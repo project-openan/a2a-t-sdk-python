@@ -1,0 +1,19 @@
+# Python A2A SDK规格文档
+
+# 功能概述
+
+要基于https://github.com/a2aproject/a2a-python的开源仓库，开发一个PYTHON 的A2A  sdk，支持从远端获取prompt模板，并内置并内置prompt模板，从而进行prompt校验，同时具备上下文也压缩的能力。通过这些开发，能够更好的支持电信场景的A2A客户端和A2A服务端的智能体之间快速集成。
+
+# 主要功能
+
+- 原生A2A SDK拓展：提供A2A client SDK和A2A server SDK，更好的支持电信场景的A2A客户端和A2A服务端的智能体之间快速集成。
+- Prompt场景化：支持从远端获取prompt模板，并内置并内置prompt模板，从而进行prompt校验。
+- 高效通信：对上下文进行的内容进行压缩，减少冗余信息传递，降低Agent开销，提升系统间交互的效率。
+
+# 主要场景
+
+1. O域的A2A客户端，集成A2A client SDK，客户端发送A2A自然语言形式的报文，到OMC域的A2A服务端。
+2. A2A服务端，集成A2A server SDK，接收并解析来自A2A自然语言形式的报文
+3. A2A服务端根据A2A SDK提供的Prompt场景化能力，利用内置大模型和远端/内置的prompt模板，对请求报文进行解析和校验。
+4. 校验通过后，将报文进行压缩，并传递给对应场景的领域大模型进行处理。
+   1. 可选压缩算法：![image-20260321145503334](C:\Users\j00467259\AppData\Roaming\Typora\typora-user-images\image-20260321145503334.png)
