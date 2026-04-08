@@ -1,41 +1,77 @@
-"""Data models for prompt management."""
+﻿from __future__ import annotations
 
-from __future__ import annotations
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Any, Literal
 
-from dataclasses import dataclass, field
-from typing import Any
+
+class CacheStatus(StrEnum):
+    """表示 Prompt 缓存状态 / Represent the cache state of a prompt load."""
+
+    MISS = "miss"
+    HIT = "hit"
+    EXPIRED = "expired"
+    REFRESHED = "refreshed"
+    STALE_FALLBACK = "stale_fallback"
 
 
-@dataclass
-class PromptTemplate:
-    """Represents a prompt template."""
+@dataclass(slots=True)
+class PromptSource:
+    """描述 Prompt 的来源信息 / Describe where a prompt was loaded from."""
+
+    source_type: Literal["local_file", "url", "agent"]
+    locator: str
+
+
+@dataclass(slots=True)
+class Prompt:
+    """表示解析完成的 Prompt / Represent a parsed prompt."""
 
     name: str
+    language: str
+    version: str
+    title: str
+    description: str
+    format: str
+    body: str
+    raw_content: str
+    source: PromptSource
+    cache_status: CacheStatus
+
+
+@dataclass(slots=True)
+class PromptReference:
+    """表示可供 catalog 输出并供 loader 使用的 Prompt 引用 / Represent a prompt reference used both for catalog listing and loader input."""
+
+    name: str
+    language: str
+    version: str
+    title: str
+    description: str
+    source: PromptSource
+    metadata: dict[str, Any] | None = None
+
+
+@dataclass(slots=True)
+class FetchResult:
+    """表示 provider 获取到的原始结果 / Represent the raw result returned by a provider."""
+
     content: str
-    description: str = ""
-    version: str = "1.0"
-    parameters: list[str] = field(default_factory=list)
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    def render(self, **kwargs: Any) -> str:
-        """Render the template with provided parameters."""
-        return self.content.format(**kwargs)
+    content_type: str | None
+    source: PromptSource
+    fetched_at: Any
 
 
-@dataclass
-class PromptRegistry:
-    """Registry for managing prompt templates."""
+@dataclass(slots=True)
+class CachedPromptRecord:
+    """表示落盘缓存的元数据记录 / Represent the metadata record stored for a cached prompt."""
 
-    templates: dict[str, PromptTemplate] = field(default_factory=dict)
-
-    def register(self, template: PromptTemplate) -> None:
-        """Register a template."""
-        self.templates[template.name] = template
-
-    def get(self, name: str) -> PromptTemplate | None:
-        """Get a template by name."""
-        return self.templates.get(name)
-
-    def list_names(self) -> list[str]:
-        """List all registered template names."""
-        return list(self.templates.keys())
+    cache_key: str
+    source_type: str
+    name: str
+    language: str
+    version: str
+    format: str
+    fetched_at: Any
+    expires_at: Any
+    checksum: str

@@ -1,34 +1,49 @@
-"""Prompt-specific error definitions."""
+from __future__ import annotations
 
 
-class PromptError(Exception):
-    """Base exception for prompt-related errors."""
+class PromptLoaderError(Exception):
+    """Prompt Loader 所有异常的基类 / Base class for all prompt loader errors."""
 
-    def __init__(self, message: str, template_name: str | None = None) -> None:
+    def __init__(self, message: str, **context: object) -> None:
+        """保存简短错误文本与机器可读上下文字段 / Store a short error message plus machine-readable context fields.
+
+        主错误文本保持简短且便于阅读，额外细节通过 ``context`` 传递，并复用稳定字段名
+        如 ``locator``、``source_type``、``cache_key``、``field``、``status_code``、
+        ``expected_*`` 与 ``actual_*`` / Keep the primary message concise and pass
+        extra details through ``context`` using stable field names such as
+        ``locator``, ``source_type``, ``cache_key``, ``field``, ``status_code``,
+        ``expected_*``, and ``actual_*``.
+        """
+
         super().__init__(message)
-        self.template_name = template_name
+        self.context = context
 
 
-class ValidationError(PromptError):
-    """Raised when prompt validation fails."""
+class PromptSourceError(PromptLoaderError):
+    """当 Prompt 来源非法或不受支持时抛出 / Raised when a prompt source is invalid or unsupported."""
 
-    def __init__(
-        self, message: str, template_name: str | None = None, errors: list[str] | None = None
-    ) -> None:
-        super().__init__(message, template_name)
-        self.validation_errors = errors or []
+    pass
 
 
-class TemplateNotFoundError(PromptError):
-    """Raised when a template is not found."""
+class PromptFetchError(PromptLoaderError):
+    """当无法从来源获取 Prompt 内容时抛出 / Raised when prompt content cannot be fetched from a source."""
 
-    def __init__(self, template_name: str) -> None:
-        super().__init__(f"Template not found: {template_name}", template_name)
+    pass
 
 
-class TemplateLoadError(PromptError):
-    """Raised when a template fails to load."""
+class PromptParseError(PromptLoaderError):
+    """当 Prompt 内容无法解析为模板时抛出 / Raised when prompt content cannot be parsed as a template."""
 
-    def __init__(self, message: str, source: str | None = None) -> None:
-        super().__init__(message)
-        self.source = source
+    pass
+
+
+class PromptMetadataError(PromptLoaderError):
+    """当必填 Prompt 元数据缺失或不匹配时抛出 / Raised when required prompt metadata is missing or mismatched."""
+
+    pass
+
+
+class PromptCacheError(PromptLoaderError):
+    """当缓存的 Prompt 内容无法读写时抛出 / Raised when cached prompt content cannot be read or written."""
+
+    pass

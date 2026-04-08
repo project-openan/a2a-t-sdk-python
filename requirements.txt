@@ -1,5 +1,6 @@
 # Core dependencies
 pyyaml>=6.0
+a2a-sdk @ git+https://github.com/a2aproject/a2a-python.git@v1.0.0-alpha.0
 
 # Testing
 pytest>=8.0.0

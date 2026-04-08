@@ -1,19 +1,65 @@
-"""Prompt management module for a2a_t."""
+"""A2A-T 的 Prompt 顶层包 / Top-level prompt package for A2A-T."""
 
-from a2a_t.prompt.models import PromptTemplate, PromptRegistry
-from a2a_t.prompt.loader import PromptLoader
-from a2a_t.prompt.registry import TemplateRegistry
-from a2a_t.prompt.validator import PromptValidator
-from a2a_t.prompt.cache import PromptCache
-from a2a_t.prompt.errors import PromptError, ValidationError
+from .cache import (
+    CacheStore,
+    ConflictResolutionPolicy,
+    ExpirationPolicy,
+    LocalFilePromptStore,
+    OverwriteOnConflictPolicy,
+    PromptStore,
+    TTLExpirationPolicy,
+)
+from .catalog import AgentPromptCatalog, LocalPromptCatalog, PromptCatalog, UrlIndexFetcher, UrlPromptCatalog
+from .catalog_registry import PromptCatalogRegistry
+from .config import PromptLoaderConfig
+from .errors import (
+    PromptCacheError,
+    PromptFetchError,
+    PromptLoaderError,
+    PromptMetadataError,
+    PromptParseError,
+    PromptSourceError,
+)
+from .loader import PromptLoader
+from .models import CacheStatus, CachedPromptRecord, FetchResult, Prompt, PromptReference, PromptSource
+from .parser import MarkdownPromptParser, PromptParser
+from .providers import AgentFetcher, AgentProvider, LocalFileFetcher, LocalFileProvider, PromptProvider, UrlFetcher, UrlProvider
 
 __all__ = [
-    "PromptTemplate",
-    "PromptRegistry",
+    "AgentFetcher",
+    "AgentPromptCatalog",
+    "AgentProvider",
+    "CacheStatus",
+    "CacheStore",
+    "ConflictResolutionPolicy",
+    "CachedPromptRecord",
+    "ExpirationPolicy",
+    "FetchResult",
+    "LocalFileFetcher",
+    "LocalFilePromptStore",
+    "LocalFileProvider",
+    "LocalPromptCatalog",
+    "MarkdownPromptParser",
+    "OverwriteOnConflictPolicy",
+    "Prompt",
+    "PromptCacheError",
+    "PromptCatalog",
+    "PromptCatalogRegistry",
+    "PromptFetchError",
     "PromptLoader",
-    "TemplateRegistry",
-    "PromptValidator",
-    "PromptCache",
-    "PromptError",
-    "ValidationError",
+    "PromptLoaderConfig",
+    "PromptLoaderError",
+    "PromptMetadataError",
+    "PromptParseError",
+    "PromptParser",
+    "PromptProvider",
+    "PromptReference",
+    "PromptSource",
+    "PromptSourceError",
+    "PromptStore",
+    "TTLExpirationPolicy",
+    "UrlFetcher",
+    "UrlIndexFetcher",
+    "UrlPromptCatalog",
+    "UrlProvider",
 ]
