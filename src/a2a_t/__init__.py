@@ -16,7 +16,8 @@ from a2a_t.server import (
     compression_handler,
     rate_limiter,
 )
-from a2a_t.prompt import models, loader, registry, validator, cache, errors as prompt_errors
+from a2a_t import prompt
+from a2a_t.prompt import models, loader, cache, errors as prompt_errors
 from a2a_t.compression import base, chain, errors as compression_errors
 from a2a_t.llm import base as llm_base, factory
 from a2a_t.config import loader, models as config_models
@@ -34,10 +35,9 @@ __all__ = [
     "prompt_handler",
     "compression_handler",
     "rate_limiter",
+    "prompt",
     "models",
     "loader",
-    "registry",
-    "validator",
     "cache",
     "prompt_errors",
     "base",
