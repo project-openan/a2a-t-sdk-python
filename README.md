@@ -25,7 +25,7 @@ pip install a2a-t-sdk
 ## Quick Start
 
 ```python
-from a2a_t_sdk import ExtendedClient
+from a2a_t import ExtendedClient
 
 # Create client
 client = ExtendedClient(url="http://localhost:8080")
@@ -54,7 +54,7 @@ mypy src/
 
 ```
 a2a-t-sdk/
-├── src/a2a_t_sdk/     # Main package
+├── src/a2a_t/     # Main package
 │   ├── common/        # Common utilities
 │   ├── client/        # Client extensions
 │   ├── server/        # Server extensions

@@ -45,7 +45,7 @@ Documentation = "https://github.com/a2a/a2a-t-sdk#readme"
 include = ["/src"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/a2a_t_sdk"]
+packages = ["src/a2a_t"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -64,3 +64,4 @@ python_version = "3.14"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
