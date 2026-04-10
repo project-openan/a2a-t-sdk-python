@@ -52,6 +52,7 @@ packages = ["src/a2a_t"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "-p no:cacheprovider"
 
 [tool.ruff]
 line-length = 120
