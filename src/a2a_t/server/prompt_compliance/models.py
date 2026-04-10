@@ -85,3 +85,11 @@ class PromptComplianceResult:
     confidence: float | None = None
     error_code: str | None = None
     error_message: str | None = None
+
+
+@dataclass
+class SlotValidationResult:
+    """Runtime validation result for extracted slots."""
+
+    valid: bool
+    errors: list[str] = field(default_factory=list)

@@ -19,3 +19,15 @@ class PromptOriginResolveError(PromptComplianceError):
     """Raised when the original prompt cannot be resolved from prompt identity."""
 
     pass
+
+
+class SlotConfigLoadError(PromptComplianceError):
+    """Raised when a slot configuration file cannot be loaded."""
+
+    pass
+
+
+class SlotConfigValidationError(PromptComplianceError):
+    """Raised when a slot configuration file is invalid."""
+
+    pass
