@@ -26,6 +26,7 @@ from a2a_t.server.prompt_compliance.models import (
 from a2a_t.server.prompt_compliance.origin_resolver import PromptOriginResolver
 from a2a_t.server.prompt_compliance.parser import ProcessedPromptParser
 from a2a_t.server.prompt_compliance.schema_builder import SlotSchemaBuilder
+from a2a_t.server.prompt_compliance.service import PromptComplianceService
 from a2a_t.server.prompt_compliance.slot_config import SlotConfig, SlotConfigResolver
 from a2a_t.server.prompt_compliance.validator import SlotValidator
 
@@ -42,6 +43,7 @@ __all__ = [
     "PromptOriginResolveError",
     "PromptOriginResolver",
     "ProcessedPromptParser",
+    "PromptComplianceService",
     "SlotConfig",
     "SlotConfigLoadError",
     "SlotConfigResolver",

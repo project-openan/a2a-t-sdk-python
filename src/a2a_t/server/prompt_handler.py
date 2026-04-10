@@ -13,8 +13,32 @@ class PromptHandler:
 
     def validate(self, template_name: str, params: dict[str, Any]) -> tuple[bool, str]:
         """Validate request against template rules."""
-        raise NotImplementedError
+        if self._validator is None:
+            return True, ""
+
+        processed_prompt_text = str(params.get("processed_prompt_text", ""))
+        result = self._validator.check(
+            processed_prompt_text=processed_prompt_text,
+            request_metadata={"template_name": template_name},
+        )
+        return result.passed, result.error_message or ""
 
     def process(self, task_id: str, params: dict[str, Any]) -> dict[str, Any]:
         """Process and validate the incoming task."""
-        raise NotImplementedError
+        if self._validator is None:
+            return {"passed": True, "task_id": task_id, "params": params}
+
+        processed_prompt_text = str(params.get("processed_prompt_text", ""))
+        result = self._validator.check(
+            processed_prompt_text=processed_prompt_text,
+            request_metadata={"task_id": task_id},
+        )
+        return {
+            "passed": result.passed,
+            "stage": result.stage,
+            "extracted_slots": result.extracted_slots,
+            "notes": result.notes,
+            "confidence": result.confidence,
+            "error_code": result.error_code,
+            "error_message": result.error_message,
+        }
