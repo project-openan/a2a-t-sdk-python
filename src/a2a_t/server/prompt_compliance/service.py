@@ -4,6 +4,7 @@ from typing import Any
 
 from a2a_t.server.prompt_compliance.errors import (
     GuardrailExecutionError,
+    GuardrailRejectedError,
     ProcessedPromptParseError,
     PromptOriginResolveError,
     SlotConfigLoadError,
@@ -43,6 +44,8 @@ class PromptComplianceService:
     ) -> PromptComplianceResult:
         try:
             guardrail_result = self._guardrail.check(processed_prompt_text, request_metadata)
+        except GuardrailRejectedError as error:
+            return self._error_result("guardrail", "guardrail_rejected", str(error))
         except GuardrailExecutionError as error:
             return self._error_result("guardrail", "guardrail_execution_error", str(error))
 
