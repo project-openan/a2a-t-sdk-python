@@ -1,6 +1,8 @@
 """Prompt compliance models and errors for server-side validation."""
 
 from a2a_t.server.prompt_compliance.errors import (
+    GuardrailExecutionError,
+    GuardrailRejectedError,
     ProcessedPromptParseError,
     PromptComplianceError,
     PromptOriginResolveError,
@@ -9,6 +11,7 @@ from a2a_t.server.prompt_compliance.errors import (
     SlotExtractionError,
 )
 from a2a_t.server.prompt_compliance.extractor import PromptSlotExtractor
+from a2a_t.server.prompt_compliance.guardrails import SafetyGuardrail, SafetyGuardrailFactory
 from a2a_t.server.prompt_compliance.models import (
     GuardrailResult,
     PromptComplianceConfig,
@@ -28,6 +31,8 @@ from a2a_t.server.prompt_compliance.validator import SlotValidator
 
 __all__ = [
     "GuardrailResult",
+    "GuardrailExecutionError",
+    "GuardrailRejectedError",
     "ProcessedPromptParseError",
     "PromptComplianceConfig",
     "PromptComplianceError",
@@ -43,6 +48,8 @@ __all__ = [
     "SlotConfigValidationError",
     "SlotExtractionError",
     "PromptSlotExtractor",
+    "SafetyGuardrail",
+    "SafetyGuardrailFactory",
     "SlotSchemaBuilder",
     "SlotExtractionConfig",
     "SlotExtractionResult",

@@ -37,3 +37,15 @@ class SlotExtractionError(PromptComplianceError):
     """Raised when structured slot extraction fails or returns invalid data."""
 
     pass
+
+
+class GuardrailRejectedError(PromptComplianceError):
+    """Raised when the safety guardrail rejects the processed prompt."""
+
+    pass
+
+
+class GuardrailExecutionError(PromptComplianceError):
+    """Raised when the safety guardrail fails due to a transient external error."""
+
+    pass
