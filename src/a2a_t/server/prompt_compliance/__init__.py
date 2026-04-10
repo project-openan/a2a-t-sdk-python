@@ -6,7 +6,9 @@ from a2a_t.server.prompt_compliance.errors import (
     PromptOriginResolveError,
     SlotConfigLoadError,
     SlotConfigValidationError,
+    SlotExtractionError,
 )
+from a2a_t.server.prompt_compliance.extractor import PromptSlotExtractor
 from a2a_t.server.prompt_compliance.models import (
     GuardrailResult,
     PromptComplianceConfig,
@@ -39,6 +41,8 @@ __all__ = [
     "SlotConfigLoadError",
     "SlotConfigResolver",
     "SlotConfigValidationError",
+    "SlotExtractionError",
+    "PromptSlotExtractor",
     "SlotSchemaBuilder",
     "SlotExtractionConfig",
     "SlotExtractionResult",

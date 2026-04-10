@@ -33,6 +33,11 @@ class LLMAdapter(ABC):
         """Generate a chat completion."""
         raise NotImplementedError
 
+    @abstractmethod
+    def structured(self, *, messages: list[dict[str, str]], json_schema: dict[str, Any], **kwargs: Any) -> LLMResponse:
+        """Generate a structured response constrained by the provided JSON schema."""
+        raise NotImplementedError
+
     @property
     @abstractmethod
     def adapter_type(self) -> str:

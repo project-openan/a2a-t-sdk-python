@@ -27,3 +27,7 @@ class HTTPAdapter(LLMAdapter):
     def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> LLMResponse:
         """Generate chat completion via HTTP API."""
         raise NotImplementedError("HTTP adapter requires backend integration")
+
+    def structured(self, *, messages: list[dict[str, str]], json_schema: dict[str, Any], **kwargs: Any) -> LLMResponse:
+        """Generate structured output via HTTP API."""
+        raise NotImplementedError("HTTP adapter requires backend integration")

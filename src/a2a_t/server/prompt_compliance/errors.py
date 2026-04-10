@@ -31,3 +31,9 @@ class SlotConfigValidationError(PromptComplianceError):
     """Raised when a slot configuration file is invalid."""
 
     pass
+
+
+class SlotExtractionError(PromptComplianceError):
+    """Raised when structured slot extraction fails or returns invalid data."""
+
+    pass
