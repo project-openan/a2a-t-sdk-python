@@ -31,9 +31,20 @@ class LLMAdapterFactory:
         return list(cls._adapters.keys())
 
 
-from a2a_t.llm.adapters import HTTPAdapter, GrpcAdapter, MQAdapter, PluginAdapter
+from a2a_t.llm.adapters import (
+    AnthropicAdapter,
+    GoogleAdapter,
+    GrpcAdapter,
+    HTTPAdapter,
+    MQAdapter,
+    OpenAIAdapter,
+    PluginAdapter,
+)
 
 LLMAdapterFactory.register("http", HTTPAdapter)
 LLMAdapterFactory.register("grpc", GrpcAdapter)
 LLMAdapterFactory.register("mq", MQAdapter)
 LLMAdapterFactory.register("plugin", PluginAdapter)
+LLMAdapterFactory.register("openai", OpenAIAdapter)
+LLMAdapterFactory.register("anthropic", AnthropicAdapter)
+LLMAdapterFactory.register("google", GoogleAdapter)

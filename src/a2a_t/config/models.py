@@ -5,6 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from a2a_t.server.prompt_compliance.models import (
+    PromptComplianceConfig,
+    PromptComplianceProviderConfig,
+    SlotExtractionConfig,
+    SlotSchemaConfig,
+)
+
 
 @dataclass
 class ClientConfig:
@@ -69,16 +76,25 @@ class SDKConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
     compression: CompressionConfig = field(default_factory=CompressionConfig)
+    prompt_compliance: PromptComplianceConfig = field(default_factory=PromptComplianceConfig)
     log_level: str = "INFO"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SDKConfig:
         """Create config from dictionary."""
+        prompt_compliance_data = data.get("prompt_compliance", {})
         return cls(
             client=ClientConfig(**data.get("client", {})),
             server=ServerConfig(**data.get("server", {})),
             llm=LLMConfig(**data.get("llm", {})),
             prompt=PromptConfig(**data.get("prompt", {})),
             compression=CompressionConfig(**data.get("compression", {})),
+            prompt_compliance=PromptComplianceConfig(
+                enabled=prompt_compliance_data.get("enabled", False),
+                guardrail=PromptComplianceProviderConfig(**prompt_compliance_data.get("guardrail", {})),
+                slot_extraction=SlotExtractionConfig(**prompt_compliance_data.get("slot_extraction", {})),
+                slot_schema=SlotSchemaConfig(**prompt_compliance_data.get("slot_schema", {})),
+                providers=prompt_compliance_data.get("providers", {}),
+            ),
             log_level=data.get("log_level", "INFO"),
         )
