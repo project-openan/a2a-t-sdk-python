@@ -229,9 +229,9 @@ class PromptLoaderDomainTest(unittest.TestCase):
             PromptLoaderConfig.__doc__ or "",
         )
 
-    def test_prompt_package_exports_default_runtime_builders(self) -> None:
-        self.assertTrue(hasattr(prompt_module, "build_default_prompt_catalog_registry"))
-        self.assertTrue(hasattr(prompt_module, "build_default_prompt_loader"))
+    def test_prompt_package_does_not_export_default_runtime_builders(self) -> None:
+        self.assertFalse(hasattr(prompt_module, "build_default_prompt_catalog_registry"))
+        self.assertFalse(hasattr(prompt_module, "build_default_prompt_loader"))
 
     def test_prompt_docstring_uses_bilingual_style(self) -> None:
         self.assertIn(
@@ -249,8 +249,8 @@ class PromptLoaderDomainTest(unittest.TestCase):
         self.assertIn("`<local_root>/<name>/<version>/<language>/prompt.<ext>`", readme)
         self.assertIn("`A2AT_PROMPT_LOCAL_DIR`", readme)
         self.assertIn("`A2AT_PROMPT_ALLOWED_EXTENSIONS`", readme)
-        self.assertIn("`build_default_prompt_loader()`", readme)
-        self.assertIn("`build_default_prompt_catalog_registry()`", readme)
+        self.assertNotIn("`build_default_prompt_loader()`", readme)
+        self.assertNotIn("`build_default_prompt_catalog_registry()`", readme)
         self.assertNotIn("`cache_dir`", readme)
         self.assertNotIn("`A2AT_PROMPT_CACHE_DIR`", readme)
         self.assertIn("`ExpirationPolicy` 负责判断缓存是否过期", readme)

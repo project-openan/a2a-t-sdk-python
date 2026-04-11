@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from a2a_t.server.prompt_compliance.models import (
+from a2a_t.server.prompt_compliance.config import (
+    GuardrailProviderConfig,
     PromptComplianceConfig,
-    PromptComplianceProviderConfig,
     SlotExtractionConfig,
     SlotSchemaConfig,
 )
@@ -91,7 +91,7 @@ class SDKConfig:
             compression=CompressionConfig(**data.get("compression", {})),
             prompt_compliance=PromptComplianceConfig(
                 enabled=prompt_compliance_data.get("enabled", False),
-                guardrail=PromptComplianceProviderConfig(**prompt_compliance_data.get("guardrail", {})),
+                guardrail=GuardrailProviderConfig(**prompt_compliance_data.get("guardrail", {})),
                 slot_extraction=SlotExtractionConfig(**prompt_compliance_data.get("slot_extraction", {})),
                 slot_schema=SlotSchemaConfig(**prompt_compliance_data.get("slot_schema", {})),
                 providers=prompt_compliance_data.get("providers", {}),

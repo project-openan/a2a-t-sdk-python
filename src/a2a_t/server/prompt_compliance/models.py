@@ -1,48 +1,15 @@
 from __future__ import annotations
 
+from enum import Enum
 from dataclasses import dataclass, field
 from typing import Any
 
-
-@dataclass
-class PromptComplianceProviderConfig:
-    """Provider configuration shared by guardrail and provider registry entries."""
-
-    provider: str = ""
-    timeout: float = 10.0
-    config: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class SlotExtractionConfig:
-    """Configuration for LLM-based slot extraction."""
-
-    provider: str = ""
-    model: str = ""
-    timeout: float = 20.0
-    temperature: float = 0.0
-    max_retries: int = 2
-
-
-@dataclass
-class SlotSchemaConfig:
-    """Configuration for locating slot schema files."""
-
-    root_dir: str = "./cache"
-    slot_root_name: str = "slots"
-    file_name: str = "slot.yaml"
-    not_found_policy: str = "strict"
-
-
-@dataclass
-class PromptComplianceConfig:
-    """Top-level configuration for prompt compliance."""
-
-    enabled: bool = False
-    guardrail: PromptComplianceProviderConfig = field(default_factory=PromptComplianceProviderConfig)
-    slot_extraction: SlotExtractionConfig = field(default_factory=SlotExtractionConfig)
-    slot_schema: SlotSchemaConfig = field(default_factory=SlotSchemaConfig)
-    providers: dict[str, dict[str, Any]] = field(default_factory=dict)
+from a2a_t.server.prompt_compliance.config import (
+    GuardrailProviderConfig,
+    PromptComplianceConfig,
+    SlotExtractionConfig,
+    SlotSchemaConfig,
+)
 
 
 @dataclass
@@ -54,14 +21,35 @@ class PromptIdentity:
     version: str
 
 
+class GuardrailDecision(str, Enum):
+    """Unified guardrail decision semantics."""
+
+    ALLOW = "allow"
+    BLOCK = "block"
+    MASK = "mask"
+    REVIEW = "review"
+
+
+@dataclass
+class GuardrailRequest:
+    """Normalized guardrail input request."""
+
+    text: str
+    metadata: dict[str, object] | None = None
+    policy_id: str | None = None
+
+
 @dataclass
 class GuardrailResult:
     """Normalized result returned by safety guardrails."""
 
     passed: bool
+    decision: GuardrailDecision = GuardrailDecision.ALLOW
     category: str | None = None
     reason: str | None = None
     raw_response: dict[str, Any] | None = None
+    provider: str | None = None
+    policy_id: str | None = None
 
 
 @dataclass

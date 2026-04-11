@@ -78,11 +78,13 @@ class PromptSlotExtractorTest(unittest.TestCase):
         adapter = FakeStructuredAdapter('{"notes": ["missing slots"]}')
         extractor = PromptSlotExtractor(adapter=adapter)
 
-        with self.assertRaises(SlotExtractionError):
+        with self.assertRaises(SlotExtractionError) as context:
             extractor.extract(
                 original_prompt=self.original_prompt,
                 processed_prompt_text="processed prompt body",
             )
+
+        self.assertEqual(context.exception.context["raw_content"], '{"notes": ["missing slots"]}')
 
 
 class ProviderAdapterContractTest(unittest.TestCase):

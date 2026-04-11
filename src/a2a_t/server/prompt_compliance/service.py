@@ -7,11 +7,13 @@ from a2a_t.server.prompt_compliance.errors import (
     GuardrailRejectedError,
     ProcessedPromptParseError,
     PromptOriginResolveError,
-    SlotConfigLoadError,
-    SlotConfigValidationError,
+    SlotSchemaLoadError,
+    SlotSchemaValidationError,
     SlotExtractionError,
+    SlotValidationError,
 )
 from a2a_t.server.prompt_compliance.models import PromptComplianceResult
+from a2a_t.server.prompt_compliance.models import GuardrailDecision
 
 
 class PromptComplianceService:
@@ -49,7 +51,12 @@ class PromptComplianceService:
         except GuardrailExecutionError as error:
             return self._error_result("guardrail", "guardrail_execution_error", str(error))
 
-        if not guardrail_result.passed:
+        rejected_decisions = {
+            GuardrailDecision.BLOCK,
+            GuardrailDecision.MASK,
+            GuardrailDecision.REVIEW,
+        }
+        if not guardrail_result.passed or guardrail_result.decision in rejected_decisions:
             return self._error_result(
                 "guardrail",
                 "guardrail_rejected",
@@ -75,8 +82,8 @@ class PromptComplianceService:
             return self._error_result("slot_extraction", "slot_extraction_error", str(error))
 
         try:
-            slot_config = self._slot_config_resolver.load(identity)
-        except SlotConfigLoadError as error:
+            slot_schema = self._slot_config_resolver.load(identity)
+        except SlotSchemaLoadError as error:
             if self._slot_not_found_policy == "skip":
                 return PromptComplianceResult(
                     passed=True,
@@ -85,19 +92,23 @@ class PromptComplianceService:
                     notes=extraction_result.notes,
                     confidence=extraction_result.confidence,
                 )
-            return self._error_result("slot_config", "slot_config_load_error", str(error))
-        except SlotConfigValidationError as error:
-            return self._error_result("slot_config", "slot_config_validation_error", str(error))
+            return self._error_result("slot_schema", "slot_schema_load_error", str(error))
+        except SlotSchemaValidationError as error:
+            return self._error_result("slot_schema", "slot_schema_validation_error", str(error))
 
         validation_result = self._validator.validate(
             extracted_slots=extraction_result.slots,
-            slot_config=slot_config,
+            slot_schema=slot_schema,
         )
         if not validation_result.valid:
+            error = SlotValidationError(
+                "; ".join(validation_result.errors) if validation_result.errors else "Slot validation failed.",
+                errors=validation_result.errors,
+            )
             return self._error_result(
                 "slot_validation",
                 "slot_validation_error",
-                "; ".join(validation_result.errors) if validation_result.errors else "Slot validation failed.",
+                str(error),
             )
 
         return PromptComplianceResult(

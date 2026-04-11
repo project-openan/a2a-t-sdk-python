@@ -63,9 +63,13 @@ response = client.send(task_id="task-001", params={"prompt": "查询基站状态
 from datetime import timedelta
 
 from a2a_t.prompt import (
+    DefaultPromptCatalogRegistry,
+    LocalFilePromptStore,
+    LocalFileProvider,
+    LocalPromptCatalog,
+    MarkdownPromptParser,
+    PromptLoader,
     PromptLoaderConfig,
-    build_default_prompt_catalog_registry,
-    build_default_prompt_loader,
 )
 
 config = PromptLoaderConfig(
@@ -74,8 +78,15 @@ config = PromptLoaderConfig(
     default_ttl=timedelta(hours=6),
 )
 
-catalog_registry = build_default_prompt_catalog_registry(config)
-loader = build_default_prompt_loader(config)
+catalog_registry = DefaultPromptCatalogRegistry()
+catalog_registry.register("local", LocalPromptCatalog(config=config))
+
+loader = PromptLoader(
+    config=config,
+    parser=MarkdownPromptParser(),
+    cache_store=LocalFilePromptStore(config.local_prompt_dir),
+    providers={"local_file": LocalFileProvider()},
+)
 
 catalog = catalog_registry.get("local")
 reference = catalog.list()[0]
@@ -88,7 +99,7 @@ prompt = loader.load(reference=reference)
 - 本地镜像目录结构为 `<local_root>/<name>/<version>/<language>/prompt.<ext>`
 - 通过 `A2AT_PROMPT_LOCAL_DIR` 配置 Prompt 本地根目录
 - 通过 `A2AT_PROMPT_ALLOWED_EXTENSIONS` 配置允许扫描的 Prompt 扩展名
-- 默认运行时装配入口为 `build_default_prompt_loader()` 与 `build_default_prompt_catalog_registry()`
+- 组件直接接收 `PromptLoaderConfig`，调用方按需组装 `PromptCatalogRegistry` 与 `PromptLoader`
 - `ExpirationPolicy` 负责判断缓存是否过期
 - `ConflictResolutionPolicy` 负责决定缓存冲突时是否覆盖
 
@@ -102,6 +113,73 @@ Prompt 模块当前使用以下环境变量：
 更完整的 Prompt 设计说明见：
 
 - `docs/superpowers/specs/2026-04-08-a2a-t-prompt-design.md`
+
+## Prompt Compliance
+
+Prompt Compliance 模块用于在服务端对加工后的 Prompt 做遵从性检查。典型流程为：
+
+1. 使用安全护栏检查加工后的 Prompt
+2. 从加工后 Prompt 的 front matter 解析 `name + language + version`
+3. 通过 Prompt catalog 和 loader 找回原始 Prompt
+4. 调用 LLM 提取结构化槽位
+5. 加载镜像路径下的 `slot.json`
+6. 使用运行时 JSON Schema 校验提取出的槽位
+
+### 核心对象
+
+- `PromptComplianceConfig`
+- `GuardrailProviderConfig`
+- `SlotExtractionConfig`
+- `SlotSchemaConfig`
+- `SlotSchema`
+- `SlotSchemaResolver`
+- `SlotSchemaBuilder`
+- `SlotValidator`
+- `PromptComplianceService`
+
+### 槽位目录
+
+槽位文件默认存放在 `./slots`，路径布局与 Prompt 身份镜像：
+
+```text
+slots/
+└── <name>/
+    └── <version>/
+        └── <language>/
+            └── slot.json
+```
+
+示例：
+
+```text
+slots/network diagnosis/1.0.0/zh-CN/slot.json
+```
+
+### 环境变量
+
+Prompt Compliance 模块使用以下环境变量：
+
+- `A2AT_PROMPT_COMPLIANCE_ENABLED`
+- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_PROVIDER`
+- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_TIMEOUT_SECONDS`
+- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_POLICY_ID`
+- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_ENDPOINT`
+- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_REGION`
+- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_CREDENTIALS_REF`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_PROVIDER`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_MODEL`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_TIMEOUT_SECONDS`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_TEMPERATURE`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_MAX_RETRIES`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_LOCAL_DIR`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_FILE_NAME`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_NOT_FOUND_POLICY`
+
+### 安全护栏 Provider
+
+- 当前已实现的独立护栏 provider：`google_model_armor`
+- Google provider 通过官方 SDK `google-cloud-modelarmor` 接入
+- 设计已预留 `AWS / Azure` 扩展位，但当前版本未实现，不应在运行时选择
 
 ## Development
 
