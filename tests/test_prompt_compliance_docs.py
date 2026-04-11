@@ -11,6 +11,10 @@ def test_prompt_compliance_env_files_include_default_settings() -> None:
         "A2AT_PROMPT_COMPLIANCE_ENABLED=false",
         "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_PROVIDER=noop",
         "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_TIMEOUT_SECONDS=10",
+        "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_POLICY_ID=",
+        "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_ENDPOINT=",
+        "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_REGION=",
+        "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_CREDENTIALS_REF=",
         "A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_PROVIDER=",
         "A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_MODEL=",
         "A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_TIMEOUT_SECONDS=30",
@@ -36,6 +40,10 @@ def test_readme_uses_prompt_compliance_current_names() -> None:
 
     assert "slot.json" in readme
     assert "GuardrailProviderConfig" in readme
+    assert "google_model_armor" in readme
+    assert "google-cloud-modelarmor" in readme
+    assert "AWS / Azure" in readme
+    assert "未实现" in readme
     assert "SlotSchemaResolver" in readme
     assert "PromptComplianceProviderConfig" not in readme
     assert "slot.yaml" not in readme
