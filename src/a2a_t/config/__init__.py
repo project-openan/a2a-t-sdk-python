@@ -1,6 +1,21 @@
 """Configuration management for a2a_t."""
 
-from a2a_t.config.loader import ConfigLoader
-from a2a_t.config.models import SDKConfig, ClientConfig, ServerConfig
+from __future__ import annotations
 
-__all__ = ["ConfigLoader", "SDKConfig", "ClientConfig", "ServerConfig"]
+from importlib import import_module
+
+__all__ = ["ConfigLoader", "SDKConfig", "ClientConfig", "EnvConfig", "ServerConfig"]
+
+
+def __getattr__(name: str):
+    if name == "EnvConfig":
+        value = import_module("a2a_t.config.env").EnvConfig
+    elif name == "ConfigLoader":
+        value = import_module("a2a_t.config.loader").ConfigLoader
+    elif name in {"SDKConfig", "ClientConfig", "ServerConfig"}:
+        value = getattr(import_module("a2a_t.config.models"), name)
+    else:
+        raise AttributeError(f"module 'a2a_t.config' has no attribute {name!r}")
+
+    globals()[name] = value
+    return value

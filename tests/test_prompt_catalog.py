@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import importlib
@@ -22,7 +23,9 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from a2a_t.prompt.errors import PromptSourceError
-from a2a_t.prompt.parser import MarkdownPromptParser
+from a2a_t.prompt.config import PromptLoaderConfig
+from a2a_t.prompt.models import CacheStatus, Prompt, PromptSource
+from a2a_t.prompt.parser import MarkdownPromptParser, PromptParserRegistry
 
 
 class PromptCatalogContractTest(unittest.TestCase):
@@ -87,6 +90,92 @@ class PromptCatalogImplementationTest(ManagedTempDirTestCase):
         self.assertEqual(references[0].language, "zh-CN")
         self.assertEqual(references[0].version, "1.0.0")
         self.assertEqual(references[0].source.source_type, "local_file")
+        self.assertEqual(references[0].source.locator, str(prompt_path))
+
+    def test_local_prompt_catalog_scans_allowed_extensions_and_routes_parser_registry(self) -> None:
+        class JsonPromptParser:
+            def parse(
+                self,
+                *,
+                content: str,
+                source: PromptSource,
+                cache_status: CacheStatus,
+            ) -> Prompt:
+                return Prompt(
+                    name="json-diagnosis",
+                    language="default",
+                    version="1.0.0",
+                    title="JSON Diagnosis",
+                    description="Diagnose alarm events.",
+                    format="json",
+                    body=content,
+                    raw_content=content,
+                    source=source,
+                    cache_status=cache_status,
+                )
+
+        prompt_dir = self.temp_root / "mixed"
+        prompt_dir.mkdir(parents=True, exist_ok=True)
+        markdown_path = prompt_dir / "diagnosis.md"
+        markdown_path.write_text(
+            "---\n"
+            "name: diagnosis\n"
+            "language: zh-CN\n"
+            "version: 1.0.0\n"
+            "title: Alarm Diagnosis\n"
+            "description: Diagnose alarm events.\n"
+            "---\n"
+            "Prompt body\n",
+            encoding="utf-8",
+        )
+        json_path = prompt_dir / "diagnosis.json"
+        json_path.write_text('{"prompt":"json"}', encoding="utf-8")
+
+        registry = PromptParserRegistry()
+        registry.register("markdown", MarkdownPromptParser(), [".md"])
+        registry.register("json", JsonPromptParser(), [".json"])
+
+        module = importlib.import_module("a2a_t.prompt.catalog")
+        catalog = module.LocalPromptCatalog(
+            prompt_dir=str(prompt_dir),
+            parser_registry=registry,
+            allowed_extensions=[".md", ".json"],
+        )
+
+        references = catalog.list()
+
+        self.assertEqual(len(references), 2)
+        self.assertEqual({reference.name for reference in references}, {"diagnosis", "json-diagnosis"})
+        self.assertEqual({Path(reference.source.locator).suffix for reference in references}, {".md", ".json"})
+
+    def test_local_prompt_catalog_can_use_prompt_loader_config_directly(self) -> None:
+        prompt_dir = self.temp_root / "configured-local"
+        prompt_dir.mkdir(parents=True, exist_ok=True)
+        prompt_path = prompt_dir / "diagnosis.md"
+        prompt_path.write_text(
+            "---\n"
+            "name: diagnosis\n"
+            "language: zh-CN\n"
+            "version: 1.0.0\n"
+            "title: Alarm Diagnosis\n"
+            "description: Diagnose alarm events.\n"
+            "---\n"
+            "Prompt body\n",
+            encoding="utf-8",
+        )
+
+        module = importlib.import_module("a2a_t.prompt.catalog")
+        catalog = module.LocalPromptCatalog(
+            config=PromptLoaderConfig(
+                default_ttl=timedelta(hours=1),
+                local_prompt_dir=str(prompt_dir),
+                allowed_extensions=[".md"],
+            )
+        )
+
+        references = catalog.list()
+
+        self.assertEqual(len(references), 1)
         self.assertEqual(references[0].source.locator, str(prompt_path))
 
     def test_url_prompt_catalog_reads_prompt_index_entries(self) -> None:
@@ -248,6 +337,61 @@ class PromptCatalogImplementationTest(ManagedTempDirTestCase):
         self.assertEqual(references[0].name, "diagnosis")
         self.assertEqual(references[0].language, "zh-CN")
         self.assertEqual(references[0].version, "2.0.0")
+
+    def test_agent_prompt_catalog_can_use_prompt_loader_config_directly(self) -> None:
+        @dataclass(slots=True)
+        class AgentExtension:
+            uri: str
+            params: dict[str, str]
+
+        @dataclass(slots=True)
+        class AgentCard:
+            name: str
+            extensions: list[AgentExtension]
+
+        agent_card = AgentCard(
+            name="alarm-agent",
+            extensions=[
+                AgentExtension(
+                    uri="custom.prompts",
+                    params={"catalogUrl": "https://agents.example.com/custom-index.json"},
+                )
+            ],
+        )
+
+        class FakeFetcher:
+            def __call__(self, index_url: str) -> dict[str, object]:
+                self.index_url = index_url
+                return {
+                    "prompts": [
+                        {
+                            "name": "diagnosis",
+                            "language": "zh-CN",
+                            "version": "2.0.0",
+                            "title": "Alarm Diagnosis",
+                            "description": "Diagnose alarm events.",
+                            "url": "/prompts/custom/diagnosis.md",
+                        }
+                    ]
+                }
+
+        fetcher = FakeFetcher()
+        module = importlib.import_module("a2a_t.prompt.catalog")
+        catalog = module.AgentPromptCatalog(
+            config=PromptLoaderConfig(
+                default_ttl=timedelta(hours=1),
+                prompt_extension_uri_overrides={"alarm-agent": "custom.prompts"},
+                prompt_index_url_param_key_overrides={"alarm-agent": "catalogUrl"},
+            ),
+            agent_cards=[agent_card],
+            fetcher=fetcher,
+        )
+
+        references = catalog.list()
+
+        self.assertEqual(len(references), 1)
+        self.assertEqual(fetcher.index_url, "https://agents.example.com/custom-index.json")
+        self.assertEqual(references[0].name, "diagnosis")
 
 
 if __name__ == "__main__":

@@ -81,7 +81,7 @@ class PromptComplianceIntegrationTest(ManagedTempDirTestCase):
     def _build_service(self, *, adapter_response: str, slot_policy: str = "strict") -> PromptComplianceService:
         catalog = LocalPromptCatalog(prompt_dir=str(self.prompts_root))
         loader = PromptLoader(
-            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), cache_dir=str(self.cache_root)),
+            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(self.cache_root)),
             parser=MarkdownPromptParser(),
             cache_store=LocalFilePromptStore(self.cache_root),
             providers={"local_file": LocalFileProvider()},

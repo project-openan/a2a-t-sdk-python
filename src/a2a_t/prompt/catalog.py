@@ -8,9 +8,10 @@ from urllib.parse import urljoin
 
 from a2a.types import AgentCard
 
+from .config import PromptLoaderConfig
 from .errors import PromptSourceError
 from .models import CacheStatus, PromptReference, PromptSource
-from .parser import MarkdownPromptParser, PromptParser
+from .parser import MarkdownPromptParser, PromptParser, PromptParserRegistry, build_default_prompt_parser_registry
 
 
 class UrlIndexFetcher(Protocol):
@@ -28,16 +29,27 @@ class PromptCatalog(Protocol):
 class LocalPromptCatalog:
     """列出本地目录下所有 Markdown Prompt / List all Markdown prompts from a local directory."""
 
-    def __init__(self, *, prompt_dir: str, parser: PromptParser | None = None) -> None:
-        self._prompt_dir = Path(prompt_dir)
-        self._parser = parser or MarkdownPromptParser()
+    def __init__(
+        self,
+        *,
+        prompt_dir: str | None = None,
+        config: PromptLoaderConfig | None = None,
+        parser: PromptParser | None = None,
+        parser_registry: PromptParserRegistry | None = None,
+        allowed_extensions: list[str] | None = None,
+    ) -> None:
+        resolved_prompt_dir = prompt_dir or (config.local_prompt_dir if config is not None else None)
+        self._prompt_dir = Path(resolved_prompt_dir or "./prompts")
+        self._parser = parser
+        self._parser_registry = parser_registry or build_default_prompt_parser_registry()
+        self._allowed_extensions = allowed_extensions or (config.allowed_extensions if config is not None else [".md"])
 
     def list(self) -> list[PromptReference]:
         references: list[PromptReference] = []
 
-        for path in sorted(self._prompt_dir.rglob("*.md")):
+        for path in self._iter_prompt_paths():
             source = PromptSource(source_type="local_file", locator=str(path))
-            prompt = self._parser.parse(
+            prompt = self._resolve_parser(path).parse(
                 content=path.read_text(encoding="utf-8"),
                 source=source,
                 cache_status=CacheStatus.MISS,
@@ -54,6 +66,18 @@ class LocalPromptCatalog:
             )
 
         return references
+
+    def _iter_prompt_paths(self) -> list[Path]:
+        prompt_paths: set[Path] = set()
+        for extension in self._allowed_extensions:
+            normalized = extension if extension.startswith(".") else f".{extension}"
+            prompt_paths.update(self._prompt_dir.rglob(f"*{normalized}"))
+        return sorted(prompt_paths)
+
+    def _resolve_parser(self, path: Path) -> PromptParser:
+        if self._parser is not None and path.suffix == ".md":
+            return self._parser
+        return self._parser_registry.get_by_extension(path.suffix)
 
 
 class UrlPromptCatalog:
@@ -128,17 +152,26 @@ class AgentPromptCatalog:
         self,
         *,
         agent_cards: list[AgentCard],
-        default_prompt_extension_uri: str | None,
+        config: PromptLoaderConfig | None = None,
+        default_prompt_extension_uri: str | None = None,
         prompt_extension_uri_overrides: dict[str, str] | None = None,
-        default_prompt_index_url_param_key: str = "promptIndexUrl",
+        default_prompt_index_url_param_key: str | None = None,
         prompt_index_url_param_key_overrides: dict[str, str] | None = None,
         fetcher: UrlIndexFetcher | None = None,
     ) -> None:
         self._agent_cards = list(agent_cards)
-        self._default_prompt_extension_uri = default_prompt_extension_uri
-        self._prompt_extension_uri_overrides = prompt_extension_uri_overrides or {}
-        self._default_prompt_index_url_param_key = default_prompt_index_url_param_key
-        self._prompt_index_url_param_key_overrides = prompt_index_url_param_key_overrides or {}
+        self._default_prompt_extension_uri = default_prompt_extension_uri or (
+            config.default_prompt_extension_uri if config is not None else None
+        )
+        self._prompt_extension_uri_overrides = prompt_extension_uri_overrides or (
+            config.prompt_extension_uri_overrides if config is not None else {}
+        )
+        self._default_prompt_index_url_param_key = default_prompt_index_url_param_key or (
+            config.default_prompt_index_url_param_key if config is not None else "promptIndexUrl"
+        )
+        self._prompt_index_url_param_key_overrides = prompt_index_url_param_key_overrides or (
+            config.prompt_index_url_param_key_overrides if config is not None else {}
+        )
         self._fetcher = fetcher or UrlPromptCatalog(index_url="unused")._default_fetcher
 
     def list(self) -> list[PromptReference]:
