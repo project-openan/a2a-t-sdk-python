@@ -112,7 +112,7 @@ Prompt 模块当前使用以下环境变量：
 
 更完整的 Prompt 设计说明见：
 
-- `docs/superpowers/specs/2026-04-08-a2a-t-prompt-design.md`
+- `docs/superpowers/specs/2026-04-11-prompt-management-design.md`
 
 ## Prompt Compliance
 
