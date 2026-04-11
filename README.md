@@ -1,10 +1,10 @@
 # a2a-t-sdk
 
-Python A2A SDK for Telecom Scenarios.
+面向电信场景的 Python A2A SDK。
 
 ## Overview
 
-This SDK extends the official [a2a-python](https://github.com/a2a/a2a-python) SDK with features tailored for telecom operator environments.
+本 SDK 在官方 [a2a-python](https://github.com/a2a/a2a-python) SDK 基础上进行扩展，提供更适合电信运营商场景的能力增强。
 
 ## Features
 
@@ -34,7 +34,7 @@ client = ExtendedClient(url="http://localhost:8080")
 response = client.send(task_id="task-001", params={"prompt": "查询基站状态"})
 ```
 
-## Prompt
+## Prompt Management
 
 当前仓库中的 Prompt 组件提供两段能力：
 
@@ -105,10 +105,15 @@ prompt = loader.load(reference=reference)
 
 ### 环境变量
 
-Prompt 模块当前使用以下环境变量：
+Prompt Management 模块当前使用以下环境变量：
 
-- `A2AT_PROMPT_LOCAL_DIR`
-- `A2AT_PROMPT_ALLOWED_EXTENSIONS`
+- `A2AT_PROMPT_DEFAULT_TTL_SECONDS`：远端 Prompt 本地镜像的默认过期时间，单位为秒
+- `A2AT_PROMPT_LOCAL_DIR`：Prompt 本地根目录，既用于本地 Prompt 扫描，也用于远端 Prompt 镜像落盘
+- `A2AT_PROMPT_ALLOWED_EXTENSIONS`：本地 Catalog 允许扫描的 Prompt 文件扩展名列表，逗号分隔
+- `A2AT_DEFAULT_PROMPT_EXTENSION_URI`：Agent Prompt Catalog 默认读取的 Prompt 扩展 URI
+- `A2AT_PROMPT_EXTENSION_URI_OVERRIDES`：按 Agent 名称覆盖 Prompt 扩展 URI 的 JSON 映射
+- `A2AT_DEFAULT_PROMPT_INDEX_URL_PARAM_KEY`：Agent Prompt Catalog 默认读取索引 URL 的参数名
+- `A2AT_PROMPT_INDEX_URL_PARAM_KEY_OVERRIDES`：按 Agent 名称覆盖索引 URL 参数名的 JSON 映射
 
 更完整的 Prompt 设计说明见：
 
@@ -159,21 +164,21 @@ slots/network diagnosis/1.0.0/zh-CN/slot.json
 
 Prompt Compliance 模块使用以下环境变量：
 
-- `A2AT_PROMPT_COMPLIANCE_ENABLED`
-- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_PROVIDER`
-- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_TIMEOUT_SECONDS`
-- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_POLICY_ID`
-- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_ENDPOINT`
-- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_REGION`
-- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_CREDENTIALS_REF`
-- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_PROVIDER`
-- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_MODEL`
-- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_TIMEOUT_SECONDS`
-- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_TEMPERATURE`
-- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_MAX_RETRIES`
-- `A2AT_PROMPT_COMPLIANCE_SLOT_LOCAL_DIR`
-- `A2AT_PROMPT_COMPLIANCE_SLOT_FILE_NAME`
-- `A2AT_PROMPT_COMPLIANCE_SLOT_NOT_FOUND_POLICY`
+- `A2AT_PROMPT_COMPLIANCE_ENABLED`：是否启用服务端 Prompt 遵从校验
+- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_PROVIDER`：输入侧安全护栏 provider 名称，默认 `noop`
+- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_TIMEOUT_SECONDS`：安全护栏调用超时时间，单位为秒
+- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_POLICY_ID`：安全护栏策略、模板或规则集标识；当前 Google Model Armor 使用该值定位模板
+- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_ENDPOINT`：安全护栏服务 endpoint，供后续或特定 provider 使用
+- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_REGION`：安全护栏服务 region，供后续或特定 provider 使用
+- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_CREDENTIALS_REF`：安全护栏凭据引用名，通常用于指向环境变量或外部凭据配置
+- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_PROVIDER`：槽位提取使用的 LLM provider
+- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_MODEL`：槽位提取使用的模型名称
+- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_TIMEOUT_SECONDS`：槽位提取调用超时时间，单位为秒
+- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_TEMPERATURE`：槽位提取时使用的采样温度
+- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_MAX_RETRIES`：槽位提取失败后的最大重试次数
+- `A2AT_PROMPT_COMPLIANCE_SLOT_LOCAL_DIR`：槽位配置根目录
+- `A2AT_PROMPT_COMPLIANCE_SLOT_FILE_NAME`：槽位配置文件名，当前默认 `slot.json`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_NOT_FOUND_POLICY`：槽位配置缺失时的处理策略，支持 `strict` 和 `skip`
 
 ### 安全护栏 Provider
 
