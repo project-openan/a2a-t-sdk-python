@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from .cache import ConflictResolutionPolicy, LocalFilePromptStore
-from .catalog import LocalPromptCatalog, PromptCatalog
+from .catalog import AgentPromptCatalog, LocalPromptCatalog, PromptCatalog, UrlIndexFetcher
 from .catalog_registry import DefaultPromptCatalogRegistry
 from .config import PromptLoaderConfig
 from .loader import PromptLoader
@@ -18,6 +18,9 @@ def build_default_prompt_catalog_registry(
     parser_registry: PromptParserRegistry | None = None,
     registry: DefaultPromptCatalogRegistry | None = None,
     local_catalog: PromptCatalog | None = None,
+    agent_cards: list[object] | None = None,
+    agent_catalog: PromptCatalog | None = None,
+    agent_catalog_fetcher: UrlIndexFetcher | None = None,
 ) -> DefaultPromptCatalogRegistry:
     prompt_parser_registry = parser_registry or build_default_prompt_parser_registry()
     catalog_registry = registry or DefaultPromptCatalogRegistry()
@@ -30,6 +33,20 @@ def build_default_prompt_catalog_registry(
             allowed_extensions=config.allowed_extensions,
         ),
     )
+    if agent_catalog is not None:
+        catalog_registry.register("agent", agent_catalog)
+    elif agent_cards:
+        catalog_registry.register(
+            "agent",
+            AgentPromptCatalog(
+                agent_cards=agent_cards,
+                default_prompt_extension_uri=config.default_prompt_extension_uri,
+                prompt_extension_uri_overrides=config.prompt_extension_uri_overrides,
+                default_prompt_index_url_param_key=config.default_prompt_index_url_param_key,
+                prompt_index_url_param_key_overrides=config.prompt_index_url_param_key_overrides,
+                fetcher=agent_catalog_fetcher,
+            ),
+        )
     return catalog_registry
 
 

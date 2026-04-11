@@ -15,6 +15,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from a2a_t.prompt.cache import LocalFilePromptStore
+from a2a_t.prompt.catalog import AgentPromptCatalog
 from a2a_t.prompt.config import PromptLoaderConfig
 from a2a_t.prompt.errors import PromptCacheError, PromptFetchError, PromptMetadataError
 from a2a_t.prompt.factory import build_default_prompt_catalog_registry, build_default_prompt_loader
@@ -584,6 +585,57 @@ class PromptLoaderTest(ManagedTempDirTestCase):
         )
 
         self.assertIs(registry.get("local"), custom_catalog)
+
+    def test_build_default_prompt_catalog_registry_builds_agent_catalog_from_config(self) -> None:
+        class FakeAgentCard:
+            def __init__(self) -> None:
+                self.name = "alarm-agent"
+                self.extensions = [
+                    {
+                        "uri": "custom.prompts",
+                        "params": {"catalogUrl": "https://agents.example.com/custom-index.json"},
+                    }
+                ]
+
+        class FakeFetcher:
+            def __call__(self, index_url: str) -> dict[str, object]:
+                self.index_url = index_url
+                return {
+                    "prompts": [
+                        {
+                            "name": "diagnosis",
+                            "language": "zh-CN",
+                            "version": "2.0.0",
+                            "title": "Alarm Diagnosis",
+                            "description": "Diagnose alarm events.",
+                            "url": "/prompts/custom/diagnosis.md",
+                        }
+                    ]
+                }
+
+        fetcher = FakeFetcher()
+        config = PromptLoaderConfig(
+            default_ttl=timedelta(hours=1),
+            local_prompt_dir=str(self.temp_root / "prompts"),
+            default_prompt_extension_uri="default-prompt",
+            prompt_extension_uri_overrides={"alarm-agent": "custom.prompts"},
+            default_prompt_index_url_param_key="promptIndexUrl",
+            prompt_index_url_param_key_overrides={"alarm-agent": "catalogUrl"},
+        )
+
+        registry = build_default_prompt_catalog_registry(
+            config,
+            agent_cards=[FakeAgentCard()],
+            agent_catalog_fetcher=fetcher,
+        )
+
+        self.assertIn("agent", registry.list_catalogs())
+        agent_catalog = registry.get("agent")
+        self.assertIsInstance(agent_catalog, AgentPromptCatalog)
+        references = agent_catalog.list()
+        self.assertEqual(fetcher.index_url, "https://agents.example.com/custom-index.json")
+        self.assertEqual(len(references), 1)
+        self.assertEqual(references[0].name, "diagnosis")
 
     def test_build_default_prompt_loader_uses_custom_conflict_policy(self) -> None:
         loader = build_default_prompt_loader(
