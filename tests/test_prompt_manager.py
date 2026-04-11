@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import hashlib
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,8 +15,10 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from a2a_t.prompt.cache import LocalFilePromptStore
+from a2a_t.prompt.catalog import AgentPromptCatalog
 from a2a_t.prompt.config import PromptLoaderConfig
 from a2a_t.prompt.errors import PromptCacheError, PromptFetchError, PromptMetadataError
+from a2a_t.prompt.factory import build_default_prompt_catalog_registry, build_default_prompt_loader
 from a2a_t.prompt.loader import PromptLoader
 from a2a_t.prompt.models import CacheStatus, FetchResult, PromptSource
 from a2a_t.prompt.parser import MarkdownPromptParser
@@ -86,6 +89,11 @@ class ResolveOnlyPromptStore:
         raise AssertionError("PromptLoader should use resolve() instead of read().")
 
 
+class RejectConflictPolicy:
+    def should_overwrite(self, *, existing_record: object, new_record: object) -> bool:
+        return False
+
+
 class PromptLoaderTest(ManagedTempDirTestCase):
     def setUp(self) -> None:
         super().setUp()
@@ -105,7 +113,7 @@ class PromptLoaderTest(ManagedTempDirTestCase):
             providers["url"] = remote_provider
 
         return PromptLoader(
-            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), cache_dir=str(self.cache_root)),
+            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(self.cache_root)),
             parser=self.parser,
             cache_store=self.cache_store,
             providers=providers,
@@ -212,7 +220,7 @@ class PromptLoaderTest(ManagedTempDirTestCase):
         )
         store = InMemoryPromptStore()
         manager = PromptLoader(
-            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), cache_dir=str(self.cache_root)),
+            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(self.cache_root)),
             parser=self.parser,
             cache_store=store,
             providers={"local_file": LocalFileProvider(), "url": remote_provider},
@@ -259,7 +267,7 @@ class PromptLoaderTest(ManagedTempDirTestCase):
         store = ResolveOnlyPromptStore(record=record, content=cached_content, cache_status=CacheStatus.HIT)
         remote_provider = FakeRemoteProvider([])
         manager = PromptLoader(
-            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), cache_dir=str(self.cache_root)),
+            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(self.cache_root)),
             parser=self.parser,
             cache_store=store,
             providers={"local_file": LocalFileProvider(), "url": remote_provider},
@@ -323,7 +331,7 @@ class PromptLoaderTest(ManagedTempDirTestCase):
             ]
         )
         manager = PromptLoader(
-            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), cache_dir=str(self.cache_root)),
+            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(self.cache_root)),
             parser=self.parser,
             cache_store=store,
             providers={"local_file": LocalFileProvider(), "url": remote_provider},
@@ -344,7 +352,7 @@ class PromptLoaderTest(ManagedTempDirTestCase):
         self.assertEqual(remote_provider.calls, 1)
         self.assertEqual(len(store.writes), 1)
 
-    def test_load_writes_cache_under_parsed_prompt_identity(self) -> None:
+    def test_load_writes_prompt_under_parsed_identity_layout(self) -> None:
         locator = "https://example.com/alarm.md"
         source = PromptSource(source_type="url", locator=locator)
         fetched_at = datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc)
@@ -375,17 +383,14 @@ class PromptLoaderTest(ManagedTempDirTestCase):
             expected_version="1.0.0",
         )
 
-        cache_key = self._expected_cache_key(
-            source_type="url",
-            locator=locator,
-            name="diagnosis",
-            language="zh-CN",
-            version="1.0.0",
-        )
-        cache_dir = self.cache_root / "prompts" / "url" / cache_key
+        cache_dir = self.cache_root / "diagnosis" / "1.0.0" / "zh-CN"
 
-        self.assertTrue((cache_dir / "content.md").exists())
+        self.assertTrue((cache_dir / "prompt.md").exists())
         self.assertTrue((cache_dir / "metadata.json").exists())
+        metadata = json.loads((cache_dir / "metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(metadata["source_locator"], "url://https://example.com/alarm.md")
+        self.assertEqual(metadata["parser_name"], "markdown")
+        self.assertTrue(metadata["content_hash"].startswith("sha256:"))
 
     def test_load_refreshes_expired_cache(self) -> None:
         locator = "https://example.com/alarm.md"
@@ -542,6 +547,108 @@ class PromptLoaderTest(ManagedTempDirTestCase):
                 expected_language="zh-CN",
                 expected_version="1.0.0",
             )
+
+    def test_build_default_prompt_catalog_registry_registers_local_catalog(self) -> None:
+        prompt_root = self.temp_root / "prompts"
+        prompt_dir = prompt_root / "diagnosis" / "1.0.0" / "zh-CN"
+        prompt_dir.mkdir(parents=True, exist_ok=True)
+        (prompt_dir / "prompt.md").write_text(
+            build_markdown(
+                name="diagnosis",
+                language="zh-CN",
+                version="1.0.0",
+                title="Alarm Diagnosis",
+                description="Diagnose alarm events.",
+                body="Prompt body",
+            ),
+            encoding="utf-8",
+        )
+
+        registry = build_default_prompt_catalog_registry(
+            PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(prompt_root))
+        )
+
+        self.assertIn("local", registry.list_catalogs())
+        references = registry.get("local").list()
+        self.assertEqual(len(references), 1)
+        self.assertEqual(references[0].name, "diagnosis")
+
+    def test_build_default_prompt_catalog_registry_allows_custom_catalog_override(self) -> None:
+        class CustomCatalog:
+            def list(self) -> list[object]:
+                return []
+
+        custom_catalog = CustomCatalog()
+        registry = build_default_prompt_catalog_registry(
+            PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(self.temp_root / "prompts")),
+            local_catalog=custom_catalog,
+        )
+
+        self.assertIs(registry.get("local"), custom_catalog)
+
+    def test_build_default_prompt_catalog_registry_builds_agent_catalog_from_config(self) -> None:
+        class FakeAgentCard:
+            def __init__(self) -> None:
+                self.name = "alarm-agent"
+                self.extensions = [
+                    {
+                        "uri": "custom.prompts",
+                        "params": {"catalogUrl": "https://agents.example.com/custom-index.json"},
+                    }
+                ]
+
+        class FakeFetcher:
+            def __call__(self, index_url: str) -> dict[str, object]:
+                self.index_url = index_url
+                return {
+                    "prompts": [
+                        {
+                            "name": "diagnosis",
+                            "language": "zh-CN",
+                            "version": "2.0.0",
+                            "title": "Alarm Diagnosis",
+                            "description": "Diagnose alarm events.",
+                            "url": "/prompts/custom/diagnosis.md",
+                        }
+                    ]
+                }
+
+        fetcher = FakeFetcher()
+        config = PromptLoaderConfig(
+            default_ttl=timedelta(hours=1),
+            local_prompt_dir=str(self.temp_root / "prompts"),
+            default_prompt_extension_uri="default-prompt",
+            prompt_extension_uri_overrides={"alarm-agent": "custom.prompts"},
+            default_prompt_index_url_param_key="promptIndexUrl",
+            prompt_index_url_param_key_overrides={"alarm-agent": "catalogUrl"},
+        )
+
+        registry = build_default_prompt_catalog_registry(
+            config,
+            agent_cards=[FakeAgentCard()],
+            agent_catalog_fetcher=fetcher,
+        )
+
+        self.assertIn("agent", registry.list_catalogs())
+        agent_catalog = registry.get("agent")
+        self.assertIsInstance(agent_catalog, AgentPromptCatalog)
+        references = agent_catalog.list()
+        self.assertEqual(fetcher.index_url, "https://agents.example.com/custom-index.json")
+        self.assertEqual(len(references), 1)
+        self.assertEqual(references[0].name, "diagnosis")
+
+    def test_build_default_prompt_loader_uses_custom_conflict_policy(self) -> None:
+        loader = build_default_prompt_loader(
+            PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(self.cache_root)),
+            conflict_resolution_policy=RejectConflictPolicy(),
+            now_provider=self._now,
+        )
+
+        self.assertIsInstance(loader, PromptLoader)
+        self.assertIsInstance(loader._cache_store, LocalFilePromptStore)
+        self.assertIsInstance(loader._providers["local_file"], LocalFileProvider)
+        self.assertIsInstance(loader._parser, MarkdownPromptParser)
+        self.assertIs(loader._cache_store._conflict_resolution_policy.__class__, RejectConflictPolicy)
 
 
 if __name__ == "__main__":

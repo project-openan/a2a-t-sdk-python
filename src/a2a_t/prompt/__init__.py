@@ -5,24 +5,30 @@ from .cache import (
     ConflictResolutionPolicy,
     ExpirationPolicy,
     LocalFilePromptStore,
+    OverwriteIfNewerVersionPolicy,
     OverwriteOnConflictPolicy,
     PromptStore,
     TTLExpirationPolicy,
 )
 from .catalog import AgentPromptCatalog, LocalPromptCatalog, PromptCatalog, UrlIndexFetcher, UrlPromptCatalog
-from .catalog_registry import PromptCatalogRegistry
+from .catalog_registry import DefaultPromptCatalogRegistry, PromptCatalogRegistry
 from .config import PromptLoaderConfig
 from .errors import (
     PromptCacheError,
+    PromptCatalogRegistryError,
+    PromptConfigError,
+    PromptConflictError,
     PromptFetchError,
     PromptLoaderError,
     PromptMetadataError,
     PromptParseError,
     PromptSourceError,
+    PromptVersionComparisonError,
 )
+from .factory import build_default_prompt_catalog_registry, build_default_prompt_loader
 from .loader import PromptLoader
 from .models import CacheStatus, CachedPromptRecord, FetchResult, Prompt, PromptReference, PromptSource
-from .parser import MarkdownPromptParser, PromptParser
+from .parser import MarkdownPromptParser, PromptParser, PromptParserRegistry, build_default_prompt_parser_registry
 from .providers import AgentFetcher, AgentProvider, LocalFileFetcher, LocalFileProvider, PromptProvider, UrlFetcher, UrlProvider
 
 __all__ = [
@@ -33,6 +39,7 @@ __all__ = [
     "CacheStore",
     "ConflictResolutionPolicy",
     "CachedPromptRecord",
+    "DefaultPromptCatalogRegistry",
     "ExpirationPolicy",
     "FetchResult",
     "LocalFileFetcher",
@@ -40,11 +47,15 @@ __all__ = [
     "LocalFileProvider",
     "LocalPromptCatalog",
     "MarkdownPromptParser",
+    "OverwriteIfNewerVersionPolicy",
     "OverwriteOnConflictPolicy",
     "Prompt",
     "PromptCacheError",
+    "PromptCatalogRegistryError",
+    "PromptConfigError",
     "PromptCatalog",
     "PromptCatalogRegistry",
+    "PromptConflictError",
     "PromptFetchError",
     "PromptLoader",
     "PromptLoaderConfig",
@@ -52,14 +63,19 @@ __all__ = [
     "PromptMetadataError",
     "PromptParseError",
     "PromptParser",
+    "PromptParserRegistry",
     "PromptProvider",
     "PromptReference",
     "PromptSource",
     "PromptSourceError",
     "PromptStore",
+    "PromptVersionComparisonError",
     "TTLExpirationPolicy",
     "UrlFetcher",
     "UrlIndexFetcher",
     "UrlPromptCatalog",
     "UrlProvider",
+    "build_default_prompt_parser_registry",
+    "build_default_prompt_catalog_registry",
+    "build_default_prompt_loader",
 ]

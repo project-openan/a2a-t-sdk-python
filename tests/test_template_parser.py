@@ -13,7 +13,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from a2a_t.prompt.errors import PromptMetadataError, PromptParseError
-from a2a_t.prompt.models import CacheStatus, PromptSource
+from a2a_t.prompt.models import CacheStatus, PromptReference, PromptSource
 from a2a_t.prompt.parser import MarkdownPromptParser, PromptParser
 
 
@@ -101,21 +101,22 @@ class MarkdownPromptParserTest(unittest.TestCase):
                 cache_status=CacheStatus.MISS,
             )
 
-    def test_parse_rejects_missing_title(self) -> None:
-        with self.assertRaises(PromptMetadataError):
-            self.parser.parse(
-                content=(
-                    "---\n"
-                    "name: diagnosis\n"
-                    "language: zh-CN\n"
-                    "version: 1.0.0\n"
-                    "description: Diagnose alarm events.\n"
-                    "---\n"
-                    "Prompt body\n"
-                ),
-                source=self.source,
-                cache_status=CacheStatus.MISS,
-            )
+    def test_parse_accepts_missing_title_as_empty_string(self) -> None:
+        prompt = self.parser.parse(
+            content=(
+                "---\n"
+                "name: diagnosis\n"
+                "language: zh-CN\n"
+                "version: 1.0.0\n"
+                "description: Diagnose alarm events.\n"
+                "---\n"
+                "Prompt body\n"
+            ),
+            source=self.source,
+            cache_status=CacheStatus.MISS,
+        )
+
+        self.assertEqual(prompt.title, "")
 
     def test_parse_rejects_missing_description(self) -> None:
         with self.assertRaises(PromptMetadataError):
@@ -132,6 +133,18 @@ class MarkdownPromptParserTest(unittest.TestCase):
                 source=self.source,
                 cache_status=CacheStatus.MISS,
             )
+
+    def test_prompt_reference_accepts_empty_title(self) -> None:
+        reference = PromptReference(
+            name="diagnosis",
+            language="zh-CN",
+            version="1.0.0",
+            title="",
+            description="Diagnose alarm events.",
+            source=self.source,
+        )
+
+        self.assertEqual(reference.title, "")
 
     def test_parse_rejects_invalid_front_matter(self) -> None:
         with self.assertRaises(PromptParseError):

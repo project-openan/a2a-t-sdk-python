@@ -20,6 +20,37 @@ class PromptParser(Protocol):
     ) -> Prompt: ...
 
 
+class PromptParserRegistry:
+    """按扩展名管理 Prompt parser / Manage prompt parsers by file extension."""
+
+    def __init__(self) -> None:
+        self._parsers_by_extension: dict[str, PromptParser] = {}
+
+    def register(self, format_name: str, parser: PromptParser, extensions: list[str]) -> None:
+        for extension in extensions:
+            normalized = self._normalize_extension(extension)
+            self._parsers_by_extension[normalized] = parser
+
+    def get_by_extension(self, extension: str) -> PromptParser:
+        normalized = self._normalize_extension(extension)
+        try:
+            return self._parsers_by_extension[normalized]
+        except KeyError as error:
+            raise PromptParseError(f"No parser registered for extension: {normalized}") from error
+
+    def list_supported_extensions(self) -> list[str]:
+        return sorted(self._parsers_by_extension.keys())
+
+    def _normalize_extension(self, extension: str) -> str:
+        return extension if extension.startswith(".") else f".{extension}"
+
+
+def build_default_prompt_parser_registry() -> PromptParserRegistry:
+    registry = PromptParserRegistry()
+    registry.register("markdown", MarkdownPromptParser(), [".md"])
+    return registry
+
+
 class MarkdownPromptParser:
     """解析 Markdown Prompt 并校验 front matter 元数据 / Parse Markdown prompts and validate their front matter metadata."""
 
@@ -38,7 +69,7 @@ class MarkdownPromptParser:
         name = self._require(metadata, "name")
         language = metadata.get("language") or "default"
         version = self._require(metadata, "version")
-        title = self._require(metadata, "title")
+        title = metadata.get("title") or ""
         description = self._require(metadata, "description")
 
         return Prompt(

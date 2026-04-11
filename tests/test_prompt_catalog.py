@@ -22,7 +22,8 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from a2a_t.prompt.errors import PromptSourceError
-from a2a_t.prompt.parser import MarkdownPromptParser
+from a2a_t.prompt.models import CacheStatus, Prompt, PromptSource
+from a2a_t.prompt.parser import MarkdownPromptParser, PromptParserRegistry
 
 
 class PromptCatalogContractTest(unittest.TestCase):
@@ -88,6 +89,62 @@ class PromptCatalogImplementationTest(ManagedTempDirTestCase):
         self.assertEqual(references[0].version, "1.0.0")
         self.assertEqual(references[0].source.source_type, "local_file")
         self.assertEqual(references[0].source.locator, str(prompt_path))
+
+    def test_local_prompt_catalog_scans_allowed_extensions_and_routes_parser_registry(self) -> None:
+        class JsonPromptParser:
+            def parse(
+                self,
+                *,
+                content: str,
+                source: PromptSource,
+                cache_status: CacheStatus,
+            ) -> Prompt:
+                return Prompt(
+                    name="json-diagnosis",
+                    language="default",
+                    version="1.0.0",
+                    title="JSON Diagnosis",
+                    description="Diagnose alarm events.",
+                    format="json",
+                    body=content,
+                    raw_content=content,
+                    source=source,
+                    cache_status=cache_status,
+                )
+
+        prompt_dir = self.temp_root / "mixed"
+        prompt_dir.mkdir(parents=True, exist_ok=True)
+        markdown_path = prompt_dir / "diagnosis.md"
+        markdown_path.write_text(
+            "---\n"
+            "name: diagnosis\n"
+            "language: zh-CN\n"
+            "version: 1.0.0\n"
+            "title: Alarm Diagnosis\n"
+            "description: Diagnose alarm events.\n"
+            "---\n"
+            "Prompt body\n",
+            encoding="utf-8",
+        )
+        json_path = prompt_dir / "diagnosis.json"
+        json_path.write_text('{"prompt":"json"}', encoding="utf-8")
+
+        registry = PromptParserRegistry()
+        registry.register("markdown", MarkdownPromptParser(), [".md"])
+        registry.register("json", JsonPromptParser(), [".json"])
+
+        module = importlib.import_module("a2a_t.prompt.catalog")
+        catalog = module.LocalPromptCatalog(
+            prompt_dir=str(prompt_dir),
+            parser_registry=registry,
+            allowed_extensions=[".md", ".json"],
+        )
+
+        references = catalog.list()
+
+        self.assertEqual(len(references), 2)
+        self.assertEqual({reference.name for reference in references}, {"diagnosis", "json-diagnosis"})
+        self.assertEqual({Path(reference.source.locator).suffix for reference in references}, {".md", ".json"})
 
     def test_url_prompt_catalog_reads_prompt_index_entries(self) -> None:
         index_dir = self.temp_root / "url"
