@@ -17,7 +17,7 @@ from a2a_t.server.prompt_compliance.models import GuardrailDecision
 
 
 class PromptComplianceService:
-    """Coordinate prompt compliance validation flow on the server side."""
+    """在服务端编排 Prompt 遵从校验流程 / Coordinate prompt compliance validation flow on the server side."""
 
     def __init__(
         self,

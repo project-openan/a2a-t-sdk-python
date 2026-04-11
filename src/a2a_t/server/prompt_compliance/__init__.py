@@ -1,4 +1,4 @@
-"""Prompt compliance models and errors for server-side validation."""
+"""服务端 Prompt 遵从校验相关模型与异常 / Prompt compliance models and errors for server-side validation."""
 
 from a2a_t.server.prompt_compliance.errors import (
     GuardrailExecutionError,

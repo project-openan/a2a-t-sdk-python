@@ -9,7 +9,7 @@ from a2a_t.server.prompt_compliance.models import GuardrailDecision, GuardrailRe
 
 
 class GoogleModelArmorGateway:
-    """Thin gateway over the official Google Model Armor client."""
+    """Google Model Armor 官方客户端薄封装 / Thin gateway over the official Google Model Armor client."""
 
     def __init__(self, *, config: GuardrailProviderConfig, client: object | None = None) -> None:
         self._config = config
@@ -46,7 +46,7 @@ class GoogleModelArmorGateway:
 
 
 class GoogleModelArmorGuardrailAdapter(GuardrailAdapter):
-    """Normalize Google Model Armor input scan results to GuardrailResult."""
+    """将 Google Model Armor 输入扫描结果归一化为 GuardrailResult / Normalize Google Model Armor input scan results to GuardrailResult."""
 
     provider_name = "google_model_armor"
 
