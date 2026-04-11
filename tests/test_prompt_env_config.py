@@ -100,6 +100,24 @@ class PromptEnvConfigTest(ManagedTempDirTestCase):
 
         self.assertEqual(env.get("A2AT_PROMPT_LOCAL_DIR"), "./from-env")
 
+    def test_env_config_supports_quoted_values_in_env_file(self) -> None:
+        temp_root = self.make_temp_dir("prompt_env_quoted")
+        env_path = temp_root / ".env"
+        env_path.write_text('A2AT_PROMPT_LOCAL_DIR="./quoted-prompts"\n', encoding="utf-8")
+
+        env = EnvConfig.load(env_path=env_path)
+
+        self.assertEqual(env.get("A2AT_PROMPT_LOCAL_DIR"), "./quoted-prompts")
+
+    def test_env_config_supports_export_prefix_in_env_file(self) -> None:
+        temp_root = self.make_temp_dir("prompt_env_export")
+        env_path = temp_root / ".env"
+        env_path.write_text("export A2AT_PROMPT_LOCAL_DIR=./exported-prompts\n", encoding="utf-8")
+
+        env = EnvConfig.load(env_path=env_path)
+
+        self.assertEqual(env.get("A2AT_PROMPT_LOCAL_DIR"), "./exported-prompts")
+
     def test_prompt_loader_config_reads_local_dir_and_extensions_from_env(self) -> None:
         env = EnvConfig(
             values={

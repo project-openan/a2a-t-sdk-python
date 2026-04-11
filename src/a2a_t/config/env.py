@@ -4,10 +4,12 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from dotenv import dotenv_values
+
 
 @dataclass(slots=True)
 class EnvConfig:
-    """Load key/value settings from a .env file and process environment."""
+    """Load settings from `.env` and process environment. / 从 `.env` 与进程环境加载配置。"""
 
     values: dict[str, str]
 
@@ -16,14 +18,10 @@ class EnvConfig:
         values: dict[str, str] = {}
 
         if env_path.exists():
-            for line in env_path.read_text(encoding="utf-8").splitlines():
-                normalized = line.strip()
-                if not normalized or normalized.startswith("#"):
-                    continue
-                if "=" not in normalized:
-                    continue
-                key, value = normalized.split("=", 1)
-                values[key.strip()] = value.strip()
+            file_values = dotenv_values(env_path)
+            values.update(
+                {key: value for key, value in file_values.items() if key is not None and value is not None}
+            )
 
         for key, value in os.environ.items():
             if key in values:
