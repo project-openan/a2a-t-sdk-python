@@ -6,21 +6,11 @@ telecom operator environments, including prompt management, context compression,
 and LLM integration adapters.
 """
 
-__version__ = "0.1.0"
+from __future__ import annotations
 
-from a2a_t.common import errors, connection_pool, logging, utils
-from a2a_t.client import extended_client, prompt_client, compression_client
-from a2a_t.server import (
-    extended_server,
-    prompt_handler,
-    compression_handler,
-    rate_limiter,
-)
-from a2a_t import prompt
-from a2a_t.prompt import models, loader, cache, errors as prompt_errors
-from a2a_t.compression import base, chain, errors as compression_errors
-from a2a_t.llm import base as llm_base, factory
-from a2a_t.config import loader, models as config_models
+from importlib import import_module
+
+__version__ = "0.1.0"
 
 __all__ = [
     "__version__",
@@ -47,3 +37,37 @@ __all__ = [
     "factory",
     "config_models",
 ]
+
+_LAZY_IMPORTS = {
+    "errors": "a2a_t.common.errors",
+    "connection_pool": "a2a_t.common.connection_pool",
+    "logging": "a2a_t.common.logging",
+    "utils": "a2a_t.common.utils",
+    "extended_client": "a2a_t.client.extended_client",
+    "prompt_client": "a2a_t.client.prompt_client",
+    "compression_client": "a2a_t.client.compression_client",
+    "extended_server": "a2a_t.server.extended_server",
+    "prompt_handler": "a2a_t.server.prompt_handler",
+    "compression_handler": "a2a_t.server.compression_handler",
+    "rate_limiter": "a2a_t.server.rate_limiter",
+    "prompt": "a2a_t.prompt",
+    "models": "a2a_t.prompt.models",
+    "loader": "a2a_t.prompt.loader",
+    "cache": "a2a_t.prompt.cache",
+    "prompt_errors": "a2a_t.prompt.errors",
+    "base": "a2a_t.compression.base",
+    "chain": "a2a_t.compression.chain",
+    "compression_errors": "a2a_t.compression.errors",
+    "llm_base": "a2a_t.llm.base",
+    "factory": "a2a_t.llm.factory",
+    "config_models": "a2a_t.config.models",
+}
+
+
+def __getattr__(name: str):
+    module_name = _LAZY_IMPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module 'a2a_t' has no attribute {name!r}")
+    module = import_module(module_name)
+    globals()[name] = module
+    return module
