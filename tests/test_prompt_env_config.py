@@ -18,6 +18,15 @@ from tests.test_support import ManagedTempDirTestCase
 
 
 class PromptEnvConfigTest(ManagedTempDirTestCase):
+    def test_project_contains_env_example_for_prompt_runtime(self) -> None:
+        env_example_path = PROJECT_ROOT / "env.example"
+
+        self.assertTrue(env_example_path.exists())
+        content = env_example_path.read_text(encoding="utf-8")
+        self.assertIn("A2AT_PROMPT_LOCAL_DIR=", content)
+        self.assertIn("A2AT_PROMPT_ALLOWED_EXTENSIONS=", content)
+        self.assertNotIn("A2AT_PROMPT_CACHE_DIR=", content)
+
     def test_project_contains_dotenv_file_for_prompt_runtime(self) -> None:
         env_path = PROJECT_ROOT / ".env"
 

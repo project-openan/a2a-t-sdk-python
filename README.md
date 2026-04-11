@@ -60,31 +60,24 @@ response = client.send(task_id="task-001", params={"prompt": "查询基站状态
 ### 调用方式
 
 ```python
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from a2a_t.prompt import (
-    LocalFilePromptStore,
-    LocalPromptCatalog,
-    MarkdownPromptParser,
-    PromptLoader,
     PromptLoaderConfig,
-    UrlProvider,
+    build_default_prompt_catalog_registry,
+    build_default_prompt_loader,
 )
 
 config = PromptLoaderConfig(
-    cache_dir=".cache/prompts",
+    local_prompt_dir="./prompts",
+    allowed_extensions=[".md"],
     default_ttl=timedelta(hours=6),
 )
 
-loader = PromptLoader(
-    config=config,
-    parser=MarkdownPromptParser(),
-    cache_store=LocalFilePromptStore(config.cache_dir),
-    providers={"url": UrlProvider()},
-    now_provider=lambda: datetime.now(timezone.utc),
-)
+catalog_registry = build_default_prompt_catalog_registry(config)
+loader = build_default_prompt_loader(config)
 
-catalog = LocalPromptCatalog(prompt_dir="./prompts")
+catalog = catalog_registry.get("local")
 reference = catalog.list()[0]
 prompt = loader.load(reference=reference)
 ```
@@ -92,10 +85,19 @@ prompt = loader.load(reference=reference)
 ### 约束说明
 
 - Prompt 发布身份由 `name + language + version` 唯一确定
-- 远端缓存目录结构为 `prompts/<source_type>/<cache_key>/`
-- `local_file` 没有缓存过期的概念
+- 本地镜像目录结构为 `<local_root>/<name>/<version>/<language>/prompt.<ext>`
+- 通过 `A2AT_PROMPT_LOCAL_DIR` 配置 Prompt 本地根目录
+- 通过 `A2AT_PROMPT_ALLOWED_EXTENSIONS` 配置允许扫描的 Prompt 扩展名
+- 默认运行时装配入口为 `build_default_prompt_loader()` 与 `build_default_prompt_catalog_registry()`
 - `ExpirationPolicy` 负责判断缓存是否过期
 - `ConflictResolutionPolicy` 负责决定缓存冲突时是否覆盖
+
+### 环境变量
+
+Prompt 模块当前使用以下环境变量：
+
+- `A2AT_PROMPT_LOCAL_DIR`
+- `A2AT_PROMPT_ALLOWED_EXTENSIONS`
 
 更完整的 Prompt 设计说明见：
 
