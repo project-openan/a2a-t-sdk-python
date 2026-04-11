@@ -63,9 +63,13 @@ response = client.send(task_id="task-001", params={"prompt": "查询基站状态
 from datetime import timedelta
 
 from a2a_t.prompt import (
+    DefaultPromptCatalogRegistry,
+    LocalFilePromptStore,
+    LocalFileProvider,
+    LocalPromptCatalog,
+    MarkdownPromptParser,
+    PromptLoader,
     PromptLoaderConfig,
-    build_default_prompt_catalog_registry,
-    build_default_prompt_loader,
 )
 
 config = PromptLoaderConfig(
@@ -74,8 +78,15 @@ config = PromptLoaderConfig(
     default_ttl=timedelta(hours=6),
 )
 
-catalog_registry = build_default_prompt_catalog_registry(config)
-loader = build_default_prompt_loader(config)
+catalog_registry = DefaultPromptCatalogRegistry()
+catalog_registry.register("local", LocalPromptCatalog(config=config))
+
+loader = PromptLoader(
+    config=config,
+    parser=MarkdownPromptParser(),
+    cache_store=LocalFilePromptStore(config.local_prompt_dir),
+    providers={"local_file": LocalFileProvider()},
+)
 
 catalog = catalog_registry.get("local")
 reference = catalog.list()[0]
@@ -88,7 +99,7 @@ prompt = loader.load(reference=reference)
 - 本地镜像目录结构为 `<local_root>/<name>/<version>/<language>/prompt.<ext>`
 - 通过 `A2AT_PROMPT_LOCAL_DIR` 配置 Prompt 本地根目录
 - 通过 `A2AT_PROMPT_ALLOWED_EXTENSIONS` 配置允许扫描的 Prompt 扩展名
-- 默认运行时装配入口为 `build_default_prompt_loader()` 与 `build_default_prompt_catalog_registry()`
+- 组件直接接收 `PromptLoaderConfig`，调用方按需组装 `PromptCatalogRegistry` 与 `PromptLoader`
 - `ExpirationPolicy` 负责判断缓存是否过期
 - `ConflictResolutionPolicy` 负责决定缓存冲突时是否覆盖
 

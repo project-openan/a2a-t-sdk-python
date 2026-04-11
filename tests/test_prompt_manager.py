@@ -15,10 +15,10 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from a2a_t.prompt.cache import LocalFilePromptStore
-from a2a_t.prompt.catalog import AgentPromptCatalog
+from a2a_t.prompt.catalog import AgentPromptCatalog, LocalPromptCatalog
+from a2a_t.prompt.catalog_registry import DefaultPromptCatalogRegistry
 from a2a_t.prompt.config import PromptLoaderConfig
 from a2a_t.prompt.errors import PromptCacheError, PromptFetchError, PromptMetadataError
-from a2a_t.prompt.factory import build_default_prompt_catalog_registry, build_default_prompt_loader
 from a2a_t.prompt.loader import PromptLoader
 from a2a_t.prompt.models import CacheStatus, FetchResult, PromptSource
 from a2a_t.prompt.parser import MarkdownPromptParser
@@ -548,7 +548,7 @@ class PromptLoaderTest(ManagedTempDirTestCase):
                 expected_version="1.0.0",
             )
 
-    def test_build_default_prompt_catalog_registry_registers_local_catalog(self) -> None:
+    def test_default_catalog_registry_registers_configured_local_catalog(self) -> None:
         prompt_root = self.temp_root / "prompts"
         prompt_dir = prompt_root / "diagnosis" / "1.0.0" / "zh-CN"
         prompt_dir.mkdir(parents=True, exist_ok=True)
@@ -564,29 +564,27 @@ class PromptLoaderTest(ManagedTempDirTestCase):
             encoding="utf-8",
         )
 
-        registry = build_default_prompt_catalog_registry(
-            PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(prompt_root))
-        )
+        config = PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(prompt_root))
+        registry = DefaultPromptCatalogRegistry()
+        registry.register("local", LocalPromptCatalog(config=config))
 
         self.assertIn("local", registry.list_catalogs())
         references = registry.get("local").list()
         self.assertEqual(len(references), 1)
         self.assertEqual(references[0].name, "diagnosis")
 
-    def test_build_default_prompt_catalog_registry_allows_custom_catalog_override(self) -> None:
+    def test_default_catalog_registry_allows_custom_catalog_registration(self) -> None:
         class CustomCatalog:
             def list(self) -> list[object]:
                 return []
 
         custom_catalog = CustomCatalog()
-        registry = build_default_prompt_catalog_registry(
-            PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(self.temp_root / "prompts")),
-            local_catalog=custom_catalog,
-        )
+        registry = DefaultPromptCatalogRegistry()
+        registry.register("local", custom_catalog)
 
         self.assertIs(registry.get("local"), custom_catalog)
 
-    def test_build_default_prompt_catalog_registry_builds_agent_catalog_from_config(self) -> None:
+    def test_agent_catalog_uses_prompt_loader_config_directly(self) -> None:
         class FakeAgentCard:
             def __init__(self) -> None:
                 self.name = "alarm-agent"
@@ -623,10 +621,10 @@ class PromptLoaderTest(ManagedTempDirTestCase):
             prompt_index_url_param_key_overrides={"alarm-agent": "catalogUrl"},
         )
 
-        registry = build_default_prompt_catalog_registry(
-            config,
-            agent_cards=[FakeAgentCard()],
-            agent_catalog_fetcher=fetcher,
+        registry = DefaultPromptCatalogRegistry()
+        registry.register(
+            "agent",
+            AgentPromptCatalog(config=config, agent_cards=[FakeAgentCard()], fetcher=fetcher),
         )
 
         self.assertIn("agent", registry.list_catalogs())
@@ -637,10 +635,19 @@ class PromptLoaderTest(ManagedTempDirTestCase):
         self.assertEqual(len(references), 1)
         self.assertEqual(references[0].name, "diagnosis")
 
-    def test_build_default_prompt_loader_uses_custom_conflict_policy(self) -> None:
-        loader = build_default_prompt_loader(
-            PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(self.cache_root)),
+    def test_prompt_loader_can_be_composed_with_custom_conflict_policy(self) -> None:
+        cache_store = LocalFilePromptStore(
+            self.cache_root,
             conflict_resolution_policy=RejectConflictPolicy(),
+        )
+        loader = PromptLoader(
+            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(self.cache_root)),
+            parser=MarkdownPromptParser(),
+            cache_store=cache_store,
+            providers={
+                "local_file": LocalFileProvider(),
+                "url": FakeRemoteProvider([]),
+            },
             now_provider=self._now,
         )
 
