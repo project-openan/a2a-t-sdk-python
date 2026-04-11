@@ -1,17 +1,17 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Literal
 
-import yaml
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from a2a_t.server.prompt_compliance.errors import SlotConfigLoadError, SlotConfigValidationError
+from a2a_t.server.prompt_compliance.errors import SlotSchemaLoadError, SlotSchemaValidationError
 from a2a_t.server.prompt_compliance.models import PromptIdentity, SlotSchemaConfig
 
 
 class SlotPromptIdentity(BaseModel):
-    """Prompt identity stored in slot.yaml."""
+    """Prompt identity stored in slot.json."""
 
     name: str
     language: str
@@ -36,7 +36,7 @@ class SlotDefinition(BaseModel):
     pattern: str | None = None
 
     @model_validator(mode="after")
-    def validate_semantics(self) -> SlotDefinition:
+    def validate_semantics(self) -> "SlotDefinition":
         if self.type == "enum" and not self.allowed_values:
             raise ValueError("enum slot must define allowed_values")
         if self.allowed_values is not None and self.type != "enum":
@@ -61,19 +61,20 @@ class SlotRule(BaseModel):
     requires: list[str] = Field(min_length=1)
 
 
-class SlotConfig(BaseModel):
-    """Full slot.yaml structure."""
+class SlotSchema(BaseModel):
+    """Full slot.json structure."""
 
     prompt_identity: SlotPromptIdentity
     slots: list[SlotDefinition]
     rules: list[SlotRule] = Field(default_factory=list)
 
 
-class SlotConfigResolver:
-    """Resolve and load mirrored slot.yaml files."""
+class SlotSchemaResolver:
+    """Resolve and load mirrored slot.json files."""
 
     def __init__(self, config: SlotSchemaConfig) -> None:
         self._config = config
+        (Path(self._config.root_dir) / self._config.slot_root_name).mkdir(parents=True, exist_ok=True)
 
     def resolve_path(self, identity: PromptIdentity) -> Path:
         root_dir = Path(self._config.root_dir)
@@ -86,10 +87,10 @@ class SlotConfigResolver:
             / self._config.file_name
         )
 
-    def load(self, identity: PromptIdentity) -> SlotConfig:
+    def load(self, identity: PromptIdentity) -> SlotSchema:
         path = self.resolve_path(identity)
         if not path.exists():
-            raise SlotConfigLoadError(
+            raise SlotSchemaLoadError(
                 "Slot configuration file does not exist.",
                 path=str(path),
                 name=identity.name,
@@ -98,15 +99,15 @@ class SlotConfigResolver:
             )
 
         try:
-            raw_data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except yaml.YAMLError as error:
-            raise SlotConfigValidationError("Slot configuration YAML is invalid.", path=str(path)) from error
+            raw_data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise SlotSchemaValidationError("Slot configuration JSON is invalid.", path=str(path)) from error
 
-        return self.build_slot_config(raw_data)
+        return self.build_slot_schema(raw_data)
 
     @staticmethod
-    def build_slot_config(raw_data: dict[str, Any]) -> SlotConfig:
+    def build_slot_schema(raw_data: dict[str, Any]) -> SlotSchema:
         try:
-            return SlotConfig.model_validate(raw_data)
+            return SlotSchema.model_validate(raw_data)
         except ValidationError as error:
-            raise SlotConfigValidationError("Slot configuration is invalid.", errors=error.errors()) from error
+            raise SlotSchemaValidationError("Slot configuration is invalid.", errors=error.errors()) from error

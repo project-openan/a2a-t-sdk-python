@@ -21,14 +21,14 @@ class PromptOriginResolveError(PromptComplianceError):
     pass
 
 
-class SlotConfigLoadError(PromptComplianceError):
-    """Raised when a slot configuration file cannot be loaded."""
+class SlotSchemaLoadError(PromptComplianceError):
+    """Raised when a slot schema file cannot be loaded."""
 
     pass
 
 
-class SlotConfigValidationError(PromptComplianceError):
-    """Raised when a slot configuration file is invalid."""
+class SlotSchemaValidationError(PromptComplianceError):
+    """Raised when a slot schema file is invalid."""
 
     pass
 
@@ -47,5 +47,11 @@ class GuardrailRejectedError(PromptComplianceError):
 
 class GuardrailExecutionError(PromptComplianceError):
     """Raised when the safety guardrail fails due to a transient external error."""
+
+    pass
+
+
+class SlotValidationError(PromptComplianceError):
+    """Raised when extracted slots do not satisfy the runtime slot schema."""
 
     pass

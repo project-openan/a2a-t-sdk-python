@@ -12,9 +12,9 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
-from a2a_t.server.prompt_compliance.errors import GuardrailExecutionError
+from a2a_t.server.prompt_compliance.errors import GuardrailExecutionError, GuardrailRejectedError
 from a2a_t.server.prompt_compliance.guardrails import SafetyGuardrailFactory
-from a2a_t.server.prompt_compliance.models import GuardrailResult, PromptComplianceProviderConfig
+from a2a_t.server.prompt_compliance.models import GuardrailProviderConfig, GuardrailResult
 
 
 class SafetyGuardrailFactoryTest(unittest.TestCase):
@@ -36,7 +36,7 @@ class SafetyGuardrailFactoryTest(unittest.TestCase):
 
         SafetyGuardrailFactory.register("custom_guardrail", transport)
         guardrail = SafetyGuardrailFactory.create(
-            PromptComplianceProviderConfig(
+            GuardrailProviderConfig(
                 provider="custom_guardrail",
                 timeout=3.0,
                 config={"transport": transport},
@@ -56,7 +56,7 @@ class SafetyGuardrailFactoryTest(unittest.TestCase):
         )
 
     def test_factory_creates_noop_guardrail(self) -> None:
-        guardrail = SafetyGuardrailFactory.create(PromptComplianceProviderConfig(provider=""))
+        guardrail = SafetyGuardrailFactory.create(GuardrailProviderConfig(provider=""))
 
         result = guardrail.check("processed prompt body", {"request_id": "req-1"})
 
@@ -68,7 +68,7 @@ class SafetyGuardrailFactoryTest(unittest.TestCase):
 
         SafetyGuardrailFactory.register("timeout_guardrail", transport)
         guardrail = SafetyGuardrailFactory.create(
-            PromptComplianceProviderConfig(
+            GuardrailProviderConfig(
                 provider="timeout_guardrail",
                 timeout=3.0,
                 config={"transport": transport},
@@ -77,6 +77,13 @@ class SafetyGuardrailFactoryTest(unittest.TestCase):
 
         with self.assertRaises(GuardrailExecutionError):
             guardrail.check("processed prompt body", {"request_id": "req-1"})
+
+    def test_guardrail_rejection_is_explicitly_modeled(self) -> None:
+        error = GuardrailRejectedError("blocked by policy", category="prompt_injection", provider="custom_guardrail")
+
+        self.assertEqual(str(error), "blocked by policy")
+        self.assertEqual(error.context["category"], "prompt_injection")
+        self.assertEqual(error.context["provider"], "custom_guardrail")
 
 
 if __name__ == "__main__":

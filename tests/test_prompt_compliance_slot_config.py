@@ -12,92 +12,104 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
-from a2a_t.server.prompt_compliance.errors import SlotConfigLoadError, SlotConfigValidationError
+from a2a_t.server.prompt_compliance.errors import SlotSchemaLoadError, SlotSchemaValidationError
 from a2a_t.server.prompt_compliance.models import PromptIdentity, SlotSchemaConfig
 from a2a_t.server.prompt_compliance.schema_builder import SlotSchemaBuilder
-from a2a_t.server.prompt_compliance.slot_config import SlotConfigResolver
+from a2a_t.server.prompt_compliance.slot_schema import SlotSchemaResolver
 from a2a_t.server.prompt_compliance.validator import SlotValidator
 from tests.test_support import ManagedTempDirTestCase
 
 
-class SlotConfigResolverTest(ManagedTempDirTestCase):
+class SlotSchemaResolverTest(ManagedTempDirTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.cache_root = self.make_temp_dir("slot_config")
         self.identity = PromptIdentity(name="network diagnosis", language="zh-CN", version="1.0.0")
-        self.config = SlotSchemaConfig(root_dir=str(self.cache_root), slot_root_name="slots", file_name="slot.yaml")
-        self.resolver = SlotConfigResolver(self.config)
+        self.config = SlotSchemaConfig(root_dir=str(self.cache_root), slot_root_name="slots", file_name="slot.json")
+        self.resolver = SlotSchemaResolver(self.config)
 
     def test_resolve_path_builds_mirrored_slot_location(self) -> None:
         path = self.resolver.resolve_path(self.identity)
 
-        expected = self.cache_root / "slots" / "network diagnosis" / "1.0.0" / "zh-CN" / "slot.yaml"
+        expected = self.cache_root / "slots" / "network diagnosis" / "1.0.0" / "zh-CN" / "slot.json"
         self.assertEqual(path, expected)
 
-    def test_load_reads_and_validates_slot_yaml(self) -> None:
+    def test_resolver_creates_slot_root_directory_on_init(self) -> None:
+        self.assertTrue((self.cache_root / "slots").exists())
+
+    def test_load_reads_and_validates_slot_json(self) -> None:
         slot_path = self.resolver.resolve_path(self.identity)
         slot_path.parent.mkdir(parents=True, exist_ok=True)
         slot_path.write_text(
             """
-prompt_identity:
-  name: "network diagnosis"
-  language: "zh-CN"
-  version: "1.0.0"
-
-slots:
-  - name: "device_type"
-    required: true
-    type: "string"
-
-  - name: "operation"
-    required: true
-    type: "enum"
-    allowed_values:
-      - "query"
-      - "restart"
-
-rules:
-  - type: "dependency"
-    when:
-      slot: "operation"
-      equals: "restart"
-    requires:
-      - "device_type"
-""".strip()
-            + "\n",
+{
+  "prompt_identity": {
+    "name": "network diagnosis",
+    "language": "zh-CN",
+    "version": "1.0.0"
+  },
+  "slots": [
+    {
+      "name": "device_type",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "name": "operation",
+      "required": true,
+      "type": "enum",
+      "allowed_values": ["query", "restart"]
+    }
+  ],
+  "rules": [
+    {
+      "type": "dependency",
+      "when": {
+        "slot": "operation",
+        "equals": "restart"
+      },
+      "requires": ["device_type"]
+    }
+  ]
+}
+""".strip() + "\n",
             encoding="utf-8",
         )
 
-        slot_config = self.resolver.load(self.identity)
+        slot_schema = self.resolver.load(self.identity)
 
-        self.assertEqual(slot_config.prompt_identity.name, "network diagnosis")
-        self.assertEqual(slot_config.slots[0].name, "device_type")
-        self.assertEqual(slot_config.slots[1].allowed_values, ["query", "restart"])
-        self.assertEqual(slot_config.rules[0].requires, ["device_type"])
+        self.assertEqual(slot_schema.prompt_identity.name, "network diagnosis")
+        self.assertEqual(slot_schema.slots[0].name, "device_type")
+        self.assertEqual(slot_schema.slots[1].allowed_values, ["query", "restart"])
+        self.assertEqual(slot_schema.rules[0].requires, ["device_type"])
 
-    def test_load_rejects_invalid_slot_yaml(self) -> None:
+    def test_load_rejects_invalid_slot_json(self) -> None:
         slot_path = self.resolver.resolve_path(self.identity)
         slot_path.parent.mkdir(parents=True, exist_ok=True)
         slot_path.write_text(
             """
-prompt_identity:
-  name: "network diagnosis"
-  language: "zh-CN"
-  version: "1.0.0"
-
-slots:
-  - name: "operation"
-    type: "enum"
-""".strip()
-            + "\n",
+{
+  "prompt_identity": {
+    "name": "network diagnosis",
+    "language": "zh-CN",
+    "version": "1.0.0"
+  },
+  "slots": [
+    {
+      "name": "operation",
+      "type": "enum"
+    }
+  ]
+}
+""".strip() + "\n",
             encoding="utf-8",
         )
 
-        with self.assertRaises(SlotConfigValidationError):
+        with self.assertRaises(SlotSchemaValidationError):
             self.resolver.load(self.identity)
 
-    def test_load_raises_when_slot_yaml_is_missing(self) -> None:
-        with self.assertRaises(SlotConfigLoadError):
+    def test_load_raises_when_slot_json_is_missing(self) -> None:
+        with self.assertRaises(SlotSchemaLoadError):
             self.resolver.load(self.identity)
 
 
@@ -106,7 +118,7 @@ class SlotSchemaBuilderTest(unittest.TestCase):
         self.builder = SlotSchemaBuilder()
 
     def test_build_maps_required_enum_pattern_and_dependency_rules(self) -> None:
-        slot_config = SlotConfigResolver.build_slot_config(
+        slot_schema = SlotSchemaResolver.build_slot_schema(
             {
                 "prompt_identity": {
                     "name": "network diagnosis",
@@ -128,7 +140,7 @@ class SlotSchemaBuilderTest(unittest.TestCase):
             }
         )
 
-        schema = self.builder.build(slot_config)
+        schema = self.builder.build(slot_schema)
 
         self.assertEqual(schema["type"], "object")
         self.assertEqual(schema["required"], ["device_type", "operation"])
@@ -141,7 +153,7 @@ class SlotSchemaBuilderTest(unittest.TestCase):
 
 class SlotValidatorTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.slot_config = SlotConfigResolver.build_slot_config(
+        self.slot_schema = SlotSchemaResolver.build_slot_schema(
             {
                 "prompt_identity": {
                     "name": "network diagnosis",
@@ -166,7 +178,7 @@ class SlotValidatorTest(unittest.TestCase):
     def test_validate_returns_success_for_matching_slots(self) -> None:
         result = self.validator.validate(
             extracted_slots={"device_type": "router", "operation": "restart"},
-            slot_config=self.slot_config,
+            slot_schema=self.slot_schema,
         )
 
         self.assertTrue(result.valid)
@@ -175,7 +187,7 @@ class SlotValidatorTest(unittest.TestCase):
     def test_validate_returns_errors_for_dependency_violation(self) -> None:
         result = self.validator.validate(
             extracted_slots={"operation": "restart"},
-            slot_config=self.slot_config,
+            slot_schema=self.slot_schema,
         )
 
         self.assertFalse(result.valid)
