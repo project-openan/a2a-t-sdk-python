@@ -26,7 +26,7 @@
 
 当前实现可以“勉强接入”三家，但还不够优雅，也不利于后续逐步扩展。
 
-本次设计的目标是：**让护栏适配层在设计上同时兼容 AWS / Azure / Google，但本轮实现只落地 Google Model Armor，AWS / Azure 只保留扩展点，不实现真实接入。**
+本次设计的目标是：**让护栏适配层在设计上同时兼容 AWS / Azure / Google，但本轮实现只落地 Google Model Armor，AWS / Azure 只保留扩展点，不实现真实接入；并且本轮 Google 接入直接使用官方 Python SDK。**
 
 ## 2. 设计目标
 
@@ -37,6 +37,7 @@
 - 将厂商差异隔离在 provider adapter 内部
 - 增强护栏配置模型与结果模型，使其能承载三家共同需求
 - 本轮仅实现 `google_model_armor` provider
+- Google provider 直接使用官方 Python SDK：`google-cloud-modelarmor`
 - AWS / Azure 仅设计兼容，不注册、不实现真实调用
 
 ### 2.2 非目标
@@ -48,7 +49,7 @@
 - 多 provider 并行/串行仲裁
 - AWS Bedrock Guardrails 真实适配器
 - Azure AI Content Safety 真实适配器
-- 引入云厂商官方 SDK 作为强依赖
+- 把 Google 官方 SDK 依赖泄漏到 service 或业务层
 
 ## 3. 范围结论
 
@@ -76,8 +77,9 @@ PromptComplianceService.check(...)
 3. 在内部新增“adapter 层”，将各厂商结果归一化
 4. 在设计上支持 `aws_bedrock` / `azure_content_safety` / `google_model_armor`
 5. 本轮只实现并注册 `google_model_armor`
-6. 结果模型不再只依赖 `passed: bool`，新增统一决策语义
-7. 当前输入侧场景下，`mask` 与 `review` 一律视为“不放行”
+6. `google_model_armor` 直接通过 Google 官方 Python SDK 实现，而不是手写 REST 作为正式实现
+7. 结果模型不再只依赖 `passed: bool`，新增统一决策语义
+8. 当前输入侧场景下，`mask` 与 `review` 一律视为“不放行”
 
 ## 5. 当前实现评估
 
@@ -103,6 +105,7 @@ PromptComplianceService.check(...)
 - 没有统一的 `GuardrailRequest`
 - 没有 provider adapter 协议，导致厂商差异只能塞进 `transport`
 - 没有区分“当前已实现 provider”和“未来预留 provider”
+- 没有为“正式 SDK 接入”预留清晰边界
 
 ## 6. 模块结构设计
 
@@ -112,7 +115,7 @@ PromptComplianceService.check(...)
 src/a2a_t/server/prompt_compliance/
 ```
 
-建议调整为：
+本轮建议调整为：
 
 ```text
 prompt_compliance/
@@ -120,19 +123,36 @@ prompt_compliance/
 ├── config.py
 ├── errors.py
 ├── guardrails.py
+├── google_model_armor.py
 ├── models.py
 ├── service.py
 └── ...
 ```
 
-本轮不新增过多文件，而是在 `guardrails.py` 中引入 adapter 相关抽象；若后续 provider 数量增加，再拆分为：
+### 职责划分
 
-```text
-guardrail_adapters.py
-providers/google_model_armor.py
-providers/aws_bedrock.py
-providers/azure_content_safety.py
-```
+#### `guardrails.py`
+
+放通用抽象：
+
+- `GuardrailDecision`
+- `GuardrailRequest`
+- `GuardrailAdapter`
+- `AdapterSafetyGuardrail`
+- `SafetyGuardrailFactory`
+- `NoopSafetyGuardrail`
+
+#### `google_model_armor.py`
+
+放 Google 专属实现：
+
+- `GoogleModelArmorGateway`
+- `GoogleModelArmorGuardrailAdapter`
+
+说明：
+
+- 当前 provider 只有一个，单独拆出 `google_model_armor.py` 更清晰
+- 后续若 AWS / Azure 真正落地，再视情况拆出 `providers/` 目录
 
 ## 7. 数据模型设计
 
@@ -246,6 +266,20 @@ A2AT_PROMPT_COMPLIANCE_GUARDRAIL_CREDENTIALS_REF=
 - 用户显式配置后才启用 `google_model_armor`
 - AWS / Azure 后续也复用同一套字段
 
+## 8.4 依赖设计
+
+本轮 Google provider 正式引入官方 Python SDK 依赖：
+
+```text
+google-cloud-modelarmor
+```
+
+要求：
+
+- 写入 `requirements.txt`
+- 只允许 `google_model_armor.py` 直接依赖该 SDK
+- 不允许 `service.py`、`config.py`、`models.py` 等通用模块直接 import Google SDK
+
 ## 9. Adapter 抽象设计
 
 ## 9.1 `GuardrailAdapter`
@@ -288,31 +322,9 @@ class AdapterSafetyGuardrail:
 - 保持当前 `SafetyGuardrail` 接口不变
 - 将 `processed_prompt_text + context` 转换为统一请求模型
 
-## 10. Provider 设计
+## 10. Google 实现设计
 
-## 10.1 本轮实现的 provider
-
-本轮只实现：
-
-- `noop`
-- `google_model_armor`
-
-## 10.2 预留但不实现的 provider
-
-本轮只在设计上兼容，不注册、不实现：
-
-- `aws_bedrock`
-- `azure_content_safety`
-
-原因：
-
-- 当前业务范围只要求建立优雅扩展底座
-- Google 是本轮优先落地对象
-- 提前注册未实现 provider 容易误导用户“已经可用”
-
-## 11. Google Model Armor 适配设计
-
-## 11.1 provider 名
+## 10.1 provider 名
 
 建议固定为：
 
@@ -320,30 +332,74 @@ class AdapterSafetyGuardrail:
 google_model_armor
 ```
 
-## 11.2 适配器职责
+## 10.2 `GoogleModelArmorGateway`
 
-`GoogleModelArmorGuardrailAdapter` 负责：
+新增 gateway，职责只包括：
 
-1. 从 `GuardrailProviderConfig` 读取 Google 相关配置
-2. 构造 Model Armor 的输入检查请求
-3. 调用 transport
-4. 将 Google 原始响应映射为统一 `GuardrailResult`
+1. 基于 `GuardrailProviderConfig` 创建或持有官方 SDK client
+2. 调用 Google Model Armor 官方 SDK
+3. 返回原始响应对象或可序列化原始结果
 
-## 11.3 transport 设计
-
-本轮建议继续采用“可注入 transport”的方式，而不是直接引入真实 Google SDK：
+建议接口：
 
 ```python
-GoogleModelArmorGuardrailAdapter(config, transport=...)
+class GoogleModelArmorGateway:
+    def __init__(
+        self,
+        *,
+        config: GuardrailProviderConfig,
+        client: ModelArmorClient | None = None,
+    ) -> None:
+        ...
+
+    def scan_prompt(
+        self,
+        *,
+        text: str,
+        metadata: dict[str, object] | None = None,
+    ) -> object:
+        ...
 ```
 
-原因：
+### 设计要求
 
-- 当前仓库尚未建立 Google Cloud SDK 依赖管理
-- 更适合单元测试
-- 避免先把 SDK 绑定死
+- 若 `client` 已注入，则直接使用，便于单元测试
+- 若未注入，则 gateway 内部创建官方 SDK client
+- SDK client 的创建逻辑只放在 gateway，不允许泄漏到 adapter 和 service
 
-## 11.4 Google 结果映射
+## 10.3 `GoogleModelArmorGuardrailAdapter`
+
+新增 adapter：
+
+```python
+class GoogleModelArmorGuardrailAdapter:
+    provider_name = "google_model_armor"
+
+    def __init__(
+        self,
+        *,
+        config: GuardrailProviderConfig,
+        gateway: GoogleModelArmorGateway,
+    ) -> None:
+        ...
+
+    def check_input(self, request: GuardrailRequest) -> GuardrailResult:
+        ...
+```
+
+职责：
+
+1. 把 `GuardrailRequest` 转成 gateway 输入
+2. 获取 Google 原始结果
+3. 将 Google 原始结果映射为统一 `GuardrailResult`
+
+### 设计要求
+
+- SDK 调用逻辑放在 gateway
+- 业务语义归一化放在 adapter
+- adapter 不负责创建 SDK client
+
+## 10.4 Google 结果映射
 
 统一映射规则建议如下：
 
@@ -357,11 +413,11 @@ GoogleModelArmorGuardrailAdapter(config, transport=...)
 - `ALLOW` -> 继续执行
 - `BLOCK` / `MASK` / `REVIEW` -> 统一作为拒绝
 
-## 12. AWS / Azure 预留设计
+## 11. AWS / Azure 预留设计
 
 虽然本轮不实现，但抽象必须确保后续可自然扩展。
 
-## 12.1 AWS Bedrock Guardrails
+## 11.1 AWS Bedrock Guardrails
 
 后续可扩展为：
 
@@ -370,7 +426,7 @@ GoogleModelArmorGuardrailAdapter(config, transport=...)
 - 使用 `region` 承载部署区域
 - 使用 `config` 承载 guardrail version 等额外字段
 
-## 12.2 Azure AI Content Safety
+## 11.2 Azure AI Content Safety
 
 后续可扩展为：
 
@@ -379,7 +435,7 @@ GoogleModelArmorGuardrailAdapter(config, transport=...)
 - 使用 `credentials_ref` 承载密钥配置
 - 使用 `config` 承载 features / thresholds / shields 等配置
 
-## 13. Factory 设计
+## 12. Factory 设计
 
 当前 `SafetyGuardrailFactory` 建议继续保留，但内部注册对象改为 adapter builder。
 
@@ -408,7 +464,7 @@ GuardrailProviderConfig
 - `aws_bedrock`
 - `azure_content_safety`
 
-## 14. Service 行为设计
+## 13. Service 行为设计
 
 `PromptComplianceService` 的对外调用方式不变：
 
@@ -423,7 +479,7 @@ guardrail.check(processed_prompt_text, request_metadata)
 
 这样不会破坏当前服务层编排顺序，也不会扩大当前业务范围。
 
-## 15. 错误处理设计
+## 14. 错误处理设计
 
 继续保留：
 
@@ -440,36 +496,42 @@ guardrail.check(processed_prompt_text, request_metadata)
 - **护栏命中不是异常**
 - **护栏调用失败才是异常**
 
-## 16. 测试设计
+## 15. 测试设计
 
 建议覆盖以下测试：
 
-### 16.1 模型与配置
+### 15.1 模型与配置
 
 - `GuardrailDecision` 枚举值
 - `GuardrailResult` 对 `provider / policy_id / decision` 的承载
 - `.env` 读取 `policy_id / endpoint / region / credentials_ref`
 
-### 16.2 Factory
+### 15.2 Factory
 
 - `noop` 可创建
 - `google_model_armor` 可创建
 - `aws_bedrock` 未注册时报清晰错误
 - `azure_content_safety` 未注册时报清晰错误
 
-### 16.3 Google Adapter
+### 15.3 Google Gateway
+
+- mock 官方 SDK client
+- 验证按配置正确构造调用
+- timeout / SDK 异常映射为执行错误
+
+### 15.4 Google Adapter
 
 - allow 响应映射为 `ALLOW`
 - block 响应映射为 `BLOCK`
-- timeout / connection error 映射为 `GuardrailExecutionError`
+- review 响应映射为 `REVIEW`
 - 原始返回保留在 `raw_response`
 
-### 16.4 Service
+### 15.5 Service
 
 - `ALLOW` 时继续执行
 - `BLOCK / MASK / REVIEW` 时统一拒绝
 
-## 17. 实施顺序建议
+## 16. 实施顺序建议
 
 建议按以下顺序落地：
 
@@ -488,34 +550,38 @@ guardrail.check(processed_prompt_text, request_metadata)
 
 ### 阶段 C
 
-- 实现 `google_model_armor` adapter
-- 补充对应单测
+- 新增 `google_model_armor.py`
+- 实现 `GoogleModelArmorGateway`
+- 实现 `GoogleModelArmorGuardrailAdapter`
 
 ### 阶段 D
 
 - 调整 service 的决策处理逻辑
 - 更新 `.env` / `env.example` / README
+- 引入 `google-cloud-modelarmor` 依赖
 
 ### 阶段 E
 
 - 补充 AWS / Azure 预留说明与回归测试
 
-## 18. 风险与注意事项
+## 17. 风险与注意事项
 
 - 本轮不应注册未实现 provider，否则会给用户造成“已支持”的误解
 - `MASK` 在输入侧场景下先按拒绝处理，避免未设计的 prompt 改写副作用
 - 当前仅做输入侧护栏，不应在代码中提前引入输出侧复杂逻辑
 - 配置字段需通用化，不能只为 Google 临时命名
+- Google 官方 SDK 只能在 provider 内部使用，不能污染通用层
 - 后续若 provider 数量增加，建议把 adapter 从 `guardrails.py` 中拆出独立文件
 
-## 19. 最终结论
+## 18. 最终结论
 
 本次设计建议在 `prompt_compliance` 模块内引入一层轻量但标准化的 Guardrail Adapter 抽象：
 
 - **设计上兼容三家**：AWS / Azure / Google
 - **本轮只落地 Google**：`google_model_armor`
+- **Google 直接使用官方 SDK**：`google-cloud-modelarmor`
 - **保留当前服务调用方式**：`guardrail.check(prompt_text, context)`
 - **统一结果语义**：`allow / block / mask / review`
 - **保留 AWS / Azure 后续扩展空间**
 
-这样可以在不推翻当前 `PromptComplianceService` 编排方式的前提下，把当前“最低可接入”的护栏能力提升为“可优雅扩展”的适配底座。
+这样可以在不推翻当前 `PromptComplianceService` 编排方式的前提下，把当前“最低可接入”的护栏能力提升为“可优雅扩展”的适配底座，并让 Google 成为第一家正式落地的 provider。
