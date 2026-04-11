@@ -10,10 +10,11 @@ from .cache import (
     TTLExpirationPolicy,
 )
 from .catalog import AgentPromptCatalog, LocalPromptCatalog, PromptCatalog, UrlIndexFetcher, UrlPromptCatalog
-from .catalog_registry import PromptCatalogRegistry
+from .catalog_registry import DefaultPromptCatalogRegistry, PromptCatalogRegistry
 from .config import PromptLoaderConfig
 from .errors import (
     PromptCacheError,
+    PromptCatalogRegistryError,
     PromptFetchError,
     PromptLoaderError,
     PromptMetadataError,
@@ -33,6 +34,7 @@ __all__ = [
     "CacheStore",
     "ConflictResolutionPolicy",
     "CachedPromptRecord",
+    "DefaultPromptCatalogRegistry",
     "ExpirationPolicy",
     "FetchResult",
     "LocalFileFetcher",
@@ -43,6 +45,7 @@ __all__ = [
     "OverwriteOnConflictPolicy",
     "Prompt",
     "PromptCacheError",
+    "PromptCatalogRegistryError",
     "PromptCatalog",
     "PromptCatalogRegistry",
     "PromptFetchError",

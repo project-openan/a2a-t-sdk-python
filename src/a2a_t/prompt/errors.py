@@ -47,3 +47,9 @@ class PromptCacheError(PromptLoaderError):
     """当缓存的 Prompt 内容无法读写时抛出 / Raised when cached prompt content cannot be read or written."""
 
     pass
+
+
+class PromptCatalogRegistryError(PromptLoaderError):
+    """当 Prompt Catalog registry 操作失败时抛出 / Raised when prompt catalog registry operations fail."""
+
+    pass
