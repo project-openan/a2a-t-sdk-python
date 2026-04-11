@@ -25,11 +25,14 @@ from a2a_t.prompt.cache import (
 )
 from a2a_t.prompt.errors import (
     PromptCacheError,
+    PromptConfigError,
+    PromptConflictError,
     PromptFetchError,
     PromptLoaderError,
     PromptMetadataError,
     PromptParseError,
     PromptSourceError,
+    PromptVersionComparisonError,
 )
 from a2a_t.prompt.loader import PromptLoader
 from a2a_t.prompt.models import CacheStatus, FetchResult, Prompt, PromptSource
@@ -98,15 +101,22 @@ class PromptLoaderDomainTest(unittest.TestCase):
         self.assertIs(result.source, source)
         self.assertIs(result.fetched_at, fetched_at)
 
-    def test_prompt_loader_config_defaults_to_easy_cache_policy(self) -> None:
+    def test_prompt_loader_config_keeps_only_active_runtime_fields(self) -> None:
         config = PromptLoaderConfig(default_ttl=timedelta(hours=6))
 
-        self.assertTrue(config.allow_stale_fallback)
         self.assertEqual(config.default_ttl, timedelta(hours=6))
+        self.assertEqual(config.local_prompt_dir, "./prompts")
+        self.assertEqual(config.allowed_extensions, [".md"])
+        self.assertNotIn("cache_dir", PromptLoaderConfig.__dataclass_fields__)
+        self.assertNotIn("allow_stale_fallback", PromptLoaderConfig.__dataclass_fields__)
         self.assertIsNone(config.default_prompt_extension_uri)
         self.assertEqual(config.prompt_extension_uri_overrides, {})
         self.assertEqual(config.default_prompt_index_url_param_key, "promptIndexUrl")
         self.assertEqual(config.prompt_index_url_param_key_overrides, {})
+
+    def test_prompt_loader_config_rejects_empty_local_prompt_dir(self) -> None:
+        with self.assertRaises(PromptConfigError):
+            PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir="")
 
     def test_prompt_fetch_error_is_prompt_loader_error(self) -> None:
         error = PromptFetchError("fetch failed", locator="127.0.0.1:9000")
@@ -191,11 +201,26 @@ class PromptLoaderDomainTest(unittest.TestCase):
         )
 
     def test_prompt_error_subclasses_define_short_summary_docstrings(self) -> None:
+        self.assertIn("Raised when prompt runtime configuration is invalid.", PromptConfigError.__doc__ or "")
         self.assertIn("Raised when a prompt source is invalid or unsupported.", PromptSourceError.__doc__ or "")
         self.assertIn("Raised when prompt content cannot be fetched from a source.", PromptFetchError.__doc__ or "")
         self.assertIn("Raised when prompt content cannot be parsed as a template.", PromptParseError.__doc__ or "")
         self.assertIn("Raised when required prompt metadata is missing or mismatched.", PromptMetadataError.__doc__ or "")
         self.assertIn("Raised when cached prompt content cannot be read or written.", PromptCacheError.__doc__ or "")
+        self.assertIn("Raised when prompt identity conflicts cannot be resolved.", PromptConflictError.__doc__ or "")
+        self.assertIn("Raised when prompt version comparison fails.", PromptVersionComparisonError.__doc__ or "")
+
+    def test_prompt_conflict_error_is_prompt_loader_error(self) -> None:
+        error = PromptConflictError("Prompt conflict cannot be resolved.", cache_key="diagnosis||1.0.0||zh-CN||markdown")
+
+        self.assertIsInstance(error, PromptLoaderError)
+        self.assertEqual(error.context["cache_key"], "diagnosis||1.0.0||zh-CN||markdown")
+
+    def test_prompt_version_comparison_error_is_prompt_loader_error(self) -> None:
+        error = PromptVersionComparisonError("Prompt version is invalid.", version="1.0.beta")
+
+        self.assertIsInstance(error, PromptLoaderError)
+        self.assertEqual(error.context["version"], "1.0.beta")
 
     def test_prompt_loader_config_docstring_uses_bilingual_style(self) -> None:
         self.assertIn(

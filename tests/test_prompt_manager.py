@@ -106,7 +106,7 @@ class PromptLoaderTest(ManagedTempDirTestCase):
             providers["url"] = remote_provider
 
         return PromptLoader(
-            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), cache_dir=str(self.cache_root)),
+            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(self.cache_root)),
             parser=self.parser,
             cache_store=self.cache_store,
             providers=providers,
@@ -213,7 +213,7 @@ class PromptLoaderTest(ManagedTempDirTestCase):
         )
         store = InMemoryPromptStore()
         manager = PromptLoader(
-            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), cache_dir=str(self.cache_root)),
+            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(self.cache_root)),
             parser=self.parser,
             cache_store=store,
             providers={"local_file": LocalFileProvider(), "url": remote_provider},
@@ -260,7 +260,7 @@ class PromptLoaderTest(ManagedTempDirTestCase):
         store = ResolveOnlyPromptStore(record=record, content=cached_content, cache_status=CacheStatus.HIT)
         remote_provider = FakeRemoteProvider([])
         manager = PromptLoader(
-            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), cache_dir=str(self.cache_root)),
+            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(self.cache_root)),
             parser=self.parser,
             cache_store=store,
             providers={"local_file": LocalFileProvider(), "url": remote_provider},
@@ -324,7 +324,7 @@ class PromptLoaderTest(ManagedTempDirTestCase):
             ]
         )
         manager = PromptLoader(
-            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), cache_dir=str(self.cache_root)),
+            config=PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(self.cache_root)),
             parser=self.parser,
             cache_store=store,
             providers={"local_file": LocalFileProvider(), "url": remote_provider},

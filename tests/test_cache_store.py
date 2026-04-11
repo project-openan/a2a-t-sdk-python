@@ -22,7 +22,7 @@ from a2a_t.prompt.cache import (
     PromptStore,
     TTLExpirationPolicy,
 )
-from a2a_t.prompt.errors import PromptCacheError
+from a2a_t.prompt.errors import PromptCacheError, PromptConflictError, PromptVersionComparisonError
 from a2a_t.prompt.models import CacheStatus, CachedPromptRecord
 from tests.test_support import ManagedTempDirTestCase
 
@@ -178,7 +178,7 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
         new_record = self._record(expires_at=self.now + timedelta(hours=2))
         store.write(record=old_record, content="Prompt body v1")
 
-        with self.assertRaises(PromptCacheError):
+        with self.assertRaises(PromptConflictError):
             store.write(record=new_record, content="Prompt body v2")
 
     def test_read_rejects_corrupted_metadata_file(self) -> None:
@@ -308,7 +308,7 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
 
         store.write(record=newer_record, content="Prompt body v2")
 
-        with self.assertRaises(PromptCacheError):
+        with self.assertRaises(PromptConflictError):
             store.write(record=older_record, content="Prompt body v1")
 
     def test_non_numeric_dotted_version_is_rejected(self) -> None:
@@ -317,7 +317,7 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
         invalid_record.version = "1.0.beta"
         invalid_record.cache_key = "diagnosis||1.0.beta||zh-CN||markdown"
 
-        with self.assertRaises(PromptCacheError):
+        with self.assertRaises(PromptVersionComparisonError):
             store.write(record=invalid_record, content="Prompt body")
 
 

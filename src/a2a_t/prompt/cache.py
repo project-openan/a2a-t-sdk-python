@@ -8,7 +8,7 @@ from pathlib import Path
 import shutil
 from typing import Protocol
 
-from .errors import PromptCacheError
+from .errors import PromptCacheError, PromptConflictError, PromptVersionComparisonError
 from .models import CacheStatus, CachedPromptRecord
 
 
@@ -80,7 +80,7 @@ class OverwriteIfNewerVersionPolicy:
     def _parse_version(self, version: str) -> list[int]:
         parts = version.split(".")
         if not parts or any(not part.isdigit() for part in parts):
-            raise PromptCacheError("Prompt version is invalid.", version=version)
+            raise PromptVersionComparisonError("Prompt version is invalid.", version=version)
         return [int(part) for part in parts]
 
 
@@ -118,7 +118,7 @@ class LocalFilePromptStore:
             new_record=record,
         ):
             logger.warning("Cache conflict cannot be resolved cache_key=%s", record.cache_key)
-            raise PromptCacheError("Cache conflict cannot be resolved.", cache_key=record.cache_key)
+            raise PromptConflictError("Cache conflict cannot be resolved.", cache_key=record.cache_key)
 
         record_to_write = record
         if existing_record is not None:

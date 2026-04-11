@@ -86,7 +86,7 @@ class PromptLoader:
             source_type=source.source_type,
             cache_key=lookup_cache_key,
             now=self._now_provider(),
-            allow_stale_fallback=self._config.allow_stale_fallback,
+            allow_stale_fallback=True,
         )
 
         if cached_record is not None and cached_content is not None:
