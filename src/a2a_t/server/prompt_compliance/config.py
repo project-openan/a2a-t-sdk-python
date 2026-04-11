@@ -26,7 +26,7 @@ def _parse_int(raw_value: str | None, default: int) -> int:
 
 @dataclass
 class GuardrailProviderConfig:
-    """Provider configuration for safety guardrail adapters."""
+    """安全护栏适配器的 provider 配置 / Provider configuration for safety guardrail adapters."""
 
     provider: str = ""
     timeout: float = 10.0
@@ -39,7 +39,7 @@ class GuardrailProviderConfig:
 
 @dataclass
 class SlotExtractionConfig:
-    """Configuration for LLM-based slot extraction."""
+    """基于 LLM 的槽位提取配置 / Configuration for LLM-based slot extraction."""
 
     provider: str = ""
     model: str = ""
@@ -50,7 +50,7 @@ class SlotExtractionConfig:
 
 @dataclass
 class SlotSchemaConfig:
-    """Configuration for locating slot schema files."""
+    """槽位 schema 文件定位配置 / Configuration for locating slot schema files."""
 
     root_dir: str = "./slots"
     slot_root_name: str = "slots"
@@ -60,7 +60,7 @@ class SlotSchemaConfig:
 
 @dataclass
 class PromptComplianceConfig:
-    """Top-level configuration for prompt compliance."""
+    """Prompt 遵从校验顶层配置 / Top-level configuration for prompt compliance."""
 
     enabled: bool = False
     guardrail: GuardrailProviderConfig = field(default_factory=GuardrailProviderConfig)
