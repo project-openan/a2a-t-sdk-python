@@ -38,7 +38,7 @@ class GoogleModelArmorGateway:
             from google.cloud import modelarmor_v1
         except ImportError as exc:
             raise GuardrailExecutionError(
-                "google-cloud-modelarmor is required for google_model_armor provider",
+                "google-cloud-model-armor is required for google_model_armor provider",
                 provider="google_model_armor",
             ) from exc
 
