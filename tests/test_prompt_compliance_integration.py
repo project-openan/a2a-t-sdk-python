@@ -22,11 +22,11 @@ from a2a_t.prompt.providers import LocalFileProvider
 from a2a_t.server.prompt_compliance.errors import GuardrailRejectedError
 from a2a_t.server.prompt_compliance.extractor import PromptSlotExtractor
 from a2a_t.server.prompt_compliance.guardrails import SafetyGuardrailFactory
-from a2a_t.server.prompt_compliance.models import PromptComplianceProviderConfig, SlotSchemaConfig
+from a2a_t.server.prompt_compliance.models import GuardrailProviderConfig, SlotSchemaConfig
 from a2a_t.server.prompt_compliance.origin_resolver import PromptOriginResolver
 from a2a_t.server.prompt_compliance.parser import ProcessedPromptParser
 from a2a_t.server.prompt_compliance.service import PromptComplianceService
-from a2a_t.server.prompt_compliance.slot_config import SlotConfigResolver
+from a2a_t.server.prompt_compliance.slot_schema import SlotSchemaResolver
 from a2a_t.server.prompt_compliance.validator import SlotValidator
 from a2a_t.server.prompt_handler import PromptHandler
 from tests.test_support import ManagedTempDirTestCase, build_markdown
@@ -92,36 +92,42 @@ class PromptComplianceIntegrationTest(ManagedTempDirTestCase):
             prompt_loader=loader,
         )
         extractor = PromptSlotExtractor(adapter=FakeStructuredAdapter(adapter_response))
-        guardrail = SafetyGuardrailFactory.create(PromptComplianceProviderConfig(provider="noop"))
+        guardrail = SafetyGuardrailFactory.create(GuardrailProviderConfig(provider="noop"))
         return PromptComplianceService(
             guardrail=guardrail,
             parser=ProcessedPromptParser(),
             origin_resolver=resolver,
             extractor=extractor,
-            slot_config_resolver=SlotConfigResolver(
-                SlotSchemaConfig(root_dir=str(self.cache_root), slot_root_name="slots", file_name="slot.yaml")
+            slot_config_resolver=SlotSchemaResolver(
+                SlotSchemaConfig(root_dir=str(self.cache_root), slot_root_name="slots", file_name="slot.json")
             ),
             validator=SlotValidator(),
             slot_not_found_policy=slot_policy,
         )
 
-    def _write_slot_yaml(self, content: str) -> None:
+    def _write_slot_json(self, content: str) -> None:
         slot_dir = self.cache_root / "slots" / "network diagnosis" / "1.0.0" / "zh-CN"
         slot_dir.mkdir(parents=True, exist_ok=True)
-        (slot_dir / "slot.yaml").write_text(content, encoding="utf-8")
+        (slot_dir / "slot.json").write_text(content, encoding="utf-8")
 
     def test_handler_process_succeeds_with_real_components(self) -> None:
-        self._write_slot_yaml(
+        self._write_slot_json(
             """
-prompt_identity:
-  name: "network diagnosis"
-  language: "zh-CN"
-  version: "1.0.0"
-slots:
-  - name: "device_type"
-    required: true
-    type: "string"
-rules: []
+{
+  "prompt_identity": {
+    "name": "network diagnosis",
+    "language": "zh-CN",
+    "version": "1.0.0"
+  },
+  "slots": [
+    {
+      "name": "device_type",
+      "required": true,
+      "type": "string"
+    }
+  ],
+  "rules": []
+}
 """.strip()
         )
         service = self._build_service(
@@ -141,29 +147,38 @@ rules: []
         self.assertEqual(result["extracted_slots"], {"device_type": "router"})
 
     def test_handler_process_returns_slot_validation_error_for_dependency_rule(self) -> None:
-        self._write_slot_yaml(
+        self._write_slot_json(
             """
-prompt_identity:
-  name: "network diagnosis"
-  language: "zh-CN"
-  version: "1.0.0"
-slots:
-  - name: "operation"
-    required: true
-    type: "enum"
-    allowed_values:
-      - "query"
-      - "restart"
-  - name: "location"
-    required: false
-    type: "string"
-rules:
-  - type: "dependency"
-    when:
-      slot: "operation"
-      equals: "restart"
-    requires:
-      - "location"
+{
+  "prompt_identity": {
+    "name": "network diagnosis",
+    "language": "zh-CN",
+    "version": "1.0.0"
+  },
+  "slots": [
+    {
+      "name": "operation",
+      "required": true,
+      "type": "enum",
+      "allowed_values": ["query", "restart"]
+    },
+    {
+      "name": "location",
+      "required": false,
+      "type": "string"
+    }
+  ],
+  "rules": [
+    {
+      "type": "dependency",
+      "when": {
+        "slot": "operation",
+        "equals": "restart"
+      },
+      "requires": ["location"]
+    }
+  ]
+}
 """.strip()
         )
         service = self._build_service(

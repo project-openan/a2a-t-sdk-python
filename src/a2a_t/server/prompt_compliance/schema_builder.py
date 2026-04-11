@@ -2,23 +2,23 @@ from __future__ import annotations
 
 from typing import Any
 
-from a2a_t.server.prompt_compliance.slot_config import SlotConfig, SlotDefinition
+from a2a_t.server.prompt_compliance.slot_schema import SlotDefinition, SlotSchema
 
 
 class SlotSchemaBuilder:
     """Build runtime JSON Schema from slot configuration."""
 
-    def build(self, slot_config: SlotConfig) -> dict[str, Any]:
+    def build(self, slot_schema: SlotSchema) -> dict[str, Any]:
         properties: dict[str, Any] = {}
         required: list[str] = []
         conditional_rules: list[dict[str, Any]] = []
 
-        for slot in slot_config.slots:
+        for slot in slot_schema.slots:
             properties[slot.name] = self._build_slot_schema(slot)
             if slot.required:
                 required.append(slot.name)
 
-        for rule in slot_config.rules:
+        for rule in slot_schema.rules:
             conditional_rules.append(
                 {
                     "if": {

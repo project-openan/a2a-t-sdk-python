@@ -6,28 +6,31 @@ from a2a_t.server.prompt_compliance.errors import (
     ProcessedPromptParseError,
     PromptComplianceError,
     PromptOriginResolveError,
-    SlotConfigLoadError,
-    SlotConfigValidationError,
+    SlotSchemaLoadError,
+    SlotSchemaValidationError,
     SlotExtractionError,
+    SlotValidationError,
+)
+from a2a_t.server.prompt_compliance.config import (
+    GuardrailProviderConfig,
+    PromptComplianceConfig,
+    SlotExtractionConfig,
+    SlotSchemaConfig,
 )
 from a2a_t.server.prompt_compliance.extractor import PromptSlotExtractor
 from a2a_t.server.prompt_compliance.guardrails import SafetyGuardrail, SafetyGuardrailFactory
 from a2a_t.server.prompt_compliance.models import (
     GuardrailResult,
-    PromptComplianceConfig,
-    PromptComplianceProviderConfig,
     PromptComplianceResult,
     PromptIdentity,
-    SlotExtractionConfig,
     SlotExtractionResult,
-    SlotSchemaConfig,
     SlotValidationResult,
 )
 from a2a_t.server.prompt_compliance.origin_resolver import PromptOriginResolver
 from a2a_t.server.prompt_compliance.parser import ProcessedPromptParser
 from a2a_t.server.prompt_compliance.schema_builder import SlotSchemaBuilder
 from a2a_t.server.prompt_compliance.service import PromptComplianceService
-from a2a_t.server.prompt_compliance.slot_config import SlotConfig, SlotConfigResolver
+from a2a_t.server.prompt_compliance.slot_schema import SlotSchema, SlotSchemaResolver
 from a2a_t.server.prompt_compliance.validator import SlotValidator
 
 __all__ = [
@@ -35,20 +38,21 @@ __all__ = [
     "GuardrailExecutionError",
     "GuardrailRejectedError",
     "ProcessedPromptParseError",
+    "GuardrailProviderConfig",
     "PromptComplianceConfig",
     "PromptComplianceError",
-    "PromptComplianceProviderConfig",
     "PromptComplianceResult",
     "PromptIdentity",
     "PromptOriginResolveError",
     "PromptOriginResolver",
     "ProcessedPromptParser",
     "PromptComplianceService",
-    "SlotConfig",
-    "SlotConfigLoadError",
-    "SlotConfigResolver",
-    "SlotConfigValidationError",
+    "SlotSchema",
+    "SlotSchemaLoadError",
+    "SlotSchemaResolver",
+    "SlotSchemaValidationError",
     "SlotExtractionError",
+    "SlotValidationError",
     "PromptSlotExtractor",
     "SafetyGuardrail",
     "SafetyGuardrailFactory",

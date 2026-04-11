@@ -114,6 +114,63 @@ Prompt 模块当前使用以下环境变量：
 
 - `docs/superpowers/specs/2026-04-08-a2a-t-prompt-design.md`
 
+## Prompt Compliance
+
+Prompt Compliance 模块用于在服务端对加工后的 Prompt 做遵从性检查。典型流程为：
+
+1. 使用安全护栏检查加工后的 Prompt
+2. 从加工后 Prompt 的 front matter 解析 `name + language + version`
+3. 通过 Prompt catalog 和 loader 找回原始 Prompt
+4. 调用 LLM 提取结构化槽位
+5. 加载镜像路径下的 `slot.json`
+6. 使用运行时 JSON Schema 校验提取出的槽位
+
+### 核心对象
+
+- `PromptComplianceConfig`
+- `GuardrailProviderConfig`
+- `SlotExtractionConfig`
+- `SlotSchemaConfig`
+- `SlotSchema`
+- `SlotSchemaResolver`
+- `SlotSchemaBuilder`
+- `SlotValidator`
+- `PromptComplianceService`
+
+### 槽位目录
+
+槽位文件默认存放在 `./slots`，路径布局与 Prompt 身份镜像：
+
+```text
+slots/
+└── <name>/
+    └── <version>/
+        └── <language>/
+            └── slot.json
+```
+
+示例：
+
+```text
+slots/network diagnosis/1.0.0/zh-CN/slot.json
+```
+
+### 环境变量
+
+Prompt Compliance 模块使用以下环境变量：
+
+- `A2AT_PROMPT_COMPLIANCE_ENABLED`
+- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_PROVIDER`
+- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_TIMEOUT_SECONDS`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_PROVIDER`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_MODEL`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_TIMEOUT_SECONDS`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_TEMPERATURE`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_MAX_RETRIES`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_LOCAL_DIR`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_FILE_NAME`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_NOT_FOUND_POLICY`
+
 ## Development
 
 ```bash

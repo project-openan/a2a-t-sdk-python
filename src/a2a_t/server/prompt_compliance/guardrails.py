@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable, Protocol
 
 from a2a_t.server.prompt_compliance.errors import GuardrailExecutionError
-from a2a_t.server.prompt_compliance.models import GuardrailResult, PromptComplianceProviderConfig
+from a2a_t.server.prompt_compliance.models import GuardrailProviderConfig, GuardrailResult
 
 
 class SafetyGuardrail(Protocol):
@@ -64,19 +64,19 @@ class TransportSafetyGuardrail:
 class SafetyGuardrailFactory:
     """Factory for creating safety guardrail adapters from provider configuration."""
 
-    _providers: dict[str, Callable[[PromptComplianceProviderConfig], SafetyGuardrail]] = {}
+    _providers: dict[str, Callable[[GuardrailProviderConfig], SafetyGuardrail]] = {}
 
     @classmethod
     def register(
         cls,
         provider_name: str,
         provider: Callable[[str, dict[str, object] | None], GuardrailResult | dict[str, object]]
-        | Callable[[PromptComplianceProviderConfig], SafetyGuardrail],
+        | Callable[[GuardrailProviderConfig], SafetyGuardrail],
     ) -> None:
         cls._providers[provider_name] = cls._wrap_provider(provider)
 
     @classmethod
-    def create(cls, config: PromptComplianceProviderConfig) -> SafetyGuardrail:
+    def create(cls, config: GuardrailProviderConfig) -> SafetyGuardrail:
         provider_name = config.provider or "noop"
         if provider_name not in cls._providers:
             available = list(cls._providers.keys())
@@ -90,9 +90,9 @@ class SafetyGuardrailFactory:
     @staticmethod
     def _wrap_provider(
         provider: Callable[[str, dict[str, object] | None], GuardrailResult | dict[str, object]]
-        | Callable[[PromptComplianceProviderConfig], SafetyGuardrail],
-    ) -> Callable[[PromptComplianceProviderConfig], SafetyGuardrail]:
-        def builder(config: PromptComplianceProviderConfig) -> SafetyGuardrail:
+        | Callable[[GuardrailProviderConfig], SafetyGuardrail],
+    ) -> Callable[[GuardrailProviderConfig], SafetyGuardrail]:
+        def builder(config: GuardrailProviderConfig) -> SafetyGuardrail:
             transport = config.config.get("transport")
             if callable(transport):
                 return TransportSafetyGuardrail(transport)
