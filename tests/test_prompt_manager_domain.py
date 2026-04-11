@@ -38,6 +38,7 @@ from a2a_t.prompt.loader import PromptLoader
 from a2a_t.prompt.models import CacheStatus, FetchResult, Prompt, PromptSource
 from a2a_t.prompt.parser import MarkdownPromptParser, PromptParser
 from a2a_t.prompt.providers import AgentFetcher, LocalFileFetcher, PromptProvider, UrlFetcher
+import a2a_t.prompt as prompt_module
 
 
 class PromptLoaderDomainTest(unittest.TestCase):
@@ -227,6 +228,10 @@ class PromptLoaderDomainTest(unittest.TestCase):
             "Define runtime configuration for the prompt loader.",
             PromptLoaderConfig.__doc__ or "",
         )
+
+    def test_prompt_package_exports_default_runtime_builders(self) -> None:
+        self.assertTrue(hasattr(prompt_module, "build_default_prompt_catalog_registry"))
+        self.assertTrue(hasattr(prompt_module, "build_default_prompt_loader"))
 
     def test_prompt_docstring_uses_bilingual_style(self) -> None:
         self.assertIn(

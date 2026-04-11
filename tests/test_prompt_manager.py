@@ -17,6 +17,7 @@ if str(SRC_ROOT) not in sys.path:
 from a2a_t.prompt.cache import LocalFilePromptStore
 from a2a_t.prompt.config import PromptLoaderConfig
 from a2a_t.prompt.errors import PromptCacheError, PromptFetchError, PromptMetadataError
+from a2a_t.prompt.factory import build_default_prompt_catalog_registry, build_default_prompt_loader
 from a2a_t.prompt.loader import PromptLoader
 from a2a_t.prompt.models import CacheStatus, FetchResult, PromptSource
 from a2a_t.prompt.parser import MarkdownPromptParser
@@ -85,6 +86,11 @@ class ResolveOnlyPromptStore:
 
     def read(self, *, source_type: str, cache_key: str) -> tuple[object, str]:
         raise AssertionError("PromptLoader should use resolve() instead of read().")
+
+
+class RejectConflictPolicy:
+    def should_overwrite(self, *, existing_record: object, new_record: object) -> bool:
+        return False
 
 
 class PromptLoaderTest(ManagedTempDirTestCase):
@@ -540,6 +546,57 @@ class PromptLoaderTest(ManagedTempDirTestCase):
                 expected_language="zh-CN",
                 expected_version="1.0.0",
             )
+
+    def test_build_default_prompt_catalog_registry_registers_local_catalog(self) -> None:
+        prompt_root = self.temp_root / "prompts"
+        prompt_dir = prompt_root / "diagnosis" / "1.0.0" / "zh-CN"
+        prompt_dir.mkdir(parents=True, exist_ok=True)
+        (prompt_dir / "prompt.md").write_text(
+            build_markdown(
+                name="diagnosis",
+                language="zh-CN",
+                version="1.0.0",
+                title="Alarm Diagnosis",
+                description="Diagnose alarm events.",
+                body="Prompt body",
+            ),
+            encoding="utf-8",
+        )
+
+        registry = build_default_prompt_catalog_registry(
+            PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(prompt_root))
+        )
+
+        self.assertIn("local", registry.list_catalogs())
+        references = registry.get("local").list()
+        self.assertEqual(len(references), 1)
+        self.assertEqual(references[0].name, "diagnosis")
+
+    def test_build_default_prompt_catalog_registry_allows_custom_catalog_override(self) -> None:
+        class CustomCatalog:
+            def list(self) -> list[object]:
+                return []
+
+        custom_catalog = CustomCatalog()
+        registry = build_default_prompt_catalog_registry(
+            PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(self.temp_root / "prompts")),
+            local_catalog=custom_catalog,
+        )
+
+        self.assertIs(registry.get("local"), custom_catalog)
+
+    def test_build_default_prompt_loader_uses_custom_conflict_policy(self) -> None:
+        loader = build_default_prompt_loader(
+            PromptLoaderConfig(default_ttl=timedelta(hours=1), local_prompt_dir=str(self.cache_root)),
+            conflict_resolution_policy=RejectConflictPolicy(),
+            now_provider=self._now,
+        )
+
+        self.assertIsInstance(loader, PromptLoader)
+        self.assertIsInstance(loader._cache_store, LocalFilePromptStore)
+        self.assertIsInstance(loader._providers["local_file"], LocalFileProvider)
+        self.assertIsInstance(loader._parser, MarkdownPromptParser)
+        self.assertIs(loader._cache_store._conflict_resolution_policy.__class__, RejectConflictPolicy)
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ from .errors import (
     PromptSourceError,
     PromptVersionComparisonError,
 )
+from .factory import build_default_prompt_catalog_registry, build_default_prompt_loader
 from .loader import PromptLoader
 from .models import CacheStatus, CachedPromptRecord, FetchResult, Prompt, PromptReference, PromptSource
 from .parser import MarkdownPromptParser, PromptParser, PromptParserRegistry, build_default_prompt_parser_registry
@@ -75,4 +76,6 @@ __all__ = [
     "UrlPromptCatalog",
     "UrlProvider",
     "build_default_prompt_parser_registry",
+    "build_default_prompt_catalog_registry",
+    "build_default_prompt_loader",
 ]
