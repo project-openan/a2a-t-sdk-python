@@ -69,7 +69,7 @@ class MarkdownPromptParser:
         name = self._require(metadata, "name")
         language = metadata.get("language") or "default"
         version = self._require(metadata, "version")
-        title = self._require(metadata, "title")
+        title = metadata.get("title") or ""
         description = self._require(metadata, "description")
 
         return Prompt(
