@@ -7,7 +7,7 @@
 1. 列出可用 Prompt
 2. 选择目标 Prompt
 3. 加载 Prompt 正文
-4. 对远端 Prompt 做解析、校验与缓存
+4. 对远端 Prompt 做解析、校验与本地落盘
 
 随着 Prompt 资产逐步增多，当前模块在目录组织、注册管理、元数据契约、扩展能力和配置获取方式上暴露出若干问题。本设计文档用于统一规划 Prompt 管理模块增强方案，在保持现有模块边界清晰的前提下，提升可用性、扩展性和可维护性。
 
@@ -21,8 +21,8 @@
 2. 清理 `PromptLoaderConfig` 中无效或未兑现的配置项
 3. 审视并补齐 `PromptLoaderError` 相关错误模型
 4. 重设计 Prompt front matter 元数据契约
-5. 重设计 Prompt 本地缓存布局，改为身份镜像路径
-6. 重设计远端 Prompt 与本地缓存发生身份冲突时的冲突决策机制
+5. 重设计 Prompt 本地存储布局，改为身份镜像路径
+6. 重设计远端 Prompt 与本地已存在 Prompt 发生身份冲突时的冲突决策机制
 7. 为 `LocalPromptCatalog` 提供按格式选择 parser 的扩展机制
 8. 提供从 `.env` 获取配置的通用能力，并切换当前 `prompt` 模块已使用配置
 
@@ -33,7 +33,7 @@
 - 为未来 `json/yaml` Prompt 扩展设计 parser 路由机制
 - 提供 SDK 级通用 `.env` 配置读取能力
 - 本次仅切换 `prompt` 模块已使用到的配置
-- Prompt 缓存布局直接切换到新身份镜像路径
+- Prompt 本地存储直接切换到新身份镜像路径
 
 ## 2.3 不在本次范围
 
@@ -57,9 +57,9 @@
 
 当前 Markdown Prompt 解析器将 `title` 视为必填字段，不利于轻量 Prompt 资产管理；同时 `language` 字段缺失时没有统一的默认语义。
 
-### 3.3 本地缓存路径不可读
+### 3.3 本地存储路径不可读
 
-当前远端 Prompt 缓存使用 `cache_key` 路径，虽然实现简单，但存在以下问题：
+当前远端 Prompt 在本地使用 `cache_key` 路径，虽然实现简单，但存在以下问题：
 
 - 无法从目录结构直接观察 Prompt 身份
 - 排障成本高
@@ -84,7 +84,7 @@
 ## 4. 设计原则
 
 1. **保持边界稳定**：优先在现有模块之上增强，而不是新起并行体系
-2. **身份优先**：Prompt 的主标识始终由 `name/language/version` 确定
+2. **身份优先**：Prompt 的主标识始终由 `name/version/language` 确定
 3. **目录可读**：本地存储布局应可从路径直接推断 Prompt 身份
 4. **扩展优先**：catalog、parser、冲突策略都应支持用户扩展
 5. **默认可用**：SDK 提供默认实现，调用方无需手写基础容器
@@ -102,7 +102,7 @@
 - `parser.py`
   - 负责 Prompt 解析
 - `loader.py`
-  - 负责基于 provider 加载、校验与缓存
+  - 负责基于 provider 加载、校验与本地写入
 - `cache.py`
   - 负责本地镜像存储与冲突决策
 - `config.py`
@@ -206,7 +206,7 @@ class PromptParserRegistry:
 
 #### 关键决策
 
-- Prompt 身份仍由 `name/language/version` 确定
+- Prompt 身份仍由 `name/version/language` 确定
 - `language` 缺失等价于 `default`
 - `title` 不再纳入最小发布契约
 - `description` 保持必填，保证 Prompt 的最小语义可读性
@@ -216,54 +216,107 @@ class PromptParserRegistry:
 #### 目标布局
 
 ```text
-<cache_root>/
-  prompts/
-    <prompt_name>/
-      <version>/
-        <language>/
-          prompt.<ext>
-          metadata.json
-  slots/
-    <prompt_name>/
-      <version>/
-        <language>/
-          slot.yaml
+<A2AT_PROMPT_LOCAL_DIR>/
+  <prompt_name>/
+    <version>/
+      <language>/
+        prompt.<ext>
+        metadata.json
 ```
 
 #### 示例
 
 ```text
-<cache_root>/prompts/network diagnosis/1.0.0/zh-CN/prompt.md
-<cache_root>/prompts/network diagnosis/1.0.0/zh-CN/metadata.json
-<cache_root>/slots/network diagnosis/1.0.0/zh-CN/slot.yaml
+<A2AT_PROMPT_LOCAL_DIR>/network diagnosis/1.0.0/zh-CN/prompt.md
+<A2AT_PROMPT_LOCAL_DIR>/network diagnosis/1.0.0/zh-CN/metadata.json
 ```
 
 #### 关键决策
 
-- `name/language/version` 作为主存储路径
+- `name/version/language` 作为本地主存储路径
+- `name`、`version`、`language` 写入路径前需要做安全规范化，禁止 `..`、绝对路径与非法保留字符
+- 同一身份目录下仅允许一份 Prompt 正文文件和一份 `metadata.json`
 - 文件名不再依赖 `cache_key`
 - `prompt.<ext>` 中的扩展名由 parser / source format 决定
-- `metadata.json` 存储来源、抓取时间、冲突处理结果等附加信息
-- 本次不考虑旧缓存布局兼容读取，统一直接切换到新布局
+- `metadata.json` 使用固定结构，至少包含 `name`、`version`、`language`、`source_type`、`source_locator`、`format`、`content_hash`、`fetched_at`、`parser_name`
+- 若发生覆盖写入，`metadata.json` 额外记录 `overwrite_reason` 与 `previous_content_hash`
+- 远端获取的 Prompt 直接写入 `A2AT_PROMPT_LOCAL_DIR`
+- 本地 Prompt 作为一个整体管理，不再区分“缓存目录”和“本地目录”
+
+#### `metadata.json` 建议契约
+
+```json
+{
+  "name": "network diagnosis",
+  "version": "1.0.0",
+  "language": "zh-CN",
+  "format": "markdown",
+  "source_type": "remote",
+  "source_locator": "remote://default/network diagnosis/1.0.0/zh-CN",
+  "parser_name": "MarkdownPromptParser",
+  "content_hash": "sha256:...",
+  "fetched_at": "2026-04-11T10:00:00Z",
+  "overwrite_reason": "overwrite_on_newer_version",
+  "previous_content_hash": "sha256:..."
+}
+```
+
+#### `metadata.json` 字段约束
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `name` | `str` | 是 | Prompt 名称，需与目录中的 `name` 一致 |
+| `version` | `str` | 是 | Prompt 版本，需与目录中的 `version` 一致 |
+| `language` | `str` | 是 | Prompt 语言，缺失时按 `default` 写入 |
+| `format` | `str` | 是 | parser 归一化后的格式名，如 `markdown` |
+| `source_type` | `str` | 是 | 来源类型，如 `remote`、`local` |
+| `source_locator` | `str` | 是 | 来源定位符，用于追溯原始来源 |
+| `parser_name` | `str` | 是 | 实际使用的 parser 名称 |
+| `content_hash` | `str` | 是 | Prompt 正文摘要，建议使用 `sha256:<hex>` |
+| `fetched_at` | `str` | 是 | 写入时间，使用 UTC ISO 8601 格式 |
+| `overwrite_reason` | `str` | 否 | 覆盖写入原因，如 `overwrite_on_newer_version` |
+| `previous_content_hash` | `str` | 否 | 被覆盖前内容摘要 |
+
+- `source_type` 当前固定枚举为：`remote`、`local`
+- `format` 当前固定枚举为：`markdown`；后续扩展 `json`、`yaml` 时再增补
+- `overwrite_reason` 当前固定枚举为：`overwrite_on_newer_version`
+- `source_locator` 当前采用 `<source_type>://<locator>` 的统一格式
+- 当 `source_type=remote` 时，推荐格式为：`remote://<catalog>/<name>/<version>/<language>`
+- 当 `source_type=local` 时，推荐格式为：`local://<relative-path>`
+- `source_locator` 必须是单行字符串，不允许包含换行
+- `overwrite_reason`、`previous_content_hash` 在首次写入时可为空或省略
+- `content_hash` 用于判断内容是否变化以及辅助审计
+- `source_locator` 保存可追溯来源，不要求与本地文件路径一致
+- `format` 采用 parser 归一化后的格式名，不直接暴露底层实现细节
 
 ### 6.5 冲突策略设计
 
 #### 冲突定义
 
-当加载远端 Prompt 时，如果目标身份镜像路径已存在内容，则视为发生冲突。
+当加载远端 Prompt 时，如果本地已存在相同 `name/language` 的 Prompt 记录，则视为发生身份冲突。
 
 #### 默认策略
 
-- Prompt 主身份固定为：`name/language/version`
+- Prompt 逻辑身份固定为：`name/language`
+- Prompt 落盘路径固定为：`name/version/language`
 - 默认冲突处理规则：
-  - **新版本覆盖旧版本**
+  - **发生身份冲突时，按版本号逐位比较，新版本覆盖旧版本**
+  - **若版本号相同，则允许覆盖同路径旧内容**
+  - **若新版本号更小，则拒绝落盘**
+  - **若新版本覆盖旧版本，则删除旧版本目录，仅保留当前最新版本目录**
+  - **若相同版本覆盖，则不保留历史副本，仅在 `metadata.json` 记录覆盖前的 `previous_content_hash`**
 
 #### 版本比较规则
 
-- 优先使用语义化版本比较
-- 若版本字符串不符合 semver：
-  - 可降级为受控比较逻辑
-  - 或交给用户自定义策略处理
+- 版本号按“逐位比较”执行
+- 建议格式为点分数字串，例如：`1.0.0`、`1.2`、`2.0.10`
+- 比较时按 `.` 分段后逐段转为整数比较
+- 若位数不同，则对较短版本在尾部补 `0` 后继续比较
+- 示例：
+  - `1.2.0` = `1.2`
+  - `1.10.0` > `1.2.9`
+  - `2.0` > `1.99.99`
+- 若版本号不满足点分数字格式，则视为版本格式错误并拒绝覆盖
 
 #### 建议接口
 
@@ -279,10 +332,10 @@ class PromptConflictResolutionPolicy(Protocol):
 
 #### 默认实现
 
-- `OverwriteOnConflictPolicy`：无条件覆盖
-- `OverwriteIfNewerVersionPolicy`：仅新版本覆盖旧版本
+- `OverwriteIfNewerVersionPolicy`：按版本号逐位比较，仅当新版本更大或版本相等时允许覆盖
+- `RejectOnConflictPolicy`：发现同身份已有内容时拒绝覆盖
 
-本次默认推荐使用 `OverwriteIfNewerVersionPolicy`。
+本次默认推荐使用 `OverwriteIfNewerVersionPolicy`，并允许调用方按需切换为拒绝覆盖策略。
 
 ### 6.6 PromptLoaderConfig 清理
 
@@ -340,7 +393,7 @@ class PromptConflictResolutionPolicy(Protocol):
 - 本次提供通用配置读取能力
 - 本次切换 `prompt` 模块当前用到的配置
 - 其他模块是否迁移，后续按需推进
-- 本次不考虑旧配置读取方式的兼容保留
+- 统一切换到新的 `.env` 配置入口，不保留旧读取分支
 
 #### 建议能力
 
@@ -375,39 +428,41 @@ class PromptConflictResolutionPolicy(Protocol):
 6. 写入：
    - `prompt.<ext>`
    - `metadata.json`
+7. 返回 Prompt 时可同时携带 metadata 摘要，便于调试与审计
 
 ### 7.3 冲突处理流程
 
 1. 发现目标身份路径已有内容
 2. 构造 existing/new 两份记录
-3. 进行版本比较
+3. 按版本号逐位比较现有记录与新记录
 4. 默认策略判断是否覆盖
-5. 若拒绝覆盖，返回明确错误
+5. 若允许覆盖，删除旧版本目录并写入新版本目录
+6. 如需审计，记录覆盖前后的元数据差异
+7. 若拒绝覆盖，返回明确错误
 
-## 8. 迁移策略
+## 8. 切换策略
 
-### 8.1 Registry 兼容
+### 8.1 Registry 切换
 
 - 保留 `PromptCatalogRegistry` 作为协议
 - 新增默认实现，不破坏现有注入方式
 
-### 8.2 Parser 兼容
+### 8.2 Parser 切换
 
 - 默认继续支持 Markdown
 - `MarkdownPromptParser` 只放宽契约，不移除原有主路径
 
-### 8.3 缓存布局迁移
+### 8.3 本地存储布局切换
 
 - 当前版本尚未被实际使用
-- 因此本次不提供旧缓存布局兼容读取
-- 所有 Prompt 缓存统一直接写入并读取新身份镜像布局
+- 所有 Prompt 统一直接写入并读取 `A2AT_PROMPT_LOCAL_DIR` 下的身份镜像布局
 - 相关实现、测试与文档均围绕新布局展开
 
-### 8.4 配置迁移
+### 8.4 配置切换
 
 - 新增 `.env` 配置能力
 - Prompt 模块迁移到统一配置入口
-- 本次不保留旧配置读取方式的兼容分支
+- 仅保留 `A2AT_PROMPT_LOCAL_DIR` 与 `A2AT_PROMPT_ALLOWED_EXTENSIONS` 等当前实际所需配置
 - 配置缺失通过默认值或显式错误提示处理
 
 ## 9. 测试策略
@@ -436,8 +491,9 @@ class PromptConflictResolutionPolicy(Protocol):
   - metadata 正确写入
 - 冲突策略
   - 新版本覆盖旧版本
-  - 同版本冲突
-  - 非标准版本降级比较
+  - 同身份拒绝覆盖
+  - 版本格式错误拒绝覆盖
+  - 覆盖审计记录
 - `.env` 配置能力
   - 默认值
   - 必填校验
@@ -455,7 +511,7 @@ class PromptConflictResolutionPolicy(Protocol):
 ### 9.3 文档与配置验证
 
 - 校验 `env.example` 是否与实际使用配置一致
-- 校验 README / 用法文档是否反映新注册方式与缓存布局
+- 校验 README / 用法文档是否反映新注册方式与本地存储布局
 
 ## 10. 风险与待确认项
 
@@ -474,7 +530,7 @@ class PromptConflictResolutionPolicy(Protocol):
    - 可选：`language`、`title`
    - `language` 缺失补 `default`
 5. Prompt 本地存储改为身份镜像路径，不再以 `cache_key` 作为主定位路径
-6. 冲突处理走策略接口，默认采用“新版本覆盖旧版本”
-7. 版本比较优先使用语义化版本，非标准版本支持降级处理或交由策略接管
+6. 冲突处理走策略接口，默认采用“身份冲突时新版本覆盖旧版本”
+7. 版本比较采用点分数字的逐位比较规则，较短版本尾部补 `0`
 8. 提供 SDK 通用 `.env` 配置能力，并在本次将 `prompt` 模块配置切换过去
-9. 当前版本未被使用，因此缓存布局与配置读取都不做历史兼容，统一直接切到新方案
+9. 当前版本未被使用，因此本地存储布局与配置读取统一直接切到新方案
