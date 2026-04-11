@@ -142,7 +142,7 @@ prompt_compliance/
 - `SafetyGuardrailFactory`
 - `NoopSafetyGuardrail`
 
-#### `google_model_armor.py`
+#### `guardrail_providers.py`
 
 放 Google 专属实现：
 
@@ -151,7 +151,7 @@ prompt_compliance/
 
 说明：
 
-- 当前 provider 只有一个，单独拆出 `google_model_armor.py` 更清晰
+- 当前 provider 只有一个，单独拆出 `guardrail_providers.py` 更清晰
 - 后续若 AWS / Azure 真正落地，再视情况拆出 `providers/` 目录
 
 ## 7. 数据模型设计
@@ -277,7 +277,7 @@ google-cloud-modelarmor
 要求：
 
 - 写入 `requirements.txt`
-- 只允许 `google_model_armor.py` 直接依赖该 SDK
+- 只允许 `guardrail_providers.py` 直接依赖该 SDK
 - 不允许 `service.py`、`config.py`、`models.py` 等通用模块直接 import Google SDK
 
 ## 9. Adapter 抽象设计
@@ -550,7 +550,7 @@ guardrail.check(processed_prompt_text, request_metadata)
 
 ### 阶段 C
 
-- 新增 `google_model_armor.py`
+- 新增 `guardrail_providers.py`
 - 实现 `GoogleModelArmorGateway`
 - 实现 `GoogleModelArmorGuardrailAdapter`
 

@@ -19,7 +19,13 @@ from a2a_t.server.prompt_compliance.errors import (
     SlotSchemaLoadError,
     SlotValidationError,
 )
-from a2a_t.server.prompt_compliance.models import GuardrailResult, PromptComplianceResult, PromptIdentity, SlotExtractionResult
+from a2a_t.server.prompt_compliance.models import (
+    GuardrailDecision,
+    GuardrailResult,
+    PromptComplianceResult,
+    PromptIdentity,
+    SlotExtractionResult,
+)
 from a2a_t.server.prompt_compliance.service import PromptComplianceService
 from a2a_t.server.prompt_handler import PromptHandler
 
@@ -141,6 +147,32 @@ class PromptComplianceServiceTest(unittest.TestCase):
                 error_message="blocked by policy",
             ),
         )
+
+    def test_service_rejects_block_mask_and_review_guardrail_decisions(self) -> None:
+        for decision in [GuardrailDecision.BLOCK, GuardrailDecision.MASK, GuardrailDecision.REVIEW]:
+            with self.subTest(decision=decision):
+                service = self._build_service(
+                    guardrail=FakeGuardrail(
+                        GuardrailResult(
+                            passed=True,
+                            decision=decision,
+                            provider="google_model_armor",
+                            reason=f"{decision.value} by policy",
+                        )
+                    )
+                )
+
+                result = service.check(processed_prompt_text=PROCESSED_PROMPT, request_metadata={"request_id": "req-1"})
+
+                self.assertEqual(
+                    result,
+                    PromptComplianceResult(
+                        passed=False,
+                        stage="guardrail",
+                        error_code="guardrail_rejected",
+                        error_message=f"{decision.value} by policy",
+                    ),
+                )
 
     def test_service_returns_guardrail_rejected_error_result(self) -> None:
         class RejectingGuardrail:

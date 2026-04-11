@@ -30,6 +30,10 @@ class GuardrailProviderConfig:
 
     provider: str = ""
     timeout: float = 10.0
+    policy_id: str = ""
+    endpoint: str = ""
+    region: str = ""
+    credentials_ref: str = ""
     config: dict[str, Any] = field(default_factory=dict)
 
 
@@ -74,6 +78,10 @@ class PromptComplianceConfig:
                     env.get("A2AT_PROMPT_COMPLIANCE_GUARDRAIL_TIMEOUT_SECONDS"),
                     10.0,
                 ),
+                policy_id=env.get("A2AT_PROMPT_COMPLIANCE_GUARDRAIL_POLICY_ID", "") or "",
+                endpoint=env.get("A2AT_PROMPT_COMPLIANCE_GUARDRAIL_ENDPOINT", "") or "",
+                region=env.get("A2AT_PROMPT_COMPLIANCE_GUARDRAIL_REGION", "") or "",
+                credentials_ref=env.get("A2AT_PROMPT_COMPLIANCE_GUARDRAIL_CREDENTIALS_REF", "") or "",
             ),
             slot_extraction=SlotExtractionConfig(
                 provider=env.get("A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_PROVIDER", "") or "",

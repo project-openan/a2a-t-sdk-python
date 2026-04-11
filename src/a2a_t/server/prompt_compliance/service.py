@@ -13,6 +13,7 @@ from a2a_t.server.prompt_compliance.errors import (
     SlotValidationError,
 )
 from a2a_t.server.prompt_compliance.models import PromptComplianceResult
+from a2a_t.server.prompt_compliance.models import GuardrailDecision
 
 
 class PromptComplianceService:
@@ -50,7 +51,12 @@ class PromptComplianceService:
         except GuardrailExecutionError as error:
             return self._error_result("guardrail", "guardrail_execution_error", str(error))
 
-        if not guardrail_result.passed:
+        rejected_decisions = {
+            GuardrailDecision.BLOCK,
+            GuardrailDecision.MASK,
+            GuardrailDecision.REVIEW,
+        }
+        if not guardrail_result.passed or guardrail_result.decision in rejected_decisions:
             return self._error_result(
                 "guardrail",
                 "guardrail_rejected",

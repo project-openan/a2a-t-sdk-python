@@ -21,6 +21,10 @@ def test_prompt_compliance_config_from_env_reads_all_sections() -> None:
             "A2AT_PROMPT_COMPLIANCE_ENABLED": "true",
             "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_PROVIDER": "custom_guardrail",
             "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_TIMEOUT_SECONDS": "11",
+            "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_POLICY_ID": "projects/p1/locations/global/templates/template-1",
+            "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_ENDPOINT": "modelarmor.googleapis.com",
+            "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_REGION": "global",
+            "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_CREDENTIALS_REF": "GOOGLE_APPLICATION_CREDENTIALS",
             "A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_PROVIDER": "openai",
             "A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_MODEL": "gpt-4.1",
             "A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_TIMEOUT_SECONDS": "22",
@@ -37,6 +41,10 @@ def test_prompt_compliance_config_from_env_reads_all_sections() -> None:
     assert config.enabled is True
     assert config.guardrail.provider == "custom_guardrail"
     assert config.guardrail.timeout == 11.0
+    assert config.guardrail.policy_id == "projects/p1/locations/global/templates/template-1"
+    assert config.guardrail.endpoint == "modelarmor.googleapis.com"
+    assert config.guardrail.region == "global"
+    assert config.guardrail.credentials_ref == "GOOGLE_APPLICATION_CREDENTIALS"
     assert config.slot_extraction.provider == "openai"
     assert config.slot_extraction.model == "gpt-4.1"
     assert config.slot_extraction.timeout == 22.0
@@ -55,6 +63,10 @@ def test_prompt_compliance_config_from_env_uses_defaults() -> None:
     assert config.enabled is False
     assert config.guardrail.provider == "noop"
     assert config.guardrail.timeout == 10.0
+    assert config.guardrail.policy_id == ""
+    assert config.guardrail.endpoint == ""
+    assert config.guardrail.region == ""
+    assert config.guardrail.credentials_ref == ""
     assert config.slot_extraction.provider == ""
     assert config.slot_extraction.model == ""
     assert config.slot_extraction.timeout == 30.0
