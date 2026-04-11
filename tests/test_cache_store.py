@@ -17,6 +17,7 @@ from a2a_t.prompt.cache import (
     ConflictResolutionPolicy,
     ExpirationPolicy,
     LocalFilePromptStore,
+    OverwriteIfNewerVersionPolicy,
     OverwriteOnConflictPolicy,
     PromptStore,
     TTLExpirationPolicy,
@@ -55,6 +56,7 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
     def test_default_policy_types_exist(self) -> None:
         self.assertIsInstance(TTLExpirationPolicy(), TTLExpirationPolicy)
         self.assertIsInstance(OverwriteOnConflictPolicy(), OverwriteOnConflictPolicy)
+        self.assertIsInstance(OverwriteIfNewerVersionPolicy(), OverwriteIfNewerVersionPolicy)
 
     def _record(self, *, expires_at: datetime) -> CachedPromptRecord:
         return CachedPromptRecord(
@@ -262,6 +264,61 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
 
         with self.assertRaises(PromptCacheError):
             self.store.write(record=unsafe_record, content="Prompt body")
+
+    def test_newer_version_overwrites_older_version_and_removes_old_directory(self) -> None:
+        store = LocalFilePromptStore(self.cache_root, conflict_resolution_policy=OverwriteIfNewerVersionPolicy())
+        old_record = self._record(expires_at=self.now + timedelta(hours=1))
+        new_record = self._record(expires_at=self.now + timedelta(hours=2))
+        new_record.version = "1.10.0"
+        new_record.cache_key = "diagnosis||1.10.0||zh-CN||markdown"
+
+        store.write(record=old_record, content="Prompt body v1")
+        store.write(record=new_record, content="Prompt body v2")
+
+        self.assertFalse((self.cache_root / "diagnosis" / "1.0.0").exists())
+        new_dir = self.cache_root / "diagnosis" / "1.10.0" / "zh-CN"
+        payload = json.loads((new_dir / "metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["overwrite_reason"], "overwrite_on_newer_version")
+        self.assertEqual(payload["previous_content_hash"], old_record.content_hash)
+        self.assertEqual((new_dir / "prompt.md").read_text(encoding="utf-8"), "Prompt body v2")
+
+    def test_equal_version_overwrites_same_directory_and_records_previous_hash(self) -> None:
+        store = LocalFilePromptStore(self.cache_root, conflict_resolution_policy=OverwriteIfNewerVersionPolicy())
+        old_record = self._record(expires_at=self.now + timedelta(hours=1))
+        new_record = self._record(expires_at=self.now + timedelta(hours=2))
+        new_record.content_hash = "sha256:def456"
+
+        store.write(record=old_record, content="Prompt body v1")
+        store.write(record=new_record, content="Prompt body v2")
+
+        prompt_path = self.cache_root / "diagnosis" / "1.0.0" / "zh-CN" / "prompt.md"
+        payload = json.loads(prompt_path.with_name("metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(prompt_path.read_text(encoding="utf-8"), "Prompt body v2")
+        self.assertEqual(payload["overwrite_reason"], "overwrite_on_newer_version")
+        self.assertEqual(payload["previous_content_hash"], old_record.content_hash)
+
+    def test_older_version_is_rejected_when_newer_version_exists(self) -> None:
+        store = LocalFilePromptStore(self.cache_root, conflict_resolution_policy=OverwriteIfNewerVersionPolicy())
+        newer_record = self._record(expires_at=self.now + timedelta(hours=1))
+        newer_record.version = "1.10.0"
+        newer_record.cache_key = "diagnosis||1.10.0||zh-CN||markdown"
+        older_record = self._record(expires_at=self.now + timedelta(hours=2))
+        older_record.version = "1.2.9"
+        older_record.cache_key = "diagnosis||1.2.9||zh-CN||markdown"
+
+        store.write(record=newer_record, content="Prompt body v2")
+
+        with self.assertRaises(PromptCacheError):
+            store.write(record=older_record, content="Prompt body v1")
+
+    def test_non_numeric_dotted_version_is_rejected(self) -> None:
+        store = LocalFilePromptStore(self.cache_root, conflict_resolution_policy=OverwriteIfNewerVersionPolicy())
+        invalid_record = self._record(expires_at=self.now + timedelta(hours=1))
+        invalid_record.version = "1.0.beta"
+        invalid_record.cache_key = "diagnosis||1.0.beta||zh-CN||markdown"
+
+        with self.assertRaises(PromptCacheError):
+            store.write(record=invalid_record, content="Prompt body")
 
 
 if __name__ == "__main__":

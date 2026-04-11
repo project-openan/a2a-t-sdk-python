@@ -77,3 +77,5 @@ class CachedPromptRecord:
     source_locator: str
     parser_name: str
     content_hash: str
+    overwrite_reason: str | None = None
+    previous_content_hash: str | None = None

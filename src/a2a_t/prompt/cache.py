@@ -5,6 +5,7 @@ from dataclasses import asdict
 from datetime import datetime
 import logging
 from pathlib import Path
+import shutil
 from typing import Protocol
 
 from .errors import PromptCacheError
@@ -51,6 +52,38 @@ class OverwriteOnConflictPolicy:
         return True
 
 
+class OverwriteIfNewerVersionPolicy:
+    """仅允许相同版本或更新版本覆盖 / Allow overwrites only for equal or newer dotted numeric versions."""
+
+    OVERWRITE_REASON = "overwrite_on_newer_version"
+
+    def should_overwrite(self, *, existing_record: CachedPromptRecord, new_record: CachedPromptRecord) -> bool:
+        return self.compare_versions(new_record.version, existing_record.version) >= 0
+
+    def compare_versions(self, left: str, right: str) -> int:
+        left_parts = self._parse_version(left)
+        right_parts = self._parse_version(right)
+        width = max(len(left_parts), len(right_parts))
+        left_parts.extend([0] * (width - len(left_parts)))
+        right_parts.extend([0] * (width - len(right_parts)))
+
+        for left_part, right_part in zip(left_parts, right_parts, strict=True):
+            if left_part > right_part:
+                return 1
+            if left_part < right_part:
+                return -1
+        return 0
+
+    def overwrite_reason(self) -> str:
+        return self.OVERWRITE_REASON
+
+    def _parse_version(self, version: str) -> list[int]:
+        parts = version.split(".")
+        if not parts or any(not part.isdigit() for part in parts):
+            raise PromptCacheError("Prompt version is invalid.", version=version)
+        return [int(part) for part in parts]
+
+
 class LocalFilePromptStore:
     """在本地文件系统持久化远端 Prompt 内容与元数据 / Persist remote prompt content and metadata on the local filesystem."""
 
@@ -63,7 +96,7 @@ class LocalFilePromptStore:
     ) -> None:
         self._cache_root = Path(cache_root)
         self._expiration_policy = expiration_policy or TTLExpirationPolicy()
-        self._conflict_resolution_policy = conflict_resolution_policy or OverwriteOnConflictPolicy()
+        self._conflict_resolution_policy = conflict_resolution_policy or OverwriteIfNewerVersionPolicy()
 
     def write(self, *, record: CachedPromptRecord, content: str) -> None:
         """将 Prompt 内容文件及其元数据写入缓存 / Write a prompt content file and its metadata into the cache."""
@@ -74,10 +107,11 @@ class LocalFilePromptStore:
             record.version,
             record.language,
         )
+        self._validate_record_version(record=record)
         cache_dir = self._cache_dir(record=record)
         content_path = cache_dir / self._content_filename(format_name=record.format)
         metadata_path = cache_dir / "metadata.json"
-        existing_record = self._read_existing_record(metadata_path=metadata_path, cache_key=record.cache_key)
+        existing_record = self._find_conflicting_record(record=record)
 
         if existing_record is not None and not self._conflict_resolution_policy.should_overwrite(
             existing_record=existing_record,
@@ -86,10 +120,33 @@ class LocalFilePromptStore:
             logger.warning("Cache conflict cannot be resolved cache_key=%s", record.cache_key)
             raise PromptCacheError("Cache conflict cannot be resolved.", cache_key=record.cache_key)
 
+        record_to_write = record
+        if existing_record is not None:
+            overwrite_reason = self._resolve_overwrite_reason()
+            record_to_write = CachedPromptRecord(
+                cache_key=record.cache_key,
+                source_type=record.source_type,
+                name=record.name,
+                language=record.language,
+                version=record.version,
+                format=record.format,
+                fetched_at=record.fetched_at,
+                expires_at=record.expires_at,
+                source_locator=record.source_locator,
+                parser_name=record.parser_name,
+                content_hash=record.content_hash,
+                overwrite_reason=overwrite_reason,
+                previous_content_hash=existing_record.content_hash,
+            )
+            existing_dir = self._cache_dir(record=existing_record)
+            if existing_dir != cache_dir and existing_dir.exists():
+                shutil.rmtree(existing_dir)
+                self._cleanup_empty_parent_dirs(existing_dir.parent)
+
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         content_path.write_text(content, encoding="utf-8")
-        metadata_path.write_text(self._serialize_record(record), encoding="utf-8")
+        metadata_path.write_text(self._serialize_record(record_to_write), encoding="utf-8")
 
     def read(self, *, source_type: str, cache_key: str) -> tuple[CachedPromptRecord, str]:
         """读取缓存的 Prompt 记录并校验必要文件存在 / Read a cached prompt entry and validate that required files exist."""
@@ -224,6 +281,7 @@ class LocalFilePromptStore:
             raise PromptCacheError("Prompt content hash is invalid.", cache_key=record.cache_key)
 
         payload = asdict(record)
+        payload = {key: value for key, value in payload.items() if value is not None}
         payload["fetched_at"] = record.fetched_at.isoformat()
         payload["expires_at"] = record.expires_at.isoformat()
 
@@ -242,6 +300,8 @@ class LocalFilePromptStore:
             source_locator=str(payload["source_locator"]),
             parser_name=str(payload["parser_name"]),
             content_hash=str(payload["content_hash"]),
+            overwrite_reason=str(payload["overwrite_reason"]) if "overwrite_reason" in payload else None,
+            previous_content_hash=str(payload["previous_content_hash"]) if "previous_content_hash" in payload else None,
         )
 
     def _read_existing_record(self, *, metadata_path: Path, cache_key: str) -> CachedPromptRecord | None:
@@ -254,6 +314,55 @@ class LocalFilePromptStore:
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
             logger.warning("Existing cache metadata file is invalid cache_key=%s", cache_key)
             raise PromptCacheError("Cache metadata file is invalid.", cache_key=cache_key) from error
+
+    def _find_conflicting_record(self, *, record: CachedPromptRecord) -> CachedPromptRecord | None:
+        exact_record = self._read_existing_record(
+            metadata_path=self._cache_dir(record=record) / "metadata.json",
+            cache_key=record.cache_key,
+        )
+        if exact_record is not None:
+            return exact_record
+
+        language_root = self._cache_root / record.name
+        if not language_root.exists():
+            return None
+
+        matching_records: list[CachedPromptRecord] = []
+        for metadata_path in language_root.glob(f"*/{record.language}/metadata.json"):
+            existing_record = self._read_existing_record(metadata_path=metadata_path, cache_key=record.cache_key)
+            if existing_record is None:
+                continue
+            if existing_record.name == record.name and existing_record.language == record.language:
+                matching_records.append(existing_record)
+
+        if not matching_records:
+            return None
+        if isinstance(self._conflict_resolution_policy, OverwriteIfNewerVersionPolicy):
+            return max(
+                matching_records,
+                key=lambda item: self._conflict_resolution_policy._parse_version(item.version),
+            )
+        return matching_records[0]
+
+    def _resolve_overwrite_reason(self) -> str | None:
+        reason_getter = getattr(self._conflict_resolution_policy, "overwrite_reason", None)
+        if callable(reason_getter):
+            return str(reason_getter())
+        return None
+
+    def _validate_record_version(self, *, record: CachedPromptRecord) -> None:
+        compare_versions = getattr(self._conflict_resolution_policy, "compare_versions", None)
+        if callable(compare_versions):
+            compare_versions(record.version, record.version)
+
+    def _cleanup_empty_parent_dirs(self, directory: Path) -> None:
+        current = directory
+        while current.exists() and current != self._cache_root:
+            try:
+                current.rmdir()
+            except OSError:
+                break
+            current = current.parent
 
 
 CacheStore = LocalFilePromptStore
