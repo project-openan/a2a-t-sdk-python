@@ -68,12 +68,14 @@ class LocalFilePromptStore:
     def write(self, *, record: CachedPromptRecord, content: str) -> None:
         """将 Prompt 内容文件及其元数据写入缓存 / Write a prompt content file and its metadata into the cache."""
 
-        logger.info("Writing cache entry cache_key=%s", record.cache_key)
-        cache_dir = self._cache_dir(
-            source_type=record.source_type,
-            cache_key=record.cache_key,
+        logger.info(
+            "Writing prompt entry name=%s version=%s language=%s",
+            record.name,
+            record.version,
+            record.language,
         )
-        content_path = cache_dir / "content.md"
+        cache_dir = self._cache_dir(record=record)
+        content_path = cache_dir / self._content_filename(format_name=record.format)
         metadata_path = cache_dir / "metadata.json"
         existing_record = self._read_existing_record(metadata_path=metadata_path, cache_key=record.cache_key)
 
@@ -93,16 +95,12 @@ class LocalFilePromptStore:
         """读取缓存的 Prompt 记录并校验必要文件存在 / Read a cached prompt entry and validate that required files exist."""
 
         logger.info("Reading cache entry cache_key=%s", cache_key)
-        cache_dir = self._cache_dir(source_type=source_type, cache_key=cache_key)
+        cache_dir = self._cache_dir_from_cache_key(cache_key=cache_key)
         metadata_path = cache_dir / "metadata.json"
-        content_path = cache_dir / "content.md"
 
         if not metadata_path.exists():
             logger.warning("Cache metadata file is missing cache_key=%s", cache_key)
             raise PromptCacheError("Cache metadata file is missing.", cache_key=cache_key)
-        if not content_path.exists():
-            logger.warning("Cache content file is missing cache_key=%s", cache_key)
-            raise PromptCacheError("Cache content file is missing.", cache_key=cache_key)
 
         try:
             record_data = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -115,6 +113,11 @@ class LocalFilePromptStore:
         except (KeyError, TypeError, ValueError) as error:
             logger.warning("Cache metadata payload is invalid cache_key=%s", cache_key)
             raise PromptCacheError("Cache metadata file is invalid.", cache_key=cache_key) from error
+
+        content_path = cache_dir / self._content_filename(format_name=record.format)
+        if not content_path.exists():
+            logger.warning("Cache content file is missing cache_key=%s", cache_key)
+            raise PromptCacheError("Cache content file is missing.", cache_key=cache_key)
 
         return record, content_path.read_text(encoding="utf-8")
 
@@ -171,10 +174,55 @@ class LocalFilePromptStore:
         logger.info("Cache entry is expired cache_key=%s", cache_key)
         return record, content, CacheStatus.EXPIRED
 
-    def _cache_dir(self, *, source_type: str, cache_key: str) -> Path:
-        return self._cache_root / "prompts" / source_type / cache_key
+    def _cache_dir(self, *, record: CachedPromptRecord) -> Path:
+        return self._safe_identity_dir(name=record.name, version=record.version, language=record.language)
+
+    def _cache_dir_from_cache_key(self, *, cache_key: str) -> Path:
+        try:
+            name, version, language, _ = cache_key.split("||")
+        except ValueError as error:
+            raise PromptCacheError("Cache key is invalid.", cache_key=cache_key) from error
+        return self._safe_identity_dir(name=name, version=version, language=language)
+
+    def _safe_identity_dir(self, *, name: str, version: str, language: str) -> Path:
+        identity_parts = (
+            ("name", name),
+            ("version", version),
+            ("language", language),
+        )
+        safe_parts = [
+            self._validate_path_part(part, field_name=field_name) for field_name, part in identity_parts
+        ]
+        root = self._cache_root.resolve()
+        target = root.joinpath(*safe_parts).resolve()
+        if root != target and root not in target.parents:
+            raise PromptCacheError(
+                "Prompt identity path escapes local root.",
+                cache_key=f"{name}||{version}||{language}",
+            )
+        return target
+
+    def _validate_path_part(self, part: str, *, field_name: str) -> str:
+        invalid_characters = set('<>:"/\\|?*')
+        if not part or part in {".", ".."}:
+            raise PromptCacheError("Prompt identity path part is invalid.", field=field_name)
+        if Path(part).is_absolute() or any(character in invalid_characters for character in part):
+            raise PromptCacheError("Prompt identity path part is invalid.", field=field_name)
+        if any(ord(character) < 32 for character in part):
+            raise PromptCacheError("Prompt identity path part is invalid.", field=field_name)
+        return part
+
+    def _content_filename(self, *, format_name: str) -> str:
+        if format_name == "markdown":
+            return "prompt.md"
+        return f"prompt.{format_name.lstrip('.')}"
 
     def _serialize_record(self, record: CachedPromptRecord) -> str:
+        if "\n" in record.source_locator or "\r" in record.source_locator:
+            raise PromptCacheError("Prompt source locator is invalid.", cache_key=record.cache_key)
+        if not record.content_hash.startswith("sha256:"):
+            raise PromptCacheError("Prompt content hash is invalid.", cache_key=record.cache_key)
+
         payload = asdict(record)
         payload["fetched_at"] = record.fetched_at.isoformat()
         payload["expires_at"] = record.expires_at.isoformat()
@@ -191,7 +239,9 @@ class LocalFilePromptStore:
             format=str(payload["format"]),
             fetched_at=datetime.fromisoformat(str(payload["fetched_at"])),
             expires_at=datetime.fromisoformat(str(payload["expires_at"])),
-            checksum=str(payload["checksum"]),
+            source_locator=str(payload["source_locator"]),
+            parser_name=str(payload["parser_name"]),
+            content_hash=str(payload["content_hash"]),
         )
 
     def _read_existing_record(self, *, metadata_path: Path, cache_key: str) -> CachedPromptRecord | None:

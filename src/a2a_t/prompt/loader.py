@@ -229,12 +229,12 @@ class PromptLoader:
     ) -> str:
         """基于 Prompt 身份与来源身份构建稳定缓存键 / Build a stable cache key from prompt identity and source identity."""
 
-        raw_key = f"{source.source_type}|{source.locator}|{name}|{language}|{version}|{format}"
-        return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+        return f"{name}||{version}||{language}||{format}"
 
     def _build_record(self, *, cache_key: str, prompt: Prompt, fetched_at: datetime) -> CachedPromptRecord:
         """创建与缓存内容一起持久化的元数据记录 / Create the metadata record persisted alongside cached prompt content."""
 
+        content_hash = hashlib.sha256(prompt.raw_content.encode("utf-8")).hexdigest()
         return CachedPromptRecord(
             cache_key=cache_key,
             source_type=prompt.source.source_type,
@@ -244,5 +244,7 @@ class PromptLoader:
             format=prompt.format,
             fetched_at=fetched_at,
             expires_at=fetched_at + self._config.default_ttl,
-            checksum=hashlib.sha256(prompt.raw_content.encode("utf-8")).hexdigest(),
+            source_locator=f"{prompt.source.source_type}://{prompt.source.locator}",
+            parser_name=prompt.format,
+            content_hash=f"sha256:{content_hash}",
         )

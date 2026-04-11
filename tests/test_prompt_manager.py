@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import hashlib
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -344,7 +345,7 @@ class PromptLoaderTest(ManagedTempDirTestCase):
         self.assertEqual(remote_provider.calls, 1)
         self.assertEqual(len(store.writes), 1)
 
-    def test_load_writes_cache_under_parsed_prompt_identity(self) -> None:
+    def test_load_writes_prompt_under_parsed_identity_layout(self) -> None:
         locator = "https://example.com/alarm.md"
         source = PromptSource(source_type="url", locator=locator)
         fetched_at = datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc)
@@ -375,17 +376,14 @@ class PromptLoaderTest(ManagedTempDirTestCase):
             expected_version="1.0.0",
         )
 
-        cache_key = self._expected_cache_key(
-            source_type="url",
-            locator=locator,
-            name="diagnosis",
-            language="zh-CN",
-            version="1.0.0",
-        )
-        cache_dir = self.cache_root / "prompts" / "url" / cache_key
+        cache_dir = self.cache_root / "diagnosis" / "1.0.0" / "zh-CN"
 
-        self.assertTrue((cache_dir / "content.md").exists())
+        self.assertTrue((cache_dir / "prompt.md").exists())
         self.assertTrue((cache_dir / "metadata.json").exists())
+        metadata = json.loads((cache_dir / "metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(metadata["source_locator"], "url://https://example.com/alarm.md")
+        self.assertEqual(metadata["parser_name"], "markdown")
+        self.assertTrue(metadata["content_hash"].startswith("sha256:"))
 
     def test_load_refreshes_expired_cache(self) -> None:
         locator = "https://example.com/alarm.md"
