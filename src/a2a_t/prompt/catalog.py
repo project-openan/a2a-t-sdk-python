@@ -10,7 +10,7 @@ from a2a.types import AgentCard
 
 from .errors import PromptSourceError
 from .models import CacheStatus, PromptReference, PromptSource
-from .parser import MarkdownPromptParser, PromptParser
+from .parser import MarkdownPromptParser, PromptParser, PromptParserRegistry, build_default_prompt_parser_registry
 
 
 class UrlIndexFetcher(Protocol):
@@ -28,16 +28,25 @@ class PromptCatalog(Protocol):
 class LocalPromptCatalog:
     """列出本地目录下所有 Markdown Prompt / List all Markdown prompts from a local directory."""
 
-    def __init__(self, *, prompt_dir: str, parser: PromptParser | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        prompt_dir: str,
+        parser: PromptParser | None = None,
+        parser_registry: PromptParserRegistry | None = None,
+        allowed_extensions: list[str] | None = None,
+    ) -> None:
         self._prompt_dir = Path(prompt_dir)
-        self._parser = parser or MarkdownPromptParser()
+        self._parser = parser
+        self._parser_registry = parser_registry or build_default_prompt_parser_registry()
+        self._allowed_extensions = allowed_extensions or [".md"]
 
     def list(self) -> list[PromptReference]:
         references: list[PromptReference] = []
 
-        for path in sorted(self._prompt_dir.rglob("*.md")):
+        for path in self._iter_prompt_paths():
             source = PromptSource(source_type="local_file", locator=str(path))
-            prompt = self._parser.parse(
+            prompt = self._resolve_parser(path).parse(
                 content=path.read_text(encoding="utf-8"),
                 source=source,
                 cache_status=CacheStatus.MISS,
@@ -54,6 +63,18 @@ class LocalPromptCatalog:
             )
 
         return references
+
+    def _iter_prompt_paths(self) -> list[Path]:
+        prompt_paths: set[Path] = set()
+        for extension in self._allowed_extensions:
+            normalized = extension if extension.startswith(".") else f".{extension}"
+            prompt_paths.update(self._prompt_dir.rglob(f"*{normalized}"))
+        return sorted(prompt_paths)
+
+    def _resolve_parser(self, path: Path) -> PromptParser:
+        if self._parser is not None and path.suffix == ".md":
+            return self._parser
+        return self._parser_registry.get_by_extension(path.suffix)
 
 
 class UrlPromptCatalog:
