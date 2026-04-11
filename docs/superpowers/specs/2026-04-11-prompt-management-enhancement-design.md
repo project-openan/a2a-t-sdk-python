@@ -33,8 +33,7 @@
 - 为未来 `json/yaml` Prompt 扩展设计 parser 路由机制
 - 提供 SDK 级通用 `.env` 配置读取能力
 - 本次仅切换 `prompt` 模块已使用到的配置
-- 支持新旧缓存布局的兼容读取
-- 统一新布局写入策略
+- Prompt 缓存布局直接切换到新身份镜像路径
 
 ## 2.3 不在本次范围
 
@@ -89,7 +88,7 @@
 3. **目录可读**：本地存储布局应可从路径直接推断 Prompt 身份
 4. **扩展优先**：catalog、parser、冲突策略都应支持用户扩展
 5. **默认可用**：SDK 提供默认实现，调用方无需手写基础容器
-6. **兼容迁移**：对旧缓存布局采用兼容读取策略，避免强制迁移
+6. **避免过度兼容**：当前版本尚未被实际使用的能力，不为历史兼容增加复杂度
 7. **配置统一**：新增通用 `.env` 能力，减少模块各自零散取值
 
 ## 5. 总体架构
@@ -245,6 +244,7 @@ class PromptParserRegistry:
 - 文件名不再依赖 `cache_key`
 - `prompt.<ext>` 中的扩展名由 parser / source format 决定
 - `metadata.json` 存储来源、抓取时间、冲突处理结果等附加信息
+- 本次不考虑旧缓存布局兼容读取，统一直接切换到新布局
 
 ### 6.5 冲突策略设计
 
@@ -340,6 +340,7 @@ class PromptConflictResolutionPolicy(Protocol):
 - 本次提供通用配置读取能力
 - 本次切换 `prompt` 模块当前用到的配置
 - 其他模块是否迁移，后续按需推进
+- 本次不考虑旧配置读取方式的兼容保留
 
 #### 建议能力
 
@@ -383,7 +384,7 @@ class PromptConflictResolutionPolicy(Protocol):
 4. 默认策略判断是否覆盖
 5. 若拒绝覆盖，返回明确错误
 
-## 8. 兼容策略
+## 8. 迁移策略
 
 ### 8.1 Registry 兼容
 
@@ -395,24 +396,19 @@ class PromptConflictResolutionPolicy(Protocol):
 - 默认继续支持 Markdown
 - `MarkdownPromptParser` 只放宽契约，不移除原有主路径
 
-### 8.3 缓存布局兼容
+### 8.3 缓存布局迁移
 
-采用以下策略：
+- 当前版本尚未被实际使用
+- 因此本次不提供旧缓存布局兼容读取
+- 所有 Prompt 缓存统一直接写入并读取新身份镜像布局
+- 相关实现、测试与文档均围绕新布局展开
 
-- **兼容读取旧布局**
-- **统一写入新布局**
-
-原因：
-
-1. 避免强制用户迁移既有缓存
-2. 降低升级风险
-3. 允许系统逐步自然收敛到新布局
-
-### 8.4 配置兼容
+### 8.4 配置迁移
 
 - 新增 `.env` 配置能力
 - Prompt 模块迁移到统一配置入口
-- 保持必要的默认值与显式错误提示
+- 本次不保留旧配置读取方式的兼容分支
+- 配置缺失通过默认值或显式错误提示处理
 
 ## 9. 测试策略
 
@@ -437,7 +433,6 @@ class PromptConflictResolutionPolicy(Protocol):
   - 文件发现后正确路由 parser
 - `PromptLoader`
   - 新身份镜像路径写入
-  - 旧布局兼容读取
   - metadata 正确写入
 - 冲突策略
   - 新版本覆盖旧版本
@@ -455,7 +450,6 @@ class PromptConflictResolutionPolicy(Protocol):
 - registry + catalog + parser
 - loader + provider + cache
 - 远端 Prompt 写入新布局
-- 旧布局兼容读取
 - 用户自定义 catalog 注册后可被发现与使用
 
 ### 9.3 文档与配置验证
@@ -466,10 +460,9 @@ class PromptConflictResolutionPolicy(Protocol):
 ## 10. 风险与待确认项
 
 1. 当前 `PromptLoaderConfig.allow_stale_fallback` 是否应彻底移除，还是需要在能力上补齐并保留
-2. 旧缓存布局兼容读取的时间窗口是否需要限制
-3. 非标准版本字符串的默认比较策略是否需要固定为某种受控规则
-4. `prompt.<ext>` 的格式来源，是以文件扩展名为准，还是以解析后的显式 format 字段为准
-5. `.env` 通用能力应放在 `config` 模块内部，还是提炼成 SDK 级更通用的配置工具
+2. 非标准版本字符串的默认比较策略是否需要固定为某种受控规则
+3. `prompt.<ext>` 的格式来源，是以文件扩展名为准，还是以解析后的显式 format 字段为准
+4. `.env` 通用能力应放在 `config` 模块内部，还是提炼成 SDK 级更通用的配置工具
 
 ## 11. 关键决策总结
 
@@ -484,4 +477,4 @@ class PromptConflictResolutionPolicy(Protocol):
 6. 冲突处理走策略接口，默认采用“新版本覆盖旧版本”
 7. 版本比较优先使用语义化版本，非标准版本支持降级处理或交由策略接管
 8. 提供 SDK 通用 `.env` 配置能力，并在本次将 `prompt` 模块配置切换过去
-9. 缓存布局迁移采用“兼容读旧布局、统一写新布局”
+9. 当前版本未被使用，因此缓存布局与配置读取都不做历史兼容，统一直接切到新方案
