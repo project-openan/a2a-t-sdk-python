@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from datetime import timedelta
 import unittest
 
 
@@ -23,8 +24,19 @@ class PromptEnvConfigTest(ManagedTempDirTestCase):
 
         self.assertTrue(env_example_path.exists())
         content = env_example_path.read_text(encoding="utf-8")
+        self.assertIn("A2AT_PROMPT_DEFAULT_TTL_SECONDS=", content)
         self.assertIn("A2AT_PROMPT_LOCAL_DIR=", content)
         self.assertIn("A2AT_PROMPT_ALLOWED_EXTENSIONS=", content)
+        self.assertIn("A2AT_DEFAULT_PROMPT_EXTENSION_URI=", content)
+        self.assertIn("A2AT_DEFAULT_PROMPT_EXTENSION_URI=default-prompt", content)
+        self.assertIn("A2AT_PROMPT_EXTENSION_URI_OVERRIDES=", content)
+        self.assertIn("A2AT_DEFAULT_PROMPT_INDEX_URL_PARAM_KEY=", content)
+        self.assertIn("A2AT_PROMPT_INDEX_URL_PARAM_KEY_OVERRIDES=", content)
+        self.assertIn('A2AT_PROMPT_EXTENSION_URI_OVERRIDES={"agent":"prompt://agent-extension"}', content)
+        self.assertIn(
+            'A2AT_PROMPT_INDEX_URL_PARAM_KEY_OVERRIDES={"agent":"agentPromptCatalogUrl"}',
+            content,
+        )
         self.assertNotIn("A2AT_PROMPT_CACHE_DIR=", content)
 
     def test_project_contains_dotenv_file_for_prompt_runtime(self) -> None:
@@ -32,8 +44,26 @@ class PromptEnvConfigTest(ManagedTempDirTestCase):
 
         self.assertTrue(env_path.exists())
         content = env_path.read_text(encoding="utf-8")
+        self.assertIn("A2AT_PROMPT_DEFAULT_TTL_SECONDS=", content)
         self.assertIn("A2AT_PROMPT_LOCAL_DIR=", content)
         self.assertIn("A2AT_PROMPT_ALLOWED_EXTENSIONS=", content)
+        self.assertIn("A2AT_DEFAULT_PROMPT_EXTENSION_URI=", content)
+        self.assertIn("A2AT_DEFAULT_PROMPT_EXTENSION_URI=default-prompt", content)
+        self.assertIn("A2AT_PROMPT_EXTENSION_URI_OVERRIDES=", content)
+        self.assertIn("A2AT_DEFAULT_PROMPT_INDEX_URL_PARAM_KEY=", content)
+        self.assertIn("A2AT_PROMPT_INDEX_URL_PARAM_KEY_OVERRIDES=", content)
+        self.assertIn('A2AT_PROMPT_EXTENSION_URI_OVERRIDES={"agent":"prompt://agent-extension"}', content)
+        self.assertIn(
+            'A2AT_PROMPT_INDEX_URL_PARAM_KEY_OVERRIDES={"agent":"agentPromptCatalogUrl"}',
+            content,
+        )
+
+    def test_project_contains_default_prompt_directory_placeholder(self) -> None:
+        prompt_dir = PROJECT_ROOT / "prompts"
+        placeholder = prompt_dir / ".gitkeep"
+
+        self.assertTrue(prompt_dir.is_dir())
+        self.assertTrue(placeholder.exists())
 
     def test_env_config_reads_values_from_env_file(self) -> None:
         temp_root = self.make_temp_dir("prompt_env")
@@ -89,6 +119,54 @@ class PromptEnvConfigTest(ManagedTempDirTestCase):
         config = PromptLoaderConfig.from_env(env)
 
         self.assertEqual(config.local_prompt_dir, "./runtime-prompts")
+
+    def test_prompt_loader_config_reads_all_fields_from_env(self) -> None:
+        env = EnvConfig(
+            values={
+                "A2AT_PROMPT_DEFAULT_TTL_SECONDS": "7200",
+                "A2AT_PROMPT_LOCAL_DIR": "./runtime-prompts",
+                "A2AT_PROMPT_ALLOWED_EXTENSIONS": ".md,.json,.yaml",
+                "A2AT_DEFAULT_PROMPT_EXTENSION_URI": "prompt://default-extension",
+                "A2AT_PROMPT_EXTENSION_URI_OVERRIDES": '{"agent":"prompt://agent-extension"}',
+                "A2AT_DEFAULT_PROMPT_INDEX_URL_PARAM_KEY": "promptCatalogUrl",
+                "A2AT_PROMPT_INDEX_URL_PARAM_KEY_OVERRIDES": '{"agent":"agentPromptCatalogUrl"}',
+            }
+        )
+
+        config = PromptLoaderConfig.from_env(env)
+
+        self.assertEqual(config.default_ttl, timedelta(seconds=7200))
+        self.assertEqual(config.local_prompt_dir, "./runtime-prompts")
+        self.assertEqual(config.allowed_extensions, [".md", ".json", ".yaml"])
+        self.assertEqual(config.default_prompt_extension_uri, "prompt://default-extension")
+        self.assertEqual(config.prompt_extension_uri_overrides, {"agent": "prompt://agent-extension"})
+        self.assertEqual(config.default_prompt_index_url_param_key, "promptCatalogUrl")
+        self.assertEqual(
+            config.prompt_index_url_param_key_overrides,
+            {"agent": "agentPromptCatalogUrl"},
+        )
+
+    def test_prompt_loader_config_from_env_uses_defaults_for_optional_fields(self) -> None:
+        env = EnvConfig(values={"A2AT_PROMPT_LOCAL_DIR": "./runtime-prompts"})
+
+        config = PromptLoaderConfig.from_env(env)
+
+        self.assertEqual(config.default_ttl, timedelta(hours=1))
+        self.assertEqual(config.default_prompt_extension_uri, "default-prompt")
+        self.assertEqual(config.prompt_extension_uri_overrides, {})
+        self.assertEqual(config.default_prompt_index_url_param_key, "promptIndexUrl")
+        self.assertEqual(config.prompt_index_url_param_key_overrides, {})
+
+    def test_prompt_loader_config_rejects_invalid_json_overrides_in_env(self) -> None:
+        env = EnvConfig(
+            values={
+                "A2AT_PROMPT_LOCAL_DIR": "./runtime-prompts",
+                "A2AT_PROMPT_EXTENSION_URI_OVERRIDES": "{invalid-json}",
+            }
+        )
+
+        with self.assertRaisesRegex(Exception, "A2AT_PROMPT_EXTENSION_URI_OVERRIDES"):
+            PromptLoaderConfig.from_env(env)
 
 
 if __name__ == "__main__":
