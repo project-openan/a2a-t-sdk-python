@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,14 +21,35 @@ class PromptIdentity:
     version: str
 
 
+class GuardrailDecision(str, Enum):
+    """Unified guardrail decision semantics."""
+
+    ALLOW = "allow"
+    BLOCK = "block"
+    MASK = "mask"
+    REVIEW = "review"
+
+
+@dataclass
+class GuardrailRequest:
+    """Normalized guardrail input request."""
+
+    text: str
+    metadata: dict[str, object] | None = None
+    policy_id: str | None = None
+
+
 @dataclass
 class GuardrailResult:
     """Normalized result returned by safety guardrails."""
 
     passed: bool
+    decision: GuardrailDecision = GuardrailDecision.ALLOW
     category: str | None = None
     reason: str | None = None
     raw_response: dict[str, Any] | None = None
+    provider: str | None = None
+    policy_id: str | None = None
 
 
 @dataclass

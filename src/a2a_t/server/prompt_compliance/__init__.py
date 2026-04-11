@@ -18,8 +18,19 @@ from a2a_t.server.prompt_compliance.config import (
     SlotSchemaConfig,
 )
 from a2a_t.server.prompt_compliance.extractor import PromptSlotExtractor
-from a2a_t.server.prompt_compliance.guardrails import SafetyGuardrail, SafetyGuardrailFactory
+from a2a_t.server.prompt_compliance.guardrail_providers import (
+    GoogleModelArmorGateway,
+    GoogleModelArmorGuardrailAdapter,
+)
+from a2a_t.server.prompt_compliance.guardrails import (
+    AdapterSafetyGuardrail,
+    GuardrailAdapter,
+    SafetyGuardrail,
+    SafetyGuardrailFactory,
+)
 from a2a_t.server.prompt_compliance.models import (
+    GuardrailDecision,
+    GuardrailRequest,
     GuardrailResult,
     PromptComplianceResult,
     PromptIdentity,
@@ -37,8 +48,14 @@ __all__ = [
     "GuardrailResult",
     "GuardrailExecutionError",
     "GuardrailRejectedError",
+    "GuardrailAdapter",
+    "AdapterSafetyGuardrail",
+    "GuardrailDecision",
     "ProcessedPromptParseError",
     "GuardrailProviderConfig",
+    "GuardrailRequest",
+    "GoogleModelArmorGateway",
+    "GoogleModelArmorGuardrailAdapter",
     "PromptComplianceConfig",
     "PromptComplianceError",
     "PromptComplianceResult",
