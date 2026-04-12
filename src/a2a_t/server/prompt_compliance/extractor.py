@@ -10,7 +10,7 @@ from a2a_t.server.prompt_compliance.models import SlotExtractionResult
 
 
 class PromptSlotExtractor:
-    """Extract structured slots from original and processed prompts."""
+    """从原始 Prompt 和加工后 Prompt 中提取结构化槽位 / Extract structured slots from original and processed prompts."""
 
     _OUTPUT_SCHEMA: dict[str, Any] = {
         "type": "object",

@@ -8,7 +8,7 @@ from a2a_t.server.prompt_compliance.slot_schema import SlotSchema
 
 
 class SlotValidator:
-    """Validate extracted slots against a generated JSON Schema."""
+    """使用生成的 JSON Schema 校验提取槽位 / Validate extracted slots against a generated JSON Schema."""
 
     def __init__(self, schema_builder: SlotSchemaBuilder | None = None) -> None:
         self._schema_builder = schema_builder or SlotSchemaBuilder()
