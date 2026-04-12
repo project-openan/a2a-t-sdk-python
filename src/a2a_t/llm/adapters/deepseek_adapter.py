@@ -10,13 +10,12 @@ from openai import OpenAI
 from a2a_t.llm.base import ChatMessage, LLMAdapter, LLMResponse
 from a2a_t.llm.errors import LLMConfigError, LLMRuntimeError
 
-_JSON_MODE_INSTRUCTION = (
+_JSON_MODE_INSTRUCTION_DEFAULT = (
     "Return a valid JSON object string. "
     "The output must be valid json. "
     "Do not wrap the response in markdown code fences. "
     "Do not include any explanation outside the JSON object."
 )
-
 
 class DeepSeekAdapter(LLMAdapter):
     """LLM adapter for DeepSeek's OpenAI-compatible API."""
@@ -74,7 +73,7 @@ class DeepSeekAdapter(LLMAdapter):
 
     def _build_api_messages(self, messages: list[ChatMessage]) -> list[dict[str, str]]:
         return [
-            {"role": "system", "content": _JSON_MODE_INSTRUCTION},
+            {"role": "system", "content": _JSON_MODE_INSTRUCTION_DEFAULT},
             *({"role": item.role, "content": item.content} for item in messages),
         ]
 
@@ -85,7 +84,7 @@ class DeepSeekAdapter(LLMAdapter):
     ) -> list[dict[str, str]]:
         schema_text = json.dumps(json_schema, ensure_ascii=False)
         return [
-            {"role": "system", "content": _JSON_MODE_INSTRUCTION},
+            {"role": "system", "content": _JSON_MODE_INSTRUCTION_DEFAULT},
             {
                 "role": "system",
                 "content": f"Return JSON that conforms to this JSON schema: {schema_text}",
