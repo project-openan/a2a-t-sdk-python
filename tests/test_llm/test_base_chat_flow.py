@@ -12,7 +12,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from a2a_t.llm.base import ChatMessage, LLMAdapter, LLMResponse
-from a2a_t.llm import ChatMessage as PublicChatMessage, ChatSession, InMemorySessionStore, LLMAdapterFactory
+from a2a_t.llm import ChatMessage as PublicChatMessage, ChatSession, InMemorySessionStore, LLMAdapterFactory, LLMClient
 from a2a_t.llm.errors import LLMRuntimeError
 
 
@@ -112,6 +112,7 @@ class LLMModuleExportsTest(unittest.TestCase):
         self.assertIsNotNone(ChatSession)
         self.assertIsNotNone(InMemorySessionStore)
         self.assertIsNotNone(LLMAdapterFactory)
+        self.assertIsNotNone(LLMClient)
 
 
 if __name__ == "__main__":

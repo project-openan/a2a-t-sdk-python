@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -15,35 +16,59 @@ from a2a_t.llm.factory import LLMAdapterFactory
 
 
 class OpenAIAdapterTest(unittest.TestCase):
-    def test_complete_builds_openai_input_payload(self) -> None:
-        recorded: dict[str, Any] = {}
+    @patch("a2a_t.llm.adapters.openai_adapter.OpenAI")
+    def test_complete_uses_openai_chat_completions_sdk(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4.1",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="done"))],
+            usage=SimpleNamespace(prompt_tokens=4, completion_tokens=1),
+        )
+        openai_cls.return_value = sdk_client
 
-        def transport(payload: dict[str, Any]) -> dict[str, Any]:
-            recorded["payload"] = payload
-            return {"output_text": "done", "model": "gpt-4.1", "usage": {"prompt_tokens": 4, "completion_tokens": 1}}
-
-        adapter = LLMAdapterFactory.create("openai", {"model": "gpt-4.1", "transport": transport})
-        response = adapter.complete("say hi", system_prompt="be short")
+        adapter = LLMAdapterFactory.create("openai", {"model": "gpt-4.1", "api_key": "sk-test"})
+        response = adapter.complete("say hi", system_prompt="be short", temperature=0.2, max_tokens=64)
 
         self.assertEqual(response.content, "done")
-        self.assertEqual(recorded["payload"]["model"], "gpt-4.1")
-        self.assertEqual(recorded["payload"]["input"][0]["role"], "system")
-        self.assertEqual(recorded["payload"]["input"][1]["content"], "say hi")
+        sdk_client.chat.completions.create.assert_called_once()
+        self.assertEqual(
+            sdk_client.chat.completions.create.call_args.kwargs,
+            {
+                "model": "gpt-4.1",
+                "messages": [
+                    {"role": "system", "content": "be short"},
+                    {"role": "user", "content": "say hi"},
+                ],
+                "temperature": 0.2,
+                "max_tokens": 64,
+            },
+        )
 
-    def test_chat_uses_existing_session_id_and_returns_it(self) -> None:
-        recorded: dict[str, Any] = {}
+    @patch("a2a_t.llm.adapters.openai_adapter.OpenAI")
+    def test_chat_uses_existing_session_id_and_returns_it(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.side_effect = [
+            SimpleNamespace(
+                model="gpt-4.1",
+                choices=[SimpleNamespace(message=SimpleNamespace(content="first-reply"))],
+                usage=SimpleNamespace(prompt_tokens=6, completion_tokens=2),
+            ),
+            SimpleNamespace(
+                model="gpt-4.1",
+                choices=[SimpleNamespace(message=SimpleNamespace(content="second-reply"))],
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=3),
+            ),
+        ]
+        openai_cls.return_value = sdk_client
 
-        def transport(payload: dict[str, Any]) -> dict[str, Any]:
-            recorded["payload"] = payload
-            return {"output_text": "reply", "model": "gpt-4.1", "usage": {"prompt_tokens": 8, "completion_tokens": 2}}
-
-        adapter = LLMAdapterFactory.create("openai", {"model": "gpt-4.1", "transport": transport, "history_window": 2})
+        adapter = LLMAdapterFactory.create("openai", {"model": "gpt-4.1", "api_key": "sk-test", "history_window": 2})
         first = adapter.chat("hello", system_prompt="be concise")
         second = adapter.chat("again", session_id=first.session_id)
 
         self.assertEqual(second.session_id, first.session_id)
-        self.assertEqual(recorded["payload"]["input"][0]["role"], "system")
-        self.assertEqual(recorded["payload"]["input"][-1]["content"], "again")
+        second_call = sdk_client.chat.completions.create.call_args_list[1].kwargs
+        self.assertEqual(second_call["messages"][0], {"role": "system", "content": "be concise"})
+        self.assertEqual(second_call["messages"][-1], {"role": "user", "content": "again"})
 
 
 if __name__ == "__main__":
