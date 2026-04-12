@@ -29,6 +29,9 @@ dependencies = [
     "jsonschema>=4.23.0",
     "python-dotenv>=1.1.0",
     "google-cloud-modelarmor>=0.1.0",
+    "openai",
+    "google-genai",
+    "anthropic",
 ]
 
 [project.optional-dependencies]
