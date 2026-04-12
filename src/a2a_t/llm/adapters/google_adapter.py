@@ -62,8 +62,7 @@ class GoogleAdapter(LLMAdapter):
         config_kwargs: dict[str, Any] = {}
         if system_instruction:
             config_kwargs["system_instruction"] = system_instruction
-        if response_mime_type is not None:
-            config_kwargs["response_mime_type"] = response_mime_type
+        config_kwargs["response_mime_type"] = response_mime_type or "application/json"
         if response_json_schema is not None:
             config_kwargs["response_json_schema"] = response_json_schema
         if kwargs.get("temperature") is not None:

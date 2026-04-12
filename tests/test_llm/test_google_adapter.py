@@ -1,3 +1,5 @@
+# ruff: noqa: E402, I001
+
 from __future__ import annotations
 
 import sys
@@ -21,7 +23,7 @@ class GoogleAdapterTest(unittest.TestCase):
     def test_complete_uses_google_generate_content(self, client_cls: Mock, config_cls: Mock) -> None:
         sdk_client = Mock()
         sdk_client.models.generate_content.return_value = SimpleNamespace(
-            text="done",
+            text='{"result":"done"}',
             model_version="gemini-2.5-flash",
             usage_metadata=SimpleNamespace(prompt_token_count=3, candidates_token_count=1),
         )
@@ -31,11 +33,16 @@ class GoogleAdapterTest(unittest.TestCase):
         adapter = LLMAdapterFactory.create("google", {"model": "gemini-2.5-flash", "api_key": "google-key"})
         response = adapter.complete("say hi", system_prompt="be short", temperature=0.2, max_tokens=64)
 
-        self.assertEqual(response.content, "done")
+        self.assertEqual(response.content, '{"result":"done"}')
         sdk_client.models.generate_content.assert_called_once_with(
             model="gemini-2.5-flash",
             contents=[{"role": "user", "parts": [{"text": "say hi"}]}],
-            config={"system_instruction": "be short", "temperature": 0.2, "max_output_tokens": 64},
+            config={
+                "system_instruction": "be short",
+                "response_mime_type": "application/json",
+                "temperature": 0.2,
+                "max_output_tokens": 64,
+            },
         )
 
     @patch("a2a_t.llm.adapters.google_adapter.types.GenerateContentConfig")
@@ -44,12 +51,12 @@ class GoogleAdapterTest(unittest.TestCase):
         sdk_client = Mock()
         sdk_client.models.generate_content.side_effect = [
             SimpleNamespace(
-                text="first-reply",
+                text='{"reply":"first"}',
                 model_version="gemini-2.5-flash",
                 usage_metadata=SimpleNamespace(prompt_token_count=6, candidates_token_count=2),
             ),
             SimpleNamespace(
-                text="second-reply",
+                text='{"reply":"second"}',
                 model_version="gemini-2.5-flash",
                 usage_metadata=SimpleNamespace(prompt_token_count=10, candidates_token_count=3),
             ),
@@ -57,7 +64,14 @@ class GoogleAdapterTest(unittest.TestCase):
         client_cls.return_value = sdk_client
         config_cls.side_effect = lambda **kwargs: kwargs
 
-        adapter = LLMAdapterFactory.create("google", {"model": "gemini-2.5-flash", "api_key": "google-key", "history_window": 2})
+        adapter = LLMAdapterFactory.create(
+            "google",
+            {
+                "model": "gemini-2.5-flash",
+                "api_key": "google-key",
+                "history_window": 2,
+            },
+        )
         first = adapter.chat("hello", system_prompt="be concise")
         second = adapter.chat("again", session_id=first.session_id)
 
@@ -65,6 +79,7 @@ class GoogleAdapterTest(unittest.TestCase):
         self.assertEqual(second.session_id, first.session_id)
         self.assertEqual(second_call["contents"][-1], {"role": "user", "parts": [{"text": "again"}]})
         self.assertEqual(second_call["config"]["system_instruction"], "be concise")
+        self.assertEqual(second_call["config"]["response_mime_type"], "application/json")
 
 
 if __name__ == "__main__":
