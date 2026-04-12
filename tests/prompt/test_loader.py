@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import hashlib
 import json
 import sys
 from datetime import datetime, timedelta, timezone
@@ -28,31 +26,35 @@ from tests.test_support import FakeRemoteProvider, ManagedTempDirTestCase, build
 
 class InMemoryPromptStore:
     def __init__(self) -> None:
-        self.records: dict[tuple[str, str, str], tuple[object, str]] = {}
+        self.records: dict[tuple[str, str, str, str], tuple[object, str]] = {}
         self.resolve_calls = 0
 
     def write(self, *, record: object, content: str) -> None:
-        cache_key = getattr(record, "cache_key")
         source_type = getattr(record, "source_type")
-        self.records[(source_type, cache_key)] = (record, content)
+        name = getattr(record, "name")
+        version = getattr(record, "version")
+        language = getattr(record, "language")
+        self.records[(source_type, name, version, language)] = (record, content)
 
-    def read(self, *, source_type: str, cache_key: str) -> tuple[object, str]:
+    def read(self, *, source_type: str, name: str, version: str, language: str) -> tuple[object, str]:
         try:
-            return self.records[(source_type, cache_key)]
+            return self.records[(source_type, name, version, language)]
         except KeyError as error:
-            raise PromptCacheError("Cache metadata file is missing.", cache_key=cache_key) from error
+            raise PromptCacheError("Cache metadata file is missing.", name=name, version=version, language=language) from error
 
     def resolve(
         self,
         *,
         source_type: str,
-        cache_key: str,
+        name: str,
+        version: str,
+        language: str,
         now: datetime,
         allow_stale_fallback: bool,
     ) -> tuple[object | None, str | None, CacheStatus]:
         self.resolve_calls += 1
         try:
-            record, content = self.read(source_type=source_type, cache_key=cache_key)
+            record, content = self.read(source_type=source_type, name=name, version=version, language=language)
         except PromptCacheError:
             return None, None, CacheStatus.MISS
 
@@ -75,7 +77,9 @@ class ResolveOnlyPromptStore:
         self,
         *,
         source_type: str,
-        cache_key: str,
+        name: str,
+        version: str,
+        language: str,
         now: datetime,
         allow_stale_fallback: bool,
     ) -> tuple[object | None, str | None, CacheStatus]:
@@ -85,7 +89,7 @@ class ResolveOnlyPromptStore:
     def write(self, *, record: object, content: str) -> None:
         self.writes.append((record, content))
 
-    def read(self, *, source_type: str, cache_key: str) -> tuple[object, str]:
+    def read(self, *, source_type: str, name: str, version: str, language: str) -> tuple[object, str]:
         raise AssertionError("PromptLoader should use resolve() instead of read().")
 
 
@@ -119,19 +123,6 @@ class PromptLoaderTest(ManagedTempDirTestCase):
             providers=providers,
             now_provider=self._now,
         )
-
-    def _expected_cache_key(
-        self,
-        *,
-        source_type: str,
-        locator: str,
-        name: str,
-        language: str,
-        version: str,
-        format: str = "markdown",
-    ) -> str:
-        raw_key = f"{source_type}|{locator}|{name}|{language}|{version}|{format}"
-        return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
     def test_load_reads_local_file_directly(self) -> None:
         prompt_path = self.temp_root / "alarm.md"
@@ -250,13 +241,6 @@ class PromptLoaderTest(ManagedTempDirTestCase):
         )
         fetched_at = datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc)
         record = self._manager()._build_record(
-            cache_key=self._expected_cache_key(
-                source_type="url",
-                locator=locator,
-                name="diagnosis",
-                language="zh-CN",
-                version="1.0.0",
-            ),
             prompt=self.parser.parse(
                 content=cached_content,
                 source=PromptSource(source_type="url", locator=locator),
@@ -298,13 +282,6 @@ class PromptLoaderTest(ManagedTempDirTestCase):
         )
         fetched_at = datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc)
         record = self._manager()._build_record(
-            cache_key=self._expected_cache_key(
-                source_type="url",
-                locator=locator,
-                name="diagnosis",
-                language="zh-CN",
-                version="1.0.0",
-            ),
             prompt=self.parser.parse(
                 content=cached_content,
                 source=PromptSource(source_type="url", locator=locator),

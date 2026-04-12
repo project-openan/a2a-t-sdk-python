@@ -168,10 +168,17 @@ class PromptLoaderDomainTest(unittest.TestCase):
         )
 
     def test_prompt_conflict_error_is_prompt_loader_error(self) -> None:
-        error = PromptConflictError("Prompt conflict cannot be resolved.", cache_key="diagnosis||1.0.0||zh-CN||markdown")
+        error = PromptConflictError(
+            "Prompt conflict cannot be resolved.",
+            name="diagnosis",
+            version="1.0.0",
+            language="zh-CN",
+        )
 
         self.assertIsInstance(error, PromptLoaderError)
-        self.assertEqual(error.context["cache_key"], "diagnosis||1.0.0||zh-CN||markdown")
+        self.assertEqual(error.context["name"], "diagnosis")
+        self.assertEqual(error.context["version"], "1.0.0")
+        self.assertEqual(error.context["language"], "zh-CN")
 
     def test_prompt_version_comparison_error_is_prompt_loader_error(self) -> None:
         error = PromptVersionComparisonError("Prompt version is invalid.", version="1.0.beta")

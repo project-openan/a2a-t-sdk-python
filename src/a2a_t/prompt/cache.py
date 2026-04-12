@@ -18,13 +18,15 @@ logger = logging.getLogger(__name__)
 class PromptStore(Protocol):
     def write(self, *, record: CachedPromptRecord, content: str) -> None: ...
 
-    def read(self, *, source_type: str, cache_key: str) -> tuple[CachedPromptRecord, str]: ...
+    def read(self, *, source_type: str, name: str, version: str, language: str) -> tuple[CachedPromptRecord, str]: ...
 
     def resolve(
         self,
         *,
         source_type: str,
-        cache_key: str,
+        name: str,
+        version: str,
+        language: str,
         now: datetime,
         allow_stale_fallback: bool,
     ) -> tuple[CachedPromptRecord | None, str | None, CacheStatus]: ...
@@ -117,14 +119,23 @@ class LocalFilePromptStore:
             existing_record=existing_record,
             new_record=record,
         ):
-            logger.warning("Cache conflict cannot be resolved cache_key=%s", record.cache_key)
-            raise PromptConflictError("Cache conflict cannot be resolved.", cache_key=record.cache_key)
+            logger.warning(
+                "Cache conflict cannot be resolved name=%s version=%s language=%s",
+                record.name,
+                record.version,
+                record.language,
+            )
+            raise PromptConflictError(
+                "Cache conflict cannot be resolved.",
+                name=record.name,
+                version=record.version,
+                language=record.language,
+            )
 
         record_to_write = record
         if existing_record is not None:
             overwrite_reason = self._resolve_overwrite_reason()
             record_to_write = CachedPromptRecord(
-                cache_key=record.cache_key,
                 source_type=record.source_type,
                 name=record.name,
                 language=record.language,
@@ -148,33 +159,33 @@ class LocalFilePromptStore:
         content_path.write_text(content, encoding="utf-8")
         metadata_path.write_text(self._serialize_record(record_to_write), encoding="utf-8")
 
-    def read(self, *, source_type: str, cache_key: str) -> tuple[CachedPromptRecord, str]:
+    def read(self, *, source_type: str, name: str, version: str, language: str) -> tuple[CachedPromptRecord, str]:
         """读取缓存的 Prompt 记录并校验必要文件存在 / Read a cached prompt entry and validate that required files exist."""
 
-        logger.info("Reading cache entry cache_key=%s", cache_key)
-        cache_dir = self._cache_dir_from_cache_key(cache_key=cache_key)
+        logger.info("Reading cache entry name=%s version=%s language=%s", name, version, language)
+        cache_dir = self._safe_identity_dir(name=name, version=version, language=language)
         metadata_path = cache_dir / "metadata.json"
 
         if not metadata_path.exists():
-            logger.warning("Cache metadata file is missing cache_key=%s", cache_key)
-            raise PromptCacheError("Cache metadata file is missing.", cache_key=cache_key)
+            logger.warning("Cache metadata file is missing name=%s version=%s language=%s", name, version, language)
+            raise PromptCacheError("Cache metadata file is missing.", name=name, version=version, language=language)
 
         try:
             record_data = json.loads(metadata_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as error:
-            logger.warning("Cache metadata file is corrupted cache_key=%s", cache_key)
-            raise PromptCacheError("Cache metadata file is corrupted.", cache_key=cache_key) from error
+            logger.warning("Cache metadata file is corrupted name=%s version=%s language=%s", name, version, language)
+            raise PromptCacheError("Cache metadata file is corrupted.", name=name, version=version, language=language) from error
 
         try:
             record = self._deserialize_record(record_data)
         except (KeyError, TypeError, ValueError) as error:
-            logger.warning("Cache metadata payload is invalid cache_key=%s", cache_key)
-            raise PromptCacheError("Cache metadata file is invalid.", cache_key=cache_key) from error
+            logger.warning("Cache metadata payload is invalid name=%s version=%s language=%s", name, version, language)
+            raise PromptCacheError("Cache metadata file is invalid.", name=name, version=version, language=language) from error
 
         content_path = cache_dir / self._content_filename(format_name=record.format)
         if not content_path.exists():
-            logger.warning("Cache content file is missing cache_key=%s", cache_key)
-            raise PromptCacheError("Cache content file is missing.", cache_key=cache_key)
+            logger.warning("Cache content file is missing name=%s version=%s language=%s", name, version, language)
+            raise PromptCacheError("Cache content file is missing.", name=name, version=version, language=language)
 
         return record, content_path.read_text(encoding="utf-8")
 
@@ -182,7 +193,9 @@ class LocalFilePromptStore:
         self,
         *,
         source_type: str,
-        cache_key: str,
+        name: str,
+        version: str,
+        language: str,
         now: datetime,
         allow_stale_fallback: bool,
     ) -> tuple[CachedPromptRecord, str, CacheStatus]:
@@ -190,16 +203,18 @@ class LocalFilePromptStore:
 
         record, content, cache_status = self.resolve(
             source_type=source_type,
-            cache_key=cache_key,
+            name=name,
+            version=version,
+            language=language,
             now=now,
             allow_stale_fallback=allow_stale_fallback,
         )
 
         if cache_status == CacheStatus.MISS:
-            raise PromptCacheError("Cache metadata file is missing.", cache_key=cache_key)
+            raise PromptCacheError("Cache metadata file is missing.", name=name, version=version, language=language)
         if cache_status == CacheStatus.EXPIRED:
-            logger.warning("Cache entry expired and stale fallback is disabled cache_key=%s", cache_key)
-            raise PromptCacheError("Cache entry is expired.", cache_key=cache_key)
+            logger.warning("Cache entry expired and stale fallback is disabled name=%s version=%s language=%s", name, version, language)
+            raise PromptCacheError("Cache entry is expired.", name=name, version=version, language=language)
 
         assert record is not None
         assert content is not None
@@ -209,37 +224,32 @@ class LocalFilePromptStore:
         self,
         *,
         source_type: str,
-        cache_key: str,
+        name: str,
+        version: str,
+        language: str,
         now: datetime,
         allow_stale_fallback: bool,
     ) -> tuple[CachedPromptRecord | None, str | None, CacheStatus]:
         """返回缓存命中、缺失或过期语义结果 / Return cache miss, hit, expired, or stale fallback semantics."""
 
         try:
-            record, content = self.read(source_type=source_type, cache_key=cache_key)
+            record, content = self.read(source_type=source_type, name=name, version=version, language=language)
         except PromptCacheError:
-            logger.info("Cache entry is missing cache_key=%s", cache_key)
+            logger.info("Cache entry is missing name=%s version=%s language=%s", name, version, language)
             return None, None, CacheStatus.MISS
 
         if not self._expiration_policy.is_expired(record=record, now=now):
-            logger.info("Cache entry is fresh cache_key=%s", cache_key)
+            logger.info("Cache entry is fresh name=%s version=%s language=%s", name, version, language)
             return record, content, CacheStatus.HIT
         if allow_stale_fallback:
-            logger.warning("Cache entry expired; using stale fallback cache_key=%s", cache_key)
+            logger.warning("Cache entry expired; using stale fallback name=%s version=%s language=%s", name, version, language)
             return record, content, CacheStatus.STALE_FALLBACK
 
-        logger.info("Cache entry is expired cache_key=%s", cache_key)
+        logger.info("Cache entry is expired name=%s version=%s language=%s", name, version, language)
         return record, content, CacheStatus.EXPIRED
 
     def _cache_dir(self, *, record: CachedPromptRecord) -> Path:
         return self._safe_identity_dir(name=record.name, version=record.version, language=record.language)
-
-    def _cache_dir_from_cache_key(self, *, cache_key: str) -> Path:
-        try:
-            name, version, language, _ = cache_key.split("||")
-        except ValueError as error:
-            raise PromptCacheError("Cache key is invalid.", cache_key=cache_key) from error
-        return self._safe_identity_dir(name=name, version=version, language=language)
 
     def _safe_identity_dir(self, *, name: str, version: str, language: str) -> Path:
         identity_parts = (
@@ -255,7 +265,9 @@ class LocalFilePromptStore:
         if root != target and root not in target.parents:
             raise PromptCacheError(
                 "Prompt identity path escapes local root.",
-                cache_key=f"{name}||{version}||{language}",
+                name=name,
+                version=version,
+                language=language,
             )
         return target
 
@@ -276,9 +288,9 @@ class LocalFilePromptStore:
 
     def _serialize_record(self, record: CachedPromptRecord) -> str:
         if "\n" in record.source_locator or "\r" in record.source_locator:
-            raise PromptCacheError("Prompt source locator is invalid.", cache_key=record.cache_key)
+            raise PromptCacheError("Prompt source locator is invalid.", name=record.name, version=record.version, language=record.language)
         if not record.content_hash.startswith("sha256:"):
-            raise PromptCacheError("Prompt content hash is invalid.", cache_key=record.cache_key)
+            raise PromptCacheError("Prompt content hash is invalid.", name=record.name, version=record.version, language=record.language)
 
         payload = asdict(record)
         payload = {key: value for key, value in payload.items() if value is not None}
@@ -289,7 +301,6 @@ class LocalFilePromptStore:
 
     def _deserialize_record(self, payload: dict[str, object]) -> CachedPromptRecord:
         return CachedPromptRecord(
-            cache_key=str(payload["cache_key"]),
             source_type=str(payload["source_type"]),
             name=str(payload["name"]),
             language=str(payload["language"]),
@@ -304,7 +315,7 @@ class LocalFilePromptStore:
             previous_content_hash=str(payload["previous_content_hash"]) if "previous_content_hash" in payload else None,
         )
 
-    def _read_existing_record(self, *, metadata_path: Path, cache_key: str) -> CachedPromptRecord | None:
+    def _read_existing_record(self, *, metadata_path: Path) -> CachedPromptRecord | None:
         if not metadata_path.exists():
             return None
 
@@ -312,13 +323,12 @@ class LocalFilePromptStore:
             payload = json.loads(metadata_path.read_text(encoding="utf-8"))
             return self._deserialize_record(payload)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
-            logger.warning("Existing cache metadata file is invalid cache_key=%s", cache_key)
-            raise PromptCacheError("Cache metadata file is invalid.", cache_key=cache_key) from error
+            logger.warning("Existing cache metadata file is invalid path=%s", metadata_path)
+            raise PromptCacheError("Cache metadata file is invalid.", path=str(metadata_path)) from error
 
     def _find_conflicting_record(self, *, record: CachedPromptRecord) -> CachedPromptRecord | None:
         exact_record = self._read_existing_record(
             metadata_path=self._cache_dir(record=record) / "metadata.json",
-            cache_key=record.cache_key,
         )
         if exact_record is not None:
             return exact_record
@@ -329,7 +339,7 @@ class LocalFilePromptStore:
 
         matching_records: list[CachedPromptRecord] = []
         for metadata_path in language_root.glob(f"*/{record.language}/metadata.json"):
-            existing_record = self._read_existing_record(metadata_path=metadata_path, cache_key=record.cache_key)
+            existing_record = self._read_existing_record(metadata_path=metadata_path)
             if existing_record is None:
                 continue
             if existing_record.name == record.name and existing_record.language == record.language:
