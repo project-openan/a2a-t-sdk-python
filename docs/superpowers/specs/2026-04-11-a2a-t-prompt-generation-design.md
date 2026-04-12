@@ -1,5 +1,26 @@
 # A2A-T Prompt 生成设计文档
 
+## 0. 状态说明
+
+本文档保留 client 侧 A2A-T Prompt 生成能力的对外契约、两阶段语义、结果模型和校验规则。
+
+自共享重构方案确定后，以下内容以
+[2026-04-12-a2a-t-prompt-shared-refactor-design.md](C:/Users/w00609601/project/a2a-t-sdk/docs/superpowers/specs/2026-04-12-a2a-t-prompt-shared-refactor-design.md)
+为准：
+
+- 共享代码架构
+- 资源目录结构与资源定位规则
+- `src/a2a_t/prompt/` 与 `src/a2a_t/server/prompt_compliance/` 的重构方式
+- server 对 front matter、slot 提取与 slot 校验的对接方式
+
+本文件中被共享重构文档替代的重点章节为：
+
+- 第 4 章中的代码落点描述
+- 第 10 章资源模型
+- 第 12 章主要类关系
+- 第 16 章 LLM 集成落点
+- 第 17 章实现职责边界中的共享层拆分方式
+
 ## 1. 背景
 
 本文档定义客户端 SDK 的 A2A-T Prompt 生成功能。
@@ -66,11 +87,11 @@
 新能力位于客户端侧，需遵循当前 SDK 边界：
 
 - 对外入口仍为现有 `PromptClient`
-- LLM 调用复用现有 SDK LLM 模块
-- 场景定义、模板、slot schema、LLM 指导 prompt 以客户端资源文件形式管理
+- LLM 调用复用现有 SDK LLM 模块，并通过共享 `LLMClient` 发起
+- 场景定义、模板、slot schema、LLM 指导 prompt 以共享 `a2a_t.prompt.resources` 资源体系管理
 - 不新增独立的 prompt generation client
 - 不新增 feature 专属的 LLM 调用栈
-- 不改动服务端模块
+- client 最终输出需要与 server prompt compliance 的 front matter 契约保持一致
 
 ### 4.1 上下文视图
 
@@ -88,7 +109,7 @@ rectangle "a2a-t-sdk" {
   [PromptClient] as PromptClient
   [A2A-T Prompt Generation Module] as PromptGen
   [Shared LLMClient\n(singleton)] as LLMClient
-  folder "Client Resources" as Resources
+  folder "Shared Prompt Resources" as Resources
   file "scenarios.json" as Scenarios
   file "templates/*.md" as Templates
   file "slots/*.json" as Slots
@@ -127,20 +148,25 @@ PromptGen .. Resources
 2. 将输入归一化为：
    - `input_kind = "natural_language"` 或 `input_kind = "json"`
    - LLM 可直接使用的标准化输入
-3. 从 `A2ATConfig` 顶层读取当前语言值；若缺失或不支持，则回退到 `en-US`
+3. 从 `A2ATConfig` 顶层读取：
+   - 当前语言值
+   - `prompt_resource_version`
+   若缺失则分别回退到 `en-US` 与 `0.0.1`
 4. 按当前语言加载第一阶段 prompt 资源；若缺失则回退到 `en-US`
 5. 若第一阶段 prompt 资源缺失，则直接失败
 6. 调用第一阶段 LLM，识别 `scenario_code`
 7. 校验第一阶段输出结构
 8. 校验 `scenario_code` 是否存在于 SDK 内置场景表中
-9. 按 `scenario_code + language` 解析模板和 slot schema，其中 `language` 为最终使用语言
+9. 按 `scenario_code + version + language` 解析模板和 slot schema，其中：
+   - `version = prompt_resource_version`
+   - `language` 为最终使用语言
 10. 按最终使用语言加载第二阶段 prompt 资源；若缺失则回退到 `en-US`
 11. 若回退后仍无法解析到模板、slot schema 或第二阶段 prompt 资源，则直接失败，不进入第二阶段
 12. 调用第二阶段 LLM，提取该场景下的 slot
 13. 校验第二阶段输出结构
 14. 按 slot schema 执行 slot 校验
 15. 若校验失败，则返回失败结果，且 `prompt_text = null`
-16. 若校验成功，则由 SDK 按 Markdown 模板渲染最终 `prompt_text`
+16. 若校验成功，则由 SDK 按 Markdown 模板渲染最终 markdown prompt，并生成 front matter
 17. 返回 `PromptGenerationResult`
 
 ### 5.2 时序图
@@ -165,7 +191,7 @@ Module -> Module : 输入归一化\n识别 input_kind
 Module -> PromptResources : 加载场景列表
 PromptResources --> Module : supported scenarios
 
-Module -> Module : 从 A2ATConfig 读取当前语言值\n缺失或不支持则回退 en-US
+Module -> Module : 从 A2ATConfig 读取 language / prompt_resource_version\n缺失则回退 en-US / 0.0.1
 Module -> PromptResources : 按 language\n加载阶段1 prompt 资源
 alt 第一阶段 prompt 缺失
   Module -> Module : 回退到 en-US
@@ -179,7 +205,7 @@ alt 场景未匹配
   Module --> Client : failure(SCENARIO_PARSE_FAILED,\nstage=scenario)
   Client --> Caller : PromptGenerationResult
 else 场景已匹配
-  Module -> PromptResources : 解析 scenario_code + language\n加载模板和 slot schema
+  Module -> PromptResources : 解析 scenario_code + version + language\n加载模板和 slot schema
   Module -> PromptResources : 按 language\n加载阶段2 prompt 资源
 
   alt 资源缺失
@@ -378,12 +404,16 @@ SDK 必须校验：
 
 - 输出结构是否合法
 - `scenario_code` 是否存在于内置场景表
-- `scenario_code + language` 是否能解析出模板和 slot schema，其中 `language` 为当前语言值回退后的最终使用语言
+- `scenario_code + version + language` 是否能解析出模板和 slot schema，其中：
+  - `version` 为 `prompt_resource_version`
+  - `language` 为当前语言值回退后的最终使用语言
 
 语言处理规则：
 
 - SDK 从 `A2ATConfig` 顶层读取当前语言值
+- SDK 从 `A2ATConfig` 顶层读取 `prompt_resource_version`
 - 若当前语言值缺失或不受支持，则回退到 `en-US`
+- 若 `prompt_resource_version` 缺失，则回退到 `0.0.1`
 - 第一阶段目标语言 prompt 资源缺失时，继续回退到 `en-US`
 - 若回退后的 `en-US` 资源仍不存在，则在第一阶段后直接失败
 - 最终结果中的 `language` 为最终使用语言
@@ -437,6 +467,7 @@ SDK 必须校验：
 
 - 原始归一化输入
 - 已解析的 `scenario_code`
+- `prompt_resource_version`
 - 最终使用语言
 - 最终渲染模板正文
 - 对应场景和语言的 slot schema
@@ -632,151 +663,19 @@ SDK 必须校验：
 
 ## 10. 资源模型
 
-### 10.1 目录结构
+本章已被共享重构文档替代。
 
-```text
-src/a2a_t/client/resources/a2a_t_prompt_generation/
-  scenarios.json
-  templates/
-    <scenario_code>.<language>.md
-  slots/
-    <scenario_code>.<language>.json
-  prompts/
-    stage1.system.<language>.md
-    stage1.user.<language>.md
-    stage2.system.<language>.md
-    stage2.user.<language>.md
-```
+当前实现应以
+[2026-04-12-a2a-t-prompt-shared-refactor-design.md](C:/Users/w00609601/project/a2a-t-sdk/docs/superpowers/specs/2026-04-12-a2a-t-prompt-shared-refactor-design.md)
+中的以下内容为准：
 
-### 10.2 场景表
+- `package_data/prompt_resources/` 统一资源根目录
+- `scenario_code + version + language` 的资源定位规则
+- `scenario_recognition` / `slot_extraction` prompt 资源路径
+- 统一 `slot.json` 结构
+- `PromptLoader` 与共享 `resources` 子包的职责边界
 
-`scenarios.json` 定义内置场景表，以及语言维度下的模板和 slot schema 映射关系。
-
-示例：
-
-```json
-{
-  "scenarios": [
-    {
-      "scenario_code": "energy_saving",
-      "scenario_name": "节能",
-      "description": "用于识别与能耗分析、节能优化建议相关的请求。",
-      "example": "分析深圳南山A区机房上周能耗，并给出节能建议。",
-      "templates": {
-        "zh-CN": "templates/energy_saving.zh-CN.md",
-        "en-US": "templates/energy_saving.en-US.md"
-      },
-      "slot_schemas": {
-        "zh-CN": "slots/energy_saving.zh-CN.json",
-        "en-US": "slots/energy_saving.en-US.json"
-      }
-    }
-  ]
-}
-```
-
-规则：
-
-- 一个 `scenario_code` 在每种支持语言下只对应一个模板
-- `scenario_name` 仅用于第一阶段识别提示，不进入最终返回对象
-- 运行时路由只以 `scenario_code` 为准
-
-### 10.3 渲染模板
-
-每个场景与语言组合对应一个 Markdown 模板文件。
-
-模板文件只存放最终可渲染的 Prompt 正文，不混入：
-
-- 场景说明
-- slot 定义
-- LLM 指令 Prompt
-
-占位符语法固定为：
-
-- `{slot_name}`
-
-### 10.4 LLM 指导 prompt 资源
-
-LLM 指导 prompt 资源用于组织两阶段 `LLMClient.structured(...)` 调用所需的 `messages`。
-
-目录与命名规则如下：
-
-```text
-prompts/
-  stage1.system.<language>.md
-  stage1.user.<language>.md
-  stage2.system.<language>.md
-  stage2.user.<language>.md
-```
-
-示例：
-
-```text
-prompts/
-  stage1.system.zh-CN.md
-  stage1.user.zh-CN.md
-  stage1.system.en-US.md
-  stage1.user.en-US.md
-  stage2.system.zh-CN.md
-  stage2.user.zh-CN.md
-  stage2.system.en-US.md
-  stage2.user.en-US.md
-```
-
-规则：
-
-- prompt 资源只按 `stage + language` 维度区分
-- 本期不按场景区分 prompt 资源
-- 场景差异继续由 `templates/` 和 `slots/` 承载
-- 第一阶段目标语言 prompt 资源不存在，则回退到 `en-US`
-- 第二阶段目标语言 prompt 资源不存在，则回退到 `en-US`
-- 若回退后的 `en-US` prompt 资源仍不存在，则返回 `PROMPT_NOT_FOUND`
-- 本期 `messages` 固定组织为两条：
-  - 一条 `system`
-  - 一条 `user`
-- `user` message 的内部内容由 SDK 统一组装，本期不在本文档中展开具体格式
-- 后续允许把单条 `user` message 拆成多条，但不改变资源目录和整体调用接口
-
-### 10.5 slot schema
-
-每个场景与语言组合对应一个 JSON slot schema。
-
-示例：
-
-```json
-{
-  "scenario_code": "energy_saving",
-  "slots": [
-    {
-      "name": "site",
-      "required": true,
-      "description": "待分析的站点、机房或区域。",
-      "example": "深圳南山A区机房",
-      "value_constraint": "必须从输入中识别出明确的站点、机房或区域名称。"
-    },
-    {
-      "name": "time_range",
-      "required": true,
-      "description": "请求分析的时间范围。",
-      "example": "2026-04-01 至 2026-04-07",
-      "value_constraint": "必须是明确的时间范围表达，不能是模糊时间。"
-    }
-  ]
-}
-```
-
-每个 slot 条目必填字段：
-
-- `name`
-- `required`
-- `description`
-- `example`
-- `value_constraint`
-
-本期约束：
-
-- `required` 保持业务语义，可取 `true` 或 `false`
-- `value_constraint` 由第二阶段 LLM 用于判断字段值是否合法
+本文件后续仅保留 client 结果契约、校验规则和示例，不再重复维护资源目录细节。
 
 ## 11. 校验与渲染
 
@@ -834,166 +733,17 @@ slot 视为“缺失”的条件：
 
 ## 12. 主要类关系
 
-下面的类图描述本模块的主要代码关系。图中包含现有类、新增内部模块，以及资源与结果对象之间的关系。
+本章已被共享重构文档替代。
 
-```plantuml
-@startuml
-skinparam classAttributeIconSize 0
-skinparam shadowing false
+当前代码关系、类图和文件落点，应以
+[2026-04-12-a2a-t-prompt-shared-refactor-design.md](C:/Users/w00609601/project/a2a-t-sdk/docs/superpowers/specs/2026-04-12-a2a-t-prompt-shared-refactor-design.md)
+中的共享架构为准：
 
-class PromptClient {
-  +generate_a2a_t_prompt(user_input)
-}
+- 共享层在 `src/a2a_t/prompt/`
+- client 编排层在 `src/a2a_t/client/prompt/`
+- server 编排层在 `src/a2a_t/server/prompt_compliance/`
 
-class PromptGenerationOrchestrator <<prompt_generation_orchestrator.py>> {
-  +generate(user_input)
-}
-
-class InputNormalizer <<input_normalizer.py>> {
-  +normalize(user_input)
-}
-
-class ScenarioRegistry <<scenario_registry.py>> {
-  +load_registry()
-  +resolve_resources(scenario_code, language)
-}
-
-class Stage1Recognizer <<stage1_recognizer.py>> {
-  +recognize(input, scenarios)
-}
-
-class Stage2Extractor <<stage2_extractor.py>> {
-  +extract(input, template, slot_schema)
-}
-
-class SlotValidator <<validator.py>> {
-  +validate(slots, slot_schema)
-}
-
-class PromptRenderer <<renderer.py>> {
-  +render(template_text, slots, slot_schema)
-}
-
-class PromptGenerationResult
-class ScenarioResolution
-class ValidationResult
-class SlotError
-class PromptGenerationFailure
-
-class LLMClient
-
-class ScenarioRegistryResource <<scenarios.json>>
-class PromptTemplateResource <<templates/*.md>>
-class SlotSchemaResource <<slots/*.json>>
-class PromptInstructionResource <<prompts/*.md>>
-
-PromptClient --> PromptGenerationOrchestrator
-PromptGenerationOrchestrator --> InputNormalizer
-PromptGenerationOrchestrator --> ScenarioRegistry
-PromptGenerationOrchestrator --> Stage1Recognizer
-PromptGenerationOrchestrator --> Stage2Extractor
-PromptGenerationOrchestrator --> SlotValidator
-PromptGenerationOrchestrator --> PromptRenderer
-
-Stage1Recognizer --> LLMClient
-Stage2Extractor --> LLMClient
-
-ScenarioRegistry --> ScenarioRegistryResource
-ScenarioRegistry --> PromptTemplateResource
-ScenarioRegistry --> SlotSchemaResource
-ScenarioRegistry --> PromptInstructionResource
-
-PromptGenerationResult --> ScenarioResolution
-PromptGenerationResult --> ValidationResult
-ValidationResult --> SlotError
-PromptGenerationResult --> PromptGenerationFailure
-@enduml
-```
-
-### 12.1 代码落点
-
-本模块新增代码放在 `src/a2a_t/client/prompt/` 下。[prompt_client.py](C:/Users/w00609601/project/a2a-t-sdk/src/a2a_t/client/prompt_client.py) 仅保留对外入口，不承载完整业务编排逻辑。
-
-目录结构如下：
-
-```text
-src/a2a_t/client/
-  prompt_client.py
-  prompt/
-    __init__.py
-    prompt_generation_orchestrator.py
-    models.py
-    constants.py
-    input_normalizer.py
-    scenario_registry.py
-    stage1_recognizer.py
-    stage2_extractor.py
-    validator.py
-    renderer.py
-```
-
-文件职责如下：
-
-- [prompt_client.py](C:/Users/w00609601/project/a2a-t-sdk/src/a2a_t/client/prompt_client.py)
-  - 暴露 `generate_a2a_t_prompt`
-  - 作为对外入口
-  - 不承载大段业务编排逻辑
-- `prompt/prompt_generation_orchestrator.py`
-  - 放 `PromptGenerationOrchestrator`
-  - 串联完整两阶段流程
-  - 负责最终结果对象组装
-- `prompt/models.py`
-  - 放 `PromptGenerationResult`
-  - 放 `ScenarioResolution`
-  - 放 `ValidationResult`
-  - 放 `SlotError`
-  - 放 `PromptGenerationFailure`
-- `prompt/constants.py`
-  - 放错误码常量
-  - 放默认语言等固定常量
-- `prompt/input_normalizer.py`
-  - 放输入类型识别与归一化
-- `prompt/scenario_registry.py`
-  - 负责加载 `scenarios.json`
-  - 负责按 `scenario_code + language` 解析模板与 slot schema 路径
-  - 负责按 `stage + language` 解析 prompt 资源路径
-- `prompt/stage1_recognizer.py`
-  - 负责第一阶段 prompt 组织与结果解析
-- `prompt/stage2_extractor.py`
-  - 负责第二阶段 prompt 组织与结果解析
-- `prompt/validator.py`
-  - 负责必填 slot 完整性校验
-- `prompt/renderer.py`
-  - 负责模板渲染
-
-资源目录保持如下结构：
-
-```text
-src/a2a_t/client/resources/a2a_t_prompt_generation/
-  scenarios.json
-  templates/
-    <scenario_code>.<language>.md
-  slots/
-    <scenario_code>.<language>.json
-  prompts/
-    stage1.system.<language>.md
-    stage1.user.<language>.md
-    stage2.system.<language>.md
-    stage2.user.<language>.md
-```
-
-类与文件的对应关系如下：
-
-- `PromptClient` -> [prompt_client.py](C:/Users/w00609601/project/a2a-t-sdk/src/a2a_t/client/prompt_client.py)
-- `PromptGenerationOrchestrator` -> `prompt/prompt_generation_orchestrator.py`
-- `InputNormalizer` -> `prompt/input_normalizer.py`
-- `ScenarioRegistry` -> `prompt/scenario_registry.py`
-- `Stage1Recognizer` -> `prompt/stage1_recognizer.py`
-- `Stage2Extractor` -> `prompt/stage2_extractor.py`
-- `SlotValidator` -> `prompt/validator.py`
-- `PromptRenderer` -> `prompt/renderer.py`
-- `PromptGenerationResult` 等结果对象 -> `prompt/models.py`
-- 错误码常量 -> `prompt/constants.py`
+因此，本文件中原先的 `ScenarioRegistry`、`stage1_recognizer.py`、`stage2_extractor.py`、client 私有 `validator.py` 等落点不再作为当前实现基线。
 
 ## 13. 失败模型
 
@@ -1088,6 +838,8 @@ src/a2a_t/client/resources/a2a_t_prompt_generation/
 
 ## 16. LLM 集成策略
 
+本章保留“调用 `LLMClient.structured(...)`”这一 client 侧语义约束，但共享实现落点以共享重构文档为准。
+
 - 复用 SDK 现有 LLM 调用模块
 - 本模块不直接创建或调用 `LLMAdapterFactory` / `LLMAdapter`
 - 本模块统一依赖共享单例 `LLMClient`
@@ -1095,7 +847,7 @@ src/a2a_t/client/resources/a2a_t_prompt_generation/
 - 两阶段统一调用 `LLMClient.structured(...)`
 - `complete(...)` 与 `chat(...)` 不作为本功能主路径
 - 两阶段所需指导 prompt 均从 `prompts/` 资源目录加载，不写死在代码常量中
-- 当前语言值从 `A2ATConfig` 顶层获取，不通过 LLM 识别
+- 当前语言值与 `prompt_resource_version` 从 `A2ATConfig` 顶层获取，不通过 LLM 识别
 
 ### 16.1 LLM 调用契约
 
@@ -1137,6 +889,11 @@ structured(
 
 虽然对外只暴露一个方法，但内部实现必须保持职责清晰。
 
+补充说明：
+
+- 共享资源加载、共享分析能力、共享校验能力的具体代码拆分，已由共享重构文档接管
+- 本章只保留 client 编排视角下的职责边界，不再定义共享层的文件结构
+
 内部实现必须包含以下职责边界：
 
 1. 输入归一化
@@ -1149,6 +906,7 @@ structured(
    - 解析模板与 slot schema 路径
    - 解析 prompt 资源路径
    - 基于 `A2ATConfig` 顶层语言值完成语言回退后的资源定位
+   - 基于 `A2ATConfig.prompt_resource_version` 确定资源版本
 
 3. 第一阶段执行
    - 加载并组装第一阶段 prompt
@@ -1179,7 +937,7 @@ structured(
 ```json
 {
   "success": true,
-  "prompt_text": "Please create an energy-saving analysis task for Shenzhen Nanshan Zone A equipment room, covering 2026-04-01 to 2026-04-07, focusing on the power and cooling systems, and output optimization suggestions.",
+  "prompt_text": "---\nscenario_code: energy_saving\nlanguage: en-US\nversion: 0.0.1\ndescription: Used for generating A2A-T task requests for energy-saving analysis.\n---\n\nPlease create an energy-saving analysis task for Shenzhen Nanshan Zone A equipment room, covering 2026-04-01 to 2026-04-07, focusing on the power and cooling systems, and output optimization suggestions.",
   "scenario": {
     "code": "energy_saving"
   },
@@ -1249,7 +1007,7 @@ structured(
 ```json
 {
   "success": true,
-  "prompt_text": "Please create an energy-saving analysis task for Shenzhen Nanshan Zone A equipment room, covering 2026-04-01 to 2026-04-07, focusing on power system, and output optimization suggestions. Additional notes: ",
+  "prompt_text": "---\nscenario_code: energy_saving\nlanguage: en-US\nversion: 0.0.1\ndescription: Used for generating A2A-T task requests for energy-saving analysis.\n---\n\nPlease create an energy-saving analysis task for Shenzhen Nanshan Zone A equipment room, covering 2026-04-01 to 2026-04-07, focusing on power system, and output optimization suggestions. Additional notes: ",
   "scenario": {
     "code": "energy_saving"
   },
