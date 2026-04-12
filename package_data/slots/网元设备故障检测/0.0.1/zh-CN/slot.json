@@ -1,0 +1,20 @@
+{
+  "prompt_identity": {
+    "name": "网元设备故障检测",
+    "language": "zh-CN",
+    "version": "0.0.1"
+  },
+  "slots": [
+    {
+      "name": "ip",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "name": "mac",
+      "required": true,
+      "type": "string"
+    }
+  ],
+  "rules": []
+}
