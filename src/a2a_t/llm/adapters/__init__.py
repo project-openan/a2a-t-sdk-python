@@ -1,13 +1,8 @@
 """LLM adapters for a2a_t."""
 
-from a2a_t.llm.adapters.anthropic_adapter import AnthropicAdapter
-from a2a_t.llm.adapters.deepseek_adapter import DeepSeekAdapter
-from a2a_t.llm.adapters.google_adapter import GoogleAdapter
-from a2a_t.llm.adapters.http_adapter import HTTPAdapter
-from a2a_t.llm.adapters.grpc_adapter import GrpcAdapter
-from a2a_t.llm.adapters.mq_adapter import MQAdapter
-from a2a_t.llm.adapters.openai_adapter import OpenAIAdapter
-from a2a_t.llm.adapters.plugin_adapter import PluginAdapter
+from __future__ import annotations
+
+from importlib import import_module
 
 __all__ = [
     "AnthropicAdapter",
@@ -15,3 +10,20 @@ __all__ = [
     "GoogleAdapter",
     "OpenAIAdapter",
 ]
+
+_ADAPTER_MODULES = {
+    "AnthropicAdapter": ("a2a_t.llm.adapters.anthropic_adapter", "AnthropicAdapter"),
+    "DeepSeekAdapter": ("a2a_t.llm.adapters.deepseek_adapter", "DeepSeekAdapter"),
+    "GoogleAdapter": ("a2a_t.llm.adapters.google_adapter", "GoogleAdapter"),
+    "OpenAIAdapter": ("a2a_t.llm.adapters.openai_adapter", "OpenAIAdapter"),
+}
+
+
+def __getattr__(name: str):
+    target = _ADAPTER_MODULES.get(name)
+    if target is None:
+        raise AttributeError(f"module 'a2a_t.llm.adapters' has no attribute '{name}'")
+
+    module_name, class_name = target
+    module = import_module(module_name)
+    return getattr(module, class_name)

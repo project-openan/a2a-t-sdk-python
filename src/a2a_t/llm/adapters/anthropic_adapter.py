@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from anthropic import Anthropic
+
 from a2a_t.llm.base import LLMAdapter, LLMResponse
-from a2a_t.llm.errors import LLMRuntimeError
+from a2a_t.llm.errors import LLMConfigError, LLMRuntimeError
 
 
 class AnthropicAdapter(LLMAdapter):
@@ -14,8 +16,15 @@ class AnthropicAdapter(LLMAdapter):
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
-        self._model = config.get("model", "")
-        self._transport = config.get("transport")
+        api_key = str(config.get("api_key", "")).strip()
+        if not api_key:
+            raise LLMConfigError("Anthropic adapter requires a non-empty api_key")
+
+        self._client = Anthropic(
+            api_key=api_key,
+            base_url=str(config.get("base_url", "")).strip() or None,
+            timeout=config.get("timeout_seconds"),
+        )
 
     @property
     def adapter_type(self) -> str:
@@ -34,12 +43,16 @@ class AnthropicAdapter(LLMAdapter):
         raise LLMRuntimeError("Anthropic adapter does not support chat() in phase 1")
 
     def structured(self, *, messages: list[dict[str, str]], json_schema: dict[str, Any], **kwargs: Any) -> LLMResponse:
-        if not callable(self._transport):
-            raise LLMRuntimeError("Anthropic adapter requires a transport callable")
-
-        payload = {
+        system_prompt = "\n\n".join(item["content"] for item in messages if item["role"] == "system") or None
+        anthropic_messages = [
+            {"role": item["role"], "content": item["content"]}
+            for item in messages
+            if item["role"] != "system"
+        ]
+        payload: dict[str, Any] = {
             "model": self._model,
-            "messages": messages,
+            "max_tokens": int(kwargs.get("max_tokens", self._config.get("max_tokens", 2000))),
+            "messages": anthropic_messages,
             "tools": [
                 {
                     "name": "prompt_slot_extraction",
@@ -47,12 +60,29 @@ class AnthropicAdapter(LLMAdapter):
                     "input_schema": json_schema,
                 }
             ],
+            "tool_choice": {"type": "tool", "name": "prompt_slot_extraction"},
         }
-        response = self._transport(payload)
-        tool_input = response.get("tool_input", {})
+        if system_prompt:
+            payload["system"] = system_prompt
+        if kwargs.get("temperature") is not None:
+            payload["temperature"] = kwargs["temperature"]
+
+        try:
+            response = self._client.messages.create(**payload)
+        except Exception as exc:  # pragma: no cover - provider failure path
+            raise LLMRuntimeError(f"{self.adapter_type} invocation failed: {exc}") from exc
+
+        tool_block = next((item for item in response.content if getattr(item, "type", None) == "tool_use"), None)
+        if tool_block is None:
+            raise LLMRuntimeError("Anthropic structured response did not contain a tool_use block")
+
+        usage = getattr(response, "usage", None)
         return LLMResponse(
-            content=json.dumps(tool_input, ensure_ascii=False),
-            model=str(response.get("model", self._model)),
-            usage=response.get("usage", {}),
-            metadata=response,
+            content=json.dumps(tool_block.input, ensure_ascii=False),
+            model=str(getattr(response, "model", self._model)),
+            usage={
+                "prompt_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+                "completion_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+            },
+            metadata={"response": response},
         )

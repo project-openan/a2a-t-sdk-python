@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 import unittest
+from unittest.mock import Mock, patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -98,58 +100,54 @@ class ProviderAdapterContractTest(unittest.TestCase):
         self.assertIn("google", available_types)
         self.assertIn("deepseek", available_types)
 
-    def test_openai_adapter_builds_structured_payload(self) -> None:
-        recorded: dict[str, Any] = {}
-
-        def transport(payload: dict[str, Any]) -> dict[str, Any]:
-            recorded["payload"] = payload
-            return {
-                "output_text": '{"slots": {"device_type": "router"}, "notes": [], "confidence": 0.8}',
-                "model": "gpt-4.1",
-            }
-
-        adapter = LLMAdapterFactory.create(
-            "openai",
-            {
-                "model": "gpt-4.1",
-                "transport": transport,
-            },
+    @patch("a2a_t.llm.adapters.openai_adapter.OpenAI")
+    def test_openai_adapter_builds_structured_payload(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4.1",
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content='{"slots": {"device_type": "router"}, "notes": [], "confidence": 0.8}'
+                    )
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=6, completion_tokens=2),
         )
+        openai_cls.return_value = sdk_client
+
+        adapter = LLMAdapterFactory.create("openai", {"model": "gpt-4.1", "api_key": "sk-test"})
 
         response = adapter.structured(
             messages=[{"role": "user", "content": "extract"}],
             json_schema={"type": "object"},
         )
 
-        self.assertEqual(recorded["payload"]["model"], "gpt-4.1")
-        self.assertEqual(recorded["payload"]["response_format"]["type"], "json_schema")
+        kwargs = sdk_client.chat.completions.create.call_args.kwargs
+        self.assertEqual(kwargs["response_format"]["type"], "json_schema")
         self.assertEqual(response.content, '{"slots": {"device_type": "router"}, "notes": [], "confidence": 0.8}')
 
-    def test_anthropic_adapter_builds_tool_use_payload(self) -> None:
-        recorded: dict[str, Any] = {}
-
-        def transport(payload: dict[str, Any]) -> dict[str, Any]:
-            recorded["payload"] = payload
-            return {
-                "tool_input": {"slots": {"device_type": "router"}, "notes": [], "confidence": 0.7},
-                "model": "claude-sonnet-4-5",
-            }
-
-        adapter = LLMAdapterFactory.create(
-            "anthropic",
-            {
-                "model": "claude-sonnet-4-5",
-                "transport": transport,
-            },
+    @patch("a2a_t.llm.adapters.anthropic_adapter.Anthropic")
+    def test_anthropic_adapter_builds_tool_use_payload(self, anthropic_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.messages.create.return_value = SimpleNamespace(
+            model="claude-sonnet-4-5",
+            usage=SimpleNamespace(input_tokens=7, output_tokens=2),
+            content=[
+                SimpleNamespace(type="tool_use", input={"slots": {"device_type": "router"}, "notes": [], "confidence": 0.7})
+            ],
         )
+        anthropic_cls.return_value = sdk_client
+
+        adapter = LLMAdapterFactory.create("anthropic", {"model": "claude-sonnet-4-5", "api_key": "anthropic-key"})
 
         response = adapter.structured(
             messages=[{"role": "user", "content": "extract"}],
             json_schema={"type": "object"},
         )
 
-        self.assertEqual(recorded["payload"]["model"], "claude-sonnet-4-5")
-        self.assertEqual(recorded["payload"]["tools"][0]["input_schema"], {"type": "object"})
+        kwargs = sdk_client.messages.create.call_args.kwargs
+        self.assertEqual(kwargs["tools"][0]["input_schema"], {"type": "object"})
         self.assertEqual(response.content, '{"slots": {"device_type": "router"}, "notes": [], "confidence": 0.7}')
 
     def test_anthropic_adapter_rejects_complete_and_chat_in_phase1(self) -> None:
@@ -157,7 +155,7 @@ class ProviderAdapterContractTest(unittest.TestCase):
             "anthropic",
             {
                 "model": "claude-sonnet-4-5",
-                "transport": lambda payload: payload,
+                "api_key": "anthropic-key",
             },
         )
 
@@ -167,31 +165,27 @@ class ProviderAdapterContractTest(unittest.TestCase):
         with self.assertRaises(LLMRuntimeError):
             adapter.chat("hello")
 
-    def test_google_adapter_builds_response_schema_payload(self) -> None:
-        recorded: dict[str, Any] = {}
-
-        def transport(payload: dict[str, Any]) -> dict[str, Any]:
-            recorded["payload"] = payload
-            return {
-                "text": '{"slots": {"device_type": "router"}, "notes": [], "confidence": 0.6}',
-                "model": "gemini-2.5-pro",
-            }
-
-        adapter = LLMAdapterFactory.create(
-            "google",
-            {
-                "model": "gemini-2.5-pro",
-                "transport": transport,
-            },
+    @patch("a2a_t.llm.adapters.google_adapter.types.GenerateContentConfig")
+    @patch("a2a_t.llm.adapters.google_adapter.genai.Client")
+    def test_google_adapter_builds_response_schema_payload(self, client_cls: Mock, config_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.models.generate_content.return_value = SimpleNamespace(
+            text='{"slots": {"device_type": "router"}, "notes": [], "confidence": 0.6}',
+            model_version="gemini-2.5-pro",
+            usage_metadata=SimpleNamespace(prompt_token_count=5, candidates_token_count=2),
         )
+        client_cls.return_value = sdk_client
+        config_cls.side_effect = lambda **kwargs: kwargs
+
+        adapter = LLMAdapterFactory.create("google", {"model": "gemini-2.5-pro", "api_key": "google-key"})
 
         response = adapter.structured(
             messages=[{"role": "user", "content": "extract"}],
             json_schema={"type": "object"},
         )
 
-        self.assertEqual(recorded["payload"]["model"], "gemini-2.5-pro")
-        self.assertEqual(recorded["payload"]["generation_config"]["response_json_schema"], {"type": "object"})
+        kwargs = sdk_client.models.generate_content.call_args.kwargs
+        self.assertEqual(kwargs["config"]["response_json_schema"], {"type": "object"})
         self.assertEqual(response.content, '{"slots": {"device_type": "router"}, "notes": [], "confidence": 0.6}')
 
 
