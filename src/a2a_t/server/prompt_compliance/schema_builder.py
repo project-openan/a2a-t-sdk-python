@@ -6,7 +6,7 @@ from a2a_t.server.prompt_compliance.slot_schema import SlotDefinition, SlotSchem
 
 
 class SlotSchemaBuilder:
-    """Build runtime JSON Schema from slot configuration."""
+    """从槽位配置构建运行时 JSON Schema / Build runtime JSON Schema from slot configuration."""
 
     def build(self, slot_schema: SlotSchema) -> dict[str, Any]:
         properties: dict[str, Any] = {}

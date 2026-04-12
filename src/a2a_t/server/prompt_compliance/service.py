@@ -4,7 +4,6 @@ from typing import Any
 
 from a2a_t.server.prompt_compliance.errors import (
     GuardrailExecutionError,
-    GuardrailRejectedError,
     ProcessedPromptParseError,
     PromptOriginResolveError,
     SlotSchemaLoadError,
@@ -13,10 +12,11 @@ from a2a_t.server.prompt_compliance.errors import (
     SlotValidationError,
 )
 from a2a_t.server.prompt_compliance.models import PromptComplianceResult
+from a2a_t.server.prompt_compliance.models import GuardrailDecision
 
 
 class PromptComplianceService:
-    """Coordinate prompt compliance validation flow on the server side."""
+    """在服务端编排 Prompt 遵从校验流程 / Coordinate prompt compliance validation flow on the server side."""
 
     def __init__(
         self,
@@ -45,12 +45,15 @@ class PromptComplianceService:
     ) -> PromptComplianceResult:
         try:
             guardrail_result = self._guardrail.check(processed_prompt_text, request_metadata)
-        except GuardrailRejectedError as error:
-            return self._error_result("guardrail", "guardrail_rejected", str(error))
         except GuardrailExecutionError as error:
             return self._error_result("guardrail", "guardrail_execution_error", str(error))
 
-        if not guardrail_result.passed:
+        rejected_decisions = {
+            GuardrailDecision.BLOCK,
+            GuardrailDecision.MASK,
+            GuardrailDecision.REVIEW,
+        }
+        if not guardrail_result.passed or guardrail_result.decision in rejected_decisions:
             return self._error_result(
                 "guardrail",
                 "guardrail_rejected",

@@ -11,7 +11,7 @@ from a2a_t.server.prompt_compliance.models import PromptIdentity, SlotSchemaConf
 
 
 class SlotPromptIdentity(BaseModel):
-    """Prompt identity stored in slot.json."""
+    """存储在 slot.json 中的 Prompt 身份 / Prompt identity stored in slot.json."""
 
     name: str
     language: str
@@ -19,14 +19,14 @@ class SlotPromptIdentity(BaseModel):
 
 
 class SlotRange(BaseModel):
-    """Range constraint for numeric or length-based validations."""
+    """数值或长度类校验的范围约束 / Range constraint for numeric or length-based validations."""
 
     min: float | int | None = None
     max: float | int | None = None
 
 
 class SlotDefinition(BaseModel):
-    """One declared slot constraint."""
+    """单个已声明的槽位约束 / One declared slot constraint."""
 
     name: str
     required: bool = False
@@ -47,14 +47,14 @@ class SlotDefinition(BaseModel):
 
 
 class DependencyCondition(BaseModel):
-    """Conditional rule trigger."""
+    """条件规则触发器 / Conditional rule trigger."""
 
     slot: str
     equals: Any
 
 
 class SlotRule(BaseModel):
-    """Cross-slot rule definition."""
+    """跨槽位规则定义 / Cross-slot rule definition."""
 
     type: Literal["dependency"]
     when: DependencyCondition
@@ -62,7 +62,7 @@ class SlotRule(BaseModel):
 
 
 class SlotSchema(BaseModel):
-    """Full slot.json structure."""
+    """完整 slot.json 结构 / Full slot.json structure."""
 
     prompt_identity: SlotPromptIdentity
     slots: list[SlotDefinition]
@@ -70,7 +70,7 @@ class SlotSchema(BaseModel):
 
 
 class SlotSchemaResolver:
-    """Resolve and load mirrored slot.json files."""
+    """解析并加载镜像路径下的 slot.json 文件 / Resolve and load mirrored slot.json files."""
 
     def __init__(self, config: SlotSchemaConfig) -> None:
         self._config = config
