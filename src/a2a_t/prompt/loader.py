@@ -71,20 +71,20 @@ class PromptLoader:
             )
             return prompt
 
-        lookup_cache_key = self._cache_key(
-            source=source,
-            name=expected_name,
-            language=expected_language,
-            version=expected_version,
-            format="markdown",
-        )
         cached_prompt = None
         cached_record = None
 
-        logger.info("Resolving cache before remote fetch cache_key=%s", lookup_cache_key)
+        logger.info(
+            "Resolving cache before remote fetch name=%s language=%s version=%s",
+            expected_name,
+            expected_language,
+            expected_version,
+        )
         cached_record, cached_content, cache_status = self._cache_store.resolve(
             source_type=source.source_type,
-            cache_key=lookup_cache_key,
+            name=expected_name,
+            version=expected_version,
+            language=expected_language,
             now=self._now_provider(),
             allow_stale_fallback=True,
         )
@@ -103,8 +103,7 @@ class PromptLoader:
             )
             if cache_status == CacheStatus.HIT and not refresh:
                 logger.info(
-                    "Returning cached prompt cache_key=%s name=%s language=%s version=%s",
-                    lookup_cache_key,
+                    "Returning cached prompt name=%s language=%s version=%s",
                     cached_prompt.name,
                     cached_prompt.language,
                     cached_prompt.version,
@@ -112,12 +111,19 @@ class PromptLoader:
                 return cached_prompt
 
         if cache_status == CacheStatus.MISS:
-            logger.info("Cache is unavailable cache_key=%s", lookup_cache_key)
+            logger.info(
+                "Cache is unavailable name=%s language=%s version=%s",
+                expected_name,
+                expected_language,
+                expected_version,
+            )
 
         try:
             logger.info(
-                "Fetching remote prompt cache_key=%s source_type=%s locator=%s",
-                lookup_cache_key,
+                "Fetching remote prompt name=%s language=%s version=%s source_type=%s locator=%s",
+                expected_name,
+                expected_language,
+                expected_version,
                 source.source_type,
                 source.locator,
             )
@@ -133,18 +139,10 @@ class PromptLoader:
                 expected_language=expected_language,
                 expected_version=expected_version,
             )
-            cache_key = self._cache_key(
-                source=source,
-                name=prompt.name,
-                language=prompt.language,
-                version=prompt.version,
-                format=prompt.format,
-            )
-            record = self._build_record(cache_key=cache_key, prompt=prompt, fetched_at=fetch_result.fetched_at)
+            record = self._build_record(prompt=prompt, fetched_at=fetch_result.fetched_at)
             self._cache_store.write(record=record, content=fetch_result.content)
             logger.info(
-                "Loaded and cached prompt cache_key=%s name=%s language=%s version=%s",
-                cache_key,
+                "Loaded and cached prompt name=%s language=%s version=%s",
                 prompt.name,
                 prompt.language,
                 prompt.version,
@@ -152,10 +150,20 @@ class PromptLoader:
             return prompt
         except Exception:
             if cached_prompt is not None and cache_status == CacheStatus.STALE_FALLBACK:
-                logger.warning("Remote refresh failed; using stale cache fallback cache_key=%s", lookup_cache_key)
+                logger.warning(
+                    "Remote refresh failed; using stale cache fallback name=%s language=%s version=%s",
+                    expected_name,
+                    expected_language,
+                    expected_version,
+                )
                 cached_prompt.cache_status = CacheStatus.STALE_FALLBACK
                 return cached_prompt
-            logger.warning("Remote prompt load failed without usable fallback cache_key=%s", lookup_cache_key)
+            logger.warning(
+                "Remote prompt load failed without usable fallback name=%s language=%s version=%s",
+                expected_name,
+                expected_language,
+                expected_version,
+            )
             raise
 
     def _resolve_load_inputs(
@@ -218,25 +226,11 @@ class PromptLoader:
                     **{f"expected_{field_name}": expected_value, f"actual_{field_name}": actual_value},
                 )
 
-    def _cache_key(
-        self,
-        *,
-        source: PromptSource,
-        name: str,
-        language: str,
-        version: str,
-        format: str,
-    ) -> str:
-        """基于 Prompt 身份与来源身份构建稳定缓存键 / Build a stable cache key from prompt identity and source identity."""
-
-        return f"{name}||{version}||{language}||{format}"
-
-    def _build_record(self, *, cache_key: str, prompt: Prompt, fetched_at: datetime) -> CachedPromptRecord:
+    def _build_record(self, *, prompt: Prompt, fetched_at: datetime) -> CachedPromptRecord:
         """创建与缓存内容一起持久化的元数据记录 / Create the metadata record persisted alongside cached prompt content."""
 
         content_hash = hashlib.sha256(prompt.raw_content.encode("utf-8")).hexdigest()
         return CachedPromptRecord(
-            cache_key=cache_key,
             source_type=prompt.source.source_type,
             name=prompt.name,
             language=prompt.language,

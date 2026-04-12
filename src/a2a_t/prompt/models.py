@@ -66,7 +66,6 @@ class FetchResult:
 class CachedPromptRecord:
     """表示落盘缓存的元数据记录 / Represent the metadata record stored for a cached prompt."""
 
-    cache_key: str
     source_type: str
     name: str
     language: str

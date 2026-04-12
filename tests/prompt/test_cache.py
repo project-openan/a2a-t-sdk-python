@@ -60,7 +60,6 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
 
     def _record(self, *, expires_at: datetime) -> CachedPromptRecord:
         return CachedPromptRecord(
-            cache_key="diagnosis||1.0.0||zh-CN||markdown",
             source_type="url",
             name="diagnosis",
             language="zh-CN",
@@ -80,7 +79,9 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
 
         cached_record, cached_content = self.store.read(
             source_type=record.source_type,
-            cache_key=record.cache_key,
+            name=record.name,
+            version=record.version,
+            language=record.language,
         )
 
         self.assertNotIn("namespace", CachedPromptRecord.__dataclass_fields__)
@@ -96,19 +97,23 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
 
         cached_record, cached_content, cache_status = self.store.get(
             source_type=record.source_type,
-            cache_key=record.cache_key,
+            name=record.name,
+            version=record.version,
+            language=record.language,
             now=self.now,
             allow_stale_fallback=False,
         )
 
-        self.assertEqual(cached_record.cache_key, record.cache_key)
+        self.assertEqual(cached_record.name, record.name)
         self.assertEqual(cached_content, "Prompt body")
         self.assertEqual(cache_status, CacheStatus.HIT)
 
     def test_resolve_returns_miss_when_cache_is_missing(self) -> None:
         cached_record, cached_content, cache_status = self.store.resolve(
             source_type="url",
-            cache_key="missing-cache-key",
+            name="missing",
+            version="1.0.0",
+            language="zh-CN",
             now=self.now,
             allow_stale_fallback=False,
         )
@@ -123,7 +128,9 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
 
         cached_record, _, cache_status = self.store.get(
             source_type=record.source_type,
-            cache_key=record.cache_key,
+            name=record.name,
+            version=record.version,
+            language=record.language,
             now=self.now,
             allow_stale_fallback=True,
         )
@@ -137,12 +144,14 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
 
         cached_record, cached_content, cache_status = self.store.resolve(
             source_type=record.source_type,
-            cache_key=record.cache_key,
+            name=record.name,
+            version=record.version,
+            language=record.language,
             now=self.now,
             allow_stale_fallback=False,
         )
 
-        self.assertEqual(cached_record.cache_key, record.cache_key)
+        self.assertEqual(cached_record.name, record.name)
         self.assertEqual(cached_content, "Prompt body")
         self.assertEqual(cache_status, CacheStatus.EXPIRED)
 
@@ -153,7 +162,9 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
         with self.assertRaises(PromptCacheError):
             self.store.get(
                 source_type=record.source_type,
-                cache_key=record.cache_key,
+                name=record.name,
+                version=record.version,
+                language=record.language,
                 now=self.now,
                 allow_stale_fallback=False,
             )
@@ -165,7 +176,9 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
 
         _, _, cache_status = store.get(
             source_type=record.source_type,
-            cache_key=record.cache_key,
+            name=record.name,
+            version=record.version,
+            language=record.language,
             now=self.now,
             allow_stale_fallback=False,
         )
@@ -190,7 +203,9 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
         with self.assertRaises(PromptCacheError):
             self.store.read(
                 source_type=record.source_type,
-                cache_key=record.cache_key,
+                name=record.name,
+                version=record.version,
+                language=record.language,
             )
 
     def test_read_rejects_missing_content_file(self) -> None:
@@ -202,7 +217,9 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
         with self.assertRaises(PromptCacheError):
             self.store.read(
                 source_type=record.source_type,
-                cache_key=record.cache_key,
+                name=record.name,
+                version=record.version,
+                language=record.language,
             )
 
     def test_write_uses_prompt_identity_directory_layout(self) -> None:
@@ -235,7 +252,6 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
                 "content_hash",
                 "fetched_at",
                 "expires_at",
-                "cache_key",
             },
         )
         self.assertEqual(payload["source_locator"], "url://https://example.com/alarm.md")
@@ -270,7 +286,6 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
         old_record = self._record(expires_at=self.now + timedelta(hours=1))
         new_record = self._record(expires_at=self.now + timedelta(hours=2))
         new_record.version = "1.10.0"
-        new_record.cache_key = "diagnosis||1.10.0||zh-CN||markdown"
 
         store.write(record=old_record, content="Prompt body v1")
         store.write(record=new_record, content="Prompt body v2")
@@ -301,10 +316,8 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
         store = LocalFilePromptStore(self.cache_root, conflict_resolution_policy=OverwriteIfNewerVersionPolicy())
         newer_record = self._record(expires_at=self.now + timedelta(hours=1))
         newer_record.version = "1.10.0"
-        newer_record.cache_key = "diagnosis||1.10.0||zh-CN||markdown"
         older_record = self._record(expires_at=self.now + timedelta(hours=2))
         older_record.version = "1.2.9"
-        older_record.cache_key = "diagnosis||1.2.9||zh-CN||markdown"
 
         store.write(record=newer_record, content="Prompt body v2")
 
@@ -315,7 +328,6 @@ class LocalFilePromptStoreTest(ManagedTempDirTestCase):
         store = LocalFilePromptStore(self.cache_root, conflict_resolution_policy=OverwriteIfNewerVersionPolicy())
         invalid_record = self._record(expires_at=self.now + timedelta(hours=1))
         invalid_record.version = "1.0.beta"
-        invalid_record.cache_key = "diagnosis||1.0.beta||zh-CN||markdown"
 
         with self.assertRaises(PromptVersionComparisonError):
             store.write(record=invalid_record, content="Prompt body")
