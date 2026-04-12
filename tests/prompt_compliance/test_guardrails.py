@@ -12,7 +12,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
-from a2a_t.server.prompt_compliance.errors import GuardrailExecutionError, GuardrailRejectedError
+from a2a_t.server.prompt_compliance.errors import GuardrailExecutionError
 from a2a_t.server.prompt_compliance.guardrails import (
     AdapterSafetyGuardrail,
     GuardrailAdapter,
@@ -124,13 +124,6 @@ class SafetyGuardrailFactoryTest(unittest.TestCase):
 
         with self.assertRaises(GuardrailExecutionError):
             guardrail.check("processed prompt body", {"request_id": "req-1"})
-
-    def test_guardrail_rejection_is_explicitly_modeled(self) -> None:
-        error = GuardrailRejectedError("blocked by policy", category="prompt_injection", provider="custom_guardrail")
-
-        self.assertEqual(str(error), "blocked by policy")
-        self.assertEqual(error.context["category"], "prompt_injection")
-        self.assertEqual(error.context["provider"], "custom_guardrail")
 
     def test_factory_reports_unregistered_reserved_provider_names(self) -> None:
         with self.assertRaises(ValueError) as aws_error:

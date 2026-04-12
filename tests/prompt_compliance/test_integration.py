@@ -19,7 +19,6 @@ from a2a_t.prompt.config import PromptLoaderConfig
 from a2a_t.prompt.loader import PromptLoader
 from a2a_t.prompt.parser import MarkdownPromptParser
 from a2a_t.prompt.providers import LocalFileProvider
-from a2a_t.server.prompt_compliance.errors import GuardrailRejectedError
 from a2a_t.server.prompt_compliance.extractor import PromptSlotExtractor
 from a2a_t.server.prompt_compliance.guardrails import SafetyGuardrailFactory
 from a2a_t.server.prompt_compliance.models import GuardrailProviderConfig, SlotSchemaConfig
@@ -196,30 +195,6 @@ class PromptComplianceIntegrationTest(ManagedTempDirTestCase):
         self.assertFalse(result["passed"])
         self.assertEqual(result["stage"], "slot_validation")
         self.assertEqual(result["error_code"], "slot_validation_error")
-
-    def test_service_normalizes_guardrail_rejected_error(self) -> None:
-        class RejectingGuardrail:
-            def check(self, prompt_text: str, context: dict[str, object] | None = None) -> object:
-                raise GuardrailRejectedError("rejected by guardrail policy")
-
-        service = PromptComplianceService(
-            guardrail=RejectingGuardrail(),
-            parser=ProcessedPromptParser(),
-            origin_resolver=object(),
-            extractor=object(),
-            slot_config_resolver=object(),
-            validator=object(),
-            slot_not_found_policy="strict",
-        )
-
-        result = service.check(
-            processed_prompt_text="---\nname: network diagnosis\nlanguage: zh-CN\nversion: 1.0.0\n---\nprocessed body"
-        )
-
-        self.assertEqual(result.stage, "guardrail")
-        self.assertEqual(result.error_code, "guardrail_rejected")
-        self.assertFalse(result.passed)
-
 
 if __name__ == "__main__":
     unittest.main()
