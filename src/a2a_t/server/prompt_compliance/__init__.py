@@ -2,7 +2,6 @@
 
 from a2a_t.server.prompt_compliance.errors import (
     GuardrailExecutionError,
-    GuardrailRejectedError,
     ProcessedPromptParseError,
     PromptComplianceError,
     PromptOriginResolveError,
@@ -47,7 +46,6 @@ from a2a_t.server.prompt_compliance.validator import SlotValidator
 __all__ = [
     "GuardrailResult",
     "GuardrailExecutionError",
-    "GuardrailRejectedError",
     "GuardrailAdapter",
     "AdapterSafetyGuardrail",
     "GuardrailDecision",

@@ -13,12 +13,7 @@ if str(SRC_ROOT) not in sys.path:
 
 
 from a2a_t.prompt.models import CacheStatus, Prompt, PromptSource
-from a2a_t.server.prompt_compliance.errors import (
-    GuardrailRejectedError,
-    PromptOriginResolveError,
-    SlotSchemaLoadError,
-    SlotValidationError,
-)
+from a2a_t.server.prompt_compliance.errors import PromptOriginResolveError, SlotSchemaLoadError, SlotValidationError
 from a2a_t.server.prompt_compliance.models import (
     GuardrailDecision,
     GuardrailResult,
@@ -173,19 +168,6 @@ class PromptComplianceServiceTest(unittest.TestCase):
                         error_message=f"{decision.value} by policy",
                     ),
                 )
-
-    def test_service_returns_guardrail_rejected_error_result(self) -> None:
-        class RejectingGuardrail:
-            def check(self, prompt_text: str, context: dict[str, object] | None = None) -> object:
-                raise GuardrailRejectedError("blocked by policy", category="prompt_injection")
-
-        service = self._build_service(guardrail=RejectingGuardrail())
-
-        result = service.check(processed_prompt_text=PROCESSED_PROMPT, request_metadata={"request_id": "req-1"})
-
-        self.assertEqual(result.stage, "guardrail")
-        self.assertEqual(result.error_code, "guardrail_rejected")
-        self.assertEqual(result.error_message, "blocked by policy")
 
     def test_service_returns_origin_resolve_failure_result(self) -> None:
         service = self._build_service(

@@ -5,7 +5,7 @@ from a2a_t.server.prompt_compliance.models import PromptIdentity
 
 
 class ProcessedPromptParser:
-    """Parse prompt identity from processed prompt front matter."""
+    """从加工后 Prompt front matter 解析 Prompt 身份 / Parse prompt identity from processed prompt front matter."""
 
     def parse(self, processed_prompt_text: str) -> PromptIdentity:
         if not processed_prompt_text.startswith("---\n"):

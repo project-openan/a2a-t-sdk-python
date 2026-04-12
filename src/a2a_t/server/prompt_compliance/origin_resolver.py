@@ -7,7 +7,7 @@ from a2a_t.server.prompt_compliance.models import PromptIdentity
 
 
 class PromptOriginResolver:
-    """Resolve the original prompt by matching prompt identity against catalogs."""
+    """通过 catalog 匹配 Prompt 身份并解析原始 Prompt / Resolve the original prompt by matching prompt identity against catalogs."""
 
     def __init__(self, *, catalog_registry: PromptCatalogRegistry, prompt_loader: PromptLoader) -> None:
         self._catalog_registry = catalog_registry
