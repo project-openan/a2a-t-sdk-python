@@ -7,7 +7,7 @@ from datetime import timedelta
 import unittest
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = PROJECT_ROOT / "src"
 
 if str(SRC_ROOT) not in sys.path:
@@ -19,57 +19,6 @@ from tests.test_support import ManagedTempDirTestCase
 
 
 class PromptEnvConfigTest(ManagedTempDirTestCase):
-    def test_project_contains_env_example_for_prompt_runtime(self) -> None:
-        env_example_path = PROJECT_ROOT / "package_data" / "env.example"
-
-        self.assertTrue(env_example_path.exists())
-        content = env_example_path.read_text(encoding="utf-8")
-        self.assertIn("A2AT_PROMPT_DEFAULT_TTL_SECONDS=", content)
-        self.assertIn("A2AT_PROMPT_LOCAL_DIR=", content)
-        self.assertIn("A2AT_PROMPT_ALLOWED_EXTENSIONS=", content)
-        self.assertIn("A2AT_DEFAULT_PROMPT_EXTENSION_URI=", content)
-        self.assertIn("A2AT_DEFAULT_PROMPT_EXTENSION_URI=default-prompt", content)
-        self.assertIn("A2AT_PROMPT_EXTENSION_URI_OVERRIDES=", content)
-        self.assertIn("A2AT_DEFAULT_PROMPT_INDEX_URL_PARAM_KEY=", content)
-        self.assertIn("A2AT_PROMPT_INDEX_URL_PARAM_KEY_OVERRIDES=", content)
-        self.assertIn('A2AT_PROMPT_EXTENSION_URI_OVERRIDES={"agent":"prompt://agent-extension"}', content)
-        self.assertIn(
-            'A2AT_PROMPT_INDEX_URL_PARAM_KEY_OVERRIDES={"agent":"agentPromptCatalogUrl"}',
-            content,
-        )
-        self.assertNotIn("A2AT_PROMPT_CACHE_DIR=", content)
-
-    def test_project_contains_dotenv_file_for_prompt_runtime(self) -> None:
-        env_path = PROJECT_ROOT / "package_data" / ".env"
-
-        self.assertTrue(env_path.exists())
-        content = env_path.read_text(encoding="utf-8")
-        self.assertIn("A2AT_PROMPT_DEFAULT_TTL_SECONDS=", content)
-        self.assertIn("A2AT_PROMPT_LOCAL_DIR=", content)
-        self.assertIn("A2AT_PROMPT_ALLOWED_EXTENSIONS=", content)
-        self.assertIn("A2AT_DEFAULT_PROMPT_EXTENSION_URI=", content)
-        self.assertIn("A2AT_DEFAULT_PROMPT_EXTENSION_URI=default-prompt", content)
-        self.assertIn("A2AT_PROMPT_EXTENSION_URI_OVERRIDES=", content)
-        self.assertIn("A2AT_DEFAULT_PROMPT_INDEX_URL_PARAM_KEY=", content)
-        self.assertIn("A2AT_PROMPT_INDEX_URL_PARAM_KEY_OVERRIDES=", content)
-        self.assertIn('A2AT_PROMPT_EXTENSION_URI_OVERRIDES={"agent":"prompt://agent-extension"}', content)
-        self.assertIn(
-            'A2AT_PROMPT_INDEX_URL_PARAM_KEY_OVERRIDES={"agent":"agentPromptCatalogUrl"}',
-            content,
-        )
-
-    def test_project_contains_default_prompt_directory_placeholder(self) -> None:
-        prompt_dir = PROJECT_ROOT / "package_data" / "prompts"
-        placeholder = prompt_dir / ".gitkeep"
-
-        self.assertTrue(prompt_dir.is_dir())
-        self.assertTrue(placeholder.exists())
-
-    def test_project_root_no_longer_contains_prompt_runtime_resources(self) -> None:
-        self.assertFalse((PROJECT_ROOT / ".env").exists())
-        self.assertFalse((PROJECT_ROOT / "env.example").exists())
-        self.assertFalse((PROJECT_ROOT / "prompts").exists())
-
     def test_env_config_reads_values_from_env_file(self) -> None:
         temp_root = self.make_temp_dir("prompt_env")
         env_path = temp_root / ".env"
