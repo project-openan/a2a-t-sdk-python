@@ -20,7 +20,7 @@ from tests.test_support import ManagedTempDirTestCase
 
 class PromptEnvConfigTest(ManagedTempDirTestCase):
     def test_project_contains_env_example_for_prompt_runtime(self) -> None:
-        env_example_path = PROJECT_ROOT / "env.example"
+        env_example_path = PROJECT_ROOT / "package_data" / "env.example"
 
         self.assertTrue(env_example_path.exists())
         content = env_example_path.read_text(encoding="utf-8")
@@ -40,7 +40,7 @@ class PromptEnvConfigTest(ManagedTempDirTestCase):
         self.assertNotIn("A2AT_PROMPT_CACHE_DIR=", content)
 
     def test_project_contains_dotenv_file_for_prompt_runtime(self) -> None:
-        env_path = PROJECT_ROOT / ".env"
+        env_path = PROJECT_ROOT / "package_data" / ".env"
 
         self.assertTrue(env_path.exists())
         content = env_path.read_text(encoding="utf-8")
@@ -59,11 +59,16 @@ class PromptEnvConfigTest(ManagedTempDirTestCase):
         )
 
     def test_project_contains_default_prompt_directory_placeholder(self) -> None:
-        prompt_dir = PROJECT_ROOT / "prompts"
+        prompt_dir = PROJECT_ROOT / "package_data" / "prompts"
         placeholder = prompt_dir / ".gitkeep"
 
         self.assertTrue(prompt_dir.is_dir())
         self.assertTrue(placeholder.exists())
+
+    def test_project_root_no_longer_contains_prompt_runtime_resources(self) -> None:
+        self.assertFalse((PROJECT_ROOT / ".env").exists())
+        self.assertFalse((PROJECT_ROOT / "env.example").exists())
+        self.assertFalse((PROJECT_ROOT / "prompts").exists())
 
     def test_env_config_reads_values_from_env_file(self) -> None:
         temp_root = self.make_temp_dir("prompt_env")

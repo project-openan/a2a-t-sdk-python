@@ -18,19 +18,11 @@ def test_wheel_data_directory_contains_packaged_resources() -> None:
     assert (PROJECT_ROOT / "package_data" / "slots" / ".gitkeep").is_file()
 
 
-def test_sdist_includes_required_project_resources() -> None:
+def test_uv_build_uses_default_source_include_behavior() -> None:
     pyproject = load_pyproject()
-    sdist = pyproject["tool"]["uv"]["build-backend"]
-    includes = set(sdist["source-include"])
+    build_backend = pyproject["tool"]["uv"]["build-backend"]
 
-    assert "src" in includes
-    assert "prompts" in includes
-    assert "prompts/.gitkeep" in includes
-    assert "slots" in includes
-    assert "slots/.gitkeep" in includes
-    assert ".env" in includes
-    assert "env.example" in includes
-    assert "README.md" in includes
+    assert "source-include" not in build_backend
 
 
 def test_sdist_excludes_gitignore() -> None:
