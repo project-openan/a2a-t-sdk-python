@@ -15,7 +15,6 @@ if str(SRC_ROOT) not in sys.path:
 
 from a2a_t.config.models import SDKConfig
 from a2a_t.server.prompt_compliance.errors import PromptComplianceError
-from a2a_t.config.env import EnvConfig
 from a2a_t.server.prompt_compliance.config import PromptComplianceConfig
 from a2a_t.server.prompt_compliance.models import (
     GuardrailDecision,
@@ -82,8 +81,8 @@ def test_sdk_config_from_dict_uses_prompt_compliance_defaults() -> None:
     assert config.prompt_compliance.providers == {}
 
 
-def test_prompt_compliance_config_from_env_is_available_from_config_module() -> None:
-    config = PromptComplianceConfig.from_env(EnvConfig(values={}))
+def test_prompt_compliance_config_from_mapping_is_available_from_config_module() -> None:
+    config = PromptComplianceConfig.from_mapping({})
 
     assert config.guardrail.provider == "noop"
     assert config.slot_schema.root_dir == "./slots"

@@ -12,8 +12,17 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from a2a_t.prompt.config import PromptLoaderConfig
+from a2a_t.server.prompt_compliance.config import PromptComplianceConfig
+
 
 class PackageSkeletonTest(unittest.TestCase):
+    def test_a2at_config_is_exported_from_config_package(self) -> None:
+        package = importlib.import_module("a2a_t.config")
+
+        self.assertTrue(hasattr(package, "A2ATConfig"))
+        self.assertTrue(hasattr(package, "ConfigFileNotFoundError"))
+
     def test_prompt_package_is_exported_from_a2a_t(self) -> None:
         package = importlib.import_module("a2a_t")
 
@@ -61,6 +70,15 @@ class PackageSkeletonTest(unittest.TestCase):
     def test_legacy_prompt_manager_package_is_not_importable(self) -> None:
         with self.assertRaises(ModuleNotFoundError):
             importlib.import_module("a2a_t_sdk.prompt_manager")
+
+    def test_env_config_is_no_longer_exported_from_config_package(self) -> None:
+        package = importlib.import_module("a2a_t.config")
+
+        self.assertFalse(hasattr(package, "EnvConfig"))
+
+    def test_module_configs_no_longer_expose_from_env_helpers(self) -> None:
+        self.assertFalse(hasattr(PromptLoaderConfig, "from_env"))
+        self.assertFalse(hasattr(PromptComplianceConfig, "from_env"))
 
 
 if __name__ == "__main__":

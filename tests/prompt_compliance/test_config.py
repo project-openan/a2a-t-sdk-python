@@ -11,32 +11,29 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
-from a2a_t.config.env import EnvConfig
 from a2a_t.server.prompt_compliance.config import PromptComplianceConfig
 
 
-def test_prompt_compliance_config_from_env_reads_all_sections() -> None:
-    env = EnvConfig(
-        values={
-            "A2AT_PROMPT_COMPLIANCE_ENABLED": "true",
-            "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_PROVIDER": "custom_guardrail",
-            "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_TIMEOUT_SECONDS": "11",
-            "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_POLICY_ID": "projects/p1/locations/global/templates/template-1",
-            "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_ENDPOINT": "modelarmor.googleapis.com",
-            "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_REGION": "global",
-            "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_CREDENTIALS_REF": "GOOGLE_APPLICATION_CREDENTIALS",
-            "A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_PROVIDER": "openai",
-            "A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_MODEL": "gpt-4.1",
-            "A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_TIMEOUT_SECONDS": "22",
-            "A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_TEMPERATURE": "0.1",
-            "A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_MAX_RETRIES": "4",
-            "A2AT_PROMPT_COMPLIANCE_SLOT_LOCAL_DIR": "./slots-runtime",
-            "A2AT_PROMPT_COMPLIANCE_SLOT_FILE_NAME": "slot.json",
-            "A2AT_PROMPT_COMPLIANCE_SLOT_NOT_FOUND_POLICY": "skip",
-        }
-    )
+def test_prompt_compliance_config_from_mapping_reads_all_sections() -> None:
+    values = {
+        "A2AT_PROMPT_COMPLIANCE_ENABLED": "true",
+        "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_PROVIDER": "custom_guardrail",
+        "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_TIMEOUT_SECONDS": "11",
+        "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_POLICY_ID": "projects/p1/locations/global/templates/template-1",
+        "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_ENDPOINT": "modelarmor.googleapis.com",
+        "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_REGION": "global",
+        "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_CREDENTIALS_REF": "GOOGLE_APPLICATION_CREDENTIALS",
+        "A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_PROVIDER": "openai",
+        "A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_MODEL": "gpt-4.1",
+        "A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_TIMEOUT_SECONDS": "22",
+        "A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_TEMPERATURE": "0.1",
+        "A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_MAX_RETRIES": "4",
+        "A2AT_PROMPT_COMPLIANCE_SLOT_LOCAL_DIR": "./slots-runtime",
+        "A2AT_PROMPT_COMPLIANCE_SLOT_FILE_NAME": "slot.json",
+        "A2AT_PROMPT_COMPLIANCE_SLOT_NOT_FOUND_POLICY": "skip",
+    }
 
-    config = PromptComplianceConfig.from_env(env)
+    config = PromptComplianceConfig.from_mapping(values)
 
     assert config.enabled is True
     assert config.guardrail.provider == "custom_guardrail"
@@ -55,10 +52,10 @@ def test_prompt_compliance_config_from_env_reads_all_sections() -> None:
     assert config.slot_schema.not_found_policy == "skip"
 
 
-def test_prompt_compliance_config_from_env_uses_defaults() -> None:
-    env = EnvConfig(values={})
+def test_prompt_compliance_config_from_mapping_uses_defaults() -> None:
+    values: dict[str, str] = {}
 
-    config = PromptComplianceConfig.from_env(env)
+    config = PromptComplianceConfig.from_mapping(values)
 
     assert config.enabled is False
     assert config.guardrail.provider == "noop"
