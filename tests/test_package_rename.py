@@ -37,14 +37,14 @@ def test_a2a_t_sdk_package_is_not_importable() -> None:
     raise AssertionError("Expected importing a2a_t_sdk to fail")
 
 
-def test_wheel_packages_target_src_a2a_t() -> None:
-    """The wheel build target should point at the renamed package root."""
+def test_uv_build_module_name_targets_a2a_t() -> None:
+    """The build backend should package the renamed runtime module."""
     pyproject_path = PROJECT_ROOT / "pyproject.toml"
     pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    wheel_packages = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"]
+    module_name = pyproject["tool"]["uv"]["build-backend"]["module-name"]
 
-    assert wheel_packages == ["src/a2a_t"]
+    assert module_name == "a2a_t"
 
 
 def test_readme_uses_a2a_t_package_name() -> None:

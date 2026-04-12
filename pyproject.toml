@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.11.3,<0.12.0"]
+build-backend = "uv_build"
 
 [project]
 name = "a2a-t-sdk"
@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Python A2A SDK for Telecom Scenarios"
 readme = "README.md"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.14"
 authors = [
     { name = "A2A SDK Team" },
@@ -16,7 +17,6 @@ keywords = ["a2a", "agent", "telecom", "sdk"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.14",
 ]
@@ -27,6 +27,8 @@ dependencies = [
     "httpx>=0.27.0",
     "pydantic>=2.6.0",
     "jsonschema>=4.23.0",
+    "python-dotenv>=1.1.0",
+    "google-cloud-modelarmor>=0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -43,11 +45,20 @@ dev = [
 Homepage = "https://github.com/a2a/a2a-t-sdk"
 Documentation = "https://github.com/a2a/a2a-t-sdk#readme"
 
-[tool.hatch.build.targets.sdist]
-include = ["/src"]
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/a2a_t"]
+[tool.uv.build-backend]
+module-name = "a2a_t"
+source-include = [
+    "src",
+    "prompts",
+    "prompts/.gitkeep",
+    "slots",
+    "slots/.gitkeep",
+    ".env",
+    "env.example",
+    "README.md",
+]
+source-exclude = [".gitignore"]
+data = { data = "package_data" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
