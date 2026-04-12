@@ -27,6 +27,8 @@ dependencies = [
     "httpx>=0.27.0",
     "pydantic>=2.6.0",
     "jsonschema>=4.23.0",
+    "python-dotenv>=1.1.0",
+    "google-cloud-modelarmor>=0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -48,6 +50,9 @@ include = ["/src"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/a2a_t"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
