@@ -43,7 +43,7 @@ class DeepSeekAdapter(LLMAdapter):
             temperature=kwargs.get("temperature"),
             max_tokens=kwargs.get("max_tokens"),
         )
-        return self._invoke(payload)
+        return self._invoke_chat_completions(payload)
 
     def _generate_from_messages(self, messages: list[ChatMessage], **kwargs: Any) -> LLMResponse:
         payload = self._build_payload(
@@ -51,7 +51,7 @@ class DeepSeekAdapter(LLMAdapter):
             temperature=kwargs.get("temperature"),
             max_tokens=kwargs.get("max_tokens"),
         )
-        return self._invoke(payload)
+        return self._invoke_chat_completions(payload)
 
     def _build_payload(
         self,
@@ -92,7 +92,7 @@ class DeepSeekAdapter(LLMAdapter):
             *messages,
         ]
 
-    def _invoke(self, payload: dict[str, Any]) -> LLMResponse:
+    def _invoke_chat_completions(self, payload: dict[str, Any]) -> LLMResponse:
         try:
             response = self._client.chat.completions.create(**payload)
         except Exception as exc:  # pragma: no cover - provider failure path

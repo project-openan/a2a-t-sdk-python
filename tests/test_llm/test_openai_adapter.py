@@ -1,3 +1,5 @@
+# ruff: noqa: E402, I001
+
 from __future__ import annotations
 
 import sys
@@ -21,7 +23,7 @@ class OpenAIAdapterTest(unittest.TestCase):
         sdk_client = Mock()
         sdk_client.chat.completions.create.return_value = SimpleNamespace(
             model="gpt-4.1",
-            choices=[SimpleNamespace(message=SimpleNamespace(content="done"))],
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"result":"done"}'))],
             usage=SimpleNamespace(prompt_tokens=4, completion_tokens=1),
         )
         openai_cls.return_value = sdk_client
@@ -29,7 +31,7 @@ class OpenAIAdapterTest(unittest.TestCase):
         adapter = LLMAdapterFactory.create("openai", {"model": "gpt-4.1", "api_key": "sk-test"})
         response = adapter.complete("say hi", system_prompt="be short", temperature=0.2, max_tokens=64)
 
-        self.assertEqual(response.content, "done")
+        self.assertEqual(response.content, '{"result":"done"}')
         sdk_client.chat.completions.create.assert_called_once()
         self.assertEqual(
             sdk_client.chat.completions.create.call_args.kwargs,
@@ -39,6 +41,7 @@ class OpenAIAdapterTest(unittest.TestCase):
                     {"role": "system", "content": "be short"},
                     {"role": "user", "content": "say hi"},
                 ],
+                "response_format": {"type": "json_object"},
                 "temperature": 0.2,
                 "max_tokens": 64,
             },
@@ -50,12 +53,12 @@ class OpenAIAdapterTest(unittest.TestCase):
         sdk_client.chat.completions.create.side_effect = [
             SimpleNamespace(
                 model="gpt-4.1",
-                choices=[SimpleNamespace(message=SimpleNamespace(content="first-reply"))],
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"reply":"first"}'))],
                 usage=SimpleNamespace(prompt_tokens=6, completion_tokens=2),
             ),
             SimpleNamespace(
                 model="gpt-4.1",
-                choices=[SimpleNamespace(message=SimpleNamespace(content="second-reply"))],
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"reply":"second"}'))],
                 usage=SimpleNamespace(prompt_tokens=10, completion_tokens=3),
             ),
         ]
@@ -67,6 +70,7 @@ class OpenAIAdapterTest(unittest.TestCase):
 
         self.assertEqual(second.session_id, first.session_id)
         second_call = sdk_client.chat.completions.create.call_args_list[1].kwargs
+        self.assertEqual(second_call["response_format"], {"type": "json_object"})
         self.assertEqual(second_call["messages"][0], {"role": "system", "content": "be concise"})
         self.assertEqual(second_call["messages"][-1], {"role": "user", "content": "again"})
 

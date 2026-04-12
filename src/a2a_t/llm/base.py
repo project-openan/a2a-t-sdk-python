@@ -77,8 +77,8 @@ class LLMAdapter(ABC):
         provider_kwargs.pop("history_window", None)
 
         session.messages.append(ChatMessage(role="user", content=message))
-        outbound = self._build_messages_from_session(session, history_window=history_window)
-        response = self._generate_from_messages(outbound, **provider_kwargs)
+        current_msg = self._build_messages_from_session(session, history_window=history_window)
+        response = self._generate_from_messages(current_msg, **provider_kwargs)
         session.messages.append(ChatMessage(role="assistant", content=response.content))
         session.updated_at = datetime.now(UTC)
         self._session_store.save(session)

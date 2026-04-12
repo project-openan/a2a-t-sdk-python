@@ -52,6 +52,7 @@ class OpenAIAdapter(LLMAdapter):
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": [{"role": item.role, "content": item.content} for item in messages],
+            "response_format": {"type": "json_object"},
         }
         if kwargs.get("temperature") is not None:
             payload["temperature"] = kwargs["temperature"]

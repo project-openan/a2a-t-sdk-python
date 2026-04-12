@@ -136,6 +136,7 @@ class LLMClient:
             **kwargs,
         )
         adapter = LLMAdapterFactory.create(str(runtime_config["provider"]), runtime_config)
+        # 注意当前deepseek还不支持json schema模式，此处输入的json_schema仅能作为prompt级约束，无法作为协议级约束。
         return adapter.structured(
             messages=messages,
             json_schema=json_schema,
