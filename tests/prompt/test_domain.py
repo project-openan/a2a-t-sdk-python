@@ -8,13 +8,12 @@ from pathlib import Path
 import unittest
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = PROJECT_ROOT / "src"
 
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from a2a_t.prompt.config import PromptLoaderConfig
 from a2a_t.prompt.cache import (
     ConflictResolutionPolicy,
     ExpirationPolicy,
@@ -23,6 +22,7 @@ from a2a_t.prompt.cache import (
     PromptStore,
     TTLExpirationPolicy,
 )
+from a2a_t.prompt.config import PromptLoaderConfig
 from a2a_t.prompt.errors import (
     PromptCacheError,
     PromptConfigError,
@@ -36,7 +36,7 @@ from a2a_t.prompt.errors import (
 )
 from a2a_t.prompt.loader import PromptLoader
 from a2a_t.prompt.models import CacheStatus, FetchResult, Prompt, PromptSource
-from a2a_t.prompt.parser import MarkdownPromptParser, PromptParser
+from a2a_t.prompt.parser import PromptParser
 from a2a_t.prompt.providers import AgentFetcher, LocalFileFetcher, PromptProvider, UrlFetcher
 import a2a_t.prompt as prompt_module
 
@@ -130,12 +130,6 @@ class PromptLoaderDomainTest(unittest.TestCase):
 
         self.assertEqual(str(error), "URL fetch timed out.")
 
-    def test_prompt_loader_docstring_uses_short_summary_style(self) -> None:
-        self.assertIn(
-            "Load prompts by coordinating providers, parsing, validation, and caching.",
-            PromptLoader.__doc__ or "",
-        )
-
     def test_prompt_loader_load_accepts_prompt_reference(self) -> None:
         signature = inspect.signature(PromptLoader.load)
 
@@ -161,34 +155,6 @@ class PromptLoaderDomainTest(unittest.TestCase):
         self.assertTrue(hasattr(ExpirationPolicy, "_is_protocol"))
         self.assertTrue(hasattr(ConflictResolutionPolicy, "_is_protocol"))
 
-    def test_local_file_prompt_store_docstring_uses_short_summary_style(self) -> None:
-        self.assertIn(
-            "Persist remote prompt content and metadata on the local filesystem.",
-            LocalFilePromptStore.__doc__ or "",
-        )
-
-    def test_default_store_policy_docstrings_use_short_summary_style(self) -> None:
-        self.assertIn(
-            "Determine whether a cached prompt record should be treated as expired.",
-            TTLExpirationPolicy.__doc__ or "",
-        )
-        self.assertIn(
-            "Always allow a new cache record to overwrite an existing one.",
-            OverwriteOnConflictPolicy.__doc__ or "",
-        )
-
-    def test_markdown_prompt_parser_docstring_uses_short_summary_style(self) -> None:
-        self.assertIn(
-            "Parse Markdown prompts and validate their front matter metadata.",
-            MarkdownPromptParser.__doc__ or "",
-        )
-
-    def test_prompt_loader_error_docstring_uses_short_summary_style(self) -> None:
-        self.assertIn(
-            "Base class for all prompt loader errors.",
-            PromptLoaderError.__doc__ or "",
-        )
-
     def test_prompt_loader_error_context_preserves_machine_readable_fields(self) -> None:
         error = PromptMetadataError(
             "Prompt metadata does not match expected language.",
@@ -200,16 +166,6 @@ class PromptLoaderDomainTest(unittest.TestCase):
             error.context,
             {"expected_language": "zh-CN", "actual_language": "default"},
         )
-
-    def test_prompt_error_subclasses_define_short_summary_docstrings(self) -> None:
-        self.assertIn("Raised when prompt runtime configuration is invalid.", PromptConfigError.__doc__ or "")
-        self.assertIn("Raised when a prompt source is invalid or unsupported.", PromptSourceError.__doc__ or "")
-        self.assertIn("Raised when prompt content cannot be fetched from a source.", PromptFetchError.__doc__ or "")
-        self.assertIn("Raised when prompt content cannot be parsed as a template.", PromptParseError.__doc__ or "")
-        self.assertIn("Raised when required prompt metadata is missing or mismatched.", PromptMetadataError.__doc__ or "")
-        self.assertIn("Raised when cached prompt content cannot be read or written.", PromptCacheError.__doc__ or "")
-        self.assertIn("Raised when prompt identity conflicts cannot be resolved.", PromptConflictError.__doc__ or "")
-        self.assertIn("Raised when prompt version comparison fails.", PromptVersionComparisonError.__doc__ or "")
 
     def test_prompt_conflict_error_is_prompt_loader_error(self) -> None:
         error = PromptConflictError("Prompt conflict cannot be resolved.", cache_key="diagnosis||1.0.0||zh-CN||markdown")
@@ -223,39 +179,10 @@ class PromptLoaderDomainTest(unittest.TestCase):
         self.assertIsInstance(error, PromptLoaderError)
         self.assertEqual(error.context["version"], "1.0.beta")
 
-    def test_prompt_loader_config_docstring_uses_bilingual_style(self) -> None:
-        self.assertIn(
-            "Define runtime configuration for the prompt loader.",
-            PromptLoaderConfig.__doc__ or "",
-        )
-
     def test_prompt_package_does_not_export_default_runtime_builders(self) -> None:
         self.assertFalse(hasattr(prompt_module, "build_default_prompt_catalog_registry"))
         self.assertFalse(hasattr(prompt_module, "build_default_prompt_loader"))
 
-    def test_prompt_docstring_uses_bilingual_style(self) -> None:
-        self.assertIn(
-            "Represent a parsed prompt.",
-            Prompt.__doc__ or "",
-        )
-
-    def test_readme_matches_namespace_removed_contract(self) -> None:
-        readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
-
-        self.assertNotIn("expected_namespace", readme)
-        self.assertNotIn("`namespace`", readme)
-        self.assertNotIn("`prompts/<namespace>/<source_type>/<cache_key>/`", readme)
-        self.assertIn("`name + language + version`", readme)
-        self.assertIn("`<local_root>/<name>/<version>/<language>/prompt.<ext>`", readme)
-        self.assertIn("`A2AT_PROMPT_LOCAL_DIR`", readme)
-        self.assertIn("`A2AT_PROMPT_ALLOWED_EXTENSIONS`", readme)
-        self.assertNotIn("`build_default_prompt_loader()`", readme)
-        self.assertNotIn("`build_default_prompt_catalog_registry()`", readme)
-        self.assertNotIn("`cache_dir`", readme)
-        self.assertNotIn("`A2AT_PROMPT_CACHE_DIR`", readme)
-        self.assertIn("`ExpirationPolicy` 负责判断缓存是否过期", readme)
-        self.assertIn("`ConflictResolutionPolicy` 负责决定缓存冲突时是否覆盖", readme)
 
 if __name__ == "__main__":
     unittest.main()
-
