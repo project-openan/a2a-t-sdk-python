@@ -45,6 +45,8 @@ class LLMConfig:
     api_key: str = ""
     model: str = "default"
     max_tokens: int = 2000
+    history_window: int = 10
+    session_store_type: str = "memory"
 
 
 @dataclass

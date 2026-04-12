@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from a2a_t.llm.base import LLMAdapter, LLMResponse
+from a2a_t.llm.errors import LLMRuntimeError
 
 
 class AnthropicAdapter(LLMAdapter):
@@ -20,15 +21,21 @@ class AnthropicAdapter(LLMAdapter):
     def adapter_type(self) -> str:
         return "anthropic"
 
-    def complete(self, prompt: str, **kwargs: Any) -> LLMResponse:
-        raise NotImplementedError("Anthropic adapter only supports structured extraction in this phase")
+    def complete(self, prompt: str, system_prompt: str | None = None, **kwargs: Any) -> LLMResponse:
+        raise LLMRuntimeError("Anthropic adapter does not support complete() in phase 1")
 
-    def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> LLMResponse:
-        raise NotImplementedError("Anthropic adapter only supports structured extraction in this phase")
+    def chat(
+        self,
+        message: str,
+        system_prompt: str | None = None,
+        session_id: str | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        raise LLMRuntimeError("Anthropic adapter does not support chat() in phase 1")
 
     def structured(self, *, messages: list[dict[str, str]], json_schema: dict[str, Any], **kwargs: Any) -> LLMResponse:
         if not callable(self._transport):
-            raise NotImplementedError("Anthropic adapter requires a transport callable")
+            raise LLMRuntimeError("Anthropic adapter requires a transport callable")
 
         payload = {
             "model": self._model,

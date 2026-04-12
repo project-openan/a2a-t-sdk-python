@@ -33,6 +33,7 @@ class LLMAdapterFactory:
 
 from a2a_t.llm.adapters import (
     AnthropicAdapter,
+    DeepSeekAdapter,
     GoogleAdapter,
     GrpcAdapter,
     HTTPAdapter,
@@ -46,5 +47,6 @@ LLMAdapterFactory.register("grpc", GrpcAdapter)
 LLMAdapterFactory.register("mq", MQAdapter)
 LLMAdapterFactory.register("plugin", PluginAdapter)
 LLMAdapterFactory.register("openai", OpenAIAdapter)
+LLMAdapterFactory.register("deepseek", DeepSeekAdapter)
 LLMAdapterFactory.register("anthropic", AnthropicAdapter)
 LLMAdapterFactory.register("google", GoogleAdapter)

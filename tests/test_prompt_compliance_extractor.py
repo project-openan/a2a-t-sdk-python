@@ -14,8 +14,10 @@ if str(SRC_ROOT) not in sys.path:
 
 
 from a2a_t.llm.base import LLMResponse
+from a2a_t.llm.errors import LLMRuntimeError
 from a2a_t.llm.factory import LLMAdapterFactory
 from a2a_t.prompt.models import CacheStatus, Prompt, PromptSource
+from a2a_t.config.models import LLMConfig
 from a2a_t.server.prompt_compliance.errors import SlotExtractionError
 from a2a_t.server.prompt_compliance.extractor import PromptSlotExtractor
 from a2a_t.server.prompt_compliance.models import SlotExtractionResult
@@ -94,6 +96,7 @@ class ProviderAdapterContractTest(unittest.TestCase):
         self.assertIn("openai", available_types)
         self.assertIn("anthropic", available_types)
         self.assertIn("google", available_types)
+        self.assertIn("deepseek", available_types)
 
     def test_openai_adapter_builds_structured_payload(self) -> None:
         recorded: dict[str, Any] = {}
@@ -149,6 +152,21 @@ class ProviderAdapterContractTest(unittest.TestCase):
         self.assertEqual(recorded["payload"]["tools"][0]["input_schema"], {"type": "object"})
         self.assertEqual(response.content, '{"slots": {"device_type": "router"}, "notes": [], "confidence": 0.7}')
 
+    def test_anthropic_adapter_rejects_complete_and_chat_in_phase1(self) -> None:
+        adapter = LLMAdapterFactory.create(
+            "anthropic",
+            {
+                "model": "claude-sonnet-4-5",
+                "transport": lambda payload: payload,
+            },
+        )
+
+        with self.assertRaises(LLMRuntimeError):
+            adapter.complete("hello")
+
+        with self.assertRaises(LLMRuntimeError):
+            adapter.chat("hello")
+
     def test_google_adapter_builds_response_schema_payload(self) -> None:
         recorded: dict[str, Any] = {}
 
@@ -175,6 +193,14 @@ class ProviderAdapterContractTest(unittest.TestCase):
         self.assertEqual(recorded["payload"]["model"], "gemini-2.5-pro")
         self.assertEqual(recorded["payload"]["generation_config"]["response_json_schema"], {"type": "object"})
         self.assertEqual(response.content, '{"slots": {"device_type": "router"}, "notes": [], "confidence": 0.6}')
+
+
+class LLMConfigModelTest(unittest.TestCase):
+    def test_llm_config_includes_chat_defaults(self) -> None:
+        config = LLMConfig()
+
+        self.assertEqual(config.history_window, 10)
+        self.assertEqual(config.session_store_type, "memory")
 
 
 if __name__ == "__main__":

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from a2a_t.llm.base import LLMAdapter, LLMResponse
+from a2a_t.llm.base import ChatMessage, LLMAdapter, LLMResponse
+from a2a_t.llm.errors import LLMConfigError
 
 
 class OpenAIAdapter(LLMAdapter):
@@ -12,23 +13,33 @@ class OpenAIAdapter(LLMAdapter):
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
-        self._model = config.get("model", "")
         self._transport = config.get("transport")
+        if not callable(self._transport):
+            raise LLMConfigError("OpenAI adapter requires a transport callable")
 
     @property
     def adapter_type(self) -> str:
         return "openai"
 
-    def complete(self, prompt: str, **kwargs: Any) -> LLMResponse:
-        raise NotImplementedError("OpenAI adapter only supports structured extraction in this phase")
+    def _generate_from_messages(self, messages: list[ChatMessage], **kwargs: Any) -> LLMResponse:
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "input": [{"role": item.role, "content": item.content} for item in messages],
+        }
+        if "temperature" in kwargs:
+            payload["temperature"] = kwargs["temperature"]
+        if "max_tokens" in kwargs:
+            payload["max_tokens"] = kwargs["max_tokens"]
 
-    def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> LLMResponse:
-        raise NotImplementedError("OpenAI adapter only supports structured extraction in this phase")
+        response = self._transport(payload)
+        return LLMResponse(
+            content=str(response.get("output_text", "")),
+            model=str(response.get("model", self._model)),
+            usage=response.get("usage", {}),
+            metadata=response,
+        )
 
     def structured(self, *, messages: list[dict[str, str]], json_schema: dict[str, Any], **kwargs: Any) -> LLMResponse:
-        if not callable(self._transport):
-            raise NotImplementedError("OpenAI adapter requires a transport callable")
-
         payload = {
             "model": self._model,
             "input": messages,
