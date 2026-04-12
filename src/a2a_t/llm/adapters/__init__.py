@@ -13,9 +13,5 @@ __all__ = [
     "AnthropicAdapter",
     "DeepSeekAdapter",
     "GoogleAdapter",
-    "HTTPAdapter",
-    "GrpcAdapter",
-    "MQAdapter",
     "OpenAIAdapter",
-    "PluginAdapter",
 ]
