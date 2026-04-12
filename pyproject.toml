@@ -47,16 +47,6 @@ Documentation = "https://github.com/a2a/a2a-t-sdk#readme"
 
 [tool.uv.build-backend]
 module-name = "a2a_t"
-source-include = [
-    "src",
-    "prompts",
-    "prompts/.gitkeep",
-    "slots",
-    "slots/.gitkeep",
-    ".env",
-    "env.example",
-    "README.md",
-]
 source-exclude = [".gitignore"]
 data = { data = "package_data" }
 
@@ -78,4 +68,3 @@ python_version = "3.14"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
-
