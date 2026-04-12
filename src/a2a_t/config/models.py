@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
+from a2a_t.config.source import DotEnvConfigSource
+from a2a_t.prompt.config import PromptLoaderConfig
 from a2a_t.server.prompt_compliance.config import (
     GuardrailProviderConfig,
     PromptComplianceConfig,
@@ -97,4 +100,20 @@ class SDKConfig:
                 providers=prompt_compliance_data.get("providers", {}),
             ),
             log_level=data.get("log_level", "INFO"),
+        )
+
+
+@dataclass
+class A2ATConfig:
+    """全局 A2A-T 配置入口 / Global A2A-T configuration entry point."""
+
+    prompt: PromptLoaderConfig
+    prompt_compliance: PromptComplianceConfig
+
+    @classmethod
+    def load(cls, env_path: Path) -> A2ATConfig:
+        values = DotEnvConfigSource.load(env_path)
+        return cls(
+            prompt=PromptLoaderConfig.from_mapping(values),
+            prompt_compliance=PromptComplianceConfig.from_mapping(values),
         )

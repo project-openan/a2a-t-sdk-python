@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import timedelta
+from typing import Mapping
 
-from a2a_t.config.env import EnvConfig
 from .errors import PromptConfigError
 
 
@@ -27,24 +27,24 @@ class PromptLoaderConfig:
             raise PromptConfigError("Prompt allowed extensions are required.", field="allowed_extensions")
 
     @classmethod
-    def from_env(cls, env: EnvConfig) -> "PromptLoaderConfig":
-        raw_extensions = env.get("A2AT_PROMPT_ALLOWED_EXTENSIONS", ".md") or ".md"
-        raw_ttl_seconds = env.get("A2AT_PROMPT_DEFAULT_TTL_SECONDS", "3600") or "3600"
+    def from_mapping(cls, values: Mapping[str, str]) -> "PromptLoaderConfig":
+        raw_extensions = values.get("A2AT_PROMPT_ALLOWED_EXTENSIONS", ".md") or ".md"
+        raw_ttl_seconds = values.get("A2AT_PROMPT_DEFAULT_TTL_SECONDS", "3600") or "3600"
         return cls(
             default_ttl=timedelta(seconds=cls._parse_ttl_seconds(raw_ttl_seconds)),
-            local_prompt_dir=env.get("A2AT_PROMPT_LOCAL_DIR", "./prompts") or "./prompts",
+            local_prompt_dir=values.get("A2AT_PROMPT_LOCAL_DIR", "./prompts") or "./prompts",
             allowed_extensions=[item.strip() for item in raw_extensions.split(",") if item.strip()],
-            default_prompt_extension_uri=env.get("A2AT_DEFAULT_PROMPT_EXTENSION_URI", "default-prompt")
+            default_prompt_extension_uri=values.get("A2AT_DEFAULT_PROMPT_EXTENSION_URI", "default-prompt")
             or "default-prompt",
             prompt_extension_uri_overrides=cls._parse_json_mapping(
-                env,
+                values,
                 "A2AT_PROMPT_EXTENSION_URI_OVERRIDES",
             ),
             default_prompt_index_url_param_key=(
-                env.get("A2AT_DEFAULT_PROMPT_INDEX_URL_PARAM_KEY", "promptIndexUrl") or "promptIndexUrl"
+                values.get("A2AT_DEFAULT_PROMPT_INDEX_URL_PARAM_KEY", "promptIndexUrl") or "promptIndexUrl"
             ),
             prompt_index_url_param_key_overrides=cls._parse_json_mapping(
-                env,
+                values,
                 "A2AT_PROMPT_INDEX_URL_PARAM_KEY_OVERRIDES",
             ),
         )
@@ -68,8 +68,8 @@ class PromptLoaderConfig:
         return ttl_seconds
 
     @staticmethod
-    def _parse_json_mapping(env: EnvConfig, key: str) -> dict[str, str]:
-        raw_value = env.get(key)
+    def _parse_json_mapping(values: Mapping[str, str], key: str) -> dict[str, str]:
+        raw_value = values.get(key)
         if raw_value is None or not raw_value.strip():
             return {}
 
