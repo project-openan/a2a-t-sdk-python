@@ -2,11 +2,11 @@
 
 面向电信场景的 Python A2A SDK。
 
-## Overview
+## 概述
 
 本 SDK 在官方 [a2a-python](https://github.com/a2a/a2a-python) SDK 基础上进行扩展，提供更适合电信运营商场景的能力增强。
 
-## Features
+## 功能特性
 
 - **A2A Client SDK**: O域客户端，支持发送自然语言请求
 - **A2A Server SDK**: OMC域服务端，接收并处理请求
@@ -16,13 +16,13 @@
 - **限流保护**: 服务端限流，保护领域大模型
 - **LLM集成**: 支持 HTTP/gRPC/MQ/插件四种集成方式
 
-## Installation
+## 安装
 
 ```bash
 pip install a2a-t-sdk
 ```
 
-## Quick Start
+## 快速开始
 
 ```python
 from a2a_t import ExtendedClient
@@ -36,28 +36,13 @@ response = client.send(task_id="task-001", params={"prompt": "查询基站状态
 
 ## Prompt Management
 
-当前仓库中的 Prompt 组件提供两段能力：
+Prompt 模块提供两类能力：列出可用 Prompt，以及加载选中的 Prompt 正文。
 
-1. `PromptCatalogRegistry` / `PromptCatalog`
-   用于列出可用 Prompt
-2. `PromptLoader`
-   用于加载调用方已经选中的 Prompt 正文
-
-完整链路可以理解为：
+调用链路如下：
 
 `registry -> catalog -> PromptReference -> PromptLoader -> Prompt`
 
-### 核心对象
-
-- `PromptCatalogRegistry`
-- `PromptCatalog`
-- `PromptReference`
-- `PromptLoader`
-- `PromptLoaderConfig`
-- `PromptSource`
-- `Prompt`
-
-### 调用方式
+### 快速使用
 
 ```python
 from datetime import timedelta
@@ -103,9 +88,7 @@ prompt = loader.load(reference=reference)
 - `ExpirationPolicy` 负责判断缓存是否过期
 - `ConflictResolutionPolicy` 负责决定缓存冲突时是否覆盖
 
-### 环境变量
-
-Prompt Management 模块当前使用以下环境变量：
+### 关键配置
 
 - `A2AT_PROMPT_DEFAULT_TTL_SECONDS`：远端 Prompt 本地镜像的默认过期时间，单位为秒
 - `A2AT_PROMPT_LOCAL_DIR`：Prompt 本地根目录，既用于本地 Prompt 扫描，也用于远端 Prompt 镜像落盘
@@ -121,30 +104,104 @@ Prompt Management 模块当前使用以下环境变量：
 
 ## Prompt Compliance
 
-Prompt Compliance 模块用于在服务端对加工后的 Prompt 做遵从性检查。典型流程为：
+Prompt Compliance 用于在服务端校验“加工后的 Prompt”是否仍满足原始模板约束。
 
-1. 使用安全护栏检查加工后的 Prompt
-2. 从加工后 Prompt 的 front matter 解析 `name + language + version`
-3. 通过 Prompt catalog 和 loader 找回原始 Prompt
-4. 调用 LLM 提取结构化槽位
-5. 加载镜像路径下的 `slot.json`
-6. 使用运行时 JSON Schema 校验提取出的槽位
+完整流程为：安全护栏检查 → 解析 Prompt 身份 → 回取原始 Prompt → LLM 提取槽位 → 加载 `slot.json` → 执行规则校验。
 
-### 核心对象
+### 快速使用
 
-- `PromptComplianceConfig`
-- `GuardrailProviderConfig`
-- `SlotExtractionConfig`
-- `SlotSchemaConfig`
-- `SlotSchema`
-- `SlotSchemaResolver`
-- `SlotSchemaBuilder`
-- `SlotValidator`
-- `PromptComplianceService`
+```python
+from datetime import datetime, timedelta, timezone
+
+from a2a_t.prompt import (
+    DefaultPromptCatalogRegistry,
+    LocalFilePromptStore,
+    LocalFileProvider,
+    LocalPromptCatalog,
+    MarkdownPromptParser,
+    PromptLoader,
+    PromptLoaderConfig,
+)
+from a2a_t.server.prompt_compliance import (
+    GuardrailProviderConfig,
+    ProcessedPromptParser,
+    PromptComplianceService,
+    PromptOriginResolver,
+    PromptSlotExtractor,
+    SafetyGuardrailFactory,
+    SlotSchemaConfig,
+    SlotSchemaResolver,
+    SlotValidator,
+)
+
+
+class DemoStructuredAdapter:
+    def structured(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        json_schema: dict[str, object],
+        **kwargs: object,
+    ) -> object:
+        return type(
+            "LLMResponseLike",
+            (),
+            {
+                "content": '{"slots": {"cityName": "广州"}, "notes": ["ok"], "confidence": 0.95}',
+                "model": "demo",
+                "usage": {},
+                "metadata": {},
+            },
+        )()
+
+
+prompt_root = "./prompts"
+slot_root = "./slots"
+
+loader_config = PromptLoaderConfig(
+    local_prompt_dir=prompt_root,
+    allowed_extensions=[".md"],
+    default_ttl=timedelta(hours=1),
+)
+
+catalog_registry = DefaultPromptCatalogRegistry()
+catalog_registry.register("local", LocalPromptCatalog(config=loader_config))
+
+loader = PromptLoader(
+    config=loader_config,
+    parser=MarkdownPromptParser(),
+    cache_store=LocalFilePromptStore(prompt_root),
+    providers={"local_file": LocalFileProvider()},
+    now_provider=lambda: datetime.now(timezone.utc),
+)
+
+service = PromptComplianceService(
+    guardrail=SafetyGuardrailFactory.create(GuardrailProviderConfig(provider="noop")),
+    parser=ProcessedPromptParser(),
+    origin_resolver=PromptOriginResolver(
+        catalog_registry=catalog_registry,
+        prompt_loader=loader,
+    ),
+    extractor=PromptSlotExtractor(adapter=DemoStructuredAdapter()),
+    slot_config_resolver=SlotSchemaResolver(SlotSchemaConfig(root_dir=slot_root, file_name="slot.json")),
+    validator=SlotValidator(),
+    slot_not_found_policy="strict",
+)
+
+result = service.check(
+    processed_prompt_text="---\nname: weather query\nlanguage: zh-CN\nversion: 0.0.1\n---\n请帮我查询广州今天天气。",
+    request_metadata={"request_id": "demo-request"},
+)
+
+print(result.passed)
+print(result.extracted_slots)
+```
+
+`service.check(...)` 会返回 `PromptComplianceResult`。
 
 ### 槽位目录
 
-槽位文件默认存放在 `./slots`，路径布局与 Prompt 身份镜像：
+槽位文件默认放在 `./slots`，路径与 Prompt 身份镜像：
 
 ```text
 slots/
@@ -157,52 +214,43 @@ slots/
 示例：
 
 ```text
-slots/network diagnosis/1.0.0/zh-CN/slot.json
+slots/weather query/0.0.1/zh-CN/slot.json
 ```
 
-### 环境变量
+### 关键配置
 
-Prompt Compliance 模块使用以下环境变量：
-
-- `A2AT_PROMPT_COMPLIANCE_ENABLED`：是否启用服务端 Prompt 遵从校验
-- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_PROVIDER`：输入侧安全护栏 provider 名称，默认 `noop`
-- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_TIMEOUT_SECONDS`：安全护栏调用超时时间，单位为秒
-- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_POLICY_ID`：安全护栏策略、模板或规则集标识；当前 Google Model Armor 使用该值定位模板
-- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_ENDPOINT`：安全护栏服务 endpoint，供后续或特定 provider 使用
-- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_REGION`：安全护栏服务 region，供后续或特定 provider 使用
-- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_CREDENTIALS_REF`：安全护栏凭据引用名，通常用于指向环境变量或外部凭据配置
+- `A2AT_PROMPT_COMPLIANCE_ENABLED`：是否启用服务端校验
+- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_PROVIDER`：安全护栏 provider，默认 `noop`
+- `A2AT_PROMPT_COMPLIANCE_GUARDRAIL_POLICY_ID`：护栏策略或模板标识
 - `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_PROVIDER`：槽位提取使用的 LLM provider
 - `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_MODEL`：槽位提取使用的模型名称
-- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_TIMEOUT_SECONDS`：槽位提取调用超时时间，单位为秒
-- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_TEMPERATURE`：槽位提取时使用的采样温度
-- `A2AT_PROMPT_COMPLIANCE_SLOT_EXTRACTION_MAX_RETRIES`：槽位提取失败后的最大重试次数
 - `A2AT_PROMPT_COMPLIANCE_SLOT_LOCAL_DIR`：槽位配置根目录
-- `A2AT_PROMPT_COMPLIANCE_SLOT_FILE_NAME`：槽位配置文件名，当前默认 `slot.json`
+- `A2AT_PROMPT_COMPLIANCE_SLOT_FILE_NAME`：槽位配置文件名，默认 `slot.json`
 - `A2AT_PROMPT_COMPLIANCE_SLOT_NOT_FOUND_POLICY`：槽位配置缺失时的处理策略，支持 `strict` 和 `skip`
 
 ### 安全护栏 Provider
 
-- 当前已实现的独立护栏 provider：`google_model_armor`
-- Google provider 通过官方 SDK `google-cloud-modelarmor` 接入
-- 设计已预留 `AWS / Azure` 扩展位，但当前版本未实现，不应在运行时选择
+- 当前已实现的独立护栏 provider 为 `google_model_armor`
+- Google provider 使用官方 SDK `google-cloud-modelarmor` 接入
+- 设计上已预留 `AWS / Azure` 扩展位，但当前版本尚未实现
 
-## Development
+## 开发
 
 ```bash
-# Install dependencies
+# 安装依赖
 pip install -e ".[dev]"
 
-# Run tests
+# 运行测试
 pytest
 
-# Lint
+# 代码检查
 ruff check src/
 
-# Type check
+# 类型检查
 mypy src/
 ```
 
-## Project Structure
+## 项目结构
 
 ```text
 a2a-t-sdk/
@@ -220,6 +268,6 @@ a2a-t-sdk/
 └── examples/          # Usage examples
 ```
 
-## License
+## 许可证
 
 Apache License 2.0
