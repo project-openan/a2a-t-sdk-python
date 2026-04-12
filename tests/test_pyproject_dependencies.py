@@ -38,7 +38,7 @@ def test_project_no_longer_relies_on_requirements_txt() -> None:
     assert not (PROJECT_ROOT / "requirements.txt").exists()
 
 
-def test_hatch_metadata_allows_direct_references() -> None:
+def test_project_no_longer_uses_hatch_metadata_configuration() -> None:
     pyproject = load_pyproject()
 
-    assert pyproject["tool"]["hatch"]["metadata"]["allow-direct-references"] is True
+    assert "hatch" not in pyproject.get("tool", {})

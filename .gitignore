@@ -21,3 +21,7 @@ venv/
 
 # Claude 本地配置
 .claude/
+
+.codex_backup
+.uv-cache
+dist
