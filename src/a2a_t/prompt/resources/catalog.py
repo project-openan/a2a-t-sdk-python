@@ -12,10 +12,10 @@ except ModuleNotFoundError:
     class AgentCard:  # pragma: no cover - optional dependency fallback
         pass
 
-from ..config import PromptLoaderConfig
-from ..errors import PromptSourceError
-from ..models import CacheStatus, PromptReference, PromptSource
-from ..parser import PromptParser, PromptParserRegistry, build_default_prompt_parser_registry
+from ..common.config import PromptLoaderConfig
+from ..common.errors import PromptSourceError
+from ..common.models import CacheStatus, PromptReference, PromptSource
+from .parser import PromptParser, PromptParserRegistry, build_default_prompt_parser_registry
 
 
 class UrlIndexFetcher(Protocol):

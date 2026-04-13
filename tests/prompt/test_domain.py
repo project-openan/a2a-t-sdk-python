@@ -14,7 +14,7 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from a2a_t.prompt.cache import (
+from a2a_t.prompt.resources.cache import (
     ConflictResolutionPolicy,
     ExpirationPolicy,
     LocalFilePromptStore,
@@ -22,8 +22,8 @@ from a2a_t.prompt.cache import (
     PromptStore,
     TTLExpirationPolicy,
 )
-from a2a_t.prompt.config import PromptLoaderConfig
-from a2a_t.prompt.errors import (
+from a2a_t.prompt.common.config import PromptLoaderConfig
+from a2a_t.prompt.common.errors import (
     PromptCacheError,
     PromptConfigError,
     PromptConflictError,
@@ -35,9 +35,9 @@ from a2a_t.prompt.errors import (
     PromptVersionComparisonError,
 )
 from a2a_t.prompt.loader import PromptLoader
-from a2a_t.prompt.models import CacheStatus, FetchResult, Prompt, PromptSource
-from a2a_t.prompt.parser import PromptParser
-from a2a_t.prompt.providers import AgentFetcher, LocalFileFetcher, PromptProvider, UrlFetcher
+from a2a_t.prompt.common.models import CacheStatus, FetchResult, Prompt, PromptSource
+from a2a_t.prompt.resources.parser import PromptParser
+from a2a_t.prompt.resources.providers import AgentFetcher, LocalFileFetcher, PromptProvider, UrlFetcher
 import a2a_t.prompt as prompt_module
 
 
@@ -72,7 +72,7 @@ class PromptLoaderDomainTest(unittest.TestCase):
         self.assertEqual(prompt.cache_status, CacheStatus.MISS)
 
     def test_prompt_reference_exists_with_listing_and_loading_fields(self) -> None:
-        models = importlib.import_module("a2a_t.prompt.models")
+        models = importlib.import_module("a2a_t.prompt.common.models")
 
         self.assertTrue(hasattr(models, "PromptReference"))
         reference = models.PromptReference(

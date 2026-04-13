@@ -8,8 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
-from ..errors import PromptCacheError, PromptConflictError, PromptVersionComparisonError
-from ..models import CacheStatus, CachedPromptRecord
+from ..common.errors import PromptCacheError, PromptConflictError, PromptVersionComparisonError
+from ..common.models import CacheStatus, CachedPromptRecord
 
 
 logger = logging.getLogger(__name__)

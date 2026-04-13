@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from ..errors import PromptCatalogRegistryError
+from ..common.errors import PromptCatalogRegistryError
 from .catalog import PromptCatalog
 
 

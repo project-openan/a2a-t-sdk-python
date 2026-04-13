@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from a2a_t.config.source import DotEnvConfigSource
-from a2a_t.prompt.config import PromptLoaderConfig
+from a2a_t.prompt.common.config import PromptLoaderConfig
 from a2a_t.server.prompt_compliance.config import (
     GuardrailProviderConfig,
     PromptComplianceConfig,

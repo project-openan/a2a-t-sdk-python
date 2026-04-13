@@ -8,8 +8,8 @@ from typing import Protocol
 from urllib import request
 from urllib.error import HTTPError, URLError
 
-from ..errors import PromptFetchError
-from ..models import FetchResult, PromptSource
+from ..common.errors import PromptFetchError
+from ..common.models import FetchResult, PromptSource
 
 
 logger = logging.getLogger(__name__)

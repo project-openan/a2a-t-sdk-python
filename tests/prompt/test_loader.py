@@ -14,15 +14,15 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from a2a_t.prompt.cache import LocalFilePromptStore
-from a2a_t.prompt.catalog import AgentPromptCatalog, LocalPromptCatalog
-from a2a_t.prompt.catalog_registry import DefaultPromptCatalogRegistry
-from a2a_t.prompt.config import PromptLoaderConfig
-from a2a_t.prompt.errors import PromptCacheError, PromptFetchError, PromptMetadataError
+from a2a_t.prompt.resources.cache import LocalFilePromptStore
+from a2a_t.prompt.resources.catalog import AgentPromptCatalog, LocalPromptCatalog
+from a2a_t.prompt.resources.catalog_registry import DefaultPromptCatalogRegistry
+from a2a_t.prompt.common.config import PromptLoaderConfig
+from a2a_t.prompt.common.errors import PromptCacheError, PromptFetchError, PromptMetadataError
 from a2a_t.prompt.loader import PromptLoader
-from a2a_t.prompt.models import CacheStatus, FetchResult, PromptSource
-from a2a_t.prompt.parser import MarkdownPromptParser
-from a2a_t.prompt.providers import LocalFileProvider
+from a2a_t.prompt.common.models import CacheStatus, FetchResult, PromptSource
+from a2a_t.prompt.resources.parser import MarkdownPromptParser
+from a2a_t.prompt.resources.providers import LocalFileProvider
 from tests.test_support import FakeRemoteProvider, ManagedTempDirTestCase, build_markdown
 
 

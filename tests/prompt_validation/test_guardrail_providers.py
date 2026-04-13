@@ -13,11 +13,11 @@ if str(SRC_ROOT) not in sys.path:
 
 
 from a2a_t.server.prompt_compliance.errors import GuardrailExecutionError
-from a2a_t.server.prompt_compliance.guardrail_providers import (
+from a2a_t.prompt.validation.guardrail_providers import (
     GoogleModelArmorGateway,
     GoogleModelArmorGuardrailAdapter,
 )
-from a2a_t.server.prompt_compliance.guardrails import AdapterSafetyGuardrail, SafetyGuardrailFactory
+from a2a_t.prompt.validation.guardrails import AdapterSafetyGuardrail, SafetyGuardrailFactory
 from a2a_t.server.prompt_compliance.models import (
     GuardrailDecision,
     GuardrailProviderConfig,
@@ -179,3 +179,7 @@ class GoogleModelArmorGuardrailAdapterTest(unittest.TestCase):
         )
 
         self.assertIsInstance(guardrail, AdapterSafetyGuardrail)
+
+
+if __name__ == "__main__":
+    unittest.main()

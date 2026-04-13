@@ -12,7 +12,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from a2a_t.prompt import DefaultPromptCatalogRegistry, PromptCatalogRegistryError
-from a2a_t.prompt.models import PromptReference, PromptSource
+from a2a_t.prompt.common.models import PromptReference, PromptSource
 
 
 class FakePromptCatalog:

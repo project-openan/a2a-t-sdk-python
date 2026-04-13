@@ -17,7 +17,7 @@ if str(SRC_ROOT) not in sys.path:
 class PromptCatalogRegistryContractTest(unittest.TestCase):
     def test_prompt_catalog_registry_module_exists_under_prompt_package(self) -> None:
         try:
-            spec = importlib.util.find_spec("a2a_t.prompt.catalog_registry")
+            spec = importlib.util.find_spec("a2a_t.prompt.resources.catalog_registry")
         except ModuleNotFoundError:
             spec = None
 
@@ -25,9 +25,9 @@ class PromptCatalogRegistryContractTest(unittest.TestCase):
 
     def test_prompt_catalog_registry_protocol_exists(self) -> None:
         try:
-            module = importlib.import_module("a2a_t.prompt.catalog_registry")
+            module = importlib.import_module("a2a_t.prompt.resources.catalog_registry")
         except ModuleNotFoundError:
-            self.fail("a2a_t.prompt.catalog_registry is missing")
+            self.fail("a2a_t.prompt.resources.catalog_registry is missing")
 
         self.assertTrue(hasattr(module, "PromptCatalogRegistry"))
         self.assertTrue(hasattr(module.PromptCatalogRegistry, "_is_protocol"))

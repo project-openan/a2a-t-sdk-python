@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Protocol
 
-from ..errors import PromptMetadataError, PromptParseError
-from ..models import CacheStatus, Prompt, PromptSource
+from ..common.errors import PromptMetadataError, PromptParseError
+from ..common.models import CacheStatus, Prompt, PromptSource
 
 
 logger = logging.getLogger(__name__)

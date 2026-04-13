@@ -13,7 +13,7 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from a2a_t.prompt.cache import (
+from a2a_t.prompt.resources.cache import (
     ConflictResolutionPolicy,
     ExpirationPolicy,
     LocalFilePromptStore,
@@ -22,8 +22,8 @@ from a2a_t.prompt.cache import (
     PromptStore,
     TTLExpirationPolicy,
 )
-from a2a_t.prompt.errors import PromptCacheError, PromptConflictError, PromptVersionComparisonError
-from a2a_t.prompt.models import CacheStatus, CachedPromptRecord
+from a2a_t.prompt.common.errors import PromptCacheError, PromptConflictError, PromptVersionComparisonError
+from a2a_t.prompt.common.models import CacheStatus, CachedPromptRecord
 from tests.test_support import ManagedTempDirTestCase
 
 
