@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
+from a2a_t.prompt.analysis.errors import PromptAnalysisError
+from a2a_t.prompt.resources.errors import PromptResourceNotFoundError
 from a2a_t.prompt.validation.models import SlotValidationError
 
 from .constants import (
     GENERATION_STAGE,
     INVALID_FIELD_VALUE,
+    INVALID_LLM_OUTPUT,
+    LLM_EXECUTION_FAILED,
     MISSING_REQUIRED_FIELDS,
     PROMPT_NOT_FOUND,
     RENDER_FAILED,
@@ -53,46 +57,102 @@ class PromptGenerationOrchestrator:
         language = getattr(self._config, "language", None) or "en-US"
         version = getattr(self._config, "prompt_resource_version", None) or "0.0.1"
 
-        scenarios = self._scenario_loader.load(version=version, language=language)
-        scenario_prompts = self._prompt_resource_loader.load(
-            analysis_action="scenario_recognition",
-            version=version,
-            language=language,
-        )
-        scenario_result = self._scenario_recognizer.recognize(
-            normalized_input=normalized_input.normalized_input,
-            scenarios=scenarios,
-            language=language,
-            system_prompt=scenario_prompts.system_prompt,
-            user_prompt=scenario_prompts.user_prompt,
-        )
+        try:
+            resolved_language, scenarios, scenario_prompts = self._load_scenario_resources(version=version, language=language)
+        except _PromptGenerationResourceFailure as error:
+            return self._failure_result(
+                code=error.code,
+                message=error.message,
+                stage=error.stage,
+                language=language,
+                input_kind=normalized_input.input_kind,
+            )
+
+        try:
+            scenario_result = self._scenario_recognizer.recognize(
+                normalized_input=normalized_input.normalized_input,
+                scenarios=scenarios,
+                language=resolved_language,
+                system_prompt=scenario_prompts.system_prompt,
+                user_prompt=scenario_prompts.user_prompt,
+            )
+        except PromptAnalysisError as error:
+            return self._failure_result(
+                code=INVALID_LLM_OUTPUT,
+                message=str(error),
+                stage=SCENARIO_STAGE,
+                language=resolved_language,
+                input_kind=normalized_input.input_kind,
+            )
+        except Exception as error:
+            return self._failure_result(
+                code=LLM_EXECUTION_FAILED,
+                message=str(error),
+                stage=SCENARIO_STAGE,
+                language=resolved_language,
+                input_kind=normalized_input.input_kind,
+            )
         if not scenario_result.matched or not scenario_result.scenario_code:
             return self._failure_result(
                 code=SCENARIO_PARSE_FAILED,
                 message=scenario_result.error_message or "Scenario recognition failed.",
                 stage=SCENARIO_STAGE,
-                language=language,
+                language=resolved_language,
                 input_kind=normalized_input.input_kind,
             )
 
         scenario_code = scenario_result.scenario_code
-        template_text = self._template_loader.load(scenario_code=scenario_code, version=version, language=language)
-        slot_schema = self._slot_schema_loader.load(scenario_code=scenario_code, version=version, language=language)
-        slot_prompts = self._prompt_resource_loader.load(
-            analysis_action="slot_extraction",
-            version=version,
-            language=language,
-        )
-        extraction_result = self._slot_extractor.extract(
-            normalized_input=normalized_input.normalized_input,
-            scenario_code=scenario_code,
-            version=version,
-            language=language,
-            template_text=template_text,
-            slot_schema=slot_schema,
-            system_prompt=slot_prompts.system_prompt,
-            user_prompt=slot_prompts.user_prompt,
-        )
+        try:
+            resolved_language, template_text, slot_schema, slot_prompts = self._load_generation_resources(
+                scenario_code=scenario_code,
+                version=version,
+                language=resolved_language,
+            )
+        except _PromptGenerationResourceFailure as error:
+            return PromptGenerationResult(
+                success=False,
+                prompt_text=None,
+                scenario=ScenarioResolution(code=scenario_code),
+                language=resolved_language,
+                input_kind=normalized_input.input_kind,
+                slots={},
+                validation=ValidationResult(passed=False, missing_required_fields=[], slot_errors=[]),
+                failure=PromptGenerationFailure(code=error.code, message=error.message, stage=error.stage),
+            )
+
+        try:
+            extraction_result = self._slot_extractor.extract(
+                normalized_input=normalized_input.normalized_input,
+                scenario_code=scenario_code,
+                version=version,
+                language=resolved_language,
+                template_text=template_text,
+                slot_schema=slot_schema,
+                system_prompt=slot_prompts.system_prompt,
+                user_prompt=slot_prompts.user_prompt,
+            )
+        except PromptAnalysisError as error:
+            return PromptGenerationResult(
+                success=False,
+                prompt_text=None,
+                scenario=ScenarioResolution(code=scenario_code),
+                language=resolved_language,
+                input_kind=normalized_input.input_kind,
+                slots={},
+                validation=ValidationResult(passed=False, missing_required_fields=[], slot_errors=[]),
+                failure=PromptGenerationFailure(code=INVALID_LLM_OUTPUT, message=str(error), stage=GENERATION_STAGE),
+            )
+        except Exception as error:
+            return PromptGenerationResult(
+                success=False,
+                prompt_text=None,
+                scenario=ScenarioResolution(code=scenario_code),
+                language=resolved_language,
+                input_kind=normalized_input.input_kind,
+                slots={},
+                validation=ValidationResult(passed=False, missing_required_fields=[], slot_errors=[]),
+                failure=PromptGenerationFailure(code=LLM_EXECUTION_FAILED, message=str(error), stage=GENERATION_STAGE),
+            )
         shared_validation = self._slot_validator.validate(
             slots=extraction_result.slots,
             slot_errors=extraction_result.slot_errors,
@@ -106,7 +166,7 @@ class PromptGenerationOrchestrator:
                 success=False,
                 prompt_text=None,
                 scenario=ScenarioResolution(code=scenario_code),
-                language=language,
+                language=resolved_language,
                 input_kind=normalized_input.input_kind,
                 slots=extraction_result.slots,
                 validation=validation,
@@ -122,7 +182,7 @@ class PromptGenerationOrchestrator:
                 template_text=template_text,
                 slots=extraction_result.slots,
                 scenario_code=scenario_code,
-                language=language,
+                language=resolved_language,
                 version=version,
                 description=self._resolve_scenario_description(scenarios, scenario_code),
             )
@@ -131,7 +191,7 @@ class PromptGenerationOrchestrator:
                 success=False,
                 prompt_text=None,
                 scenario=ScenarioResolution(code=scenario_code),
-                language=language,
+                language=resolved_language,
                 input_kind=normalized_input.input_kind,
                 slots=extraction_result.slots,
                 validation=validation,
@@ -146,12 +206,80 @@ class PromptGenerationOrchestrator:
             success=True,
             prompt_text=prompt_text,
             scenario=ScenarioResolution(code=scenario_code),
-            language=language,
+            language=resolved_language,
             input_kind=normalized_input.input_kind,
             slots=extraction_result.slots,
             validation=validation,
             failure=None,
         )
+
+    def _load_scenario_resources(self, *, version: str, language: str) -> tuple[str, Any, Any]:
+        try:
+            return language, self._scenario_loader.load(version=version, language=language), self._prompt_resource_loader.load(
+                analysis_action="scenario_recognition",
+                version=version,
+                language=language,
+            )
+        except PromptResourceNotFoundError:
+            if language == "en-US":
+                raise _PromptGenerationResourceFailure(
+                    code=PROMPT_NOT_FOUND,
+                    message="Scenario recognition prompt resources are missing.",
+                    stage=SCENARIO_STAGE,
+                ) from None
+            return self._load_scenario_resources(version=version, language="en-US")
+
+    def _load_generation_resources(
+        self,
+        *,
+        scenario_code: str,
+        version: str,
+        language: str,
+    ) -> tuple[str, Any, Any, Any]:
+        try:
+            return language, self._load_template(scenario_code=scenario_code, version=version, language=language), self._load_slot_schema(
+                scenario_code=scenario_code,
+                version=version,
+                language=language,
+            ), self._load_slot_prompts(version=version, language=language)
+        except _PromptGenerationResourceFailure:
+            if language == "en-US":
+                raise
+            return self._load_generation_resources(scenario_code=scenario_code, version=version, language="en-US")
+
+    def _load_template(self, *, scenario_code: str, version: str, language: str) -> str:
+        try:
+            return self._template_loader.load(scenario_code=scenario_code, version=version, language=language)
+        except PromptResourceNotFoundError as error:
+            raise _PromptGenerationResourceFailure(
+                code=TEMPLATE_NOT_FOUND,
+                message=str(error),
+                stage=GENERATION_STAGE,
+            ) from error
+
+    def _load_slot_schema(self, *, scenario_code: str, version: str, language: str) -> Any:
+        try:
+            return self._slot_schema_loader.load(scenario_code=scenario_code, version=version, language=language)
+        except PromptResourceNotFoundError as error:
+            raise _PromptGenerationResourceFailure(
+                code=SLOT_SCHEMA_NOT_FOUND,
+                message=str(error),
+                stage=GENERATION_STAGE,
+            ) from error
+
+    def _load_slot_prompts(self, *, version: str, language: str) -> Any:
+        try:
+            return self._prompt_resource_loader.load(
+                analysis_action="slot_extraction",
+                version=version,
+                language=language,
+            )
+        except PromptResourceNotFoundError as error:
+            raise _PromptGenerationResourceFailure(
+                code=PROMPT_NOT_FOUND,
+                message=str(error),
+                stage=GENERATION_STAGE,
+            ) from error
 
     def _build_validation_result(self, slot_errors: list[SlotValidationError]) -> ValidationResult:
         client_slot_errors = [
@@ -193,3 +321,11 @@ class PromptGenerationOrchestrator:
             validation=ValidationResult(passed=False, missing_required_fields=[], slot_errors=[]),
             failure=PromptGenerationFailure(code=code, message=message, stage=stage),
         )
+
+
+class _PromptGenerationResourceFailure(Exception):
+    def __init__(self, *, code: str, message: str, stage: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.stage = stage
