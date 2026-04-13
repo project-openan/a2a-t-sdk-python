@@ -10,6 +10,9 @@ __all__ = [
     "ConfigError",
     "ConfigFileNotFoundError",
     "ConfigLoader",
+    "GuardrailProviderConfig",
+    "PromptComplianceConfig",
+    "PromptRuntimeConfig",
     "SDKConfig",
     "ServerConfig",
 ]
@@ -22,7 +25,14 @@ def __getattr__(name: str):
         value = getattr(import_module("a2a_t.config.errors"), name)
     elif name == "A2ATConfig":
         value = getattr(import_module("a2a_t.config.models"), name)
-    elif name in {"SDKConfig", "ClientConfig", "ServerConfig"}:
+    elif name in {
+        "SDKConfig",
+        "ClientConfig",
+        "ServerConfig",
+        "PromptRuntimeConfig",
+        "PromptComplianceConfig",
+        "GuardrailProviderConfig",
+    }:
         value = getattr(import_module("a2a_t.config.models"), name)
     else:
         raise AttributeError(f"module 'a2a_t.config' has no attribute {name!r}")

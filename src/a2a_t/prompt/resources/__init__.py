@@ -1,51 +1,34 @@
 """Shared prompt resource loading package."""
 
-from .cache import (
-    CacheStore,
-    ConflictResolutionPolicy,
-    ExpirationPolicy,
-    LocalFilePromptStore,
-    OverwriteIfNewerVersionPolicy,
-    OverwriteOnConflictPolicy,
-    PromptStore,
-    TTLExpirationPolicy,
-)
-from .catalog import AgentPromptCatalog, LocalPromptCatalog, PromptCatalog, UrlIndexFetcher, UrlPromptCatalog
-from .catalog_registry import DefaultPromptCatalogRegistry, PromptCatalogRegistry
+from .cache import ConflictResolutionPolicy, ExpirationPolicy, OverwriteIfNewerVersionPolicy, OverwriteOnConflictPolicy, PromptStore, TTLExpirationPolicy
+from .catalog import LocalPromptResourceCatalog, PromptResourceCatalog
 from .errors import PromptResourceError, PromptResourceNotFoundError, PromptResourceParseError
 from .models import PromptMessages, ScenarioDefinition, SlotDefinition, SlotRange, SlotSchema
-from .parser import MarkdownPromptParser, PromptParser, PromptParserRegistry, build_default_prompt_parser_registry
 from .prompt_resource_loader import PromptResourceLoader
-from .providers import AgentFetcher, AgentProvider, LocalFileFetcher, LocalFileProvider, PromptProvider, UrlFetcher, UrlProvider
+from .registry import PromptResourceRegistry
+from .providers import LocalPromptResourceProvider, PromptResourceProvider
 from .scenario_loader import ScenarioLoader
 from .slot_schema_loader import SlotSchemaLoader
+from .source import LocalPromptResourceSource, PromptResourceSource
 from .template_loader import TemplateLoader
 
 __all__ = [
-    "CacheStore",
     "ConflictResolutionPolicy",
     "ExpirationPolicy",
-    "AgentFetcher",
-    "AgentPromptCatalog",
-    "AgentProvider",
-    "DefaultPromptCatalogRegistry",
-    "LocalFileFetcher",
-    "LocalFileProvider",
-    "LocalFilePromptStore",
-    "LocalPromptCatalog",
-    "MarkdownPromptParser",
+    "LocalPromptResourceCatalog",
+    "LocalPromptResourceProvider",
+    "LocalPromptResourceSource",
     "OverwriteIfNewerVersionPolicy",
     "OverwriteOnConflictPolicy",
     "PromptMessages",
-    "PromptCatalog",
-    "PromptCatalogRegistry",
-    "PromptParser",
-    "PromptParserRegistry",
-    "PromptProvider",
+    "PromptResourceCatalog",
     "PromptResourceError",
     "PromptResourceLoader",
+    "PromptResourceRegistry",
     "PromptResourceNotFoundError",
     "PromptResourceParseError",
+    "PromptResourceProvider",
+    "PromptResourceSource",
     "PromptStore",
     "ScenarioDefinition",
     "ScenarioLoader",
@@ -55,9 +38,4 @@ __all__ = [
     "SlotSchemaLoader",
     "TemplateLoader",
     "TTLExpirationPolicy",
-    "UrlFetcher",
-    "UrlIndexFetcher",
-    "UrlPromptCatalog",
-    "UrlProvider",
-    "build_default_prompt_parser_registry",
 ]

@@ -16,6 +16,8 @@ if str(SRC_ROOT) not in sys.path:
 class PromptValidationRuntimeModuleTest(unittest.TestCase):
     def test_validation_guardrail_runtime_modules_are_importable(self) -> None:
         module_names = [
+            "a2a_t.prompt.validation.constants",
+            "a2a_t.prompt.validation.errors",
             "a2a_t.prompt.validation.guardrails",
             "a2a_t.prompt.validation.guardrail_providers",
         ]
@@ -26,6 +28,7 @@ class PromptValidationRuntimeModuleTest(unittest.TestCase):
 
     def test_server_guardrail_shim_modules_are_not_importable(self) -> None:
         module_names = [
+            "a2a_t.prompt.validation.config",
             "a2a_t.server.prompt_compliance.guardrails",
             "a2a_t.server.prompt_compliance.guardrail_providers",
         ]

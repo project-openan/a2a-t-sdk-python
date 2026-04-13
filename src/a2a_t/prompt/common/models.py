@@ -35,6 +35,13 @@ class Prompt:
 
 @dataclass(slots=True)
 class PromptReference:
+    scenario_code: str
+    language: str
+    version: str
+
+
+@dataclass(slots=True)
+class PromptAssetReference:
     name: str
     language: str
     version: str

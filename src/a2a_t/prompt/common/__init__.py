@@ -1,6 +1,5 @@
 """Shared common prompt runtime primitives."""
 
-from .config import PromptLoaderConfig
 from .errors import (
     PromptCacheError,
     PromptCatalogRegistryError,
@@ -13,19 +12,20 @@ from .errors import (
     PromptSourceError,
     PromptVersionComparisonError,
 )
-from .models import CacheStatus, CachedPromptRecord, FetchResult, Prompt, PromptReference, PromptSource
+from .models import CacheStatus, CachedPromptRecord, FetchResult, Prompt, PromptAssetReference, PromptReference, PromptSource
+from .a2a_t_task_prompt import A2ATTaskPromptFormatError, A2ATTaskPromptMetadata, parse_a2a_t_task_prompt_metadata, render_a2a_t_task_prompt
 
 __all__ = [
     "CacheStatus",
     "CachedPromptRecord",
     "FetchResult",
     "Prompt",
+    "PromptAssetReference",
     "PromptCacheError",
     "PromptCatalogRegistryError",
     "PromptConfigError",
     "PromptConflictError",
     "PromptFetchError",
-    "PromptLoaderConfig",
     "PromptLoaderError",
     "PromptMetadataError",
     "PromptParseError",
@@ -33,4 +33,8 @@ __all__ = [
     "PromptSource",
     "PromptSourceError",
     "PromptVersionComparisonError",
+    "A2ATTaskPromptFormatError",
+    "A2ATTaskPromptMetadata",
+    "parse_a2a_t_task_prompt_metadata",
+    "render_a2a_t_task_prompt",
 ]

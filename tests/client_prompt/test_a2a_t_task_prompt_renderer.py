@@ -12,11 +12,12 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
-class PromptRendererTest(unittest.TestCase):
+class A2ATTaskPromptRendererTest(unittest.TestCase):
     def test_render_builds_markdown_prompt_with_front_matter(self) -> None:
-        from a2a_t.client.prompt.renderer import PromptRenderer
+        from a2a_t.prompt.common.a2a_t_task_prompt import A2ATTaskPromptMetadata, render_a2a_t_task_prompt
+        from a2a_t.client.prompt.a2a_t_task_prompt_renderer import A2ATTaskPromptRenderer
 
-        renderer = PromptRenderer()
+        renderer = A2ATTaskPromptRenderer()
         prompt_text = renderer.render(
             template_text="Site: {site}\nNotes: {additional_notes}",
             slots={"site": "Site A", "additional_notes": None},
@@ -26,16 +27,28 @@ class PromptRendererTest(unittest.TestCase):
             description="Used for energy saving analysis.",
         )
 
+        self.assertEqual(
+            prompt_text,
+            render_a2a_t_task_prompt(
+                body="Site: Site A\nNotes: ",
+                metadata=A2ATTaskPromptMetadata(
+                    scenario_code="energy_saving",
+                    language="en-US",
+                    version="0.0.1",
+                    description="Used for energy saving analysis.",
+                ),
+            ),
+        )
         self.assertIn("---\nscenario_code: energy_saving\nlanguage: en-US\nversion: 0.0.1\ndescription: Used for energy saving analysis.\n---\n", prompt_text)
         self.assertTrue(prompt_text.endswith("Site: Site A\nNotes: "))
 
     def test_render_raises_when_template_references_unknown_slot(self) -> None:
-        from a2a_t.client.prompt.renderer import PromptRenderer
-        from a2a_t.client.prompt.renderer import PromptRenderError
+        from a2a_t.client.prompt.a2a_t_task_prompt_renderer import A2ATTaskPromptRenderError
+        from a2a_t.client.prompt.a2a_t_task_prompt_renderer import A2ATTaskPromptRenderer
 
-        renderer = PromptRenderer()
+        renderer = A2ATTaskPromptRenderer()
 
-        with self.assertRaises(PromptRenderError):
+        with self.assertRaises(A2ATTaskPromptRenderError):
             renderer.render(
                 template_text="Site: {site}\nTime Range: {time_range}",
                 slots={"site": "Site A"},

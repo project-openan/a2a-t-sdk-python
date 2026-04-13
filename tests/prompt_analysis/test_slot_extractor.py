@@ -13,6 +13,7 @@ if str(SRC_ROOT) not in sys.path:
 
 
 from a2a_t.llm.base import LLMResponse
+from a2a_t.prompt.common.models import PromptReference
 from a2a_t.prompt.resources.models import SlotDefinition, SlotSchema
 from a2a_t.prompt.validation.models import SlotValidationError
 
@@ -70,9 +71,7 @@ class SlotExtractorTest(unittest.TestCase):
 
         result = extractor.extract(
             normalized_input="Analyze Site A and focus on power system.",
-            scenario_code="energy_saving",
-            version="0.0.1",
-            language="en-US",
+            reference=PromptReference(scenario_code="energy_saving", version="0.0.1", language="en-US"),
             template_text="Site: {site}\nNotes: {additional_notes}",
             slot_schema=slot_schema,
             system_prompt="Extract slots.",
@@ -107,6 +106,10 @@ class SlotExtractorTest(unittest.TestCase):
             llm_client.calls[0]["json_schema"]["properties"]["slot_errors"]["items"]["properties"]["code"]["enum"],
             ["missing_input", "invalid_value"],
         )
+        self.assertEqual(
+            llm_client.calls[0]["json_schema"]["properties"]["slot_errors"]["items"]["properties"]["slot_name"]["enum"],
+            ["site", "additional_notes"],
+        )
 
     def test_extract_rejects_invalid_slot_error_code(self) -> None:
         llm_client = FakeLLMClient(
@@ -124,9 +127,7 @@ class SlotExtractorTest(unittest.TestCase):
         with self.assertRaises(SlotExtractionError):
             extractor.extract(
                 normalized_input="Analyze Site A.",
-                scenario_code="energy_saving",
-                version="0.0.1",
-                language="en-US",
+                reference=PromptReference(scenario_code="energy_saving", version="0.0.1", language="en-US"),
                 template_text="Site: {site}",
                 slot_schema=SlotSchema(
                     scenario_code="energy_saving",

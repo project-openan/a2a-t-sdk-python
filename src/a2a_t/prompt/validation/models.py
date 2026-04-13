@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from enum import Enum
 
 
 @dataclass(slots=True)
@@ -9,6 +10,9 @@ class SlotValidationError:
     code: str
     message: str
 
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
 
 @dataclass(slots=True)
 class SlotValidationResult:
@@ -16,8 +20,32 @@ class SlotValidationResult:
     slot_errors: list[SlotValidationError]
 
 
+class GuardrailDecision(str, Enum):
+    """Unified guardrail decision semantics."""
+
+    ALLOW = "allow"
+    BLOCK = "block"
+    MASK = "mask"
+    REVIEW = "review"
+
+
+@dataclass(slots=True)
+class GuardrailRequest:
+    """Normalized guardrail input request."""
+
+    text: str
+    metadata: dict[str, object] | None = None
+    policy_id: str | None = None
+
+
 @dataclass(slots=True)
 class GuardrailResult:
     passed: bool
-    error_code: str | None
-    error_message: str | None
+    decision: GuardrailDecision = GuardrailDecision.ALLOW
+    category: str | None = None
+    reason: str | None = None
+    raw_response: dict[str, object] | None = None
+    provider: str | None = None
+    policy_id: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None

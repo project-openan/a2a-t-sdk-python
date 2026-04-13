@@ -17,8 +17,8 @@ class AnalysisJsonSchemaBuilder:
         }
 
     def build_slot_extraction_schema(self, *, slot_schema: SlotSchema) -> dict[str, object]:
+        slot_names = [slot.name for slot in slot_schema.slots]
         slot_properties = {slot.name: {"type": ["string", "null"]} for slot in slot_schema.slots}
-        slot_required = [slot.name for slot in slot_schema.slots]
         return {
             "type": "object",
             "additionalProperties": False,
@@ -27,7 +27,7 @@ class AnalysisJsonSchemaBuilder:
                 "slots": {
                     "type": "object",
                     "additionalProperties": False,
-                    "required": slot_required,
+                    "required": slot_names,
                     "properties": slot_properties,
                 },
                 "slot_errors": {
@@ -37,7 +37,7 @@ class AnalysisJsonSchemaBuilder:
                         "additionalProperties": False,
                         "required": ["slot_name", "code", "message"],
                         "properties": {
-                            "slot_name": {"type": "string"},
+                            "slot_name": {"type": "string", "enum": slot_names},
                             "code": {"type": "string", "enum": ["missing_input", "invalid_value"]},
                             "message": {"type": "string"},
                         },

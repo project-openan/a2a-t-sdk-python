@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-import types
 from pathlib import Path
 import unittest
 
@@ -16,46 +15,8 @@ if str(SRC_ROOT) not in sys.path:
 from tests.test_support import ManagedTempDirTestCase
 
 
-def _install_fake_dotenv() -> None:
-    if "dotenv" in sys.modules:
-        return
-
-    dotenv_module = types.ModuleType("dotenv")
-
-    def dotenv_values(path: str | Path) -> dict[str, str]:
-        result: dict[str, str] = {}
-        for line in Path(path).read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#") or "=" not in stripped:
-                continue
-            key, value = stripped.split("=", 1)
-            result[key] = value
-        return result
-
-    dotenv_module.dotenv_values = dotenv_values
-    sys.modules["dotenv"] = dotenv_module
-
-
-def _install_fake_a2a() -> None:
-    if "a2a" in sys.modules:
-        return
-
-    a2a_module = types.ModuleType("a2a")
-    a2a_types_module = types.ModuleType("a2a.types")
-
-    class AgentCard:  # pragma: no cover
-        pass
-
-    a2a_types_module.AgentCard = AgentCard
-    a2a_module.types = a2a_types_module
-    sys.modules["a2a"] = a2a_module
-    sys.modules["a2a.types"] = a2a_types_module
-
-
 class A2ATConfigTest(ManagedTempDirTestCase):
     def _load_config_api(self) -> tuple[object, type[Exception]]:
-        _install_fake_dotenv()
-        _install_fake_a2a()
         from a2a_t.config import A2ATConfig, ConfigFileNotFoundError
 
         return A2ATConfig, ConfigFileNotFoundError
@@ -73,12 +34,12 @@ class A2ATConfigTest(ManagedTempDirTestCase):
         env_path.write_text(
             "\n".join(
                 [
-                    "A2AT_PROMPT_DEFAULT_TTL_SECONDS=7200",
-                    "A2AT_PROMPT_LOCAL_DIR=./runtime-prompts",
-                    "A2AT_PROMPT_ALLOWED_EXTENSIONS=.md,.json",
+                    "A2AT_LANGUAGE=zh-CN",
+                    "A2AT_PROMPT_RESOURCE_VERSION=0.0.2",
+                    "A2AT_PROMPT_SOURCE_TYPE=local_file",
+                    "A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR=./runtime-prompt-resources",
                     "A2AT_PROMPT_COMPLIANCE_ENABLED=true",
                     "A2AT_PROMPT_COMPLIANCE_GUARDRAIL_PROVIDER=google_model_armor",
-                    "A2AT_PROMPT_COMPLIANCE_SLOT_LOCAL_DIR=./runtime-slots",
                 ]
             ),
             encoding="utf-8",
@@ -87,11 +48,12 @@ class A2ATConfigTest(ManagedTempDirTestCase):
 
         config = A2ATConfig.load(env_path)
 
-        self.assertEqual(config.prompt.local_prompt_dir, "./runtime-prompts")
-        self.assertEqual(config.prompt.allowed_extensions, [".md", ".json"])
+        self.assertEqual(config.prompt.language, "zh-CN")
+        self.assertEqual(config.prompt.prompt_resource_version, "0.0.2")
+        self.assertEqual(config.prompt.source_type, "local_file")
+        self.assertEqual(config.prompt.local_root_dir, "./runtime-prompt-resources")
         self.assertTrue(config.prompt_compliance.enabled)
         self.assertEqual(config.prompt_compliance.guardrail.provider, "google_model_armor")
-        self.assertEqual(config.prompt_compliance.slot_schema.root_dir, "./runtime-slots")
 
     def test_load_reads_language_and_prompt_resource_version_from_dotenv_file(self) -> None:
         temp_root = self.make_temp_dir("global_prompt_generation_config")
@@ -110,8 +72,8 @@ class A2ATConfigTest(ManagedTempDirTestCase):
 
         config = A2ATConfig.load(env_path)
 
-        self.assertEqual(config.language, "zh-CN")
-        self.assertEqual(config.prompt_resource_version, "0.0.2")
+        self.assertEqual(config.prompt.language, "zh-CN")
+        self.assertEqual(config.prompt.prompt_resource_version, "0.0.2")
 
     def test_load_uses_defaults_for_language_and_prompt_resource_version(self) -> None:
         temp_root = self.make_temp_dir("global_prompt_generation_defaults")
@@ -121,26 +83,34 @@ class A2ATConfigTest(ManagedTempDirTestCase):
 
         config = A2ATConfig.load(env_path)
 
-        self.assertEqual(config.language, "en-US")
-        self.assertEqual(config.prompt_resource_version, "0.0.1")
+        self.assertEqual(config.prompt.language, "en-US")
+        self.assertEqual(config.prompt.prompt_resource_version, "0.0.1")
+        self.assertEqual(config.prompt.source_type, "local_file")
+        self.assertEqual(config.prompt.local_root_dir, "./package_data/prompt_resources")
+
+    def test_a2at_config_no_longer_exposes_language_and_prompt_version_at_top_level(self) -> None:
+        A2ATConfig, _ = self._load_config_api()
+
+        self.assertNotIn("language", A2ATConfig.__dataclass_fields__)
+        self.assertNotIn("prompt_resource_version", A2ATConfig.__dataclass_fields__)
 
     def test_load_only_reads_dotenv_file_and_ignores_process_environment(self) -> None:
         temp_root = self.make_temp_dir("dotenv_only_config")
         env_path = temp_root / ".env"
-        env_path.write_text("A2AT_PROMPT_LOCAL_DIR=./from-file\n", encoding="utf-8")
+        env_path.write_text("A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR=./from-file\n", encoding="utf-8")
         A2ATConfig, _ = self._load_config_api()
 
-        original = os.environ.get("A2AT_PROMPT_LOCAL_DIR")
-        os.environ["A2AT_PROMPT_LOCAL_DIR"] = "./from-process"
+        original = os.environ.get("A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR")
+        os.environ["A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR"] = "./from-process"
         try:
             config = A2ATConfig.load(env_path)
         finally:
             if original is None:
-                os.environ.pop("A2AT_PROMPT_LOCAL_DIR", None)
+                os.environ.pop("A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR", None)
             else:
-                os.environ["A2AT_PROMPT_LOCAL_DIR"] = original
+                os.environ["A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR"] = original
 
-        self.assertEqual(config.prompt.local_prompt_dir, "./from-file")
+        self.assertEqual(config.prompt.local_root_dir, "./from-file")
 
 
 if __name__ == "__main__":

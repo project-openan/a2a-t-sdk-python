@@ -15,11 +15,10 @@ if str(SRC_ROOT) not in sys.path:
 
 from a2a_t.llm.base import LLMResponse
 from a2a_t.prompt.analysis import SlotExtractor
+from a2a_t.prompt.common.a2a_t_task_prompt import A2ATTaskPromptMetadata, render_a2a_t_task_prompt
 from a2a_t.prompt.resources import PromptResourceLoader, SlotSchemaLoader, TemplateLoader
 from a2a_t.prompt.validation import GuardrailResult, SlotValidator
-from a2a_t.server.prompt_compliance.extractor import PromptSlotExtractor
-from a2a_t.server.prompt_compliance.parser import ProcessedPromptParser
-from a2a_t.server.prompt_compliance.service import PromptComplianceService
+from a2a_t.server.prompt_compliance.prompt_compliance_orchestrator import PromptComplianceOrchestrator
 from a2a_t.server.prompt_handler import PromptHandler
 from tests.test_support import ManagedTempDirTestCase
 
@@ -80,17 +79,14 @@ class PromptComplianceIntegrationRuntimeTest(ManagedTempDirTestCase):
             ),
         )
 
-        service = PromptComplianceService(
+        service = PromptComplianceOrchestrator(
             guardrail=FakeGuardrail(),
-            parser=ProcessedPromptParser(),
             template_loader=TemplateLoader(root_dir=self.root),
             slot_schema_loader=SlotSchemaLoader(root_dir=self.root),
             prompt_resource_loader=PromptResourceLoader(root_dir=self.root),
-            extractor=PromptSlotExtractor(
-                slot_extractor=SlotExtractor(
-                    llm_client=FakeSequencedLLMClient(
-                        ['{"slots": {"site": "Site A"}, "slot_errors": []}']
-                    )
+            extractor=SlotExtractor(
+                llm_client=FakeSequencedLLMClient(
+                    ['{"slots": {"site": "Site A"}, "slot_errors": []}']
                 )
             ),
             validator=SlotValidator(),
@@ -100,14 +96,14 @@ class PromptComplianceIntegrationRuntimeTest(ManagedTempDirTestCase):
         result = handler.process(
             "task-1",
             {
-                "processed_prompt_text": (
-                    "---\n"
-                    "scenario_code: energy_saving\n"
-                    "language: en-US\n"
-                    "version: 0.0.1\n"
-                    "description: Used for energy saving analysis.\n"
-                    "---\n"
-                    "processed body"
+                "processed_prompt_text": render_a2a_t_task_prompt(
+                    body="processed body",
+                    metadata=A2ATTaskPromptMetadata(
+                        scenario_code="energy_saving",
+                        language="en-US",
+                        version="0.0.1",
+                        description="Used for energy saving analysis.",
+                    ),
                 )
             },
         )

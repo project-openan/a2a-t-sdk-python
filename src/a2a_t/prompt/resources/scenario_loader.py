@@ -6,7 +6,7 @@ from .models import ScenarioDefinition
 
 class ScenarioLoader(BasePromptResourceLoader):
     def load(self, *, version: str, language: str) -> list[ScenarioDefinition]:
-        path = self.root_dir / "scenarios" / version / language / "scenarios.json"
+        path = f"scenarios/{version}/{language}/scenarios.json"
         data = self._read_json(path)
         scenarios = data.get("scenarios") or []
 
