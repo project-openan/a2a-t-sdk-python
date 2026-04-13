@@ -27,7 +27,7 @@ class FakeLLMClient:
 
 
 class ScenarioRecognizerTest(unittest.TestCase):
-    def test_recognize_calls_structured_with_single_message_and_fixed_schema(self) -> None:
+    def test_recognize_calls_structured_with_system_and_user_messages_and_fixed_schema(self) -> None:
         llm_client = FakeLLMClient('{"matched": true, "scenario_code": "energy_saving", "error_message": null}')
 
         from a2a_t.prompt.analysis.scenario_recognizer import ScenarioRecognizer
@@ -52,14 +52,17 @@ class ScenarioRecognizerTest(unittest.TestCase):
         self.assertEqual(result.scenario_code, "energy_saving")
         self.assertIsNone(result.error_message)
         self.assertEqual(len(llm_client.calls), 1)
-        self.assertEqual(len(llm_client.calls[0]["messages"]), 1)
-        self.assertEqual(llm_client.calls[0]["messages"][0]["role"], "user")
+        self.assertEqual(len(llm_client.calls[0]["messages"]), 2)
+        self.assertEqual(llm_client.calls[0]["messages"][0]["role"], "system")
+        self.assertEqual(llm_client.calls[0]["messages"][1]["role"], "user")
         self.assertEqual(
             llm_client.calls[0]["json_schema"]["required"],
             ["matched", "scenario_code", "error_message"],
         )
-        self.assertIn("energy_saving", llm_client.calls[0]["messages"][0]["content"])
-        self.assertIn("Please analyze site A energy usage.", llm_client.calls[0]["messages"][0]["content"])
+        self.assertIn("Identify the best matching scenario.", llm_client.calls[0]["messages"][0]["content"])
+        self.assertIn("Choose from the provided scenario list.", llm_client.calls[0]["messages"][1]["content"])
+        self.assertIn("energy_saving", llm_client.calls[0]["messages"][1]["content"])
+        self.assertIn("Please analyze site A energy usage.", llm_client.calls[0]["messages"][1]["content"])
 
     def test_recognize_rejects_semantically_invalid_payload(self) -> None:
         llm_client = FakeLLMClient('{"matched": true, "scenario_code": null, "error_message": null}')

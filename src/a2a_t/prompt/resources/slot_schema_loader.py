@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from a2a_t.prompt.common.models import PromptReference
+
 from ._base import BasePromptResourceLoader
 from .models import SlotDefinition, SlotRange, SlotSchema
 
 
 class SlotSchemaLoader(BasePromptResourceLoader):
-    def load(self, *, scenario_code: str, version: str, language: str) -> SlotSchema:
-        path = self.root_dir / "slots" / scenario_code / version / language / "slot.json"
+    def load(self, *, reference: PromptReference) -> SlotSchema:
+        path = f"slots/{reference.scenario_code}/{reference.version}/{reference.language}/slot.json"
         data = self._read_json(path)
         raw_slots = data.get("slots") or []
 

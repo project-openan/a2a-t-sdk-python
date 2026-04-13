@@ -14,6 +14,7 @@ if str(SRC_ROOT) not in sys.path:
 
 
 from a2a_t.llm.base import LLMResponse
+from a2a_t.config.models import PromptRuntimeConfig
 from a2a_t.prompt.analysis import ScenarioRecognizer, SlotExtractor
 from a2a_t.prompt.resources import PromptResourceLoader, ScenarioLoader, SlotSchemaLoader, TemplateLoader
 from a2a_t.prompt.validation import SlotValidator
@@ -112,7 +113,7 @@ class PromptGenerationOrchestratorFallbackTest(ManagedTempDirTestCase):
         from a2a_t.client.prompt.prompt_generation_orchestrator import PromptGenerationOrchestrator
 
         orchestrator = PromptGenerationOrchestrator(
-            config=type("Config", (), {"language": "zh-CN", "prompt_resource_version": "0.0.1"})(),
+            config=PromptRuntimeConfig(language="zh-CN", prompt_resource_version="0.0.1"),
             scenario_loader=ScenarioLoader(root_dir=self.root),
             prompt_resource_loader=PromptResourceLoader(root_dir=self.root),
             template_loader=TemplateLoader(root_dir=self.root),
@@ -155,7 +156,7 @@ class PromptGenerationOrchestratorFallbackTest(ManagedTempDirTestCase):
         from a2a_t.client.prompt.prompt_generation_orchestrator import PromptGenerationOrchestrator
 
         orchestrator = PromptGenerationOrchestrator(
-            config=type("Config", (), {"language": "zh-CN", "prompt_resource_version": "0.0.1"})(),
+            config=PromptRuntimeConfig(language="zh-CN", prompt_resource_version="0.0.1"),
             scenario_loader=ScenarioLoader(root_dir=self.root),
             prompt_resource_loader=PromptResourceLoader(root_dir=self.root),
             template_loader=TemplateLoader(root_dir=self.root),

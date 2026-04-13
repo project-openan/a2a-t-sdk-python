@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from a2a_t.prompt.common.models import PromptReference
 from a2a_t.prompt.resources.models import SlotSchema
 from a2a_t.prompt.validation.models import SlotValidationError
 
@@ -23,14 +24,13 @@ class SlotExtractor:
         self._llm_client = llm_client
         self._message_builder = message_builder or AnalysisMessageBuilder()
         self._json_schema_builder = json_schema_builder or AnalysisJsonSchemaBuilder()
+        self.last_raw_response_content: str | None = None
 
     def extract(
         self,
         *,
         normalized_input: str,
-        scenario_code: str,
-        version: str,
-        language: str,
+        reference: PromptReference,
         template_text: str,
         slot_schema: SlotSchema,
         system_prompt: str,
@@ -38,9 +38,7 @@ class SlotExtractor:
     ) -> SlotExtractionResult:
         messages = self._message_builder.build_slot_extraction_messages(
             normalized_input=normalized_input,
-            scenario_code=scenario_code,
-            version=version,
-            language=language,
+            reference=reference,
             template_text=template_text,
             slot_schema=slot_schema,
             system_prompt=system_prompt,
@@ -50,6 +48,7 @@ class SlotExtractor:
             messages=messages,
             json_schema=self._json_schema_builder.build_slot_extraction_schema(slot_schema=slot_schema),
         )
+        self.last_raw_response_content = response.content
         return self._parse_response(response.content, slot_schema=slot_schema)
 
     def _parse_response(self, content: str, *, slot_schema: SlotSchema) -> SlotExtractionResult:

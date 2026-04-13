@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Callable, Protocol
 
-from a2a_t.server.prompt_compliance.errors import GuardrailExecutionError
-from a2a_t.server.prompt_compliance.models import GuardrailProviderConfig, GuardrailRequest, GuardrailResult
+from a2a_t.config.models import GuardrailProviderConfig
+
+from .errors import GuardrailExecutionError
+from .models import GuardrailRequest, GuardrailResult
 
 
 class SafetyGuardrail(Protocol):

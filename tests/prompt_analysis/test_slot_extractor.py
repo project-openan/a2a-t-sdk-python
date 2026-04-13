@@ -13,6 +13,7 @@ if str(SRC_ROOT) not in sys.path:
 
 
 from a2a_t.llm.base import LLMResponse
+from a2a_t.prompt.common.models import PromptReference
 from a2a_t.prompt.resources.models import SlotDefinition, SlotSchema
 from a2a_t.prompt.validation.models import SlotValidationError
 
@@ -28,7 +29,7 @@ class FakeLLMClient:
 
 
 class SlotExtractorTest(unittest.TestCase):
-    def test_extract_calls_structured_with_dynamic_schema_and_single_message(self) -> None:
+    def test_extract_calls_structured_with_dynamic_schema_and_system_user_messages(self) -> None:
         llm_client = FakeLLMClient(
             (
                 '{"slots": {"site": "Site A", "additional_notes": null}, '
@@ -70,9 +71,7 @@ class SlotExtractorTest(unittest.TestCase):
 
         result = extractor.extract(
             normalized_input="Analyze Site A and focus on power system.",
-            scenario_code="energy_saving",
-            version="0.0.1",
-            language="en-US",
+            reference=PromptReference(scenario_code="energy_saving", version="0.0.1", language="en-US"),
             template_text="Site: {site}\nNotes: {additional_notes}",
             slot_schema=slot_schema,
             system_prompt="Extract slots.",
@@ -97,8 +96,12 @@ class SlotExtractorTest(unittest.TestCase):
             ],
         )
         self.assertEqual(len(llm_client.calls), 1)
-        self.assertEqual(len(llm_client.calls[0]["messages"]), 1)
-        self.assertEqual(llm_client.calls[0]["messages"][0]["role"], "user")
+        self.assertEqual(len(llm_client.calls[0]["messages"]), 2)
+        self.assertEqual(llm_client.calls[0]["messages"][0]["role"], "system")
+        self.assertEqual(llm_client.calls[0]["messages"][1]["role"], "user")
+        self.assertIn("Extract slots.", llm_client.calls[0]["messages"][0]["content"])
+        self.assertIn("Return slots and slot errors.", llm_client.calls[0]["messages"][1]["content"])
+        self.assertIn("Analyze Site A and focus on power system.", llm_client.calls[0]["messages"][1]["content"])
         self.assertEqual(
             llm_client.calls[0]["json_schema"]["properties"]["slots"]["required"],
             ["site", "additional_notes"],
@@ -106,6 +109,10 @@ class SlotExtractorTest(unittest.TestCase):
         self.assertEqual(
             llm_client.calls[0]["json_schema"]["properties"]["slot_errors"]["items"]["properties"]["code"]["enum"],
             ["missing_input", "invalid_value"],
+        )
+        self.assertEqual(
+            llm_client.calls[0]["json_schema"]["properties"]["slot_errors"]["items"]["properties"]["slot_name"]["enum"],
+            ["site", "additional_notes"],
         )
 
     def test_extract_rejects_invalid_slot_error_code(self) -> None:
@@ -124,9 +131,7 @@ class SlotExtractorTest(unittest.TestCase):
         with self.assertRaises(SlotExtractionError):
             extractor.extract(
                 normalized_input="Analyze Site A.",
-                scenario_code="energy_saving",
-                version="0.0.1",
-                language="en-US",
+                reference=PromptReference(scenario_code="energy_saving", version="0.0.1", language="en-US"),
                 template_text="Site: {site}",
                 slot_schema=SlotSchema(
                     scenario_code="energy_saving",

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from a2a_t.server.prompt_compliance.config import GuardrailProviderConfig
-from a2a_t.server.prompt_compliance.errors import GuardrailExecutionError
-from a2a_t.server.prompt_compliance.models import GuardrailDecision, GuardrailRequest, GuardrailResult
+from a2a_t.config.models import GuardrailProviderConfig
 
 from .guardrails import GuardrailAdapter
+from .errors import GuardrailExecutionError
+from .models import GuardrailDecision, GuardrailRequest, GuardrailResult
 
 
 class GoogleModelArmorGateway:

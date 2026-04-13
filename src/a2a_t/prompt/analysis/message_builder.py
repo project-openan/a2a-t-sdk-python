@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from a2a_t.prompt.common.models import PromptReference
 from a2a_t.prompt.resources.models import ScenarioDefinition, SlotSchema
 
 
@@ -24,22 +25,22 @@ class AnalysisMessageBuilder:
         ]
         content = "\n\n".join(
             [
-                f"[system_prompt]\n{system_prompt}",
                 f"[user_prompt]\n{user_prompt}",
                 f"[language]\n{language}",
                 f"[input]\n{normalized_input}",
                 "[scenarios]\n" + "\n".join(scenario_lines),
             ]
         )
-        return [{"role": "user", "content": content}]
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": content},
+        ]
 
     def build_slot_extraction_messages(
         self,
         *,
         normalized_input: str,
-        scenario_code: str,
-        version: str,
-        language: str,
+        reference: PromptReference,
         template_text: str,
         slot_schema: SlotSchema,
         system_prompt: str,
@@ -57,14 +58,16 @@ class AnalysisMessageBuilder:
         ]
         content = "\n\n".join(
             [
-                f"[system_prompt]\n{system_prompt}",
                 f"[user_prompt]\n{user_prompt}",
-                f"[scenario_code]\n{scenario_code}",
-                f"[version]\n{version}",
-                f"[language]\n{language}",
+                f"[scenario_code]\n{reference.scenario_code}",
+                f"[version]\n{reference.version}",
+                f"[language]\n{reference.language}",
                 f"[input]\n{normalized_input}",
                 f"[template]\n{template_text}",
                 "[slots]\n" + "\n".join(slot_lines),
             ]
         )
-        return [{"role": "user", "content": content}]
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": content},
+        ]
