@@ -31,6 +31,24 @@ class InputNormalizerTest(unittest.TestCase):
         self.assertEqual(result.input_kind, "json")
         self.assertEqual(result.normalized_input, '{"site": "Site A", "time_range": "2026-04-01 to 2026-04-07"}')
 
+    def test_normalize_json_object_string_returns_json_kind(self) -> None:
+        from a2a_t.client.prompt.input_normalizer import InputNormalizer
+
+        normalizer = InputNormalizer()
+        result = normalizer.normalize('{"site": "Site A"}')
+
+        self.assertEqual(result.input_kind, "json")
+        self.assertEqual(result.normalized_input, '{"site": "Site A"}')
+
+    def test_normalize_non_object_json_string_keeps_natural_language_kind(self) -> None:
+        from a2a_t.client.prompt.input_normalizer import InputNormalizer
+
+        normalizer = InputNormalizer()
+        result = normalizer.normalize('["site-a", "site-b"]')
+
+        self.assertEqual(result.input_kind, "natural_language")
+        self.assertEqual(result.normalized_input, '["site-a", "site-b"]')
+
     def test_normalize_empty_string_raises_value_error(self) -> None:
         from a2a_t.client.prompt.input_normalizer import InputNormalizer
 
@@ -38,6 +56,14 @@ class InputNormalizerTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             normalizer.normalize("   ")
+
+    def test_normalize_empty_dict_raises_value_error(self) -> None:
+        from a2a_t.client.prompt.input_normalizer import InputNormalizer
+
+        normalizer = InputNormalizer()
+
+        with self.assertRaises(ValueError):
+            normalizer.normalize({})
 
 
 if __name__ == "__main__":

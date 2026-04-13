@@ -11,18 +11,17 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-
-from a2a_t.server.prompt_compliance.errors import GuardrailExecutionError
-from a2a_t.prompt.validation.guardrails import (
-    AdapterSafetyGuardrail,
-    GuardrailAdapter,
-    SafetyGuardrailFactory,
-)
-from a2a_t.server.prompt_compliance.models import (
+from a2a_t.prompt.validation import (
     GuardrailDecision,
     GuardrailProviderConfig,
     GuardrailRequest,
     GuardrailResult,
+)
+from a2a_t.prompt.validation.errors import GuardrailExecutionError
+from a2a_t.prompt.validation.guardrails import (
+    AdapterSafetyGuardrail,
+    GuardrailAdapter,
+    SafetyGuardrailFactory,
 )
 
 

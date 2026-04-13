@@ -13,19 +13,19 @@ if str(SRC_ROOT) not in sys.path:
 
 
 from a2a_t.prompt.analysis.models import SlotExtractionResult
+from a2a_t.prompt.common.a2a_t_task_prompt import A2ATTaskPromptMetadata, render_a2a_t_task_prompt
+from a2a_t.prompt.common.models import PromptReference
 from a2a_t.prompt.resources.errors import PromptResourceNotFoundError
 from a2a_t.prompt.resources.models import PromptMessages, SlotDefinition, SlotSchema
 from a2a_t.prompt.validation.models import GuardrailResult, SlotValidationError, SlotValidationResult
-from a2a_t.server.prompt_compliance.models import PromptComplianceResult, PromptIdentity
-
-
-PROCESSED_PROMPT = """---
-scenario_code: energy_saving
-language: en-US
-version: 0.0.1
-description: Used for energy saving analysis.
----
-processed body"""
+from a2a_t.server.prompt_compliance.constants import (
+    GENERATION_STAGE,
+    PASSED_STAGE,
+    SLOT_VALIDATION_ERROR,
+    SLOT_VALIDATION_STAGE,
+    TEMPLATE_LOAD_ERROR,
+)
+from a2a_t.server.prompt_compliance.result import PromptComplianceResult
 
 
 class FakeGuardrail:
@@ -36,19 +36,13 @@ class FakeGuardrail:
         return self._result
 
 
-class FakeParser:
-    def __init__(self, identity: PromptIdentity) -> None:
-        self._identity = identity
-
-    def parse(self, processed_prompt_text: str) -> PromptIdentity:
-        return self._identity
-
-
 class FakeTemplateLoader:
     def __init__(self, result: str | Exception) -> None:
         self._result = result
+        self.last_reference: PromptReference | None = None
 
-    def load(self, *, scenario_code: str, version: str, language: str) -> str:
+    def load(self, *, reference: PromptReference) -> str:
+        self.last_reference = reference
         if isinstance(self._result, Exception):
             raise self._result
         return self._result
@@ -57,8 +51,10 @@ class FakeTemplateLoader:
 class FakeSlotSchemaLoader:
     def __init__(self, result: SlotSchema | Exception) -> None:
         self._result = result
+        self.last_reference: PromptReference | None = None
 
-    def load(self, *, scenario_code: str, version: str, language: str) -> SlotSchema:
+    def load(self, *, reference: PromptReference) -> SlotSchema:
+        self.last_reference = reference
         if isinstance(self._result, Exception):
             raise self._result
         return self._result
@@ -77,8 +73,10 @@ class FakePromptResourceLoader:
 class FakeExtractor:
     def __init__(self, result: SlotExtractionResult) -> None:
         self._result = result
+        self.last_reference: PromptReference | None = None
 
     def extract(self, **kwargs: object) -> SlotExtractionResult:
+        self.last_reference = kwargs.get("reference")
         return self._result
 
 
@@ -90,7 +88,18 @@ class FakeValidator:
         return self._result
 
 
-class PromptComplianceServiceRuntimeTest(unittest.TestCase):
+class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.processed_prompt = render_a2a_t_task_prompt(
+            body="processed body",
+            metadata=A2ATTaskPromptMetadata(
+                scenario_code="energy_saving",
+                language="en-US",
+                version="0.0.1",
+                description="Used for energy saving analysis.",
+            ),
+        )
+
     def _slot_schema(self) -> SlotSchema:
         return SlotSchema(
             scenario_code="energy_saving",
@@ -119,11 +128,10 @@ class PromptComplianceServiceRuntimeTest(unittest.TestCase):
         extractor: FakeExtractor | None = None,
         validator: FakeValidator | None = None,
     ):
-        from a2a_t.server.prompt_compliance.service import PromptComplianceService
+        from a2a_t.server.prompt_compliance.prompt_compliance_orchestrator import PromptComplianceOrchestrator
 
-        return PromptComplianceService(
+        return PromptComplianceOrchestrator(
             guardrail=FakeGuardrail(GuardrailResult(passed=True, error_code=None, error_message=None)),
-            parser=FakeParser(PromptIdentity(scenario_code="energy_saving", language="en-US", version="0.0.1")),
             template_loader=template_loader or FakeTemplateLoader("Site: {site}"),
             slot_schema_loader=slot_schema_loader or FakeSlotSchemaLoader(self._slot_schema()),
             prompt_resource_loader=prompt_resource_loader or FakePromptResourceLoader(
@@ -134,15 +142,25 @@ class PromptComplianceServiceRuntimeTest(unittest.TestCase):
         )
 
     def test_check_returns_success_result(self) -> None:
-        service = self._build_service()
+        template_loader = FakeTemplateLoader("Site: {site}")
+        slot_schema_loader = FakeSlotSchemaLoader(self._slot_schema())
+        extractor = FakeExtractor(SlotExtractionResult(slots={"site": "Site A"}, slot_errors=[]))
+        service = self._build_service(
+            template_loader=template_loader,
+            slot_schema_loader=slot_schema_loader,
+            extractor=extractor,
+        )
 
-        result = service.check(processed_prompt_text=PROCESSED_PROMPT, request_metadata={"task_id": "task-1"})
+        result = service.check(processed_prompt_text=self.processed_prompt, request_metadata={"task_id": "task-1"})
 
+        self.assertEqual(template_loader.last_reference, PromptReference(scenario_code="energy_saving", language="en-US", version="0.0.1"))
+        self.assertEqual(slot_schema_loader.last_reference, PromptReference(scenario_code="energy_saving", language="en-US", version="0.0.1"))
+        self.assertEqual(extractor.last_reference, PromptReference(scenario_code="energy_saving", language="en-US", version="0.0.1"))
         self.assertEqual(
             result,
             PromptComplianceResult(
                 passed=True,
-                stage="passed",
+                stage=PASSED_STAGE,
                 extracted_slots={"site": "Site A"},
             ),
         )
@@ -163,11 +181,11 @@ class PromptComplianceServiceRuntimeTest(unittest.TestCase):
             )
         )
 
-        result = service.check(processed_prompt_text=PROCESSED_PROMPT, request_metadata=None)
+        result = service.check(processed_prompt_text=self.processed_prompt, request_metadata=None)
 
         self.assertFalse(result.passed)
-        self.assertEqual(result.stage, "slot_validation")
-        self.assertEqual(result.error_code, "slot_validation_error")
+        self.assertEqual(result.stage, SLOT_VALIDATION_STAGE)
+        self.assertEqual(result.error_code, SLOT_VALIDATION_ERROR)
         self.assertEqual(result.error_message, "Site format is invalid.")
         self.assertEqual(result.extracted_slots, {"site": "Site A"})
 
@@ -176,11 +194,20 @@ class PromptComplianceServiceRuntimeTest(unittest.TestCase):
             template_loader=FakeTemplateLoader(PromptResourceNotFoundError("missing template")),
         )
 
-        result = service.check(processed_prompt_text=PROCESSED_PROMPT, request_metadata=None)
+        result = service.check(processed_prompt_text=self.processed_prompt, request_metadata=None)
 
         self.assertFalse(result.passed)
-        self.assertEqual(result.stage, "generation")
-        self.assertEqual(result.error_code, "template_load_error")
+        self.assertEqual(result.stage, GENERATION_STAGE)
+        self.assertEqual(result.error_code, TEMPLATE_LOAD_ERROR)
+
+    def test_check_returns_prompt_parse_error_when_front_matter_is_invalid(self) -> None:
+        service = self._build_service()
+
+        result = service.check(processed_prompt_text="invalid prompt", request_metadata=None)
+
+        self.assertFalse(result.passed)
+        self.assertEqual(result.stage, "prompt_parse")
+        self.assertEqual(result.error_code, "processed_prompt_parse_error")
 
 
 if __name__ == "__main__":

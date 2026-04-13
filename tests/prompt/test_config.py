@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from datetime import timedelta
+from unittest import mock
 import unittest
 
 
@@ -14,11 +14,27 @@ if str(SRC_ROOT) not in sys.path:
 
 from a2a_t.config.errors import ConfigFileNotFoundError
 from a2a_t.config.source import DotEnvConfigSource
-from a2a_t.prompt.common.config import PromptLoaderConfig
 from tests.test_support import ManagedTempDirTestCase
 
 
 class PromptConfigTest(ManagedTempDirTestCase):
+    def test_dotenv_source_requires_python_dotenv_dependency(self) -> None:
+        original_import = __import__
+
+        def guarded_import(name: str, globals=None, locals=None, fromlist=(), level=0):  # type: ignore[no-untyped-def]
+            if name == "dotenv":
+                raise ModuleNotFoundError("No module named 'dotenv'")
+            return original_import(name, globals, locals, fromlist, level)
+
+        sys.modules.pop("a2a_t.config.source", None)
+        try:
+            with mock.patch("builtins.__import__", side_effect=guarded_import):
+                with self.assertRaises(ModuleNotFoundError):
+                    __import__("a2a_t.config.source")
+        finally:
+            sys.modules.pop("a2a_t.config.source", None)
+            __import__("a2a_t.config.source")
+
     def test_dotenv_source_reads_values_from_env_file(self) -> None:
         temp_root = self.make_temp_dir("prompt_env")
         env_path = temp_root / ".env"
@@ -61,67 +77,9 @@ class PromptConfigTest(ManagedTempDirTestCase):
 
         self.assertEqual(values["A2AT_PROMPT_LOCAL_DIR"], "./exported-prompts")
 
-    def test_prompt_loader_config_reads_local_dir_and_extensions_from_mapping(self) -> None:
-        values = {
-            "A2AT_PROMPT_LOCAL_DIR": "./runtime-prompts",
-            "A2AT_PROMPT_ALLOWED_EXTENSIONS": ".md,.json,.yaml",
-        }
-
-        config = PromptLoaderConfig.from_mapping(values)
-
-        self.assertEqual(config.local_prompt_dir, "./runtime-prompts")
-        self.assertEqual(config.allowed_extensions, [".md", ".json", ".yaml"])
-
-    def test_prompt_loader_config_from_mapping_does_not_require_cache_dir(self) -> None:
-        values = {"A2AT_PROMPT_LOCAL_DIR": "./runtime-prompts"}
-
-        config = PromptLoaderConfig.from_mapping(values)
-
-        self.assertEqual(config.local_prompt_dir, "./runtime-prompts")
-
-    def test_prompt_loader_config_reads_all_fields_from_mapping(self) -> None:
-        values = {
-            "A2AT_PROMPT_DEFAULT_TTL_SECONDS": "7200",
-            "A2AT_PROMPT_LOCAL_DIR": "./runtime-prompts",
-            "A2AT_PROMPT_ALLOWED_EXTENSIONS": ".md,.json,.yaml",
-            "A2AT_DEFAULT_PROMPT_EXTENSION_URI": "prompt://default-extension",
-            "A2AT_PROMPT_EXTENSION_URI_OVERRIDES": '{"agent":"prompt://agent-extension"}',
-            "A2AT_DEFAULT_PROMPT_INDEX_URL_PARAM_KEY": "promptCatalogUrl",
-            "A2AT_PROMPT_INDEX_URL_PARAM_KEY_OVERRIDES": '{"agent":"agentPromptCatalogUrl"}',
-        }
-
-        config = PromptLoaderConfig.from_mapping(values)
-
-        self.assertEqual(config.default_ttl, timedelta(seconds=7200))
-        self.assertEqual(config.local_prompt_dir, "./runtime-prompts")
-        self.assertEqual(config.allowed_extensions, [".md", ".json", ".yaml"])
-        self.assertEqual(config.default_prompt_extension_uri, "prompt://default-extension")
-        self.assertEqual(config.prompt_extension_uri_overrides, {"agent": "prompt://agent-extension"})
-        self.assertEqual(config.default_prompt_index_url_param_key, "promptCatalogUrl")
-        self.assertEqual(
-            config.prompt_index_url_param_key_overrides,
-            {"agent": "agentPromptCatalogUrl"},
-        )
-
-    def test_prompt_loader_config_from_mapping_uses_defaults_for_optional_fields(self) -> None:
-        values = {"A2AT_PROMPT_LOCAL_DIR": "./runtime-prompts"}
-
-        config = PromptLoaderConfig.from_mapping(values)
-
-        self.assertEqual(config.default_ttl, timedelta(hours=1))
-        self.assertEqual(config.default_prompt_extension_uri, "default-prompt")
-        self.assertEqual(config.prompt_extension_uri_overrides, {})
-        self.assertEqual(config.default_prompt_index_url_param_key, "promptIndexUrl")
-        self.assertEqual(config.prompt_index_url_param_key_overrides, {})
-
-    def test_prompt_loader_config_rejects_invalid_json_overrides_in_mapping(self) -> None:
-        values = {
-            "A2AT_PROMPT_LOCAL_DIR": "./runtime-prompts",
-            "A2AT_PROMPT_EXTENSION_URI_OVERRIDES": "{invalid-json}",
-        }
-
-        with self.assertRaisesRegex(Exception, "A2AT_PROMPT_EXTENSION_URI_OVERRIDES"):
-            PromptLoaderConfig.from_mapping(values)
+    def test_legacy_prompt_common_config_module_is_not_importable(self) -> None:
+        with self.assertRaises(ModuleNotFoundError):
+            __import__("a2a_t.prompt.common.config")
 
 
 if __name__ == "__main__":

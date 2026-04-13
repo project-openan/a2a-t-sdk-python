@@ -21,6 +21,7 @@ class ScenarioRecognizer:
         self._llm_client = llm_client
         self._message_builder = message_builder or AnalysisMessageBuilder()
         self._json_schema_builder = json_schema_builder or AnalysisJsonSchemaBuilder()
+        self.last_raw_response_content: str | None = None
 
     def recognize(
         self,
@@ -42,6 +43,7 @@ class ScenarioRecognizer:
             messages=messages,
             json_schema=self._json_schema_builder.build_scenario_recognition_schema(),
         )
+        self.last_raw_response_content = response.content
         return self._parse_response(response.content)
 
     def _parse_response(self, content: str) -> ScenarioRecognitionResult:

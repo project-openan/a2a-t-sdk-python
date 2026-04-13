@@ -15,22 +15,19 @@ if str(SRC_ROOT) not in sys.path:
 
 
 class PromptCatalogRegistryContractTest(unittest.TestCase):
-    def test_prompt_catalog_registry_module_exists_under_prompt_package(self) -> None:
+    def test_prompt_catalog_registry_module_is_not_importable(self) -> None:
         try:
             spec = importlib.util.find_spec("a2a_t.prompt.resources.catalog_registry")
         except ModuleNotFoundError:
             spec = None
 
-        self.assertIsNotNone(spec)
+        self.assertIsNone(spec)
 
-    def test_prompt_catalog_registry_protocol_exists(self) -> None:
-        try:
-            module = importlib.import_module("a2a_t.prompt.resources.catalog_registry")
-        except ModuleNotFoundError:
-            self.fail("a2a_t.prompt.resources.catalog_registry is missing")
+    def test_prompt_package_stops_exporting_catalog_registry_runtime(self) -> None:
+        module = importlib.import_module("a2a_t.prompt")
 
-        self.assertTrue(hasattr(module, "PromptCatalogRegistry"))
-        self.assertTrue(hasattr(module.PromptCatalogRegistry, "_is_protocol"))
+        self.assertFalse(hasattr(module, "PromptCatalogRegistry"))
+        self.assertFalse(hasattr(module, "DefaultPromptCatalogRegistry"))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from a2a_t.prompt.common.models import PromptReference
 from a2a_t.prompt.resources.models import ScenarioDefinition, SlotSchema
 
 
@@ -37,9 +38,7 @@ class AnalysisMessageBuilder:
         self,
         *,
         normalized_input: str,
-        scenario_code: str,
-        version: str,
-        language: str,
+        reference: PromptReference,
         template_text: str,
         slot_schema: SlotSchema,
         system_prompt: str,
@@ -59,9 +58,9 @@ class AnalysisMessageBuilder:
             [
                 f"[system_prompt]\n{system_prompt}",
                 f"[user_prompt]\n{user_prompt}",
-                f"[scenario_code]\n{scenario_code}",
-                f"[version]\n{version}",
-                f"[language]\n{language}",
+                f"[scenario_code]\n{reference.scenario_code}",
+                f"[version]\n{reference.version}",
+                f"[language]\n{reference.language}",
                 f"[input]\n{normalized_input}",
                 f"[template]\n{template_text}",
                 "[slots]\n" + "\n".join(slot_lines),

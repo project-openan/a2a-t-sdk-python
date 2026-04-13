@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
+from a2a_t.prompt.validation.constants import MISSING_INPUT
+from a2a_t.prompt.validation.models import SlotValidationError
+
 
 @dataclass(slots=True)
 class NormalizedInput:
@@ -10,28 +13,13 @@ class NormalizedInput:
 
 
 @dataclass(slots=True)
-class ScenarioResolution:
-    code: str
-
-    def to_dict(self) -> dict[str, object]:
-        return asdict(self)
-
-
-@dataclass(slots=True)
-class SlotError:
-    slot_name: str
-    code: str
-    message: str
-
-    def to_dict(self) -> dict[str, object]:
-        return asdict(self)
-
-
-@dataclass(slots=True)
 class ValidationResult:
     passed: bool
-    missing_required_fields: list[str]
-    slot_errors: list[SlotError]
+    slot_errors: list[SlotValidationError]
+
+    @property
+    def missing_required_fields(self) -> list[str]:
+        return [slot_error.slot_name for slot_error in self.slot_errors if slot_error.code == MISSING_INPUT]
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -55,7 +43,7 @@ class PromptGenerationFailure:
 class PromptGenerationResult:
     success: bool
     prompt_text: str | None
-    scenario: ScenarioResolution | None
+    scenario_code: str | None
     language: str
     input_kind: str
     slots: dict[str, str | None]
@@ -66,7 +54,7 @@ class PromptGenerationResult:
         return {
             "success": self.success,
             "prompt_text": self.prompt_text,
-            "scenario": self.scenario.to_dict() if self.scenario is not None else None,
+            "scenario_code": self.scenario_code,
             "language": self.language,
             "input_kind": self.input_kind,
             "slots": dict(self.slots),
