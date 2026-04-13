@@ -35,13 +35,13 @@ __all__ = [
 ]
 
 _EXPORTS: dict[str, tuple[str, str]] = {
-    "AdapterSafetyGuardrail": ("a2a_t.server.prompt_compliance.guardrails", "AdapterSafetyGuardrail"),
-    "GoogleModelArmorGateway": ("a2a_t.server.prompt_compliance.guardrail_providers", "GoogleModelArmorGateway"),
+    "AdapterSafetyGuardrail": ("a2a_t.prompt.validation.guardrails", "AdapterSafetyGuardrail"),
+    "GoogleModelArmorGateway": ("a2a_t.prompt.validation.guardrail_providers", "GoogleModelArmorGateway"),
     "GoogleModelArmorGuardrailAdapter": (
-        "a2a_t.server.prompt_compliance.guardrail_providers",
+        "a2a_t.prompt.validation.guardrail_providers",
         "GoogleModelArmorGuardrailAdapter",
     ),
-    "GuardrailAdapter": ("a2a_t.server.prompt_compliance.guardrails", "GuardrailAdapter"),
+    "GuardrailAdapter": ("a2a_t.prompt.validation.guardrails", "GuardrailAdapter"),
     "GuardrailDecision": ("a2a_t.server.prompt_compliance.models", "GuardrailDecision"),
     "GuardrailExecutionError": ("a2a_t.server.prompt_compliance.errors", "GuardrailExecutionError"),
     "GuardrailProviderConfig": ("a2a_t.server.prompt_compliance.config", "GuardrailProviderConfig"),
@@ -55,8 +55,8 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "PromptComplianceService": ("a2a_t.server.prompt_compliance.service", "PromptComplianceService"),
     "PromptIdentity": ("a2a_t.server.prompt_compliance.models", "PromptIdentity"),
     "PromptSlotExtractor": ("a2a_t.server.prompt_compliance.extractor", "PromptSlotExtractor"),
-    "SafetyGuardrail": ("a2a_t.server.prompt_compliance.guardrails", "SafetyGuardrail"),
-    "SafetyGuardrailFactory": ("a2a_t.server.prompt_compliance.guardrails", "SafetyGuardrailFactory"),
+    "SafetyGuardrail": ("a2a_t.prompt.validation.guardrails", "SafetyGuardrail"),
+    "SafetyGuardrailFactory": ("a2a_t.prompt.validation.guardrails", "SafetyGuardrailFactory"),
     "SlotExtractionConfig": ("a2a_t.server.prompt_compliance.config", "SlotExtractionConfig"),
     "SlotExtractionError": ("a2a_t.server.prompt_compliance.errors", "SlotExtractionError"),
     "SlotExtractionResult": ("a2a_t.server.prompt_compliance.models", "SlotExtractionResult"),
