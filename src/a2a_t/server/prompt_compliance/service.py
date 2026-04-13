@@ -2,40 +2,34 @@ from __future__ import annotations
 
 from typing import Any
 
-from a2a_t.server.prompt_compliance.errors import (
-    GuardrailExecutionError,
-    ProcessedPromptParseError,
-    PromptOriginResolveError,
-    SlotSchemaLoadError,
-    SlotSchemaValidationError,
-    SlotExtractionError,
-    SlotValidationError,
-)
+from a2a_t.prompt.analysis.errors import PromptAnalysisError
+from a2a_t.prompt.resources.errors import PromptResourceNotFoundError
+from a2a_t.prompt.validation.models import SlotValidationResult
+from a2a_t.server.prompt_compliance.errors import ProcessedPromptParseError
 from a2a_t.server.prompt_compliance.models import PromptComplianceResult
-from a2a_t.server.prompt_compliance.models import GuardrailDecision
 
 
 class PromptComplianceService:
-    """在服务端编排 Prompt 遵从校验流程 / Coordinate prompt compliance validation flow on the server side."""
+    """Coordinate prompt compliance validation flow on the server side."""
 
     def __init__(
         self,
         *,
         guardrail: Any,
         parser: Any,
-        origin_resolver: Any,
+        template_loader: Any,
+        slot_schema_loader: Any,
+        prompt_resource_loader: Any,
         extractor: Any,
-        slot_config_resolver: Any,
         validator: Any,
-        slot_not_found_policy: str = "strict",
     ) -> None:
         self._guardrail = guardrail
         self._parser = parser
-        self._origin_resolver = origin_resolver
+        self._template_loader = template_loader
+        self._slot_schema_loader = slot_schema_loader
+        self._prompt_resource_loader = prompt_resource_loader
         self._extractor = extractor
-        self._slot_config_resolver = slot_config_resolver
         self._validator = validator
-        self._slot_not_found_policy = slot_not_found_policy
 
     def check(
         self,
@@ -43,21 +37,12 @@ class PromptComplianceService:
         processed_prompt_text: str,
         request_metadata: dict[str, object] | None = None,
     ) -> PromptComplianceResult:
-        try:
-            guardrail_result = self._guardrail.check(processed_prompt_text, request_metadata)
-        except GuardrailExecutionError as error:
-            return self._error_result("guardrail", "guardrail_execution_error", str(error))
-
-        rejected_decisions = {
-            GuardrailDecision.BLOCK,
-            GuardrailDecision.MASK,
-            GuardrailDecision.REVIEW,
-        }
-        if not guardrail_result.passed or guardrail_result.decision in rejected_decisions:
+        guardrail_result = self._guardrail.check(processed_prompt_text, request_metadata)
+        if not guardrail_result.passed:
             return self._error_result(
-                "guardrail",
-                "guardrail_rejected",
-                guardrail_result.reason or "Guardrail rejected the processed prompt.",
+                stage="guardrail",
+                error_code=guardrail_result.error_code or "guardrail_rejected",
+                error_message=guardrail_result.error_message or "Guardrail rejected the processed prompt.",
             )
 
         try:
@@ -66,55 +51,71 @@ class PromptComplianceService:
             return self._error_result("prompt_parse", "processed_prompt_parse_error", str(error))
 
         try:
-            original_prompt = self._origin_resolver.resolve(identity)
-        except PromptOriginResolveError as error:
-            return self._error_result("origin_resolve", "prompt_origin_resolve_error", str(error))
+            template_text = self._template_loader.load(
+                scenario_code=identity.scenario_code,
+                version=identity.version,
+                language=identity.language,
+            )
+        except PromptResourceNotFoundError as error:
+            return self._error_result("generation", "template_load_error", str(error))
+
+        try:
+            slot_schema = self._slot_schema_loader.load(
+                scenario_code=identity.scenario_code,
+                version=identity.version,
+                language=identity.language,
+            )
+        except PromptResourceNotFoundError as error:
+            return self._error_result("generation", "slot_schema_load_error", str(error))
+
+        try:
+            slot_prompts = self._prompt_resource_loader.load(
+                analysis_action="slot_extraction",
+                version=identity.version,
+                language=identity.language,
+            )
+        except PromptResourceNotFoundError as error:
+            return self._error_result("generation", "prompt_resource_load_error", str(error))
 
         try:
             extraction_result = self._extractor.extract(
-                original_prompt=original_prompt,
-                processed_prompt_text=processed_prompt_text,
+                normalized_input=processed_prompt_text,
+                scenario_code=identity.scenario_code,
+                version=identity.version,
+                language=identity.language,
+                template_text=template_text,
+                slot_schema=slot_schema,
+                system_prompt=slot_prompts.system_prompt,
+                user_prompt=slot_prompts.user_prompt,
             )
-        except SlotExtractionError as error:
+        except PromptAnalysisError as error:
+            return self._error_result("slot_extraction", "slot_extraction_error", str(error))
+        except Exception as error:
             return self._error_result("slot_extraction", "slot_extraction_error", str(error))
 
-        try:
-            slot_schema = self._slot_config_resolver.load(identity)
-        except SlotSchemaLoadError as error:
-            if self._slot_not_found_policy == "skip":
-                return PromptComplianceResult(
-                    passed=True,
-                    stage="skipped_slot_validation",
-                    extracted_slots=extraction_result.slots,
-                    notes=extraction_result.notes,
-                    confidence=extraction_result.confidence,
-                )
-            return self._error_result("slot_schema", "slot_schema_load_error", str(error))
-        except SlotSchemaValidationError as error:
-            return self._error_result("slot_schema", "slot_schema_validation_error", str(error))
-
-        validation_result = self._validator.validate(
-            extracted_slots=extraction_result.slots,
+        validation_result: SlotValidationResult = self._validator.validate(
+            slots=extraction_result.slots,
+            slot_errors=extraction_result.slot_errors,
             slot_schema=slot_schema,
         )
-        if not validation_result.valid:
-            error = SlotValidationError(
-                "; ".join(validation_result.errors) if validation_result.errors else "Slot validation failed.",
-                errors=validation_result.errors,
-            )
-            return self._error_result(
-                "slot_validation",
-                "slot_validation_error",
-                str(error),
+        if not validation_result.passed:
+            return PromptComplianceResult(
+                passed=False,
+                stage="slot_validation",
+                extracted_slots=extraction_result.slots,
+                error_code="slot_validation_error",
+                error_message=self._aggregate_slot_errors(validation_result),
             )
 
         return PromptComplianceResult(
             passed=True,
             stage="passed",
             extracted_slots=extraction_result.slots,
-            notes=extraction_result.notes,
-            confidence=extraction_result.confidence,
         )
+
+    def _aggregate_slot_errors(self, validation_result: SlotValidationResult) -> str:
+        messages = [slot_error.message for slot_error in validation_result.slot_errors if slot_error.message]
+        return "; ".join(messages) if messages else "Slot validation failed."
 
     @staticmethod
     def _error_result(stage: str, error_code: str, error_message: str) -> PromptComplianceResult:

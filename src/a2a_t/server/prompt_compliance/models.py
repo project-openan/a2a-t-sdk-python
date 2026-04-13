@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from enum import Enum
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 from a2a_t.server.prompt_compliance.config import (
@@ -12,17 +12,36 @@ from a2a_t.server.prompt_compliance.config import (
 )
 
 
-@dataclass
+@dataclass(init=False)
 class PromptIdentity:
-    """原始 Prompt 引用身份 / Identity for an original prompt reference."""
+    """Identity resolved from processed prompt front matter."""
 
-    name: str
+    scenario_code: str
     language: str
     version: str
 
+    def __init__(
+        self,
+        *,
+        scenario_code: str | None = None,
+        language: str,
+        version: str,
+        name: str | None = None,
+    ) -> None:
+        resolved_scenario_code = scenario_code or name
+        if not resolved_scenario_code:
+            raise TypeError("PromptIdentity requires scenario_code.")
+        self.scenario_code = resolved_scenario_code
+        self.language = language
+        self.version = version
+
+    @property
+    def name(self) -> str:
+        return self.scenario_code
+
 
 class GuardrailDecision(str, Enum):
-    """统一的护栏决策语义 / Unified guardrail decision semantics."""
+    """Unified guardrail decision semantics."""
 
     ALLOW = "allow"
     BLOCK = "block"
@@ -32,7 +51,7 @@ class GuardrailDecision(str, Enum):
 
 @dataclass
 class GuardrailRequest:
-    """归一化后的护栏输入请求 / Normalized guardrail input request."""
+    """Normalized guardrail input request."""
 
     text: str
     metadata: dict[str, object] | None = None
@@ -41,7 +60,7 @@ class GuardrailRequest:
 
 @dataclass
 class GuardrailResult:
-    """安全护栏返回的归一化结果 / Normalized result returned by safety guardrails."""
+    """Normalized result returned by safety guardrails."""
 
     passed: bool
     decision: GuardrailDecision = GuardrailDecision.ALLOW
@@ -54,7 +73,7 @@ class GuardrailResult:
 
 @dataclass
 class SlotExtractionResult:
-    """结构化槽位提取结果 / Structured slot extraction result."""
+    """Structured slot extraction result."""
 
     slots: dict[str, Any]
     notes: list[str]
@@ -64,7 +83,7 @@ class SlotExtractionResult:
 
 @dataclass
 class PromptComplianceResult:
-    """统一的遵从校验执行结果 / Unified compliance execution result."""
+    """Unified compliance execution result."""
 
     passed: bool
     stage: str
@@ -77,7 +96,7 @@ class PromptComplianceResult:
 
 @dataclass
 class SlotValidationResult:
-    """提取槽位的运行时校验结果 / Runtime validation result for extracted slots."""
+    """Runtime validation result for extracted slots."""
 
     valid: bool
     errors: list[str] = field(default_factory=list)

@@ -1,0 +1,61 @@
+{
+  "scenario_code": "energy_saving",
+  "version": "0.0.1",
+  "slots": [
+    {
+      "name": "site",
+      "required": true,
+      "description": "Target site or equipment room.",
+      "example": "Shenzhen Nanshan Zone A equipment room",
+      "value_constraint": "Must be a concrete site or equipment room name.",
+      "type": "string",
+      "allowed_values": null,
+      "range": null,
+      "pattern": null
+    },
+    {
+      "name": "time_range",
+      "required": true,
+      "description": "Requested analysis time range.",
+      "example": "2026-04-01 to 2026-04-07",
+      "value_constraint": "Must be a concrete time range.",
+      "type": "string",
+      "allowed_values": null,
+      "range": null,
+      "pattern": null
+    },
+    {
+      "name": "analysis_target",
+      "required": true,
+      "description": "Primary systems or targets to analyze.",
+      "example": "power system, cooling system",
+      "value_constraint": "Must describe one or more concrete analysis targets.",
+      "type": "string",
+      "allowed_values": null,
+      "range": null,
+      "pattern": null
+    },
+    {
+      "name": "expected_output",
+      "required": true,
+      "description": "Expected analysis output.",
+      "example": "optimization suggestions",
+      "value_constraint": "Must describe the expected output clearly.",
+      "type": "string",
+      "allowed_values": null,
+      "range": null,
+      "pattern": null
+    },
+    {
+      "name": "additional_notes",
+      "required": false,
+      "description": "Optional extra notes.",
+      "example": "Focus on abnormal nighttime energy consumption.",
+      "value_constraint": "Free-form additional notes.",
+      "type": "string",
+      "allowed_values": null,
+      "range": null,
+      "pattern": null
+    }
+  ]
+}
