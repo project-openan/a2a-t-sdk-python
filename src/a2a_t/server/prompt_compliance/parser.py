@@ -5,7 +5,7 @@ from a2a_t.server.prompt_compliance.models import PromptIdentity
 
 
 class ProcessedPromptParser:
-    """从加工后 Prompt front matter 解析 Prompt 身份 / Parse prompt identity from processed prompt front matter."""
+    """Parse prompt identity from processed prompt front matter."""
 
     def parse(self, processed_prompt_text: str) -> PromptIdentity:
         if not processed_prompt_text.startswith("---\n"):
@@ -31,13 +31,16 @@ class ProcessedPromptParser:
                 raise ProcessedPromptParseError(f"Invalid front matter line: {line}")
             metadata[normalized_key] = normalized_value
 
-        name = metadata.get("name")
-        if not name:
-            raise ProcessedPromptParseError("Processed prompt is missing required field: name.", field="name")
+        scenario_code = metadata.get("scenario_code")
+        if not scenario_code:
+            raise ProcessedPromptParseError(
+                "Processed prompt is missing required field: scenario_code.",
+                field="scenario_code",
+            )
 
         version = metadata.get("version")
         if not version:
             raise ProcessedPromptParseError("Processed prompt is missing required field: version.", field="version")
 
         language = metadata.get("language") or "default"
-        return PromptIdentity(name=name, language=language, version=version)
+        return PromptIdentity(scenario_code=scenario_code, language=language, version=version)

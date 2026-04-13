@@ -37,8 +37,6 @@ class PromptHandler:
             "passed": result.passed,
             "stage": result.stage,
             "extracted_slots": result.extracted_slots,
-            "notes": result.notes,
-            "confidence": result.confidence,
             "error_code": result.error_code,
             "error_message": result.error_message,
         }

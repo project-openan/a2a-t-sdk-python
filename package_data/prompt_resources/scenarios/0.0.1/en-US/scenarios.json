@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "scenario_code": "energy_saving",
+      "scenario_name": "Energy Saving",
+      "description": "Used for generating A2A-T task requests for energy-saving analysis.",
+      "example": "Analyze site power usage and suggest optimization actions."
+    }
+  ]
+}
