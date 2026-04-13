@@ -10,8 +10,6 @@ from .errors import PromptConfigError
 
 @dataclass(slots=True)
 class PromptLoaderConfig:
-    """定义 Prompt Loader 的运行时配置 / Define runtime configuration for the prompt loader."""
-
     default_ttl: timedelta
     local_prompt_dir: str = "./prompts"
     allowed_extensions: list[str] = field(default_factory=lambda: [".md"])
@@ -36,10 +34,7 @@ class PromptLoaderConfig:
             allowed_extensions=[item.strip() for item in raw_extensions.split(",") if item.strip()],
             default_prompt_extension_uri=values.get("A2AT_DEFAULT_PROMPT_EXTENSION_URI", "default-prompt")
             or "default-prompt",
-            prompt_extension_uri_overrides=cls._parse_json_mapping(
-                values,
-                "A2AT_PROMPT_EXTENSION_URI_OVERRIDES",
-            ),
+            prompt_extension_uri_overrides=cls._parse_json_mapping(values, "A2AT_PROMPT_EXTENSION_URI_OVERRIDES"),
             default_prompt_index_url_param_key=(
                 values.get("A2AT_DEFAULT_PROMPT_INDEX_URL_PARAM_KEY", "promptIndexUrl") or "promptIndexUrl"
             ),

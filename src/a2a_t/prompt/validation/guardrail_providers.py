@@ -4,13 +4,12 @@ from typing import Any
 
 from a2a_t.server.prompt_compliance.config import GuardrailProviderConfig
 from a2a_t.server.prompt_compliance.errors import GuardrailExecutionError
-from a2a_t.server.prompt_compliance.guardrails import GuardrailAdapter
 from a2a_t.server.prompt_compliance.models import GuardrailDecision, GuardrailRequest, GuardrailResult
+
+from .guardrails import GuardrailAdapter
 
 
 class GoogleModelArmorGateway:
-    """Google Model Armor 官方客户端薄封装 / Thin gateway over the official Google Model Armor client."""
-
     def __init__(self, *, config: GuardrailProviderConfig, client: object | None = None) -> None:
         self._config = config
         self._client = client or self._build_client()
@@ -46,8 +45,6 @@ class GoogleModelArmorGateway:
 
 
 class GoogleModelArmorGuardrailAdapter(GuardrailAdapter):
-    """将 Google Model Armor 输入扫描结果归一化为 GuardrailResult / Normalize Google Model Armor input scan results to GuardrailResult."""
-
     provider_name = "google_model_armor"
 
     def __init__(self, *, config: GuardrailProviderConfig, gateway: GoogleModelArmorGateway) -> None:

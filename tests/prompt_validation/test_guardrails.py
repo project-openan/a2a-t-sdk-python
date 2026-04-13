@@ -13,7 +13,7 @@ if str(SRC_ROOT) not in sys.path:
 
 
 from a2a_t.server.prompt_compliance.errors import GuardrailExecutionError
-from a2a_t.server.prompt_compliance.guardrails import (
+from a2a_t.prompt.validation.guardrails import (
     AdapterSafetyGuardrail,
     GuardrailAdapter,
     SafetyGuardrailFactory,

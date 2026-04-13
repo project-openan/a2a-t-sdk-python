@@ -11,8 +11,13 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from a2a_t.prompt.models import CacheStatus, Prompt, PromptSource
-from a2a_t.prompt.parser import MarkdownPromptParser, PromptParseError, PromptParserRegistry, build_default_prompt_parser_registry
+from a2a_t.prompt.common.models import CacheStatus, Prompt, PromptSource
+from a2a_t.prompt.resources.parser import (
+    MarkdownPromptParser,
+    PromptParserRegistry,
+    build_default_prompt_parser_registry,
+)
+from a2a_t.prompt.common.errors import PromptParseError
 
 
 class FakeJsonPromptParser:

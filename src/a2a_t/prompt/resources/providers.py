@@ -8,8 +8,8 @@ from typing import Protocol
 from urllib import request
 from urllib.error import HTTPError, URLError
 
-from .errors import PromptFetchError
-from .models import FetchResult, PromptSource
+from ..common.errors import PromptFetchError
+from ..common.models import FetchResult, PromptSource
 
 
 logger = logging.getLogger(__name__)
@@ -32,24 +32,19 @@ class AgentFetcher(Protocol):
 
 
 class LocalFileProvider:
-    """直接从本地 Markdown 文件加载 Prompt 内容 / Load prompt content directly from a local Markdown file."""
+    """Load prompt content directly from a local Markdown file."""
 
     def __init__(self, *, fetcher: LocalFileFetcher | None = None) -> None:
         self._fetcher = fetcher or self._default_fetcher
 
     def fetch(self, locator: str) -> FetchResult:
-        """从本地文件路径读取 Prompt 内容 / Read prompt content from a local file path."""
-
         logger.info("Loading prompt source_type=local_file locator=%s", locator)
         content, content_type, fetched_at = self._fetcher(locator)
 
         return FetchResult(
             content=content,
             content_type=content_type,
-            source=PromptSource(
-                source_type="local_file",
-                locator=locator,
-            ),
+            source=PromptSource(source_type="local_file", locator=locator),
             fetched_at=fetched_at,
         )
 
@@ -64,14 +59,12 @@ class LocalFileProvider:
 
 
 class UrlProvider:
-    """从直接 URL 加载 Prompt 内容 / Load prompt content from a direct URL."""
+    """Load prompt content from a direct URL."""
 
     def __init__(self, *, fetcher: UrlFetcher | None = None) -> None:
         self._fetcher = fetcher or self._default_fetcher
 
     def fetch(self, locator: str) -> FetchResult:
-        """从 URL 获取 Prompt 内容并归一化请求错误 / Fetch prompt content from a URL and normalize request errors."""
-
         logger.info("Fetching prompt source_type=url locator=%s", locator)
         try:
             content, content_type, _resolved_uri, fetched_at = self._fetcher(locator)
@@ -91,10 +84,7 @@ class UrlProvider:
         return FetchResult(
             content=content,
             content_type=content_type,
-            source=PromptSource(
-                source_type="url",
-                locator=locator,
-            ),
+            source=PromptSource(source_type="url", locator=locator),
             fetched_at=fetched_at,
         )
 
@@ -108,14 +98,12 @@ class UrlProvider:
 
 
 class AgentProvider:
-    """从已知 Agent Prompt URL 获取 Prompt 内容 / Load prompt content from a known agent prompt URL."""
+    """Load prompt content from a known agent prompt URL."""
 
     def __init__(self, *, fetcher: AgentFetcher | None = None) -> None:
         self._fetcher = fetcher or self._default_fetcher
 
     def fetch(self, locator: str) -> FetchResult:
-        """从已知 Agent URL 获取 Prompt 内容 / Fetch prompt content from a known agent URL."""
-
         logger.info("Fetching prompt source_type=agent locator=%s", locator)
         try:
             content, content_type, fetched_at = self._fetcher(locator)
@@ -139,10 +127,7 @@ class AgentProvider:
         return FetchResult(
             content=content,
             content_type=content_type,
-            source=PromptSource(
-                source_type="agent",
-                locator=locator,
-            ),
+            source=PromptSource(source_type="agent", locator=locator),
             fetched_at=fetched_at,
         )
 

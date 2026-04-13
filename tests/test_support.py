@@ -4,7 +4,7 @@ from pathlib import Path
 import shutil
 import unittest
 
-from a2a_t.prompt.models import FetchResult
+from a2a_t.prompt.common.models import FetchResult
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

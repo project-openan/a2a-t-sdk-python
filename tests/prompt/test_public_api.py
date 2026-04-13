@@ -12,7 +12,7 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from a2a_t.prompt.config import PromptLoaderConfig
+from a2a_t.prompt.common.config import PromptLoaderConfig
 from a2a_t.server.prompt_compliance.config import PromptComplianceConfig
 
 
@@ -44,13 +44,15 @@ class PackageSkeletonTest(unittest.TestCase):
 
     def test_prompt_runtime_modules_exist_under_prompt_package(self) -> None:
         module_names = [
-            "a2a_t.prompt.cache",
-            "a2a_t.prompt.config",
-            "a2a_t.prompt.errors",
+            "a2a_t.prompt.common.config",
+            "a2a_t.prompt.common.errors",
             "a2a_t.prompt.loader",
-            "a2a_t.prompt.models",
-            "a2a_t.prompt.parser",
-            "a2a_t.prompt.providers",
+            "a2a_t.prompt.common.models",
+            "a2a_t.prompt.resources.cache",
+            "a2a_t.prompt.resources.catalog",
+            "a2a_t.prompt.resources.catalog_registry",
+            "a2a_t.prompt.resources.parser",
+            "a2a_t.prompt.resources.providers",
         ]
 
         for module_name in module_names:

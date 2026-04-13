@@ -16,8 +16,15 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from a2a_t.prompt.errors import PromptFetchError
-from a2a_t.prompt.providers import AgentFetcher, AgentProvider, LocalFileFetcher, LocalFileProvider, UrlFetcher, UrlProvider
+from a2a_t.prompt.common.errors import PromptFetchError
+from a2a_t.prompt.resources.providers import (
+    AgentFetcher,
+    AgentProvider,
+    LocalFileFetcher,
+    LocalFileProvider,
+    UrlFetcher,
+    UrlProvider,
+)
 from tests.test_support import ManagedTempDirTestCase
 
 

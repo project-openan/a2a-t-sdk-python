@@ -12,9 +12,9 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from a2a_t.prompt.errors import PromptMetadataError, PromptParseError
-from a2a_t.prompt.models import CacheStatus, PromptReference, PromptSource
-from a2a_t.prompt.parser import MarkdownPromptParser, PromptParser
+from a2a_t.prompt.common.errors import PromptMetadataError, PromptParseError
+from a2a_t.prompt.common.models import CacheStatus, PromptReference, PromptSource
+from a2a_t.prompt.resources.parser import MarkdownPromptParser, PromptParser
 
 
 class MarkdownPromptParserTest(unittest.TestCase):

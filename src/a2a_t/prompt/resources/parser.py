@@ -1,10 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 from typing import Protocol
 
-from .errors import PromptMetadataError, PromptParseError
-from .models import CacheStatus, Prompt, PromptSource
+from ..common.errors import PromptMetadataError, PromptParseError
+from ..common.models import CacheStatus, Prompt, PromptSource
 
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ class PromptParser(Protocol):
 
 
 class PromptParserRegistry:
-    """按扩展名管理 Prompt parser / Manage prompt parsers by file extension."""
+    """Manage prompt parsers by file extension."""
 
     def __init__(self) -> None:
         self._parsers_by_extension: dict[str, PromptParser] = {}
@@ -52,7 +52,7 @@ def build_default_prompt_parser_registry() -> PromptParserRegistry:
 
 
 class MarkdownPromptParser:
-    """解析 Markdown Prompt 并校验 front matter 元数据 / Parse Markdown prompts and validate their front matter metadata."""
+    """Parse Markdown prompts and validate their front matter metadata."""
 
     def parse(
         self,
@@ -61,8 +61,6 @@ class MarkdownPromptParser:
         source: PromptSource,
         cache_status: CacheStatus,
     ) -> Prompt:
-        """解析 Markdown Prompt 并返回标准化 Prompt 对象 / Parse a Markdown prompt and return the normalized prompt object."""
-
         logger.info("Parsing prompt locator=%s source_type=%s", source.locator, source.source_type)
         metadata, body = self._split_front_matter(content, locator=source.locator)
 
@@ -98,7 +96,6 @@ class MarkdownPromptParser:
         header = content[4:closing_index]
         body = content[closing_index + len("\n---\n") :]
         metadata = self._parse_metadata(header, locator=locator)
-
         return metadata, body
 
     def _parse_metadata(self, header: str, *, locator: str) -> dict[str, str]:

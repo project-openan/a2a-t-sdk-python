@@ -5,12 +5,12 @@ from datetime import datetime
 import logging
 from typing import Callable
 
-from .cache import PromptStore
-from .config import PromptLoaderConfig
-from .errors import PromptMetadataError
-from .models import CacheStatus, CachedPromptRecord, Prompt, PromptReference, PromptSource
-from .parser import PromptParser
-from .providers import PromptProvider
+from .resources.cache import PromptStore
+from .common.config import PromptLoaderConfig
+from .common.errors import PromptMetadataError
+from .common.models import CacheStatus, CachedPromptRecord, Prompt, PromptReference, PromptSource
+from .resources.parser import PromptParser
+from .resources.providers import PromptProvider
 
 
 logger = logging.getLogger(__name__)

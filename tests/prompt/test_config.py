@@ -14,7 +14,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from a2a_t.config.errors import ConfigFileNotFoundError
 from a2a_t.config.source import DotEnvConfigSource
-from a2a_t.prompt.config import PromptLoaderConfig
+from a2a_t.prompt.common.config import PromptLoaderConfig
 from tests.test_support import ManagedTempDirTestCase
 
 

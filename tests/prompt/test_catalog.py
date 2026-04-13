@@ -22,16 +22,16 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from a2a_t.prompt.config import PromptLoaderConfig
-from a2a_t.prompt.errors import PromptSourceError
-from a2a_t.prompt.models import CacheStatus, Prompt, PromptSource
-from a2a_t.prompt.parser import MarkdownPromptParser, PromptParserRegistry
+from a2a_t.prompt.common.config import PromptLoaderConfig
+from a2a_t.prompt.common.errors import PromptSourceError
+from a2a_t.prompt.common.models import CacheStatus, Prompt, PromptSource
+from a2a_t.prompt.resources.parser import MarkdownPromptParser, PromptParserRegistry
 
 
 class PromptCatalogContractTest(unittest.TestCase):
     def test_prompt_catalog_module_exists_under_prompt_package(self) -> None:
         try:
-            spec = importlib.util.find_spec("a2a_t.prompt.catalog")
+            spec = importlib.util.find_spec("a2a_t.prompt.resources.catalog")
         except ModuleNotFoundError:
             spec = None
 
@@ -39,22 +39,22 @@ class PromptCatalogContractTest(unittest.TestCase):
 
     def test_prompt_catalog_protocol_exists(self) -> None:
         try:
-            module = importlib.import_module("a2a_t.prompt.catalog")
+            module = importlib.import_module("a2a_t.prompt.resources.catalog")
         except ModuleNotFoundError:
-            self.fail("a2a_t.prompt.catalog is missing")
+            self.fail("a2a_t.prompt.resources.catalog is missing")
 
         self.assertTrue(hasattr(module, "PromptCatalog"))
         self.assertTrue(hasattr(module.PromptCatalog, "_is_protocol"))
 
     def test_agent_prompt_catalog_constructor_uses_agentcard_type(self) -> None:
-        module = importlib.import_module("a2a_t.prompt.catalog")
+        module = importlib.import_module("a2a_t.prompt.resources.catalog")
 
         signature = inspect.signature(module.AgentPromptCatalog.__init__)
 
         self.assertEqual(signature.parameters["agent_cards"].annotation, "list[AgentCard]")
 
     def test_agentcard_type_is_available_at_runtime_in_catalog_module(self) -> None:
-        module = importlib.import_module("a2a_t.prompt.catalog")
+        module = importlib.import_module("a2a_t.prompt.resources.catalog")
 
         self.assertTrue(hasattr(module, "AgentCard"))
 
@@ -80,7 +80,7 @@ class PromptCatalogImplementationTest(ManagedTempDirTestCase):
             encoding="utf-8",
         )
 
-        module = importlib.import_module("a2a_t.prompt.catalog")
+        module = importlib.import_module("a2a_t.prompt.resources.catalog")
         catalog = module.LocalPromptCatalog(prompt_dir=str(prompt_dir), parser=MarkdownPromptParser())
 
         references = catalog.list()
@@ -135,7 +135,7 @@ class PromptCatalogImplementationTest(ManagedTempDirTestCase):
         registry.register("markdown", MarkdownPromptParser(), [".md"])
         registry.register("json", JsonPromptParser(), [".json"])
 
-        module = importlib.import_module("a2a_t.prompt.catalog")
+        module = importlib.import_module("a2a_t.prompt.resources.catalog")
         catalog = module.LocalPromptCatalog(
             prompt_dir=str(prompt_dir),
             parser_registry=registry,
@@ -164,7 +164,7 @@ class PromptCatalogImplementationTest(ManagedTempDirTestCase):
             encoding="utf-8",
         )
 
-        module = importlib.import_module("a2a_t.prompt.catalog")
+        module = importlib.import_module("a2a_t.prompt.resources.catalog")
         catalog = module.LocalPromptCatalog(
             config=PromptLoaderConfig(
                 default_ttl=timedelta(hours=1),
@@ -205,7 +205,7 @@ class PromptCatalogImplementationTest(ManagedTempDirTestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
 
-        module = importlib.import_module("a2a_t.prompt.catalog")
+        module = importlib.import_module("a2a_t.prompt.resources.catalog")
         catalog = module.UrlPromptCatalog(index_url=f"http://127.0.0.1:{server.server_port}/index.json")
 
         references = catalog.list()
@@ -219,7 +219,7 @@ class PromptCatalogImplementationTest(ManagedTempDirTestCase):
         self.assertEqual(references[0].source.source_type, "url")
 
     def test_url_prompt_catalog_requires_index_url(self) -> None:
-        module = importlib.import_module("a2a_t.prompt.catalog")
+        module = importlib.import_module("a2a_t.prompt.resources.catalog")
         catalog = module.UrlPromptCatalog(index_url=None)
 
         with self.assertRaises(PromptSourceError):
@@ -263,7 +263,7 @@ class PromptCatalogImplementationTest(ManagedTempDirTestCase):
                 }
 
         fetcher = FakeFetcher()
-        module = importlib.import_module("a2a_t.prompt.catalog")
+        module = importlib.import_module("a2a_t.prompt.resources.catalog")
         catalog = module.AgentPromptCatalog(
             agent_cards=[agent_card],
             default_prompt_extension_uri="a2a-t.prompts",
@@ -319,7 +319,7 @@ class PromptCatalogImplementationTest(ManagedTempDirTestCase):
                 }
 
         fetcher = FakeFetcher()
-        module = importlib.import_module("a2a_t.prompt.catalog")
+        module = importlib.import_module("a2a_t.prompt.resources.catalog")
         catalog = module.AgentPromptCatalog(
             agent_cards=[agent_card],
             default_prompt_extension_uri="a2a-t.prompts",
@@ -375,7 +375,7 @@ class PromptCatalogImplementationTest(ManagedTempDirTestCase):
                 }
 
         fetcher = FakeFetcher()
-        module = importlib.import_module("a2a_t.prompt.catalog")
+        module = importlib.import_module("a2a_t.prompt.resources.catalog")
         catalog = module.AgentPromptCatalog(
             config=PromptLoaderConfig(
                 default_ttl=timedelta(hours=1),

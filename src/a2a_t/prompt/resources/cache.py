@@ -1,15 +1,15 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
+import logging
+import shutil
 from dataclasses import asdict
 from datetime import datetime
-import logging
 from pathlib import Path
-import shutil
 from typing import Protocol
 
-from .errors import PromptCacheError, PromptConflictError, PromptVersionComparisonError
-from .models import CacheStatus, CachedPromptRecord
+from ..common.errors import PromptCacheError, PromptConflictError, PromptVersionComparisonError
+from ..common.models import CacheStatus, CachedPromptRecord
 
 
 logger = logging.getLogger(__name__)
@@ -87,8 +87,6 @@ class OverwriteIfNewerVersionPolicy:
 
 
 class LocalFilePromptStore:
-    """在本地文件系统持久化远端 Prompt 内容与元数据 / Persist remote prompt content and metadata on the local filesystem."""
-
     def __init__(
         self,
         cache_root: Path | str,
@@ -101,14 +99,7 @@ class LocalFilePromptStore:
         self._conflict_resolution_policy = conflict_resolution_policy or OverwriteIfNewerVersionPolicy()
 
     def write(self, *, record: CachedPromptRecord, content: str) -> None:
-        """将 Prompt 内容文件及其元数据写入缓存 / Write a prompt content file and its metadata into the cache."""
-
-        logger.info(
-            "Writing prompt entry name=%s version=%s language=%s",
-            record.name,
-            record.version,
-            record.language,
-        )
+        logger.info("Writing prompt entry name=%s version=%s language=%s", record.name, record.version, record.language)
         self._validate_record_version(record=record)
         cache_dir = self._cache_dir(record=record)
         content_path = cache_dir / self._content_filename(format_name=record.format)
@@ -155,7 +146,6 @@ class LocalFilePromptStore:
                 self._cleanup_empty_parent_dirs(existing_dir.parent)
 
         cache_dir.mkdir(parents=True, exist_ok=True)
-
         content_path.write_text(content, encoding="utf-8")
         metadata_path.write_text(self._serialize_record(record_to_write), encoding="utf-8")
 
@@ -199,8 +189,6 @@ class LocalFilePromptStore:
         now: datetime,
         allow_stale_fallback: bool,
     ) -> tuple[CachedPromptRecord, str, CacheStatus]:
-        """根据过期状态与策略返回命中或陈旧回退结果 / Return a cache hit or stale fallback depending on expiry and policy."""
-
         record, content, cache_status = self.resolve(
             source_type=source_type,
             name=name,
@@ -230,8 +218,6 @@ class LocalFilePromptStore:
         now: datetime,
         allow_stale_fallback: bool,
     ) -> tuple[CachedPromptRecord | None, str | None, CacheStatus]:
-        """返回缓存命中、缺失或过期语义结果 / Return cache miss, hit, expired, or stale fallback semantics."""
-
         try:
             record, content = self.read(source_type=source_type, name=name, version=version, language=language)
         except PromptCacheError:
@@ -252,14 +238,8 @@ class LocalFilePromptStore:
         return self._safe_identity_dir(name=record.name, version=record.version, language=record.language)
 
     def _safe_identity_dir(self, *, name: str, version: str, language: str) -> Path:
-        identity_parts = (
-            ("name", name),
-            ("version", version),
-            ("language", language),
-        )
-        safe_parts = [
-            self._validate_path_part(part, field_name=field_name) for field_name, part in identity_parts
-        ]
+        identity_parts = (("name", name), ("version", version), ("language", language))
+        safe_parts = [self._validate_path_part(part, field_name=field_name) for field_name, part in identity_parts]
         root = self._cache_root.resolve()
         target = root.joinpath(*safe_parts).resolve()
         if root != target and root not in target.parents:
@@ -296,7 +276,6 @@ class LocalFilePromptStore:
         payload = {key: value for key, value in payload.items() if value is not None}
         payload["fetched_at"] = record.fetched_at.isoformat()
         payload["expires_at"] = record.expires_at.isoformat()
-
         return json.dumps(payload, ensure_ascii=False, indent=2)
 
     def _deserialize_record(self, payload: dict[str, object]) -> CachedPromptRecord:

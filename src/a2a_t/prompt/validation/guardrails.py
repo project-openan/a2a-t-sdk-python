@@ -7,31 +7,23 @@ from a2a_t.server.prompt_compliance.models import GuardrailProviderConfig, Guard
 
 
 class SafetyGuardrail(Protocol):
-    """加工后 Prompt 检查的统一护栏接口 / Unified guardrail interface for processed prompt checks."""
-
     def check(self, prompt_text: str, context: dict[str, object] | None = None) -> GuardrailResult:
-        """检查加工后 Prompt 是否通过安全护栏 / Check whether the processed prompt passes the safety guardrail."""
+        """Check whether the processed prompt passes the safety guardrail."""
 
 
 class GuardrailAdapter(Protocol):
-    """面向厂商实现的内部 adapter 协议 / Internal adapter protocol for provider-specific guardrail implementations."""
-
     provider_name: str
 
     def check_input(self, request: GuardrailRequest) -> GuardrailResult:
-        """执行输入侧护栏检查 / Run input-side guardrail checks."""
+        """Run input-side guardrail checks."""
 
 
 class NoopSafetyGuardrail:
-    """始终放行的默认护栏实现 / Default guardrail that always passes."""
-
     def check(self, prompt_text: str, context: dict[str, object] | None = None) -> GuardrailResult:
         return GuardrailResult(passed=True)
 
 
 class AdapterSafetyGuardrail:
-    """将 provider adapter 桥接到公共护栏接口 / Bridge a provider adapter to the public safety guardrail interface."""
-
     def __init__(self, *, config: GuardrailProviderConfig, adapter: GuardrailAdapter) -> None:
         self._config = config
         self._adapter = adapter
@@ -47,8 +39,6 @@ class AdapterSafetyGuardrail:
 
 
 class TransportSafetyGuardrail:
-    """基于配置传入 transport 可调用对象的护栏实现 / Guardrail backed by a transport callable provided by configuration."""
-
     def __init__(self, transport: Callable[[str, dict[str, object] | None], GuardrailResult | dict[str, object]]) -> None:
         self._transport = transport
 
@@ -88,8 +78,6 @@ class TransportSafetyGuardrail:
 
 
 class SafetyGuardrailFactory:
-    """根据 provider 配置创建安全护栏实例的工厂 / Factory for creating safety guardrail adapters from provider configuration."""
-
     _providers: dict[str, Callable[[GuardrailProviderConfig], SafetyGuardrail]] = {}
     _reserved_providers: set[str] = {"aws_bedrock", "azure_content_safety"}
 
@@ -140,10 +128,7 @@ SafetyGuardrailFactory.register("noop", lambda config: NoopSafetyGuardrail())
 
 
 def _build_google_model_armor_guardrail(config: GuardrailProviderConfig) -> SafetyGuardrail:
-    from a2a_t.server.prompt_compliance.guardrail_providers import (
-        GoogleModelArmorGateway,
-        GoogleModelArmorGuardrailAdapter,
-    )
+    from a2a_t.prompt.validation.guardrail_providers import GoogleModelArmorGateway, GoogleModelArmorGuardrailAdapter
 
     client = config.config.get("client")
     gateway = GoogleModelArmorGateway(config=config, client=client if client is not None else None)

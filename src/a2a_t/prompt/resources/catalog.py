@@ -12,26 +12,26 @@ except ModuleNotFoundError:
     class AgentCard:  # pragma: no cover - optional dependency fallback
         pass
 
-from .config import PromptLoaderConfig
-from .errors import PromptSourceError
-from .models import CacheStatus, PromptReference, PromptSource
-from .parser import MarkdownPromptParser, PromptParser, PromptParserRegistry, build_default_prompt_parser_registry
+from ..common.config import PromptLoaderConfig
+from ..common.errors import PromptSourceError
+from ..common.models import CacheStatus, PromptReference, PromptSource
+from .parser import PromptParser, PromptParserRegistry, build_default_prompt_parser_registry
 
 
 class UrlIndexFetcher(Protocol):
-    """获取 URL catalog 索引 / Fetch the JSON index for a URL-backed prompt catalog."""
+    """Fetch the JSON index for a URL-backed prompt catalog."""
 
     def __call__(self, index_url: str) -> dict[str, object]: ...
 
 
 class PromptCatalog(Protocol):
-    """列出某个来源下所有可用 Prompt 引用 / List all available prompt references from a source."""
+    """List all available prompt references from a source."""
 
     def list(self) -> list[PromptReference]: ...
 
 
 class LocalPromptCatalog:
-    """列出本地目录下所有 Markdown Prompt / List all Markdown prompts from a local directory."""
+    """List all Markdown prompts from a local directory."""
 
     def __init__(
         self,
@@ -85,7 +85,7 @@ class LocalPromptCatalog:
 
 
 class UrlPromptCatalog:
-    """通过索引 URL 列出远端 Prompt / List remote prompts from an index URL."""
+    """List remote prompts from an index URL."""
 
     def __init__(self, *, index_url: str | None, fetcher: UrlIndexFetcher | None = None) -> None:
         self._index_url = index_url
@@ -113,19 +113,11 @@ class UrlPromptCatalog:
 
     def _build_reference(self, entry: object, base_url: str) -> PromptReference:
         if not isinstance(entry, dict):
-            raise PromptSourceError(
-                "URL prompt catalog entry is invalid.",
-                locator=base_url,
-                source_type="url",
-            )
+            raise PromptSourceError("URL prompt catalog entry is invalid.", locator=base_url, source_type="url")
 
         url = entry.get("url")
         if not isinstance(url, str) or not url:
-            raise PromptSourceError(
-                "URL prompt catalog entry is missing url.",
-                locator=base_url,
-                source_type="url",
-            )
+            raise PromptSourceError("URL prompt catalog entry is missing url.", locator=base_url, source_type="url")
 
         return PromptReference(
             name=self._require_text(entry, "name", base_url=base_url),
@@ -150,7 +142,7 @@ class UrlPromptCatalog:
 
 
 class AgentPromptCatalog:
-    """从 AgentCard 扩展中展开 Prompt 索引 / Expand prompt references from AgentCard extensions."""
+    """Expand prompt references from AgentCard extensions."""
 
     def __init__(
         self,
