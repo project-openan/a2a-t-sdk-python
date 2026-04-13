@@ -6,7 +6,11 @@ from typing import Protocol
 from urllib import request
 from urllib.parse import urljoin
 
-from a2a.types import AgentCard
+try:
+    from a2a.types import AgentCard
+except ModuleNotFoundError:
+    class AgentCard:  # pragma: no cover - optional dependency fallback
+        pass
 
 from .config import PromptLoaderConfig
 from .errors import PromptSourceError

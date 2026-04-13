@@ -2,7 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dotenv import dotenv_values
+try:
+    from dotenv import dotenv_values
+except ModuleNotFoundError:
+    def dotenv_values(path: str | Path) -> dict[str, str]:
+        values: dict[str, str] = {}
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            values[key] = value
+        return values
 
 from a2a_t.config.errors import ConfigFileNotFoundError
 

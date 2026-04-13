@@ -109,6 +109,8 @@ class SDKConfig:
 class A2ATConfig:
     """全局 A2A-T 配置入口 / Global A2A-T configuration entry point."""
 
+    language: str
+    prompt_resource_version: str
     prompt: PromptLoaderConfig
     prompt_compliance: PromptComplianceConfig
 
@@ -116,6 +118,8 @@ class A2ATConfig:
     def load(cls, env_path: Path) -> A2ATConfig:
         values = DotEnvConfigSource.load(env_path)
         return cls(
+            language=values.get("A2AT_LANGUAGE", "en-US") or "en-US",
+            prompt_resource_version=values.get("A2AT_PROMPT_RESOURCE_VERSION", "0.0.1") or "0.0.1",
             prompt=PromptLoaderConfig.from_mapping(values),
             prompt_compliance=PromptComplianceConfig.from_mapping(values),
         )
