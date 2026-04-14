@@ -115,7 +115,6 @@ class DeepSeekAdapterTest(unittest.TestCase):
             messages=[{"role": "user", "content": "extract router"}],
             json_schema=json_schema,
         )
-        print(response)
 
         self.assertEqual(response.content, '{"device_type":"router"}')
         payload = sdk_client.chat.completions.create.call_args.kwargs

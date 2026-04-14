@@ -84,7 +84,6 @@ class LLMClientTest(ManagedTempDirTestCase):
 
             client = LLMClient(env_path=env_path)
             response = client.chat("hello", system_prompt="be concise")
-            print(response)
 
         self.assertEqual(response.content, "chat-ok")
         self.assertEqual(created[0][0], "deepseek")

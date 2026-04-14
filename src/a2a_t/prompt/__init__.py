@@ -1,78 +1,68 @@
 """A2A-T 的 Prompt 顶层包 / Top-level prompt package for A2A-T."""
 
-from .cache import (
-    CacheStore,
-    ConflictResolutionPolicy,
-    ExpirationPolicy,
-    LocalFilePromptStore,
-    OverwriteIfNewerVersionPolicy,
-    OverwriteOnConflictPolicy,
-    PromptStore,
-    TTLExpirationPolicy,
-)
-from .catalog import AgentPromptCatalog, LocalPromptCatalog, PromptCatalog, UrlIndexFetcher, UrlPromptCatalog
-from .catalog_registry import DefaultPromptCatalogRegistry, PromptCatalogRegistry
-from .config import PromptLoaderConfig
-from .errors import (
-    PromptCacheError,
-    PromptCatalogRegistryError,
-    PromptConfigError,
-    PromptConflictError,
-    PromptFetchError,
-    PromptLoaderError,
-    PromptMetadataError,
-    PromptParseError,
-    PromptSourceError,
-    PromptVersionComparisonError,
-)
-from .loader import PromptLoader
-from .models import CacheStatus, CachedPromptRecord, FetchResult, Prompt, PromptReference, PromptSource
-from .parser import MarkdownPromptParser, PromptParser, PromptParserRegistry, build_default_prompt_parser_registry
-from .providers import AgentFetcher, AgentProvider, LocalFileFetcher, LocalFileProvider, PromptProvider, UrlFetcher, UrlProvider
+from __future__ import annotations
+
+from importlib import import_module
 
 __all__ = [
-    "AgentFetcher",
-    "AgentPromptCatalog",
-    "AgentProvider",
     "CacheStatus",
-    "CacheStore",
     "ConflictResolutionPolicy",
     "CachedPromptRecord",
-    "DefaultPromptCatalogRegistry",
     "ExpirationPolicy",
     "FetchResult",
-    "LocalFileFetcher",
-    "LocalFilePromptStore",
-    "LocalFileProvider",
-    "LocalPromptCatalog",
-    "MarkdownPromptParser",
     "OverwriteIfNewerVersionPolicy",
     "OverwriteOnConflictPolicy",
     "Prompt",
+    "PromptAssetReference",
     "PromptCacheError",
     "PromptCatalogRegistryError",
     "PromptConfigError",
-    "PromptCatalog",
-    "PromptCatalogRegistry",
     "PromptConflictError",
     "PromptFetchError",
-    "PromptLoader",
-    "PromptLoaderConfig",
     "PromptLoaderError",
     "PromptMetadataError",
     "PromptParseError",
-    "PromptParser",
-    "PromptParserRegistry",
-    "PromptProvider",
     "PromptReference",
     "PromptSource",
     "PromptSourceError",
     "PromptStore",
     "PromptVersionComparisonError",
     "TTLExpirationPolicy",
-    "UrlFetcher",
-    "UrlIndexFetcher",
-    "UrlPromptCatalog",
-    "UrlProvider",
-    "build_default_prompt_parser_registry",
 ]
+
+_EXPORTS: dict[str, tuple[str, str]] = {
+    "CacheStatus": ("a2a_t.prompt.common.models", "CacheStatus"),
+    "ConflictResolutionPolicy": ("a2a_t.prompt.resources.cache", "ConflictResolutionPolicy"),
+    "CachedPromptRecord": ("a2a_t.prompt.common.models", "CachedPromptRecord"),
+    "ExpirationPolicy": ("a2a_t.prompt.resources.cache", "ExpirationPolicy"),
+    "FetchResult": ("a2a_t.prompt.common.models", "FetchResult"),
+    "OverwriteIfNewerVersionPolicy": ("a2a_t.prompt.resources.cache", "OverwriteIfNewerVersionPolicy"),
+    "OverwriteOnConflictPolicy": ("a2a_t.prompt.resources.cache", "OverwriteOnConflictPolicy"),
+    "Prompt": ("a2a_t.prompt.common.models", "Prompt"),
+    "PromptAssetReference": ("a2a_t.prompt.common.models", "PromptAssetReference"),
+    "PromptCacheError": ("a2a_t.prompt.common.errors", "PromptCacheError"),
+    "PromptCatalogRegistryError": ("a2a_t.prompt.common.errors", "PromptCatalogRegistryError"),
+    "PromptConfigError": ("a2a_t.prompt.common.errors", "PromptConfigError"),
+    "PromptConflictError": ("a2a_t.prompt.common.errors", "PromptConflictError"),
+    "PromptFetchError": ("a2a_t.prompt.common.errors", "PromptFetchError"),
+    "PromptLoaderError": ("a2a_t.prompt.common.errors", "PromptLoaderError"),
+    "PromptMetadataError": ("a2a_t.prompt.common.errors", "PromptMetadataError"),
+    "PromptParseError": ("a2a_t.prompt.common.errors", "PromptParseError"),
+    "PromptReference": ("a2a_t.prompt.common.models", "PromptReference"),
+    "PromptSource": ("a2a_t.prompt.common.models", "PromptSource"),
+    "PromptSourceError": ("a2a_t.prompt.common.errors", "PromptSourceError"),
+    "PromptStore": ("a2a_t.prompt.resources.cache", "PromptStore"),
+    "PromptVersionComparisonError": ("a2a_t.prompt.common.errors", "PromptVersionComparisonError"),
+    "TTLExpirationPolicy": ("a2a_t.prompt.resources.cache", "TTLExpirationPolicy"),
+}
+
+
+def __getattr__(name: str):
+    try:
+        module_name, attr_name = _EXPORTS[name]
+    except KeyError as error:
+        raise AttributeError(f"module 'a2a_t.prompt' has no attribute {name!r}") from error
+
+    value = getattr(import_module(module_name), attr_name)
+    globals()[name] = value
+    return value
