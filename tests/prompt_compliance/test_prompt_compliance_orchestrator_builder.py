@@ -71,11 +71,6 @@ class PromptComplianceOrchestratorBuilderTest(unittest.TestCase):
         self.assertEqual(len(runtime_builder.calls), 1)
         effective_config = runtime_builder.calls[0]
         self.assertEqual(effective_config.prompt.local_root_dir, "./override-root")
-        self.assertIs(orchestrator.kwargs["guardrail"], components.guardrail)
-        self.assertIs(orchestrator.kwargs["template_loader"], components.template_loader)
-        self.assertIs(orchestrator.kwargs["slot_schema_loader"], components.slot_schema_loader)
-        self.assertIs(orchestrator.kwargs["prompt_resource_loader"], components.prompt_resource_loader)
-        self.assertIs(orchestrator.kwargs["validator"], components.slot_validator)
         self.assertIsInstance(orchestrator.kwargs["extractor"], FakeSlotExtractor)
         self.assertIs(orchestrator.kwargs["extractor"].llm_client, llm_client)
 

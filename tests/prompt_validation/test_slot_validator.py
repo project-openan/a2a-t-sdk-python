@@ -109,6 +109,83 @@ class SlotValidatorTest(unittest.TestCase):
             ],
         )
 
+    def test_validate_adds_missing_input_when_required_slot_key_is_absent(self) -> None:
+        from a2a_t.prompt.validation.slot_validator import SlotValidator
+
+        validator = SlotValidator()
+        result = validator.validate(
+            slots={"additional_notes": "Focus on power system"},
+            slot_errors=[],
+            slot_schema=self.slot_schema,
+        )
+
+        self.assertFalse(result.passed)
+        self.assertEqual(
+            result.slot_errors,
+            [
+                SlotValidationError(
+                    slot_name="site",
+                    code="missing_input",
+                    message="Required slot 'site' is missing.",
+                )
+            ],
+        )
+
+    def test_validate_adds_missing_input_for_each_missing_required_slot_in_schema_order(self) -> None:
+        from a2a_t.prompt.validation.slot_validator import SlotValidator
+
+        slot_schema = SlotSchema(
+            scenario_code="energy_saving",
+            version="0.0.1",
+            slots=[
+                SlotDefinition(
+                    name="site",
+                    required=True,
+                    description="Site name",
+                    example="Site A",
+                    value_constraint="Must be a concrete site name.",
+                    type="string",
+                    allowed_values=None,
+                    range=None,
+                    pattern=None,
+                ),
+                SlotDefinition(
+                    name="time_range",
+                    required=True,
+                    description="Time range",
+                    example="2026-04-01 to 2026-04-07",
+                    value_constraint="Must describe a concrete time window.",
+                    type="string",
+                    allowed_values=None,
+                    range=None,
+                    pattern=None,
+                ),
+            ],
+        )
+        validator = SlotValidator()
+        result = validator.validate(
+            slots={},
+            slot_errors=[],
+            slot_schema=slot_schema,
+        )
+
+        self.assertFalse(result.passed)
+        self.assertEqual(
+            result.slot_errors,
+            [
+                SlotValidationError(
+                    slot_name="site",
+                    code="missing_input",
+                    message="Required slot 'site' is missing.",
+                ),
+                SlotValidationError(
+                    slot_name="time_range",
+                    code="missing_input",
+                    message="Required slot 'time_range' is missing.",
+                ),
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

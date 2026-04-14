@@ -65,6 +65,14 @@ class InputNormalizerTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalizer.normalize({})
 
+    def test_normalize_non_string_non_dict_raises_type_error(self) -> None:
+        from a2a_t.client.prompt_generation.input_normalizer import InputNormalizer
+
+        normalizer = InputNormalizer()
+
+        with self.assertRaises(TypeError):
+            normalizer.normalize(123)  # type: ignore[arg-type]
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,7 +22,11 @@ from a2a_t.prompt.validation.errors import GuardrailExecutionError
 from a2a_t.prompt.validation.models import GuardrailResult, SlotValidationError, SlotValidationResult
 from a2a_t.server.prompt_compliance.constants import (
     GENERATION_STAGE,
+    GUARDRAIL_REJECTED,
     PASSED_STAGE,
+    PROMPT_RESOURCE_ACCESS_ERROR,
+    PROMPT_RESOURCE_LOAD_ERROR,
+    GUARDRAIL_STAGE,
     SLOT_VALIDATION_ERROR,
     SLOT_VALIDATION_STAGE,
     TEMPLATE_LOAD_ERROR,
@@ -263,6 +267,24 @@ class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
         self.assertEqual(result.error_code, "guardrail_execution_error")
         self.assertEqual(result.error_message, "unexpected guardrail failure")
 
+    def test_check_returns_guardrail_rejected_when_guardrail_blocks_prompt(self) -> None:
+        service = self._build_service(
+            guardrail=FakeGuardrail(
+                GuardrailResult(
+                    passed=False,
+                    error_code=None,
+                    error_message=None,
+                )
+            ),
+        )
+
+        result = service.check(processed_prompt_text=self.processed_prompt, request_metadata=None)
+
+        self.assertFalse(result.passed)
+        self.assertEqual(result.stage, GUARDRAIL_STAGE)
+        self.assertEqual(result.error_code, GUARDRAIL_REJECTED)
+        self.assertEqual(result.error_message, "Guardrail rejected the processed prompt.")
+
     def test_check_returns_generation_error_when_template_resource_is_invalid(self) -> None:
         service = self._build_service(
             template_loader=FakeTemplateLoader(PromptResourceParseError("template is invalid")),
@@ -286,6 +308,30 @@ class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
         self.assertEqual(result.stage, GENERATION_STAGE)
         self.assertEqual(result.error_code, "prompt_resource_parse_error")
         self.assertEqual(result.error_message, "slot schema is invalid")
+
+    def test_check_returns_generation_error_when_slot_prompt_resources_are_missing(self) -> None:
+        service = self._build_service(
+            prompt_resource_loader=FakePromptResourceLoader(PromptResourceNotFoundError("missing slot extraction prompts")),
+        )
+
+        result = service.check(processed_prompt_text=self.processed_prompt, request_metadata=None)
+
+        self.assertFalse(result.passed)
+        self.assertEqual(result.stage, GENERATION_STAGE)
+        self.assertEqual(result.error_code, PROMPT_RESOURCE_LOAD_ERROR)
+        self.assertEqual(result.error_message, "missing slot extraction prompts")
+
+    def test_check_returns_generation_error_when_slot_prompt_resource_access_fails(self) -> None:
+        service = self._build_service(
+            prompt_resource_loader=FakePromptResourceLoader(PromptSourceError("prompt resource path escapes local root")),
+        )
+
+        result = service.check(processed_prompt_text=self.processed_prompt, request_metadata=None)
+
+        self.assertFalse(result.passed)
+        self.assertEqual(result.stage, GENERATION_STAGE)
+        self.assertEqual(result.error_code, PROMPT_RESOURCE_ACCESS_ERROR)
+        self.assertEqual(result.error_message, "prompt resource path escapes local root")
 
     def test_check_returns_generation_error_when_resource_path_access_fails(self) -> None:
         service = self._build_service(

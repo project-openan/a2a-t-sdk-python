@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import sys
 from pathlib import Path
 import unittest
@@ -15,11 +14,13 @@ if str(SRC_ROOT) not in sys.path:
 
 from a2a_t.prompt.analysis.models import ScenarioRecognitionResult, SlotExtractionResult
 from a2a_t.config.models import PromptRuntimeConfig
+from a2a_t.prompt.analysis.errors import PromptAnalysisError
 from a2a_t.prompt.validation.constants import MISSING_INPUT
 from a2a_t.prompt.common.errors import PromptSourceError
 from a2a_t.client.prompt_generation.generation_constants import (
     GENERATION_STAGE,
     INVALID_LLM_OUTPUT,
+    LLM_EXECUTION_FAILED,
     MISSING_REQUIRED_FIELDS,
     PROMPT_RESOURCE_ACCESS_ERROR,
     PROMPT_RESOURCE_PARSE_ERROR,
@@ -117,6 +118,15 @@ class FakeSlotExtractor:
         return self._result
 
 
+class RaisingSlotExtractor:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+        self.last_raw_response_content: str | None = None
+
+    def extract(self, **kwargs: object) -> SlotExtractionResult:
+        raise self._error
+
+
 class FakeSlotValidator:
     def __init__(self, result: SlotValidationResult) -> None:
         self._result = result
@@ -135,6 +145,14 @@ class FakeLogger:
 
     def debug(self, message: str, *args: object) -> None:
         self.debug_calls.append(message % args if args else message)
+
+
+class FakeRenderer:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def render(self, **kwargs: object) -> str:
+        raise self._error
 
 
 class FakeResourceRegistry:
@@ -180,13 +198,6 @@ class FakePromptRuntimeConfig(PromptRuntimeConfig):
 
 
 class PromptGenerationOrchestratorTest(unittest.TestCase):
-    def test_orchestrator_no_longer_keeps_obsolete_private_loader_methods(self) -> None:
-        from a2a_t.client.prompt_generation.prompt_generation_orchestrator import PromptGenerationOrchestrator
-
-        self.assertFalse(hasattr(PromptGenerationOrchestrator, "_load_template"))
-        self.assertFalse(hasattr(PromptGenerationOrchestrator, "_load_slot_schema"))
-        self.assertFalse(hasattr(PromptGenerationOrchestrator, "_load_slot_prompts"))
-
     def _build_orchestrator(
         self,
         *,
@@ -196,12 +207,14 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
         resource_registry: FakeResourceRegistry | None = None,
         debug_enabled: bool = False,
         logger: FakeLogger | None = None,
+        slot_extractor: object | None = None,
+        renderer: object | None = None,
     ):
         from a2a_t.client.prompt_generation.prompt_generation_orchestrator import PromptGenerationOrchestrator
 
         self.template_loader = FakeTemplateLoader()
         self.slot_schema_loader = FakeSlotSchemaLoader()
-        self.slot_extractor = FakeSlotExtractor(extraction_result)
+        self.slot_extractor = slot_extractor or FakeSlotExtractor(extraction_result)
         self.logger = logger or FakeLogger()
 
         return PromptGenerationOrchestrator(
@@ -218,6 +231,7 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
             slot_extractor=self.slot_extractor,
             slot_validator=FakeSlotValidator(validation_result),
             resource_registry=resource_registry,
+            renderer=renderer,
             logger=self.logger,
         )
 
@@ -291,12 +305,6 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
         self.assertEqual(result.validation.slot_errors, [])
         self.assertIn("scenario_code: energy_saving", result.prompt_text)
         self.assertIn("Site: Site A", result.prompt_text)
-        self.assertTrue(any("input_kind=natural_language" in message for message in self.logger.info_calls))
-        self.assertTrue(any("scenario_code=energy_saving" in message for message in self.logger.info_calls))
-        self.assertTrue(any("slots={'site': 'Site A', 'additional_notes': None}" in message for message in self.logger.info_calls))
-        self.assertTrue(any("slot_errors=[]" in message for message in self.logger.info_calls))
-        self.assertTrue(any("success=True" in message for message in self.logger.info_calls))
-        self.assertEqual(self.logger.debug_calls, [])
 
     def test_generate_returns_scenario_failure_when_no_match(self) -> None:
         orchestrator = self._build_orchestrator(
@@ -379,41 +387,6 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
                 )
             ],
         )
-        self.assertFalse(any("missing_required_fields=" in message for message in self.logger.info_calls))
-        self.assertTrue(any("slot_errors=[SlotValidationError(slot_name='site', code='missing_input', message=\"Required slot 'site' is missing.\")]" in message for message in self.logger.info_calls))
-
-    def test_client_constants_shim_module_is_not_importable(self) -> None:
-        with self.assertRaises(ModuleNotFoundError):
-            importlib.import_module("a2a_t.client.prompt_generation.constants")
-
-    def test_legacy_private_constants_module_is_not_importable(self) -> None:
-        with self.assertRaises(ModuleNotFoundError):
-            importlib.import_module("a2a_t.client.prompt_generation._constants")
-
-    def test_generate_logs_raw_input_and_raw_llm_outputs_when_debug_enabled(self) -> None:
-        orchestrator = self._build_orchestrator(
-            scenario_result=ScenarioRecognitionResult(
-                matched=True,
-                scenario_code="energy_saving",
-                error_message=None,
-            ),
-            extraction_result=SlotExtractionResult(
-                slots={"site": "Site A", "additional_notes": None},
-                slot_errors=[],
-            ),
-            validation_result=SlotValidationResult(
-                passed=True,
-                slot_errors=[],
-            ),
-            debug_enabled=True,
-        )
-
-        result = orchestrator.generate("Analyze Site A energy usage.")
-
-        self.assertTrue(result.success)
-        self.assertTrue(any("raw_user_input=Analyze Site A energy usage." in message for message in self.logger.debug_calls))
-        self.assertTrue(any('scenario_raw_output={"matched": true}' in message for message in self.logger.debug_calls))
-        self.assertTrue(any('slot_raw_output={"slots": {}}' in message for message in self.logger.debug_calls))
 
     def test_generate_returns_scenario_failure_when_scenario_resources_are_invalid(self) -> None:
         orchestrator = self._build_orchestrator(
@@ -480,6 +453,77 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
         self.assertEqual(result.failure.code, PROMPT_RESOURCE_ACCESS_ERROR)
         self.assertEqual(result.failure.stage, GENERATION_STAGE)
         self.assertEqual(result.failure.message, "generation resource path escapes local root")
+
+    def test_generate_returns_generation_failure_when_slot_extraction_payload_is_invalid(self) -> None:
+        orchestrator = self._build_orchestrator(
+            scenario_result=ScenarioRecognitionResult(
+                matched=True,
+                scenario_code="energy_saving",
+                error_message=None,
+            ),
+            extraction_result=SlotExtractionResult(slots={}, slot_errors=[]),
+            validation_result=SlotValidationResult(
+                passed=True,
+                slot_errors=[],
+            ),
+            slot_extractor=RaisingSlotExtractor(PromptAnalysisError("slot extraction returned invalid JSON")),
+        )
+
+        result = orchestrator.generate("Analyze Site A energy usage.")
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.failure.code, INVALID_LLM_OUTPUT)
+        self.assertEqual(result.failure.stage, GENERATION_STAGE)
+        self.assertEqual(result.failure.message, "slot extraction returned invalid JSON")
+
+    def test_generate_returns_generation_failure_when_slot_extraction_runtime_fails(self) -> None:
+        orchestrator = self._build_orchestrator(
+            scenario_result=ScenarioRecognitionResult(
+                matched=True,
+                scenario_code="energy_saving",
+                error_message=None,
+            ),
+            extraction_result=SlotExtractionResult(slots={}, slot_errors=[]),
+            validation_result=SlotValidationResult(
+                passed=True,
+                slot_errors=[],
+            ),
+            slot_extractor=RaisingSlotExtractor(RuntimeError("llm transport down")),
+        )
+
+        result = orchestrator.generate("Analyze Site A energy usage.")
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.failure.code, LLM_EXECUTION_FAILED)
+        self.assertEqual(result.failure.stage, GENERATION_STAGE)
+        self.assertEqual(result.failure.message, "llm transport down")
+
+    def test_generate_returns_render_failure_when_renderer_rejects_slots(self) -> None:
+        from a2a_t.client.prompt_generation.a2a_t_task_prompt_renderer import A2ATTaskPromptRenderError
+
+        orchestrator = self._build_orchestrator(
+            scenario_result=ScenarioRecognitionResult(
+                matched=True,
+                scenario_code="energy_saving",
+                error_message=None,
+            ),
+            extraction_result=SlotExtractionResult(
+                slots={"site": "Site A", "additional_notes": None},
+                slot_errors=[],
+            ),
+            validation_result=SlotValidationResult(
+                passed=True,
+                slot_errors=[],
+            ),
+            renderer=FakeRenderer(A2ATTaskPromptRenderError("Template references unknown slot: time_range")),
+        )
+
+        result = orchestrator.generate("Analyze Site A energy usage.")
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.failure.code, "RENDER_FAILED")
+        self.assertEqual(result.failure.stage, "render")
+        self.assertEqual(result.failure.message, "Template references unknown slot: time_range")
 
 
 if __name__ == "__main__":

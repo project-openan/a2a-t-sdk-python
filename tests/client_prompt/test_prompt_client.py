@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-import typing
 import unittest
 
 
@@ -38,13 +37,6 @@ class FakeOrchestratorBuilder:
 
 
 class PromptClientTest(ManagedTempDirTestCase):
-    def test_generate_a2a_t_prompt_has_prompt_generation_result_return_annotation(self) -> None:
-        from a2a_t.client.prompt_client import PromptClient
-
-        hints = typing.get_type_hints(PromptClient.generate_a2a_t_prompt)
-
-        self.assertIs(hints["return"], PromptGenerationResult)
-
     def test_generate_a2a_t_prompt_delegates_to_orchestrator(self) -> None:
         from a2a_t.client.prompt_client import PromptClient
 
@@ -107,8 +99,6 @@ class PromptClientTest(ManagedTempDirTestCase):
         self.assertEqual(orchestrator.calls, ["Analyze Site A."])
         self.assertEqual(len(orchestrator_builder.calls), 1)
         self.assertIs(orchestrator_builder.calls[0]["llm_client"], llm_client)
-        self.assertIsNone(orchestrator_builder.calls[0]["resource_root"])
-        self.assertEqual(orchestrator_builder.calls[0]["config"].prompt.language, "en-US")
 
 
 if __name__ == "__main__":

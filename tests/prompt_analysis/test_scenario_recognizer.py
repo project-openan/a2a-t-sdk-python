@@ -88,6 +88,54 @@ class ScenarioRecognizerTest(unittest.TestCase):
                 user_prompt="Choose from the provided scenario list.",
             )
 
+    def test_recognize_rejects_payload_when_unmatched_response_contains_scenario_code(self) -> None:
+        llm_client = FakeLLMClient('{"matched": false, "scenario_code": "energy_saving", "error_message": "No match."}')
+
+        from a2a_t.prompt.analysis.errors import ScenarioRecognitionError
+        from a2a_t.prompt.analysis.scenario_recognizer import ScenarioRecognizer
+
+        recognizer = ScenarioRecognizer(llm_client=llm_client)
+
+        with self.assertRaises(ScenarioRecognitionError):
+            recognizer.recognize(
+                normalized_input="Analyze site A energy usage.",
+                scenarios=[
+                    ScenarioDefinition(
+                        scenario_code="energy_saving",
+                        scenario_name="Energy Saving",
+                        description="Energy saving analysis tasks.",
+                        example="Analyze site power usage and suggest optimization.",
+                    )
+                ],
+                language="en-US",
+                system_prompt="Identify the best matching scenario.",
+                user_prompt="Choose from the provided scenario list.",
+            )
+
+    def test_recognize_rejects_non_object_json_payload(self) -> None:
+        llm_client = FakeLLMClient('["energy_saving"]')
+
+        from a2a_t.prompt.analysis.errors import ScenarioRecognitionError
+        from a2a_t.prompt.analysis.scenario_recognizer import ScenarioRecognizer
+
+        recognizer = ScenarioRecognizer(llm_client=llm_client)
+
+        with self.assertRaises(ScenarioRecognitionError):
+            recognizer.recognize(
+                normalized_input="Analyze site A energy usage.",
+                scenarios=[
+                    ScenarioDefinition(
+                        scenario_code="energy_saving",
+                        scenario_name="Energy Saving",
+                        description="Energy saving analysis tasks.",
+                        example="Analyze site power usage and suggest optimization.",
+                    )
+                ],
+                language="en-US",
+                system_prompt="Identify the best matching scenario.",
+                user_prompt="Choose from the provided scenario list.",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

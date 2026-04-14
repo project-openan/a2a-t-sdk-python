@@ -154,6 +154,51 @@ class SlotExtractorTest(unittest.TestCase):
                 user_prompt="Return slots and slot errors.",
             )
 
+    def test_extract_ignores_unknown_slot_key_in_slots_payload(self) -> None:
+        llm_client = FakeLLMClient(
+            (
+                '{"slots": {"site": "Site A", "unexpected_slot": "bad"}, '
+                '"slot_errors": []}'
+            )
+        )
+
+        from a2a_t.prompt.analysis.slot_extractor import SlotExtractor
+
+        extractor = SlotExtractor(llm_client=llm_client)
+
+        result = extractor.extract(
+            normalized_input="Analyze Site A.",
+            reference=PromptReference(scenario_code="energy_saving", version="0.0.1", language="en-US"),
+            template_text="Site: {site}",
+            slot_schema=SlotSchema(
+                scenario_code="energy_saving",
+                version="0.0.1",
+                slots=[
+                    SlotDefinition(
+                        name="site",
+                        required=True,
+                        description="Site name",
+                        example="Site A",
+                        value_constraint="Must be a concrete site name.",
+                        type="string",
+                        allowed_values=None,
+                        range=None,
+                        pattern=None,
+                    )
+                ],
+            ),
+            system_prompt="Extract slots.",
+            user_prompt="Return slots and slot errors.",
+        )
+
+        self.assertEqual(
+            result.slots,
+            {
+                "site": "Site A",
+            },
+        )
+        self.assertEqual(result.slot_errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

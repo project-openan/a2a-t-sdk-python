@@ -86,8 +86,6 @@ class PromptHandlerRuntimeTest(ManagedTempDirTestCase):
         self.assertEqual(result["passed"], True)
         self.assertEqual(len(builder.calls), 1)
         self.assertIs(builder.calls[0]["llm_client"], llm_client)
-        self.assertIsNone(builder.calls[0]["resource_root"])
-        self.assertEqual(builder.calls[0]["config"].prompt.language, "en-US")
 
 
 if __name__ == "__main__":

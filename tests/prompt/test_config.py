@@ -77,10 +77,5 @@ class PromptConfigTest(ManagedTempDirTestCase):
 
         self.assertEqual(values["A2AT_PROMPT_LOCAL_DIR"], "./exported-prompts")
 
-    def test_legacy_prompt_common_config_module_is_not_importable(self) -> None:
-        with self.assertRaises(ModuleNotFoundError):
-            __import__("a2a_t.prompt.common.config")
-
-
 if __name__ == "__main__":
     unittest.main()

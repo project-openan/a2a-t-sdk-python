@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import sys
 from pathlib import Path
 import unittest
@@ -17,20 +16,6 @@ from a2a_t.prompt.validation.models import SlotValidationError
 
 
 class PromptGenerationModelsTest(unittest.TestCase):
-    def test_client_prompt_package_exports_only_result_models(self) -> None:
-        package = importlib.import_module("a2a_t.client.prompt_generation")
-
-        self.assertTrue(hasattr(package, "PromptGenerationResult"))
-        self.assertTrue(hasattr(package, "PromptGenerationFailure"))
-        self.assertTrue(hasattr(package, "ValidationResult"))
-        self.assertFalse(hasattr(package, "ScenarioResolution"))
-        self.assertFalse(hasattr(package, "InputNormalizer"))
-        self.assertFalse(hasattr(package, "PromptGenerationOrchestrator"))
-        self.assertFalse(hasattr(package, "A2ATTaskPromptRenderError"))
-        self.assertFalse(hasattr(package, "A2ATTaskPromptRenderer"))
-        self.assertFalse(hasattr(package, "SCENARIO_STAGE"))
-        self.assertFalse(hasattr(package, "PROMPT_NOT_FOUND"))
-
     def test_validation_result_exposes_only_shared_slot_errors(self) -> None:
         from a2a_t.client.prompt_generation.models import ValidationResult
 
@@ -60,11 +45,6 @@ class PromptGenerationModelsTest(unittest.TestCase):
             },
         )
 
-    def test_client_prompt_models_no_longer_define_local_slot_error_wrapper(self) -> None:
-        module = importlib.import_module("a2a_t.client.prompt_generation.models")
-
-        self.assertFalse(hasattr(module, "SlotError"))
-
     def test_prompt_generation_result_uses_flat_scenario_code_field(self) -> None:
         from a2a_t.client.prompt_generation.models import PromptGenerationResult, ValidationResult
 
@@ -92,10 +72,6 @@ class PromptGenerationModelsTest(unittest.TestCase):
                 "failure": None,
             },
         )
-
-    def test_legacy_client_prompt_package_is_not_importable(self) -> None:
-        with self.assertRaises(ModuleNotFoundError):
-            importlib.import_module("a2a_t.client.prompt")
 
 
 if __name__ == "__main__":

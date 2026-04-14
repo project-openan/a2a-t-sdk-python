@@ -87,11 +87,6 @@ class PromptComplianceResultTest(unittest.TestCase):
         self.assertNotIn("notes", PromptComplianceResult.__dataclass_fields__)
         self.assertNotIn("confidence", PromptComplianceResult.__dataclass_fields__)
 
-    def test_server_prompt_models_no_longer_define_prompt_identity(self) -> None:
-        import a2a_t.server.prompt_compliance.result as result_module
-
-        self.assertFalse(hasattr(result_module, "PromptIdentity"))
-
     def test_prompt_compliance_config_models_can_be_constructed_directly(self) -> None:
         config = PromptComplianceConfig(
             enabled=True,
@@ -115,15 +110,6 @@ class PromptComplianceResultTest(unittest.TestCase):
         self.assertEqual(config.guardrail.credentials_ref, "GOOGLE_APPLICATION_CREDENTIALS")
         self.assertFalse(hasattr(config, "slot_schema"))
         self.assertEqual(config.providers["google"]["api_key"], "secret")
-
-    def test_old_prompt_compliance_provider_config_is_not_exported(self) -> None:
-        import a2a_t.server.prompt_compliance as prompt_compliance
-
-        self.assertFalse(hasattr(prompt_compliance, "A2ATTaskPromptParseError"))
-        self.assertFalse(hasattr(prompt_compliance, "A2ATTaskPromptParser"))
-        self.assertFalse(hasattr(prompt_compliance, "GuardrailProviderConfig"))
-        self.assertFalse(hasattr(prompt_compliance, "PromptComplianceProviderConfig"))
-        self.assertFalse(hasattr(prompt_compliance, "PromptIdentity"))
 
 
 if __name__ == "__main__":

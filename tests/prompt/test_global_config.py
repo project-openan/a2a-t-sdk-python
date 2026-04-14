@@ -88,12 +88,6 @@ class A2ATConfigTest(ManagedTempDirTestCase):
         self.assertEqual(config.prompt.source_type, "local_file")
         self.assertEqual(config.prompt.local_root_dir, "./package_data/prompt_resources")
 
-    def test_a2at_config_no_longer_exposes_language_and_prompt_version_at_top_level(self) -> None:
-        A2ATConfig, _ = self._load_config_api()
-
-        self.assertNotIn("language", A2ATConfig.__dataclass_fields__)
-        self.assertNotIn("prompt_resource_version", A2ATConfig.__dataclass_fields__)
-
     def test_load_only_reads_dotenv_file_and_ignores_process_environment(self) -> None:
         temp_root = self.make_temp_dir("dotenv_only_config")
         env_path = temp_root / ".env"

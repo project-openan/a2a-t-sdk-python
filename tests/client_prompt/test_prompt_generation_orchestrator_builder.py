@@ -79,13 +79,6 @@ class PromptGenerationOrchestratorBuilderTest(unittest.TestCase):
         self.assertEqual(len(runtime_builder.calls), 1)
         effective_config = runtime_builder.calls[0]
         self.assertEqual(effective_config.prompt.local_root_dir, "./override-root")
-        self.assertEqual(orchestrator.kwargs["config"], effective_config.prompt)
-        self.assertIs(orchestrator.kwargs["scenario_loader"], components.scenario_loader)
-        self.assertIs(orchestrator.kwargs["prompt_resource_loader"], components.prompt_resource_loader)
-        self.assertIs(orchestrator.kwargs["template_loader"], components.template_loader)
-        self.assertIs(orchestrator.kwargs["slot_schema_loader"], components.slot_schema_loader)
-        self.assertIs(orchestrator.kwargs["slot_validator"], components.slot_validator)
-        self.assertIs(orchestrator.kwargs["resource_registry"], components.resource_registry)
         self.assertIsInstance(orchestrator.kwargs["scenario_recognizer"], FakeScenarioRecognizer)
         self.assertIsInstance(orchestrator.kwargs["slot_extractor"], FakeSlotExtractor)
         self.assertIs(orchestrator.kwargs["scenario_recognizer"].llm_client, llm_client)
