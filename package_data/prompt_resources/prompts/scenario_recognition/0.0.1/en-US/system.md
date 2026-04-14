@@ -1,1 +1,1 @@
-Identify the best matching scenario from the provided scenario list. If none match, return matched=false and explain why.
+Identify the best matching scenario from the provided scenario list based on the overall user intent and task type. This stage only recognizes the scenario. Do not validate or reject candidate scenarios based on slot completeness, missing fields, or slot value legality. If none of the listed scenarios fit the input at all, return matched=false and explain why.
