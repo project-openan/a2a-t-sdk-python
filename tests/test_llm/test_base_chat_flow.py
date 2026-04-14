@@ -58,6 +58,28 @@ class BaseChatFlowTest(unittest.TestCase):
         self.assertIn("system:first prompt", second.content)
         self.assertNotIn("system:second prompt", second.content)
 
+    def test_chat_creates_provider_prefixed_session_id(self) -> None:
+        adapter = DummyAdapter({"model": "dummy-model", "provider": "dummy", "history_window": 2})
+
+        response = adapter.chat("hello")
+
+        self.assertIsNotNone(response.session_id)
+        self.assertTrue(response.session_id.startswith("dummy-"))
+
+    def test_cross_provider_session_reuse_raises_runtime_error(self) -> None:
+        shared_store = InMemorySessionStore(max_total=10, max_per_provider=10)
+        openai_adapter = DummyAdapter(
+            {"model": "dummy-model", "provider": "openai", "history_window": 2, "session_store": shared_store}
+        )
+        deepseek_adapter = DummyAdapter(
+            {"model": "dummy-model", "provider": "deepseek", "history_window": 2, "session_store": shared_store}
+        )
+
+        first = openai_adapter.chat("hello")
+
+        with self.assertRaises(LLMRuntimeError):
+            deepseek_adapter.chat("continue", session_id=first.session_id)
+
     def test_reset_session_clears_history_and_system_prompt(self) -> None:
         adapter = DummyAdapter({"model": "dummy-model", "history_window": 2})
         first = adapter.chat("hello", system_prompt="first prompt")
