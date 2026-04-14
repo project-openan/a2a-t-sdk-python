@@ -14,6 +14,7 @@ if str(SRC_ROOT) not in sys.path:
 
 
 from a2a_t.prompt.analysis.models import ScenarioRecognitionResult, SlotExtractionResult
+from a2a_t.config.models import PromptRuntimeConfig
 from a2a_t.prompt.validation.constants import MISSING_INPUT
 from a2a_t.client.prompt.generation_constants import (
     GENERATION_STAGE,
@@ -132,6 +133,27 @@ class FakeLogger:
         self.debug_calls.append(message % args if args else message)
 
 
+class FakePromptRuntimeConfig(PromptRuntimeConfig):
+    __slots__ = ("prompt_generation_debug",)
+
+    def __init__(
+        self,
+        *,
+        language: str = "en-US",
+        prompt_resource_version: str = "0.0.1",
+        source_type: str = "local_file",
+        local_root_dir: str = "./package_data/prompt_resources",
+        prompt_generation_debug: bool = False,
+    ) -> None:
+        super().__init__(
+            language=language,
+            prompt_resource_version=prompt_resource_version,
+            source_type=source_type,
+            local_root_dir=local_root_dir,
+        )
+        self.prompt_generation_debug = prompt_generation_debug
+
+
 class PromptGenerationOrchestratorTest(unittest.TestCase):
     def test_orchestrator_no_longer_keeps_obsolete_private_loader_methods(self) -> None:
         from a2a_t.client.prompt.prompt_generation_orchestrator import PromptGenerationOrchestrator
@@ -157,11 +179,11 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
         self.logger = logger or FakeLogger()
 
         return PromptGenerationOrchestrator(
-            config=type(
-                "Config",
-                (),
-                {"language": "en-US", "prompt_resource_version": "0.0.1", "prompt_generation_debug": debug_enabled},
-            )(),
+            config=FakePromptRuntimeConfig(
+                language="en-US",
+                prompt_resource_version="0.0.1",
+                prompt_generation_debug=debug_enabled,
+            ),
             scenario_loader=FakeScenarioLoader(),
             prompt_resource_loader=FakePromptResourceLoader(),
             template_loader=self.template_loader,
@@ -171,6 +193,37 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
             slot_validator=FakeSlotValidator(validation_result),
             logger=self.logger,
         )
+
+    def test_orchestrator_requires_prompt_runtime_config(self) -> None:
+        from a2a_t.client.prompt.prompt_generation_orchestrator import PromptGenerationOrchestrator
+
+        with self.assertRaises(TypeError):
+            PromptGenerationOrchestrator(
+                config=object(),
+                scenario_loader=FakeScenarioLoader(),
+                prompt_resource_loader=FakePromptResourceLoader(),
+                template_loader=FakeTemplateLoader(),
+                slot_schema_loader=FakeSlotSchemaLoader(),
+                scenario_recognizer=FakeScenarioRecognizer(
+                    ScenarioRecognitionResult(
+                        matched=True,
+                        scenario_code="energy_saving",
+                        error_message=None,
+                    )
+                ),
+                slot_extractor=FakeSlotExtractor(
+                    SlotExtractionResult(
+                        slots={"site": "Site A", "additional_notes": None},
+                        slot_errors=[],
+                    )
+                ),
+                slot_validator=FakeSlotValidator(
+                    SlotValidationResult(
+                        passed=True,
+                        slot_errors=[],
+                    )
+                ),
+            )
 
     def test_generate_returns_success_result(self) -> None:
         orchestrator = self._build_orchestrator(
@@ -213,6 +266,8 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
         self.assertIn("Site: Site A", result.prompt_text)
         self.assertTrue(any("input_kind=natural_language" in message for message in self.logger.info_calls))
         self.assertTrue(any("scenario_code=energy_saving" in message for message in self.logger.info_calls))
+        self.assertTrue(any("slots={'site': 'Site A', 'additional_notes': None}" in message for message in self.logger.info_calls))
+        self.assertTrue(any("slot_errors=[]" in message for message in self.logger.info_calls))
         self.assertTrue(any("success=True" in message for message in self.logger.info_calls))
         self.assertEqual(self.logger.debug_calls, [])
 
@@ -288,6 +343,8 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
         self.assertEqual(result.failure.code, MISSING_REQUIRED_FIELDS)
         self.assertEqual(result.failure.stage, VALIDATION_STAGE)
         self.assertEqual(result.validation.missing_required_fields, ["site"])
+        self.assertTrue(any("missing_required_fields=['site']" in message for message in self.logger.info_calls))
+        self.assertTrue(any("slot_errors=[SlotValidationError(slot_name='site', code='missing_input', message=\"Required slot 'site' is missing.\")]" in message for message in self.logger.info_calls))
 
     def test_client_constants_shim_module_is_not_importable(self) -> None:
         with self.assertRaises(ModuleNotFoundError):

@@ -8,6 +8,7 @@ from typing import Any
 from a2a_t.config.models import A2ATConfig
 from a2a_t.llm.client import LLMClient
 
+from .prompt.models import PromptGenerationResult
 from .prompt.prompt_generation_orchestrator import PromptGenerationOrchestrator
 from .prompt.prompt_generation_orchestrator_builder import PromptGenerationOrchestratorBuilder
 
@@ -42,7 +43,7 @@ class PromptClient:
             resource_root=resource_root,
         )
 
-    def generate_a2a_t_prompt(self, user_input: str | dict[str, object]) -> Any:
+    def generate_a2a_t_prompt(self, user_input: str | dict[str, object]) -> PromptGenerationResult:
         return self._orchestrator.generate(user_input)
 
     def send_with_template(self, template_name: str, params: dict[str, Any]) -> dict[str, Any]:

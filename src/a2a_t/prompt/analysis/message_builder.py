@@ -25,14 +25,16 @@ class AnalysisMessageBuilder:
         ]
         content = "\n\n".join(
             [
-                f"[system_prompt]\n{system_prompt}",
                 f"[user_prompt]\n{user_prompt}",
                 f"[language]\n{language}",
                 f"[input]\n{normalized_input}",
                 "[scenarios]\n" + "\n".join(scenario_lines),
             ]
         )
-        return [{"role": "user", "content": content}]
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": content},
+        ]
 
     def build_slot_extraction_messages(
         self,
@@ -56,7 +58,6 @@ class AnalysisMessageBuilder:
         ]
         content = "\n\n".join(
             [
-                f"[system_prompt]\n{system_prompt}",
                 f"[user_prompt]\n{user_prompt}",
                 f"[scenario_code]\n{reference.scenario_code}",
                 f"[version]\n{reference.version}",
@@ -66,4 +67,7 @@ class AnalysisMessageBuilder:
                 "[slots]\n" + "\n".join(slot_lines),
             ]
         )
-        return [{"role": "user", "content": content}]
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": content},
+        ]

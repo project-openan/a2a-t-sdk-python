@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from a2a_t.config.models import PromptRuntimeConfig
 from a2a_t.prompt.analysis.errors import PromptAnalysisError
 from a2a_t.prompt.validation.constants import INVALID_VALUE
 from a2a_t.prompt.resources.errors import PromptResourceNotFoundError
@@ -37,7 +38,7 @@ class PromptGenerationOrchestrator:
     def __init__(
         self,
         *,
-        config: Any,
+        config: PromptRuntimeConfig,
         scenario_loader: Any,
         prompt_resource_loader: Any,
         template_loader: Any,
@@ -50,6 +51,8 @@ class PromptGenerationOrchestrator:
         renderer: A2ATTaskPromptRenderer | None = None,
         logger: Any | None = None,
     ) -> None:
+        if not isinstance(config, PromptRuntimeConfig):
+            raise TypeError("config must be a PromptRuntimeConfig instance.")
         self._config = config
         self._scenario_loader = scenario_loader
         self._prompt_resource_loader = prompt_resource_loader
@@ -73,8 +76,8 @@ class PromptGenerationOrchestrator:
         if self._is_debug_enabled():
             self._log_debug("prompt_generation_raw_user_input raw_user_input=%s", user_input)
         normalized_input = self._input_normalizer.normalize(user_input)
-        language = getattr(self._config, "language", None) or "en-US"
-        version = getattr(self._config, "prompt_resource_version", None) or "0.0.1"
+        language = self._config.language
+        version = self._config.prompt_resource_version
         self._log_info(
             "prompt_generation_input_normalized input_kind=%s requested_language=%s version=%s",
             normalized_input.input_kind,
@@ -209,9 +212,19 @@ class PromptGenerationOrchestrator:
             slot_schema=slot_schema,
         )
         validation = self._build_validation_result(shared_validation.slot_errors)
+        self._log_info(
+            "prompt_generation_slots_extracted slots=%s slot_errors=%s",
+            extraction_result.slots,
+            shared_validation.slot_errors,
+        )
         if not shared_validation.passed:
             failure_code = INVALID_FIELD_VALUE if self._contains_invalid_value(shared_validation.slot_errors) else MISSING_REQUIRED_FIELDS
             failure_message = "Slot validation failed."
+            self._log_info(
+                "prompt_generation_validation_failed missing_required_fields=%s slot_errors=%s",
+                validation.missing_required_fields,
+                shared_validation.slot_errors,
+            )
             return self._finalize_result(
                 PromptGenerationResult(
                 success=False,

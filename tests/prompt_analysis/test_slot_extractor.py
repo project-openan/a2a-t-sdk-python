@@ -29,7 +29,7 @@ class FakeLLMClient:
 
 
 class SlotExtractorTest(unittest.TestCase):
-    def test_extract_calls_structured_with_dynamic_schema_and_single_message(self) -> None:
+    def test_extract_calls_structured_with_dynamic_schema_and_system_user_messages(self) -> None:
         llm_client = FakeLLMClient(
             (
                 '{"slots": {"site": "Site A", "additional_notes": null}, '
@@ -96,8 +96,12 @@ class SlotExtractorTest(unittest.TestCase):
             ],
         )
         self.assertEqual(len(llm_client.calls), 1)
-        self.assertEqual(len(llm_client.calls[0]["messages"]), 1)
-        self.assertEqual(llm_client.calls[0]["messages"][0]["role"], "user")
+        self.assertEqual(len(llm_client.calls[0]["messages"]), 2)
+        self.assertEqual(llm_client.calls[0]["messages"][0]["role"], "system")
+        self.assertEqual(llm_client.calls[0]["messages"][1]["role"], "user")
+        self.assertIn("Extract slots.", llm_client.calls[0]["messages"][0]["content"])
+        self.assertIn("Return slots and slot errors.", llm_client.calls[0]["messages"][1]["content"])
+        self.assertIn("Analyze Site A and focus on power system.", llm_client.calls[0]["messages"][1]["content"])
         self.assertEqual(
             llm_client.calls[0]["json_schema"]["properties"]["slots"]["required"],
             ["site", "additional_notes"],
