@@ -9,7 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from a2a_t.llm.errors import LLMConfigError, LLMRuntimeError
-from a2a_t.llm.session_store import InMemorySessionStore, SessionStore
+from a2a_t.llm.session_store import InMemorySessionStore, ProviderScopedSessionStore, SessionStore
 
 
 @dataclass
@@ -26,6 +26,7 @@ class ChatSession:
     messages: list[ChatMessage] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_accessed_time: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass
@@ -46,7 +47,12 @@ class LLMAdapter(ABC):
         self._config = config
         self._provider = str(config.get("provider", "")).strip() or self.adapter_type
         self._model = str(config.get("model", ""))
-        self._session_store: SessionStore = config.get("session_store") or InMemorySessionStore()
+        root_store: SessionStore = config.get("session_store") or InMemorySessionStore()
+        self._session_store = (
+            root_store if isinstance(root_store, ProviderScopedSessionStore) else ProviderScopedSessionStore(
+                self._provider, root_store
+            )
+        )
         if not self._model:
             raise LLMConfigError("LLM adapter requires a non-empty model")
 
@@ -82,7 +88,9 @@ class LLMAdapter(ABC):
         current_msg = self._build_messages_from_session(session, history_window=history_window)
         response = self._generate_from_messages(current_msg, **provider_kwargs)
         session.messages.append(ChatMessage(role="assistant", content=response.content))
-        session.last_accessed_time = datetime.now(UTC)
+        now = datetime.now(UTC)
+        session.last_accessed_time = now
+        session.updated_at = now
         self._session_store.save(session)
         response.session_id = session.session_id
         return response
@@ -113,6 +121,7 @@ class LLMAdapter(ABC):
                 provider=self._provider,
                 created_at=now,
                 last_accessed_time=now,
+                updated_at=now,
             )
         session = self._session_store.get(session_id)
         if session is None:

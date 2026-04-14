@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import sys
 from pathlib import Path
 import unittest
@@ -40,7 +39,14 @@ class ProviderScopedSessionStoreTest(unittest.TestCase):
         with self.assertRaises(LLMConfigError):
             openai_store.save(session)
 
+    def test_save_rejects_mismatched_session_id_prefix(self) -> None:
+        root = InMemorySessionStore(max_total=5, max_per_provider=5)
+        openai_store = ProviderScopedSessionStore("openai", root)
+        session = ChatSession(session_id="other-1", provider="openai")
+
+        with self.assertRaises(LLMConfigError):
+            openai_store.save(session)
+
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -80,6 +80,51 @@ class BaseChatFlowTest(unittest.TestCase):
         with self.assertRaises(LLMRuntimeError):
             deepseek_adapter.chat("continue", session_id=first.session_id)
 
+    def test_cross_provider_reset_session_raises_runtime_error(self) -> None:
+        shared_store = InMemorySessionStore(max_total=10, max_per_provider=10)
+        openai_adapter = DummyAdapter(
+            {"model": "dummy-model", "provider": "openai", "history_window": 2, "session_store": shared_store}
+        )
+        deepseek_adapter = DummyAdapter(
+            {"model": "dummy-model", "provider": "deepseek", "history_window": 2, "session_store": shared_store}
+        )
+
+        first = openai_adapter.chat("hello")
+
+        with self.assertRaises(LLMRuntimeError):
+            deepseek_adapter.reset_session(first.session_id)
+
+    def test_cross_provider_delete_session_does_not_remove(self) -> None:
+        shared_store = InMemorySessionStore(max_total=10, max_per_provider=10)
+        openai_adapter = DummyAdapter(
+            {"model": "dummy-model", "provider": "openai", "history_window": 2, "session_store": shared_store}
+        )
+        deepseek_adapter = DummyAdapter(
+            {"model": "dummy-model", "provider": "deepseek", "history_window": 2, "session_store": shared_store}
+        )
+
+        first = openai_adapter.chat("hello")
+
+        deepseek_adapter.delete_session(first.session_id)
+
+        second = openai_adapter.chat("continue", session_id=first.session_id)
+
+        self.assertEqual(second.session_id, first.session_id)
+
+    def test_chat_updates_legacy_updated_at_field(self) -> None:
+        shared_store = InMemorySessionStore(max_total=10, max_per_provider=10)
+        adapter = DummyAdapter(
+            {"model": "dummy-model", "provider": "dummy", "history_window": 2, "session_store": shared_store}
+        )
+
+        response = adapter.chat("hello")
+
+        session = shared_store.get(response.session_id)
+
+        self.assertIsNotNone(session)
+        self.assertIsNotNone(session.updated_at)
+        self.assertEqual(session.updated_at, session.last_accessed_time)
+
     def test_reset_session_clears_history_and_system_prompt(self) -> None:
         adapter = DummyAdapter({"model": "dummy-model", "history_window": 2})
         first = adapter.chat("hello", system_prompt="first prompt")
