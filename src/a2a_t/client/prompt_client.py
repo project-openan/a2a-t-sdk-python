@@ -8,9 +8,9 @@ from typing import Any
 from a2a_t.config.models import A2ATConfig
 from a2a_t.llm.client import LLMClient
 
-from .prompt.models import PromptGenerationResult
-from .prompt.prompt_generation_orchestrator import PromptGenerationOrchestrator
-from .prompt.prompt_generation_orchestrator_builder import PromptGenerationOrchestratorBuilder
+from .prompt_generation.models import PromptGenerationResult
+from .prompt_generation.prompt_generation_orchestrator import PromptGenerationOrchestrator
+from .prompt_generation.prompt_generation_orchestrator_builder import PromptGenerationOrchestratorBuilder
 
 
 def _default_env_path() -> Path:

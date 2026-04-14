@@ -42,7 +42,7 @@ class FakeOrchestrator:
 
 class PromptGenerationOrchestratorBuilderTest(unittest.TestCase):
     def test_builder_uses_runtime_components_builder_and_injects_llm_client(self) -> None:
-        from a2a_t.client.prompt.prompt_generation_orchestrator_builder import PromptGenerationOrchestratorBuilder
+        from a2a_t.client.prompt_generation.prompt_generation_orchestrator_builder import PromptGenerationOrchestratorBuilder
 
         components = type(
             "Components",

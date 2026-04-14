@@ -17,7 +17,7 @@ from a2a_t.prompt.analysis.models import ScenarioRecognitionResult, SlotExtracti
 from a2a_t.config.models import PromptRuntimeConfig
 from a2a_t.prompt.validation.constants import MISSING_INPUT
 from a2a_t.prompt.common.errors import PromptSourceError
-from a2a_t.client.prompt.generation_constants import (
+from a2a_t.client.prompt_generation.generation_constants import (
     GENERATION_STAGE,
     INVALID_LLM_OUTPUT,
     MISSING_REQUIRED_FIELDS,
@@ -181,7 +181,7 @@ class FakePromptRuntimeConfig(PromptRuntimeConfig):
 
 class PromptGenerationOrchestratorTest(unittest.TestCase):
     def test_orchestrator_no_longer_keeps_obsolete_private_loader_methods(self) -> None:
-        from a2a_t.client.prompt.prompt_generation_orchestrator import PromptGenerationOrchestrator
+        from a2a_t.client.prompt_generation.prompt_generation_orchestrator import PromptGenerationOrchestrator
 
         self.assertFalse(hasattr(PromptGenerationOrchestrator, "_load_template"))
         self.assertFalse(hasattr(PromptGenerationOrchestrator, "_load_slot_schema"))
@@ -197,7 +197,7 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
         debug_enabled: bool = False,
         logger: FakeLogger | None = None,
     ):
-        from a2a_t.client.prompt.prompt_generation_orchestrator import PromptGenerationOrchestrator
+        from a2a_t.client.prompt_generation.prompt_generation_orchestrator import PromptGenerationOrchestrator
 
         self.template_loader = FakeTemplateLoader()
         self.slot_schema_loader = FakeSlotSchemaLoader()
@@ -222,7 +222,7 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
         )
 
     def test_orchestrator_requires_prompt_runtime_config(self) -> None:
-        from a2a_t.client.prompt.prompt_generation_orchestrator import PromptGenerationOrchestrator
+        from a2a_t.client.prompt_generation.prompt_generation_orchestrator import PromptGenerationOrchestrator
 
         with self.assertRaises(TypeError):
             PromptGenerationOrchestrator(
@@ -384,11 +384,11 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
 
     def test_client_constants_shim_module_is_not_importable(self) -> None:
         with self.assertRaises(ModuleNotFoundError):
-            importlib.import_module("a2a_t.client.prompt.constants")
+            importlib.import_module("a2a_t.client.prompt_generation.constants")
 
     def test_legacy_private_constants_module_is_not_importable(self) -> None:
         with self.assertRaises(ModuleNotFoundError):
-            importlib.import_module("a2a_t.client.prompt._constants")
+            importlib.import_module("a2a_t.client.prompt_generation._constants")
 
     def test_generate_logs_raw_input_and_raw_llm_outputs_when_debug_enabled(self) -> None:
         orchestrator = self._build_orchestrator(

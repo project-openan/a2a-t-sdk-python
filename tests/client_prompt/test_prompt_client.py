@@ -13,7 +13,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
-from a2a_t.client.prompt.models import PromptGenerationResult, ValidationResult
+from a2a_t.client.prompt_generation.models import PromptGenerationResult, ValidationResult
 from tests.test_support import ManagedTempDirTestCase
 
 

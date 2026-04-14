@@ -110,7 +110,7 @@ class PromptGenerationOrchestratorFallbackTest(ManagedTempDirTestCase):
             ]
         )
 
-        from a2a_t.client.prompt.prompt_generation_orchestrator import PromptGenerationOrchestrator
+        from a2a_t.client.prompt_generation.prompt_generation_orchestrator import PromptGenerationOrchestrator
 
         orchestrator = PromptGenerationOrchestrator(
             config=PromptRuntimeConfig(language="zh-CN", prompt_resource_version="0.0.1"),
@@ -153,7 +153,7 @@ class PromptGenerationOrchestratorFallbackTest(ManagedTempDirTestCase):
             ['{"matched": true, "scenario_code": "energy_saving", "error_message": null}']
         )
 
-        from a2a_t.client.prompt.prompt_generation_orchestrator import PromptGenerationOrchestrator
+        from a2a_t.client.prompt_generation.prompt_generation_orchestrator import PromptGenerationOrchestrator
 
         orchestrator = PromptGenerationOrchestrator(
             config=PromptRuntimeConfig(language="zh-CN", prompt_resource_version="0.0.1"),
