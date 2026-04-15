@@ -58,6 +58,73 @@ class BaseChatFlowTest(unittest.TestCase):
         self.assertIn("system:first prompt", second.content)
         self.assertNotIn("system:second prompt", second.content)
 
+    def test_chat_creates_provider_prefixed_session_id(self) -> None:
+        adapter = DummyAdapter({"model": "dummy-model", "provider": "dummy", "history_window": 2})
+
+        response = adapter.chat("hello")
+
+        self.assertIsNotNone(response.session_id)
+        self.assertTrue(response.session_id.startswith("dummy-"))
+
+    def test_cross_provider_session_reuse_raises_runtime_error(self) -> None:
+        shared_store = InMemorySessionStore(max_total=10, max_per_provider=10)
+        openai_adapter = DummyAdapter(
+            {"model": "dummy-model", "provider": "openai", "history_window": 2, "session_store": shared_store}
+        )
+        deepseek_adapter = DummyAdapter(
+            {"model": "dummy-model", "provider": "deepseek", "history_window": 2, "session_store": shared_store}
+        )
+
+        first = openai_adapter.chat("hello")
+
+        with self.assertRaises(LLMRuntimeError):
+            deepseek_adapter.chat("continue", session_id=first.session_id)
+
+    def test_cross_provider_reset_session_raises_runtime_error(self) -> None:
+        shared_store = InMemorySessionStore(max_total=10, max_per_provider=10)
+        openai_adapter = DummyAdapter(
+            {"model": "dummy-model", "provider": "openai", "history_window": 2, "session_store": shared_store}
+        )
+        deepseek_adapter = DummyAdapter(
+            {"model": "dummy-model", "provider": "deepseek", "history_window": 2, "session_store": shared_store}
+        )
+
+        first = openai_adapter.chat("hello")
+
+        with self.assertRaises(LLMRuntimeError):
+            deepseek_adapter.reset_session(first.session_id)
+
+    def test_cross_provider_delete_session_does_not_remove(self) -> None:
+        shared_store = InMemorySessionStore(max_total=10, max_per_provider=10)
+        openai_adapter = DummyAdapter(
+            {"model": "dummy-model", "provider": "openai", "history_window": 2, "session_store": shared_store}
+        )
+        deepseek_adapter = DummyAdapter(
+            {"model": "dummy-model", "provider": "deepseek", "history_window": 2, "session_store": shared_store}
+        )
+
+        first = openai_adapter.chat("hello")
+
+        deepseek_adapter.delete_session(first.session_id)
+
+        second = openai_adapter.chat("continue", session_id=first.session_id)
+
+        self.assertEqual(second.session_id, first.session_id)
+
+    def test_chat_updates_legacy_updated_at_field(self) -> None:
+        shared_store = InMemorySessionStore(max_total=10, max_per_provider=10)
+        adapter = DummyAdapter(
+            {"model": "dummy-model", "provider": "dummy", "history_window": 2, "session_store": shared_store}
+        )
+
+        response = adapter.chat("hello")
+
+        session = shared_store._sessions[response.session_id]
+
+        self.assertIsNotNone(session)
+        self.assertIsNotNone(session.updated_at)
+        self.assertEqual(session.updated_at, session.last_accessed_time)
+
     def test_reset_session_clears_history_and_system_prompt(self) -> None:
         adapter = DummyAdapter({"model": "dummy-model", "history_window": 2})
         first = adapter.chat("hello", system_prompt="first prompt")
@@ -104,6 +171,20 @@ class BaseChatFlowTest(unittest.TestCase):
         self.assertEqual(outbound[0].content, "second")
         self.assertEqual(outbound[1].content, second.content)
         self.assertEqual(outbound[2].content, "third")
+
+    def test_chat_trims_persisted_history_to_history_window(self) -> None:
+        store = InMemorySessionStore(max_total=10, max_per_provider=10)
+        adapter = DummyAdapter(
+            {"model": "dummy-model", "provider": "dummy", "history_window": 2, "session_store": store}
+        )
+
+        first = adapter.chat("first")
+        adapter.chat("second", session_id=first.session_id)
+        adapter.chat("third", session_id=first.session_id)
+        stored = store.get(first.session_id)
+
+        self.assertEqual([item.role for item in stored.messages], ["user", "assistant", "user", "assistant"])
+        self.assertEqual(stored.messages[0].content, "second")
 
 
 class LLMModuleExportsTest(unittest.TestCase):

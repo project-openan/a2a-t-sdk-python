@@ -64,10 +64,12 @@ class LLMClientTest(ManagedTempDirTestCase):
                 [
                     "A2AT_LLM_PROVIDER=deepseek",
                     "A2AT_LLM_MODEL=deepseek-chat",
-                    "A2AT_LLM_API_KEY=sk-5a2b4be663c64c82a41814e3468c9943",
+                    "A2AT_LLM_API_KEY=sk-test",
                     "A2AT_LLM_HISTORY_WINDOW=6",
                     "A2AT_LLM_TEMPERATURE=0.1",
                     "A2AT_LLM_MAX_TOKENS=128",
+                    "A2AT_LLM_SESSION_MAX_TOTAL=40",
+                    "A2AT_LLM_SESSION_MAX_PER_PROVIDER=20",
                 ]
             )
             + "\n"
@@ -88,11 +90,13 @@ class LLMClientTest(ManagedTempDirTestCase):
         self.assertEqual(response.content, "chat-ok")
         self.assertEqual(created[0][0], "deepseek")
         self.assertEqual(created[0][1]["model"], "deepseek-chat")
-        self.assertEqual(created[0][1]["api_key"], "sk-5a2b4be663c64c82a41814e3468c9943")
+        self.assertEqual(created[0][1]["api_key"], "sk-test")
         self.assertEqual(created[0][1]["history_window"], 6)
         self.assertEqual(created[0][2].chat_calls[0]["kwargs"]["temperature"], 0.1)
         self.assertEqual(created[0][2].chat_calls[0]["kwargs"]["max_tokens"], 128)
         self.assertEqual(created[0][2].chat_calls[0]["kwargs"]["history_window"], 6)
+        self.assertEqual(client._defaults.session_max_total, 40)
+        self.assertEqual(client._defaults.session_max_per_provider, 20)
 
     def test_complete_allows_method_level_overrides(self) -> None:
         env_path = self._write_env(
@@ -159,7 +163,155 @@ class LLMClientTest(ManagedTempDirTestCase):
                 history_window=9,
             )
 
-        self.assertIs(session_stores[0], session_stores[1])
+        self.assertEqual(session_stores[0].__class__.__name__, "ProviderScopedSessionStore")
+        self.assertEqual(session_stores[1].__class__.__name__, "ProviderScopedSessionStore")
+        self.assertIs(session_stores[0]._root_store, session_stores[1]._root_store)
+
+    def test_chat_injects_provider_scoped_session_store(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=sk-test",
+                    "A2AT_LLM_SESSION_MAX_TOTAL=50",
+                    "A2AT_LLM_SESSION_MAX_PER_PROVIDER=20",
+                ]
+            )
+            + "\n"
+        )
+        session_stores: list[object] = []
+
+        def factory_side_effect(adapter_type: str, config: dict[str, Any]) -> RecordingAdapter:
+            session_stores.append(config["session_store"])
+            return RecordingAdapter(config)
+
+        with patch("a2a_t.llm.client.LLMAdapterFactory.create", side_effect=factory_side_effect):
+            from a2a_t.llm.client import LLMClient
+
+            client = LLMClient(env_path=env_path)
+            client.chat("hello")
+
+        self.assertEqual(session_stores[0].__class__.__name__, "ProviderScopedSessionStore")
+
+    def test_session_store_defaults_apply_configured_limits(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=sk-test",
+                    "A2AT_LLM_SESSION_MAX_TOTAL=50",
+                    "A2AT_LLM_SESSION_MAX_PER_PROVIDER=20",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.client import LLMClient
+
+        client = LLMClient(env_path=env_path)
+
+        self.assertEqual(client._session_store._max_total, 50)
+        self.assertEqual(client._session_store._max_per_provider, 20)
+
+    def test_session_limit_config_is_loaded_from_dotenv(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=sk-test",
+                    "A2AT_LLM_SESSION_MAX_TOTAL=50",
+                    "A2AT_LLM_SESSION_MAX_PER_PROVIDER=20",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.client import LLMClient
+
+        client = LLMClient(env_path=env_path)
+
+        self.assertEqual(client._defaults.session_max_total, 50)
+        self.assertEqual(client._defaults.session_max_per_provider, 20)
+
+    def test_session_limit_config_defaults_to_recommended_values(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=sk-test",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.client import LLMClient
+
+        client = LLMClient(env_path=env_path)
+
+        self.assertEqual(client._defaults.session_max_total, 300)
+        self.assertEqual(client._defaults.session_max_per_provider, 100)
+
+    def test_history_window_override_rejects_above_maximum(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=sk-test",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.client import LLMClient
+
+        client = LLMClient(env_path=env_path)
+
+        with self.assertRaises(LLMConfigError):
+            client.chat("hello", history_window=101)
+
+    def test_session_limit_config_rejects_values_above_hard_maximums(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=sk-test",
+                    "A2AT_LLM_HISTORY_WINDOW=101",
+                    "A2AT_LLM_SESSION_MAX_TOTAL=3001",
+                    "A2AT_LLM_SESSION_MAX_PER_PROVIDER=1001",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.client import LLMClient
+
+        with self.assertRaises(LLMConfigError):
+            LLMClient(env_path=env_path)
+
+    def test_session_limit_config_rejects_total_smaller_than_per_provider(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=sk-test",
+                    "A2AT_LLM_SESSION_MAX_TOTAL=10",
+                    "A2AT_LLM_SESSION_MAX_PER_PROVIDER=20",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.client import LLMClient
+
+        with self.assertRaises(LLMConfigError):
+            LLMClient(env_path=env_path)
 
     def test_reset_and_delete_session_delegate_to_adapter(self) -> None:
         env_path = self._write_env(
@@ -238,6 +390,42 @@ class LLMClientTest(ManagedTempDirTestCase):
         client = LLMClient(env_path=env_path)
         with self.assertRaises(LLMConfigError):
             client.complete("hello")
+
+    def test_whitespace_only_api_key_is_treated_as_missing(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=   ",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.client import LLMClient
+
+        client = LLMClient(env_path=env_path)
+        with self.assertRaises(LLMConfigError):
+            client.complete("hello")
+
+    def test_runtime_api_key_override_whitespace_is_rejected(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=sk-test",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.client import LLMClient
+
+        client = LLMClient(env_path=env_path)
+        with self.assertRaises(LLMConfigError):
+            client.complete("hello", api_key="   ")
 
 
 if __name__ == "__main__":

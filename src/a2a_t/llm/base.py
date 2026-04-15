@@ -9,7 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from a2a_t.llm.errors import LLMConfigError, LLMRuntimeError
-from a2a_t.llm.session_store import InMemorySessionStore, SessionStore
+from a2a_t.llm.session_store import InMemorySessionStore, ProviderScopedSessionStore, SessionStore
 
 
 @dataclass
@@ -21,9 +21,11 @@ class ChatMessage:
 @dataclass
 class ChatSession:
     session_id: str
+    provider: str
     system_prompt: str | None = None
     messages: list[ChatMessage] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    last_accessed_time: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -43,8 +45,14 @@ class LLMAdapter(ABC):
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config
+        self._provider = str(config.get("provider", "")).strip() or self.adapter_type
         self._model = str(config.get("model", ""))
-        self._session_store: SessionStore = config.get("session_store") or InMemorySessionStore()
+        root_store: SessionStore = config.get("session_store") or InMemorySessionStore()
+        self._session_store = (
+            root_store if isinstance(root_store, ProviderScopedSessionStore) else ProviderScopedSessionStore(
+                self._provider, root_store
+            )
+        )
         if not self._model:
             raise LLMConfigError("LLM adapter requires a non-empty model")
 
@@ -80,7 +88,10 @@ class LLMAdapter(ABC):
         current_msg = self._build_messages_from_session(session, history_window=history_window)
         response = self._generate_from_messages(current_msg, **provider_kwargs)
         session.messages.append(ChatMessage(role="assistant", content=response.content))
-        session.updated_at = datetime.now(UTC)
+        session.messages = self._trim_session_messages(session.messages, history_window=history_window)
+        now = datetime.now(UTC)
+        session.last_accessed_time = now
+        session.updated_at = now
         self._session_store.save(session)
         response.session_id = session.session_id
         return response
@@ -105,10 +116,21 @@ class LLMAdapter(ABC):
 
     def _load_or_create_session(self, session_id: str | None) -> ChatSession:
         if session_id is None:
-            return ChatSession(session_id=str(uuid4()))
+            now = datetime.now(UTC)
+            return ChatSession(
+                session_id=f"{self._provider}-{uuid4()}",
+                provider=self._provider,
+                created_at=now,
+                last_accessed_time=now,
+                updated_at=now,
+            )
         session = self._session_store.get(session_id)
         if session is None:
             raise LLMRuntimeError(f"unknown session_id: {session_id}")
+        if session.provider != self._provider:
+            raise LLMRuntimeError(
+                f"session_id {session_id} belongs to provider {session.provider}, not {self._provider}"
+            )
         return session
 
     def _build_messages(self, prompt: str, system_prompt: str | None) -> list[ChatMessage]:
@@ -125,6 +147,13 @@ class LLMAdapter(ABC):
         trimmed = session.messages[-(history_window * 2 - 1) :]
         messages.extend(trimmed)
         return messages
+
+    def _trim_session_messages(
+        self,
+        messages: list[ChatMessage],
+        history_window: int,
+    ) -> list[ChatMessage]:
+        return messages[-(history_window * 2) :]
 
     def _generate_from_messages(self, messages: list[ChatMessage], **kwargs: Any) -> LLMResponse:
         raise LLMRuntimeError("adapter does not support message generation in this phase")
