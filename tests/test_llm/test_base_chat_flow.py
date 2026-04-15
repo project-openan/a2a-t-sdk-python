@@ -119,7 +119,7 @@ class BaseChatFlowTest(unittest.TestCase):
 
         response = adapter.chat("hello")
 
-        session = shared_store.get(response.session_id)
+        session = shared_store._sessions[response.session_id]
 
         self.assertIsNotNone(session)
         self.assertIsNotNone(session.updated_at)
@@ -171,6 +171,20 @@ class BaseChatFlowTest(unittest.TestCase):
         self.assertEqual(outbound[0].content, "second")
         self.assertEqual(outbound[1].content, second.content)
         self.assertEqual(outbound[2].content, "third")
+
+    def test_chat_trims_persisted_history_to_history_window(self) -> None:
+        store = InMemorySessionStore(max_total=10, max_per_provider=10)
+        adapter = DummyAdapter(
+            {"model": "dummy-model", "provider": "dummy", "history_window": 2, "session_store": store}
+        )
+
+        first = adapter.chat("first")
+        adapter.chat("second", session_id=first.session_id)
+        adapter.chat("third", session_id=first.session_id)
+        stored = store.get(first.session_id)
+
+        self.assertEqual([item.role for item in stored.messages], ["user", "assistant", "user", "assistant"])
+        self.assertEqual(stored.messages[0].content, "second")
 
 
 class LLMModuleExportsTest(unittest.TestCase):

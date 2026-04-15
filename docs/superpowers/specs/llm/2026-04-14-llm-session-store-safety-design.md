@@ -214,8 +214,8 @@ session.provider == self.adapter_type
 新增：
 
 ```dotenv
-A2AT_LLM_SESSION_MAX_TOTAL=500
-A2AT_LLM_SESSION_MAX_PER_PROVIDER=300
+A2AT_LLM_SESSION_MAX_TOTAL=300
+A2AT_LLM_SESSION_MAX_PER_PROVIDER=100
 ```
 
 ### 7.2 配置语义
@@ -240,8 +240,8 @@ A2AT_LLM_SESSION_MAX_PER_PROVIDER=300
 
 例如：
 
-- `openai` 最多 300 个 session
-- `deepseek` 最多 300 个 session
+- `openai` 最多 100 个 session
+- `deepseek` 最多 100 个 session
 - 各 provider 分别独立计算
 
 ### 7.3 两类上限同时生效
@@ -254,14 +254,14 @@ A2AT_LLM_SESSION_MAX_PER_PROVIDER=300
 例如：
 
 ```dotenv
-A2AT_LLM_SESSION_MAX_TOTAL=500
-A2AT_LLM_SESSION_MAX_PER_PROVIDER=300
+A2AT_LLM_SESSION_MAX_TOTAL=300
+A2AT_LLM_SESSION_MAX_PER_PROVIDER=100
 ```
 
 则：
 
-- `openai=300, deepseek=200` 是允许的
-- 若再创建一个 `deepseek` session，虽然 deepseek 自身未超 300，但全局会超 500，因此仍需触发淘汰
+- `openai=100, deepseek=100, google=50, anthropic=50` 是允许的
+- 若再创建一个 `anthropic` session，虽然 anthropic 自身仅为 51、未超 100，但全局会超 300，因此仍需触发淘汰
 
 ### 7.4 淘汰策略
 
@@ -393,19 +393,21 @@ A2AT_LLM_HISTORY_WINDOW=10
 假设：
 
 ```dotenv
-A2AT_LLM_SESSION_MAX_TOTAL=500
-A2AT_LLM_SESSION_MAX_PER_PROVIDER=300
+A2AT_LLM_SESSION_MAX_TOTAL=300
+A2AT_LLM_SESSION_MAX_PER_PROVIDER=100
 ```
 
 若当前：
 
-- `openai=300`
-- `deepseek=200`
+- `openai=100`
+- `deepseek=100`
+- `google=50`
+- `anthropic=50`
 
-此时再创建一个 `deepseek` session：
+此时再创建一个 `anthropic` session：
 
-- deepseek provider 范围内仍未超 300
-- 但全局已达到 501
+- anthropic provider 范围内仍未超 100
+- 但全局已达到 301
 - 系统应淘汰全局范围内 `last_accessed_time` 最老的 session
 
 ## 12. 需要修改的对象

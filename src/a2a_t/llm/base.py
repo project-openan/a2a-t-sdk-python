@@ -88,6 +88,7 @@ class LLMAdapter(ABC):
         current_msg = self._build_messages_from_session(session, history_window=history_window)
         response = self._generate_from_messages(current_msg, **provider_kwargs)
         session.messages.append(ChatMessage(role="assistant", content=response.content))
+        session.messages = self._trim_session_messages(session.messages, history_window=history_window)
         now = datetime.now(UTC)
         session.last_accessed_time = now
         session.updated_at = now
@@ -146,6 +147,13 @@ class LLMAdapter(ABC):
         trimmed = session.messages[-(history_window * 2 - 1) :]
         messages.extend(trimmed)
         return messages
+
+    def _trim_session_messages(
+        self,
+        messages: list[ChatMessage],
+        history_window: int,
+    ) -> list[ChatMessage]:
+        return messages[-(history_window * 2) :]
 
     def _generate_from_messages(self, messages: list[ChatMessage], **kwargs: Any) -> LLMResponse:
         raise LLMRuntimeError("adapter does not support message generation in this phase")

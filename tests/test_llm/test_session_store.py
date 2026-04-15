@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import unittest
 
@@ -46,6 +47,78 @@ class ProviderScopedSessionStoreTest(unittest.TestCase):
 
         with self.assertRaises(LLMConfigError):
             openai_store.save(session)
+
+
+class InMemorySessionStoreTest(unittest.TestCase):
+    def test_get_refreshes_last_accessed_time(self) -> None:
+        root = InMemorySessionStore(max_total=5, max_per_provider=5)
+        session = ChatSession(session_id="openai-1", provider="openai")
+        root.save(session)
+        old_time = datetime.now(UTC) - timedelta(minutes=5)
+        root._sessions["openai-1"].last_accessed_time = old_time
+
+        refreshed = root.get("openai-1")
+
+        self.assertGreater(refreshed.last_accessed_time, old_time)
+
+    def test_get_does_not_refresh_updated_at(self) -> None:
+        root = InMemorySessionStore(max_total=5, max_per_provider=5)
+        session = ChatSession(session_id="openai-1", provider="openai")
+        root.save(session)
+        old_time = datetime.now(UTC) - timedelta(minutes=5)
+        root._sessions["openai-1"].updated_at = old_time
+
+        refreshed = root.get("openai-1")
+
+        self.assertEqual(refreshed.updated_at, old_time)
+
+    def test_save_evicts_oldest_session_when_provider_limit_is_exceeded(self) -> None:
+        root = InMemorySessionStore(max_total=10, max_per_provider=2)
+        old_time = datetime.now(UTC) - timedelta(minutes=10)
+        root.save(ChatSession(session_id="openai-1", provider="openai", last_accessed_time=old_time))
+        root.save(ChatSession(session_id="openai-2", provider="openai"))
+        root.save(ChatSession(session_id="openai-3", provider="openai"))
+
+        self.assertIsNone(root.get("openai-1"))
+        self.assertIsNotNone(root.get("openai-2"))
+        self.assertIsNotNone(root.get("openai-3"))
+
+    def test_save_evicts_global_oldest_session_when_total_limit_is_exceeded(self) -> None:
+        root = InMemorySessionStore(max_total=2, max_per_provider=2)
+        old_time = datetime.now(UTC) - timedelta(minutes=10)
+        root.save(ChatSession(session_id="openai-1", provider="openai", last_accessed_time=old_time))
+        root.save(ChatSession(session_id="deepseek-1", provider="deepseek"))
+        root.save(ChatSession(session_id="openai-2", provider="openai"))
+
+        self.assertIsNone(root.get("openai-1"))
+        self.assertIsNotNone(root.get("deepseek-1"))
+        self.assertIsNotNone(root.get("openai-2"))
+
+    def test_reset_refreshes_timestamps(self) -> None:
+        root = InMemorySessionStore(max_total=5, max_per_provider=5)
+        old_time = datetime.now(UTC) - timedelta(minutes=10)
+        root.save(ChatSession(session_id="openai-1", provider="openai"))
+        root._sessions["openai-1"].last_accessed_time = old_time
+        root._sessions["openai-1"].updated_at = old_time
+
+        refreshed = root.reset("openai-1")
+
+        self.assertIsNotNone(refreshed)
+        self.assertGreater(refreshed.last_accessed_time, old_time)
+        self.assertGreater(refreshed.updated_at, old_time)
+
+    def test_recent_access_preserves_session_during_provider_eviction(self) -> None:
+        root = InMemorySessionStore(max_total=10, max_per_provider=2)
+        old_time = datetime.now(UTC) - timedelta(minutes=10)
+        root.save(ChatSession(session_id="openai-1", provider="openai"))
+        root.save(ChatSession(session_id="openai-2", provider="openai"))
+        root._sessions["openai-1"].last_accessed_time = old_time
+
+        root.get("openai-1")
+        root.save(ChatSession(session_id="openai-3", provider="openai"))
+
+        self.assertIsNotNone(root.get("openai-1"))
+        self.assertIsNone(root.get("openai-2"))
 
 
 if __name__ == "__main__":
