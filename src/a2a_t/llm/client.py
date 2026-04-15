@@ -219,10 +219,8 @@ class LLMClient:
         api_key = overrides.get("api_key")
         if api_key is None:
             api_key = self._defaults.api_key
-        else:
-            api_key = str(api_key).strip()
-            if not api_key:
-                api_key = ""
+        if not str(api_key or "").strip():
+            raise LLMConfigError("LLM client requires a non-empty api_key")
 
         base_url = overrides.get("base_url")
         if base_url is None:

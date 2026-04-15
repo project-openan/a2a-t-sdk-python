@@ -1,0 +1,1 @@
+Review the normalized input and select the most appropriate supported scenario by overall task intent. Do not reject a scenario only because some fields are missing, ambiguous, or may later fail slot extraction or slot value validation. Return matched=false only when none of the supported scenarios fits the input at all.

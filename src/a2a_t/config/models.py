@@ -4,16 +4,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from a2a_t.config.source import DotEnvConfigSource
-from a2a_t.prompt.config import PromptLoaderConfig
-from a2a_t.server.prompt_compliance.config import (
-    GuardrailProviderConfig,
-    PromptComplianceConfig,
-    SlotExtractionConfig,
-    SlotSchemaConfig,
-)
+
+
+def _parse_bool(raw_value: str | None, default: bool) -> bool:
+    if raw_value is None or not raw_value.strip():
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_float(raw_value: str | None, default: float) -> float:
+    if raw_value is None or not raw_value.strip():
+        return default
+    return float(raw_value)
 
 
 @dataclass
@@ -72,6 +77,68 @@ class CompressionConfig:
     max_ratio: float = 0.5
 
 
+@dataclass(slots=True)
+class PromptRuntimeConfig:
+    """Prompt runtime configuration owned by the config package."""
+
+    language: str = "en-US"
+    prompt_resource_version: str = "0.0.1"
+    source_type: str = "local_file"
+    local_root_dir: str = "./package_data/prompt_resources"
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, str]) -> "PromptRuntimeConfig":
+        return cls(
+            language=values.get("A2AT_LANGUAGE", "en-US") or "en-US",
+            prompt_resource_version=values.get("A2AT_PROMPT_RESOURCE_VERSION", "0.0.1") or "0.0.1",
+            source_type=values.get("A2AT_PROMPT_SOURCE_TYPE", "local_file") or "local_file",
+            local_root_dir=values.get(
+                "A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR",
+                "./package_data/prompt_resources",
+            )
+            or "./package_data/prompt_resources",
+        )
+
+
+@dataclass(slots=True)
+class GuardrailProviderConfig:
+    """Provider configuration for safety guardrail adapters."""
+
+    provider: str = "noop"
+    timeout: float = 10.0
+    policy_id: str = ""
+    endpoint: str = ""
+    region: str = ""
+    credentials_ref: str = ""
+    config: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class PromptComplianceConfig:
+    """Top-level configuration for prompt compliance."""
+
+    enabled: bool = False
+    guardrail: GuardrailProviderConfig = field(default_factory=GuardrailProviderConfig)
+    providers: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, str]) -> "PromptComplianceConfig":
+        return cls(
+            enabled=_parse_bool(values.get("A2AT_PROMPT_COMPLIANCE_ENABLED"), False),
+            guardrail=GuardrailProviderConfig(
+                provider=values.get("A2AT_PROMPT_COMPLIANCE_GUARDRAIL_PROVIDER", "noop") or "noop",
+                timeout=_parse_float(
+                    values.get("A2AT_PROMPT_COMPLIANCE_GUARDRAIL_TIMEOUT_SECONDS"),
+                    10.0,
+                ),
+                policy_id=values.get("A2AT_PROMPT_COMPLIANCE_GUARDRAIL_POLICY_ID", "") or "",
+                endpoint=values.get("A2AT_PROMPT_COMPLIANCE_GUARDRAIL_ENDPOINT", "") or "",
+                region=values.get("A2AT_PROMPT_COMPLIANCE_GUARDRAIL_REGION", "") or "",
+                credentials_ref=values.get("A2AT_PROMPT_COMPLIANCE_GUARDRAIL_CREDENTIALS_REF", "") or "",
+            ),
+        )
+
+
 @dataclass
 class SDKConfig:
     """Main SDK configuration."""
@@ -85,7 +152,7 @@ class SDKConfig:
     log_level: str = "INFO"
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> SDKConfig:
+    def from_dict(cls, data: dict[str, Any]) -> "SDKConfig":
         """Create config from dictionary."""
         prompt_compliance_data = data.get("prompt_compliance", {})
         return cls(
@@ -97,8 +164,6 @@ class SDKConfig:
             prompt_compliance=PromptComplianceConfig(
                 enabled=prompt_compliance_data.get("enabled", False),
                 guardrail=GuardrailProviderConfig(**prompt_compliance_data.get("guardrail", {})),
-                slot_extraction=SlotExtractionConfig(**prompt_compliance_data.get("slot_extraction", {})),
-                slot_schema=SlotSchemaConfig(**prompt_compliance_data.get("slot_schema", {})),
                 providers=prompt_compliance_data.get("providers", {}),
             ),
             log_level=data.get("log_level", "INFO"),
@@ -109,13 +174,13 @@ class SDKConfig:
 class A2ATConfig:
     """全局 A2A-T 配置入口 / Global A2A-T configuration entry point."""
 
-    prompt: PromptLoaderConfig
+    prompt: PromptRuntimeConfig
     prompt_compliance: PromptComplianceConfig
 
     @classmethod
     def load(cls, env_path: Path) -> A2ATConfig:
         values = DotEnvConfigSource.load(env_path)
         return cls(
-            prompt=PromptLoaderConfig.from_mapping(values),
+            prompt=PromptRuntimeConfig.from_mapping(values),
             prompt_compliance=PromptComplianceConfig.from_mapping(values),
         )
