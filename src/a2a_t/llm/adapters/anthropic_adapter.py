@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from anthropic import Anthropic
+try:
+    from anthropic import Anthropic
+except ModuleNotFoundError:  # pragma: no cover - optional dependency in test env
+    Anthropic = None
 
 from a2a_t.llm.base import LLMAdapter, LLMResponse
 from a2a_t.llm.errors import LLMConfigError, LLMRuntimeError
@@ -19,6 +22,8 @@ class AnthropicAdapter(LLMAdapter):
         api_key = str(config.get("api_key", "")).strip()
         if not api_key:
             raise LLMConfigError("Anthropic adapter requires a non-empty api_key")
+        if Anthropic is None:
+            raise LLMConfigError("Anthropic adapter requires the 'anthropic' package to be installed")
 
         self._client = Anthropic(
             api_key=api_key,

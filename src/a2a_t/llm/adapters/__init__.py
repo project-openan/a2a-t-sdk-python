@@ -9,6 +9,10 @@ __all__ = [
     "DeepSeekAdapter",
     "GoogleAdapter",
     "OpenAIAdapter",
+    "anthropic_adapter",
+    "deepseek_adapter",
+    "google_adapter",
+    "openai_adapter",
 ]
 
 _ADAPTER_MODULES = {
@@ -18,8 +22,19 @@ _ADAPTER_MODULES = {
     "OpenAIAdapter": ("a2a_t.llm.adapters.openai_adapter", "OpenAIAdapter"),
 }
 
+_MODULE_EXPORTS = {
+    "anthropic_adapter": "a2a_t.llm.adapters.anthropic_adapter",
+    "deepseek_adapter": "a2a_t.llm.adapters.deepseek_adapter",
+    "google_adapter": "a2a_t.llm.adapters.google_adapter",
+    "openai_adapter": "a2a_t.llm.adapters.openai_adapter",
+}
+
 
 def __getattr__(name: str):
+    module_name = _MODULE_EXPORTS.get(name)
+    if module_name is not None:
+        return import_module(module_name)
+
     target = _ADAPTER_MODULES.get(name)
     if target is None:
         raise AttributeError(f"module 'a2a_t.llm.adapters' has no attribute '{name}'")

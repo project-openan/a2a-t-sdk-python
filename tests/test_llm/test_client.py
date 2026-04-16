@@ -12,8 +12,8 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from a2a_t.llm.base import LLMResponse
-from a2a_t.llm.errors import LLMConfigError
+from a2a_t.llm.base import ChatMessage, ChatSession, LLMResponse
+from a2a_t.llm.errors import LLMConfigError, LLMRuntimeError
 from tests.test_support import ManagedTempDirTestCase
 
 
@@ -53,10 +53,99 @@ class RecordingAdapter:
 
 
 class LLMClientTest(ManagedTempDirTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        from a2a_t.llm import client as llm_client_module
+
+        llm_client_module._reset_default_session_store_for_tests()
+
+    def tearDown(self) -> None:
+        from a2a_t.llm import client as llm_client_module
+
+        llm_client_module._reset_default_session_store_for_tests()
+        super().tearDown()
+
     def _write_env(self, body: str) -> Path:
         env_path = self.make_temp_dir("llm_client_env") / ".env"
         env_path.write_text(body, encoding="utf-8")
         return env_path
+
+    def test_default_session_store_is_shared_across_clients(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=sk-test",
+                    "A2AT_LLM_SESSION_MAX_TOTAL=50",
+                    "A2AT_LLM_SESSION_MAX_PER_PROVIDER=20",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.client import LLMClient
+
+        first = LLMClient(env_path=env_path)
+        second = LLMClient(env_path=env_path)
+
+        self.assertIs(first._session_store, second._session_store)
+
+    def test_default_session_store_rejects_capacity_config_conflicts(self) -> None:
+        env_dir = self.make_temp_dir("llm_client_conflict_envs")
+        first_env = env_dir / "first.env"
+        second_env = env_dir / "second.env"
+        first_env.write_text(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=sk-test",
+                    "A2AT_LLM_SESSION_MAX_TOTAL=50",
+                    "A2AT_LLM_SESSION_MAX_PER_PROVIDER=20",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        second_env.write_text(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=deepseek",
+                    "A2AT_LLM_MODEL=deepseek-chat",
+                    "A2AT_LLM_API_KEY=sk-test",
+                    "A2AT_LLM_SESSION_MAX_TOTAL=60",
+                    "A2AT_LLM_SESSION_MAX_PER_PROVIDER=20",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        from a2a_t.llm.client import LLMClient
+
+        LLMClient(env_path=first_env)
+
+        with self.assertRaises(LLMConfigError):
+            LLMClient(env_path=second_env)
+
+    def test_init_rejects_public_session_store_injection(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=sk-test",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.client import LLMClient
+        from a2a_t.llm.session_store import InMemorySessionStore
+
+        with self.assertRaises(TypeError):
+            LLMClient(env_path=env_path, session_store=InMemorySessionStore(max_total=1, max_per_provider=1))
 
     def test_chat_loads_defaults_from_dotenv(self) -> None:
         env_path = self._write_env(
@@ -134,6 +223,39 @@ class LLMClientTest(ManagedTempDirTestCase):
         self.assertEqual(created[0][2].complete_calls[0]["kwargs"]["temperature"], 0.2)
         self.assertEqual(created[0][2].complete_calls[0]["kwargs"]["max_tokens"], 64)
 
+    def test_chat_accepts_explicit_runtime_overrides(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=sk-default",
+                ]
+            )
+            + "\n"
+        )
+        created: list[tuple[str, dict[str, Any], RecordingAdapter]] = []
+
+        def factory_side_effect(adapter_type: str, config: dict[str, Any]) -> RecordingAdapter:
+            adapter = RecordingAdapter(config)
+            created.append((adapter_type, config, adapter))
+            return adapter
+
+        with patch("a2a_t.llm.client.LLMAdapterFactory.create", side_effect=factory_side_effect):
+            from a2a_t.llm.client import LLMClient
+
+            client = LLMClient(env_path=env_path)
+            client.chat(
+                "hello",
+                api_key="sk-override",
+                base_url="https://example.test/v1",
+                timeout_seconds=12,
+            )
+
+        self.assertEqual(created[0][1]["api_key"], "sk-override")
+        self.assertEqual(created[0][1]["base_url"], "https://example.test/v1")
+        self.assertEqual(created[0][1]["timeout_seconds"], 12)
+
     def test_structured_uses_shared_session_store_and_runtime_overrides(self) -> None:
         env_path = self._write_env(
             "\n".join(
@@ -160,7 +282,7 @@ class LLMClientTest(ManagedTempDirTestCase):
             client.structured(
                 messages=[{"role": "user", "content": "extract"}],
                 json_schema={"type": "object"},
-                history_window=9,
+                max_tokens=9,
             )
 
         self.assertEqual(session_stores[0].__class__.__name__, "ProviderScopedSessionStore")
@@ -274,6 +396,67 @@ class LLMClientTest(ManagedTempDirTestCase):
         with self.assertRaises(LLMConfigError):
             client.chat("hello", history_window=101)
 
+    def test_complete_rejects_history_window_argument(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=sk-test",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.client import LLMClient
+
+        client = LLMClient(env_path=env_path)
+
+        with self.assertRaises(TypeError):
+            client.complete("hello", history_window=2)
+
+    def test_structured_rejects_history_window_argument(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=sk-test",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.client import LLMClient
+
+        client = LLMClient(env_path=env_path)
+
+        with self.assertRaises(TypeError):
+            client.structured(
+                messages=[{"role": "user", "content": "extract"}],
+                json_schema={"type": "object"},
+                history_window=2,
+            )
+
+    def test_chat_rejects_unknown_runtime_keyword(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=sk-test",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.client import LLMClient
+
+        client = LLMClient(env_path=env_path)
+
+        with self.assertRaises(TypeError):
+            client.chat("hello", unsupported=True)
+
     def test_session_limit_config_rejects_values_above_hard_maximums(self) -> None:
         env_path = self._write_env(
             "\n".join(
@@ -313,7 +496,7 @@ class LLMClientTest(ManagedTempDirTestCase):
         with self.assertRaises(LLMConfigError):
             LLMClient(env_path=env_path)
 
-    def test_reset_and_delete_session_delegate_to_adapter(self) -> None:
+    def test_reset_session_uses_root_store_without_creating_adapter(self) -> None:
         env_path = self._write_env(
             "\n".join(
                 [
@@ -324,22 +507,64 @@ class LLMClientTest(ManagedTempDirTestCase):
             )
             + "\n"
         )
-        created_adapters: list[RecordingAdapter] = []
-
-        def factory_side_effect(adapter_type: str, config: dict[str, Any]) -> RecordingAdapter:
-            adapter = RecordingAdapter(config)
-            created_adapters.append(adapter)
-            return adapter
-
-        with patch("a2a_t.llm.client.LLMAdapterFactory.create", side_effect=factory_side_effect):
+        with patch("a2a_t.llm.client.LLMAdapterFactory.create") as create_mock:
             from a2a_t.llm.client import LLMClient
 
             client = LLMClient(env_path=env_path)
-            client.reset_session("session-a")
-            client.delete_session("session-a")
+            client._session_store.save(
+                ChatSession(
+                    session_id="openai-1",
+                    provider="openai",
+                    system_prompt="keep",
+                    messages=[ChatMessage(role="user", content="hello")],
+                )
+            )
 
-        self.assertEqual(created_adapters[0].reset_calls, ["session-a"])
-        self.assertEqual(created_adapters[1].delete_calls, ["session-a"])
+            client.reset_session("openai-1")
+
+        create_mock.assert_not_called()
+        reset_session = client._session_store.get("openai-1")
+        self.assertEqual(reset_session.messages, [])
+        self.assertIsNone(reset_session.system_prompt)
+
+    def test_delete_session_is_idempotent_without_creating_adapter(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4.1",
+                    "A2AT_LLM_API_KEY=sk-test",
+                ]
+            )
+            + "\n"
+        )
+
+        with patch("a2a_t.llm.client.LLMAdapterFactory.create") as create_mock:
+            from a2a_t.llm.client import LLMClient
+
+            client = LLMClient(env_path=env_path)
+            client.delete_session("openai-missing")
+
+        create_mock.assert_not_called()
+
+    def test_reset_session_rejects_unknown_session_id_without_provider_args(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=deepseek",
+                    "A2AT_LLM_MODEL=deepseek-chat",
+                    "A2AT_LLM_API_KEY=sk-test",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.client import LLMClient
+
+        client = LLMClient(env_path=env_path)
+
+        with self.assertRaises(LLMRuntimeError):
+            client.reset_session("openai-missing")
 
     def test_missing_provider_or_model_raises_config_error(self) -> None:
         env_path = self._write_env("A2AT_LLM_API_KEY=sk-test\n")
