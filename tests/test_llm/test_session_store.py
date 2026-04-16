@@ -61,16 +61,14 @@ class InMemorySessionStoreTest(unittest.TestCase):
 
         self.assertGreater(refreshed.last_accessed_time, old_time)
 
-    def test_get_does_not_refresh_updated_at(self) -> None:
+    def test_get_does_not_expose_legacy_updated_at_field(self) -> None:
         root = InMemorySessionStore(max_total=5, max_per_provider=5)
         session = ChatSession(session_id="openai-1", provider="openai")
         root.save(session)
-        old_time = datetime.now(UTC) - timedelta(minutes=5)
-        root._sessions["openai-1"].updated_at = old_time
 
         refreshed = root.get("openai-1")
 
-        self.assertEqual(refreshed.updated_at, old_time)
+        self.assertFalse(hasattr(refreshed, "updated_at"))
 
     def test_save_evicts_oldest_session_when_provider_limit_is_exceeded(self) -> None:
         root = InMemorySessionStore(max_total=10, max_per_provider=2)
@@ -99,13 +97,12 @@ class InMemorySessionStoreTest(unittest.TestCase):
         old_time = datetime.now(UTC) - timedelta(minutes=10)
         root.save(ChatSession(session_id="openai-1", provider="openai"))
         root._sessions["openai-1"].last_accessed_time = old_time
-        root._sessions["openai-1"].updated_at = old_time
 
         refreshed = root.reset("openai-1")
 
         self.assertIsNotNone(refreshed)
         self.assertGreater(refreshed.last_accessed_time, old_time)
-        self.assertGreater(refreshed.updated_at, old_time)
+        self.assertFalse(hasattr(refreshed, "updated_at"))
 
     def test_recent_access_preserves_session_during_provider_eviction(self) -> None:
         root = InMemorySessionStore(max_total=10, max_per_provider=2)

@@ -64,6 +64,6 @@ def do_structured():
 
 
 if __name__ == "__main__":
-    do_complete()
+    # do_complete()
     do_chat()
-    do_structured()
+    # do_structured()

@@ -26,7 +26,6 @@ class ChatSession:
     messages: list[ChatMessage] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_accessed_time: datetime = field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass
@@ -89,9 +88,7 @@ class LLMAdapter(ABC):
         response = self._generate_from_messages(current_msg, **provider_kwargs)
         session.messages.append(ChatMessage(role="assistant", content=response.content))
         session.messages = self._trim_session_messages(session.messages, history_window=history_window)
-        now = datetime.now(UTC)
-        session.last_accessed_time = now
-        session.updated_at = now
+        session.last_accessed_time = datetime.now(UTC)
         self._session_store.save(session)
         response.session_id = session.session_id
         return response
@@ -122,7 +119,6 @@ class LLMAdapter(ABC):
                 provider=self._provider,
                 created_at=now,
                 last_accessed_time=now,
-                updated_at=now,
             )
         session = self._session_store.get(session_id)
         if session is None:

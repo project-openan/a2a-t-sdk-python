@@ -488,3 +488,11 @@ A2AT_LLM_SESSION_MAX_PER_PROVIDER=100
 - 用代码内置硬上限防止误配置导致 OOM 风险
 
 这样可以在保持当前抽象相对稳定的前提下，把 `a2a_t.llm` 的会话管理从“功能可用”推进到“具备隔离性与安全边界”的状态。
+
+## 16. Implementation Follow-Up
+
+后续实现已进一步收敛默认行为：
+
+- 默认 root session store 的作用域从 `LLMClient` 实例级提升为进程级共享
+- `session_store` 不再作为 `LLMClient` 对外公开注入点
+- `reset_session()` / `delete_session()` 收敛为纯内部 session 管理接口

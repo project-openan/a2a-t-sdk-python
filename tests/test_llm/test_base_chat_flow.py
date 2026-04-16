@@ -111,7 +111,7 @@ class BaseChatFlowTest(unittest.TestCase):
 
         self.assertEqual(second.session_id, first.session_id)
 
-    def test_chat_updates_legacy_updated_at_field(self) -> None:
+    def test_chat_does_not_expose_legacy_updated_at_field(self) -> None:
         shared_store = InMemorySessionStore(max_total=10, max_per_provider=10)
         adapter = DummyAdapter(
             {"model": "dummy-model", "provider": "dummy", "history_window": 2, "session_store": shared_store}
@@ -122,8 +122,8 @@ class BaseChatFlowTest(unittest.TestCase):
         session = shared_store._sessions[response.session_id]
 
         self.assertIsNotNone(session)
-        self.assertIsNotNone(session.updated_at)
-        self.assertEqual(session.updated_at, session.last_accessed_time)
+        self.assertFalse(hasattr(session, "updated_at"))
+        self.assertIsNotNone(session.last_accessed_time)
 
     def test_reset_session_clears_history_and_system_prompt(self) -> None:
         adapter = DummyAdapter({"model": "dummy-model", "history_window": 2})

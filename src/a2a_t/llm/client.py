@@ -9,17 +9,47 @@ from typing import Any
 from a2a_t.config.errors import ConfigFileNotFoundError
 from a2a_t.config.source import DotEnvConfigSource
 from a2a_t.llm.base import LLMResponse
-from a2a_t.llm.errors import LLMConfigError
+from a2a_t.llm.errors import LLMConfigError, LLMRuntimeError
 from a2a_t.llm.factory import LLMAdapterFactory
-from a2a_t.llm.session_store import InMemorySessionStore, ProviderScopedSessionStore, SessionStore
+from a2a_t.llm.session_store import InMemorySessionStore, ProviderScopedSessionStore
 
 _MAX_HISTORY_WINDOW = 100
 _MAX_SESSION_MAX_TOTAL = 3000
 _MAX_SESSION_MAX_PER_PROVIDER = 1000
+_DEFAULT_SESSION_STORE: InMemorySessionStore | None = None
+_DEFAULT_SESSION_STORE_LIMITS: tuple[int, int] | None = None
 
 
 def _default_env_path() -> Path:
     return Path(__file__).resolve().parents[3] / "package_data" / ".env"
+
+
+def _get_or_create_default_session_store(*, max_total: int, max_per_provider: int) -> InMemorySessionStore:
+    global _DEFAULT_SESSION_STORE, _DEFAULT_SESSION_STORE_LIMITS
+
+    requested_limits = (max_total, max_per_provider)
+    if _DEFAULT_SESSION_STORE is None:
+        _DEFAULT_SESSION_STORE = InMemorySessionStore(
+            max_total=max_total,
+            max_per_provider=max_per_provider,
+        )
+        _DEFAULT_SESSION_STORE_LIMITS = requested_limits
+        return _DEFAULT_SESSION_STORE
+
+    if _DEFAULT_SESSION_STORE_LIMITS != requested_limits:
+        raise LLMConfigError(
+            "Default global LLM session store is already initialized with different "
+            "session capacity limits"
+        )
+
+    return _DEFAULT_SESSION_STORE
+
+
+def _reset_default_session_store_for_tests() -> None:
+    global _DEFAULT_SESSION_STORE, _DEFAULT_SESSION_STORE_LIMITS
+
+    _DEFAULT_SESSION_STORE = None
+    _DEFAULT_SESSION_STORE_LIMITS = None
 
 
 def _coerce_optional_int(value: str | None, key: str) -> int | None:
@@ -57,10 +87,10 @@ class LLMClientConfig:
 class LLMClient:
     """Client for completion/chat/structured calls with shared session state."""
 
-    def __init__(self, env_path: Path | None = None, session_store: SessionStore | None = None) -> None:
+    def __init__(self, env_path: Path | None = None) -> None:
         self._env_path = env_path or _default_env_path()
         self._defaults = self._load_defaults(self._env_path)
-        self._session_store = session_store or InMemorySessionStore(
+        self._session_store = _get_or_create_default_session_store(
             max_total=self._defaults.session_max_total,
             max_per_provider=self._defaults.session_max_per_provider,
         )
@@ -73,18 +103,22 @@ class LLMClient:
         *,
         provider: str | None = None,
         model: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        timeout_seconds: float | None = None,
         history_window: int | None = None,
-        **kwargs: Any,
     ) -> LLMResponse:
-        runtime_config = self._build_runtime_config(
+        runtime_config = self._build_inference_runtime_config(
             provider=provider,
             model=model,
+            api_key=api_key,
+            base_url=base_url,
             temperature=temperature,
             max_tokens=max_tokens,
+            timeout_seconds=timeout_seconds,
             history_window=history_window,
-            **kwargs,
         )
         adapter = LLMAdapterFactory.create(str(runtime_config["provider"]), runtime_config)
         return adapter.chat(
@@ -103,18 +137,20 @@ class LLMClient:
         *,
         provider: str | None = None,
         model: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        history_window: int | None = None,
-        **kwargs: Any,
+        timeout_seconds: float | None = None,
     ) -> LLMResponse:
-        runtime_config = self._build_runtime_config(
+        runtime_config = self._build_inference_runtime_config(
             provider=provider,
             model=model,
+            api_key=api_key,
+            base_url=base_url,
             temperature=temperature,
             max_tokens=max_tokens,
-            history_window=history_window,
-            **kwargs,
+            timeout_seconds=timeout_seconds,
         )
         adapter = LLMAdapterFactory.create(str(runtime_config["provider"]), runtime_config)
         return adapter.complete(
@@ -131,18 +167,20 @@ class LLMClient:
         json_schema: dict[str, Any],
         provider: str | None = None,
         model: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        history_window: int | None = None,
-        **kwargs: Any,
+        timeout_seconds: float | None = None,
     ) -> LLMResponse:
-        runtime_config = self._build_runtime_config(
+        runtime_config = self._build_inference_runtime_config(
             provider=provider,
             model=model,
+            api_key=api_key,
+            base_url=base_url,
             temperature=temperature,
             max_tokens=max_tokens,
-            history_window=history_window,
-            **kwargs,
+            timeout_seconds=timeout_seconds,
         )
         adapter = LLMAdapterFactory.create(str(runtime_config["provider"]), runtime_config)
         # 注意当前deepseek还不支持json schema模式，此处输入的json_schema仅能作为prompt级约束，无法作为协议级约束。
@@ -153,89 +191,56 @@ class LLMClient:
             max_tokens=runtime_config["max_tokens"],
         )
 
-    def reset_session(
-        self,
-        session_id: str,
-        *,
-        provider: str | None = None,
-        model: str | None = None,
-        history_window: int | None = None,
-        **kwargs: Any,
-    ) -> None:
-        runtime_config = self._build_runtime_config(
-            provider=provider,
-            model=model,
-            history_window=history_window,
-            **kwargs,
-        )
-        adapter = LLMAdapterFactory.create(str(runtime_config["provider"]), runtime_config)
-        adapter.reset_session(session_id)
+    def reset_session(self, session_id: str) -> None:
+        if self._session_store.reset(session_id) is None:
+            raise LLMRuntimeError(f"unknown session_id: {session_id}")
 
-    def delete_session(
-        self,
-        session_id: str,
-        *,
-        provider: str | None = None,
-        model: str | None = None,
-        history_window: int | None = None,
-        **kwargs: Any,
-    ) -> None:
-        runtime_config = self._build_runtime_config(
-            provider=provider,
-            model=model,
-            history_window=history_window,
-            **kwargs,
-        )
-        adapter = LLMAdapterFactory.create(str(runtime_config["provider"]), runtime_config)
-        adapter.delete_session(session_id)
+    def delete_session(self, session_id: str) -> None:
+        self._session_store.delete(session_id)
 
-    def _build_runtime_config(self, **overrides: Any) -> dict[str, Any]:
-        provider = self._normalize_provider(overrides.get("provider") or self._defaults.provider)
-        model = str(overrides.get("model") or self._defaults.model).strip()
-        if not provider or not model:
+    def _build_inference_runtime_config(
+        self,
+        *,
+        provider: str | None,
+        model: str | None,
+        api_key: str | None,
+        base_url: str | None,
+        temperature: float | None,
+        max_tokens: int | None,
+        timeout_seconds: float | None,
+        history_window: int | None = None,
+    ) -> dict[str, Any]:
+        resolved_provider = self._normalize_provider(provider or self._defaults.provider)
+        resolved_model = str(model or self._defaults.model).strip()
+        if not resolved_provider or not resolved_model:
             raise LLMConfigError("LLM client requires provider and model")
 
-        history_window_value = overrides.get("history_window")
-        if history_window_value is None:
-            history_window_value = self._defaults.history_window
-        history_window = self._coerce_bounded_int(
+        history_window_value = history_window if history_window is not None else self._defaults.history_window
+        resolved_history_window = self._coerce_bounded_int(
             history_window_value,
             "history_window",
             max_value=_MAX_HISTORY_WINDOW,
         )
 
-        max_tokens = overrides.get("max_tokens")
-        if max_tokens is None:
-            max_tokens = self._defaults.max_tokens
-
-        temperature = overrides.get("temperature")
-        if temperature is None:
-            temperature = self._defaults.temperature
-
-        timeout_seconds = overrides.get("timeout_seconds")
-        if timeout_seconds is None:
-            timeout_seconds = self._defaults.timeout_seconds
-
-        api_key = overrides.get("api_key")
-        if api_key is None:
-            api_key = self._defaults.api_key
-        if not str(api_key or "").strip():
+        resolved_api_key = self._defaults.api_key if api_key is None else str(api_key).strip()
+        if not resolved_api_key:
             raise LLMConfigError("LLM client requires a non-empty api_key")
 
-        base_url = overrides.get("base_url")
-        if base_url is None:
-            base_url = self._defaults.base_url
+        resolved_base_url = self._defaults.base_url if base_url is None else str(base_url).strip() or None
+        resolved_max_tokens = self._defaults.max_tokens if max_tokens is None else max_tokens
+        resolved_temperature = self._defaults.temperature if temperature is None else temperature
+        resolved_timeout_seconds = self._defaults.timeout_seconds if timeout_seconds is None else timeout_seconds
 
         runtime_config = {
-            "provider": provider,
-            "model": model,
-            "api_key": api_key,
-            "base_url": base_url,
-            "history_window": history_window,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "timeout_seconds": timeout_seconds,
-            "session_store": ProviderScopedSessionStore(provider, self._session_store),
+            "provider": resolved_provider,
+            "model": resolved_model,
+            "api_key": resolved_api_key,
+            "base_url": resolved_base_url,
+            "history_window": resolved_history_window,
+            "max_tokens": resolved_max_tokens,
+            "temperature": resolved_temperature,
+            "timeout_seconds": resolved_timeout_seconds,
+            "session_store": ProviderScopedSessionStore(resolved_provider, self._session_store),
         }
         return runtime_config
 

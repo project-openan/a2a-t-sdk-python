@@ -36,9 +36,7 @@ class InMemorySessionStore:
 
     def save(self, session: ChatSession) -> None:
         stored = deepcopy(session)
-        now = datetime.now(UTC)
-        stored.last_accessed_time = now
-        stored.updated_at = now
+        stored.last_accessed_time = datetime.now(UTC)
         self._sessions[stored.session_id] = stored
         self._evict_for_provider(stored.provider)
         self._evict_for_total()
@@ -50,9 +48,7 @@ class InMemorySessionStore:
         updated = deepcopy(session)
         updated.messages.clear()
         updated.system_prompt = None
-        now = datetime.now(UTC)
-        updated.last_accessed_time = now
-        updated.updated_at = now
+        updated.last_accessed_time = datetime.now(UTC)
         self._sessions[session_id] = updated
         return deepcopy(updated)
 
