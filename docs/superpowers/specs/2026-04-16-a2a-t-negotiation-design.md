@@ -55,6 +55,61 @@
 - 服务端负责 Prompt 校验、协商状态管理、轮次控制、终止判断、最终执行决策
 - 协议层尽量复用 A2A 原生语义，通过同一个 `task_id/context_id` 和 `TASK_STATE_INPUT_REQUIRED + message` 表达协商
 
+### 4.1 上下文视图
+
+下面的上下文视图描述第一版协商下发方案在整体系统中的位置。
+
+```plantuml
+@startuml
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+actor "上层调用方" as Caller
+
+rectangle "客户端进程" {
+  [Task Submission Facade] as ClientFacade
+  [Prompt Generation Module] as PromptGen
+  [A2A Client] as A2AClient
+  [Supplement Provider\n(optional)] as SupplementProvider
+  [Progress Callback\n(optional)] as ProgressCallback
+  collections "Client Negotiation Context\n(in-memory, persistence extension)" as ClientContext
+}
+
+rectangle "服务端进程" {
+  [A2A Server Handler] as ServerHandler
+  [Prompt Validator] as PromptValidator
+  [Negotiation Manager] as NegotiationManager
+  collections "Negotiation State Store\n(in-memory, persistence extension)" as NegotiationStore
+  [Downstream Agent] as DownstreamAgent
+}
+
+Caller --> ClientFacade : submit(natural_language_description)
+ClientFacade --> PromptGen : 生成完整 Prompt
+ClientFacade --> A2AClient : 发送任务 / 续轮任务
+ClientFacade --> ClientContext : 维护原始描述\n与补充历史
+ClientFacade ..> SupplementProvider : 自动协商时获取补充描述
+ClientFacade ..> ProgressCallback : 报告当前阶段
+
+A2AClient --> ServerHandler : A2A task message
+ServerHandler --> PromptValidator : 校验 Prompt
+ServerHandler --> NegotiationManager : 管理协商状态/轮次/终止
+NegotiationManager --> NegotiationStore
+ServerHandler --> DownstreamAgent : 校验通过后下发执行
+
+note bottom of A2AClient
+协商续轮保持同一
+task_id / context_id
+end note
+
+note bottom of ServerHandler
+协商通过
+TASK_STATE_INPUT_REQUIRED
++ message 表达
+end note
+@enduml
+```
+
 ## 5. 角色职责
 
 ### 5.1 上层调用方
@@ -248,7 +303,95 @@
 
 ## 14. 端到端流程
 
-### 14.1 首次下发
+### 14.1 流程时序图
+
+下面的时序图描述第一版同步调用下的主流程，以及进入协商后的手动/自动分支。
+
+```plantuml
+@startuml
+skinparam shadowing false
+autonumber
+
+actor "上层调用方" as Caller
+participant "客户端 SDK" as ClientSDK
+participant "Prompt Generation Module" as PromptGen
+participant "Supplement Provider" as SupplementProvider
+participant "A2A Client" as A2AClient
+participant "服务端 SDK" as ServerSDK
+participant "Prompt Validator" as Validator
+participant "Negotiation Manager" as NegotiationManager
+participant "Downstream Agent" as DownstreamAgent
+
+Caller -> ClientSDK : submit(natural_language_description)
+ClientSDK -> ClientSDK : 创建协商上下文\n记录原始描述
+ClientSDK -> PromptGen : generate(原始描述 + 补充历史=[])
+PromptGen --> ClientSDK : 完整 Prompt
+ClientSDK -> A2AClient : send(prompt)
+A2AClient -> ServerSDK : sendTask(prompt, new task_id/context_id)
+ServerSDK -> NegotiationManager : 创建/加载协商状态
+ServerSDK -> Validator : validate(prompt)
+
+alt 校验通过
+  Validator --> ServerSDK : valid
+  ServerSDK -> NegotiationManager : 标记 satisfied\n记录 validated prompt
+  ServerSDK -> DownstreamAgent : execute(validated prompt)
+  ServerSDK --> A2AClient : success
+  A2AClient --> ClientSDK : success
+  ClientSDK --> Caller : success
+else 需要补参或修正
+  Validator --> ServerSDK : issues + follow_up_message
+  ServerSDK -> NegotiationManager : 记录 latest prompt / issues\n检查轮次上限
+  alt 已达上限或不可继续
+    NegotiationManager --> ServerSDK : rejected
+    ServerSDK --> A2AClient : failure(rejected)
+    A2AClient --> ClientSDK : failure
+    ClientSDK --> Caller : failure
+  else 允许继续协商
+    NegotiationManager --> ServerSDK : negotiating
+    ServerSDK --> A2AClient : TASK_STATE_INPUT_REQUIRED\n+ issues + follow_up_message
+    A2AClient --> ClientSDK : negotiation request
+    alt `manual` 或未配置 provider
+      ClientSDK --> Caller : negotiation_required
+    else `auto` 且已配置 provider
+      loop 直到 satisfied 或 rejected
+        ClientSDK -> SupplementProvider : provide(issues, follow_up_message)
+        SupplementProvider --> ClientSDK : 增量补充描述
+        ClientSDK -> ClientSDK : 追加到补充历史
+        ClientSDK -> PromptGen : regenerate(原始描述 + 补充历史)
+        PromptGen --> ClientSDK : 新完整 Prompt
+        ClientSDK -> A2AClient : resend(同一 task_id/context_id)
+        A2AClient -> ServerSDK : sendTask(new prompt)
+        ServerSDK -> NegotiationManager : 加载当前协商状态
+        ServerSDK -> Validator : validate(new prompt)
+        alt 校验通过
+          Validator --> ServerSDK : valid
+          ServerSDK -> NegotiationManager : 标记 satisfied\n记录 validated prompt
+          ServerSDK -> DownstreamAgent : execute(validated prompt)
+          ServerSDK --> A2AClient : success
+          A2AClient --> ClientSDK : success
+          ClientSDK --> Caller : success
+        else 继续要求补参
+          Validator --> ServerSDK : issues + follow_up_message
+          ServerSDK -> NegotiationManager : 更新状态并检查上限
+          alt 达到上限或不可继续
+            NegotiationManager --> ServerSDK : rejected
+            ServerSDK --> A2AClient : failure(rejected)
+            A2AClient --> ClientSDK : failure
+            ClientSDK --> Caller : failure
+          else 返回下一轮协商
+            NegotiationManager --> ServerSDK : negotiating
+            ServerSDK --> A2AClient : TASK_STATE_INPUT_REQUIRED\n+ issues + follow_up_message
+            A2AClient --> ClientSDK : negotiation request
+          end
+        end
+      end
+    end
+  end
+end
+@enduml
+```
+
+### 14.2 首次下发
 
 1. 调用方调用客户端封装对象，输入原始自然语言任务描述
 2. 客户端创建协商上下文
@@ -256,7 +399,7 @@
 4. 客户端通过 A2A 发送给服务端
 5. 服务端接收后执行 Prompt 校验
 
-### 14.2 校验通过
+### 14.3 校验通过
 
 如果服务端校验通过：
 
@@ -265,7 +408,7 @@
 3. 服务端把该 Prompt 传给下游 Agent 执行
 4. 客户端返回 `success`
 
-### 14.3 进入协商
+### 14.4 进入协商
 
 如果服务端发现缺失信息或可修正的明显非法信息：
 
@@ -273,7 +416,7 @@
 2. 服务端一次性返回当前已知的全部缺失/错误信息
 3. 服务端通过 `TASK_STATE_INPUT_REQUIRED + message` 返回协商要求
 
-### 14.4 客户端处理协商要求
+### 14.5 客户端处理协商要求
 
 客户端收到协商要求后，按策略处理：
 
@@ -283,7 +426,7 @@
   - 如果配置了补参 provider，则向其获取增量自然语言补充描述
   - 如果未配置补参 provider，则退化为 `manual`
 
-### 14.5 自动协商续轮
+### 14.6 自动协商续轮
 
 在 `auto` 且成功获取补充描述的情况下：
 
@@ -292,7 +435,7 @@
 3. 客户端继续使用原来的 `task_id/context_id` 发送新 Prompt
 4. 服务端把该 Prompt 视为当前任务最新输入，并重新完整校验
 
-### 14.6 协商终止
+### 14.7 协商终止
 
 协商在以下情况下结束：
 
