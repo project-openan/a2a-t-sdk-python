@@ -25,3 +25,4 @@ venv/
 .codex_backup
 .uv-cache
 dist
+.obsidian
