@@ -45,30 +45,32 @@ class PromptHandler:
             resource_root=resource_root,
         )
 
-    def validate(self, template_name: str, params: dict[str, Any]) -> tuple[bool, str]:
-        """Validate request against template rules."""
+    def check_task_prompt(
+        self,
+        *,
+        task_id: str,
+        processed_prompt_text: str,
+    ) -> dict[str, Any]:
+        """Check task prompt and return semantic validation result."""
         if self._validator is None:
-            return True, ""
+            return {
+                "passed": True,
+                "need_negotiation": False,
+                "negotiation_input": None,
+                "stage": "passed",
+                "extracted_slots": None,
+                "error_code": None,
+                "error_message": None,
+            }
 
-        processed_prompt_text = str(params.get("processed_prompt_text", ""))
-        result = self._validator.check(
-            processed_prompt_text=processed_prompt_text,
-            request_metadata={"template_name": template_name},
-        )
-        return result.passed, result.error_message or ""
-
-    def process(self, task_id: str, params: dict[str, Any]) -> dict[str, Any]:
-        """Process and validate the incoming task."""
-        if self._validator is None:
-            return {"passed": True, "task_id": task_id, "params": params}
-
-        processed_prompt_text = str(params.get("processed_prompt_text", ""))
         result = self._validator.check(
             processed_prompt_text=processed_prompt_text,
             request_metadata={"task_id": task_id},
         )
         return {
             "passed": result.passed,
+            "need_negotiation": result.need_negotiation,
+            "negotiation_input": result.negotiation_input,
             "stage": result.stage,
             "extracted_slots": result.extracted_slots,
             "error_code": result.error_code,

@@ -18,29 +18,58 @@ from tests.test_support import ManagedTempDirTestCase
 
 
 class PromptHandlerRuntimeTest(ManagedTempDirTestCase):
-    def test_process_returns_compact_payload_without_notes_or_confidence(self) -> None:
+    def test_check_task_prompt_returns_semantic_payload(self) -> None:
         class FakeComplianceService:
             def check(self, *, processed_prompt_text: str, request_metadata: dict[str, object] | None) -> PromptComplianceResult:
                 return PromptComplianceResult(
-                    passed=True,
-                    stage="passed",
+                    passed=False,
+                    stage="slot_validation",
                     extracted_slots={"site": "Site A"},
+                    error_code="slot_validation_error",
+                    error_message="Site format is invalid.",
+                    need_negotiation=True,
+                    negotiation_input={
+                        "type": "information",
+                        "contentText": "Site format is invalid.",
+                        "facts": {
+                            "missingFields": [],
+                            "invalidFields": [{"name": "site", "reason": "Site format is invalid."}],
+                        },
+                    },
                 )
 
         handler = PromptHandler(validator=FakeComplianceService())
 
-        result = handler.process("task-1", {"processed_prompt_text": "processed prompt"})
+        result = handler.check_task_prompt(
+            task_id="task-1",
+            processed_prompt_text="processed prompt",
+        )
 
         self.assertEqual(
             result,
             {
-                "passed": True,
-                "stage": "passed",
+                "passed": False,
+                "need_negotiation": True,
+                "negotiation_input": {
+                    "type": "information",
+                    "contentText": "Site format is invalid.",
+                    "facts": {
+                        "missingFields": [],
+                        "invalidFields": [{"name": "site", "reason": "Site format is invalid."}],
+                    },
+                },
+                "stage": "slot_validation",
                 "extracted_slots": {"site": "Site A"},
-                "error_code": None,
-                "error_message": None,
+                "error_code": "slot_validation_error",
+                "error_message": "Site format is invalid.",
             },
         )
+
+    def test_handler_does_not_expose_legacy_validate_or_process_methods(self) -> None:
+        handler = PromptHandler(validator=object())
+
+        self.assertFalse(hasattr(handler, "validate"))
+        self.assertFalse(hasattr(handler, "process"))
 
     def test_handler_builds_validator_via_builder(self) -> None:
         class FakeComplianceService:
@@ -81,9 +110,13 @@ class PromptHandlerRuntimeTest(ManagedTempDirTestCase):
             llm_client=llm_client,
             validator_builder=builder,
         )
-        result = handler.process("task-1", {"processed_prompt_text": "processed prompt"})
+        result = handler.check_task_prompt(
+            task_id="task-1",
+            processed_prompt_text="processed prompt",
+        )
 
         self.assertEqual(result["passed"], True)
+        self.assertEqual(result["need_negotiation"], False)
         self.assertEqual(len(builder.calls), 1)
         self.assertIs(builder.calls[0]["llm_client"], llm_client)
 

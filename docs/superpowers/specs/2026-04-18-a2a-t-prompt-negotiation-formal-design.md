@@ -32,6 +32,9 @@
   - `message: str`
   - `context_json: dict[str, object] | None`
 - A/D 负责在 A2A message/task metadata 与 SDK `context_json` 之间做适配
+- 非 negotiation 场景下，`context_json` 可以为 `None`
+- negotiation 之外的运行时补充参数，放在各自方法的独立输入对象中，不并入 `context_json`
+- 第一版不新增统一的 `A2ATClient` / `A2ATServer` facade
 
 ### 2.3 第一版范围
 
@@ -61,8 +64,8 @@
 第一版公开能力固定为：
 
 ```python
-render_task_prompt(input) -> str
-validate_task_prompt(message) -> dict[str, object]
+generate(input) -> PromptGenerationResult
+check_task_prompt(task_id, processed_prompt_text) -> dict[str, object]
 start_negotiation(input) -> dict[str, object]
 receive_negotiation(message, context_json) -> dict[str, object]
 continue_negotiation(input) -> dict[str, object]
@@ -70,19 +73,23 @@ continue_negotiation(input) -> dict[str, object]
 
 ### 3.2 返回契约
 
-- `render_task_prompt(input)`
-  - 返回 task prompt 字符串
-  - 无法处理直接抛异常
+- `generate(input)`
+  - 返回 `PromptGenerationResult`
+  - 成功时由调用方读取 `prompt_text`
+  - 失败时由调用方读取 `failure`
 
-- `validate_task_prompt(message)`
+- `check_task_prompt(task_id, processed_prompt_text)`
   - 返回：
 
 ```json
 {
   "passed": true,
-  "needNegotiation": false,
-  "negotiationInput": null,
-  "errorMessage": null
+  "need_negotiation": false,
+  "negotiation_input": null,
+  "stage": "passed",
+  "extracted_slots": null,
+  "error_code": null,
+  "error_message": null
 }
 ```
 
@@ -158,6 +165,7 @@ A/D 在 A2A metadata 中传递的数据结构固定为：
 - `round` 从 `1` 开始递增
 - `extra` 必须是 object，但第一版不解释其内部语义
 - `round` 和 `status` 由 B/C 维护，A/D 不负责推进
+- `extra` 中即使出现与核心字段同名的 key，也一律忽略，不参与协议语义
 
 ### 4.2 最小格式校验
 
@@ -171,6 +179,8 @@ negotiation 报文的最小格式校验只做两层：
 - `extra` 内部字段校验
 - facts 核心字段强校验
 - 跨 type 的通用 slot 抽取
+- negotiation message 的理解不走 LLM；`receive_negotiation(...)` 依赖固定模板格式做确定性解析
+- task prompt 之外的 front matter 渲染或校验；front matter 只作用于 task prompt
 
 ### 4.3 非法输入处理
 
@@ -184,45 +194,53 @@ negotiation 报文的最小格式校验只做两层：
 
 ### 5.1 task prompt 生成
 
-1. A 调用 B 的 `render_task_prompt(input)`
-2. B 基于现有 prompt generation 链路生成完整 task prompt
-3. A 通过 A2A 将该 prompt 发给 D
+1. A 调用 B 的 `generate(input)`
+2. B 基于现有 prompt generation 链路生成 `PromptGenerationResult`
+3. A 从 `result.prompt_text` 取出完整 task prompt
+4. A 通过 A2A 将该 prompt 发给 D
+
+说明：
+
+- 初始 task prompt 下发不是 negotiation 报文，不携带 negotiation `context_json`
 
 ### 5.2 task prompt 校验通过
 
-1. D 收到 task prompt 后调用 C 的 `validate_task_prompt(message)`
+1. D 收到 task prompt 后调用 C 的 `check_task_prompt(task_id, processed_prompt_text)`
 2. C 复用现有 prompt compliance 链路校验
 3. 若 `passed=true`：
-   - `needNegotiation=false`
+   - `need_negotiation=false`
    - D 直接执行任务
 
 ### 5.3 `information` 协商闭环
 
-1. D 调用 `validate_task_prompt(message)`
-2. 若 `passed=false` 且 `needNegotiation=true`：
+1. D 调用 `check_task_prompt(task_id, processed_prompt_text)`
+2. 若 `passed=false` 且 `need_negotiation=true`：
    - C 返回：
 
 ```json
 {
   "passed": false,
-  "needNegotiation": true,
-  "negotiationInput": {
+  "need_negotiation": true,
+  "negotiation_input": {
     "type": "information",
     "contentText": "...",
     "facts": {}
   },
-  "errorMessage": "..."
+  "stage": "slot_validation",
+  "extracted_slots": {},
+  "error_code": "slot_validation_error",
+  "error_message": "..."
 }
 ```
 
-3. D 调用 `start_negotiation(negotiationInput)` 生成首轮协商报文
+3. D 调用 `start_negotiation(negotiation_input)` 生成首轮协商报文
 4. D 通过 A2A 发给 A
 5. A 调用 `receive_negotiation(message, context_json)` 获取：
    - `context`
    - `needResponse`
    - `facts`
 6. A 基于 `facts` 与本地 Agent 交互，补充缺失/修正信息
-7. A 重新调用 `render_task_prompt(input_with_new_info)` 生成最新完整 task prompt
+7. A 重新调用 `generate(input_with_new_info)` 生成最新完整 task prompt，并从 `result.prompt_text` 取值
 8. A 调用：
 
 ```json
@@ -301,12 +319,12 @@ src/a2a_t/server/prompt_compliance
 ```text
 src/a2a_t/
 ├─ prompt/
+│  ├─ builders/
 │  ├─ common/
 │  ├─ resources/
 │  ├─ analysis/
 │  ├─ validation/
-│  ├─ task_rendering/
-│  └─ task_validation/
+│  └─ task_rendering/
 ├─ negotiation/
 │  ├─ common/
 │  ├─ rendering/
@@ -324,10 +342,15 @@ src/a2a_t/
 
 说明：
 
+- `prompt/builders` 继续保留，负责复用当前 runtime components 装配
 - `prompt/analysis`、`prompt/validation` 继续保留为底层 runtime
-- `prompt/task_rendering`、`prompt/task_validation` 是新的领域收口层
+- `prompt/common/task_prompt_format.py` 负责 task prompt front matter 的格式化与解析
+- `prompt/task_rendering` 是 task prompt 渲染收口层
+- `common/prompt_resources`、`common/prompt_runtime` 承接 prompt 与 negotiation 共用的资源加载与 runtime 装配
 - `negotiation/` 是新的共享核心层
 - `client/*`、`server/*` 只做端侧公开入口与依赖装配
+- `negotiation/handling` 是内部流程层，不作为 SDK 对外入口
+- 不单独新增 `negotiation/parsing` 一级包；解析能力下沉为 `handling` 内部组件
 
 ### 6.3 `negotiation/types`
 
@@ -350,8 +373,8 @@ src/a2a_t/negotiation/types/
 
 角色：
 
-- B 侧 task prompt 对外入口
-- 对外语义方法为 `render_task_prompt(input)`
+- B 侧 task prompt 生成入口
+- 对外稳定方法为 `generate(input)`
 - 内部复用现有 `generate(...)` 链路
 
 处理范围：
@@ -364,15 +387,16 @@ src/a2a_t/negotiation/types/
 
 兼容策略：
 
-- 当前代码中的 `generate(...)` 保留
-- 第一版可以先新增公开别名 `render_task_prompt(...)`
+- 当前代码中的 `generate(...)` 直接作为公开生成入口
+- 不再额外保留 `render_task_prompt(...)` 薄封装
 - `PromptClient` 继续作为 compatibility shim，不承载 negotiation
 
-#### `prompt.task_rendering.PromptRenderer`
+#### `prompt.task_rendering.TaskPromptRenderer`
 
 角色：
 
 - 仅负责 task prompt 文本生成
+- 内部通过 `task_prompt_format` 写入 front matter
 - 不负责 negotiation context 生成
 - 不负责 fixed-key map 组装
 
@@ -380,23 +404,22 @@ src/a2a_t/negotiation/types/
 
 角色：
 
-- C 侧 task prompt 校验公开入口
-- 对外语义方法为 `validate_task_prompt(message)`
-- 内部复用现有 `check(...)` 链路
+- C 侧 task prompt 校验核心执行器
+- 核心方法为 `check(processed_prompt_text, request_metadata)`
+- 直接输出包含 `need_negotiation` / `negotiation_input` 的语义结果
 
 兼容策略：
 
-- 当前 `check(processed_prompt_text=...)` 保留
-- 第一版新增/封装 `validate_task_prompt(message)` 语义入口
-- `PromptHandler` 保持 compatibility shim，不承载 negotiation 生命周期
+- 当前 `check(processed_prompt_text=...)` 保留并直接承担语义结果输出
+- `PromptHandler` 收敛为单一 `check_task_prompt(...)` 薄 facade
 
-#### `prompt.task_validation.PromptValidator`
+#### `server.prompt_handler.PromptHandler`
 
 角色：
 
-- 统一承接 task prompt 校验领域语义
-- 收编现有 server `prompt_compliance`
-- 输出对 negotiation 友好的结果
+- C 侧 task prompt 校验兼容 facade
+- 对外公开 `check_task_prompt(task_id, processed_prompt_text)`
+- 内部只做 `PromptComplianceOrchestrator.check(...)` 的薄代理
 
 ### 7.2 negotiation 公开入口
 
@@ -425,42 +448,31 @@ src/a2a_t/negotiation/types/
 - 只做参数校验、流程编排与依赖调用
 - 不承载 type-specific 业务规则
 - 不直接操作 store
+- 直接依赖收敛为 `NegotiationHandler` 和 `NegotiationParser`
 
 ### 7.3 negotiation 核心组件
-
-#### `NegotiationBuilder`
-
-角色：
-
-- 只负责首轮协商发起
-- 负责：
-  - 首轮 `NegotiationContext` 生成
-  - 首轮协商 prompt 文本生成
-  - 首轮 fixed-key map 组装
-  - 首轮 `NegotiationRecord` 建档
-
-不负责：
-
-- 入站处理
-- 后续续轮
-- 幂等判断
-- 终态判断
 
 #### `NegotiationHandler`
 
 角色：
 
 - 负责：
+  - `start(...)`
   - `receive(...)`
   - `continue_(...)`
-- 统一执行续轮合法性校验、状态推进、type 路由和 store 更新
+  - 首轮 `NegotiationContext` 生成
+  - 首轮协商 prompt 文本生成
+  - 首轮 fixed-key map 组装
+  - 首轮 `NegotiationRecord` 建档
+  - 续轮合法性校验、状态推进、type 路由和 store 更新
 - 是内部用例执行器，不直接对外暴露
 
 #### `NegotiationParser`
 
 角色：
 
-- 只作为 `NegotiationHandler` 的内部辅助组件
+- 作为公开入口和 `NegotiationHandler` 共享的解析组件
+- 统一解析 negotiation context 和固定 `negotiation-json` 报文
 - 不作为独立公开入口
 
 ### 7.4 negotiation type
@@ -503,26 +515,29 @@ src/a2a_t/negotiation/types/
 
 ### 8.1 公开输入输出
 
-#### `validate_task_prompt(message)` 结果
+#### `check_task_prompt(task_id, processed_prompt_text)` 结果
 
 ```json
 {
   "passed": false,
-  "needNegotiation": true,
-  "negotiationInput": {
+  "need_negotiation": true,
+  "negotiation_input": {
     "type": "information",
     "contentText": "...",
     "facts": {}
   },
-  "errorMessage": "Slot validation failed."
+  "stage": "slot_validation",
+  "extracted_slots": {},
+  "error_code": "slot_validation_error",
+  "error_message": "Slot validation failed."
 }
 ```
 
 约束：
 
-- `passed=true` -> `needNegotiation=false` 且 `negotiationInput=null`
-- `needNegotiation=true` -> `negotiationInput` 必须非空
-- `errorMessage` 只保留字符串
+- `passed=true` -> `need_negotiation=false` 且 `negotiation_input=null`
+- `need_negotiation=true` -> `negotiation_input` 必须非空
+- `error_message` 只保留字符串
 
 #### `start_negotiation(input)` 输入
 
@@ -695,13 +710,13 @@ store 至少保存：
 
 ### 10.1 task prompt 侧
 
-- `render_task_prompt(...)`
+- `generate(...)`
   - 对外契约统一为抛异常
   - 若底层仍复用当前 `generate(...)` 失败结果对象，由公开入口负责转换
 
-- `validate_task_prompt(...)`
+- `check_task_prompt(...)`
   - 请求本身无法处理：抛异常
-  - 业务校验失败：正常返回 `passed/needNegotiation/negotiationInput/errorMessage`
+  - 业务校验失败：正常返回 `passed/need_negotiation/negotiation_input/error_message`
   - 若底层仍复用当前 `check(...)` 返回的 `PromptComplianceResult`，由公开入口负责翻译
 
 ### 10.2 negotiation 侧
@@ -784,28 +799,31 @@ package_data/prompt_resources/
 - 新增共享 `negotiation/` 包
 - 新增 `client/negotiation/`
 - 新增 `server/negotiation/`
-- 为 `PromptGenerationOrchestrator` 增加 `render_task_prompt(...)` 语义入口或等价 facade
-- 为 `PromptComplianceOrchestrator` 增加 `validate_task_prompt(...)` 语义入口或等价 facade
-- 在 `prompt/task_validation/` 中收编当前 `prompt_compliance` 结果，形成对 negotiation 友好的校验输出
+- 删除 `PromptGenerationOrchestrator.render_task_prompt(...)` 薄封装，统一保留 `generate(...)`
+- 由 `PromptComplianceOrchestrator.check(...)` 直接输出语义化校验结果
+- `PromptHandler` 收敛为单一 `check_task_prompt(...)` 薄 facade
 
 ### 12.4 当前代码的明确差异
 
 当前代码中：
 
-- `PromptGenerationOrchestrator` 公开方法是 `generate(...)`
-- `PromptComplianceOrchestrator` 公开方法是 `check(...)`
-- `PromptComplianceResult` 目前只有：
+- `PromptGenerationOrchestrator` 公开方法保留为 `generate(...)`
+- `PromptComplianceOrchestrator` 公开方法保留为 `check(...)`
+- `PromptComplianceResult` 已直接包含：
   - `passed`
   - `stage`
   - `extracted_slots`
   - `error_code`
   - `error_message`
+  - `need_negotiation`
+  - `negotiation_input`
 
-因此第一版开发需要补的不是“重写旧链路”，而是：
+因此当前代码的关键收敛点是：
 
-- 在现有能力外侧补新的领域入口
-- 把 `check(...)` 的结果翻译为 `validate_task_prompt(...)` 契约
-- 在共享层新增 negotiation 状态机、type 路由和 store
+- 统一让 B 侧调用方使用 `generate(...)` 返回的 `PromptGenerationResult`
+- 统一让 C 侧 facade 使用 `PromptHandler.check_task_prompt(...)`
+- 让 `check(...)` 的结果直接服务 `information` 场景的协商发起
+- 在共享层维护 negotiation 状态机、type 路由和 store
 
 ## 13. 结论
 

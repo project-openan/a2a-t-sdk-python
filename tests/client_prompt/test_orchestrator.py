@@ -266,6 +266,27 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
                 ),
             )
 
+    def test_orchestrator_uses_shared_task_prompt_renderer_by_default(self) -> None:
+        from a2a_t.prompt.task_rendering import TaskPromptRenderer
+
+        orchestrator = self._build_orchestrator(
+            scenario_result=ScenarioRecognitionResult(
+                matched=True,
+                scenario_code="energy_saving",
+                error_message=None,
+            ),
+            extraction_result=SlotExtractionResult(
+                slots={"site": "Site A", "additional_notes": None},
+                slot_errors=[],
+            ),
+            validation_result=SlotValidationResult(
+                passed=True,
+                slot_errors=[],
+            ),
+        )
+
+        self.assertIs(type(orchestrator._renderer), TaskPromptRenderer)
+
     def test_generate_returns_success_result(self) -> None:
         orchestrator = self._build_orchestrator(
             scenario_result=ScenarioRecognitionResult(
@@ -499,7 +520,7 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
         self.assertEqual(result.failure.message, "llm transport down")
 
     def test_generate_returns_render_failure_when_renderer_rejects_slots(self) -> None:
-        from a2a_t.client.prompt_generation.a2a_t_task_prompt_renderer import A2ATTaskPromptRenderError
+        from a2a_t.prompt.task_rendering import TaskPromptRenderError
 
         orchestrator = self._build_orchestrator(
             scenario_result=ScenarioRecognitionResult(
@@ -515,7 +536,7 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
                 passed=True,
                 slot_errors=[],
             ),
-            renderer=FakeRenderer(A2ATTaskPromptRenderError("Template references unknown slot: time_range")),
+            renderer=FakeRenderer(TaskPromptRenderError("Template references unknown slot: time_range")),
         )
 
         result = orchestrator.generate("Analyze Site A energy usage.")
@@ -524,6 +545,52 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
         self.assertEqual(result.failure.code, "RENDER_FAILED")
         self.assertEqual(result.failure.stage, "render")
         self.assertEqual(result.failure.message, "Template references unknown slot: time_range")
+
+    def test_generate_returns_render_failure_when_shared_renderer_rejects_slots(self) -> None:
+        from a2a_t.prompt.task_rendering import TaskPromptRenderError
+
+        orchestrator = self._build_orchestrator(
+            scenario_result=ScenarioRecognitionResult(
+                matched=True,
+                scenario_code="energy_saving",
+                error_message=None,
+            ),
+            extraction_result=SlotExtractionResult(
+                slots={"site": "Site A", "additional_notes": None},
+                slot_errors=[],
+            ),
+            validation_result=SlotValidationResult(
+                passed=True,
+                slot_errors=[],
+            ),
+            renderer=FakeRenderer(TaskPromptRenderError("Template references unknown slot: time_range")),
+        )
+
+        result = orchestrator.generate("Analyze Site A energy usage.")
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.failure.code, "RENDER_FAILED")
+        self.assertEqual(result.failure.stage, "render")
+        self.assertEqual(result.failure.message, "Template references unknown slot: time_range")
+
+    def test_orchestrator_does_not_expose_render_task_prompt_helper(self) -> None:
+        orchestrator = self._build_orchestrator(
+            scenario_result=ScenarioRecognitionResult(
+                matched=True,
+                scenario_code="energy_saving",
+                error_message=None,
+            ),
+            extraction_result=SlotExtractionResult(
+                slots={"site": "Site A", "additional_notes": None},
+                slot_errors=[],
+            ),
+            validation_result=SlotValidationResult(
+                passed=True,
+                slot_errors=[],
+            ),
+        )
+
+        self.assertFalse(hasattr(orchestrator, "render_task_prompt"))
 
 
 if __name__ == "__main__":

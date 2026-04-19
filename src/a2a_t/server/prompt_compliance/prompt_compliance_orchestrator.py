@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 from a2a_t.prompt.analysis import SlotExtractor
-from a2a_t.prompt.common.a2a_t_task_prompt import A2ATTaskPromptFormatError, parse_a2a_t_task_prompt_metadata
 from a2a_t.prompt.analysis.errors import PromptAnalysisError
+from a2a_t.common.prompt_resources import (
+    PromptResourceLoader,
+    PromptResourceNotFoundError,
+    PromptResourceParseError,
+    SlotSchemaLoader,
+    TemplateLoader,
+)
+from a2a_t.prompt.common.task_prompt_format import TaskPromptFormatError, parse_task_prompt_metadata
 from a2a_t.prompt.common.errors import PromptSourceError
 from a2a_t.prompt.common.models import PromptReference
-from a2a_t.prompt.resources import PromptResourceLoader, SlotSchemaLoader, TemplateLoader
-from a2a_t.prompt.resources.errors import PromptResourceNotFoundError, PromptResourceParseError
+from a2a_t.prompt.validation.constants import INVALID_VALUE, MISSING_INPUT
 from a2a_t.prompt.validation.errors import GuardrailExecutionError
 from a2a_t.prompt.validation.guardrails import SafetyGuardrail
+from a2a_t.prompt.validation.models import SlotValidationError
 from a2a_t.prompt.validation.models import SlotValidationResult
 from a2a_t.prompt.validation.slot_validator import SlotValidator
 from a2a_t.server.prompt_compliance.constants import (
@@ -81,7 +88,7 @@ class PromptComplianceOrchestrator:
 
         try:
             reference = self._parse_reference(processed_prompt_text)
-        except A2ATTaskPromptFormatError as error:
+        except TaskPromptFormatError as error:
             return self._error_result(PROMPT_PARSE_STAGE, PROCESSED_PROMPT_PARSE_ERROR, str(error))
 
         try:
@@ -135,12 +142,20 @@ class PromptComplianceOrchestrator:
             slot_schema=slot_schema,
         )
         if not validation_result.passed:
+            error_message = self._aggregate_slot_errors(validation_result)
+            slot_errors = list(validation_result.slot_errors)
             return PromptComplianceResult(
                 passed=False,
                 stage=SLOT_VALIDATION_STAGE,
                 extracted_slots=extraction_result.slots,
                 error_code=SLOT_VALIDATION_ERROR,
-                error_message=self._aggregate_slot_errors(validation_result),
+                error_message=error_message,
+                slot_errors=slot_errors,
+                need_negotiation=self._is_negotiable_slot_failure(slot_errors),
+                negotiation_input=self._build_negotiation_input(
+                    error_message=error_message,
+                    slot_errors=slot_errors,
+                ),
             )
 
         return PromptComplianceResult(
@@ -151,11 +166,47 @@ class PromptComplianceOrchestrator:
 
     @staticmethod
     def _parse_reference(processed_prompt_text: str) -> PromptReference:
-        return parse_a2a_t_task_prompt_metadata(processed_prompt_text).to_prompt_reference()
+        return parse_task_prompt_metadata(processed_prompt_text).to_prompt_reference()
 
     def _aggregate_slot_errors(self, validation_result: SlotValidationResult) -> str:
         messages = [slot_error.message for slot_error in validation_result.slot_errors if slot_error.message]
         return "; ".join(messages) if messages else "Slot validation failed."
+
+    def _is_negotiable_slot_failure(self, slot_errors: list[SlotValidationError]) -> bool:
+        if not slot_errors:
+            return False
+        return all(slot_error.code in {MISSING_INPUT, INVALID_VALUE} for slot_error in slot_errors)
+
+    def _build_negotiation_input(
+        self,
+        *,
+        error_message: str,
+        slot_errors: list[SlotValidationError],
+    ) -> dict[str, object] | None:
+        if not self._is_negotiable_slot_failure(slot_errors):
+            return None
+
+        missing_fields: list[str] = []
+        invalid_fields: list[dict[str, str]] = []
+        for slot_error in slot_errors:
+            if slot_error.code == INVALID_VALUE:
+                invalid_fields.append(
+                    {
+                        "name": slot_error.slot_name,
+                        "reason": slot_error.message,
+                    }
+                )
+                continue
+            missing_fields.append(slot_error.slot_name)
+
+        return {
+            "type": "information",
+            "contentText": error_message,
+            "facts": {
+                "missingFields": missing_fields,
+                "invalidFields": invalid_fields,
+            },
+        }
 
     @staticmethod
     def _error_result(stage: str, error_code: str, error_message: str) -> PromptComplianceResult:

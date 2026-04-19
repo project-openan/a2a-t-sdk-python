@@ -5,8 +5,9 @@ from pathlib import Path
 from typing import Any
 
 from a2a_t.config.models import A2ATConfig
+from a2a_t.common.prompt_runtime import PromptRuntimeComponentsBuilder
 from a2a_t.prompt.analysis import ScenarioRecognizer, SlotExtractor
-from a2a_t.prompt.builders import PromptRuntimeComponentsBuilder
+from a2a_t.prompt.task_rendering import TaskPromptRenderer
 
 from .prompt_generation_orchestrator import PromptGenerationOrchestrator
 
@@ -18,11 +19,13 @@ class PromptGenerationOrchestratorBuilder:
         runtime_components_builder: PromptRuntimeComponentsBuilder | None = None,
         scenario_recognizer_cls: type = ScenarioRecognizer,
         slot_extractor_cls: type = SlotExtractor,
+        renderer_cls: type = TaskPromptRenderer,
         orchestrator_cls: type = PromptGenerationOrchestrator,
     ) -> None:
         self._runtime_components_builder = runtime_components_builder or PromptRuntimeComponentsBuilder()
         self._scenario_recognizer_cls = scenario_recognizer_cls
         self._slot_extractor_cls = slot_extractor_cls
+        self._renderer_cls = renderer_cls
         self._orchestrator_cls = orchestrator_cls
 
     def build(
@@ -54,5 +57,6 @@ class PromptGenerationOrchestratorBuilder:
             slot_extractor=slot_extractor,
             slot_validator=components.slot_validator,
             resource_registry=components.resource_registry,
+            renderer=self._renderer_cls(),
             logger=logger,
         )
