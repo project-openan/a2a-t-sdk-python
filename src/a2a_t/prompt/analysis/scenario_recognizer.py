@@ -7,7 +7,7 @@ from .errors import ScenarioRecognitionError
 from .json_schema_builder import AnalysisJsonSchemaBuilder
 from .message_builder import AnalysisMessageBuilder
 from .models import ScenarioRecognitionResult
-from a2a_t.prompt.resources.models import ScenarioDefinition
+from a2a_t.common.prompt_resources.models import ScenarioDefinition
 
 
 class ScenarioRecognizer:

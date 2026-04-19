@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from a2a_t.prompt.resources.models import SlotSchema
+from a2a_t.common.prompt_resources.models import SlotSchema
 
 from .models import SlotValidationError, SlotValidationResult
 

@@ -22,8 +22,8 @@ class FakeNegotiationHandler:
         self.start_calls.append({"input": input, "role": role})
         return {"started": True}
 
-    def receive(self, *, message: str, conetxt: dict[str, object]):
-        self.receive_calls.append({"message": message, "conetxt": conetxt})
+    def receive(self, *, message: str, context: dict[str, object]):
+        self.receive_calls.append({"message": message, "context": context})
         return {
             "context": {
                 "negotiationType": "clarification",
@@ -117,7 +117,7 @@ class NegotiationOrchestratorTest(unittest.TestCase):
 
         result = orchestrator.continue_negotiation(
             ContinueNegotiationInput(
-                context=NegotiationContext.from_conetxt(
+                context=NegotiationContext.from_context(
                     {
                         "negotiationType": "clarification",
                         "negotiationId": "neg-1",

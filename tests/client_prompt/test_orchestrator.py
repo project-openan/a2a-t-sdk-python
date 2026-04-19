@@ -29,8 +29,8 @@ from a2a_t.client.prompt_generation.generation_constants import (
     VALIDATION_STAGE,
 )
 from a2a_t.prompt.common.models import PromptReference
-from a2a_t.prompt.resources.errors import PromptResourceParseError
-from a2a_t.prompt.resources.models import PromptMessages, ScenarioDefinition, SlotDefinition, SlotSchema
+from a2a_t.common.prompt_resources.errors import PromptResourceParseError
+from a2a_t.common.prompt_resources.models import PromptMessages, ScenarioDefinition, SlotDefinition, SlotSchema
 from a2a_t.prompt.validation.models import SlotValidationError, SlotValidationResult
 
 
@@ -592,6 +592,29 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
 
         self.assertFalse(hasattr(orchestrator, "render_task_prompt"))
 
+    def test_orchestrator_does_not_keep_redundant_loader_members(self) -> None:
+        orchestrator = self._build_orchestrator(
+            scenario_result=ScenarioRecognitionResult(
+                matched=True,
+                scenario_code="energy_saving",
+                error_message=None,
+            ),
+            extraction_result=SlotExtractionResult(
+                slots={"site": "Site A", "additional_notes": None},
+                slot_errors=[],
+            ),
+            validation_result=SlotValidationResult(
+                passed=True,
+                slot_errors=[],
+            ),
+        )
+
+        self.assertFalse(hasattr(orchestrator, "_scenario_loader"))
+        self.assertFalse(hasattr(orchestrator, "_prompt_resource_loader"))
+        self.assertFalse(hasattr(orchestrator, "_template_loader"))
+        self.assertFalse(hasattr(orchestrator, "_slot_schema_loader"))
+
 
 if __name__ == "__main__":
     unittest.main()
+

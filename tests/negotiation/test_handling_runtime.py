@@ -70,7 +70,7 @@ class NegotiationHandlingRuntimeTest(unittest.TestCase):
 
         result = handler.receive(
             message="Clarify intent",
-            conetxt={
+            context={
                 "negotiationType": "clarification",
                 "negotiationId": "neg-receive",
                 "role": "client",
@@ -167,7 +167,7 @@ class NegotiationHandlingRuntimeTest(unittest.TestCase):
 
         result = handler.receive(
             message="Clarify intent",
-            conetxt={
+            context={
                 "negotiationType": "clarification",
                 "negotiationId": "neg-terminal",
                 "role": "client",
@@ -213,7 +213,7 @@ class NegotiationHandlingRuntimeTest(unittest.TestCase):
         with self.assertRaises(NegotiationStateError):
             handler.receive(
                 message="Clarify intent",
-                conetxt={
+                context={
                     "negotiationType": "clarification",
                     "negotiationId": "neg-round-skip",
                     "role": "client",
@@ -304,7 +304,7 @@ class NegotiationHandlingRuntimeTest(unittest.TestCase):
 
         result = handler.receive(
             message="Clarify intent",
-            conetxt={
+            context={
                 "negotiationType": "clarification",
                 "negotiationId": "neg-round-limit",
                 "role": "client",

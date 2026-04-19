@@ -13,11 +13,11 @@ if str(SRC_ROOT) not in sys.path:
 
 
 class NegotiationContextParseTest(unittest.TestCase):
-    def test_from_conetxt_returns_negotiation_context(self) -> None:
+    def test_from_context_returns_negotiation_context(self) -> None:
         from a2a_t.negotiation.common.enums import NegotiationRole, NegotiationStatus, NegotiationType
         from a2a_t.negotiation.common.models import NegotiationContext
 
-        context = NegotiationContext.from_conetxt(
+        context = NegotiationContext.from_context(
             {
                 "negotiationType": "information",
                 "negotiationId": "neg-1",
@@ -34,12 +34,12 @@ class NegotiationContextParseTest(unittest.TestCase):
         self.assertEqual(context.round, 3)
         self.assertEqual(context.status, NegotiationStatus.IN_PROGRESS)
 
-    def test_from_conetxt_rejects_invalid_root_fields(self) -> None:
+    def test_from_context_rejects_invalid_root_fields(self) -> None:
         from a2a_t.negotiation.common.exceptions import NegotiationContextError
         from a2a_t.negotiation.common.models import NegotiationContext
 
         with self.assertRaises(NegotiationContextError):
-            NegotiationContext.from_conetxt(
+            NegotiationContext.from_context(
                 {
                     "negotiationType": "unknown",
                     "negotiationId": "neg-1",

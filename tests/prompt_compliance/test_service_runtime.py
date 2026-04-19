@@ -16,8 +16,8 @@ from a2a_t.prompt.analysis.models import SlotExtractionResult
 from a2a_t.prompt.common.task_prompt_format import TaskPromptMetadata, format_task_prompt
 from a2a_t.prompt.common.errors import PromptSourceError
 from a2a_t.prompt.common.models import PromptReference
-from a2a_t.prompt.resources.errors import PromptResourceNotFoundError, PromptResourceParseError
-from a2a_t.prompt.resources.models import PromptMessages, SlotDefinition, SlotSchema
+from a2a_t.common.prompt_resources.errors import PromptResourceNotFoundError, PromptResourceParseError
+from a2a_t.common.prompt_resources.models import PromptMessages, SlotDefinition, SlotSchema
 from a2a_t.prompt.validation.constants import INVALID_VALUE, MISSING_INPUT
 from a2a_t.prompt.validation.errors import GuardrailExecutionError
 from a2a_t.prompt.validation.models import GuardrailResult, SlotValidationError, SlotValidationResult
@@ -418,3 +418,4 @@ class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

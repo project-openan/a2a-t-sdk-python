@@ -17,7 +17,7 @@ if str(SRC_ROOT) not in sys.path:
 from a2a_t.llm.base import LLMResponse
 from a2a_t.prompt.analysis import SlotExtractor
 from a2a_t.prompt.common.task_prompt_format import TaskPromptMetadata, format_task_prompt
-from a2a_t.prompt.resources import PromptResourceLoader, SlotSchemaLoader, TemplateLoader
+from a2a_t.common.prompt_resources import PromptResourceLoader, SlotSchemaLoader, TemplateLoader
 from a2a_t.prompt.validation import GuardrailResult, SlotValidator
 from a2a_t.server.a2at_server import A2ATServer
 from a2a_t.server.prompt_compliance.prompt_compliance_orchestrator import PromptComplianceOrchestrator
@@ -136,3 +136,4 @@ class PromptComplianceIntegrationRuntimeTest(ManagedTempDirTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

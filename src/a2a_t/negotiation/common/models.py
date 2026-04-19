@@ -30,19 +30,19 @@ class NegotiationContext:
     extra: dict[str, object]
 
     @classmethod
-    def from_conetxt(cls, conetxt: dict[str, object]) -> "NegotiationContext":
+    def from_context(cls, context: dict[str, object]) -> "NegotiationContext":
         try:
-            negotiation_type = NegotiationType(str(conetxt["negotiationType"]))
-            negotiation_id = str(conetxt["negotiationId"])
-            role = NegotiationRole(str(conetxt["role"]))
-            round_value = int(conetxt["round"])
-            status = NegotiationStatus(str(conetxt["status"]))
-            extra = conetxt["extra"]
+            negotiation_type = NegotiationType(str(context["negotiationType"]))
+            negotiation_id = str(context["negotiationId"])
+            role = NegotiationRole(str(context["role"]))
+            round_value = int(context["round"])
+            status = NegotiationStatus(str(context["status"]))
+            extra = context["extra"]
         except (KeyError, TypeError, ValueError) as error:
-            raise NegotiationContextError("Invalid negotiation conetxt.") from error
+            raise NegotiationContextError("Invalid negotiation context.") from error
 
         if not negotiation_id or round_value < 1 or not isinstance(extra, dict):
-            raise NegotiationContextError("Invalid negotiation conetxt.")
+            raise NegotiationContextError("Invalid negotiation context.")
 
         return cls(
             negotiation_type=negotiation_type,
@@ -53,7 +53,7 @@ class NegotiationContext:
             extra=dict(extra),
         )
 
-    def to_conetxt(self) -> dict[str, object]:
+    def to_context(self) -> dict[str, object]:
         return {
             "negotiationType": self.negotiation_type.value,
             "negotiationId": self.negotiation_id,

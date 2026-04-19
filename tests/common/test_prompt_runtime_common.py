@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 import unittest
+import importlib
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -45,3 +46,8 @@ class CommonPromptRuntimeComponentsBuilderTest(unittest.TestCase):
         self.assertIsInstance(components.slot_validator, SlotValidator)
         self.assertTrue(hasattr(components.guardrail, "check"))
 
+    def test_common_prompt_resources_owns_real_submodules(self) -> None:
+        common_module = importlib.import_module("a2a_t.common.prompt_resources.scenario_loader")
+
+        self.assertTrue(common_module.__file__.endswith("common\\prompt_resources\\scenario_loader.py"))
+        self.assertIsNone(importlib.util.find_spec("a2a_t.prompt.resources"))

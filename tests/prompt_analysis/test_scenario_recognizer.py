@@ -13,7 +13,7 @@ if str(SRC_ROOT) not in sys.path:
 
 
 from a2a_t.llm.base import LLMResponse
-from a2a_t.prompt.resources.models import ScenarioDefinition
+from a2a_t.common.prompt_resources.models import ScenarioDefinition
 
 
 class FakeLLMClient:
@@ -139,3 +139,4 @@ class ScenarioRecognizerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
