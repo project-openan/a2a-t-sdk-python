@@ -16,7 +16,7 @@ class InformationNegotiationType(BaseNegotiationType):
     def process_received_message(
         self,
         *,
-        message_payload: dict[str, object],
+        message: str,
         context: NegotiationContext,
         record: NegotiationRecord | None,
     ) -> ReceiveResult:
@@ -24,29 +24,31 @@ class InformationNegotiationType(BaseNegotiationType):
             return ReceiveResult(
                 need_response=False,
                 facts={},
-                message=str(message_payload.get("contentText", "")),
+                message=message,
             )
 
         if self._prompt_checker is None:
             return super().process_received_message(
-                message_payload=message_payload,
+                message=message,
                 context=context,
-                record=record,
+                record=None,
             )
 
-        latest_task_prompt = str(message_payload.get("contentText", ""))
         compliance_result = self._prompt_checker.check(
-            processed_prompt_text=latest_task_prompt,
+            processed_prompt_text=message,
             request_metadata=None,
         )
         if compliance_result.need_negotiation and compliance_result.negotiation_input is not None:
-            facts = compliance_result.negotiation_input.get("facts", {})
-            if not isinstance(facts, dict):
-                facts = {}
             return ReceiveResult(
                 need_response=True,
-                facts=dict(facts),
-                message=compliance_result.error_message or str(message_payload.get("contentText", "")),
+                facts={},
+                message=compliance_result.error_message or message,
+            )
+        if not compliance_result.passed:
+            return ReceiveResult(
+                need_response=True,
+                facts={},
+                message=compliance_result.error_message or "Task prompt validation failed.",
             )
 
         return ReceiveResult(
@@ -65,10 +67,7 @@ class InformationNegotiationType(BaseNegotiationType):
     ) -> ContinueResult:
         prompt_text = self._prompt_renderer.render_continue(
             negotiation_type=context.negotiation_type,
-            context=context,
-            status=status,
-            content_text=content_text,
-            facts={},
+            message=content_text,
         )
         final_task_prompt = content_text if status == NegotiationStatus.AGREED else None
         return ContinueResult(

@@ -12,7 +12,6 @@ from .models import (
     ContinueResult,
     NegotiationContext,
     NegotiationRecord,
-    ReceiveNegotiationResult,
     ReceiveResult,
     StartNegotiationInput,
 )
@@ -32,7 +31,6 @@ __all__ = [
     "NegotiationStatus",
     "NegotiationTerminalStateError",
     "NegotiationType",
-    "ReceiveNegotiationResult",
     "ReceiveResult",
     "StartNegotiationInput",
     "TASK_PROMPT_KEY",

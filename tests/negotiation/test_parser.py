@@ -12,14 +12,12 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
-class NegotiationParserTest(unittest.TestCase):
-    def test_parse_context_returns_negotiation_context(self) -> None:
+class NegotiationContextParseTest(unittest.TestCase):
+    def test_from_context_json_returns_negotiation_context(self) -> None:
         from a2a_t.negotiation.common.enums import NegotiationRole, NegotiationStatus, NegotiationType
-        from a2a_t.negotiation.handling.negotiation_parser import NegotiationParser
+        from a2a_t.negotiation.common.models import NegotiationContext
 
-        parser = NegotiationParser()
-
-        context = parser.parse_context(
+        context = NegotiationContext.from_context_json(
             {
                 "negotiationType": "information",
                 "negotiationId": "neg-1",
@@ -36,14 +34,12 @@ class NegotiationParserTest(unittest.TestCase):
         self.assertEqual(context.round, 3)
         self.assertEqual(context.status, NegotiationStatus.IN_PROGRESS)
 
-    def test_parse_context_rejects_invalid_root_fields(self) -> None:
+    def test_from_context_json_rejects_invalid_root_fields(self) -> None:
         from a2a_t.negotiation.common.exceptions import NegotiationContextError
-        from a2a_t.negotiation.handling.negotiation_parser import NegotiationParser
-
-        parser = NegotiationParser()
+        from a2a_t.negotiation.common.models import NegotiationContext
 
         with self.assertRaises(NegotiationContextError):
-            parser.parse_context(
+            NegotiationContext.from_context_json(
                 {
                     "negotiationType": "unknown",
                     "negotiationId": "neg-1",
@@ -53,29 +49,3 @@ class NegotiationParserTest(unittest.TestCase):
                     "extra": {},
                 }
             )
-
-    def test_parse_message_payload_extracts_negotiation_json_block(self) -> None:
-        from a2a_t.negotiation.handling.negotiation_parser import NegotiationParser
-
-        parser = NegotiationParser()
-
-        payload = parser.parse_message_payload(
-            "Please review the negotiation.\n\n```negotiation-json\n{\"facts\": {\"missingFields\": [\"site\"]}, \"contentText\": \"latest prompt\"}\n```"
-        )
-
-        self.assertEqual(
-            payload,
-            {
-                "facts": {"missingFields": ["site"]},
-                "contentText": "latest prompt",
-            },
-        )
-
-    def test_parse_message_payload_rejects_missing_block(self) -> None:
-        from a2a_t.negotiation.common.exceptions import NegotiationParseError
-        from a2a_t.negotiation.handling.negotiation_parser import NegotiationParser
-
-        parser = NegotiationParser()
-
-        with self.assertRaises(NegotiationParseError):
-            parser.parse_message_payload("plain text only")

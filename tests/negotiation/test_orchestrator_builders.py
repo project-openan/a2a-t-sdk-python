@@ -77,21 +77,20 @@ class NegotiationOrchestratorBuilderTest(unittest.TestCase):
         )
 
     def test_client_builder_builds_working_orchestrator(self) -> None:
-        from a2a_t.client.negotiation.negotiation_orchestrator_builder import NegotiationOrchestratorBuilder
+        from a2a_t.client.negotiation.negotiation_orchestrator_builder import ClientNegotiationOrchestratorBuilder
+        from a2a_t.negotiation.common.enums import NegotiationType
+        from a2a_t.negotiation.common.models import StartNegotiationInput
 
         store_factory = FakeStoreFactory()
-        builder = NegotiationOrchestratorBuilder(store_factory=store_factory)
-        orchestrator = builder.build(
-            config=self._config(),
-            llm_client=object(),
-        )
+        builder = ClientNegotiationOrchestratorBuilder(store_factory=store_factory)
+        orchestrator = builder.build()
 
         result = orchestrator.start_negotiation(
-            {
-                "type": "clarification",
-                "contentText": "Please clarify.",
-                "facts": {},
-            }
+            StartNegotiationInput(
+                type=NegotiationType.CLARIFICATION,
+                content_text="Please clarify.",
+                facts={},
+            )
         )
 
         self.assertIn("https://github.com/a2aproject/telecommunication/extensions/NEGOTIATION-T", result)
@@ -101,21 +100,24 @@ class NegotiationOrchestratorBuilderTest(unittest.TestCase):
         )
         self.assertEqual(len(store_factory.calls), 1)
 
-    def test_client_builder_uses_common_runtime_builder_by_default(self) -> None:
-        from a2a_t.client.negotiation.negotiation_orchestrator_builder import NegotiationOrchestratorBuilder
-        from a2a_t.common.prompt_runtime import PromptRuntimeComponentsBuilder
+    def test_client_builder_does_not_keep_unused_runtime_builder_dependency(self) -> None:
+        from a2a_t.client.negotiation.negotiation_orchestrator_builder import ClientNegotiationOrchestratorBuilder
 
-        builder = NegotiationOrchestratorBuilder()
+        builder = ClientNegotiationOrchestratorBuilder()
 
-        self.assertIsInstance(builder._runtime_components_builder, PromptRuntimeComponentsBuilder)
+        self.assertFalse(hasattr(builder, "_runtime_components_builder"))
+        self.assertFalse(hasattr(builder, "_registry_cls"))
+        self.assertFalse(hasattr(builder, "_context_factory_cls"))
 
     def test_server_builder_builds_working_orchestrator(self) -> None:
-        from a2a_t.server.negotiation.negotiation_orchestrator_builder import NegotiationOrchestratorBuilder
+        from a2a_t.server.negotiation.negotiation_orchestrator_builder import ServerNegotiationOrchestratorBuilder
+        from a2a_t.negotiation.common.enums import NegotiationType
+        from a2a_t.negotiation.common.models import StartNegotiationInput
 
         prompt_checker = FakePromptChecker()
         prompt_compliance_builder = FakePromptComplianceBuilder(prompt_checker)
         store_factory = FakeStoreFactory()
-        builder = NegotiationOrchestratorBuilder(
+        builder = ServerNegotiationOrchestratorBuilder(
             prompt_compliance_builder=prompt_compliance_builder,
             store_factory=store_factory,
         )
@@ -125,11 +127,11 @@ class NegotiationOrchestratorBuilderTest(unittest.TestCase):
             llm_client=object(),
         )
         result = orchestrator.start_negotiation(
-            {
-                "type": "information",
-                "contentText": "Need more details.",
-                "facts": {},
-            }
+            StartNegotiationInput(
+                type=NegotiationType.INFORMATION,
+                content_text="Need more details.",
+                facts={},
+            )
         )
 
         self.assertIn("https://github.com/a2aproject/telecommunication/extensions/NEGOTIATION-T", result)
@@ -141,19 +143,17 @@ class NegotiationOrchestratorBuilderTest(unittest.TestCase):
         self.assertEqual(len(store_factory.calls), 1)
 
     def test_server_builder_builds_shared_runtime_once_and_reuses_it(self) -> None:
-        from a2a_t.server.negotiation.negotiation_orchestrator_builder import NegotiationOrchestratorBuilder
+        from a2a_t.server.negotiation.negotiation_orchestrator_builder import ServerNegotiationOrchestratorBuilder
 
         prompt_checker = FakePromptChecker()
         prompt_compliance_builder = FakePromptComplianceBuilder(prompt_checker)
         components = type(
             "Components",
             (),
-            {
-                "prompt_resource_loader": object(),
-            },
+            {},
         )()
         runtime_builder = FakeRuntimeComponentsBuilder(components)
-        builder = NegotiationOrchestratorBuilder(
+        builder = ServerNegotiationOrchestratorBuilder(
             prompt_compliance_builder=prompt_compliance_builder,
             runtime_components_builder=runtime_builder,
             prompt_renderer_cls=FakePromptRenderer,
@@ -167,12 +167,14 @@ class NegotiationOrchestratorBuilderTest(unittest.TestCase):
 
         self.assertEqual(len(runtime_builder.calls), 1)
         self.assertIs(prompt_compliance_builder.calls[0]["runtime_components"], components)
-        self.assertIs(FakePromptRenderer.last_kwargs["prompt_resource_loader"], components.prompt_resource_loader)
+        self.assertEqual(FakePromptRenderer.last_kwargs, {})
 
     def test_server_builder_uses_common_runtime_builder_by_default(self) -> None:
-        from a2a_t.server.negotiation.negotiation_orchestrator_builder import NegotiationOrchestratorBuilder
+        from a2a_t.server.negotiation.negotiation_orchestrator_builder import ServerNegotiationOrchestratorBuilder
         from a2a_t.common.prompt_runtime import PromptRuntimeComponentsBuilder
 
-        builder = NegotiationOrchestratorBuilder()
+        builder = ServerNegotiationOrchestratorBuilder()
 
         self.assertIsInstance(builder._runtime_components_builder, PromptRuntimeComponentsBuilder)
+        self.assertFalse(hasattr(builder, "_registry_cls"))
+        self.assertFalse(hasattr(builder, "_context_factory_cls"))

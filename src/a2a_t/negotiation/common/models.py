@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .exceptions import NegotiationContextError
 from .enums import NegotiationRole, NegotiationStatus, NegotiationType
 
 
@@ -28,6 +29,30 @@ class NegotiationContext:
     status: NegotiationStatus
     extra: dict[str, object]
 
+    @classmethod
+    def from_context_json(cls, context_json: dict[str, object]) -> "NegotiationContext":
+        try:
+            negotiation_type = NegotiationType(str(context_json["negotiationType"]))
+            negotiation_id = str(context_json["negotiationId"])
+            role = NegotiationRole(str(context_json["role"]))
+            round_value = int(context_json["round"])
+            status = NegotiationStatus(str(context_json["status"]))
+            extra = context_json["extra"]
+        except (KeyError, TypeError, ValueError) as error:
+            raise NegotiationContextError("Invalid negotiation context_json.") from error
+
+        if not negotiation_id or round_value < 1 or not isinstance(extra, dict):
+            raise NegotiationContextError("Invalid negotiation context_json.")
+
+        return cls(
+            negotiation_type=negotiation_type,
+            negotiation_id=negotiation_id,
+            role=role,
+            round=round_value,
+            status=status,
+            extra=dict(extra),
+        )
+
     def to_context_json(self) -> dict[str, object]:
         return {
             "negotiationType": self.negotiation_type.value,
@@ -36,22 +61,6 @@ class NegotiationContext:
             "round": self.round,
             "status": self.status.value,
             "extra": dict(self.extra),
-        }
-
-
-@dataclass(slots=True)
-class ReceiveNegotiationResult:
-    context: NegotiationContext
-    need_response: bool
-    facts: dict[str, object]
-    message: str = ""
-
-    def to_public_dict(self) -> dict[str, object]:
-        return {
-            "context": self.context.to_context_json(),
-            "needResponse": self.need_response,
-            "facts": dict(self.facts),
-            "message": self.message,
         }
 
 

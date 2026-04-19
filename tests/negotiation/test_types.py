@@ -62,19 +62,13 @@ class NegotiationTypesTest(unittest.TestCase):
         negotiation_type = InformationNegotiationType(prompt_renderer=NegotiationPromptRenderer())
 
         result = negotiation_type.process_received_message(
-            message_payload={
-                "facts": {
-                    "missingFields": ["site"],
-                    "invalidFields": [],
-                },
-                "contentText": "prompt",
-            },
+            message="prompt",
             context=self._context(),
             record=None,
         )
 
         self.assertTrue(result.need_response)
-        self.assertEqual(result.facts["missingFields"], ["site"])
+        self.assertEqual(result.facts, {})
         self.assertEqual(result.message, "prompt")
 
     def test_information_type_on_server_side_uses_prompt_checker(self) -> None:
@@ -90,17 +84,14 @@ class NegotiationTypesTest(unittest.TestCase):
         )
 
         result = negotiation_type.process_received_message(
-            message_payload={
-                "facts": {},
-                "contentText": "latest full task prompt",
-            },
+            message="latest full task prompt",
             context=self._context(),
             record=None,
         )
 
         self.assertEqual(checker.calls, ["latest full task prompt"])
         self.assertTrue(result.need_response)
-        self.assertEqual(result.facts, {"missingFields": ["site"], "invalidFields": []})
+        self.assertEqual(result.facts, {})
         self.assertEqual(result.message, "Need more information")
 
     def test_information_type_on_server_side_returns_completion_message_when_prompt_is_valid(self) -> None:
@@ -124,10 +115,7 @@ class NegotiationTypesTest(unittest.TestCase):
         )
 
         result = negotiation_type.process_received_message(
-            message_payload={
-                "facts": {},
-                "contentText": "latest full task prompt",
-            },
+            message="latest full task prompt",
             context=self._context(),
             record=None,
         )
@@ -135,6 +123,36 @@ class NegotiationTypesTest(unittest.TestCase):
         self.assertTrue(result.need_response)
         self.assertEqual(result.facts, {})
         self.assertEqual(result.message, "Task prompt is complete.")
+
+    def test_information_type_on_server_side_returns_error_when_prompt_fails_without_negotiation(self) -> None:
+        from a2a_t.negotiation.rendering.negotiation_prompt_renderer import NegotiationPromptRenderer
+        from a2a_t.negotiation.types.information import InformationNegotiationType
+        from a2a_t.server.prompt_compliance.result import PromptComplianceResult
+
+        checker = FakePromptChecker(
+            PromptComplianceResult(
+                passed=False,
+                stage="guardrail",
+                error_code="guardrail_rejected",
+                error_message="Guardrail rejected the task prompt.",
+                need_negotiation=False,
+                negotiation_input=None,
+            )
+        )
+        negotiation_type = InformationNegotiationType(
+            prompt_renderer=NegotiationPromptRenderer(),
+            prompt_checker=checker,
+        )
+
+        result = negotiation_type.process_received_message(
+            message="latest full task prompt",
+            context=self._context(),
+            record=None,
+        )
+
+        self.assertTrue(result.need_response)
+        self.assertEqual(result.facts, {})
+        self.assertEqual(result.message, "Guardrail rejected the task prompt.")
 
     def test_information_type_render_continue_returns_final_task_prompt_when_agreed(self) -> None:
         from a2a_t.negotiation.common.enums import NegotiationStatus
@@ -159,7 +177,7 @@ class NegotiationTypesTest(unittest.TestCase):
         )
 
         self.assertEqual(result.final_task_prompt, "final prompt")
-        self.assertIn("final prompt", result.prompt_text)
+        self.assertEqual(result.prompt_text, "final prompt")
 
     def test_clarification_type_passthroughs_facts(self) -> None:
         from a2a_t.negotiation.common.enums import NegotiationRole, NegotiationStatus, NegotiationType
@@ -169,12 +187,7 @@ class NegotiationTypesTest(unittest.TestCase):
 
         negotiation_type = ClarificationNegotiationType(prompt_renderer=NegotiationPromptRenderer())
         result = negotiation_type.process_received_message(
-            message_payload={
-                "facts": {
-                    "clarificationItems": [{"name": "intent"}],
-                },
-                "contentText": "clarify this",
-            },
+            message="clarify this",
             context=NegotiationContext(
                 negotiation_type=NegotiationType.CLARIFICATION,
                 negotiation_id="neg-2",
@@ -186,7 +199,7 @@ class NegotiationTypesTest(unittest.TestCase):
             record=None,
         )
 
-        self.assertEqual(result.facts, {"clarificationItems": [{"name": "intent"}]})
+        self.assertEqual(result.facts, {})
         self.assertEqual(result.message, "clarify this")
 
     def test_clarification_type_on_terminal_message_does_not_require_response(self) -> None:
@@ -197,12 +210,7 @@ class NegotiationTypesTest(unittest.TestCase):
 
         negotiation_type = ClarificationNegotiationType(prompt_renderer=NegotiationPromptRenderer())
         result = negotiation_type.process_received_message(
-            message_payload={
-                "facts": {
-                    "clarificationItems": [{"name": "intent"}],
-                },
-                "contentText": "clarify this",
-            },
+            message="clarify this",
             context=NegotiationContext(
                 negotiation_type=NegotiationType.CLARIFICATION,
                 negotiation_id="neg-3",
@@ -215,5 +223,5 @@ class NegotiationTypesTest(unittest.TestCase):
         )
 
         self.assertFalse(result.need_response)
-        self.assertEqual(result.facts, {"clarificationItems": [{"name": "intent"}]})
+        self.assertEqual(result.facts, {})
         self.assertEqual(result.message, "clarify this")

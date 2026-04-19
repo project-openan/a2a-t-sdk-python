@@ -5,9 +5,8 @@ from a2a_t.negotiation.runtime.base_negotiation_orchestrator import BaseNegotiat
 
 
 class NegotiationOrchestrator(BaseNegotiationOrchestrator):
-    def __init__(self, *, handler, parser) -> None:
+    def __init__(self, *, handler) -> None:
         super().__init__(
             handler=handler,
-            parser=parser,
             role=NegotiationRole.SERVER,
         )

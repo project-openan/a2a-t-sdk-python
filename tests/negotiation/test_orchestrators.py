@@ -24,81 +24,59 @@ class FakeNegotiationHandler:
 
     def receive(self, *, message: str, context_json: dict[str, object]):
         self.receive_calls.append({"message": message, "context_json": context_json})
-
-        from a2a_t.negotiation.common.enums import NegotiationRole, NegotiationStatus, NegotiationType
-        from a2a_t.negotiation.common.models import NegotiationContext, ReceiveNegotiationResult
-
-        return ReceiveNegotiationResult(
-            context=NegotiationContext(
-                negotiation_type=NegotiationType.CLARIFICATION,
-                negotiation_id="neg-1",
-                role=NegotiationRole.CLIENT,
-                round=1,
-                status=NegotiationStatus.IN_PROGRESS,
-                extra={},
-            ),
-            need_response=True,
-            facts={"clarificationItems": []},
-            message="Please clarify.",
-        )
+        return {
+            "context": {
+                "negotiationType": "clarification",
+                "negotiationId": "neg-1",
+                "role": "client",
+                "round": 1,
+                "status": "in-progress",
+                "extra": {},
+            },
+            "needResponse": True,
+            "facts": {"clarificationItems": []},
+            "message": "Please clarify.",
+        }
 
     def continue_(self, *, input: object) -> dict[str, object]:
         self.continue_calls.append({"input": input})
         return {"continued": True}
 
 
-class FakeNegotiationParser:
-    def __init__(self) -> None:
-        self.context_calls: list[dict[str, object]] = []
-
-    def parse_context(self, context_json: dict[str, object]):
-        self.context_calls.append(dict(context_json))
-
-        from a2a_t.negotiation.common.enums import NegotiationRole, NegotiationStatus, NegotiationType
-        from a2a_t.negotiation.common.models import NegotiationContext
-
-        return NegotiationContext(
-            negotiation_type=NegotiationType(str(context_json["negotiationType"])),
-            negotiation_id=str(context_json["negotiationId"]),
-            role=NegotiationRole(str(context_json["role"])),
-            round=int(context_json["round"]),
-            status=NegotiationStatus(str(context_json["status"])),
-            extra=dict(context_json["extra"]),
-        )
-
-
 class NegotiationOrchestratorTest(unittest.TestCase):
     def test_client_orchestrator_start_negotiation_uses_client_role(self) -> None:
-        from a2a_t.negotiation.common.enums import NegotiationRole
+        from a2a_t.negotiation.common.enums import NegotiationRole, NegotiationType
+        from a2a_t.negotiation.common.models import StartNegotiationInput
         from a2a_t.client.negotiation.negotiation_orchestrator import NegotiationOrchestrator
 
         handler = FakeNegotiationHandler()
-        orchestrator = NegotiationOrchestrator(handler=handler, parser=FakeNegotiationParser())
+        orchestrator = NegotiationOrchestrator(handler=handler)
 
         result = orchestrator.start_negotiation(
-            {
-                "type": "clarification",
-                "contentText": "Please clarify.",
-                "facts": {},
-            }
+            StartNegotiationInput(
+                type=NegotiationType.CLARIFICATION,
+                content_text="Please clarify.",
+                facts={},
+            )
         )
 
         self.assertEqual(result, {"started": True})
         self.assertEqual(handler.start_calls[0]["role"], NegotiationRole.CLIENT)
 
     def test_server_orchestrator_start_negotiation_uses_server_role(self) -> None:
-        from a2a_t.negotiation.common.enums import NegotiationRole
+        from a2a_t.negotiation.common.enums import NegotiationRole, NegotiationType
+        from a2a_t.negotiation.common.models import StartNegotiationInput
         from a2a_t.server.negotiation.negotiation_orchestrator import NegotiationOrchestrator
 
         handler = FakeNegotiationHandler()
-        orchestrator = NegotiationOrchestrator(handler=handler, parser=FakeNegotiationParser())
+        orchestrator = NegotiationOrchestrator(handler=handler)
 
         result = orchestrator.start_negotiation(
-            {
-                "type": "information",
-                "contentText": "Need more information.",
-                "facts": {},
-            }
+            StartNegotiationInput(
+                type=NegotiationType.INFORMATION,
+                content_text="Need more information.",
+                facts={},
+            )
         )
 
         self.assertEqual(result, {"started": True})
@@ -109,7 +87,6 @@ class NegotiationOrchestratorTest(unittest.TestCase):
 
         orchestrator = NegotiationOrchestrator(
             handler=FakeNegotiationHandler(),
-            parser=FakeNegotiationParser(),
         )
 
         result = orchestrator.receive_negotiation(
@@ -129,30 +106,32 @@ class NegotiationOrchestratorTest(unittest.TestCase):
         self.assertEqual(result["message"], "Please clarify.")
 
     def test_continue_negotiation_returns_handler_payload(self) -> None:
+        from a2a_t.negotiation.common.enums import NegotiationStatus
+        from a2a_t.negotiation.common.models import ContinueNegotiationInput, NegotiationContext
         from a2a_t.client.negotiation.negotiation_orchestrator import NegotiationOrchestrator
 
         handler = FakeNegotiationHandler()
-        parser = FakeNegotiationParser()
         orchestrator = NegotiationOrchestrator(
             handler=handler,
-            parser=parser,
         )
 
         result = orchestrator.continue_negotiation(
-            {
-                "context": {
-                    "negotiationType": "clarification",
-                    "negotiationId": "neg-1",
-                    "role": "client",
-                    "round": 1,
-                    "status": "in-progress",
-                    "extra": {},
-                },
-                "status": "in-progress",
-                "contentText": "Here is the clarification.",
-            }
+            ContinueNegotiationInput(
+                context=NegotiationContext.from_context_json(
+                    {
+                        "negotiationType": "clarification",
+                        "negotiationId": "neg-1",
+                        "role": "client",
+                        "round": 1,
+                        "status": "in-progress",
+                        "extra": {},
+                    }
+                ),
+                status=NegotiationStatus.IN_PROGRESS,
+                content_text="Here is the clarification.",
+            )
         )
 
         self.assertEqual(result, {"continued": True})
         self.assertEqual(len(handler.continue_calls), 1)
-        self.assertEqual(len(parser.context_calls), 1)
+        self.assertEqual(handler.continue_calls[0]["input"].context.negotiation_id, "neg-1")

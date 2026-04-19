@@ -10,24 +10,21 @@ class BaseNegotiationType:
         self._prompt_renderer = prompt_renderer
 
     def render_start_prompt(self, *, input: StartNegotiationInput, context: NegotiationContext) -> str:
-        return self._prompt_renderer.render_start(input=input, context=context)
+        return self._prompt_renderer.render_start(
+            negotiation_type=input.type,
+            message=input.content_text,
+        )
 
     def process_received_message(
         self,
         *,
-        message_payload: dict[str, object],
+        message: str,
         context: NegotiationContext,
         record: NegotiationRecord | None,
     ) -> ReceiveResult:
-        facts = message_payload.get("facts", {})
-        if not isinstance(facts, dict):
-            facts = {}
-        message = message_payload.get("contentText", "")
-        if not isinstance(message, str):
-            message = ""
         return ReceiveResult(
             need_response=context.status == NegotiationStatus.IN_PROGRESS,
-            facts=dict(facts),
+            facts={},
             message=message,
         )
 
@@ -39,16 +36,10 @@ class BaseNegotiationType:
         status,
         content_text: str,
     ) -> ContinueResult:
-        facts: dict[str, object] = {}
-        if record.last_receive_result is not None:
-            facts = dict(record.last_receive_result.facts)
         return ContinueResult(
             prompt_text=self._prompt_renderer.render_continue(
                 negotiation_type=context.negotiation_type,
-                context=context,
-                status=status,
-                content_text=content_text,
-                facts=facts,
+                message=content_text,
             ),
             final_task_prompt=None,
         )

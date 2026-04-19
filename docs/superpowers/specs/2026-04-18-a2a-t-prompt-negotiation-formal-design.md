@@ -34,7 +34,8 @@
 - A/D 负责在 A2A message/task metadata 与 SDK `context_json` 之间做适配
 - 非 negotiation 场景下，`context_json` 可以为 `None`
 - negotiation 之外的运行时补充参数，放在各自方法的独立输入对象中，不并入 `context_json`
-- 第一版不新增统一的 `A2ATClient` / `A2ATServer` facade
+- 第一版新增统一的 `A2ATClient` / `A2ATServer` facade，作为推荐对外入口
+- `PromptClient` / `PromptHandler` 继续保留为兼容壳
 
 ### 2.3 第一版范围
 
@@ -103,7 +104,8 @@ continue_negotiation(input) -> dict[str, object]
 {
   "context": {},
   "needResponse": true,
-  "facts": {}
+  "facts": {},
+  "message": ""
 }
 ```
 
@@ -179,7 +181,8 @@ negotiation 报文的最小格式校验只做两层：
 - `extra` 内部字段校验
 - facts 核心字段强校验
 - 跨 type 的通用 slot 抽取
-- negotiation message 的理解不走 LLM；`receive_negotiation(...)` 依赖固定模板格式做确定性解析
+- negotiation message 的语义理解
+- negotiation message 的固定 machine-readable 段落解析；`message` 直接作为自然语言字符串透传
 - task prompt 之外的 front matter 渲染或校验；front matter 只作用于 task prompt
 
 ### 4.3 非法输入处理
@@ -333,9 +336,11 @@ src/a2a_t/
 │  ├─ types/
 │  └─ runtime/
 ├─ client/
+│  ├─ a2at_client.py
 │  ├─ prompt_generation/
 │  └─ negotiation/
 └─ server/
+   ├─ a2at_server.py
    ├─ prompt_compliance/
    └─ negotiation/
 ```
@@ -421,6 +426,30 @@ src/a2a_t/negotiation/types/
 - 对外公开 `check_task_prompt(task_id, processed_prompt_text)`
 - 内部只做 `PromptComplianceOrchestrator.check(...)` 的薄代理
 
+#### `client.A2ATClient`
+
+角色：
+
+- 新的推荐 client facade
+- 聚合：
+  - `generate_task_prompt(...)`
+  - `start_negotiation(...)`
+  - `receive_negotiation(...)`
+  - `continue_negotiation(...)`
+- `__init__` 默认内部自建 prompt generation 与 negotiation 依赖
+
+#### `server.A2ATServer`
+
+角色：
+
+- 新的推荐 server facade
+- 聚合：
+  - `check_task_prompt(...)`
+  - `start_negotiation(...)`
+  - `receive_negotiation(...)`
+  - `continue_negotiation(...)`
+- `__init__` 默认内部自建 prompt compliance 与 negotiation 依赖
+
 ### 7.2 negotiation 公开入口
 
 #### `client.negotiation.NegotiationOrchestrator`
@@ -448,7 +477,7 @@ src/a2a_t/negotiation/types/
 - 只做参数校验、流程编排与依赖调用
 - 不承载 type-specific 业务规则
 - 不直接操作 store
-- 直接依赖收敛为 `NegotiationHandler` 和 `NegotiationParser`
+- 直接依赖收敛为 `NegotiationHandler`
 
 ### 7.3 negotiation 核心组件
 
@@ -467,13 +496,11 @@ src/a2a_t/negotiation/types/
   - 续轮合法性校验、状态推进、type 路由和 store 更新
 - 是内部用例执行器，不直接对外暴露
 
-#### `NegotiationParser`
+说明：
 
-角色：
-
-- 作为公开入口和 `NegotiationHandler` 共享的解析组件
-- 统一解析 negotiation context 和固定 `negotiation-json` 报文
-- 不作为独立公开入口
+- `context_json` 解析收口到 `NegotiationContext.from_context_json(...)`
+- `message` 不再做固定 machine-readable 段落解析，直接作为自然语言字符串透传
+- 不再保留独立 `NegotiationParser`
 
 ### 7.4 negotiation type
 
@@ -782,8 +809,10 @@ package_data/prompt_resources/
 - `src/a2a_t/prompt/analysis/*`
 - `src/a2a_t/prompt/validation/*`
 
-### 12.2 保持兼容，不作为新核心入口
+### 12.2 推荐入口与兼容入口
 
+- `A2ATClient`
+- `A2ATServer`
 - `PromptClient`
 - `PromptHandler`
 - `ExtendedClient`
@@ -791,6 +820,7 @@ package_data/prompt_resources/
 
 其中：
 
+- `A2ATClient` / `A2ATServer` 是新的推荐语义入口
 - `PromptClient` / `PromptHandler` 保留为兼容壳
 - `ExtendedClient` / `ExtendedServer` 不承载本轮语义层设计
 
