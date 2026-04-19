@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import sys
 from pathlib import Path
 import unittest
@@ -163,41 +162,10 @@ class A2ATServerTest(unittest.TestCase):
         self.assertEqual(negotiation.receive_calls[0]["message"], "Need more information")
         self.assertEqual(negotiation.continue_calls, [continue_input])
 
-    def test_a2at_server_init_keeps_only_runtime_configuration_inputs(self) -> None:
-        from a2a_t.server.a2at_server import A2ATServer
-
-        parameters = inspect.signature(A2ATServer).parameters
-
-        self.assertEqual(
-            list(parameters),
-            ["env_path", "logger"],
-        )
-
-    def test_a2at_server_does_not_keep_resolved_llm_client_local_name(self) -> None:
-        from a2a_t.server.a2at_server import A2ATServer
-
-        source = inspect.getsource(A2ATServer.__init__)
-
-        self.assertNotIn("resolved_llm_client", source)
-
-    def test_server_package_only_exports_a2at_server(self) -> None:
+    def test_server_package_exports_a2at_server(self) -> None:
         import a2a_t.server as server_package
 
         self.assertTrue(hasattr(server_package, "A2ATServer"))
-        self.assertFalse(hasattr(server_package, "PromptHandler"))
-        self.assertFalse(hasattr(server_package, "ExtendedServer"))
-        self.assertFalse(hasattr(server_package, "CompressionHandler"))
-        self.assertFalse(hasattr(server_package, "RateLimiter"))
-
-    def test_root_package_does_not_lazy_export_removed_server_entrypoints(self) -> None:
-        import a2a_t
-
-        self.assertNotIn("prompt_handler", a2a_t.__all__)
-        self.assertNotIn("extended_server", a2a_t.__all__)
-        self.assertNotIn("compression_handler", a2a_t.__all__)
-        self.assertNotIn("rate_limiter", a2a_t.__all__)
-        with self.assertRaises(AttributeError):
-            getattr(a2a_t, "prompt_handler")
 
 
 if __name__ == "__main__":

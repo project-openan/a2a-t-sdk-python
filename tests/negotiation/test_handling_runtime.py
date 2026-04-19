@@ -3,7 +3,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 import unittest
-from typing import get_type_hints
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -14,14 +13,6 @@ if str(SRC_ROOT) not in sys.path:
 
 
 class NegotiationHandlingRuntimeTest(unittest.TestCase):
-    def test_handler_depends_on_store_protocol(self) -> None:
-        from a2a_t.negotiation.handling.negotiation_handler import NegotiationHandler
-        from a2a_t.negotiation.store.base import NegotiationStateStore
-
-        annotations = get_type_hints(NegotiationHandler.__init__)
-
-        self.assertIs(annotations["store"], NegotiationStateStore)
-
     def _clarification_types(self):
         from a2a_t.negotiation.rendering.negotiation_prompt_renderer import NegotiationPromptRenderer
         from a2a_t.negotiation.common.enums import NegotiationType

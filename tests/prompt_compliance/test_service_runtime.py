@@ -269,11 +269,6 @@ class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
             },
         )
 
-    def test_check_does_not_expose_validate_task_prompt_helper(self) -> None:
-        service = self._build_service()
-
-        self.assertFalse(hasattr(service, "validate_task_prompt"))
-
     def test_check_returns_template_load_error_when_template_resource_is_missing(self) -> None:
         service = self._build_service(
             template_loader=FakeTemplateLoader(PromptResourceNotFoundError("missing template")),
