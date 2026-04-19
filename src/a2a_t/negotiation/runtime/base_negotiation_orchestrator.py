@@ -12,10 +12,10 @@ class BaseNegotiationOrchestrator:
     def start_negotiation(self, input: StartNegotiationInput) -> dict[str, object]:
         return self._handler.start(input=input, role=self._role)
 
-    def receive_negotiation(self, message: str, context_json: dict[str, object]) -> dict[str, object]:
+    def receive_negotiation(self, message: str, conetxt: dict[str, object]) -> dict[str, object]:
         return self._handler.receive(
             message=message,
-            context_json=context_json,
+            conetxt=conetxt,
         )
 
     def continue_negotiation(self, input: ContinueNegotiationInput) -> dict[str, object]:

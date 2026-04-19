@@ -6,7 +6,7 @@ class NegotiationInputError(Exception):
 
 
 class NegotiationContextError(Exception):
-    """Raised when negotiation context_json is invalid."""
+    """Raised when negotiation conetxt is invalid."""
 
 
 class NegotiationStateError(Exception):

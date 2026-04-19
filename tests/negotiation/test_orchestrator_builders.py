@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 import unittest
+import inspect
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -167,6 +168,7 @@ class NegotiationOrchestratorBuilderTest(unittest.TestCase):
 
         self.assertEqual(len(runtime_builder.calls), 1)
         self.assertIs(prompt_compliance_builder.calls[0]["runtime_components"], components)
+        self.assertNotIn("resource_root", prompt_compliance_builder.calls[0])
         self.assertEqual(FakePromptRenderer.last_kwargs, {})
 
     def test_server_builder_uses_common_runtime_builder_by_default(self) -> None:
@@ -178,3 +180,10 @@ class NegotiationOrchestratorBuilderTest(unittest.TestCase):
         self.assertIsInstance(builder._runtime_components_builder, PromptRuntimeComponentsBuilder)
         self.assertFalse(hasattr(builder, "_registry_cls"))
         self.assertFalse(hasattr(builder, "_context_factory_cls"))
+
+    def test_server_builder_build_signature_does_not_accept_resource_root(self) -> None:
+        from a2a_t.server.negotiation.negotiation_orchestrator_builder import ServerNegotiationOrchestratorBuilder
+
+        parameters = inspect.signature(ServerNegotiationOrchestratorBuilder.build).parameters
+
+        self.assertNotIn("resource_root", parameters)

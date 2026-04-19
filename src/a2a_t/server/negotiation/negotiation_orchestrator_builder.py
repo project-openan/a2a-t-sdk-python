@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
 from a2a_t.config.models import A2ATConfig
@@ -44,22 +42,13 @@ class ServerNegotiationOrchestratorBuilder:
         *,
         config: A2ATConfig,
         llm_client: Any,
-        resource_root: str | Path | None = None,
         env_path: str | Path | None = None,
         logger: Any | None = None,
     ) -> NegotiationOrchestrator:
-        effective_config = config
-        if resource_root is not None:
-            effective_config = A2ATConfig(
-                prompt=replace(config.prompt, local_root_dir=str(resource_root)),
-                prompt_compliance=config.prompt_compliance,
-            )
-
-        components = self._runtime_components_builder.build(config=effective_config)
+        components = self._runtime_components_builder.build(config=config)
         prompt_checker = self._prompt_compliance_builder.build(
-            config=effective_config,
+            config=config,
             llm_client=llm_client,
-            resource_root=resource_root,
             runtime_components=components,
         )
         prompt_renderer = self._prompt_renderer_cls()

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
 from a2a_t.config.models import A2ATConfig
@@ -33,22 +31,14 @@ class PromptGenerationOrchestratorBuilder:
         *,
         config: A2ATConfig,
         llm_client: Any,
-        resource_root: str | Path | None = None,
         logger: Any | None = None,
     ) -> PromptGenerationOrchestrator:
-        effective_config = config
-        if resource_root is not None:
-            effective_config = A2ATConfig(
-                prompt=replace(config.prompt, local_root_dir=str(resource_root)),
-                prompt_compliance=config.prompt_compliance,
-            )
-
-        components = self._runtime_components_builder.build(config=effective_config)
+        components = self._runtime_components_builder.build(config=config)
         scenario_recognizer = self._scenario_recognizer_cls(llm_client=llm_client)
         slot_extractor = self._slot_extractor_cls(llm_client=llm_client)
 
         return self._orchestrator_cls(
-            config=effective_config.prompt,
+            config=config.prompt,
             scenario_loader=components.scenario_loader,
             prompt_resource_loader=components.prompt_resource_loader,
             template_loader=components.template_loader,

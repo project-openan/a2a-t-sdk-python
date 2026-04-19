@@ -34,8 +34,7 @@
 - A/D 负责在 A2A message/task metadata 与 SDK `context_json` 之间做适配
 - 非 negotiation 场景下，`context_json` 可以为 `None`
 - negotiation 之外的运行时补充参数，放在各自方法的独立输入对象中，不并入 `context_json`
-- 第一版新增统一的 `A2ATClient` / `A2ATServer` facade，作为推荐对外入口
-- `PromptClient` / `PromptHandler` 继续保留为兼容壳
+- 第一版统一只保留 `A2ATClient` / `A2ATServer` 作为对外入口
 
 ### 2.3 第一版范围
 
@@ -392,9 +391,9 @@ src/a2a_t/negotiation/types/
 
 兼容策略：
 
-- 当前代码中的 `generate(...)` 直接作为公开生成入口
+- `A2ATClient.generate_task_prompt(...)` 作为 client 侧公开生成入口
+- 内部直接复用 `PromptGenerationOrchestrator.generate(...)`
 - 不再额外保留 `render_task_prompt(...)` 薄封装
-- `PromptClient` 继续作为 compatibility shim，不承载 negotiation
 
 #### `prompt.task_rendering.TaskPromptRenderer`
 
@@ -415,14 +414,14 @@ src/a2a_t/negotiation/types/
 
 兼容策略：
 
-- 当前 `check(processed_prompt_text=...)` 保留并直接承担语义结果输出
-- `PromptHandler` 收敛为单一 `check_task_prompt(...)` 薄 facade
+- `A2ATServer.check_task_prompt(...)` 作为 server 侧公开校验入口
+- 内部直接调用 `PromptComplianceOrchestrator.check(...)`
 
-#### `server.prompt_handler.PromptHandler`
+#### `server.a2at_server.A2ATServer`
 
 角色：
 
-- C 侧 task prompt 校验兼容 facade
+- C 侧 task prompt 校验 facade
 - 对外公开 `check_task_prompt(task_id, processed_prompt_text)`
 - 内部只做 `PromptComplianceOrchestrator.check(...)` 的薄代理
 
@@ -809,20 +808,15 @@ package_data/prompt_resources/
 - `src/a2a_t/prompt/analysis/*`
 - `src/a2a_t/prompt/validation/*`
 
-### 12.2 推荐入口与兼容入口
+### 12.2 推荐入口
 
 - `A2ATClient`
 - `A2ATServer`
-- `PromptClient`
-- `PromptHandler`
-- `ExtendedClient`
-- `ExtendedServer`
 
 其中：
 
-- `A2ATClient` / `A2ATServer` 是新的推荐语义入口
-- `PromptClient` / `PromptHandler` 保留为兼容壳
-- `ExtendedClient` / `ExtendedServer` 不承载本轮语义层设计
+- `A2ATClient` / `A2ATServer` 是统一语义入口
+- 旧的 `PromptClient` / `PromptHandler` / `ExtendedClient` / `ExtendedServer` 已删除
 
 ### 12.3 需要新增或重构
 
@@ -831,7 +825,7 @@ package_data/prompt_resources/
 - 新增 `server/negotiation/`
 - 删除 `PromptGenerationOrchestrator.render_task_prompt(...)` 薄封装，统一保留 `generate(...)`
 - 由 `PromptComplianceOrchestrator.check(...)` 直接输出语义化校验结果
-- `PromptHandler` 收敛为单一 `check_task_prompt(...)` 薄 facade
+- `A2ATServer` 对外收敛为单一 `check_task_prompt(...)` 入口
 
 ### 12.4 当前代码的明确差异
 
@@ -850,8 +844,8 @@ package_data/prompt_resources/
 
 因此当前代码的关键收敛点是：
 
-- 统一让 B 侧调用方使用 `generate(...)` 返回的 `PromptGenerationResult`
-- 统一让 C 侧 facade 使用 `PromptHandler.check_task_prompt(...)`
+- 统一让 B 侧调用方使用 `A2ATClient.generate_task_prompt(...)`
+- 统一让 C 侧调用方使用 `A2ATServer.check_task_prompt(...)`
 - 让 `check(...)` 的结果直接服务 `information` 场景的协商发起
 - 在共享层维护 negotiation 状态机、type 路由和 store
 

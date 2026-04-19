@@ -30,19 +30,19 @@ class NegotiationContext:
     extra: dict[str, object]
 
     @classmethod
-    def from_context_json(cls, context_json: dict[str, object]) -> "NegotiationContext":
+    def from_conetxt(cls, conetxt: dict[str, object]) -> "NegotiationContext":
         try:
-            negotiation_type = NegotiationType(str(context_json["negotiationType"]))
-            negotiation_id = str(context_json["negotiationId"])
-            role = NegotiationRole(str(context_json["role"]))
-            round_value = int(context_json["round"])
-            status = NegotiationStatus(str(context_json["status"]))
-            extra = context_json["extra"]
+            negotiation_type = NegotiationType(str(conetxt["negotiationType"]))
+            negotiation_id = str(conetxt["negotiationId"])
+            role = NegotiationRole(str(conetxt["role"]))
+            round_value = int(conetxt["round"])
+            status = NegotiationStatus(str(conetxt["status"]))
+            extra = conetxt["extra"]
         except (KeyError, TypeError, ValueError) as error:
-            raise NegotiationContextError("Invalid negotiation context_json.") from error
+            raise NegotiationContextError("Invalid negotiation conetxt.") from error
 
         if not negotiation_id or round_value < 1 or not isinstance(extra, dict):
-            raise NegotiationContextError("Invalid negotiation context_json.")
+            raise NegotiationContextError("Invalid negotiation conetxt.")
 
         return cls(
             negotiation_type=negotiation_type,
@@ -53,7 +53,7 @@ class NegotiationContext:
             extra=dict(extra),
         )
 
-    def to_context_json(self) -> dict[str, object]:
+    def to_conetxt(self) -> dict[str, object]:
         return {
             "negotiationType": self.negotiation_type.value,
             "negotiationId": self.negotiation_id,
