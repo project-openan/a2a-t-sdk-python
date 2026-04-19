@@ -4,11 +4,15 @@ import logging
 from typing import Any
 
 from a2a_t.config.models import PromptRuntimeConfig
+from a2a_t.common.prompt_resources import (
+    PromptResourceNotFoundError,
+    PromptResourceParseError,
+    PromptResourceRegistry,
+)
 from a2a_t.prompt.analysis.errors import PromptAnalysisError
 from a2a_t.prompt.common.errors import PromptSourceError
 from a2a_t.prompt.validation.constants import INVALID_VALUE
-from a2a_t.prompt.resources.errors import PromptResourceNotFoundError, PromptResourceParseError
-from a2a_t.prompt.resources.registry import PromptResourceRegistry
+from a2a_t.prompt.task_rendering import TaskPromptRenderError, TaskPromptRenderer
 from a2a_t.prompt.validation.models import SlotValidationError
 
 from .generation_constants import (
@@ -31,7 +35,6 @@ from .generation_constants import (
 from a2a_t.prompt.common.models import PromptReference
 from .input_normalizer import InputNormalizer
 from .models import PromptGenerationFailure, PromptGenerationResult, ValidationResult
-from .a2a_t_task_prompt_renderer import A2ATTaskPromptRenderError, A2ATTaskPromptRenderer
 
 
 logger = logging.getLogger(__name__)
@@ -51,7 +54,7 @@ class PromptGenerationOrchestrator:
         slot_validator: Any,
         resource_registry: PromptResourceRegistry | None = None,
         input_normalizer: InputNormalizer | None = None,
-        renderer: A2ATTaskPromptRenderer | None = None,
+        renderer: TaskPromptRenderer | None = None,
         logger: Any | None = None,
     ) -> None:
         if not isinstance(config, PromptRuntimeConfig):
@@ -71,7 +74,7 @@ class PromptGenerationOrchestrator:
             slot_schema_loader=slot_schema_loader,
         )
         self._input_normalizer = input_normalizer or InputNormalizer()
-        self._renderer = renderer or A2ATTaskPromptRenderer()
+        self._renderer = renderer or TaskPromptRenderer()
         self._logger = logger or globals()["logger"]
 
     def generate(self, user_input: str | dict[str, object]) -> PromptGenerationResult:
@@ -253,7 +256,7 @@ class PromptGenerationOrchestrator:
                 version=version,
                 description=self._resolve_scenario_description(scenarios, scenario_code),
             )
-        except A2ATTaskPromptRenderError as error:
+        except TaskPromptRenderError as error:
             return self._finalize_result(
                 PromptGenerationResult(
                 success=False,

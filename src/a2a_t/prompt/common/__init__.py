@@ -13,7 +13,7 @@ from .errors import (
     PromptVersionComparisonError,
 )
 from .models import CacheStatus, CachedPromptRecord, FetchResult, Prompt, PromptAssetReference, PromptReference, PromptSource
-from .a2a_t_task_prompt import A2ATTaskPromptFormatError, A2ATTaskPromptMetadata, parse_a2a_t_task_prompt_metadata, render_a2a_t_task_prompt
+from .task_prompt_format import TaskPromptFormatError, TaskPromptMetadata, format_task_prompt, parse_task_prompt_metadata
 
 __all__ = [
     "CacheStatus",
@@ -33,8 +33,8 @@ __all__ = [
     "PromptSource",
     "PromptSourceError",
     "PromptVersionComparisonError",
-    "A2ATTaskPromptFormatError",
-    "A2ATTaskPromptMetadata",
-    "parse_a2a_t_task_prompt_metadata",
-    "render_a2a_t_task_prompt",
+    "TaskPromptFormatError",
+    "TaskPromptMetadata",
+    "parse_task_prompt_metadata",
+    "format_task_prompt",
 ]

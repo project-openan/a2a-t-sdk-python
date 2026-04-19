@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 import unittest
+import inspect
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -65,14 +66,56 @@ class PromptComplianceOrchestratorBuilderTest(unittest.TestCase):
         orchestrator = builder.build(
             config=config,
             llm_client=llm_client,
-            resource_root="./override-root",
         )
 
         self.assertEqual(len(runtime_builder.calls), 1)
-        effective_config = runtime_builder.calls[0]
-        self.assertEqual(effective_config.prompt.local_root_dir, "./override-root")
+        self.assertIs(runtime_builder.calls[0], config)
         self.assertIsInstance(orchestrator.kwargs["extractor"], FakeSlotExtractor)
         self.assertIs(orchestrator.kwargs["extractor"].llm_client, llm_client)
+
+    def test_builder_reuses_provided_runtime_components_without_rebuilding(self) -> None:
+        from a2a_t.server.prompt_compliance.prompt_compliance_orchestrator_builder import PromptComplianceOrchestratorBuilder
+
+        components = type(
+            "Components",
+            (),
+            {
+                "guardrail": object(),
+                "template_loader": object(),
+                "slot_schema_loader": object(),
+                "prompt_resource_loader": object(),
+                "slot_validator": object(),
+            },
+        )()
+        runtime_builder = FakeRuntimeComponentsBuilder(components)
+        llm_client = object()
+        builder = PromptComplianceOrchestratorBuilder(
+            runtime_components_builder=runtime_builder,
+            slot_extractor_cls=FakeSlotExtractor,
+            orchestrator_cls=FakeOrchestrator,
+        )
+        config = A2ATConfig(
+            prompt=PromptRuntimeConfig(local_root_dir="./default-root"),
+            prompt_compliance=PromptComplianceConfig(),
+        )
+
+        orchestrator = builder.build(
+            config=config,
+            llm_client=llm_client,
+            runtime_components=components,
+        )
+
+        self.assertEqual(runtime_builder.calls, [])
+        self.assertIs(orchestrator.kwargs["guardrail"], components.guardrail)
+        self.assertIs(orchestrator.kwargs["prompt_resource_loader"], components.prompt_resource_loader)
+        self.assertIs(orchestrator.kwargs["validator"], components.slot_validator)
+
+    def test_builder_build_signature_does_not_accept_resource_root(self) -> None:
+        from a2a_t.server.prompt_compliance.prompt_compliance_orchestrator_builder import PromptComplianceOrchestratorBuilder
+
+        parameters = inspect.signature(PromptComplianceOrchestratorBuilder.build).parameters
+
+        self.assertNotIn("resource_root", parameters)
 
 
 if __name__ == "__main__":

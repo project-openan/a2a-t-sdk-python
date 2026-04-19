@@ -1,5 +1,4 @@
-from .prompt_runtime_components import PromptRuntimeComponents
-from .prompt_runtime_components_builder import PromptRuntimeComponentsBuilder
+from a2a_t.common.prompt_runtime import PromptRuntimeComponents, PromptRuntimeComponentsBuilder
 
 __all__ = [
     "PromptRuntimeComponents",

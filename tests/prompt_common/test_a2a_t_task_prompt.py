@@ -17,26 +17,26 @@ from a2a_t.prompt.common.models import PromptReference
 
 class A2ATTaskPromptCommonTest(unittest.TestCase):
     def test_render_and_parse_a2a_t_task_prompt_share_one_protocol(self) -> None:
-        from a2a_t.prompt.common.a2a_t_task_prompt import (
-            A2ATTaskPromptMetadata,
-            parse_a2a_t_task_prompt_metadata,
-            render_a2a_t_task_prompt,
+        from a2a_t.prompt.common.task_prompt_format import (
+            TaskPromptMetadata,
+            format_task_prompt,
+            parse_task_prompt_metadata,
         )
 
-        prompt_text = render_a2a_t_task_prompt(
+        prompt_text = format_task_prompt(
             body="Site: Site A",
-            metadata=A2ATTaskPromptMetadata(
+            metadata=TaskPromptMetadata(
                 scenario_code="energy_saving",
                 language="en-US",
                 version="0.0.1",
                 description="Used for energy saving analysis.",
             ),
         )
-        metadata = parse_a2a_t_task_prompt_metadata(prompt_text)
+        metadata = parse_task_prompt_metadata(prompt_text)
 
         self.assertEqual(
             metadata,
-            A2ATTaskPromptMetadata(
+            TaskPromptMetadata(
                 scenario_code="energy_saving",
                 language="en-US",
                 version="0.0.1",
@@ -49,10 +49,10 @@ class A2ATTaskPromptCommonTest(unittest.TestCase):
         )
 
     def test_parse_rejects_missing_language(self) -> None:
-        from a2a_t.prompt.common.a2a_t_task_prompt import A2ATTaskPromptFormatError, parse_a2a_t_task_prompt_metadata
+        from a2a_t.prompt.common.task_prompt_format import TaskPromptFormatError, parse_task_prompt_metadata
 
-        with self.assertRaises(A2ATTaskPromptFormatError) as context:
-            parse_a2a_t_task_prompt_metadata(
+        with self.assertRaises(TaskPromptFormatError) as context:
+            parse_task_prompt_metadata(
                 "---\n"
                 "scenario_code: energy_saving\n"
                 "version: 0.0.1\n"
@@ -64,10 +64,10 @@ class A2ATTaskPromptCommonTest(unittest.TestCase):
         self.assertEqual(context.exception.field, "language")
 
     def test_parse_rejects_missing_description(self) -> None:
-        from a2a_t.prompt.common.a2a_t_task_prompt import A2ATTaskPromptFormatError, parse_a2a_t_task_prompt_metadata
+        from a2a_t.prompt.common.task_prompt_format import TaskPromptFormatError, parse_task_prompt_metadata
 
-        with self.assertRaises(A2ATTaskPromptFormatError) as context:
-            parse_a2a_t_task_prompt_metadata(
+        with self.assertRaises(TaskPromptFormatError) as context:
+            parse_task_prompt_metadata(
                 "---\n"
                 "scenario_code: energy_saving\n"
                 "language: en-US\n"
@@ -79,10 +79,10 @@ class A2ATTaskPromptCommonTest(unittest.TestCase):
         self.assertEqual(context.exception.field, "description")
 
     def test_parse_rejects_blank_language(self) -> None:
-        from a2a_t.prompt.common.a2a_t_task_prompt import A2ATTaskPromptFormatError, parse_a2a_t_task_prompt_metadata
+        from a2a_t.prompt.common.task_prompt_format import TaskPromptFormatError, parse_task_prompt_metadata
 
-        with self.assertRaises(A2ATTaskPromptFormatError) as context:
-            parse_a2a_t_task_prompt_metadata(
+        with self.assertRaises(TaskPromptFormatError) as context:
+            parse_task_prompt_metadata(
                 "---\n"
                 "scenario_code: energy_saving\n"
                 "language:    \n"
@@ -95,10 +95,10 @@ class A2ATTaskPromptCommonTest(unittest.TestCase):
         self.assertEqual(context.exception.field, "language")
 
     def test_parse_rejects_blank_description(self) -> None:
-        from a2a_t.prompt.common.a2a_t_task_prompt import A2ATTaskPromptFormatError, parse_a2a_t_task_prompt_metadata
+        from a2a_t.prompt.common.task_prompt_format import TaskPromptFormatError, parse_task_prompt_metadata
 
-        with self.assertRaises(A2ATTaskPromptFormatError) as context:
-            parse_a2a_t_task_prompt_metadata(
+        with self.assertRaises(TaskPromptFormatError) as context:
+            parse_task_prompt_metadata(
                 "---\n"
                 "scenario_code: energy_saving\n"
                 "language: en-US\n"

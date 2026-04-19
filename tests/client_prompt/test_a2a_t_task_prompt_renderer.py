@@ -13,11 +13,11 @@ if str(SRC_ROOT) not in sys.path:
 
 
 class A2ATTaskPromptRendererTest(unittest.TestCase):
-    def test_render_builds_markdown_prompt_with_front_matter(self) -> None:
-        from a2a_t.prompt.common.a2a_t_task_prompt import A2ATTaskPromptMetadata, render_a2a_t_task_prompt
-        from a2a_t.client.prompt_generation.a2a_t_task_prompt_renderer import A2ATTaskPromptRenderer
+    def test_shared_task_prompt_renderer_builds_markdown_prompt_with_front_matter(self) -> None:
+        from a2a_t.prompt.common.task_prompt_format import TaskPromptMetadata, format_task_prompt
+        from a2a_t.prompt.task_rendering import TaskPromptRenderer
 
-        renderer = A2ATTaskPromptRenderer()
+        renderer = TaskPromptRenderer()
         prompt_text = renderer.render(
             template_text="Site: {site}\nNotes: {additional_notes}",
             slots={"site": "Site A", "additional_notes": None},
@@ -29,9 +29,9 @@ class A2ATTaskPromptRendererTest(unittest.TestCase):
 
         self.assertEqual(
             prompt_text,
-            render_a2a_t_task_prompt(
+            format_task_prompt(
                 body="Site: Site A\nNotes: ",
-                metadata=A2ATTaskPromptMetadata(
+                metadata=TaskPromptMetadata(
                     scenario_code="energy_saving",
                     language="en-US",
                     version="0.0.1",
@@ -39,16 +39,14 @@ class A2ATTaskPromptRendererTest(unittest.TestCase):
                 ),
             ),
         )
-        self.assertIn("---\nscenario_code: energy_saving\nlanguage: en-US\nversion: 0.0.1\ndescription: Used for energy saving analysis.\n---\n", prompt_text)
-        self.assertTrue(prompt_text.endswith("Site: Site A\nNotes: "))
 
     def test_render_raises_when_template_references_unknown_slot(self) -> None:
-        from a2a_t.client.prompt_generation.a2a_t_task_prompt_renderer import A2ATTaskPromptRenderError
-        from a2a_t.client.prompt_generation.a2a_t_task_prompt_renderer import A2ATTaskPromptRenderer
+        from a2a_t.prompt.task_rendering import TaskPromptRenderError
+        from a2a_t.prompt.task_rendering import TaskPromptRenderer
 
-        renderer = A2ATTaskPromptRenderer()
+        renderer = TaskPromptRenderer()
 
-        with self.assertRaises(A2ATTaskPromptRenderError):
+        with self.assertRaises(TaskPromptRenderError):
             renderer.render(
                 template_text="Site: {site}\nTime Range: {time_range}",
                 slots={"site": "Site A"},
@@ -57,7 +55,6 @@ class A2ATTaskPromptRendererTest(unittest.TestCase):
                 version="0.0.1",
                 description="Used for energy saving analysis.",
             )
-
 
 if __name__ == "__main__":
     unittest.main()

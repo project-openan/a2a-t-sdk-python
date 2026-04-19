@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 import unittest
+import inspect
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -73,16 +74,22 @@ class PromptGenerationOrchestratorBuilderTest(unittest.TestCase):
         orchestrator = builder.build(
             config=config,
             llm_client=llm_client,
-            resource_root="./override-root",
         )
 
         self.assertEqual(len(runtime_builder.calls), 1)
-        effective_config = runtime_builder.calls[0]
-        self.assertEqual(effective_config.prompt.local_root_dir, "./override-root")
+        self.assertIs(runtime_builder.calls[0], config)
+        self.assertEqual(orchestrator.kwargs["config"].local_root_dir, "./default-root")
         self.assertIsInstance(orchestrator.kwargs["scenario_recognizer"], FakeScenarioRecognizer)
         self.assertIsInstance(orchestrator.kwargs["slot_extractor"], FakeSlotExtractor)
         self.assertIs(orchestrator.kwargs["scenario_recognizer"].llm_client, llm_client)
         self.assertIs(orchestrator.kwargs["slot_extractor"].llm_client, llm_client)
+
+    def test_builder_build_signature_does_not_accept_resource_root(self) -> None:
+        from a2a_t.client.prompt_generation.prompt_generation_orchestrator_builder import PromptGenerationOrchestratorBuilder
+
+        parameters = inspect.signature(PromptGenerationOrchestratorBuilder.build).parameters
+
+        self.assertNotIn("resource_root", parameters)
 
 
 if __name__ == "__main__":

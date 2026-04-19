@@ -13,11 +13,12 @@ if str(SRC_ROOT) not in sys.path:
 
 
 from a2a_t.prompt.analysis.models import SlotExtractionResult
-from a2a_t.prompt.common.a2a_t_task_prompt import A2ATTaskPromptMetadata, render_a2a_t_task_prompt
+from a2a_t.prompt.common.task_prompt_format import TaskPromptMetadata, format_task_prompt
 from a2a_t.prompt.common.errors import PromptSourceError
 from a2a_t.prompt.common.models import PromptReference
 from a2a_t.prompt.resources.errors import PromptResourceNotFoundError, PromptResourceParseError
 from a2a_t.prompt.resources.models import PromptMessages, SlotDefinition, SlotSchema
+from a2a_t.prompt.validation.constants import INVALID_VALUE, MISSING_INPUT
 from a2a_t.prompt.validation.errors import GuardrailExecutionError
 from a2a_t.prompt.validation.models import GuardrailResult, SlotValidationError, SlotValidationResult
 from a2a_t.server.prompt_compliance.constants import (
@@ -104,9 +105,9 @@ class FakeValidator:
 
 class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.processed_prompt = render_a2a_t_task_prompt(
+        self.processed_prompt = format_task_prompt(
             body="processed body",
-            metadata=A2ATTaskPromptMetadata(
+            metadata=TaskPromptMetadata(
                 scenario_code="energy_saving",
                 language="en-US",
                 version="0.0.1",
@@ -177,21 +178,24 @@ class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
                 passed=True,
                 stage=PASSED_STAGE,
                 extracted_slots={"site": "Site A"},
+                need_negotiation=False,
+                negotiation_input=None,
             ),
         )
 
     def test_check_returns_slot_validation_error_with_aggregated_message(self) -> None:
+        slot_errors = [
+            SlotValidationError(
+                slot_name="site",
+                code="invalid_value",
+                message="Site format is invalid.",
+            )
+        ]
         service = self._build_service(
             validator=FakeValidator(
                 SlotValidationResult(
                     passed=False,
-                    slot_errors=[
-                        SlotValidationError(
-                            slot_name="site",
-                            code="invalid_value",
-                            message="Site format is invalid.",
-                        )
-                    ],
+                    slot_errors=slot_errors,
                 )
             )
         )
@@ -203,6 +207,72 @@ class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
         self.assertEqual(result.error_code, SLOT_VALIDATION_ERROR)
         self.assertEqual(result.error_message, "Site format is invalid.")
         self.assertEqual(result.extracted_slots, {"site": "Site A"})
+        self.assertEqual(result.slot_errors, slot_errors)
+        self.assertTrue(result.need_negotiation)
+        self.assertEqual(
+            result.negotiation_input,
+            {
+                "type": "information",
+                "contentText": "Site format is invalid.",
+                "facts": {
+                    "missingFields": [],
+                    "invalidFields": [
+                        {
+                            "name": "site",
+                            "reason": "Site format is invalid.",
+                        }
+                    ],
+                },
+            },
+        )
+
+    def test_check_returns_information_negotiation_input_only_for_missing_and_invalid_fields(self) -> None:
+        service = self._build_service(
+            validator=FakeValidator(
+                SlotValidationResult(
+                    passed=False,
+                    slot_errors=[
+                        SlotValidationError(
+                            slot_name="site",
+                            code=MISSING_INPUT,
+                            message="Required slot 'site' is missing.",
+                        ),
+                        SlotValidationError(
+                            slot_name="analysis_target",
+                            code=INVALID_VALUE,
+                            message="analysis_target is invalid.",
+                        ),
+                    ],
+                )
+            )
+        )
+
+        result = service.check(processed_prompt_text=self.processed_prompt, request_metadata=None)
+
+        self.assertEqual(result.passed, False)
+        self.assertEqual(result.need_negotiation, True)
+        self.assertEqual(result.error_message, "Required slot 'site' is missing.; analysis_target is invalid.")
+        self.assertEqual(
+            result.negotiation_input,
+            {
+                "type": "information",
+                "contentText": "Required slot 'site' is missing.; analysis_target is invalid.",
+                "facts": {
+                    "missingFields": ["site"],
+                    "invalidFields": [
+                        {
+                            "name": "analysis_target",
+                            "reason": "analysis_target is invalid.",
+                        }
+                    ],
+                },
+            },
+        )
+
+    def test_check_does_not_expose_validate_task_prompt_helper(self) -> None:
+        service = self._build_service()
+
+        self.assertFalse(hasattr(service, "validate_task_prompt"))
 
     def test_check_returns_template_load_error_when_template_resource_is_missing(self) -> None:
         service = self._build_service(
