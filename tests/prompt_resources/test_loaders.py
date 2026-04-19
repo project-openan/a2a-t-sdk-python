@@ -68,7 +68,7 @@ class PromptResourceLoaderTest(ManagedTempDirTestCase):
             },
         )
 
-        from a2a_t.prompt.resources.scenario_loader import ScenarioLoader
+        from a2a_t.common.prompt_resources.scenario_loader import ScenarioLoader
 
         loader = ScenarioLoader(root_dir=self.root)
         scenarios = loader.load(version="0.0.1", language="zh-CN")
@@ -81,7 +81,7 @@ class PromptResourceLoaderTest(ManagedTempDirTestCase):
         self._write_text("templates/energy_saving/0.0.1/en-US/template.md", "Site: {site}\n")
         self._write_json("scenarios/0.0.1/en-US/scenarios.json", {"scenarios": []})
 
-        from a2a_t.prompt.resources.source import LocalPromptResourceSource
+        from a2a_t.common.prompt_resources.source import LocalPromptResourceSource
 
         source = LocalPromptResourceSource(root_dir=self.root)
 
@@ -108,7 +108,7 @@ class PromptResourceLoaderTest(ManagedTempDirTestCase):
             ]
         }
 
-        from a2a_t.prompt.resources.scenario_loader import ScenarioLoader
+        from a2a_t.common.prompt_resources.scenario_loader import ScenarioLoader
 
         loader = ScenarioLoader(source=source)
         scenarios = loader.load(version="0.0.1", language="zh-CN")
@@ -119,7 +119,7 @@ class PromptResourceLoaderTest(ManagedTempDirTestCase):
     def test_template_loader_reads_template_markdown_text(self) -> None:
         self._write_text("templates/energy_saving/0.0.1/en-US/template.md", "Site: {site}\nTime Range: {time_range}\n")
 
-        from a2a_t.prompt.resources.template_loader import TemplateLoader
+        from a2a_t.common.prompt_resources.template_loader import TemplateLoader
 
         loader = TemplateLoader(root_dir=self.root)
         template_text = loader.load(
@@ -132,7 +132,7 @@ class PromptResourceLoaderTest(ManagedTempDirTestCase):
         source = FakePromptResourceSource()
         source.text_values["templates/energy_saving/0.0.1/en-US/template.md"] = "Site: {site}\n"
 
-        from a2a_t.prompt.resources.template_loader import TemplateLoader
+        from a2a_t.common.prompt_resources.template_loader import TemplateLoader
 
         loader = TemplateLoader(source=source)
         template_text = loader.load(
@@ -146,7 +146,7 @@ class PromptResourceLoaderTest(ManagedTempDirTestCase):
         self._write_text("prompts/slot_extraction/0.0.1/en-US/system.md", "system prompt")
         self._write_text("prompts/slot_extraction/0.0.1/en-US/user.md", "user prompt")
 
-        from a2a_t.prompt.resources.prompt_resource_loader import PromptResourceLoader
+        from a2a_t.common.prompt_resources.prompt_resource_loader import PromptResourceLoader
 
         loader = PromptResourceLoader(root_dir=self.root)
         messages = loader.load(analysis_action="slot_extraction", version="0.0.1", language="en-US")
@@ -159,7 +159,7 @@ class PromptResourceLoaderTest(ManagedTempDirTestCase):
         source.text_values["prompts/slot_extraction/0.0.1/en-US/system.md"] = "system prompt"
         source.text_values["prompts/slot_extraction/0.0.1/en-US/user.md"] = "user prompt"
 
-        from a2a_t.prompt.resources.prompt_resource_loader import PromptResourceLoader
+        from a2a_t.common.prompt_resources.prompt_resource_loader import PromptResourceLoader
 
         loader = PromptResourceLoader(source=source)
         messages = loader.load(analysis_action="slot_extraction", version="0.0.1", language="en-US")
@@ -196,7 +196,7 @@ class PromptResourceLoaderTest(ManagedTempDirTestCase):
             },
         )
 
-        from a2a_t.prompt.resources.slot_schema_loader import SlotSchemaLoader
+        from a2a_t.common.prompt_resources.slot_schema_loader import SlotSchemaLoader
 
         loader = SlotSchemaLoader(root_dir=self.root)
         slot_schema = loader.load(
@@ -229,7 +229,7 @@ class PromptResourceLoaderTest(ManagedTempDirTestCase):
             ],
         }
 
-        from a2a_t.prompt.resources.slot_schema_loader import SlotSchemaLoader
+        from a2a_t.common.prompt_resources.slot_schema_loader import SlotSchemaLoader
 
         loader = SlotSchemaLoader(source=source)
         slot_schema = loader.load(
@@ -264,7 +264,7 @@ class PromptResourceLoaderTest(ManagedTempDirTestCase):
             },
         )
 
-        from a2a_t.prompt.resources.registry import PromptResourceRegistry
+        from a2a_t.common.prompt_resources.registry import PromptResourceRegistry
 
         registry = PromptResourceRegistry(root_dir=self.root)
         resolved_reference, template_text, slot_schema, messages = registry.load_generation_resources(
@@ -279,3 +279,4 @@ class PromptResourceLoaderTest(ManagedTempDirTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

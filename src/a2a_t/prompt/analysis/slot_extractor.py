@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from a2a_t.prompt.common.models import PromptReference
-from a2a_t.prompt.resources.models import SlotSchema
+from a2a_t.common.prompt_resources.models import SlotSchema
 from a2a_t.prompt.validation.models import SlotValidationError
 
 from .errors import SlotExtractionError

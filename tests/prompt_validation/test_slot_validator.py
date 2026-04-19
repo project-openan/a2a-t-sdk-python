@@ -12,7 +12,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
-from a2a_t.prompt.resources.models import SlotDefinition, SlotSchema
+from a2a_t.common.prompt_resources.models import SlotDefinition, SlotSchema
 from a2a_t.prompt.validation.models import SlotValidationError, SlotValidationResult
 
 
@@ -189,3 +189,4 @@ class SlotValidatorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

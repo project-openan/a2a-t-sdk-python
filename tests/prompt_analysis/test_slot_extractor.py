@@ -14,7 +14,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from a2a_t.llm.base import LLMResponse
 from a2a_t.prompt.common.models import PromptReference
-from a2a_t.prompt.resources.models import SlotDefinition, SlotSchema
+from a2a_t.common.prompt_resources.models import SlotDefinition, SlotSchema
 from a2a_t.prompt.validation.models import SlotValidationError
 
 
@@ -202,3 +202,4 @@ class SlotExtractorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

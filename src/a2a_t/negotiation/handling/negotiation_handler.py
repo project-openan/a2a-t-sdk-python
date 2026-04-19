@@ -50,8 +50,8 @@ class NegotiationHandler:
             context=context,
         )
 
-    def receive(self, *, message: str, conetxt: dict[str, object]) -> dict[str, object]:
-        context = NegotiationContext.from_conetxt(conetxt)
+    def receive(self, *, message: str, context: dict[str, object]) -> dict[str, object]:
+        context = NegotiationContext.from_context(context)
         record = self._store.get(context.negotiation_id)
         if record is None:
             if context.round != 1:
@@ -193,7 +193,7 @@ class NegotiationHandler:
     ) -> dict[str, object]:
         result: dict[str, object] = {
             NEGOTIATION_TEXT_KEY: prompt_text,
-            NEGOTIATION_CONTEXT_KEY: context.to_conetxt(),
+            NEGOTIATION_CONTEXT_KEY: context.to_context(),
         }
         if final_task_prompt is not None:
             result[TASK_PROMPT_KEY] = final_task_prompt
@@ -206,7 +206,7 @@ class NegotiationHandler:
         receive_result: ReceiveResult,
     ) -> dict[str, object]:
         return {
-            "context": context.to_conetxt(),
+            "context": context.to_context(),
             "needResponse": receive_result.need_response,
             "facts": dict(receive_result.facts),
             "message": receive_result.message,

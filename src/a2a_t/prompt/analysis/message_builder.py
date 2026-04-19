@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from a2a_t.prompt.common.models import PromptReference
-from a2a_t.prompt.resources.models import ScenarioDefinition, SlotSchema
+from a2a_t.common.prompt_resources.models import ScenarioDefinition, SlotSchema
 
 
 class AnalysisMessageBuilder:

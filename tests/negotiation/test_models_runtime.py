@@ -13,7 +13,7 @@ if str(SRC_ROOT) not in sys.path:
 
 
 class NegotiationModelsRuntimeTest(unittest.TestCase):
-    def test_negotiation_context_to_conetxt_uses_protocol_field_names(self) -> None:
+    def test_negotiation_context_to_context_uses_protocol_field_names(self) -> None:
         from a2a_t.negotiation.common.enums import NegotiationRole, NegotiationStatus, NegotiationType
         from a2a_t.negotiation.common.models import NegotiationContext
 
@@ -27,7 +27,7 @@ class NegotiationModelsRuntimeTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            context.to_conetxt(),
+            context.to_context(),
             {
                 "negotiationType": "information",
                 "negotiationId": "neg-1",
@@ -51,11 +51,11 @@ class NegotiationModelsRuntimeTest(unittest.TestCase):
         self.assertEqual(result.facts, {"clarificationItems": []})
         self.assertEqual(result.message, "Please clarify the intent.")
 
-    def test_negotiation_context_from_conetxt_uses_protocol_field_names(self) -> None:
+    def test_negotiation_context_from_context_uses_protocol_field_names(self) -> None:
         from a2a_t.negotiation.common.enums import NegotiationRole, NegotiationStatus, NegotiationType
         from a2a_t.negotiation.common.models import NegotiationContext
 
-        context = NegotiationContext.from_conetxt(
+        context = NegotiationContext.from_context(
             {
                 "negotiationType": "information",
                 "negotiationId": "neg-3",

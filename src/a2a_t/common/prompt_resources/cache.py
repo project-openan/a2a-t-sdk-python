@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
-from ..common.errors import PromptVersionComparisonError
-from ..common.models import CacheStatus, CachedPromptRecord
+from a2a_t.prompt.common.errors import PromptVersionComparisonError
+from a2a_t.prompt.common.models import CacheStatus, CachedPromptRecord
 
 
 class PromptStore(Protocol):

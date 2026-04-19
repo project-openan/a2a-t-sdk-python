@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from ..common.errors import PromptSourceError
+from a2a_t.prompt.common.errors import PromptSourceError
 
 
 class PromptResourceCatalog(Protocol):

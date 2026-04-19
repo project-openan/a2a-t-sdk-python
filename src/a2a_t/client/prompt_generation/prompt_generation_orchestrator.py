@@ -60,10 +60,6 @@ class PromptGenerationOrchestrator:
         if not isinstance(config, PromptRuntimeConfig):
             raise TypeError("config must be a PromptRuntimeConfig instance.")
         self._config = config
-        self._scenario_loader = scenario_loader
-        self._prompt_resource_loader = prompt_resource_loader
-        self._template_loader = template_loader
-        self._slot_schema_loader = slot_schema_loader
         self._scenario_recognizer = scenario_recognizer
         self._slot_extractor = slot_extractor
         self._slot_validator = slot_validator

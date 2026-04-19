@@ -49,8 +49,8 @@ class FakeNegotiationOrchestrator:
         self.start_calls.append(input)
         return {"started": True}
 
-    def receive_negotiation(self, message: str, conetxt: dict[str, object]) -> dict[str, object]:
-        self.receive_calls.append({"message": message, "conetxt": conetxt})
+    def receive_negotiation(self, message: str, context: dict[str, object]) -> dict[str, object]:
+        self.receive_calls.append({"message": message, "context": context})
         return {"received": True}
 
     def continue_negotiation(self, input: ContinueNegotiationInput) -> dict[str, object]:
@@ -82,7 +82,7 @@ class A2ATClientTest(unittest.TestCase):
             facts={},
         )
         continue_input = ContinueNegotiationInput(
-            context=NegotiationContext.from_conetxt(
+            context=NegotiationContext.from_context(
                 {
                     "negotiationType": "clarification",
                     "negotiationId": "neg-1",
