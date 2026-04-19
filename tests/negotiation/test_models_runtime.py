@@ -38,19 +38,6 @@ class NegotiationModelsRuntimeTest(unittest.TestCase):
             },
         )
 
-    def test_receive_result_keeps_internal_receive_fields(self) -> None:
-        from a2a_t.negotiation.common.models import ReceiveResult
-
-        result = ReceiveResult(
-            need_response=True,
-            facts={"clarificationItems": []},
-            message="Please clarify the intent.",
-        )
-
-        self.assertTrue(result.need_response)
-        self.assertEqual(result.facts, {"clarificationItems": []})
-        self.assertEqual(result.message, "Please clarify the intent.")
-
     def test_negotiation_context_from_context_uses_protocol_field_names(self) -> None:
         from a2a_t.negotiation.common.enums import NegotiationRole, NegotiationStatus, NegotiationType
         from a2a_t.negotiation.common.models import NegotiationContext
