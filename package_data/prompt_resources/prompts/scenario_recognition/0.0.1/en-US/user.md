@@ -1,1 +1,12 @@
-Review the normalized input and select the most appropriate supported scenario by overall task intent. Do not reject a scenario only because some fields are missing, ambiguous, or may later fail slot extraction or slot value validation. Return matched=false only when none of the supported scenarios fits the input at all.
+Analyze the normalized input and match it to the best supported scenario.
+
+## Scenario Hints
+- **energy_saving**: Keywords include "energy", "power", "consumption", "saving", "efficiency", "optimize". Intent: analyze energy usage and suggest optimizations.
+- **subscribe_incident**: Keywords include "subscribe", "incident", "alarm", "event", "notification", "alert". Intent: subscribe to incident/alarm events from network devices.
+
+## Decision Rules
+1. If input clearly indicates one task type, select that scenario
+2. If input is ambiguous, choose the most likely scenario based on domain keywords
+3. If input cannot be mapped to any scenario, return matched=false with explanation
+
+Process the input now and return your matching result.

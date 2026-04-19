@@ -1,0 +1,16 @@
+{
+  "scenarios": [
+    {
+      "scenario_code": "energy_saving",
+      "scenario_name": "节能分析",
+      "description": "用于生成节能分析的 A2A-T 任务请求。",
+      "example": "分析站点能耗并提供优化建议。"
+    },
+    {
+      "scenario_code": "subscribe_incident",
+      "scenario_name": "Incident 事件订阅",
+      "description": "用于生成电信网管系统中 incident 事件订阅的 A2A-T 任务请求。",
+      "example": "订阅基站设备产生的 critical 级别告警事件。"
+    }
+  ]
+}

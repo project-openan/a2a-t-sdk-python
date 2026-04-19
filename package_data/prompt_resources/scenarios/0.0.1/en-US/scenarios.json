@@ -5,6 +5,12 @@
       "scenario_name": "Energy Saving",
       "description": "Used for generating A2A-T task requests for energy-saving analysis.",
       "example": "Analyze site power usage and suggest optimization actions."
+    },
+    {
+      "scenario_code": "subscribe_incident",
+      "scenario_name": "Incident Subscription",
+      "description": "Used for generating A2A-T task requests for incident event subscription in telecom network management.",
+      "example": "Subscribe to critical incidents from base station equipment."
     }
   ]
 }
