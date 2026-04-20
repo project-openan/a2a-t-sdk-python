@@ -3,70 +3,22 @@
   "version": "0.0.1",
   "slots": [
     {
-      "name": "incident_name",
-      "required": true,
-      "description": "待订阅的 incident 名称列表，用于填充订阅条件。",
-      "example": "[\"eth-los\"]",
-      "value_constraint": "必须是有效的 incident 名称列表。",
+      "name": "subscription_condition_incident_name",
+      "required": false,
+      "description": "待订阅的故障名称列表，用于定义订阅条件。",
+      "example": "[\"eth-los\", \"光纤中断\"]",
+      "value_constraint": "必须是有效的 incident 名称列表。例如：尾纤故障，光纤中断，单板故障，光模块故障，光纤接头脏污，网元掉电，环境温度异常，业务板故障，风扇板故障，NPE到核心网路由不通，激光器老化，PWE3 QoS限速，MPLS-TP静态隧道限速，SR-TP静态隧道限速，带宽利用率过高等。",
       "type": "list",
-      "allowed_values": null,
-      "range": null,
-      "pattern": null
+      "allowed_values": null
     },
     {
-      "name": "incident_level",
+      "name": "subscription_condition_incident_level",
       "required": false,
-      "description": "待订阅的 incident 消息级别列表，用于筛选订阅条件。",
+      "description": "待订阅的故障级别列表，用于定义订阅条件。",
       "example": "[\"critical\", \"major\"]",
       "value_constraint": "必须是以下值中的一个或多个：critical, major, minor, warning。",
       "type": "list",
-      "allowed_values": ["critical", "major", "minor", "warning"],
-      "range": null,
-      "pattern": null
-    },
-    {
-      "name": "extra_incident_subscription_condition",
-      "required": false,
-      "description": "用户对订阅条件的额外说明，用于填充订阅条件。",
-      "example": "仅订阅特定厂商设备产生的告警事件。",
-      "value_constraint": "自由格式的订阅条件额外需求描述。",
-      "type": "string",
-      "allowed_values": null,
-      "range": null,
-      "pattern": null
-    },
-    {
-      "name": "extra_incident_basic_info",
-      "required": false,
-      "description": "用户对上报事件数据格式中 incident 基本信息的额外说明。",
-      "example": "基本信息中包含设备型号和固件版本。",
-      "value_constraint": "自由格式的基本信息额外需求描述。",
-      "type": "string",
-      "allowed_values": null,
-      "range": null,
-      "pattern": null
-    },
-    {
-      "name": "extra_incident_analysis_result",
-      "required": false,
-      "description": "用户对上报事件数据格式中 incident 分析结果的额外说明。",
-      "example": "提供根因分析和推荐的修复步骤。",
-      "value_constraint": "自由格式的分析结果额外需求描述。",
-      "type": "string",
-      "allowed_values": null,
-      "range": null,
-      "pattern": null
-    },
-    {
-      "name": "extra_incident_business_impact",
-      "required": false,
-      "description": "用户对上报事件数据格式中 incident 业务影响结果的额外说明。",
-      "example": "包含受影响服务数量和客户影响级别。",
-      "value_constraint": "自由格式的业务影响额外需求描述。",
-      "type": "string",
-      "allowed_values": null,
-      "range": null,
-      "pattern": null
+      "allowed_values": ["critical", "major", "minor", "warning"]
     }
   ]
 }

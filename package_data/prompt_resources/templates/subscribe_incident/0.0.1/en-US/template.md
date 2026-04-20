@@ -5,38 +5,22 @@ Please complete the autonomous data event subscription and reporting task based 
 <Reported Event Data Format> indicates the structure and field requirements of the reported data.
 <Expected Output> indicates the subscription execution result and returned content.
 
-
 ## Event Topic
-The subscription topic name is "incident"
-
+Topic name: incident
 
 ## Subscription Condition
-Required parameters:
-    Incident name {incident_name};
-Optional parameters:
-    Incident level {incident_level};
-Additional explanation for subscription condition (optional): {extra_incident_subscription_condition};
-Requirements: 1) If the user has additional explanation for the subscription condition, the final subscription condition parameters are the required parameters plus the user's additional requirements, note that the user's requirements have higher priority; 2) If the user has no additional explanation, the subscription condition includes all required and optional parameters.
+Requirements: Current subscription condition includes "Incident Name" and "Incident Level". Both are optional parameters.
+Incident name parameter supports list input, the value range is the network-side incident name list. For example: fiber fault, fiber break, board fault, optical module fault, fiber connector contamination, NE power loss, ambient temperature abnormal, service board fault, fan board fault, NPE to core network route unreachable, laser aging, PWE3 QoS rate limiting, MPLS-TP static tunnel rate limiting, SR-TP static tunnel rate limiting, dedicated line access port rate limiting, bandwidth utilization overload, etc.
+Incident level parameter supports list input, the value range includes Critical, Major, Minor, Warning.
 
+Incident name is {subscription_condition_incident_name};
+Incident level is {subscription_condition_incident_level}
 
 ## Reported Event Data Format
-### Event Basic Information
-Required parameters: incident serial number, incident name, incident occurrence time, incident category, incident status, incident root cause alarm serial number, related alarm serial number.
-Optional parameters: severity level, domain, incident update time, incident clear time, message type (including create, update, clear), incident phenomenon network-side resource identifier, type, name, detailed location information.
-Additional explanation for event basic information (optional): {extra_incident_basic_info}.
-Requirements: 1) If the user has additional explanation for event basic information, the final event basic information parameters are the required parameters plus the user's additional requirements, note that the user's requirements have higher priority; 2) If the user has no additional explanation, report all required and optional parameter information.
-
-### Event Analysis Result
-Default analysis result description: Must include incident root cause name, detailed description, remediation suggestion, incident root cause point resource object identifier, type, name, detailed location information. Note: When completing incident root cause analysis and reporting incident update message, incident serial number, incident update time, incident root cause, incident details, and remediation suggestion are required parameters.
-Additional explanation for event analysis result (optional): {extra_incident_analysis_result}.
-Requirements: 1) If the user has additional explanation for event analysis result, the final event analysis result should be based on "Default analysis result description", then adjust according to the user's additional explanation, note that the user's explanation has higher priority; 2) If the user has no additional explanation, report data based on "Default analysis result description".
-
-### Event Business Impact Result
-Business impact result description: Must include all business objects affected by the incident, the degree of business impact caused by the incident (service interruption, quality degradation, service downgrade, etc.). This is an optional parameter.
-Additional explanation for business impact result (optional): {extra_incident_business_impact}.
-Requirements: 1) If the user has additional explanation for business impact result, the final impact result should be based on "Business impact result description", then adjust according to the user's additional explanation, note that the user's requirements have higher priority; 2) If the user has no additional explanation, report data based on "Business impact result description".
-
+Requirements: Report event data according to the schema and target model definition in the following schema link.
+Model definition schema: https://projects.tmforum.org/a2aproject/telecommunication/extensions/faultManagement/Incident/v1
+Model name: IncidentObject
 
 ## Expected Output
 1. Subscription result: success or failure;
-2. If subscription fails, the subscription failure reason
+2. Subscription failure reason (optional)
