@@ -16,7 +16,7 @@
       "required": false,
       "description": "待订阅的故障级别列表，用于定义订阅条件。",
       "example": "[\"critical\", \"major\"]",
-      "value_constraint": "必须是以下值中的一个或多个：critical, major, minor, warning。",
+      "value_constraint": "必须是以下值中的一个或多个：critical（严重）, major（高）, minor（中）, warning（低）。",
       "type": "list",
       "allowed_values": ["critical", "major", "minor", "warning"]
     }
