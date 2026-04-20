@@ -3,70 +3,22 @@
   "version": "0.0.1",
   "slots": [
     {
-      "name": "incident_name",
-      "required": true,
-      "description": "List of incident names to subscribe. Used to fill the subscription condition.",
-      "example": "[\"eth-los\"]",
-      "value_constraint": "Must be a valid list of incident names.",
+      "name": "subscription_condition_incident_name",
+      "required": false,
+      "description": "List of incident names to subscribe. Used to define subscription condition.",
+      "example": "[\"eth-los\", \"fiber break\"]",
+      "value_constraint": "Must be a valid incident name list. For example: fiber fault, fiber break, board fault, optical module fault, fiber connector contamination, NE power loss, ambient temperature abnormal, service board fault, fan board fault, NPE to core network route unreachable, laser aging, PWE3 QoS rate limiting, MPLS-TP static tunnel rate limiting, SR-TP static tunnel rate limiting, dedicated line access port rate limiting, bandwidth utilization overload, etc.",
       "type": "list",
-      "allowed_values": null,
-      "range": null,
-      "pattern": null
+      "allowed_values": null
     },
     {
-      "name": "incident_level",
+      "name": "subscription_condition_incident_level",
       "required": false,
-      "description": "List of incident severity levels to subscribe. Used to filter subscription condition.",
+      "description": "List of incident severity levels to subscribe. Used to define subscription condition.",
       "example": "[\"critical\", \"major\"]",
       "value_constraint": "Must be one or more of: critical, major, minor, warning.",
       "type": "list",
-      "allowed_values": ["critical", "major", "minor", "warning"],
-      "range": null,
-      "pattern": null
-    },
-    {
-      "name": "extra_incident_subscription_condition",
-      "required": false,
-      "description": "Additional explanation for subscription condition. Used to fill the subscription condition.",
-      "example": "Only subscribe to alarm events from specific vendor devices.",
-      "value_constraint": "Free-form description of extra subscription condition requirements.",
-      "type": "string",
-      "allowed_values": null,
-      "range": null,
-      "pattern": null
-    },
-    {
-      "name": "extra_incident_basic_info",
-      "required": false,
-      "description": "Additional requirements for incident basic information in the reported event data format.",
-      "example": "Include device model and firmware version in basic info.",
-      "value_constraint": "Free-form description of extra basic info requirements.",
-      "type": "string",
-      "allowed_values": null,
-      "range": null,
-      "pattern": null
-    },
-    {
-      "name": "extra_incident_analysis_result",
-      "required": false,
-      "description": "Additional requirements for incident analysis result in the reported event data format.",
-      "example": "Provide root cause analysis and recommended remediation steps.",
-      "value_constraint": "Free-form description of extra analysis result requirements.",
-      "type": "string",
-      "allowed_values": null,
-      "range": null,
-      "pattern": null
-    },
-    {
-      "name": "extra_incident_business_impact",
-      "required": false,
-      "description": "Additional requirements for business impact assessment in the reported event data format.",
-      "example": "Include affected service count and customer impact level.",
-      "value_constraint": "Free-form description of extra business impact requirements.",
-      "type": "string",
-      "allowed_values": null,
-      "range": null,
-      "pattern": null
+      "allowed_values": ["critical", "major", "minor", "warning"]
     }
   ]
 }
