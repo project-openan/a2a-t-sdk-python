@@ -22,7 +22,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "a2a-sdk @ git+https://github.com/a2aproject/a2a-python.git@v1.0.0-alpha.0",
+    "a2a-sdk>=1.0.1",
     "fastapi>=0.115.0",
     "sqlalchemy>=2.0.36",
     "sse-starlette>=2.1.3",
