@@ -20,12 +20,15 @@ from a2a_t.client.prompt_generation.generation_constants import (
     GENERATION_STAGE,
     INVALID_LLM_OUTPUT,
     LLM_EXECUTION_FAILED,
+    PROMPT_NOT_FOUND,
     PROMPT_RESOURCE_ACCESS_ERROR,
     PROMPT_RESOURCE_PARSE_ERROR,
     RENDER_FAILED,
     RENDER_STAGE,
     SCENARIO_PARSE_FAILED,
     SCENARIO_STAGE,
+    SLOT_SCHEMA_NOT_FOUND,
+    TEMPLATE_NOT_FOUND,
 )
 from a2a_t.prompt.common.models import PromptReference
 from a2a_t.common.prompt_resources.errors import PromptResourceParseError
@@ -190,6 +193,21 @@ class FakePromptRuntimeConfig(PromptRuntimeConfig):
 
 
 class PromptGenerationOrchestratorTest(unittest.TestCase):
+    def test_public_generation_error_codes_are_lowercase(self) -> None:
+        public_error_codes = [
+            SCENARIO_PARSE_FAILED,
+            TEMPLATE_NOT_FOUND,
+            SLOT_SCHEMA_NOT_FOUND,
+            PROMPT_NOT_FOUND,
+            PROMPT_RESOURCE_PARSE_ERROR,
+            PROMPT_RESOURCE_ACCESS_ERROR,
+            INVALID_LLM_OUTPUT,
+            LLM_EXECUTION_FAILED,
+            RENDER_FAILED,
+        ]
+
+        self.assertEqual(public_error_codes, [code.lower() for code in public_error_codes])
+
     def _build_orchestrator(
         self,
         *,
@@ -320,7 +338,7 @@ class PromptGenerationOrchestratorTest(unittest.TestCase):
             scenario_result=ScenarioResolutionResult(
                 success=False,
                 failure=ScenarioResolutionFailure(
-                    code="SCENARIO_PARSE_FAILED",
+                    code="scenario_parse_failed",
                     message="No matching scenario.",
                     stage=SCENARIO_STAGE,
                 ),

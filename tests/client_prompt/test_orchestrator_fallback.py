@@ -188,7 +188,7 @@ class PromptGenerationOrchestratorFallbackTest(ManagedTempDirTestCase):
         result = orchestrator.generate("Analyze Site A.")
 
         self.assertFalse(result.success)
-        self.assertEqual(result.failure.code, "TEMPLATE_NOT_FOUND")
+        self.assertEqual(result.failure.code, "template_not_found")
         self.assertEqual(result.failure.stage, "generation")
 
 

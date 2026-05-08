@@ -212,6 +212,78 @@ class PromptComplianceIntegrationRuntimeTest(ManagedTempDirTestCase):
             },
         )
 
+    def test_handler_check_task_prompt_succeeds_when_optional_subscribe_incident_slots_are_null(self) -> None:
+        self._write_resource_file("templates/subscribe_incident/0.0.1/en-US/template.md", "Name: {subscription_condition_incident_name}\nLevels: {subscription_condition_incident_level}")
+        self._write_resource_file("prompts/slot_extraction/0.0.1/en-US/system.md", "Extract slots.")
+        self._write_resource_file("prompts/slot_extraction/0.0.1/en-US/user.md", "Return slots.")
+        self._write_resource_file(
+            "slots/subscribe_incident/0.0.1/en-US/slot.json",
+            json.dumps(
+                {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "subscription_condition_incident_name": {
+                            "type": "string",
+                            "x-a2at-slot-type": "list",
+                            "x-a2at-value-constraint": "Must be a valid incident name list.",
+                            "examples": ["[\"fiber break\"]"],
+                        },
+                        "subscription_condition_incident_level": {
+                            "type": "string",
+                            "pattern": "^\\s*\\[(?:\\s*\"(?:critical|major)\"\\s*(?:,\\s*\"(?:critical|major)\"\\s*)*)?\\]\\s*$",
+                            "x-a2at-slot-type": "list",
+                            "x-a2at-value-constraint": "Must be a JSON array string containing one or more of: critical, major.",
+                            "examples": ["[\"critical\"]"],
+                        },
+                    },
+                    "required": [],
+                },
+                ensure_ascii=True,
+            ),
+        )
+
+        service = PromptComplianceOrchestrator(
+            guardrail=FakeGuardrail(),
+            scenario_resolver=FakeScenarioResolver(
+                ScenarioResolutionResult(
+                    success=True,
+                    reference=PromptReference(scenario_code="subscribe_incident", language="en-US", version="0.0.1"),
+                    scenario=ScenarioDefinition(
+                        scenario_code="subscribe_incident",
+                        scenario_name="Subscribe Incident",
+                        description="Subscribe incidents by condition.",
+                        example="Subscribe to critical incidents.",
+                    ),
+                )
+            ),
+            template_loader=TemplateLoader(root_dir=self.root),
+            slot_schema_loader=SlotSchemaLoader(root_dir=self.root),
+            slot_json_schema_loader=SlotJsonSchemaLoader(root_dir=self.root),
+            prompt_resource_loader=PromptResourceLoader(root_dir=self.root),
+            extractor=SlotExtractor(
+                llm_client=FakeSequencedLLMClient(
+                    [
+                        '{"slots": {"subscription_condition_incident_name": null, "subscription_condition_incident_level": null}, "slot_errors": []}'
+                    ]
+                )
+            ),
+            validator=JsonSchemaSlotValidator(),
+        )
+        with (
+            patch("a2a_t.server.a2at_server._default_env_path", return_value=TEST_ENV_PATH),
+            patch("a2a_t.server.a2at_server.PromptComplianceOrchestratorBuilder", return_value=FakePromptComplianceBuilder(service)),
+            patch("a2a_t.server.a2at_server.ServerNegotiationOrchestratorBuilder") as negotiation_builder_cls,
+            patch("a2a_t.server.a2at_server.LLMClient", return_value=object()),
+        ):
+            negotiation_builder_cls.return_value.build.return_value = object()
+            server = A2ATServer()
+
+            result = server.check_task_prompt(processed_prompt_text="processed body")
+
+        self.assertEqual(result, {"success": True})
+
 
 if __name__ == "__main__":
     unittest.main()

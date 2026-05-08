@@ -120,6 +120,30 @@ class JsonSchemaSlotValidatorTest(unittest.TestCase):
             ),
         )
 
+    def test_validate_ignores_null_optional_slot_values(self) -> None:
+        from a2a_t.prompt.validation.json_schema_slot_validator import JsonSchemaSlotValidator
+
+        validator = JsonSchemaSlotValidator()
+        result = validator.validate(
+            slots={"site": "Site A", "incident_level": None},
+            slot_errors=[],
+            slot_json_schema=self.schema,
+        )
+
+        self.assertEqual(result, SlotValidationResult(passed=True, slot_errors=[]))
+
+    def test_validate_ignores_blank_optional_slot_values(self) -> None:
+        from a2a_t.prompt.validation.json_schema_slot_validator import JsonSchemaSlotValidator
+
+        validator = JsonSchemaSlotValidator()
+        result = validator.validate(
+            slots={"site": "Site A", "incident_level": "   "},
+            slot_errors=[],
+            slot_json_schema=self.schema,
+        )
+
+        self.assertEqual(result, SlotValidationResult(passed=True, slot_errors=[]))
+
     def test_validate_uses_business_constraint_message_for_pattern_violation(self) -> None:
         from a2a_t.prompt.validation.json_schema_slot_validator import JsonSchemaSlotValidator
 
@@ -156,6 +180,24 @@ class JsonSchemaSlotValidatorTest(unittest.TestCase):
                 ],
             ),
         )
+
+    def test_validate_ignores_upstream_missing_input_for_optional_null_slot(self) -> None:
+        from a2a_t.prompt.validation.json_schema_slot_validator import JsonSchemaSlotValidator
+
+        validator = JsonSchemaSlotValidator()
+        result = validator.validate(
+            slots={"site": "Site A", "incident_level": None},
+            slot_errors=[
+                SlotValidationError(
+                    slot_name="incident_level",
+                    code="missing_input",
+                    message="Optional slot is missing.",
+                )
+            ],
+            slot_json_schema=self.schema,
+        )
+
+        self.assertEqual(result, SlotValidationResult(passed=True, slot_errors=[]))
 
     def test_validate_preserves_upstream_slot_errors_without_duplicate_local_error(self) -> None:
         from a2a_t.prompt.validation.json_schema_slot_validator import JsonSchemaSlotValidator
