@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -351,7 +351,7 @@ class LLMClient:
             raise LLMConfigError(f"Unsupported llm provider: {provider}. Available: {sorted(available)}")
         return provider
 
-    def _coerce_bounded_int(self, value: object, key: str, *, max_value: int) -> int:
+    def _coerce_bounded_int(self, value: int | str, key: str, *, max_value: int) -> int:
         """Parse an integer config value and enforce a positive upper bound."""
         try:
             parsed = int(value)

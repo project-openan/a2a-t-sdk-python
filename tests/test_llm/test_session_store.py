@@ -20,7 +20,7 @@ class ProviderScopedSessionStoreTest(unittest.TestCase):
     def test_foreign_provider_session_is_invisible(self) -> None:
         root = InMemorySessionStore(max_total=5, max_per_provider=5)
         openai_store = ProviderScopedSessionStore("openai", root)
-        deepseek_store = ProviderScopedSessionStore("deepseek", root)
+        secondary_provider_store = ProviderScopedSessionStore("deepseek", root)
         session = ChatSession(
             session_id="openai-1",
             provider="openai",
@@ -30,7 +30,7 @@ class ProviderScopedSessionStoreTest(unittest.TestCase):
         openai_store.save(session)
 
         self.assertIsNotNone(openai_store.get("openai-1"))
-        self.assertIsNone(deepseek_store.get("openai-1"))
+        self.assertIsNone(secondary_provider_store.get("openai-1"))
 
     def test_save_rejects_mismatched_provider_metadata(self) -> None:
         root = InMemorySessionStore(max_total=5, max_per_provider=5)

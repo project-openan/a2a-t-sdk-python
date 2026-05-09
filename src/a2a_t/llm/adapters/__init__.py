@@ -2,31 +2,13 @@
 
 from __future__ import annotations
 
-from importlib import import_module
+from a2a_t.llm.adapters import composed_adapter, openai_compatible
+from a2a_t.llm.adapters.composed_adapter import ComposedLLMAdapter
+from a2a_t.llm.adapters.openai_compatible import OpenAICompatibleAdapter
 
 __all__ = [
-    "DeepSeekAdapter",
-    "deepseek_adapter",
+    "ComposedLLMAdapter",
+    "OpenAICompatibleAdapter",
+    "composed_adapter",
+    "openai_compatible",
 ]
-
-_ADAPTER_MODULES = {
-    "DeepSeekAdapter": ("a2a_t.llm.adapters.deepseek_adapter", "DeepSeekAdapter"),
-}
-
-_MODULE_EXPORTS = {
-    "deepseek_adapter": "a2a_t.llm.adapters.deepseek_adapter",
-}
-
-
-def __getattr__(name: str):
-    module_name = _MODULE_EXPORTS.get(name)
-    if module_name is not None:
-        return import_module(module_name)
-
-    target = _ADAPTER_MODULES.get(name)
-    if target is None:
-        raise AttributeError(f"module 'a2a_t.llm.adapters' has no attribute '{name}'")
-
-    module_name, class_name = target
-    module = import_module(module_name)
-    return getattr(module, class_name)

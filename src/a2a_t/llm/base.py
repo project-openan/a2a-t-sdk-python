@@ -166,3 +166,23 @@ class LLMAdapter(ABC):
     def _generate_from_messages(self, messages: list[ChatMessage], **kwargs: Any) -> LLMResponse:
         """Fail by default until a concrete adapter implements message generation."""
         raise LLMRuntimeError("adapter does not support message generation in this phase")
+
+
+def __getattr__(name: str) -> Any:
+    if name == "ComposedLLMAdapter":
+        from a2a_t.llm.adapters.composed_adapter import ComposedLLMAdapter
+
+        return ComposedLLMAdapter
+    if name == "PayloadBuilder":
+        from a2a_t.llm.payload_builders import PayloadBuilder
+
+        return PayloadBuilder
+    if name == "ResponseParser":
+        from a2a_t.llm.response_parsers import ResponseParser
+
+        return ResponseParser
+    if name == "TransportAdapter":
+        from a2a_t.llm.transports import TransportAdapter
+
+        return TransportAdapter
+    raise AttributeError(f"module 'a2a_t.llm.base' has no attribute '{name}'")

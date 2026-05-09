@@ -64,7 +64,7 @@ uv run mypy src
 使用前建议先确认以下限制：
 
 - 项目整体处于 **Alpha** 阶段，接口和资源组织仍可能调整。
-- 内置 LLM 适配器目前仅支持 DeepSeek。
+- 内置 LLM 调用链对外统一为 OpenAI-compatible 适配层。
 - 内置 guardrail 机制目前仅提供 `noop`。
 - 提示词资源目前仅支持本地文件。
 - 协商状态存储目前仅提供内存实现，不保证持久化。

@@ -71,41 +71,41 @@ class BaseChatFlowTest(unittest.TestCase):
         openai_adapter = DummyAdapter(
             {"model": "dummy-model", "provider": "openai", "history_window": 2, "session_store": shared_store}
         )
-        deepseek_adapter = DummyAdapter(
+        secondary_provider_adapter = DummyAdapter(
             {"model": "dummy-model", "provider": "deepseek", "history_window": 2, "session_store": shared_store}
         )
 
         first = openai_adapter.chat("hello")
 
         with self.assertRaises(LLMRuntimeError):
-            deepseek_adapter.chat("continue", session_id=first.session_id)
+            secondary_provider_adapter.chat("continue", session_id=first.session_id)
 
     def test_cross_provider_reset_session_raises_runtime_error(self) -> None:
         shared_store = InMemorySessionStore(max_total=10, max_per_provider=10)
         openai_adapter = DummyAdapter(
             {"model": "dummy-model", "provider": "openai", "history_window": 2, "session_store": shared_store}
         )
-        deepseek_adapter = DummyAdapter(
+        secondary_provider_adapter = DummyAdapter(
             {"model": "dummy-model", "provider": "deepseek", "history_window": 2, "session_store": shared_store}
         )
 
         first = openai_adapter.chat("hello")
 
         with self.assertRaises(LLMRuntimeError):
-            deepseek_adapter.reset_session(first.session_id)
+            secondary_provider_adapter.reset_session(first.session_id)
 
     def test_cross_provider_delete_session_does_not_remove(self) -> None:
         shared_store = InMemorySessionStore(max_total=10, max_per_provider=10)
         openai_adapter = DummyAdapter(
             {"model": "dummy-model", "provider": "openai", "history_window": 2, "session_store": shared_store}
         )
-        deepseek_adapter = DummyAdapter(
+        secondary_provider_adapter = DummyAdapter(
             {"model": "dummy-model", "provider": "deepseek", "history_window": 2, "session_store": shared_store}
         )
 
         first = openai_adapter.chat("hello")
 
-        deepseek_adapter.delete_session(first.session_id)
+        secondary_provider_adapter.delete_session(first.session_id)
 
         second = openai_adapter.chat("continue", session_id=first.session_id)
 

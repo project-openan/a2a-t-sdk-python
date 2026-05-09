@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
 
 from a2a_t.llm.errors import LLMConfigError
@@ -28,6 +28,7 @@ class InMemorySessionStore:
         self._max_total = max_total
         self._max_per_provider = max_per_provider
         self._sessions: dict[str, ChatSession] = {}
+        self._last_accessed_time: datetime | None = None
 
     def get(self, session_id: str) -> ChatSession | None:
         """Return a defensive copy of the requested session and refresh its access time."""
@@ -35,14 +36,14 @@ class InMemorySessionStore:
         if session is None:
             return None
         updated = deepcopy(session)
-        updated.last_accessed_time = datetime.now(UTC)
+        updated.last_accessed_time = self._next_access_time()
         self._sessions[session_id] = updated
         return deepcopy(updated)
 
     def save(self, session: ChatSession) -> None:
         """Persist a defensive copy of the session and enforce eviction limits."""
         stored = deepcopy(session)
-        stored.last_accessed_time = datetime.now(UTC)
+        stored.last_accessed_time = self._next_access_time()
         self._sessions[stored.session_id] = stored
         self._evict_for_provider(stored.provider)
         self._evict_for_total()
@@ -55,7 +56,7 @@ class InMemorySessionStore:
         updated = deepcopy(session)
         updated.messages.clear()
         updated.system_prompt = None
-        updated.last_accessed_time = datetime.now(UTC)
+        updated.last_accessed_time = self._next_access_time()
         self._sessions[session_id] = updated
         return deepcopy(updated)
 
@@ -80,6 +81,14 @@ class InMemorySessionStore:
         while len(self._sessions) > self._max_total:
             oldest = min(self._sessions.values(), key=lambda item: item.last_accessed_time)
             self._sessions.pop(oldest.session_id, None)
+
+    def _next_access_time(self) -> datetime:
+        """Return a monotonic timestamp for stable LRU ordering."""
+        current = datetime.now(UTC)
+        if self._last_accessed_time is not None and current <= self._last_accessed_time:
+            current = self._last_accessed_time + timedelta(microseconds=1)
+        self._last_accessed_time = current
+        return current
 
 
 class ProviderScopedSessionStore:
