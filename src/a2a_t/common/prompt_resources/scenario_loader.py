@@ -10,7 +10,7 @@ class ScenarioLoader(BasePromptResourceLoader):
     def load(self, *, language: str) -> list[ScenarioDefinition]:
         """Return all scenario definitions for the requested language."""
         path = f"scenarios/{language}/scenarios.json"
-        data = self._read_json(path)
+        data = self._read_json_with_fallback(path)
         scenarios = data.get("scenarios") or []
 
         return [

@@ -13,7 +13,7 @@ class SlotSchemaLoader(BasePromptResourceLoader):
     def load(self, *, reference: PromptReference) -> SlotSchema:
         """Return the slot schema for the referenced scenario resource."""
         path = f"slots/{reference.scenario_code}/{reference.language}/slot.json"
-        data = self._read_json(path)
+        data = self._read_json_with_fallback(path)
         if self._looks_like_json_schema(data):
             return self._build_from_json_schema(data, reference=reference)
         raise PromptResourceParseError(

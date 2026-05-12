@@ -70,6 +70,7 @@ class BasePromptResourceLoader:
 
     def __init__(self, *, root_dir: str | Path | None = None) -> None:
         self._files = LocalPromptResourceFiles(root_dir=root_dir)
+        self._default_files = LocalPromptResourceFiles(root_dir=self._default_root_dir())
 
     @property
     def root_dir(self) -> Path:
@@ -87,3 +88,17 @@ class BasePromptResourceLoader:
     def _read_json(self, relative_path: str) -> dict[str, Any]:
         """Read and parse a JSON resource through the configured source."""
         return self._files.read_json(relative_path)
+
+    def _read_text_with_fallback(self, relative_path: str) -> str:
+        """Read a text resource from the local root, then the packaged root."""
+        try:
+            return self._read_text(relative_path)
+        except PromptResourceNotFoundError:
+            return self._default_files.read_text(relative_path)
+
+    def _read_json_with_fallback(self, relative_path: str) -> dict[str, Any]:
+        """Read a JSON resource from the local root, then the packaged root."""
+        try:
+            return self._read_json(relative_path)
+        except PromptResourceNotFoundError:
+            return self._default_files.read_json(relative_path)

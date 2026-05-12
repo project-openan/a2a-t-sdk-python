@@ -13,23 +13,9 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
+from a2a_t.common.prompt_resources.errors import PromptResourceParseError
 from a2a_t.prompt.common.models import PromptReference
 from tests.test_support import ManagedTempDirTestCase
-
-
-class FakePromptResourceSource:
-    source_type = "fake"
-
-    def __init__(self) -> None:
-        self.json_values: dict[str, dict[str, object]] = {}
-        self.json_reads: list[str] = []
-
-    def read_json(self, *, relative_path: str) -> dict[str, object]:
-        self.json_reads.append(relative_path)
-        return self.json_values[relative_path]
-
-    def exists(self, *, relative_path: str) -> bool:
-        return relative_path in self.json_values
 
 
 class SlotJsonSchemaLoaderTest(ManagedTempDirTestCase):
@@ -65,26 +51,7 @@ class SlotJsonSchemaLoaderTest(ManagedTempDirTestCase):
         self.assertEqual(slot_schema["required"], ["site"])
         self.assertEqual(slot_schema["properties"]["site"]["minLength"], 1)
 
-    def test_loader_reads_via_prompt_resource_source(self) -> None:
-        source = FakePromptResourceSource()
-        source.json_values["slots/energy_saving/en-US/slot.json"] = {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {"site": {"type": "string", "minLength": 1}},
-            "required": ["site"],
-        }
-
-        from a2a_t.common.prompt_resources.slot_json_schema_loader import SlotJsonSchemaLoader
-
-        loader = SlotJsonSchemaLoader(source=source)
-        slot_schema = loader.load(
-            reference=PromptReference(scenario_code="energy_saving", language="en-US")
-        )
-
-        self.assertEqual(source.json_reads, ["slots/energy_saving/en-US/slot.json"])
-        self.assertEqual(slot_schema["required"], ["site"])
-
-    def test_loader_translates_legacy_slot_schema_to_string_json_schema(self) -> None:
+    def test_loader_rejects_legacy_slot_schema(self) -> None:
         self._write_json(
             "slots/energy_saving/en-US/slot.json",
             {
@@ -119,15 +86,10 @@ class SlotJsonSchemaLoaderTest(ManagedTempDirTestCase):
         from a2a_t.common.prompt_resources.slot_json_schema_loader import SlotJsonSchemaLoader
 
         loader = SlotJsonSchemaLoader(root_dir=self.root)
-        slot_schema = loader.load(
-            reference=PromptReference(scenario_code="energy_saving", language="en-US")
-        )
-
-        self.assertEqual(slot_schema["type"], "object")
-        self.assertEqual(slot_schema["required"], ["site"])
-        self.assertEqual(slot_schema["properties"]["site"]["type"], "string")
-        self.assertEqual(slot_schema["properties"]["site"]["minLength"], 1)
-        self.assertEqual(slot_schema["properties"]["incident_level"]["enum"], ["critical", "major"])
+        with self.assertRaises(PromptResourceParseError):
+            loader.load(
+                reference=PromptReference(scenario_code="energy_saving", language="en-US")
+            )
 
 
 if __name__ == "__main__":
