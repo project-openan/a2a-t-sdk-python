@@ -16,7 +16,7 @@ if str(SRC_ROOT) not in sys.path:
 from a2a_t.client.prompt_generation.models import PromptGenerationResult
 from a2a_t.negotiation.common.enums import NegotiationStatus, NegotiationType
 from a2a_t.negotiation.common.models import ContinueNegotiationInput, NegotiationContext, StartNegotiationInput
-from tests.test_support import TEST_ENV_PATH
+from tests.test_support import ManagedTempDirTestCase, TEST_ENV_PATH
 
 
 class FakePromptGenerationOrchestrator:
@@ -132,6 +132,57 @@ class A2ATClientTest(unittest.TestCase):
         import a2a_t.client as client_package
 
         self.assertTrue(hasattr(client_package, "A2ATClient"))
+
+
+class A2ATClientPromptResourceTimingTest(ManagedTempDirTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.root = self.make_temp_dir("a2at_client_prompt_timing")
+
+    def _write_resource_file(self, relative_path: str, content: str) -> None:
+        path = self.root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    def _write_env(self) -> Path:
+        env_path = self.root / "client.env"
+        env_path.write_text(
+            "\n".join(
+                [
+                    "A2AT_LANGUAGE=en-US",
+                    "A2AT_PROMPT_SOURCE_TYPE=local_file",
+                    f"A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR={self.root}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return env_path
+
+    def test_generate_task_prompt_still_fails_at_call_time_when_packaged_prompts_are_missing(self) -> None:
+        from a2a_t.client.a2at_client import A2ATClient
+
+        self._write_resource_file(
+            "scenarios/en-US/scenarios.json",
+            '{"scenarios":[{"scenario_code":"energy_saving","scenario_name":"Energy Saving","description":"Used for energy saving analysis.","example":"Analyze site power usage and suggest optimization."}]}',
+        )
+        env_path = self._write_env()
+        missing_packaged_root = self.make_temp_dir("missing_packaged_prompts")
+
+        with (
+            patch("a2a_t.client.a2at_client.ClientNegotiationOrchestratorBuilder") as negotiation_builder_cls,
+            patch("a2a_t.client.a2at_client.LLMClient", return_value=object()),
+            patch("a2a_t.common.prompt_resources.local_resources.LocalPromptResourceFiles._default_root_dir", return_value=missing_packaged_root),
+        ):
+            negotiation_builder_cls.return_value.build.return_value = object()
+            client = A2ATClient(env_path=env_path)
+
+            result = client.generate_task_prompt("Analyze Site A.")
+
+        self.assertFalse(result.success)
+        self.assertIsNotNone(result.failure)
+        self.assertEqual(result.failure.code, "prompt_resource_load_error")
+        self.assertEqual(result.failure.stage, "generation")
 
 
 if __name__ == "__main__":
