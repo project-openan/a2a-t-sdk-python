@@ -5,6 +5,18 @@
       "scenario_name": "Incident 事件订阅",
       "description": "用于生成电信网管系统中 incident 事件订阅的 A2A-T 任务请求。",
       "example": "订阅基站设备产生的 critical 级别告警事件。"
+    },
+    {
+      "scenario_code": "energy_saving",
+      "scenario_name": "能效优化任务下发",
+      "description": "用于生成电信网管系统中 能效优化任务的 A2A-T 任务请求。",
+      "example": "实现松山湖区域30%的能耗降低，同时确保速率保障不低于50Mbps。"
+    },
+    {
+      "scenario_code": "private_line_complaint",
+      "scenario_name": "专线投诉",
+      "description": "用于生成电信网管系统中 专线投诉场景的网络侧故障根因诊断的 A2A-T 任务请求。",
+      "example": "请确认广东政企专线2026-05-10T18:25:30Z发生的故障fault-id-1-328-20260510-58489的根因，并提供修复建议。"
     }
   ]
 }
