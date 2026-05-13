@@ -18,6 +18,15 @@ CASE_TYPE_COUNTS = {
     "negative_ambiguous": 15,
 }
 
+CASE_TYPE_LABELS = {
+    "positive_complete": "正样本-信息完整",
+    "positive_partial": "正样本-信息不完整",
+    "positive_recognized_but_slot_risky": "正样本-高风险槽位提取",
+    "negative_near_intent": "负样本-近邻意图",
+    "negative_non_incident_subscription": "负样本-非Incident订阅",
+    "negative_ambiguous": "负样本-意图模糊",
+}
+
 TARGETS = [
     "基站设备",
     "无线网元",
@@ -489,22 +498,22 @@ def build_cases() -> list[dict[str, object]]:
 
 def render_markdown(cases: list[dict[str, object]]) -> str:
     lines = [
-        "# Subscribe Incident Evaluation Cases",
+        "# Incident订阅评测用例",
         "",
-        f"Total cases: {len(cases)}",
+        f"用例总数：{len(cases)}",
         "",
-        "## Distribution",
+        "## 分布情况",
         "",
     ]
     counts = Counter(str(case["tags"]["case_type"]) for case in cases)
     for case_type in CASE_TYPE_COUNTS:
-        lines.append(f"- `{case_type}`: {counts[case_type]}")
-    lines.extend(["", "## Cases", ""])
+        lines.append(f"- `{CASE_TYPE_LABELS[case_type]}`：{counts[case_type]}")
+    lines.extend(["", "## 用例预览", ""])
 
     for case_type in CASE_TYPE_COUNTS:
-        lines.append(f"### {case_type}")
+        lines.append(f"### {CASE_TYPE_LABELS[case_type]}")
         lines.append("")
-        lines.append("| ID | Completeness | Input | Scenario |")
+        lines.append("| 用例ID | 完整度 | 输入 | 场景说明 |")
         lines.append("| --- | --- | --- | --- |")
         for case in cases:
             tags = case["tags"]
@@ -525,8 +534,8 @@ def main() -> None:
     MARKDOWN_PATH.parent.mkdir(parents=True, exist_ok=True)
     DATASET_PATH.write_text(json.dumps(cases, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     MARKDOWN_PATH.write_text(render_markdown(cases), encoding="utf-8")
-    print(f"Wrote {len(cases)} cases to {DATASET_PATH}")
-    print(f"Wrote markdown preview to {MARKDOWN_PATH}")
+    print(f"已生成 {len(cases)} 条用例：{DATASET_PATH}")
+    print(f"已生成用例预览文档：{MARKDOWN_PATH}")
 
 
 if __name__ == "__main__":

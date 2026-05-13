@@ -1,21 +1,21 @@
-# Subscribe Incident Evaluation Cases
+# Incident订阅评测用例
 
-Total cases: 160
+用例总数：160
 
-## Distribution
+## 分布情况
 
-- `positive_complete`: 50
-- `positive_partial`: 30
-- `positive_recognized_but_slot_risky`: 25
-- `negative_near_intent`: 20
-- `negative_non_incident_subscription`: 20
-- `negative_ambiguous`: 15
+- `正样本-信息完整`：50
+- `正样本-信息不完整`：30
+- `正样本-高风险槽位提取`：25
+- `负样本-近邻意图`：20
+- `负样本-非Incident订阅`：20
+- `负样本-意图模糊`：15
 
-## Cases
+## 用例预览
 
-### positive_complete
+### 正样本-信息完整
 
-| ID | Completeness | Input | Scenario |
+| 用例ID | 完整度 | 输入 | 场景说明 |
 | --- | --- | --- | --- |
 | `si_pc_001` | `L4` | 请帮我订阅基站设备的Incident，关注光纤中断和尾纤故障，级别限定为严重和高，通过DataPart上报Incident数据，描述写正式一点，这条给白班值守使用。 | 完整正样本，主题、故障名、级别和上报格式同时出现。 |
 | `si_pc_002` | `L3` | 需要创建一个无线网元Incident事件订阅任务，关注单板故障和主控板异常，级别限定为高和中，通过TextPart上报Incident通知，这条给白班值守使用。 | 完整正样本，主题、故障名、级别和上报格式同时出现。 |
@@ -68,9 +68,9 @@ Total cases: 160
 | `si_pc_049` | `L4` | 帮我盯一下传输设备这边的Incident，关注风扇故障和单板故障，级别限定为critical和major，通过DataPart上报Incident数据，这条先按当前站点范围生效。 | 完整正样本，主题、故障名、级别和上报格式同时出现。 |
 | `si_pc_050` | `L3` | 最近室分设备故障偏多，请订阅相关Incident事件，关注温度过高和光模块故障，级别限定为严重和major，通过TextPart上报Incident通知，这条先按当前站点范围生效。 | 完整正样本，主题、故障名、级别和上报格式同时出现。 |
 
-### positive_partial
+### 正样本-信息不完整
 
-| ID | Completeness | Input | Scenario |
+| 用例ID | 完整度 | 输入 | 场景说明 |
 | --- | --- | --- | --- |
 | `si_pp_001` | `L1` | 请订阅基站设备的Incident，先只订阅这个主题，暂时不用限定级别和上报格式。，描述写正式一点。 | 正样本但信息不完整，测试可识别但较宽泛的输入。 |
 | `si_pp_002` | `L2` | 需要给无线网元创建Incident事件订阅，重点看单板故障，其他限制先不加。 | 正样本但信息不完整，测试可识别但较宽泛的输入。 |
@@ -103,9 +103,9 @@ Total cases: 160
 | `si_pp_029` | `L2` | 请订阅传输设备的Incident，重点看风扇故障，其他限制先不加。，输出尽量简洁。 | 正样本但信息不完整，测试可识别但较宽泛的输入。 |
 | `si_pp_030` | `L2` | 需要给室分设备创建Incident事件订阅，只限制级别为严重和major，先不要指定上报格式。 | 正样本但信息不完整，测试可识别但较宽泛的输入。 |
 
-### positive_recognized_but_slot_risky
+### 正样本-高风险槽位提取
 
-| ID | Completeness | Input | Scenario |
+| 用例ID | 完整度 | 输入 | 场景说明 |
 | --- | --- | --- | --- |
 | `si_pr_001` | `L4` | 最近基站设备在晚高峰时段波动明显，前面已经连续出现过光纤中断和尾纤故障，现在我想把Incident订阅补上，不是所有故障都要，只看严重和高，另外把链路抖动也纳入条件，通过DataPart上报Incident数据。 如果描述里要带背景可以简短带一句，但不要改成分析任务。 当前是日常值守场景。 | 意图明确但句子较长且有噪声，容易识别成功但抽槽位不完整。 |
 | `si_pr_002` | `L4` | 最近无线网元在晚高峰时段波动明显，前面已经连续出现过单板故障和主控板异常，现在我想把Incident事件订阅补上，不是所有故障都要，只看高和中，另外把端口异常也纳入条件，通过TextPart上报Incident通知。 输出保持成订阅请求，不要写成说明文。 当前是日常值守场景。 | 意图明确但句子较长且有噪声，容易识别成功但抽槽位不完整。 |
@@ -133,9 +133,9 @@ Total cases: 160
 | `si_pr_024` | `L4` | 最近接入侧网元在晚高峰时段波动明显，前面已经连续出现过尾纤故障和链路抖动，现在我想把智能故障Incident订阅补上，不是所有故障都要，只看critical和major，另外把温度过高也纳入条件，按DataPart格式上报Incident消息。 输出保持成订阅请求，不要写成说明文。 当前是告警复盘后的补订阅场景。 | 意图明确但句子较长且有噪声，容易识别成功但抽槽位不完整。 |
 | `si_pr_025` | `L4` | 最近汇聚节点在晚高峰时段波动明显，前面已经连续出现过主控板异常和端口异常，现在我想把Incident订阅补上，不是所有故障都要，只看严重和major，另外把光纤中断也纳入条件，通过DataPart上报Incident数据。 如果描述里要带背景可以简短带一句，但不要改成分析任务。 当前是告警复盘后的补订阅场景。 | 意图明确但句子较长且有噪声，容易识别成功但抽槽位不完整。 |
 
-### negative_near_intent
+### 负样本-近邻意图
 
-| ID | Completeness | Input | Scenario |
+| 用例ID | 完整度 | 输入 | 场景说明 |
 | --- | --- | --- | --- |
 | `si_nn_001` | `L2` | 请把下面这段Incident订阅说明翻成英文：基站设备的Incident，关注光纤中断和尾纤故障，级别是严重和高。 | 接近incident订阅，但主意图是翻译、解释、改写或总结，不应生成订阅prompt。 |
 | `si_nn_002` | `L2` | 解释一下如何订阅无线网元的Incident事件，重点说明无线网元的Incident事件，关注单板故障和主控板异常，级别是高和中。 | 接近incident订阅，但主意图是翻译、解释、改写或总结，不应生成订阅prompt。 |
@@ -158,9 +158,9 @@ Total cases: 160
 | `si_nn_019` | `L2` | 帮我总结这条故障Incident订阅规则，不要生成任务请求：传输设备的故障Incident，关注风扇故障和单板故障，级别是critical和major。 | 接近incident订阅，但主意图是翻译、解释、改写或总结，不应生成订阅prompt。 |
 | `si_nn_020` | `L2` | 检查下面这段智能故障Incident订阅描述是否通顺：室分设备的智能故障Incident，关注温度过高和光模块故障，级别是严重和major。 | 接近incident订阅，但主意图是翻译、解释、改写或总结，不应生成订阅prompt。 |
 
-### negative_non_incident_subscription
+### 负样本-非Incident订阅
 
-| ID | Completeness | Input | Scenario |
+| 用例ID | 完整度 | 输入 | 场景说明 |
 | --- | --- | --- | --- |
 | `si_ni_001` | `L1` | 请订阅基站设备的性能事件，不要订阅Incident。 | 订阅意图明确，但订阅对象不是incident，不应识别为subscribe_incident。 |
 | `si_ni_002` | `L1` | 需要给无线网元配置状态变更通知订阅，重点看夜间波动，不要转成Incident任务。 | 订阅意图明确，但订阅对象不是incident，不应识别为subscribe_incident。 |
@@ -183,9 +183,9 @@ Total cases: 160
 | `si_ni_019` | `L1` | 帮我订阅传输设备的能耗告警，按DataPart上报即可，但不是Incident。 | 订阅意图明确，但订阅对象不是incident，不应识别为subscribe_incident。 |
 | `si_ni_020` | `L1` | 我们想接收室分设备的配置变更消息通知，别识别成Incident订阅。 | 订阅意图明确，但订阅对象不是incident，不应识别为subscribe_incident。 |
 
-### negative_ambiguous
+### 负样本-意图模糊
 
-| ID | Completeness | Input | Scenario |
+| 用例ID | 完整度 | 输入 | 场景说明 |
 | --- | --- | --- | --- |
 | `si_na_001` | `L1` | 帮我配个Incident规则，先处理一下。 | 意图太短或边界模糊，测试模型是否会过度猜测成incident订阅。 |
 | `si_na_002` | `L1` | 基站那边的Incident先关注一下，具体你看着配。 | 意图太短或边界模糊，测试模型是否会过度猜测成incident订阅。 |

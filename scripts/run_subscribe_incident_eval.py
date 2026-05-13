@@ -18,6 +18,26 @@ REPORT_JSON_PATH = PROJECT_ROOT / "docs" / "eval" / "subscribe_incident_eval_rep
 REPORT_MD_PATH = PROJECT_ROOT / "docs" / "eval" / "subscribe_incident_eval_report.md"
 TMP_ENV_PATH = PROJECT_ROOT / ".tmp_subscribe_incident_eval.env"
 
+CASE_TYPE_LABELS = {
+    "positive_complete": "正样本-信息完整",
+    "positive_partial": "正样本-信息不完整",
+    "positive_recognized_but_slot_risky": "正样本-高风险槽位提取",
+    "negative_near_intent": "负样本-近邻意图",
+    "negative_non_incident_subscription": "负样本-非Incident订阅",
+    "negative_ambiguous": "负样本-意图模糊",
+}
+
+SEMANTIC_VARIANT_LABELS = {
+    "topic_expression": "主题表达",
+    "condition_fault_name": "故障名称条件",
+    "condition_severity": "级别条件",
+    "condition_combination": "组合条件",
+    "report_format": "上报格式",
+    "subscription_target_context": "订阅对象上下文",
+    "noise_interference": "噪声干扰",
+    "instruction_purity": "指令纯度",
+}
+
 if str(SRC_ROOT) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(SRC_ROOT))
 
@@ -271,32 +291,46 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
 def render_markdown(report: dict[str, Any]) -> str:
     summary = report["summary"]
     lines = [
-        "# Subscribe Incident Evaluation Report",
+        "# Incident订阅评测报告",
         "",
-        f"Generated at: {report['generated_at']}",
+        f"生成时间：{report['generated_at']}",
         "",
-        "## Summary",
+        "## 总览",
         "",
-        f"- Total cases: {summary['total_cases']}",
-        f"- Positive cases: {summary['positive_cases']}",
-        f"- Negative cases: {summary['negative_cases']}",
-        f"- Overall recognition accuracy: {summary['overall_recognition_accuracy']}",
-        f"- Positive-case recognition accuracy: {summary['positive_case_recognition_accuracy']}",
-        f"- Negative-case false positive rate: {summary['negative_case_false_positive_rate']}",
-        f"- Recognized positive cases: {summary['recognized_positive_cases']}",
-        f"- Slot exact rate within recognized positive cases: {summary['slot_exact_rate_within_recognized_positive_cases']}",
-        f"- Slot group hit rate within recognized positive cases: {summary['slot_group_hit_rate_within_recognized_positive_cases']}",
-        f"- Prompt exact rate within recognized positive cases: {summary['prompt_exact_rate_within_recognized_positive_cases']}",
-        f"- Prompt group hit rate within recognized positive cases: {summary['prompt_group_hit_rate_within_recognized_positive_cases']}",
+        f"- 用例总数：{summary['total_cases']}",
+        f"- 正样本数：{summary['positive_cases']}",
+        f"- 负样本数：{summary['negative_cases']}",
+        f"- 总体识别准确率：{summary['overall_recognition_accuracy']}",
+        f"- 正样本识别准确率：{summary['positive_case_recognition_accuracy']}",
+        f"- 负样本误识别率：{summary['negative_case_false_positive_rate']}",
+        f"- 成功识别的正样本数：{summary['recognized_positive_cases']}",
+        f"- 已识别正样本中的槽位完全命中率：{summary['slot_exact_rate_within_recognized_positive_cases']}",
+        f"- 已识别正样本中的槽位组命中率：{summary['slot_group_hit_rate_within_recognized_positive_cases']}",
+        f"- 已识别正样本中的Prompt完全命中率：{summary['prompt_exact_rate_within_recognized_positive_cases']}",
+        f"- 已识别正样本中的Prompt关键组命中率：{summary['prompt_group_hit_rate_within_recognized_positive_cases']}",
         "",
     ]
 
-    def render_bucket(title: str, payload: dict[str, Any]) -> None:
-        lines.extend([f"## {title}", "", "| Bucket | Count | Recognition | Slot Exact | Slot Hit | Prompt Exact | Prompt Hit |", "| --- | --- | --- | --- | --- | --- | --- |"])
+    def display_bucket_key(section: str, key: str) -> str:
+        if section == "case_type":
+            return CASE_TYPE_LABELS.get(key, key)
+        if section == "semantic_variant":
+            return SEMANTIC_VARIANT_LABELS.get(key, key)
+        return key
+
+    def render_bucket(title: str, payload: dict[str, Any], *, section: str) -> None:
+        lines.extend(
+            [
+                f"## {title}",
+                "",
+                "| 分组 | 数量 | 识别准确率 | 槽位完全命中率 | 槽位组命中率 | Prompt完全命中率 | Prompt组命中率 |",
+                "| --- | --- | --- | --- | --- | --- | --- |",
+            ]
+        )
         for key, metrics in payload.items():
             lines.append(
                 "| `{}` | {} | {} | {} | {} | {} | {} |".format(
-                    key,
+                    display_bucket_key(section, key),
                     metrics["count"],
                     metrics["recognition_accuracy"],
                     metrics["slot_exact_rate"],
@@ -307,35 +341,35 @@ def render_markdown(report: dict[str, Any]) -> str:
             )
         lines.append("")
 
-    render_bucket("By Case Type", report["by_case_type"])
-    render_bucket("By Semantic Variant", report["by_semantic_variant"])
-    render_bucket("By Completeness Level", report["by_completeness_level"])
+    render_bucket("按用例类型统计", report["by_case_type"], section="case_type")
+    render_bucket("按语义变体统计", report["by_semantic_variant"], section="semantic_variant")
+    render_bucket("按完整度统计", report["by_completeness_level"], section="completeness")
 
-    lines.extend(["## Sample Failures", ""])
+    lines.extend(["## 失败样例", ""])
     for failure in report["failure_samples"]:
         lines.extend(
             [
                 f"### {failure['id']}",
                 "",
-                f"- Case type: `{failure['case_type']}`",
-                f"- Recognition correct: `{failure['recognition_correct']}`",
-                f"- Slot exact: `{failure['slot_exact']}`",
-                f"- Prompt exact: `{failure['prompt_exact']}`",
-                f"- Failure code: `{failure['failure_code']}`",
-                f"- Failure stage: `{failure['failure_stage']}`",
-                f"- Missing slot groups: `{failure['slot_missing']}`",
-                f"- Missing prompt groups: `{failure['prompt_missing']}`",
-                f"- Forbidden hits: `{failure['forbidden_hits']}`",
+                f"- 用例类型：`{CASE_TYPE_LABELS.get(failure['case_type'], failure['case_type'])}`",
+                f"- 识别是否正确：`{failure['recognition_correct']}`",
+                f"- 槽位是否完全命中：`{failure['slot_exact']}`",
+                f"- Prompt是否完全命中：`{failure['prompt_exact']}`",
+                f"- 失败码：`{failure['failure_code']}`",
+                f"- 失败阶段：`{failure['failure_stage']}`",
+                f"- 缺失槽位组：`{failure['slot_missing']}`",
+                f"- 缺失Prompt组：`{failure['prompt_missing']}`",
+                f"- 命中的禁止项：`{failure['forbidden_hits']}`",
                 "",
-                "**Input**",
+                "**输入**",
                 "",
                 failure["input"],
                 "",
-                "**Failure Message**",
+                "**失败信息**",
                 "",
                 str(failure["failure_message"]),
                 "",
-                "**Prompt**",
+                "**生成的Prompt**",
                 "",
                 "```text",
                 failure["prompt_text"] or "",
@@ -347,7 +381,7 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run subscribe_incident evaluation cases against the client SDK.")
+    parser = argparse.ArgumentParser(description="执行 subscribe_incident 评测用例并输出统计结果。")
     parser.add_argument("--dataset", type=Path, default=DATASET_PATH)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--out-json", type=Path, default=REPORT_JSON_PATH)
@@ -363,7 +397,7 @@ def main() -> None:
             result = run_case(client, case)
             results.append(result)
             if index % 10 == 0 or index == len(cases):
-                print(f"Processed {index}/{len(cases)} cases")
+                print(f"已处理 {index}/{len(cases)} 条用例")
     finally:
         cleanup_env(env_path)
 
@@ -372,8 +406,8 @@ def main() -> None:
     args.out_md.parent.mkdir(parents=True, exist_ok=True)
     args.out_json.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     args.out_md.write_text(render_markdown(report), encoding="utf-8")
-    print(f"Wrote JSON report to {args.out_json}")
-    print(f"Wrote markdown report to {args.out_md}")
+    print(f"已写出 JSON 报告：{args.out_json}")
+    print(f"已写出 Markdown 报告：{args.out_md}")
 
 
 if __name__ == "__main__":

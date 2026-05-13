@@ -1,77 +1,77 @@
-# Subscribe Incident Evaluation Report
+# Incident订阅评测报告
 
-Generated at: 2026-05-13T06:26:16.449545+00:00
+生成时间：2026-05-13T06:26:16.449545+00:00
 
-## Summary
+## 总览
 
-- Total cases: 160
-- Positive cases: 105
-- Negative cases: 55
-- Overall recognition accuracy: 0.6625
-- Positive-case recognition accuracy: 1.0
-- Negative-case false positive rate: 0.9818
-- Recognized positive cases: 105
-- Slot exact rate within recognized positive cases: 0.8762
-- Slot group hit rate within recognized positive cases: 0.9672
-- Prompt exact rate within recognized positive cases: 0.8762
-- Prompt group hit rate within recognized positive cases: 0.9672
+- 用例总数：160
+- 正样本数：105
+- 负样本数：55
+- 总体识别准确率：0.6625
+- 正样本识别准确率：1.0
+- 负样本误识别率：0.9818
+- 成功识别的正样本数：105
+- 已识别正样本中的槽位完全命中率：0.8762
+- 已识别正样本中的槽位组命中率：0.9672
+- 已识别正样本中的Prompt完全命中率：0.8762
+- 已识别正样本中的Prompt关键组命中率：0.9672
 
-## By Case Type
+## 按用例类型统计
 
-| Bucket | Count | Recognition | Slot Exact | Slot Hit | Prompt Exact | Prompt Hit |
+| 分组 | 数量 | 识别准确率 | 槽位完全命中率 | 槽位组命中率 | Prompt完全命中率 | Prompt组命中率 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `negative_ambiguous` | 15 | 0.0 | None | None | None | None |
-| `negative_near_intent` | 20 | 0.0 | None | None | None | None |
-| `negative_non_incident_subscription` | 20 | 0.05 | None | None | None | None |
-| `positive_complete` | 50 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 |
-| `positive_partial` | 30 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 |
-| `positive_recognized_but_slot_risky` | 25 | 1.0 | 0.48 | 0.9 | 0.48 | 0.9 |
+| `负样本-意图模糊` | 15 | 0.0 | None | None | None | None |
+| `负样本-近邻意图` | 20 | 0.0 | None | None | None | None |
+| `负样本-非Incident订阅` | 20 | 0.05 | None | None | None | None |
+| `正样本-信息完整` | 50 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 |
+| `正样本-信息不完整` | 30 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 |
+| `正样本-高风险槽位提取` | 25 | 1.0 | 0.48 | 0.9 | 0.48 | 0.9 |
 
-## By Semantic Variant
+## 按语义变体统计
 
-| Bucket | Count | Recognition | Slot Exact | Slot Hit | Prompt Exact | Prompt Hit |
+| 分组 | 数量 | 识别准确率 | 槽位完全命中率 | 槽位组命中率 | Prompt完全命中率 | Prompt组命中率 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `condition_combination` | 75 | 1.0 | 0.8267 | 0.9636 | 0.8267 | 0.9636 |
-| `condition_fault_name` | 105 | 0.8095 | 0.8471 | 0.9649 | 0.8471 | 0.9649 |
-| `condition_severity` | 105 | 0.8095 | 0.8471 | 0.9655 | 0.8471 | 0.9655 |
-| `instruction_purity` | 55 | 0.0182 | None | None | None | None |
-| `noise_interference` | 40 | 0.625 | 0.48 | 0.9 | 0.48 | 0.9 |
-| `report_format` | 75 | 1.0 | 0.8267 | 0.9636 | 0.8267 | 0.9636 |
-| `subscription_target_context` | 125 | 0.848 | 0.8762 | 0.9672 | 0.8762 | 0.9672 |
-| `topic_expression` | 140 | 0.75 | 0.8762 | 0.9672 | 0.8762 | 0.9672 |
+| `组合条件` | 75 | 1.0 | 0.8267 | 0.9636 | 0.8267 | 0.9636 |
+| `故障名称条件` | 105 | 0.8095 | 0.8471 | 0.9649 | 0.8471 | 0.9649 |
+| `级别条件` | 105 | 0.8095 | 0.8471 | 0.9655 | 0.8471 | 0.9655 |
+| `指令纯度` | 55 | 0.0182 | None | None | None | None |
+| `噪声干扰` | 40 | 0.625 | 0.48 | 0.9 | 0.48 | 0.9 |
+| `上报格式` | 75 | 1.0 | 0.8267 | 0.9636 | 0.8267 | 0.9636 |
+| `订阅对象上下文` | 125 | 0.848 | 0.8762 | 0.9672 | 0.8762 | 0.9672 |
+| `主题表达` | 140 | 0.75 | 0.8762 | 0.9672 | 0.8762 | 0.9672 |
 
-## By Completeness Level
+## 按完整度统计
 
-| Bucket | Count | Recognition | Slot Exact | Slot Hit | Prompt Exact | Prompt Hit |
+| 分组 | 数量 | 识别准确率 | 槽位完全命中率 | 槽位组命中率 | Prompt完全命中率 | Prompt组命中率 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `L1` | 45 | 0.2444 | 1.0 | 1.0 | 1.0 | 1.0 |
 | `L2` | 40 | 0.5 | 1.0 | 1.0 | 1.0 | 1.0 |
 | `L3` | 33 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 |
 | `L4` | 42 | 1.0 | 0.6905 | 0.9373 | 0.6905 | 0.9373 |
 
-## Sample Failures
+## 失败样例
 
 ### si_pr_003
 
-- Case type: `positive_recognized_but_slot_risky`
-- Recognition correct: `True`
-- Slot exact: `False`
-- Prompt exact: `False`
-- Failure code: `None`
-- Failure stage: `None`
-- Missing slot groups: `[['电源模块告警']]`
-- Missing prompt groups: `[['电源模块告警']]`
-- Forbidden hits: `[]`
+- 用例类型：`正样本-高风险槽位提取`
+- 识别是否正确：`True`
+- 槽位是否完全命中：`False`
+- Prompt是否完全命中：`False`
+- 失败码：`None`
+- 失败阶段：`None`
+- 缺失槽位组：`[['电源模块告警']]`
+- 缺失Prompt组：`[['电源模块告警']]`
+- 命中的禁止项：`[]`
 
-**Input**
+**输入**
 
 最近站点设备在晚高峰时段波动明显，前面已经连续出现过光模块故障和电源模块告警，现在我想把故障Incident订阅补上，不是所有故障都要，只看严重和中，另外把风扇故障也纳入条件，用DataPart承载Incident数据进行上报。 如果描述里要带背景可以简短带一句，但不要改成分析任务。 当前是日常值守场景。
 
-**Failure Message**
+**失败信息**
 
 None
 
-**Prompt**
+**生成的Prompt**
 
 ```text
 ## 订阅描述
@@ -99,25 +99,25 @@ Incident（必选）
 
 ### si_pr_005
 
-- Case type: `positive_recognized_but_slot_risky`
-- Recognition correct: `True`
-- Slot exact: `False`
-- Prompt exact: `False`
-- Failure code: `None`
-- Failure stage: `None`
-- Missing slot groups: `[['主控板异常'], ['端口异常']]`
-- Missing prompt groups: `[['主控板异常'], ['端口异常']]`
-- Forbidden hits: `[]`
+- 用例类型：`正样本-高风险槽位提取`
+- 识别是否正确：`True`
+- 槽位是否完全命中：`False`
+- Prompt是否完全命中：`False`
+- 失败码：`None`
+- 失败阶段：`None`
+- 缺失槽位组：`[['主控板异常'], ['端口异常']]`
+- 缺失Prompt组：`[['主控板异常'], ['端口异常']]`
+- 命中的禁止项：`[]`
 
-**Input**
+**输入**
 
 最近汇聚节点在晚高峰时段波动明显，前面已经连续出现过主控板异常和端口异常，现在我想把Incident订阅补上，不是所有故障都要，只看严重和major，另外把光纤中断也纳入条件，通过DataPart上报Incident数据。 如果描述里要带背景可以简短带一句，但不要改成分析任务。 当前是日常值守场景。
 
-**Failure Message**
+**失败信息**
 
 None
 
-**Prompt**
+**生成的Prompt**
 
 ```text
 ## 订阅描述
@@ -145,25 +145,25 @@ Incident（必选）
 
 ### si_pr_006
 
-- Case type: `positive_recognized_but_slot_risky`
-- Recognition correct: `True`
-- Slot exact: `False`
-- Prompt exact: `False`
-- Failure code: `None`
-- Failure stage: `None`
-- Missing slot groups: `[['电源模块告警'], ['风扇故障']]`
-- Missing prompt groups: `[['电源模块告警'], ['风扇故障']]`
-- Forbidden hits: `[]`
+- 用例类型：`正样本-高风险槽位提取`
+- 识别是否正确：`True`
+- 槽位是否完全命中：`False`
+- Prompt是否完全命中：`False`
+- 失败码：`None`
+- 失败阶段：`None`
+- 缺失槽位组：`[['电源模块告警'], ['风扇故障']]`
+- 缺失Prompt组：`[['电源模块告警'], ['风扇故障']]`
+- 命中的禁止项：`[]`
 
-**Input**
+**输入**
 
 最近OLT设备在晚高峰时段波动明显，前面已经连续出现过电源模块告警和风扇故障，现在我想把Incident事件订阅补上，不是所有故障都要，只看严重和高，另外把单板故障也纳入条件，通过TextPart上报Incident通知。 输出保持成订阅请求，不要写成说明文。 当前是日常值守场景。
 
-**Failure Message**
+**失败信息**
 
 None
 
-**Prompt**
+**生成的Prompt**
 
 ```text
 ## 订阅描述
@@ -191,25 +191,25 @@ Incident（必选）
 
 ### si_pr_007
 
-- Case type: `positive_recognized_but_slot_risky`
-- Recognition correct: `True`
-- Slot exact: `False`
-- Prompt exact: `False`
-- Failure code: `None`
-- Failure stage: `None`
-- Missing slot groups: `[['链路抖动'], ['温度过高']]`
-- Missing prompt groups: `[['链路抖动'], ['温度过高']]`
-- Forbidden hits: `[]`
+- 用例类型：`正样本-高风险槽位提取`
+- 识别是否正确：`True`
+- 槽位是否完全命中：`False`
+- Prompt是否完全命中：`False`
+- 失败码：`None`
+- 失败阶段：`None`
+- 缺失槽位组：`[['链路抖动'], ['温度过高']]`
+- 缺失Prompt组：`[['链路抖动'], ['温度过高']]`
+- 命中的禁止项：`[]`
 
-**Input**
+**输入**
 
 最近核心网网元在晚高峰时段波动明显，前面已经连续出现过链路抖动和温度过高，现在我想把故障Incident订阅补上，不是所有故障都要，只看高和中，另外把光模块故障也纳入条件，用DataPart承载Incident数据进行上报。 如果描述里要带背景可以简短带一句，但不要改成分析任务。 当前是日常值守场景。
 
-**Failure Message**
+**失败信息**
 
 None
 
-**Prompt**
+**生成的Prompt**
 
 ```text
 ## 订阅描述
@@ -237,25 +237,25 @@ Incident（必选）
 
 ### si_pr_008
 
-- Case type: `positive_recognized_but_slot_risky`
-- Recognition correct: `True`
-- Slot exact: `False`
-- Prompt exact: `False`
-- Failure code: `None`
-- Failure stage: `None`
-- Missing slot groups: `[['端口异常']]`
-- Missing prompt groups: `[['端口异常']]`
-- Forbidden hits: `[]`
+- 用例类型：`正样本-高风险槽位提取`
+- 识别是否正确：`True`
+- 槽位是否完全命中：`False`
+- Prompt是否完全命中：`False`
+- 失败码：`None`
+- 失败阶段：`None`
+- 缺失槽位组：`[['端口异常']]`
+- 缺失Prompt组：`[['端口异常']]`
+- 命中的禁止项：`[]`
 
-**Input**
+**输入**
 
 最近园区站点在晚高峰时段波动明显，前面已经连续出现过端口异常和光纤中断，现在我想把智能故障Incident订阅补上，不是所有故障都要，只看严重和中，另外把尾纤故障也纳入条件，按DataPart格式上报Incident消息。 输出保持成订阅请求，不要写成说明文。 当前是日常值守场景。
 
-**Failure Message**
+**失败信息**
 
 None
 
-**Prompt**
+**生成的Prompt**
 
 ```text
 ## 订阅描述
@@ -283,25 +283,25 @@ DataPart（可选）
 
 ### si_pr_014
 
-- Case type: `positive_recognized_but_slot_risky`
-- Recognition correct: `True`
-- Slot exact: `False`
-- Prompt exact: `False`
-- Failure code: `None`
-- Failure stage: `None`
-- Missing slot groups: `[['链路抖动']]`
-- Missing prompt groups: `[['链路抖动']]`
-- Forbidden hits: `[]`
+- 用例类型：`正样本-高风险槽位提取`
+- 识别是否正确：`True`
+- 槽位是否完全命中：`False`
+- Prompt是否完全命中：`False`
+- 失败码：`None`
+- 失败阶段：`None`
+- 缺失槽位组：`[['链路抖动']]`
+- 缺失Prompt组：`[['链路抖动']]`
+- 命中的禁止项：`[]`
 
-**Input**
+**输入**
 
 最近接入侧网元在晚高峰时段波动明显，前面已经连续出现过尾纤故障和链路抖动，现在我想把Incident事件订阅补上，不是所有故障都要，只看critical和major，另外把温度过高也纳入条件，通过TextPart上报Incident通知。 输出保持成订阅请求，不要写成说明文。 当前是割接观察场景。
 
-**Failure Message**
+**失败信息**
 
 None
 
-**Prompt**
+**生成的Prompt**
 
 ```text
 ## 订阅描述
@@ -329,25 +329,25 @@ TextPart（可选）
 
 ### si_pr_015
 
-- Case type: `positive_recognized_but_slot_risky`
-- Recognition correct: `True`
-- Slot exact: `False`
-- Prompt exact: `False`
-- Failure code: `None`
-- Failure stage: `None`
-- Missing slot groups: `[['主控板异常'], ['端口异常']]`
-- Missing prompt groups: `[['主控板异常'], ['端口异常']]`
-- Forbidden hits: `[]`
+- 用例类型：`正样本-高风险槽位提取`
+- 识别是否正确：`True`
+- 槽位是否完全命中：`False`
+- Prompt是否完全命中：`False`
+- 失败码：`None`
+- 失败阶段：`None`
+- 缺失槽位组：`[['主控板异常'], ['端口异常']]`
+- 缺失Prompt组：`[['主控板异常'], ['端口异常']]`
+- 命中的禁止项：`[]`
 
-**Input**
+**输入**
 
 最近汇聚节点在晚高峰时段波动明显，前面已经连续出现过主控板异常和端口异常，现在我想把故障Incident订阅补上，不是所有故障都要，只看严重和major，另外把光纤中断也纳入条件，用DataPart承载Incident数据进行上报。 如果描述里要带背景可以简短带一句，但不要改成分析任务。 当前是割接观察场景。
 
-**Failure Message**
+**失败信息**
 
 None
 
-**Prompt**
+**生成的Prompt**
 
 ```text
 ## 订阅描述
@@ -375,25 +375,25 @@ Incident（必选）
 
 ### si_pr_016
 
-- Case type: `positive_recognized_but_slot_risky`
-- Recognition correct: `True`
-- Slot exact: `False`
-- Prompt exact: `False`
-- Failure code: `None`
-- Failure stage: `None`
-- Missing slot groups: `[['电源模块告警'], ['风扇故障']]`
-- Missing prompt groups: `[['电源模块告警'], ['风扇故障']]`
-- Forbidden hits: `[]`
+- 用例类型：`正样本-高风险槽位提取`
+- 识别是否正确：`True`
+- 槽位是否完全命中：`False`
+- Prompt是否完全命中：`False`
+- 失败码：`None`
+- 失败阶段：`None`
+- 缺失槽位组：`[['电源模块告警'], ['风扇故障']]`
+- 缺失Prompt组：`[['电源模块告警'], ['风扇故障']]`
+- 命中的禁止项：`[]`
 
-**Input**
+**输入**
 
 最近OLT设备在晚高峰时段波动明显，前面已经连续出现过电源模块告警和风扇故障，现在我想把智能故障Incident订阅补上，不是所有故障都要，只看严重和高，另外把单板故障也纳入条件，按DataPart格式上报Incident消息。 输出保持成订阅请求，不要写成说明文。 当前是割接观察场景。
 
-**Failure Message**
+**失败信息**
 
 None
 
-**Prompt**
+**生成的Prompt**
 
 ```text
 ## 订阅描述
@@ -421,25 +421,25 @@ DataPart（可选）
 
 ### si_pr_017
 
-- Case type: `positive_recognized_but_slot_risky`
-- Recognition correct: `True`
-- Slot exact: `False`
-- Prompt exact: `False`
-- Failure code: `None`
-- Failure stage: `None`
-- Missing slot groups: `[['链路抖动'], ['温度过高']]`
-- Missing prompt groups: `[['链路抖动'], ['温度过高']]`
-- Forbidden hits: `[]`
+- 用例类型：`正样本-高风险槽位提取`
+- 识别是否正确：`True`
+- 槽位是否完全命中：`False`
+- Prompt是否完全命中：`False`
+- 失败码：`None`
+- 失败阶段：`None`
+- 缺失槽位组：`[['链路抖动'], ['温度过高']]`
+- 缺失Prompt组：`[['链路抖动'], ['温度过高']]`
+- 命中的禁止项：`[]`
 
-**Input**
+**输入**
 
 最近核心网网元在晚高峰时段波动明显，前面已经连续出现过链路抖动和温度过高，现在我想把Incident订阅补上，不是所有故障都要，只看高和中，另外把光模块故障也纳入条件，通过DataPart上报Incident数据。 如果描述里要带背景可以简短带一句，但不要改成分析任务。 当前是割接观察场景。
 
-**Failure Message**
+**失败信息**
 
 None
 
-**Prompt**
+**生成的Prompt**
 
 ```text
 ## 订阅描述
@@ -467,25 +467,25 @@ Incident（必选）
 
 ### si_pr_018
 
-- Case type: `positive_recognized_but_slot_risky`
-- Recognition correct: `True`
-- Slot exact: `False`
-- Prompt exact: `False`
-- Failure code: `None`
-- Failure stage: `None`
-- Missing slot groups: `[['端口异常']]`
-- Missing prompt groups: `[['端口异常']]`
-- Forbidden hits: `[]`
+- 用例类型：`正样本-高风险槽位提取`
+- 识别是否正确：`True`
+- 槽位是否完全命中：`False`
+- Prompt是否完全命中：`False`
+- 失败码：`None`
+- 失败阶段：`None`
+- 缺失槽位组：`[['端口异常']]`
+- 缺失Prompt组：`[['端口异常']]`
+- 命中的禁止项：`[]`
 
-**Input**
+**输入**
 
 最近园区站点在晚高峰时段波动明显，前面已经连续出现过端口异常和光纤中断，现在我想把Incident事件订阅补上，不是所有故障都要，只看严重和中，另外把尾纤故障也纳入条件，通过TextPart上报Incident通知。 输出保持成订阅请求，不要写成说明文。 当前是割接观察场景。
 
-**Failure Message**
+**失败信息**
 
 None
 
-**Prompt**
+**生成的Prompt**
 
 ```text
 ## 订阅描述
@@ -513,25 +513,25 @@ Incident（必选）
 
 ### si_pr_020
 
-- Case type: `positive_recognized_but_slot_risky`
-- Recognition correct: `True`
-- Slot exact: `False`
-- Prompt exact: `False`
-- Failure code: `None`
-- Failure stage: `None`
-- Missing slot groups: `[['温度过高']]`
-- Missing prompt groups: `[['温度过高']]`
-- Forbidden hits: `[]`
+- 用例类型：`正样本-高风险槽位提取`
+- 识别是否正确：`True`
+- 槽位是否完全命中：`False`
+- Prompt是否完全命中：`False`
+- 失败码：`None`
+- 失败阶段：`None`
+- 缺失槽位组：`[['温度过高']]`
+- 缺失Prompt组：`[['温度过高']]`
+- 命中的禁止项：`[]`
 
-**Input**
+**输入**
 
 最近室分设备在晚高峰时段波动明显，前面已经连续出现过温度过高和光模块故障，现在我想把智能故障Incident订阅补上，不是所有故障都要，只看严重和major，另外把电源模块告警也纳入条件，按DataPart格式上报Incident消息。 输出保持成订阅请求，不要写成说明文。 当前是割接观察场景。
 
-**Failure Message**
+**失败信息**
 
 None
 
-**Prompt**
+**生成的Prompt**
 
 ```text
 ## 订阅描述
@@ -559,25 +559,25 @@ DataPart（可选）
 
 ### si_pr_023
 
-- Case type: `positive_recognized_but_slot_risky`
-- Recognition correct: `True`
-- Slot exact: `False`
-- Prompt exact: `False`
-- Failure code: `None`
-- Failure stage: `None`
-- Missing slot groups: `[['电源模块告警']]`
-- Missing prompt groups: `[['电源模块告警']]`
-- Forbidden hits: `[]`
+- 用例类型：`正样本-高风险槽位提取`
+- 识别是否正确：`True`
+- 槽位是否完全命中：`False`
+- Prompt是否完全命中：`False`
+- 失败码：`None`
+- 失败阶段：`None`
+- 缺失槽位组：`[['电源模块告警']]`
+- 缺失Prompt组：`[['电源模块告警']]`
+- 命中的禁止项：`[]`
 
-**Input**
+**输入**
 
 最近站点设备在晚高峰时段波动明显，前面已经连续出现过光模块故障和电源模块告警，现在我想把故障Incident订阅补上，不是所有故障都要，只看严重和中，另外把风扇故障也纳入条件，用DataPart承载Incident数据进行上报。 如果描述里要带背景可以简短带一句，但不要改成分析任务。 当前是告警复盘后的补订阅场景。
 
-**Failure Message**
+**失败信息**
 
 None
 
-**Prompt**
+**生成的Prompt**
 
 ```text
 ## 订阅描述
@@ -605,25 +605,25 @@ Incident（必选）
 
 ### si_pr_025
 
-- Case type: `positive_recognized_but_slot_risky`
-- Recognition correct: `True`
-- Slot exact: `False`
-- Prompt exact: `False`
-- Failure code: `None`
-- Failure stage: `None`
-- Missing slot groups: `[['主控板异常'], ['端口异常']]`
-- Missing prompt groups: `[['主控板异常'], ['端口异常']]`
-- Forbidden hits: `[]`
+- 用例类型：`正样本-高风险槽位提取`
+- 识别是否正确：`True`
+- 槽位是否完全命中：`False`
+- Prompt是否完全命中：`False`
+- 失败码：`None`
+- 失败阶段：`None`
+- 缺失槽位组：`[['主控板异常'], ['端口异常']]`
+- 缺失Prompt组：`[['主控板异常'], ['端口异常']]`
+- 命中的禁止项：`[]`
 
-**Input**
+**输入**
 
 最近汇聚节点在晚高峰时段波动明显，前面已经连续出现过主控板异常和端口异常，现在我想把Incident订阅补上，不是所有故障都要，只看严重和major，另外把光纤中断也纳入条件，通过DataPart上报Incident数据。 如果描述里要带背景可以简短带一句，但不要改成分析任务。 当前是告警复盘后的补订阅场景。
 
-**Failure Message**
+**失败信息**
 
 None
 
-**Prompt**
+**生成的Prompt**
 
 ```text
 ## 订阅描述
@@ -651,25 +651,25 @@ Incident（必选）
 
 ### si_nn_001
 
-- Case type: `negative_near_intent`
-- Recognition correct: `False`
-- Slot exact: `False`
-- Prompt exact: `False`
-- Failure code: `None`
-- Failure stage: `None`
-- Missing slot groups: `[]`
-- Missing prompt groups: `[]`
-- Forbidden hits: `[]`
+- 用例类型：`负样本-近邻意图`
+- 识别是否正确：`False`
+- 槽位是否完全命中：`False`
+- Prompt是否完全命中：`False`
+- 失败码：`None`
+- 失败阶段：`None`
+- 缺失槽位组：`[]`
+- 缺失Prompt组：`[]`
+- 命中的禁止项：`[]`
 
-**Input**
+**输入**
 
 请把下面这段Incident订阅说明翻成英文：基站设备的Incident，关注光纤中断和尾纤故障，级别是严重和高。
 
-**Failure Message**
+**失败信息**
 
 None
 
-**Prompt**
+**生成的Prompt**
 
 ```text
 ## 订阅描述
@@ -697,25 +697,25 @@ None
 
 ### si_nn_002
 
-- Case type: `negative_near_intent`
-- Recognition correct: `False`
-- Slot exact: `False`
-- Prompt exact: `False`
-- Failure code: `None`
-- Failure stage: `None`
-- Missing slot groups: `[]`
-- Missing prompt groups: `[]`
-- Forbidden hits: `[]`
+- 用例类型：`负样本-近邻意图`
+- 识别是否正确：`False`
+- 槽位是否完全命中：`False`
+- Prompt是否完全命中：`False`
+- 失败码：`None`
+- 失败阶段：`None`
+- 缺失槽位组：`[]`
+- 缺失Prompt组：`[]`
+- 命中的禁止项：`[]`
 
-**Input**
+**输入**
 
 解释一下如何订阅无线网元的Incident事件，重点说明无线网元的Incident事件，关注单板故障和主控板异常，级别是高和中。
 
-**Failure Message**
+**失败信息**
 
 None
 
-**Prompt**
+**生成的Prompt**
 
 ```text
 ## 订阅描述
