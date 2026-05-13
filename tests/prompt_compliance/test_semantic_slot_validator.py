@@ -105,10 +105,11 @@ class LLMSemanticSlotValidatorTest(unittest.TestCase):
         self.assertEqual(messages[0]["content"], "SYSTEM_PROMPT_FROM_FILE")
         self.assertEqual(messages[1]["role"], "user")
         self.assertIn("USER_PROMPT_FROM_FILE", messages[1]["content"])
-        self.assertIn('"scenario_code": "energy_saving"', messages[1]["content"])
-        self.assertIn('"language": "zh-CN"', messages[1]["content"])
-        self.assertIn('"processed_prompt_text"', messages[1]["content"])
+        self.assertIn('"slot_json_schema"', messages[1]["content"])
         self.assertIn('"extracted_slots"', messages[1]["content"])
+        self.assertNotIn('"scenario_code"', messages[1]["content"])
+        self.assertNotIn('"language"', messages[1]["content"])
+        self.assertNotIn('"processed_prompt_text"', messages[1]["content"])
 
     def test_validate_returns_failed_result_when_llm_returns_invalid_json(self) -> None:
         from a2a_t.server.prompt_compliance.llm_semantic_slot_validator import LLMSemanticSlotValidator

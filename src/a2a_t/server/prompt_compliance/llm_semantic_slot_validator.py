@@ -81,21 +81,7 @@ class LLMSemanticSlotValidator(SemanticSlotValidator):
         slot_json_schema: dict[str, object],
         extracted_slots: dict[str, str | None],
     ) -> list[dict[str, str]]:
-        slot_schema_summary = [
-            {
-                "name": slot.name,
-                "required": slot.required,
-                "description": slot.description,
-                "value_constraint": slot.value_constraint,
-            }
-            for slot in slot_schema.slots
-        ]
         payload = {
-            "scenario_code": reference.scenario_code,
-            "language": reference.language,
-            "processed_prompt_text": processed_prompt_text,
-            "template_text": template_text,
-            "slot_schema_summary": slot_schema_summary,
             "slot_json_schema": slot_json_schema,
             "extracted_slots": extracted_slots,
         }
