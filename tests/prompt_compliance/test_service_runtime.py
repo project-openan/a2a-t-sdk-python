@@ -35,6 +35,7 @@ from a2a_t.server.prompt_compliance.constants import (
     TEMPLATE_LOAD_ERROR,
 )
 from a2a_t.server.prompt_compliance.result import PromptComplianceResult
+from a2a_t.server.prompt_compliance.semantic_validator import SemanticValidationError, SemanticValidationResult
 
 
 class FakeGuardrail:
@@ -127,6 +128,28 @@ class FakeValidator:
         return self._result
 
 
+class FakeSemanticValidator:
+    def __init__(self, passed: bool, message: str = "semantic validation failed") -> None:
+        self._passed = passed
+        self._message = message
+        self.calls: int = 0
+
+    def validate(self, **kwargs: object) -> SemanticValidationResult:
+        self.calls += 1
+        if self._passed:
+            return SemanticValidationResult(passed=True, errors=[])
+        return SemanticValidationResult(
+            passed=False,
+            errors=[
+                SemanticValidationError(
+                    slot_name="site",
+                    code=INVALID_VALUE,
+                    message=self._message,
+                )
+            ],
+        )
+
+
 class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
     def setUp(self) -> None:
         self.processed_prompt = "processed body"
@@ -173,6 +196,7 @@ class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
         scenario_resolver: FakeScenarioResolver | None = None,
         extractor: FakeExtractor | None = None,
         validator: FakeValidator | None = None,
+        semantic_validator: FakeSemanticValidator | None = None,
     ):
         from a2a_t.server.prompt_compliance.prompt_compliance_orchestrator import PromptComplianceOrchestrator
 
@@ -195,6 +219,7 @@ class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
             ),
             extractor=extractor or FakeExtractor(SlotExtractionResult(slots={"site": "Site A"}, slot_errors=[])),
             validator=validator or FakeValidator(SlotValidationResult(passed=True, slot_errors=[])),
+            semantic_validator=semantic_validator or FakeSemanticValidator(passed=True),
         )
 
     def test_check_returns_success_result(self) -> None:
@@ -295,6 +320,60 @@ class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
                 },
             ),
         )
+
+    def test_check_skips_semantic_validation_when_schema_fails(self) -> None:
+        semantic_validator = FakeSemanticValidator(passed=True)
+        service = self._build_service(
+            validator=FakeValidator(
+                SlotValidationResult(
+                    passed=False,
+                    slot_errors=[
+                        SlotValidationError(
+                            slot_name="site",
+                            code=MISSING_INPUT,
+                            message="Required slot 'site' is missing.",
+                        )
+                    ],
+                )
+            ),
+            semantic_validator=semantic_validator,
+        )
+
+        result = service.check(processed_prompt_text=self.processed_prompt, request_metadata=None)
+
+        self.assertEqual(semantic_validator.calls, 0)
+        self.assertEqual(result.success, False)
+        assert result.failure is not None
+        self.assertEqual(result.failure["code"], SLOT_VALIDATION_ERROR)
+        self.assertEqual(result.failure["stage"], SLOT_VALIDATION_STAGE)
+
+    def test_check_returns_slot_validation_error_when_semantic_validation_fails(self) -> None:
+        semantic_validator = FakeSemanticValidator(passed=False, message="semantic mismatch for site")
+        service = self._build_service(semantic_validator=semantic_validator)
+
+        result = service.check(processed_prompt_text=self.processed_prompt, request_metadata=None)
+
+        self.assertEqual(semantic_validator.calls, 1)
+        self.assertEqual(
+            result,
+            PromptComplianceResult(
+                success=False,
+                failure={
+                    "code": SLOT_VALIDATION_ERROR,
+                    "message": "semantic mismatch for site",
+                    "stage": SLOT_VALIDATION_STAGE,
+                },
+            ),
+        )
+
+    def test_check_returns_success_when_schema_and_semantic_validation_pass(self) -> None:
+        semantic_validator = FakeSemanticValidator(passed=True)
+        service = self._build_service(semantic_validator=semantic_validator)
+
+        result = service.check(processed_prompt_text=self.processed_prompt, request_metadata=None)
+
+        self.assertEqual(semantic_validator.calls, 1)
+        self.assertEqual(result, PromptComplianceResult(success=True))
 
     def test_check_returns_template_load_error_when_template_resource_is_missing(self) -> None:
         service = self._build_service(

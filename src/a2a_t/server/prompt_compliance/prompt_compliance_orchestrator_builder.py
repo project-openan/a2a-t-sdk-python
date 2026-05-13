@@ -6,6 +6,7 @@ from a2a_t.config.models import A2ATConfig
 from a2a_t.common.prompt_runtime import PromptRuntimeComponents, PromptRuntimeComponentsBuilder
 from a2a_t.prompt.analysis import ScenarioRecognizer, ScenarioResolutionOrchestrator, SlotExtractor
 
+from .llm_semantic_slot_validator import LLMSemanticSlotValidator
 from .prompt_compliance_orchestrator import PromptComplianceOrchestrator
 
 
@@ -19,12 +20,14 @@ class PromptComplianceOrchestratorBuilder:
         scenario_recognizer_cls: type = ScenarioRecognizer,
         scenario_resolver_cls: type = ScenarioResolutionOrchestrator,
         slot_extractor_cls: type = SlotExtractor,
+        semantic_validator_cls: type = LLMSemanticSlotValidator,
         orchestrator_cls: type = PromptComplianceOrchestrator,
     ) -> None:
         self._runtime_components_builder = runtime_components_builder or PromptRuntimeComponentsBuilder()
         self._scenario_recognizer_cls = scenario_recognizer_cls
         self._scenario_resolver_cls = scenario_resolver_cls
         self._slot_extractor_cls = slot_extractor_cls
+        self._semantic_validator_cls = semantic_validator_cls
         self._orchestrator_cls = orchestrator_cls
 
     def build(
@@ -44,6 +47,10 @@ class PromptComplianceOrchestratorBuilder:
             scenario_recognizer=scenario_recognizer,
         )
         extractor = self._slot_extractor_cls(llm_client=llm_client)
+        semantic_validator = self._semantic_validator_cls(
+            llm_client=llm_client,
+            prompt_resource_loader=components.prompt_resource_loader,
+        )
         return self._orchestrator_cls(
             guardrail=components.guardrail,
             scenario_resolver=scenario_resolver,
@@ -53,4 +60,5 @@ class PromptComplianceOrchestratorBuilder:
             prompt_resource_loader=components.prompt_resource_loader,
             extractor=extractor,
             validator=components.json_schema_slot_validator,
+            semantic_validator=semantic_validator,
         )

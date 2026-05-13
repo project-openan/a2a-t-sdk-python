@@ -15,6 +15,10 @@ from a2a_t.prompt.validation.errors import GuardrailExecutionError
 from a2a_t.prompt.validation.guardrails import SafetyGuardrail
 from a2a_t.prompt.validation.models import SlotValidationResult
 from a2a_t.prompt.validation.json_schema_slot_validator import JsonSchemaSlotValidator
+from a2a_t.server.prompt_compliance.semantic_validator import (
+    SemanticSlotValidator,
+    SemanticValidationResult,
+)
 from a2a_t.server.prompt_compliance.constants import (
     GUARDRAIL_EXECUTION_ERROR,
     GENERATION_STAGE,
@@ -50,6 +54,7 @@ class PromptComplianceOrchestrator:
         prompt_resource_loader: PromptResourceLoader,
         extractor: SlotExtractor,
         validator: JsonSchemaSlotValidator,
+        semantic_validator: SemanticSlotValidator | None = None,
     ) -> None:
         self._guardrail = guardrail
         self._scenario_resolver = scenario_resolver
@@ -59,6 +64,7 @@ class PromptComplianceOrchestrator:
         self._prompt_resource_loader = prompt_resource_loader
         self._extractor = extractor
         self._validator = validator
+        self._semantic_validator = semantic_validator
 
     def check(
         self,
@@ -167,6 +173,26 @@ class PromptComplianceOrchestrator:
                 },
             )
 
+        if self._semantic_validator is not None:
+            semantic_result: SemanticValidationResult = self._semantic_validator.validate(
+                processed_prompt_text=processed_prompt_text,
+                reference=reference,
+                template_text=template_text,
+                slot_schema=slot_schema,
+                slot_json_schema=slot_json_schema,
+                extracted_slots=extraction_result.slots,
+            )
+            if not semantic_result.passed:
+                error_message = self._aggregate_semantic_errors(semantic_result)
+                return PromptComplianceResult(
+                    success=False,
+                    failure={
+                        "code": SLOT_VALIDATION_ERROR,
+                        "message": error_message,
+                        "stage": SLOT_VALIDATION_STAGE,
+                    },
+                )
+
         return PromptComplianceResult(
             success=True,
         )
@@ -175,6 +201,10 @@ class PromptComplianceOrchestrator:
         """Collapse slot validation messages into the single message exposed to callers."""
         messages = [slot_error.message for slot_error in validation_result.slot_errors if slot_error.message]
         return "; ".join(messages) if messages else "Slot validation failed."
+
+    def _aggregate_semantic_errors(self, validation_result: SemanticValidationResult) -> str:
+        messages = [error.message for error in validation_result.errors if error.message]
+        return "; ".join(messages) if messages else "Slot semantic validation failed."
 
     @staticmethod
     def _error_result(stage: str, error_code: str, error_message: str) -> PromptComplianceResult:

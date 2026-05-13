@@ -55,6 +55,12 @@ class FakeOrchestrator:
         self.kwargs = kwargs
 
 
+class FakeSemanticValidator:
+    def __init__(self, *, llm_client: object, prompt_resource_loader: object) -> None:
+        self.llm_client = llm_client
+        self.prompt_resource_loader = prompt_resource_loader
+
+
 class PromptComplianceOrchestratorBuilderTest(unittest.TestCase):
     def test_builder_uses_runtime_components_builder_and_injects_llm_client(self) -> None:
         from a2a_t.server.prompt_compliance.prompt_compliance_orchestrator_builder import PromptComplianceOrchestratorBuilder
@@ -79,6 +85,7 @@ class PromptComplianceOrchestratorBuilderTest(unittest.TestCase):
             scenario_recognizer_cls=FakeScenarioRecognizer,
             scenario_resolver_cls=FakeScenarioResolver,
             slot_extractor_cls=FakeSlotExtractor,
+            semantic_validator_cls=FakeSemanticValidator,
             orchestrator_cls=FakeOrchestrator,
         )
         config = A2ATConfig(
@@ -101,6 +108,11 @@ class PromptComplianceOrchestratorBuilderTest(unittest.TestCase):
         self.assertIs(orchestrator.kwargs["scenario_resolver"].scenario_recognizer.llm_client, llm_client)
         self.assertIsInstance(orchestrator.kwargs["extractor"], FakeSlotExtractor)
         self.assertIs(orchestrator.kwargs["extractor"].llm_client, llm_client)
+        self.assertIn("semantic_validator", orchestrator.kwargs)
+        self.assertIsNotNone(orchestrator.kwargs["semantic_validator"])
+        self.assertIsInstance(orchestrator.kwargs["semantic_validator"], FakeSemanticValidator)
+        self.assertIs(orchestrator.kwargs["semantic_validator"].llm_client, llm_client)
+        self.assertIs(orchestrator.kwargs["semantic_validator"].prompt_resource_loader, components.prompt_resource_loader)
 
     def test_builder_reuses_provided_runtime_components_without_rebuilding(self) -> None:
         from a2a_t.server.prompt_compliance.prompt_compliance_orchestrator_builder import PromptComplianceOrchestratorBuilder
@@ -125,6 +137,7 @@ class PromptComplianceOrchestratorBuilderTest(unittest.TestCase):
             scenario_recognizer_cls=FakeScenarioRecognizer,
             scenario_resolver_cls=FakeScenarioResolver,
             slot_extractor_cls=FakeSlotExtractor,
+            semantic_validator_cls=FakeSemanticValidator,
             orchestrator_cls=FakeOrchestrator,
         )
         config = A2ATConfig(
@@ -147,6 +160,11 @@ class PromptComplianceOrchestratorBuilderTest(unittest.TestCase):
         self.assertIs(orchestrator.kwargs["prompt_resource_loader"], components.prompt_resource_loader)
         self.assertIs(orchestrator.kwargs["slot_json_schema_loader"], components.slot_json_schema_loader)
         self.assertIs(orchestrator.kwargs["validator"], components.json_schema_slot_validator)
+        self.assertIn("semantic_validator", orchestrator.kwargs)
+        self.assertIsNotNone(orchestrator.kwargs["semantic_validator"])
+        self.assertIsInstance(orchestrator.kwargs["semantic_validator"], FakeSemanticValidator)
+        self.assertIs(orchestrator.kwargs["semantic_validator"].llm_client, llm_client)
+        self.assertIs(orchestrator.kwargs["semantic_validator"].prompt_resource_loader, components.prompt_resource_loader)
 
 if __name__ == "__main__":
     unittest.main()
