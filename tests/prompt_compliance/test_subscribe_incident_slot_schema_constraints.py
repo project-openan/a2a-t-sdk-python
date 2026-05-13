@@ -42,9 +42,8 @@ class SubscribeIncidentSlotSchemaConstraintsTest(unittest.TestCase):
         self.assertIn("高/high", constraint)
         self.assertIn("中/medium", constraint)
         self.assertIn("低/low", constraint)
-        self.assertIn("示例仅用于说明", constraint)
-        self.assertIn("不构成穷举", constraint)
-        self.assertIn("英文缩写", constraint)
+        self.assertIn("中文或英文任一命中即可视为有效", constraint)
+        self.assertIn("取值范围为网络侧故障名称列表", constraint)
 
 
 if __name__ == "__main__":
