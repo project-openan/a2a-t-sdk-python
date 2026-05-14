@@ -1,0 +1,8134 @@
+[
+  {
+    "id": "es_pc_001",
+    "input": "请帮我给松山湖管委会创建一个节能任务，目标是总功耗降低18%，下行吞吐率不低于40Mbps。背景是：最近夜间话务长期偏低，但白天业务量波动较大。约束：仅针对室外NR小区，1300频点作为基础层，2450频点作为容量层，采用激进节能，体验无损，执行时间为每天21:00:00至05:00:00，商业区场景禁止1300频点做容量层，允许关闭1650频点载波。描述写正式一点",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低18%",
+            "能耗降低18%"
+          ],
+          [
+            "下行吞吐率不低于40Mbps",
+            "速率保障不低于40Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "松山湖管委会"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "夜间",
+            "低谷期"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室外"
+          ],
+          [
+            "NR"
+          ],
+          [
+            "1300"
+          ],
+          [
+            "2450"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "21:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "商业区"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低18%",
+          "能耗降低18%"
+        ],
+        [
+          "下行吞吐率不低于40Mbps",
+          "速率保障不低于40Mbps"
+        ],
+        [
+          "松山湖管委会"
+        ],
+        [
+          "夜间",
+          "低谷期"
+        ],
+        [
+          "室外"
+        ],
+        [
+          "NR"
+        ],
+        [
+          "1300"
+        ],
+        [
+          "2450"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "21:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "商业区"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "松山湖管委会",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_002",
+    "input": "需要你为福田保税区生成无线能效优化请求，要求总功耗降低22%，下行吞吐率不低于45Mbps，当前情况是节假日零点后的负荷下降比较明显，存在节能空间，并满足这些限制：仅针对室内LTE小区，1475频点作为基础层，2570频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天22:00:00至06:00:00，居民区场景22:00后不要关闭基础覆盖层，1650频点不可关断。按网管任务口径组织内容",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低22%",
+            "能耗降低22%"
+          ],
+          [
+            "下行吞吐率不低于45Mbps",
+            "速率保障不低于45Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "福田保税区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "节假日",
+            "零点后"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室内"
+          ],
+          [
+            "LTE"
+          ],
+          [
+            "1475"
+          ],
+          [
+            "2570"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "22:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "居民区"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低22%",
+          "能耗降低22%"
+        ],
+        [
+          "下行吞吐率不低于45Mbps",
+          "速率保障不低于45Mbps"
+        ],
+        [
+          "福田保税区"
+        ],
+        [
+          "节假日",
+          "零点后"
+        ],
+        [
+          "室内"
+        ],
+        [
+          "LTE"
+        ],
+        [
+          "1475"
+        ],
+        [
+          "2570"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "22:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "居民区"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "福田保税区",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_003",
+    "input": "帮我给南山科技园北区出一个节能方案，总功耗降低26%，下行吞吐率不低于50Mbps。近期能耗考核压力较大，需要先做一轮区域节能优化。执行时请遵守：针对全量小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天23:00:00至05:00:00，铁路场景不要启用深度休眠，允许关闭1650频点载波。不要漏掉关键限制",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低26%",
+            "能耗降低26%"
+          ],
+          [
+            "下行吞吐率不低于50Mbps",
+            "速率保障不低于50Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "南山科技园北区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "能耗考核",
+            "节能优化"
+          ]
+        ],
+        "约束条件": [
+          [
+            "所有"
+          ],
+          [
+            "全部",
+            "所有"
+          ],
+          [
+            "1650"
+          ],
+          [
+            "2690"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "23:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "铁路"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低26%",
+          "能耗降低26%"
+        ],
+        [
+          "下行吞吐率不低于50Mbps",
+          "速率保障不低于50Mbps"
+        ],
+        [
+          "南山科技园北区"
+        ],
+        [
+          "能耗考核",
+          "节能优化"
+        ],
+        [
+          "所有"
+        ],
+        [
+          "全部",
+          "所有"
+        ],
+        [
+          "1650"
+        ],
+        [
+          "2690"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "23:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "铁路"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "南山科技园北区",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_004",
+    "input": "前海桂湾片区这边想做一条节能任务，目标定为总功耗降低30%，下行吞吐率不低于55Mbps，补充背景：过去两周低谷期资源利用率持续偏低，希望减少空耗；约束条件包括仅针对室外NR小区，1825频点作为基础层，2810频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天21:00:00至06:00:00，景区场景在节假日晚高峰前后不要做激进切换，1650频点不可关断。输出尽量简洁",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低30%",
+            "能耗降低30%"
+          ],
+          [
+            "下行吞吐率不低于55Mbps",
+            "速率保障不低于55Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "前海桂湾片区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "资源利用率",
+            "空耗"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室外"
+          ],
+          [
+            "NR"
+          ],
+          [
+            "1825"
+          ],
+          [
+            "2810"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "21:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "景区"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低30%",
+          "能耗降低30%"
+        ],
+        [
+          "下行吞吐率不低于55Mbps",
+          "速率保障不低于55Mbps"
+        ],
+        [
+          "前海桂湾片区"
+        ],
+        [
+          "资源利用率",
+          "空耗"
+        ],
+        [
+          "室外"
+        ],
+        [
+          "NR"
+        ],
+        [
+          "1825"
+        ],
+        [
+          "2810"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "21:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "景区"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "前海桂湾片区",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_005",
+    "input": "请帮我给坐标(112.91, 22.92)周边区域创建一个节能任务，目标是总功耗降低34%，下行吞吐率不低于60Mbps。背景是：该区域白天用户感知要求高，夜间则可以适度节能。约束：仅针对室内LTE小区，1300频点作为基础层，2450频点作为容量层，采用激进节能，体验无损，执行时间为每天22:00:00至05:00:00，校园区场景考试周期间保持体验无损，允许关闭1650频点载波。顺手把表述规范一下",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低34%",
+            "能耗降低34%"
+          ],
+          [
+            "下行吞吐率不低于60Mbps",
+            "速率保障不低于60Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "坐标(112.91, 22.92)周边区域"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "用户感知",
+            "夜间"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室内"
+          ],
+          [
+            "LTE"
+          ],
+          [
+            "1300"
+          ],
+          [
+            "2450"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "22:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "校园区"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低34%",
+          "能耗降低34%"
+        ],
+        [
+          "下行吞吐率不低于60Mbps",
+          "速率保障不低于60Mbps"
+        ],
+        [
+          "坐标(112.91, 22.92)周边区域"
+        ],
+        [
+          "用户感知",
+          "夜间"
+        ],
+        [
+          "室内"
+        ],
+        [
+          "LTE"
+        ],
+        [
+          "1300"
+        ],
+        [
+          "2450"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "22:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "校园区"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "坐标(112.91, 22.92)周边区域",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_006",
+    "input": "需要你为宝安机场东片区生成无线能效优化请求，要求总功耗降低38%，下行吞吐率不低于40Mbps，当前情况是当前片区正在做降本专项，优先处理夜间低负荷小区，并满足这些限制：针对全量小区，1475频点作为基础层，2570频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天23:00:00至06:00:00，黑森林场景00:00-06:00不要开通休眠，1650频点不可关断。描述写正式一点",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低38%",
+            "能耗降低38%"
+          ],
+          [
+            "下行吞吐率不低于40Mbps",
+            "速率保障不低于40Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "宝安机场东片区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "降本",
+            "夜间低负荷"
+          ]
+        ],
+        "约束条件": [
+          [
+            "所有"
+          ],
+          [
+            "全部",
+            "所有"
+          ],
+          [
+            "1475"
+          ],
+          [
+            "2570"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "23:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "黑森林"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低38%",
+          "能耗降低38%"
+        ],
+        [
+          "下行吞吐率不低于40Mbps",
+          "速率保障不低于40Mbps"
+        ],
+        [
+          "宝安机场东片区"
+        ],
+        [
+          "降本",
+          "夜间低负荷"
+        ],
+        [
+          "所有"
+        ],
+        [
+          "全部",
+          "所有"
+        ],
+        [
+          "1475"
+        ],
+        [
+          "2570"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "23:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "黑森林"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "宝安机场东片区",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_007",
+    "input": "帮我给苏州工业园区金鸡湖片区出一个节能方案，总功耗降低18%，下行吞吐率不低于45Mbps。最近夜间话务长期偏低，但白天业务量波动较大。执行时请遵守：仅针对室外NR小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天21:00:00至05:00:00，商业区场景禁止1300频点做容量层，允许关闭1650频点载波。按网管任务口径组织内容",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低18%",
+            "能耗降低18%"
+          ],
+          [
+            "下行吞吐率不低于45Mbps",
+            "速率保障不低于45Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "苏州工业园区金鸡湖片区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "夜间",
+            "低谷期"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室外"
+          ],
+          [
+            "NR"
+          ],
+          [
+            "1650"
+          ],
+          [
+            "2690"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "21:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "商业区"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低18%",
+          "能耗降低18%"
+        ],
+        [
+          "下行吞吐率不低于45Mbps",
+          "速率保障不低于45Mbps"
+        ],
+        [
+          "苏州工业园区金鸡湖片区"
+        ],
+        [
+          "夜间",
+          "低谷期"
+        ],
+        [
+          "室外"
+        ],
+        [
+          "NR"
+        ],
+        [
+          "1650"
+        ],
+        [
+          "2690"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "21:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "商业区"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "苏州工业园区金鸡湖片区",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_008",
+    "input": "杭州未来科技城核心区这边想做一条节能任务，目标定为总功耗降低22%，下行吞吐率不低于50Mbps，补充背景：节假日零点后的负荷下降比较明显，存在节能空间；约束条件包括仅针对室内LTE小区，1825频点作为基础层，2810频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天22:00:00至06:00:00，居民区场景22:00后不要关闭基础覆盖层，1650频点不可关断。不要漏掉关键限制",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低22%",
+            "能耗降低22%"
+          ],
+          [
+            "下行吞吐率不低于50Mbps",
+            "速率保障不低于50Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "杭州未来科技城核心区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "节假日",
+            "零点后"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室内"
+          ],
+          [
+            "LTE"
+          ],
+          [
+            "1825"
+          ],
+          [
+            "2810"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "22:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "居民区"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低22%",
+          "能耗降低22%"
+        ],
+        [
+          "下行吞吐率不低于50Mbps",
+          "速率保障不低于50Mbps"
+        ],
+        [
+          "杭州未来科技城核心区"
+        ],
+        [
+          "节假日",
+          "零点后"
+        ],
+        [
+          "室内"
+        ],
+        [
+          "LTE"
+        ],
+        [
+          "1825"
+        ],
+        [
+          "2810"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "22:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "居民区"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "杭州未来科技城核心区",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_009",
+    "input": "请帮我给武汉光谷软件园创建一个节能任务，目标是总功耗降低26%，下行吞吐率不低于55Mbps。背景是：近期能耗考核压力较大，需要先做一轮区域节能优化。约束：针对全量小区，1300频点作为基础层，2450频点作为容量层，采用激进节能，体验无损，执行时间为每天23:00:00至05:00:00，铁路场景不要启用深度休眠，允许关闭1650频点载波。输出尽量简洁",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低26%",
+            "能耗降低26%"
+          ],
+          [
+            "下行吞吐率不低于55Mbps",
+            "速率保障不低于55Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "武汉光谷软件园"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "能耗考核",
+            "节能优化"
+          ]
+        ],
+        "约束条件": [
+          [
+            "所有"
+          ],
+          [
+            "全部",
+            "所有"
+          ],
+          [
+            "1300"
+          ],
+          [
+            "2450"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "23:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "铁路"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低26%",
+          "能耗降低26%"
+        ],
+        [
+          "下行吞吐率不低于55Mbps",
+          "速率保障不低于55Mbps"
+        ],
+        [
+          "武汉光谷软件园"
+        ],
+        [
+          "能耗考核",
+          "节能优化"
+        ],
+        [
+          "所有"
+        ],
+        [
+          "全部",
+          "所有"
+        ],
+        [
+          "1300"
+        ],
+        [
+          "2450"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "23:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "铁路"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "武汉光谷软件园",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_010",
+    "input": "需要你为坐标(113.95, 22.54)周边区域生成无线能效优化请求，要求总功耗降低30%，下行吞吐率不低于60Mbps，当前情况是过去两周低谷期资源利用率持续偏低，希望减少空耗，并满足这些限制：仅针对室外NR小区，1475频点作为基础层，2570频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天21:00:00至06:00:00，景区场景在节假日晚高峰前后不要做激进切换，1650频点不可关断。顺手把表述规范一下",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低30%",
+            "能耗降低30%"
+          ],
+          [
+            "下行吞吐率不低于60Mbps",
+            "速率保障不低于60Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "坐标(113.95, 22.54)周边区域"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "资源利用率",
+            "空耗"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室外"
+          ],
+          [
+            "NR"
+          ],
+          [
+            "1475"
+          ],
+          [
+            "2570"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "21:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "景区"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低30%",
+          "能耗降低30%"
+        ],
+        [
+          "下行吞吐率不低于60Mbps",
+          "速率保障不低于60Mbps"
+        ],
+        [
+          "坐标(113.95, 22.54)周边区域"
+        ],
+        [
+          "资源利用率",
+          "空耗"
+        ],
+        [
+          "室外"
+        ],
+        [
+          "NR"
+        ],
+        [
+          "1475"
+        ],
+        [
+          "2570"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "21:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "景区"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "坐标(113.95, 22.54)周边区域",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_011",
+    "input": "帮我给松山湖管委会出一个节能方案，总功耗降低34%，下行吞吐率不低于40Mbps。该区域白天用户感知要求高，夜间则可以适度节能。执行时请遵守：仅针对室内LTE小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天22:00:00至05:00:00，校园区场景考试周期间保持体验无损，允许关闭1650频点载波。描述写正式一点",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低34%",
+            "能耗降低34%"
+          ],
+          [
+            "下行吞吐率不低于40Mbps",
+            "速率保障不低于40Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "松山湖管委会"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "用户感知",
+            "夜间"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室内"
+          ],
+          [
+            "LTE"
+          ],
+          [
+            "1650"
+          ],
+          [
+            "2690"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "22:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "校园区"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低34%",
+          "能耗降低34%"
+        ],
+        [
+          "下行吞吐率不低于40Mbps",
+          "速率保障不低于40Mbps"
+        ],
+        [
+          "松山湖管委会"
+        ],
+        [
+          "用户感知",
+          "夜间"
+        ],
+        [
+          "室内"
+        ],
+        [
+          "LTE"
+        ],
+        [
+          "1650"
+        ],
+        [
+          "2690"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "22:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "校园区"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "松山湖管委会",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_012",
+    "input": "福田保税区这边想做一条节能任务，目标定为总功耗降低38%，下行吞吐率不低于45Mbps，补充背景：当前片区正在做降本专项，优先处理夜间低负荷小区；约束条件包括针对全量小区，1825频点作为基础层，2810频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天23:00:00至06:00:00，黑森林场景00:00-06:00不要开通休眠，1650频点不可关断。按网管任务口径组织内容",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低38%",
+            "能耗降低38%"
+          ],
+          [
+            "下行吞吐率不低于45Mbps",
+            "速率保障不低于45Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "福田保税区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "降本",
+            "夜间低负荷"
+          ]
+        ],
+        "约束条件": [
+          [
+            "所有"
+          ],
+          [
+            "全部",
+            "所有"
+          ],
+          [
+            "1825"
+          ],
+          [
+            "2810"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "23:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "黑森林"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低38%",
+          "能耗降低38%"
+        ],
+        [
+          "下行吞吐率不低于45Mbps",
+          "速率保障不低于45Mbps"
+        ],
+        [
+          "福田保税区"
+        ],
+        [
+          "降本",
+          "夜间低负荷"
+        ],
+        [
+          "所有"
+        ],
+        [
+          "全部",
+          "所有"
+        ],
+        [
+          "1825"
+        ],
+        [
+          "2810"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "23:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "黑森林"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "福田保税区",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_013",
+    "input": "请帮我给南山科技园北区创建一个节能任务，目标是总功耗降低18%，下行吞吐率不低于50Mbps。背景是：最近夜间话务长期偏低，但白天业务量波动较大。约束：仅针对室外NR小区，1300频点作为基础层，2450频点作为容量层，采用激进节能，体验无损，执行时间为每天21:00:00至05:00:00，商业区场景禁止1300频点做容量层，允许关闭1650频点载波。不要漏掉关键限制",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低18%",
+            "能耗降低18%"
+          ],
+          [
+            "下行吞吐率不低于50Mbps",
+            "速率保障不低于50Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "南山科技园北区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "夜间",
+            "低谷期"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室外"
+          ],
+          [
+            "NR"
+          ],
+          [
+            "1300"
+          ],
+          [
+            "2450"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "21:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "商业区"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低18%",
+          "能耗降低18%"
+        ],
+        [
+          "下行吞吐率不低于50Mbps",
+          "速率保障不低于50Mbps"
+        ],
+        [
+          "南山科技园北区"
+        ],
+        [
+          "夜间",
+          "低谷期"
+        ],
+        [
+          "室外"
+        ],
+        [
+          "NR"
+        ],
+        [
+          "1300"
+        ],
+        [
+          "2450"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "21:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "商业区"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "南山科技园北区",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_014",
+    "input": "需要你为前海桂湾片区生成无线能效优化请求，要求总功耗降低22%，下行吞吐率不低于55Mbps，当前情况是节假日零点后的负荷下降比较明显，存在节能空间，并满足这些限制：仅针对室内LTE小区，1475频点作为基础层，2570频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天22:00:00至06:00:00，居民区场景22:00后不要关闭基础覆盖层，1650频点不可关断。输出尽量简洁",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低22%",
+            "能耗降低22%"
+          ],
+          [
+            "下行吞吐率不低于55Mbps",
+            "速率保障不低于55Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "前海桂湾片区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "节假日",
+            "零点后"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室内"
+          ],
+          [
+            "LTE"
+          ],
+          [
+            "1475"
+          ],
+          [
+            "2570"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "22:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "居民区"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低22%",
+          "能耗降低22%"
+        ],
+        [
+          "下行吞吐率不低于55Mbps",
+          "速率保障不低于55Mbps"
+        ],
+        [
+          "前海桂湾片区"
+        ],
+        [
+          "节假日",
+          "零点后"
+        ],
+        [
+          "室内"
+        ],
+        [
+          "LTE"
+        ],
+        [
+          "1475"
+        ],
+        [
+          "2570"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "22:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "居民区"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "前海桂湾片区",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_015",
+    "input": "帮我给坐标(120.74, 31.30)周边区域出一个节能方案，总功耗降低26%，下行吞吐率不低于60Mbps。近期能耗考核压力较大，需要先做一轮区域节能优化。执行时请遵守：针对全量小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天23:00:00至05:00:00，铁路场景不要启用深度休眠，允许关闭1650频点载波。顺手把表述规范一下",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低26%",
+            "能耗降低26%"
+          ],
+          [
+            "下行吞吐率不低于60Mbps",
+            "速率保障不低于60Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "坐标(120.74, 31.30)周边区域"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "能耗考核",
+            "节能优化"
+          ]
+        ],
+        "约束条件": [
+          [
+            "所有"
+          ],
+          [
+            "全部",
+            "所有"
+          ],
+          [
+            "1650"
+          ],
+          [
+            "2690"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "23:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "铁路"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低26%",
+          "能耗降低26%"
+        ],
+        [
+          "下行吞吐率不低于60Mbps",
+          "速率保障不低于60Mbps"
+        ],
+        [
+          "坐标(120.74, 31.30)周边区域"
+        ],
+        [
+          "能耗考核",
+          "节能优化"
+        ],
+        [
+          "所有"
+        ],
+        [
+          "全部",
+          "所有"
+        ],
+        [
+          "1650"
+        ],
+        [
+          "2690"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "23:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "铁路"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "坐标(120.74, 31.30)周边区域",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_016",
+    "input": "宝安机场东片区这边想做一条节能任务，目标定为总功耗降低30%，下行吞吐率不低于40Mbps，补充背景：过去两周低谷期资源利用率持续偏低，希望减少空耗；约束条件包括仅针对室外NR小区，1825频点作为基础层，2810频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天21:00:00至06:00:00，景区场景在节假日晚高峰前后不要做激进切换，1650频点不可关断。描述写正式一点",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低30%",
+            "能耗降低30%"
+          ],
+          [
+            "下行吞吐率不低于40Mbps",
+            "速率保障不低于40Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "宝安机场东片区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "资源利用率",
+            "空耗"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室外"
+          ],
+          [
+            "NR"
+          ],
+          [
+            "1825"
+          ],
+          [
+            "2810"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "21:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "景区"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低30%",
+          "能耗降低30%"
+        ],
+        [
+          "下行吞吐率不低于40Mbps",
+          "速率保障不低于40Mbps"
+        ],
+        [
+          "宝安机场东片区"
+        ],
+        [
+          "资源利用率",
+          "空耗"
+        ],
+        [
+          "室外"
+        ],
+        [
+          "NR"
+        ],
+        [
+          "1825"
+        ],
+        [
+          "2810"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "21:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "景区"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "宝安机场东片区",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_017",
+    "input": "请帮我给苏州工业园区金鸡湖片区创建一个节能任务，目标是总功耗降低34%，下行吞吐率不低于45Mbps。背景是：该区域白天用户感知要求高，夜间则可以适度节能。约束：仅针对室内LTE小区，1300频点作为基础层，2450频点作为容量层，采用激进节能，体验无损，执行时间为每天22:00:00至05:00:00，校园区场景考试周期间保持体验无损，允许关闭1650频点载波。按网管任务口径组织内容",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低34%",
+            "能耗降低34%"
+          ],
+          [
+            "下行吞吐率不低于45Mbps",
+            "速率保障不低于45Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "苏州工业园区金鸡湖片区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "用户感知",
+            "夜间"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室内"
+          ],
+          [
+            "LTE"
+          ],
+          [
+            "1300"
+          ],
+          [
+            "2450"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "22:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "校园区"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低34%",
+          "能耗降低34%"
+        ],
+        [
+          "下行吞吐率不低于45Mbps",
+          "速率保障不低于45Mbps"
+        ],
+        [
+          "苏州工业园区金鸡湖片区"
+        ],
+        [
+          "用户感知",
+          "夜间"
+        ],
+        [
+          "室内"
+        ],
+        [
+          "LTE"
+        ],
+        [
+          "1300"
+        ],
+        [
+          "2450"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "22:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "校园区"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "苏州工业园区金鸡湖片区",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_018",
+    "input": "需要你为杭州未来科技城核心区生成无线能效优化请求，要求总功耗降低38%，下行吞吐率不低于50Mbps，当前情况是当前片区正在做降本专项，优先处理夜间低负荷小区，并满足这些限制：针对全量小区，1475频点作为基础层，2570频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天23:00:00至06:00:00，黑森林场景00:00-06:00不要开通休眠，1650频点不可关断。不要漏掉关键限制",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低38%",
+            "能耗降低38%"
+          ],
+          [
+            "下行吞吐率不低于50Mbps",
+            "速率保障不低于50Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "杭州未来科技城核心区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "降本",
+            "夜间低负荷"
+          ]
+        ],
+        "约束条件": [
+          [
+            "所有"
+          ],
+          [
+            "全部",
+            "所有"
+          ],
+          [
+            "1475"
+          ],
+          [
+            "2570"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "23:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "黑森林"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低38%",
+          "能耗降低38%"
+        ],
+        [
+          "下行吞吐率不低于50Mbps",
+          "速率保障不低于50Mbps"
+        ],
+        [
+          "杭州未来科技城核心区"
+        ],
+        [
+          "降本",
+          "夜间低负荷"
+        ],
+        [
+          "所有"
+        ],
+        [
+          "全部",
+          "所有"
+        ],
+        [
+          "1475"
+        ],
+        [
+          "2570"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "23:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "黑森林"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "杭州未来科技城核心区",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_019",
+    "input": "帮我给武汉光谷软件园出一个节能方案，总功耗降低18%，下行吞吐率不低于55Mbps。最近夜间话务长期偏低，但白天业务量波动较大。执行时请遵守：仅针对室外NR小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天21:00:00至05:00:00，商业区场景禁止1300频点做容量层，允许关闭1650频点载波。输出尽量简洁",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低18%",
+            "能耗降低18%"
+          ],
+          [
+            "下行吞吐率不低于55Mbps",
+            "速率保障不低于55Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "武汉光谷软件园"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "夜间",
+            "低谷期"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室外"
+          ],
+          [
+            "NR"
+          ],
+          [
+            "1650"
+          ],
+          [
+            "2690"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "21:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "商业区"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低18%",
+          "能耗降低18%"
+        ],
+        [
+          "下行吞吐率不低于55Mbps",
+          "速率保障不低于55Mbps"
+        ],
+        [
+          "武汉光谷软件园"
+        ],
+        [
+          "夜间",
+          "低谷期"
+        ],
+        [
+          "室外"
+        ],
+        [
+          "NR"
+        ],
+        [
+          "1650"
+        ],
+        [
+          "2690"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "21:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "商业区"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "武汉光谷软件园",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_020",
+    "input": "坐标(104.07, 30.57)周边区域这边想做一条节能任务，目标定为总功耗降低22%，下行吞吐率不低于60Mbps，补充背景：节假日零点后的负荷下降比较明显，存在节能空间；约束条件包括仅针对室内LTE小区，1825频点作为基础层，2810频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天22:00:00至06:00:00，居民区场景22:00后不要关闭基础覆盖层，1650频点不可关断。顺手把表述规范一下",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低22%",
+            "能耗降低22%"
+          ],
+          [
+            "下行吞吐率不低于60Mbps",
+            "速率保障不低于60Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "坐标(104.07, 30.57)周边区域"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "节假日",
+            "零点后"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室内"
+          ],
+          [
+            "LTE"
+          ],
+          [
+            "1825"
+          ],
+          [
+            "2810"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "22:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "居民区"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低22%",
+          "能耗降低22%"
+        ],
+        [
+          "下行吞吐率不低于60Mbps",
+          "速率保障不低于60Mbps"
+        ],
+        [
+          "坐标(104.07, 30.57)周边区域"
+        ],
+        [
+          "节假日",
+          "零点后"
+        ],
+        [
+          "室内"
+        ],
+        [
+          "LTE"
+        ],
+        [
+          "1825"
+        ],
+        [
+          "2810"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "22:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "居民区"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "坐标(104.07, 30.57)周边区域",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_021",
+    "input": "请帮我给松山湖管委会创建一个节能任务，目标是总功耗降低26%，下行吞吐率不低于40Mbps。背景是：近期能耗考核压力较大，需要先做一轮区域节能优化。约束：针对全量小区，1300频点作为基础层，2450频点作为容量层，采用激进节能，体验无损，执行时间为每天23:00:00至05:00:00，铁路场景不要启用深度休眠，允许关闭1650频点载波。描述写正式一点",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低26%",
+            "能耗降低26%"
+          ],
+          [
+            "下行吞吐率不低于40Mbps",
+            "速率保障不低于40Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "松山湖管委会"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "能耗考核",
+            "节能优化"
+          ]
+        ],
+        "约束条件": [
+          [
+            "所有"
+          ],
+          [
+            "全部",
+            "所有"
+          ],
+          [
+            "1300"
+          ],
+          [
+            "2450"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "23:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "铁路"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低26%",
+          "能耗降低26%"
+        ],
+        [
+          "下行吞吐率不低于40Mbps",
+          "速率保障不低于40Mbps"
+        ],
+        [
+          "松山湖管委会"
+        ],
+        [
+          "能耗考核",
+          "节能优化"
+        ],
+        [
+          "所有"
+        ],
+        [
+          "全部",
+          "所有"
+        ],
+        [
+          "1300"
+        ],
+        [
+          "2450"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "23:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "铁路"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "松山湖管委会",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_022",
+    "input": "需要你为福田保税区生成无线能效优化请求，要求总功耗降低30%，下行吞吐率不低于45Mbps，当前情况是过去两周低谷期资源利用率持续偏低，希望减少空耗，并满足这些限制：仅针对室外NR小区，1475频点作为基础层，2570频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天21:00:00至06:00:00，景区场景在节假日晚高峰前后不要做激进切换，1650频点不可关断。按网管任务口径组织内容",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低30%",
+            "能耗降低30%"
+          ],
+          [
+            "下行吞吐率不低于45Mbps",
+            "速率保障不低于45Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "福田保税区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "资源利用率",
+            "空耗"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室外"
+          ],
+          [
+            "NR"
+          ],
+          [
+            "1475"
+          ],
+          [
+            "2570"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "21:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "景区"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低30%",
+          "能耗降低30%"
+        ],
+        [
+          "下行吞吐率不低于45Mbps",
+          "速率保障不低于45Mbps"
+        ],
+        [
+          "福田保税区"
+        ],
+        [
+          "资源利用率",
+          "空耗"
+        ],
+        [
+          "室外"
+        ],
+        [
+          "NR"
+        ],
+        [
+          "1475"
+        ],
+        [
+          "2570"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "21:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "景区"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "福田保税区",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_023",
+    "input": "帮我给南山科技园北区出一个节能方案，总功耗降低34%，下行吞吐率不低于50Mbps。该区域白天用户感知要求高，夜间则可以适度节能。执行时请遵守：仅针对室内LTE小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天22:00:00至05:00:00，校园区场景考试周期间保持体验无损，允许关闭1650频点载波。不要漏掉关键限制",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低34%",
+            "能耗降低34%"
+          ],
+          [
+            "下行吞吐率不低于50Mbps",
+            "速率保障不低于50Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "南山科技园北区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "用户感知",
+            "夜间"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室内"
+          ],
+          [
+            "LTE"
+          ],
+          [
+            "1650"
+          ],
+          [
+            "2690"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "22:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "校园区"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低34%",
+          "能耗降低34%"
+        ],
+        [
+          "下行吞吐率不低于50Mbps",
+          "速率保障不低于50Mbps"
+        ],
+        [
+          "南山科技园北区"
+        ],
+        [
+          "用户感知",
+          "夜间"
+        ],
+        [
+          "室内"
+        ],
+        [
+          "LTE"
+        ],
+        [
+          "1650"
+        ],
+        [
+          "2690"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "22:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "校园区"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "南山科技园北区",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pc_024",
+    "input": "前海桂湾片区这边想做一条节能任务，目标定为总功耗降低38%，下行吞吐率不低于55Mbps，补充背景：当前片区正在做降本专项，优先处理夜间低负荷小区；约束条件包括针对全量小区，1825频点作为基础层，2810频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天23:00:00至06:00:00，黑森林场景00:00-06:00不要开通休眠，1650频点不可关断。输出尽量简洁",
+    "scenario_description": "完整正样本，节能目标、区域对象、背景和约束条件同时出现。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低38%",
+            "能耗降低38%"
+          ],
+          [
+            "下行吞吐率不低于55Mbps",
+            "速率保障不低于55Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "前海桂湾片区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "降本",
+            "夜间低负荷"
+          ]
+        ],
+        "约束条件": [
+          [
+            "所有"
+          ],
+          [
+            "全部",
+            "所有"
+          ],
+          [
+            "1825"
+          ],
+          [
+            "2810"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "23:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "黑森林"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低38%",
+          "能耗降低38%"
+        ],
+        [
+          "下行吞吐率不低于55Mbps",
+          "速率保障不低于55Mbps"
+        ],
+        [
+          "前海桂湾片区"
+        ],
+        [
+          "降本",
+          "夜间低负荷"
+        ],
+        [
+          "所有"
+        ],
+        [
+          "全部",
+          "所有"
+        ],
+        [
+          "1825"
+        ],
+        [
+          "2810"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "23:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "黑森林"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "前海桂湾片区",
+        "节能",
+        "能效优化"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_complete",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pp_001",
+    "input": "请给松山湖管委会做节能任务，先按这个区域做节能优化，目标和细约束你先按常规节能任务组织。描述写正式一点",
+    "scenario_description": "正样本但信息不完整，测试场景可识别且缺省槽位可接受。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [
+          [
+            "松山湖管委会"
+          ]
+        ],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "松山湖管委会"
+        ]
+      ],
+      "preferred_keywords": [
+        "松山湖管委会",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_partial",
+      "semantic_variant": [
+        "object_expression"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_pp_002",
+    "input": "需要为福田保税区生成能效优化请求，目标是总功耗降低22%，下行吞吐率不低于45Mbps，其他限制先不补。按网管任务口径组织内容",
+    "scenario_description": "正样本但信息不完整，测试场景可识别且缺省槽位可接受。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低22%",
+            "能耗降低22%"
+          ],
+          [
+            "下行吞吐率不低于45Mbps",
+            "速率保障不低于45Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "福田保税区"
+          ]
+        ],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低22%",
+          "能耗降低22%"
+        ],
+        [
+          "下行吞吐率不低于45Mbps",
+          "速率保障不低于45Mbps"
+        ],
+        [
+          "福田保税区"
+        ]
+      ],
+      "preferred_keywords": [
+        "福田保税区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_partial",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_pp_003",
+    "input": "帮我针对南山科技园北区做节能，背景是近期能耗考核压力较大，需要先做一轮区域节能优化，执行约束先按针对全量小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天23:00:00至05:00:00，铁路场景不要启用深度休眠，允许关闭1650频点载波。不要漏掉关键限制",
+    "scenario_description": "正样本但信息不完整，测试场景可识别且缺省槽位可接受。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [
+          [
+            "南山科技园北区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "能耗考核",
+            "节能优化"
+          ]
+        ],
+        "约束条件": [
+          [
+            "所有"
+          ],
+          [
+            "全部",
+            "所有"
+          ],
+          [
+            "1650"
+          ],
+          [
+            "2690"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [
+        "任务目标"
+      ],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "南山科技园北区"
+        ],
+        [
+          "能耗考核",
+          "节能优化"
+        ],
+        [
+          "所有"
+        ],
+        [
+          "全部",
+          "所有"
+        ],
+        [
+          "1650"
+        ],
+        [
+          "2690"
+        ]
+      ],
+      "preferred_keywords": [
+        "南山科技园北区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_partial",
+      "semantic_variant": [
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_pp_004",
+    "input": "前海桂湾片区这边想做节能优化，目标先定为总功耗降低30%，下行吞吐率不低于55Mbps，背景是过去两周低谷期资源利用率持续偏低，希望减少空耗。输出尽量简洁",
+    "scenario_description": "正样本但信息不完整，测试场景可识别且缺省槽位可接受。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低30%",
+            "能耗降低30%"
+          ],
+          [
+            "下行吞吐率不低于55Mbps",
+            "速率保障不低于55Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "前海桂湾片区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "资源利用率",
+            "空耗"
+          ]
+        ],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "约束条件"
+      ],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低30%",
+          "能耗降低30%"
+        ],
+        [
+          "下行吞吐率不低于55Mbps",
+          "速率保障不低于55Mbps"
+        ],
+        [
+          "前海桂湾片区"
+        ],
+        [
+          "资源利用率",
+          "空耗"
+        ]
+      ],
+      "preferred_keywords": [
+        "前海桂湾片区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_partial",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background"
+      ],
+      "completeness_level": "L3"
+    }
+  },
+  {
+    "id": "es_pp_005",
+    "input": "请给坐标(112.91, 22.92)周边区域做节能任务，先按这个区域做节能优化，目标和细约束你先按常规节能任务组织。顺手把表述规范一下",
+    "scenario_description": "正样本但信息不完整，测试场景可识别且缺省槽位可接受。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [
+          [
+            "坐标(112.91, 22.92)周边区域"
+          ]
+        ],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "坐标(112.91, 22.92)周边区域"
+        ]
+      ],
+      "preferred_keywords": [
+        "坐标(112.91, 22.92)周边区域",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_partial",
+      "semantic_variant": [
+        "object_expression"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_pp_006",
+    "input": "需要为宝安机场东片区生成能效优化请求，目标是总功耗降低38%，下行吞吐率不低于40Mbps，其他限制先不补。描述写正式一点",
+    "scenario_description": "正样本但信息不完整，测试场景可识别且缺省槽位可接受。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低38%",
+            "能耗降低38%"
+          ],
+          [
+            "下行吞吐率不低于40Mbps",
+            "速率保障不低于40Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "宝安机场东片区"
+          ]
+        ],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低38%",
+          "能耗降低38%"
+        ],
+        [
+          "下行吞吐率不低于40Mbps",
+          "速率保障不低于40Mbps"
+        ],
+        [
+          "宝安机场东片区"
+        ]
+      ],
+      "preferred_keywords": [
+        "宝安机场东片区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_partial",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_pp_007",
+    "input": "帮我针对苏州工业园区金鸡湖片区做节能，背景是最近夜间话务长期偏低，但白天业务量波动较大，执行约束先按仅针对室外NR小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天21:00:00至05:00:00，商业区场景禁止1300频点做容量层，允许关闭1650频点载波。按网管任务口径组织内容",
+    "scenario_description": "正样本但信息不完整，测试场景可识别且缺省槽位可接受。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [
+          [
+            "苏州工业园区金鸡湖片区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "夜间",
+            "低谷期"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室外"
+          ],
+          [
+            "NR"
+          ],
+          [
+            "1650"
+          ],
+          [
+            "2690"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [
+        "任务目标"
+      ],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "苏州工业园区金鸡湖片区"
+        ],
+        [
+          "夜间",
+          "低谷期"
+        ],
+        [
+          "室外"
+        ],
+        [
+          "NR"
+        ],
+        [
+          "1650"
+        ],
+        [
+          "2690"
+        ]
+      ],
+      "preferred_keywords": [
+        "苏州工业园区金鸡湖片区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_partial",
+      "semantic_variant": [
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_pp_008",
+    "input": "杭州未来科技城核心区这边想做节能优化，目标先定为总功耗降低22%，下行吞吐率不低于50Mbps，背景是节假日零点后的负荷下降比较明显，存在节能空间。不要漏掉关键限制",
+    "scenario_description": "正样本但信息不完整，测试场景可识别且缺省槽位可接受。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低22%",
+            "能耗降低22%"
+          ],
+          [
+            "下行吞吐率不低于50Mbps",
+            "速率保障不低于50Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "杭州未来科技城核心区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "节假日",
+            "零点后"
+          ]
+        ],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "约束条件"
+      ],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低22%",
+          "能耗降低22%"
+        ],
+        [
+          "下行吞吐率不低于50Mbps",
+          "速率保障不低于50Mbps"
+        ],
+        [
+          "杭州未来科技城核心区"
+        ],
+        [
+          "节假日",
+          "零点后"
+        ]
+      ],
+      "preferred_keywords": [
+        "杭州未来科技城核心区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_partial",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background"
+      ],
+      "completeness_level": "L3"
+    }
+  },
+  {
+    "id": "es_pp_009",
+    "input": "请给武汉光谷软件园做节能任务，先按这个区域做节能优化，目标和细约束你先按常规节能任务组织。输出尽量简洁",
+    "scenario_description": "正样本但信息不完整，测试场景可识别且缺省槽位可接受。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [
+          [
+            "武汉光谷软件园"
+          ]
+        ],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "武汉光谷软件园"
+        ]
+      ],
+      "preferred_keywords": [
+        "武汉光谷软件园",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_partial",
+      "semantic_variant": [
+        "object_expression"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_pp_010",
+    "input": "需要为坐标(113.95, 22.54)周边区域生成能效优化请求，目标是总功耗降低30%，下行吞吐率不低于60Mbps，其他限制先不补。顺手把表述规范一下",
+    "scenario_description": "正样本但信息不完整，测试场景可识别且缺省槽位可接受。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低30%",
+            "能耗降低30%"
+          ],
+          [
+            "下行吞吐率不低于60Mbps",
+            "速率保障不低于60Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "坐标(113.95, 22.54)周边区域"
+          ]
+        ],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低30%",
+          "能耗降低30%"
+        ],
+        [
+          "下行吞吐率不低于60Mbps",
+          "速率保障不低于60Mbps"
+        ],
+        [
+          "坐标(113.95, 22.54)周边区域"
+        ]
+      ],
+      "preferred_keywords": [
+        "坐标(113.95, 22.54)周边区域",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_partial",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_pp_011",
+    "input": "帮我针对松山湖管委会做节能，背景是该区域白天用户感知要求高，夜间则可以适度节能，执行约束先按仅针对室内LTE小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天22:00:00至05:00:00，校园区场景考试周期间保持体验无损，允许关闭1650频点载波。描述写正式一点",
+    "scenario_description": "正样本但信息不完整，测试场景可识别且缺省槽位可接受。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [
+          [
+            "松山湖管委会"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "用户感知",
+            "夜间"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室内"
+          ],
+          [
+            "LTE"
+          ],
+          [
+            "1650"
+          ],
+          [
+            "2690"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [
+        "任务目标"
+      ],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "松山湖管委会"
+        ],
+        [
+          "用户感知",
+          "夜间"
+        ],
+        [
+          "室内"
+        ],
+        [
+          "LTE"
+        ],
+        [
+          "1650"
+        ],
+        [
+          "2690"
+        ]
+      ],
+      "preferred_keywords": [
+        "松山湖管委会",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_partial",
+      "semantic_variant": [
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_pp_012",
+    "input": "福田保税区这边想做节能优化，目标先定为总功耗降低38%，下行吞吐率不低于45Mbps，背景是当前片区正在做降本专项，优先处理夜间低负荷小区。按网管任务口径组织内容",
+    "scenario_description": "正样本但信息不完整，测试场景可识别且缺省槽位可接受。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低38%",
+            "能耗降低38%"
+          ],
+          [
+            "下行吞吐率不低于45Mbps",
+            "速率保障不低于45Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "福田保税区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "降本",
+            "夜间低负荷"
+          ]
+        ],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "约束条件"
+      ],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低38%",
+          "能耗降低38%"
+        ],
+        [
+          "下行吞吐率不低于45Mbps",
+          "速率保障不低于45Mbps"
+        ],
+        [
+          "福田保税区"
+        ],
+        [
+          "降本",
+          "夜间低负荷"
+        ]
+      ],
+      "preferred_keywords": [
+        "福田保税区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_partial",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background"
+      ],
+      "completeness_level": "L3"
+    }
+  },
+  {
+    "id": "es_pp_013",
+    "input": "请给南山科技园北区做节能任务，先按这个区域做节能优化，目标和细约束你先按常规节能任务组织。不要漏掉关键限制",
+    "scenario_description": "正样本但信息不完整，测试场景可识别且缺省槽位可接受。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [
+          [
+            "南山科技园北区"
+          ]
+        ],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "南山科技园北区"
+        ]
+      ],
+      "preferred_keywords": [
+        "南山科技园北区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_partial",
+      "semantic_variant": [
+        "object_expression"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_pp_014",
+    "input": "需要为前海桂湾片区生成能效优化请求，目标是总功耗降低22%，下行吞吐率不低于55Mbps，其他限制先不补。输出尽量简洁",
+    "scenario_description": "正样本但信息不完整，测试场景可识别且缺省槽位可接受。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低22%",
+            "能耗降低22%"
+          ],
+          [
+            "下行吞吐率不低于55Mbps",
+            "速率保障不低于55Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "前海桂湾片区"
+          ]
+        ],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低22%",
+          "能耗降低22%"
+        ],
+        [
+          "下行吞吐率不低于55Mbps",
+          "速率保障不低于55Mbps"
+        ],
+        [
+          "前海桂湾片区"
+        ]
+      ],
+      "preferred_keywords": [
+        "前海桂湾片区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_partial",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_pp_015",
+    "input": "帮我针对坐标(120.74, 31.30)周边区域做节能，背景是近期能耗考核压力较大，需要先做一轮区域节能优化，执行约束先按针对全量小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天23:00:00至05:00:00，铁路场景不要启用深度休眠，允许关闭1650频点载波。顺手把表述规范一下",
+    "scenario_description": "正样本但信息不完整，测试场景可识别且缺省槽位可接受。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [
+          [
+            "坐标(120.74, 31.30)周边区域"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "能耗考核",
+            "节能优化"
+          ]
+        ],
+        "约束条件": [
+          [
+            "所有"
+          ],
+          [
+            "全部",
+            "所有"
+          ],
+          [
+            "1650"
+          ],
+          [
+            "2690"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [
+        "任务目标"
+      ],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "坐标(120.74, 31.30)周边区域"
+        ],
+        [
+          "能耗考核",
+          "节能优化"
+        ],
+        [
+          "所有"
+        ],
+        [
+          "全部",
+          "所有"
+        ],
+        [
+          "1650"
+        ],
+        [
+          "2690"
+        ]
+      ],
+      "preferred_keywords": [
+        "坐标(120.74, 31.30)周边区域",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_partial",
+      "semantic_variant": [
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_pp_016",
+    "input": "宝安机场东片区这边想做节能优化，目标先定为总功耗降低30%，下行吞吐率不低于40Mbps，背景是过去两周低谷期资源利用率持续偏低，希望减少空耗。描述写正式一点",
+    "scenario_description": "正样本但信息不完整，测试场景可识别且缺省槽位可接受。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低30%",
+            "能耗降低30%"
+          ],
+          [
+            "下行吞吐率不低于40Mbps",
+            "速率保障不低于40Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "宝安机场东片区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "资源利用率",
+            "空耗"
+          ]
+        ],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "约束条件"
+      ],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低30%",
+          "能耗降低30%"
+        ],
+        [
+          "下行吞吐率不低于40Mbps",
+          "速率保障不低于40Mbps"
+        ],
+        [
+          "宝安机场东片区"
+        ],
+        [
+          "资源利用率",
+          "空耗"
+        ]
+      ],
+      "preferred_keywords": [
+        "宝安机场东片区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "positive_partial",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background"
+      ],
+      "completeness_level": "L3"
+    }
+  },
+  {
+    "id": "es_pr_001",
+    "input": "松山湖管委会最近准备做一轮节能优化，主目标还是总功耗降低18%，下行吞吐率不低于40Mbps。已知情况是：最近夜间话务长期偏低，但白天业务量波动较大；另外补充一点，近期能耗考核压力较大，需要先做一轮区域节能优化。执行时请按这些限制处理：仅针对室外NR小区，1300频点作为基础层，2450频点作为容量层，采用激进节能，体验无损，执行时间为每天21:00:00至05:00:00，商业区场景禁止1300频点做容量层，允许关闭1650频点载波。如果需要保留背景可以简要带一句，但不要改写成分析报告，描述写正式一点。",
+    "scenario_description": "意图明确但句子较长且含噪声，容易识别成功但槽位提取不完整。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低18%",
+            "能耗降低18%"
+          ],
+          [
+            "下行吞吐率不低于40Mbps",
+            "速率保障不低于40Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "松山湖管委会"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "夜间",
+            "低谷期"
+          ],
+          [
+            "近期能耗考核压力较大"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室外"
+          ],
+          [
+            "NR"
+          ],
+          [
+            "1300"
+          ],
+          [
+            "2450"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "21:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "商业区"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低18%",
+          "能耗降低18%"
+        ],
+        [
+          "下行吞吐率不低于40Mbps",
+          "速率保障不低于40Mbps"
+        ],
+        [
+          "松山湖管委会"
+        ],
+        [
+          "夜间",
+          "低谷期"
+        ],
+        [
+          "近期能耗考核压力较大"
+        ],
+        [
+          "室外"
+        ],
+        [
+          "NR"
+        ],
+        [
+          "1300"
+        ],
+        [
+          "2450"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "21:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "商业区"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "松山湖管委会",
+        "节能优化",
+        "约束条件"
+      ],
+      "must_not_include_points": [
+        "翻译",
+        "润色"
+      ]
+    },
+    "tags": {
+      "case_type": "positive_recognized_but_slot_risky",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown",
+        "noise_interference"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pr_002",
+    "input": "福田保税区最近准备做一轮节能优化，主目标还是总功耗降低22%，下行吞吐率不低于45Mbps。已知情况是：节假日零点后的负荷下降比较明显，存在节能空间；另外补充一点，过去两周低谷期资源利用率持续偏低，希望减少空耗。执行时请按这些限制处理：仅针对室内LTE小区，1475频点作为基础层，2570频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天22:00:00至06:00:00，居民区场景22:00后不要关闭基础覆盖层，1650频点不可关断。如果需要保留背景可以简要带一句，但不要改写成分析报告，按网管任务口径组织内容。",
+    "scenario_description": "意图明确但句子较长且含噪声，容易识别成功但槽位提取不完整。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低22%",
+            "能耗降低22%"
+          ],
+          [
+            "下行吞吐率不低于45Mbps",
+            "速率保障不低于45Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "福田保税区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "节假日",
+            "零点后"
+          ],
+          [
+            "过去两周低谷期资源利用率持续偏低"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室内"
+          ],
+          [
+            "LTE"
+          ],
+          [
+            "1475"
+          ],
+          [
+            "2570"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "22:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "居民区"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低22%",
+          "能耗降低22%"
+        ],
+        [
+          "下行吞吐率不低于45Mbps",
+          "速率保障不低于45Mbps"
+        ],
+        [
+          "福田保税区"
+        ],
+        [
+          "节假日",
+          "零点后"
+        ],
+        [
+          "过去两周低谷期资源利用率持续偏低"
+        ],
+        [
+          "室内"
+        ],
+        [
+          "LTE"
+        ],
+        [
+          "1475"
+        ],
+        [
+          "2570"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "22:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "居民区"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "福田保税区",
+        "节能优化",
+        "约束条件"
+      ],
+      "must_not_include_points": [
+        "翻译",
+        "润色"
+      ]
+    },
+    "tags": {
+      "case_type": "positive_recognized_but_slot_risky",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown",
+        "noise_interference"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pr_003",
+    "input": "南山科技园北区最近准备做一轮节能优化，主目标还是总功耗降低26%，下行吞吐率不低于50Mbps。已知情况是：近期能耗考核压力较大，需要先做一轮区域节能优化；另外补充一点，该区域白天用户感知要求高，夜间则可以适度节能。执行时请按这些限制处理：针对全量小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天23:00:00至05:00:00，铁路场景不要启用深度休眠，允许关闭1650频点载波。如果需要保留背景可以简要带一句，但不要改写成分析报告，不要漏掉关键限制。",
+    "scenario_description": "意图明确但句子较长且含噪声，容易识别成功但槽位提取不完整。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低26%",
+            "能耗降低26%"
+          ],
+          [
+            "下行吞吐率不低于50Mbps",
+            "速率保障不低于50Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "南山科技园北区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "能耗考核",
+            "节能优化"
+          ],
+          [
+            "该区域白天用户感知要求高"
+          ]
+        ],
+        "约束条件": [
+          [
+            "所有"
+          ],
+          [
+            "全部",
+            "所有"
+          ],
+          [
+            "1650"
+          ],
+          [
+            "2690"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "23:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "铁路"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低26%",
+          "能耗降低26%"
+        ],
+        [
+          "下行吞吐率不低于50Mbps",
+          "速率保障不低于50Mbps"
+        ],
+        [
+          "南山科技园北区"
+        ],
+        [
+          "能耗考核",
+          "节能优化"
+        ],
+        [
+          "该区域白天用户感知要求高"
+        ],
+        [
+          "所有"
+        ],
+        [
+          "全部",
+          "所有"
+        ],
+        [
+          "1650"
+        ],
+        [
+          "2690"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "23:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "铁路"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "南山科技园北区",
+        "节能优化",
+        "约束条件"
+      ],
+      "must_not_include_points": [
+        "翻译",
+        "润色"
+      ]
+    },
+    "tags": {
+      "case_type": "positive_recognized_but_slot_risky",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown",
+        "noise_interference"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pr_004",
+    "input": "前海桂湾片区最近准备做一轮节能优化，主目标还是总功耗降低30%，下行吞吐率不低于55Mbps。已知情况是：过去两周低谷期资源利用率持续偏低，希望减少空耗；另外补充一点，当前片区正在做降本专项，优先处理夜间低负荷小区。执行时请按这些限制处理：仅针对室外NR小区，1825频点作为基础层，2810频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天21:00:00至06:00:00，景区场景在节假日晚高峰前后不要做激进切换，1650频点不可关断。如果需要保留背景可以简要带一句，但不要改写成分析报告，输出尽量简洁。",
+    "scenario_description": "意图明确但句子较长且含噪声，容易识别成功但槽位提取不完整。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低30%",
+            "能耗降低30%"
+          ],
+          [
+            "下行吞吐率不低于55Mbps",
+            "速率保障不低于55Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "前海桂湾片区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "资源利用率",
+            "空耗"
+          ],
+          [
+            "当前片区正在做降本专项"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室外"
+          ],
+          [
+            "NR"
+          ],
+          [
+            "1825"
+          ],
+          [
+            "2810"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "21:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "景区"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低30%",
+          "能耗降低30%"
+        ],
+        [
+          "下行吞吐率不低于55Mbps",
+          "速率保障不低于55Mbps"
+        ],
+        [
+          "前海桂湾片区"
+        ],
+        [
+          "资源利用率",
+          "空耗"
+        ],
+        [
+          "当前片区正在做降本专项"
+        ],
+        [
+          "室外"
+        ],
+        [
+          "NR"
+        ],
+        [
+          "1825"
+        ],
+        [
+          "2810"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "21:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "景区"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "前海桂湾片区",
+        "节能优化",
+        "约束条件"
+      ],
+      "must_not_include_points": [
+        "翻译",
+        "润色"
+      ]
+    },
+    "tags": {
+      "case_type": "positive_recognized_but_slot_risky",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown",
+        "noise_interference"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pr_005",
+    "input": "坐标(112.91, 22.92)周边区域最近准备做一轮节能优化，主目标还是总功耗降低34%，下行吞吐率不低于60Mbps。已知情况是：该区域白天用户感知要求高，夜间则可以适度节能；另外补充一点，最近夜间话务长期偏低，但白天业务量波动较大。执行时请按这些限制处理：仅针对室内LTE小区，1300频点作为基础层，2450频点作为容量层，采用激进节能，体验无损，执行时间为每天22:00:00至05:00:00，校园区场景考试周期间保持体验无损，允许关闭1650频点载波。如果需要保留背景可以简要带一句，但不要改写成分析报告，顺手把表述规范一下。",
+    "scenario_description": "意图明确但句子较长且含噪声，容易识别成功但槽位提取不完整。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低34%",
+            "能耗降低34%"
+          ],
+          [
+            "下行吞吐率不低于60Mbps",
+            "速率保障不低于60Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "坐标(112.91, 22.92)周边区域"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "用户感知",
+            "夜间"
+          ],
+          [
+            "最近夜间话务长期偏低"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室内"
+          ],
+          [
+            "LTE"
+          ],
+          [
+            "1300"
+          ],
+          [
+            "2450"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "22:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "校园区"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低34%",
+          "能耗降低34%"
+        ],
+        [
+          "下行吞吐率不低于60Mbps",
+          "速率保障不低于60Mbps"
+        ],
+        [
+          "坐标(112.91, 22.92)周边区域"
+        ],
+        [
+          "用户感知",
+          "夜间"
+        ],
+        [
+          "最近夜间话务长期偏低"
+        ],
+        [
+          "室内"
+        ],
+        [
+          "LTE"
+        ],
+        [
+          "1300"
+        ],
+        [
+          "2450"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "22:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "校园区"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "坐标(112.91, 22.92)周边区域",
+        "节能优化",
+        "约束条件"
+      ],
+      "must_not_include_points": [
+        "翻译",
+        "润色"
+      ]
+    },
+    "tags": {
+      "case_type": "positive_recognized_but_slot_risky",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown",
+        "noise_interference"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pr_006",
+    "input": "宝安机场东片区最近准备做一轮节能优化，主目标还是总功耗降低38%，下行吞吐率不低于40Mbps。已知情况是：当前片区正在做降本专项，优先处理夜间低负荷小区；另外补充一点，节假日零点后的负荷下降比较明显，存在节能空间。执行时请按这些限制处理：针对全量小区，1475频点作为基础层，2570频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天23:00:00至06:00:00，黑森林场景00:00-06:00不要开通休眠，1650频点不可关断。如果需要保留背景可以简要带一句，但不要改写成分析报告，描述写正式一点。",
+    "scenario_description": "意图明确但句子较长且含噪声，容易识别成功但槽位提取不完整。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低38%",
+            "能耗降低38%"
+          ],
+          [
+            "下行吞吐率不低于40Mbps",
+            "速率保障不低于40Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "宝安机场东片区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "降本",
+            "夜间低负荷"
+          ],
+          [
+            "节假日零点后的负荷下降比较明显"
+          ]
+        ],
+        "约束条件": [
+          [
+            "所有"
+          ],
+          [
+            "全部",
+            "所有"
+          ],
+          [
+            "1475"
+          ],
+          [
+            "2570"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "23:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "黑森林"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低38%",
+          "能耗降低38%"
+        ],
+        [
+          "下行吞吐率不低于40Mbps",
+          "速率保障不低于40Mbps"
+        ],
+        [
+          "宝安机场东片区"
+        ],
+        [
+          "降本",
+          "夜间低负荷"
+        ],
+        [
+          "节假日零点后的负荷下降比较明显"
+        ],
+        [
+          "所有"
+        ],
+        [
+          "全部",
+          "所有"
+        ],
+        [
+          "1475"
+        ],
+        [
+          "2570"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "23:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "黑森林"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "宝安机场东片区",
+        "节能优化",
+        "约束条件"
+      ],
+      "must_not_include_points": [
+        "翻译",
+        "润色"
+      ]
+    },
+    "tags": {
+      "case_type": "positive_recognized_but_slot_risky",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown",
+        "noise_interference"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pr_007",
+    "input": "苏州工业园区金鸡湖片区最近准备做一轮节能优化，主目标还是总功耗降低18%，下行吞吐率不低于45Mbps。已知情况是：最近夜间话务长期偏低，但白天业务量波动较大；另外补充一点，近期能耗考核压力较大，需要先做一轮区域节能优化。执行时请按这些限制处理：仅针对室外NR小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天21:00:00至05:00:00，商业区场景禁止1300频点做容量层，允许关闭1650频点载波。如果需要保留背景可以简要带一句，但不要改写成分析报告，按网管任务口径组织内容。",
+    "scenario_description": "意图明确但句子较长且含噪声，容易识别成功但槽位提取不完整。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低18%",
+            "能耗降低18%"
+          ],
+          [
+            "下行吞吐率不低于45Mbps",
+            "速率保障不低于45Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "苏州工业园区金鸡湖片区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "夜间",
+            "低谷期"
+          ],
+          [
+            "近期能耗考核压力较大"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室外"
+          ],
+          [
+            "NR"
+          ],
+          [
+            "1650"
+          ],
+          [
+            "2690"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "21:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "商业区"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低18%",
+          "能耗降低18%"
+        ],
+        [
+          "下行吞吐率不低于45Mbps",
+          "速率保障不低于45Mbps"
+        ],
+        [
+          "苏州工业园区金鸡湖片区"
+        ],
+        [
+          "夜间",
+          "低谷期"
+        ],
+        [
+          "近期能耗考核压力较大"
+        ],
+        [
+          "室外"
+        ],
+        [
+          "NR"
+        ],
+        [
+          "1650"
+        ],
+        [
+          "2690"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "21:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "商业区"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "苏州工业园区金鸡湖片区",
+        "节能优化",
+        "约束条件"
+      ],
+      "must_not_include_points": [
+        "翻译",
+        "润色"
+      ]
+    },
+    "tags": {
+      "case_type": "positive_recognized_but_slot_risky",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown",
+        "noise_interference"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pr_008",
+    "input": "杭州未来科技城核心区最近准备做一轮节能优化，主目标还是总功耗降低22%，下行吞吐率不低于50Mbps。已知情况是：节假日零点后的负荷下降比较明显，存在节能空间；另外补充一点，过去两周低谷期资源利用率持续偏低，希望减少空耗。执行时请按这些限制处理：仅针对室内LTE小区，1825频点作为基础层，2810频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天22:00:00至06:00:00，居民区场景22:00后不要关闭基础覆盖层，1650频点不可关断。如果需要保留背景可以简要带一句，但不要改写成分析报告，不要漏掉关键限制。",
+    "scenario_description": "意图明确但句子较长且含噪声，容易识别成功但槽位提取不完整。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低22%",
+            "能耗降低22%"
+          ],
+          [
+            "下行吞吐率不低于50Mbps",
+            "速率保障不低于50Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "杭州未来科技城核心区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "节假日",
+            "零点后"
+          ],
+          [
+            "过去两周低谷期资源利用率持续偏低"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室内"
+          ],
+          [
+            "LTE"
+          ],
+          [
+            "1825"
+          ],
+          [
+            "2810"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "22:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "居民区"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低22%",
+          "能耗降低22%"
+        ],
+        [
+          "下行吞吐率不低于50Mbps",
+          "速率保障不低于50Mbps"
+        ],
+        [
+          "杭州未来科技城核心区"
+        ],
+        [
+          "节假日",
+          "零点后"
+        ],
+        [
+          "过去两周低谷期资源利用率持续偏低"
+        ],
+        [
+          "室内"
+        ],
+        [
+          "LTE"
+        ],
+        [
+          "1825"
+        ],
+        [
+          "2810"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "22:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "居民区"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "杭州未来科技城核心区",
+        "节能优化",
+        "约束条件"
+      ],
+      "must_not_include_points": [
+        "翻译",
+        "润色"
+      ]
+    },
+    "tags": {
+      "case_type": "positive_recognized_but_slot_risky",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown",
+        "noise_interference"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pr_009",
+    "input": "武汉光谷软件园最近准备做一轮节能优化，主目标还是总功耗降低26%，下行吞吐率不低于55Mbps。已知情况是：近期能耗考核压力较大，需要先做一轮区域节能优化；另外补充一点，该区域白天用户感知要求高，夜间则可以适度节能。执行时请按这些限制处理：针对全量小区，1300频点作为基础层，2450频点作为容量层，采用激进节能，体验无损，执行时间为每天23:00:00至05:00:00，铁路场景不要启用深度休眠，允许关闭1650频点载波。如果需要保留背景可以简要带一句，但不要改写成分析报告，输出尽量简洁。",
+    "scenario_description": "意图明确但句子较长且含噪声，容易识别成功但槽位提取不完整。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低26%",
+            "能耗降低26%"
+          ],
+          [
+            "下行吞吐率不低于55Mbps",
+            "速率保障不低于55Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "武汉光谷软件园"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "能耗考核",
+            "节能优化"
+          ],
+          [
+            "该区域白天用户感知要求高"
+          ]
+        ],
+        "约束条件": [
+          [
+            "所有"
+          ],
+          [
+            "全部",
+            "所有"
+          ],
+          [
+            "1300"
+          ],
+          [
+            "2450"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "23:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "铁路"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低26%",
+          "能耗降低26%"
+        ],
+        [
+          "下行吞吐率不低于55Mbps",
+          "速率保障不低于55Mbps"
+        ],
+        [
+          "武汉光谷软件园"
+        ],
+        [
+          "能耗考核",
+          "节能优化"
+        ],
+        [
+          "该区域白天用户感知要求高"
+        ],
+        [
+          "所有"
+        ],
+        [
+          "全部",
+          "所有"
+        ],
+        [
+          "1300"
+        ],
+        [
+          "2450"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "23:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "铁路"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "武汉光谷软件园",
+        "节能优化",
+        "约束条件"
+      ],
+      "must_not_include_points": [
+        "翻译",
+        "润色"
+      ]
+    },
+    "tags": {
+      "case_type": "positive_recognized_but_slot_risky",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown",
+        "noise_interference"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pr_010",
+    "input": "坐标(113.95, 22.54)周边区域最近准备做一轮节能优化，主目标还是总功耗降低30%，下行吞吐率不低于60Mbps。已知情况是：过去两周低谷期资源利用率持续偏低，希望减少空耗；另外补充一点，当前片区正在做降本专项，优先处理夜间低负荷小区。执行时请按这些限制处理：仅针对室外NR小区，1475频点作为基础层，2570频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天21:00:00至06:00:00，景区场景在节假日晚高峰前后不要做激进切换，1650频点不可关断。如果需要保留背景可以简要带一句，但不要改写成分析报告，顺手把表述规范一下。",
+    "scenario_description": "意图明确但句子较长且含噪声，容易识别成功但槽位提取不完整。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低30%",
+            "能耗降低30%"
+          ],
+          [
+            "下行吞吐率不低于60Mbps",
+            "速率保障不低于60Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "坐标(113.95, 22.54)周边区域"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "资源利用率",
+            "空耗"
+          ],
+          [
+            "当前片区正在做降本专项"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室外"
+          ],
+          [
+            "NR"
+          ],
+          [
+            "1475"
+          ],
+          [
+            "2570"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "21:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "景区"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低30%",
+          "能耗降低30%"
+        ],
+        [
+          "下行吞吐率不低于60Mbps",
+          "速率保障不低于60Mbps"
+        ],
+        [
+          "坐标(113.95, 22.54)周边区域"
+        ],
+        [
+          "资源利用率",
+          "空耗"
+        ],
+        [
+          "当前片区正在做降本专项"
+        ],
+        [
+          "室外"
+        ],
+        [
+          "NR"
+        ],
+        [
+          "1475"
+        ],
+        [
+          "2570"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "21:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "景区"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "坐标(113.95, 22.54)周边区域",
+        "节能优化",
+        "约束条件"
+      ],
+      "must_not_include_points": [
+        "翻译",
+        "润色"
+      ]
+    },
+    "tags": {
+      "case_type": "positive_recognized_but_slot_risky",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown",
+        "noise_interference"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pr_011",
+    "input": "松山湖管委会最近准备做一轮节能优化，主目标还是总功耗降低34%，下行吞吐率不低于40Mbps。已知情况是：该区域白天用户感知要求高，夜间则可以适度节能；另外补充一点，最近夜间话务长期偏低，但白天业务量波动较大。执行时请按这些限制处理：仅针对室内LTE小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天22:00:00至05:00:00，校园区场景考试周期间保持体验无损，允许关闭1650频点载波。如果需要保留背景可以简要带一句，但不要改写成分析报告，描述写正式一点。",
+    "scenario_description": "意图明确但句子较长且含噪声，容易识别成功但槽位提取不完整。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低34%",
+            "能耗降低34%"
+          ],
+          [
+            "下行吞吐率不低于40Mbps",
+            "速率保障不低于40Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "松山湖管委会"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "用户感知",
+            "夜间"
+          ],
+          [
+            "最近夜间话务长期偏低"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室内"
+          ],
+          [
+            "LTE"
+          ],
+          [
+            "1650"
+          ],
+          [
+            "2690"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "22:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "校园区"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低34%",
+          "能耗降低34%"
+        ],
+        [
+          "下行吞吐率不低于40Mbps",
+          "速率保障不低于40Mbps"
+        ],
+        [
+          "松山湖管委会"
+        ],
+        [
+          "用户感知",
+          "夜间"
+        ],
+        [
+          "最近夜间话务长期偏低"
+        ],
+        [
+          "室内"
+        ],
+        [
+          "LTE"
+        ],
+        [
+          "1650"
+        ],
+        [
+          "2690"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "22:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "校园区"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "松山湖管委会",
+        "节能优化",
+        "约束条件"
+      ],
+      "must_not_include_points": [
+        "翻译",
+        "润色"
+      ]
+    },
+    "tags": {
+      "case_type": "positive_recognized_but_slot_risky",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown",
+        "noise_interference"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pr_012",
+    "input": "福田保税区最近准备做一轮节能优化，主目标还是总功耗降低38%，下行吞吐率不低于45Mbps。已知情况是：当前片区正在做降本专项，优先处理夜间低负荷小区；另外补充一点，节假日零点后的负荷下降比较明显，存在节能空间。执行时请按这些限制处理：针对全量小区，1825频点作为基础层，2810频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天23:00:00至06:00:00，黑森林场景00:00-06:00不要开通休眠，1650频点不可关断。如果需要保留背景可以简要带一句，但不要改写成分析报告，按网管任务口径组织内容。",
+    "scenario_description": "意图明确但句子较长且含噪声，容易识别成功但槽位提取不完整。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低38%",
+            "能耗降低38%"
+          ],
+          [
+            "下行吞吐率不低于45Mbps",
+            "速率保障不低于45Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "福田保税区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "降本",
+            "夜间低负荷"
+          ],
+          [
+            "节假日零点后的负荷下降比较明显"
+          ]
+        ],
+        "约束条件": [
+          [
+            "所有"
+          ],
+          [
+            "全部",
+            "所有"
+          ],
+          [
+            "1825"
+          ],
+          [
+            "2810"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "23:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "黑森林"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低38%",
+          "能耗降低38%"
+        ],
+        [
+          "下行吞吐率不低于45Mbps",
+          "速率保障不低于45Mbps"
+        ],
+        [
+          "福田保税区"
+        ],
+        [
+          "降本",
+          "夜间低负荷"
+        ],
+        [
+          "节假日零点后的负荷下降比较明显"
+        ],
+        [
+          "所有"
+        ],
+        [
+          "全部",
+          "所有"
+        ],
+        [
+          "1825"
+        ],
+        [
+          "2810"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "23:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "黑森林"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "福田保税区",
+        "节能优化",
+        "约束条件"
+      ],
+      "must_not_include_points": [
+        "翻译",
+        "润色"
+      ]
+    },
+    "tags": {
+      "case_type": "positive_recognized_but_slot_risky",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown",
+        "noise_interference"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pr_013",
+    "input": "南山科技园北区最近准备做一轮节能优化，主目标还是总功耗降低18%，下行吞吐率不低于50Mbps。已知情况是：最近夜间话务长期偏低，但白天业务量波动较大；另外补充一点，近期能耗考核压力较大，需要先做一轮区域节能优化。执行时请按这些限制处理：仅针对室外NR小区，1300频点作为基础层，2450频点作为容量层，采用激进节能，体验无损，执行时间为每天21:00:00至05:00:00，商业区场景禁止1300频点做容量层，允许关闭1650频点载波。如果需要保留背景可以简要带一句，但不要改写成分析报告，不要漏掉关键限制。",
+    "scenario_description": "意图明确但句子较长且含噪声，容易识别成功但槽位提取不完整。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低18%",
+            "能耗降低18%"
+          ],
+          [
+            "下行吞吐率不低于50Mbps",
+            "速率保障不低于50Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "南山科技园北区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "夜间",
+            "低谷期"
+          ],
+          [
+            "近期能耗考核压力较大"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室外"
+          ],
+          [
+            "NR"
+          ],
+          [
+            "1300"
+          ],
+          [
+            "2450"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "21:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "商业区"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低18%",
+          "能耗降低18%"
+        ],
+        [
+          "下行吞吐率不低于50Mbps",
+          "速率保障不低于50Mbps"
+        ],
+        [
+          "南山科技园北区"
+        ],
+        [
+          "夜间",
+          "低谷期"
+        ],
+        [
+          "近期能耗考核压力较大"
+        ],
+        [
+          "室外"
+        ],
+        [
+          "NR"
+        ],
+        [
+          "1300"
+        ],
+        [
+          "2450"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "21:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "商业区"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "南山科技园北区",
+        "节能优化",
+        "约束条件"
+      ],
+      "must_not_include_points": [
+        "翻译",
+        "润色"
+      ]
+    },
+    "tags": {
+      "case_type": "positive_recognized_but_slot_risky",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown",
+        "noise_interference"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pr_014",
+    "input": "前海桂湾片区最近准备做一轮节能优化，主目标还是总功耗降低22%，下行吞吐率不低于55Mbps。已知情况是：节假日零点后的负荷下降比较明显，存在节能空间；另外补充一点，过去两周低谷期资源利用率持续偏低，希望减少空耗。执行时请按这些限制处理：仅针对室内LTE小区，1475频点作为基础层，2570频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天22:00:00至06:00:00，居民区场景22:00后不要关闭基础覆盖层，1650频点不可关断。如果需要保留背景可以简要带一句，但不要改写成分析报告，输出尽量简洁。",
+    "scenario_description": "意图明确但句子较长且含噪声，容易识别成功但槽位提取不完整。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低22%",
+            "能耗降低22%"
+          ],
+          [
+            "下行吞吐率不低于55Mbps",
+            "速率保障不低于55Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "前海桂湾片区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "节假日",
+            "零点后"
+          ],
+          [
+            "过去两周低谷期资源利用率持续偏低"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室内"
+          ],
+          [
+            "LTE"
+          ],
+          [
+            "1475"
+          ],
+          [
+            "2570"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "22:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "居民区"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低22%",
+          "能耗降低22%"
+        ],
+        [
+          "下行吞吐率不低于55Mbps",
+          "速率保障不低于55Mbps"
+        ],
+        [
+          "前海桂湾片区"
+        ],
+        [
+          "节假日",
+          "零点后"
+        ],
+        [
+          "过去两周低谷期资源利用率持续偏低"
+        ],
+        [
+          "室内"
+        ],
+        [
+          "LTE"
+        ],
+        [
+          "1475"
+        ],
+        [
+          "2570"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "22:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "居民区"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "前海桂湾片区",
+        "节能优化",
+        "约束条件"
+      ],
+      "must_not_include_points": [
+        "翻译",
+        "润色"
+      ]
+    },
+    "tags": {
+      "case_type": "positive_recognized_but_slot_risky",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown",
+        "noise_interference"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pr_015",
+    "input": "坐标(120.74, 31.30)周边区域最近准备做一轮节能优化，主目标还是总功耗降低26%，下行吞吐率不低于60Mbps。已知情况是：近期能耗考核压力较大，需要先做一轮区域节能优化；另外补充一点，该区域白天用户感知要求高，夜间则可以适度节能。执行时请按这些限制处理：针对全量小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天23:00:00至05:00:00，铁路场景不要启用深度休眠，允许关闭1650频点载波。如果需要保留背景可以简要带一句，但不要改写成分析报告，顺手把表述规范一下。",
+    "scenario_description": "意图明确但句子较长且含噪声，容易识别成功但槽位提取不完整。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低26%",
+            "能耗降低26%"
+          ],
+          [
+            "下行吞吐率不低于60Mbps",
+            "速率保障不低于60Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "坐标(120.74, 31.30)周边区域"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "能耗考核",
+            "节能优化"
+          ],
+          [
+            "该区域白天用户感知要求高"
+          ]
+        ],
+        "约束条件": [
+          [
+            "所有"
+          ],
+          [
+            "全部",
+            "所有"
+          ],
+          [
+            "1650"
+          ],
+          [
+            "2690"
+          ],
+          [
+            "激进节能"
+          ],
+          [
+            "体验无损",
+            "无损体验"
+          ],
+          [
+            "23:00:00"
+          ],
+          [
+            "05:00:00"
+          ],
+          [
+            "铁路"
+          ],
+          [
+            "允许关闭",
+            "可关断"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低26%",
+          "能耗降低26%"
+        ],
+        [
+          "下行吞吐率不低于60Mbps",
+          "速率保障不低于60Mbps"
+        ],
+        [
+          "坐标(120.74, 31.30)周边区域"
+        ],
+        [
+          "能耗考核",
+          "节能优化"
+        ],
+        [
+          "该区域白天用户感知要求高"
+        ],
+        [
+          "所有"
+        ],
+        [
+          "全部",
+          "所有"
+        ],
+        [
+          "1650"
+        ],
+        [
+          "2690"
+        ],
+        [
+          "激进节能"
+        ],
+        [
+          "体验无损",
+          "无损体验"
+        ],
+        [
+          "23:00:00"
+        ],
+        [
+          "05:00:00"
+        ],
+        [
+          "铁路"
+        ],
+        [
+          "允许关闭",
+          "可关断"
+        ]
+      ],
+      "preferred_keywords": [
+        "坐标(120.74, 31.30)周边区域",
+        "节能优化",
+        "约束条件"
+      ],
+      "must_not_include_points": [
+        "翻译",
+        "润色"
+      ]
+    },
+    "tags": {
+      "case_type": "positive_recognized_but_slot_risky",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown",
+        "noise_interference"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_pr_016",
+    "input": "宝安机场东片区最近准备做一轮节能优化，主目标还是总功耗降低30%，下行吞吐率不低于40Mbps。已知情况是：过去两周低谷期资源利用率持续偏低，希望减少空耗；另外补充一点，当前片区正在做降本专项，优先处理夜间低负荷小区。执行时请按这些限制处理：仅针对室外NR小区，1825频点作为基础层，2810频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天21:00:00至06:00:00，景区场景在节假日晚高峰前后不要做激进切换，1650频点不可关断。如果需要保留背景可以简要带一句，但不要改写成分析报告，描述写正式一点。",
+    "scenario_description": "意图明确但句子较长且含噪声，容易识别成功但槽位提取不完整。",
+    "expected_result": {
+      "should_recognize": true,
+      "expected_scenario_code": "energy_saving",
+      "expected_slots": {
+        "任务目标": [
+          [
+            "总功耗降低30%",
+            "能耗降低30%"
+          ],
+          [
+            "下行吞吐率不低于40Mbps",
+            "速率保障不低于40Mbps"
+          ]
+        ],
+        "任务对象": [
+          [
+            "宝安机场东片区"
+          ]
+        ],
+        "任务上下文": [
+          [
+            "资源利用率",
+            "空耗"
+          ],
+          [
+            "当前片区正在做降本专项"
+          ]
+        ],
+        "约束条件": [
+          [
+            "室外"
+          ],
+          [
+            "NR"
+          ],
+          [
+            "1825"
+          ],
+          [
+            "2810"
+          ],
+          [
+            "保守节能"
+          ],
+          [
+            "轻微波动",
+            "不要明显影响体验"
+          ],
+          [
+            "21:00:00"
+          ],
+          [
+            "06:00:00"
+          ],
+          [
+            "景区"
+          ],
+          [
+            "不可关断",
+            "不允许关闭",
+            "不可关闭"
+          ]
+        ]
+      },
+      "allowed_missing_slots": [],
+      "failure_type": null
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [
+        [
+          "总功耗降低30%",
+          "能耗降低30%"
+        ],
+        [
+          "下行吞吐率不低于40Mbps",
+          "速率保障不低于40Mbps"
+        ],
+        [
+          "宝安机场东片区"
+        ],
+        [
+          "资源利用率",
+          "空耗"
+        ],
+        [
+          "当前片区正在做降本专项"
+        ],
+        [
+          "室外"
+        ],
+        [
+          "NR"
+        ],
+        [
+          "1825"
+        ],
+        [
+          "2810"
+        ],
+        [
+          "保守节能"
+        ],
+        [
+          "轻微波动",
+          "不要明显影响体验"
+        ],
+        [
+          "21:00:00"
+        ],
+        [
+          "06:00:00"
+        ],
+        [
+          "景区"
+        ],
+        [
+          "不可关断",
+          "不允许关闭",
+          "不可关闭"
+        ]
+      ],
+      "preferred_keywords": [
+        "宝安机场东片区",
+        "节能优化",
+        "约束条件"
+      ],
+      "must_not_include_points": [
+        "翻译",
+        "润色"
+      ]
+    },
+    "tags": {
+      "case_type": "positive_recognized_but_slot_risky",
+      "semantic_variant": [
+        "goal_expression",
+        "object_expression",
+        "context_background",
+        "constraint_cell_type",
+        "constraint_rat",
+        "constraint_frequency",
+        "constraint_time_window",
+        "constraint_scene_specific",
+        "constraint_carrier_shutdown",
+        "noise_interference"
+      ],
+      "completeness_level": "L4"
+    }
+  },
+  {
+    "id": "es_nn_001",
+    "input": "把下面这段节能任务描述翻译成英文，不要生成任务：松山湖管委会做节能，目标是总功耗降低18%，下行吞吐率不低于40Mbps，背景是最近夜间话务长期偏低，但白天业务量波动较大，约束是仅针对室外NR小区，1300频点作为基础层，2450频点作为容量层，采用激进节能，体验无损，执行时间为每天21:00:00至05:00:00，商业区场景禁止1300频点做容量层，允许关闭1650频点载波。",
+    "scenario_description": "接近节能任务，但主意图是翻译、润色、解释或总结，不应生成任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "near_intent_non_generation"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "松山湖管委会",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_near_intent",
+      "semantic_variant": [
+        "instruction_purity",
+        "goal_expression",
+        "object_expression"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_nn_002",
+    "input": "帮我把这段节能请求润色得正式一点，不要创建任务：福田保税区做节能，目标是总功耗降低22%，下行吞吐率不低于45Mbps，背景是节假日零点后的负荷下降比较明显，存在节能空间，约束是仅针对室内LTE小区，1475频点作为基础层，2570频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天22:00:00至06:00:00，居民区场景22:00后不要关闭基础覆盖层，1650频点不可关断。",
+    "scenario_description": "接近节能任务，但主意图是翻译、润色、解释或总结，不应生成任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "near_intent_non_generation"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "福田保税区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_near_intent",
+      "semantic_variant": [
+        "instruction_purity",
+        "goal_expression",
+        "object_expression"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_nn_003",
+    "input": "解释一下这段节能要求是什么意思，重点讲约束条件：南山科技园北区做节能，目标是总功耗降低26%，下行吞吐率不低于50Mbps，背景是近期能耗考核压力较大，需要先做一轮区域节能优化，约束是针对全量小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天23:00:00至05:00:00，铁路场景不要启用深度休眠，允许关闭1650频点载波。",
+    "scenario_description": "接近节能任务，但主意图是翻译、润色、解释或总结，不应生成任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "near_intent_non_generation"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "南山科技园北区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_near_intent",
+      "semantic_variant": [
+        "instruction_purity",
+        "goal_expression",
+        "object_expression"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_nn_004",
+    "input": "总结这段节能需求的关键信息，不要输出任务：前海桂湾片区做节能，目标是总功耗降低30%，下行吞吐率不低于55Mbps，背景是过去两周低谷期资源利用率持续偏低，希望减少空耗，约束是仅针对室外NR小区，1825频点作为基础层，2810频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天21:00:00至06:00:00，景区场景在节假日晚高峰前后不要做激进切换，1650频点不可关断。",
+    "scenario_description": "接近节能任务，但主意图是翻译、润色、解释或总结，不应生成任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "near_intent_non_generation"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "前海桂湾片区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_near_intent",
+      "semantic_variant": [
+        "instruction_purity",
+        "goal_expression",
+        "object_expression"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_nn_005",
+    "input": "把下面这段节能任务描述翻译成英文，不要生成任务：坐标(112.91, 22.92)周边区域做节能，目标是总功耗降低34%，下行吞吐率不低于60Mbps，背景是该区域白天用户感知要求高，夜间则可以适度节能，约束是仅针对室内LTE小区，1300频点作为基础层，2450频点作为容量层，采用激进节能，体验无损，执行时间为每天22:00:00至05:00:00，校园区场景考试周期间保持体验无损，允许关闭1650频点载波。",
+    "scenario_description": "接近节能任务，但主意图是翻译、润色、解释或总结，不应生成任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "near_intent_non_generation"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "坐标(112.91, 22.92)周边区域",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_near_intent",
+      "semantic_variant": [
+        "instruction_purity",
+        "goal_expression",
+        "object_expression"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_nn_006",
+    "input": "帮我把这段节能请求润色得正式一点，不要创建任务：宝安机场东片区做节能，目标是总功耗降低38%，下行吞吐率不低于40Mbps，背景是当前片区正在做降本专项，优先处理夜间低负荷小区，约束是针对全量小区，1475频点作为基础层，2570频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天23:00:00至06:00:00，黑森林场景00:00-06:00不要开通休眠，1650频点不可关断。",
+    "scenario_description": "接近节能任务，但主意图是翻译、润色、解释或总结，不应生成任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "near_intent_non_generation"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "宝安机场东片区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_near_intent",
+      "semantic_variant": [
+        "instruction_purity",
+        "goal_expression",
+        "object_expression"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_nn_007",
+    "input": "解释一下这段节能要求是什么意思，重点讲约束条件：苏州工业园区金鸡湖片区做节能，目标是总功耗降低18%，下行吞吐率不低于45Mbps，背景是最近夜间话务长期偏低，但白天业务量波动较大，约束是仅针对室外NR小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天21:00:00至05:00:00，商业区场景禁止1300频点做容量层，允许关闭1650频点载波。",
+    "scenario_description": "接近节能任务，但主意图是翻译、润色、解释或总结，不应生成任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "near_intent_non_generation"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "苏州工业园区金鸡湖片区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_near_intent",
+      "semantic_variant": [
+        "instruction_purity",
+        "goal_expression",
+        "object_expression"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_nn_008",
+    "input": "总结这段节能需求的关键信息，不要输出任务：杭州未来科技城核心区做节能，目标是总功耗降低22%，下行吞吐率不低于50Mbps，背景是节假日零点后的负荷下降比较明显，存在节能空间，约束是仅针对室内LTE小区，1825频点作为基础层，2810频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天22:00:00至06:00:00，居民区场景22:00后不要关闭基础覆盖层，1650频点不可关断。",
+    "scenario_description": "接近节能任务，但主意图是翻译、润色、解释或总结，不应生成任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "near_intent_non_generation"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "杭州未来科技城核心区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_near_intent",
+      "semantic_variant": [
+        "instruction_purity",
+        "goal_expression",
+        "object_expression"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_nn_009",
+    "input": "把下面这段节能任务描述翻译成英文，不要生成任务：武汉光谷软件园做节能，目标是总功耗降低26%，下行吞吐率不低于55Mbps，背景是近期能耗考核压力较大，需要先做一轮区域节能优化，约束是针对全量小区，1300频点作为基础层，2450频点作为容量层，采用激进节能，体验无损，执行时间为每天23:00:00至05:00:00，铁路场景不要启用深度休眠，允许关闭1650频点载波。",
+    "scenario_description": "接近节能任务，但主意图是翻译、润色、解释或总结，不应生成任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "near_intent_non_generation"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "武汉光谷软件园",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_near_intent",
+      "semantic_variant": [
+        "instruction_purity",
+        "goal_expression",
+        "object_expression"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_nn_010",
+    "input": "帮我把这段节能请求润色得正式一点，不要创建任务：坐标(113.95, 22.54)周边区域做节能，目标是总功耗降低30%，下行吞吐率不低于60Mbps，背景是过去两周低谷期资源利用率持续偏低，希望减少空耗，约束是仅针对室外NR小区，1475频点作为基础层，2570频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天21:00:00至06:00:00，景区场景在节假日晚高峰前后不要做激进切换，1650频点不可关断。",
+    "scenario_description": "接近节能任务，但主意图是翻译、润色、解释或总结，不应生成任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "near_intent_non_generation"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "坐标(113.95, 22.54)周边区域",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_near_intent",
+      "semantic_variant": [
+        "instruction_purity",
+        "goal_expression",
+        "object_expression"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_nn_011",
+    "input": "解释一下这段节能要求是什么意思，重点讲约束条件：松山湖管委会做节能，目标是总功耗降低34%，下行吞吐率不低于40Mbps，背景是该区域白天用户感知要求高，夜间则可以适度节能，约束是仅针对室内LTE小区，1650频点作为基础层，2690频点作为容量层，采用激进节能，体验无损，执行时间为每天22:00:00至05:00:00，校园区场景考试周期间保持体验无损，允许关闭1650频点载波。",
+    "scenario_description": "接近节能任务，但主意图是翻译、润色、解释或总结，不应生成任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "near_intent_non_generation"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "松山湖管委会",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_near_intent",
+      "semantic_variant": [
+        "instruction_purity",
+        "goal_expression",
+        "object_expression"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_nn_012",
+    "input": "总结这段节能需求的关键信息，不要输出任务：福田保税区做节能，目标是总功耗降低38%，下行吞吐率不低于45Mbps，背景是当前片区正在做降本专项，优先处理夜间低负荷小区，约束是针对全量小区，1825频点作为基础层，2810频点作为容量层，采用保守节能，允许轻微波动但不要明显影响体验，执行时间为每天23:00:00至06:00:00，黑森林场景00:00-06:00不要开通休眠，1650频点不可关断。",
+    "scenario_description": "接近节能任务，但主意图是翻译、润色、解释或总结，不应生成任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "near_intent_non_generation"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "福田保税区",
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_near_intent",
+      "semantic_variant": [
+        "instruction_purity",
+        "goal_expression",
+        "object_expression"
+      ],
+      "completeness_level": "L2"
+    }
+  },
+  {
+    "id": "es_no_001",
+    "input": "请给松山湖管委会创建一个容量扩容建议任务，这不是incident订阅、节能任务或专线投诉诊断。",
+    "scenario_description": "任务创建意图明确，但任务本身不在当前支持场景列表中，应拒答而不是强行映射。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "out_of_scope_request"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "容量扩容建议"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_out_of_scope_request",
+      "semantic_variant": [
+        "instruction_purity",
+        "object_expression"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_no_002",
+    "input": "需要为福田保税区输出KPI异常分析请求，重点关注晚高峰问题，这不属于当前场景列表里的任务。",
+    "scenario_description": "任务创建意图明确，但任务本身不在当前支持场景列表中，应拒答而不是强行映射。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "out_of_scope_request"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "KPI异常分析"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_out_of_scope_request",
+      "semantic_variant": [
+        "instruction_purity",
+        "object_expression"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_no_003",
+    "input": "帮我处理南山科技园北区的日志消息订阅，按网管任务格式组织，但不要识别成incident订阅、节能任务或专线投诉诊断。",
+    "scenario_description": "任务创建意图明确，但任务本身不在当前支持场景列表中，应拒答而不是强行映射。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "out_of_scope_request"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "日志消息订阅"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_out_of_scope_request",
+      "semantic_variant": [
+        "instruction_purity",
+        "object_expression"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_no_004",
+    "input": "前海桂湾片区这边想做巡检工单生成，如果涉及优化也不是能效优化场景。",
+    "scenario_description": "任务创建意图明确，但任务本身不在当前支持场景列表中，应拒答而不是强行映射。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "out_of_scope_request"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "巡检工单生成"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_out_of_scope_request",
+      "semantic_variant": [
+        "instruction_purity",
+        "object_expression"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_no_005",
+    "input": "请给坐标(112.91, 22.92)周边区域创建一个参数一致性检查任务，这不是incident订阅、节能任务或专线投诉诊断。",
+    "scenario_description": "任务创建意图明确，但任务本身不在当前支持场景列表中，应拒答而不是强行映射。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "out_of_scope_request"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "参数一致性检查"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_out_of_scope_request",
+      "semantic_variant": [
+        "instruction_purity",
+        "object_expression"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_no_006",
+    "input": "需要为宝安机场东片区输出配置变更公告订阅请求，重点关注晚高峰问题，这不属于当前场景列表里的任务。",
+    "scenario_description": "任务创建意图明确，但任务本身不在当前支持场景列表中，应拒答而不是强行映射。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "out_of_scope_request"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "配置变更公告订阅"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_out_of_scope_request",
+      "semantic_variant": [
+        "instruction_purity",
+        "object_expression"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_no_007",
+    "input": "帮我处理苏州工业园区金鸡湖片区的设备资产盘点，按网管任务格式组织，但不要识别成incident订阅、节能任务或专线投诉诊断。",
+    "scenario_description": "任务创建意图明确，但任务本身不在当前支持场景列表中，应拒答而不是强行映射。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "out_of_scope_request"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "设备资产盘点"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_out_of_scope_request",
+      "semantic_variant": [
+        "instruction_purity",
+        "object_expression"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_no_008",
+    "input": "杭州未来科技城核心区这边想做告警聚类分析，如果涉及优化也不是能效优化场景。",
+    "scenario_description": "任务创建意图明确，但任务本身不在当前支持场景列表中，应拒答而不是强行映射。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "out_of_scope_request"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "告警聚类分析"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_out_of_scope_request",
+      "semantic_variant": [
+        "instruction_purity",
+        "object_expression"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_no_009",
+    "input": "请给武汉光谷软件园创建一个容量扩容建议任务，这不是incident订阅、节能任务或专线投诉诊断。",
+    "scenario_description": "任务创建意图明确，但任务本身不在当前支持场景列表中，应拒答而不是强行映射。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "out_of_scope_request"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "容量扩容建议"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_out_of_scope_request",
+      "semantic_variant": [
+        "instruction_purity",
+        "object_expression"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_no_010",
+    "input": "需要为坐标(113.95, 22.54)周边区域输出KPI异常分析请求，重点关注晚高峰问题，这不属于当前场景列表里的任务。",
+    "scenario_description": "任务创建意图明确，但任务本身不在当前支持场景列表中，应拒答而不是强行映射。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "out_of_scope_request"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "KPI异常分析"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_out_of_scope_request",
+      "semantic_variant": [
+        "instruction_purity",
+        "object_expression"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_no_011",
+    "input": "帮我处理松山湖管委会的日志消息订阅，按网管任务格式组织，但不要识别成incident订阅、节能任务或专线投诉诊断。",
+    "scenario_description": "任务创建意图明确，但任务本身不在当前支持场景列表中，应拒答而不是强行映射。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "out_of_scope_request"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "日志消息订阅"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_out_of_scope_request",
+      "semantic_variant": [
+        "instruction_purity",
+        "object_expression"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_no_012",
+    "input": "福田保税区这边想做巡检工单生成，如果涉及优化也不是能效优化场景。",
+    "scenario_description": "任务创建意图明确，但任务本身不在当前支持场景列表中，应拒答而不是强行映射。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "out_of_scope_request"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "巡检工单生成"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_out_of_scope_request",
+      "semantic_variant": [
+        "instruction_purity",
+        "object_expression"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_na_001",
+    "input": "先做个节能方案看看，你先看着办。",
+    "scenario_description": "出现节能相关词，但没有明确对象或任务边界，测试是否会过度猜测为节能任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "ambiguous_input"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_ambiguous",
+      "semantic_variant": [
+        "instruction_purity",
+        "noise_interference"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_na_002",
+    "input": "这个片区省点电，具体条件后面再说。",
+    "scenario_description": "出现节能相关词，但没有明确对象或任务边界，测试是否会过度猜测为节能任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "ambiguous_input"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_ambiguous",
+      "semantic_variant": [
+        "instruction_purity",
+        "noise_interference"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_na_003",
+    "input": "晚上低谷期优化一下能耗。",
+    "scenario_description": "出现节能相关词，但没有明确对象或任务边界，测试是否会过度猜测为节能任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "ambiguous_input"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_ambiguous",
+      "semantic_variant": [
+        "instruction_purity",
+        "noise_interference"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_na_004",
+    "input": "给我搞个节能任务，你先看着办。",
+    "scenario_description": "出现节能相关词，但没有明确对象或任务边界，测试是否会过度猜测为节能任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "ambiguous_input"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_ambiguous",
+      "semantic_variant": [
+        "instruction_purity",
+        "noise_interference"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_na_005",
+    "input": "这边先节能一下，具体条件后面再说。",
+    "scenario_description": "出现节能相关词，但没有明确对象或任务边界，测试是否会过度猜测为节能任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "ambiguous_input"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_ambiguous",
+      "semantic_variant": [
+        "instruction_purity",
+        "noise_interference"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_na_006",
+    "input": "先做个节能方案看看。",
+    "scenario_description": "出现节能相关词，但没有明确对象或任务边界，测试是否会过度猜测为节能任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "ambiguous_input"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_ambiguous",
+      "semantic_variant": [
+        "instruction_purity",
+        "noise_interference"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_na_007",
+    "input": "这个片区省点电，你先看着办。",
+    "scenario_description": "出现节能相关词，但没有明确对象或任务边界，测试是否会过度猜测为节能任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "ambiguous_input"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_ambiguous",
+      "semantic_variant": [
+        "instruction_purity",
+        "noise_interference"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_na_008",
+    "input": "晚上低谷期优化一下能耗，具体条件后面再说。",
+    "scenario_description": "出现节能相关词，但没有明确对象或任务边界，测试是否会过度猜测为节能任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "ambiguous_input"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_ambiguous",
+      "semantic_variant": [
+        "instruction_purity",
+        "noise_interference"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_na_009",
+    "input": "给我搞个节能任务。",
+    "scenario_description": "出现节能相关词，但没有明确对象或任务边界，测试是否会过度猜测为节能任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "ambiguous_input"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_ambiguous",
+      "semantic_variant": [
+        "instruction_purity",
+        "noise_interference"
+      ],
+      "completeness_level": "L1"
+    }
+  },
+  {
+    "id": "es_na_010",
+    "input": "这边先节能一下，你先看着办。",
+    "scenario_description": "出现节能相关词，但没有明确对象或任务边界，测试是否会过度猜测为节能任务。",
+    "expected_result": {
+      "should_recognize": false,
+      "expected_scenario_code": null,
+      "expected_slots": {
+        "任务目标": [],
+        "任务对象": [],
+        "任务上下文": [],
+        "约束条件": []
+      },
+      "allowed_missing_slots": [
+        "任务目标",
+        "任务对象",
+        "任务上下文",
+        "约束条件"
+      ],
+      "failure_type": "ambiguous_input"
+    },
+    "expected_prompt_effect": {
+      "must_include_points": [],
+      "preferred_keywords": [
+        "节能"
+      ],
+      "must_not_include_points": []
+    },
+    "tags": {
+      "case_type": "negative_ambiguous",
+      "semantic_variant": [
+        "instruction_purity",
+        "noise_interference"
+      ],
+      "completeness_level": "L1"
+    }
+  }
+]
