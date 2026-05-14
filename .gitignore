@@ -27,3 +27,4 @@ venv/
 .uv-cache
 dist
 .obsidian
+docs/TASKS.md
