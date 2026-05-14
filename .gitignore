@@ -21,8 +21,10 @@ venv/
 
 # Claude 本地配置
 .claude/
+.worktrees/
 
 .codex_backup
 .uv-cache
 dist
 .obsidian
+docs/
