@@ -55,3 +55,23 @@
    - Status: Completed
 5. Ask the user to review the written spec before planning
    - Status: In Progress
+
+## Task: Build SDK Release 0.1.5 In New Worktree
+
+- Status: Completed
+- Goal: Create an isolated git worktree for the `0.1.5` SDK release, update release version metadata, verify unit tests and package build, then push the release branch.
+
+### Subtasks
+
+1. Inspect current release baseline and version touchpoints
+   - Status: Completed
+2. Create a new isolated worktree and release branch for `0.1.5`
+   - Status: Completed
+3. Add or update unit tests for release version metadata
+   - Status: Completed
+4. Update SDK version metadata and release docs to `0.1.5`
+   - Status: Completed
+5. Run targeted unit tests and package build in the new worktree
+   - Status: Completed
+6. Commit and push the `0.1.5` release branch
+   - Status: In Progress
