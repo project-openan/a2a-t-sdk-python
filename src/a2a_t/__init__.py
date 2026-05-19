@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from importlib import import_module
 
-__version__ = "0.1.7"
+__version__ = "0.1.8"
 
 __all__ = [
     "__version__",
