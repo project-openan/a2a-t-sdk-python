@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-`a2a-t-sdk` is a Python SDK targeting telecom scenarios, used to generate task prompts and handle task negotiation flows. The current version is `0.1.8` and is in the **Alpha** stage, suitable for prototype validation, interface integration testing, and capability evaluation. It is not recommended for direct use in production environments at this time.
+`a2a-t-sdk` is a Python SDK targeting telecom scenarios, used to generate task prompts and handle task negotiation flows.
 
 This SDK is primarily aimed at two types of users:
 
@@ -37,7 +37,7 @@ The core code of the repository is located in `src/a2a_t`, with the main modules
 - License: `Apache-2.0`
 - Build backend: `uv_build`
 
-The current version is better suited for trial, integration testing, and evaluation via source code. Before getting started, it is recommended to first copy `package_data/env.example` to `package_data/.env`.
+Before getting started, it is recommended to first copy `package_data/env.example` to `package_data/.env`.
 
 ## Development and Testing
 
@@ -64,7 +64,6 @@ The `tests/` directory contains test cases for client prompt generation, server 
 
 Before use, it is recommended to confirm the following limitations:
 
-- The project as a whole is in the **Alpha** stage, and interfaces and resource organization may still change.
 - The built-in LLM invocation chain is unified externally as an OpenAI-compatible adaptation layer.
 - The built-in guardrail mechanism currently only provides `noop`.
 - Prompt resources currently only support local files.
