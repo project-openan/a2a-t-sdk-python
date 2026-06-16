@@ -9,7 +9,6 @@ from a2a_t.common.prompt_resources import (
     SlotSchemaLoader,
     TemplateLoader,
 )
-from a2a_t.prompt.validation.guardrails import SafetyGuardrail
 from a2a_t.prompt.validation.json_schema_slot_validator import JsonSchemaSlotValidator
 
 
@@ -23,4 +22,3 @@ class PromptRuntimeComponents:
     slot_json_schema_loader: SlotJsonSchemaLoader
     prompt_resource_loader: PromptResourceLoader
     json_schema_slot_validator: JsonSchemaSlotValidator
-    guardrail: SafetyGuardrail

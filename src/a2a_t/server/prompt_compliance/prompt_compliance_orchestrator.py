@@ -11,8 +11,6 @@ from a2a_t.common.prompt_resources import (
     TemplateLoader,
 )
 from a2a_t.prompt.common.errors import PromptSourceError
-from a2a_t.prompt.validation.errors import GuardrailExecutionError
-from a2a_t.prompt.validation.guardrails import SafetyGuardrail
 from a2a_t.prompt.validation.models import SlotValidationResult
 from a2a_t.prompt.validation.json_schema_slot_validator import JsonSchemaSlotValidator
 from a2a_t.server.prompt_compliance.semantic_validator import (
@@ -20,12 +18,9 @@ from a2a_t.server.prompt_compliance.semantic_validator import (
     SemanticValidationResult,
 )
 from a2a_t.server.prompt_compliance.constants import (
-    GUARDRAIL_EXECUTION_ERROR,
     GENERATION_STAGE,
     PROMPT_RESOURCE_ACCESS_ERROR,
     PROMPT_RESOURCE_PARSE_ERROR,
-    GUARDRAIL_REJECTED,
-    GUARDRAIL_STAGE,
     PASSED_STAGE,
     PROCESSED_PROMPT_PARSE_ERROR,
     PROMPT_PARSE_STAGE,
@@ -46,7 +41,6 @@ class PromptComplianceOrchestrator:
     def __init__(
         self,
         *,
-        guardrail: SafetyGuardrail,
         scenario_resolver: ScenarioResolutionOrchestrator,
         template_loader: TemplateLoader,
         slot_schema_loader: SlotSchemaLoader,
@@ -56,7 +50,6 @@ class PromptComplianceOrchestrator:
         validator: JsonSchemaSlotValidator,
         semantic_validator: SemanticSlotValidator | None = None,
     ) -> None:
-        self._guardrail = guardrail
         self._scenario_resolver = scenario_resolver
         self._template_loader = template_loader
         self._slot_schema_loader = slot_schema_loader
@@ -73,27 +66,6 @@ class PromptComplianceOrchestrator:
         request_metadata: dict[str, object] | None = None,
     ) -> PromptComplianceResult:
         """Validate a processed task prompt and derive follow-up negotiation hints when needed."""
-        try:
-            guardrail_result = self._guardrail.check(processed_prompt_text, request_metadata)
-        except GuardrailExecutionError as error:
-            return self._error_result(
-                stage=GUARDRAIL_STAGE,
-                error_code=GUARDRAIL_EXECUTION_ERROR,
-                error_message=str(error),
-            )
-        except Exception as error:
-            return self._error_result(
-                stage=GUARDRAIL_STAGE,
-                error_code=GUARDRAIL_EXECUTION_ERROR,
-                error_message=str(error),
-            )
-        if not guardrail_result.passed:
-            return self._error_result(
-                stage=GUARDRAIL_STAGE,
-                error_code=guardrail_result.error_code or GUARDRAIL_REJECTED,
-                error_message=guardrail_result.error_message or "Guardrail rejected the processed prompt.",
-            )
-
         scenario_resolution = self._scenario_resolver.resolve(processed_prompt_text)
         if not scenario_resolution.success or scenario_resolution.reference is None:
             failure = scenario_resolution.failure

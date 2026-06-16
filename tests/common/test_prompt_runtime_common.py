@@ -12,7 +12,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
-from a2a_t.config.models import A2ATConfig, GuardrailProviderConfig, PromptComplianceConfig, PromptRuntimeConfig
+from a2a_t.config.models import A2ATConfig, PromptComplianceConfig, PromptRuntimeConfig
 from tests.test_support import ManagedTempDirTestCase
 
 
@@ -29,10 +29,7 @@ class CommonPromptRuntimeComponentsBuilderTest(unittest.TestCase):
                 source_type="local_file",
                 local_root_dir="./runtime-prompt-resources",
             ),
-            prompt_compliance=PromptComplianceConfig(
-                enabled=True,
-                guardrail=GuardrailProviderConfig(provider="noop"),
-            ),
+            prompt_compliance=PromptComplianceConfig(enabled=True),
         )
 
         components = PromptRuntimeComponentsBuilder().build(config=config)
@@ -47,7 +44,7 @@ class CommonPromptRuntimeComponentsBuilderTest(unittest.TestCase):
         self.assertEqual(components.prompt_resource_loader.root_dir, PromptResourceLoader().root_dir)
         self.assertFalse(hasattr(components, "slot_validator"))
         self.assertIsInstance(components.json_schema_slot_validator, JsonSchemaSlotValidator)
-        self.assertTrue(hasattr(components.guardrail, "check"))
+        self.assertFalse(hasattr(components, "guardrail"))
 
 
 class CommonPromptRuntimeComponentsBuilderRootScopeAdjustmentTest(ManagedTempDirTestCase):
@@ -58,10 +55,7 @@ class CommonPromptRuntimeComponentsBuilderRootScopeAdjustmentTest(ManagedTempDir
                 source_type="local_file",
                 local_root_dir=str(self.root),
             ),
-            prompt_compliance=PromptComplianceConfig(
-                enabled=True,
-                guardrail=GuardrailProviderConfig(provider="noop"),
-            ),
+            prompt_compliance=PromptComplianceConfig(enabled=True),
         )
 
     def _write_resource_file(self, relative_path: str, content: str) -> None:
@@ -107,10 +101,7 @@ class CommonPromptRuntimeComponentsBuilderRootScopeAdjustmentTest(ManagedTempDir
                 source_type="local_file",
                 local_root_dir=str(packaged_root),
             ),
-            prompt_compliance=PromptComplianceConfig(
-                enabled=True,
-                guardrail=GuardrailProviderConfig(provider="noop"),
-            ),
+            prompt_compliance=PromptComplianceConfig(enabled=True),
         )
 
         with self.assertNoLogs("a2a_t.common.prompt_runtime.prompt_runtime_components_builder", level="WARNING"):

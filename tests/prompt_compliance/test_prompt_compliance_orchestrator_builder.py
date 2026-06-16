@@ -69,7 +69,6 @@ class PromptComplianceOrchestratorBuilderTest(unittest.TestCase):
             "Components",
             (),
             {
-                "guardrail": object(),
                 "scenario_loader": object(),
                 "prompt_resource_loader": object(),
                 "template_loader": object(),
@@ -113,6 +112,7 @@ class PromptComplianceOrchestratorBuilderTest(unittest.TestCase):
         self.assertIsInstance(orchestrator.kwargs["semantic_validator"], FakeSemanticValidator)
         self.assertIs(orchestrator.kwargs["semantic_validator"].llm_client, llm_client)
         self.assertIs(orchestrator.kwargs["semantic_validator"].prompt_resource_loader, components.prompt_resource_loader)
+        self.assertNotIn("guardrail", orchestrator.kwargs)
 
     def test_builder_reuses_provided_runtime_components_without_rebuilding(self) -> None:
         from a2a_t.server.prompt_compliance.prompt_compliance_orchestrator_builder import PromptComplianceOrchestratorBuilder
@@ -121,7 +121,6 @@ class PromptComplianceOrchestratorBuilderTest(unittest.TestCase):
             "Components",
             (),
             {
-                "guardrail": object(),
                 "scenario_loader": object(),
                 "prompt_resource_loader": object(),
                 "template_loader": object(),
@@ -156,10 +155,10 @@ class PromptComplianceOrchestratorBuilderTest(unittest.TestCase):
         self.assertIs(orchestrator.kwargs["scenario_resolver"].config, config.prompt)
         self.assertIs(orchestrator.kwargs["scenario_resolver"].scenario_loader, components.scenario_loader)
         self.assertIs(orchestrator.kwargs["scenario_resolver"].prompt_resource_loader, components.prompt_resource_loader)
-        self.assertIs(orchestrator.kwargs["guardrail"], components.guardrail)
         self.assertIs(orchestrator.kwargs["prompt_resource_loader"], components.prompt_resource_loader)
         self.assertIs(orchestrator.kwargs["slot_json_schema_loader"], components.slot_json_schema_loader)
         self.assertIs(orchestrator.kwargs["validator"], components.json_schema_slot_validator)
+        self.assertNotIn("guardrail", orchestrator.kwargs)
         self.assertIn("semantic_validator", orchestrator.kwargs)
         self.assertIsNotNone(orchestrator.kwargs["semantic_validator"])
         self.assertIsInstance(orchestrator.kwargs["semantic_validator"], FakeSemanticValidator)

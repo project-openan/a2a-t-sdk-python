@@ -22,36 +22,17 @@ from a2a_t.prompt.common.models import PromptReference
 from a2a_t.common.prompt_resources.errors import PromptResourceNotFoundError, PromptResourceParseError
 from a2a_t.common.prompt_resources.models import PromptMessages, ScenarioDefinition, SlotDefinition, SlotSchema
 from a2a_t.prompt.validation.constants import INVALID_VALUE, MISSING_INPUT
-from a2a_t.prompt.validation.errors import GuardrailExecutionError
-from a2a_t.prompt.validation.models import GuardrailResult, SlotValidationError, SlotValidationResult
+from a2a_t.prompt.validation.models import SlotValidationError, SlotValidationResult
 from a2a_t.server.prompt_compliance.constants import (
     GENERATION_STAGE,
-    GUARDRAIL_REJECTED,
     PROMPT_RESOURCE_ACCESS_ERROR,
     PROMPT_RESOURCE_LOAD_ERROR,
-    GUARDRAIL_STAGE,
     SLOT_VALIDATION_ERROR,
     SLOT_VALIDATION_STAGE,
     TEMPLATE_LOAD_ERROR,
 )
 from a2a_t.server.prompt_compliance.result import PromptComplianceResult
 from a2a_t.server.prompt_compliance.semantic_validator import SemanticValidationError, SemanticValidationResult
-
-
-class FakeGuardrail:
-    def __init__(self, result: GuardrailResult) -> None:
-        self._result = result
-
-    def check(self, prompt_text: str, context: dict[str, object] | None = None) -> GuardrailResult:
-        return self._result
-
-
-class RaisingGuardrail:
-    def __init__(self, error: Exception) -> None:
-        self._error = error
-
-    def check(self, prompt_text: str, context: dict[str, object] | None = None) -> GuardrailResult:
-        raise self._error
 
 
 class FakeTemplateLoader:
@@ -188,7 +169,6 @@ class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
     def _build_service(
         self,
         *,
-        guardrail: FakeGuardrail | RaisingGuardrail | None = None,
         template_loader: FakeTemplateLoader | None = None,
         slot_schema_loader: FakeSlotSchemaLoader | None = None,
         slot_json_schema_loader: FakeSlotJsonSchemaLoader | None = None,
@@ -201,7 +181,6 @@ class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
         from a2a_t.server.prompt_compliance.prompt_compliance_orchestrator import PromptComplianceOrchestrator
 
         return PromptComplianceOrchestrator(
-            guardrail=guardrail or FakeGuardrail(GuardrailResult(passed=True, error_code=None, error_message=None)),
             scenario_resolver=scenario_resolver or FakeScenarioResolver(self.scenario_resolution),
             template_loader=template_loader or FakeTemplateLoader("Site: {site}"),
             slot_schema_loader=slot_schema_loader or FakeSlotSchemaLoader(self._slot_schema()),
@@ -446,69 +425,6 @@ class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
                     "code": "prompt_resource_load_error",
                     "message": "Scenario recognition prompt resources are missing.",
                     "stage": "generation",
-                },
-            ),
-        )
-
-    def test_check_returns_guardrail_execution_error_when_guardrail_runtime_fails(self) -> None:
-        service = self._build_service(
-            guardrail=RaisingGuardrail(GuardrailExecutionError("guardrail timed out")),
-        )
-
-        result = service.check(processed_prompt_text=self.processed_prompt, request_metadata=None)
-
-        self.assertEqual(
-            result,
-            PromptComplianceResult(
-                success=False,
-                failure={
-                    "code": "guardrail_execution_error",
-                    "message": "guardrail timed out",
-                    "stage": "guardrail",
-                },
-            ),
-        )
-
-    def test_check_returns_guardrail_execution_error_when_guardrail_raises_unexpected_error(self) -> None:
-        service = self._build_service(
-            guardrail=RaisingGuardrail(RuntimeError("unexpected guardrail failure")),
-        )
-
-        result = service.check(processed_prompt_text=self.processed_prompt, request_metadata=None)
-
-        self.assertEqual(
-            result,
-            PromptComplianceResult(
-                success=False,
-                failure={
-                    "code": "guardrail_execution_error",
-                    "message": "unexpected guardrail failure",
-                    "stage": "guardrail",
-                },
-            ),
-        )
-
-    def test_check_returns_guardrail_rejected_when_guardrail_blocks_prompt(self) -> None:
-        service = self._build_service(
-            guardrail=FakeGuardrail(
-                GuardrailResult(
-                    passed=False,
-                    error_code=None,
-                    error_message=None,
-                )
-            ),
-        )
-
-        result = service.check(processed_prompt_text=self.processed_prompt, request_metadata=None)
-
-        self.assertEqual(
-            result,
-            PromptComplianceResult(
-                success=False,
-                failure={
-                    "code": GUARDRAIL_REJECTED,
-                    "message": "Guardrail rejected the processed prompt.",
-                    "stage": GUARDRAIL_STAGE,
                 },
             ),
         )
