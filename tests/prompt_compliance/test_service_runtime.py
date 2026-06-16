@@ -113,9 +113,11 @@ class FakeSemanticValidator:
         self._passed = passed
         self._message = message
         self.calls: int = 0
+        self.last_kwargs: dict[str, object] | None = None
 
     def validate(self, **kwargs: object) -> SemanticValidationResult:
         self.calls += 1
+        self.last_kwargs = dict(kwargs)
         if self._passed:
             return SemanticValidationResult(passed=True, errors=[])
         return SemanticValidationResult(
@@ -332,6 +334,20 @@ class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
         result = service.check(processed_prompt_text=self.processed_prompt, request_metadata=None)
 
         self.assertEqual(semantic_validator.calls, 1)
+        self.assertEqual(
+            semantic_validator.last_kwargs,
+            {
+                "language": "en-US",
+                "slot_json_schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {"site": {"type": "string", "minLength": 1}},
+                    "required": ["site"],
+                    "additionalProperties": False,
+                },
+                "extracted_slots": {"site": "Site A"},
+            },
+        )
         self.assertEqual(
             result,
             PromptComplianceResult(

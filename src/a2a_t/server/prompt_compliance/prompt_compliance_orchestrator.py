@@ -143,10 +143,7 @@ class PromptComplianceOrchestrator:
 
         if self._semantic_validator is not None:
             semantic_result: SemanticValidationResult = self._semantic_validator.validate(
-                processed_prompt_text=processed_prompt_text,
-                reference=reference,
-                template_text=template_text,
-                slot_schema=slot_schema,
+                language=reference.language,
                 slot_json_schema=slot_json_schema,
                 extracted_slots=extraction_result.slots,
             )

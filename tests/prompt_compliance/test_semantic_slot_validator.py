@@ -12,9 +12,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
-from a2a_t.common.prompt_resources.models import SlotDefinition, SlotSchema
 from a2a_t.llm.models import LLMResponse
-from a2a_t.prompt.common.models import PromptReference
 
 
 class FakeLLMClient:
@@ -22,7 +20,13 @@ class FakeLLMClient:
         self._response = response
         self.calls: list[dict[str, object]] = []
 
-    def structured(self, *, messages: list[dict[str, str]], json_schema: dict[str, object], **kwargs: object) -> LLMResponse:
+    def structured(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        json_schema: dict[str, object],
+        **kwargs: object,
+    ) -> LLMResponse:
         self.calls.append({"messages": messages, "json_schema": json_schema})
         if isinstance(self._response, Exception):
             raise self._response
@@ -45,24 +49,6 @@ class FakePromptResourceLoader:
 
 
 class LLMSemanticSlotValidatorTest(unittest.TestCase):
-    def _slot_schema(self) -> SlotSchema:
-        return SlotSchema(
-            scenario_code="energy_saving",
-            slots=[
-                SlotDefinition(
-                    name="site",
-                    required=True,
-                    description="site name",
-                    example="Site A",
-                    value_constraint="must be a site",
-                    type="string",
-                    allowed_values=None,
-                    range=None,
-                    pattern=None,
-                )
-            ],
-        )
-
     def test_validate_builds_prompt_and_returns_passed_result(self) -> None:
         from a2a_t.server.prompt_compliance.llm_semantic_slot_validator import LLMSemanticSlotValidator
 
@@ -84,12 +70,9 @@ class LLMSemanticSlotValidatorTest(unittest.TestCase):
         )
 
         result = validator.validate(
-            processed_prompt_text="请分析松山湖区域节能目标",
-            reference=PromptReference(scenario_code="energy_saving", language="zh-CN"),
-            template_text="Template: {site}",
-            slot_schema=self._slot_schema(),
+            language="zh-CN",
             slot_json_schema={"type": "object"},
-            extracted_slots={"site": "松山湖区域"},
+            extracted_slots={"site": "Site A"},
         )
 
         self.assertTrue(result.passed)
@@ -116,7 +99,7 @@ class LLMSemanticSlotValidatorTest(unittest.TestCase):
 
         llm = FakeLLMClient(
             LLMResponse(
-                content='not-json',
+                content="not-json",
                 model="deepseek-chat",
                 usage={},
                 metadata={},
@@ -125,10 +108,7 @@ class LLMSemanticSlotValidatorTest(unittest.TestCase):
         validator = LLMSemanticSlotValidator(llm_client=llm)
 
         result = validator.validate(
-            processed_prompt_text="x",
-            reference=PromptReference(scenario_code="energy_saving", language="zh-CN"),
-            template_text="t",
-            slot_schema=self._slot_schema(),
+            language="zh-CN",
             slot_json_schema={"type": "object"},
             extracted_slots={"site": "S"},
         )
@@ -144,10 +124,7 @@ class LLMSemanticSlotValidatorTest(unittest.TestCase):
         validator = LLMSemanticSlotValidator(llm_client=llm)
 
         result = validator.validate(
-            processed_prompt_text="x",
-            reference=PromptReference(scenario_code="energy_saving", language="zh-CN"),
-            template_text="t",
-            slot_schema=self._slot_schema(),
+            language="zh-CN",
             slot_json_schema={"type": "object"},
             extracted_slots={"site": "S"},
         )

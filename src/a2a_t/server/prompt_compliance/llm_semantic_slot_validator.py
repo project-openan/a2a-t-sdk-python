@@ -3,9 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from a2a_t.common.prompt_resources.models import SlotSchema
 from a2a_t.common.prompt_resources import PromptResourceLoader
-from a2a_t.prompt.common.models import PromptReference
 
 from .models import SemanticValidationError, SemanticValidationResult
 from .semantic_validator import SemanticSlotValidator
@@ -19,17 +17,14 @@ class LLMSemanticSlotValidator(SemanticSlotValidator):
     def validate(
         self,
         *,
-        processed_prompt_text: str,
-        reference: PromptReference,
-        template_text: str,
-        slot_schema: SlotSchema,
+        language: str,
         slot_json_schema: dict[str, object],
         extracted_slots: dict[str, str | None],
     ) -> SemanticValidationResult:
         try:
             prompt_messages = self._prompt_resource_loader.load(
                 analysis_action="semantic_validation",
-                language=reference.language,
+                language=language,
             )
         except Exception as error:
             return SemanticValidationResult(
@@ -47,10 +42,6 @@ class LLMSemanticSlotValidator(SemanticSlotValidator):
                 messages=self._build_messages(
                     system_prompt=prompt_messages.system_prompt,
                     user_prompt=prompt_messages.user_prompt,
-                    processed_prompt_text=processed_prompt_text,
-                    reference=reference,
-                    template_text=template_text,
-                    slot_schema=slot_schema,
                     slot_json_schema=slot_json_schema,
                     extracted_slots=extracted_slots,
                 ),
@@ -75,10 +66,6 @@ class LLMSemanticSlotValidator(SemanticSlotValidator):
         *,
         system_prompt: str,
         user_prompt: str,
-        processed_prompt_text: str,
-        reference: PromptReference,
-        template_text: str,
-        slot_schema: SlotSchema,
         slot_json_schema: dict[str, object],
         extracted_slots: dict[str, str | None],
     ) -> list[dict[str, str]]:
