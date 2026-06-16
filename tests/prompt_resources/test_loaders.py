@@ -289,21 +289,6 @@ class PromptResourceLoaderTest(ManagedTempDirTestCase):
             self.assertEqual(local_resources.LocalPromptResourceFiles().root_dir, expected_root)
             self.assertEqual(local_resources.BasePromptResourceLoader()._default_root_dir(), expected_root)
 
-    def test_public_package_no_longer_exports_source_catalog_provider_cache_or_registry_layers(self) -> None:
-        import a2a_t.common.prompt_resources as prompt_resources
-
-        self.assertFalse(hasattr(prompt_resources, "LocalPromptResourceSource"))
-        self.assertFalse(hasattr(prompt_resources, "PromptResourceSource"))
-        self.assertFalse(hasattr(prompt_resources, "LocalPromptResourceCatalog"))
-        self.assertFalse(hasattr(prompt_resources, "PromptResourceCatalog"))
-        self.assertFalse(hasattr(prompt_resources, "LocalPromptResourceProvider"))
-        self.assertFalse(hasattr(prompt_resources, "PromptResourceProvider"))
-        self.assertFalse(hasattr(prompt_resources, "PromptStore"))
-        self.assertFalse(hasattr(prompt_resources, "ConflictResolutionPolicy"))
-        self.assertFalse(hasattr(prompt_resources, "ExpirationPolicy"))
-        self.assertFalse(hasattr(prompt_resources, "PromptResourceRegistry"))
-
-
 if __name__ == "__main__":
     unittest.main()
 

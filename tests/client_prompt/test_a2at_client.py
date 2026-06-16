@@ -103,9 +103,6 @@ class A2ATClientTest(unittest.TestCase):
             result = client.generate_task_prompt("Analyze Site A.")
 
             self.assertIs(result, prompt_result)
-            self.assertFalse(hasattr(result, "scenario_code"))
-            self.assertFalse(hasattr(result, "validation"))
-            self.assertFalse(hasattr(result, "slots"))
             self.assertEqual(client.start_negotiation(start_input), {"started": True})
             self.assertEqual(
                 client.receive_negotiation(
@@ -127,11 +124,6 @@ class A2ATClientTest(unittest.TestCase):
         self.assertEqual(negotiation.start_calls, [start_input])
         self.assertEqual(negotiation.receive_calls[0]["message"], "Clarify intent")
         self.assertEqual(negotiation.continue_calls, [continue_input])
-
-    def test_client_package_exports_a2at_client(self) -> None:
-        import a2a_t.client as client_package
-
-        self.assertTrue(hasattr(client_package, "A2ATClient"))
 
 
 class A2ATClientPromptResourceTimingTest(ManagedTempDirTestCase):

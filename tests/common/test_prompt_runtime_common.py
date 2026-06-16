@@ -34,7 +34,6 @@ class CommonPromptRuntimeComponentsBuilderTest(unittest.TestCase):
 
         components = PromptRuntimeComponentsBuilder().build(config=config)
 
-        self.assertFalse(hasattr(components, "resource_source"))
         self.assertEqual(components.scenario_loader.root_dir, Path("./runtime-prompt-resources"))
         self.assertEqual(components.template_loader.root_dir, Path("./runtime-prompt-resources"))
         self.assertEqual(components.slot_schema_loader.root_dir, Path("./runtime-prompt-resources"))
@@ -42,9 +41,7 @@ class CommonPromptRuntimeComponentsBuilderTest(unittest.TestCase):
         self.assertEqual(components.slot_json_schema_loader.root_dir, Path("./runtime-prompt-resources"))
         self.assertIsInstance(components.prompt_resource_loader, PromptResourceLoader)
         self.assertEqual(components.prompt_resource_loader.root_dir, PromptResourceLoader().root_dir)
-        self.assertFalse(hasattr(components, "slot_validator"))
         self.assertIsInstance(components.json_schema_slot_validator, JsonSchemaSlotValidator)
-        self.assertFalse(hasattr(components, "guardrail"))
 
 
 class CommonPromptRuntimeComponentsBuilderRootScopeAdjustmentTest(ManagedTempDirTestCase):

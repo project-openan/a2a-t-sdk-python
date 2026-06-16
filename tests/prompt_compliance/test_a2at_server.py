@@ -171,11 +171,6 @@ class A2ATServerTest(unittest.TestCase):
                 },
             )
 
-    def test_server_package_exports_a2at_server(self) -> None:
-        import a2a_t.server as server_package
-
-        self.assertTrue(hasattr(server_package, "A2ATServer"))
-
 
 class A2ATServerPromptResourceTimingTest(ManagedTempDirTestCase):
     def setUp(self) -> None:

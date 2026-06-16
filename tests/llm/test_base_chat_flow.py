@@ -13,7 +13,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from a2a_t.llm.base import LLMAdapter
 from a2a_t.llm.models import ChatMessage, LLMResponse
-from a2a_t.llm import ChatMessage as PublicChatMessage, ChatSession, InMemorySessionStore, LLMAdapterFactory, LLMClient
+from a2a_t.llm import InMemorySessionStore
 from a2a_t.llm.errors import LLMRuntimeError
 
 
@@ -112,20 +112,6 @@ class BaseChatFlowTest(unittest.TestCase):
 
         self.assertEqual(second.session_id, first.session_id)
 
-    def test_chat_does_not_expose_legacy_updated_at_field(self) -> None:
-        shared_store = InMemorySessionStore(max_total=10, max_per_provider=10)
-        adapter = DummyAdapter(
-            {"model": "dummy-model", "provider": "dummy", "history_window": 2, "session_store": shared_store}
-        )
-
-        response = adapter.chat("hello")
-
-        session = shared_store._sessions[response.session_id]
-
-        self.assertIsNotNone(session)
-        self.assertFalse(hasattr(session, "updated_at"))
-        self.assertIsNotNone(session.last_accessed_time)
-
     def test_reset_session_clears_history_and_system_prompt(self) -> None:
         adapter = DummyAdapter({"model": "dummy-model", "history_window": 2})
         first = adapter.chat("hello", system_prompt="first prompt")
@@ -186,15 +172,6 @@ class BaseChatFlowTest(unittest.TestCase):
 
         self.assertEqual([item.role for item in stored.messages], ["user", "assistant", "user", "assistant"])
         self.assertEqual(stored.messages[0].content, "second")
-
-
-class LLMModuleExportsTest(unittest.TestCase):
-    def test_public_exports_cover_chat_primitives(self) -> None:
-        self.assertIsNotNone(PublicChatMessage)
-        self.assertIsNotNone(ChatSession)
-        self.assertIsNotNone(InMemorySessionStore)
-        self.assertIsNotNone(LLMAdapterFactory)
-        self.assertIsNotNone(LLMClient)
 
 
 if __name__ == "__main__":

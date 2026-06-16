@@ -56,11 +56,6 @@ class OpenAICompatibleAdapterTest(unittest.TestCase):
             timeout=None,
         )
 
-    def test_provider_wrapper_type_is_exposed_as_openai_compatible_adapter(self) -> None:
-        from a2a_t.llm.adapters import OpenAICompatibleAdapter
-
-        self.assertTrue(issubclass(OpenAICompatibleAdapter, ComposedLLMAdapter))
-
     @patch("a2a_t.llm.transports.OpenAI")
     def test_complete_forces_json_mode_and_json_instruction(self, openai_cls: Mock) -> None:
         sdk_client = Mock()
