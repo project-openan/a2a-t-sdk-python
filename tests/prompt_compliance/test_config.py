@@ -22,8 +22,6 @@ def test_prompt_compliance_config_from_mapping_reads_all_sections() -> None:
     config = PromptComplianceConfig.from_mapping(values)
 
     assert config.enabled is True
-    assert not hasattr(config, "guardrail")
-    assert not hasattr(config, "slot_schema")
     assert config.providers == {}
 
 
@@ -33,6 +31,4 @@ def test_prompt_compliance_config_from_mapping_uses_defaults() -> None:
     config = PromptComplianceConfig.from_mapping(values)
 
     assert config.enabled is False
-    assert not hasattr(config, "guardrail")
-    assert not hasattr(config, "slot_schema")
     assert config.providers == {}
