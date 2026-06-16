@@ -35,8 +35,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/a2a/a2a-t-sdk"
-Documentation = "https://github.com/a2a/a2a-t-sdk#readme"
+Homepage = "https://github.com/project-openan/a2a-t-sdk-python"
+Documentation = "https://github.com/project-openan/a2a-t-sdk-python#readme"
 
 [tool.uv.build-backend]
 module-name = "a2a_t"
