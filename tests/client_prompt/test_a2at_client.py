@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
 import unittest
@@ -14,9 +15,25 @@ if str(SRC_ROOT) not in sys.path:
 
 
 from a2a_t.client.prompt_generation.models import PromptGenerationResult
+from a2a_t.llm.models import LLMClientConfig
 from a2a_t.negotiation.common.enums import NegotiationStatus, NegotiationType
 from a2a_t.negotiation.common.models import ContinueNegotiationInput, NegotiationContext, StartNegotiationInput
 from tests.test_support import ManagedTempDirTestCase, TEST_ENV_PATH
+
+
+def build_llm_config() -> LLMClientConfig:
+    return LLMClientConfig(
+        provider="deepseek",
+        model="deepseek-chat",
+        api_key="sk-test",
+        base_url=None,
+        history_window=10,
+        max_tokens=None,
+        temperature=None,
+        timeout_seconds=None,
+        session_max_total=300,
+        session_max_per_provider=100,
+    )
 
 
 class FakePromptGenerationOrchestrator:
@@ -59,6 +76,15 @@ class FakeNegotiationOrchestrator:
 
 
 class A2ATClientTest(unittest.TestCase):
+    def test_constructor_signature_remains_stable(self) -> None:
+        from a2a_t.client.a2at_client import A2ATClient
+
+        signature = inspect.signature(A2ATClient.__init__)
+
+        self.assertEqual(list(signature.parameters), ["self", "env_path", "logger"])
+        self.assertEqual(signature.parameters["env_path"].kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertEqual(signature.parameters["logger"].kind, inspect.Parameter.KEYWORD_ONLY)
+
     def test_a2at_client_delegates_all_public_methods_with_typed_negotiation_inputs(self) -> None:
         from a2a_t.client.a2at_client import A2ATClient
 
@@ -70,6 +96,8 @@ class A2ATClientTest(unittest.TestCase):
         prompt_orchestrator = FakePromptGenerationOrchestrator(prompt_result)
         prompt_builder = FakePromptGenerationBuilder(prompt_orchestrator)
         negotiation = FakeNegotiationOrchestrator()
+        llm_config = build_llm_config()
+        llm_client = object()
 
         start_input = StartNegotiationInput(
             type=NegotiationType.CLARIFICATION,
@@ -93,9 +121,10 @@ class A2ATClientTest(unittest.TestCase):
 
         with (
             patch("a2a_t.client.a2at_client._default_env_path", return_value=TEST_ENV_PATH),
+            patch("a2a_t.client.a2at_client.LLMConfigLoader.load", return_value=llm_config) as load_llm_config,
+            patch("a2a_t.client.a2at_client.LLMClientFactory.create", return_value=llm_client) as create_llm_client,
             patch("a2a_t.client.a2at_client.PromptGenerationOrchestratorBuilder", return_value=prompt_builder),
             patch("a2a_t.client.a2at_client.ClientNegotiationOrchestratorBuilder") as negotiation_builder_cls,
-            patch("a2a_t.client.a2at_client.LLMClient", return_value=object()),
         ):
             negotiation_builder_cls.return_value.build.return_value = negotiation
             client = A2ATClient()
@@ -120,6 +149,9 @@ class A2ATClientTest(unittest.TestCase):
             )
             self.assertEqual(client.continue_negotiation(continue_input), {"continued": True})
 
+        load_llm_config.assert_called_once_with(TEST_ENV_PATH)
+        create_llm_client.assert_called_once_with(llm_config.provider, llm_config, logger=None)
+        self.assertIs(prompt_builder.calls[0]["llm_client"], llm_client)
         self.assertEqual(prompt_orchestrator.calls, ["Analyze Site A."])
         self.assertEqual(negotiation.start_calls, [start_input])
         self.assertEqual(negotiation.receive_calls[0]["message"], "Clarify intent")
@@ -163,7 +195,8 @@ class A2ATClientPromptResourceTimingTest(ManagedTempDirTestCase):
 
         with (
             patch("a2a_t.client.a2at_client.ClientNegotiationOrchestratorBuilder") as negotiation_builder_cls,
-            patch("a2a_t.client.a2at_client.LLMClient", return_value=object()),
+            patch("a2a_t.client.a2at_client.LLMConfigLoader.load", return_value=build_llm_config()),
+            patch("a2a_t.client.a2at_client.LLMClientFactory.create", return_value=object()),
             patch("a2a_t.common.prompt_resources.local_resources.LocalPromptResourceFiles._default_root_dir", return_value=missing_packaged_root),
         ):
             negotiation_builder_cls.return_value.build.return_value = object()

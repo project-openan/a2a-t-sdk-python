@@ -16,7 +16,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from a2a_t.common.prompt_resources import PromptResourceLoader, SlotSchemaLoader, TemplateLoader
 from a2a_t.common.prompt_resources.models import ScenarioDefinition
-from a2a_t.llm.models import LLMResponse
+from a2a_t.llm.models import LLMClientConfig, LLMResponse
 from a2a_t.prompt.analysis import SlotExtractor
 from a2a_t.prompt.analysis.models import ScenarioResolutionResult
 from a2a_t.prompt.common.models import PromptReference
@@ -24,6 +24,21 @@ from a2a_t.prompt.validation.json_schema_slot_validator import JsonSchemaSlotVal
 from a2a_t.server.a2at_server import A2ATServer
 from a2a_t.server.prompt_compliance.prompt_compliance_orchestrator import PromptComplianceOrchestrator
 from tests.test_support import ManagedTempDirTestCase, TEST_ENV_PATH
+
+
+def build_llm_config() -> LLMClientConfig:
+    return LLMClientConfig(
+        provider="deepseek",
+        model="deepseek-chat",
+        api_key="sk-test",
+        base_url=None,
+        history_window=10,
+        max_tokens=None,
+        temperature=None,
+        timeout_seconds=None,
+        session_max_total=300,
+        session_max_per_provider=100,
+    )
 
 
 class FakeSequencedLLMClient:
@@ -116,9 +131,10 @@ class PromptComplianceIntegrationRuntimeTest(ManagedTempDirTestCase):
         )
         with (
             patch("a2a_t.server.a2at_server._default_env_path", return_value=TEST_ENV_PATH),
+            patch("a2a_t.server.a2at_server.LLMConfigLoader.load", return_value=build_llm_config()),
+            patch("a2a_t.server.a2at_server.LLMClientFactory.create", return_value=object()),
             patch("a2a_t.server.a2at_server.PromptComplianceOrchestratorBuilder", return_value=FakePromptComplianceBuilder(service)),
             patch("a2a_t.server.a2at_server.ServerNegotiationOrchestratorBuilder") as negotiation_builder_cls,
-            patch("a2a_t.server.a2at_server.LLMClient", return_value=object()),
         ):
             negotiation_builder_cls.return_value.build.return_value = object()
             server = A2ATServer()
@@ -178,9 +194,10 @@ class PromptComplianceIntegrationRuntimeTest(ManagedTempDirTestCase):
         )
         with (
             patch("a2a_t.server.a2at_server._default_env_path", return_value=TEST_ENV_PATH),
+            patch("a2a_t.server.a2at_server.LLMConfigLoader.load", return_value=build_llm_config()),
+            patch("a2a_t.server.a2at_server.LLMClientFactory.create", return_value=object()),
             patch("a2a_t.server.a2at_server.PromptComplianceOrchestratorBuilder", return_value=FakePromptComplianceBuilder(service)),
             patch("a2a_t.server.a2at_server.ServerNegotiationOrchestratorBuilder") as negotiation_builder_cls,
-            patch("a2a_t.server.a2at_server.LLMClient", return_value=object()),
         ):
             negotiation_builder_cls.return_value.build.return_value = object()
             server = A2ATServer()
@@ -258,9 +275,10 @@ class PromptComplianceIntegrationRuntimeTest(ManagedTempDirTestCase):
         )
         with (
             patch("a2a_t.server.a2at_server._default_env_path", return_value=TEST_ENV_PATH),
+            patch("a2a_t.server.a2at_server.LLMConfigLoader.load", return_value=build_llm_config()),
+            patch("a2a_t.server.a2at_server.LLMClientFactory.create", return_value=object()),
             patch("a2a_t.server.a2at_server.PromptComplianceOrchestratorBuilder", return_value=FakePromptComplianceBuilder(service)),
             patch("a2a_t.server.a2at_server.ServerNegotiationOrchestratorBuilder") as negotiation_builder_cls,
-            patch("a2a_t.server.a2at_server.LLMClient", return_value=object()),
         ):
             negotiation_builder_cls.return_value.build.return_value = object()
             server = A2ATServer()
