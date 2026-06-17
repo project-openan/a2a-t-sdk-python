@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import Any
 
 from a2a_t.config.models import A2ATConfig
-from a2a_t.llm.client import LLMClient
+from a2a_t.llm.config_loader import LLMConfigLoader
+from a2a_t.llm.factory import LLMClientFactory
 from a2a_t.negotiation.common.models import ContinueNegotiationInput, StartNegotiationInput
 
 from .negotiation.negotiation_orchestrator_builder import ServerNegotiationOrchestratorBuilder
@@ -27,7 +28,8 @@ class A2ATServer:
     ) -> None:
         resolved_env_path = env_path or _default_env_path()
         config = A2ATConfig.load(resolved_env_path)
-        llm_client = LLMClient(env_path=resolved_env_path, logger=logger)
+        llm_config = LLMConfigLoader.load(resolved_env_path)
+        llm_client = LLMClientFactory.create(llm_config.provider, llm_config, logger=logger)
         self._prompt_compliance_orchestrator = PromptComplianceOrchestratorBuilder().build(
             config=config,
             llm_client=llm_client,

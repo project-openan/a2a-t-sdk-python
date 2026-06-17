@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
 import unittest
@@ -13,10 +14,26 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
+from a2a_t.llm.models import LLMClientConfig
 from a2a_t.negotiation.common.enums import NegotiationStatus, NegotiationType
 from a2a_t.negotiation.common.models import ContinueNegotiationInput, NegotiationContext, StartNegotiationInput
 from a2a_t.server.prompt_compliance.models import PromptComplianceResult
 from tests.test_support import ManagedTempDirTestCase, TEST_ENV_PATH
+
+
+def build_llm_config() -> LLMClientConfig:
+    return LLMClientConfig(
+        provider="deepseek",
+        model="deepseek-chat",
+        api_key="sk-test",
+        base_url=None,
+        history_window=10,
+        max_tokens=None,
+        temperature=None,
+        timeout_seconds=None,
+        session_max_total=300,
+        session_max_per_provider=100,
+    )
 
 
 class FakePromptComplianceOrchestrator:
@@ -71,6 +88,15 @@ class FakeLogger:
 
 
 class A2ATServerTest(unittest.TestCase):
+    def test_constructor_signature_remains_stable(self) -> None:
+        from a2a_t.server.a2at_server import A2ATServer
+
+        signature = inspect.signature(A2ATServer.__init__)
+
+        self.assertEqual(list(signature.parameters), ["self", "env_path", "logger"])
+        self.assertEqual(signature.parameters["env_path"].kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertEqual(signature.parameters["logger"].kind, inspect.Parameter.KEYWORD_ONLY)
+
     def test_a2at_server_delegates_all_public_methods_with_typed_negotiation_inputs(self) -> None:
         from a2a_t.server.a2at_server import A2ATServer
 
@@ -86,6 +112,8 @@ class A2ATServerTest(unittest.TestCase):
         compliance_builder = FakePromptComplianceBuilder(compliance)
         negotiation = FakeNegotiationOrchestrator()
         logger = FakeLogger()
+        llm_config = build_llm_config()
+        llm_client = object()
         start_input = StartNegotiationInput(
             type=NegotiationType.INFORMATION,
             content_text="Need more information.",
@@ -108,9 +136,10 @@ class A2ATServerTest(unittest.TestCase):
 
         with (
             patch("a2a_t.server.a2at_server._default_env_path", return_value=TEST_ENV_PATH),
+            patch("a2a_t.server.a2at_server.LLMConfigLoader.load", return_value=llm_config) as load_llm_config,
+            patch("a2a_t.server.a2at_server.LLMClientFactory.create", return_value=llm_client) as create_llm_client,
             patch("a2a_t.server.a2at_server.PromptComplianceOrchestratorBuilder", return_value=compliance_builder),
             patch("a2a_t.server.a2at_server.ServerNegotiationOrchestratorBuilder") as negotiation_builder_cls,
-            patch("a2a_t.server.a2at_server.LLMClient", return_value=object()),
         ):
             negotiation_builder_cls.return_value.build.return_value = negotiation
             server = A2ATServer(logger=logger)
@@ -143,6 +172,10 @@ class A2ATServerTest(unittest.TestCase):
             )
             self.assertEqual(server.continue_negotiation(continue_input), {"continued": True})
 
+        load_llm_config.assert_called_once_with(TEST_ENV_PATH)
+        create_llm_client.assert_called_once_with(llm_config.provider, llm_config, logger=logger)
+        self.assertIs(compliance_builder.calls[0]["llm_client"], llm_client)
+        self.assertIs(negotiation_builder_cls.return_value.build.call_args.kwargs["llm_client"], llm_client)
         self.assertEqual(
             compliance.calls,
             [
@@ -165,9 +198,10 @@ class A2ATServerTest(unittest.TestCase):
 
         with (
             patch("a2a_t.server.a2at_server._default_env_path", return_value=TEST_ENV_PATH),
+            patch("a2a_t.server.a2at_server.LLMConfigLoader.load", return_value=build_llm_config()),
+            patch("a2a_t.server.a2at_server.LLMClientFactory.create", return_value=object()),
             patch("a2a_t.server.a2at_server.PromptComplianceOrchestratorBuilder", return_value=compliance_builder),
             patch("a2a_t.server.a2at_server.ServerNegotiationOrchestratorBuilder") as negotiation_builder_cls,
-            patch("a2a_t.server.a2at_server.LLMClient", return_value=object()),
         ):
             negotiation_builder_cls.return_value.build.return_value = negotiation
             server = A2ATServer()
@@ -217,7 +251,8 @@ class A2ATServerPromptResourceTimingTest(ManagedTempDirTestCase):
 
         with (
             patch("a2a_t.server.a2at_server.ServerNegotiationOrchestratorBuilder") as negotiation_builder_cls,
-            patch("a2a_t.server.a2at_server.LLMClient", return_value=object()),
+            patch("a2a_t.server.a2at_server.LLMConfigLoader.load", return_value=build_llm_config()),
+            patch("a2a_t.server.a2at_server.LLMClientFactory.create", return_value=object()),
             patch("a2a_t.common.prompt_resources.local_resources.LocalPromptResourceFiles._default_root_dir", return_value=missing_packaged_root),
         ):
             negotiation_builder_cls.return_value.build.return_value = object()
