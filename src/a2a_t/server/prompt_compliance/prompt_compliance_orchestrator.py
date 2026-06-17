@@ -9,7 +9,6 @@ from a2a_t.common.prompt_resources import (
     PromptResourceLoader,
     PromptResourceNotFoundError,
     PromptResourceParseError,
-    SlotJsonSchemaLoader,
     SlotSchemaLoader,
     TemplateLoader,
 )
@@ -46,7 +45,6 @@ class PromptComplianceOrchestrator:
         scenario_resolver: ScenarioResolutionOrchestrator,
         template_loader: TemplateLoader,
         slot_schema_loader: SlotSchemaLoader,
-        slot_json_schema_loader: SlotJsonSchemaLoader,
         prompt_resource_loader: PromptResourceLoader,
         extractor: SlotExtractor,
         validator: JsonSchemaSlotValidator,
@@ -56,7 +54,6 @@ class PromptComplianceOrchestrator:
         self._scenario_resolver = scenario_resolver
         self._template_loader = template_loader
         self._slot_schema_loader = slot_schema_loader
-        self._slot_json_schema_loader = slot_json_schema_loader
         self._prompt_resource_loader = prompt_resource_loader
         self._extractor = extractor
         self._validator = validator
@@ -97,7 +94,7 @@ class PromptComplianceOrchestrator:
             return self._finalize_result(self._error_result(PREPARATION_STAGE, PROMPT_RESOURCE_ACCESS_ERROR, str(error)))
 
         try:
-            slot_json_schema = self._slot_json_schema_loader.load(reference=reference)
+            slot_json_schema = self._slot_schema_loader.load_json_schema(reference=reference)
         except PromptResourceNotFoundError as error:
             return self._finalize_result(self._error_result(PREPARATION_STAGE, SLOT_SCHEMA_LOAD_ERROR, str(error)))
         except PromptResourceParseError as error:
@@ -106,7 +103,7 @@ class PromptComplianceOrchestrator:
             return self._finalize_result(self._error_result(PREPARATION_STAGE, PROMPT_RESOURCE_ACCESS_ERROR, str(error)))
 
         try:
-            slot_schema = self._slot_schema_loader.load(reference=reference)
+            slot_schema = self._slot_schema_loader.load_slot_schema(reference=reference)
         except PromptResourceNotFoundError as error:
             return self._finalize_result(self._error_result(PREPARATION_STAGE, SLOT_SCHEMA_LOAD_ERROR, str(error)))
         except PromptResourceParseError as error:

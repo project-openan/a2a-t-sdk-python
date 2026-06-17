@@ -16,7 +16,6 @@ if str(SRC_ROOT) not in sys.path:
 
 from a2a_t.common.prompt_resources import PromptResourceLoader, SlotSchemaLoader, TemplateLoader
 from a2a_t.common.prompt_resources.models import ScenarioDefinition
-from a2a_t.common.prompt_resources.slot_json_schema_loader import SlotJsonSchemaLoader
 from a2a_t.llm.models import LLMResponse
 from a2a_t.prompt.analysis import SlotExtractor
 from a2a_t.prompt.analysis.models import ScenarioResolutionResult
@@ -107,7 +106,6 @@ class PromptComplianceIntegrationRuntimeTest(ManagedTempDirTestCase):
             ),
             template_loader=TemplateLoader(root_dir=self.root),
             slot_schema_loader=SlotSchemaLoader(root_dir=self.root),
-            slot_json_schema_loader=SlotJsonSchemaLoader(root_dir=self.root),
             prompt_resource_loader=PromptResourceLoader(root_dir=self.root),
             extractor=SlotExtractor(
                 llm_client=FakeSequencedLLMClient(
@@ -170,7 +168,6 @@ class PromptComplianceIntegrationRuntimeTest(ManagedTempDirTestCase):
             ),
             template_loader=TemplateLoader(root_dir=self.root),
             slot_schema_loader=SlotSchemaLoader(root_dir=self.root),
-            slot_json_schema_loader=SlotJsonSchemaLoader(root_dir=self.root),
             prompt_resource_loader=PromptResourceLoader(root_dir=self.root),
             extractor=SlotExtractor(
                 llm_client=FakeSequencedLLMClient(
@@ -249,7 +246,6 @@ class PromptComplianceIntegrationRuntimeTest(ManagedTempDirTestCase):
             ),
             template_loader=TemplateLoader(root_dir=self.root),
             slot_schema_loader=SlotSchemaLoader(root_dir=self.root),
-            slot_json_schema_loader=SlotJsonSchemaLoader(root_dir=self.root),
             prompt_resource_loader=PromptResourceLoader(root_dir=self.root),
             extractor=SlotExtractor(
                 llm_client=FakeSequencedLLMClient(

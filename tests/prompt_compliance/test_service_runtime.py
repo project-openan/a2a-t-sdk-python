@@ -47,27 +47,37 @@ class FakeTemplateLoader:
 
 
 class FakeSlotSchemaLoader:
-    def __init__(self, result: SlotSchema | Exception) -> None:
-        self._result = result
-        self.last_reference: PromptReference | None = None
+    def __init__(
+        self,
+        slot_schema_result: SlotSchema | Exception,
+        json_schema_result: dict[str, object] | Exception | None = None,
+    ) -> None:
+        self._slot_schema_result = slot_schema_result
+        self._json_schema_result = (
+            json_schema_result
+            if json_schema_result is not None
+            else {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {"site": {"type": "string", "minLength": 1}},
+                "required": ["site"],
+                "additionalProperties": False,
+            }
+        )
+        self.last_json_schema_reference: PromptReference | None = None
+        self.last_slot_schema_reference: PromptReference | None = None
 
-    def load(self, *, reference: PromptReference) -> SlotSchema:
-        self.last_reference = reference
-        if isinstance(self._result, Exception):
-            raise self._result
-        return self._result
+    def load_json_schema(self, *, reference: PromptReference) -> dict[str, object]:
+        self.last_json_schema_reference = reference
+        if isinstance(self._json_schema_result, Exception):
+            raise self._json_schema_result
+        return self._json_schema_result
 
-
-class FakeSlotJsonSchemaLoader:
-    def __init__(self, result: dict[str, object] | Exception) -> None:
-        self._result = result
-        self.last_reference: PromptReference | None = None
-
-    def load(self, *, reference: PromptReference) -> dict[str, object]:
-        self.last_reference = reference
-        if isinstance(self._result, Exception):
-            raise self._result
-        return self._result
+    def load_slot_schema(self, *, reference: PromptReference) -> SlotSchema:
+        self.last_slot_schema_reference = reference
+        if isinstance(self._slot_schema_result, Exception):
+            raise self._slot_schema_result
+        return self._slot_schema_result
 
 
 class FakePromptResourceLoader:
@@ -180,7 +190,6 @@ class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
         *,
         template_loader: FakeTemplateLoader | None = None,
         slot_schema_loader: FakeSlotSchemaLoader | None = None,
-        slot_json_schema_loader: FakeSlotJsonSchemaLoader | None = None,
         prompt_resource_loader: FakePromptResourceLoader | None = None,
         scenario_resolver: FakeScenarioResolver | None = None,
         extractor: FakeExtractor | None = None,
@@ -194,15 +203,6 @@ class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
             scenario_resolver=scenario_resolver or FakeScenarioResolver(self.scenario_resolution),
             template_loader=template_loader or FakeTemplateLoader("Site: {site}"),
             slot_schema_loader=slot_schema_loader or FakeSlotSchemaLoader(self._slot_schema()),
-            slot_json_schema_loader=slot_json_schema_loader or FakeSlotJsonSchemaLoader(
-                {
-                    "$schema": "https://json-schema.org/draft/2020-12/schema",
-                    "type": "object",
-                    "properties": {"site": {"type": "string", "minLength": 1}},
-                    "required": ["site"],
-                    "additionalProperties": False,
-                }
-            ),
             prompt_resource_loader=prompt_resource_loader or FakePromptResourceLoader(
                 PromptMessages(system_prompt="Extract slots.", user_prompt="Return slots.")
             ),
@@ -215,28 +215,24 @@ class PromptComplianceOrchestratorRuntimeTest(unittest.TestCase):
     def test_check_returns_success_result(self) -> None:
         template_loader = FakeTemplateLoader("Site: {site}")
         slot_schema_loader = FakeSlotSchemaLoader(self._slot_schema())
-        slot_json_schema_loader = FakeSlotJsonSchemaLoader(
-            {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "properties": {"site": {"type": "string", "minLength": 1}},
-                "required": ["site"],
-                "additionalProperties": False,
-            }
-        )
         extractor = FakeExtractor(SlotExtractionResult(slots={"site": "Site A"}, slot_errors=[]))
         service = self._build_service(
             template_loader=template_loader,
             slot_schema_loader=slot_schema_loader,
-            slot_json_schema_loader=slot_json_schema_loader,
             extractor=extractor,
         )
 
         result = service.check(processed_prompt_text=self.processed_prompt)
 
         self.assertEqual(template_loader.last_reference, PromptReference(scenario_code="energy_saving", language="en-US"))
-        self.assertEqual(slot_schema_loader.last_reference, PromptReference(scenario_code="energy_saving", language="en-US"))
-        self.assertEqual(slot_json_schema_loader.last_reference, PromptReference(scenario_code="energy_saving", language="en-US"))
+        self.assertEqual(
+            slot_schema_loader.last_json_schema_reference,
+            PromptReference(scenario_code="energy_saving", language="en-US"),
+        )
+        self.assertEqual(
+            slot_schema_loader.last_slot_schema_reference,
+            PromptReference(scenario_code="energy_saving", language="en-US"),
+        )
         self.assertEqual(extractor.last_reference, PromptReference(scenario_code="energy_saving", language="en-US"))
         self.assertEqual(
             result,

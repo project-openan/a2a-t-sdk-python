@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from a2a_t.common.prompt_resources import (
     PromptResourceLoader,
     ScenarioLoader,
-    SlotJsonSchemaLoader,
     SlotSchemaLoader,
     TemplateLoader,
 )
@@ -19,6 +18,5 @@ class PromptRuntimeComponents:
     scenario_loader: ScenarioLoader
     template_loader: TemplateLoader
     slot_schema_loader: SlotSchemaLoader
-    slot_json_schema_loader: SlotJsonSchemaLoader
     prompt_resource_loader: PromptResourceLoader
     json_schema_slot_validator: JsonSchemaSlotValidator

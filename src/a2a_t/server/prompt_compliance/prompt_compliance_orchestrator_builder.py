@@ -56,7 +56,6 @@ class PromptComplianceOrchestratorBuilder:
             scenario_resolver=scenario_resolver,
             template_loader=components.template_loader,
             slot_schema_loader=components.slot_schema_loader,
-            slot_json_schema_loader=components.slot_json_schema_loader,
             prompt_resource_loader=components.prompt_resource_loader,
             extractor=extractor,
             validator=components.json_schema_slot_validator,

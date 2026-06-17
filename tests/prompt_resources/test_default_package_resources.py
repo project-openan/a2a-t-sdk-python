@@ -17,7 +17,6 @@ class DefaultPromptResourcePackageTest(unittest.TestCase):
         from a2a_t.common.prompt_resources.errors import PromptResourceNotFoundError
         from a2a_t.common.prompt_resources.prompt_resource_loader import PromptResourceLoader
         from a2a_t.common.prompt_resources.scenario_loader import ScenarioLoader
-        from a2a_t.common.prompt_resources.slot_json_schema_loader import SlotJsonSchemaLoader
         from a2a_t.common.prompt_resources.slot_schema_loader import SlotSchemaLoader
         from a2a_t.common.prompt_resources.template_loader import TemplateLoader
         from a2a_t.prompt.common.models import PromptReference
@@ -31,7 +30,7 @@ class DefaultPromptResourcePackageTest(unittest.TestCase):
         with self.assertRaises(PromptResourceNotFoundError):
             SlotSchemaLoader().load(reference=en_reference)
         with self.assertRaises(PromptResourceNotFoundError):
-            SlotJsonSchemaLoader().load(reference=en_reference)
+            SlotSchemaLoader().load_json_schema(reference=en_reference)
 
         template_text = TemplateLoader().load(reference=zh_reference)
         scenario_prompts = PromptResourceLoader().load(

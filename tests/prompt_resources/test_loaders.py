@@ -144,8 +144,12 @@ class PromptResourceLoaderTest(ManagedTempDirTestCase):
         slot_schema = loader.load(
             reference=PromptReference(scenario_code="energy_saving", language="en-US")
         )
+        explicit_slot_schema = loader.load_slot_schema(
+            reference=PromptReference(scenario_code="energy_saving", language="en-US")
+        )
 
         self.assertEqual(slot_schema.scenario_code, "energy_saving")
+        self.assertEqual(explicit_slot_schema, slot_schema)
         self.assertEqual([slot.name for slot in slot_schema.slots], ["site", "incident_level"])
         self.assertTrue(slot_schema.slots[0].required)
         self.assertEqual(slot_schema.slots[0].description, "Site name")

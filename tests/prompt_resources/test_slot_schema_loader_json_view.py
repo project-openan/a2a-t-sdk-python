@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -18,7 +19,7 @@ from a2a_t.prompt.common.models import PromptReference
 from tests.test_support import ManagedTempDirTestCase
 
 
-class SlotJsonSchemaLoaderTest(ManagedTempDirTestCase):
+class SlotSchemaLoaderJsonViewTest(ManagedTempDirTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.root = self.make_temp_dir("prompt_resources")
@@ -28,7 +29,7 @@ class SlotJsonSchemaLoaderTest(ManagedTempDirTestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
 
-    def test_loader_reads_raw_json_schema_object(self) -> None:
+    def test_slot_schema_loader_reads_raw_json_schema_object(self) -> None:
         self._write_json(
             "slots/energy_saving/en-US/slot.json",
             {
@@ -40,10 +41,10 @@ class SlotJsonSchemaLoaderTest(ManagedTempDirTestCase):
             },
         )
 
-        from a2a_t.common.prompt_resources.slot_json_schema_loader import SlotJsonSchemaLoader
+        from a2a_t.common.prompt_resources.slot_schema_loader import SlotSchemaLoader
 
-        loader = SlotJsonSchemaLoader(root_dir=self.root)
-        slot_schema = loader.load(
+        loader = SlotSchemaLoader(root_dir=self.root)
+        slot_schema = loader.load_json_schema(
             reference=PromptReference(scenario_code="energy_saving", language="en-US")
         )
 
@@ -51,7 +52,7 @@ class SlotJsonSchemaLoaderTest(ManagedTempDirTestCase):
         self.assertEqual(slot_schema["required"], ["site"])
         self.assertEqual(slot_schema["properties"]["site"]["minLength"], 1)
 
-    def test_loader_rejects_legacy_slot_schema(self) -> None:
+    def test_slot_schema_loader_json_view_rejects_legacy_slot_schema(self) -> None:
         self._write_json(
             "slots/energy_saving/en-US/slot.json",
             {
@@ -83,13 +84,24 @@ class SlotJsonSchemaLoaderTest(ManagedTempDirTestCase):
             },
         )
 
-        from a2a_t.common.prompt_resources.slot_json_schema_loader import SlotJsonSchemaLoader
+        from a2a_t.common.prompt_resources.slot_schema_loader import SlotSchemaLoader
 
-        loader = SlotJsonSchemaLoader(root_dir=self.root)
+        loader = SlotSchemaLoader(root_dir=self.root)
         with self.assertRaises(PromptResourceParseError):
-            loader.load(
+            loader.load_json_schema(
                 reference=PromptReference(scenario_code="energy_saving", language="en-US")
             )
+
+    def test_removed_legacy_loader_module_is_not_importable(self) -> None:
+        module_name = ".".join(
+            [
+                "a2a_t",
+                "common",
+                "prompt_resources",
+                "slot" + "_json" + "_schema" + "_loader",
+            ]
+        )
+        self.assertIsNone(importlib.util.find_spec(module_name))
 
 
 if __name__ == "__main__":

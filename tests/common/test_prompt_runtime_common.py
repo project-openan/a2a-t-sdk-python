@@ -20,7 +20,7 @@ class CommonPromptRuntimeComponentsBuilderTest(unittest.TestCase):
     def test_common_builder_creates_shared_runtime_components_from_config(self) -> None:
         from a2a_t.common.prompt_runtime import PromptRuntimeComponentsBuilder
         from a2a_t.common.prompt_resources.prompt_resource_loader import PromptResourceLoader
-        from a2a_t.common.prompt_resources.slot_json_schema_loader import SlotJsonSchemaLoader
+        from a2a_t.common.prompt_resources.slot_schema_loader import SlotSchemaLoader
         from a2a_t.prompt.validation.json_schema_slot_validator import JsonSchemaSlotValidator
 
         config = A2ATConfig(
@@ -37,8 +37,8 @@ class CommonPromptRuntimeComponentsBuilderTest(unittest.TestCase):
         self.assertEqual(components.scenario_loader.root_dir, Path("./runtime-prompt-resources"))
         self.assertEqual(components.template_loader.root_dir, Path("./runtime-prompt-resources"))
         self.assertEqual(components.slot_schema_loader.root_dir, Path("./runtime-prompt-resources"))
-        self.assertIsInstance(components.slot_json_schema_loader, SlotJsonSchemaLoader)
-        self.assertEqual(components.slot_json_schema_loader.root_dir, Path("./runtime-prompt-resources"))
+        self.assertIsInstance(components.slot_schema_loader, SlotSchemaLoader)
+        self.assertEqual(components.slot_schema_loader.root_dir, Path("./runtime-prompt-resources"))
         self.assertIsInstance(components.prompt_resource_loader, PromptResourceLoader)
         self.assertEqual(components.prompt_resource_loader.root_dir, PromptResourceLoader().root_dir)
         self.assertIsInstance(components.json_schema_slot_validator, JsonSchemaSlotValidator)

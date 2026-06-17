@@ -85,7 +85,6 @@ class PromptComplianceOrchestratorBuilderTest(unittest.TestCase):
                 "prompt_resource_loader": object(),
                 "template_loader": object(),
                 "slot_schema_loader": object(),
-                "slot_json_schema_loader": object(),
                 "json_schema_slot_validator": object(),
             },
         )()
@@ -138,7 +137,6 @@ class PromptComplianceOrchestratorBuilderTest(unittest.TestCase):
                 "prompt_resource_loader": object(),
                 "template_loader": object(),
                 "slot_schema_loader": object(),
-                "slot_json_schema_loader": object(),
                 "json_schema_slot_validator": object(),
             },
         )()
@@ -169,7 +167,7 @@ class PromptComplianceOrchestratorBuilderTest(unittest.TestCase):
         self.assertIs(orchestrator.kwargs["scenario_resolver"].scenario_loader, components.scenario_loader)
         self.assertIs(orchestrator.kwargs["scenario_resolver"].prompt_resource_loader, components.prompt_resource_loader)
         self.assertIs(orchestrator.kwargs["prompt_resource_loader"], components.prompt_resource_loader)
-        self.assertIs(orchestrator.kwargs["slot_json_schema_loader"], components.slot_json_schema_loader)
+        self.assertIs(orchestrator.kwargs["slot_schema_loader"], components.slot_schema_loader)
         self.assertIs(orchestrator.kwargs["validator"], components.json_schema_slot_validator)
         self.assertNotIn("guardrail", orchestrator.kwargs)
         self.assertIn("semantic_validator", orchestrator.kwargs)
@@ -189,7 +187,6 @@ class PromptComplianceOrchestratorBuilderTest(unittest.TestCase):
                 "prompt_resource_loader": object(),
                 "template_loader": object(),
                 "slot_schema_loader": object(),
-                "slot_json_schema_loader": object(),
                 "json_schema_slot_validator": object(),
             },
         )()
