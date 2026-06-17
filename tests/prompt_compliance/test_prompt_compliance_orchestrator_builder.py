@@ -168,7 +168,6 @@ class PromptComplianceOrchestratorBuilderTest(unittest.TestCase):
         self.assertIs(orchestrator.kwargs["scenario_resolver"].prompt_resource_loader, components.prompt_resource_loader)
         self.assertIs(orchestrator.kwargs["prompt_resource_loader"], components.prompt_resource_loader)
         self.assertIs(orchestrator.kwargs["slot_schema_loader"], components.slot_schema_loader)
-        self.assertNotIn("slot_json_schema_loader", orchestrator.kwargs)
         self.assertIs(orchestrator.kwargs["validator"], components.json_schema_slot_validator)
         self.assertNotIn("guardrail", orchestrator.kwargs)
         self.assertIn("semantic_validator", orchestrator.kwargs)

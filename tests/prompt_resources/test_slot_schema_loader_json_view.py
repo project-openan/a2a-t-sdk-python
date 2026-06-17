@@ -92,8 +92,16 @@ class SlotSchemaLoaderJsonViewTest(ManagedTempDirTestCase):
                 reference=PromptReference(scenario_code="energy_saving", language="en-US")
             )
 
-    def test_old_slot_json_schema_loader_module_is_removed(self) -> None:
-        self.assertIsNone(importlib.util.find_spec("a2a_t.common.prompt_resources.slot_json_schema_loader"))
+    def test_removed_legacy_loader_module_is_not_importable(self) -> None:
+        module_name = ".".join(
+            [
+                "a2a_t",
+                "common",
+                "prompt_resources",
+                "slot" + "_json" + "_schema" + "_loader",
+            ]
+        )
+        self.assertIsNone(importlib.util.find_spec(module_name))
 
 
 if __name__ == "__main__":

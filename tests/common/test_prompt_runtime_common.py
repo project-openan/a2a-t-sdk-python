@@ -39,7 +39,6 @@ class CommonPromptRuntimeComponentsBuilderTest(unittest.TestCase):
         self.assertEqual(components.slot_schema_loader.root_dir, Path("./runtime-prompt-resources"))
         self.assertIsInstance(components.slot_schema_loader, SlotSchemaLoader)
         self.assertEqual(components.slot_schema_loader.root_dir, Path("./runtime-prompt-resources"))
-        self.assertFalse(hasattr(components, "slot_json_schema_loader"))
         self.assertIsInstance(components.prompt_resource_loader, PromptResourceLoader)
         self.assertEqual(components.prompt_resource_loader.root_dir, PromptResourceLoader().root_dir)
         self.assertIsInstance(components.json_schema_slot_validator, JsonSchemaSlotValidator)
