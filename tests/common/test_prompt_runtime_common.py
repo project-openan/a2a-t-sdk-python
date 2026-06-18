@@ -13,7 +13,7 @@ if str(SRC_ROOT) not in sys.path:
 
 
 from a2a_t.config.models import A2ATConfig, PromptComplianceConfig, PromptRuntimeConfig
-from tests.test_support import ManagedTempDirTestCase
+from tests.support import ManagedTempDirTestCase
 
 
 class CommonPromptRuntimeComponentsBuilderTest(unittest.TestCase):

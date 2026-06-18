@@ -10,7 +10,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from a2a_t.llm.errors import LLMConfigError
-from tests.test_support import ManagedTempDirTestCase
+from tests.support import ManagedTempDirTestCase
 
 
 class LLMConfigLoaderTest(ManagedTempDirTestCase):

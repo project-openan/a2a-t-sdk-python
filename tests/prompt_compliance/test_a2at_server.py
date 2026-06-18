@@ -18,7 +18,7 @@ from a2a_t.llm.models import LLMClientConfig
 from a2a_t.negotiation.common.enums import NegotiationStatus, NegotiationType
 from a2a_t.negotiation.common.models import ContinueNegotiationInput, NegotiationContext, StartNegotiationInput
 from a2a_t.server.prompt_compliance.models import PromptComplianceResult
-from tests.test_support import ManagedTempDirTestCase, TEST_ENV_PATH
+from tests.support import ManagedTempDirTestCase, TEST_ENV_PATH
 
 
 def build_llm_config() -> LLMClientConfig:

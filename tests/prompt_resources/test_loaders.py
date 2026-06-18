@@ -16,7 +16,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from a2a_t.common.prompt_resources.errors import PromptResourceParseError
 from a2a_t.prompt.common.models import PromptReference
-from tests.test_support import ManagedTempDirTestCase
+from tests.support import ManagedTempDirTestCase
 
 
 class PromptResourceLoaderTest(ManagedTempDirTestCase):

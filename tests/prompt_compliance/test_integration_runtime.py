@@ -23,7 +23,7 @@ from a2a_t.prompt.common.models import PromptReference
 from a2a_t.prompt.validation.json_schema_slot_validator import JsonSchemaSlotValidator
 from a2a_t.server.a2at_server import A2ATServer
 from a2a_t.server.prompt_compliance.prompt_compliance_orchestrator import PromptComplianceOrchestrator
-from tests.test_support import ManagedTempDirTestCase, TEST_ENV_PATH
+from tests.support import ManagedTempDirTestCase, TEST_ENV_PATH
 
 
 def build_llm_config() -> LLMClientConfig:

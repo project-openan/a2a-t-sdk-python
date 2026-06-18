@@ -17,7 +17,7 @@ from a2a_t.llm.models import LLMResponse
 from a2a_t.config.models import PromptRuntimeConfig
 from a2a_t.prompt.analysis import ScenarioRecognizer, ScenarioResolutionOrchestrator, SlotExtractor
 from a2a_t.common.prompt_resources import PromptResourceLoader, ScenarioLoader, SlotSchemaLoader, TemplateLoader
-from tests.test_support import ManagedTempDirTestCase
+from tests.support import ManagedTempDirTestCase
 
 
 class FakeSequencedLLMClient:
