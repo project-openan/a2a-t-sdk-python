@@ -22,6 +22,7 @@ class LLMLegacyApiRemovedTest(unittest.TestCase):
             "a2a_t.llm.adapters.openai_compatible",
             "a2a_t.llm.payload_builders",
             "a2a_t.llm.response_parsers",
+            "a2a_t.llm.session_store",
             "a2a_t.llm.transports",
         ]
 
@@ -35,3 +36,9 @@ class LLMLegacyApiRemovedTest(unittest.TestCase):
         from a2a_t.llm import factory
 
         self.assertFalse(hasattr(factory, "LLM" + "AdapterFactory"))
+
+    def test_chat_session_models_are_removed(self) -> None:
+        from a2a_t.llm import models
+
+        self.assertFalse(hasattr(models, "Chat" + "Message"))
+        self.assertFalse(hasattr(models, "Chat" + "Session"))

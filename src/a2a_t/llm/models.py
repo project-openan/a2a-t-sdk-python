@@ -2,29 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass
 from typing import Any
-
-
-@dataclass
-class ChatMessage:
-    """Represent one message in a chat session."""
-
-    role: str
-    content: str
-
-
-@dataclass
-class ChatSession:
-    """Persist chat history and metadata for a provider-scoped session."""
-
-    session_id: str
-    provider: str
-    system_prompt: str | None = None
-    messages: list[ChatMessage] = field(default_factory=list)
-    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    last_accessed_time: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass
