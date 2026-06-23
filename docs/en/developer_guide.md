@@ -1,4 +1,4 @@
-# 1 A2A-T Python SDK Developer Guide
+# 1 a2a-t-sdk-python Developer Guide
 
 ## 1.1 Feature Introduction
 
@@ -55,7 +55,14 @@ uv run mypy src
 ```
 
 ## 1.4 SDK Basic Usage
-### 1.4.1 Client Generating Task Prompt
+
+### 1.4.1 Dependency installation
+
+```bash
+pip install a2a-t-sdk
+```
+
+### 1.4.2 Client Generating Task Prompt
 
 ```python
 from pathlib import Path
@@ -79,7 +86,7 @@ else:
     print(result.failure.to_dict())
 ```
 
-### 1.4.2 Server Validating Task Prompt
+### 1.4.3 Server Validating Task Prompt
 
 ```python
 from pathlib import Path
@@ -95,7 +102,7 @@ else:
     print(check_result["failure"])
 ```
 
-### 1.4.3 Initiating Negotiation
+### 1.4.4 Initiating Negotiation
 
 ```python
 from a2a_t.negotiation.common.enums import NegotiationType
