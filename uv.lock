@@ -4,7 +4,7 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "a2a-t-sdk"
-version = "0.1.8"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "jsonschema" },

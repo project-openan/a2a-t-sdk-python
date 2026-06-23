@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "a2a-t-sdk"
-version = "0.1.9"
+version = "1.0.0"
 description = "Python A2A SDK for Telecom Scenarios"
 readme = "README.md"
 license = "Apache-2.0"
