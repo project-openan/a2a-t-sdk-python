@@ -49,17 +49,16 @@ SPDX-License-Identifier: Apache-2.0
 
 - 任务提示词生成链路：覆盖输入归一化、场景识别、槽位提取、任务提示词渲染。
 - 客户端 API：提供任务提示词生成结果流，以及 `start_negotiation`、`receive_negotiation`、`continue_negotiation` 等协商入口。
-- 服务端校验 API：面向符合 SDK 格式的 `processed task prompt`，执行场景识别、槽位提取和槽位校验，并支持可选的 guardrail（防护）钩子。
-- 协商类型：内置 `information`、`clarification`、`feasibility`、`fulfillment` 四类协商类型。
+- 服务端校验 API：面向符合 SDK 格式的 `processed task prompt`，执行场景识别、槽位提取和槽位校验。
+- 协商类型：内置 `information`协商类型。
 - 资源组织：内置提示词资源位于 `package_data/prompt_resources`，包含 `prompts`、`scenarios`、`slots`、`templates`。
-- 内置示例场景：当前随包提供 `subscribe_incident`等场景。
 
 ## 项目结构
 
 仓库的核心代码位于 `src/a2a_t`，主要模块如下：
 
 - `client`：客户端封装，提供任务提示词生成与协商入口。
-- `server`：服务端封装，提供 `processed task prompt` 校验与协商入口。
+- `server`：服务端封装，提供 A2A-T 协议报文的校验和协商入口。
 - `common`：共享的提示词资源加载与运行时公共能力。
 - `config`：模型相关配置及其加载逻辑。
 - `llm`：LLM 适配层、客户端和会话存储抽象。
@@ -86,6 +85,7 @@ SPDX-License-Identifier: Apache-2.0
 建议的最小开发流程如下：
 
 ```bash
+cd {项目路径}/a2a-t-sdk-python
 uv sync --dev
 uv run pytest
 uv run ruff check .
@@ -98,10 +98,10 @@ uv run mypy src
 
 使用前建议先确认以下限制：
 
-- 内置 LLM 调用链对外统一为 OpenAI-compatible 适配层。
+- 内置 LLM 调用链对外统一为 OpenAI 适配层。
 - 提示词资源目前仅支持本地文件。
 - 协商状态存储目前仅提供内存实现，不保证持久化。
-- 随包资源与语言覆盖有限，不包含 `registry`（注册中心）等远程资源加载能力。
+- 随包资源与语言覆盖有限，不包含 `registry-center`（注册中心）等远程资源加载能力。
 - 本文档主要介绍 SDK 本身，不涉及 CLI、托管服务、部署流程或可直接使用的应用方案。
 
 ## 许可证

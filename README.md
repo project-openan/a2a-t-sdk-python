@@ -50,16 +50,15 @@ This SDK is primarily aimed at two types of users:
 - Task prompt generation pipeline: Covers input normalization, scenario recognition, slot extraction, and task prompt rendering.
 - Client API: Provides a task prompt generation result stream, along with negotiation entry points such as `start_negotiation`, `receive_negotiation`, and `continue_negotiation`.
 - Server validation API: Targets `processed task prompts` that conform to the SDK format, performing metadata parsing, slot extraction.
-- Negotiation types: Includes four built-in negotiation types: `information`, `clarification`, `feasibility`, and `fulfillment`.
+- Negotiation types: Includes one built-in negotiation type: `information`.
 - Resource organization: Built-in prompt resources are located in `package_data/prompt_resources`, containing `prompts`, `scenarios`, `slots`, and `templates`.
-- Built-in example scenario: Currently, the package provides scenarios such as`subscribe_incident`.
 
 ## Project Structure
 
 The core code of the repository is located in `src/a2a_t`, with the main modules as follows:
 
 - `client`: Client wrapper, providing task prompt generation and negotiation entry points.
-- `server`: Server wrapper, providing `processed task prompt` validation and negotiation entry points.
+- `server`: Server wrapper, providing validation and negotiation entry points for A2A-T protocol messages.
 - `common`: Shared prompt resource loading and common runtime capabilities.
 - `config`: Model-related configuration and its loading logic.
 - `llm`: LLM adaptation layer, client, and session storage abstraction.
@@ -86,6 +85,7 @@ The project uses `uv_build` as its build backend. Development dependencies inclu
 The recommended minimal development workflow is as follows:
 
 ```bash
+cd {project_path}/a2a-t-sdk-python
 uv sync --dev
 uv run pytest
 uv run ruff check .
@@ -98,10 +98,10 @@ The `tests/` directory contains test cases for client prompt generation, server 
 
 Before use, it is recommended to confirm the following limitations:
 
-- The built-in LLM invocation chain is unified externally as an OpenAI-compatible adaptation layer.
+- The built-in LLM invocation chain is unified externally as an OpenAI adaptation layer.
 - Prompt resources currently only support local files.
 - Negotiation state storage currently only provides an in-memory implementation and does not guarantee persistence.
-- The bundled resources and language coverage are limited, and do not include remote resource loading capabilities such as `registry`.
+- The bundled resources and language coverage are limited, and do not include remote resource loading capabilities such as `registry-center`.
 - This document primarily introduces the SDK itself, and does not cover the CLI, hosted services, deployment processes, or ready-to-use application solutions.
 
 ## License

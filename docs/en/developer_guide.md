@@ -1,24 +1,23 @@
-# 1 A2A- T Python SDK Developer Guide
+# 1 A2A-T Python SDK Developer Guide
 
 ## 1.1 Feature Introduction
 
-See the [User Guide 1.1 Feature Introduction](https://gitcode.com/OpenAN/a2a-t-sdk/blob/main/docs/en/user_guide.md#11-feature-introduction) section.
+See the [User Guide 1.1 Feature Introduction](https://github.com/project-openan/a2a-t-sdk-python/blob/main/docs/en/user_guide.md) section.
 
 ## 1.2 Constraints and Limitations
 
-1. The SDK current version is `0.1.8`, in the Alpha stage.
-2. Python version requirement is 3.12+.
-3. Built-in resource coverage is limited; the current bundled resources are primarily sample scenarios such as `subscribe_incident`.
-4. Negotiation state storage only provides `in_memory`; state is lost after the process exits.
-5. The SDK does not provide Agent HTTP service framework, registry-center client, authentication, or key management capabilities; these must be integrated by the business system.
+1. Python version requirement is 3.12+.
+2. Built-in resource coverage is limited; the current bundled resources are primarily scenarios such as `subscribe_incident`.
+3. Negotiation state storage only provides `in_memory`; state is lost after the process exits.
+4. The SDK does not provide Agent HTTP service framework, registry-center client, authentication, or key management capabilities; these must be integrated by the business system.
 
 ## 1.3 Environment Preparation
 
 ### 1.3.1 Obtain Source Code
 
 ```bash
-git clone git@gitcode.com:OpenAN/a2a-t-sdk.git
-cd a2a-t-sdk
+git clone git@github.com:project-openan/a2a-t-sdk-python.git
+cd a2a-t-sdk-python
 ```
 
 ### 1.3.2 Install Development Dependencies
@@ -40,7 +39,6 @@ A2AT_LANGUAGE=zh-CN
 A2AT_PROMPT_SOURCE_TYPE=local_file
 A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR=
 A2AT_PROMPT_COMPLIANCE_ENABLED=true
-A2AT_PROMPT_COMPLIANCE_GUARDRAIL_PROVIDER=noop
 A2AT_LLM_PROVIDER=deepseek
 A2AT_LLM_MODEL=deepseek-chat
 A2AT_LLM_API_KEY={your_api_key}
