@@ -44,7 +44,7 @@ uv run pytest a2a-t-corpus/suites/negotiation -m live --corpus-scenario='ran-ene
 - 每条已执行用例完成即打印到控制台；失败/崩溃用例同时打印完整 interaction 轨迹；转录文件只反映本次执行（过滤运行会以命中的用例整体覆盖文件）。
 - `--corpus-output-dir=<dir>`：把输出重定向到指定目录（缺省转录写回场景目录；summary 默认落 `a2a-t-corpus/.corpus/`）。
 - 无 LLM 时先跑结构自守卫（此测试进 CI）：
-  `uv run pytest a2a-t-corpus/suites/task/test_self_guard.py a2a-t-corpus/suites/negotiation/test_negotiation_self_guard.py`。
+  `uv run pytest a2a-t-corpus/suites/task/test_task_self_guard.py a2a-t-corpus/suites/negotiation/test_negotiation_self_guard.py`。
 
 ## 用例 JSON 契约（v1，一手定义见 `schemas/`）
 
