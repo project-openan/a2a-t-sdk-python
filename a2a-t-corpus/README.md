@@ -35,7 +35,7 @@ uv run pytest a2a-t-corpus/suites/negotiation -m live --corpus-scenario='ran-ene
   into the given directory (default: transcripts write back into the scenario directories, the
   summary into `a2a-t-corpus/.corpus/`).
 - Without an LLM, run the structural gates first (these run in CI):
-  `uv run pytest a2a-t-corpus/suites/task/test_self_guard.py a2a-t-corpus/suites/negotiation/test_negotiation_self_guard.py`.
+  `uv run pytest a2a-t-corpus/suites/task/test_task_self_guard.py a2a-t-corpus/suites/negotiation/test_negotiation_self_guard.py`.
 
 ## Directory
 
