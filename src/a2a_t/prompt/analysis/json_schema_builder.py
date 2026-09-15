@@ -39,10 +39,16 @@ class AnalysisJsonSchemaBuilder:
                     "items": {
                         "type": "object",
                         "additionalProperties": False,
-                        "required": ["slot_name", "code", "message"],
+                        "required": ["slot_name", "code"],
                         "properties": {
                             "slot_name": {"type": "string", "enum": slot_names},
-                            "code": {"type": "string", "enum": ["missing_input", "invalid_value"]},
+                            "code": {"type": "string", "enum": [
+                                "slot.not_provided",
+                                "slot.constraint_violated",
+                                "missing_input",
+                                "invalid_value",
+                            ]},
+                            "facts": {"type": "object", "additionalProperties": {"type": "string"}},
                             "message": {"type": "string"},
                         },
                     },

@@ -566,6 +566,11 @@ class PromptGenerationOrchestrator:
             )
             entry = ErrorCatalog.SLOT_RULE_VIOLATION
         facts = {"slot_label": label}
+        parsed_facts = getattr(error, "facts", None)
+        if isinstance(parsed_facts, dict):
+            for key, value in parsed_facts.items():
+                if isinstance(value, str) and value.strip():
+                    facts[key] = value
         return SlotValidationError(
             slot_name=label,
             code=entry.value,

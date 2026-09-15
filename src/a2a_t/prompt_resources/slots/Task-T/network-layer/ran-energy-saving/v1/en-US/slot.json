@@ -52,5 +52,5 @@
       "x-a2at-value-constraint": "Intent Report Basic Information: unique identifier of the network energy saving report, unique identifier of the energy saving task, execution result of the overall intent (status, details, reason for not achieving). Intent Report Detailed Information: execution result of specific KPIs (status, details, reason for not achieving)."
     }
   },
-  "required": []
+  "required": ["operation_type", "task_object", "task_description"]
 }
