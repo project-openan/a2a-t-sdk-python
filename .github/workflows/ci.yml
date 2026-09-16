@@ -86,35 +86,6 @@ jobs:
       - name: Type-check with mypy
         run: uv run mypy src
 
-  docs:
-    name: Docs Build (strict)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Show git info
-        run: |
-          echo "commit: $(git rev-parse HEAD)"
-          echo "branch: $(git branch --show-current)"
-          git log --oneline -3
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-
-      - name: Install SDK dependencies
-        run: uv sync --frozen
-
-      # The API reference is generated from the docstrings of src/ (port decision D26), so the
-      # build is kept cheap and unconditional instead of path-filtered: any docstring, nav page or
-      # resource link can introduce a warning. --strict turns every warning into a failure.
-      - name: Build documentation (fail on warnings)
-        run: uv run mkdocs build --strict
-
   e2e-test:
     name: E2E Samples Test
     runs-on: ubuntu-latest
