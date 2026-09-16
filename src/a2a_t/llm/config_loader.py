@@ -150,4 +150,9 @@ class LLMConfigLoader:
             session_max_per_provider=session_max_per_provider,
             reasoning_effort=coerce_reasoning_effort(values.get("A2AT_LLM_REASONING_EFFORT")),
             ssl_verify=coerce_boolean(values.get("A2AT_LLM_SSL_VERIFY"), "A2AT_LLM_SSL_VERIFY", default=True),
+            detail_log_enabled=coerce_boolean(
+                values.get("A2AT_LLM_DETAIL_LOG_ENABLED"),
+                "A2AT_LLM_DETAIL_LOG_ENABLED",
+                default=False,
+            ),
         )

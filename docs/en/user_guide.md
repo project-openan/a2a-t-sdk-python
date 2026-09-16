@@ -286,6 +286,7 @@ uv run python -m negotiation_demo --language zh-CN
 | `A2AT_LLM_SESSION_MAX_TOTAL`           | Maximum total number of tracked LLM sessions, default `300`                                                              |
 | `A2AT_LLM_SESSION_MAX_PER_PROVIDER`    | Maximum number of tracked LLM sessions per provider, default `100`                                                       |
 | `A2AT_LLM_MAX_ATTEMPTS`                | Maximum number of attempts for retryable LLM steps; range 1–10 (out-of-range values are clamped with a warning), default `3` |
+| `A2AT_LLM_DETAIL_LOG_ENABLED`          | Whether to print the full LLM request/response payloads (no truncation), default `false`; enabling it may expose sensitive information or consume log space — use only in the DEBUG phase and keep disabled in production; timestamp/token/latency summary logs are emitted at DEBUG level on the dedicated logger `a2a_t.llm.call`, see developer guide 1.15 |
 | `A2AT_NEGOTIATION_STATE_STORE_TYPE`    | Negotiation state store of the deprecated state-machine negotiation demo (`in_memory`); the 1.1.0 negotiation content API is stateless and ignores this key |
 
 ### 1.6.1 Migration: the resource source default changed in 1.1.0
