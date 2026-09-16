@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -29,6 +31,7 @@ class OpenAIClient(LLMClient):
             raise LLMConfigError(f"{config.provider} client requires a non-empty api_key")
         self._config = config
         self._logger = logger if logger is not None else logging.getLogger(__name__)
+        self._call_logger = logging.getLogger("a2a_t.llm.call")
         self._client: Any | None = None
 
     def _get_client(self) -> Any:
@@ -66,13 +69,27 @@ class OpenAIClient(LLMClient):
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        started = time.perf_counter()
+        debug_enabled = self._call_logger.isEnabledFor(logging.DEBUG)
+        if debug_enabled:
+            self._log_request(payload)
         try:
             raw_response = self._get_client().chat.completions.create(**payload)
         except LLMConfigError:
             raise
         except Exception as exc:  # pragma: no cover - provider failure path
+            if debug_enabled:
+                self._log_error(started, exc)
             raise LLMRuntimeError(f"{self._config.provider} invocation failed: {exc}") from exc
-        return self._parse_response(raw_response)
+        try:
+            response = self._parse_response(raw_response)
+        except LLMRuntimeError as exc:
+            if debug_enabled:
+                self._log_error(started, exc)
+            raise
+        if debug_enabled:
+            self._log_response(started, raw_response, response)
+        return response
 
     def _build_structured_payload(
         self,
@@ -111,15 +128,85 @@ class OpenAIClient(LLMClient):
 
     def _parse_response(self, response: Any) -> LLMResponse:
         usage = getattr(response, "usage", None)
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        total_tokens = int(getattr(usage, "total_tokens", 0) or 0) or (prompt_tokens + completion_tokens)
         return LLMResponse(
             content=self._extract_json_object_string(response),
             model=str(getattr(response, "model", self._config.model)),
             usage={
-                "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
-                "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
             },
             metadata={"response": response},
         )
+
+    def _log_request(self, payload: dict[str, Any]) -> None:
+        messages_json = json.dumps(payload["messages"], ensure_ascii=False)
+        temperature = payload.get("temperature")
+        max_tokens = payload.get("max_tokens")
+        self._call_logger.debug(
+            "llm_call event=request ts=%s provider=%s model=%s messages=%s chars=%s temperature=%s max_tokens=%s",
+            self._utc_now(),
+            self._config.provider,
+            self._config.model,
+            len(payload["messages"]),
+            len(messages_json),
+            "-" if temperature is None else temperature,
+            "-" if max_tokens is None else max_tokens,
+        )
+        if self._config.detail_log_enabled:
+            self._call_logger.debug(
+                "llm_call event=request_body ts=%s provider=%s model=%s messages_json=%s",
+                self._utc_now(),
+                self._config.provider,
+                self._config.model,
+                messages_json,
+            )
+
+    def _log_response(self, started: float, raw_response: Any, response: LLMResponse) -> None:
+        usage = response.usage
+        self._call_logger.debug(
+            "llm_call event=response ts=%s provider=%s model=%s elapsed_ms=%s prompt_tokens=%s"
+            " completion_tokens=%s total_tokens=%s content_chars=%s response_id=%s",
+            self._utc_now(),
+            self._config.provider,
+            response.model,
+            self._elapsed_ms(started),
+            usage.get("prompt_tokens", 0),
+            usage.get("completion_tokens", 0),
+            usage.get("total_tokens", 0),
+            len(response.content),
+            getattr(raw_response, "id", None) or "-",
+        )
+        if self._config.detail_log_enabled:
+            self._call_logger.debug(
+                "llm_call event=response_body ts=%s provider=%s model=%s content=%s",
+                self._utc_now(),
+                self._config.provider,
+                response.model,
+                response.content,
+            )
+
+    def _log_error(self, started: float, exc: Exception) -> None:
+        self._call_logger.debug(
+            "llm_call event=error ts=%s provider=%s model=%s elapsed_ms=%s error_code=%s error=%s",
+            self._utc_now(),
+            self._config.provider,
+            self._config.model,
+            self._elapsed_ms(started),
+            type(exc).__name__,
+            str(exc),
+        )
+
+    @staticmethod
+    def _elapsed_ms(started: float) -> str:
+        return f"{(time.perf_counter() - started) * 1000.0:.1f}"
+
+    @staticmethod
+    def _utc_now() -> str:
+        return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
     def _extract_json_object_string(self, response: Any) -> str:
         raw_content = self._extract_message_text(response)

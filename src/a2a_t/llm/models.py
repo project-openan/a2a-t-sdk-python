@@ -28,6 +28,10 @@ class LLMClientConfig:
         ssl_verify: whether to verify the TLS certificate chain and hostname of the LLM endpoint; ``False``
             disables both certificate-chain and hostname verification for HTTPS gateways whose
             certificate is not in the system trust store. Java ``LLMClientConfig.sslVerify``.
+        detail_log_enabled: whether to print the full LLM request and response payloads (no truncation).
+            Summary logs (timestamp, token usage, elapsed time) are recorded at DEBUG level on the
+            dedicated logger ``a2a_t.llm.call`` independently of this flag. Java
+            ``LLMClientConfig.detailLogEnabled``.
     """
 
     provider: str
@@ -42,3 +46,4 @@ class LLMClientConfig:
     session_max_per_provider: int
     reasoning_effort: str | None = None
     ssl_verify: bool = True
+    detail_log_enabled: bool = False

@@ -1424,7 +1424,93 @@ uv run python tools/template_lint.py --resource-root src/a2a_t/prompt_resources
 
 Template changes must land together with the lint expectations; the two Python-only prompt directories (`clarification_negotiation`, `fulfillment_negotiation`) are explicitly whitelisted.
 
-## 1.15 Configuration Item List
+## 1.15 Logging Configuration and Integration Guide
+
+### 1.15.1 Logging Mechanism Overview
+
+The SDK's LLM call logs are emitted through the Python standard `logging` module on a **dedicated logger** `a2a_t.llm.call`, decoupled from the application's other logs so the level can be controlled and filtered independently:
+
+| Log category | Level | Content | Controlled by the switch? |
+| --- | --- | --- | --- |
+| Call summary logs (`llm_call event=request` / `event=response` / `event=error`) | DEBUG | Timestamp, model, message count/character count, elapsed time (`elapsed_ms`), input/output/total tokens (`prompt_tokens`/`completion_tokens`/`total_tokens`), response content length (`content_chars`), `response_id`; **no payload content** | No; emitted at DEBUG level regardless |
+| Full payload logs (`llm_call event=request_body` / `event=response_body`) | DEBUG | Full request messages and response content, **no truncation** | Yes; controlled by `A2AT_LLM_DETAIL_LOG_ENABLED`, default off |
+
+Summary log example:
+
+```text
+llm_call event=response ts=2026-09-14T08:12:36.012Z provider=openai model=deepseek-v3 elapsed_ms=2556.4 prompt_tokens=512 completion_tokens=120 total_tokens=632 content_chars=344 response_id=chatcmpl-abc123
+```
+
+Key points:
+
+1. **No payload is printed by default**: `A2AT_LLM_DETAIL_LOG_ENABLED` defaults to `false`; summary logs are only visible when the embedding application enables DEBUG for the dedicated logger, so production INFO/WARN defaults produce no new output from the SDK.
+2. **Two-level control**: first set the level of `a2a_t.llm.call` to DEBUG through the application's logging configuration (controls whether summary logs are visible), then optionally set `A2AT_LLM_DETAIL_LOG_ENABLED=true` (controls whether full payloads are printed).
+3. **Risk warning**: enabling the switch prints detailed LLM interaction content, which may expose sensitive information (business templates, slots, negotiation messages, model responses, etc.) or consume large amounts of log space. Use it **only during the project DEBUG phase and keep it disabled in production**.
+
+### 1.15.2 Configuration
+
+Add the following to `.env` (the `package_data/.env` or the file pointed to by `env_path`):
+
+```properties
+# Whether to print the full LLM request and response payloads (no truncation). Defaults to
+# false. WARNING: enabling this prints detailed LLM interaction content, which may expose
+# sensitive information and consume large amounts of log space; use ONLY during project
+# debugging and keep it disabled in production.
+A2AT_LLM_DETAIL_LOG_ENABLED=false
+```
+
+| Value | Behavior |
+| --- | --- |
+| `false` (default, unset, or blank) | Full request/response payloads are not printed |
+| `true` | Full payloads are appended to the DEBUG-level logs, without truncation |
+
+Values are case-insensitive; any other invalid value raises `LLMConfigError` while loading the configuration.
+
+### 1.15.3 Integration Configuration Guide
+
+Viewing the LLM call logs requires the embedding application's cooperation (recommended only in debugging environments). Common options:
+
+**Option A: global DEBUG (affects all application modules; debugging only)**
+
+```python
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+```
+
+**Option B: enable only the SDK LLM call logger (recommended, with output path + rotation)**
+
+```python
+import logging
+from logging.handlers import RotatingFileHandler
+
+call_logger = logging.getLogger("a2a_t.llm.call")
+call_logger.setLevel(logging.DEBUG)
+
+# Output path and rotation: 100MB per file, keep 7 rotated copies
+handler = RotatingFileHandler(
+    "logs/llm-call.log", maxBytes=100 * 1024 * 1024, backupCount=7, encoding="utf-8"
+)
+handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+call_logger.addHandler(handler)
+# Stop bubbling up to the root logger to avoid duplicating console output
+call_logger.propagate = False
+```
+
+For daily rotation use `TimedRotatingFileHandler("logs/llm-call.log", when="midnight", backupCount=7)` instead.
+
+**Typical troubleshooting scenarios**:
+
+| Goal | Action |
+| --- | --- |
+| Observe token usage and latency per LLM call | Set the dedicated logger to DEBUG, keep the switch at its default `false` |
+| Verify request construction and model output | Dedicated logger at DEBUG + `A2AT_LLM_DETAIL_LOG_ENABLED=true`; restore `false` and reset the level after troubleshooting |
+| Inspect payloads by file | Check `logs/llm-call.log` (rotated files are `llm-call.log.1`, `llm-call.log.2`, ...); clean up manually after troubleshooting |
+| Production | Keep the logger at its default (INFO or higher) and the switch at `false` — both off |
+
+> Note: the SDK only produces log events and never configures handlers or levels; both the output path and the rotation policy are entirely decided by the embedding application (the examples above are recommendations). When `A2AT_LLM_DETAIL_LOG_ENABLED` is enabled, every LLM call prints full payloads — set a per-file size cap and a backup count as shown to avoid filling up the disk. If the embedding application does not configure logging at all, Python defaults to printing only WARNING and above to stderr, so the DEBUG-level `llm_call` logs stay invisible.
+
+## 1.16 Configuration Item List
 
 The full configuration template is the repository-root `env.example`; copy it to `package_data/.env` (or pass an explicit `env_path`). The configuration items are described below:
 
@@ -1448,11 +1534,12 @@ The full configuration template is the repository-root `env.example`; copy it to
 | `A2AT_LLM_SESSION_MAX_TOTAL` | Maximum total number of tracked sessions, default `300` |
 | `A2AT_LLM_SESSION_MAX_PER_PROVIDER` | Maximum number of tracked sessions per provider, default `100` |
 | `A2AT_LLM_MAX_ATTEMPTS` | Maximum number of attempts for retryable LLM steps; range 1-10 (out-of-range values are clamped), default `3` |
+| `A2AT_LLM_DETAIL_LOG_ENABLED` | Whether to print the full LLM request/response payloads (no truncation), default `false`; enabling it may expose sensitive information or consume log space — use only in the DEBUG phase and keep disabled in production; timestamp/token/latency summary logs are emitted at DEBUG level on the dedicated logger `a2a_t.llm.call`, see 1.15 |
 | `A2AT_NEGOTIATION_STATE_STORE_TYPE` | Negotiation state store of the deprecated state-machine negotiation demo (`in_memory`); the 1.1.0 negotiation content API is stateless and ignores this key |
 
 The live-LLM corpus variables (`A2AT_TEST_LLM_BASE_URL`, `A2AT_TEST_LLM_API_KEY`, `A2AT_TEST_LLM_MODEL`, `A2AT_TEST_LLM_TEMPERATURE`, `A2AT_TEST_LLM_TIMEOUT_SECONDS`) are test-only and never affect production behavior.
 
-## 1.16 FAQ
+## 1.17 FAQ
 
 **Q: The prompt generation raises `PromptGenerationError` with `template.not_found` although the template file exists.**
 Check which resource source is active: in `local_file` mode business templates are read only from the local root without packaged fallback, so the file must exist under the root at the exact `template_uri` path; in `packaged` mode the template must be part of the installed package. `get_prompts()` lists what the current configuration actually sees. Remember the local root is a frozen snapshot — newly added files need a process restart.
