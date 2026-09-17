@@ -23,13 +23,9 @@ SPDX-License-Identifier: Apache-2.0
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.12+-blue.svg" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="License"></a>
 </p>
-
 <p align="center">
   <strong>Python SDK used to generate task prompts and handle task negotiation flows based on the A2A-T protocol.</strong>
-  <br>
-  基于A2A-T协议用于生成任务提示词并处理任务协商流程的Python SDK。
 </p>
-
 <p align="center">
   <a href="./README_zh.md">中文</a>
 </p>
@@ -38,71 +34,141 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Project Overview
 
-`a2a-t-sdk-python` is a Python SDK targeting telecom scenarios, used to generate task prompts and handle task negotiation flows.
+A2A-T (Agent-to-Agent Telecom) is a telecom-domain multi-agent interconnection protocol extended from the A2A protocol. It enhances capabilities such as information models, task negotiation, and collaboration security for telecom business scenarios, supporting deterministic, highly reliable, efficient, and secure collaboration among multi-agents in the telecom domain.
 
-This SDK is primarily aimed at two types of users:
+`a2a-t-sdk-python` is the Python SDK of the A2A-T protocol. Its core responsibility is to **generate, validate, and negotiate task prompts** (structured protocol messages) in A2A-T interactions. The SDK primarily targets two kinds of users:
 
-- Client: Generates task prompts based on user input, and initiates, receives, and advances negotiation flows.
-- Server: Validates `processed task prompts` that conform to the SDK format, and initiates, receives, and advances negotiation flows.
+- **Client Agent**: converts natural-language or structured input into task prompts conforming to the A2A-T format, and initiates, receives, and advances negotiation flows.
+- **Server Agent**: validates whether A2A-T messages submitted by clients satisfy scenario, template, and slot constraints, extracts parameters, and advances negotiation flows.
+
+The A2A-T SDK is independent of the A2A SDK. Using the two SDKs together builds agents with full A2A-T protocol support (the A2A SDK to pair with in the Python ecosystem is `a2a-sdk`):
+
+```mermaid
+flowchart LR
+    subgraph Server["Server Agent"]
+        B2["A2A SDK (a2a-sdk)<br/>A2A transport"] --> B1["A2A-T Server SDK<br/>message validation / parameter extraction / negotiation"]
+        B1 --> B0["Business code"]
+    end
+    subgraph Client["Client Agent"]
+        A0["Business code"] --> A1["A2A-T Client SDK<br/>task prompt generation / negotiation messages"]
+        A1 --> A2["A2A SDK (a2a-sdk)<br/>A2A transport"]
+    end
+    Client -- "HTTP A2A-T request" --> Server
+    Server -- "HTTP A2A-T response" --> Client
+```
 
 ## Core Capabilities
 
-- Task prompt generation pipeline: Covers input normalization, scenario recognition, slot extraction, and task prompt rendering.
-- Client API: Provides a task prompt generation result stream, along with negotiation entry points such as `start_negotiation`, `receive_negotiation`, and `continue_negotiation`.
-- Server validation API: Targets `processed task prompts` that conform to the SDK format, performing metadata parsing, slot extraction.
-- Negotiation types: Includes one built-in negotiation type: `information`.
-- Resource organization: Built-in prompt resources are located in `src/a2a_t/prompt_resources` (packaged inside the SDK module), containing `prompts`, `scenarios`, `slots`, and `templates`.
+| Capability | Description |
+| --- | --- |
+| Task prompt generation (client) | Covers input normalization, scenario recognition, slot extraction, and template rendering, supporting both natural-language and structured-data input |
+| Message validation and parameter extraction (server) | Executes metadata parsing, slot extraction, and semantic validation on SDK-format task prompts, extracts parameters per a Schema, and returns details of missing/invalid slots |
+| Negotiation content API | Supports `information` / `feasibility` / `target` negotiation types plus `abort` termination messages, with template-driven negotiation message generation and validation; negotiation session state travels in the message metadata (`negotiationContext`) and the SDK itself is stateless |
+| Resource organization | Bundled prompt resources (`prompts` / `scenarios` / `slots` / `templates` / `negotiation-vocabulary`) ship with the package, supporting both `packaged` (installed package) and `local_file` (local files) loading modes |
+| LLM adaptation | Connects to external LLMs through OpenAI-compatible call chains, with bounded retries for retryable failure codes |
+| Bundled samples | The repository ships runnable sample scenarios such as `subscribe_incident` (event subscription) and `negotiation` (negotiation closed loop); without an API key they automatically degrade to scripted mock LLM responses, running end to end with zero external dependencies |
 
 ## Project Structure
 
-The core code of the repository is located in `src/a2a_t`, with the main modules as follows:
+The repository is organized with `uv`; the core code lives under `src/a2a_t`:
 
-- `client`: Client wrapper, providing task prompt generation and negotiation entry points.
-- `server`: Server wrapper, providing validation and negotiation entry points for A2A-T protocol messages.
-- `common`: Shared prompt resource loading and common runtime capabilities.
-- `config`: Model-related configuration and its loading logic.
-- `llm`: LLM adaptation layer, client, and session storage abstraction.
-- `negotiation`: Negotiation types, runtime processing, and state storage.
-- `prompt`: Capabilities related to task prompt formatting, analysis, rendering, and validation.
+| Module | Description |
+| --- | --- |
+| `client` | Client facade providing task prompt generation and negotiation entry points (`A2ATClient`) |
+| `server` | Server facade providing A2A-T message validation and negotiation entry points (`A2ATServer`) |
+| `core` | Template addressing, metadata models, the validation pipeline, and the structured bilingual error model |
+| `common/prompt_resources` | Bundled prompt resource packaging and loading (`packaged` / `local_file`) |
+| `config` | `.env`-based configuration loading and configuration models |
+| `llm` | LLM adaptation layer with a default OpenAI-compatible client; supports custom LLM integration |
+| `prompt` | Prompt resource analysis, slot extraction, template rendering, and validation |
+| `negotiation` | Negotiation content models, the generation pipeline, and the validation pipeline |
+| `a2a-t-sample` | Runnable client/server sample case collection |
+| `a2a-t-corpus` | Accuracy verification corpus (pure test assets): data-driven workflow cases, shared byte-for-byte with the Java repository |
 
-## Installation and Environment Requirements
+The `tests/` directory mirrors the package structure, covering prompt generation, server validation, negotiation pipelines, prompt resources, and LLM adaptation test cases.
 
-- Python requirement: `>=3.12`
-- Package name: `a2a-t-sdk`
-- License: `Apache-2.0`
-- Build backend: `uv_build`
+## Quick Start
 
-Before getting started, it is recommended to first copy `package_data/env.example` to `package_data/.env`.
+### Environment Requirements
 
-## Development and Testing
+| Item | Requirement |
+| --- | --- |
+| Python | `>=3.12` |
+| Dependency manager | `uv` (recommended) |
+| LLM | Optional. Without an API key the samples automatically degrade to scripted mock LLM responses, running with zero external dependencies |
 
-The project uses `uv_build` as its build backend. Development dependencies include:
+### Run the First Demo in Three Steps
 
-- `pytest`
-- `ruff`
-- `mypy`
-
-The recommended minimal development workflow is as follows:
+Take the `subscribe_incident` (event subscription) scenario as an example: the client generates a Notification-T task prompt from natural-language input and sends it to the server over a real HTTP A2A chain; the server validates the message, establishes the event subscription, and streams Incident notifications. All commands below run in the **`a2a-t-sample` directory** (where `.env` lives):
 
 ```bash
-cd {project_path}/a2a-t-sdk-python
-uv sync --dev
-uv run pytest
-uv run ruff check .
-uv run mypy src
+# 1. Install dependencies and prepare the environment configuration
+#    (an empty A2AT_LLM_API_KEY automatically uses the mock LLM)
+cp env.example .env
+uv pip install -r requirements.txt
+
+# 2. Terminal 1: start the registry center (port 5001)
+#    Set the module search path first (.env lives in a2a-t-sample):
+#    PowerShell: $env:PYTHONPATH = "$pwd\subscribe-incident\src"
+#    bash:       export PYTHONPATH="$(pwd)/subscribe-incident/src"
+uv run python -m agentcard_example.registry_main
+
+# 3. Terminal 2: start the server (port 8000);
+#    Terminal 3: start the client (keeps receiving artifacts, Ctrl+C to stop)
+#    Set PYTHONPATH in both terminals as in step 2
+uv run python -m server_example.server_main
+uv run python -m client_example.client_main
 ```
 
-The `tests/` directory contains test cases for client prompt generation, server validation, negotiation runtime, prompt resources, and LLM adaptation. For external contributors, it is recommended to prioritize running the tests and static checks relevant to the current change.
+After startup you can observe the full-chain logs: client scenario recognition and slot extraction, the generated task prompt, the A2A request message, the server validation result, and the Incident notification push.
 
-## Current Scope of Support
+> If the Windows console shows garbled Chinese characters, run `chcp 65001` first.
 
-Before use, it is recommended to confirm the following limitations:
+### Connect a Real LLM (Optional)
 
-- The built-in LLM invocation chain is unified externally as an OpenAI adaptation layer.
-- Prompt resources currently only support local files.
-- Negotiation state storage currently only provides an in-memory implementation and does not guarantee persistence.
-- The bundled resources and language coverage are limited, and do not include remote resource loading capabilities such as `registry-center`.
-- This document primarily introduces the SDK itself, and does not cover the CLI, hosted services, deployment processes, or ready-to-use application solutions.
+Edit `a2a-t-sample/.env` and fill in any OpenAI-compatible endpoint:
+
+```properties
+# LLM protocol type
+A2AT_LLM_PROVIDER=openai
+# Model name
+A2AT_LLM_MODEL=<model name>
+# Model endpoint
+A2AT_LLM_BASE_URL=<OpenAI-compatible endpoint>
+# LLM API key
+A2AT_LLM_API_KEY=<your API key>
+```
+
+See the repository root `env.example` for the full configuration reference.
+
+### Development and Testing
+
+```bash
+cd {project path}/a2a-t-sdk-python
+uv sync --dev
+uv run pytest        # run all tests
+uv run ruff check .  # static checks
+uv run mypy src      # type checks
+```
+
+More runnable samples (event subscription end-to-end, negotiation closed loop, etc.) are described in [a2a-t-sample/README.md](a2a-t-sample/README.md).
+
+## More Documentation
+
+| Document | Location | Content |
+| --- | --- | --- |
+| Developer Guide | [docs/en/developer_guide.md](docs/en/developer_guide.md) | Feature introduction, installation and integration, parameter configuration, and minimal practices |
+| API Reference | [docs/en/API_Reference.md](docs/en/API_Reference.md) | Full API definitions and usage of `A2ATClient` / `A2ATServer` |
+
+## Current Support Scope
+
+Confirm the following limitations before use:
+
+- The built-in LLM call chain is uniformly exposed as an OpenAI adaptation layer.
+- The LLM prompt resources are built in and do not support custom extension (`prompts` and `errors` are always loaded from the installed package).
+- Negotiation session state travels in the message metadata (the SDK is stateless) and no negotiation state store is provided; the legacy state-machine negotiation APIs (`start_negotiation` / `receive_negotiation` / `continue_negotiation`) are deprecated since 1.1.0.
+- Bundled resources and language coverage are limited, and remote resource loading such as `registry-center` (the registry center) is not included.
+- This document mainly introduces the SDK itself and does not cover CLI tools, hosted services, deployment flows, or ready-to-use application solutions.
 
 ## License
 

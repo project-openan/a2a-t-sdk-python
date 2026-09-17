@@ -1,33 +1,26 @@
-# a2a-t-sample — 示例用例集
+# a2a-t-sample
 
-基于 **a2a-t-sdk** 的示例用例，以用例独立目录组织。
+`a2a-t-sample` 是 A2A-T Python SDK 的示例用例集，以用例独立目录组织，包含客户端与服务端可直接运行的入口。
 
-## 目录结构
+当前示例基于官方 Python A2A SDK（`a2a-sdk`）运行真实的 A2A `HTTP+JSON/REST` 链路：
+- `a2a-t-sdk` 客户端仅用于生成结构化 prompt
+- `a2a-t-sdk` 服务端仅用于校验结构化 prompt
 
-```
-a2a-t-sample/
-├── env.example              # 共享环境配置模板
-├── requirements.txt         # 共享依赖
-├── ruff.toml                # 共享 lint 配置
-├── README.md / README-zh.md # 本文档
-├── subscribe-incident/      # 用例：故障订阅
-│   ├── src/                 #   client / server / registry / common 模块
-│   ├── test/                #   单元测试
-│   └── resources/           #   用例独有 mock LLM 响应数据（zh-CN / en-US）
-└── negotiation/             # 用例：协商闭环（离线）
-    ├── src/negotiation_demo/ #  演示入口 / client & server 运行时 / 生成策略
-    ├── test/                 #  闭环测试（mock LLM，双语言）
-    └── resources/            #  场景数据 + 脚本化 mock LLM 响应（zh-CN / en-US）
-```
-
-共享配置（`env.example`、`requirements.txt`、`ruff.toml`）位于容器层，各用例可复用。每个用例携带自己的 `src/`、`test/` 和 `resources/`。
-
-## 已有用例
+## 用例清单
 
 | 目录 | 说明 |
-|------|------|
-| [subscribe-incident/](subscribe-incident/) | 故障订阅用例 — 流式推送 Incident artifact（含注册中心） |
-| [negotiation/](negotiation/) | 协商闭环用例 — 离线 propose -> accept 往返（脚本化 mock LLM） |
+| --- | --- |
+| [subscribe-incident/](subscribe-incident/) | 事件订阅用例——客户端生成 Notification-T prompt → 服务端校验 → 流式推送 Incident artifact（含注册中心） |
+| [negotiation/](negotiation/) | 协商闭环用例——离线 propose → accept 往返（脚本化 mock LLM，双语言） |
+
+## 模块内资源
+
+- 共享环境配置模板：`env.example`（复制为 `a2a-t-sample/.env` 使用）
+- 共享依赖：`requirements.txt`
+- 订阅用例客户端/服务端/注册中心入口：`subscribe-incident/src/{client_example,server_example,agentcard_example}/`
+- 订阅用例 mock LLM 响应数据：`subscribe-incident/resources/mock_responses/`（zh-CN / en-US）
+- 协商用例入口：`negotiation/src/negotiation_demo/`（demo 运行时与生成策略）
+- 协商用例场景数据与脚本化 mock LLM 响应：`negotiation/resources/`
 
 新用例直接在 `a2a-t-sample/` 下以 `subscribe-incident/` 的同级目录添加。
 
@@ -39,59 +32,61 @@ cp env.example .env
 uv pip install -r requirements.txt
 ```
 
-> 如果 `A2AT_LLM_API_KEY` 留空，sample 自动使用 `resources/mock_responses/` 下的 mock LLM 响应，无需真实 API 即可跑通完整流程。
+> 如果 `A2AT_LLM_API_KEY` 留空，两个用例都会自动使用用例各自的脚本化 mock LLM 响应，无需真实 API 即可跑通完整流程。使用 mock 时每次响应前会输出一行独立日志 `[llm] llm-mock: using canned mock LLM response`，用于区分 mock 与真实 LLM。
 
-## 用例：subscribe-incident（故障订阅）
+## 协商（Negotiation）闭环样例
 
-最小端到端用例，演示故障订阅场景：客户端生成 prompt → 服务端校验 → 流式推送 Incident artifact。流程包含客户端 prompt 生成、服务端校验、流式 artifact 推送，并保留 LLM mock 能力。
+协商样例是**离线**协商闭环 demo（Java `a2a-t-sample` NegotiationDemoApp 的 Python 对应物，内嵌 HTTP 服务器替换为**进程内运行时调用**）。未配置 LLM API Key 时用脚本化 mock LLM 应答，整个往返完全离线运行。
 
-### 启动服务（三个终端）
+4 报文流转：
 
-> 模块位于 `subscribe-incident/src/`，而 `.env` 位于 `a2a-t-sample/`，因此需要**在 `a2a-t-sample` 目录下设置 `PYTHONPATH` 指向 `subscribe-incident/src`**。
+| 报文 | 方向 | 内容 | 任务状态 |
+| --- | --- | --- | --- |
+| 1 | client→server | Task-T（参数缺失） | → |
+| 2 | server→client | Negotiation-T 信息协商请求（动态列出缺失参数） | INPUT_REQUIRED |
+| 3 | client→server | Task-T（参数补齐）+ Negotiation-T accept | → |
+| 4 | server→client | 诊断结果（从提取参数动态生成） | COMPLETED |
 
-```powershell
-# 进入 sample 目录（.env 所在位置）
-cd a2a-t-sample
+**LLM 参与约定**：`fromData` 策略下协商消息生成环节是纯确定性渲染（不调 LLM），Task-T 槽位提取、语义校验与 fromText 协商抽取仍调用 LLM（缺 key 时由脚本化 mock LLM 应答，因此样例离线可跑）。配置了真实 API key 时同一流程调用真实 LLM。
 
-# 设置模块搜索路径（每个终端都要执行）
-$env:PYTHONPATH = "$pwd\subscribe-incident\src"
-```
+### 协商样例结构
+
+| 目录 | 作用 |
+| --- | --- |
+| `negotiation/src/negotiation_demo/` | 入口 `__main__` / `demo_app`：解析 `--fromText` / `--language` 并驱动 4 报文往返 |
+| `negotiation/src/negotiation_demo/client_runtime.py` | 客户端运行时：Task-T prompt 生成 + accept 生成（`generate_task_prompt_from_data_with_schema` + `generate_negotiation_accept_prompt_from_data`） |
+| `negotiation/src/negotiation_demo/server_runtime.py` | 服务端运行时：`validate_task_prompt_and_data_filling` 驱动的缺失检测 → propose 生成 → 诊断渲染 |
+| `negotiation/src/negotiation_demo/shared/` | 策略层（fromData / fromText）、mock LLM 桩、场景数据加载 |
+| `negotiation/resources/` | 场景数据（`scenario.json` 等）+ 双语言 mock LLM 响应 |
+
+### 协商样例启动
 
 ```bash
-# 终端1：启动注册中心（端口 5001）
-uv run python -m agentcard_example.registry_main
+# 从 a2a-t-sample 目录执行；PYTHONPATH 指向用例 src
+$env:PYTHONPATH = "$pwd\negotiation\src"     # PowerShell；bash 下用 export PYTHONPATH=...
 
-# 终端2：启动服务端（端口 8000）
-uv run python -m server_example.server_main
-
-# 终端3：启动客户端（持续接收 artifact，Ctrl+C 停止）
-uv run python -m client_example.client_main
+uv run python -m negotiation_demo                 # fromData 策略（协商消息确定性生成）
+uv run python -m negotiation_demo --fromText      # fromText 策略（每条协商消息一次 LLM 抽取）
+uv run python -m negotiation_demo --language zh-CN
 ```
 
-客户端会持续接收 artifact，按 `Ctrl+C` 停止。
+本样例为进程内运行时（无 HTTP 服务端），不涉及传输端点开关。Windows 控制台如遇中文乱码，先执行 `chcp 65001`。
 
-### 限制接收数量（可选）
+## 事件订阅（subscribe-incident）样例
 
-```powershell
-$env:A2AT_SAMPLE_MAX_ARTIFACTS = "5"
-uv run python -m client_example.client_main
-```
-
-### 流程说明
+最小端到端用例，基于 `a2a-sdk` 的真实 HTTP+JSON 链路，演示故障订阅场景：客户端生成 prompt → 服务端校验 → 流式推送 Incident artifact。流程包含注册中心交互、客户端 prompt 生成、服务端校验与流式 artifact 推送，并保留 LLM mock 能力。
 
 | 阶段 | 谁调 SDK | SDK 做什么 | LLM 调用次数 |
-|------|---------|-----------|-------------|
+| --- | --- | --- | --- |
 | 启动 | client + server | A2ATClient / A2ATServer 初始化 | 0 |
 | Prompt 生成 | 客户端 | 场景识别 + slot 提取 + 模板渲染 | 2 |
 | Prompt 校验 | 服务端 | 场景识别 → slot 提取 → 语义校验 | 3 |
-| 流式推送 | 客户端 | normalize_event 归一化 stream 事件 | 0 |
+| 流式推送 | 客户端 | 归一化 stream 事件 | 0 |
 
 ### 消息体约定
 
-客户端发送的 A2A 请求遵循以下约定：
-
 | 位置 | 内容 |
-|------|------|
+| --- | --- |
 | text part | scenario 名（`"create incident subscription"`） |
 | `metadata[Notification-T/NL/v1]` | 生成的 promptText |
 | header `A2A-Extensions` | `https://projects.tmforum.org/a2aproject/telecommunication/extensions/Notification-T/NL/v1` |
@@ -117,6 +112,36 @@ uv run python -m client_example.client_main
 - name：`SPN Domain Agent`，provider：`Huawei`
 - 仅声明 `Notification-T/NL/v1` 扩展（subscribe 用例不涉及 Task-T）
 
+### 事件订阅样例启动
+
+> 模块位于 `subscribe-incident/src/`，而 `.env` 位于 `a2a-t-sample/`，因此需要**在 `a2a-t-sample` 目录下设置 `PYTHONPATH` 指向 `subscribe-incident/src`**。
+
+```powershell
+# 进入 sample 目录（.env 所在位置）
+cd a2a-t-sample
+
+# 设置模块搜索路径（每个终端都要执行）
+$env:PYTHONPATH = "$pwd\subscribe-incident\src"
+```
+
+```bash
+# 终端1：启动注册中心（端口 5001）
+uv run python -m agentcard_example.registry_main
+
+# 终端2：启动服务端（端口 8000）
+uv run python -m server_example.server_main
+
+# 终端3：启动客户端（持续接收 artifact，Ctrl+C 停止）
+uv run python -m client_example.client_main
+```
+
+### 限制接收数量（可选）
+
+```powershell
+$env:A2AT_SAMPLE_MAX_ARTIFACTS = "5"
+uv run python -m client_example.client_main
+```
+
 ### 关键点
 
 - **SDK 是中间层**：client/server 不直接调 LLM，通过 A2ATClient/A2ATServer 间接调用
@@ -124,7 +149,6 @@ uv run python -m client_example.client_main
 - **无协商**：客户端一次性提交完整输入，服务端校验通过直接推送
 - **三层解耦**：client（发现 + 消费）→ server（注册 + 推送）→ registry（注册中心）
 - **mock 能力保留**：`common/mock_llm.py` + `resources/mock_responses/` 在 key 为空时自动启用，完整流程无需真实 API
-- **如何区分 mock**：每次 mock LLM 响应前都会输出一行独立日志 `[llm] llm-mock: using canned mock LLM response`；使用真实 LLM 时没有这行日志
 
 ## 运行测试
 
@@ -133,40 +157,3 @@ uv run python -m client_example.client_main
 uv run pytest subscribe-incident/test/ -v
 uv run pytest negotiation/test/ -v
 ```
-
-## 用例：negotiation
-
-**离线**协商闭环演示（Java `a2a-t-sample` NegotiationDemoApp 的 Python 对应物，内嵌 HTTP
-服务器替换为进程内运行时调用）。它驱动 4 消息流程：
-
-1. client -> 以**缺失**参数生成 Task-T prompt（`generate_task_prompt_from_data_with_schema`）；
-2. server -> `validate_task_prompt_and_data_filling` 校验拒绝（参数缺失）-> 生成 Negotiation-T
-   信息**提议（propose）** -> `INPUT_REQUIRED`；
-3. client -> **补全**参数的 Task-T prompt + Negotiation-T **接受（accept）**；
-4. server -> 校验通过 -> 诊断结果 -> `COMPLETED`。
-
-### 运行（离线，无需 API key）
-
-```bash
-# 从 a2a-t-sample 目录执行；PYTHONPATH 指向用例 src
-$env:PYTHONPATH = "$pwd\negotiation\src"     # PowerShell；bash 下用 export PYTHONPATH=...
-
-uv run python -m negotiation_demo                 # fromData 策略（协商消息确定性生成）
-uv run python -m negotiation_demo --fromText      # fromText 策略（每条协商消息一次 LLM 抽取）
-uv run python -m negotiation_demo --language zh-CN
-```
-
-`.env` 中没有 `A2AT_LLM_API_KEY` 时，脚本化 mock LLM
-（`negotiation/src/negotiation_demo/shared/mock_llm.py`）从
-`negotiation/resources/mock_responses/` 应答槽位抽取、内容校验与协商抽取调用，整个往返
-完全离线运行。配置了真实 API key 时同一流程调用真实 LLM（fromData 策略的协商消息依然
-零 LLM 调用 — SDK 直接按模板渲染类型化内容）。
-
-### 流程
-
-| 阶段 | 谁调 SDK | SDK 做什么 | LLM 调用（fromData） |
-|------|----------|-----------|---------------------|
-| 消息 1 | client | Task-T 槽位抽取 + 模板渲染（`fromDataWithSchema`） | 1 |
-| 消息 2 | server | `validate_task_prompt_and_data_filling` + 协商 propose 生成 | 1（fromData +0） |
-| 消息 3 | client | Task-T 生成 + 协商 accept 生成 | 1（fromData +0） |
-| 消息 4 | server | `validate_task_prompt_and_data_filling` + 诊断渲染 | 1 |

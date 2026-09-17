@@ -1,37 +1,30 @@
-# a2a-t-sample — Sample Use Cases
+# a2a-t-sample
 
-Sample use cases built on **a2a-t-sdk**, organized as sibling use-case directories.
+`a2a-t-sample` is the sample case collection of the A2A-T Python SDK, organized as one independent directory per case, with runnable client and server entry points.
 
-## Directory Structure
+The current samples run a real A2A `HTTP+JSON/REST` chain based on the official Python A2A SDK (`a2a-sdk`):
+- the `a2a-t-sdk` client only generates structured prompts
+- the `a2a-t-sdk` server only validates structured prompts
 
-```
-a2a-t-sample/
-├── env.example              # shared environment config template
-├── requirements.txt         # shared dependencies
-├── ruff.toml                # shared lint config
-├── README.md / README-zh.md # this document
-├── subscribe-incident/      # use case: fault (incident) subscription
-│   ├── src/                 #   client / server / registry / common modules
-│   ├── test/                #   unit tests
-│   └── resources/           #   use-case mock LLM response data (zh-CN / en-US)
-└── negotiation/             # use case: negotiation closed loop (offline)
-    ├── src/negotiation_demo/ #  demo app / client & server runtimes / strategies
-    ├── test/                 #  closed-loop tests (mock LLM, both languages)
-    └── resources/            #  scenario data + scripted mock LLM responses (zh-CN / en-US)
-```
-
-Shared configuration (`env.example`, `requirements.txt`, `ruff.toml`) lives at the container level so every use case can reuse it. Each use case carries its own `src/`, `test/`, and `resources/`.
-
-## Available Use Cases
+## Case List
 
 | Directory | Description |
-|-----------|-------------|
-| [subscribe-incident/](subscribe-incident/) | Fault (incident) subscription — streaming Incident artifact push with registry center |
-| [negotiation/](negotiation/) | Negotiation closed loop — offline propose -> accept round trip with a scripted mock LLM |
+| --- | --- |
+| [subscribe-incident/](subscribe-incident/) | Event subscription case — client generates a Notification-T prompt → server validates it → streams Incident artifacts (includes the registry center) |
+| [negotiation/](negotiation/) | Negotiation closed-loop case — offline propose → accept round trips (scripted mock LLM, both languages) |
 
-New use cases are added as sibling directories of `subscribe-incident/`.
+## Resources in This Module
 
-## Quick Start (shared)
+- Shared environment configuration template: `env.example` (copy to `a2a-t-sample/.env` before use)
+- Shared dependencies: `requirements.txt`
+- Subscription case client/server/registry entry points: `subscribe-incident/src/{client_example,server_example,agentcard_example}/`
+- Subscription case mock LLM response data: `subscribe-incident/resources/mock_responses/` (zh-CN / en-US)
+- Negotiation case entry point: `negotiation/src/negotiation_demo/` (demo runtime and generation strategies)
+- Negotiation case scenario data and scripted mock LLM responses: `negotiation/resources/`
+
+Add new cases directly under `a2a-t-sample/`, as sibling directories of `subscribe-incident/`.
+
+## Quick Start (Shared)
 
 ```bash
 cd a2a-t-sample
@@ -39,135 +32,128 @@ cp env.example .env
 uv pip install -r requirements.txt
 ```
 
-> If `A2AT_LLM_API_KEY` is left empty in `.env`, the samples automatically use mock LLM responses from `resources/mock_responses/`. No real API key is needed to run the full flow.
+> If `A2AT_LLM_API_KEY` is left empty, both cases automatically use their own scripted mock LLM responses, so the full flows run without a real API. With the mock in use, a standalone log line `[llm] llm-mock: using canned mock LLM response` is printed before each response; this line distinguishes the mock from a real LLM.
 
-## Use Case: subscribe-incident
+## Negotiation Closed-Loop Sample
 
-A minimal end-to-end use case demonstrating the **subscribe-incident (fault subscription)** scenario: client generates prompt -> server validates -> streaming Incident artifact push. The flow includes client-side prompt generation, server-side validation, and streaming artifact push, while retaining the LLM mock capability.
+The negotiation sample is an **offline** negotiation closed-loop demo (the Python counterpart of the Java `a2a-t-sample` NegotiationDemoApp, with the embedded HTTP server replaced by an **in-process runtime**). Without an LLM API key it uses a scripted mock LLM, so the whole round trip runs completely offline.
 
-### Start services (three terminals)
+The 4-message flow:
 
-> Modules live under `subscribe-incident/src/`, while the `.env` file is at `a2a-t-sample/`. Therefore you must set `PYTHONPATH` to point to `subscribe-incident/src` **from the `a2a-t-sample` directory**.
+| Message | Direction | Content | Task status |
+| --- | --- | --- | --- |
+| 1 | client→server | Task-T (with missing parameters) | → |
+| 2 | server→client | Negotiation-T information negotiation request (dynamically lists the missing parameters) | INPUT_REQUIRED |
+| 3 | client→server | Task-T (parameters filled) + Negotiation-T accept | → |
+| 4 | server→client | Diagnosis result (dynamically generated from the extracted parameters) | COMPLETED |
 
-```powershell
-# Change to the sample directory (where .env lives)
-cd a2a-t-sample
+**LLM involvement conventions**: under the `fromData` strategy the negotiation message generation is purely deterministic rendering (no LLM calls), while Task-T slot extraction, semantic validation, and fromText negotiation extraction still call the LLM (answered by the scripted mock LLM when the key is absent, so the sample runs offline). With a real API key configured, the same flow calls a real LLM.
 
-# Set module search path (every terminal needs this)
-$env:PYTHONPATH = "$pwd\subscribe-incident\src"
-```
+### Negotiation Sample Structure
 
-```bash
-# Terminal 1: start registry (port 5001)
-uv run python -m agentcard_example.registry_main
+| Directory | Role |
+| --- | --- |
+| `negotiation/src/negotiation_demo/` | Entry point `__main__` / `demo_app`: parses `--fromText` / `--language` and drives the 4-message round trip |
+| `negotiation/src/negotiation_demo/client_runtime.py` | Client runtime: Task-T prompt generation + accept generation (`generate_task_prompt_from_data_with_schema` + `generate_negotiation_accept_prompt_from_data`) |
+| `negotiation/src/negotiation_demo/server_runtime.py` | Server runtime: missing-parameter detection driven by `validate_task_prompt_and_data_filling` → propose generation → diagnosis rendering |
+| `negotiation/src/negotiation_demo/shared/` | Strategy layer (fromData / fromText), the mock LLM stub, and scenario data loading |
+| `negotiation/resources/` | Scenario data (e.g. `scenario.json`) + bilingual mock LLM responses |
 
-# Terminal 2: start server (port 8000)
-uv run python -m server_example.server_main
-
-# Terminal 3: start client (receives artifacts continuously; Ctrl+C to stop)
-uv run python -m client_example.client_main
-```
-
-The client will continuously receive artifacts. Press `Ctrl+C` to stop.
-
-### Limit received count (optional)
-
-```powershell
-$env:A2AT_SAMPLE_MAX_ARTIFACTS = "5"
-uv run python -m client_example.client_main
-```
-
-### Flow
-
-| Stage | Who calls SDK | What SDK does | LLM calls |
-|-------|--------------|---------------|-----------|
-| Startup | client + server | A2ATClient / A2ATServer init | 0 |
-| Prompt generation | client | scenario recognition + slot extraction + template render | 2 |
-| Prompt validation | server | scenario recognition -> slot extraction -> semantic validation | 3 |
-| Streaming push | client | normalize_event for stream events | 0 |
-
-### Message Body Convention
-
-The A2A request sent by the client follows this convention:
-
-| Field | Content |
-|-------|---------|
-| text part | scenario name (`"create incident subscription"`) |
-| `metadata[Notification-T/NL/v1]` | generated promptText |
-| header `A2A-Extensions` | `https://projects.tmforum.org/a2aproject/telecommunication/extensions/Notification-T/NL/v1` |
-
-- Prompt generation input is a **hard-coded natural language string**, selected by `A2AT_LANGUAGE`:
-  - `zh-CN`: `"请生成一个Incident事件订阅任务：通知主题为Incident，订阅条件为订阅级别为critical的ETH-LOS的故障，上报通知数据格式为DataPart"`
-  - `en-US`: `"Generate an Incident event subscription task: notification topic is Incident, subscription condition is a critical ETH-LOS fault, and the notification data format is DataPart"`
-
-### Server Validation Flow
-
-The `execute_server_flow` state machine:
-
-1. **Validate `A2A-Extensions` header** — must contain the Notification-T/NL extension URI; otherwise throws `ValueError("a2a client extensions is not exist.")`
-2. **Extract promptText from `metadata[Notification-T/NL/v1]`** (no longer reads from `parts[0].text`)
-3. **`SUBMITTED`** → call `A2ATServer.check_task_prompt` for validation
-   - Validation fails → emit **`REJECTED`** status (not an exception)
-   - Validation passes → emit **`WORKING`** status
-4. **Loop pushing Incident artifacts** (every `ARTIFACT_SEND_INTERVAL_SECONDS = 5.0s`, infinite by default, can be capped via `max_artifacts`)
-5. Exception during push → emit **`FAILED`** status
-
-### AgentCard Data
-
-- name: `SPN Domain Agent`, provider: `Huawei`
-- Declares only the `Notification-T/NL/v1` extension (subscribe use case does not involve Task-T)
-
-### Key Points
-
-- **SDK as middleware**: client/server never call LLM directly; they go through A2ATClient/A2ATServer
-- **LLM only for prompt phase**: no LLM calls during artifact push
-- **No negotiation**: client submits complete input; server validates and pushes directly
-- **Three-layer decoupling**: client (discover + consume) -> server (register + push) -> registry (registry center)
-- **Mock capability preserved**: `common/mock_llm.py` + `resources/mock_responses/` auto-activate when the API key is empty; the full flow runs without a real API
-- **How to tell it's mock**: before each mock LLM response, a standalone log line `[llm] llm-mock: using canned mock LLM response` is printed; this line is absent when using a real LLM
-
-## Run Tests
+### Starting the Negotiation Sample
 
 ```bash
-# Run all use case tests (from the a2a-t-sample directory)
-uv run pytest subscribe-incident/test/ -v
-uv run pytest negotiation/test/ -v
-```
-
-## Use Case: negotiation
-
-An **offline** negotiation closed-loop demo (the Python counterpart of the Java
-`a2a-t-sample` NegotiationDemoApp, with the embedded HTTP server replaced by an in-process
-runtime call). It drives the 4-message flow:
-
-1. client -> Task-T prompt generated with **missing** params (`generate_task_prompt_from_data_with_schema`);
-2. server -> `validate_task_prompt_and_data_filling` rejects (params missing) -> Negotiation-T
-   information **propose** -> `INPUT_REQUIRED`;
-3. client -> Task-T prompt with **filled** params + Negotiation-T **accept**;
-4. server -> validation passes -> diagnosis result -> `COMPLETED`.
-
-### Run (offline, no API key needed)
-
-```bash
-# From the a2a-t-sample directory; PYTHONPATH points at the use case src
-$env:PYTHONPATH = "$pwd\negotiation\src"     # PowerShell; export PYTHONPATH=... on bash
+# Run from the a2a-t-sample directory; PYTHONPATH must point at the case src
+$env:PYTHONPATH = "$pwd\negotiation\src"     # PowerShell; use export under bash
 
 uv run python -m negotiation_demo                 # fromData strategy (deterministic negotiation messages)
 uv run python -m negotiation_demo --fromText      # fromText strategy (one LLM extraction per negotiation message)
 uv run python -m negotiation_demo --language zh-CN
 ```
 
-Without `A2AT_LLM_API_KEY` in `.env`, the scripted mock LLM (`negotiation/src/negotiation_demo/shared/mock_llm.py`)
-serves the slot-extraction, content-validation and negotiation-extraction calls from
-`negotiation/resources/mock_responses/`, so the whole round trip runs offline. With a real API
-key the same flow calls the real LLM (the negotiation messages of the fromData strategy still
-make no LLM call — the SDK renders the typed content directly from the template).
+This sample is an in-process runtime (no HTTP server), so transport endpoint switches do not apply. If the Windows console shows garbled Chinese characters, run `chcp 65001` first.
 
-### Flow
+## Event Subscription (subscribe-incident) Sample
 
-| Stage | Who calls SDK | What SDK does | LLM calls (fromData) |
-|-------|--------------|---------------|----------------------|
-| Message 1 | client | Task-T slot extraction + template render (`fromDataWithSchema`) | 1 |
-| Message 2 | server | `validate_task_prompt_and_data_filling` + negotiation propose generation | 1 (+0 fromData) |
-| Message 3 | client | Task-T generation + negotiation accept generation | 1 (+0 fromData) |
-| Message 4 | server | `validate_task_prompt_and_data_filling` + diagnosis rendering | 1 |
+A minimal end-to-end case based on the real HTTP+JSON chain of `a2a-sdk`, demonstrating the fault subscription scenario: the client generates a prompt → the server validates it → Incident artifacts are streamed. The flow covers registry center interaction, client prompt generation, server validation, and streaming artifact delivery, and keeps the LLM mock capability.
+
+| Stage | Who calls the SDK | What the SDK does | LLM calls |
+| --- | --- | --- | --- |
+| Startup | client + server | A2ATClient / A2ATServer initialization | 0 |
+| Prompt generation | client | scenario recognition + slot extraction + template rendering | 2 |
+| Prompt validation | server | scenario recognition → slot extraction → semantic validation | 3 |
+| Streaming push | client | normalizes the stream events | 0 |
+
+### Message Body Conventions
+
+| Location | Content |
+| --- | --- |
+| text part | scenario name (`"create incident subscription"`) |
+| `metadata[Notification-T/NL/v1]` | the generated promptText |
+| header `A2A-Extensions` | `https://projects.tmforum.org/a2aproject/telecommunication/extensions/Notification-T/NL/v1` |
+
+- The prompt generation input is **hard-coded natural language**, selected automatically by `A2AT_LANGUAGE`:
+  - `zh-CN`: `"请生成一个Incident事件订阅任务：通知主题为Incident，订阅条件为订阅级别为critical的ETH-LOS的故障，上报通知数据格式为DataPart"`
+  - `en-US`: `"Generate an Incident event subscription task: notification topic is Incident, subscription condition is a critical ETH-LOS fault, and the notification data format is DataPart"`
+
+### Server Validation Flow
+
+The state machine of `execute_server_flow`:
+
+1. **Validate the `A2A-Extensions` header**: must contain the Notification-T/NL extension URI, otherwise raise `ValueError("a2a client extensions is not exist.")`
+2. **Extract promptText from `metadata[Notification-T/NL/v1]`** (no longer read from `parts[0].text`)
+3. **`SUBMITTED`** → validate with `A2ATServer.check_task_prompt`
+   - validation failed → emit **`REJECTED`** status (no exception raised)
+   - validation passed → emit **`WORKING`** status
+4. **Push Incident artifacts in a loop** (every `ARTIFACT_SEND_INTERVAL_SECONDS = 5.0s`; unlimited by default, may be truncated by `max_artifacts`)
+5. exception during pushing → emit **`FAILED`** status
+
+### AgentCard Data
+
+- name: `SPN Domain Agent`, provider: `Huawei`
+- declares only the `Notification-T/NL/v1` extension (the subscribe case does not involve Task-T)
+
+### Starting the Event Subscription Sample
+
+> The modules live under `subscribe-incident/src/` while `.env` lives under `a2a-t-sample/`; therefore **set `PYTHONPATH` to point at `subscribe-incident/src` while working in the `a2a-t-sample` directory**.
+
+```powershell
+# enter the sample directory (where .env lives)
+cd a2a-t-sample
+
+# set the module search path (repeat in every terminal)
+$env:PYTHONPATH = "$pwd\subscribe-incident\src"
+```
+
+```bash
+# Terminal 1: start the registry center (port 5001)
+uv run python -m agentcard_example.registry_main
+
+# Terminal 2: start the server (port 8000)
+uv run python -m server_example.server_main
+
+# Terminal 3: start the client (keeps receiving artifacts, Ctrl+C to stop)
+uv run python -m client_example.client_main
+```
+
+### Limit the Number of Received Artifacts (Optional)
+
+```powershell
+$env:A2AT_SAMPLE_MAX_ARTIFACTS = "5"
+uv run python -m client_example.client_main
+```
+
+### Key Points
+
+- **The SDK is the middle layer**: the client/server never call the LLM directly; they call it indirectly through A2ATClient/A2ATServer
+- **The LLM is used only in the prompt stages**: pushing artifacts does not call the LLM
+- **No negotiation**: the client submits complete input once, and the server pushes directly after validation passes
+- **Three-layer decoupling**: client (discovery + consumption) → server (registration + push) → registry (registry center)
+- **Mock capability retained**: `common/mock_llm.py` + `resources/mock_responses/` are enabled automatically when the key is empty; the full flow needs no real API
+
+## Running the Tests
+
+```bash
+# run the tests of all cases (from the a2a-t-sample directory)
+uv run pytest subscribe-incident/test/ -v
+uv run pytest negotiation/test/ -v
+```
