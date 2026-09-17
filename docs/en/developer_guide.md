@@ -1092,11 +1092,13 @@ The SDK depends on four kinds of prompt resources when generating and validating
 | Business templates/slots/scenarios (templates/slots/scenarios of Task-T, Notification-T, Authorization-T) and negotiation resources (Negotiation-T templates and negotiation-vocabulary) | Read from the local root directory (including the Negotiation-T tree) | Installed package |
 | LLM instruction prompts (the prompts directory) and error messages (errors) | Always loaded from the installed package; local copies are ignored with a warning | Installed package |
 
+**Built-in fallback (local-first overlay).** In `local_file` mode a routed resource that is missing from the local snapshot falls back to the packaged copy, so a custom root only needs to carry the files it actually overrides. Each resource path served from the package this way warns once — `prompt_resource_builtin_fallback path=prompt_resources/... source=packaged` (exact for a path-form identifier, the Java wildcard locator `.../templates/*/network-layer/<code>/v1/<language>/template.md (or the layout without the network-layer segment)` for a bare scenario code) — and a resource missing both locally and in the package fails with the plain not-found error without a warning. Bare scenario codes resolve in two phases: the whole local snapshot is probed first, so a local file wins whatever its type directory or layout, and only then the packaged candidates. The template catalog enumerates the overlay the same way: the packaged templates union the locally captured ones, with the local copy winning, and each `PromptTemplate` record carries its effective origin (`local` or `packaged`).
+
 **Key constraints**:
 
 1. **Construction-time validation**: in `local_file` mode, when `A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR` is unset, the path does not exist, or the path is not a directory, construction fails immediately with a clear error message.
 2. **Initialization-time loading (frozen snapshot)**: the local root directory is read once into a read-only snapshot at facade construction and the filesystem is not accessed again at runtime; after modifying local files, the SDK process must be restarted for the changes to take effect.
-3. **No built-in fallback**: in `local_file` mode, business templates are only read from the local root directory with no fallback to the package; when the files for a `template_uri` are missing, the generation path raises `PromptGenerationError` and the validation path raises `ContentValidationError`, both with the `template.not_found` code.
+3. **Local-first built-in fallback**: in `local_file` mode the routed resources are read from the local root with a built-in fallback — a file missing from the local snapshot is served from the installed package with a one-time `prompt_resource_builtin_fallback` warning per resource path; a file missing both locally and in the package makes the generation path raise `PromptGenerationError` and the validation path raise `ContentValidationError`, both with the `template.not_found` code.
 
 ### 1.5.2 Implementation Steps
 
@@ -1208,13 +1210,13 @@ metadata = client.generate_task_prompt_from_text(
 
 The failure policy for `template_uri`: `None` raises `TypeError`; a blank or malformed URI (fewer than three segments, or a segment that is not a simple segment) raises `ValueError` with the message `Unparseable template URI: <input>`.
 
-To override a built-in template (for example `PRIVATE_LINE_COMPLAINT_URI`), place `template.md` and `slot.json` under the same relative path in the local root directory and keep using the original constant in the code. Note that in `local_file` mode business templates are only read from the local root directory with no fallback to the package (see the key constraints in 1.5.1); when the local files are missing, the generation chain raises `PromptGenerationError` and the validation chain raises `ContentValidationError`, both with the `template.not_found` code.
+To override a built-in template (for example `PRIVATE_LINE_COMPLAINT_URI`), place `template.md` and `slot.json` under the same relative path in the local root directory and keep using the original constant in the code. In `local_file` mode the local copy wins; a file the local root does not carry falls back to the packaged copy with a one-time `prompt_resource_builtin_fallback` warning per resource path. Only when a file is missing both locally and in the package does the generation chain raise `PromptGenerationError` and the validation chain raise `ContentValidationError`, both with the `template.not_found` code.
 
 #### Step4 Verification and Troubleshooting
 
 After starting the client or the server, confirm and troubleshoot as follows:
 
-1. **Missing resources**: when a template is not found, the generation chain raises `PromptGenerationError` and the validation chain raises `ContentValidationError`, both with the `template.not_found` code; the exception message includes the expected file path — complete the directory structure per the hint.
+1. **Missing resources**: when a template is not found, the generation chain raises `PromptGenerationError` and the validation chain raises `ContentValidationError`, both with the `template.not_found` code; in `local_file` mode the template resolves local-first with the packaged fallback, so the file must exist under the local root at the exact `template_uri` path or inside the installed package — complete the directory structure per the hint.
 2. **Content not updated**: changes to local files do not take effect without a restart; restart the SDK process and reconstruct.
 3. **LLM instructions and error messages cannot be customized**: `prompts/` and `errors/` are always loaded from the installed package; local copies are ignored with a warning.
 

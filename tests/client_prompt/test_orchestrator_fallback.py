@@ -1,9 +1,10 @@
 """End-to-end prompt generation over a real local resource root (D31 access layer).
 
 Replaces the interim loader-fallback tests: ``local_file`` mode serves routed resources from the
-frozen snapshot of the configured root and the instruction prompts from the package, so a language
-missing from the local root fails fast with ``template.load_failed`` instead of silently falling
-back to the packaged defaults (Java ADR-0004 semantics).
+frozen snapshot of the configured root with the built-in packaged fallback (Java ADR 0005 overlay)
+— a resource missing locally is served from the package with a one-time warning — while the
+instruction prompts always come from the package. A resource missing both locally and in the
+package still fails fast with the catalog-coded generation failure.
 """
 
 from __future__ import annotations
@@ -101,7 +102,7 @@ def _build_orchestrator(root: Path, *, language: str, llm_client: Any) -> Prompt
     )
 
 
-def test_generate_returns_prompt_resource_load_error_when_requested_language_resources_are_missing(
+def test_generate_falls_back_to_the_packaged_resources_when_requested_language_resources_are_missing(
     tmp_path: Path,
 ) -> None:
     _write_english_business_resources(tmp_path)
@@ -116,11 +117,12 @@ def test_generate_returns_prompt_resource_load_error_when_requested_language_res
 
     result = orchestrator.generate("Analyze Site A.")
 
-    assert result.success is False
-    assert result.failure is not None
-    assert result.failure.code == ErrorCatalog.TEMPLATE_LOAD_FAILED.value
-    assert result.failure.stage == "preparation"
-    assert result.failure.message == "模板资源「prompt_resources/scenarios/zh-CN/scenarios.json」读取失败"
+    assert result.success is True
+    assert result.failure is None
+    # The packaged zh-CN copy is served (its section headers are in the prompt), not the local
+    # en-US template.
+    assert "操作类型" in result.prompt_text
+    assert "Site:" not in result.prompt_text
 
 
 def test_generate_returns_prompt_resource_load_error_when_packaged_prompts_are_missing(
@@ -192,7 +194,7 @@ def test_generate_uses_the_routed_local_business_resources_and_packaged_prompts(
     assert system_messages[1]["content"] == packaged.load_prompt("slot_extraction", "en-US", "system.md")
 
 
-def test_generate_surfaces_a_missing_local_template_for_a_resolved_scenario(tmp_path: Path) -> None:
+def test_generate_falls_back_to_the_packaged_template_when_the_local_template_is_missing(tmp_path: Path) -> None:
     _write_resource_file(
         tmp_path,
         "scenarios/en-US/scenarios.json",
@@ -204,8 +206,48 @@ def test_generate_surfaces_a_missing_local_template_for_a_resolved_scenario(tmp_
         json.dumps(_SLOT_JSON_SCHEMA, ensure_ascii=True),
     )
     llm_client = FakeSequencedLLMClient(
-        ['{"matched": true, "scenario_code": "ran-energy-saving", "error_message": null}']
+        [
+            '{"matched": true, "scenario_code": "ran-energy-saving", "error_message": null}',
+            '{"slots": {"site": "Site A", "additional_notes": null}, "slot_errors": []}',
+        ]
     )
+
+    orchestrator = _build_orchestrator(tmp_path, language="en-US", llm_client=llm_client)
+
+    result = orchestrator.generate("Analyze Site A.")
+
+    assert result.success is True
+    assert result.failure is None
+    # The packaged en-US copy is served (its section headers are in the prompt), not a local template.
+    assert "Operation Type" in result.prompt_text
+    assert "Site:" not in result.prompt_text
+
+
+def test_generate_still_fails_when_the_template_is_missing_everywhere(tmp_path: Path) -> None:
+    """A resource missing both locally and in the package keeps the fail-fast contract."""
+    _write_resource_file(
+        tmp_path,
+        "scenarios/en-US/scenarios.json",
+        json.dumps(
+            {
+                "scenarios": [
+                    {
+                        "scenario_code": "ghost-scenario",
+                        "scenario_name": "Ghost Scenario",
+                        "description": "A scenario unknown to the packaged resources.",
+                        "example": "Trigger the ghost scenario.",
+                    }
+                ]
+            },
+            ensure_ascii=True,
+        ),
+    )
+    _write_resource_file(
+        tmp_path,
+        "slots/Task-T/network-layer/ghost-scenario/v1/en-US/slot.json",
+        json.dumps(_SLOT_JSON_SCHEMA, ensure_ascii=True),
+    )
+    llm_client = FakeSequencedLLMClient(['{"matched": true, "scenario_code": "ghost-scenario", "error_message": null}'])
 
     orchestrator = _build_orchestrator(tmp_path, language="en-US", llm_client=llm_client)
 
@@ -216,7 +258,7 @@ def test_generate_surfaces_a_missing_local_template_for_a_resolved_scenario(tmp_
     assert result.failure.code == ErrorCatalog.TEMPLATE_NOT_FOUND.value
     assert result.failure.stage == "preparation"
     assert result.failure.message == (
-        "Template 'ran-energy-saving' does not support language 'en-US'; check the template URI and language setting"
+        "Template 'ghost-scenario' does not support language 'en-US'; check the template URI and language setting"
     )
 
 

@@ -1,8 +1,10 @@
 """Routing behavior of the D31 resource access layer.
 
 Pins the routing table of ``a2a_t.common.prompt_resources.resource_access``: source-type dispatch,
-the frozen local snapshot (D9), the package-fixed categories (``prompts/``, ``errors/``) with the
-CustomRootPromptsIgnored semantics, and the configuration failures of ``local_file`` mode.
+the frozen local snapshot (D9), the built-in packaged fallback of the missing ``local_file``
+business content with its one-time-per-path warning (Java ADR 0005), the package-fixed categories
+(``prompts/``, ``errors/``) with the CustomRootPromptsIgnored semantics, and the configuration
+failures of ``local_file`` mode.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from a2a_t.common.prompt_resources.resource_access import (
 from a2a_t.config.errors import ConfigError
 from a2a_t.config.models import PromptRuntimeConfig
 from a2a_t.core.errors.catalog import ErrorCatalog
-from a2a_t.core.errors.exceptions import A2ATBusinessError, A2ATError
+from a2a_t.core.errors.exceptions import A2ATError
 from a2a_t.core.standard_templates import ENERGY_SAVING_URI, NEGOTIATION_ABORT_URI
 from tests.common.prompt_resources.conftest import (
     LANGUAGES,
@@ -32,6 +34,9 @@ from tests.common.prompt_resources.conftest import (
 )
 
 LOGGER_NAME = "a2a_t.common.prompt_resources.resource_access"
+
+#: Parent of every prompt-resources logger; used where the child logger name must not be pinned.
+_PROMPT_RESOURCES_LOGGER = "a2a_t.common.prompt_resources"
 
 
 def _local_access(root: Path) -> LocalFilePromptResourceAccess:
@@ -176,16 +181,16 @@ class TestFrozenSnapshot:
         template.write_text("edited content", encoding="utf-8")
         assert access.template_text(ENERGY_SAVING_URI, "en-US") == "original content"
 
-    def test_files_added_after_capture_stay_missing(self, tmp_path: Path) -> None:
+    def test_files_added_after_capture_stay_invisible_but_the_package_serves_the_fallback(self, tmp_path: Path) -> None:
         access = _local_access(tmp_path)
         write_local_resource(
             tmp_path,
             "templates/Task-T/network-layer/ran-energy-saving/v1/en-US/template.md",
             "added later",
         )
-        with pytest.raises(A2ATBusinessError) as info:
-            access.template_text(ENERGY_SAVING_URI, "en-US")
-        assert info.value.code is ErrorCatalog.TEMPLATE_NOT_FOUND
+        assert access.template_text(ENERGY_SAVING_URI, "en-US") == packaged_file_text(
+            "templates/Task-T/network-layer/ran-energy-saving/v1/en-US/template.md"
+        )
 
     def test_files_deleted_after_capture_stay_served(self, tmp_path: Path) -> None:
         template = write_local_resource(
@@ -206,6 +211,142 @@ class TestFrozenSnapshot:
         _local_access(tmp_path)
         template.write_text("edited content", encoding="utf-8")
         assert _local_access(tmp_path).template_text(ENERGY_SAVING_URI, "en-US") == "edited content"
+
+
+class TestBuiltinFallback:
+    """The Java ADR 0005 overlay: packaged fallback for missing local_file business content.
+
+    A routed resource missing from the frozen snapshot falls back to the packaged copy; each
+    resource path warns once (``prompt_resource_builtin_fallback``) and only after the packaged
+    load actually succeeded.
+    """
+
+    FALLBACK_LOGGER = "a2a_t.common.prompt_resources.builtin_fallback"
+
+    def test_missing_template_falls_back_to_the_packaged_copy(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        access = _local_access(tmp_path)
+        with caplog.at_level(logging.WARNING, logger=self.FALLBACK_LOGGER):
+            text = access.template_text(ENERGY_SAVING_URI, "en-US")
+        assert text == packaged_file_text("templates/Task-T/network-layer/ran-energy-saving/v1/en-US/template.md")
+        messages = [record.getMessage() for record in caplog.records]
+        assert messages == [
+            "prompt_resource_builtin_fallback "
+            "path=prompt_resources/templates/Task-T/network-layer/ran-energy-saving/v1/en-US/template.md "
+            "source=packaged"
+        ]
+
+    def test_missing_scenarios_fall_back_to_the_packaged_catalog(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        access = _local_access(tmp_path)
+        with caplog.at_level(logging.WARNING, logger=self.FALLBACK_LOGGER):
+            scenarios = access.load_scenarios("en-US")
+        assert {scenario.scenario_code for scenario in scenarios} >= {"ran-energy-saving", "subscribe-incident"}
+        assert any(
+            "prompt_resource_builtin_fallback path=prompt_resources/scenarios/en-US/scenarios.json source=packaged"
+            in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_missing_vocabulary_falls_back_to_the_packaged_copy(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        access = _local_access(tmp_path)
+        with caplog.at_level(logging.WARNING, logger=self.FALLBACK_LOGGER):
+            vocabulary = access.load_vocabulary("en-US")
+        assert (
+            vocabulary.get("punct.list_colon")
+            == json.loads(packaged_file_text("negotiation-vocabulary/en-US/vocabulary.json"))["punct.list_colon"]
+        )
+        assert any(
+            "path=prompt_resources/negotiation-vocabulary/en-US/vocabulary.json source=packaged" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_fallback_warns_only_once_per_path_across_repeated_reads(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        access = _local_access(tmp_path)
+        with caplog.at_level(logging.WARNING, logger=self.FALLBACK_LOGGER):
+            access.load_scenarios("en-US")
+            access.load_scenarios("en-US")
+        scenario_warnings = [
+            record
+            for record in caplog.records
+            if "prompt_resources/scenarios/en-US/scenarios.json" in record.getMessage()
+        ]
+        assert len(scenario_warnings) == 1
+
+    def test_double_missing_resource_raises_without_a_fallback_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        access = _local_access(tmp_path)
+        with caplog.at_level(logging.WARNING, logger=self.FALLBACK_LOGGER):
+            with pytest.raises(A2ATError) as info:
+                access.load_scenarios("xx-XX")
+        assert info.value.code is ErrorCatalog.INFRA_RESOURCE_READ_FAILED
+        fallback_warnings = [record for record in caplog.records if record.name == self.FALLBACK_LOGGER]
+        assert fallback_warnings == []
+
+    def test_package_fixed_categories_never_fall_back(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """``prompts/`` and ``errors/`` are read from the package directly, without the overlay."""
+        access = _local_access(tmp_path)
+        with caplog.at_level(logging.WARNING, logger=self.FALLBACK_LOGGER):
+            prompt = access.load_prompt("slot_extraction", "en-US", "system.md")
+            errors = access.load_errors("en-US")
+        assert prompt == packaged_file_text("prompts/slot_extraction/en-US/system.md")
+        assert (
+            errors["template.not_found"]
+            == json.loads(packaged_file_text("errors/en-US/errors.json"))["template.not_found"]
+        )
+        assert caplog.records == []
+
+    def test_template_entry_origins_mark_the_overlay(self, tmp_path: Path) -> None:
+        write_local_resource(
+            tmp_path,
+            "templates/Task-T/network-layer/ran-energy-saving/v1/en-US/template.md",
+            "LOCAL TEMPLATE",
+        )
+        access = _local_access(tmp_path)
+        entries = access.template_entries_with_origins()
+        assert entries["Task-T/network-layer/ran-energy-saving/v1/en-US/template.md"] == (
+            "LOCAL TEMPLATE",
+            "local",
+        )
+        assert entries["Negotiation-T/common/abort/v1/en-US/template.md"][1] == "packaged"
+
+    def test_packaged_mode_origins_are_uniform(self, packaged_access: PromptResourceAccess) -> None:
+        entries = packaged_access.template_entries_with_origins()
+        assert entries
+        assert {origin for _text, origin in entries.values()} == {"packaged"}
+
+    def test_packaged_mode_never_emits_fallback_warnings(
+        self, packaged_access: PromptResourceAccess, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The overlay reader is wired only in local_file mode; packaged reads never warn."""
+        with caplog.at_level(logging.WARNING, logger=_PROMPT_RESOURCES_LOGGER):
+            packaged_access.template_text(ENERGY_SAVING_URI, "en-US")
+            packaged_access.slot_schema(ENERGY_SAVING_URI, "en-US")
+            packaged_access.load_scenarios("en-US")
+        assert caplog.records == []
+
+    def test_fallback_warning_dedup_resets_per_access_object(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The dedup set lives on the access object: a fresh access warns again (Java parity)."""
+        first = _local_access(tmp_path)
+        with caplog.at_level(logging.WARNING, logger=self.FALLBACK_LOGGER):
+            first.load_scenarios("en-US")
+            second = _local_access(tmp_path)
+            second.load_scenarios("en-US")
+        scenario_warnings = [
+            record
+            for record in caplog.records
+            if "prompt_resources/scenarios/en-US/scenarios.json" in record.getMessage()
+        ]
+        assert len(scenario_warnings) == 2
 
 
 class TestCustomRootPromptsIgnored:
