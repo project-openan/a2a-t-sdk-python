@@ -28,7 +28,7 @@ The negotiation phase of the input text is given by the phase field in the user 
 }
 
 ## Field Rules
-- feasibility_negotiation_description: required in the propose phase. A paragraph summarizing the purpose and message category of this feasibility negotiation.
+- feasibility_negotiation_description: required in the propose phase. It must start with "Message category of this round: X.", where X is one of "initiate feasibility assessment", "assess as feasible and request confirmation", or "assess as infeasible and propose"; then state the feasibility assessment category (goal achievement or solution feasibility) and the purpose of this negotiation. For example: "Message category of this round: initiate feasibility assessment. Request evaluating the feasibility of ..."
 - action: required enum in the propose phase; must be one of exactly two values:
   - "REQUEST_FEASIBILITY_EVALUATION": ask the peer to evaluate the feasibility of certain matters, or this side has completed the evaluation with a feasible conclusion;
   - "PROPOSE_ALTERNATIVE_ON_FAILURE": state that the target is infeasible and propose an alternative.
@@ -54,13 +54,19 @@ The negotiation phase of the input text is given by the phase field in the user 
    - Assess as infeasible and propose: this side has completed the assessment with an infeasible conclusion, stating the details and proposing a handling strategy. Action is "PROPOSE_ALTERNATIVE_ON_FAILURE"; extract infeasibility_details_and_proposal; contents_to_evaluate and feasibility_confirm_request are null.
 3. When the input does not express content for an optional field, output null for that field; do not fabricate entries.
 4. In the ending phase, the accepting or rejecting stance toward the evaluation result maps to conclusion, and the full statement of the evaluation outcome maps to feasibility_summary.
+5. Never fabricate missing required content: if the input text does not explicitly express the content of a required field, output an empty value; do not reuse examples or generic wording, and do not write it yourself:
+   - Ending phase: if the input text does not explicitly express the "feasibility evaluation result confirmation" content, output an empty string "" for feasibility_summary (do not treat the conclusion or a negotiation-closing phrase as the result confirmation).
+   - Propose phase (initiate feasibility assessment): if the input text does not explicitly express any content to evaluate, output an empty array [] for contents_to_evaluate (do not construct entries such as "evaluation object" or "target content" yourself). When the input only refers to the evaluated subject with pronouns such as "this target" or "this solution" without stating its concrete content (region, time window, target value, resource status, etc.), it is likewise treated as not explicitly expressing content to evaluate.
+   - Propose phase: if the input text cannot summarize the purpose of this negotiation at all, output an empty string "" for feasibility_negotiation_description.
+6. The empty values of rule 5 mean "the input is missing this required information" and are valid output; do not replace them with any illustrative, generic, or example text.
+7. When the input states both an "existing constraint" and a "target/commitment" that conflict with each other, output them as two separate entries: the existing constraint as its own entry (name "existing constraint") and the target or commitment as its own entry (name "goal achievement"); do not merge them into one entry, so that downstream validation can detect the conflict.
 
 ## Output Examples
 
 ### Example 1: propose phase (initiating a feasibility assessment)
 
 {
-  "feasibility_negotiation_description": "Request evaluating the feasibility of maintaining a 5Mbps guaranteed-rate target during the power-outage protection scenario.",
+  "feasibility_negotiation_description": "Message category of this round: initiate feasibility assessment. Request evaluating the feasibility of maintaining a 5Mbps guaranteed-rate target during the power-outage protection scenario.",
   "action": "REQUEST_FEASIBILITY_EVALUATION",
   "contents_to_evaluate": [
     {"name": "evaluation target", "value": "rate guarantee for key users during the 8-hour outage"}
@@ -72,7 +78,7 @@ The negotiation phase of the input text is given by the phase field in the user 
 ### Example 2: propose phase (infeasible, proposing an alternative)
 
 {
-  "feasibility_negotiation_description": "The 5Mbps guaranteed-rate target is infeasible in the power-outage protection scenario; a reduced target is proposed.",
+  "feasibility_negotiation_description": "Message category of this round: assess as infeasible and propose. The 5Mbps guaranteed-rate target is infeasible in the power-outage protection scenario; a reduced target is proposed.",
   "action": "PROPOSE_ALTERNATIVE_ON_FAILURE",
   "contents_to_evaluate": null,
   "infeasibility_details_and_proposal": [
@@ -85,7 +91,7 @@ The negotiation phase of the input text is given by the phase field in the user 
 ### Example 3: propose phase (assess as feasible and request confirmation, goal achievement)
 
 {
-  "feasibility_negotiation_description": "The feasibility assessment of the adjusted guaranteed-rate target has been completed with a feasible conclusion; request the counterparty to confirm whether to proceed with this target.",
+  "feasibility_negotiation_description": "Message category of this round: assess as feasible and request confirmation. The feasibility assessment of the adjusted guaranteed-rate target has been completed with a feasible conclusion; request the counterparty to confirm whether to proceed with this target.",
   "action": "REQUEST_FEASIBILITY_EVALUATION",
   "contents_to_evaluate": null,
   "infeasibility_details_and_proposal": null,
@@ -95,7 +101,7 @@ The negotiation phase of the input text is given by the phase field in the user 
 ### Example 4: propose phase (assess as feasible and request confirmation, solution feasibility)
 
 {
-  "feasibility_negotiation_description": "The feasibility assessment of the keepalive solution for the fault subscription task has been completed with a feasible conclusion; request the counterparty to confirm whether to proceed with this solution.",
+  "feasibility_negotiation_description": "Message category of this round: assess as feasible and request confirmation. The feasibility assessment of the keepalive solution for the fault subscription task has been completed with a feasible conclusion; request the counterparty to confirm whether to proceed with this solution.",
   "action": "REQUEST_FEASIBILITY_EVALUATION",
   "contents_to_evaluate": null,
   "infeasibility_details_and_proposal": null,

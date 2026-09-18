@@ -331,9 +331,12 @@ def _build_ending_content(
             failure_reason=_optional_str(raw, "failure_reason"),
         )
     if negotiation_type is NegotiationType.FEASIBILITY:
+        # A missing/blank summary is passed through to the SDK generator, whose deterministic
+        # required-text gate raises the coded ``negotiation.content_invalid`` failure; a binding-level
+        # ``ValueError`` here would surface as an uncoded engine crash instead.
         return FeasibilityEndingContent(
             conclusion=conclusion,
-            feasibility_summary=_required(raw, "feasibility_summary", "ending content"),
+            feasibility_summary=_optional_str(raw, "feasibility_summary"),
         )
     raise ValueError(f"unsupported negotiation type: {negotiation_type}")
 
@@ -358,9 +361,9 @@ def _build_propose_content(negotiation_type: NegotiationType, raw: dict[str, Any
         if action is None:
             raise ValueError("feasibility propose content must declare its action")
         return FeasibilityProposeContent(
-            feasibility_negotiation_description=_required(
-                raw, "feasibility_negotiation_description", "propose content"
-            ),
+            # Same rationale as the ending content: the blank/missing description is left for the
+            # SDK generator's coded ``negotiation.content_invalid`` gate.
+            feasibility_negotiation_description=_optional_str(raw, "feasibility_negotiation_description"),
             action=NegotiationAction(str(action)),
             contents_to_evaluate=_items(raw.get("contents_to_evaluate")),
             infeasibility_details_and_proposal=_items(raw.get("infeasibility_details_and_proposal")),
