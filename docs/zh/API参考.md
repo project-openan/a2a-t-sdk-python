@@ -48,8 +48,8 @@ A2A-T SDK 对外仅提供两个入口：客户端入口 `A2ATClient`（提示词
    | message | str | 人类可读的错误说明，由 SDK 按错误码的消息模板渲染，语言跟随 `A2AT_LANGUAGE`                                                                         |
    | facts | dict[str, str] \| None | 渲染消息所依据的结构化事实值（如 `section_label`、`index`、`field_label`），可为 None                                                          |
 
-- **结果轨数据类：** `generate_task_prompt` 与 `check_task_prompt` 不抛业务异常，失败负载随结果对象返回（结构见 1.3.22 / 1.3.23）。
-- **模板 URI：** `A2ATClient` 与 `A2ATServer` 门面上所有指定模板的方法均以 `template_uri` 声明模板选择，接受裸字符串，推荐直接传 `a2a_t.core.standard_templates` 的 `*_URI` 字符串常量（每个都有去掉 `_URI` 后缀的同名类型化孪生常量）；来自外部的字符串直接传入即可。类型 `TemplateUri` 仍用于底层服务层，可用 `TemplateUri.parse(str)` 解析，返回 `TemplateUri | None` 且不抛异常。当前支持的模板 URI 常量（字符串形态）如下：
+- **以返回值报告结果的接口：** `generate_task_prompt` 与 `check_task_prompt` 不抛业务异常，失败信息随返回对象给出（结构见 1.3.22 / 1.3.23）。
+- **模板 URI：** `A2ATClient` 与 `A2ATServer` 对外提供的所有指定模板的方法均以 `template_uri` 声明模板选择，接受裸字符串，推荐直接传 `a2a_t.core.standard_templates` 的 `*_URI` 字符串常量（每个都有去掉 `_URI` 后缀的同名 `TemplateUri` 类型化常量）；来自外部的字符串直接传入即可。类型 `TemplateUri` 仍用于底层服务层，可用 `TemplateUri.parse(str)` 解析，返回 `TemplateUri | None` 且不抛异常。当前支持的模板 URI 常量（字符串形态）如下：
 
    | 常量名称                                                        | 含义 | TemplateUri |
    |-------------------------------------------------------------| ---- | ---- |
@@ -145,6 +145,7 @@ metadata = propose.build_metadata_content()
 错误码：
 
 - `template.not_found`（模板或提示词资源缺失）
+- `template.render_failed`（模板渲染失败）
 
 - `negotiation.content_extract_failed`（无法从文本抽取结构化内容，可重试）
 
@@ -216,6 +217,7 @@ accept = client.generate_negotiation_accept_prompt_from_text(
 失败时抛 `NegotiationGenerationError`（结构同 1.3.1）。错误码：
 
 - `template.not_found`（模板或提示词资源缺失）
+- `template.render_failed`（模板渲染失败）
 
 - `negotiation.content_extract_failed`（无法从文本抽取结构化内容，可重试）
 
@@ -281,6 +283,7 @@ reject = client.generate_negotiation_reject_prompt_from_text(
 失败时抛 `NegotiationGenerationError`（结构同 1.3.1）。错误码：
 
 - `template.not_found`（模板或提示词资源缺失）
+- `template.render_failed`（模板渲染失败）
 
 - `negotiation.content_extract_failed`（无法从文本抽取结构化内容，可重试）
 
@@ -351,6 +354,7 @@ abort = client.generate_negotiation_abort_prompt_from_text(
 失败时抛 `NegotiationGenerationError`（结构同 1.3.1）。错误码：
 
 - `template.not_found`（模板或提示词资源缺失）
+- `template.render_failed`（模板渲染失败）
 
 - `negotiation.content_extract_failed`（无法从文本抽取结构化内容，可重试）
 
@@ -716,7 +720,8 @@ needed = {k: v for k, v in requested.data.items() if k not in ("id", "round", "m
 
 | 字段/方法 | 类型 | 说明 |
 | --------- | ---- | ---- |
-| data | dict[str, object] | 合并后的参数：协商上下文参数（`id` / `round` / `maxRounds`，键冲突时**优先**）+ 按调用方 Schema 从报文中提取的参数 |
+| data | dict[str, object] \| list[object] | 合并后的参数：协商上下文参数（`id` / `round` / `maxRounds`，键冲突时**优先**）+ 按调用方 Schema 从报文中提取的参数；调用方 Schema 为数组形态时，`data` 为有序数组 |
+| context | dict[str, object] \| None | 仅数组形态的 `data` 下携带的上下文参数（`id` / `round` / `maxRounds`）；对象形态时上下文已合并进 `data`，该字段为 `None` |
 
 失败时抛 `NegotiationParamExtractionError`（`A2ATError` 子类）：
 
@@ -971,7 +976,7 @@ metadata = client.generate_task_prompt_from_text(
 | template_uri | str | 生成报文所用模板 URI，如 `Task-T/network-layer/private-line-complaint/v1` |
 | prompt_text | str | 渲染后的任务提示词报文文本，作为 A2A 消息 metadata 中扩展 URI 对应的值传输 |
 | extension_uri | str | TMF 扩展 URI（`https://projects.tmforum.org/a2aproject/telecommunication/extensions/Task-T/v1`），即报文在 metadata 中的 key |
-| negotiation_context | NegotiationContext | 恒为 None（非协商报文） |
+| negotiation_context | NegotiationContext | 始终为 None（非协商报文） |
 | build_metadata_content() | dict[str, object] | 构建可直接放入 `Message.metadata` 的两键映射：扩展 URI → 报文文本、`templateUri` → 模板 URI |
 
 失败时抛 `PromptGenerationError`（`A2ATError` 子类）：
@@ -1201,7 +1206,8 @@ extracted = server.validate_task_prompt_and_data_filling(
 
 | 字段/方法 | 类型 | 说明 |
 | --------- | ---- | ---- |
-| data | dict[str, object] | 按 Schema 提取的参数，key 为 Schema 中声明的参数名 |
+| data | dict[str, object] \| list[object] | 按 Schema 提取的参数，key 为 Schema 中声明的参数名；调用方 Schema 为数组形态时，`data` 为有序数组 |
+| context | dict[str, object] \| None | 仅数组形态的 `data` 下携带的上下文参数；对象形态时为 `None` |
 
 失败时抛 `ContentValidationError`（`A2ATError` 子类）：
 
@@ -1755,20 +1761,20 @@ else:
 
 **输出说明**
 
-成功时（`success` 为 `True`，不抛异常，结果随数据类返回）：
+成功时（`success` 为 `True`，不抛异常，结果随返回值返回）：
 
 | 字段/方法 | 类型 | 说明 |
 | --------- | ---- | ---- |
-| success | bool | 恒为 True |
+| success | bool | 始终为 True |
 | prompt_text | str | 渲染后的任务提示词报文文本，作为 A2A 消息 metadata 发送 |
-| failure | PromptGenerationFailure | 恒为 None |
+| failure | PromptGenerationFailure | 始终为 None |
 
 失败时（`success` 为 `False`，不抛异常，失败负载随结果返回）：
 
 | 字段/方法 | 类型 | 说明 |
 | --------- | ---- | ---- |
-| success | bool | 恒为 False |
-| prompt_text | str | 恒为 None |
+| success | bool | 始终为 False |
+| prompt_text | str | 始终为 None |
 | failure | PromptGenerationFailure | 标准化失败负载，结构见下表 |
 
 `PromptGenerationFailure` 结构：
@@ -1777,9 +1783,11 @@ else:
 | ---- | ---- | ---- |
 | code | str | 机器可读错误码，取值来自错误码列表，如 `scenario.not_matched`（场景识别未命中）、`input.text_too_long`（输入长度防护）、`template.load_failed`（提示词资源加载失败）、`template.not_found`（模板缺失）、`slot.schema_not_found`（槽位 Schema 缺失）、`slot.not_provided`（必填槽缺失）、`template.render_failed`（渲染失败）、`llm.invocation_failed` / `llm.response_invalid`（LLM 失败） |
 | message | str | 人类可读的失败描述 |
-| stage | str \| None | 失败发生的阶段：`input`（输入长度防护）、`scenario`（场景识别）、`preparation`（模板/槽位/提示词资源加载）、`generation`（LLM 槽位提取等生成过程）、`render`（模板渲染） |
+| stage | str \| None | 失败发生的阶段：`input`（输入长度防护）、`scenario`（场景识别）、`preparation`（模板/槽位/提示词资源加载）、`generation`（LLM 槽位提取等生成过程）、`validation`（槽位校验）、`render`（模板渲染） |
 
 `PromptGenerationResult` 与 `PromptGenerationFailure` 均提供 `to_dict()`，可直接 JSON 序列化。
+
+编程错误：`user_input` 既不是 `str` 也不是 `dict` 时抛 `TypeError`；为空白字符串或空 `dict` 时抛 `ValueError`。
 
 **响应样例**
 
@@ -1844,18 +1852,18 @@ else:
 
 **输出说明**
 
-成功时（`success` 为 `True`，不抛异常，结果随数据类返回）：
+成功时（`success` 为 `True`，不抛异常，结果随返回值返回）：
 
 | 字段/方法 | 类型 | 说明 |
 | --------- | ---- | ---- |
-| success | bool | 恒为 True |
-| failure | PromptComplianceFailure | 恒为 None |
+| success | bool | 始终为 True |
+| failure | PromptComplianceFailure | 始终为 None |
 
 失败时（`success` 为 `False`，不抛异常，失败负载随结果返回）：
 
 | 字段/方法 | 类型 | 说明 |
 | --------- | ---- | ---- |
-| success | bool | 恒为 False |
+| success | bool | 始终为 False |
 | failure | PromptComplianceFailure | 标准化失败负载，结构见下表 |
 
 `PromptComplianceFailure` 结构：

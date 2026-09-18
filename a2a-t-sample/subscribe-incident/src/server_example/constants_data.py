@@ -9,8 +9,8 @@ SUBMITTED_MESSAGE = "Subscription accepted, starting Incident reporting task"
 WORKING_MESSAGE = "Incident reporting task in progress"
 ARTIFACT_SEND_INTERVAL_SECONDS = 5.0
 
-NOTIFICATION_T_EXTENSION_URI_NL = (
-    "https://projects.tmforum.org/a2aproject/telecommunication/extensions/Notification-T/NL/v1"
+NOTIFICATION_T_EXTENSION_URI = (
+    "https://projects.tmforum.org/a2aproject/telecommunication/extensions/Notification-T/v1"
 )
 
 PUBLIC_AGENT_CARD: dict[str, Any] = {
@@ -36,7 +36,7 @@ PUBLIC_AGENT_CARD: dict[str, Any] = {
         "pushNotifications": False,
         "extensions": [
             {
-                "uri": NOTIFICATION_T_EXTENSION_URI_NL,
+                "uri": NOTIFICATION_T_EXTENSION_URI,
                 "description": "Extension of structured prompt Notification-T requests.",
             },
         ],

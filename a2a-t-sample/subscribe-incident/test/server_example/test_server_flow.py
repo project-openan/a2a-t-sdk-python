@@ -15,7 +15,7 @@ if str(TEST_ROOT) not in sys.path:
 
 from a2a.server.agent_execution.context import RequestContext
 from a2a.types import Message, Role, Task, TaskArtifactUpdateEvent, TaskState, TaskStatusUpdateEvent
-from server_example.constants_data import NOTIFICATION_T_EXTENSION_URI_NL
+from server_example.constants_data import NOTIFICATION_T_EXTENSION_URI
 from server_example.server_flow import execute_server_flow
 from support import FakeEventQueue, FakePromptServer
 
@@ -25,10 +25,10 @@ def _make_request_context(prompt_text: str = "test prompt") -> RequestContext:
     message.message_id = "msg-1"
     message.role = Role.ROLE_USER
     message.parts.add().text = "create incident subscription"
-    message.metadata[NOTIFICATION_T_EXTENSION_URI_NL] = prompt_text
+    message.metadata[NOTIFICATION_T_EXTENSION_URI] = prompt_text
 
     class FakeCallContext:
-        requested_extensions = {NOTIFICATION_T_EXTENSION_URI_NL}
+        requested_extensions = {NOTIFICATION_T_EXTENSION_URI}
         state: dict = {}
 
     class FakeRequestContext:
@@ -98,7 +98,7 @@ class ExecuteServerFlowTest(unittest.IsolatedAsyncioTestCase):
         message.message_id = "msg-1"
         message.role = Role.ROLE_USER
         message.parts.add().text = "scenario"
-        message.metadata[NOTIFICATION_T_EXTENSION_URI_NL] = "prompt"
+        message.metadata[NOTIFICATION_T_EXTENSION_URI] = "prompt"
 
         class EmptyCallContext:
             requested_extensions = set()

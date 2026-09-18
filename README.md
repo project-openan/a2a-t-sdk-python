@@ -64,9 +64,9 @@ flowchart LR
 | Task prompt generation (client) | Covers input normalization, scenario recognition, slot extraction, and template rendering, supporting both natural-language and structured-data input |
 | Message validation and parameter extraction (server) | Executes metadata parsing, slot extraction, and semantic validation on SDK-format task prompts, extracts parameters per a Schema, and returns details of missing/invalid slots |
 | Negotiation content API | Supports `information` / `feasibility` / `target` negotiation types plus `abort` termination messages, with template-driven negotiation message generation and validation; negotiation session state travels in the message metadata (`negotiationContext`) and the SDK itself is stateless |
-| Resource organization | Bundled prompt resources (`prompts` / `scenarios` / `slots` / `templates` / `negotiation-vocabulary`) ship with the package, supporting both `packaged` (installed package) and `local_file` (local files) loading modes |
-| LLM adaptation | Connects to external LLMs through OpenAI-compatible call chains, with bounded retries for retryable failure codes |
-| Bundled samples | The repository ships runnable sample scenarios such as `subscribe_incident` (event subscription) and `negotiation` (negotiation closed loop); without an API key they automatically degrade to scripted mock LLM responses, running end to end with zero external dependencies |
+| Resource organization | Bundled prompt resources (`prompts` / `scenarios` / `slots` / `templates` / `negotiation-vocabulary`) ship with the package, supporting both `packaged` built-in resources and `local_file` local files |
+| LLM adaptation | Connects to external LLMs through OpenAI-compatible call chains, retrying retryable error codes up to the configured attempt limit |
+| Bundled samples | The repository ships runnable sample scenarios such as `subscribe_incident` (event subscription); without an API key they automatically degrade to scripted mock LLM responses, running end to end with zero external dependencies |
 
 ## Project Structure
 
@@ -74,8 +74,8 @@ The repository is organized with `uv`; the core code lives under `src/a2a_t`:
 
 | Module | Description |
 | --- | --- |
-| `client` | Client facade providing task prompt generation and negotiation entry points (`A2ATClient`) |
-| `server` | Server facade providing A2A-T message validation and negotiation entry points (`A2ATServer`) |
+| `client` | Client wrapper providing task prompt generation and negotiation entry points (`A2ATClient`) |
+| `server` | Server wrapper providing A2A-T message validation and negotiation entry points (`A2ATServer`) |
 | `core` | Template addressing, metadata models, the validation pipeline, and the structured bilingual error model |
 | `common/prompt_resources` | Bundled prompt resource packaging and loading (`packaged` / `local_file`) |
 | `config` | `.env`-based configuration loading and configuration models |
@@ -83,7 +83,7 @@ The repository is organized with `uv`; the core code lives under `src/a2a_t`:
 | `prompt` | Prompt resource analysis, slot extraction, template rendering, and validation |
 | `negotiation` | Negotiation content models, the generation pipeline, and the validation pipeline |
 | `a2a-t-sample` | Runnable client/server sample case collection |
-| `a2a-t-corpus` | Accuracy verification corpus (pure test assets): data-driven workflow cases, shared byte-for-byte with the Java repository |
+| `a2a-t-corpus` | Accuracy verification corpus (pure test assets): data-driven workflow cases |
 
 The `tests/` directory mirrors the package structure, covering prompt generation, server validation, negotiation pipelines, prompt resources, and LLM adaptation test cases.
 
@@ -104,7 +104,9 @@ Take the `subscribe_incident` (event subscription) scenario as an example: the c
 ```bash
 # 1. Install dependencies and prepare the environment configuration
 #    (an empty A2AT_LLM_API_KEY automatically uses the mock LLM)
-cp env.example .env
+#    First run: execute uv sync --dev in the repository root (this creates .venv
+#    and installs the SDK dependencies), then run the following in a2a-t-sample
+cp env.example .env      # after copying, confirm A2AT_LLM_API_KEY is empty
 uv pip install -r requirements.txt
 
 # 2. Terminal 1: start the registry center (port 5001)
@@ -165,7 +167,7 @@ More runnable samples (event subscription end-to-end, negotiation closed loop, e
 Confirm the following limitations before use:
 
 - The built-in LLM call chain is uniformly exposed as an OpenAI adaptation layer.
-- The LLM prompt resources are built in and do not support custom extension (`prompts` and `errors` are always loaded from the installed package).
+- The LLM prompt resources are built in and do not support custom extension (`prompts` and `errors` are always read from the built-in resources).
 - Negotiation session state travels in the message metadata (the SDK is stateless) and no negotiation state store is provided; the legacy state-machine negotiation APIs (`start_negotiation` / `receive_negotiation` / `continue_negotiation`) are deprecated since 1.1.0.
 - Bundled resources and language coverage are limited, and remote resource loading such as `registry-center` (the registry center) is not included.
 - This document mainly introduces the SDK itself and does not cover CLI tools, hosted services, deployment flows, or ready-to-use application solutions.

@@ -22,7 +22,7 @@ Main capabilities include:
 - **Negotiation content API**: supports `information`, `feasibility`, and `target` negotiation types plus `abort` termination messages, with template-driven negotiation message generation and validation; negotiation session state travels in the message metadata (`negotiationContext`) and the SDK itself is stateless.
 - **Template resource management**: built-in scenario, slot, template, vocabulary, and system prompt resources, supporting both the `packaged` built-in source and the `local_file` local-file source.
 - **LLM adaptation**: connects to external large language models through OpenAI-compatible call chains.
-- **Structured, bilingual error model**: a closed catalog of 42 machine-readable error codes with fact parameters and bilingual message templates.
+- **Structured, bilingual error model**: 42 fixed machine-readable error codes (with the parameters needed to render their messages) and bilingual message templates.
 
 For the complete API list and usage, see [API_Reference.md](API_Reference.md).
 
@@ -80,8 +80,6 @@ flowchart TD
     Client -. Register / Discover .-> Registry
     Server -. Register / Discover .-> Registry
 ```
-
-When the first prompt carries incomplete task information, the two sides switch to the negotiation flow: the server generates a Negotiation-T propose message asking for the missing information, and the client validates that message, fills the requested parameters, and answers with a Task-T prompt plus a Negotiation-T accept message. The full closed loop is available in the `a2a-t-sample/negotiation/` offline sample (see 1.4.5).
 
 ## 1.2 Constraints and Limitations
 
@@ -312,7 +310,7 @@ pip install a2a-sdk
 
 #### Step2 Configure the LLM
 
-Copy the repository root `env.example` to `package_data/.env` (the facades' default read location) and configure the following:
+Copy the repository root `env.example` to `package_data/.env` (the SDK's default read location) and configure the following:
 
 ```properties
 A2AT_LANGUAGE=en-US
@@ -839,14 +837,14 @@ class NotificationAgentExecutor(AgentExecutor):
         context.current_task.CopyFrom(task)
         await event_queue.enqueue_event(task)
 
-        # 4) Run the completeness check with the A2A-T SDK (compliance check, result track)
+        # 4) Run the completeness check with the A2A-T SDK (compliance check, reporting the result through the return value)
         check_result = self._prompt_server.check_task_prompt(processed_prompt_text=processed_prompt)
         if not check_result.success:
             # Validation failed: push REJECTED (the failure carries code, message, and stage)
             await self._emit_status(event_queue, task_id, context_id, TaskState.TASK_STATE_REJECTED, f"prompt validation failed: {check_result.failure}")
             return
 
-        # 5) Validation passed: extract the subscription parameters (exception track)
+        # 5) Validation passed: extract the subscription parameters (raises on failure)
         try:
             filled = self._prompt_server.validate_notification_prompt_and_data_filling(
                 processed_prompt, PARAM_SCHEMA, NOTIFICATION_TEMPLATE_URI
@@ -1062,43 +1060,28 @@ app = Starlette(routes=[
 uvicorn.run(app, host="0.0.0.0", port=8000)
 ```
 
-### 1.4.5 Negotiation Closed-Loop Sample
-
-The repository provides a runnable offline negotiation closed loop under `a2a-t-sample/negotiation/`. It drives the four-message flow in-process (a Task-T prompt with missing parameters → a Negotiation-T information propose → a Task-T prompt with filled parameters + accept → the diagnosis result); without an LLM API key, the LLM steps are handled by a scripted mock LLM:
-
-```bash
-cd {project path}/a2a-t-sdk-python/a2a-t-sample
-cp env.example .env
-uv pip install -r requirements.txt
-
-# Set the module search path before running (see a2a-t-sample/README.md for PowerShell / bash syntax)
-uv run python -m negotiation_demo                 # from-data strategy (zero LLM calls)
-uv run python -m negotiation_demo --fromText      # from-text strategy (mock LLM)
-uv run python -m negotiation_demo --language zh-CN
-```
-
-This sample is the reference for integrating the negotiation content API into a real agent pair: `client_runtime.py` shows the client-side generation (Task-T prompt and accept messages), `server_runtime.py` shows the server-side propose generation and the parameter discovery driven by `validate_task_prompt_and_data_filling`, and `shared/strategies.py` isolates the from-data / from-text differences. See [a2a-t-sample/README.md](../../a2a-t-sample/README.md) for details.
-
 ## 1.5 Loading Custom Templates
 
 ### 1.5.1 Background
 
-The SDK depends on four kinds of prompt resources when generating and validating A2A-T prompts: scenario catalogs (scenarios), slot definitions (slots), template bodies (templates), and the negotiation vocabulary (negotiation-vocabulary). The built-in resources are packaged inside the SDK and read from the installed package by default. When the business side needs its own business scenario templates (for example adding a business scenario, adjusting template wording, or changing slot constraints), it can switch the resource source to `local_file` and load custom templates from a local directory without repackaging the SDK.
+The SDK depends on the following resources when generating and validating A2A-T prompts: scenario catalogs (scenarios), slot definitions (slots), template bodies (templates), and the negotiation vocabulary (negotiation-vocabulary). These resources ship with the SDK as built-in resources and are read from them by default. When the business side needs its own business scenario templates (for example adding a business scenario, adjusting template wording, or changing slot constraints), it can switch the resource source to `local_file` and load custom templates from a local directory without repackaging the SDK.
 
-**The capability boundaries of custom templates are as follows**:
+**Customizable scope**:
 
 | Resource | `local_file` mode | `packaged` mode |
 | --- | --- | --- |
-| Business templates/slots/scenarios (templates/slots/scenarios of Task-T, Notification-T, Authorization-T) and negotiation resources (Negotiation-T templates and negotiation-vocabulary) | Read from the local root directory (including the Negotiation-T tree) | Installed package |
-| LLM instruction prompts (the prompts directory) and error messages (errors) | Always loaded from the installed package; local copies are ignored with a warning | Installed package |
+| Business templates/slots/scenarios (Task-T, Notification-T, Authorization-T) and negotiation resources (Negotiation-T templates and negotiation-vocabulary) | Read from the local root directory | Read from the built-in resources |
+| LLM instruction prompts (the prompts directory) and error messages (errors) | Local copies are ignored with a warning; still read from the built-in resources | Read from the built-in resources |
 
-**Built-in fallback (local-first overlay).** In `local_file` mode a routed resource that is missing from the local snapshot falls back to the packaged copy, so a custom root only needs to carry the files it actually overrides. Each resource path served from the package this way warns once — `prompt_resource_builtin_fallback path=prompt_resources/... source=packaged` (exact for a path-form identifier, the Java wildcard locator `.../templates/*/network-layer/<code>/v1/<language>/template.md (or the layout without the network-layer segment)` for a bare scenario code) — and a resource missing both locally and in the package fails with the plain not-found error without a warning. Bare scenario codes resolve in two phases: the whole local snapshot is probed first, so a local file wins whatever its type directory or layout, and only then the packaged candidates. The template catalog enumerates the overlay the same way: the packaged templates union the locally captured ones, with the local copy winning, and each `PromptTemplate` record carries its effective origin (`local` or `packaged`).
+**Local-first, built-in fallback**: in `local_file` mode, when the local root directory is missing a resource, the SDK automatically uses the built-in resource instead, so the local root only needs to carry the files to override or add. Specific rules:
+
+1. **Fallback warning**: each path that switches to a built-in resource warns once (`prompt_resource_builtin_fallback ... source=packaged`); when a resource is missing both locally and in the built-in resources, it fails as a missing template (`template.not_found`).
+2. **Template enumeration**: when listing available templates, the built-in templates and the local templates are merged, with the local copy winning on the same path.
 
 **Key constraints**:
 
-1. **Construction-time validation**: in `local_file` mode, when `A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR` is unset, the path does not exist, or the path is not a directory, construction fails immediately with a clear error message.
-2. **Initialization-time loading (frozen snapshot)**: the local root directory is read once into a read-only snapshot at facade construction and the filesystem is not accessed again at runtime; after modifying local files, the SDK process must be restarted for the changes to take effect.
-3. **Local-first built-in fallback**: in `local_file` mode the routed resources are read from the local root with a built-in fallback — a file missing from the local snapshot is served from the installed package with a one-time `prompt_resource_builtin_fallback` warning per resource path; a file missing both locally and in the package makes the generation path raise `PromptGenerationError` and the validation path raise `ContentValidationError`, both with the `template.not_found` code.
+1. **Construction-time validation**: in `local_file` mode, the path pointed to by `A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR` must exist and be a directory, otherwise construction fails; when this setting is empty, the built-in resource directory is used by default.
+2. **One-time loading**: the local root directory is read into memory once when `A2ATClient` / `A2ATServer` is constructed, and the filesystem is not accessed again afterwards; after modifying local files, the process must be restarted for the changes to take effect.
 
 ### 1.5.2 Implementation Steps
 
@@ -1122,8 +1105,8 @@ Following the directory structure of `src/a2a_t/prompt_resources`, place the res
 Notes:
 
 1. `<Extension-T>` supports `Task-T`, `Notification-T`, `Authorization-T`, and `Negotiation-T`; the template version segment is fixed at `v1`; the built-in languages are `zh-CN` and `en-US`.
-2. The `<scenario path>` of Task-T / Notification-T is `network-layer/<scenario code>` (for example `network-layer/ran-energy-saving`); for Negotiation-T it is `<type segment>/<performative segment>` (for example `information-negotiation/propose`); Authorization-T carries no domain segment.
-3. If the local root directory contains `prompts/` or `errors/` directories, they are ignored at construction with a warning log (these resources are always loaded from the installed package).
+2. The `<scenario path>` of Task-T / Notification-T is `network-layer/<scenario code>` (for example `network-layer/ran-energy-saving`); for Negotiation-T it is `<negotiation type segment>/<negotiation phase segment>` (for example `information-negotiation/propose`); Authorization-T carries no domain segment.
+3. If the local root directory contains `prompts/` or `errors/` directories, they are ignored at construction with a warning log (these two kinds of resources are read only from the built-in resources).
 
 #### Step2 Author the Resource Files
 
@@ -1181,7 +1164,7 @@ A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR=/opt/a2at/prompt_resources
 Notes:
 
 1. `A2AT_PROMPT_SOURCE_TYPE` takes `packaged` (default since 1.1.0) or `local_file`; any other value fails at construction with `Unsupported prompt source type`.
-2. In `local_file` mode, `A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR` is required: when unset, an error is reported prompting to set `A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR`; when the path does not exist or is not a directory, assembly fails as well.
+2. In `local_file` mode, the path pointed to by `A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR` must exist and be a directory, otherwise assembly fails; when this setting is empty, the built-in resource directory is used by default.
 3. A relative local root directory is resolved against the directory containing the `.env` file; absolute paths are recommended.
 4. In `packaged` mode, a configured local root directory is ignored: the configuration parsing logs a warning.
 
@@ -1210,15 +1193,15 @@ metadata = client.generate_task_prompt_from_text(
 
 The failure policy for `template_uri`: `None` raises `TypeError`; a blank or malformed URI (fewer than three segments, or a segment that is not a simple segment) raises `ValueError` with the message `Unparseable template URI: <input>`.
 
-To override a built-in template (for example `PRIVATE_LINE_COMPLAINT_URI`), place `template.md` and `slot.json` under the same relative path in the local root directory and keep using the original constant in the code. In `local_file` mode the local copy wins; a file the local root does not carry falls back to the packaged copy with a one-time `prompt_resource_builtin_fallback` warning per resource path. Only when a file is missing both locally and in the package does the generation chain raise `PromptGenerationError` and the validation chain raise `ContentValidationError`, both with the `template.not_found` code.
+To override a built-in template (for example `PRIVATE_LINE_COMPLAINT_URI`), place `template.md` and `slot.json` under the same relative path in the local root directory and keep using the original constant in the code. In `local_file` mode the local copy wins; a file the local root does not carry falls back to the built-in resources with a one-time `prompt_resource_builtin_fallback` warning per resource path. Only when a file is missing both locally and in the built-in resources does the generation chain raise `PromptGenerationError` and the validation chain raise `ContentValidationError`, both with the `template.not_found` code.
 
 #### Step4 Verification and Troubleshooting
 
 After starting the client or the server, confirm and troubleshoot as follows:
 
-1. **Missing resources**: when a template is not found, the generation chain raises `PromptGenerationError` and the validation chain raises `ContentValidationError`, both with the `template.not_found` code; in `local_file` mode the template resolves local-first with the packaged fallback, so the file must exist under the local root at the exact `template_uri` path or inside the installed package — complete the directory structure per the hint.
+1. **Missing resources**: when a template is not found, the generation chain raises `PromptGenerationError` and the validation chain raises `ContentValidationError`, both with the `template.not_found` code; in `local_file` mode the template resolves local-first with the built-in fallback, so the file must exist under the local root at the exact `template_uri` path or in the built-in resources — complete the directory structure per the hint.
 2. **Content not updated**: changes to local files do not take effect without a restart; restart the SDK process and reconstruct.
-3. **LLM instructions and error messages cannot be customized**: `prompts/` and `errors/` are always loaded from the installed package; local copies are ignored with a warning.
+3. **LLM instructions and error messages cannot be customized**: `prompts/` and `errors/` are read only from the built-in resources; local copies are ignored with a warning.
 
 ## 1.6 Logging Configuration and Integration Guide
 
@@ -1314,7 +1297,7 @@ The sample configuration file provided by the SDK is `env.example`; copy it to `
 | ------------------------------------- | ------------------------------------------------------------ |
 | `A2AT_LANGUAGE`                       | Language of the prompt resources; built-in `zh-CN` and `en-US`, default `en-US`        |
 | `A2AT_PROMPT_SOURCE_TYPE`             | Source of the prompt resources; supports `packaged` (default since 1.1.0) and `local_file` |
-| `A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR` | Local prompt resource root directory; required in `local_file` mode, failing fast at assembly when unset or when the path does not exist; only the business content (templates/slots/scenarios of Task-T/Notification-T/Authorization-T plus Negotiation-T templates and negotiation-vocabulary) is read from this root, while LLM prompts and error messages are always loaded from the installed package |
+| `A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR` | Local prompt resource root directory; required in `local_file` mode, failing fast at assembly when unset or when the path does not exist; only the business content (templates/slots/scenarios of Task-T/Notification-T/Authorization-T plus Negotiation-T templates and negotiation-vocabulary) is read from this root, while LLM prompts and error messages are read only from the built-in resources |
 | `A2AT_INPUT_TEXT_MAX_CHARS`           | Maximum character count of free-text inputs (from-text generation and message validation entry points); oversized inputs fail fast with the error code `input.text_too_long`, default `16384`; structured data that does not involve LLM calls is not limited |
 | `A2AT_LLM_PROVIDER`                   | Supported LLM protocol type; currently only `openai`                        |
 | `A2AT_LLM_MODEL`                      | Model name                                                     |

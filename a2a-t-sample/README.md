@@ -28,15 +28,16 @@ Add new cases directly under `a2a-t-sample/`, as sibling directories of `subscri
 
 ```bash
 cd a2a-t-sample
-cp env.example .env
+# First run: execute uv sync --dev in the repository root (creates .venv and installs SDK dependencies)
+cp env.example .env      # after copying, confirm A2AT_LLM_API_KEY is empty
 uv pip install -r requirements.txt
 ```
 
-> If `A2AT_LLM_API_KEY` is left empty, both cases automatically use their own scripted mock LLM responses, so the full flows run without a real API. With the mock in use, a standalone log line `[llm] llm-mock: using canned mock LLM response` is printed before each response; this line distinguishes the mock from a real LLM.
+> If `A2AT_LLM_API_KEY` is left empty, both cases automatically use their own scripted mock LLM responses, so the full flows run without a real API. With the mock in use, a role-prefixed standalone log line `[<role>] llm-mock: using canned mock LLM response` is printed before each response (the client prints `[client]`, the server prints `[server]`); this line distinguishes the mock from a real LLM.
 
 ## Negotiation Closed-Loop Sample
 
-The negotiation sample is an **offline** negotiation closed-loop demo (the Python counterpart of the Java `a2a-t-sample` NegotiationDemoApp, with the embedded HTTP server replaced by an **in-process runtime**). Without an LLM API key it uses a scripted mock LLM, so the whole round trip runs completely offline.
+The negotiation sample is an **offline** negotiation closed-loop demo (the Python counterpart of the Java `a2a-t-sample` NegotiationDemoApp, with the embedded HTTP server replaced by an **in-process runtime**). Unlike the Java negotiation sample, which requires a real LLM API key, this sample answers the LLM steps with a scripted mock LLM when the key is absent, so the whole round trip runs completely offline.
 
 The 4-message flow:
 
@@ -88,8 +89,8 @@ A minimal end-to-end case based on the real HTTP+JSON chain of `a2a-sdk`, demons
 | Location | Content |
 | --- | --- |
 | text part | scenario name (`"create incident subscription"`) |
-| `metadata[Notification-T/NL/v1]` | the generated promptText |
-| header `A2A-Extensions` | `https://projects.tmforum.org/a2aproject/telecommunication/extensions/Notification-T/NL/v1` |
+| `metadata[Notification-T/v1]` | the generated promptText |
+| header `A2A-Extensions` | `https://projects.tmforum.org/a2aproject/telecommunication/extensions/Notification-T/v1` |
 
 - The prompt generation input is **hard-coded natural language**, selected automatically by `A2AT_LANGUAGE`:
   - `zh-CN`: `"请生成一个Incident事件订阅任务：通知主题为Incident，订阅条件为订阅级别为critical的ETH-LOS的故障，上报通知数据格式为DataPart"`
@@ -99,8 +100,8 @@ A minimal end-to-end case based on the real HTTP+JSON chain of `a2a-sdk`, demons
 
 The state machine of `execute_server_flow`:
 
-1. **Validate the `A2A-Extensions` header**: must contain the Notification-T/NL extension URI, otherwise raise `ValueError("a2a client extensions is not exist.")`
-2. **Extract promptText from `metadata[Notification-T/NL/v1]`** (no longer read from `parts[0].text`)
+1. **Validate the `A2A-Extensions` header**: must contain the Notification-T extension URI, otherwise raise `ValueError("a2a client extensions is not exist.")`
+2. **Extract promptText from `metadata[Notification-T/v1]`** (no longer read from `parts[0].text`)
 3. **`SUBMITTED`** → validate with `A2ATServer.check_task_prompt`
    - validation failed → emit **`REJECTED`** status (no exception raised)
    - validation passed → emit **`WORKING`** status
@@ -110,7 +111,7 @@ The state machine of `execute_server_flow`:
 ### AgentCard Data
 
 - name: `SPN Domain Agent`, provider: `Huawei`
-- declares only the `Notification-T/NL/v1` extension (the subscribe case does not involve Task-T)
+- declares only the `Notification-T/v1` extension (the subscribe case does not involve Task-T)
 
 ### Starting the Event Subscription Sample
 

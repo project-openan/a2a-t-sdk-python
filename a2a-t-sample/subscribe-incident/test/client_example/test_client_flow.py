@@ -20,7 +20,7 @@ from a2a.types import (
     TaskState,
 )
 from client_example.client_flow import (
-    _NOTIFICATION_T_EXTENSION_URI_NL,
+    _NOTIFICATION_T_EXTENSION_URI,
     run_client_flow,
 )
 from client_example.scenario_data import (
@@ -117,7 +117,7 @@ class RunClientFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(prompt_client.generate_calls, [expected_input])
 
     async def test_request_body_aligns_with_java_convention(self) -> None:
-        """Text part = scenario name, metadata[NL-URI] = prompt text, header = NL URI."""
+        """Text part = scenario name, metadata[Notification-T URI] = prompt text, header = Notification-T URI."""
         a2a_client = FakeStreamA2AClient(events=[])
         prompt_client = FakePromptClient(prompt_text="generated prompt")
 
@@ -131,12 +131,12 @@ class RunClientFlowTest(unittest.IsolatedAsyncioTestCase):
         message = request.message
         self.assertEqual(message.parts[0].text, "create incident subscription")
         self.assertEqual(
-            dict(message.metadata)[_NOTIFICATION_T_EXTENSION_URI_NL],
+            dict(message.metadata)[_NOTIFICATION_T_EXTENSION_URI],
             "generated prompt",
         )
         self.assertEqual(
             context.service_parameters["A2A-Extensions"],
-            _NOTIFICATION_T_EXTENSION_URI_NL,
+            _NOTIFICATION_T_EXTENSION_URI,
         )
 
     async def test_max_artifacts_stops_after_n_artifacts(self) -> None:

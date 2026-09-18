@@ -48,8 +48,8 @@ The A2A-T SDK exposes only two entry points: the client entry `A2ATClient` (prom
    | message | str | Human-readable error description rendered by the SDK from the code's message template; the language follows `A2AT_LANGUAGE`                                                                         |
    | facts | dict[str, str] \| None | Structured fact values the message is based on (such as `section_label`, `index`, `field_label`); may be None                                                          |
 
-- **Result-track data classes:** `generate_task_prompt` and `check_task_prompt` do not raise business exceptions; failure payloads are returned with the result object (structures in 1.3.22 / 1.3.23).
-- **Template URIs:** every method on the `A2ATClient` and `A2ATServer` facades that addresses a template declares the template selection through `template_uri`, accepts raw strings, and recommends passing the `*_URI` string constants of `a2a_t.core.standard_templates` directly (each has a same-named typed twin constant without the `_URI` suffix); strings from external sources can be passed in as-is. The `TemplateUri` type is still used by the underlying service layers and can be parsed with `TemplateUri.parse(str)`, returning `TemplateUri | None` without raising. The currently supported template URI constants (string form) are:
+- **Interfaces that report results through return values:** `generate_task_prompt` and `check_task_prompt` do not raise business exceptions; failure information is given with the returned object (structures in 1.3.22 / 1.3.23).
+- **Template URIs:** every method the `A2ATClient` and `A2ATServer` expose that addresses a template declares the template selection through `template_uri`, accepts raw strings, and recommends passing the `*_URI` string constants of `a2a_t.core.standard_templates` directly (each has a same-named `TemplateUri`-typed constant without the `_URI` suffix); strings from external sources can be passed in as-is. The `TemplateUri` type is still used by the underlying service layers and can be parsed with `TemplateUri.parse(str)`, returning `TemplateUri | None` without raising. The currently supported template URI constants (string form) are:
 
    | Constant name                                                        | Meaning | TemplateUri |
    |-------------------------------------------------------------| ---- | ---- |
@@ -147,6 +147,7 @@ On failure, raises `NegotiationGenerationError` (an `A2ATError` subclass):
 Error codes:
 
 - `template.not_found` (the template or prompt resource is missing)
+- `template.render_failed` (template rendering failed)
 
 - `negotiation.content_extract_failed` (structured content could not be extracted from the text, retryable)
 
@@ -219,6 +220,7 @@ On success, returns `MetadataContent` (same structure as [1.3.1](#131-generate_n
 On failure, raises `NegotiationGenerationError` (same structure as 1.3.1). Error codes:
 
 - `template.not_found` (the template or prompt resource is missing)
+- `template.render_failed` (template rendering failed)
 
 - `negotiation.content_extract_failed` (structured content could not be extracted from the text, retryable)
 
@@ -285,6 +287,7 @@ On success, returns `MetadataContent` (same structure as [1.3.1](#131-generate_n
 On failure, raises `NegotiationGenerationError` (same structure as 1.3.1). Error codes:
 
 - `template.not_found` (the template or prompt resource is missing)
+- `template.render_failed` (template rendering failed)
 
 - `negotiation.content_extract_failed` (structured content could not be extracted from the text, retryable)
 
@@ -356,6 +359,7 @@ On success, returns `MetadataContent` (same structure as [1.3.1](#131-generate_n
 On failure, raises `NegotiationGenerationError` (same structure as 1.3.1). Error codes:
 
 - `template.not_found` (the template or prompt resource is missing)
+- `template.render_failed` (template rendering failed)
 
 - `negotiation.content_extract_failed` (structured content could not be extracted from the text, retryable)
 
@@ -726,7 +730,8 @@ On success, returns `FilledParamData`:
 
 | Field/method | Type | Description |
 | --------- | ---- | ---- |
-| data | dict[str, object] | Merged parameters: the negotiation context parameters (`id` / `round` / `maxRounds`, **winning** on key conflicts) + the parameters extracted from the message per the caller's Schema |
+| data | dict[str, object] \| list[object] | Merged parameters: the negotiation context parameters (`id` / `round` / `maxRounds`, **winning** on key conflicts) + the parameters extracted from the message per the caller's Schema; when the caller's Schema is array-shaped, `data` is an ordered array |
+| context | dict[str, object] \| None | The context parameters (`id` / `round` / `maxRounds`) carried only when `data` is array-shaped; for an object-shaped result the context is already merged into `data` and this field is `None` |
 
 On failure, raises `NegotiationParamExtractionError` (an `A2ATError` subclass):
 
@@ -1215,7 +1220,8 @@ On success, returns `FilledParamData`:
 
 | Field/method | Type | Description |
 | --------- | ---- | ---- |
-| data | dict[str, object] | Parameters extracted per the Schema; keys are the parameter names declared in the Schema |
+| data | dict[str, object] \| list[object] | Parameters extracted per the Schema; keys are the parameter names declared in the Schema; when the caller's Schema is array-shaped, `data` is an ordered array |
+| context | dict[str, object] \| None | The context parameters carried only when `data` is array-shaped; `None` for an object-shaped result |
 
 On failure, raises `ContentValidationError` (an `A2ATError` subclass):
 
@@ -1774,7 +1780,7 @@ else:
 
 **Output description**
 
-On success (`success` is `True`; no exception raised; the result is returned with the dataclass):
+On success (`success` is `True`; no exception raised; the result is returned with the return value):
 
 | Field/method | Type | Description |
 | --------- | ---- | ---- |
@@ -1796,9 +1802,11 @@ On failure (`success` is `False`; no exception raised; the failure payload is re
 | ---- | ---- | ---- |
 | code | str | Machine-readable error code from the error code list, such as `scenario.not_matched` (scenario recognition missed), `input.text_too_long` (input length protection), `template.load_failed` (prompt resource loading failed), `template.not_found` (the template is missing), `slot.schema_not_found` (the slot Schema is missing), `slot.not_provided` (a required slot is missing), `template.render_failed` (rendering failed), `llm.invocation_failed` / `llm.response_invalid` (LLM failure) |
 | message | str | Human-readable failure description |
-| stage | str \| None | Stage where the failure occurred: `input` (input length protection), `scenario` (scenario recognition), `preparation` (template/slot/prompt resource loading), `generation` (generation processes such as LLM slot extraction), `render` (template rendering) |
+| stage | str \| None | Stage where the failure occurred: `input` (input length protection), `scenario` (scenario recognition), `preparation` (template/slot/prompt resource loading), `generation` (generation processes such as LLM slot extraction), `validation` (slot validation), `render` (template rendering) |
 
 Both `PromptGenerationResult` and `PromptGenerationFailure` provide `to_dict()` for direct JSON serialization.
+
+Programming errors: a `user_input` that is neither a `str` nor a `dict` raises `TypeError`; a blank string or an empty `dict` raises `ValueError`.
 
 **Response sample**
 
@@ -1863,7 +1871,7 @@ else:
 
 **Output description**
 
-On success (`success` is `True`; no exception raised; the result is returned with the dataclass):
+On success (`success` is `True`; no exception raised; the result is returned with the return value):
 
 | Field/method | Type | Description |
 | --------- | ---- | ---- |
