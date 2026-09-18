@@ -28,15 +28,16 @@
 
 ```bash
 cd a2a-t-sample
-cp env.example .env
+# 首次使用：先在仓库根目录执行 uv sync --dev（创建 .venv 并安装 SDK 依赖）
+cp env.example .env      # 复制后确认 .env 中 A2AT_LLM_API_KEY 为空
 uv pip install -r requirements.txt
 ```
 
-> 如果 `A2AT_LLM_API_KEY` 留空，两个用例都会自动使用用例各自的脚本化 mock LLM 响应，无需真实 API 即可跑通完整流程。使用 mock 时每次响应前会输出一行独立日志 `[llm] llm-mock: using canned mock LLM response`，用于区分 mock 与真实 LLM。
+> 如果 `A2AT_LLM_API_KEY` 留空，两个用例都会自动使用用例各自的脚本化 mock LLM 响应，无需真实 API 即可跑通完整流程。使用 mock 时每次响应前会输出一行带角色前缀的独立日志 `[<角色>] llm-mock: using canned mock LLM response`（客户端为 `[client]`、服务端为 `[server]`），用于区分 mock 与真实 LLM。
 
 ## 协商（Negotiation）闭环样例
 
-协商样例是**离线**协商闭环 demo（Java `a2a-t-sample` NegotiationDemoApp 的 Python 对应物，内嵌 HTTP 服务器替换为**进程内运行时调用**）。未配置 LLM API Key 时用脚本化 mock LLM 应答，整个往返完全离线运行。
+协商样例是**离线**协商闭环 demo（Java `a2a-t-sample` NegotiationDemoApp 的 Python 对应物，内嵌 HTTP 服务器替换为**进程内运行时调用**）。与 Java 版协商样例需真实 LLM API key 不同，本样例未配置 key 时用脚本化 mock LLM 应答，整个往返完全离线运行。
 
 4 报文流转：
 
@@ -88,8 +89,8 @@ uv run python -m negotiation_demo --language zh-CN
 | 位置 | 内容 |
 | --- | --- |
 | text part | scenario 名（`"create incident subscription"`） |
-| `metadata[Notification-T/NL/v1]` | 生成的 promptText |
-| header `A2A-Extensions` | `https://projects.tmforum.org/a2aproject/telecommunication/extensions/Notification-T/NL/v1` |
+| `metadata[Notification-T/v1]` | 生成的 promptText |
+| header `A2A-Extensions` | `https://projects.tmforum.org/a2aproject/telecommunication/extensions/Notification-T/v1` |
 
 - Prompt 生成输入为**硬编码自然语言**，按照 `A2AT_LANGUAGE` 自动选择：
   - `zh-CN`：`"请生成一个Incident事件订阅任务：通知主题为Incident，订阅条件为订阅级别为critical的ETH-LOS的故障，上报通知数据格式为DataPart"`
@@ -99,8 +100,8 @@ uv run python -m negotiation_demo --language zh-CN
 
 `execute_server_flow` 的状态机：
 
-1. **校验 `A2A-Extensions` header**：必须包含 Notification-T/NL 扩展 URI，否则抛 `ValueError("a2a client extensions is not exist.")`
-2. **从 `metadata[Notification-T/NL/v1]` 提取 promptText**（不再从 `parts[0].text` 读取）
+1. **校验 `A2A-Extensions` header**：必须包含 Notification-T 扩展 URI，否则抛 `ValueError("a2a client extensions is not exist.")`
+2. **从 `metadata[Notification-T/v1]` 提取 promptText**（不再从 `parts[0].text` 读取）
 3. **`SUBMITTED`** → 调用 `A2ATServer.check_task_prompt` 校验
    - 校验失败 → 发 **`REJECTED`** 状态（不抛异常）
    - 校验通过 → 发 **`WORKING`** 状态
@@ -110,7 +111,7 @@ uv run python -m negotiation_demo --language zh-CN
 ### AgentCard 数据
 
 - name：`SPN Domain Agent`，provider：`Huawei`
-- 仅声明 `Notification-T/NL/v1` 扩展（subscribe 用例不涉及 Task-T）
+- 仅声明 `Notification-T/v1` 扩展（subscribe 用例不涉及 Task-T）
 
 ### 事件订阅样例启动
 

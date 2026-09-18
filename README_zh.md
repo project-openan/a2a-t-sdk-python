@@ -64,9 +64,9 @@ flowchart LR
 | 任务提示词生成（客户端） | 覆盖输入归一化、场景识别、槽位提取与模板渲染，支持自然语言与结构化数据两种输入 |
 | 报文校验与提参（服务端） | 对符合 SDK 格式的任务提示词执行元数据解析、槽位提取与语义校验，按 Schema 提取参数并返回缺失/非法槽位明细 |
 | 协商内容 API | 支持 `information` / `feasibility` / `target` 三类协商及 `abort` 终止消息，提供模板驱动的协商报文生成与校验；协商会话状态随消息 metadata（`negotiationContext`）往返，SDK 本身无状态 |
-| 资源组织 | 内置提示词资源（`prompts` / `scenarios` / `slots` / `templates` / `negotiation-vocabulary`）随包提供，支持 `packaged`（已安装包）与 `local_file`（本地文件）两种加载方式 |
-| LLM 适配 | 通过 OpenAI 兼容调用链接入外部大模型，可重试失败码支持有界重试 |
-| 内置示例 | 随仓库提供 `subscribe_incident`（事件订阅）与 `negotiation`（协商闭环）等可运行示例场景，未配置 API Key 时自动降级为脚本化 Mock LLM，零外部依赖即可端到端跑通 |
+| 资源组织 | 内置提示词资源（`prompts` / `scenarios` / `slots` / `templates` / `negotiation-vocabulary`）随包提供，支持 `packaged` 内置资源与 `local_file` 本地文件两种加载方式 |
+| LLM 适配 | 通过 OpenAI 兼容调用链接入外部大模型；对可重试错误码按配置的尝试次数上限重试 |
+| 内置示例 | 随仓库提供 `subscribe_incident`（事件订阅）等可运行示例场景，未配置 API Key 时自动降级为脚本化 Mock LLM，零外部依赖即可端到端跑通 |
 
 ## 项目结构
 
@@ -83,7 +83,7 @@ flowchart LR
 | `prompt` | 提示词资源分析、槽位提取、模板渲染与校验 |
 | `negotiation` | 协商内容模型、生成管线与校验管线 |
 | `a2a-t-sample` | 可运行的客户端/服务端示例用例集 |
-| `a2a-t-corpus` | 准确性验证语料（纯测试资产）：数据驱动工作流用例，与 Java 仓逐字节共享 |
+| `a2a-t-corpus` | 准确性验证语料（纯测试资产）：数据驱动工作流用例 |
 
 `tests/` 目录镜像包结构，覆盖提示词生成、服务端校验、协商管线、提示词资源与 LLM 适配等测试用例。
 
@@ -103,7 +103,9 @@ flowchart LR
 
 ```bash
 # 1. 安装依赖并准备环境配置（A2AT_LLM_API_KEY 留空时自动使用 mock LLM）
-cp env.example .env
+#    首次使用：先在仓库根目录执行 uv sync --dev（创建 .venv 并安装 SDK 依赖），
+#    再回到 a2a-t-sample 目录执行以下命令
+cp env.example .env      # 复制后确认 .env 中 A2AT_LLM_API_KEY 为空
 uv pip install -r requirements.txt
 
 # 2. 终端一：启动注册中心（端口 5001）
@@ -163,7 +165,7 @@ uv run mypy src      # 类型检查
 使用前建议先确认以下限制：
 
 - 内置 LLM 调用链对外统一为 OpenAI 适配层。
-- 大模型提示词资源已内置，不支持自定义扩展（`prompts` 与 `errors` 恒从已安装包加载）。
+- 大模型提示词资源已内置，不支持自定义扩展（`prompts` 与 `errors` 始终从内置资源加载）。
 - 协商会话状态随消息 metadata 往返（SDK 无状态），不提供协商状态存储；旧的状态机协商 API（`start_negotiation` / `receive_negotiation` / `continue_negotiation`）自 1.1.0 起废弃。
 - 随包资源与语言覆盖有限，不包含 `registry-center`（注册中心）等远程资源加载能力。
 - 本文档主要介绍 SDK 本身，不涉及 CLI、托管服务、部署流程或可直接使用的应用方案。
