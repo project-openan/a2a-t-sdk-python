@@ -12,7 +12,7 @@ externally as plain strings through ``code_str`` (D4).
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -201,7 +201,7 @@ class ContentValidationError(A2ATBusinessError):
         message: str | None = None,
         cause: BaseException | None = None,
         errors: Iterable[SlotValidationError] | None = None,
-        params: Mapping[str, object] | None = None,
+        params: Mapping[str, object] | Sequence[object] | None = None,
     ) -> None:
         """Create one content validation failure.
 
@@ -215,11 +215,17 @@ class ContentValidationError(A2ATBusinessError):
             cause: underlying exception to chain as ``__cause__``, when any.
             errors: structured per-slot validation errors.
             params: partial extraction result, when validation ran on an extraction; may carry
-                ``None`` values for the slots the semantic validator could not extract.
+                ``None`` values for the slots the semantic validator could not extract. An
+                array-shaped caller schema yields a list of per-item objects, preserved as-is.
         """
         super().__init__(code, facts, language=language, message=message, cause=cause)
         self.errors: list[SlotValidationError] = list(errors or ())
-        self.params: dict[str, object] = dict(params) if params else {}
+        if params is None:
+            self.params: dict[str, object] | list[object] = {}
+        elif isinstance(params, Mapping):
+            self.params = dict(params)
+        else:
+            self.params = list(params)
 
 
 class A2ATParamExtractionError(A2ATBusinessError):
