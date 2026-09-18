@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from a2a_t.common.prompt_resources import PromptResourceAccess
-from a2a_t.config.models import A2ATConfig, PromptComplianceConfig, PromptRuntimeConfig
+from a2a_t.config.models import A2ATConfig, PromptRuntimeConfig
 
 
 class FakeRuntimeComponentsBuilder:
@@ -74,7 +74,6 @@ def _components() -> object:
 def _config() -> A2ATConfig:
     return A2ATConfig(
         prompt=PromptRuntimeConfig(local_root_dir="./default-root"),
-        prompt_compliance=PromptComplianceConfig(),
     )
 
 

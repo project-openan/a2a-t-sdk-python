@@ -317,7 +317,6 @@ Copy the repository root `env.example` to `package_data/.env` (the facades' defa
 ```properties
 A2AT_LANGUAGE=en-US
 A2AT_PROMPT_SOURCE_TYPE=packaged
-A2AT_PROMPT_COMPLIANCE_ENABLED=true
 A2AT_INPUT_TEXT_MAX_CHARS=16384
 A2AT_LLM_PROVIDER=openai
 A2AT_LLM_MODEL=deepseek-chat
@@ -1316,7 +1315,6 @@ The sample configuration file provided by the SDK is `env.example`; copy it to `
 | `A2AT_LANGUAGE`                       | Language of the prompt resources; built-in `zh-CN` and `en-US`, default `en-US`        |
 | `A2AT_PROMPT_SOURCE_TYPE`             | Source of the prompt resources; supports `packaged` (default since 1.1.0) and `local_file` |
 | `A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR` | Local prompt resource root directory; required in `local_file` mode, failing fast at assembly when unset or when the path does not exist; only the business content (templates/slots/scenarios of Task-T/Notification-T/Authorization-T plus Negotiation-T templates and negotiation-vocabulary) is read from this root, while LLM prompts and error messages are always loaded from the installed package |
-| `A2AT_PROMPT_COMPLIANCE_ENABLED`      | Whether server-side prompt compliance validation is enabled, default `false`                    |
 | `A2AT_INPUT_TEXT_MAX_CHARS`           | Maximum character count of free-text inputs (from-text generation and message validation entry points); oversized inputs fail fast with the error code `input.text_too_long`, default `16384`; structured data that does not involve LLM calls is not limited |
 | `A2AT_LLM_PROVIDER`                   | Supported LLM protocol type; currently only `openai`                        |
 | `A2AT_LLM_MODEL`                      | Model name                                                     |

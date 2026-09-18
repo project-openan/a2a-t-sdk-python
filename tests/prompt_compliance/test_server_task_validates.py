@@ -22,7 +22,7 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from a2a_t.config.models import A2ATConfig, LlmRuntimeConfig, PromptComplianceConfig, PromptRuntimeConfig
+from a2a_t.config.models import A2ATConfig, LlmRuntimeConfig, PromptRuntimeConfig
 from a2a_t.core.errors.exceptions import ContentValidationError
 from a2a_t.core.errors.input_limit import InputLimitConfig
 from a2a_t.core.standard_templates import (
@@ -82,7 +82,6 @@ class MockLLM:
 def _config(*, max_attempts: int = 1, max_text_chars: int = 16384) -> A2ATConfig:
     return A2ATConfig(
         prompt=PromptRuntimeConfig(language="en-US", source_type="packaged"),
-        prompt_compliance=PromptComplianceConfig(),
         input_limits=InputLimitConfig(max_text_chars=max_text_chars),
         llm=LlmRuntimeConfig(max_attempts=max_attempts),
     )
