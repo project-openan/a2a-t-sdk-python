@@ -31,11 +31,16 @@ def test_bundled_template_keys_match_the_catalog_exactly(language: str) -> None:
 
 @pytest.mark.parametrize("language", TEMPLATE_LANGUAGES)
 @pytest.mark.parametrize("member", list(ErrorCatalog))
-def test_declared_fact_parameters_match_the_template_placeholders(member: ErrorCatalog, language: str) -> None:
+def test_template_placeholders_are_covered_by_declared_fact_parameters(
+    member: ErrorCatalog, language: str
+) -> None:
     text = template(member, language)
     assert text is not None
     placeholders = set(re.findall(r"\{([a-zA-Z][a-zA-Z0-9_]*)\}", text))
-    assert placeholders == set(member.fact_parameters)
+    # Every rendered placeholder must be a declared fact parameter, but facts may carry more
+    # context than the message renders (template.not_found keeps the configured language in
+    # facts while the message only reports the miss).
+    assert placeholders <= set(member.fact_parameters)
 
 
 @pytest.mark.parametrize(

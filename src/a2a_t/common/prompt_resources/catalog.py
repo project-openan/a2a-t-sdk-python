@@ -13,9 +13,13 @@ the URI formed from the segments before the language.
 One deliberate divergence from the Java catalog (D31, which overrides D13): Java keeps the
 Negotiation-T tree classpath-fixed and unions it into the local business content in ``local_file``
 mode, while this port routes the whole ``templates/`` tree — negotiation templates included —
-through the single resource access layer, so the catalog reads exactly one source per configuration.
-The Negotiation-T closed-set filter of the Java catalog is kept verbatim: a Negotiation-T template
-outside the closed set of seven shapes is ignored with a warning.
+through the single resource access layer, so both sources of the overlay come from one access
+object. In ``local_file`` mode the effective set is the built-in templates union the locally
+captured ones, with the local copy winning when the same path exists in both (the Java ADR 0005
+overlay), and every template record carries its effective origin: ``local`` for locally captured
+files, ``packaged`` for the built-in copies. The Negotiation-T closed-set filter of the Java
+catalog is kept verbatim: a Negotiation-T template outside the closed set of seven shapes is
+ignored with a warning.
 
 The catalog captures its entries once, at construction (Java constructor snapshot): the packaged
 tree is walked and the local root snapshotted by the access layer, and the frozen entry map is
@@ -105,10 +109,15 @@ class PromptTemplateCatalog:
 
     The catalog captures the template entries of the configured source once, at construction, and
     never re-reads the resource tree afterwards, so a template added or removed after assembly is
-    invisible to :meth:`load_all` and :meth:`load` until the SDK is restarted (D9). Both query
-    methods never throw: a template outside the catalogable URI shapes — or a Negotiation-T
-    template outside the closed set of seven shapes — is skipped with a warning, and a template
-    that exists nowhere for the language is answered with ``None``.
+    invisible to :meth:`load_all` and :meth:`load` until the SDK is restarted (D9). In
+    ``local_file`` mode the captured set is the built-in overlay: the packaged templates union the
+    locally captured ones with the local copy winning, and each entry keeps the origin it was
+    served from. The shadowing is per path: a local override placed at a non-canonical layout (for
+    example the plain ``Task-T/<code>/v1`` layout while the built-in lives under
+    ``network-layer``) is listed as its own URI next to the packaged one, matching the Java
+    catalog. Both query methods never throw: a template outside the catalogable URI shapes — or a
+    Negotiation-T template outside the closed set of seven shapes — is skipped with a warning, and
+    a template that exists nowhere for the language is answered with ``None``.
     """
 
     def __init__(self, language: str, source_type: str, local_root_dir: str | None = None) -> None:
@@ -136,7 +145,11 @@ class PromptTemplateCatalog:
             PromptRuntimeConfig(language=language, source_type=source_type, local_root_dir=local_root_dir)
         )
         self._source = SOURCE_PACKAGED if access.packaged() else SOURCE_LOCAL
-        self._entries = dict(access.template_entries())
+        self._entries: dict[str, str] = {}
+        self._origins: dict[str, str] = {}
+        for path, (text, origin) in access.template_entries_with_origins().items():
+            self._entries[path] = text
+            self._origins[path] = origin
 
     @property
     def language(self) -> str:
@@ -149,11 +162,14 @@ class PromptTemplateCatalog:
 
     @property
     def source(self) -> str:
-        """The effective origin of every template of the catalog (``packaged`` or ``local``).
+        """The dominant origin of the catalog's configured source (``packaged`` or ``local``).
 
         Returns:
-            the source marker of the captured snapshot: :data:`~a2a_t.common.prompt_resources.models.SOURCE_PACKAGED`
-            or :data:`~a2a_t.common.prompt_resources.models.SOURCE_LOCAL`.
+            :data:`~a2a_t.common.prompt_resources.models.SOURCE_PACKAGED` in packaged mode;
+            :data:`~a2a_t.common.prompt_resources.models.SOURCE_LOCAL` in ``local_file`` mode,
+            where locally captured files win the built-in overlay. The per-template effective
+            origin — including the packaged fallback copies a local root does not override — is
+            carried by each :class:`PromptTemplate`'s ``source`` field.
         """
         return self._source
 
@@ -162,7 +178,8 @@ class PromptTemplateCatalog:
 
         This query never throws: templates that exist nowhere for the language are skipped and an
         empty list is returned when no template can be loaded at all. The result is sorted by
-        template URI, which orders by extension first.
+        template URI, which orders by extension first. Each record carries the effective origin of
+        its path in the captured overlay.
 
         Returns:
             the loadable templates of the configured language, sorted by URI; empty when none can
@@ -186,7 +203,7 @@ class PromptTemplateCatalog:
                 # keeps its never-throw contract (Java raises IllegalStateException here).
                 logger.warning("prompt_template_skipped uri=%s reason=unparseable", uri)
                 continue
-            templates.append(PromptTemplate(template_uri, extract_description(content), content, self._source))
+            templates.append(PromptTemplate(template_uri, extract_description(content), content, self._origin_of(path)))
         templates.sort(key=lambda template: template.template_uri.uri)
         logger.debug("prompt_templates_listed count=%d language=%s", len(templates), self._language)
         return templates
@@ -194,8 +211,11 @@ class PromptTemplateCatalog:
     def load(self, template_uri: TemplateUri) -> PromptTemplate | None:
         """Load one template of the configured language by its URI, regardless of the extension.
 
-        A Negotiation-T template outside the closed set is answered with ``None``. This query never
-        throws: a template that exists nowhere for the language yields ``None``.
+        In ``local_file`` mode the addressed template resolves against the captured overlay: the
+        locally captured copy wins, and the packaged copy is the effective origin of a path the
+        local root does not carry. A Negotiation-T template outside the closed set is answered with
+        ``None``. This query never throws: a template that exists nowhere for the language yields
+        ``None``.
 
         Args:
             template_uri: template URI such as ``Negotiation-T/information-negotiation/propose/v1``
@@ -213,10 +233,15 @@ class PromptTemplateCatalog:
         uri = template_uri.uri
         if template_uri.extension_name == _NEGOTIATION_EXTENSION and not _is_closed_set_negotiation_uri(uri):
             return None
-        content = self._entries.get(f"{uri}/{self._language}/{_TEMPLATE_FILE_NAME}")
+        path = f"{uri}/{self._language}/{_TEMPLATE_FILE_NAME}"
+        content = self._entries.get(path)
         if content is None:
             return None
-        return PromptTemplate(template_uri, extract_description(content), content, self._source)
+        return PromptTemplate(template_uri, extract_description(content), content, self._origin_of(path))
+
+    def _origin_of(self, path: str) -> str:
+        """Return the captured origin of one template path, defaulting to the configured source."""
+        return self._origins.get(path, self._source)
 
 
 class TemplateQueryService:

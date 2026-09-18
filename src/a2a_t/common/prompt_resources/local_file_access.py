@@ -9,6 +9,11 @@ the filesystem, so local file changes only take effect after the SDK is restarte
 Divergence from the Java snapshot (D31): the routed categories include ``negotiation-vocabulary/``,
 because negotiation resources are locally overridable in this port (D13 as overridden by D31); Java
 1.1.0 keeps them classpath-fixed and therefore does not snapshot them.
+
+The snapshot itself carries no fallback: the built-in packaged fallback of the missing local
+business content (Java ADR 0005 overlay) is layered on top by
+:class:`~a2a_t.common.prompt_resources.builtin_fallback.BuiltinFallbackReader`, which the access
+object wires as the routed reader.
 """
 
 from __future__ import annotations
@@ -170,7 +175,10 @@ class LocalResourceSnapshot:
         The local half of the directory-driven template enumeration consumed by the template
         catalog (Java ``PromptTemplateCatalog.localTemplates``): every captured path under the
         category ending in ``file_name`` is reported with its captured text, so later file edits
-        stay invisible exactly like every other snapshot read (D9).
+        stay invisible exactly like every other snapshot read (D9). The returned keys are
+        category-relative like the packaged reader's (Java keeps the classpath root prefix in the
+        intermediate map and strips it when resolving the URI; this port returns the stripped form
+        directly).
 
         Args:
             category: category prefix, such as ``templates``.
@@ -183,7 +191,9 @@ class LocalResourceSnapshot:
         prefix = category + _SEPARATOR
         suffix = _SEPARATOR + file_name
         return {
-            key: text for key, text in sorted(self._content.items()) if key.startswith(prefix) and key.endswith(suffix)
+            key[len(prefix) :]: text
+            for key, text in sorted(self._content.items())
+            if key.startswith(prefix) and key.endswith(suffix)
         }
 
     def _snapshot_key(self, key: PromptResourceKey) -> str:
