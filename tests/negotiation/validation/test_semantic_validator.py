@@ -318,7 +318,7 @@ def test_missing_other_required_keys_are_shape_violations(payload: str) -> None:
     [
         '{"semantic_verdict":"yes","negotiation_type":"information","errors":[],"params":{}}',
         '{"semantic_verdict":true,"negotiation_type":"information","errors":"none","params":{}}',
-        '{"semantic_verdict":true,"negotiation_type":"information","errors":[],"params":[]}',
+        '{"semantic_verdict":true,"negotiation_type":"information","errors":[],"params":[1,2]}',
         '{"semantic_verdict":true,"negotiation_type":"information","errors":[{"slot_name":"section.context"}],"params":{}}',
         '{"semantic_verdict":true,"negotiation_type":42,"errors":[],"params":{}}',
         '{"semantic_verdict":true,"negotiation_type":"information","errors":[{"slot_name":"s","code":"c","facts":"f"}],"params":{}}',
@@ -327,7 +327,7 @@ def test_missing_other_required_keys_are_shape_violations(payload: str) -> None:
     ids=[
         "verdict-not-boolean",
         "errors-not-array",
-        "params-not-object",
+        "params-array-items-not-objects",
         "error-item-missing-code-and-facts",
         "type-not-string",
         "facts-not-object",

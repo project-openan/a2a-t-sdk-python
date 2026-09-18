@@ -26,8 +26,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -39,37 +56,50 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 节能区域信息：松山湖管委会；2. 节能速率保障目标：20Mbps；3. 节能时段：00:00~06:00。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "energy_region": {
+                "type": "string",
+                "description": "节能区域信息"
+              },
+              "rate_target": {
+                "type": "string",
+                "description": "节能速率保障目标"
+              },
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -84,7 +114,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -100,7 +136,11 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "energy_region": "松山湖管委会",
+          "rate_target": "20Mbps",
+          "time_window": "00:00~06:00"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -111,13 +151,13 @@
   {
     "id": "TC00000002",
     "caseDimension": "01-意图清晰参数完整",
-    "caseDesc": "信息协商-propose-清晰信息项组合2（2项），生成并校验通过",
+    "caseDesc": "信息协商-propose-清晰信息项组合2（2项+或关系，仅提供区域A），生成并校验通过",
     "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
         "args": {
-          "text": "无线网络节能任务缺少必要信息，请提供以下信息项：1. 节能区域信息，如东莞松山湖片区；2. 节能速率保障目标，如30%。请补充以上信息项以完成节能任务配置。",
+          "text": "无线网络节能任务缺少必要信息，请提供以下信息项：1. 节能区域信息，如松山湖管委会；2. 节能速率保障目标，如20Mbps。以上两项信息提供其一即可。请补充以上信息项以完成节能任务配置。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
             "round": 1,
@@ -135,8 +175,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": "或"
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -148,37 +205,42 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，我方可提供节能区域信息：松山湖管委会。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "energy_region": {
+                "type": "string",
+                "description": "节能区域信息"
+              }
+            },
+            "relationship": "或"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -193,7 +255,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -209,7 +277,9 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "energy_region": "松山湖管委会"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -244,8 +314,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -257,37 +344,46 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 节能区域信息：深圳坂田；2. 节能时段：22:00~06:00。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "energy_region": {
+                "type": "string",
+                "description": "节能区域信息"
+              },
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -302,7 +398,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -318,7 +420,10 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "energy_region": "深圳坂田",
+          "time_window": "22:00~06:00"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -329,13 +434,13 @@
   {
     "id": "TC00000004",
     "caseDimension": "01-意图清晰参数完整",
-    "caseDesc": "信息协商-propose-清晰信息项组合4（2项），生成并校验通过",
+    "caseDesc": "信息协商-propose-清晰信息项组合4（2项+或关系），生成并校验通过",
     "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
         "args": {
-          "text": "无线网络节能任务缺少必要信息，请提供以下信息项：1. 节能速率保障目标，如2Mbps；2. 节能时段，如00:00~06:00。请补充以上信息项以完成节能任务配置。",
+          "text": "无线网络节能任务缺少必要信息，请提供以下信息项：1. 节能速率保障目标，如2Mbps；2. 节能时段，如00:00~06:00。以上两项信息提供其一即可。请补充以上信息项以完成节能任务配置。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
             "round": 1,
@@ -353,8 +458,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": "或"
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -366,37 +488,46 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 节能速率保障目标：2Mbps；2. 节能时段：00:00~06:00。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "rate_target": {
+                "type": "string",
+                "description": "节能速率保障目标"
+              },
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              }
+            },
+            "relationship": "或"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -411,7 +542,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -427,7 +564,10 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "rate_target": "2Mbps",
+          "time_window": "00:00~06:00"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -462,8 +602,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -475,37 +632,54 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 节能区域信息：松山湖管委会；2. 节能速率保障目标：20Mbps；3. 节能时段：00:00~06:00；4. 小区制式：NR。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "energy_region": {
+                "type": "string",
+                "description": "节能区域信息"
+              },
+              "rate_target": {
+                "type": "string",
+                "description": "节能速率保障目标"
+              },
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              },
+              "cell_mode": {
+                "type": "string",
+                "description": "小区制式"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -520,7 +694,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -536,7 +716,12 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "energy_region": "松山湖管委会",
+          "rate_target": "20Mbps",
+          "time_window": "00:00~06:00",
+          "cell_mode": "NR"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -571,8 +756,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -584,37 +786,42 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，我方可提供节能区域信息：松山湖管委会。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "energy_region": {
+                "type": "string",
+                "description": "节能区域信息"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -629,7 +836,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -645,7 +858,9 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "energy_region": "松山湖管委会"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -680,8 +895,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": "与"
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -693,37 +925,46 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 节能区域信息：松山湖管委会；2. 节能速率保障目标：20Mbps。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "energy_region": {
+                "type": "string",
+                "description": "节能区域信息"
+              },
+              "rate_target": {
+                "type": "string",
+                "description": "节能速率保障目标"
+              }
+            },
+            "relationship": "与"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -738,7 +979,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -754,7 +1001,10 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "energy_region": "松山湖管委会",
+          "rate_target": "20Mbps"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -789,8 +1039,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -802,37 +1069,46 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 下行频点号：1650；2. 节能时段：00:00~06:00。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "downlink_freq": {
+                "type": "string",
+                "description": "下行频点号"
+              },
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -847,7 +1123,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -863,7 +1145,10 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "downlink_freq": "1650",
+          "time_window": "00:00~06:00"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -898,8 +1183,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": "与"
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -911,37 +1213,46 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 节能区域信息：松山湖管委会；2. 节能时段：00:00~06:00。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "energy_region": {
+                "type": "string",
+                "description": "节能区域信息"
+              },
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              }
+            },
+            "relationship": "与"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -956,7 +1267,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -972,7 +1289,10 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "energy_region": "松山湖管委会",
+          "time_window": "00:00~06:00"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -1007,8 +1327,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -1020,37 +1357,46 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 小区制式：LTE；2. 下行频点号：1650。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "cell_mode": {
+                "type": "string",
+                "description": "小区制式"
+              },
+              "downlink_freq": {
+                "type": "string",
+                "description": "下行频点号"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -1065,7 +1411,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -1081,7 +1433,10 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "cell_mode": "LTE",
+          "downlink_freq": "1650"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -1091,14 +1446,14 @@
   },
   {
     "id": "TC00000011",
-    "caseDimension": "04-关键信息缺失",
-    "caseDesc": "信息协商-propose-清晰生成后validate缺少协商上下文变体1，规则门返回 negotiation.invalid_input",
+    "caseDimension": "02-关键信息缺失",
+    "caseDesc": "信息协商-propose-文本只说场景不说缺什么，步骤1生成侧校验拦截，返回 negotiation.field_missing",
     "caseCategory": "异常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
         "args": {
-          "text": "无线网络节能任务缺少节能区域信息，请提供任务覆盖的物理区域，如松山湖管委会。",
+          "text": "无线网络节能任务缺少必要信息，请补充以上信息项以完成节能任务配置。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
             "round": 1,
@@ -1107,86 +1462,14 @@
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1"
         }
-      },
-      {
-        "api": "validateProposePromptAndDataFilling",
-        "args": {
-          "promptText": {
-            "$fromStep": 1,
-            "$field": "promptText"
-          },
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
-        }
-      },
-      {
-        "api": "validateAcceptPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
-            "maxRounds": 5,
-            "performative": "ACCEPT"
-          }
-        }
-      },
-      {
-        "api": "validateRejectPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
-            "maxRounds": 5,
-            "performative": "REJECT"
-          }
-        }
       }
     ],
     "expected": [
       {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
         "result": "error",
         "data": {},
         "error": {
-          "errCode": "negotiation.invalid_input",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
+          "errCode": "negotiation.field_missing",
           "errMessage": ""
         }
       }
@@ -1194,102 +1477,29 @@
   },
   {
     "id": "TC00000012",
-    "caseDimension": "04-关键信息缺失",
-    "caseDesc": "信息协商-propose-清晰生成后validate缺少协商上下文变体2，规则门返回 negotiation.invalid_input",
+    "caseDimension": "02-关键信息缺失",
+    "caseDesc": "信息协商-propose-步骤1入参context丢失id字段，绑定层返回 negotiation.invalid_input",
     "caseCategory": "异常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
         "args": {
-          "text": "无线网络节能任务缺少节能速率保障目标，请提供，如20Mbps。",
+          "text": "无线网络节能任务缺少节能区域信息，请提供任务覆盖的物理区域，如松山湖管委会。",
           "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
             "round": 1,
             "maxRounds": 5,
             "performative": "PROPOSE"
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1"
         }
-      },
-      {
-        "api": "validateProposePromptAndDataFilling",
-        "args": {
-          "promptText": {
-            "$fromStep": 1,
-            "$field": "promptText"
-          },
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
-        }
-      },
-      {
-        "api": "validateAcceptPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
-            "maxRounds": 5,
-            "performative": "ACCEPT"
-          }
-        }
-      },
-      {
-        "api": "validateRejectPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
-            "maxRounds": 5,
-            "performative": "REJECT"
-          }
-        }
       }
     ],
     "expected": [
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
       {
         "result": "error",
         "data": {},
         "error": {
           "errCode": "negotiation.invalid_input",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
           "errMessage": ""
         }
       }
@@ -1297,14 +1507,14 @@
   },
   {
     "id": "TC00000013",
-    "caseDimension": "04-关键信息缺失",
-    "caseDesc": "信息协商-propose-清晰生成后validate缺少协商上下文变体3，规则门返回 negotiation.invalid_input",
+    "caseDimension": "02-关键信息缺失",
+    "caseDesc": "信息协商-propose-步骤2入参丢失templateUri，返回 template.not_found",
     "caseCategory": "异常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
         "args": {
-          "text": "无线网络节能任务缺少节能时段信息，请提供，如00:00~06:00。",
+          "text": "无线网络节能任务缺少节能区域与节能速率保障目标信息，请提供，区域如松山湖管委会，目标如20Mbps。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
             "round": 1,
@@ -1321,44 +1531,32 @@
             "$fromStep": 1,
             "$field": "promptText"
           },
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
-        }
-      },
-      {
-        "api": "validateAcceptPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "ACCEPT"
-          }
-        }
-      },
-      {
-        "api": "validateRejectPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+            "performative": "PROPOSE"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
-            "maxRounds": 5,
-            "performative": "REJECT"
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           }
         }
       }
@@ -1376,23 +1574,7 @@
         "result": "error",
         "data": {},
         "error": {
-          "errCode": "negotiation.invalid_input",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
+          "errCode": "template.not_found",
           "errMessage": ""
         }
       }
@@ -1400,14 +1582,14 @@
   },
   {
     "id": "TC00000014",
-    "caseDimension": "04-关键信息缺失",
-    "caseDesc": "信息协商-propose-清晰生成后validate缺少协商上下文变体4，规则门返回 negotiation.invalid_input",
-    "caseCategory": "异常",
+    "caseDimension": "02-关键信息缺失",
+    "caseDesc": "信息协商-propose-请求3项时accept回填2项（空关系尽力而为），校验通过",
+    "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
         "args": {
-          "text": "无线网络节能任务缺少节能区域与小区制式信息，请提供，区域如松山湖管委会，制式如NR。",
+          "text": "无线网络节能任务缺少必要信息，请提供以下信息项：1. 节能区域信息，如松山湖管委会；2. 节能速率保障目标，如20Mbps；3. 节能时段，如00:00~06:00。请补充以上信息项以完成节能任务配置。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
             "round": 1,
@@ -1424,45 +1606,86 @@
             "$fromStep": 1,
             "$field": "promptText"
           },
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1"
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 节能区域信息：松山湖管委会；2. 节能速率保障目标：20Mbps。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "energy_region": {
+                "type": "string",
+                "description": "节能区域信息"
+              },
+              "rate_target": {
+                "type": "string",
+                "description": "节能速率保障目标"
+              },
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              }
+            },
+            "required": [
+              "energy_region",
+              "rate_target",
+              "time_window"
+            ],
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -1476,10 +1699,16 @@
         }
       },
       {
-        "result": "error",
-        "data": {},
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
-          "errCode": "negotiation.invalid_input",
+          "errCode": "",
           "errMessage": ""
         }
       },
@@ -1493,7 +1722,10 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "energy_region": "松山湖管委会",
+          "rate_target": "20Mbps"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -1503,14 +1735,14 @@
   },
   {
     "id": "TC00000015",
-    "caseDimension": "04-关键信息缺失",
-    "caseDesc": "信息协商-propose-清晰生成后validate缺少协商上下文变体5，规则门返回 negotiation.invalid_input",
+    "caseDimension": "02-关键信息缺失",
+    "caseDesc": "信息协商-propose-步骤4入参丢失templateUri，返回 template.not_found",
     "caseCategory": "异常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
         "args": {
-          "text": "无线网络节能任务缺少节能区域与节能时段信息，请提供，区域如松山湖管委会，时段如00:00~06:00。",
+          "text": "无线网络节能任务缺少节能速率保障目标与节能时段信息，请提供，目标如2Mbps，时段如00:00~06:00。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
             "round": 1,
@@ -1527,44 +1759,75 @@
             "$fromStep": 1,
             "$field": "promptText"
           },
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1"
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 节能速率保障目标：2Mbps；2. 节能时段：00:00~06:00。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "rate_target": {
+                "type": "string",
+                "description": "节能速率保障目标"
+              },
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              }
+            },
+            "relationship": ""
           }
         }
       }
@@ -1579,26 +1842,32 @@
         }
       },
       {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
         "result": "error",
         "data": {},
         "error": {
-          "errCode": "negotiation.invalid_input",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
+          "errCode": "template.not_found",
           "errMessage": ""
         }
       }
@@ -1606,14 +1875,14 @@
   },
   {
     "id": "TC00000016",
-    "caseDimension": "04-关键信息缺失",
-    "caseDesc": "信息协商-propose-清晰生成后validate缺少协商上下文变体6，规则门返回 negotiation.invalid_input",
+    "caseDimension": "02-关键信息缺失",
+    "caseDesc": "信息协商-propose-文本只说场景不说缺什么（更简短变体），步骤1生成侧校验拦截，返回 negotiation.field_missing",
     "caseCategory": "异常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
         "args": {
-          "text": "无线网络节能任务缺少下行频点号信息，请提供可关闭的下行频点，如1650。",
+          "text": "无线网络节能任务缺少必要信息，请补充以上信息项。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
             "round": 1,
@@ -1622,86 +1891,14 @@
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1"
         }
-      },
-      {
-        "api": "validateProposePromptAndDataFilling",
-        "args": {
-          "promptText": {
-            "$fromStep": 1,
-            "$field": "promptText"
-          },
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
-        }
-      },
-      {
-        "api": "validateAcceptPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
-            "maxRounds": 5,
-            "performative": "ACCEPT"
-          }
-        }
-      },
-      {
-        "api": "validateRejectPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
-            "maxRounds": 5,
-            "performative": "REJECT"
-          }
-        }
       }
     ],
     "expected": [
       {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
         "result": "error",
         "data": {},
         "error": {
-          "errCode": "negotiation.invalid_input",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
+          "errCode": "negotiation.field_missing",
           "errMessage": ""
         }
       }
@@ -1709,102 +1906,30 @@
   },
   {
     "id": "TC00000017",
-    "caseDimension": "04-关键信息缺失",
-    "caseDesc": "信息协商-propose-清晰生成后validate缺少协商上下文变体7，规则门返回 negotiation.invalid_input",
+    "caseDimension": "02-关键信息缺失",
+    "caseDesc": "信息协商-propose-步骤1入参context携带非法round（0），绑定层返回 negotiation.invalid_input",
     "caseCategory": "异常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
         "args": {
-          "text": "无线网络节能任务缺少小区制式信息，请提供，如LTE。",
+          "text": "无线网络节能任务缺少节能时段信息，请提供，如00:00~06:00。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 1,
+            "round": 0,
             "maxRounds": 5,
             "performative": "PROPOSE"
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1"
         }
-      },
-      {
-        "api": "validateProposePromptAndDataFilling",
-        "args": {
-          "promptText": {
-            "$fromStep": 1,
-            "$field": "promptText"
-          },
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
-        }
-      },
-      {
-        "api": "validateAcceptPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
-            "maxRounds": 5,
-            "performative": "ACCEPT"
-          }
-        }
-      },
-      {
-        "api": "validateRejectPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
-            "maxRounds": 5,
-            "performative": "REJECT"
-          }
-        }
       }
     ],
     "expected": [
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
       {
         "result": "error",
         "data": {},
         "error": {
           "errCode": "negotiation.invalid_input",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
           "errMessage": ""
         }
       }
@@ -1812,14 +1937,14 @@
   },
   {
     "id": "TC00000018",
-    "caseDimension": "04-关键信息缺失",
-    "caseDesc": "信息协商-propose-清晰生成后validate缺少协商上下文变体8，规则门返回 negotiation.invalid_input",
+    "caseDimension": "02-关键信息缺失",
+    "caseDesc": "信息协商-propose-步骤2入参丢失templateUri（制式+频点变体），返回 template.not_found",
     "caseCategory": "异常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
         "args": {
-          "text": "无线网络节能任务缺少节能区域与下行频点号信息，请提供，区域如松山湖管委会，频点如1650。",
+          "text": "无线网络节能任务缺少小区制式与下行频点号信息，请提供，制式如LTE，频点如1650。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
             "round": 1,
@@ -1836,44 +1961,32 @@
             "$fromStep": 1,
             "$field": "promptText"
           },
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
-        }
-      },
-      {
-        "api": "validateAcceptPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "ACCEPT"
-          }
-        }
-      },
-      {
-        "api": "validateRejectPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+            "performative": "PROPOSE"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
-            "maxRounds": 5,
-            "performative": "REJECT"
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           }
         }
       }
@@ -1891,23 +2004,7 @@
         "result": "error",
         "data": {},
         "error": {
-          "errCode": "negotiation.invalid_input",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
+          "errCode": "template.not_found",
           "errMessage": ""
         }
       }
@@ -1915,14 +2012,14 @@
   },
   {
     "id": "TC00000019",
-    "caseDimension": "04-关键信息缺失",
-    "caseDesc": "信息协商-propose-清晰生成后validate缺少协商上下文变体9，规则门返回 negotiation.invalid_input",
-    "caseCategory": "异常",
+    "caseDimension": "02-关键信息缺失",
+    "caseDesc": "信息协商-propose-请求2项时accept回填1项（空关系尽力而为），校验通过",
+    "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
         "args": {
-          "text": "无线网络节能任务缺少节能速率保障目标与小区制式信息，请提供，目标如20Mbps，制式如NR。",
+          "text": "无线网络节能任务缺少节能区域与节能时段信息，请提供，区域如深圳坂田，时段如00:00~06:00。请补充以上信息项以完成节能任务配置。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
             "round": 1,
@@ -1939,45 +2036,81 @@
             "$fromStep": 1,
             "$field": "promptText"
           },
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1"
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，我方可提供节能区域信息：深圳坂田。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "energy_region": {
+                "type": "string",
+                "description": "节能区域信息"
+              },
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              }
+            },
+            "required": [
+              "energy_region",
+              "time_window"
+            ],
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -1991,10 +2124,16 @@
         }
       },
       {
-        "result": "error",
-        "data": {},
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
-          "errCode": "negotiation.invalid_input",
+          "errCode": "",
           "errMessage": ""
         }
       },
@@ -2008,7 +2147,9 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "energy_region": "深圳坂田"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -2018,14 +2159,14 @@
   },
   {
     "id": "TC00000020",
-    "caseDimension": "04-关键信息缺失",
-    "caseDesc": "信息协商-propose-清晰生成后validate缺少协商上下文变体10，规则门返回 negotiation.invalid_input",
+    "caseDimension": "02-关键信息缺失",
+    "caseDesc": "信息协商-propose-步骤4入参丢失templateUri（下行频点变体），返回 template.not_found",
     "caseCategory": "异常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
         "args": {
-          "text": "无线网络节能任务缺少节能时段与下行频点号信息，请提供，时段如00:00~06:00，频点如1650。",
+          "text": "无线网络节能任务缺少小区制式与下行频点号信息，请提供，制式如NR，频点如1650。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
             "round": 1,
@@ -2042,44 +2183,75 @@
             "$fromStep": 1,
             "$field": "promptText"
           },
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1"
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 小区制式：NR；2. 下行频点号：1650。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "cell_mode": {
+                "type": "string",
+                "description": "小区制式"
+              },
+              "downlink_freq": {
+                "type": "string",
+                "description": "下行频点号"
+              }
+            },
+            "relationship": ""
           }
         }
       }
@@ -2094,26 +2266,32 @@
         }
       },
       {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
         "result": "error",
         "data": {},
         "error": {
-          "errCode": "negotiation.invalid_input",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
+          "errCode": "template.not_found",
           "errMessage": ""
         }
       }
@@ -2121,9 +2299,9 @@
   },
   {
     "id": "TC00000021",
-    "caseDimension": "05-意图描述模糊",
-    "caseDesc": "信息协商-propose-口语化指代变体1，应能提取信息项并通过校验",
-    "caseCategory": "模糊语义",
+    "caseDimension": "03-意图描述模糊",
+    "caseDesc": "信息协商-propose-清晰生成后步骤2校验缺失入参（context），规则门返回 negotiation.invalid_input",
+    "caseCategory": "异常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
@@ -2146,50 +2324,27 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
-          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 1,
-            "maxRounds": 5,
-            "performative": "PROPOSE"
-          }
-        }
-      },
-      {
-        "api": "validateAcceptPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
-            "maxRounds": 5,
-            "performative": "ACCEPT"
-          }
-        }
-      },
-      {
-        "api": "validateRejectPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
-            "maxRounds": 5,
-            "performative": "REJECT"
-          }
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
         }
       }
     ],
@@ -2203,26 +2358,10 @@
         }
       },
       {
-        "result": "success",
+        "result": "error",
         "data": {},
         "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
+          "errCode": "negotiation.invalid_input",
           "errMessage": ""
         }
       }
@@ -2230,9 +2369,9 @@
   },
   {
     "id": "TC00000022",
-    "caseDimension": "05-意图描述模糊",
-    "caseDesc": "信息协商-propose-口语化指代变体2，应能提取信息项并通过校验",
-    "caseCategory": "模糊语义",
+    "caseDimension": "03-意图描述模糊",
+    "caseDesc": "信息协商-propose-清晰生成后步骤2校验缺失入参（promptText为空），输入门返回 negotiation.invalid_input",
+    "caseCategory": "异常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
@@ -2250,13 +2389,27 @@
       {
         "api": "validateProposePromptAndDataFilling",
         "args": {
-          "promptText": {
-            "$fromStep": 1,
-            "$field": "promptText"
-          },
+          "promptText": "",
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -2264,40 +2417,6 @@
             "round": 1,
             "maxRounds": 5,
             "performative": "PROPOSE"
-          }
-        }
-      },
-      {
-        "api": "validateAcceptPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
-            "maxRounds": 5,
-            "performative": "ACCEPT"
-          }
-        }
-      },
-      {
-        "api": "validateRejectPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
-            "maxRounds": 5,
-            "performative": "REJECT"
           }
         }
       }
@@ -2312,26 +2431,10 @@
         }
       },
       {
-        "result": "success",
+        "result": "error",
         "data": {},
         "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
+          "errCode": "negotiation.invalid_input",
           "errMessage": ""
         }
       }
@@ -2339,9 +2442,9 @@
   },
   {
     "id": "TC00000023",
-    "caseDimension": "05-意图描述模糊",
+    "caseDimension": "03-意图描述模糊",
     "caseDesc": "信息协商-propose-口语化指代变体3，应能提取信息项并通过校验",
-    "caseCategory": "模糊语义",
+    "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
@@ -2364,8 +2467,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -2377,37 +2497,46 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 节能区域信息：深圳坂田；2. 节能速率保障目标：15%。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "energy_region": {
+                "type": "string",
+                "description": "节能区域信息"
+              },
+              "rate_target": {
+                "type": "string",
+                "description": "节能速率保障目标"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -2422,7 +2551,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -2438,7 +2573,10 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "energy_region": "深圳坂田",
+          "rate_target": "15%"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -2448,9 +2586,9 @@
   },
   {
     "id": "TC00000024",
-    "caseDimension": "05-意图描述模糊",
+    "caseDimension": "03-意图描述模糊",
     "caseDesc": "信息协商-propose-口语化指代变体4，应能提取信息项并通过校验",
-    "caseCategory": "模糊语义",
+    "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
@@ -2473,8 +2611,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -2486,37 +2641,46 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 节能区域信息：松山湖；2. 节能速率保障目标：20%。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "energy_region": {
+                "type": "string",
+                "description": "节能区域信息"
+              },
+              "rate_target": {
+                "type": "string",
+                "description": "节能速率保障目标"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -2531,7 +2695,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -2547,7 +2717,10 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "energy_region": "松山湖",
+          "rate_target": "20%"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -2557,9 +2730,9 @@
   },
   {
     "id": "TC00000025",
-    "caseDimension": "05-意图描述模糊",
+    "caseDimension": "03-意图描述模糊",
     "caseDesc": "信息协商-propose-口语化指代变体5，应能提取信息项并通过校验",
-    "caseCategory": "模糊语义",
+    "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
@@ -2582,8 +2755,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -2595,37 +2785,46 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 节能区域信息：松山湖管委会；2. 节能速率保障目标：20%。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "energy_region": {
+                "type": "string",
+                "description": "节能区域信息"
+              },
+              "rate_target": {
+                "type": "string",
+                "description": "节能速率保障目标"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -2640,7 +2839,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -2656,7 +2861,10 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "energy_region": "松山湖管委会",
+          "rate_target": "20%"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -2666,9 +2874,9 @@
   },
   {
     "id": "TC00000026",
-    "caseDimension": "05-意图描述模糊",
+    "caseDimension": "03-意图描述模糊",
     "caseDesc": "信息协商-propose-口语化指代变体6，应能提取信息项并通过校验",
-    "caseCategory": "模糊语义",
+    "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
@@ -2691,8 +2899,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -2704,37 +2929,46 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 节能时段：00:00~06:00；2. 节能速率保障目标：15%。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              },
+              "rate_target": {
+                "type": "string",
+                "description": "节能速率保障目标"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -2749,7 +2983,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -2765,7 +3005,10 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "time_window": "00:00~06:00",
+          "rate_target": "15%"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -2775,9 +3018,9 @@
   },
   {
     "id": "TC00000027",
-    "caseDimension": "05-意图描述模糊",
+    "caseDimension": "03-意图描述模糊",
     "caseDesc": "信息协商-propose-口语化指代变体7，应能提取信息项并通过校验",
-    "caseCategory": "模糊语义",
+    "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
@@ -2800,8 +3043,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -2813,37 +3073,46 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 节能区域信息：松山湖；2. 节能速率保障目标：20%。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "energy_region": {
+                "type": "string",
+                "description": "节能区域信息"
+              },
+              "rate_target": {
+                "type": "string",
+                "description": "节能速率保障目标"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -2858,7 +3127,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -2874,7 +3149,10 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "energy_region": "松山湖",
+          "rate_target": "20%"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -2884,9 +3162,9 @@
   },
   {
     "id": "TC00000028",
-    "caseDimension": "05-意图描述模糊",
+    "caseDimension": "03-意图描述模糊",
     "caseDesc": "信息协商-propose-口语化指代变体8，应能提取信息项并通过校验",
-    "caseCategory": "模糊语义",
+    "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
@@ -2909,8 +3187,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -2922,37 +3217,46 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 节能区域信息：松山湖；2. 节能速率保障目标：10%。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "energy_region": {
+                "type": "string",
+                "description": "节能区域信息"
+              },
+              "rate_target": {
+                "type": "string",
+                "description": "节能速率保障目标"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -2967,7 +3271,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -2983,7 +3293,10 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "energy_region": "松山湖",
+          "rate_target": "10%"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -2993,9 +3306,9 @@
   },
   {
     "id": "TC00000029",
-    "caseDimension": "05-意图描述模糊",
+    "caseDimension": "03-意图描述模糊",
     "caseDesc": "信息协商-propose-口语化指代变体9，应能提取信息项并通过校验",
-    "caseCategory": "模糊语义",
+    "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
@@ -3018,8 +3331,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -3031,37 +3361,46 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 节能区域信息：松山湖管委会；2. 节能速率保障目标：20%。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "energy_region": {
+                "type": "string",
+                "description": "节能区域信息"
+              },
+              "rate_target": {
+                "type": "string",
+                "description": "节能速率保障目标"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -3076,7 +3415,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -3092,7 +3437,10 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "energy_region": "松山湖管委会",
+          "rate_target": "20%"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -3102,9 +3450,9 @@
   },
   {
     "id": "TC00000030",
-    "caseDimension": "05-意图描述模糊",
+    "caseDimension": "03-意图描述模糊",
     "caseDesc": "信息协商-propose-口语化指代变体10，应能提取信息项并通过校验",
-    "caseCategory": "模糊语义",
+    "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
@@ -3127,8 +3475,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -3140,37 +3505,46 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，现提供所需信息如下：1. 节能区域信息：东莞松山湖片区；2. 节能速率保障目标：15%。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "energy_region": {
+                "type": "string",
+                "description": "节能区域信息"
+              },
+              "rate_target": {
+                "type": "string",
+                "description": "节能速率保障目标"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -3185,7 +3559,13 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -3201,7 +3581,10 @@
       },
       {
         "result": "success",
-        "data": {},
+        "data": {
+          "energy_region": "东莞松山湖片区",
+          "rate_target": "15%"
+        },
         "error": {
           "errCode": "",
           "errMessage": ""
@@ -3211,9 +3594,9 @@
   },
   {
     "id": "TC00000031",
-    "caseDimension": "06-值域违规检测",
-    "caseDesc": "信息协商-propose-信息项样例携带非法时刻变体1（起始时刻25:00:00，结束时刻08:00:00），服务端语义校验应拒绝",
-    "caseCategory": "异常",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-样例含非法时刻（样例不作判违），accept回填正常时段（0:00-6:00变体格式），校验通过",
+    "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
@@ -3236,8 +3619,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -3249,37 +3649,42 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，我方可提供节能时段：0:00-6:00。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -3293,10 +3698,16 @@
         }
       },
       {
-        "result": "error",
-        "data": {},
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
-          "errCode": "negotiation.semantic_rejected",
+          "errCode": "",
           "errMessage": ""
         }
       },
@@ -3320,8 +3731,8 @@
   },
   {
     "id": "TC00000032",
-    "caseDimension": "06-值域违规检测",
-    "caseDesc": "信息协商-propose-信息项样例携带非法时刻变体2（时段25:30~07:00），服务端语义校验应拒绝",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-样例含非法时刻（样例不作判违），accept回填越界时段（25:30~07:00），步骤4语义校验拒绝，返回 negotiation.semantic_rejected",
     "caseCategory": "异常",
     "input": [
       {
@@ -3345,8 +3756,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -3358,41 +3786,68 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，我方可提供节能时段：25:30~07:00。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
     "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
       {
         "result": "success",
         "data": {},
@@ -3408,30 +3863,14 @@
           "errCode": "negotiation.semantic_rejected",
           "errMessage": ""
         }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
       }
     ]
   },
   {
     "id": "TC00000033",
-    "caseDimension": "06-值域违规检测",
-    "caseDesc": "信息协商-propose-信息项样例携带非法时刻变体3（起始26:00:00，结束08:00:00），服务端语义校验应拒绝",
-    "caseCategory": "异常",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-样例含非法时刻（样例不作判违），accept回填正常时段（带秒格式），校验通过",
+    "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
@@ -3454,8 +3893,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -3467,37 +3923,42 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，我方可提供节能时段：00:00:00~08:00:00。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -3511,10 +3972,16 @@
         }
       },
       {
-        "result": "error",
-        "data": {},
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
-          "errCode": "negotiation.semantic_rejected",
+          "errCode": "",
           "errMessage": ""
         }
       },
@@ -3538,8 +4005,8 @@
   },
   {
     "id": "TC00000034",
-    "caseDimension": "06-值域违规检测",
-    "caseDesc": "信息协商-propose-信息项样例携带非法时刻变体4（起始时刻27:45，结束时刻次日06:00），服务端语义校验应拒绝",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-样例含非法时刻（样例不作判违），accept回填越界日期（13月），步骤4语义校验拒绝，返回 negotiation.semantic_rejected",
     "caseCategory": "异常",
     "input": [
       {
@@ -3563,8 +4030,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -3576,41 +4060,68 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationAcceptPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "同意你方的协商请求，我方可提供节能时段：2026-13-01 10:00:00至2026-13-01 18:00:00。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
             "performative": "ACCEPT"
-          }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
-        "api": "validateRejectPromptAndDataFilling",
+        "api": "validateAcceptPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "REJECT"
-          }
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
     "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
       {
         "result": "success",
         "data": {},
@@ -3626,35 +4137,19 @@
           "errCode": "negotiation.semantic_rejected",
           "errMessage": ""
         }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
       }
     ]
   },
   {
     "id": "TC00000035",
-    "caseDimension": "06-值域违规检测",
-    "caseDesc": "信息协商-propose-信息项样例携带非法时刻变体5（起始时刻25:05:00），服务端语义校验应拒绝",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-清晰生成后步骤2校验缺失入参（context），规则门返回 negotiation.invalid_input",
     "caseCategory": "异常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
         "args": {
-          "text": "无线网络节能任务缺少节能时段信息，请提供该任务的节能时段，格式要求为：起始时刻25:05:00。请补充该信息项以完成节能任务配置。",
+          "text": "无线网络节能任务缺少节能时段信息，请提供该任务的节能时段，格式要求为：起始时刻早上5点1刻，结束时刻6点半。请补充该信息项以完成节能任务配置。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
             "round": 1,
@@ -3672,50 +4167,27 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
-          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 1,
-            "maxRounds": 5,
-            "performative": "PROPOSE"
-          }
-        }
-      },
-      {
-        "api": "validateAcceptPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
-            "maxRounds": 5,
-            "performative": "ACCEPT"
-          }
-        }
-      },
-      {
-        "api": "validateRejectPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
-            "maxRounds": 5,
-            "performative": "REJECT"
-          }
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
         }
       }
     ],
@@ -3732,23 +4204,7 @@
         "result": "error",
         "data": {},
         "error": {
-          "errCode": "negotiation.semantic_rejected",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
+          "errCode": "negotiation.invalid_input",
           "errMessage": ""
         }
       }
@@ -3756,9 +4212,9 @@
   },
   {
     "id": "TC00000036",
-    "caseDimension": "06-值域违规检测",
-    "caseDesc": "信息协商-propose-信息项样例携带非法时刻变体6（时段30:00~08:00），服务端语义校验应拒绝",
-    "caseCategory": "异常",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-拒绝理由引用正常时刻（00:00~06:00），validate通过",
+    "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
@@ -3781,8 +4237,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -3794,37 +4267,42 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationRejectPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "很抱歉，我方无法同意你方的协商请求。节能时段：我方可提供时段为00:00~06:00，请求的取值越界，无法提供。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "ACCEPT"
-          }
+            "performative": "REJECT"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
         "api": "validateRejectPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
             "performative": "REJECT"
-          }
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -3838,10 +4316,16 @@
         }
       },
       {
-        "result": "error",
-        "data": {},
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
-          "errCode": "negotiation.semantic_rejected",
+          "errCode": "",
           "errMessage": ""
         }
       },
@@ -3865,14 +4349,14 @@
   },
   {
     "id": "TC00000037",
-    "caseDimension": "06-值域违规检测",
-    "caseDesc": "信息协商-propose-信息项样例携带非法时刻变体7（时刻25:70:00），服务端语义校验应拒绝",
-    "caseCategory": "异常",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-样例含非法时刻（样例不作判违）（口语化），对端文本拒绝且理由不含具体取值，校验通过",
+    "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
         "args": {
-          "text": "无线网络节能任务缺少节能时段信息，请提供该任务的节能时段，格式要求为：时刻25:70:00。请补充该信息项以完成节能任务配置。",
+          "text": "无线网络节能任务缺少节能时段信息，请提供该任务的节能时段，格式要求为：起始时刻二十五点一刻，结束时刻6点。请补充该信息项以完成节能任务配置。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
             "round": 1,
@@ -3890,8 +4374,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -3903,37 +4404,42 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationRejectPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "很抱歉，我方无法同意你方的协商请求。节能时段：请求的时刻取值越界，无法提供。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "ACCEPT"
-          }
+            "performative": "REJECT"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
         "api": "validateRejectPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
             "performative": "REJECT"
-          }
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -3947,10 +4453,16 @@
         }
       },
       {
-        "result": "error",
-        "data": {},
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
-          "errCode": "negotiation.semantic_rejected",
+          "errCode": "",
           "errMessage": ""
         }
       },
@@ -3974,9 +4486,9 @@
   },
   {
     "id": "TC00000038",
-    "caseDimension": "06-值域违规检测",
-    "caseDesc": "信息协商-propose-信息项样例携带非法时刻变体8（2026-13-01 10:00:00至2026-13-01 18:00:00），服务端语义校验应拒绝",
-    "caseCategory": "异常",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-拒绝理由引用正常日期时间（2026-12-01），validate通过",
+    "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
@@ -3999,8 +4511,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -4012,37 +4541,42 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationRejectPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "很抱歉，我方无法同意你方的协商请求。节能时段：2026-12-01 10:00:00至2026-12-01 18:00:00我方可提供，请求的月份越界，无法按请求提供。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "ACCEPT"
-          }
+            "performative": "REJECT"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
         "api": "validateRejectPromptAndDataFilling",
         "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
           },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
             "performative": "REJECT"
-          }
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -4056,10 +4590,16 @@
         }
       },
       {
-        "result": "error",
-        "data": {},
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
-          "errCode": "negotiation.semantic_rejected",
+          "errCode": "",
           "errMessage": ""
         }
       },
@@ -4083,14 +4623,14 @@
   },
   {
     "id": "TC00000039",
-    "caseDimension": "06-值域违规检测",
-    "caseDesc": "信息协商-propose-信息项样例携带非法时刻变体9（起始24:70，结束06:00），服务端语义校验应拒绝",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-清晰生成后步骤2校验缺失入参（promptText为空），输入门返回 negotiation.invalid_input",
     "caseCategory": "异常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
         "args": {
-          "text": "无线网络节能任务缺少节能时段信息，请提供该任务的节能时段，格式要求为：起始24:70，结束06:00。请补充该信息项以完成节能任务配置。",
+          "text": "无线网络节能任务缺少节能时段信息，请提供该任务的节能时段，格式要求为：起始时刻下午两点整，结束时刻下午四点。请补充该信息项以完成节能任务配置。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
             "round": 1,
@@ -4103,13 +4643,27 @@
       {
         "api": "validateProposePromptAndDataFilling",
         "args": {
-          "promptText": {
-            "$fromStep": 1,
-            "$field": "promptText"
-          },
+          "promptText": "",
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -4117,40 +4671,6 @@
             "round": 1,
             "maxRounds": 5,
             "performative": "PROPOSE"
-          }
-        }
-      },
-      {
-        "api": "validateAcceptPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
-            "maxRounds": 5,
-            "performative": "ACCEPT"
-          }
-        }
-      },
-      {
-        "api": "validateRejectPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
-            "maxRounds": 5,
-            "performative": "REJECT"
           }
         }
       }
@@ -4168,23 +4688,7 @@
         "result": "error",
         "data": {},
         "error": {
-          "errCode": "negotiation.semantic_rejected",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
+          "errCode": "negotiation.invalid_input",
           "errMessage": ""
         }
       }
@@ -4192,9 +4696,9 @@
   },
   {
     "id": "TC00000040",
-    "caseDimension": "06-值域违规检测",
-    "caseDesc": "信息协商-propose-信息项样例携带非法时刻变体10（时段25:00~25:30），服务端语义校验应拒绝",
-    "caseCategory": "异常",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-样例含非法时刻（样例不作判违），对端文本拒绝且理由不含具体取值，校验通过",
+    "caseCategory": "正常",
     "input": [
       {
         "api": "generateNegotiationProposePromptFromText",
@@ -4217,8 +4721,25 @@
             "$field": "promptText"
           },
           "schema": {
-            "type": "object",
-            "properties": {}
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
           },
           "templateUri": "Negotiation-T/information-negotiation/propose/v1",
           "context": {
@@ -4230,129 +4751,20 @@
         }
       },
       {
-        "api": "validateAcceptPromptAndDataFilling",
+        "api": "generateNegotiationRejectPromptFromText",
         "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "text": "很抱歉，我方无法同意你方的协商请求。节能时段：请求的时段取值越界，无法提供。",
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
+            "round": 1,
             "maxRounds": 5,
-            "performative": "ACCEPT"
-          }
+            "performative": "REJECT"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       },
       {
         "api": "validateRejectPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
-            "maxRounds": 5,
-            "performative": "REJECT"
-          }
-        }
-      }
-    ],
-    "expected": [
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "error",
-        "data": {},
-        "error": {
-          "errCode": "negotiation.semantic_rejected",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      }
-    ]
-  },
-  {
-    "id": "TC00000041",
-    "caseDimension": "07-多轮协商回环",
-    "caseDesc": "无线节能-信息协商-propose-服务端语义拒绝后客户端按 round+1 修正重新发起，二轮校验通过",
-    "caseCategory": "异常",
-    "input": [
-      {
-        "api": "generateNegotiationProposePromptFromText",
-        "args": {
-          "text": "无线网络节能任务缺少节能时段信息，请提供该任务的节能时段，格式要求为：起始时刻25:00:00，结束时刻08:00:00。请补充该信息项以完成节能任务配置。",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 1,
-            "maxRounds": 5,
-            "performative": "PROPOSE"
-          },
-          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
-        }
-      },
-      {
-        "api": "validateProposePromptAndDataFilling",
-        "args": {
-          "promptText": {
-            "$fromStep": 1,
-            "$field": "promptText"
-          },
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 1,
-            "maxRounds": 5,
-            "performative": "PROPOSE"
-          },
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
-        }
-      },
-      {
-        "api": "generateNegotiationProposePromptFromText",
-        "args": {
-          "text": "无线网络节能任务缺少节能时段信息，此前提供的格式样例中起始时刻有误，现修正该信息项：节能时段格式要求为起始时刻00:00:00，结束时刻08:00:00。请补充该信息项以完成节能任务配置。",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
-            "maxRounds": 5,
-            "performative": "PROPOSE"
-          },
-          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
-        }
-      },
-      {
-        "api": "validateProposePromptAndDataFilling",
         "args": {
           "promptText": {
             "$fromStep": 3,
@@ -4360,49 +4772,21 @@
           },
           "context": {
             "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
-            "maxRounds": 5,
-            "performative": "PROPOSE"
-          },
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
-        }
-      },
-      {
-        "api": "validateAcceptPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nAccept\n\n## 信息协商结果内容\n节能区域信息为松山湖\n节能速率保障目标为20Mbps",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 2,
-            "maxRounds": 5,
-            "performative": "ACCEPT"
-          }
-        }
-      },
-      {
-        "api": "validateRejectPromptAndDataFilling",
-        "args": {
-          "promptText": "## 信息协商结果\nReject\n\n## 信息协商结果内容\n无法提供区域信息",
-          "schema": {
-            "type": "object",
-            "properties": {}
-          },
-          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
-          "context": {
-            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
-            "round": 3,
+            "round": 1,
             "maxRounds": 5,
             "performative": "REJECT"
-          }
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "time_window": {
+                "type": "string",
+                "description": "节能时段"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
         }
       }
     ],
@@ -4416,24 +4800,14 @@
         }
       },
       {
-        "result": "error",
-        "data": {},
-        "error": {
-          "errCode": "negotiation.semantic_rejected",
-          "errMessage": ""
-        }
-      },
-      {
         "result": "success",
-        "data": {},
-        "error": {
-          "errCode": "",
-          "errMessage": ""
-        }
-      },
-      {
-        "result": "success",
-        "data": {},
+        "data": {
+          "context": {
+            "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
         "error": {
           "errCode": "",
           "errMessage": ""

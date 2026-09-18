@@ -446,6 +446,64 @@ def test_the_core_result_shape_drives_the_pipeline() -> None:
 
 
 # --------------------------------------------------------------------------------------
+# array-shaped caller schemas: ordered item arrays plus the deterministic dup gate
+# --------------------------------------------------------------------------------------
+
+
+def test_array_shaped_params_travel_with_the_context_field() -> None:
+    semantic_validator = StubSemanticValidator(
+        SemanticValidationResult(
+            True, "information", (), [{"name": "节能区域信息", "desc": "任务覆盖的物理区域"}]
+        )
+    )
+
+    filled = extractor(compliance_checker=passing_checker(), semantic_validator=semantic_validator).extract(
+        VALID_ZH_PROMPT, CONTEXT, {"type": "array"}, REFERENCE
+    )
+
+    assert filled.data == [{"name": "节能区域信息", "desc": "任务覆盖的物理区域"}]
+    assert filled.context == {"id": SESSION_ID, "round": 2, "maxRounds": 5}
+
+
+def test_duplicate_param_names_in_array_extraction_fail_with_rule_violation() -> None:
+    semantic_validator = StubSemanticValidator(
+        SemanticValidationResult(
+            True,
+            "information",
+            (),
+            [{"name": "节能时段", "desc": "a"}, {"name": "节能时段", "desc": "b"}],
+        )
+    )
+
+    with pytest.raises(NegotiationParamExtractionError) as info:
+        extractor(compliance_checker=passing_checker(), semantic_validator=semantic_validator).extract(
+            VALID_ZH_PROMPT, CONTEXT, {"type": "array"}, REFERENCE
+        )
+
+    assert info.value.code_str == "negotiation.rule_violation"
+    assert info.value.facts is not None
+    assert info.value.facts.get("section_label") == "params.name"
+    assert "节能时段" in str(info.value.facts.get("duplicates"))
+
+
+def test_unique_array_param_names_pass_the_dup_gate() -> None:
+    semantic_validator = StubSemanticValidator(
+        SemanticValidationResult(
+            True,
+            "information",
+            (),
+            [{"name": "节能区域信息", "desc": "a"}, {"name": "节能时段", "desc": "b"}],
+        )
+    )
+
+    filled = extractor(compliance_checker=passing_checker(), semantic_validator=semantic_validator).extract(
+        VALID_ZH_PROMPT, CONTEXT, {"type": "array"}, REFERENCE
+    )
+
+    assert [item["name"] for item in filled.data] == ["节能区域信息", "节能时段"]
+
+
+# --------------------------------------------------------------------------------------
 # the generation-seam implementation (the P5 protocol gets its P6 implementation)
 # --------------------------------------------------------------------------------------
 

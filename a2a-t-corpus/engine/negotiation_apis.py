@@ -20,6 +20,8 @@ from typing import Any
 
 from engine.registry import ApiRegistry
 
+from a2a_t.core.errors.catalog import ErrorCatalog
+from a2a_t.core.errors.exceptions import A2ATBusinessError
 from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
 from a2a_t.core.template_uri import TemplateUri
 from a2a_t.core.validation_pipeline import FilledParamData
@@ -199,18 +201,28 @@ def metadata_to_map(content: Any) -> dict[str, object]:
 
 def _filled_to_map(filled: FilledParamData) -> dict[str, object]:
     """Serialize one filled-parameter result into the transcript payload shape."""
-    return {"data": dict(filled.data)}
+    payload: dict[str, object] = {"data": filled.data}
+    if filled.context:
+        payload["context"] = dict(filled.context)
+    return payload
 
 
 class Args:
-    """Step-argument binding helpers for the negotiation handlers."""
+    """Step-argument binding helpers for the negotiation handlers.
+
+    Binding failures surface as coded business errors (never bare ``ValueError``) so the corpus
+    engine records an assertable catalog code instead of an engine-level crash:
+    missing/ill-shaped ``promptText``/``schema``/``context``/``data`` arguments map to
+    ``negotiation.invalid_input`` and a missing/unparseable ``templateUri`` maps to
+    ``template.not_found``.
+    """
 
     @staticmethod
     def text(args: dict[str, Any], name: str) -> str:
         """Return one required string argument (blank passes through to the SDK's coded error)."""
         value = args.get(name)
         if not isinstance(value, str):
-            raise ValueError(f"step argument {name} must be a string: {value}")
+            raise _invalid_argument(f"missing or non-string step argument: {name}")
         return value
 
     @staticmethod
@@ -218,24 +230,26 @@ class Args:
         """Return one required non-empty object argument."""
         value = args.get(name)
         if not isinstance(value, dict):
-            raise ValueError(f"step argument {name} must be an object: {value}")
+            raise _invalid_argument(f"missing or non-object step argument: {name}")
         if not value:
-            raise ValueError(f"step argument {name} must not be an empty object")
+            raise _invalid_argument(f"empty object step argument: {name}")
         return dict(value)
 
     @staticmethod
     def template_uri(args: dict[str, Any], name: str) -> TemplateUri:
         """Parse one required template URI argument, fail-fast when malformed."""
-        raw = Args.text(args, name)
+        raw = args.get(name)
+        if not isinstance(raw, str):
+            raise _template_uri_error("<missing>")
         parsed = TemplateUri.parse(raw)
         if parsed is None:
-            raise ValueError(f"Unparseable template URI: {raw}")
+            raise _template_uri_error(raw)
         return parsed
 
     @staticmethod
     def context(args: dict[str, Any], name: str) -> NegotiationContext:
         """Build the required negotiation context of a from-text step."""
-        return _context_from_map(Args.map(args, name))
+        return _context_from_args(Args.map(args, name))
 
     @staticmethod
     def optional_context(args: dict[str, Any], name: str) -> NegotiationContext | None:
@@ -244,8 +258,8 @@ class Args:
         if raw is None:
             return None
         if not isinstance(raw, dict):
-            raise ValueError(f"step argument {name} must be an object: {raw}")
-        return _context_from_map(dict(raw))
+            raise _invalid_argument(f"non-object step argument: {name}")
+        return _context_from_args(dict(raw))
 
     @staticmethod
     def data(
@@ -260,18 +274,39 @@ class Args:
         """
         raw = Args.map(args, name)
         template_uri = Args.template_uri(args, "templateUri")
-        negotiation_type = _negotiation_type_of(template_uri)
-        typed_content = _build_content(
-            negotiation_type,
-            performative,
-            Args.map(raw, "content"),
-        )
-        context = _context_from_map(Args.map(raw, "context"))
+        try:
+            negotiation_type = _negotiation_type_of(template_uri)
+            typed_content = _build_content(
+                negotiation_type,
+                performative,
+                Args.map(raw, "content"),
+            )
+            context = _context_from_args(Args.map(raw, "context"))
+        except ValueError as error:
+            raise _invalid_argument(f"invalid negotiation data: {error}") from error
         if performative is NegotiationPerformative.ACCEPT or performative is NegotiationPerformative.REJECT:
             return NegotiationEndingData(context=context, content=typed_content)
         if performative is NegotiationPerformative.PROPOSE:
             return NegotiationProposeData(context=context, content=typed_content)
         return NegotiationAbortData(context=context, content=typed_content)
+
+
+def _invalid_argument(reason: str) -> A2ATBusinessError:
+    """Build the coded ``negotiation.invalid_input`` failure for one step-argument binding miss."""
+    return A2ATBusinessError(ErrorCatalog.NEGOTIATION_INVALID_INPUT, {"reason": reason})
+
+
+def _template_uri_error(raw: str) -> A2ATBusinessError:
+    """Build the coded ``template.not_found`` failure for one missing/unparseable template URI."""
+    return A2ATBusinessError(ErrorCatalog.TEMPLATE_NOT_FOUND, {"template_uri": raw})
+
+
+def _context_from_args(raw: dict[str, Any]) -> NegotiationContext:
+    """Rebuild one negotiation context from a step-argument map, coding structural misses."""
+    try:
+        return _context_from_map(raw)
+    except (KeyError, ValueError, TypeError) as error:
+        raise _invalid_argument(f"invalid negotiation context: {error}") from error
 
 
 def _context_from_map(raw: dict[str, Any]) -> NegotiationContext:

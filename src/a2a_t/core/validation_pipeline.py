@@ -100,14 +100,23 @@ class FilledParamData:
     """Filled parameter data produced by the content validation pipeline.
 
     Attributes:
-        data: merged parameter values keyed by parameter name.
+        data: merged parameter values keyed by parameter name, or the ordered parameter object
+            array when the caller schema is array-shaped.
+        context: context parameters (``id``/``round``/``maxRounds``) carried alongside
+            array-shaped data; ``None`` when the parameters already merge them (object shape).
     """
 
-    data: dict[str, object]
+    data: dict[str, object] | list[object]
+    context: dict[str, object] | None = None
 
     def __post_init__(self) -> None:
-        """Defensively copy the parameter map, preserving insertion order."""
-        object.__setattr__(self, "data", dict(self.data))
+        """Defensively copy the parameter map or array, preserving insertion order."""
+        if isinstance(self.data, dict):
+            object.__setattr__(self, "data", dict(self.data))
+        else:
+            object.__setattr__(self, "data", list(self.data))
+        if self.context is not None:
+            object.__setattr__(self, "context", dict(self.context))
 
 
 @dataclass(frozen=True)
@@ -124,12 +133,15 @@ class ValidationResult:
 
     verdict: bool
     errors: tuple[SlotValidationError, ...] = ()
-    params: dict[str, object] = field(default_factory=dict)
+    params: dict[str, object] | list[object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Defensively copy the errors sequence and the parameter map."""
+        """Defensively copy the errors sequence and the parameter map or array."""
         object.__setattr__(self, "errors", tuple(self.errors))
-        object.__setattr__(self, "params", dict(self.params))
+        if isinstance(self.params, dict):
+            object.__setattr__(self, "params", dict(self.params))
+        else:
+            object.__setattr__(self, "params", list(self.params))
 
 
 class RuleChecker(Protocol):
@@ -436,6 +448,16 @@ class ValidationPipeline(Generic[T]):
                 errors=semantic_result.errors,
                 params=semantic_result.params,
             )
+
+        if isinstance(semantic_result.params, list):
+            # Array-shaped caller schema: the context parameters cannot merge into the ordered
+            # object array, so they travel on the dedicated context field instead.
+            filled_param_data = FilledParamData(
+                list(semantic_result.params),
+                context=dict(context_params) if context_params else None,
+            )
+            _LOGGER.info("content_validation_completed param_count=%s", len(filled_param_data.data))
+            return filled_param_data
 
         merged = _merge_params(context_params, semantic_result.params)
         filled_param_data = FilledParamData(merged)
