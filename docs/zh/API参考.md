@@ -1890,7 +1890,7 @@ PromptComplianceFailure(code='slot.not_provided', message='输入中未提供「
 
 | 错误码                                    | 类别     | 消息（zh-CN）                                                | 消息（en-US）                                                |
 | ----------------------------------------- | -------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| `template.not_found`                      | BUSINESS | 模板「{template_uri}」不支持语言「{language}」,请检查模板标识与语言配置 | Template '{template_uri}' does not support language '{language}'; check the template URI and language setting |
+| `template.not_found`                      | BUSINESS | 模板「{template_uri}」不存在 | Template '{template_uri}' does not exist |
 | `template.render_failed`                  | BUSINESS | 模板「{template_uri}」渲染失败:{reason}                      | Failed to render template '{template_uri}': {reason}         |
 | `template.load_failed`                    | INFRA    | 模板资源「{resource_path}」读取失败                          | Failed to read template resource '{resource_path}'           |
 | `slot.schema_not_found`                   | BUSINESS | 模板「{template_uri}」缺少参数定义文件(语言「{language}」)   | Template '{template_uri}' is missing its slot schema (language '{language}') |

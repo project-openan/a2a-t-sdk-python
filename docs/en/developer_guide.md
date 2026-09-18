@@ -22,6 +22,7 @@ Main capabilities include:
 - **Negotiation content API**: supports `information`, `feasibility`, and `target` negotiation types plus `abort` termination messages, with template-driven negotiation message generation and validation; negotiation session state travels in the message metadata (`negotiationContext`) and the SDK itself is stateless.
 - **Template resource management**: built-in scenario, slot, template, vocabulary, and system prompt resources, supporting both the `packaged` built-in source and the `local_file` local-file source.
 - **LLM adaptation**: connects to external large language models through OpenAI-compatible call chains.
+- **Structured, bilingual error model**: a closed catalog of 42 machine-readable error codes with fact parameters and bilingual message templates.
 
 For the complete API list and usage, see [API_Reference.md](API_Reference.md).
 

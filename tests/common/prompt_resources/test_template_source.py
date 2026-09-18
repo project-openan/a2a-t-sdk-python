@@ -101,10 +101,11 @@ def test_unknown_template_uri_raises_template_not_found_with_facts(
     assert error.code is ErrorCatalog.TEMPLATE_NOT_FOUND
     assert error.code_str == "template.not_found"
     assert error.facts == {"template_uri": unknown, "language": language}
+    assert "不存在" in str(error) or "does not exist" in str(error)
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
-def test_unknown_slot_schema_raises_slot_schema_not_found_with_facts(
+def test_unknown_slot_schema_raises_slot_schema_not_found(
     packaged_access: PromptResourceAccess, language: str
 ) -> None:
     unknown = "Task-T/network-layer/does-not-exist/v1"
@@ -113,6 +114,19 @@ def test_unknown_slot_schema_raises_slot_schema_not_found_with_facts(
     error = info.value
     assert error.code is ErrorCatalog.SLOT_SCHEMA_NOT_FOUND
     assert error.facts == {"template_uri": unknown, "language": language}
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_known_template_uri_without_slot_schema_raises_slot_schema_not_found(
+    packaged_access: PromptResourceAccess, language: str
+) -> None:
+    """Negotiation templates have no slot schema: the template family exists, so the miss is a
+    slot-schema problem, not an addressing one."""
+    with pytest.raises(A2ATBusinessError) as info:
+        packaged_access.slot_schema("Negotiation-T/common/abort/v1", language)
+    error = info.value
+    assert error.code is ErrorCatalog.SLOT_SCHEMA_NOT_FOUND
+    assert error.facts == {"template_uri": "Negotiation-T/common/abort/v1", "language": language}
 
 
 @pytest.mark.parametrize("template_uri", ALL_TEMPLATE_URIS)
@@ -248,6 +262,10 @@ class TestLocalTemplateOverride:
             with pytest.raises(A2ATBusinessError) as info:
                 access.template_text("Task-T/network-layer/does-not-exist/v1", "en-US")
         assert info.value.code is ErrorCatalog.TEMPLATE_NOT_FOUND
+        assert info.value.facts == {
+            "template_uri": "Task-T/network-layer/does-not-exist/v1",
+            "language": "en-US",
+        }
         assert caplog.records == []
 
     @pytest.mark.parametrize("language", LANGUAGES)

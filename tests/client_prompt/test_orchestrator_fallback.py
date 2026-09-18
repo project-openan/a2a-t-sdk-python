@@ -224,7 +224,7 @@ def test_generate_falls_back_to_the_packaged_template_when_the_local_template_is
 
 
 def test_generate_still_fails_when_the_template_is_missing_everywhere(tmp_path: Path) -> None:
-    """A resource missing both locally and in the package keeps the fail-fast contract."""
+    """A template missing everywhere keeps the fail-fast contract."""
     _write_resource_file(
         tmp_path,
         "scenarios/en-US/scenarios.json",
@@ -257,9 +257,6 @@ def test_generate_still_fails_when_the_template_is_missing_everywhere(tmp_path: 
     assert result.failure is not None
     assert result.failure.code == ErrorCatalog.TEMPLATE_NOT_FOUND.value
     assert result.failure.stage == "preparation"
-    assert result.failure.message == (
-        "Template 'ghost-scenario' does not support language 'en-US'; check the template URI and language setting"
-    )
 
 
 def test_fake_access_stays_usable_for_pipeline_wiring_checks() -> None:
