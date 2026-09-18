@@ -31,7 +31,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Run tests
-        run: uv run pytest
+        run: uv run pytest -m 'not live'
 
       - name: Build distributions
         run: uv build --no-sources
