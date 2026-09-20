@@ -20,6 +20,13 @@ default is ``packaged`` since the 1.1.0 release flip — D10 step 2, mirroring t
   ``CustomRootPromptsIgnored`` semantics).
 - ``errors/**`` — always packaged: the SDK error-message contract (same ignore semantics).
 
+``local_file`` mode serves the routed categories local-first with a built-in fallback (the port of
+the Java ADR 0005 overlay): a resource missing from the local snapshot falls back to the packaged
+copy, so a custom root only needs to carry the files it actually overrides. Each resource path that
+is served from the package this way warns once
+(``prompt_resource_builtin_fallback path=... source=packaged``); a resource missing both locally
+and in the package fails with the plain not-found error and never warns.
+
 ``local_file`` mode requires the local root to exist and be a directory (a clear config error
 otherwise), and the whole root is captured ONCE as a frozen snapshot when the access object is
 created, so later file edits are invisible until the SDK is restarted (D9). ``packaged`` reads are
@@ -45,15 +52,17 @@ from a2a_t.core.prompt_resource_key import PromptResourceKey
 from a2a_t.core.template_uri import TemplateUri
 
 from . import json_source, packaged_access, template_source, vocabulary
+from .builtin_fallback import BuiltinFallbackReader
 from .json_source import ResourceReader
 from .local_file_access import LocalResourceSnapshot
-from .models import ScenarioDefinition
+from .models import SOURCE_LOCAL, SOURCE_PACKAGED, ScenarioDefinition
 from .packaged_access import PackagedResourceReader
 from .vocabulary import Vocabulary
 
 __all__ = [
     "LOCAL_FILE_SOURCE_TYPE",
     "PACKAGED_SOURCE_TYPE",
+    "BuiltinFallbackReader",
     "LocalFilePromptResourceAccess",
     "PackagedPromptResourceAccess",
     "PromptResourceAccess",
@@ -194,14 +203,42 @@ class PromptResourceAccess(ABC):
         The directory-driven enumeration consumed by the template catalog: the whole routed
         templates tree — every extension directory it contains, negotiation templates included —
         is walked so extensions added later are discovered instead of being listed (Java
-        ``PromptTemplateCatalog`` directory walking). The caller captures the returned mapping once
-        into its own frozen snapshot; this read family has no module-level cache of its own.
+        ``PromptTemplateCatalog`` directory walking). In ``local_file`` mode the enumeration is the
+        built-in overlay: the packaged templates union the locally captured ones, a local file
+        winning over its packaged counterpart (Java ADR 0005 overlay semantics). The caller
+        captures the returned mapping once into its own frozen snapshot; this read family has no
+        module-level cache of its own.
 
         Returns:
             a mapping of templates-category-relative path (forward slashes, such as
             ``Negotiation-T/common/abort/v1/zh-CN/template.md``) to the template text.
         """
-        return self._routed_reader.category_files(_TEMPLATE_CATEGORY, _TEMPLATE_FILE_NAME)
+        return {path: text for path, (text, _origin) in self.template_entries_with_origins().items()}
+
+    def template_entries_with_origins(self) -> dict[str, tuple[str, str]]:
+        """Return the overlay template enumeration with the effective origin per path.
+
+        One single walk of the routed tree serves both :meth:`template_entries` and the origin
+        view. In packaged mode every entry originates from the package. In ``local_file`` mode the
+        overlay gives locally captured files the :data:`~a2a_t.common.prompt_resources.models.
+        SOURCE_LOCAL` origin and the packaged copies the
+        :data:`~a2a_t.common.prompt_resources.models.SOURCE_PACKAGED` origin (the per-template
+        origin the Java ``PromptTemplateCatalog`` carries in every ``PromptTemplate`` record).
+
+        Returns:
+            a mapping of templates-category-relative paths (the same keys as
+            :meth:`template_entries`) to ``(text, origin)`` pairs.
+
+        Note:
+            the default derives one uniform origin from :meth:`packaged`, which is only correct
+            for single-source access objects; an access that mixes local and packaged entries must
+            override this method to keep the origins truthful.
+        """
+        uniform = SOURCE_PACKAGED if self.packaged() else SOURCE_LOCAL
+        return {
+            path: (text, uniform)
+            for path, text in self._routed_reader.category_files(_TEMPLATE_CATEGORY, _TEMPLATE_FILE_NAME).items()
+        }
 
     def slot_schema(self, template_uri: str | TemplateUri, language: str) -> dict[str, Any]:
         """Load one template's slot schema document (routed).
@@ -323,12 +360,16 @@ class LocalFilePromptResourceAccess(PromptResourceAccess):
 
     The whole local root is captured once as a :class:`LocalResourceSnapshot` when this object is
     created; runtime reads never touch the filesystem, so local file changes only take effect after
-    the SDK is restarted. The package-fixed categories (``prompts/``, ``errors/``) are still served
-    from the package.
+    the SDK is restarted. The routed reads run through a
+    :class:`~a2a_t.common.prompt_resources.builtin_fallback.BuiltinFallbackReader`: a resource
+    missing from the snapshot falls back to the packaged copy with a one-time warning per resource
+    path (Java ADR 0005 overlay), so a custom root only needs the files it overrides. The
+    package-fixed categories (``prompts/``, ``errors/``) are still served from the package
+    directly.
     """
 
     def __init__(self, root_dir: Path) -> None:
-        """Capture the frozen snapshot of one local root.
+        """Capture the frozen snapshot of one local root and wire the built-in fallback.
 
         Args:
             root_dir: local prompt resource root; must exist and be a directory.
@@ -336,7 +377,8 @@ class LocalFilePromptResourceAccess(PromptResourceAccess):
         super().__init__()
         self._root_dir = root_dir
         self._snapshot = LocalResourceSnapshot.capture(root_dir)
-        self._routed_reader = self._snapshot
+        self._fallback_reader = BuiltinFallbackReader(self._snapshot, self._packaged_reader)
+        self._routed_reader = self._fallback_reader
 
     def packaged(self) -> bool:
         """Return whether routed resources are served from the packaged tree.
@@ -353,6 +395,17 @@ class LocalFilePromptResourceAccess(PromptResourceAccess):
             the local root captured as the frozen snapshot at construction.
         """
         return self._root_dir
+
+    def template_entries_with_origins(self) -> dict[str, tuple[str, str]]:
+        """Return the overlay template enumeration with the per-path origin (single walk).
+
+        Returns:
+            a mapping of templates-category-relative paths to ``(text, origin)`` pairs, the origin
+            being :data:`~a2a_t.common.prompt_resources.models.SOURCE_LOCAL` for the locally
+            captured files and :data:`~a2a_t.common.prompt_resources.models.SOURCE_PACKAGED` for
+            the packaged fallback copies.
+        """
+        return self._fallback_reader.category_files_with_origin(_TEMPLATE_CATEGORY, _TEMPLATE_FILE_NAME)
 
     @property
     def snapshot(self) -> LocalResourceSnapshot:

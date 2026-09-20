@@ -23,7 +23,6 @@ from a2a_t.client.prompt_generation.prompt_generation_orchestrator_builder impor
 from a2a_t.config.models import (
     A2ATConfig,
     LlmRuntimeConfig,
-    PromptComplianceConfig,
     PromptRuntimeConfig,
 )
 from a2a_t.core.errors.input_limit import InputLimitConfig
@@ -85,7 +84,6 @@ def task_runtime() -> Runtime:
 
     config = A2ATConfig(
         prompt=PromptRuntimeConfig(language=_LANGUAGE, source_type="packaged"),
-        prompt_compliance=PromptComplianceConfig(enabled=False),
         input_limits=InputLimitConfig(),
         llm=LlmRuntimeConfig(max_attempts=env.max_attempts),
     )

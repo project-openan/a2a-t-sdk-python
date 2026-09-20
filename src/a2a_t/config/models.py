@@ -7,7 +7,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final
+from typing import Final
 
 from a2a_t.config.source import DotEnvConfigSource
 from a2a_t.core.errors.input_limit import InputLimitConfig
@@ -32,13 +32,6 @@ LLM_MAX_ATTEMPTS_LOWER_BOUND: Final[int] = 1
 
 #: Inclusive upper bound of the attempt limit; larger configured values are clamped down to it.
 LLM_MAX_ATTEMPTS_UPPER_BOUND: Final[int] = 10
-
-
-def _parse_bool(raw_value: str | None, default: bool) -> bool:
-    """Parse a boolean-like environment value with a fallback default."""
-    if raw_value is None or not raw_value.strip():
-        return default
-    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _parse_float(raw_value: str | None, default: float) -> float:
@@ -174,27 +167,11 @@ class LlmRuntimeConfig:
         return cls.from_mapping(os.environ)
 
 
-@dataclass(slots=True)
-class PromptComplianceConfig:
-    """Top-level configuration for prompt compliance."""
-
-    enabled: bool = False
-    providers: dict[str, dict[str, Any]] = field(default_factory=dict)
-
-    @classmethod
-    def from_mapping(cls, values: Mapping[str, str]) -> "PromptComplianceConfig":
-        """Build prompt compliance config from raw environment values."""
-        return cls(
-            enabled=_parse_bool(values.get("A2AT_PROMPT_COMPLIANCE_ENABLED"), False),
-        )
-
-
 @dataclass
 class A2ATConfig:
     """Global A2A-T configuration entry point."""
 
     prompt: PromptRuntimeConfig
-    prompt_compliance: PromptComplianceConfig
     input_limits: InputLimitConfig = field(default_factory=InputLimitConfig)
     llm: LlmRuntimeConfig = field(default_factory=LlmRuntimeConfig)
 
@@ -204,7 +181,6 @@ class A2ATConfig:
         values = DotEnvConfigSource.load(env_path)
         return cls(
             prompt=PromptRuntimeConfig.from_mapping(values, base_dir=env_path.parent),
-            prompt_compliance=PromptComplianceConfig.from_mapping(values),
             input_limits=InputLimitConfig.from_map(values),
             llm=LlmRuntimeConfig.from_mapping(values),
         )

@@ -14,7 +14,7 @@ from google.protobuf.json_format import MessageToDict
 from server_example.constants_data import (
     ARTIFACT_SEND_INTERVAL_SECONDS,
     INCIDENT_ARTIFACT_DATA,
-    NOTIFICATION_T_EXTENSION_URI_NL,
+    NOTIFICATION_T_EXTENSION_URI,
     SUBMITTED_MESSAGE,
     WORKING_MESSAGE,
 )
@@ -23,26 +23,26 @@ SleepFn = Callable[[float], Awaitable[None]]
 
 
 def _require_notification_extension(request_context: RequestContext) -> None:
-    """Validate that the request carries the Notification-T/NL extension header.
+    """Validate that the request carries the Notification-T extension header.
 
-    The A2A-Extensions header must contain the NL Notification-T extension
+    The A2A-Extensions header must contain the Notification-T extension
     URI; raises ValueError if it is not present.
     """
     ext_set = request_context.call_context.requested_extensions
-    if NOTIFICATION_T_EXTENSION_URI_NL not in ext_set:
+    if NOTIFICATION_T_EXTENSION_URI not in ext_set:
         raise ValueError("a2a client extensions is not exist.")
 
 
 def _extract_prompt_text(request_context: RequestContext) -> str:
     """Extract the prompt text from the incoming message metadata.
 
-    Reads from metadata under the NL extension URI; raises ValueError if no
+    Reads from metadata under the Notification-T extension URI; raises ValueError if no
     metadata is present.
     """
     if request_context.message is None or request_context.message.metadata is None:
         raise ValueError("Expected message metadata for Notification-T prompt")
     metadata = MessageToDict(request_context.message.metadata)
-    prompt_text = str(metadata.get(NOTIFICATION_T_EXTENSION_URI_NL, ""))
+    prompt_text = str(metadata.get(NOTIFICATION_T_EXTENSION_URI, ""))
     return prompt_text
 
 

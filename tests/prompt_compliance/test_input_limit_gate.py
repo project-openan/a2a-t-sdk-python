@@ -162,7 +162,7 @@ def _build_llm_config() -> LLMClientConfig:
 
 
 def test_builder_passes_the_configured_input_limit_and_language_into_the_orchestrator() -> None:
-    from a2a_t.config.models import A2ATConfig, PromptComplianceConfig, PromptRuntimeConfig
+    from a2a_t.config.models import A2ATConfig, PromptRuntimeConfig
     from a2a_t.server.prompt_compliance.prompt_compliance_orchestrator_builder import (
         PromptComplianceOrchestratorBuilder,
     )
@@ -185,7 +185,6 @@ def test_builder_passes_the_configured_input_limit_and_language_into_the_orchest
     input_limit = InputLimitConfig(max_text_chars=512)
     config = A2ATConfig(
         prompt=PromptRuntimeConfig(language="zh-CN"),
-        prompt_compliance=PromptComplianceConfig(),
         input_limits=input_limit,
     )
 

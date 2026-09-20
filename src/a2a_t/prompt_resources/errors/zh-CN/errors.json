@@ -1,5 +1,5 @@
 {
-  "template.not_found": "模板「{template_uri}」不支持语言「{language}」,请检查模板标识与语言配置",
+  "template.not_found": "模板「{template_uri}」不存在",
   "template.render_failed": "模板「{template_uri}」渲染失败:{reason}",
   "template.load_failed": "模板资源「{resource_path}」读取失败",
   "slot.schema_not_found": "模板「{template_uri}」缺少参数定义文件(语言「{language}」)",

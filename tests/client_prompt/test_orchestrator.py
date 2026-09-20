@@ -318,8 +318,7 @@ def test_generate_returns_generation_failure_when_generation_resource_access_fai
         (
             ErrorCatalog.TEMPLATE_NOT_FOUND,
             "template.not_found",
-            "Template 'ran-energy-saving' does not support language 'en-US'; "
-            "check the template URI and language setting",
+            "Template 'ran-energy-saving' does not exist",
         ),
         (
             ErrorCatalog.SLOT_SCHEMA_NOT_FOUND,

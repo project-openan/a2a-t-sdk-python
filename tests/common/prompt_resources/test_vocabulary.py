@@ -79,11 +79,12 @@ def test_local_vocabulary_override_is_honored(tmp_path: Path, language: str) -> 
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
-def test_missing_local_vocabulary_does_not_fall_back_to_the_package(tmp_path: Path, language: str) -> None:
+def test_missing_local_vocabulary_falls_back_to_the_packaged_copy(tmp_path: Path, language: str) -> None:
+    """The Java ADR 0005 overlay: the packaged vocabulary serves a local root without one."""
     access = _local_access(tmp_path)
-    with pytest.raises(A2ATError) as info:
-        access.load_vocabulary(language)
-    assert info.value.code is ErrorCatalog.INFRA_RESOURCE_READ_FAILED
+    vocabulary = access.load_vocabulary(language)
+    assert set(vocabulary.canonical_keys()) == set(CANONICAL_KEYS)
+    assert vocabulary.get("punct.list_colon") == packaged_vocabulary_entries(language)["punct.list_colon"]
 
 
 @pytest.mark.parametrize("language", LANGUAGES)

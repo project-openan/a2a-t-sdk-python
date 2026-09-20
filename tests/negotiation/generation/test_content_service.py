@@ -17,7 +17,6 @@ import pytest
 from a2a_t.config.models import (
     A2ATConfig,
     LlmRuntimeConfig,
-    PromptComplianceConfig,
     PromptRuntimeConfig,
 )
 from a2a_t.core.errors.exceptions import NegotiationGenerationError
@@ -76,7 +75,6 @@ def config(*, language: str = "zh-CN", max_attempts: int = 3, max_text_chars: in
     """Build one unified SDK config for the wiring tests."""
     return A2ATConfig(
         prompt=PromptRuntimeConfig(language=language),
-        prompt_compliance=PromptComplianceConfig(),
         input_limits=InputLimitConfig(max_text_chars=max_text_chars),
         llm=LlmRuntimeConfig(max_attempts=max_attempts),
     )

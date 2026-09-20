@@ -151,7 +151,7 @@ class SemanticValidationResult:
     verdict: bool
     negotiation_type: str | None
     errors: tuple[SlotValidationError, ...] = ()
-    params: dict[str, object] = field(default_factory=dict)
+    params: dict[str, object] | list[object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Normalize the errors sequence and the extracted parameters.
@@ -165,7 +165,10 @@ class SemanticValidationResult:
         if self.params is None:
             raise TypeError("Semantic validation params must not be null.")
         object.__setattr__(self, "errors", tuple(self.errors))
-        object.__setattr__(self, "params", dict(self.params))
+        if isinstance(self.params, dict):
+            object.__setattr__(self, "params", dict(self.params))
+        else:
+            object.__setattr__(self, "params", list(self.params))
 
 
 def build_semantic_validation_schema(caller_schema: Mapping[str, object]) -> dict[str, object]:
@@ -560,8 +563,8 @@ def _interpret(response: Mapping[str, object], reference: NegotiationReference) 
     if not isinstance(raw_errors, list):
         raise NegotiationValidationError("Semantic validation response key errors must be an array.")
     raw_params: object = response.get(KEY_PARAMS)
-    if not isinstance(raw_params, Mapping):
-        raise NegotiationValidationError("Semantic validation response key params must be an object.")
+    if not isinstance(raw_params, (Mapping, list)):
+        raise NegotiationValidationError("Semantic validation response key params must be an object or an array.")
 
     errors = _parse_errors(raw_errors, reference.language)
     params = _parse_params(raw_params)
@@ -663,18 +666,30 @@ def _string_facts(raw_facts: Mapping[object, object]) -> dict[str, str]:
     return facts
 
 
-def _parse_params(raw_params: Mapping[object, object]) -> dict[str, object]:
+def _parse_params(raw_params: Mapping[object, object] | list[object]) -> dict[str, object] | list[object]:
     """Parse the extracted parameters, keeping their values verbatim.
 
+    Object-shaped responses are keyed by string parameter names; array-shaped responses keep the
+    declared item order of the caller's array schema, never merging, de-duplicating or dropping
+    any same-named items.
+
     Raises:
-        NegotiationValidationError: when one parameter key is not a string.
+        NegotiationValidationError: when one parameter key is not a string or one array item is
+            not an object.
     """
-    params: dict[str, object] = {}
+    if isinstance(raw_params, list):
+        params: list[object] = []
+        for item in raw_params:
+            if not isinstance(item, Mapping):
+                raise NegotiationValidationError("Semantic validation response params array items must be objects.")
+            params.append(dict(item))
+        return params
+    params_map: dict[str, object] = {}
     for key, value in raw_params.items():
         if not isinstance(key, str):
             raise NegotiationValidationError("Semantic validation response params keys must be strings.")
-        params[key] = value
-    return params
+        params_map[key] = value
+    return params_map
 
 
 def _type_consistency_error(

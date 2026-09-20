@@ -18,7 +18,7 @@ from a2a_t.common.prompt_resources import (
     PromptResourceAccess,
 )
 from a2a_t.common.prompt_runtime import PromptRuntimeComponents, PromptRuntimeComponentsBuilder
-from a2a_t.config.models import A2ATConfig, PromptComplianceConfig, PromptRuntimeConfig
+from a2a_t.config.models import A2ATConfig, PromptRuntimeConfig
 from a2a_t.prompt.validation.json_schema_slot_validator import JsonSchemaSlotValidator
 
 ACCESS_LOGGER = "a2a_t.common.prompt_resources.resource_access"
@@ -27,7 +27,6 @@ ACCESS_LOGGER = "a2a_t.common.prompt_resources.resource_access"
 def _config(local_root_dir: str, *, language: str = "en-US", source_type: str = "local_file") -> A2ATConfig:
     return A2ATConfig(
         prompt=PromptRuntimeConfig(language=language, source_type=source_type, local_root_dir=local_root_dir),
-        prompt_compliance=PromptComplianceConfig(enabled=True),
     )
 
 
@@ -102,7 +101,6 @@ def test_components_builder_does_not_warn_when_local_root_is_the_packaged_root(
     # whose resolved default root IS the packaged tree carries no user intent, so no warning fires.
     config = A2ATConfig(
         prompt=_PromptRuntimeConfig(source_type="local_file"),
-        prompt_compliance=PromptComplianceConfig(),
     )
 
     with caplog.at_level(logging.WARNING, logger=ACCESS_LOGGER):

@@ -339,8 +339,7 @@ def test_check_logs_failure_stage_and_code() -> None:
                 {"template_uri": "ran-energy-saving", "language": "en-US"},
             ),
             ErrorCatalog.TEMPLATE_NOT_FOUND.value,
-            "Template 'ran-energy-saving' does not support language 'en-US'; "
-            "check the template URI and language setting",
+            "Template 'ran-energy-saving' does not exist",
         ),
         (
             A2ATError("template resource read failed"),

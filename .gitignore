@@ -20,9 +20,6 @@ build/
 venv/
 .ruff_cache/
 
-# MkDocs site output (D26: docs build with `mkdocs build --strict`)
-site/
-
 # Local env files (env.example is tracked as template)
 .env
 a2a-t-sample/.env

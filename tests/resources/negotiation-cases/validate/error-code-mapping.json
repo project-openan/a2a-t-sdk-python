@@ -97,7 +97,7 @@
       "outcome": "failure",
       "exception": "NegotiationParamExtractionException",
       "code": "template.not_found",
-      "messageContains": ["不支持语言"],
+      "messageContains": ["不存在"],
       "llmCalls": 0
     }
   }

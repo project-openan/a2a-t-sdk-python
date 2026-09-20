@@ -36,9 +36,6 @@ dev = [
     "mypy>=1.9.0",
     "types-jsonschema>=4.23.0",
     "hypothesis>=6.167.1",
-    "mkdocs>=1.6.1",
-    "mkdocstrings-python>=2.0.8",
-    "mkdocs-material>=9.7.7",
 ]
 
 [project.urls]

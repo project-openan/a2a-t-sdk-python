@@ -1,5 +1,5 @@
 {
-  "template.not_found": "Template '{template_uri}' does not support language '{language}'; check the template URI and language setting",
+  "template.not_found": "Template '{template_uri}' does not exist",
   "template.render_failed": "Failed to render template '{template_uri}': {reason}",
   "template.load_failed": "Failed to read template resource '{resource_path}'",
   "slot.schema_not_found": "Template '{template_uri}' is missing its slot schema (language '{language}')",

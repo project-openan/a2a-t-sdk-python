@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from typing import Any, Final, Iterator
 
-from a2a_t.core.errors.exceptions import ResourceNotFoundError
 from a2a_t.core.path_segments import require_simple_relative_path, require_simple_segment
 from a2a_t.core.prompt_resource_key import PromptResourceKey
 from a2a_t.core.standard_templates import (
@@ -32,6 +31,7 @@ from a2a_t.core.standard_templates import (
 from a2a_t.core.template_uri import DEFAULT_TEMPLATE_VERSION, TemplateUri
 
 from . import json_source
+from .builtin_fallback import resolve_bare_code
 from .json_source import ResourceReader
 
 __all__ = [
@@ -144,20 +144,16 @@ def _load_routed_text(
 ) -> tuple[PromptResourceKey, str]:
     """Resolve and read one template-addressed resource, probing bare codes across types.
 
-    A slash-carrying identifier addresses the resource directly; a bare scenario code is probed
-    across the known and discovered types of the category, ``network-layer`` layout first.
+    A slash-carrying identifier addresses the resource directly; a bare scenario code resolves in
+    the Java two-phase order (:func:`~a2a_t.common.prompt_resources.builtin_fallback.resolve_bare_code`):
+    the whole local snapshot is probed first — a local file wins whatever its type directory or
+    layout — and only then the packaged candidates.
     """
     if "/" in identifier:
         key = _direct_key(category, identifier, language, file_name)
         return key, reader.read_text(key)
-    for key in _bare_code_keys(reader, category, identifier, language, file_name, known_types):
-        try:
-            return key, reader.read_text(key)
-        except ResourceNotFoundError:
-            continue
-    raise ResourceNotFoundError(
-        "Prompt resource file does not exist.", _probe_hint(category, identifier, language, file_name)
-    )
+    keys = list(_bare_code_keys(reader, category, identifier, language, file_name, known_types))
+    return resolve_bare_code(reader, keys, _probe_hint(category, identifier, language, file_name))
 
 
 def _direct_key(category: str, identifier: str, language: str, file_name: str) -> PromptResourceKey:

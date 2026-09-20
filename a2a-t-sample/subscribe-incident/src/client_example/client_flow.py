@@ -9,9 +9,9 @@ from common.sse_event_consumer import normalize_event
 
 from client_example.scenario_data import build_prompt_input as _build_scenario_prompt_input
 
-# Natural-language Notification-T extension URI.
-_NOTIFICATION_T_EXTENSION_URI_NL = (
-    "https://projects.tmforum.org/a2aproject/telecommunication/extensions/Notification-T/NL/v1"
+# Notification-T extension URI.
+_NOTIFICATION_T_EXTENSION_URI = (
+    "https://projects.tmforum.org/a2aproject/telecommunication/extensions/Notification-T/v1"
 )
 
 
@@ -48,7 +48,7 @@ async def run_client_flow(
     Message-body convention:
       * text part      -> scenario name (request metadata)
       * metadata[extUri] -> generated prompt text
-      * header         -> A2A-Extensions: Notification-T/NL/v1
+      * header         -> A2A-Extensions: Notification-T/v1
     """
     prompt_input = build_prompt_input()
     prompt_result = prompt_client.generate_task_prompt(prompt_input)
@@ -60,10 +60,10 @@ async def run_client_flow(
     request.message.message_id = str(uuid.uuid4())
     request.message.role = Role.ROLE_USER
     request.message.parts.add().text = _build_request_metadata(initial_input)
-    request.message.metadata[_NOTIFICATION_T_EXTENSION_URI_NL] = prompt_text
+    request.message.metadata[_NOTIFICATION_T_EXTENSION_URI] = prompt_text
 
     context = ClientCallContext(
-        service_parameters={"A2A-Extensions": _NOTIFICATION_T_EXTENSION_URI_NL},
+        service_parameters={"A2A-Extensions": _NOTIFICATION_T_EXTENSION_URI},
     )
 
     if log_sink is not None:

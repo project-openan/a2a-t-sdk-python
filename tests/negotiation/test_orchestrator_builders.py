@@ -14,7 +14,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
-from a2a_t.config.models import A2ATConfig, PromptComplianceConfig, PromptRuntimeConfig
+from a2a_t.config.models import A2ATConfig, PromptRuntimeConfig
 
 
 class FakePromptComplianceBuilder:
@@ -95,7 +95,6 @@ class NegotiationOrchestratorBuilderTest(unittest.TestCase):
         # builder tests only need the bundled packaged tree either way.
         return A2ATConfig(
             prompt=PromptRuntimeConfig(source_type="packaged"),
-            prompt_compliance=PromptComplianceConfig(),
         )
 
     def test_client_builder_builds_working_orchestrator(self) -> None:

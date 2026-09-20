@@ -24,7 +24,7 @@ from a2a_t.client.prompt_generation.prompt_generation_orchestrator_builder impor
     PromptGenerationOrchestratorBuilder,
 )
 from a2a_t.common.prompt_resources import PackagedPromptResourceAccess
-from a2a_t.config.models import A2ATConfig, PromptComplianceConfig, PromptRuntimeConfig
+from a2a_t.config.models import A2ATConfig, PromptRuntimeConfig
 from a2a_t.llm.models import LLMResponse
 from tests.support import ManagedTempDirTestCase
 
@@ -111,7 +111,6 @@ class CustomRootPromptsIgnoredTest(ManagedTempDirTestCase):
                 source_type="local_file",
                 local_root_dir=str(self.root),
             ),
-            prompt_compliance=PromptComplianceConfig(),
         )
 
     def test_pipeline_keeps_using_the_packaged_prompts_and_warns_about_the_local_copy(self) -> None:

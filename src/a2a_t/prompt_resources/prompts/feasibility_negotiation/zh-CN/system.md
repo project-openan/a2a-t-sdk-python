@@ -28,7 +28,7 @@
 }
 
 ## 字段规则
-- feasibility_negotiation_description：发起阶段必填。概括本次可行性协商的目的与消息类别。
+- feasibility_negotiation_description：发起阶段必填。必须以"本轮消息类别：X。"开头，X 只能取"发起可行性评估""评估可行并请求确认""评估不可行并提案"之一；随后说明可行性评估类别（目标达成或方案可行性）与本次协商目的。例如："本轮消息类别：发起可行性评估。请求评估……的可行性。"
 - action：发起阶段必填枚举，只能取以下两个值之一：
   - "REQUEST_FEASIBILITY_EVALUATION"：请求对方评估某些事项的可行性，或本方已完成评估且结论为可行；
   - "PROPOSE_ALTERNATIVE_ON_FAILURE"：已知目标不可行时，说明不可行详情并提出替代方案。
@@ -54,13 +54,19 @@
    - 评估不可行并提案：本方已完成评估且结论为不可行，说明详情并提出处理策略 → action 取 "PROPOSE_ALTERNATIVE_ON_FAILURE"，提取 infeasibility_details_and_proposal，contents_to_evaluate 与 feasibility_confirm_request 为 null。
 3. 输入未表达某可选字段的内容时输出 null，不要编造条目。
 4. 结论阶段中，对评估结果的接受或拒绝表态映射为 conclusion，评估结论的完整表述映射为 feasibility_summary。
+5. 严禁编造缺失的必填内容：若输入文本未明确表达某必填字段的内容，必须输出空值，不得套用示例、通用措辞或自行补写：
+   - 结论阶段：若输入文本未明确表达"可行性评估结果确认"的内容，feasibility_summary 输出空字符串 ""（不得把 conclusion 或协商结束语当作结果确认内容）。
+   - 发起阶段（发起可行性评估）：若输入文本未明确表达任何待评估内容，contents_to_evaluate 输出空数组 []（不得自行构造"评估对象""目标内容"等条目）。仅以"该目标""该方案"等指代词提及评估对象、而未说明其具体内容（区域、时段、目标值、资源现状等）时，同样视为未明确表达待评估内容。
+   - 发起阶段：若输入文本完全无法概括本次协商目的，feasibility_negotiation_description 输出空字符串 ""。
+6. 第 5 条的空值表示"输入缺失该必填信息"，是合法输出，不得替换为任何示意性、通用性或示例性文本。
+7. 当输入同时说明"既有约束"与"目标/承诺"且二者存在冲突时，必须分别输出为两个条目：既有约束单独一项（name 取"既有约束"），目标或承诺单独一项（name 取"目标达成"），不得合并为一条，以便后续校验识别两者冲突。
 
 ## 输出示例
 
 ### 示例1：发起阶段（发起可行性评估）
 
 {
-  "feasibility_negotiation_description": "请求评估停电保障场景下维持5Mbps速率保障目标的可行性。",
+  "feasibility_negotiation_description": "本轮消息类别：发起可行性评估。请求评估停电保障场景下维持5Mbps速率保障目标的可行性。",
   "action": "REQUEST_FEASIBILITY_EVALUATION",
   "contents_to_evaluate": [
     {"name": "评估对象", "value": "停电8小时期间核心用户的速率保障"}
@@ -72,7 +78,7 @@
 ### 示例2：发起阶段（不可行并提出替代方案）
 
 {
-  "feasibility_negotiation_description": "停电保障场景下5Mbps速率保障目标不可行，提出下调方案。",
+  "feasibility_negotiation_description": "本轮消息类别：评估不可行并提案。停电保障场景下5Mbps速率保障目标不可行，提出下调方案。",
   "action": "PROPOSE_ALTERNATIVE_ON_FAILURE",
   "contents_to_evaluate": null,
   "infeasibility_details_and_proposal": [
@@ -85,7 +91,7 @@
 ### 示例3：发起阶段（评估可行并请求确认，目标达成）
 
 {
-  "feasibility_negotiation_description": "针对调整后的速率保障目标，可行性评估已完成，结论为可行，请求对方确认是否按此目标继续执行。",
+  "feasibility_negotiation_description": "本轮消息类别：评估可行并请求确认。针对调整后的速率保障目标，可行性评估已完成，结论为可行，请求对方确认是否按此目标继续执行。",
   "action": "REQUEST_FEASIBILITY_EVALUATION",
   "contents_to_evaluate": null,
   "infeasibility_details_and_proposal": null,
@@ -95,7 +101,7 @@
 ### 示例4：发起阶段（评估可行并请求确认，方案可行性）
 
 {
-  "feasibility_negotiation_description": "故障订阅任务的保活方案可行性评估已完成，结论为可行，请求对方确认是否按此方案继续执行。",
+  "feasibility_negotiation_description": "本轮消息类别：评估可行并请求确认。故障订阅任务的保活方案可行性评估已完成，结论为可行，请求对方确认是否按此方案继续执行。",
   "action": "REQUEST_FEASIBILITY_EVALUATION",
   "contents_to_evaluate": null,
   "infeasibility_details_and_proposal": null,

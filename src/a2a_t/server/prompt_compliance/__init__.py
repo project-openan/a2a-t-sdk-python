@@ -6,7 +6,6 @@ from importlib import import_module
 from typing import Any
 
 __all__ = [
-    "PromptComplianceConfig",
     "PromptComplianceFailure",
     "PromptComplianceOrchestratorBuilder",
     "PromptComplianceOrchestrator",
@@ -14,7 +13,6 @@ __all__ = [
 ]
 
 _EXPORTS: dict[str, tuple[str, str]] = {
-    "PromptComplianceConfig": ("a2a_t.config.models", "PromptComplianceConfig"),
     "PromptComplianceFailure": ("a2a_t.server.prompt_compliance.models", "PromptComplianceFailure"),
     "PromptComplianceOrchestratorBuilder": (
         "a2a_t.server.prompt_compliance.prompt_compliance_orchestrator_builder",

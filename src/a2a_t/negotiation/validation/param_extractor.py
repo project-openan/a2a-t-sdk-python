@@ -40,6 +40,7 @@ from a2a_t.core.errors.exceptions import (
     ContentValidationError,
     NegotiationParamExtractionError,
     ResourceNotFoundError,
+    SlotValidationError,
 )
 from a2a_t.core.metadata import NegotiationContext
 from a2a_t.core.validation_pipeline import (
@@ -188,9 +189,38 @@ class ParamExtractor:
             template_content_loader=self._template_content_loader,
         )
         try:
-            return pipeline.validate(prompt, schema, reference)
+            filled = pipeline.validate(prompt, schema, reference)
         except ContentValidationError as failure:
             raise _negotiation_failure(failure) from failure
+        _require_unique_param_names(filled.data)
+        return filled
+
+
+def _require_unique_param_names(data: object) -> None:
+    """Reject duplicate parameter names in one array-shaped extraction (deterministic, non-LLM).
+
+    An array-shaped caller schema extracts one object per requested item; the same name appearing
+    twice is a rule violation of the shared corpus contract, reported deterministically after the
+    pipeline instead of being left to the LLM verdict.
+
+    Raises:
+        NegotiationParamExtractionError: with ``negotiation.rule_violation`` when two or more
+            extracted array items carry the same ``name``.
+    """
+    if not isinstance(data, list):
+        return
+    names = [entry["name"] for entry in data if isinstance(entry, Mapping) and isinstance(entry.get("name"), str)]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if not duplicates:
+        return
+    facts = {"section_label": "params.name", "duplicates": ", ".join(duplicates)}
+    message = "Duplicate parameter names in the extracted params: " + ", ".join(duplicates)
+    raise NegotiationParamExtractionError(
+        ErrorCatalog.NEGOTIATION_RULE_VIOLATION,
+        facts,
+        message=message,
+        errors=[SlotValidationError("params.name", ErrorCatalog.NEGOTIATION_RULE_VIOLATION.value, message, facts)],
+    )
 
 
 def _negotiation_failure(failure: ContentValidationError) -> NegotiationParamExtractionError:

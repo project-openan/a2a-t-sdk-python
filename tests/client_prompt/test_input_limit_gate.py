@@ -178,7 +178,7 @@ def test_builder_passes_the_configured_input_limit_into_the_orchestrator() -> No
     from a2a_t.client.prompt_generation.prompt_generation_orchestrator_builder import (
         PromptGenerationOrchestratorBuilder,
     )
-    from a2a_t.config.models import A2ATConfig, PromptComplianceConfig, PromptRuntimeConfig
+    from a2a_t.config.models import A2ATConfig, PromptRuntimeConfig
 
     class FakeRuntimeComponentsBuilder:
         def build(self, *, config: A2ATConfig, resource_access: object | None = None) -> object:
@@ -195,7 +195,6 @@ def test_builder_passes_the_configured_input_limit_into_the_orchestrator() -> No
     input_limit = InputLimitConfig(max_text_chars=512)
     config = A2ATConfig(
         prompt=PromptRuntimeConfig(),
-        prompt_compliance=PromptComplianceConfig(),
         input_limits=input_limit,
     )
 

@@ -128,12 +128,11 @@ class TestScenarioCatalog:
         scenarios = access.load_scenarios(language)
         assert [scenario.scenario_code for scenario in scenarios] == ["local-scenario"]
 
-    def test_missing_local_scenarios_do_not_fall_back_to_the_package(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("language", LANGUAGES)
+    def test_missing_local_scenarios_fall_back_to_the_packaged_catalog(self, tmp_path: Path, language: str) -> None:
         access = _local_access(tmp_path)
-        with pytest.raises(A2ATError) as info:
-            access.load_scenarios("en-US")
-        assert info.value.code is ErrorCatalog.INFRA_RESOURCE_READ_FAILED
-        assert "scenarios/en-US/scenarios.json" in str(info.value)
+        scenarios = access.load_scenarios(language)
+        assert {scenario.scenario_code for scenario in scenarios} >= {"ran-energy-saving", "subscribe-incident"}
 
     def test_unknown_language_fails_with_the_resource_path(self, packaged_access: PromptResourceAccess) -> None:
         with pytest.raises(A2ATError) as info:
