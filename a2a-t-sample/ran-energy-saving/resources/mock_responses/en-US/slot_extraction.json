@@ -1,0 +1,11 @@
+{
+  "slots": {
+    "operation_type": "Create",
+    "task_description": "Based on <Task Object> and <Task Context>, output a wireless network energy saving plan that achieves the wireless network energy saving goal defined in <Task Target>, and return the wireless network energy saving result in the format defined in <Expected Output>.",
+    "task_object": "The area is the Songshanhu Administration Committee.",
+    "task_target": "Energy consumption goal: 30%",
+    "task_context": "Cell RAT for energy saving: NR; Energy saving time range: start time \"00:00:00\", end time \"12:00:00\".",
+    "expected_output": "Output the intent report for the network energy saving task."
+  },
+  "slot_errors": []
+}

@@ -1,4 +1,4 @@
-# a2a-t-sample
+﻿# a2a-t-sample
 
 `a2a-t-sample` is the sample case collection of the A2A-T Python SDK, organized as one independent directory per case, with runnable client and server entry points.
 
@@ -11,6 +11,7 @@ The current samples run a real A2A `HTTP+JSON/REST` chain based on the official 
 | Directory | Description |
 | --- | --- |
 | [subscribe-incident/](subscribe-incident/) | Event subscription case — client generates a Notification-T prompt → server validates it → streams Incident artifacts (includes the registry center) |
+| [ran-energy-saving/](ran-energy-saving/) | Task-T RAN energy saving case (bilingual; `run_demo.py` defaults to en-US) — client generates a prompt via `generate_task_prompt_from_text` → server validates it via `validate_task_prompt_and_data_filling` → streams energy saving step artifacts + COMPLETED (cross-platform non-blocking `run_demo.py`) |
 | [negotiation/](negotiation/) | Negotiation closed-loop case — offline propose → accept round trips (scripted mock LLM, both languages) |
 
 ## Resources in This Module
@@ -33,7 +34,7 @@ cp env.example .env      # after copying, confirm A2AT_LLM_API_KEY is empty
 uv pip install -r requirements.txt
 ```
 
-> If `A2AT_LLM_API_KEY` is left empty, both cases automatically use their own scripted mock LLM responses, so the full flows run without a real API. With the mock in use, a role-prefixed standalone log line `[<role>] llm-mock: using canned mock LLM response` is printed before each response (the client prints `[client]`, the server prints `[server]`); this line distinguishes the mock from a real LLM.
+> If `A2AT_LLM_API_KEY` is left empty, each case automatically uses its own scripted mock LLM responses, so the full flows run without a real API. With the mock in use, a role-prefixed standalone log line `[<role>] llm-mock: using canned mock LLM response` is printed before each response (the client prints `[client]`, the server prints `[server]`); this line distinguishes the mock from a real LLM.
 
 ## Negotiation Closed-Loop Sample
 
