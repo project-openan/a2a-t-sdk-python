@@ -1,4 +1,4 @@
-# a2a-t-sample
+﻿# a2a-t-sample
 
 `a2a-t-sample` 是 A2A-T Python SDK 的示例用例集，以用例独立目录组织，包含客户端与服务端可直接运行的入口。
 
@@ -11,6 +11,7 @@
 | 目录 | 说明 |
 | --- | --- |
 | [subscribe-incident/](subscribe-incident/) | 事件订阅用例——客户端生成 Notification-T prompt → 服务端校验 → 流式推送 Incident artifact（含注册中心） |
+| [ran-energy-saving/](ran-energy-saving/) | Task-T 无线网络节能用例（中英双语，`run_demo.py` 默认 en-US）——客户端用 `generate_task_prompt_from_text` 生成 prompt → 服务端用 `validate_task_prompt_and_data_filling` 校验 → 流式推送节能任务步骤 artifact + COMPLETED（跨平台非阻塞 `run_demo.py` 启动） |
 | [negotiation/](negotiation/) | 协商闭环用例——离线 propose → accept 往返（脚本化 mock LLM，双语言） |
 
 ## 模块内资源
@@ -33,7 +34,7 @@ cp env.example .env      # 复制后确认 .env 中 A2AT_LLM_API_KEY 为空
 uv pip install -r requirements.txt
 ```
 
-> 如果 `A2AT_LLM_API_KEY` 留空，两个用例都会自动使用用例各自的脚本化 mock LLM 响应，无需真实 API 即可跑通完整流程。使用 mock 时每次响应前会输出一行带角色前缀的独立日志 `[<角色>] llm-mock: using canned mock LLM response`（客户端为 `[client]`、服务端为 `[server]`），用于区分 mock 与真实 LLM。
+> 如果 `A2AT_LLM_API_KEY` 留空，每个用例都会自动使用用例各自的脚本化 mock LLM 响应，无需真实 API 即可跑通完整流程。使用 mock 时每次响应前会输出一行带角色前缀的独立日志 `[<角色>] llm-mock: using canned mock LLM response`（客户端为 `[client]`、服务端为 `[server]`），用于区分 mock 与真实 LLM。
 
 ## 协商（Negotiation）闭环样例
 
