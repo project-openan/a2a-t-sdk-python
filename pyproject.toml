@@ -25,17 +25,37 @@ dependencies = [
     "jsonschema>=4.23.0",
     "python-dotenv>=1.1.0",
     "openai",
-    "httpx>=0.23.0,<1",
+]
+
+[project.optional-dependencies]
+observability = [
+    "opentelemetry-api>=1.33.0",
+    "opentelemetry-sdk>=1.33.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.33.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.33.0",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
     "ruff>=0.3.0",
-    "trustme>=1.2.1,<2",
     "mypy>=1.9.0",
     "types-jsonschema>=4.23.0",
+    "types-protobuf>=6.30.0,<7",
     "hypothesis>=6.167.1",
+    "mkdocs>=1.6.1",
+    "mkdocstrings-python>=2.0.8",
+    "mkdocs-material>=9.7.7",
+    "opentelemetry-sdk>=1.33.0",
+]
+integration = [
+    "a2a-sdk>=1.1.0,<2",
+    "httpx>=0.28.1",
+    "opentelemetry-sdk>=1.33.0",
+    "starlette>=0.47.0",
+    "sse-starlette>=3.4.4",
+    "uvicorn>=0.30.0",
 ]
 
 [project.urls]
@@ -63,6 +83,7 @@ markers = [
     # Live-LLM engines (D24 live family and the a2a-t-corpus accuracy workflows): opt-in
     # through the A2AT_* environment variables; CI excludes them with -m 'not live'.
     "live: live-LLM tests against a real OpenAI-compatible endpoint (skipped/deselected when unconfigured)",
+    "a2a: integration tests requiring a2a-sdk (opt-in via A2AT_TEST_A2A=1)",
 ]
 
 [tool.ruff]
