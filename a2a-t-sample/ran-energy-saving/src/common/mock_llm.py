@@ -1,6 +1,6 @@
 """Schema-routed scripted mock LLM for the offline Task-T RAN energy saving demo.
 
-This case is the Task-T counterpart of ``subscribe-incident``: the client calls
+In this demo the client calls
 ``generate_task_prompt_from_text`` (template-directed slot extraction) and the server calls
 ``validate_task_prompt_and_data_filling`` (content semantic validation). Both steps issue
 structured LLM calls, so the mock routes every call by the **output schema signature** instead
