@@ -1,6 +1,6 @@
 ﻿# ran-energy-saving (Task-T)
 
-A minimal **Task-T** end-to-end sample, the Task-T counterpart of `subscribe-incident`:
+A minimal **Task-T** end-to-end sample demonstrating a RAN energy-saving task:
 
 - the client generates a prompt with the template-directed
   `A2ATClient.generate_task_prompt_from_text(text, "Task-T/network-layer/ran-energy-saving/v1")` API
