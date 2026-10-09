@@ -10,7 +10,7 @@
 
 | 目录 | 说明 |
 | --- | --- |
-| [subscribe-incident/](subscribe-incident/) | 事件订阅用例——客户端生成 Notification-T prompt → 服务端校验 → 流式推送 Incident artifact（含注册中心） |
+| [fault-management/](fault-management/) | 事件订阅用例——客户端生成 Notification-T prompt → 服务端校验 → 流式推送 Incident artifact（含注册中心） |
 | [ran-energy-saving/](ran-energy-saving/) | Task-T 无线网络节能用例（中英双语，`run_demo.py` 默认 en-US）——客户端用 `generate_task_prompt_from_text` 生成 prompt → 服务端用 `validate_task_prompt_and_data_filling` 校验 → 流式推送节能任务步骤 artifact + COMPLETED（跨平台非阻塞 `run_demo.py` 启动） |
 | [negotiation/](negotiation/) | 协商闭环用例——离线 propose → accept 往返（脚本化 mock LLM，双语言） |
 
@@ -18,12 +18,12 @@
 
 - 共享环境配置模板：`env.example`（复制为 `a2a-t-sample/.env` 使用）
 - 共享依赖：`requirements.txt`
-- 订阅用例客户端/服务端/注册中心入口：`subscribe-incident/src/{client_example,server_example,agentcard_example}/`
-- 订阅用例 mock LLM 响应数据：`subscribe-incident/resources/mock_responses/`（zh-CN / en-US）
+- 订阅用例客户端/服务端/注册中心入口：`fault-management/src/{client_example,server_example,agentcard_example}/`
+- 订阅用例 mock LLM 响应数据：`fault-management/resources/mock_responses/`（zh-CN / en-US）
 - 协商用例入口：`negotiation/src/negotiation_demo/`（demo 运行时与生成策略）
 - 协商用例场景数据与脚本化 mock LLM 响应：`negotiation/resources/`
 
-新用例直接在 `a2a-t-sample/` 下以 `subscribe-incident/` 的同级目录添加。
+新用例直接在 `a2a-t-sample/` 下以 `fault-management/` 的同级目录添加。
 
 ## 快速开始（共享）
 
@@ -74,7 +74,7 @@ uv run python -m negotiation_demo --language zh-CN
 
 本样例为进程内运行时（无 HTTP 服务端），不涉及传输端点开关。Windows 控制台如遇中文乱码，先执行 `chcp 65001`。
 
-## 事件订阅（subscribe-incident）样例
+## 事件订阅（fault-management）样例
 
 最小端到端用例，基于 `a2a-sdk` 的真实 HTTP+JSON 链路，演示故障订阅场景：客户端生成 prompt → 服务端校验 → 流式推送 Incident artifact。流程包含注册中心交互、客户端 prompt 生成、服务端校验与流式 artifact 推送，并保留 LLM mock 能力。
 
@@ -116,14 +116,14 @@ uv run python -m negotiation_demo --language zh-CN
 
 ### 事件订阅样例启动
 
-> 模块位于 `subscribe-incident/src/`，而 `.env` 位于 `a2a-t-sample/`，因此需要**在 `a2a-t-sample` 目录下设置 `PYTHONPATH` 指向 `subscribe-incident/src`**。
+> 模块位于 `fault-management/src/`，而 `.env` 位于 `a2a-t-sample/`，因此需要**在 `a2a-t-sample` 目录下设置 `PYTHONPATH` 指向 `fault-management/src`**。
 
 ```powershell
 # 进入 sample 目录（.env 所在位置）
 cd a2a-t-sample
 
 # 设置模块搜索路径（每个终端都要执行）
-$env:PYTHONPATH = "$pwd\subscribe-incident\src"
+$env:PYTHONPATH = "$pwd\fault-management\src"
 ```
 
 ```bash
@@ -156,6 +156,6 @@ uv run python -m client_example.client_main
 
 ```bash
 # 运行全部用例测试（从 a2a-t-sample 目录）
-uv run pytest subscribe-incident/test/ -v
+uv run pytest fault-management/test/ -v
 uv run pytest negotiation/test/ -v
 ```

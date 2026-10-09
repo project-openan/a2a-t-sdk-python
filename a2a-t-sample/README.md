@@ -10,7 +10,7 @@ The current samples run a real A2A `HTTP+JSON/REST` chain based on the official 
 
 | Directory | Description |
 | --- | --- |
-| [subscribe-incident/](subscribe-incident/) | Event subscription case — client generates a Notification-T prompt → server validates it → streams Incident artifacts (includes the registry center) |
+| [fault-management/](fault-management/) | Event subscription case — client generates a Notification-T prompt → server validates it → streams Incident artifacts (includes the registry center) |
 | [ran-energy-saving/](ran-energy-saving/) | Task-T RAN energy saving case (bilingual; `run_demo.py` defaults to en-US) — client generates a prompt via `generate_task_prompt_from_text` → server validates it via `validate_task_prompt_and_data_filling` → streams energy saving step artifacts + COMPLETED (cross-platform non-blocking `run_demo.py`) |
 | [negotiation/](negotiation/) | Negotiation closed-loop case — offline propose → accept round trips (scripted mock LLM, both languages) |
 
@@ -18,12 +18,12 @@ The current samples run a real A2A `HTTP+JSON/REST` chain based on the official 
 
 - Shared environment configuration template: `env.example` (copy to `a2a-t-sample/.env` before use)
 - Shared dependencies: `requirements.txt`
-- Subscription case client/server/registry entry points: `subscribe-incident/src/{client_example,server_example,agentcard_example}/`
-- Subscription case mock LLM response data: `subscribe-incident/resources/mock_responses/` (zh-CN / en-US)
+- Subscription case client/server/registry entry points: `fault-management/src/{client_example,server_example,agentcard_example}/`
+- Subscription case mock LLM response data: `fault-management/resources/mock_responses/` (zh-CN / en-US)
 - Negotiation case entry point: `negotiation/src/negotiation_demo/` (demo runtime and generation strategies)
 - Negotiation case scenario data and scripted mock LLM responses: `negotiation/resources/`
 
-Add new cases directly under `a2a-t-sample/`, as sibling directories of `subscribe-incident/`.
+Add new cases directly under `a2a-t-sample/`, as sibling directories of `fault-management/`.
 
 ## Quick Start (Shared)
 
@@ -74,7 +74,7 @@ uv run python -m negotiation_demo --language zh-CN
 
 This sample is an in-process runtime (no HTTP server), so transport endpoint switches do not apply. If the Windows console shows garbled Chinese characters, run `chcp 65001` first.
 
-## Event Subscription (subscribe-incident) Sample
+## Event Subscription (fault-management) Sample
 
 A minimal end-to-end case based on the real HTTP+JSON chain of `a2a-sdk`, demonstrating the fault subscription scenario: the client generates a prompt → the server validates it → Incident artifacts are streamed. The flow covers registry center interaction, client prompt generation, server validation, and streaming artifact delivery, and keeps the LLM mock capability.
 
@@ -116,14 +116,14 @@ The state machine of `execute_server_flow`:
 
 ### Starting the Event Subscription Sample
 
-> The modules live under `subscribe-incident/src/` while `.env` lives under `a2a-t-sample/`; therefore **set `PYTHONPATH` to point at `subscribe-incident/src` while working in the `a2a-t-sample` directory**.
+> The modules live under `fault-management/src/` while `.env` lives under `a2a-t-sample/`; therefore **set `PYTHONPATH` to point at `fault-management/src` while working in the `a2a-t-sample` directory**.
 
 ```powershell
 # enter the sample directory (where .env lives)
 cd a2a-t-sample
 
 # set the module search path (repeat in every terminal)
-$env:PYTHONPATH = "$pwd\subscribe-incident\src"
+$env:PYTHONPATH = "$pwd\fault-management\src"
 ```
 
 ```bash
@@ -156,6 +156,6 @@ uv run python -m client_example.client_main
 
 ```bash
 # run the tests of all cases (from the a2a-t-sample directory)
-uv run pytest subscribe-incident/test/ -v
+uv run pytest fault-management/test/ -v
 uv run pytest negotiation/test/ -v
 ```

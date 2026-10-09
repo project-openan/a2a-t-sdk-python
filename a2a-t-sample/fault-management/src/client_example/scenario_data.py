@@ -1,4 +1,4 @@
-"""Sample scenario input data for the subscribe-incident e2e flow.
+"""Sample scenario input data for the fault-management e2e flow.
 
 Contains the scenario tag, agent_card_query, subscription_filter, and
 diagnosis_context used by the sample client. The prompt generation input is

@@ -111,8 +111,8 @@ uv pip install -r requirements.txt
 
 # 2. Terminal 1: start the registry center (port 5001)
 #    Set the module search path first (.env lives in a2a-t-sample):
-#    PowerShell: $env:PYTHONPATH = "$pwd\subscribe-incident\src"
-#    bash:       export PYTHONPATH="$(pwd)/subscribe-incident/src"
+#    PowerShell: $env:PYTHONPATH = "$pwd\fault-management\src"
+#    bash:       export PYTHONPATH="$(pwd)/fault-management/src"
 uv run python -m agentcard_example.registry_main
 
 # 3. Terminal 2: start the server (port 8000);
