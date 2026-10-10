@@ -659,7 +659,7 @@ def test_get_prompts_lists_every_bundled_template_sorted_by_uri(language: str, t
 
     prompts = client.get_prompts()
 
-    assert len(prompts) == 12
+    assert len(prompts) == 13
     uris = [template.template_uri.uri for template in prompts]
     assert uris == sorted(uris)
     assert uris[0] == "Authorization-T/authorization-policy-management/v1"

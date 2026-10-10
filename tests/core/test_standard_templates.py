@@ -23,6 +23,7 @@ RESOURCE_LANGUAGES = ("en-US", "zh-CN")
 EXPECTED_TEMPLATE_URIS = {
     "ENERGY_SAVING": "Task-T/network-layer/ran-energy-saving/v1",
     "PRIVATE_LINE_COMPLAINT": "Task-T/network-layer/private-line-complaint/v1",
+    "RAN_INTELLIGENT_BACKUP_BATTERY_ENDURANCE": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1",
     "SUBSCRIBE_INCIDENT": "Notification-T/network-layer/subscribe-incident/v1",
     "SERVICE_RECOVERY": "Notification-T/network-layer/service-recovery/v1",
     "AUTHORIZATION_POLICY_MANAGEMENT": "Authorization-T/authorization-policy-management/v1",
@@ -46,7 +47,7 @@ STANDARD_TEMPLATE_PAIRS: list[tuple[str, TemplateUri, str]] = sorted(
 
 # (family constant name, extension name, typed family, raw family, expected size)
 FAMILIES = [
-    ("TASK", "Task-T", standard_templates.TASK, standard_templates.TASK_URIS, 2),
+    ("TASK", "Task-T", standard_templates.TASK, standard_templates.TASK_URIS, 3),
     ("NOTIFICATION", "Notification-T", standard_templates.NOTIFICATION, standard_templates.NOTIFICATION_URIS, 2),
     (
         "AUTHORIZATION",
@@ -65,7 +66,7 @@ def _template_resource_root() -> Path:
 
 
 def test_standard_templates_pair_count() -> None:
-    assert len(STANDARD_TEMPLATE_PAIRS) == 12
+    assert len(STANDARD_TEMPLATE_PAIRS) == 13
 
 
 def test_the_twelve_expected_constants_exist() -> None:
@@ -75,8 +76,8 @@ def test_the_twelve_expected_constants_exist() -> None:
 def test_all_standard_template_uris_are_unique() -> None:
     raw_uris = [raw for _, _, raw in STANDARD_TEMPLATE_PAIRS]
 
-    assert len(raw_uris) == 12
-    assert len(set(raw_uris)) == 12
+    assert len(raw_uris) == 13
+    assert len(set(raw_uris)) == 13
 
 
 @pytest.mark.parametrize(("name", "typed", "raw"), STANDARD_TEMPLATE_PAIRS)
@@ -114,8 +115,8 @@ def test_family_lists_are_consistent(
 def test_all_families_together_cover_the_twelve_templates() -> None:
     all_typed = [template for _, _, typed_family, _, _ in FAMILIES for template in typed_family]
 
-    assert len(all_typed) == 12
-    assert len(set(all_typed)) == 12
+    assert len(all_typed) == 13
+    assert len(set(all_typed)) == 13
 
 
 def test_extension_name_constants() -> None:
