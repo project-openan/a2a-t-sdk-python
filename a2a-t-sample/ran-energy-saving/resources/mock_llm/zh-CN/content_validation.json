@@ -1,0 +1,10 @@
+{
+  "semantic_verdict": true,
+  "errors": [],
+  "params": {
+    "operationType": "create",
+    "region": "松山湖管委会",
+    "energySavingGoal": "在满足任务上下文的前提下最大化节能。",
+    "guaranteedThroughputTarget": "{00:00~07:00,2Mbps}、{07:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~24:00,2Mbps}"
+  }
+}

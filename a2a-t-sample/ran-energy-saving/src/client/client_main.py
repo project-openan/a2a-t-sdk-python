@@ -21,8 +21,8 @@ from common.registry_client import query_by_name_org
 from dotenv import dotenv_values
 from google.protobuf.json_format import ParseDict
 
-from client_example.client_flow import run_client_flow
-from client_example.scenario_data import build_task_request
+from client.client_flow import run_client_flow
+from client.scenario_data import build_prompt_input, build_task_request
 
 install_mock_llm_if_needed()
 install_llm_logger(role="client")
@@ -132,6 +132,7 @@ async def run_main(
     *,
     env_path: Path | None,
     initial_input: dict[str, object],
+    input_text: str,
     bootstrap: object = build_client_runtime,
     flow: object = run_client_flow,
     logger: Any | None = None,
@@ -181,8 +182,8 @@ async def run_main(
         prompt_client=runtime["prompt_client"],
         a2a_client=a2a_client,
         initial_input=initial_input,
+        input_text=input_text,
         max_artifacts=max_artifacts,
-        env_path=env_path,
         log_sink=log_sink,
     )
 
@@ -195,6 +196,7 @@ def main(
 ) -> object:
     """Entry point for the client: reads .env, installs mock/logger, and runs the async flow."""
     resolved_env_path = env_path or Path.cwd() / ".env"
+    sample_env_path = resolved_env_path if resolved_env_path.exists() else None
     with _without_proxy_env():
         set_llm_log_sink(print)
         debug_enabled = resolve_sample_debug(env_path=resolved_env_path)
@@ -206,8 +208,9 @@ def main(
         )
         return async_runner(
             run_async(
-                env_path=resolved_env_path if resolved_env_path.exists() else None,
+                env_path=sample_env_path,
                 initial_input=build_task_request(),
+                input_text=build_prompt_input(env_path=sample_env_path),
                 log_sink=print,
                 debug_enabled=debug_enabled,
                 max_artifacts=max_artifacts,

@@ -38,8 +38,16 @@ def normalize_event(stream_response: StreamResponse) -> dict[str, object]:
             "artifact_id": artifact.artifact_id,
             "name": artifact.name,
         }
-        if artifact.parts and artifact.parts[0].HasField("data"):
-            event["data"] = MessageToDict(artifact.parts[0].data)
+        if artifact.parts:
+            part = artifact.parts[0]
+            if part.HasField("data"):
+                event["data"] = MessageToDict(part.data)
+            elif part.HasField("text"):
+                event["text"] = part.text
+        if artifact.HasField("metadata"):
+            metadata = MessageToDict(artifact.metadata)
+            if metadata:
+                event["metadata"] = metadata
         return event
 
     if stream_response.HasField("task"):

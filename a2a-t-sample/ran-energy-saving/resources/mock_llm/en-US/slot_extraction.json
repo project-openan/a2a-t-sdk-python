@@ -3,8 +3,8 @@
     "operation_type": "Create",
     "task_description": "Based on <Task Object> and <Task Context>, output a wireless network energy saving plan that achieves the wireless network energy saving goal defined in <Task Target>, and return the wireless network energy saving result in the format defined in <Expected Output>.",
     "task_object": "The area is the Songshanhu Administration Committee.",
-    "task_target": "Energy consumption goal: 30%",
-    "task_context": "Cell RAT for energy saving: NR; Energy saving time range: start time \"00:00:00\", end time \"12:00:00\".",
+    "task_target": "Maximize energy saving under the condition that the task context is met.",
+    "task_context": "Time-segment-based guaranteed throughput target: {00:00~07:00,2Mbps}, {07:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,2Mbps}.",
     "expected_output": "Output the intent report for the network energy saving task."
   },
   "slot_errors": []
