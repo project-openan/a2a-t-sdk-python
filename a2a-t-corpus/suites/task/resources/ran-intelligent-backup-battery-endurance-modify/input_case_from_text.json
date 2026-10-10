@@ -1,0 +1,145 @@
+[
+  {
+    "id": "TC00000001",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "修改档-标准修改诉求（站点+续航目标+小区列表）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "把无线智能备电任务调整为修改：站点龙岩新罗水晶澜庭-HRHH，备电保障的续航时长目标6h，小区460-00-2136088-511重保4G 2.3GHz，小区460-00-2136088-513关键4G 2.3GHz",
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": {
+                "type": "string",
+                "description": "Operation type of the wireless backup power task; allowed values are listed in the enum",
+                "enum": ["create", "modify"]
+              },
+              "task_description": {
+                "type": "string",
+                "description": "Task description for the wireless intelligent backup power management task"
+              },
+              "task_target": {
+                "type": "string",
+                "description": "Task target; one of: Create New Tiered Power-Down Task, Create Restoration Task, Modify Tiered Power-Down Task."
+              },
+              "task_object": {
+                "type": "string",
+                "description": "Task object; list of sites with their cells"
+              },
+              "task_context": {
+                "type": "string",
+                "description": "Task context information"
+              },
+              "expected_output": {
+                "type": "string",
+                "description": "Expected output"
+              }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": { "errCode": "", "errMessage": "" }
+      },
+      {
+        "result": "success",
+        "data": {
+          "operation_type": "modify",
+          "task_target": "Modify Tiered Power-Down Task, backup power endurance duration target: 6h",
+          "task_object": "龙岩新罗水晶澜庭-HRHH: 460-00-2136088-511: Critical Protection, 4G, 2.3GHz; 460-00-2136088-513: Key, 4G, 2.3GHz"
+        },
+        "error": { "errCode": "", "errMessage": "" }
+      }
+    ]
+  },
+  {
+    "id": "TC00000002",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "修改档-创建恢复任务（回退配置）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "创建恢复任务：回退无线智能备电配置，站点龙岩新罗水晶澜庭-HRHH",
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": {
+                "type": "string",
+                "description": "Operation type of the wireless backup power task; allowed values are listed in the enum",
+                "enum": ["create", "modify"]
+              },
+              "task_description": {
+                "type": "string",
+                "description": "Task description for the wireless intelligent backup power management task"
+              },
+              "task_target": {
+                "type": "string",
+                "description": "Task target; one of: Create New Tiered Power-Down Task, Create Restoration Task, Modify Tiered Power-Down Task."
+              },
+              "task_object": {
+                "type": "string",
+                "description": "Task object; list of sites with their cells"
+              },
+              "task_context": {
+                "type": "string",
+                "description": "Task context information"
+              },
+              "expected_output": {
+                "type": "string",
+                "description": "Expected output"
+              }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": { "errCode": "", "errMessage": "" }
+      },
+      {
+        "result": "success",
+        "data": {
+          "operation_type": "create",
+          "task_target": "Create Restoration Task"
+        },
+        "error": { "errCode": "", "errMessage": "" }
+      }
+    ]
+  }
+]

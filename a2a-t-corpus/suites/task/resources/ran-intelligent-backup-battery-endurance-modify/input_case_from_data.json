@@ -1,0 +1,578 @@
+[
+  {
+    "id": "TC00000001",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "data修改档-结构化完整（站点+续航目标+小区列表）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromDataWithSchema",
+        "args": {
+          "data": {
+            "operation_type": "modify",
+            "task_description": "基于<任务对象>、<任务上下文> 进行无线智能备电管理，达成<任务目标>中定义的备电目标，按照<预期输出>中定义的结构返回任务处理结果",
+            "task_target": "修改分级下电任务，备电保障的续航时长目标：6h",
+            "task_object": "站点龙岩新罗水晶澜庭-HRHH，小区460-00-2136088-511重保4G 2.3GHz，小区460-00-2136088-513关键4G 2.3GHz"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1",
+          "promptText": { "$fromStep": 1, "$field": "promptText" }
+        }
+      }
+    ],
+    "expected": [
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } },
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } }
+    ]
+  },
+  {
+    "id": "TC00000002",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "data修改档-多站点+混合制式+调整续航目标",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromDataWithSchema",
+        "args": {
+          "data": {
+            "operation_type": "modify",
+            "task_description": "基于<任务对象>、<任务上下文> 进行无线智能备电管理，达成<任务目标>中定义的备电目标，按照<预期输出>中定义的结构返回任务处理结果",
+            "task_target": "修改分级下电任务，备电保障的续航时长目标：8h",
+            "task_object": "站点龙岩新罗水晶澜庭-HRHH，小区460-00-2136088-511重保4G 2.3GHz；站点龙岩新罗龙辉小区-HRHH，小区460-00-2134161-514关键5G 2.6GHz，小区460-00-2134161-515一般5G 2.6GHz"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1",
+          "promptText": { "$fromStep": 1, "$field": "promptText" }
+        }
+      }
+    ],
+    "expected": [
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } },
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } }
+    ]
+  },
+  {
+    "id": "TC00000003",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "data修改档-创建恢复任务（回退已有分级下电配置）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromDataWithSchema",
+        "args": {
+          "data": {
+            "operation_type": "create",
+            "task_description": "基于<任务对象>、<任务上下文> 进行无线智能备电管理，达成<任务目标>中定义的备电目标，按照<预期输出>中定义的结构返回任务处理结果",
+            "task_target": "创建恢复任务，回退无线智能备电配置",
+            "task_object": "站点龙岩新罗水晶澜庭-HRHH"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1",
+          "promptText": { "$fromStep": 1, "$field": "promptText" }
+        }
+      }
+    ],
+    "expected": [
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } },
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } }
+    ]
+  },
+  {
+    "id": "TC00000004",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "data修改档-仅站点名称（无小区列表，选填放行）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromDataWithSchema",
+        "args": {
+          "data": {
+            "operation_type": "modify",
+            "task_description": "基于<任务对象>、<任务上下文> 进行无线智能备电管理，达成<任务目标>中定义的备电目标，按照<预期输出>中定义的结构返回任务处理结果",
+            "task_target": "修改分级下电任务，备电保障的续航时长目标：2h",
+            "task_object": "站点龙岩新罗水晶澜庭-HRHH"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1",
+          "promptText": { "$fromStep": 1, "$field": "promptText" }
+        }
+      }
+    ],
+    "expected": [
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } },
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } }
+    ]
+  },
+  {
+    "id": "TC00000005",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "data修改档-带任务上下文（市电恢复，缩短续航目标）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromDataWithSchema",
+        "args": {
+          "data": {
+            "operation_type": "modify",
+            "task_description": "基于<任务对象>、<任务上下文> 进行无线智能备电管理，达成<任务目标>中定义的备电目标，按照<预期输出>中定义的结构返回任务处理结果",
+            "task_target": "修改分级下电任务，备电保障的续航时长目标：2h",
+            "task_object": "站点龙岩新罗水晶澜庭-HRHH，小区460-00-2136088-511重保4G 2.3GHz，小区460-00-2136088-513关键4G 2.3GHz",
+            "task_context": "市电预计2小时后恢复，缩短备电保障时长"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1",
+          "promptText": { "$fromStep": 1, "$field": "promptText" }
+        }
+      }
+    ],
+    "expected": [
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } },
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } }
+    ]
+  },
+  {
+    "id": "TC00000006",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "data修改档-5G站点+修改续航目标至12h",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromDataWithSchema",
+        "args": {
+          "data": {
+            "operation_type": "modify",
+            "task_description": "基于<任务对象>、<任务上下文> 进行无线智能备电管理，达成<任务目标>中定义的备电目标，按照<预期输出>中定义的结构返回任务处理结果",
+            "task_target": "修改分级下电任务，备电保障的续航时长目标：12h",
+            "task_object": "站点龙岩新罗龙辉小区-HRHH，小区460-00-2134161-514关键5G 2.6GHz，小区460-00-2134161-515一般5G 2.6GHz，小区460-00-2134161-516一般5G 2.6GHz"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1",
+          "promptText": { "$fromStep": 1, "$field": "promptText" }
+        }
+      }
+    ],
+    "expected": [
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } },
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } }
+    ]
+  },
+  {
+    "id": "TC00000007",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "data修改档-含用户指标信息（常住用户+RRC用户+流量+话务）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromDataWithSchema",
+        "args": {
+          "data": {
+            "operation_type": "modify",
+            "task_description": "基于<任务对象>、<任务上下文> 进行无线智能备电管理，达成<任务目标>中定义的备电目标，按照<预期输出>中定义的结构返回任务处理结果",
+            "task_target": "修改分级下电任务，备电保障的续航时长目标：4h",
+            "task_object": "站点龙岩新罗水晶澜庭-HRHH，小区460-00-2136088-511重保4G 2.3GHz，常住用户326户，当前RRC用户216户，流量12.6GB，话务72Erl；小区460-00-2136088-513关键4G 2.3GHz，常住用户150户，当前RRC用户80户，流量5.2GB，话务30Erl"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1",
+          "promptText": { "$fromStep": 1, "$field": "promptText" }
+        }
+      }
+    ],
+    "expected": [
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } },
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } }
+    ]
+  },
+  {
+    "id": "TC00000008",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "data修改档-多站点恢复任务（多站点回退配置）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromDataWithSchema",
+        "args": {
+          "data": {
+            "operation_type": "create",
+            "task_description": "基于<任务对象>、<任务上下文> 进行无线智能备电管理，达成<任务目标>中定义的备电目标，按照<预期输出>中定义的结构返回任务处理结果",
+            "task_target": "创建恢复任务，回退无线智能备电配置",
+            "task_object": "站点龙岩新罗水晶澜庭-HRHH；站点龙岩新罗龙辉小区-HRHH"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1",
+          "promptText": { "$fromStep": 1, "$field": "promptText" }
+        }
+      }
+    ],
+    "expected": [
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } },
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } }
+    ]
+  },
+  {
+    "id": "TC00000009",
+    "caseDimension": "04-关键信息缺失",
+    "caseDesc": "data修改缺少任务描述，required应拦截",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromDataWithSchema",
+        "args": {
+          "data": {
+            "operation_type": "modify",
+            "task_target": "修改分级下电任务，备电保障的续航时长目标：6h",
+            "task_object": "站点龙岩新罗水晶澜庭-HRHH"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1"
+        }
+      }
+    ],
+    "expected": [
+      { "result": "error", "data": {}, "error": { "errCode": "slot.not_provided", "errMessage": "" } }
+    ]
+  },
+  {
+    "id": "TC00000010",
+    "caseDimension": "04-关键信息缺失",
+    "caseDesc": "data修改缺少操作类型，LLM从task_target推断补值",
+    "caseCategory": "边界",
+    "input": [
+      {
+        "api": "generateTaskPromptFromDataWithSchema",
+        "args": {
+          "data": {
+            "task_description": "基于<任务对象>、<任务上下文> 进行无线智能备电管理，达成<任务目标>中定义的备电目标，按照<预期输出>中定义的结构返回任务处理结果",
+            "task_target": "修改分级下电任务，备电保障的续航时长目标：6h"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1"
+        }
+      }
+    ],
+    "expected": [
+      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } }
+    ]
+  },
+  {
+    "id": "TC00000011",
+    "caseDimension": "06-值域违规检测",
+    "caseDesc": "data修改操作类型\"query\"违规",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromDataWithSchema",
+        "args": {
+          "data": {
+            "operation_type": "query",
+            "task_description": "基于<任务对象>、<任务上下文> 进行无线智能备电管理，达成<任务目标>中定义的备电目标，按照<预期输出>中定义的结构返回任务处理结果",
+            "task_target": "修改分级下电任务，备电保障的续航时长目标：6h"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1"
+        }
+      }
+    ],
+    "expected": [
+      { "result": "error", "data": {}, "error": { "errCode": "slot.not_provided", "errMessage": "" } }
+    ]
+  },
+  {
+    "id": "TC00000012",
+    "caseDimension": "06-值域违规检测",
+    "caseDesc": "data修改操作类型\"rollback\"违规",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromDataWithSchema",
+        "args": {
+          "data": {
+            "operation_type": "rollback",
+            "task_description": "基于<任务对象>、<任务上下文> 进行无线智能备电管理，达成<任务目标>中定义的备电目标，按照<预期输出>中定义的结构返回任务处理结果",
+            "task_target": "修改分级下电任务，备电保障的续航时长目标：6h"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "operation_type": { "type": "string", "description": "Operation type", "enum": ["create", "modify", "创建", "修改"] },
+              "task_description": { "type": "string", "description": "Task description" },
+              "task_target": { "type": "string", "description": "Task target" },
+              "task_object": { "type": "string", "description": "Task object" },
+              "task_context": { "type": "string", "description": "Task context" },
+              "expected_output": { "type": "string", "description": "Expected output" }
+            },
+            "required": ["operation_type", "task_description"]
+          },
+          "templateUri": "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1"
+        }
+      }
+    ],
+    "expected": [
+      { "result": "error", "data": {}, "error": { "errCode": "slot.constraint_violated", "errMessage": "" } }
+    ]
+  }
+]

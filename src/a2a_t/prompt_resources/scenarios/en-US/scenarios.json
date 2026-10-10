@@ -23,6 +23,12 @@
       "scenario_name": "Service Recovery Event Subscription",
       "description": "Used to generate an A2A-T task request for subscribing to service recovery events in a telecom network management system, describing the subscription condition and the notification data format for network-side service recovery events.",
       "example": "Help me subscribe to service recovery events: only for the xx subnetwork, and report the recovery plan execution status, diagnosis sequence number, access port, and execution result in each event."
+    },
+    {
+      "scenario_code": "ran-intelligent-backup-battery-endurance",
+      "scenario_name": "Wireless Intelligent Backup Power Management",
+      "description": "Used to generate an A2A-T task request for wireless intelligent backup power management in a telecom network management system, covering tiered power-down, backup power endurance duration targets, and restoration tasks.",
+      "example": "Create a wireless intelligent backup power task: site Longyan Xinluo Crystal Lanting-HRHH, backup power endurance duration target 4h, cell 460-00-2136088-511 Critical Protection, cell 460-00-2136088-513 Key."
     }
   ]
 }

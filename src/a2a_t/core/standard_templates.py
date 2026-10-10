@@ -60,6 +60,8 @@ __all__ = [
     "TARGET_NEGOTIATION_ACCEPT_REJECT_URI",
     "TARGET_NEGOTIATION_PROPOSE",
     "TARGET_NEGOTIATION_PROPOSE_URI",
+    "RAN_INTELLIGENT_BACKUP_BATTERY_ENDURANCE",
+    "RAN_INTELLIGENT_BACKUP_BATTERY_ENDURANCE_URI",
 ]
 
 #: Extension name of the Task-T template family.
@@ -90,6 +92,15 @@ PRIVATE_LINE_COMPLAINT: Final[TemplateUri] = TemplateUri.of(
 
 #: Raw template URI of ``PRIVATE_LINE_COMPLAINT``: ``Task-T/network-layer/private-line-complaint/v1``.
 PRIVATE_LINE_COMPLAINT_URI: Final[str] = PRIVATE_LINE_COMPLAINT.uri
+
+#: Task-T template for the ran-intelligent-backup-battery-endurance scenario.
+RAN_INTELLIGENT_BACKUP_BATTERY_ENDURANCE: Final[TemplateUri] = TemplateUri.of(
+    TASK_EXTENSION_NAME, NETWORK_LAYER_SEGMENT, "ran-intelligent-backup-battery-endurance"
+)
+
+#: Raw template URI of ``RAN_INTELLIGENT_BACKUP_BATTERY_ENDURANCE``:
+#: ``Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1``.
+RAN_INTELLIGENT_BACKUP_BATTERY_ENDURANCE_URI: Final[str] = RAN_INTELLIGENT_BACKUP_BATTERY_ENDURANCE.uri
 
 #: Notification-T template for the subscribe-incident scenario.
 SUBSCRIBE_INCIDENT: Final[TemplateUri] = TemplateUri.of(
@@ -177,10 +188,18 @@ NEGOTIATION_ABORT: Final[TemplateUri] = TemplateUri.of(NEGOTIATION_EXTENSION_NAM
 NEGOTIATION_ABORT_URI: Final[str] = NEGOTIATION_ABORT.uri
 
 #: All built-in Task-T templates.
-TASK: Final[tuple[TemplateUri, ...]] = (ENERGY_SAVING, PRIVATE_LINE_COMPLAINT)
+TASK: Final[tuple[TemplateUri, ...]] = (
+    ENERGY_SAVING,
+    PRIVATE_LINE_COMPLAINT,
+    RAN_INTELLIGENT_BACKUP_BATTERY_ENDURANCE,
+)
 
 #: Raw template URIs of all built-in Task-T templates.
-TASK_URIS: Final[tuple[str, ...]] = (ENERGY_SAVING_URI, PRIVATE_LINE_COMPLAINT_URI)
+TASK_URIS: Final[tuple[str, ...]] = (
+    ENERGY_SAVING_URI,
+    PRIVATE_LINE_COMPLAINT_URI,
+    RAN_INTELLIGENT_BACKUP_BATTERY_ENDURANCE_URI,
+)
 
 #: All built-in Notification-T templates.
 NOTIFICATION: Final[tuple[TemplateUri, ...]] = (SUBSCRIBE_INCIDENT, SERVICE_RECOVERY)

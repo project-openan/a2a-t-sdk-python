@@ -14,10 +14,11 @@ from a2a_t.core.template_uri import DEFAULT_TEMPLATE_VERSION, TemplateUri
 
 ALL_STANDARD_TEMPLATES = (*TASK, *NOTIFICATION, *AUTHORIZATION, *NEGOTIATION)
 
-# The 12 built-in templates pinned against the Java StandardTemplates spelling.
+# The 13 built-in templates pinned against the Java StandardTemplates spelling.
 STANDARD_TEMPLATE_URIS = [
     "Task-T/network-layer/ran-energy-saving/v1",
     "Task-T/network-layer/private-line-complaint/v1",
+    "Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1",
     "Notification-T/network-layer/subscribe-incident/v1",
     "Notification-T/network-layer/service-recovery/v1",
     "Authorization-T/authorization-policy-management/v1",
