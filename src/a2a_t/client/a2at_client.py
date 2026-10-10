@@ -14,6 +14,7 @@ release (port decision D1).
 
 from __future__ import annotations
 
+import logging
 import warnings
 from collections.abc import Mapping
 from pathlib import Path
@@ -33,10 +34,25 @@ from a2a_t.negotiation.content.models import (
     NegotiationProposeData,
 )
 from a2a_t.negotiation.generation import NegotiationContentService
+from a2a_t.observability.llm_decorator import A2ATLLMClientDecorator
+from a2a_t.observability.negotiation_metrics import report_terminal_negotiation_rounds
 
 from .negotiation.negotiation_orchestrator_builder import ClientNegotiationOrchestratorBuilder
 from .prompt_generation.models import PromptGenerationResult
 from .prompt_generation.prompt_generation_orchestrator_builder import PromptGenerationOrchestratorBuilder
+
+logger = logging.getLogger("a2at.observability")
+
+
+def _report_negotiation_rounds_metric(result: MetadataContent) -> None:
+    """Auto-report ``a2at.negotiation.total_rounds`` for terminal messages (spec 5.5).
+
+    Wrapped in try/except: observability must never break the business flow (spec 8.2).
+    """
+    try:
+        report_terminal_negotiation_rounds(result.negotiation_context)
+    except Exception:  # noqa: BLE001 - metrics must never break the business flow
+        logger.warning("a2at: negotiation metric report failed", exc_info=True)
 
 
 def _default_env_path() -> Path:
@@ -129,7 +145,11 @@ class A2ATClient:
         resolved_env_path = env_path or _default_env_path()
         self._config = A2ATConfig.load(resolved_env_path)
         llm_config = LLMConfigLoader.load(resolved_env_path)
-        self._llm_client = LLMClientFactory.create(llm_config.provider, llm_config, logger=logger)
+        # A2ATLLMClientDecorator (spec 2.2): stashes the token usage of every structured call
+        # (client entry span attrs) and records the L2 gen_ai.client.token.usage metric.
+        self._llm_client: Any = A2ATLLMClientDecorator(
+            LLMClientFactory.create(llm_config.provider, llm_config, logger=logger)
+        )
         self._prompt_generation_orchestrator = PromptGenerationOrchestratorBuilder().build(
             config=self._config,
             llm_client=self._llm_client,
@@ -471,7 +491,9 @@ class A2ATClient:
                 ``negotiation.conclusion_mismatch``, ``negotiation.content_invalid`` or
                 ``template.render_failed`` when generation fails.
         """
-        return self._negotiation_content().generate_accept_from_data(data, _parse_template_uri(template_uri))
+        result = self._negotiation_content().generate_accept_from_data(data, _parse_template_uri(template_uri))
+        _report_negotiation_rounds_metric(result)
+        return result
 
     def generate_negotiation_reject_prompt_from_data(
         self, data: NegotiationEndingData, template_uri: str | TemplateUri
@@ -499,7 +521,9 @@ class A2ATClient:
                 ``negotiation.conclusion_mismatch``, ``negotiation.content_invalid`` or
                 ``template.render_failed`` when generation fails.
         """
-        return self._negotiation_content().generate_reject_from_data(data, _parse_template_uri(template_uri))
+        result = self._negotiation_content().generate_reject_from_data(data, _parse_template_uri(template_uri))
+        _report_negotiation_rounds_metric(result)
+        return result
 
     def generate_negotiation_abort_prompt_from_data(
         self, data: NegotiationAbortData, template_uri: str | TemplateUri
@@ -527,7 +551,9 @@ class A2ATClient:
                 ``negotiation.content_invalid`` or ``template.render_failed`` when generation
                 fails.
         """
-        return self._negotiation_content().generate_abort_from_data(data, _parse_template_uri(template_uri))
+        result = self._negotiation_content().generate_abort_from_data(data, _parse_template_uri(template_uri))
+        _report_negotiation_rounds_metric(result)
+        return result
 
     # ------------------------------------------------------------------
     # Negotiation content generation (from text: one LLM extraction step)
@@ -594,10 +620,12 @@ class A2ATClient:
             NegotiationGenerationError: with the code ``template.not_found``, one of the retryable
                 codes when the extraction step fails after exhausting its retries,
                 ``template.render_failed``, ``negotiation.field_missing``,
-                ``negotiation.invalid_input``, ``negotiation.conclusion_mismatch`` or
-                ``input.text_too_long``.
+            ``negotiation.invalid_input``, ``negotiation.conclusion_mismatch`` or
+            ``input.text_too_long``.
         """
-        return self._negotiation_content().generate_accept_from_text(text, context, _parse_template_uri(template_uri))
+        result = self._negotiation_content().generate_accept_from_text(text, context, _parse_template_uri(template_uri))
+        _report_negotiation_rounds_metric(result)
+        return result
 
     def generate_negotiation_reject_prompt_from_text(
         self, text: str | None, context: NegotiationContext, template_uri: str | TemplateUri
@@ -627,10 +655,12 @@ class A2ATClient:
             NegotiationGenerationError: with the code ``template.not_found``, one of the retryable
                 codes when the extraction step fails after exhausting its retries,
                 ``template.render_failed``, ``negotiation.field_missing``,
-                ``negotiation.invalid_input``, ``negotiation.conclusion_mismatch`` or
-                ``input.text_too_long``.
+            ``negotiation.invalid_input``, ``negotiation.conclusion_mismatch`` or
+            ``input.text_too_long``.
         """
-        return self._negotiation_content().generate_reject_from_text(text, context, _parse_template_uri(template_uri))
+        result = self._negotiation_content().generate_reject_from_text(text, context, _parse_template_uri(template_uri))
+        _report_negotiation_rounds_metric(result)
+        return result
 
     def generate_negotiation_abort_prompt_from_text(
         self, text: str | None, context: NegotiationContext, template_uri: str | TemplateUri
@@ -662,7 +692,9 @@ class A2ATClient:
                 ``template.render_failed``, ``negotiation.field_missing``,
                 ``negotiation.invalid_input`` or ``input.text_too_long``.
         """
-        return self._negotiation_content().generate_abort_from_text(text, context, _parse_template_uri(template_uri))
+        result = self._negotiation_content().generate_abort_from_text(text, context, _parse_template_uri(template_uri))
+        _report_negotiation_rounds_metric(result)
+        return result
 
     # ------------------------------------------------------------------
     # Negotiation validation and parameter filling

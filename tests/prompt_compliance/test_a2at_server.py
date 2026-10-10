@@ -179,8 +179,12 @@ class A2ATServerTest(unittest.TestCase):
 
         load_llm_config.assert_called_once_with(TEST_ENV_PATH)
         create_llm_client.assert_called_once_with(llm_config.provider, llm_config, logger=logger)
-        self.assertIs(compliance_builder.calls[0]["llm_client"], llm_client)
-        self.assertIs(negotiation_builder_cls.return_value.build.call_args.kwargs["llm_client"], llm_client)
+        # The builders receive the observability-wrapped client (spec 2.2 A2ATLLMClientDecorator)
+        # whose inner is the factory product.
+        self.assertIs(compliance_builder.calls[0]["llm_client"]._inner, llm_client)
+        self.assertIs(
+            negotiation_builder_cls.return_value.build.call_args.kwargs["llm_client"]._inner, llm_client
+        )
         self.assertEqual(
             compliance.calls,
             [

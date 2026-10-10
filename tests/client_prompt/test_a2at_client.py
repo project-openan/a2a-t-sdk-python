@@ -155,7 +155,10 @@ class A2ATClientTest(unittest.TestCase):
 
         load_llm_config.assert_called_once_with(TEST_ENV_PATH)
         create_llm_client.assert_called_once_with(llm_config.provider, llm_config, logger=None)
-        self.assertIs(prompt_builder.calls[0]["llm_client"], llm_client)
+        # The builder receives the observability-wrapped client (spec 2.2 A2ATLLMClientDecorator)
+        # whose inner is the factory product.
+        built_llm_client = prompt_builder.calls[0]["llm_client"]
+        self.assertIs(built_llm_client._inner, llm_client)
         self.assertEqual(prompt_orchestrator.calls, ["Analyze Site A."])
         self.assertEqual(negotiation.start_calls, [start_input])
         self.assertEqual(negotiation.receive_calls[0]["message"], "Clarify intent")
