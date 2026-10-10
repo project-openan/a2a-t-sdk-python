@@ -471,7 +471,7 @@
       }
     ],
     "expected": [
-      { "result": "success", "data": {}, "error": { "errCode": "", "errMessage": "" } }
+      { "result": "error", "data": {}, "error": { "errCode": "slot.not_provided", "errMessage": "" } }
     ]
   },
   {
