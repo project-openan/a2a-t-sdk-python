@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
 
 from a2a.server.agent_execution.context import RequestContext
 from a2a.server.events.event_queue import EventQueue
@@ -16,8 +15,6 @@ from a2a.types import (
     TaskStatus,
     TaskStatusUpdateEvent,
 )
-from google.protobuf.json_format import ParseDict
-from google.protobuf.struct_pb2 import Value
 
 
 def build_status_message(*, context_id: str, task_id: str, text: str) -> Message:
@@ -37,17 +34,24 @@ def build_status(*, context_id: str, task_id: str, state: TaskState, text: str) 
     )
 
 
-def build_artifact(
+def build_metadata_artifact(
     *,
-    artifact_data: Mapping[str, object],
     name: str,
+    text: str,
+    extension_uri: str,
+    metadata_text: str,
 ) -> Artifact:
-    """Build an A2A Artifact with a DataPart containing the given JSON data."""
+    """Build an A2A Artifact with a TextPart label and an A2A-T metadata body.
+
+    The A2A-T energy-saving intent report is carried in ``artifact.metadata[extension_uri]``; the
+    artifact parts only carry a label text.
+    """
     artifact = Artifact(
         artifact_id=str(uuid.uuid4()),
         name=name,
     )
-    artifact.parts.add(data=ParseDict(dict(artifact_data), Value()))
+    artifact.parts.add(text=text)
+    artifact.metadata[extension_uri] = metadata_text
     return artifact
 
 

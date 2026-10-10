@@ -22,8 +22,8 @@ from common.registry_client import register_agentcard
 from dotenv import dotenv_values
 from starlette.applications import Starlette
 
-from server_example.constants_data import get_public_agent_card
-from server_example.server_flow import execute_server_flow
+from server.constants_data import get_public_agent_card
+from server.server_flow import execute_server_flow
 
 install_mock_llm_if_needed()
 install_llm_logger(role="server")

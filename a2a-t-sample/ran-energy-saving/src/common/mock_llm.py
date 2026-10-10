@@ -15,7 +15,7 @@ schema signature                      served response
 =====================================  ==========================================
 
 The response language is read from ``A2AT_LANGUAGE`` in the ``.env`` file (``zh-CN`` / ``en-US``);
-both language trees live under ``resources/mock_responses/``. When ``A2AT_LLM_API_KEY`` is empty
+both language trees live under ``resources/mock_llm/``. When ``A2AT_LLM_API_KEY`` is empty
 the mock injects a placeholder API key so the OpenAI client can be constructed without network
 access. A missing ``.env`` is a hard error (copy ``env.example`` to ``.env`` first).
 """
@@ -30,7 +30,7 @@ from a2a_t.config.errors import ConfigFileNotFoundError
 from a2a_t.llm.models import LLMResponse
 from dotenv import dotenv_values
 
-_RESOURCES_DIR = Path(__file__).resolve().parents[2] / "resources" / "mock_responses"
+_RESOURCES_DIR = Path(__file__).resolve().parents[2] / "resources" / "mock_llm"
 
 #: Stage name -> response file name.
 _STAGE_FILES: dict[str, str] = {

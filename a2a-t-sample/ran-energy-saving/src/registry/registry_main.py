@@ -8,7 +8,7 @@ from pathlib import Path
 import uvicorn
 from dotenv import dotenv_values
 
-from agentcard_example.registry_routes import build_registry_app
+from registry.registry_routes import build_registry_app
 
 
 def resolve_registry_bind(*, env_path: Path | None = None) -> tuple[str, int]:

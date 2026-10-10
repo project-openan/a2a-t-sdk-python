@@ -1,180 +1,258 @@
-﻿# ran-energy-saving (Task-T)
+﻿# RAN Energy Saving (Task-T) Sample
 
-A minimal **Task-T** end-to-end sample demonstrating a RAN energy-saving task:
+## Table of Contents
 
-- the client generates a prompt with the template-directed
-  `A2ATClient.generate_task_prompt_from_text(text, "Task-T/network-layer/ran-energy-saving/v1")` API
-- the server (A2A server) validates it with the A2A-T server SDK API
-  `A2ATServer.validate_task_prompt_and_data_filling(prompt, schema, template_uri)`
-- the server **streams** the execution of the RAN energy-saving task over a real A2A `HTTP+JSON`
-  chain: plan → candidate cell selection → energy saving activation → intent report → `COMPLETED`
+- [Overview](#overview)
+  - [Project layout](#project-layout)
+- [How to Run](#how-to-run)
+  - [Run the two sides separately](#run-the-two-sides-separately)
+  - [Configuration](#configuration)
+- [Using the A2A-T SDK](#using-the-a2a-t-sdk)
+  - [Client: generate and send a Task-T prompt](#client-generate-and-send-a-task-t-prompt)
+  - [Server: validate, extract, and stream](#server-validate-extract-and-stream)
 
-The flow runs fully offline: with an empty `A2AT_LLM_API_KEY` the sample serves scripted mock LLM
-responses (`resources/mock_responses/{zh-CN,en-US}/`). The language is read from `A2AT_LANGUAGE`
-in `.env` (the shared `env.example` ships `zh-CN`); both the natural-language input and the mock
-responses follow it, so `en-US` and `zh-CN` are both fully supported. `run_demo.py` defaults to
-`en-US` and accepts `--language`. A missing `.env` is a hard error (copy `env.example` to `.env`
-first).
+## Overview
 
-## Message Body Conventions
+This sample is a complete **Task-T** example of the A2A-T Python SDK. It contains an A2A-T **client**
+and **server** for a RAN energy-saving task, and a **registry center** for AgentCard discovery.
 
-| Location | Content |
-| --- | --- |
-| text part | task name (`"create ran energy saving task"`) |
-| `metadata[Task-T/v1]` | the generated prompt text |
-| `metadata[templateUri]` | `Task-T/network-layer/ran-energy-saving/v1` |
-| header `A2A-Extensions` | `https://projects.tmforum.org/a2aproject/telecommunication/extensions/Task-T/v1` |
+The sample runs this step-by-step interaction:
 
-## Streaming
+1. **Build the request** — the client calls the A2A-T client SDK's `generate_task_prompt_from_text` to
+   turn the raw natural-language input into a Task-T task request (a rendered prompt).
+2. **Send the request** — the client sends the task request to the server; the rendered prompt travels
+   in `message.metadata`.
+3. **Validate** — the server reads the prompt from `message.metadata` and calls the A2A-T
+   server SDK's `validate_task_prompt_and_data_filling` to validate it and extract the parameters.
+4. **Execute and report** — the server feeds the extracted parameters into its business logic, runs
+   the energy-saving task, and generates the status updates and the energy-saving report sent to the
+   client.
+5. **Receive and present** — the client consumes the streamed events: the progress comes from the
+   status update messages and the report body from `artifact.metadata`; it presents both.
 
-The client calls the A2A SDK `Client.send_message(...)` and iterates the returned **stream**; the
-A2A server registers its handler on the streaming route (`POST /message:stream`). The server
-streams `TaskStatusUpdateEvent` (`SUBMITTED` → `WORKING` → `COMPLETED`) and one
-`TaskArtifactUpdateEvent` per task step, so the client sees the energy-saving task progress
-incrementally instead of one final blob.
-
-Streamed task steps (artifact names):
-
-| # | Artifact | Shows |
-| --- | --- | --- |
-| 1 | `energySaving.TaskPlan` | operation type, area, cell mode, time window, target |
-| 2 | `energySaving.CellSelection` | candidate/selected cell counts + policy |
-| 3 | `energySaving.EnergySavingActivated` | cells activated, power saving mode, time |
-| 4 | `energySaving.IntentReport` | intent/energy/rate goal achievement |
-
-## Layout
+### Project layout
 
 | Path | Role |
 | --- | --- |
-| `src/client_example/` | client: registry discovery → `generate_task_prompt_from_text` → stream consumption |
-| `src/server_example/` | server: `validate_task_prompt_and_data_filling` → stream energy-saving task steps |
-| `src/agentcard_example/` | mock registry center (AgentCard register/query, port 5001) |
+| `src/client/` | client: registry discovery → `generate_task_prompt_from_text` → stream consumption |
+| `src/server/` | server: `validate_task_prompt_and_data_filling` → stream progress and the intent report |
+| `src/registry/` | mock registry center (AgentCard register/query, port 5001) |
 | `src/common/` | shared adapters + the schema-routed mock LLM |
-| `resources/mock_responses/{zh-CN,en-US}/` | scripted slot-extraction and content-validation responses |
+| `resources/mock_llm/{zh-CN,en-US}/` | scripted slot-extraction and content-validation responses |
 | `run_demo.py` | cross-platform, non-blocking launcher (background registry/server, auto cleanup) |
 
-## Prerequisites
+## How to Run
 
-From `a2a-t-sample/` (the directory holding `.env`):
+> **Prerequisites:** Python (the repository `.venv`) and [`uv`](https://docs.astral.sh/uv/).
 
-```powershell
-cp env.example .env      # keep A2AT_LLM_API_KEY empty for the offline mock
+Run this once from the repository root and `a2a-t-sample/`:
+
+```bash
+# repository root: create .venv and install the SDK
+uv sync --dev
+
+# a2a-t-sample/ (the directory that holds .env)
+cd a2a-t-sample
+cp env.example .env
 uv pip install -r requirements.txt
 ```
 
-`A2AT_LANGUAGE` in that `.env` selects the language of the manual (three-terminal) flow;
-`run_demo.py` overrides it per run via `--language` (default `en-US`).
-
-## Run (non-blocking, recommended)
-
-`run_demo.py` is cross-platform (Windows / macOS / Linux). It starts the registry and the server as
-**background subprocesses** (so the terminal is never blocked), waits for their ports, runs the
-client, then stops the background processes.
+Then run the sample with a single cross-platform command:
 
 ```bash
 cd a2a-t-sample/ran-energy-saving
-python run_demo.py                   # English (default); streams the 4 task steps, then COMPLETED
-python run_demo.py --language zh-CN  # Chinese run
-python run_demo.py --max-artifacts 2 # stop the client after 2 artifacts
-python run_demo.py --keep-alive      # leave registry/server running (stop with --stop)
-python run_demo.py --stop            # stop a previous --keep-alive run
+python run_demo.py        # English (default)
 ```
 
-The client runs in the foreground; after it exits, the launcher prints the key **server-side
-A2A-T SDK activity** (`sdk-call` / `sdk-result` / statuses) read from the server log, so the whole
-story is visible from one command. Full LLM request/response payloads are printed only when
-`A2AT_SAMPLE_DEBUG=true`.
+`run_demo.py` starts the registry and the server as **background subprocesses** and runs the client
+in the foreground. Both sides' output is streamed to the terminal **live and interleaved** as it
+happens (their logs are also written to the run directory), then the background processes are
+stopped. Use an interpreter that has the sample dependencies (the repository `.venv`), e.g.
+`..\..\.venv\Scripts\python.exe run_demo.py` on Windows.
 
-> Use an interpreter that has the sample dependencies installed (the repository `.venv`), e.g.
-> `..\..\.venv\Scripts\python.exe run_demo.py` on Windows or `../../.venv/bin/python run_demo.py`
-> on macOS/Linux.
-> 
-> **Temporary files**: everything the launcher writes lives in
-> `<temp>/a2at-ran-energy-saving/` (a per-run `.env` with the overridden language, the subprocess
-> logs, and `pids.json`) and is **removed on exit**. Use `--keep-logs` to keep it for inspection;
-> `--keep-alive` also keeps it (with `pids.json`) so a later `--stop` can find the processes.
+| Flag | Effect |
+| --- | --- |
+| `--language {en-US,zh-CN}` | Run language (default `en-US`) |
+| `--keep-alive` | Leave registry/server running; stop later with `--stop` |
+| `--keep-logs` | Keep the temp run directory (logs / `.env`) under `<temp>/a2at-ran-energy-saving/` |
+| `--stop` | Stop a previous `--keep-alive` run and exit |
+| `--timeout N` | Seconds to wait for each port (default 30) |
 
-## Run (manual, three terminals)
+> Server-side progress and report text is fixed English regardless of `--language`; the flag only
+> switches the client input, templates, and mock replies.
 
-From `a2a-t-sample/` (the directory holding `.env`), point `PYTHONPATH` at the case `src/`:
+**Expected output** (trimmed):
+
+```text
+[client] a2a-event: {"task": {"id": "...", "status": {"state": "TASK_STATE_SUBMITTED", ...}}}
+[client] a2a-event: {"statusUpdate": {"status": {"state": "TASK_STATE_WORKING", ...}}}
+...
+[client] a2a-event: {"artifactUpdate": {"artifact": {"name": "energy saving intent report", ...}}}
+[client] stream-completed: events=12 artifacts=1
+```
+
+### Run the two sides separately
+
+To run the server and the client in separate terminals (for example, to host your own server or to
+watch each side's log on its own), point `PYTHONPATH` at the case `src/` and start each part. `.env`
+is read from the current directory, and a missing `.env` is a **hard error** for the client and
+server.
+
+> [!IMPORTANT]
+> Start the registry and the server first; the client discovers the server's AgentCard from the
+> registry, so it must already be running.
+
+The run language comes from `A2AT_LANGUAGE` in `a2a-t-sample/.env` (`env.example` ships `zh-CN`);
+`run_demo.py` overrides it per run via `--language` (default `en-US`).
 
 ```bash
 # bash / zsh
 cd a2a-t-sample
 export PYTHONPATH="$PWD/ran-energy-saving/src"
-
-# Terminal 1: registry center (5001)   # Terminal 2: server (8000)
-uv run python -m agentcard_example.registry_main
-uv run python -m server_example.server_main
-
-# Terminal 3: client (Ctrl+C to stop; or cap the artifacts)
-A2AT_SAMPLE_MAX_ARTIFACTS=5 uv run python -m client_example.client_main
+uv run --no-sync python -m registry.registry_main    # terminal 1: registry center (5001)
+uv run --no-sync python -m server.server_main         # terminal 2: server (8000)
+uv run --no-sync python -m client.client_main         # terminal 3: client
 ```
 
 ```powershell
 # PowerShell
 cd a2a-t-sample
 $env:PYTHONPATH = "$pwd\ran-energy-saving\src"
-
-uv run python -m agentcard_example.registry_main
-uv run python -m server_example.server_main
-$env:A2AT_SAMPLE_MAX_ARTIFACTS = "5"
-uv run python -m client_example.client_main
+uv run --no-sync python -m registry.registry_main
+uv run --no-sync python -m server.server_main
+uv run --no-sync python -m client.client_main
 ```
 
-> If `uv run` prunes the sample dependencies, use the repository venv directly
-> (`.venv/Scripts/python.exe` on Windows, `.venv/bin/python` on macOS/Linux), or `uv run --no-sync ...`.
+### Configuration
 
-## Expected client output (trimmed)
+Configuration used by this sample (from `a2a-t-sample/.env`):
 
-The client logs the raw input, the A2A-T SDK prompt, and then the A2A streaming exchange:
+| Key | Meaning |
+| --- | --- |
+| `A2AT_LANGUAGE` | `zh-CN` / `en-US`; selects the natural-language input and the mock/template tree |
+| `A2AT_LLM_API_KEY` | Empty ⇒ mock LLM; otherwise an OpenAI-compatible key |
+| `A2AT_LLM_PROVIDER` / `A2AT_LLM_MODEL` / `A2AT_LLM_BASE_URL` | LLM endpoint settings |
+| `A2AT_LLM_TIMEOUT_SECONDS` | HTTP client timeout in seconds (default 60) |
+| `A2AT_SAMPLE_HOST` / `A2AT_SAMPLE_PORT` | Server bind for the manual `python -m` path (default `127.0.0.1:8000`) |
+| `REGISTRY_CENTER_HOST` / `REGISTRY_CENTER_PORT` | Registry bind for the manual `python -m` path (default `127.0.0.1:5001`) |
+| `A2AT_SAMPLE_DEBUG` | `true` prints full LLM request/response payloads |
 
-```
-[client] input-raw: Create a RAN energy saving task in the Songshanhu Administration Committee area: ...
-[client] sdk-call: A2ATClient.generate_task_prompt_from_text(text=..., template_uri=Task-T/network-layer/ran-energy-saving/v1)
-[client] llm-mock: using canned mock LLM response
-[client] sdk-output-prompt: ## Operation Type
+Environment variables (read from the process environment, not `.env`):
 
-Create
+| Key | Meaning |
+| --- | --- |
+| `A2AT_SAMPLE_MAX_ARTIFACTS` | Stop after N artifacts (default 0 = no limit) |
 
-## Task Type
+Notes:
 
-Wireless network energy saving
-...
-[client] sdk-output-meta: template_uri=Task-T/network-layer/ran-energy-saving/v1 extension_uri=.../Task-T/v1
-[client] a2a-send-message: streaming text_part=create ran energy saving task metadata_keys=[.../Task-T/v1, templateUri] header[A2A-Extensions]=.../Task-T/v1
-[client] response-inbound: stream started
-[client] status-received: state=TASK_STATE_SUBMITTED text=
-[client] status-received: state=TASK_STATE_WORKING text=RAN energy saving task in progress
-[client] artifact-received: name=energySaving.TaskPlan artifact_id=...
-[client] artifact-received: name=energySaving.CellSelection artifact_id=...
-[client] artifact-received: name=energySaving.EnergySavingActivated artifact_id=...
-[client] artifact-received: name=energySaving.IntentReport artifact_id=...
-[client] status-received: state=TASK_STATE_COMPLETED text=RAN energy saving task completed
-[client] stream-completed: events=7 artifacts=4
-```
+- `run_demo.py` always uses `5001` / `8000` for its readiness checks and ignores
+  `A2AT_SAMPLE_PORT` / `REGISTRY_CENTER_PORT`; set those only for the manual `python -m` path.
+- The values above (the `template_uri`, the parameter schema, the AgentCard, and the natural-language
+  input) are **specific to this sample**; replace them with your own. The template must belong to the
+  `Task-T` extension and use version `v1`.
+- Bundled resources and language coverage are limited; remote prompt-resource loading is not part of
+  the SDK, and the registry center here is a sample-side mock for AgentCard discovery, not an SDK
+  capability.
 
-The server side shows the A2A-T SDK call and its result:
+## Using the A2A-T SDK
 
-```
-[server] request-inbound: {"prompt_text": "## Operation Type ..."}
-[server] sdk-call: A2ATServer.validate_task_prompt_and_data_filling(template_uri=..., prompt_text=...)
-[server] sdk-result: success extracted_params={'operationType': 'create', 'region': 'Songshanhu Administration Committee', 'energyTarget': '30%', 'energyTargetDirection': 'reduce', 'cellMode': 'NR', 'startTime': '16:00:00Z', 'endTime': '04:00:00Z'}
-[server] task-status: TASK_STATE_SUBMITTED
-[server] task-status: TASK_STATE_WORKING
-[server] artifact-pushed: count=1 name=energySaving.TaskPlan step=energy saving plan built
-...
-[server] task-status: TASK_STATE_COMPLETED
+### Client: generate and send a Task-T prompt
+
+Render a Task-T prompt from your natural-language input (A2A-T SDK) —
+[`client_flow.py:70`](src/client/client_flow.py#L70):
+
+```python
+prompt_content = prompt_client.generate_task_prompt_from_text(input_text, ENERGY_SAVING_TEMPLATE_URI)
+prompt_text, extension_uri = _require_prompt_text(prompt_content)
 ```
 
-## Where the SDKs are called
+It returns `MetadataContent` (`prompt_text`, `extension_uri`, `template_uri`,
+`build_metadata_content()`) and raises `PromptGenerationError` (codes such as `template.not_found`,
+`slot.not_provided`, `llm.not_configured`, `input.text_too_long`).
 
-| Step | Caller | API | Transport |
-| --- | --- | --- | --- |
-| prompt generation | client | A2A-T **client** SDK `A2ATClient.generate_task_prompt_from_text` | in-process |
-| task request | client → server | A2A SDK `Client.send_message` (streaming) | A2A `HTTP+JSON` `/message:stream` |
-| prompt validation + param extraction | server | A2A-T **server** SDK `A2ATServer.validate_task_prompt_and_data_filling` | in-process (inside the A2A handler) |
-| result streaming | server → client | A2A SDK `EventQueue` (`TaskArtifactUpdateEvent`) | A2A `HTTP+JSON` stream |
+Put the prompt in the message metadata and send it over `a2a-sdk` (streaming) —
+[`client_flow.py:84`](src/client/client_flow.py#L84):
 
-So yes — the A2A server **does** call the A2A-T server SDK to validate the prompt and extract the
-parameters; the extracted `params` are logged as `[server] sdk-result`.
+```python
+request = SendMessageRequest()
+request.message.message_id = str(uuid.uuid4())
+request.message.role = Role.ROLE_USER
+request.message.parts.add().text = _build_request_metadata(initial_input)
+request.message.metadata[extension_uri] = prompt_text
+request.message.metadata["templateUri"] = (
+    getattr(prompt_content, "template_uri", None) or ENERGY_SAVING_TEMPLATE_URI
+)
+
+call_context = ClientCallContext(
+    service_parameters={"A2A-Extensions": extension_uri},
+)
+
+async for stream_response in a2a_client.send_message(request, context=call_context):
+    ...
+```
+
+The AgentCard discovery and `a2a-sdk` client construction that precede this are in
+[`client_main.py`](src/client/client_main.py).
+
+### Server: validate, extract, and stream
+
+Read the A2A-T payload from the message metadata the client sent —
+[`server_flow.py:39`](src/server/server_flow.py#L39):
+
+```python
+def _extract_prompt_text(request_context: RequestContext) -> str:
+    """Extract the prompt text from metadata under the Task-T extension URI."""
+    if request_context.message is None or request_context.message.metadata is None:
+        raise ValueError("Expected message metadata for Task-T prompt")
+    metadata = MessageToDict(request_context.message.metadata)
+    return str(metadata.get(TASK_T_EXTENSION_URI, ""))
+```
+
+Validate the prompt and extract the parameters (A2A-T SDK) —
+[`server_flow.py:101`](src/server/server_flow.py#L101):
+
+```python
+filled_params = prompt_server.validate_task_prompt_and_data_filling(
+    prompt=prompt_text,
+    schema=TASK_PARAM_SCHEMA,
+    template_uri=ENERGY_SAVING_TEMPLATE_URI,
+)
+```
+
+`schema` is **yours**: it declares the parameters to extract; `filled_params.data` is the merged
+parameter map (or a list for array-shaped schemas). A rejected prompt raises `ContentValidationError`
+(codes such as `negotiation.semantic_rejected`, `llm.invocation_failed`, `template.not_found`)
+carrying `exc.errors` with per-slot `slot_name` / `code` / `message`; the sample maps that to
+`TASK_STATE_REJECTED` instead of crashing —
+[`server_flow.py:145`](src/server/server_flow.py#L145):
+
+```python
+if validation_failure is not None:
+    await emit_status_update(
+        request_context=request_context,
+        event_queue=event_queue,
+        context_id=resolved_context_id,
+        task_id=resolved_task_id,
+        state=TaskState.TASK_STATE_REJECTED,
+        text=f"Prompt validation failed: {validation_failure}",
+    )
+    ...
+    return
+```
+
+The flow runs inside an `a2a-sdk` `AgentExecutor`, which delegates to `execute_server_flow` —
+[`server_main.py:55`](src/server/server_main.py#L55):
+
+```python
+async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+    kwargs = {
+        "request_context": context,
+        "event_queue": event_queue,
+        "prompt_server": self._prompt_server,
+        "log_sink": self._log_sink,
+    }
+    await self._execute_flow(**kwargs)
+```
+
+The `a2a-sdk` app assembly (routes, task store) is in
+[`src/server/server_main.py`](src/server/server_main.py).

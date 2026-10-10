@@ -17,19 +17,18 @@ from dotenv import dotenv_values
 #: Task-T template addressed by this case.
 ENERGY_SAVING_TEMPLATE_URI = "Task-T/network-layer/ran-energy-saving/v1"
 
-#: Chinese natural-language task request used for prompt generation.
+#: Chinese natural-language task request used for prompt generation (UC1).
 NATURAL_LANGUAGE_PROMPT_INPUT_ZH = (
-    "在东莞松山湖管委会创建无线网络节能任务：节能的小区制式：NR；"
-    "需要节能的时间范围（北京时间，UTC+8）：起始时间00:00:00，结束时间12:00:00；"
-    "能耗目标：总功耗降低30%"
+    "在松山湖管委会创建无线网络节能任务：在满足任务上下文的前提下最大化节能；"
+    "分时段保障速率目标为 {00:00~07:00,2Mbps}、{07:00~17:30,10Mbps}、"
+    "{17:30~23:00,20Mbps}、{23:00~24:00,2Mbps}。"
 )
 
-#: English natural-language task request used for prompt generation.
+#: English natural-language task request used for prompt generation (UC1).
 NATURAL_LANGUAGE_PROMPT_INPUT_EN = (
-    "Create a RAN energy saving task in the Songshanhu Administration Committee area: "
-    "cell RAT for energy saving: NR; energy saving time range (Beijing time, UTC+8): "
-    "start time 00:00:00, end time 12:00:00; energy consumption goal: reduce total power "
-    "consumption by 30%"
+    "Create a RAN energy saving task in the Songshanhu Administration Committee area to maximize "
+    "energy saving. The time-segment-based guaranteed throughput target is {00:00~07:00,2Mbps}, "
+    "{07:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,2Mbps}."
 )
 
 
@@ -52,7 +51,7 @@ def build_task_request() -> dict[str, object]:
     return {
         "scenario": "create ran energy saving task",
         "agent_card_query": {
-            "name": "RAN Energy Saving Agent",
+            "name": "RAN Domain Agent",
             "organization": "Huawei",
         },
     }

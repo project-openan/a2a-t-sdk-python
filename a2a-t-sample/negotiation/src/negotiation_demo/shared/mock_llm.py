@@ -1,7 +1,7 @@
 """Scripted mock LLM for the offline negotiation demo.
 
 The demo runs fully offline: when the ``.env`` carries no usable LLM API key, this module patches
-the SDK seams the same way the subscribe-incident sample does —
+the SDK seams the same way the fault-management sample does —
 
 * ``DotEnvConfigSource.load`` tolerates a missing ``.env``, injects a placeholder API key (so the
   OpenAI client constructs without network access) and defaults the prompt source type to the

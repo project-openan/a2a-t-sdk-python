@@ -110,8 +110,8 @@ uv pip install -r requirements.txt
 
 # 2. 终端一：启动注册中心（端口 5001）
 #    启动前先设置模块搜索路径（.env 位于 a2a-t-sample 目录）：
-#    PowerShell：$env:PYTHONPATH = "$pwd\subscribe-incident\src"
-#    bash：      export PYTHONPATH="$(pwd)/subscribe-incident/src"
+#    PowerShell：$env:PYTHONPATH = "$pwd\fault-management\src"
+#    bash：      export PYTHONPATH="$(pwd)/fault-management/src"
 uv run python -m agentcard_example.registry_main
 
 # 3. 终端二启动服务端（端口 8000）、终端三启动客户端（持续接收 artifact，Ctrl+C 停止）

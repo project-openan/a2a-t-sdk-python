@@ -38,7 +38,7 @@ jobs:
 
       - name: Register samples src path
         run: |
-          src=$(cd a2a-t-sample/subscribe-incident/src && pwd)
+          src=$(cd a2a-t-sample/fault-management/src && pwd)
           venv_site=$(.venv/bin/python -c "import site; print(site.getsitepackages()[0])")
           echo "$src" > "$venv_site/samples.pth"
 
@@ -50,7 +50,7 @@ jobs:
         run: uv run pytest tests/ a2a-t-corpus -v --tb=short -m 'not live'
 
       - name: Run samples tests
-        run: uv run pytest a2a-t-sample/subscribe-incident/test/ a2a-t-sample/negotiation/test/ -v --tb=short
+        run: uv run pytest a2a-t-sample/fault-management/test/ a2a-t-sample/negotiation/test/ -v --tb=short
 
   lint:
     name: Lint + Type-check (advisory)
@@ -81,7 +81,7 @@ jobs:
 
       - name: Lint samples with ruff
         working-directory: a2a-t-sample
-        run: uv run ruff check subscribe-incident/src subscribe-incident/test negotiation/src negotiation/test
+        run: uv run ruff check fault-management/src fault-management/test negotiation/src negotiation/test
 
       - name: Type-check with mypy
         run: uv run mypy src
@@ -115,7 +115,7 @@ jobs:
 
       - name: Register samples src path
         run: |
-          src=$(cd a2a-t-sample/subscribe-incident/src && pwd)
+          src=$(cd a2a-t-sample/fault-management/src && pwd)
           venv_site=$(.venv/bin/python -c "import site; print(site.getsitepackages()[0])")
           echo "$src" > "$venv_site/samples.pth"
 
