@@ -10,6 +10,8 @@
 - [如何使用 A2A-T SDK](#如何使用-a2a-t-sdk)
   - [客户端：生成并发送 Task-T prompt](#客户端生成并发送-task-t-prompt)
   - [服务端：校验、抽取并流式推送](#服务端校验抽取并流式推送)
+- [协商场景（Negotiation-T）](#协商场景negotiation-t)
+- [Webhook 传输（A2A 推送通知）](#webhook-传输a2a-推送通知)
 
 ## 概览
 
@@ -69,6 +71,11 @@ python run_demo.py --language zh-CN   # 中文（默认是 en-US）
 | 参数 | 作用 |
 | --- | --- |
 | `--language {en-US,zh-CN}` | 运行语言（默认 `en-US`） |
+| `--scenario {default,negotiation}` | 场景变体（默认 `default`；`negotiation` 运行缺失 region 的信息协商，见[协商场景](#协商场景negotiation-t)） |
+| `--negotiation {information,target,feasibility}` | 协商类型，选择客户端场景输入（默认 `information` = 缺失 region；`target` = 100Mbps 速率超出小区能力；`feasibility` = 30% 节能目标与 50Mbps 速率目标冲突）。`information` 仍受 `--scenario` 开关控制（只有 `--scenario negotiation` 运行缺失 region 流程）；`target`/`feasibility` 无需该开关即可触发。该参数只选择输入——服务端依据内容校验错误码数据驱动地分派，见[协商场景](#协商场景negotiation-t) |
+| `--channel {fromData,fromText}` | 协商 propose/accept 消息的生成通道（默认 `fromData`；`fromText` 每条生成的消息多一次抽取 LLM 调用，见[协商场景](#协商场景negotiation-t)） |
+| `--transport {sse,webhook}` | 客户端的事件传输方式（默认 `sse`）：`sse` 消费流式响应；`webhook` 在客户端内嵌推送接收器，以 webhook POST 接收全部任务事件，见[Webhook 传输](#webhook-传输a2a-推送通知) |
+| `--webhook-port N` | `--transport webhook` 时内嵌 webhook 接收器的绑定端口（默认 9000；`0` 表示由操作系统分配临时端口），见[Webhook 传输](#webhook-传输a2a-推送通知) |
 | `--keep-alive` | 保留注册中心/服务端不停止；之后用 `--stop` 关闭 |
 | `--keep-logs` | 保留临时运行目录（日志 / `.env`），位于 `<temp>/a2at-ran-energy-saving/` |
 | `--stop` | 停止之前 `--keep-alive` 留下的后台进程并退出 |
@@ -123,6 +130,13 @@ uv run --no-sync python -m client.client_main
 | 键 | 含义 |
 | --- | --- |
 | `A2AT_LANGUAGE` | `zh-CN` / `en-US`；决定自然语言输入与 mock/模板语言树 |
+| `A2AT_SAMPLE_SCENARIO` | `default` / `negotiation`；选择样例场景变体（`negotiation` = 缺失 region 的信息协商，见[协商场景](#协商场景negotiation-t)） |
+| `A2AT_SAMPLE_NEGOTIATION_KIND` | `information` / `target` / `feasibility`（默认 `information`）；选择协商场景输入，与 `--negotiation` 语义相同 |
+| `A2AT_SAMPLE_CHANNEL` | `data` / `text`（默认 `data`）；协商 propose/accept 消息的生成通道，与 `--channel` 语义相同 |
+| `A2AT_SAMPLE_TRANSPORT` | `sse` / `webhook`（默认 `sse`）；客户端的事件传输方式，与 `--transport` 语义相同 |
+| `A2AT_SAMPLE_WEBHOOK_PORT` | 内嵌 webhook 接收器的绑定端口（默认 `9000`；`0` = 操作系统分配临时端口），`A2AT_SAMPLE_TRANSPORT=webhook` 时使用 |
+| `A2AT_SAMPLE_WEBHOOK_TOKEN` | 服务端在 `X-A2A-Notification-Token` 头中必须携带的推送 token（默认 `demo-webhook-token`）；不匹配回 `401` |
+| `A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT` | 空闲兜底超时（秒）：webhook 流程超过该时长未收到推送即结束（默认 `30`） |
 | `A2AT_LLM_API_KEY` | 留空 ⇒ mock LLM；否则为 OpenAI 兼容的 key |
 | `A2AT_LLM_PROVIDER` / `A2AT_LLM_MODEL` / `A2AT_LLM_BASE_URL` | LLM 端点配置 |
 | `A2AT_LLM_TIMEOUT_SECONDS` | HTTP 客户端超时（秒，默认 60） |
@@ -150,7 +164,7 @@ uv run --no-sync python -m client.client_main
 ### 客户端：生成并发送 Task-T prompt
 
 用 A2A-T SDK 把你的自然语言输入渲染成 Task-T prompt ——
-[`client_flow.py:70`](src/client/client_flow.py#L70)：
+[`client_flow.py:891`](src/client/client_flow.py#L891)：
 
 ```python
 prompt_content = prompt_client.generate_task_prompt_from_text(input_text, ENERGY_SAVING_TEMPLATE_URI)
@@ -162,7 +176,7 @@ prompt_text, extension_uri = _require_prompt_text(prompt_content)
 `llm.not_configured`、`input.text_too_long`）。
 
 把 prompt 放进消息 metadata，用 `a2a-sdk` 发送（流式）——
-[`client_flow.py:84`](src/client/client_flow.py#L84)：
+[`client_flow.py:905`](src/client/client_flow.py#L905)：
 
 ```python
 request = SendMessageRequest()
@@ -188,7 +202,7 @@ async for stream_response in a2a_client.send_message(request, context=call_conte
 ### 服务端：校验、抽取并流式推送
 
 从客户端发来的消息 metadata 中读取 A2A-T 报文 ——
-[`server_flow.py:39`](src/server/server_flow.py#L39)：
+[`server_flow.py:75`](src/server/server_flow.py#L75)：
 
 ```python
 def _extract_prompt_text(request_context: RequestContext) -> str:
@@ -200,7 +214,7 @@ def _extract_prompt_text(request_context: RequestContext) -> str:
 ```
 
 用 A2A-T SDK 校验 prompt 并抽取参数 ——
-[`server_flow.py:101`](src/server/server_flow.py#L101)：
+[`server_flow.py:455`](src/server/server_flow.py#L455)：
 
 ```python
 filled_params = prompt_server.validate_task_prompt_and_data_filling(
@@ -215,7 +229,7 @@ schema 则为 list）。prompt 被拒绝时会抛出 `ContentValidationError`（
 `negotiation.semantic_rejected`、`llm.invocation_failed`、`template.not_found`），并携带
 `exc.errors`，含每槽位的 `slot_name` / `code` / `message`；样例将其映射为 `TASK_STATE_REJECTED`
 而不是让服务崩溃 ——
-[`server_flow.py:145`](src/server/server_flow.py#L145)：
+[`server_flow.py:482`](src/server/server_flow.py#L482)：
 
 ```python
 if validation_failure is not None:
@@ -232,7 +246,7 @@ if validation_failure is not None:
 ```
 
 整条流程运行在 `a2a-sdk` 的 `AgentExecutor` 中，它把执行委托给 `execute_server_flow` ——
-[`server_main.py:55`](src/server/server_main.py#L55)：
+[`server_main.py:59`](src/server/server_main.py#L59)：
 
 ```python
 async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
@@ -247,3 +261,144 @@ async def execute(self, context: RequestContext, event_queue: EventQueue) -> Non
 
 `a2a-sdk` 应用装配（routes、task store）见
 [`src/server/server_main.py`](src/server/server_main.py)。
+
+## 协商场景（Negotiation-T）
+
+除上述默认流程外，本样例还提供多个协商场景，在同一条流式链路上演示 **Negotiation-T** 协商。支持三类
+协商类型，由服务端产生的内容校验错误码数据驱动地选择：
+
+> 要把协商集成到您自己的系统？参见 [A2A-T 协商集成指南](../../docs/zh/协商集成指南.md)，了解
+> SDK/客户职责分界、七步集成路径与 demo 到生产的替换清单。
+
+| 内容校验错误码 | 协商类型 | 第 1 轮 propose → 第 2 轮 accept |
+| --- | --- | --- |
+| `content.param_missing` | 信息协商（information） | 服务端索要缺失参数（`region`）；客户端补全后应答 |
+| `content.value_not_allowed` | 目标协商（target） | 服务端提出澄清后的目标请求确认（确认请求轮）；客户端以确认后的意图应答 |
+| `content.semantic_conflict` | 可行性协商（feasibility） | 服务端请求对冲突内容做可行性评估（`action=REQUEST_FEASIBILITY_EVALUATION`，携带 `contents_to_evaluate`）；客户端以可行性摘要应答 |
+
+> 该映射是样例层的约定。报文是自描述的：每个 propose 携带各自的 `templateUri`
+> （`Negotiation-T/{information,target,feasibility}-negotiation/propose/v1`），客户端基于该 URI
+> 分派 accept。
+
+```bash
+cd a2a-t-sample/ran-energy-saving
+python run_demo.py --scenario negotiation                         # 缺失 region 的输入；信息协商
+python run_demo.py --negotiation target                           # 100Mbps 速率超出小区能力；目标协商
+python run_demo.py --negotiation feasibility --channel fromText   # 30% 节能目标与 50Mbps 速率冲突；可行性协商
+```
+
+各参数的默认值（`default` 场景、`information` 类型、`fromData` 通道）保持上文流程不变；协商类型与
+通道也可以通过 `.env` 中的 `A2AT_SAMPLE_NEGOTIATION_KIND` / `A2AT_SAMPLE_CHANNEL` 选择
+（见[配置](#配置)）。
+
+**第一轮——服务端发起 propose。** 客户端用 `generate_task_prompt_from_text`
+（[`client_flow.py:891`](src/client/client_flow.py#L891)）从自然语言输入生成 Task-T prompt。服务端用
+`validate_task_prompt_and_data_filling`（[`server_flow.py:455`](src/server/server_flow.py#L455)）校验后
+得到按槽位命名的拒绝；错误码选择协商类型（见上表），服务端用
+`generate_negotiation_propose_prompt_from_data`
+（[`server_flow.py:285`](src/server/server_flow.py#L285)）从类型化内容（`a2a_t.negotiation.content.models`
+中的 `InformationProposeContent` / `TargetProposeContent` / `FeasibilityProposeContent`）渲染对应的
+Negotiation-T propose——fromData 通道下渲染不涉及 LLM 调用——并发出 `TASK_STATE_INPUT_REQUIRED`，
+propose 放在该状态消息的 metadata 中（`build_metadata_content()`）。
+
+**第二轮——客户端 accept。** 客户端从 INPUT_REQUIRED 的 metadata 中读取 propose 并解析
+`negotiationContext` 会话，然后基于 propose 的 `templateUri` 分派应答的 ending 内容——信息协商：
+`InformationEndingContent`（补全后的应答项）；目标协商：`TargetEndingContent`（`ACCEPT` +
+`confirmed_intent`）；可行性协商：`FeasibilityEndingContent`（`ACCEPT` + `feasibility_summary`）。
+客户端用 `generate_task_prompt_from_data_with_schema`
+（[`client_flow.py:686`](src/client/client_flow.py#L686)）从补全后的参数重新生成 Task-T prompt，用
+`generate_negotiation_accept_prompt_from_data`
+（[`client_flow.py:701`](src/client/client_flow.py#L701)）渲染 accept，然后把两个 prompt 一并放进
+消息 metadata 重新发送同一任务。服务端检测到 Negotiation-T URI 即视为协商续轮，校验补全后的
+prompt，流式推送 UC1 进度与报告 artifact，最后以 `TASK_STATE_COMPLETED` 结束任务——协商运行到此
+结束，而默认流程保持长连接运行。
+
+**fromText 通道。** 选择 `--channel fromText`（`A2AT_SAMPLE_CHANNEL=text`）时，每条协商消息先渲染为
+自然语言文本，再由 SDK 从文本中抽取结构化内容：服务端调用
+`generate_negotiation_propose_prompt_from_text`
+（[`server_flow.py:282`](src/server/server_flow.py#L282)），客户端调用
+`generate_negotiation_accept_prompt_from_text`
+（[`client_flow.py:695`](src/client/client_flow.py#L695)）——每条生成的协商消息多一次抽取 LLM 调用
+（使用内置 mock LLM 时表现为额外的 `llm-mock` 日志行）。报文格式与 `fromData` 完全一致。已知的 mock 伪影：`--scenario negotiation --channel fromText` 时 information propose 携带预置的 2 条抽取项列表（`fromData` 携带 1 条缺失项列表）；accept 与报文约定保持等价。各类型的
+消息形态：目标协商的 propose 携带协商摘要与确认请求，accept 携带确认后的意图；可行性协商的 propose
+携带评估请求与 `contents_to_evaluate` 条目，accept 携带可行性摘要。
+
+> **语言行为：** 协商消息文本（propose 摘要、确认请求、可行性条目、accept 摘要）跟随运行语言
+> （`--language`）；UC1 进度与报告文案不随语言变化，保持内置英文。
+
+报文约定：
+
+| 内容 | 位置 |
+| --- | --- |
+| propose（第 1 轮）/ accept（第 2 轮）文本 | 消息 `metadata` 中 Negotiation-T 扩展 URI 之下（`https://projects.tmforum.org/a2aproject/telecommunication/extensions/Negotiation-T/v1`） |
+| 协商会话 | 嵌套的 `negotiationContext` metadata map（`id` / `round` / `maxRounds` / `performative`） |
+| 第 2 轮续轮信号 | 第 2 轮消息 `metadata` 中出现 Negotiation-T URI；`task_id` / `context_id` 沿用第 1 轮 |
+| 第 2 轮 `A2A-Extensions` 头 | 同时携带两个扩展 URI（Task-T **与** Negotiation-T），逗号拼接 |
+
+**预期输出**（已裁剪）：
+
+```text
+[client] a2a-event: {"task": {"id": "...", "status": {"state": "TASK_STATE_SUBMITTED", ...}}}
+[client] a2a-event: {"statusUpdate": {"status": {"state": "TASK_STATE_INPUT_REQUIRED", "message": {"metadata": {"negotiationContext": {"round": 1.0, ..., "performative": "PROPOSE"}, ".../extensions/Negotiation-T/v1": "## Information Negotiation ...", "templateUri": "Negotiation-T/information-negotiation/propose/v1"}}}}}
+[client] negotiation-accept: generated (round=2) template_uri=Negotiation-T/information-negotiation/accept-reject/v1 items=[('region', 'Songshanhu Administration Committee')]
+[client] a2a-send-message: round=2 streaming text_part=create ran energy saving task metadata_keys=[<Task-T/v1>, <Negotiation-T/v1>, templateUri, negotiationContext] header[A2A-Extensions]=<Negotiation-T/v1>,<Task-T/v1>
+[client] a2a-event: {"artifactUpdate": {"artifact": {"name": "energy saving intent report", ...}}}
+[client] a2a-event: {"statusUpdate": {"status": {"state": "TASK_STATE_COMPLETED", ...}}}
+[client] stream-completed: events=14 artifacts=1
+```
+
+## Webhook 传输（A2A 推送通知）
+
+除上述 SSE 流式消费外，样例还支持 **webhook 传输**（`--transport webhook`、`A2AT_SAMPLE_TRANSPORT=webhook`）——
+即 A2A **推送通知（Push Notification）**模式，面向不保持流式长连接的客户端：
+
+- **纯回调模式。** 客户端不消费 SSE：发送非阻塞 `message:send`（`return_immediately=True`），**全部**任务事件以
+  webhook POST 的形式送达客户端进程内嵌的接收器：`client_main` 在流程开始前于客户端自己的 asyncio loop 上启动
+  Starlette/uvicorn [`WebhookReceiver`](src/common/webhook_receiver.py)，流程结束后停止
+  （[`client_main.py`](src/client/client_main.py)）。推送报文是与 SSE 事件同构的 StreamResponse JSON（a2a-sdk
+  发送 `to_stream_response(event)`），因此协商检测、artifact 计数与展示逻辑与 SSE 路径完全共享。
+- **两条注册路径。** 第 1 轮在请求内联注册 push 配置（`SendMessageConfiguration.task_push_notification_config`，
+  即扁平的 `TaskPushNotificationConfig(url, token)`——此时 task id 尚未知）；第 2 轮在发送协商 accept 前，经
+  `POST /tasks/{id}/pushNotificationConfigs` REST 端点（a2a-sdk `BaseClient.create_task_push_notification_config`）
+  重注册同一 URL/token。服务端**无条件**装配推送机制——a2a-sdk `DefaultRequestHandler` 携带
+  `InMemoryPushNotificationConfigStore` + `BasePushNotificationSender`
+  （[`server_main.py`](src/server/server_main.py)）——SSE 模式下它只是闲置，不存在服务端模式开关。
+- **Token 鉴权。** 服务端推送发送方在每个 POST 的 `X-A2A-Notification-Token` 头中携带
+  `A2AT_SAMPLE_WEBHOOK_TOKEN`（默认 `demo-webhook-token`）；接收器校验该头，不匹配回 `401`（事件被丢弃）；
+  格式错误或无法识别的报文回 `400`（两条拒绝路径都属于接收器契约）。
+- **结束信号。** 任一 SDK 终态（`TASK_STATE_COMPLETED` / `FAILED` / `CANCELED` / `REJECTED`）都会在两个阶段
+  立即结束流程——协商场景正常以 `COMPLETED` 结束，校验失败或流异常则以 `REJECTED` / `FAILED` 直接结束，
+  而不是一直挂到空闲兜底——summary 行以 `end=<state>` 记录终态结束。默认场景仍以报告 artifact 结束；
+  `INPUT_REQUIRED`（协商 propose）只是第 1 轮的中断点，不是流程结束。空闲超时
+  （`A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT`，默认 30 秒，每收到一个事件重置）是兜底：打印
+  `webhook-idle-timeout` 诊断行后，带着已收集的事件正常结束流程。`A2AT_SAMPLE_MAX_ARTIFACTS` 在 webhook
+  模式下不生效——artifact 结束信号本身就关闭默认流程（没有流截断上限）。
+
+webhook 模式下客户端内嵌接收器，因此除注册中心/服务端端口外**多绑定一个监听端口**——
+`A2AT_SAMPLE_WEBHOOK_PORT`（默认 9000；`--webhook-port N`，`0` = 操作系统分配临时端口）。a2a 客户端以
+`ClientConfig(streaming=False)` 构建——这是选择非阻塞 `message:send` 路径的必要条件（仅设置
+`return_immediately` 不会切换路径）。语言行为沿用上文协商章节的说明。每一轮的唯一 RPC 应答（首个 Task）以
+`webhook-rpc-reply` 记录一次、不重复计数：`stream-completed` 汇总统计经 webhook 收到的事件（与 SSE 口径
+一致），并追加 `transport=webhook`（终态结束再追加 `end=<state>`，空闲兜底结束则追加 `idle-timeout=<N>s`）。
+
+```bash
+cd a2a-t-sample/ran-energy-saving
+python run_demo.py --transport webhook                          # 默认场景；以报告 artifact 结束
+python run_demo.py --transport webhook --scenario negotiation   # 信息协商；以 COMPLETED 结束
+python run_demo.py --transport webhook --negotiation target     # webhook 上的目标协商
+```
+
+**预期输出**（已裁剪）：
+
+```text
+[webhook-receiver] listening: url=http://127.0.0.1:9000/webhook
+[client] webhook-mode: push_url=http://127.0.0.1:9000/webhook idle_timeout=30.0s (client streaming=false, events via push notifications)
+[client] a2a-send-message: round=1 webhook text_part=create ran energy saving task metadata_keys=[<Task-T/v1>, templateUri] return_immediately=true push_registration=inline
+[client] webhook-event: {"statusUpdate": {..., "status": {"state": "TASK_STATE_INPUT_REQUIRED", "message": {"metadata": {"negotiationContext": {"round": 1.0, ..., "performative": "PROPOSE"}, ".../extensions/Negotiation-T/v1": "## Information Negotiation ...", "templateUri": "Negotiation-T/information-negotiation/propose/v1"}}}}}
+[client] negotiation-accept: generated (round=2) template_uri=Negotiation-T/information-negotiation/accept-reject/v1 items=[('region', 'Songshanhu Administration Committee')]
+[client] webhook-push-reregister: task_id=... url=http://127.0.0.1:9000/webhook method=create_task_push_notification_config token=***
+[client] a2a-send-message: round=2 webhook text_part=create ran energy saving task metadata_keys=[<Task-T/v1>, <Negotiation-T/v1>, templateUri, negotiationContext] header[A2A-Extensions]=<Negotiation-T/v1>,<Task-T/v1> return_immediately=true push_registration=endpoint
+[client] webhook-event: {"statusUpdate": {..., "status": {"state": "TASK_STATE_COMPLETED", ...}}}
+[client] stream-completed: events=14 artifacts=1 transport=webhook end=TASK_STATE_COMPLETED
+[webhook-receiver] stopped: url=http://127.0.0.1:9000/webhook
+```

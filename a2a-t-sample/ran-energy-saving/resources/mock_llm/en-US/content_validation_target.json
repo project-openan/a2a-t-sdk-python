@@ -1,0 +1,18 @@
+{
+  "semantic_verdict": false,
+  "errors": [
+    {
+      "slot_name": "guaranteedThroughputTarget",
+      "code": "content.value_not_allowed",
+      "facts": {
+        "section_label": "task_context"
+      }
+    }
+  ],
+  "params": {
+    "operationType": "create",
+    "region": "Songshanhu Administration Committee",
+    "energySavingGoal": "Maximize energy saving under the condition that the task context is met.",
+    "guaranteedThroughputTarget": null
+  }
+}

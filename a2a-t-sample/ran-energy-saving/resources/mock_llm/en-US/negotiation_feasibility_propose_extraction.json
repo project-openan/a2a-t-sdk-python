@@ -1,0 +1,16 @@
+{
+  "feasibility_negotiation_description": "Feasibility negotiation for the RAN energy saving task: the 30% energy saving goal conflicts with the 50Mbps guaranteed throughput target, so the feasibility needs a joint evaluation.",
+  "action": "REQUEST_FEASIBILITY_EVALUATION",
+  "contents_to_evaluate": [
+    {
+      "name": "Target achievement",
+      "value": "The area runs energy saving from 00:00 to 06:00 while guaranteeing a throughput target of 50Mbps."
+    },
+    {
+      "name": "Resource status",
+      "value": "The cells in the area are NR with carrier shutdown available during the low-traffic period."
+    }
+  ],
+  "infeasibility_details_and_proposal": null,
+  "feasibility_confirm_request": null
+}

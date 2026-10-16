@@ -27,11 +27,23 @@ def build_status_message(*, context_id: str, task_id: str, text: str) -> Message
     return message
 
 
-def build_status(*, context_id: str, task_id: str, state: TaskState, text: str) -> TaskStatus:
-    return TaskStatus(
+def build_status(
+    *,
+    context_id: str,
+    task_id: str,
+    state: TaskState,
+    text: str,
+    metadata: dict[str, object] | None = None,
+) -> TaskStatus:
+    """Build one TaskStatus whose message carries the text part and the optional metadata map."""
+    status = TaskStatus(
         state=state,
         message=build_status_message(context_id=context_id, task_id=task_id, text=text),
     )
+    if metadata:
+        for key, value in metadata.items():
+            status.message.metadata[key] = value
+    return status
 
 
 def build_metadata_artifact(
@@ -63,6 +75,7 @@ async def emit_status_update(
     task_id: str,
     state: TaskState,
     text: str,
+    metadata: dict[str, object] | None = None,
 ) -> None:
     """Build and enqueue a TaskStatusUpdateEvent, also updating the request context's current_task."""
     status = build_status(
@@ -70,6 +83,7 @@ async def emit_status_update(
         task_id=task_id,
         state=state,
         text=text,
+        metadata=metadata,
     )
     current_task = Task()
     if request_context.current_task is not None:

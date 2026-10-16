@@ -13,5 +13,5 @@ See the repository root [`README.md`](../README.md) for setup and how to run.
 | Directory | Description |
 | --- | --- |
 | [fault-management/](fault-management/) | Event subscription sample — stream Incident notifications |
-| [ran-energy-saving/](ran-energy-saving/) | RAN energy saving sample — run a RAN energy-saving task |
+| [ran-energy-saving/](ran-energy-saving/) | RAN energy saving sample — run a RAN energy-saving task, including Negotiation-T negotiations in three kinds (information / target / feasibility) over both generation channels (fromData / fromText), plus an optional webhook transport (`--transport webhook`) that delivers every task event as an A2A push-notification callback to a client-embedded receiver |
 | [negotiation/](negotiation/) | Negotiation closed-loop sample — offline propose → accept round trips |

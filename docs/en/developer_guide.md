@@ -1203,6 +1203,8 @@ After starting the client or the server, confirm and troubleshoot as follows:
 2. **Content not updated**: changes to local files do not take effect without a restart; restart the SDK process and reconstruct.
 3. **LLM instructions and error messages cannot be customized**: `prompts/` and `errors/` are read only from the built-in resources; local copies are ignored with a warning.
 
+> Once your custom template is in place and you want the negotiation capability on top of it, see [negotiation_integration_guide.md](negotiation_integration_guide.md) — it walks the end-to-end Negotiation-T integration path (the server task-execution seam, the client negotiation-response provider, the error-code mapping, transports, and the demo-to-production checklist), using the ran-energy-saving sample as the worked example.
+
 ## 1.6 Logging Configuration and Integration Guide
 
 ### 1.6.1 Logging Mechanism Overview

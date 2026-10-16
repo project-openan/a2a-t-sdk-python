@@ -159,6 +159,7 @@ uv run mypy src      # 类型检查
 | --- | --- | --- |
 | 开发指南 | [docs/zh/开发指南.md](docs/zh/开发指南.md) | 特性介绍、安装接入、参数配置与最小实践 |
 | API 参考 | [docs/zh/API参考.md](docs/zh/API参考.md) | `A2ATClient` / `A2ATServer` 全量 API 定义与使用说明 |
+| 协商集成指南 | [docs/zh/协商集成指南.md](docs/zh/协商集成指南.md) | Negotiation-T 能力集成指引：SDK/客户职责分界、七步集成路径与 demo 到生产的替换清单 |
 
 ## 当前支持范围
 

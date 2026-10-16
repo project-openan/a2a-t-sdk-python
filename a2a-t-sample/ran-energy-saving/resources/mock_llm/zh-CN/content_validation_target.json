@@ -1,0 +1,18 @@
+{
+  "semantic_verdict": false,
+  "errors": [
+    {
+      "slot_name": "guaranteedThroughputTarget",
+      "code": "content.value_not_allowed",
+      "facts": {
+        "section_label": "任务上下文"
+      }
+    }
+  ],
+  "params": {
+    "operationType": "create",
+    "region": "松山湖管委会",
+    "energySavingGoal": "在满足任务上下文的前提下最大化节能。",
+    "guaranteedThroughputTarget": null
+  }
+}

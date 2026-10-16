@@ -1,0 +1,16 @@
+{
+  "feasibility_negotiation_description": "无线网络节能任务的可行性协商：节能目标30%与保障速率目标50Mbps存在冲突，需对可行性进行联合评估。",
+  "action": "REQUEST_FEASIBILITY_EVALUATION",
+  "contents_to_evaluate": [
+    {
+      "name": "目标达成",
+      "value": "区域在00:00~06:00时段执行节能，同时保障速率目标为50Mbps。"
+    },
+    {
+      "name": "能源现状",
+      "value": "区域内小区为NR制式，低话务时段具备关断载频条件。"
+    }
+  ],
+  "infeasibility_details_and_proposal": null,
+  "feasibility_confirm_request": null
+}

@@ -161,6 +161,7 @@ More runnable samples (event subscription end-to-end, negotiation closed loop, e
 | --- | --- | --- |
 | Developer Guide | [docs/en/developer_guide.md](docs/en/developer_guide.md) | Feature introduction, installation and integration, parameter configuration, and minimal practices |
 | API Reference | [docs/en/API_Reference.md](docs/en/API_Reference.md) | Full API definitions and usage of `A2ATClient` / `A2ATServer` |
+| Negotiation Integration Guide | [docs/en/negotiation_integration_guide.md](docs/en/negotiation_integration_guide.md) | How to integrate the Negotiation-T capability: SDK/customer responsibility split, the seven-step integration path, and the demo-to-production checklist |
 
 ## Current Support Scope
 

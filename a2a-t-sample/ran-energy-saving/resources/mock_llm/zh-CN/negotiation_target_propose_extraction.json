@@ -1,0 +1,7 @@
+{
+  "target_negotiation_description": "无线网络节能任务的目标协商：用户提交的保障速率目标100Mbps超出小区能力，需对澄清后的目标进行确认。",
+  "intent_understanding": null,
+  "alignment_and_clarification": null,
+  "request_for_clarification": null,
+  "target_confirm_request": "澄清后的目标为该区域保障速率20Mbps，请确认。"
+}

@@ -1,0 +1,13 @@
+{
+  "items": [
+    {
+      "name": "region",
+      "value": "Please provide the coverage region of the energy saving task"
+    },
+    {
+      "name": "energySavingGoal",
+      "value": "Please provide the energy saving goal of the energy saving task"
+    }
+  ],
+  "relationship": null
+}
