@@ -65,10 +65,6 @@ integration = [
 Homepage = "https://github.com/project-openan/a2a-t-sdk-python"
 Documentation = "https://github.com/project-openan/a2a-t-sdk-python#readme"
 
-[[tool.uv.index]]
-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
-default = true
-
 [tool.uv.build-backend]
 module-name = "a2a_t"
 source-exclude = [".gitignore"]

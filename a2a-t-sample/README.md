@@ -15,3 +15,4 @@ See the repository root [`README.md`](../README.md) for setup and how to run.
 | [fault-management/](fault-management/) | Event subscription sample — stream Incident notifications |
 | [ran-energy-saving/](ran-energy-saving/) | RAN energy saving sample — run a RAN energy-saving task |
 | [negotiation/](negotiation/) | Negotiation closed-loop sample — offline propose → accept round trips |
+| [observability-sample/](observability-sample/) | Observability sample — traces, metrics and logs for every scenario, with an optional Langfuse backend |

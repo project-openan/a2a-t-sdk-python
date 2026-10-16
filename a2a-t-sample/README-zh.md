@@ -15,3 +15,4 @@
 | [fault-management/](fault-management/) | 事件订阅样例——流式推送 Incident 通知 |
 | [ran-energy-saving/](ran-energy-saving/) | 无线网络节能样例——运行 RAN 节能任务 |
 | [negotiation/](negotiation/) | 协商闭环样例——离线 propose → accept 往返 |
+| [observability-sample/](observability-sample/) | 可观测样例——所有场景的 trace / 指标 / 日志，可选 Langfuse 后端 |

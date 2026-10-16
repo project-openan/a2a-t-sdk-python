@@ -1,98 +1,139 @@
-# observability-sample — A2A-T 可观测性演示（v3.0 装饰器架构）
+# observability-sample — see what your A2A-T agents are actually doing
 
-基于 `a2a-t-sdk[observability]` v3.0 的端到端可观测性样例：一行装饰器接线、零手动 OTel 代码。
+A runnable sample that shows the **full lifecycle of an A2A-T interaction** — a client
+asks, a server answers, artifacts stream back — with every step automatically traced,
+measured and logged by the `a2a-t-sdk` observability layer.
 
-## 接线（v3.0）
+There is **no manual OpenTelemetry code** in the sample: the server adds one wrapper,
+the client adds one registration, and everything else is emitted by the SDK.
 
-- Server：`A2ATRequestHandlerDecorator(LegacyRequestHandler(...))` —— 自动创建 SERVER 入口 Span
-  （从 `ServerCallContext.state["headers"]` 提取 traceparent 作为父上下文，无需 ASGI 中间件）、
-  包装 executor 产生 per-event Span、包装 push sender 产生 push Span
-- Client：`register_client_factory(factory)` —— 之后 `factory.create(card)` 产出的 client 自动携带
-  观测 transport（CLIENT Span + traceparent 注入，经 `ClientCallContext.service_parameters` 落到 HTTP 头）
-- OTel 自动配置：SDK 在首次使用时自动装配 Tracer/Meter/LoggerProvider（未配置
-  `OTEL_EXPORTER_OTLP_ENDPOINT` 时回退 Console 导出），样例不含任何手动 setup 代码
+---
 
-## a2a-sdk 1.1.x handler caveat（必须 LegacyRequestHandler）
+## What you can try
 
-完整 per-event Span 富化需要 `LegacyRequestHandler`。a2a-sdk 1.1.2 默认的 `DefaultRequestHandler`
-（V2）在构造期即捕获裸的 `agent_executor`/`_push_sender` 引用（ActiveTaskRegistry），装饰器构造期的
-executor/push 包装会被绕过。本样例固定使用 `LegacyRequestHandler`（服务端行为与 V2 兼容）。
+| Scenario (`--scenario=`) | Story |
+|--------------------------|-------|
+| `native` | A task flows end to end: the client submits, the server works and streams artifacts back. Watch the request light up on both sides. |
+| `a2at` | Prompt generation with an LLM (a mock LLM by default — no API key needed) and a manual "L4" span around the SDK call. |
+| `negotiation` | The agent **bargains before it commits**: two offer rounds happen over plain messages (no task yet), and only after both sides agree does the real task start and stream its result. |
 
-## 运行（离线，默认 Console 输出）
+## Quick start
 
-```powershell
+Prerequisites: you are in the repository root and [uv](https://docs.astral.sh/uv/) is installed.
+
+```bash
+# from the repo root — terminal 1: start the server (port 8100)
 cd a2a-t-sample
-$env:PYTHONPATH = "$pwd\observability-sample\src"
-$env:A2AT_OBSERVABILITY_ENABLED = "true"   # 观测总开关（默认即 true；置 false 时装饰器完全直通）
-
-# 终端 1：server（端口 8100）
+export PYTHONPATH="$PWD/observability-sample/src"
+export A2AT_OBSERVABILITY_ENABLED=true
 uv run python -m obs_sample.server_main
 
-# 终端 2：client（原生 a2a-python 流量）
+# terminal 2: run a client scenario
+cd a2a-t-sample
+export PYTHONPATH="$PWD/observability-sample/src"
 uv run python -m obs_sample.client_main --scenario=native
+```
 
-# 或 client（A2ATClient 模板生成 + trace_facade L4 Span，需仓库 a2a-t-sample/.env：
-# 不存在时从 env.example 复制并将 A2AT_LLM_API_KEY 置空（A2AT_LLM_API_KEY=），置空后自动走 mock LLM）
+Windows PowerShell: use `$env:PYTHONPATH = "$PWD\observability-sample\src"` instead of `export`.
+
+You will see log lines on both terminals (`[server] ...` / `[client] ...`), and — with the
+default configuration — every span printed as JSON on the server console.
+
+## Scenario walkthroughs
+
+### native — one task, both sides
+
+1. Terminal 1 starts the server. Terminal 2 runs the client with `--scenario=native`.
+2. The client submits a task; the server moves it through *submitted → working* and
+   streams an artifact back.
+3. Each step appears as a span on **both** sides, joined into one trace
+   (the client passes a W3C `traceparent` to the server automatically).
+
+### a2at — generate a prompt with an LLM
+
+```bash
 uv run python -m obs_sample.client_main --scenario=a2at
+```
 
-# 协商场景：server 需以 negotiation 模式启动（返回 Negotiation-T 终态 Message）
+The client generates a task prompt through the SDK's LLM facade. With an empty
+`A2AT_LLM_API_KEY` in `a2a-t-sample/.env` a canned **mock LLM** answers, so this runs
+fully offline. The LLM's token usage is measured automatically and attached to the trace.
+
+### negotiation — bargain first, execute later
+
+```bash
+# terminal 1: restart the server in negotiation mode
 uv run python -m obs_sample.server_main --scenario=negotiation
-# 然后另一个终端：
+# terminal 2:
 uv run python -m obs_sample.client_main --scenario=negotiation
 ```
 
-`--scenario=a2at` 分支会调用一次幂等的 `setup()`（SDK 公共自动配置入口）：L4 门面 Span
-产生在首个 A2A 请求之前，需先完成 OTel 自动装配才不会丢失；native 场景无需任何调用，
-首个请求即触发自动配置。
+This is the real-world timing of a Negotiation-T deal:
 
-端口可用 `A2AT_OBS_SAMPLE_PORT` 覆盖（默认 8100）。样例 client 会请求 push notification
-（回环到 server 的 `/push-sink`），用于演示 `SendMessage-pushNotification` Span。
+1. **Round 1** — the client proposes; the server counters with a different offer and
+   disconnects. *No task exists yet — bargaining happens over plain messages.*
+2. **Round 2** — the client reconnects, accepts the counter-offer; the server confirms
+   the agreement and disconnects again.
+3. **The task starts only after agreement** — a separate request now runs the full
+   task lifecycle and streams the result.
 
-## 预期输出（v3.0 Span 命名，a2a-java 对齐）
+Each round is an independent exchange; the sample ties them together so you can follow
+the whole deal in one place (see Langfuse below).
 
-Client 终端（CLIENT Span）：
+## Send everything to Langfuse (optional)
 
-- `SendStreamingMessage`（入口 Span，含 `extension.name`、`gen_ai.operation.name`、
-  `gen_ai.client.operation.duration` 指标；traceparent 注入请求头）
-- `SendStreamingMessage-event`（per-event，LINK 到入口 Span）
-- `--scenario=a2at` 另有 `a2at.sdk.client.generate_task_prompt`（L4）
-- `--scenario=negotiation` 另有 `SendStreamingMessage-negotiation`（PARENT 到入口 Span，
-  含 `negotiation.id/round/max_rounds/performative` 属性；服务端返回 Negotiation-T 终态 Message 时自动识别）
+Set three variables before starting **both** processes and every span lands in your
+Langfuse project as one browsable trace per interaction:
 
-Server 终端（SERVER/INTERNAL Span，与 Client 同 trace_id —— W3C traceparent 端到端贯通）：
-
-- `SendStreamingMessage`（SERVER 入口 Span，父 = Client 入口 Span）
-- `SendStreamingMessage-event`（per-event INTERNAL Span，父 = SERVER 入口 Span）
-- `SendMessage-pushNotification`（CLIENT kind Span，LINK 到 SERVER 入口 Span）
-- `--scenario=negotiation` 时 server 返回终态协商 Message（不产生 per-event Span 流）
-
-日志与指标：
-
-- logger `a2at.observability` 自动经 OTLP/Console 导出（`task.status_changed` / `task.artifact` 等）
-- 指标：`gen_ai.client.operation.duration`（client）、`a2at.task.request.duration`（side=client/server）
-
-## 配置开关
-
-| 环境变量 | 默认 | 说明 |
-| --- | --- | --- |
-| `A2AT_OBSERVABILITY_ENABLED` | `true` | 观测总开关；`false` → 装饰器完全直通（无任何观测） |
-| `A2AT_TRACE_ENABLED` | `true` | Trace 信号开关；`false` → 不产生 Span，指标/日志仍工作 |
-| `A2AT_METRIC_ENABLED` | `true` | Metric 信号开关 |
-| `A2AT_LOG_ENABLED` | `true` | Log 信号开关 |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | 未设置 | 未设置 → Console 导出（dev 模式） |
-| `A2AT_EXPORTER_PROTOCOL` | `grpc` | OTLP 协议（`grpc` / `http/protobuf`） |
-| `OTEL_SERVICE_NAME`（或 `A2AT_SERVICE_NAME`） | `a2a-t-agent` | Resource `service.name` |
-| `OTEL_INSTRUMENTATION_A2AT_SDK_ENABLED` | `true` | OTel 主开关；`false` → 全部 NoOp 直通 |
-
-## 切换 OTLP 后端
-
-```powershell
-$env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://collector:4317"
+```bash
+export LANGFUSE_PUBLIC_KEY="pk-lf-..."
+export LANGFUSE_SECRET_KEY="sk-lf-..."
+export LANGFUSE_BASE_URL="https://us.cloud.langfuse.com"
 ```
 
-（需另装 `opentelemetry-exporter-otlp-proto-grpc`；默认 Console 输出无需任何额外依赖。）
+In the Langfuse UI you will see the client and server spans of every round and the final
+task on a single timeline — including who proposed what, which round was accepted, and
+how long each step took.
 
-## 说明
+## What gets recorded (cheat sheet)
 
-- 断言式端到端验证见 `tests/integration/test_e2e_observability.py`（`A2AT_TEST_A2A=1`）。
-- a2at 场景的 mock LLM 资源复用 `../subscribe-incident/resources/mock_responses`。
+| You do | The SDK records |
+|--------|-----------------|
+| Client sends a request | `SendStreamingMessage` span (CLIENT) + duration metric |
+| Server receives it | `SendStreamingMessage` span (SERVER), child of the client's |
+| Server streams an event | `SendStreamingMessage-event` span, linked to the entry |
+| A negotiation message is sent / received | `SendStreamingMessage-negotiation` span with round & performative |
+| Server pushes a notification | `SendMessage-pushNotification` span, linked to the server entry |
+| The LLM generates tokens | token-usage metric + `gen_ai.usage.*` on the next trace |
+| Anything noteworthy | a structured log line on logger `a2at.observability` |
+
+Signals can be toggled independently — see the environment variables below.
+
+## Environment variables
+
+Commonly used:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `A2AT_OBSERVABILITY_ENABLED` | `true` | Master switch — `false` makes the SDK fully transparent |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | *(unset)* | Send spans/metrics/logs to an OTLP collector instead of the console |
+| `A2AT_CONSOLE_EXPORTER` | `true` | `false` disables the dev-mode console fallback (no stdout JSON) |
+| `OTEL_SERVICE_NAME` (or `A2AT_SERVICE_NAME`) | `a2a-t-agent` | How this process is named in the backend |
+| `A2AT_OBS_SAMPLE_PORT` | `8100` | Sample server port |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL` | *(unset)* | Enable the Langfuse backend |
+
+Advanced (rarely needed): `A2AT_TRACE_ENABLED`, `A2AT_METRIC_ENABLED`, `A2AT_LOG_ENABLED`
+(per-signal switches — e.g. trace off keeps metrics and logs alive), `A2AT_EXPORTER_PROTOCOL`
+(`grpc` / `http/protobuf`), `OTEL_INSTRUMENTATION_A2AT_SDK_ENABLED=false` (hard disable).
+
+## Notes
+
+- The server uses the **official default** `DefaultRequestHandler` (a2a-sdk 1.1.x alias
+  for `DefaultRequestHandlerV2`): the observability decorator detects the V2 shape and
+  rebuilds its task registry with the decorated executor / push sender, so per-event and
+  push spans work on the official handler too. (`LegacyRequestHandler` remains supported
+  via per-attribute wrapping.)
+- Push notifications are echoed back to the server's `/push-sink` endpoint, which is
+  why the sample can show the `SendMessage-pushNotification` span end to end.
+- Offline verification helpers live next to the sample code (`check_*.py`,
+  `verify_langfuse.py`) — they are one-off debugging tools, not part of the sample flow.
