@@ -50,9 +50,7 @@
       {
         "result": "success",
         "data": {
-          "topic": "Incident",
-          "subscriptionCondition": "故障优先级为严重、高，故障名称为光纤中断、单板故障",
-          "notificationDataFormat": "通过DataPart上报Incident数据"
+          "topic": "Incident"
         },
         "error": { "errCode": "", "errMessage": "" }
       }
@@ -61,13 +59,13 @@
   {
     "id": "TC00000002",
     "caseDimension": "01-意图清晰参数完整",
-    "caseDesc": "Fault订阅-英文优先级语义（critical、high）+DataPart承载",
+    "caseDesc": "Fault订阅-中文优先级语义（高、中）+DataPart承载",
     "caseCategory": "正常",
     "input": [
       {
         "api": "generateNotificationPromptFromText",
         "args": {
-          "text": "请生成一个智能故障订阅任务：通知主题为Fault，订阅条件为故障优先级为critical、high，故障名称为光纤中断、光模块故障，上报通知数据格式为通过DataPart上报故障数据",
+          "text": "请生成一个智能故障订阅任务：通知主题为Fault，订阅条件为故障优先级为高、中，故障名称为单板故障、主控板异常，上报通知数据格式为通过DataPart上报故障数据",
           "templateUri": "Notification-T/network-layer/subscribe-incident/v1"
         }
       },
@@ -109,8 +107,7 @@
       {
         "result": "success",
         "data": {
-          "topic": "Fault",
-          "subscriptionCondition": "故障优先级为critical、high，故障名称为光纤中断、光模块故障"
+          "topic": "Fault"
         },
         "error": { "errCode": "", "errMessage": "" }
       }

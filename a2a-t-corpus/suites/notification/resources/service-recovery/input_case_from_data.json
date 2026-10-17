@@ -81,8 +81,7 @@
       {
         "result": "success",
         "data": {
-          "topic": "业务抢通事件",
-          "subscriptionCondition": "子网名称：松山湖园区子网"
+          "topic": "业务抢通事件"
         },
         "error": { "errCode": "", "errMessage": "" }
       }
@@ -178,9 +177,9 @@
   },
   {
     "id": "TC00000003",
-    "caseDimension": "01-意图清晰参数完整",
-    "caseDesc": "data业务抢通事件-精简上报通知数据格式（4个字段）",
-    "caseCategory": "正常",
+    "caseDimension": "04-关键信息缺失",
+    "caseDesc": "data业务抢通事件-精简上报通知数据格式缺少必选信息项（语义校验拒绝）",
+    "caseCategory": "异常",
     "input": [
       {
         "api": "generateNotificationPromptFromDataWithSchema",
@@ -253,12 +252,9 @@
         "error": { "errCode": "", "errMessage": "" }
       },
       {
-        "result": "success",
-        "data": {
-          "topic": "业务抢通事件",
-          "subscriptionCondition": "子网名称：东莞松山湖园区子网"
-        },
-        "error": { "errCode": "", "errMessage": "" }
+        "result": "error",
+        "data": {},
+        "error": { "errCode": "negotiation.semantic_rejected", "errMessage": "" }
       }
     ]
   },

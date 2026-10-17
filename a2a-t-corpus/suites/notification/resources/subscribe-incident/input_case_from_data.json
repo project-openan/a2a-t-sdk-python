@@ -72,8 +72,7 @@
       {
         "result": "success",
         "data": {
-          "topic": "Incident",
-          "subscriptionCondition": "故障优先级为严重、高，故障名称为光纤中断、单板故障"
+          "topic": "Incident"
         },
         "error": { "errCode": "", "errMessage": "" }
       }
@@ -82,7 +81,7 @@
   {
     "id": "TC00000002",
     "caseDimension": "01-意图清晰参数完整",
-    "caseDesc": "data Fault订阅-英文优先级语义+光模块故障+DataPart承载",
+    "caseDesc": "data Fault订阅-中文优先级语义（高、中）+单板故障+DataPart承载",
     "caseCategory": "正常",
     "input": [
       {
@@ -90,7 +89,7 @@
         "args": {
           "data": {
             "topic": "Fault",
-            "condition": "故障优先级为critical、high，故障名称为光纤中断、光模块故障",
+            "condition": "故障优先级为高、中，故障名称为单板故障、主控板异常",
             "dataFormat": "通过DataPart上报故障数据"
           },
           "schema": {
@@ -152,8 +151,7 @@
       {
         "result": "success",
         "data": {
-          "topic": "Fault",
-          "subscriptionCondition": "故障优先级为critical、high，故障名称为光纤中断、光模块故障"
+          "topic": "Fault"
         },
         "error": { "errCode": "", "errMessage": "" }
       }

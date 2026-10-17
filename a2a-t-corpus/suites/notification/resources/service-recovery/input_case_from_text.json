@@ -50,9 +50,7 @@
       {
         "result": "success",
         "data": {
-          "topic": "业务抢通事件",
-          "subscriptionCondition": "子网名称：松山湖园区子网",
-          "notificationDataFormat": "业务抢通事件数据包含：业务抢通方案执行状态（未启动、已结束）、投诉诊断任务流水号、OSS侧事件流水号、接入端口名称、是否已授权OMC自动抢通（是、否）、业务抢通方案名称、业务抢通方案详情。"
+          "topic": "业务抢通事件"
         },
         "error": { "errCode": "", "errMessage": "" }
       }
@@ -109,8 +107,7 @@
       {
         "result": "success",
         "data": {
-          "topic": "业务抢通事件",
-          "notificationDataFormat": "业务抢通事件数据包含：业务抢通方案执行状态（未启动、已结束）、投诉诊断任务流水号、OSS侧事件流水号、接入端口名称、是否已授权OMC自动抢通（是、否）、业务抢通方案名称、业务抢通方案详情。"
+          "topic": "业务抢通事件"
         },
         "error": { "errCode": "", "errMessage": "" }
       }
@@ -118,9 +115,9 @@
   },
   {
     "id": "TC00000003",
-    "caseDimension": "01-意图清晰参数完整",
-    "caseDesc": "业务抢通事件-订阅条件（子网名称）+精简上报通知数据格式（4个字段）",
-    "caseCategory": "正常",
+    "caseDimension": "04-关键信息缺失",
+    "caseDesc": "业务抢通事件-精简上报通知数据格式缺少必选信息项（语义校验拒绝）",
+    "caseCategory": "异常",
     "input": [
       {
         "api": "generateNotificationPromptFromText",
@@ -165,34 +162,9 @@
         "error": { "errCode": "", "errMessage": "" }
       },
       {
-        "result": "success",
-        "data": {
-          "topic": "业务抢通事件",
-          "subscriptionCondition": "子网名称：东莞松山湖园区子网"
-        },
-        "error": { "errCode": "", "errMessage": "" }
-      }
-    ]
-  },
-  {
-    "id": "TC00000004",
-    "caseDimension": "04-关键信息缺失",
-    "caseDesc": "业务抢通事件-缺少必选的上报通知数据格式",
-    "caseCategory": "异常",
-    "input": [
-      {
-        "api": "generateNotificationPromptFromText",
-        "args": {
-          "text": "我想订阅一下业务抢通事件，子网名称为松山湖园区子网。",
-          "templateUri": "Notification-T/network-layer/service-recovery/v1"
-        }
-      }
-    ],
-    "expected": [
-      {
         "result": "error",
         "data": {},
-        "error": { "errCode": "slot.not_provided", "errMessage": "" }
+        "error": { "errCode": "negotiation.semantic_rejected", "errMessage": "" }
       }
     ]
   }
