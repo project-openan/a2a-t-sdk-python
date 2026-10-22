@@ -9,6 +9,8 @@
   fails fast with an actionable error exactly when someone actually tries to run the live suites.
 - ``pytest_generate_tests``: parametrizes the workflow suite modules over the discovered scenario
   cases (test id = ``<scenario>/<case id>``), the ``@TestFactory`` counterpart.
+- ``A2AT_LANGUAGE`` (default ``zh-CN``) selects the prompt language and the case-file variant, for
+  example ``input_case_from_text_en-US.json``; a language without any committed case file skips.
 
 Suite modules declare four constants: ``EXTENSION_FOLDER``, ``INPUT_CASE_FILE``, ``FLOW_TYPE`` and
 ``RUNTIME_KIND`` (``"task"``, ``"negotiation"`` or ``"notification"``); ``API_NAMES`` defaults to the
@@ -21,7 +23,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from engine.constants import TASK_API_NAMES
+from engine.config import resolve_language
+from engine.constants import DEFAULT_LANGUAGE, TASK_API_NAMES, localized_case_file
 from engine.discover import ScenarioScanner
 from engine.loader import CaseFileLoader
 
@@ -50,6 +53,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def _runtime_kind(request: pytest.FixtureRequest) -> str:
     """Read the suite's runtime kind from its module, defaulting to Task-T."""
     return getattr(request.module, "RUNTIME_KIND", "task")
+
+
+@pytest.fixture(scope="session")
+def corpus_language() -> str:
+    """The configured prompt and case-file language, resolved before the LLM runtime loads."""
+    return resolve_language()
 
 
 @pytest.fixture(scope="session")
@@ -128,14 +137,19 @@ def workflow_engine(request: pytest.FixtureRequest, workflow_runtime: Any) -> An
 
 
 @pytest.fixture(scope="module")
-def workflow_context(request: pytest.FixtureRequest, summary_output_dir: Path | None) -> Any:
+def workflow_context(
+    request: pytest.FixtureRequest,
+    summary_output_dir: Path | None,
+    corpus_language: str,
+) -> Any:
     """The result collector of one suite module; the transcript writes on teardown."""
     from engine.suite import WorkflowRunContext
 
     flow_type = getattr(request.module, "FLOW_TYPE", None)
     if not flow_type:
         pytest.fail("workflow suite modules must declare FLOW_TYPE", pytrace=False)
-    context = WorkflowRunContext(flow_type)
+    run_flow_type = flow_type if corpus_language == DEFAULT_LANGUAGE else f"{flow_type}_{corpus_language}"
+    context = WorkflowRunContext(run_flow_type)
 
     def finalize() -> None:
         context.write_outputs(output_dir_override=summary_output_dir, summary_dir_override=summary_output_dir)
@@ -149,16 +163,28 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if not _WORKFLOW_FIXTURES.issubset(metafunc.fixturenames):
         return
     extension_folder = getattr(metafunc.module, "EXTENSION_FOLDER", None)
-    flow_file_name = getattr(metafunc.module, "INPUT_CASE_FILE", None)
-    if not extension_folder or not flow_file_name:
+    base_flow_file = getattr(metafunc.module, "INPUT_CASE_FILE", None)
+    if not extension_folder or not base_flow_file:
         return
 
+    language = resolve_language()
+    flow_file_name = localized_case_file(base_flow_file, language)
     scenario_filter = metafunc.config.getoption("--corpus-scenario")
     case_filter = metafunc.config.getoption("--case-filter")
-    scenarios = ScenarioScanner.filter_scenarios(
-        ScenarioScanner.discover(extension_folder, flow_file_name),
-        scenario_filter,
-    )
+    scenarios = ScenarioScanner.discover_optional(extension_folder, flow_file_name)
+    if not scenarios:
+        reason = (
+            f"no {language} corpus case file found: expected "
+            f"suites/{extension_folder}/resources/<scenario>/{flow_file_name}; add the "
+            f"language-specific case file or set A2AT_LANGUAGE={DEFAULT_LANGUAGE}"
+        )
+        metafunc.parametrize(
+            ("scenario", "case"),
+            [pytest.param(None, None, marks=pytest.mark.skip(reason))],
+            ids=["none"],
+        )
+        return
+    scenarios = ScenarioScanner.filter_scenarios(scenarios, scenario_filter)
     loader = CaseFileLoader()
     parameters: list[tuple[Any, Any]] = []
     ids: list[str] = []
