@@ -1,0 +1,49 @@
+"""Caller-provided parameter schema for the ran-energy-saving Task-T content validation.
+
+The Task-T content validation pipeline extracts these parameters from the submitted prompt, aligned
+with the UC1 RAN energy-saving intent: a region-level or site-level task with a time-segment-based
+guaranteed throughput target; the site-level context also carries the site list and an optional
+background event (the feasibility scenario uses a power outage). Both sides of the sample share the
+schema: the server validates the submitted prompt against it, and the client's negotiation accept
+regenerates the filled Task-T prompt from it.
+"""
+
+from __future__ import annotations
+
+TASK_PARAM_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "operationType": {
+            "type": "string",
+            "description": "Operation type of the RAN energy-saving task.",
+            "enum": ["create", "modify"],
+        },
+        "region": {
+            "type": "string",
+            "description": "Coverage region (task object) of the energy-saving task; a concrete physical area name.",
+        },
+        "energySavingGoal": {
+            "type": "string",
+            "description": (
+                "Energy-saving goal (task target): a quantitative target (a percentage) or the "
+                "qualitative goal to maximize energy saving under the task context."
+            ),
+        },
+        "guaranteedThroughputTarget": {
+            "type": "string",
+            "description": (
+                "Time-segment-based guaranteed throughput target (task context), e.g. "
+                "{00:00~07:00,2Mbps}, {07:00~17:30,10Mbps}."
+            ),
+        },
+        "siteList": {
+            "type": "string",
+            "description": "Site list of a site-level energy-saving task (comma-separated).",
+        },
+        "backgroundEvent": {
+            "type": "string",
+            "description": "Optional background event and its period of a site-level task.",
+        },
+    },
+    "required": ["operationType", "region"],
+}

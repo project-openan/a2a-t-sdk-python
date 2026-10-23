@@ -1,0 +1,16 @@
+{
+  "feasibility_negotiation_description": "The feasibility assessment for the station-level energy saving task is complete: the current guaranteed throughput target cannot satisfy the power-outage duration requirement; see the infeasibility details and proposal.",
+  "action": "PROPOSE_ALTERNATIVE_ON_FAILURE",
+  "contents_to_evaluate": null,
+  "infeasibility_details_and_proposal": [
+    {
+      "name": "Conclusion",
+      "value": "Infeasible."
+    },
+    {
+      "name": "Proposal",
+      "value": "Lower the guaranteed throughput target for 06:00~18:00 from 10Mbps to 2Mbps, which extends the supportable outage duration to the required 18 hours. If lowering the rate is not acceptable, shorten the required outage duration instead. One of the two must be adjusted; no third option satisfies both original requirements."
+    }
+  ],
+  "feasibility_confirm_request": null
+}

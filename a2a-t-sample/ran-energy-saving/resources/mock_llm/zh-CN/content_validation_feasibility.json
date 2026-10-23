@@ -1,0 +1,20 @@
+{
+  "semantic_verdict": false,
+  "errors": [
+    {
+      "slot_name": "guaranteedThroughputTarget",
+      "code": "content.rule_violation",
+      "facts": {
+        "section_label": "任务上下文"
+      }
+    }
+  ],
+  "params": {
+    "operationType": "create",
+    "region": "松山湖管委会",
+    "energySavingGoal": "在满足任务上下文的前提下最大化节能。",
+    "guaranteedThroughputTarget": null,
+    "siteList": "站点名称1,站点名称2",
+    "backgroundEvent": "00:00~18:00 停电"
+  }
+}

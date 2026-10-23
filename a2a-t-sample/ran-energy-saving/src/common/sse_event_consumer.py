@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
-from a2a.types import StreamResponse, TaskState
+from a2a.types import StreamResponse, TaskState, TaskStatus
 from google.protobuf.json_format import MessageToDict
+
+
+def _status_message_metadata(status: TaskStatus) -> dict[str, object] | None:
+    """Return the status message's metadata map, ``None`` when the message carries none."""
+    if not status.HasField("message"):
+        return None
+    metadata = MessageToDict(status.message.metadata)
+    return metadata or None
 
 
 def normalize_event(stream_response: StreamResponse) -> dict[str, object]:
@@ -14,21 +22,33 @@ def normalize_event(stream_response: StreamResponse) -> dict[str, object]:
         text = ""
         if status.HasField("message") and status.message.parts:
             text = status.message.parts[0].text
-        return {
+        event: dict[str, object] = {
             "kind": "status",
             "task_id": stream_response.status_update.task_id,
+            "context_id": stream_response.status_update.context_id,
             "state": state_name,
             "text": text,
         }
+        metadata = _status_message_metadata(status)
+        if metadata is not None:
+            event["metadata"] = metadata
+        return event
 
     if stream_response.HasField("message"):
+        message = stream_response.message
         text = ""
-        if stream_response.message.parts:
-            text = stream_response.message.parts[0].text
-        return {
+        if message.parts:
+            text = message.parts[0].text
+        event: dict[str, object] = {
             "kind": "message",
             "text": text,
+            "context_id": message.context_id,
+            "message_id": message.message_id,
         }
+        metadata = MessageToDict(message.metadata)
+        if metadata:
+            event["metadata"] = metadata
+        return event
 
     if stream_response.HasField("artifact_update"):
         artifact = stream_response.artifact_update.artifact
@@ -58,6 +78,7 @@ def normalize_event(stream_response: StreamResponse) -> dict[str, object]:
         return {
             "kind": "status",
             "task_id": task.id,
+            "context_id": task.context_id,
             "state": state_name,
         }
 

@@ -1,0 +1,173 @@
+[
+  {
+    "id": "TC00000001",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "Incident订阅-通知主题+订阅条件（优先级与故障名称）+DataPart承载",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNotificationPromptFromText",
+        "args": {
+          "text": "请生成一个智能故障Incident订阅任务：通知主题为Incident，订阅条件为故障优先级为严重、高，故障名称为光纤中断、单板故障，上报通知数据格式为通过DataPart上报Incident数据",
+          "templateUri": "Notification-T/network-layer/subscribe-incident/v1"
+        }
+      },
+      {
+        "api": "validateNotificationPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "topic": {
+                "type": "string",
+                "description": "订阅主题（必填）。要订阅的事件主题名称。"
+              },
+              "subscriptionCondition": {
+                "type": "string",
+                "description": "订阅条件（可选）。要订阅的条件的描述。"
+              },
+              "notificationDataFormat": {
+                "type": "string",
+                "description": "上报通知数据格式（必填）。要上报的通知数据格式的描述。"
+              }
+            },
+            "required": ["topic", "notificationDataFormat"]
+          },
+          "templateUri": "Notification-T/network-layer/subscribe-incident/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": { "errCode": "", "errMessage": "" }
+      },
+      {
+        "result": "success",
+        "data": {
+          "topic": "Incident"
+        },
+        "error": { "errCode": "", "errMessage": "" }
+      }
+    ]
+  },
+  {
+    "id": "TC00000002",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "Fault订阅-中文优先级语义（高、中）+DataPart承载",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNotificationPromptFromText",
+        "args": {
+          "text": "请生成一个智能故障订阅任务：通知主题为Fault，订阅条件为故障优先级为高、中，故障名称为单板故障、主控板异常，上报通知数据格式为通过DataPart上报故障数据",
+          "templateUri": "Notification-T/network-layer/subscribe-incident/v1"
+        }
+      },
+      {
+        "api": "validateNotificationPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "topic": {
+                "type": "string",
+                "description": "订阅主题（必填）。要订阅的事件主题名称。"
+              },
+              "subscriptionCondition": {
+                "type": "string",
+                "description": "订阅条件（可选）。要订阅的条件的描述。"
+              },
+              "notificationDataFormat": {
+                "type": "string",
+                "description": "上报通知数据格式（必填）。要上报的通知数据格式的描述。"
+              }
+            },
+            "required": ["topic", "notificationDataFormat"]
+          },
+          "templateUri": "Notification-T/network-layer/subscribe-incident/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": { "errCode": "", "errMessage": "" }
+      },
+      {
+        "result": "success",
+        "data": {
+          "topic": "Fault"
+        },
+        "error": { "errCode": "", "errMessage": "" }
+      }
+    ]
+  },
+  {
+    "id": "TC00000003",
+    "caseDimension": "05-可选参数缺省",
+    "caseDesc": "智能故障订阅-通知主题（中文）+无订阅条件（可选缺省）+TextPart承载",
+    "caseCategory": "边界",
+    "input": [
+      {
+        "api": "generateNotificationPromptFromText",
+        "args": {
+          "text": "请生成一个智能故障订阅任务：通知主题为智能故障，上报通知数据格式为通过TextPart上报故障数据",
+          "templateUri": "Notification-T/network-layer/subscribe-incident/v1"
+        }
+      },
+      {
+        "api": "validateNotificationPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "topic": {
+                "type": "string",
+                "description": "订阅主题（必填）。要订阅的事件主题名称。"
+              },
+              "subscriptionCondition": {
+                "type": "string",
+                "description": "订阅条件（可选）。要订阅的条件的描述。"
+              },
+              "notificationDataFormat": {
+                "type": "string",
+                "description": "上报通知数据格式（必填）。要上报的通知数据格式的描述。"
+              }
+            },
+            "required": ["topic", "notificationDataFormat"]
+          },
+          "templateUri": "Notification-T/network-layer/subscribe-incident/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": { "errCode": "", "errMessage": "" }
+      },
+      {
+        "result": "success",
+        "data": {
+          "topic": "智能故障"
+        },
+        "error": { "errCode": "", "errMessage": "" }
+      }
+    ]
+  }
+]

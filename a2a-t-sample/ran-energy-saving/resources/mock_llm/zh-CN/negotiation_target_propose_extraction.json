@@ -1,0 +1,21 @@
+{
+  "target_negotiation_description": "无线网络节能任务的目标协商：分时段保障速率目标中 {17:30~23:00,20Mbps} 与 {20:00~00:00,10Mbps} 两个时段存在时间重叠，无法唯一确定重叠时段的速率保障目标。",
+  "intent_understanding": [
+    {
+      "name": "区域",
+      "value": "松山湖管委会"
+    },
+    {
+      "name": "分时段保障速率目标",
+      "value": "{00:00~07:00,2Mbps}、{07:00~09:00,10Mbps}、{09:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{20:00~00:00,10Mbps}"
+    }
+  ],
+  "alignment_and_clarification": null,
+  "request_for_clarification": [
+    {
+      "name": "分时段保障速率目标",
+      "value": "如下两个时段存在时间重叠，无法唯一确定重叠时段的速率保障目标，请调整时间：{17:30~23:00,20Mbps}、{20:00~00:00,10Mbps}"
+    }
+  ],
+  "target_confirm_request": null
+}

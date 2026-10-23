@@ -1,0 +1,5 @@
+{
+  "conclusion": "Accept",
+  "confirmed_intent": "节能目标修正为{00:00~07:00,2Mbps}、{07:00~09:00,10Mbps}、{09:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~00:00,10Mbps}。",
+  "failure_reason": null
+}

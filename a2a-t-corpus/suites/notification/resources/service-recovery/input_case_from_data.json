@@ -1,0 +1,305 @@
+[
+  {
+    "id": "TC00000001",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "data业务抢通事件-订阅条件（子网名称）+完整上报通知数据格式（7个必选字段）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNotificationPromptFromDataWithSchema",
+        "args": {
+          "data": {
+            "condition": "子网名称：松山湖园区子网",
+            "reportFormat": [
+              { "name": "业务抢通方案执行状态", "values": ["未启动", "已结束"], "required": true },
+              { "name": "投诉诊断任务流水号", "required": true },
+              { "name": "OSS侧事件流水号", "required": true },
+              { "name": "接入端口名称", "required": true },
+              { "name": "是否已授权OMC自动抢通", "values": ["是", "否"], "required": true },
+              { "name": "业务抢通方案名称", "required": true },
+              { "name": "业务抢通方案详情", "required": true }
+            ]
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "condition": { "type": "string", "description": "订阅条件，可选。待订阅的条件描述，如子网名称。" },
+              "reportFormat": {
+                "type": "array",
+                "description": "上报通知数据格式，必选。描述所需上报内容的字段列表。",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string" },
+                    "values": { "type": "array" },
+                    "required": { "type": "boolean" }
+                  },
+                  "required": ["name"]
+                }
+              }
+            },
+            "required": ["reportFormat"]
+          },
+          "templateUri": "Notification-T/network-layer/service-recovery/v1"
+        }
+      },
+      {
+        "api": "validateNotificationPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "topic": {
+                "type": "string",
+                "description": "订阅主题（必填）。要订阅的事件主题名称。"
+              },
+              "subscriptionCondition": {
+                "type": "string",
+                "description": "订阅条件（可选）。要订阅的条件的描述。"
+              },
+              "notificationDataFormat": {
+                "type": "string",
+                "description": "上报通知数据格式（必填）。要上报的通知数据格式的描述。"
+              }
+            },
+            "required": ["topic", "notificationDataFormat"]
+          },
+          "templateUri": "Notification-T/network-layer/service-recovery/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": { "errCode": "", "errMessage": "" }
+      },
+      {
+        "result": "success",
+        "data": {
+          "topic": "业务抢通事件"
+        },
+        "error": { "errCode": "", "errMessage": "" }
+      }
+    ]
+  },
+  {
+    "id": "TC00000002",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "data业务抢通事件-仅上报通知数据格式（订阅条件可选缺省）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNotificationPromptFromDataWithSchema",
+        "args": {
+          "data": {
+            "reportFormat": [
+              { "name": "业务抢通方案执行状态", "values": ["未启动", "已结束"], "required": true },
+              { "name": "投诉诊断任务流水号", "required": true },
+              { "name": "OSS侧事件流水号", "required": true },
+              { "name": "接入端口名称", "required": true },
+              { "name": "是否已授权OMC自动抢通", "values": ["是", "否"], "required": true },
+              { "name": "业务抢通方案名称", "required": true },
+              { "name": "业务抢通方案详情", "required": true },
+              { "name": "业务抢通方案执行结束时间", "required": false }
+            ]
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "condition": { "type": "string", "description": "订阅条件，可选。待订阅的条件描述，如子网名称。" },
+              "reportFormat": {
+                "type": "array",
+                "description": "上报通知数据格式，必选。描述所需上报内容的字段列表。",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string" },
+                    "values": { "type": "array" },
+                    "required": { "type": "boolean" }
+                  },
+                  "required": ["name"]
+                }
+              }
+            },
+            "required": ["reportFormat"]
+          },
+          "templateUri": "Notification-T/network-layer/service-recovery/v1"
+        }
+      },
+      {
+        "api": "validateNotificationPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "topic": {
+                "type": "string",
+                "description": "订阅主题（必填）。要订阅的事件主题名称。"
+              },
+              "subscriptionCondition": {
+                "type": "string",
+                "description": "订阅条件（可选）。要订阅的条件的描述。"
+              },
+              "notificationDataFormat": {
+                "type": "string",
+                "description": "上报通知数据格式（必填）。要上报的通知数据格式的描述。"
+              }
+            },
+            "required": ["topic", "notificationDataFormat"]
+          },
+          "templateUri": "Notification-T/network-layer/service-recovery/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": { "errCode": "", "errMessage": "" }
+      },
+      {
+        "result": "success",
+        "data": {
+          "topic": "业务抢通事件"
+        },
+        "error": { "errCode": "", "errMessage": "" }
+      }
+    ]
+  },
+  {
+    "id": "TC00000003",
+    "caseDimension": "04-关键信息缺失",
+    "caseDesc": "data业务抢通事件-精简上报通知数据格式缺少必选信息项（语义校验拒绝）",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNotificationPromptFromDataWithSchema",
+        "args": {
+          "data": {
+            "condition": "子网名称：东莞松山湖园区子网",
+            "reportFormat": [
+              { "name": "业务抢通方案执行状态", "values": ["未启动", "已结束"], "required": true },
+              { "name": "投诉诊断任务流水号", "required": true },
+              { "name": "接入端口名称", "required": true },
+              { "name": "业务抢通方案名称", "required": true }
+            ]
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "condition": { "type": "string", "description": "订阅条件，可选。待订阅的条件描述，如子网名称。" },
+              "reportFormat": {
+                "type": "array",
+                "description": "上报通知数据格式，必选。描述所需上报内容的字段列表。",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string" },
+                    "values": { "type": "array" },
+                    "required": { "type": "boolean" }
+                  },
+                  "required": ["name"]
+                }
+              }
+            },
+            "required": ["reportFormat"]
+          },
+          "templateUri": "Notification-T/network-layer/service-recovery/v1"
+        }
+      },
+      {
+        "api": "validateNotificationPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "topic": {
+                "type": "string",
+                "description": "订阅主题（必填）。要订阅的事件主题名称。"
+              },
+              "subscriptionCondition": {
+                "type": "string",
+                "description": "订阅条件（可选）。要订阅的条件的描述。"
+              },
+              "notificationDataFormat": {
+                "type": "string",
+                "description": "上报通知数据格式（必填）。要上报的通知数据格式的描述。"
+              }
+            },
+            "required": ["topic", "notificationDataFormat"]
+          },
+          "templateUri": "Notification-T/network-layer/service-recovery/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": { "errCode": "", "errMessage": "" }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": { "errCode": "negotiation.semantic_rejected", "errMessage": "" }
+      }
+    ]
+  },
+  {
+    "id": "TC00000004",
+    "caseDimension": "04-关键信息缺失",
+    "caseDesc": "data业务抢通事件-缺少必选的上报通知数据格式",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNotificationPromptFromDataWithSchema",
+        "args": {
+          "data": {
+            "condition": "子网名称：松山湖园区子网"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "condition": { "type": "string", "description": "订阅条件，可选。待订阅的条件描述，如子网名称。" },
+              "reportFormat": {
+                "type": "array",
+                "description": "上报通知数据格式，必选。描述所需上报内容的字段列表。",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string" },
+                    "values": { "type": "array" },
+                    "required": { "type": "boolean" }
+                  },
+                  "required": ["name"]
+                }
+              }
+            },
+            "required": ["reportFormat"]
+          },
+          "templateUri": "Notification-T/network-layer/service-recovery/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": { "errCode": "slot.not_provided", "errMessage": "" }
+      }
+    ]
+  }
+]

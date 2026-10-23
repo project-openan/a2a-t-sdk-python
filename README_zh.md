@@ -151,7 +151,7 @@ uv run ruff check .  # 静态检查
 uv run mypy src      # 类型检查
 ```
 
-更多可运行示例（事件订阅端到端、协商闭环等）见 [a2a-t-sample/README-zh.md](a2a-t-sample/README-zh.md)。
+更多可运行示例（事件订阅端到端、含协商的 RAN 节能等）见 [a2a-t-sample/README-zh.md](a2a-t-sample/README-zh.md)。
 
 ## 更多文档
 

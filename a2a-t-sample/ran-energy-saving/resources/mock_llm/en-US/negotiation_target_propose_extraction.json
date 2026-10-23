@@ -1,0 +1,21 @@
+{
+  "target_negotiation_description": "Target negotiation for the RAN energy saving task: the guaranteed throughput target has two overlapping time segments, {17:30~23:00,20Mbps} and {20:00~00:00,10Mbps}, so the guaranteed rate for the overlapping period cannot be determined uniquely.",
+  "intent_understanding": [
+    {
+      "name": "Region",
+      "value": "Songshanhu Administration Committee"
+    },
+    {
+      "name": "Time-segment-based guaranteed throughput target",
+      "value": "{00:00~07:00,2Mbps}, {07:00~09:00,10Mbps}, {09:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {20:00~00:00,10Mbps}"
+    }
+  ],
+  "alignment_and_clarification": null,
+  "request_for_clarification": [
+    {
+      "name": "Time-segment-based guaranteed throughput target",
+      "value": "The two segments {17:30~23:00,20Mbps} and {20:00~00:00,10Mbps} overlap, so the guaranteed rate for the overlapping period is ambiguous; please adjust the time."
+    }
+  ],
+  "target_confirm_request": null
+}

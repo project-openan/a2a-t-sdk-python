@@ -1,0 +1,20 @@
+{
+  "semantic_verdict": false,
+  "errors": [
+    {
+      "slot_name": "guaranteedThroughputTarget",
+      "code": "content.rule_violation",
+      "facts": {
+        "section_label": "task_context"
+      }
+    }
+  ],
+  "params": {
+    "operationType": "create",
+    "region": "Songshanhu Administration Committee",
+    "energySavingGoal": "Maximize energy saving under the condition that the task context is met.",
+    "guaranteedThroughputTarget": null,
+    "siteList": "Station 1,Station 2",
+    "backgroundEvent": "power outage from 00:00 to 18:00"
+  }
+}

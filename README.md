@@ -153,7 +153,7 @@ uv run ruff check .  # static checks
 uv run mypy src      # type checks
 ```
 
-More runnable samples (event subscription end-to-end, negotiation closed loop, etc.) are described in [a2a-t-sample/README.md](a2a-t-sample/README.md).
+More runnable samples (event subscription end-to-end, RAN energy saving with negotiation, etc.) are described in [a2a-t-sample/README.md](a2a-t-sample/README.md).
 
 ## More Documentation
 

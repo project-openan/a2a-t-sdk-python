@@ -1,0 +1,9 @@
+{
+  "items": [
+    {
+      "name": "region",
+      "value": "Please provide region: Coverage region (task object) of the energy-saving task; a concrete physical area name.."
+    }
+  ],
+  "relationship": null
+}

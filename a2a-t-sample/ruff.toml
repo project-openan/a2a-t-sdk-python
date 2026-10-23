@@ -6,4 +6,4 @@ select = ["E", "F", "I", "N", "W"]
 
 [lint.per-file-ignores]
 "fault-management/test/**/*.py" = ["E402", "E501"]
-"negotiation/test/**/*.py" = ["E402", "E501"]
+"ran-energy-saving/test/**/*.py" = ["E402", "E501"]

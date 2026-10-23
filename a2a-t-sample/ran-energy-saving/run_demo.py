@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Cross-platform, non-blocking launcher for the ran-energy-saving (Task-T) sample.
 
 The registry center and the A2A server each bind a port; started in the foreground they would
@@ -11,10 +11,14 @@ keep writing their logs to the run directory, and a follower thread echoes every
 the terminal as it happens, so the server prints when the server runs and the client prints when the
 client runs.
 
-The language defaults to English and is applied without touching the shared
-``a2a-t-sample/.env``: the launcher writes a temporary ``.env`` (a copy of the shared one with
-``A2AT_LANGUAGE`` overridden) into its own run directory and points the child processes at that
-working directory. Temporary files are removed on exit (see ``--keep-logs`` / ``--keep-alive``).
+The language, the sample scenario, the negotiation kind and the event transport default to
+English / ``default`` / ``information`` / ``sse`` and are
+applied without touching the shared ``a2a-t-sample/.env``: the launcher writes a temporary
+``.env`` (a copy of the shared one with ``A2AT_LANGUAGE``, ``A2AT_SAMPLE_SCENARIO``,
+``A2AT_SAMPLE_NEGOTIATION_KIND``, ``A2AT_SAMPLE_TRANSPORT`` and
+``A2AT_SAMPLE_WEBHOOK_PORT`` overridden) into its own run directory and points the child
+processes at that working directory. Temporary files are removed on exit (see ``--keep-logs`` /
+``--keep-alive``).
 
 Works on Windows, macOS and Linux. Run it with the same interpreter that has the sample
 dependencies installed (e.g. the repository ``.venv``).
@@ -22,6 +26,10 @@ dependencies installed (e.g. the repository ``.venv``).
 Usage:
     python run_demo.py                      # English, streams the energy-saving steps, then exits
     python run_demo.py --language zh-CN
+    python run_demo.py --scenario negotiation   # missing-region input; information negotiation
+    python run_demo.py --negotiation target     # overlapping time segments; target negotiation
+    python run_demo.py --negotiation feasibility
+    python run_demo.py --transport webhook      # task events via the embedded webhook receiver
     python run_demo.py --keep-alive         # leave registry/server running; stop with --stop
     python run_demo.py --stop               # stop a previous --keep-alive run
 """
@@ -54,7 +62,6 @@ PID_FILE = RUN_DIR / "pids.json"
 REGISTRY_PORT = 5001
 SERVER_PORT = 8000
 
-
 def _port_open(port: int, host: str = "127.0.0.1") -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.3)
@@ -81,13 +88,34 @@ def _child_env() -> dict[str, str]:
     return env
 
 
-def _write_run_env(language: str) -> None:
-    """Write the per-run ``.env`` (shared .env copy with A2AT_LANGUAGE overridden)."""
+#: Run-specific keys the launcher overrides in the per-run ``.env`` copy.
+_RUN_ENV_OVERRIDES = (
+    "A2AT_LANGUAGE",
+    "A2AT_SAMPLE_SCENARIO",
+    "A2AT_SAMPLE_NEGOTIATION_KIND",
+    "A2AT_SAMPLE_TRANSPORT",
+    "A2AT_SAMPLE_WEBHOOK_PORT",
+)
+
+
+def _write_run_env(
+    language: str, scenario: str, negotiation_kind: str, transport: str, webhook_port: int
+) -> None:
+    """Write the per-run ``.env`` (shared .env copy with the run-specific keys overridden)."""
+    values = {
+        "A2AT_LANGUAGE": language,
+        "A2AT_SAMPLE_SCENARIO": scenario,
+        "A2AT_SAMPLE_NEGOTIATION_KIND": negotiation_kind,
+        "A2AT_SAMPLE_TRANSPORT": transport,
+        "A2AT_SAMPLE_WEBHOOK_PORT": str(webhook_port),
+    }
     text = ENV_FILE.read_text(encoding="utf-8")
-    if re.search(r"(?m)^A2AT_LANGUAGE=", text):
-        text = re.sub(r"(?m)^A2AT_LANGUAGE=.*$", f"A2AT_LANGUAGE={language}", text)
-    else:
-        text = text.rstrip("\n") + f"\nA2AT_LANGUAGE={language}\n"
+    for key in _RUN_ENV_OVERRIDES:
+        value = values[key]
+        if re.search(rf"(?m)^{key}=", text):
+            text = re.sub(rf"(?m)^{key}=.*$", f"{key}={value}", text)
+        else:
+            text = text.rstrip("\n") + f"\n{key}={value}\n"
     env_path = RUN_DIR / ".env"
     env_path.write_text(text, encoding="utf-8", newline="\n")
     try:  # best effort: keep the copied config (may carry an API key) owner-only
@@ -235,6 +263,45 @@ def main() -> int:
         choices=["en-US", "zh-CN"],
         help="run language (default: en-US)",
     )
+    parser.add_argument(
+        "--scenario",
+        default="default",
+        choices=["default", "negotiation"],
+        help="sample scenario variant: default flow, or the missing-region information negotiation (default: default)",
+    )
+    parser.add_argument(
+        "--negotiation",
+        default="information",
+        choices=["information", "target", "feasibility"],
+        help=(
+            "negotiation kind selecting the client scenario input: information (missing region), "
+            "target (overlapping time segments in the guaranteed throughput target), feasibility "
+            "(the guaranteed rate cannot sustain the outage duration). information engages only together with "
+            "--scenario negotiation; target/feasibility engage without it. The KIND flag only "
+            "selects the scenario input — the server stays data-driven on the content-validation "
+            "error code "
+            "(default: information)"
+        ),
+    )
+    parser.add_argument(
+        "--transport",
+        default="sse",
+        choices=["sse", "webhook"],
+        help=(
+            "event transport of the client: sse consumes the streaming response, webhook embeds "
+            "the client-side push receiver and receives the task events as webhook callbacks "
+            "(default: sse)"
+        ),
+    )
+    parser.add_argument(
+        "--webhook-port",
+        type=int,
+        default=9000,
+        help=(
+            "bind port of the embedded webhook receiver used with --transport webhook; 0 selects "
+            "an OS-assigned ephemeral port (default: 9000)"
+        ),
+    )
     parser.add_argument("--keep-alive", action="store_true", help="leave registry/server running afterwards")
     parser.add_argument("--keep-logs", action="store_true", help="keep the temporary run directory (logs/.env)")
     parser.add_argument("--stop", action="store_true", help="stop a previous --keep-alive run and exit")
@@ -262,7 +329,9 @@ def main() -> int:
         PID_FILE.unlink(missing_ok=True)
         existing = []
 
-    _write_run_env(args.language)
+    _write_run_env(
+        args.language, args.scenario, args.negotiation, args.transport, args.webhook_port
+    )
     managed: list[int] = list(existing)
     started_pids: list[int] = []
     log_handles: list = []
@@ -346,7 +415,11 @@ def main() -> int:
         _save_pids(list(dict.fromkeys(managed)))
         persisted = True
 
-        print(f"[run_demo] running client (language = {args.language}) ...")
+        print(
+            f"[run_demo] running client (language = {args.language}, scenario = {args.scenario}, "
+            f"negotiation = {args.negotiation}, "
+            f"transport = {args.transport}, webhook_port = {args.webhook_port}) ..."
+        )
         client_returncode = subprocess.run(
             [python, "-m", "client.client_main"],
             cwd=str(RUN_DIR),

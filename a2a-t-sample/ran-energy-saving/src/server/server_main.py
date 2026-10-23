@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import os
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any
 
+import httpx
 import uvicorn
 from a2a.server.agent_execution.agent_executor import AgentExecutor
 from a2a.server.agent_execution.context import RequestContext
 from a2a.server.events.event_queue import EventQueue
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_rest_routes
+from a2a.server.tasks import BasePushNotificationSender, InMemoryPushNotificationConfigStore
 from a2a.server.tasks.inmemory_task_store import InMemoryTaskStore
 from a2a.utils.constants import TransportProtocol
 from a2a_t.server.a2at_server import A2ATServer
@@ -24,6 +27,7 @@ from starlette.applications import Starlette
 
 from server.constants_data import get_public_agent_card
 from server.server_flow import execute_server_flow
+from server.task_execution import TaskExecutionService, Uc1DemoExecutionService
 
 install_mock_llm_if_needed()
 install_llm_logger(role="server")
@@ -47,10 +51,14 @@ class SampleAgentExecutor(AgentExecutor):
         prompt_server: object,
         log_sink: object | None = None,
         execute_flow: object,
+        env_path: Path | None = None,
+        execution_service: TaskExecutionService | None = None,
     ) -> None:
         self._prompt_server = prompt_server
         self._log_sink = log_sink
         self._execute_flow = execute_flow
+        self._env_path = env_path
+        self._execution_service = execution_service
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         kwargs = {
@@ -58,6 +66,8 @@ class SampleAgentExecutor(AgentExecutor):
             "event_queue": event_queue,
             "prompt_server": self._prompt_server,
             "log_sink": self._log_sink,
+            "env_path": self._env_path,
+            "execution_service": self._execution_service,
         }
         await self._execute_flow(**kwargs)
 
@@ -100,6 +110,7 @@ def build_registration_payload(*, host: str, port: int) -> dict[str, Any]:
 def build_agent_card(*, host: str, port: int) -> object:
     from a2a.types import AgentCard
     from google.protobuf.json_format import ParseDict
+
     return ParseDict(build_agent_card_payload(host=host, port=port), AgentCard())
 
 
@@ -111,15 +122,26 @@ def build_server_runtime(
     log_sink: object | None = None,
     debug_enabled: bool = False,
 ) -> dict[str, object]:
-    """Build the server runtime: an A2ATServer prompt server and a SampleAgentExecutor."""
+    """Build the server runtime: an A2ATServer prompt server and a SampleAgentExecutor.
+
+    The ``env_path`` is threaded into the executor so the propose builders read the same scenario
+    configuration. The execution service of the task execution integration point is assembled here
+    too and threaded through the executor into ``execute_server_flow``.
+    """
     resolved_logger = logger
     if resolved_logger is None and log_sink is not None and debug_enabled:
         resolved_logger = build_sample_logger(sink=log_sink, debug_enabled=True)
     prompt_server = A2ATServer(env_path=env_path, logger=resolved_logger)
+    # INTEGRATION POINT: the server implementation replaces Uc1DemoExecutionService with its business
+    # execution service
+    # (the server flow depends only on the TaskExecutionService Protocol it implements).
+    execution_service: TaskExecutionService = Uc1DemoExecutionService()
     executor = SampleAgentExecutor(
         prompt_server=prompt_server,
         log_sink=log_sink,
         execute_flow=execute_server_flow,
+        env_path=env_path,
+        execution_service=execution_service,
     )
     return {
         "prompt_server": prompt_server,
@@ -132,18 +154,46 @@ def build_rest_app(
     agent_card: object,
     executor: object,
 ) -> object:
-    """Build the Starlette REST app with agent card routes and A2A task/message routes."""
+    """Build the Starlette REST app with agent card routes and A2A task/message routes.
+
+    Push-notification machinery (plan R1) is assembled **unconditionally**: the in-memory config
+    store and the BasePushNotificationSender (with its own httpx client) go into the
+    DefaultRequestHandler whether or not any client registers a push config — in SSE transport
+    mode nothing registers and the machinery simply idles; in webhook mode the client registers
+    its callback (inline config on the initial send / REST endpoint re-registration before the
+    accept) and every task
+    event is POSTed to it. There is deliberately no server-side transport switch.
+
+    Lifecycle: the sender's httpx client is closed by the app's lifespan (uvicorn runs it on
+    shutdown). The built request handler is exposed as ``app.state.request_handler`` for tests.
+    """
     task_store = InMemoryTaskStore()
+    push_config_store = InMemoryPushNotificationConfigStore()
+    push_httpx_client = httpx.AsyncClient(trust_env=False)
+    push_sender = BasePushNotificationSender(push_httpx_client, push_config_store)
+
+    @asynccontextmanager
+    async def _lifespan(app: Starlette) -> AsyncGenerator[None, None]:
+        # The sender's httpx client closes on app shutdown (uvicorn runs the lifespan when the
+        # server stops); the asynccontextmanager return annotation must be `AsyncGenerator`
+        # (the `AsyncIterator` spelling is the deprecated overload).
+        yield
+        await push_httpx_client.aclose()
+
     request_handler = DefaultRequestHandler(
         agent_executor=executor,
         task_store=task_store,
         agent_card=agent_card,
+        push_config_store=push_config_store,
+        push_sender=push_sender,
     )
     routes = [
         *create_agent_card_routes(agent_card),
         *create_rest_routes(request_handler),
     ]
-    return Starlette(routes=routes)
+    app = Starlette(routes=routes, lifespan=_lifespan)
+    app.state.request_handler = request_handler
+    return app
 
 
 async def register_agent_card_if_possible(
@@ -163,8 +213,7 @@ async def register_agent_card_if_possible(
             log_sink("[server] agent-card registration: success")
         else:
             log_sink(
-                "[server] agent-card registration failed, continuing startup: "
-                f"{result.get('message', 'unknown error')}"
+                f"[server] agent-card registration failed, continuing startup: {result.get('message', 'unknown error')}"
             )
     return result
 

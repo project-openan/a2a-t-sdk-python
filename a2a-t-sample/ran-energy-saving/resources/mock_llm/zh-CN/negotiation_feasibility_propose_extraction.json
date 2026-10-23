@@ -1,0 +1,16 @@
+{
+  "feasibility_negotiation_description": "站点级节能任务的目标达成可行性评估已完成，当前速率目标无法同时满足停电时长要求，详见评估不可行时的详情和提案，请确认。",
+  "action": "PROPOSE_ALTERNATIVE_ON_FAILURE",
+  "contents_to_evaluate": null,
+  "infeasibility_details_and_proposal": [
+    {
+      "name": "评估结论",
+      "value": "不可行。"
+    },
+    {
+      "name": "提案",
+      "value": "建议将06:00~18:00时段的速率保障目标由10Mbps下调至2Mbps，以延长可支撑的停电时长至满足要求的18小时。若无法接受下调速率，则需相应缩短停电时长保障要求。两者需二选一调整，暂无第三种可同时满足原有两项要求的方案。"
+    }
+  ],
+  "feasibility_confirm_request": null
+}

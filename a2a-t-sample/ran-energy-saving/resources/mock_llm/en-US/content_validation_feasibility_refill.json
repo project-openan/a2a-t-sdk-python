@@ -1,0 +1,12 @@
+{
+  "semantic_verdict": true,
+  "errors": [],
+  "params": {
+    "operationType": "create",
+    "region": "Songshanhu Administration Committee",
+    "energySavingGoal": "Maximize energy saving under the condition that the task context is met.",
+    "guaranteedThroughputTarget": "{00:00~06:00,2Mbps}, {06:00~18:00,2Mbps}",
+    "siteList": "Station 1,Station 2",
+    "backgroundEvent": "power outage from 00:00 to 18:00"
+  }
+}

@@ -1,9 +1,0 @@
-{
-  "items": [
-    {
-      "name": "task_context",
-      "value": "Please provide task_context: Provide the fault phenomenon description of the private line service and the context information of the diagnosis task."
-    }
-  ],
-  "relationship": "All listed fields are required; the fields are in an AND relationship; missing any of them prevents starting the diagnosis."
-}

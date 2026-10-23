@@ -22,6 +22,10 @@ __all__ = [
     "API_VALIDATE_NEGOTIATION_REJECT",
     "API_VALIDATE_NEGOTIATION_ABORT",
     "NEGOTIATION_API_NAMES",
+    "API_GENERATE_NOTIFICATION_FROM_TEXT",
+    "API_GENERATE_NOTIFICATION_FROM_DATA",
+    "API_VALIDATE_NOTIFICATION",
+    "NOTIFICATION_API_NAMES",
     "FLOW_FROM_DATA",
     "FLOW_FROM_TEXT",
     "INPUT_CASE_FROM_DATA",
@@ -91,3 +95,19 @@ NEGOTIATION_API_NAMES: Final[frozenset[str]] = frozenset({
     API_VALIDATE_NEGOTIATION_REJECT,
     API_VALIDATE_NEGOTIATION_ABORT,
 })
+
+# ---------- Notification-T ----------
+
+#: Notification-T client generation API (natural language -> notification prompt).
+API_GENERATE_NOTIFICATION_FROM_TEXT: Final[str] = "generateNotificationPromptFromText"
+
+#: Notification-T client generation API (structured data -> notification prompt).
+API_GENERATE_NOTIFICATION_FROM_DATA: Final[str] = "generateNotificationPromptFromDataWithSchema"
+
+#: Notification-T server validation API (prompt validation + parameter extraction).
+API_VALIDATE_NOTIFICATION: Final[str] = "validateNotificationPromptAndDataFilling"
+
+#: Full set of Notification-T phase-1 API names.
+NOTIFICATION_API_NAMES: Final[frozenset[str]] = frozenset(
+    {API_GENERATE_NOTIFICATION_FROM_TEXT, API_GENERATE_NOTIFICATION_FROM_DATA, API_VALIDATE_NOTIFICATION}
+)

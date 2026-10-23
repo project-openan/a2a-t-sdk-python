@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from engine.client_apis import register_client_task_apis
 from engine.config import CorpusEnvConfig
 from engine.negotiation_apis import register_negotiation_apis
+from engine.notification_apis import register_notification_apis
 from engine.recorder import RecordingMeteredLlmClient
 from engine.registry import ApiRegistry
 from engine.server_apis import register_server_task_apis
@@ -34,10 +35,13 @@ from a2a_t.server.prompt_compliance.content_validator import InputLimitedContent
 
 __all__ = [
     "NegotiationRuntime",
+    "NotificationRuntime",
     "Runtime",
     "build_negotiation_registry",
+    "build_notification_registry",
     "build_task_registry",
     "negotiation_runtime",
+    "notification_runtime",
     "task_runtime",
 ]
 
@@ -128,4 +132,43 @@ def build_negotiation_registry(runtime: NegotiationRuntime) -> ApiRegistry:
     """Register the Negotiation-T phase-1 APIs into a fresh registry."""
     registry = ApiRegistry()
     register_negotiation_apis(registry, runtime.orchestrator)
+    return registry
+
+
+@dataclass(slots=True)
+class NotificationRuntime:
+    """Fully assembled Notification-T runtime with the single shared recording LLM client."""
+
+    recorder: RecordingMeteredLlmClient
+    client_generation: PromptGenerationOrchestrator
+    notification_validator: InputLimitedContentValidator
+
+
+def notification_runtime() -> NotificationRuntime:
+    """Assemble the Notification-T phase-1 runtime against the real LLM endpoint of the corpus config."""
+    env = CorpusEnvConfig.load()
+    recorder = _new_recorder(env)
+
+    config = A2ATConfig(
+        prompt=PromptRuntimeConfig(language=_LANGUAGE, source_type="packaged"),
+        input_limits=InputLimitConfig(),
+        llm=LlmRuntimeConfig(max_attempts=env.max_attempts),
+    )
+
+    client_generation = PromptGenerationOrchestratorBuilder().build(config=config, llm_client=recorder)
+    notification_validator = build_content_validator(
+        extension_name="Notification-T", config=config, llm_client=recorder
+    )
+
+    return NotificationRuntime(
+        recorder=recorder,
+        client_generation=client_generation,
+        notification_validator=notification_validator,
+    )
+
+
+def build_notification_registry(runtime: NotificationRuntime) -> ApiRegistry:
+    """Register the Notification-T phase-1 APIs into a fresh registry."""
+    registry = ApiRegistry()
+    register_notification_apis(registry, runtime.client_generation, runtime.notification_validator)
     return registry

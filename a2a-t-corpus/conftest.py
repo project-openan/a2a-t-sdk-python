@@ -11,8 +11,8 @@
   cases (test id = ``<scenario>/<case id>``), the ``@TestFactory`` counterpart.
 
 Suite modules declare four constants: ``EXTENSION_FOLDER``, ``INPUT_CASE_FILE``, ``FLOW_TYPE`` and
-``RUNTIME_KIND`` (``"task"`` or ``"negotiation"``); ``API_NAMES`` defaults to the Task-T set when
-omitted.
+``RUNTIME_KIND`` (``"task"``, ``"negotiation"`` or ``"notification"``); ``API_NAMES`` defaults to the
+Task-T set when omitted.
 """
 
 from __future__ import annotations
@@ -76,12 +76,26 @@ def negotiation_workflow_runtime() -> Any:
     return negotiation_runtime()
 
 
+@pytest.fixture(scope="session")
+def notification_workflow_runtime() -> Any:
+    """The shared Notification-T SDK runtime, assembled lazily on first use.
+
+    Raises:
+        RuntimeError: when the corpus LLM configuration is missing or invalid.
+    """
+    from engine.assembler import notification_runtime
+
+    return notification_runtime()
+
+
 @pytest.fixture(scope="module")
 def workflow_runtime(request: pytest.FixtureRequest) -> Any:
     """The module-selected runtime singleton (one per extension, shared across its suites)."""
     kind = _runtime_kind(request)
     if kind == "negotiation":
         return request.getfixturevalue("negotiation_workflow_runtime")
+    if kind == "notification":
+        return request.getfixturevalue("notification_workflow_runtime")
     return request.getfixturevalue("task_workflow_runtime")
 
 
@@ -102,6 +116,10 @@ def workflow_engine(request: pytest.FixtureRequest, workflow_runtime: Any) -> An
         from engine.assembler import build_negotiation_registry
 
         registry = build_negotiation_registry(workflow_runtime)
+    elif kind == "notification":
+        from engine.assembler import build_notification_registry
+
+        registry = build_notification_registry(workflow_runtime)
     else:
         from engine.assembler import build_task_registry
 
