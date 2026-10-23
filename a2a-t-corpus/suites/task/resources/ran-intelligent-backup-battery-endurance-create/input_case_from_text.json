@@ -115,7 +115,7 @@
   {
     "id": "TC00000002",
     "caseDimension": "02-关键信息缺失",
-    "caseDesc": "创建诉求仅含续航目标，缺少任务描述，required应拦截",
+    "caseDesc": "创建诉求仅含续航目标，缺少操作类型，required应拦截",
     "caseCategory": "异常",
     "input": [
       {
