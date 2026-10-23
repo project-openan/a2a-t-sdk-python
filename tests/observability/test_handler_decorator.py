@@ -807,29 +807,66 @@ async def test_subscribe_to_task_stream_entry_span(exporter: InMemorySpanExporte
     assert spans[0].status.status_code == StatusCode.OK
 
 
-async def test_v2_handler_emits_one_time_degradation_warning(caplog: pytest.LogCaptureFixture) -> None:
-    """a2a-sdk 1.1.2+ V2 DefaultRequestHandler (``_active_task_registry``): post-construction
-    executor/push wraps are silently bypassed — the decorator warns once per instance."""
+class _FakeV2Registry:
+    """Accepts the ActiveTaskRegistry constructor kwargs, records them."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.created_with = kwargs
+
+
+class _StrictRegistry:
+    """Constructor signature incompatible with the rebuilt registry (degradation path)."""
+
+    def __init__(self) -> None: ...
+
+
+async def test_v2_handler_registry_rebuilt_with_decorated_collaborators(
+    exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
+) -> None:
+    """D9：V2 handler（``_active_task_registry`` 存在）→ 装饰器用装饰版 executor/push_sender
+    重建 registry（构造期裸引用被替换），并打 INFO 适配日志。"""
+    import logging
+
     inner = FakeSimpleHandler(result=FakeMessage(metadata={}, task_id="T26", context_id="C26"))
-    inner._active_task_registry = object()
+    inner.agent_executor = FakeExecutor(events=[])
+    inner._push_sender = FakeDispatchPushSender(["https://hook.example"])
+    inner._active_task_registry = _FakeV2Registry()
 
-    with caplog.at_level(logging.WARNING, logger="a2at.observability"):
-        decorator = A2ATRequestHandlerDecorator(inner)
-        decorator._wrap_collaborators()  # re-wrap within the same instance: warning stays one-time
+    with caplog.at_level(logging.INFO, logger="a2at.observability"):
+        A2ATRequestHandlerDecorator(inner)
 
-    warnings = [record for record in caplog.records if "LegacyRequestHandler" in record.getMessage()]
-    assert len(warnings) == 1
-    assert warnings[0].levelno == logging.WARNING
+    assert isinstance(inner.agent_executor, A2ATAgentExecutorDecorator)
+    assert isinstance(inner._push_sender, A2ATPushSenderDecorator)
+    registry = inner._active_task_registry
+    assert isinstance(registry, _FakeV2Registry)
+    assert registry.created_with["agent_executor"] is inner.agent_executor
+    assert registry.created_with["push_sender"] is inner._push_sender
+    assert any("V2" in record.getMessage() and "rebuilt" in record.getMessage() for record in caplog.records)
 
 
-async def test_legacy_handler_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
-    """LegacyRequestHandler-shaped inners (no ``_active_task_registry``) stay silent."""
-    inner = FakeSimpleHandler(result=FakeMessage(metadata={}, task_id="T27", context_id="C27"))
+async def test_v2_registry_rebuild_failure_degrades_gracefully(
+    exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
+) -> None:
+    """registry 签名不兼容（版本变化）→ WARNING 降级：入口 span 仍工作（spec §8.2）。"""
+    import logging
+
+    inner = FakeStreamingHandler(FakeExecutor(events=[]))
+    inner._push_sender = FakeDispatchPushSender(["https://hook.example"])
+    inner._active_task_registry = _StrictRegistry()
 
     with caplog.at_level(logging.WARNING, logger="a2at.observability"):
         A2ATRequestHandlerDecorator(inner)
 
-    assert not [record for record in caplog.records if "LegacyRequestHandler" in record.getMessage()]
+    assert any("V2 registry rebuild failed" in record.getMessage() for record in caplog.records), (
+        "expected the rebuild-failure WARNING"
+    )
+
+    # D9 test-plan item 5: 入口 span 仍工作——一次流式请求仍产生 SERVER 入口 span
+    decorator = A2ATRequestHandlerDecorator(inner)
+    params = make_send_request({}, task_id="T26c", context_id="C26c")
+    _ = [event async for event in decorator.on_message_send_stream(params, FakeServerCallContext())]
+    entry = [s for s in exporter.get_finished_spans() if s.name == "SendStreamingMessage"]
+    assert len(entry) == 1 and entry[0].kind is SpanKind.SERVER
 
 
 async def test_stream_negotiation_message_creates_server_negotiation_span(
