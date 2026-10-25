@@ -66,6 +66,7 @@ flowchart LR
 | 协商内容 API | 支持 `information` / `feasibility` / `target` 三类协商及 `abort` 终止消息，提供模板驱动的协商报文生成与校验；协商会话状态随消息 metadata（`negotiationContext`）往返，SDK 本身无状态 |
 | 资源组织 | 内置提示词资源（`prompts` / `scenarios` / `slots` / `templates` / `negotiation-vocabulary`）随包提供，支持 `packaged` 内置资源与 `local_file` 本地文件两种加载方式 |
 | LLM 适配 | 通过 OpenAI 兼容调用链接入外部大模型；对可重试错误码按配置的尝试次数上限重试 |
+| 可观测性 | 基于 OpenTelemetry 自动记录 A2A-T 交互的调用链、耗时指标与结构化日志；客户端注册一次、服务端包装一次即可接入，无需修改业务代码，支持按需整体关闭 |
 | 内置示例 | 随仓库提供 `subscribe_incident`（事件订阅）等可运行示例场景，未配置 API Key 时自动降级为脚本化 Mock LLM，零外部依赖即可端到端跑通 |
 
 ## 项目结构
@@ -82,6 +83,7 @@ flowchart LR
 | `llm` | LLM 适配层，默认提供 OpenAI 兼容客户端，支持自定义 LLM 接入 |
 | `prompt` | 提示词资源分析、槽位提取、模板渲染与校验 |
 | `negotiation` | 协商内容模型、生成管线与校验管线 |
+| `observability` | 可观测性模块，自动记录交互调用链、指标与日志（需安装 `a2a-t-sdk[observability]` 额外依赖） |
 | `a2a-t-sample` | 可运行的客户端/服务端示例用例集 |
 | `a2a-t-corpus` | 准确性验证语料（纯测试资产）：数据驱动工作流用例 |
 
@@ -157,7 +159,7 @@ uv run mypy src      # 类型检查
 
 | 文档 | 位置 | 内容 |
 | --- | --- | --- |
-| 开发指南 | [docs/zh/开发指南.md](docs/zh/开发指南.md) | 特性介绍、安装接入、参数配置与最小实践 |
+| 开发指南 | [docs/zh/开发指南.md](docs/zh/开发指南.md) | 特性介绍、安装接入、参数配置、可观测性集成与最小实践 |
 | API 参考 | [docs/zh/API参考.md](docs/zh/API参考.md) | `A2ATClient` / `A2ATServer` 全量 API 定义与使用说明 |
 
 ## 当前支持范围
