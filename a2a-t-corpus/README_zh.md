@@ -9,14 +9,14 @@ a2a-t-corpus 是 A2A-T SDK 的数据驱动准确性验证模块。它按用例�
 使用前需了解三点：
 
 - **仅用于测试**：位于 `a2a-t-corpus/`，不打包进 `a2a_t`，CI 中以 `-m 'not live'` 排除。
-- **需要真实 LLM**：三个必填配置 `A2AT_LLM_*` 缺失时会直接报错并给出提示；`.env` 的键名与项目根 `env.example` 一致。
+- **需要真实 LLM**：三个必填配置 `A2AT_LLM_*` 缺失时会直接报错并给出提示；`.env` 的键名（`A2AT_LANGUAGE`、`A2AT_LLM_*`）与项目根 `env.example` 一致。
 - **用例格式与 Java 仓库共用**：用例文件、`schemas/` 下的 Schema、`tools/` 下的工具，在两个仓库中保持一致。
 
 ## 2. 模块目录
 
 ```
 a2a-t-corpus/
-├── env.example                      配置模板，含三个必填 A2AT_LLM_* 项
+├── env.example                      配置模板，含 A2AT_LANGUAGE 与三个必填 A2AT_LLM_* 项
 ├── .env                             本地配置（密钥，gitignore；由 env.example 复制）
 ├── README.md                        英文说明
 ├── README_zh.md                     中文说明
@@ -220,6 +220,7 @@ python a2a-t-corpus/tools/inputCsvToJson.py --reverse --csv a2a-t-corpus/suites/
 
 - **代码仓库只提交 `input_case_*.json`**：CSV 设计表供人评审用，`input_case_*.json` 供代码运行用，两者内容一致，但只需要提交 JSON。
 - **新增用例不需要新增代码**：只需新建测试场景目录（`suites/<扩展>/resources/<场景>/`）并放入 `input_case_*.json`，套件在收集阶段会自动发现场景。新增后可用对应扩展的 `test_*_self_guard.py` 做一次结构检查。
+- **非默认语言**：在 `a2a-t-corpus/.env`（或进程环境变量）中设置 `A2AT_LANGUAGE`，并把翻译后的用例文件与中文文件放在同一场景目录，命名为 `input_case_from_text_<语言>.json` / `input_case_from_data_<语言>.json`，例如 `input_case_from_text_en-US.json`。`caseDimension` / `caseCategory` 建议沿用现有词表（如 `正常` / `异常`），以保持报表统计口径和 self-guard 分类契约一致。若配置语言下没有用例文件，workflow 套件会以明确的 skip 信息提示；补齐文件后无需改代码即可运行。
 
 ### 4.3 用例文件格式
 
@@ -253,6 +254,8 @@ python a2a-t-corpus/tools/inputCsvToJson.py --reverse --csv a2a-t-corpus/suites/
 ```
 cp a2a-t-corpus/env.example a2a-t-corpus/.env
 ```
+
+`A2AT_LANGUAGE` 同时决定提示词资源语言和用例文件变体，默认 `zh-CN`；设置为 `en-US` 后使用英文模板。corpus 读取的是 `a2a-t-corpus/.env` 和进程环境变量（不会读取项目根目录的 `.env`）。英文用例与中文用例放在同一场景目录，命名为 `input_case_from_text_en-US.json` / `input_case_from_data_en-US.json`；若配置语言下没有对应用例文件，workflow 套件会以明确的 skip 信息提示。非默认语言的结果文件为 `output_result_<flow>_<语言>.json`、汇总为 `summary_report_<flow>_<语言>.json`，不会覆盖中文运行结果。
 
 **执行全部用例**：
 
@@ -288,7 +291,7 @@ uv run pytest a2a-t-corpus/suites/task/test_task_t_from_text_workflow.py -m live
 - Negotiation-T / Notification-T 只需把套件路径换成 `a2a-t-corpus/suites/negotiation` 或 `a2a-t-corpus/suites/notification`，场景名同样支持通配符。
 - 每条用例执行完成会立即打印到控制台；失败或崩溃的用例会额外打印完整的调用记录。结果文件只反映本次运行，过滤运行时只覆盖命中的用例。
 - `--corpus-output-dir=<目录>` 可把结果文件和汇总报表写到指定目录；默认结果文件写回各场景目录，汇总报表写到 `a2a-t-corpus/.corpus/`。
-- 每个场景生成 `output_result_from_text.json` / `output_result_from_data.json`，并汇总为 `summary_report_<flow>.json` 与控制台表格（总体 / 按场景 / 按维度 / 按分类 / 按 API 步的通过率，标注 95% 目标，含耗时 p50/p95 与 Token 合计）。
+- 每个场景生成 `output_result_<flow>.json`（非默认语言为 `output_result_<flow>_<语言>.json`），并汇总为 `summary_report_<flow>.json` 与控制台表格（总体 / 按场景 / 按维度 / 按分类 / 按 API 步的通过率，标注 95% 目标，含耗时 p50/p95 与 Token 合计）。
 - 未配置 LLM 时，可先运行结构自检（此测试进 CI）：
 
 ```

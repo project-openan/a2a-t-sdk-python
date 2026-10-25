@@ -36,8 +36,12 @@ class ScenarioScanner:
     """Discovers corpus scenarios by directory convention and filters them by glob."""
 
     @staticmethod
-    def discover(extension_folder: str, flow_file_name: str) -> list[Scenario]:
-        """List every scenario under ``suites/<extension>/resources/`` carrying the requested case file."""
+    def discover_optional(extension_folder: str, flow_file_name: str) -> list[Scenario]:
+        """List matching scenarios, returning an empty list when the case file exists nowhere.
+
+        The optional variant serves the language-specific case selection: a language without any
+        committed case file is a visible skip, not a collection failure.
+        """
         source_tree = corpus_root() / "suites" / extension_folder / "resources"
         scenarios: list[Scenario] = []
         if source_tree.is_dir():
@@ -45,6 +49,13 @@ class ScenarioScanner:
                 if directory.is_dir() and (directory / flow_file_name).is_file():
                     scenarios.append(Scenario(directory.name, directory))
         scenarios.sort(key=lambda scenario: scenario.name)
+        return scenarios
+
+    @staticmethod
+    def discover(extension_folder: str, flow_file_name: str) -> list[Scenario]:
+        """List every scenario under ``suites/<extension>/resources/`` carrying the requested case file."""
+        source_tree = corpus_root() / "suites" / extension_folder / "resources"
+        scenarios = ScenarioScanner.discover_optional(extension_folder, flow_file_name)
         if not scenarios:
             raise RuntimeError(
                 "No corpus scenario directories found: expected "
