@@ -33,14 +33,14 @@ The specific requirements for these 3 options are as follows:
 
 ## Task Object
 
-{{task_object}} (required for Create New Tiered Power-Down Task, optional for Modify Tiered Power-Down Task, optional for Create Restoration Task)
+{{task_object}} (required for `Create New Tiered Power-Down Task`, optional for `Modify Tiered Power-Down Task`, optional for `Create Restoration Task`)
 
 Requirement:
 
 1. Supports list format, where each item in the list contains the following information:
-    - Site Name: The name of the site that needs to execute the backup power task; example: "Longyan Xinluo Crystal Lanting-HRHH"; (Required for Create New Tiered Power-Down Task, Optional for Modify Tiered Power-Down Task, Optional for Create Restoration Task)
-    - The list of cells included in the site, which may contain the following: (Optional for Create New Tiered Power-Down Task, Optional for Modify Tiered Power-Down Task, Not required for Create Restoration Task)
-      - Cell Identifier: Using CGI; example: "460-00-2136088-512";
+    - Site Name: the name of the site that needs to execute the backup power task; example: "Longyan Xinluo Crystal Lanting-HRHH"; (Required for `Create New Tiered Power-Down Task`, Optional for `Modify Tiered Power-Down Task`, Optional for `Create Restoration Task`)
+    - The list of cells included in the site, which may contain the following: (Optional for `Create New Tiered Power-Down Task`, Optional for `Modify Tiered Power-Down Task`, Not required for `Create Restoration Task`)
+      - Cell Identifier: using CGI; example: "460-00-2136088-512";
       - Cell Protection Level; allowed values include: Critical Protection, Key, General; example: "Critical Protection";
       - Cell Frequency Band; example: 2.6GHz;
       - Cell Technology; allowed values: 4G (or LTE), 5G (or NR); example: 5G;
@@ -69,32 +69,32 @@ Example:
 
 Requirement:
 
-1. When `Create New Tiered Power-Down Task` or `Modify Tiered Power-Down Task`, provide the following content:
+1. When `Create New Tiered Power-Down Task` or `Modify Tiered Power-Down Task` is selected, provide the following content:
     - Execution Result; allowed values include: Success, Failure; (required)
     - Provide the cell lists for non-shutdown and executed shutdown separately (required)
       - Cell list not to be shut down in this task:
         - Site Name
         - The list of cells included in the site, which must contain the following:
-          - Cell Identifier: Using CGI; example: "460-00-2136088-511";
+          - Cell Identifier: using CGI; example: "460-00-2136088-511";
       - Cell list for executed shutdown:
         - Site Name
         - The list of cells included in the site, which must contain the following:
-          - Cell Identifier: Using CGI; example: "460-00-2136088-513";
+          - Cell Identifier: using CGI; example: "460-00-2136088-513";
           - Frequency Band; example: 2.3GHz;
           - Cell Shutdown Execution Result; example: Execution Success;
           - Shutdown Execution Time; example: 2026/9/16 21:42:09;
 
-2. When `Create Restoration Task`, provide the following content:
+2. When `Create Restoration Task` is selected, provide the following content:
     - Execution Result; allowed values include: Success, Failure; (required)
     - Provide the cell lists for no-rollback and executed rollback separately (required)
       - Cell list not requiring rollback in this task:
         - Site Name
         - The list of cells included in the site, which must contain the following:
-          - Cell Identifier: Using CGI; example: "460-00-2136088-511";
+          - Cell Identifier: using CGI; example: "460-00-2136088-511";
       - Cell list for executed rollback:
         - Site Name
         - The list of cells included in the site, which must contain the following:
-          - Cell Identifier: Using CGI; example: "460-00-2136088-513";
+          - Cell Identifier: using CGI; example: "460-00-2136088-513";
           - Frequency Band; example: 2.3GHz;
           - Cell Rollback Execution Result; example: Rollback Success;
           - Rollback Execution Time; example: 2026/9/16 23:30:00;
