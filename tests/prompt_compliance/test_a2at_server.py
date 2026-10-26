@@ -6,8 +6,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = PROJECT_ROOT / "src"
 
@@ -17,8 +15,6 @@ if str(SRC_ROOT) not in sys.path:
 
 from a2a_t.core.errors.catalog import ErrorCatalog
 from a2a_t.llm.models import LLMClientConfig
-from a2a_t.negotiation.common.enums import NegotiationStatus, NegotiationType
-from a2a_t.negotiation.common.models import ContinueNegotiationInput, NegotiationContext, StartNegotiationInput
 from a2a_t.server.prompt_compliance.models import PromptComplianceFailure, PromptComplianceResult
 from tests.support import TEST_ENV_PATH, ManagedTempDirTestCase
 
@@ -62,25 +58,6 @@ class FakePromptComplianceBuilder:
         return self._orchestrator
 
 
-class FakeNegotiationOrchestrator:
-    def __init__(self) -> None:
-        self.start_calls: list[object] = []
-        self.receive_calls: list[dict[str, object]] = []
-        self.continue_calls: list[object] = []
-
-    def start_negotiation(self, input: StartNegotiationInput) -> dict[str, object]:
-        self.start_calls.append(input)
-        return {"started": True}
-
-    def receive_negotiation(self, message: str, context: dict[str, object]) -> dict[str, object]:
-        self.receive_calls.append({"message": message, "context": context})
-        return {"received": True}
-
-    def continue_negotiation(self, input: ContinueNegotiationInput) -> dict[str, object]:
-        self.continue_calls.append(input)
-        return {"continued": True}
-
-
 class FakeLogger:
     def __init__(self) -> None:
         self.info_messages: list[tuple[str, tuple[object, ...]]] = []
@@ -99,7 +76,7 @@ class A2ATServerTest(unittest.TestCase):
         self.assertEqual(signature.parameters["env_path"].kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertEqual(signature.parameters["logger"].kind, inspect.Parameter.KEYWORD_ONLY)
 
-    def test_a2at_server_delegates_all_public_methods_with_typed_negotiation_inputs(self) -> None:
+    def test_a2at_server_delegates_prompt_compliance_with_configured_llm(self) -> None:
         from a2a_t.server.a2at_server import A2ATServer
 
         compliance_result = PromptComplianceResult(
@@ -112,38 +89,16 @@ class A2ATServerTest(unittest.TestCase):
         )
         compliance = FakePromptComplianceOrchestrator(compliance_result)
         compliance_builder = FakePromptComplianceBuilder(compliance)
-        negotiation = FakeNegotiationOrchestrator()
         logger = FakeLogger()
         llm_config = build_llm_config()
         llm_client = object()
-        start_input = StartNegotiationInput(
-            type=NegotiationType.INFORMATION,
-            content_text="Need more information.",
-            facts={},
-        )
-        continue_input = ContinueNegotiationInput(
-            context=NegotiationContext.from_context(
-                {
-                    "negotiationType": "information",
-                    "negotiationId": "neg-1",
-                    "role": "server",
-                    "round": 1,
-                    "status": "in-progress",
-                    "extra": {},
-                }
-            ),
-            status=NegotiationStatus.IN_PROGRESS,
-            content_text="Need the site name.",
-        )
 
         with (
             patch("a2a_t.server.a2at_server._default_env_path", return_value=TEST_ENV_PATH),
             patch("a2a_t.server.a2at_server.LLMConfigLoader.load", return_value=llm_config) as load_llm_config,
             patch("a2a_t.server.a2at_server.LLMClientFactory.create", return_value=llm_client) as create_llm_client,
             patch("a2a_t.server.a2at_server.PromptComplianceOrchestratorBuilder", return_value=compliance_builder),
-            patch("a2a_t.server.a2at_server.ServerNegotiationOrchestratorBuilder") as negotiation_builder_cls,
         ):
-            negotiation_builder_cls.return_value.build.return_value = negotiation
             server = A2ATServer(logger=logger)
 
             self.assertEqual(
@@ -157,34 +112,12 @@ class A2ATServerTest(unittest.TestCase):
                     ),
                 ),
             )
-            # The three legacy state-machine methods keep their forwarding behavior for one
-            # release and warn on every call (D1 deprecation shim round).
-            with pytest.warns(DeprecationWarning, match=r"A2ATServer\.\w+ is deprecated since 1\.1\.0"):
-                self.assertEqual(server.start_negotiation(start_input), {"started": True})
-                self.assertEqual(
-                    server.receive_negotiation(
-                        "Need more information",
-                        {
-                            "negotiationType": "information",
-                            "negotiationId": "neg-1",
-                            "role": "server",
-                            "round": 1,
-                            "status": "in-progress",
-                            "extra": {},
-                        },
-                    ),
-                    {"received": True},
-                )
-                self.assertEqual(server.continue_negotiation(continue_input), {"continued": True})
 
         load_llm_config.assert_called_once_with(TEST_ENV_PATH)
         create_llm_client.assert_called_once_with(llm_config.provider, llm_config, logger=logger)
-        # The builders receive the observability-wrapped client (spec 2.2 A2ATLLMClientDecorator)
+        # The builder receives the observability-wrapped client (spec 2.2 A2ATLLMClientDecorator)
         # whose inner is the factory product.
         self.assertIs(compliance_builder.calls[0]["llm_client"]._inner, llm_client)
-        self.assertIs(
-            negotiation_builder_cls.return_value.build.call_args.kwargs["llm_client"]._inner, llm_client
-        )
         self.assertEqual(
             compliance.calls,
             [
@@ -193,9 +126,6 @@ class A2ATServerTest(unittest.TestCase):
                 }
             ],
         )
-        self.assertEqual(negotiation.start_calls, [start_input])
-        self.assertEqual(negotiation.receive_calls[0]["message"], "Need more information")
-        self.assertEqual(negotiation.continue_calls, [continue_input])
         self.assertIs(compliance_builder.calls[0]["logger"], logger)
 
     def test_check_task_prompt_returns_success_only_when_compliance_passes(self) -> None:
@@ -203,16 +133,13 @@ class A2ATServerTest(unittest.TestCase):
 
         compliance = FakePromptComplianceOrchestrator(PromptComplianceResult(success=True))
         compliance_builder = FakePromptComplianceBuilder(compliance)
-        negotiation = FakeNegotiationOrchestrator()
 
         with (
             patch("a2a_t.server.a2at_server._default_env_path", return_value=TEST_ENV_PATH),
             patch("a2a_t.server.a2at_server.LLMConfigLoader.load", return_value=build_llm_config()),
             patch("a2a_t.server.a2at_server.LLMClientFactory.create", return_value=object()),
             patch("a2a_t.server.a2at_server.PromptComplianceOrchestratorBuilder", return_value=compliance_builder),
-            patch("a2a_t.server.a2at_server.ServerNegotiationOrchestratorBuilder") as negotiation_builder_cls,
         ):
-            negotiation_builder_cls.return_value.build.return_value = negotiation
             server = A2ATServer()
 
             self.assertEqual(
@@ -265,12 +192,10 @@ class A2ATServerPromptResourceTimingTest(ManagedTempDirTestCase):
             return original_read_text(self, key)
 
         with (
-            patch("a2a_t.server.a2at_server.ServerNegotiationOrchestratorBuilder") as negotiation_builder_cls,
             patch("a2a_t.server.a2at_server.LLMConfigLoader.load", return_value=build_llm_config()),
             patch("a2a_t.server.a2at_server.LLMClientFactory.create", return_value=object()),
             patch.object(PackagedResourceReader, "read_text", missing_prompts_read_text),
         ):
-            negotiation_builder_cls.return_value.build.return_value = object()
             server = A2ATServer(env_path=env_path)
 
             result = server.check_task_prompt(processed_prompt_text="processed body")

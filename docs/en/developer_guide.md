@@ -87,7 +87,7 @@ flowchart TD
 1. Python 3.12+ is required.
 2. Complete multi-agent protocol interaction development also requires the `a2a-sdk`, version 1.1.0+.
 3. The SDK is stateless: negotiation session state travels with the A2A-T metadata (`negotiationContext`) of each message and is not stored inside the SDK.
-4. The legacy state-machine negotiation demo (`start_negotiation` / `receive_negotiation` / `continue_negotiation` and the `negotiation/{types,store,runtime,handling}` packages) is deprecated since 1.1.0 (calls emit a `DeprecationWarning`) and will be removed in the next release.
+4. The legacy state-machine negotiation demo (`start_negotiation` / `receive_negotiation` / `continue_negotiation` and the `negotiation/{types,store,runtime,handling}` packages): the state-machine negotiation APIs were deprecated since v1.1.0, emitted a `DeprecationWarning` when called, and were removed in v1.2.0.
 5. The A2A-T SDK does not provide an agent HTTP service framework, a registry-center client, or authentication and key management capabilities; these must be integrated by the business system.
 
 ## 1.3 Environment Preparation
@@ -1521,4 +1521,3 @@ The sample configuration file provided by the SDK is `env.example`; copy it to `
 | `A2AT_LLM_SESSION_MAX_PER_PROVIDER`   | Maximum number of tracked sessions per provider, default `100`                           |
 | `A2AT_LLM_MAX_ATTEMPTS`               | Maximum number of attempts for retryable LLM steps, range 1-10 (out-of-range values are clipped), default `3` |
 | `A2AT_LLM_DETAIL_LOG_ENABLED`         | Whether to print the complete LLM request/response messages (not truncated), default `false`; enabling it may print sensitive information or consume log space, use only in the DEBUG phase and keep it off in production; time/token/elapsed-time summary logs are emitted at DEBUG level by the dedicated logger `a2a_t.llm.call`, see 1.6 |
-| `A2AT_NEGOTIATION_STATE_STORE_TYPE`   | Negotiation state store of the deprecated state-machine negotiation demo (`in_memory`); the 1.1.0 negotiation content API is stateless and does not use this key |

@@ -219,9 +219,7 @@ class A2ATServerInputLimitGateTest(ManagedTempDirTestCase):
             patch("a2a_t.server.a2at_server._default_env_path", return_value=env_path),
             patch("a2a_t.server.a2at_server.LLMConfigLoader.load", return_value=_build_llm_config()),
             patch("a2a_t.server.a2at_server.LLMClientFactory.create", return_value=object()),
-            patch("a2a_t.server.a2at_server.ServerNegotiationOrchestratorBuilder") as negotiation_builder_cls,
         ):
-            negotiation_builder_cls.return_value.build.return_value = object()
             server = A2ATServer(env_path=env_path)
 
             result = server.check_task_prompt(processed_prompt_text="x" * (DEFAULT_MAX_TEXT_CHARS + 1))

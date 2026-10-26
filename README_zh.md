@@ -168,7 +168,7 @@ uv run mypy src      # 类型检查
 
 - 内置 LLM 调用链对外统一为 OpenAI 适配层。
 - 大模型提示词资源已内置，不支持自定义扩展（`prompts` 与 `errors` 始终从内置资源加载）。
-- 协商会话状态随消息 metadata 往返（SDK 无状态），不提供协商状态存储；旧的状态机协商 API（`start_negotiation` / `receive_negotiation` / `continue_negotiation`）自 1.1.0 起废弃。
+- 协商会话状态随消息 metadata 往返（SDK 无状态），不提供协商状态存储；旧的状态机协商 API（`start_negotiation` / `receive_negotiation` / `continue_negotiation`）自 v1.1.0 起废弃，已在 v1.2.0 版本删除。
 - 随包资源与语言覆盖有限，不包含 `registry-center`（注册中心）等远程资源加载能力。
 - 本文档主要介绍 SDK 本身，不涉及 CLI、托管服务、部署流程或可直接使用的应用方案。
 
