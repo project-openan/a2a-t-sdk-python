@@ -23,6 +23,7 @@ Main capabilities include:
 - **Template resource management**: built-in scenario, slot, template, vocabulary, and system prompt resources, supporting both the `packaged` built-in source and the `local_file` local-file source.
 - **LLM adaptation**: connects to external large language models through OpenAI-compatible call chains.
 - **Structured, bilingual error model**: 42 fixed machine-readable error codes (with the parameters needed to render their messages) and bilingual message templates.
+- **Observability**: automatically records traces, duration metrics, and structured logs of A2A interactions based on OpenTelemetry; one integration step on each of the client and the server, with no business code changes (see 1.7).
 
 For the complete API list and usage, see [API_Reference.md](API_Reference.md).
 
@@ -1291,7 +1292,212 @@ For daily rotation, use `TimedRotatingFileHandler("logs/llm-call.log", when="mid
 
 > Note: the SDK only produces log events and configures no handler/level; the log output path and rotation policy are entirely decided by the integrator's configuration (the examples above are suggestions only). Once `A2AT_LLM_DETAIL_LOG_ENABLED` is enabled, every LLM call outputs its complete message; set per-file size limits and retention counts as in the examples to avoid filling the disk. If the integrator does not configure logging at all, Python by default sends only WARNING and above to stderr, so the DEBUG-level `llm_call` logs are invisible.
 
-## 1.7 Configuration Reference
+## 1.7 Observability Integration Guide
+
+### 1.7.1 Capability Overview
+
+Purpose: answer the question "what happened after the request went out" during joint debugging and O&M — who called whom, which step the task has reached, how long each step took, and how many rounds a negotiation went through. The SDK's observability module is based on OpenTelemetry (the industry-standard observability data framework) and automatically records the A2A interaction process. The recorded data falls into three categories:
+
+| Data type | Description | Typical use |
+| --- | --- | --- |
+| Traces | The complete course of one interaction from the client initiating the request to the server finishing the processing, broken down into per-step records: the client sending the request, the server handling the request, and each streamed event are each a record | Troubleshoot "where the request is stuck" and confirm whether the records from both ends correlate |
+| Metrics | Time-aggregated values, such as the task request duration and the number of negotiation rounds to convergence | Observe overall trends and configure alerts |
+| Logs | Structured records (JSON) of key events, automatically carrying the trace identity | Look up the detailed messages and status changes of one interaction by the trace identity |
+
+Integration: **register once on the client `ClientFactory` and wrap the request handler once on the server**; afterwards the SDK records the data above automatically — no business code changes and no hand-written OpenTelemetry code are needed. Without a data collection endpoint, the records go to the console (directly visible during joint debugging); with an endpoint configured, they are exported to an OpenTelemetry collector and viewed in a backend (such as Jaeger or Langfuse).
+
+Notes:
+
+1. Observability is an optional capability installed through the extra dependency `a2a-t-sdk[observability]`; without it the SDK behavior is unaffected.
+2. The observability logic has zero impact on the business flow: a recording failure only produces a warning log and never interrupts request processing; it can be switched off entirely or per data type.
+3. Difference from section 1.6: section 1.6 covers the SDK-internal LLM call logs (for prompt tuning), while this section covers the full A2A interaction chain, whose data can be exported to a unified observability backend.
+
+### 1.7.2 Integration Steps
+
+#### Step1 Install Dependencies
+
+The observability module's code ships with `a2a-t-sdk` — no separate package is needed; however, the OpenTelemetry components it relies on at runtime are optional dependencies that `pip install a2a-t-sdk` does not install — without them the observability logic silently disables itself (no records are produced and the business flow is unaffected), so the extra dependency is needed to fill the gap:
+
+```bash
+pip install a2a-t-sdk[observability]
+```
+
+> If the environment already has the OpenTelemetry components installed (for example, other observability capabilities are integrated), this step can be skipped.
+
+#### Step2 Client Integration
+
+Before creating clients with the official `ClientFactory`, register the factory once; every client produced by that factory is then observed automatically:
+
+```python
+from a2a.client.client import ClientConfig
+from a2a.client.client_factory import ClientFactory
+from a2a.utils.constants import TransportProtocol
+from a2a_t.observability import register_client_factory
+
+factory = ClientFactory(
+    ClientConfig(
+        supported_protocol_bindings=[TransportProtocol.HTTP_JSON],
+        use_client_preference=True,
+    )
+)
+register_client_factory(factory)  # register once; no other business code changes
+a2a_client = factory.create(agent_card)
+```
+
+After registration the client automatically: records the request initiation, records each streamed event it receives, and injects the trace identity (`traceparent`) into the request headers to correlate with the server-side records.
+
+#### Step3 Server Integration
+
+Wrap the official request handler with `A2ATRequestHandlerDecorator`, then assemble the routes as usual:
+
+```python
+from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.routes import create_agent_card_routes, create_rest_routes
+from a2a.server.tasks.inmemory_task_store import InMemoryTaskStore
+from a2a_t.observability import A2ATRequestHandlerDecorator
+from starlette.applications import Starlette
+
+request_handler = A2ATRequestHandlerDecorator(  # one wrapper around the original handler
+    DefaultRequestHandler(
+        agent_executor=executor,
+        task_store=InMemoryTaskStore(),
+        agent_card=agent_card,
+    )
+)
+
+app = Starlette(routes=[
+    *create_agent_card_routes(agent_card),
+    *create_rest_routes(request_handler),
+])
+```
+
+After wrapping, the server automatically: records the request handling (extracting the trace identity from the request headers to join the client records into the same trace), records each streamed event it sends, and records push notification deliveries.
+
+> Both the official `DefaultRequestHandler` (a2a-sdk 1.1.x) and the `LegacyRequestHandler` can be wrapped directly.
+
+#### Step4 Configure the Data Destination
+
+Observability configuration is read from **OS environment variables** (note the difference from section 1.8, where the business configuration is read from the `.env` file). The SDK completes its initialization automatically on the first observed call. Common settings:
+
+| Environment variable | Default | Description |
+| --- | --- | --- |
+| `A2AT_OBSERVABILITY_ENABLED` | `true` | Master switch; set to `false` and the module becomes fully transparent, producing no records |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | Data collection endpoint address. When unset, records are printed to the console for direct inspection during joint debugging |
+| `OTEL_SERVICE_NAME` (or `A2AT_SERVICE_NAME`) | `a2a-t-agent` | The service name of this process shown in the backend; use different values for the client and the server |
+| `A2AT_EXPORTER_PROTOCOL` | `grpc` | Export protocol; `http/protobuf` is also supported |
+
+Notes:
+
+1. If the application has already initialized OpenTelemetry itself (for example, other observability components are integrated), the SDK does not override the existing configuration.
+2. Initialization can also be done explicitly in code: `from a2a_t.observability import setup; setup(endpoint=..., service_name=...)`; the passed arguments take precedence over environment variables.
+3. For the complete configuration list (per-data-type switches, message payload logging switches, etc.), see 1.7.4.
+
+#### Step5 Verify the Integration
+
+Without `OTEL_EXPORTER_OTLP_ENDPOINT` configured, both consoles print the JSON of every trace record for direct inspection. The repository ships a runnable end-to-end sample (with three scenarios — task dispatch, LLM prompt generation, and multi-round negotiation — plus instructions for connecting a Langfuse backend); run the sample before integrating into your own project:
+
+```bash
+cd a2a-t-sample
+# PowerShell: $env:PYTHONPATH = "$PWD\observability-sample\src"
+export PYTHONPATH="$PWD/observability-sample/src"
+uv run python -m obs_sample.server_main                    # terminal 1: the server (port 8100)
+uv run python -m obs_sample.client_main --scenario=native  # terminal 2: the client
+```
+
+For details, see [observability-sample/README.md](../../a2a-t-sample/observability-sample/README.md).
+
+### 1.7.3 What Gets Recorded Automatically
+
+After integration, no observability code is needed; the SDK records automatically per interaction action:
+
+| Interaction action | What is recorded automatically |
+| --- | --- |
+| The client initiates a request (SendMessage / SendStreamingMessage, etc.) | The client entry record, with the trace identity injected into the request |
+| The server receives and handles the request | The server entry record, joined with the client entry record into the same trace |
+| The server streams out events (status changes, result artifacts, completion, etc.) | One record per event, carrying the event kind (`streaming.event.kind`) and the task status (`task.status`) |
+| Negotiation messages (Negotiation-T) sent or received | A negotiation record carrying the negotiation identity (`negotiation.id`), the current round (`negotiation.round`), and the negotiation action (`negotiation.performative`); when the negotiation reaches agreement or terminates, the converged-rounds metric `a2at.negotiation.total_rounds` is reported automatically |
+| The server delivers a push notification | A push record (`SendMessage-pushNotification`) |
+| A task request finishes processing | The duration metric `a2at.task.request.duration` (recorded on both ends, told apart by the `a2at.span.side` attribute) |
+| The LLM is called through an SDK facade such as `A2ATClient` | The input/output token usage is recorded automatically onto the subsequent trace |
+| Key events (task status changes, result artifacts, etc.) | Structured JSON logs on the logger `a2at.observability`, automatically carrying `trace_id` / `span_id` for looking up logs by the trace identity |
+
+The trace records also automatically carry A2A-T business attributes (prefixed with `gen_ai.agent.a2at.`), which the backend can filter and aggregate by. Common attributes:
+
+| Attribute | Description | Source |
+| --- | --- | --- |
+| `extension.name` | The A2A-T extension type of this interaction (Task-T / Negotiation-T / Notification-T / Authorization-T) | Extracted from the extension URI in the message metadata |
+| `task.type` | The task type (for example "configuration dispatch") | Extracted from the message body by the template section heading |
+| `notification.topic` | The notification subscription topic | Same as above |
+| `authorization.policy.operation.type` | The operation type of the authorization policy | Same as above |
+| `negotiation.id` / `negotiation.round` | The negotiation identity and the current round | Extracted from the `negotiationContext` in the message metadata |
+
+For example, filtering by `extension.name=Task-T` in the backend shows only the traces of task-dispatch interactions; querying by `negotiation.id` reconstructs the complete course of a multi-round negotiation.
+
+### 1.7.4 Configuration Reference
+
+All observability configuration items are read from OS environment variables (not from the `.env` file):
+
+| Environment variable | Default | Description |
+| --- | --- | --- |
+| `A2AT_OBSERVABILITY_ENABLED` | `true` | Master switch; `false` makes the module fully transparent |
+| `A2AT_TRACE_ENABLED` / `A2AT_METRIC_ENABLED` / `A2AT_LOG_ENABLED` | `true` | Per-data-type switches; for example, metrics and logs keep working with traces switched off |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | Data collection endpoint; when unset, records go to the console (joint-debugging mode) |
+| `A2AT_CONSOLE_EXPORTER` | `true` | Set to `false` to turn off the console output of the joint-debugging mode (no output at all when no collection endpoint is configured) |
+| `OTEL_SERVICE_NAME` (or `A2AT_SERVICE_NAME`) | `a2a-t-agent` | Service name |
+| `A2AT_AGENT_ROLE` | unset | Process role marker (such as `client` / `server`), written into the resource attribute `agent.role` |
+| `A2AT_EXPORTER_PROTOCOL` | `grpc` | Export protocol; `http/protobuf` is also supported |
+| `A2AT_EXTRACT_REQUEST` / `A2AT_EXTRACT_RESPONSE` | `false` | Whether to write the request/response message payload into the attributes of the trace records (JSON, truncated per the same rule as the payload logs) |
+| `A2AT_LOGS_PAYLOAD_ENABLED` | `false` | Whether to include the message payload in the structured logs |
+| `A2AT_LOGS_PAYLOAD_MAX_LENGTH` | `4096` | Maximum length (characters) of one payload entry; the excess is truncated and marked with `[truncated]` |
+| `OTEL_INSTRUMENTATION_A2AT_SDK_ENABLED` | `true` | Hard switch; `false` disables all observability logic at module load time |
+
+> Risk warning: with `A2AT_EXTRACT_REQUEST` / `A2AT_EXTRACT_RESPONSE` or `A2AT_LOGS_PAYLOAD_ENABLED` enabled, the request and response payloads (including the prompt content) enter the trace attributes or the logs and may contain sensitive information — use them only during joint debugging and keep them off in production; long payloads also increase the data volume significantly, so control them with `A2AT_LOGS_PAYLOAD_MAX_LENGTH`. For redaction, pass a custom `payload_redactor` function when constructing `A2ATObservabilityConfig` (redaction runs before truncation), and pass the config through `register_client_factory(factory, config=...)` or `A2ATRequestHandlerDecorator(handler, config=...)`.
+
+### 1.7.5 Adding Observability Data in Business Code (Optional)
+
+Beyond the automatic records, the SDK provides three additional entry points for use as needed:
+
+**1. Add business attributes to the current step**
+
+In business code such as `AgentExecutor.execute`, call `current_span()` to get a view of the current step and append custom attributes (for example, a business order number):
+
+```python
+from a2a_t.observability import current_span
+
+span = current_span()
+if span is not None:
+    span.set_attribute("biz.order_id", order_id)
+```
+
+It returns `None` when observability is not integrated or no trace is in progress; the caller just checks for `None`.
+
+**2. Record a piece of business processing manually**
+
+Use `A2ATSpan` to record the duration and attributes of a piece of business processing:
+
+```python
+from a2a_t.observability import A2ATSpan
+
+with A2ATSpan("query-ne-config") as span:
+    span.set_attribute("ne.name", ne_name)
+    query_ne_config(ne_name)
+```
+
+**3. Record SDK facade calls**
+
+Wrap an `A2ATClient` / `A2ATServer` instance with `trace_facade` to record one step per SDK-internal processing such as prompt generation and message validation (named like `a2at.sdk.client.generate_task_prompt_from_text`):
+
+```python
+from pathlib import Path
+from a2a_t.client.a2at_client import A2ATClient
+from a2a_t.observability import trace_facade
+
+client = trace_facade(A2ATClient(env_path=Path("package_data/.env")))
+```
+
+> The entry points above automatically become no-ops (producing no records) when the observability dependencies are not installed or the master switch is off, so the business code needs no extra checks.
+
+## 1.8 Configuration Reference
 
 The sample configuration file provided by the SDK is `env.example`; copy it to `package_data/.env` (or pass an explicit `env_path`). Both the A2A-T Client and the A2A-T Server read the `.env` file at construction (OS environment variables are not read). The configuration items are:
 
