@@ -72,7 +72,7 @@ A2A-T SDK 对外仅提供两个入口：客户端入口 `A2ATClient`（提示词
 
 - 部分接口涉及到LLM调用，使用时需根据对所接模型服务可提供的并发能力，结合业务时限要求，控制使用API时的调用频率和并发。
 - 涉及到LLM调用的API针对文本`text`输入会做长度防护，在输入超过`.env`（`package_data/.env` 或 `env_path` 指向的文件）中配置的 `A2AT_INPUT_TEXT_MAX_CHARS` 字符时，会报错误码 `input.text_too_long` ，该配置项默认配置为 16384（16×1024）；不涉及LLM调用的结构化数据不受此限制。
-- SDK 无状态：协商会话状态随每条消息的 A2A-T metadata（`negotiationContext`）往返，不保存在 SDK 内部；旧的 `start_negotiation` / `receive_negotiation` / `continue_negotiation` 状态机协商 API 自 1.1.0 起废弃，调用时发出 `DeprecationWarning`，将在下一版本删除。
+- SDK 无状态：协商会话状态随每条消息的 A2A-T metadata（`negotiationContext`）往返，不保存在 SDK 内部；旧的 `start_negotiation` / `receive_negotiation` / `continue_negotiation` 状态机协商 API 自 v1.1.0 起废弃，调用时发出 `DeprecationWarning`，已在 v1.2.0 版本删除。
 
 ## 1.3 API说明
 

@@ -268,8 +268,7 @@ def test_every_client_public_method_is_symmetric_on_the_server(method: str) -> N
 
     The seven prompt-side generation APIs are the documented client-only exception of the Java
     contract and are skipped with their reason; every other client method — the twelve negotiation
-    content methods, both template queries and the three deprecated state-machine shims — must stay
-    symmetric.
+    content methods and both template queries — must stay symmetric.
     """
     _assert_symmetric_signatures(A2ATClient, A2ATServer, method)
 

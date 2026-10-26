@@ -170,7 +170,7 @@ Confirm the following limitations before use:
 
 - The built-in LLM call chain is uniformly exposed as an OpenAI adaptation layer.
 - The LLM prompt resources are built in and do not support custom extension (`prompts` and `errors` are always read from the built-in resources).
-- Negotiation session state travels in the message metadata (the SDK is stateless) and no negotiation state store is provided; the legacy state-machine negotiation APIs (`start_negotiation` / `receive_negotiation` / `continue_negotiation`) are deprecated since 1.1.0.
+- Negotiation session state travels in the message metadata (the SDK is stateless) and no negotiation state store is provided; the legacy state-machine negotiation APIs (`start_negotiation` / `receive_negotiation` / `continue_negotiation`) were deprecated since v1.1.0 and removed in v1.2.0.
 - Bundled resources and language coverage are limited, and remote resource loading such as `registry-center` (the registry center) is not included.
 - This document mainly introduces the SDK itself and does not cover CLI tools, hosted services, deployment flows, or ready-to-use application solutions.
 
