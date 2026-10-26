@@ -4,8 +4,7 @@ Besides the task prompt compliance API, the facade exposes the three extension c
 (``validate_{task,notification,auth}_prompt_and_data_filling``, the shared core validation pipeline
 behind an input-length gate), the twelve negotiation content methods
 of the shared :class:`~a2a_t.negotiation.generation.content_service.NegotiationContentService`
-(eight generation plus four validation methods) and the extension-agnostic template queries of the
-:class:`~a2a_t.common.prompt_resources.catalog.TemplateQueryService`.
+(eight generation plus four validation methods).
 """
 
 from __future__ import annotations
@@ -77,9 +76,9 @@ def _parse_template_uri(template_uri: str | TemplateUri | None) -> TemplateUri:
 
 
 class A2ATServer:
-    """Server-side facade of the A2A-T SDK: prompt compliance, validation, negotiation, and queries.
+    """Server-side facade of the A2A-T SDK: prompt compliance, validation, and negotiation.
 
-    The facade is the single server entry point of the SDK and exposes four groups of operations:
+    The facade is the single server entry point of the SDK and exposes three groups of operations:
 
     - **Task prompt compliance** — :meth:`check_task_prompt` validates one processed task prompt
       against the scenario, template and slot constraints and reports the outcome in the returned
@@ -93,8 +92,6 @@ class A2ATServer:
       (``generate_negotiation_{propose,accept,reject,abort}_prompt_from_{data,text}``) and four
       message-validation methods (``validate_{...}_prompt_and_data_filling``), identical to the
       client surface because both peers of a negotiation generate and validate messages.
-    - **Template queries** — :meth:`get_prompts` and :meth:`get_prompt`, the extension-agnostic
-      catalog queries that never throw.
 
     Every method that addresses a template takes the template URI in its raw string spelling and
     parses it fail-fast; use the constants of :mod:`a2a_t.core.standard_templates` instead of
@@ -696,10 +693,10 @@ class A2ATServer:
         )
 
     # ------------------------------------------------------------------
-    # Template queries
+    # Internal template queries
     # ------------------------------------------------------------------
 
-    def get_prompts(self) -> list[PromptTemplate]:
+    def _get_prompts(self) -> list[PromptTemplate]:
         """List every template available for the configured language across all A2A-T extensions.
 
         This query never throws: the extension directories are discovered from the configured
@@ -713,7 +710,7 @@ class A2ATServer:
         """
         return self._template_queries().get_prompts()
 
-    def get_prompt(self, template_uri: str | TemplateUri) -> PromptTemplate | None:
+    def _get_prompt(self, template_uri: str | TemplateUri) -> PromptTemplate | None:
         """Load one template by its URI, regardless of the extension.
 
         This query never throws for a well-formed template URI: a missing template yields ``None``

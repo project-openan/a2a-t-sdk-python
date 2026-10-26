@@ -73,6 +73,7 @@ The A2A-T SDK exposes only two entry points: the client entry `A2ATClient` (prom
 - Some APIs involve LLM calls. When using them, control the call frequency and concurrency based on the concurrency the connected model service can provide and your business latency requirements.
 - APIs involving LLM calls apply length protection to `text` inputs: when the input exceeds `A2AT_INPUT_TEXT_MAX_CHARS` configured in `.env` (the `package_data/.env` or the file pointed to by `env_path`), the error code `input.text_too_long` is reported; the default of this configuration item is 16384 (16×1024). Structured data that does not involve LLM calls is not limited.
 - The SDK is stateless: negotiation session state travels with the A2A-T metadata (`negotiationContext`) of each message and is not stored inside the SDK; the legacy `start_negotiation` / `receive_negotiation` / `continue_negotiation` state-machine negotiation APIs were deprecated since v1.1.0, emitted a `DeprecationWarning` when called, and were removed in v1.2.0.
+- The private template-query methods `_get_prompts` / `_get_prompt` on `A2ATClient` and `A2ATServer` are SDK-internal interfaces. They are not part of the public API, are not guaranteed to be compatible across releases, and may be changed or removed without notice; do not call them directly.
 
 ## 1.3 API Descriptions
 
