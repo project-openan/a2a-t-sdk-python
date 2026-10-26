@@ -1,8 +1,8 @@
 """Facade API symmetry guard (port of Java ``NegotiationFacadeApiSymmetryTest``).
 
 The Java sample module guards the negotiation content-layer API surface of the two high-level
-facades with reflection: the client and the server facade expose the negotiation generation, query
-and validation APIs as one symmetric surface — identical method names, parameter types and return
+facades with reflection: the client and the server facade expose the negotiation generation and
+validation APIs as one symmetric surface — identical method names, parameter types and return
 types — and the guard fails when one facade drifts from the other. This port replaces the
 reflection sweep with ``inspect.signature`` parametrized tests (plan section 三、P7): for every
 guarded method the two facades must agree on the parameter names, their order, kinds, annotations
@@ -74,8 +74,8 @@ NEGOTIATION_API_METHODS: tuple[str, ...] = (
 #: The retired negotiation-scoped query methods the Java guard keeps absent from both facades.
 REMOVED_NEGOTIATION_QUERY_METHODS: tuple[str, ...] = ("get_negotiation_prompts", "get_negotiation_prompt")
 
-#: The extension-agnostic query methods both facades expose with one signature.
-CROSS_EXTENSION_QUERY_METHODS: tuple[str, ...] = ("get_prompts", "get_prompt")
+#: The internal template query methods both facades expose with one signature.
+INTERNAL_TEMPLATE_QUERY_METHODS: tuple[str, ...] = ("_get_prompts", "_get_prompt")
 
 #: Name shape of the negotiation content API family, used to catch family drift beyond the closed
 #: list (a new ``generate_negotiation_*`` or negotiation ``validate_*_prompt_and_data_filling``
@@ -233,28 +233,26 @@ def test_negotiation_api_family_is_exactly_the_twelve_methods(facade_name: str, 
 @pytest.mark.parametrize("method", REMOVED_NEGOTIATION_QUERY_METHODS)
 def test_removed_negotiation_query_method_is_absent(facade_name: str, facade: type, method: str) -> None:
     """Neither facade exposes the removed negotiation-scoped query methods."""
-    assert not hasattr(facade, method), (
-        f"{facade_name} must not expose the removed {method} query method; "
-        "use the extension-agnostic get_prompts / get_prompt instead"
-    )
+    assert not hasattr(facade, method), f"{facade_name} must not expose the removed {method} query method"
 
 
 # --------------------------------------------------------------------------------------
-# The cross-extension query methods (Java bothFacadesExposeTheSameCrossExtensionQueryMethods)
+# The internal template query methods (not part of the public facade surface)
 # --------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("method", CROSS_EXTENSION_QUERY_METHODS)
-def test_cross_extension_query_method_is_symmetric(method: str) -> None:
-    """The extension-agnostic template queries exist on the client and match on the server."""
+@pytest.mark.parametrize("method", INTERNAL_TEMPLATE_QUERY_METHODS)
+def test_internal_template_query_method_is_symmetric(method: str) -> None:
+    """The internal template queries exist on the client and match on the server."""
     assert callable(getattr(A2ATClient, method, None)), f"A2ATClient is missing {method}"
     _assert_symmetric_signatures(A2ATClient, A2ATServer, method)
 
 
-def test_client_exposes_exactly_the_cross_extension_query_methods() -> None:
-    """The client facade exposes both cross-extension query methods and no other one."""
-    exposed = {method for method in _public_methods(A2ATClient) if method in CROSS_EXTENSION_QUERY_METHODS}
-    assert exposed == set(CROSS_EXTENSION_QUERY_METHODS)
+@pytest.mark.parametrize("facade_name,facade", _FACADES)
+def test_template_query_methods_are_not_public(facade_name: str, facade: type) -> None:
+    """The template query methods stay private on both facades."""
+    for method in ("get_prompts", "get_prompt"):
+        assert not hasattr(facade, method), f"{facade_name} must not expose the public {method} method"
 
 
 # --------------------------------------------------------------------------------------
@@ -386,14 +384,14 @@ def test_both_facades_generate_the_identical_negotiation_message(
 
 @pytest.mark.parametrize("language", LANGUAGES)
 def test_both_facades_list_the_same_template_catalog(language: str, tmp_path: Path) -> None:
-    """Both facades built from one config answer the template queries with the same catalog."""
+    """Both facades built from one config answer the internal template queries with the same catalog."""
     client, server = _build_facades(_write_env(tmp_path, language))
 
-    client_prompts = client.get_prompts()
-    server_prompts = server.get_prompts()
+    client_prompts = client._get_prompts()
+    server_prompts = server._get_prompts()
 
     assert [prompt.template_uri.uri for prompt in client_prompts] == [
         prompt.template_uri.uri for prompt in server_prompts
     ]
     assert client_prompts == server_prompts
-    assert client.get_prompt("Negotiation-T/common/abort/v1") == server.get_prompt("Negotiation-T/common/abort/v1")
+    assert client._get_prompt("Negotiation-T/common/abort/v1") == server._get_prompt("Negotiation-T/common/abort/v1")
