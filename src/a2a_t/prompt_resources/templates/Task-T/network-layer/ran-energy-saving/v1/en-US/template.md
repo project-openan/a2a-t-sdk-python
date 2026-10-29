@@ -29,19 +29,22 @@ Requirement:
 {{task_target}} (optional)
 
 Requirement:
-1. Define the quantitative or qualitative goals the task must achieve. Quantitative and qualitative goals cannot be selected at the same time, and the default is a qualitative goal. The specific description of energy saving goals is as follows:
+1. Define the quantitative or qualitative goals the task must achieve. Quantitative and qualitative goals cannot be selected at the same time. The specific description of energy saving goals is as follows:
     - Quantitative goal: energy saving gain target. The target value format must be a percentage, such as the percentage by which total power consumption is reduced. Example: energy saving gain target: 15%
-    - Qualitative goal: maximize energy saving under the conditions defined in the task context
+    - Qualitative goal: energy saving aggressiveness. Allowed values: Aggressive, Conservative
 2. When <Operation Type> is set to `Modify`, updating the task target is supported.
 
 ## Task Context
 {{task_context}} (optional)
 
 Requirement:
-1. Cell radio access technology for energy saving (LTE/NR/all). Example: Cell RAT for energy saving: NR; (optional)
-2. The time range for executing energy saving, recurring daily. If omitted, energy saving is performed for the full period. **The rate goal is guaranteed only within the energy saving enabled time range**. Example: Energy saving time range: start time "08:00:00", end time "12:00:00"; (optional)
-3. Carrier frequencies that can be turned off during energy saving. Example: Downlink frequency numbers: 1650, 1600; (optional)
-4. Rate guarantee target: the minimum downlink throughput target that must be guaranteed and its effective time period; (optional)
+1. Cell radio access technology for energy saving (optional); allowed values: LTE, NR, all
+2. Energy saving time range (optional): The time range for executing energy saving, recurring daily. If omitted, energy saving is performed for the full period. **The rate goal is guaranteed only within the energy saving enabled time range**. Example: Energy saving time range: start time "08:00:00", end time "12:00:00"
+3. Energy saving cell coverage type (optional); allowed values: indoor, outdoor, all
+4. Whether experience-lossless energy saving is required (optional); allowed values: yes, no
+5. Coverage layer and capacity layer requirements (optional): specify which frequencies are used as the coverage layer and which as the capacity layer. Example: frequency 1650 serves as the coverage layer for carrier shutdown
+6. Carrier frequencies that can be turned off during energy saving (optional); Example: Downlink frequency numbers: 1650, 1600
+7. Rate guarantee target (optional): the minimum downlink throughput target that must be guaranteed and its effective time period
 
     - **For the area-level setting**, the following information needs to be provided:
 
@@ -63,7 +66,7 @@ Requirement:
         - Example:
             - Site list 1: ["Site Name 1", "Site Name 2"], Time-segmented rate guarantee target: {00:00~06:00,2Mbps}, {06:00~18:00,10Mbps}, Background event: power outage from 00:00 to 18:00.
             - Site list 2: ["Site Name 3", "Site Name 4"], Time-segmented rate guarantee target: {01:00~06:00,2Mbps}, {06:00~18:00,10Mbps}, Background event: power outage from 01:00 to 18:00.
-5. When <Operation Type> is set to `Modify`, the configurable parameter is: Rate guarantee target.
+8. When <Operation Type> is set to `Modify`, the configurable parameter is: Rate guarantee target.
 
 ## Expected Output
 {{expected_output}} (optional when creating, not required when modifying)
@@ -100,3 +103,9 @@ Requirement:
     - Synonyms: Shutdown Layer
 11. Coverage Layer
     - Synonyms: Retained Layer, Basic Layer
+12. Lossless Experience Energy Saving
+    - Synonyms: User Experience First
+13. Lossy Experience Energy Saving
+    - Synonyms: Energy Saving First
+14. ARFCN
+    - Explanation: Absolute Radio Frequency Channel Number is used to identify the position of a radio frequency channel in a wireless system. For LTE, EARFCN can be used for identification; for NR, NR-ARFCN can be used.
