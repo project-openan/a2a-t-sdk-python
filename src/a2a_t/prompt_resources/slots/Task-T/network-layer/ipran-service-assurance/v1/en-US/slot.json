@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "task_object": {
+      "type": "string",
+      "description": "Fill in the list of affected services. List format is supported, and each item contains service identifier, service scenario, base station name, base station IP, priority, service type, UNI device name, UNI interface, UNI interface IP, customer name, and other information.",
+      "examples": [
+        "Service identifier: s1-l3vnp; Service scenario: ToB; Priority: high; Service type: L3VPN; UNI device name: NE1; UNI interface: Ge1/0/1; Customer name: Customer 1"
+      ],
+      "x-a2at-value-constraint": "Service identifier (required): service name. Service scenario (required): ToB or ToC. Base station name (optional when the service scenario is ToC, not required when the service scenario is ToB). Base station IP (optional when the service scenario is ToC, not required when the service scenario is ToB). Priority (required): high, medium, low. Service type (required). UNI device name (required): network element name. UNI interface (required): interface name. UNI interface IP (optional when the service scenario is ToC, not required when the service scenario is ToB). Customer name (required when the service scenario is ToB, not required when the service scenario is ToC)."
+    },
+    "task_context": {
+      "type": "string",
+      "description": "Provide the incident serial number (CSN) that reports the affected services.",
+      "examples": [
+        "Incident serial number: 1673735459373056"
+      ],
+      "x-a2at-value-constraint": "Incident serial number (required): fill in the CSN of the incident that reports the affected services."
+    }
+  },
+  "required": ["task_object", "task_context"]
+}
