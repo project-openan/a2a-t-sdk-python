@@ -15,7 +15,7 @@ Requirement:
 2. If the target clarification confirmation request from the counterparty is received, and it is determined to proceed with this target, reply with agreement
 3. If all questions cannot be fully clarified, state the reason for failure
 
-Examples:
+Example:
 1. Accept Example: The clarified intent content is as follows. This negotiation is confirmed and ended:
    - The area is Songshanhu
    - The time-segmented rate guarantee goals are {00:00~07:00,2Mbps}, {07:00~23:00,20Mbps}, {23:00~24:00,10Mbps}
