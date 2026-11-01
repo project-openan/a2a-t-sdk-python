@@ -317,7 +317,7 @@ EXPECTED: dict[tuple[str, str], str] = {
     ),
     ("information_propose", "zh-CN"): (
         "## 信息协商\n"
-        "请根据<所需信息项>补充相关内容。\n"
+        "请根据[所需信息项](#所需信息项)补充相关内容。\n"
         "\n"
         "## 所需信息项\n"
         "1. 接入端口名称：举例：P533-珠江旧城-PTN3900-23-TPA1EG24-1\n"
@@ -327,7 +327,7 @@ EXPECTED: dict[tuple[str, str], str] = {
     ),
     ("information_propose", "en-US"): (
         "## Information Negotiation\n"
-        "Please supplement the relevant content based on <Required Information Items>.\n"
+        "Please supplement the relevant content based on [Required Information Items](#required-information-items).\n"
         "\n"
         "## Required Information Items\n"
         "1. Access Port Name: e.g. P533-Zhujiang Old Town-PTN3900-23-TPA1EG24-1\n"
