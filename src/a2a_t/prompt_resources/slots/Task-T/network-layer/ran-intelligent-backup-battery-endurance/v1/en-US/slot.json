@@ -15,9 +15,9 @@
       "type": "string",
       "description": "Based on Task Object and Task Context, perform wireless intelligent backup power management to achieve the backup power target defined in Task Target, and return the task processing result according to the structure defined in Expected Output.",
       "examples": [
-        "Based on <Task Object> and <Task Context>, perform wireless intelligent backup power management to achieve the backup power target defined in <Task Target>, and return the task processing result according to the structure defined in <Expected Output>."
+        "Based on [Task Object](#task-object) and [Task Context](#task-context), perform wireless intelligent backup power management to achieve the backup power target defined in [Task Target](#task-target), and return the task processing result according to the structure defined in [Expected Output](#expected-output)."
       ],
-      "x-a2at-value-constraint": "Based on <Task Object> and <Task Context>, perform wireless intelligent backup power management to achieve the backup power target defined in <Task Target>, and return the task processing result according to the structure defined in <Expected Output>."
+      "x-a2at-value-constraint": "Based on [Task Object](#task-object) and [Task Context](#task-context), perform wireless intelligent backup power management to achieve the backup power target defined in [Task Target](#task-target), and return the task processing result according to the structure defined in [Expected Output](#expected-output)."
     },
     "task_target": {
       "type": "string",

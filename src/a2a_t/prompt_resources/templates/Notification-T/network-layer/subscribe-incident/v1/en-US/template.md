@@ -13,14 +13,14 @@ Requirement:
 Requirement:
 1. The subscription condition includes fault priority and fault name.
    - Fault priority: supports passing a list. The allowed values of this parameter include critical, high, medium, and low.
-   - Fault name: supports passing a list. The allowed values of this parameter are the list of network-side fault names, for example: pigtail fault, fiber break, board fault, optical module fault, etc.
+   - Fault name: supports passing a list. The allowed values of this parameter are the list of network-side fault names. Example: pigtail fault, fiber break, board fault, optical module fault, etc.
 
 ## Notification Data Format
 {{notification_data_format}} (optional)
 
 Requirement:
-1. Reported data type: Incident, fault; 
-2. Reported data format: which A2A Part carries it (DataPart, TextPart). For example: report Incident data via DataPart.
+1. Reported data type: Incident, fault;
+2. Reported data format: which A2A Part carries it (DataPart, TextPart); Example: report Incident data via DataPart.
 
 ## Expected Output
 1. Subscription result, success or failure

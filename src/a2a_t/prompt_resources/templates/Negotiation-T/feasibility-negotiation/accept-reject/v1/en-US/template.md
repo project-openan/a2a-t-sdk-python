@@ -16,7 +16,7 @@ Requirement:
 4. If the assessment result provided by the counterparty is accepted: briefly summarize the counterparty's assessment result, and state that this assessment result is accepted
 5. If the assessment result provided by the counterparty is not accepted: briefly summarize the counterparty's assessment result, and state that this assessment result is not accepted
 
-Example：
+Example:
 1. Accept Example: The energy saving goal can be achieved. This negotiation is confirmed and ended.
 2. Accept Example: Agree to adjust the rate guarantee goal from 5Mbps down to 2Mbps. This negotiation is confirmed and ended.
 3. Accept Example: The current neighbor cell keepalive solution is feasible, and the impact is controllable. This negotiation is confirmed and ended.

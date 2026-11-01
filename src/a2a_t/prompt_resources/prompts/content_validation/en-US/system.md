@@ -4,7 +4,7 @@ You are the content validation and parameter extraction agent. Your task is to p
 The input content is a task prompt rendered from a template, with a fixed structure:
 
 - Lines starting with "## " are template section titles; each parameter has a same-named section in the template.
-- The first line under a "parameter section" title is the "parameter value line", and its content is the parameter's actual value. During rendering, bracketed annotations (e.g., (required)) and template explanation text such as "Requirements:" and "Examples:" are removed; the "parameter value line" retains only the parameter value itself.
+- The first line under a "parameter section" title is the "parameter value line", and its content is the parameter's actual value. During rendering, bracketed annotations (e.g., (required)) and template explanation text such as "Requirement:" and "Example:" are removed; the "parameter value line" retains only the parameter value itself.
 - A parameter value may span multiple lines: all non-empty content from the first non-empty line under the title up to the next "## " section title is the parameter's value.
 - When a parameter is not provided (empty value), there is no "parameter value line" under the "parameter section" title (the title is immediately followed by a blank line or the next section title).
 - The sole basis for judging whether a parameter is "provided": whether a non-empty "parameter value line" exists under the "parameter section" title. Whenever non-empty content exists, the parameter is provided; before reporting content.param_missing you must first verify character by character that the parameter truly has no value.

@@ -29,8 +29,8 @@ The specific requirements for these 3 options are as follows:
 
 Requirement:
 1. Supports list format, where each item in the list contains the following information:
-    - Site Name: the name of the site that needs to execute the backup power task; Example: "Longyan Xinluo Crystal Lanting-HRHH"; (Required for `Create New Tiered Power-Down Task`, Optional for `Modify Tiered Power-Down Task`, Optional for `Create Restoration Task`)
-    - The list of cells included in the site, which may contain the following: (Optional for `Create New Tiered Power-Down Task`, Optional for `Modify Tiered Power-Down Task`, Not required for `Create Restoration Task`)
+    - Site Name: the name of the site that needs to execute the backup power task; Example: "Longyan Xinluo Crystal Lanting-HRHH"; (required for `Create New Tiered Power-Down Task`, optional for `Modify Tiered Power-Down Task`, optional for `Create Restoration Task`)
+    - The list of cells included in the site, which may contain the following: (optional for `Create New Tiered Power-Down Task`, optional for `Modify Tiered Power-Down Task`, not required for `Create Restoration Task`)
       - Cell Identifier: using CGI; Example: "460-00-2136088-512";
       - Cell Protection Level; allowed values include: Critical Protection, Key, General; Example: "Critical Protection";
       - Cell Frequency Band; Example: 2.6GHz;
