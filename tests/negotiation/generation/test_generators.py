@@ -91,7 +91,7 @@ def test_information_propose_renders_items_and_static_section() -> None:
     rendered = generate_information_propose(context(1), content, zh_template(INFORMATION_NEGOTIATION_PROPOSE_URI), ZH)
 
     assert "## 所需信息项\n1. 故障发生时间：精确到分钟的时间点\n2. 受影响小区标识：CGI 或小区名称" in rendered
-    assert "## 信息协商\n请根据<所需信息项>补充相关内容。" in rendered
+    assert "## 信息协商\n请根据[所需信息项](#所需信息项)补充相关内容。" in rendered
     assert "要求：" not in rendered
     assert "缺失项之间的关系" not in rendered
     assert "{{" not in rendered
