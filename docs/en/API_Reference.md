@@ -35,7 +35,7 @@ The A2A-T SDK exposes only two entry points: the client entry `A2ATClient` (prom
 **Common data types and conventions**
 
 - **Negotiation session context:** `NegotiationContext(id, round, max_rounds, performative)` (a frozen dataclass; `id` is UUID-shaped, `round` starts at 1, default budget `DEFAULT_MAX_ROUNDS = 5`), travels in the message metadata without involving the LLM; `NegotiationContext.of(id, round, performative)` uses the default budget, `next_round()` advances the round, `with_performative()` derives a context carrying another communicative intent, and `is_exhausted()` reports whether the budget is exceeded. `NegotiationPerformative` takes the values `PROPOSE` / `ACCEPT` / `REJECT` / `ABORT`.
-- **Exception system:** every SDK processing failure is a subclass of `A2ATError`; catching `A2ATError` covers all processing failures, and `code_str` gives the machine-readable error code. All messages are rendered by the SDK from error-code templates, with the language following `A2AT_LANGUAGE`. The following business exceptions all extend `A2ATBusinessError`, which additionally provides `facts` returning the structured fact values the rendered message is based on;
+- **Exception system:** every SDK processing failure is a subclass of `A2ATError`; catching `A2ATError` covers all processing failures, and `code` (an `ErrorCatalog` member, derived from `str`) and `code_str` (its plain string form) both give the machine-readable error code. All messages are rendered by the SDK from error-code templates, with the language following `A2AT_LANGUAGE`. The following business exceptions all extend `A2ATBusinessError`, which additionally provides `facts` returning the structured fact values the rendered message is based on;
   - Template generation failures raise `PromptGenerationError` (Task-T / Notification-T / Authorization-T) or `NegotiationGenerationError` (Negotiation-T).
   - Template validation + parameter extraction failures raise `ContentValidationError` (Task-T / Notification-T / Authorization-T) or `NegotiationParamExtractionError` (Negotiation-T).
   - Infrastructure failures are `ResourceNotFoundError` and `ConfigFileNotFoundError`, which extend `A2ATError` directly; programming errors (None, blank, or malformed arguments) deliberately stay outside the tree and are raised as `TypeError` / `ValueError`.
@@ -55,6 +55,7 @@ The A2A-T SDK exposes only two entry points: the client entry `A2ATClient` (prom
    |-------------------------------------------------------------| ---- | ---- |
    | standard_templates.ENERGY_SAVING_URI                         | Task-T energy-saving task template | Task-T/network-layer/ran-energy-saving/v1 |
    | standard_templates.PRIVATE_LINE_COMPLAINT_URI                | Task-T private-line-complaint task template | Task-T/network-layer/private-line-complaint/v1 |
+   | standard_templates.RAN_INTELLIGENT_BACKUP_BATTERY_ENDURANCE_URI | Task-T RAN intelligent backup battery endurance task template | Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1 |
    | standard_templates.SUBSCRIBE_INCIDENT_URI                    | Notification-T incident subscription notification template | Notification-T/network-layer/subscribe-incident/v1 |
    | standard_templates.SERVICE_RECOVERY_URI                      | Notification-T service recovery notification template | Notification-T/network-layer/service-recovery/v1 |
    | standard_templates.AUTHORIZATION_POLICY_MANAGEMENT_URI       | Authorization-T authorization policy management template | Authorization-T/authorization-policy-management/v1 |
@@ -141,7 +142,8 @@ On failure, raises `NegotiationGenerationError` (an `A2ATError` subclass):
 
 | Member | Type | Description |
 | ---- | ---- | ---- |
-| code_str | str | Machine-readable error code; values below |
+| code | ErrorCatalog | Machine-readable error code member (derived from `str`, directly comparable with strings); values below |
+| code_str | str | Plain string form of `code` (equivalent to `code.value`); values below |
 | message | str | Human-readable failure description |
 | facts | dict[str, str] | Structured fact values the rendered message is based on |
 
@@ -532,9 +534,11 @@ On failure, raises `NegotiationGenerationError` (same structure as 1.3.1). Error
 
 - `negotiation.content_invalid` (a typed content field is invalid, e.g. the required items list is empty or a required description is blank)
 
+- `negotiation.conclusion_mismatch` (`content.conclusion` is not `ACCEPT`)
+
 - `template.render_failed` (template rendering failed)
 
-Programming errors: `None` input or its context raises `TypeError`; a blank or malformed template_uri, an inconsistent content type, or a performative segment that is not `accept-reject` raises `ValueError`; a `conclusion` other than `ACCEPT` is rejected with the `negotiation.conclusion_mismatch` business error.
+Programming errors: `None` input or its context raises `TypeError`; a blank or malformed template_uri, an inconsistent content type, or a performative segment that is not `accept-reject` raises `ValueError`.
 
 **Response sample**
 
@@ -596,9 +600,11 @@ On failure, raises `NegotiationGenerationError` (same structure as 1.3.1). Error
 
 - `negotiation.content_invalid` (a typed content field is invalid, e.g. the required items list is empty or a required description is blank)
 
+- `negotiation.conclusion_mismatch` (`content.conclusion` is not `REJECT`)
+
 - `template.render_failed` (template rendering failed)
 
-Programming errors: `None` input or its context raises `TypeError`; a blank or malformed template_uri, an inconsistent content type, or a performative segment that is not `accept-reject` raises `ValueError`; a `conclusion` other than `REJECT` is rejected with the `negotiation.conclusion_mismatch` business error.
+Programming errors: `None` input or its context raises `TypeError`; a blank or malformed template_uri, an inconsistent content type, or a performative segment that is not `accept-reject` raises `ValueError`.
 
 **Response sample**
 
@@ -738,7 +744,8 @@ On failure, raises `NegotiationParamExtractionError` (an `A2ATError` subclass):
 
 | Member | Type | Description |
 | ---- | ---- | ---- |
-| code_str | str | Machine-readable error code; values below |
+| code | ErrorCatalog | Machine-readable error code member (derived from `str`, directly comparable with strings); values below |
+| code_str | str | Plain string form of `code` (equivalent to `code.value`); values below |
 | message | str | Human-readable failure description |
 | errors | list[SlotValidationError] | Per-slot error details; structure in the common conventions |
 
@@ -753,6 +760,8 @@ Error codes:
 - `llm.invocation_failed` / `llm.response_invalid` (LLM failure, retryable)
 
 - `template.not_found` (the validation prompt resource is missing)
+
+- `input.text_too_long` (the prompt exceeds `A2AT_INPUT_TEXT_MAX_CHARS`)
 
 Programming errors: a `None` schema / template_uri raises `TypeError`; a blank or malformed template_uri, or a mismatched performative segment, raises `ValueError`; a `None` or blank prompt is not a programming error and raises `NegotiationParamExtractionError` with `negotiation.invalid_input` (see the error codes above).
 
@@ -814,6 +823,8 @@ On failure, raises `NegotiationParamExtractionError` (same structure as 1.3.9). 
 
 - `template.not_found` (the validation prompt resource is missing)
 
+- `input.text_too_long` (the prompt exceeds `A2AT_INPUT_TEXT_MAX_CHARS`)
+
 Programming errors: a `None` schema / template_uri raises `TypeError`; a blank or malformed template_uri, or a performative segment that is not `accept-reject`, raises `ValueError`; a `None` or blank prompt is not a programming error and raises `NegotiationParamExtractionError` with `negotiation.invalid_input` (see the error codes above).
 
 **Response sample**
@@ -873,6 +884,8 @@ On failure, raises `NegotiationParamExtractionError` (same structure as 1.3.9). 
 
 - `template.not_found` (the validation prompt resource is missing)
 
+- `input.text_too_long` (the prompt exceeds `A2AT_INPUT_TEXT_MAX_CHARS`)
+
 Programming errors: a `None` schema / template_uri raises `TypeError`; a blank or malformed template_uri, or a performative segment that is not `accept-reject`, raises `ValueError`; a `None` or blank prompt is not a programming error and raises `NegotiationParamExtractionError` with `negotiation.invalid_input` (see the error codes above).
 
 **Response sample**
@@ -930,6 +943,8 @@ On failure, raises `NegotiationParamExtractionError` (same structure as 1.3.9). 
 - `llm.invocation_failed` / `llm.response_invalid` (LLM failure, retryable)
 
 - `template.not_found` (the validation prompt resource is missing)
+
+- `input.text_too_long` (the prompt exceeds `A2AT_INPUT_TEXT_MAX_CHARS`)
 
 Programming errors: a `None` schema / template_uri raises `TypeError`; a blank or malformed template_uri, or one not addressing the common abort template, raises `ValueError`; a `None` or blank prompt is not a programming error and raises `NegotiationParamExtractionError` with `negotiation.invalid_input` (see the error codes above).
 
@@ -997,7 +1012,8 @@ On failure, raises `PromptGenerationError` (an `A2ATError` subclass):
 
 | Member | Type | Description |
 | ---- | ---- | ---- |
-| code_str | str | Machine-readable error code; values below |
+| code | ErrorCatalog | Machine-readable error code member (derived from `str`, directly comparable with strings); values below |
+| code_str | str | Plain string form of `code` (equivalent to `code.value`); values below |
 | message | str | Human-readable failure description |
 | failed_parameters | list[SlotValidationError] | Details of the slot validation failures (non-empty for slot-domain failure codes such as `slot.not_provided`); structure in the common conventions |
 
@@ -1228,10 +1244,11 @@ On failure, raises `ContentValidationError` (an `A2ATError` subclass):
 
 | Member | Type | Description |
 | ---- | ---- | ---- |
-| code_str | str | Machine-readable error code; values below |
+| code | ErrorCatalog | Machine-readable error code member (derived from `str`, directly comparable with strings); values below |
+| code_str | str | Plain string form of `code` (equivalent to `code.value`); values below |
 | message | str | Human-readable failure description |
 | errors | list[SlotValidationError] | Per-slot error details (slot-level error codes such as `content.param_missing`, `content.entry_field_missing`, `content.format_error`); structure in the common conventions |
-| params | dict[str, object] | The partially extracted parameters before rejection (slots that could not be extracted have None or missing values) |
+| params | dict[str, object] \| list[object] | The partially extracted parameters before rejection (slots that could not be extracted have None or missing values); an array-shaped caller Schema yields an ordered array |
 
 Error codes:
 
@@ -1803,7 +1820,7 @@ On failure (`success` is `False`; no exception raised; the failure payload is re
 | ---- | ---- | ---- |
 | code | str | Machine-readable error code from the error code list, such as `scenario.not_matched` (scenario recognition missed), `input.text_too_long` (input length protection), `template.load_failed` (prompt resource loading failed), `template.not_found` (the template is missing), `slot.schema_not_found` (the slot Schema is missing), `slot.not_provided` (a required slot is missing), `template.render_failed` (rendering failed), `llm.invocation_failed` / `llm.response_invalid` (LLM failure) |
 | message | str | Human-readable failure description |
-| stage | str \| None | Stage where the failure occurred: `input` (input length protection), `scenario` (scenario recognition), `preparation` (template/slot/prompt resource loading), `generation` (generation processes such as LLM slot extraction), `validation` (slot validation), `render` (template rendering) |
+| stage | str \| None | Stage where the failure occurred: `input` (input length protection), `scenario` (scenario recognition), `prompt_parse` (scenario resolution failure), `preparation` (template/slot/prompt resource loading), `generation` (generation processes such as LLM slot extraction), `render` (template rendering) |
 
 Both `PromptGenerationResult` and `PromptGenerationFailure` provide `to_dict()` for direct JSON serialization.
 
@@ -1838,7 +1855,7 @@ On failure (the input matches no built-in scenario):
 ```text
 result.success = False
 result.failure =
-PromptGenerationFailure(code='scenario.not_matched', message='The input does not match any known scenario: <reason>', stage='scenario')
+PromptGenerationFailure(code='scenario.not_matched', message='The input does not match any known scenario: <reason>', stage='prompt_parse')
 ```
 
 ### 1.3.23 check_task_prompt

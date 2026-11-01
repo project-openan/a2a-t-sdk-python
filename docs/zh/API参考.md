@@ -35,7 +35,7 @@ A2A-T SDK 对外仅提供两个入口：客户端入口 `A2ATClient`（提示词
 **公共数据类型与约定**
 
 - **协商会话上下文：**`NegotiationContext(id, round, max_rounds, performative)`（frozen dataclass，id 为 UUID 形态、round 从 1 起、默认轮次 `DEFAULT_MAX_ROUNDS = 5`），随消息 metadata 传输、不经 LLM；`NegotiationContext.of(id, round, performative)` 使用默认轮次，`next_round()` 推进轮次，`with_performative()` 派生携带其它言语意图的上下文，`is_exhausted()` 判断轮次超限。`NegotiationPerformative` 取值 `PROPOSE` / `ACCEPT` / `REJECT` / `ABORT`。
-- **异常体系：** 所有 SDK 处理失败均为 `A2ATError` 子类，捕获 `A2ATError` 即可覆盖全部处理失败，`code_str` 获取机器可读错误码。所有消息均由 SDK 按错误码模板渲染，语言跟随 `A2AT_LANGUAGE`。如下业务异常均继承 `A2ATBusinessError`，额外提供 `facts` 返回渲染消息所依据的结构化事实值；
+- **异常体系：** 所有 SDK 处理失败均为 `A2ATError` 子类，捕获 `A2ATError` 即可覆盖全部处理失败，`code`（`ErrorCatalog` 枚举成员，`str` 派生）与 `code_str`（其纯字符串形式）均提供机器可读错误码。所有消息均由 SDK 按错误码模板渲染，语言跟随 `A2AT_LANGUAGE`。如下业务异常均继承 `A2ATBusinessError`，额外提供 `facts` 返回渲染消息所依据的结构化事实值；
   - 模板生成失败抛 `PromptGenerationError`（Task-T / Notification-T / Authorization-T）或 `NegotiationGenerationError`（Negotiation-T）。
   - 模板校验+提参失败抛 `ContentValidationError`（Task-T / Notification-T / Authorization-T）或 `NegotiationParamExtractionError`（Negotiation-T）。
   - 基础设施失败为直接继承 `A2ATError` 的 `ResourceNotFoundError`、`ConfigFileNotFoundError`；编程错误（None、空白或畸形入参）刻意留在异常树之外，以 `TypeError` / `ValueError` 抛出。
@@ -55,6 +55,7 @@ A2A-T SDK 对外仅提供两个入口：客户端入口 `A2ATClient`（提示词
    |-------------------------------------------------------------| ---- | ---- |
    | standard_templates.ENERGY_SAVING_URI                         | Task-T 节能任务模板 | Task-T/network-layer/ran-energy-saving/v1 |
    | standard_templates.PRIVATE_LINE_COMPLAINT_URI                | Task-T 专线投诉任务模板 | Task-T/network-layer/private-line-complaint/v1 |
+   | standard_templates.RAN_INTELLIGENT_BACKUP_BATTERY_ENDURANCE_URI | Task-T 无线智能备电续航任务模板 | Task-T/network-layer/ran-intelligent-backup-battery-endurance/v1 |
    | standard_templates.SUBSCRIBE_INCIDENT_URI                    | Notification-T 事件订阅通知模板 | Notification-T/network-layer/subscribe-incident/v1 |
    | standard_templates.SERVICE_RECOVERY_URI                      | Notification-T 业务抢通通知模板 | Notification-T/network-layer/service-recovery/v1 |
    | standard_templates.AUTHORIZATION_POLICY_MANAGEMENT_URI       | Authorization-T 授权策略管理模板 | Authorization-T/authorization-policy-management/v1 |
@@ -139,7 +140,8 @@ metadata = propose.build_metadata_content()
 
 | 成员 | 类型 | 说明 |
 | ---- | ---- | ---- |
-| code_str | str | 机器可读错误码，取值见下 |
+| code | ErrorCatalog | 机器可读错误码枚举成员（`str` 派生，可直接与字符串比较），取值见下 |
+| code_str | str | `code` 的纯字符串形式（等同于 `code.value`），取值见下 |
 | message | str | 人类可读的失败描述 |
 | facts | dict[str, str] | 渲染消息所依据的结构化事实值 |
 
@@ -527,9 +529,11 @@ accept = client.generate_negotiation_accept_prompt_from_data(
 
 - `negotiation.content_invalid`（类型化内容字段无效，如必填 items 为空、必填描述为空白）
 
+- `negotiation.conclusion_mismatch`（`content.conclusion` 不是 `ACCEPT`）
+
 - `template.render_failed`（模板渲染失败）
 
-编程错误：入参或其 context 为 None 抛 `TypeError`；template_uri 为空白或非法、内容类型不符或 performative 段不是 `accept-reject` 抛 `ValueError`；`conclusion` 不是 `ACCEPT` 以 `negotiation.conclusion_mismatch` 业务错误拒绝。
+编程错误：入参或其 context 为 None 抛 `TypeError`；template_uri 为空白或非法、内容类型不符或 performative 段不是 `accept-reject` 抛 `ValueError`。
 
 **响应样例**
 
@@ -588,9 +592,11 @@ reject = client.generate_negotiation_reject_prompt_from_data(
 
 - `negotiation.content_invalid`（类型化内容字段无效，如必填 items 为空、必填描述为空白）
 
+- `negotiation.conclusion_mismatch`（`content.conclusion` 不是 `REJECT`）
+
 - `template.render_failed`（模板渲染失败）
 
-编程错误：入参或其 context 为 None 抛 `TypeError`；template_uri 为空白或非法、内容类型不符或 performative 段不是 `accept-reject` 抛 `ValueError`；`conclusion` 不是 `REJECT` 以 `negotiation.conclusion_mismatch` 业务错误拒绝。
+编程错误：入参或其 context 为 None 抛 `TypeError`；template_uri 为空白或非法、内容类型不符或 performative 段不是 `accept-reject` 抛 `ValueError`。
 
 **响应样例**
 
@@ -728,7 +734,8 @@ needed = {k: v for k, v in requested.data.items() if k not in ("id", "round", "m
 
 | 成员 | 类型 | 说明 |
 | ---- | ---- | ---- |
-| code_str | str | 机器可读错误码，取值见下 |
+| code | ErrorCatalog | 机器可读错误码枚举成员（`str` 派生，可直接与字符串比较），取值见下 |
+| code_str | str | `code` 的纯字符串形式（等同于 `code.value`），取值见下 |
 | message | str | 人类可读的失败描述 |
 | errors | list[SlotValidationError] | 逐槽位错误明细，结构见公共约定 |
 
@@ -743,6 +750,8 @@ needed = {k: v for k, v in requested.data.items() if k not in ("id", "round", "m
 - `llm.invocation_failed` / `llm.response_invalid`（LLM 失败，可重试）
 
 - `template.not_found`（校验提示词资源缺失）
+
+- `input.text_too_long`（prompt 超过 `A2AT_INPUT_TEXT_MAX_CHARS`）
 
 编程错误：schema / template_uri 为 None 抛 `TypeError`，template_uri 为空白或非法、performative 段不匹配抛 `ValueError`；prompt 为 None 或空白不属编程错误，以 `negotiation.invalid_input` 抛 `NegotiationParamExtractionError`（见上错误码）。
 
@@ -804,6 +813,8 @@ accept_params = server.validate_accept_prompt_and_data_filling(
 
 - `template.not_found`（校验提示词资源缺失）
 
+- `input.text_too_long`（prompt 超过 `A2AT_INPUT_TEXT_MAX_CHARS`）
+
 编程错误：schema / template_uri 为 None 抛 `TypeError`，template_uri 为空白或非法、performative 段不是 `accept-reject` 抛 `ValueError`；prompt 为 None 或空白不属编程错误，以 `negotiation.invalid_input` 抛 `NegotiationParamExtractionError`（见上错误码）。
 
 **响应样例**
@@ -863,6 +874,8 @@ reject_params = server.validate_reject_prompt_and_data_filling(
 
 - `template.not_found`（校验提示词资源缺失）
 
+- `input.text_too_long`（prompt 超过 `A2AT_INPUT_TEXT_MAX_CHARS`）
+
 编程错误：schema / template_uri 为 None 抛 `TypeError`，template_uri 为空白或非法、performative 段不是 `accept-reject` 抛 `ValueError`；prompt 为 None 或空白不属编程错误，以 `negotiation.invalid_input` 抛 `NegotiationParamExtractionError`（见上错误码）。
 
 **响应样例**
@@ -920,6 +933,8 @@ abort_params = server.validate_abort_prompt_and_data_filling(
 - `llm.invocation_failed` / `llm.response_invalid`（LLM 失败，可重试）
 
 - `template.not_found`（校验提示词资源缺失）
+
+- `input.text_too_long`（prompt 超过 `A2AT_INPUT_TEXT_MAX_CHARS`）
 
 编程错误：schema / template_uri 为 None 抛 `TypeError`，template_uri 为空白或非法、或不指向公共 abort 模板抛 `ValueError`；prompt 为 None 或空白不属编程错误，以 `negotiation.invalid_input` 抛 `NegotiationParamExtractionError`（见上错误码）。
 
@@ -984,7 +999,8 @@ metadata = client.generate_task_prompt_from_text(
 
 | 成员 | 类型 | 说明 |
 | ---- | ---- | ---- |
-| code_str | str | 机器可读错误码，取值见下 |
+| code | ErrorCatalog | 机器可读错误码枚举成员（`str` 派生，可直接与字符串比较），取值见下 |
+| code_str | str | `code` 的纯字符串形式（等同于 `code.value`），取值见下 |
 | message | str | 人类可读的失败描述 |
 | failed_parameters | list[SlotValidationError] | 槽位校验失败的明细（`slot.not_provided` 等槽位域失败码时非空），结构见公共约定 |
 
@@ -1214,10 +1230,11 @@ extracted = server.validate_task_prompt_and_data_filling(
 
 | 成员 | 类型 | 说明 |
 | ---- | ---- | ---- |
-| code_str | str | 机器可读错误码，取值见下 |
+| code | ErrorCatalog | 机器可读错误码枚举成员（`str` 派生，可直接与字符串比较），取值见下 |
+| code_str | str | `code` 的纯字符串形式（等同于 `code.value`），取值见下 |
 | message | str | 人类可读的失败描述 |
 | errors | list[SlotValidationError] | 逐槽位错误明细（槽位级错误码如 `content.param_missing`、`content.entry_field_missing`、`content.format_error`），结构见公共约定 |
-| params | dict[str, object] | 被拒前的部分提取参数（无法提取的槽位值为 None 或缺失） |
+| params | dict[str, object] \| list[object] | 被拒前的部分提取参数（无法提取的槽位值为 None 或缺失）；调用方 Schema 为数组形态时为有序数组 |
 
 错误码：
 
@@ -1784,7 +1801,7 @@ else:
 | ---- | ---- | ---- |
 | code | str | 机器可读错误码，取值来自错误码列表，如 `scenario.not_matched`（场景识别未命中）、`input.text_too_long`（输入长度防护）、`template.load_failed`（提示词资源加载失败）、`template.not_found`（模板缺失）、`slot.schema_not_found`（槽位 Schema 缺失）、`slot.not_provided`（必填槽缺失）、`template.render_failed`（渲染失败）、`llm.invocation_failed` / `llm.response_invalid`（LLM 失败） |
 | message | str | 人类可读的失败描述 |
-| stage | str \| None | 失败发生的阶段：`input`（输入长度防护）、`scenario`（场景识别）、`preparation`（模板/槽位/提示词资源加载）、`generation`（LLM 槽位提取等生成过程）、`validation`（槽位校验）、`render`（模板渲染） |
+| stage | str \| None | 失败发生的阶段：`input`（输入长度防护）、`scenario`（场景识别）、`prompt_parse`（场景解析失败）、`preparation`（模板/槽位/提示词资源加载）、`generation`（LLM 槽位提取等生成过程）、`render`（模板渲染） |
 
 `PromptGenerationResult` 与 `PromptGenerationFailure` 均提供 `to_dict()`，可直接 JSON 序列化。
 
@@ -1819,7 +1836,7 @@ result.prompt_text =
 ```text
 result.success = False
 result.failure =
-PromptGenerationFailure(code='scenario.not_matched', message='输入内容无法匹配任何已知场景：<原因>', stage='scenario')
+PromptGenerationFailure(code='scenario.not_matched', message='输入内容无法匹配任何已知场景：<原因>', stage='prompt_parse')
 ```
 
 ### 1.3.23 check_task_prompt
