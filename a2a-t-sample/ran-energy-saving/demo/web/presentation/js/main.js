@@ -203,6 +203,7 @@ const ui = {
   submitting: false,
   counterOpen: false,
   counterText: "",
+  selectedRegion: "",
   cardKey: null,
   cardError: "",
   deadline: null,
@@ -518,6 +519,7 @@ function selectScenario(name, { start = false } = {}) {
   ui.wireFormat = "t";
   ui.wirePinned = false;
   ui.counterOpen = false;
+  ui.selectedRegion = "";
   ui.looping = false;
   els.requestText.value = ui.meta?.scenarioRequests?.[name] || "";
   stage.reset();
@@ -560,6 +562,7 @@ async function startRun() {
   ui.wirePinned = false;
   ui.counterOpen = false;
   ui.counterText = "";
+  ui.selectedRegion = "";
   ui.submitting = false;
   ui.deadline = null;
   ui.looping = false;
@@ -739,6 +742,7 @@ function enqueueFrame(frame) {
   ) {
     ui.wireEntry = frame.event;
   }
+  if (frame.type === "decision_requested") ui.selectedRegion = "";
   applyFrame(ui.shadow, frame);
   ui.frameLog.push(frame);
   player.enqueue(scene);
@@ -1058,6 +1062,37 @@ function renderChoices(card) {
     return;
   }
 
+  const regionOptions = Array.isArray(card.regionOptions) ? card.regionOptions : [];
+  if (regionOptions.length === 0) {
+    ui.selectedRegion = "";
+  } else {
+    if (!regionOptions.some((option) => option.value === ui.selectedRegion)) {
+      const recommendedRegion = card.recommendation?.filled_params?.region;
+      const preferred =
+        regionOptions.find((option) => option.value === recommendedRegion) ||
+        regionOptions.find((option) => option.recommended) ||
+        regionOptions[0];
+      ui.selectedRegion = preferred.value;
+    }
+    const group = el("div", "region-options");
+    group.append(el("span", "region-label", ui.copy.decision.servedArea));
+    for (const option of regionOptions) {
+      const choice = el(
+        "button",
+        option.value === ui.selectedRegion ? "region-choice selected" : "region-choice",
+        option.label,
+      );
+      choice.type = "button";
+      choice.disabled = ui.submitting;
+      choice.addEventListener("click", () => {
+        ui.selectedRegion = option.value;
+        renderNarrator();
+      });
+      group.append(choice);
+    }
+    els.choices.append(group);
+  }
+
   for (const option of card.options) {
     const button = el("button", option.primary ? "primary" : option.danger ? "danger" : "", option.label);
     button.type = "button";
@@ -1089,7 +1124,7 @@ async function submitDecision(action, counterText = "") {
   if (card === null) return;
   ui.submitting = true;
   renderChoices(card);
-  const payload = decisionPayload(card, action, ui.copy, counterText);
+  const payload = decisionPayload(card, action, ui.copy, counterText, ui.selectedRegion);
   try {
     const response = await fetch(`/api/runs/${encodeURIComponent(ui.view.runId)}/decisions`, {
       method: "POST",
@@ -1102,6 +1137,7 @@ async function submitDecision(action, counterText = "") {
     }
     ui.submitting = false;
     ui.counterOpen = false;
+    ui.selectedRegion = "";
     if (ui.view.decision !== null) ui.view.decision.resolved = true;
     player.release();
     render();

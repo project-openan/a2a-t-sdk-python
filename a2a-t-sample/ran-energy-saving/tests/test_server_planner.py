@@ -19,7 +19,7 @@ from demo.agents.server_agent.planner import (
     build_system_prompt,
     describe_dataset,
 )
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from shared.config import MODEL_MODE_LIVE, SampleConfig
 
@@ -263,6 +263,23 @@ def test_system_prompt_describes_the_dataset_and_tool_rules(offline_config: Samp
 def test_scripted_model_reads_the_plan_id_from_the_apply_result() -> None:
     model = ScriptedChatModel(dataset_date=ran_data.dataset_date())
     assert asyncio.run(_turn_count(model)) == 5
+
+
+def test_scripted_planner_uses_the_cell_of_a_confirmed_second_area() -> None:
+    model = ScriptedChatModel(dataset_date=ran_data.dataset_date())
+    messages = [HumanMessage(content="## Task Object\nThe area is the Dalingshan.")]
+
+    assert model._plan_args(messages) == ("cell-003", "00:00~06:00", "28")
+
+
+def test_scripted_planner_ignores_area_names_in_the_system_prompt() -> None:
+    model = ScriptedChatModel(dataset_date=ran_data.dataset_date())
+    messages = [
+        SystemMessage(content="Dataset cells: cell-003 (Dalingshan-Central, Dalingshan)"),
+        HumanMessage(content="## Task Object\nThe area is the Songshanhu Administration Committee."),
+    ]
+
+    assert model._plan_args(messages) == ("cell-001", "00:00~06:00", "30")
 
 
 async def _turn_count(model: ScriptedChatModel) -> int:

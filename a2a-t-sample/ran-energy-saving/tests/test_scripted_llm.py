@@ -520,3 +520,40 @@ def test_real_client_generates_a_reject_offline_zh_cn(
 
     assert content.prompt_text
     assert "Reject" in content.prompt_text
+
+
+def test_unknown_area_propose_lists_the_served_areas(client: ScriptedLLMClient) -> None:
+    schema: dict[str, object] = {
+        "type": "object",
+        "properties": {"items": {"type": "array"}, "relationship": {"type": "string"}},
+    }
+    proposal = (
+        'The requested area "Region Z" is not recognized by the RAN. '
+        "Served areas: Songshanhu Administration Committee; Dalingshan."
+    )
+
+    response = client.structured(messages=_messages(proposal), json_schema=schema)
+    payload = json.loads(response.content)
+    value = payload["items"][0]["value"]
+
+    assert "Songshanhu Administration Committee" in value
+    assert "Dalingshan" in value
+
+
+def test_unknown_area_propose_lists_the_served_areas_in_chinese() -> None:
+    client = ScriptedLLMClient(_LLM_CONFIG, language="zh-CN")
+    schema: dict[str, object] = {
+        "type": "object",
+        "properties": {"items": {"type": "array"}, "relationship": {"type": "string"}},
+    }
+    proposal = (
+        "无法识别区域“未知区域”。可用区域：松山湖管委会；大岭山。"
+        "未找到相近区域，请确认一个可用区域，并保留原保障速率时段。"
+    )
+
+    response = client.structured(messages=_messages(proposal), json_schema=schema)
+    payload = json.loads(response.content)
+    value = payload["items"][0]["value"]
+
+    assert "松山湖管委会" in value
+    assert "大岭山" in value

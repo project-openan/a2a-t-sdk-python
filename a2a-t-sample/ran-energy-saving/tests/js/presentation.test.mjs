@@ -272,6 +272,52 @@ assert.equal(decisionCard(thinking, copy), null);
 applyFrame(confirming, decision(2, "counter", 1));
 assert.equal(pendingHuman(confirming), null);
 
+// --- Unknown area: choose one of the served areas -----------------------
+const areaDecision = createState();
+applyFrame(areaDecision, { type: "run_started", runId: "r-area", scenario: "unknown_area", mode: "manual" });
+applyFrame(areaDecision, {
+  type: "decision_requested",
+  round: 1,
+  maxRounds: 3,
+  proposal: {
+    kind: "information",
+    content:
+      '## Information Negotiation\n\n## Required Information Items\n' +
+      '1. region: The requested area "Region Z" is not recognized by the RAN. ' +
+      "Served areas: Songshanhu Administration Committee; Dalingshan.",
+    options: {
+      field: "region",
+      requested: "Region Z",
+      keep: ["guaranteedThroughputTarget"],
+      options: [
+        {
+          value: "Songshanhu Administration Committee",
+          labels: { "en-US": "Songshanhu Administration Committee", "zh-CN": "松山湖管委会" },
+          score: 0,
+          recommended: false,
+        },
+        {
+          value: "Dalingshan",
+          labels: { "en-US": "Dalingshan", "zh-CN": "大岭山" },
+          score: 0,
+          recommended: false,
+        },
+      ],
+    },
+  },
+  timeoutSeconds: 300,
+  requestedAt: new Date().toISOString(),
+});
+const areaCard = decisionCard(areaDecision, copy);
+assert.ok(areaCard);
+assert.equal(areaCard.regionOptions.length, 2);
+assert.equal(areaCard.regionOptions[0].label, "松山湖管委会");
+assert.ok(areaCard.text.includes("Region Z"));
+assert.deepEqual(decisionPayload(areaCard, "accept", copy, "", "大岭山").filled_params, {
+  region: "大岭山",
+});
+assert.equal(decisionPayload(areaCard, "reject", copy, "", "大岭山").filled_params, undefined);
+
 // --- Approval 1: intent review ------------------------------------------
 
 const intentReview = createState();

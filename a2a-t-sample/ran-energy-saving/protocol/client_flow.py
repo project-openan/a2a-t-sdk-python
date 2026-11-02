@@ -57,7 +57,7 @@ from a2a_t.core.standard_templates import (
 from google.protobuf.json_format import ParseDict
 from shared.config import DEFAULT_HTTP_TIMEOUT_SECONDS, DEFAULT_WEBHOOK_IDLE_TIMEOUT
 from shared.logging_setup import log_context
-from shared.models import NegotiationDecision, NegotiationProposeView
+from shared.models import NegotiationDecision, NegotiationOptions, NegotiationProposeView
 from shared.run_constants import (
     FINAL_STATE_INTENT_NOT_CONFIRMED,
     FINAL_STATE_NEGOTIATION_ABORTED,
@@ -83,6 +83,7 @@ from shared.webhook_receiver import WebhookReceiver
 from protocol.decision_provider import NegotiationDecisionProvider
 from protocol.messages import (
     END_MESSAGE_TEXT,
+    SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
     SAMPLE_PROPOSAL_METADATA_KEY,
     SAMPLE_RUN_ID_METADATA_KEY,
     TASK_TEMPLATE_URI,
@@ -205,9 +206,7 @@ class SendMessageClient(Protocol):
 
 
 #: Observer invoked immediately after a provider returns its decision (Run Explorer §6).
-DecisionMadeCallback = Callable[
-    [NegotiationDecision, NegotiationProposeView, NegotiationContext], None
-]
+DecisionMadeCallback = Callable[[NegotiationDecision, NegotiationProposeView, NegotiationContext], None]
 
 
 class ClientTransport(Protocol):
@@ -525,9 +524,7 @@ async def run_client_flow(
             (
                 value
                 for key, value in metadata.items()
-                if isinstance(key, str)
-                and "Task-T" in key
-                and isinstance(value, str)
+                if isinstance(key, str) and "Task-T" in key and isinstance(value, str)
             ),
             None,
         )
@@ -737,9 +734,7 @@ async def run_client_flow(
             send_title = f"Counter proposal sent · R{session.round}"
         else:
             performative = (
-                NegotiationPerformative.REJECT
-                if decision.action == "reject"
-                else NegotiationPerformative.ABORT
+                NegotiationPerformative.REJECT if decision.action == "reject" else NegotiationPerformative.ABORT
             )
             request, call_context = _build_terminal_request(
                 prompt_client=prompt_client,
@@ -821,9 +816,7 @@ def _negotiation_request(
     extra_metadata: Mapping[str, object] | None = None,
 ) -> tuple[SendMessageRequest, ClientCallContext]:
     """Build one negotiation response request from generated protocol content."""
-    metadata = {
-        key: value for key, value in content.build_metadata_content().items() if value is not None
-    }
+    metadata = {key: value for key, value in content.build_metadata_content().items() if value is not None}
     metadata[NEGOTIATION_CONTEXT_METADATA_KEY] = negotiation_context_metadata(
         NegotiationContext(
             id=context_id,
@@ -835,9 +828,7 @@ def _negotiation_request(
     if extra_metadata:
         metadata.update(extra_metadata)
     request = _build_message_request(metadata=metadata, label=label, context_id=context_id)
-    return request, _call_context(
-        (TASK_T_EXTENSION_URI, NEGOTIATION_T_EXTENSION_URI), call_timeout_seconds
-    )
+    return request, _call_context((TASK_T_EXTENSION_URI, NEGOTIATION_T_EXTENSION_URI), call_timeout_seconds)
 
 
 def _accept_filled_values(
@@ -864,9 +855,9 @@ def _accept_filled_values(
                     filled[key] = value
         target = filled.get("guaranteedThroughputTarget")
         if not isinstance(target, str) or not _TIME_SEGMENTED_TARGET_PATTERN.search(target):
-            filled["guaranteedThroughputTarget"] = policy.filled_params(
-                kind.value, language
-            ).get("guaranteedThroughputTarget")
+            filled["guaranteedThroughputTarget"] = policy.filled_params(kind.value, language).get(
+                "guaranteedThroughputTarget"
+            )
     if filled.get("operationType") not in {"Create", "Modify"}:
         filled["operationType"] = "Create"
     return filled
@@ -897,9 +888,7 @@ def _ensure_agreed_target(task_text: str, filled: Mapping[str, object]) -> str:
     compact_prompt = re.sub(r"\s+", "", task_text)
     if all(segment in compact_prompt for segment in segments):
         return task_text
-    _LOGGER.warning(
-        "the refilled Task-T prompt dropped the agreed throughput target; writing it into the task context"
-    )
+    _LOGGER.warning("the refilled Task-T prompt dropped the agreed throughput target; writing it into the task context")
     heading = _CONTEXT_HEADING_PATTERN.search(task_text)
     if heading is None:
         return f"{task_text.rstrip()}\n\n{target}\n"
@@ -930,9 +919,7 @@ def _build_accept_request(
         task_content = prompt_client.generate_task_prompt_from_data_with_schema(
             filled, TASK_PARAM_SCHEMA, task_template_uri
         )
-    task_text = _ensure_agreed_target(
-        _require_prompt_text(task_content, "the refilled Task-T prompt"), filled
-    )
+    task_text = _ensure_agreed_target(_require_prompt_text(task_content, "the refilled Task-T prompt"), filled)
 
     accept_text = _accept_text(kind, filled, decision, language, policy)
     accept_context = session.with_performative(NegotiationPerformative.ACCEPT)
@@ -1109,7 +1096,18 @@ def _propose_view(
         performative=session.performative.value,
         template_uri=template_uri,
         context_id=_string_field(event, "context_id") or context_id,
+        options=_proposal_options(metadata.get(SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY)),
     )
+
+
+def _proposal_options(value: object) -> NegotiationOptions | None:
+    """Parse the sample-only option payload of one proposal, ignoring malformed metadata."""
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return NegotiationOptions.model_validate(value)
+    except ValueError:
+        return None
 
 
 def _accept_text(
@@ -1126,19 +1124,13 @@ def _accept_text(
         # text as result content and, on live models, reject the accept.
         allowed = TASK_PARAM_SCHEMA.get("properties")
         requested = [
-            name
-            for name in (decision.filled_params or {})
-            if isinstance(allowed, Mapping) and name in allowed
+            name for name in (decision.filled_params or {}) if isinstance(allowed, Mapping) and name in allowed
         ]
         if not requested:
             requested = ["guaranteedThroughputTarget"]
         items = " ".join(f"{name}: {filled.get(name, '')}." for name in requested)
         return f"Accept. {items}"
-    confirmation = (
-        decision.confirmed_intent
-        if kind is NegotiationKind.TARGET
-        else decision.feasibility_summary
-    )
+    confirmation = decision.confirmed_intent if kind is NegotiationKind.TARGET else decision.feasibility_summary
     return f"Accept. {confirmation or policy.accept_text(kind.value, language) or decision.rationale}"
 
 
@@ -1214,6 +1206,4 @@ def _fill_result(result: ClientFlowResult, context_id: str | None) -> None:
         if isinstance(data, Mapping):
             result.report = dict(data)
         else:
-            result.report = {
-                key: value for key, value in selected.items() if key in ("text", "name", "artifact_id")
-            }
+            result.report = {key: value for key, value in selected.items() if key in ("text", "name", "artifact_id")}

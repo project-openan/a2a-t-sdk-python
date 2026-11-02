@@ -33,7 +33,9 @@ export function decisionCard(state, copy) {
   // In confirm mode the OSS Agent is still thinking: do not offer a decision before its
   // recommendation arrives, otherwise the engineer could answer without the agent's input.
   if (state.mode === "confirm" && !recommendation) return null;
+  const regionOptions = areaOptions(decision.proposal?.options, copy);
   const proposalText =
+    proposalItemText(decision.proposal?.content, "region") ||
     proposalLine(copy, state.scenario, round) ||
     firstLine(decision.proposal?.content) ||
     copy.negotiation.generic;
@@ -64,6 +66,8 @@ export function decisionCard(state, copy) {
     recommendedAction,
     recommendation,
     counterText: recommendation?.counter_proposal || "",
+    regionOptions,
+    requestedRegion: decision.proposal?.options?.requested || "",
     options,
     remaining: remainingSeconds(decision.requestedAt, decision.timeoutSeconds),
   };
@@ -133,12 +137,17 @@ export function approvalCard(state, copy) {
 }
 
 /** Build the ``NegotiationDecision`` payload of one click. */
-export function decisionPayload(card, action, copy, counterText) {
+export function decisionPayload(card, action, copy, counterText, selectedArea) {
+  const areaParams = selectedArea ? { region: selectedArea } : null;
   if (action === "confirm" && card.recommendation) {
+    const mergeArea =
+      areaParams !== null && card.recommendation.action === "accept"
+        ? { ...(card.recommendation.filled_params || {}), ...areaParams }
+        : card.recommendation.filled_params ?? null;
     return clean({
       action: card.recommendation.action,
       rationale: card.recommendation.rationale || copy.decision.acceptRationale,
-      filled_params: card.recommendation.filled_params ?? null,
+      filled_params: mergeArea,
       counter_proposal: card.recommendation.counter_proposal ?? null,
       counter_params: card.recommendation.counter_params ?? null,
       confirmed_intent: card.recommendation.confirmed_intent ?? null,
@@ -158,7 +167,11 @@ export function decisionPayload(card, action, copy, counterText) {
   if (action === "abort") {
     return { action: "abort", rationale: copy.decision.abortRationale };
   }
-  return { action: "accept", rationale: copy.decision.acceptRationale };
+  return clean({
+    action: "accept",
+    rationale: copy.decision.acceptRationale,
+    filled_params: areaParams,
+  });
 }
 
 /** Seconds left in a human window, or ``null`` when the backend did not send a budget. */
@@ -184,6 +197,31 @@ function firstLine(content) {
     .map((item) => item.replace(/^#+\s*/, "").replace(/\*\*/g, "").trim())
     .find((item) => item !== "");
   return line ? line.slice(0, 180) : "";
+}
+
+/** Return the value of one numbered item of a rendered information proposal. */
+function proposalItemText(content, field) {
+  if (typeof content !== "string") return "";
+  const pattern = new RegExp(`^\\s*(?:\\d+\\.\\s*)?${field}\\s*:\\s*(.+)$`, "im");
+  const match = content.match(pattern);
+  return match ? match[1].trim() : "";
+}
+
+/** Build the localized selectable areas of one information proposal. */
+function areaOptions(options, copy) {
+  const entries = Array.isArray(options?.options) ? options.options : [];
+  return entries
+    .map((option) => {
+      const labels = isObject(option?.labels) ? option.labels : {};
+      const value = labels[copy.lang] || option?.value || "";
+      return {
+        value,
+        label: value,
+        score: Number(option?.score) || 0,
+        recommended: option?.recommended === true,
+      };
+    })
+    .filter((option) => option.value !== "");
 }
 
 function clean(payload) {

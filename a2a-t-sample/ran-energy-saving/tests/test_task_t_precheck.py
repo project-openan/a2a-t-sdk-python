@@ -68,6 +68,43 @@ def test_an_unknown_area_opens_an_information_negotiation() -> None:
     assert finding.missing_items == ("region",)
     assert "Region Z" in finding.proposal_text
     assert "Songshanhu" in finding.proposal_text
+    assert "Dalingshan" in finding.proposal_text
+    assert finding.options is not None
+    options = finding.options["options"]
+    assert [option["value"] for option in options] == [
+        "Songshanhu Administration Committee",
+        "Dalingshan",
+    ]
+
+
+def test_an_alias_is_not_an_unknown_area() -> None:
+    finding = RanDataTaskTPrecheck()(
+        _filled(
+            operationType="Create",
+            region="Songshanhu",
+            guaranteedThroughputTarget="{00:00~07:00,2Mbps}",
+        ),
+        TASK_PARAM_SCHEMA,
+    )
+
+    assert finding is None
+
+
+def test_a_near_miss_area_recommends_one_candidate() -> None:
+    finding = RanDataTaskTPrecheck()(
+        _filled(
+            operationType="Create",
+            region="Songshanhu Admin Commitee",
+            guaranteedThroughputTarget="{00:00~07:00,2Mbps}",
+        ),
+        TASK_PARAM_SCHEMA,
+    )
+
+    assert finding is not None
+    assert "Closest match: Songshanhu Administration Committee" in finding.proposal_text
+    assert finding.options is not None
+    options = finding.options["options"]
+    assert [option["recommended"] for option in options] == [True, False]
 
 
 def test_a_valid_task_needs_no_negotiation() -> None:

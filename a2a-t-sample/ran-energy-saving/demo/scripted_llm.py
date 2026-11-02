@@ -39,7 +39,11 @@ from demo.scenario import (
     NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_EN,
     NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_ZH,
     NATURAL_LANGUAGE_PROMPT_INPUT_ZH,
+)
+from demo.served_areas import (
     REGION_STRINGS,
+    build_area_proposal_text,
+    match_served_areas,
 )
 
 #: Provider name registered with ``LLMClientFactory``.
@@ -157,6 +161,22 @@ _COMPLETE_THROUGHPUT_MARKER = "07:00~17:30,10Mbps"
 #: Task-T must validate successfully and reach the sample precheck instead of being treated as the
 #: intentionally incomplete information request.
 _UNKNOWN_AREA_VALIDATION_MARKER = "07:00~23:00,20Mbps"
+
+#: Requested area inside the precheck proposal text (localized).
+_REQUESTED_AREA_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r'The requested area "([^"]+)"'),
+    re.compile(r"无法识别区域“([^”]+)”"),
+)
+
+
+def _requested_area(user_content: str) -> str | None:
+    """Return the area named by an unknown-area proposal text, or ``None`` for another proposal."""
+    for pattern in _REQUESTED_AREA_PATTERNS:
+        match = pattern.search(user_content)
+        if match is not None:
+            return match.group(1)
+    return None
+
 
 #: From-data Task-T refill markers (the accepted values are the only distinguishing text).
 #:
@@ -663,24 +683,18 @@ class ScriptedLLMClient:
             content = abort_extraction_response(user_content, self.language)
         if content is None and stage.startswith("slot_extraction"):
             content = data_slot_extraction_response(user_content, self.language)
-        if (
-            content is None
-            and stage == STAGE_NEGOTIATION_PROPOSE_EXTRACTION
-            and "not recognized by the RAN" in user_content
-        ):
-            unknown = re.search(r'The requested area "([^"]+)"', user_content)
-            requested = unknown.group(1) if unknown is not None else "the requested area"
-            if self.language == LANGUAGE_ZH:
-                value = f"无法识别区域“{requested}”，请确认可用区域：松山湖管委会。"
-            else:
-                value = (
-                    f'The requested area "{requested}" is not recognized. '
-                    "Please confirm a served area: Songshanhu Administration Committee."
+        if content is None and stage == STAGE_NEGOTIATION_PROPOSE_EXTRACTION:
+            requested = _requested_area(user_content)
+            if requested is not None:
+                value = build_area_proposal_text(
+                    requested,
+                    match_served_areas(requested),
+                    self.language,
                 )
-            content = json.dumps(
-                {"items": [{"name": "region", "value": value}], "relationship": None},
-                ensure_ascii=False,
-            )
+                content = json.dumps(
+                    {"items": [{"name": "region", "value": value}], "relationship": None},
+                    ensure_ascii=False,
+                )
         if content is None:
             content = self._script[stage]
         if stage == STAGE_NEGOTIATION_PROPOSE_EXTRACTION and _PROPOSE_RELATIONSHIP_MARKER in user_content:

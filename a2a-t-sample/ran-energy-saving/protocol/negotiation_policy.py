@@ -179,6 +179,7 @@ class NegotiationState:
         inbound: inbound performative; ``None`` for the initial Task-T validation failure.
         missing_items: slot names reported by a failed Task-T validation (information kind).
         proposal_text: business text the deployment wants in the first proposal, when it has one.
+        options: sample-only choices the client may select (for example served areas).
     """
 
     kind: NegotiationKind
@@ -187,6 +188,7 @@ class NegotiationState:
     inbound: InboundDecision | None = None
     missing_items: tuple[str, ...] = ()
     proposal_text: str = ""
+    options: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -199,6 +201,7 @@ class ProposalContent:
         template_uri: Negotiation-T propose template URI.
         text: natural-language input rendered into the protocol content by the SDK.
         sample_proposal: plan the proposal is based on, when known.
+        options: sample-only choices the client may select (for example served areas).
     """
 
     kind: NegotiationKind
@@ -206,6 +209,7 @@ class ProposalContent:
     template_uri: str
     text: str
     sample_proposal: SampleProposal | None = None
+    options: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -369,6 +373,7 @@ def _initial_decision(state: NegotiationState) -> PolicyDecision:
             round=1,
             template_uri=PROPOSE_TEMPLATE_URI_BY_KIND[state.kind],
             text=text,
+            options=state.options,
         ),
         f"Task-T validation requires an {state.kind.value} negotiation.",
     )
@@ -409,9 +414,7 @@ def _counter_decision(
                 f"window {sample.window}, target rate {sample.target_rate}%. The server publishes it "
                 f"as the final agreement in round {next_round}; please accept it."
             )
-            rationale = (
-                "The client counter proposal is feasible, so the server publishes the final proposal."
-            )
+            rationale = "The client counter proposal is feasible, so the server publishes the final proposal."
         else:
             revised = assessment.revised
             text = (
@@ -420,9 +423,7 @@ def _counter_decision(
                 f"{revised.window}, target rate {revised.target_rate}%. Please accept this revised "
                 "plan."
             )
-            rationale = (
-                "The client counter proposal is infeasible, so the server proposes a revised plan."
-            )
+            rationale = "The client counter proposal is infeasible, so the server proposes a revised plan."
     elif evaluator is not None:
         preset = evaluator.preset(next_round)
         text = (

@@ -21,6 +21,9 @@ from dataclasses import replace
 import pytest
 from a2a.types import TaskState
 from a2a_t.core.metadata import NEGOTIATION_T_EXTENSION_URI
+from demo.agents.client_agent.agent import build_client_agent
+from demo.catalog import to_run_spec
+from demo.composition import install_offline_provider, offline_model_factory
 from demo.scenario import (
     FINAL_STATE_NEGOTIATION_ABORTED,
     FINAL_STATE_NEGOTIATION_ENDED,
@@ -37,7 +40,10 @@ from integration_helpers import (
     running_server,
 )
 from protocol.client_flow import ClientFlowResult
+from protocol.client_runtime import build_client_runtime
 from protocol.messages import metadata_to_dict, parse_negotiation_context
+from protocol.run_spec import RunSpec
+from shared.models import NegotiationDecision
 
 #: Client decision action matching one expected performative.
 _ACTION_BY_PERFORMATIVE: dict[str, str] = {
@@ -132,6 +138,53 @@ async def test_planned_outage_uses_the_micro_cell_without_negotiation(
     assert result.report is not None
     assert result.report.get("cell_id") == "cell-002"
     assert result.report.get("window") == "01:00~05:00"
+
+
+class _DalingshanCatalog:
+    """Catalog that accepts the unknown-area proposal with the second served area."""
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return ("unknown_area",)
+
+    def spec(self, name: str, *, language: str) -> RunSpec:
+        spec = to_run_spec(get_scenario(name), language=language)
+        return replace(
+            spec,
+            scripted_decisions=(
+                NegotiationDecision(
+                    action="accept",
+                    rationale="The engineer selected Dalingshan.",
+                    filled_params={"region": "Dalingshan"},
+                ),
+            ),
+        )
+
+
+async def test_unknown_area_can_use_the_second_served_area(english_language: None) -> None:
+    """Selecting Dalingshan in the unknown-area proposal runs the Dalingshan cell."""
+    config = offline_direct_config(free_tcp_port())
+
+    with running_server(config):
+        runtime = await build_client_runtime(
+            config,
+            "unknown_area",
+            "scripted",
+            "sse",
+            catalog=_DalingshanCatalog(),
+            offline_model_factory=offline_model_factory,
+            install_offline_provider=install_offline_provider,
+            client_agent_factory=build_client_agent,
+        )
+        try:
+            result = await runtime.run()
+        finally:
+            await runtime.aclose()
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert result.report is not None
+    assert result.report.get("region") == "Dalingshan"
+    assert result.report.get("cell_id") == "cell-003"
 
 
 @pytest.mark.parametrize("scenario_name", ("information", "target", "feasibility"))

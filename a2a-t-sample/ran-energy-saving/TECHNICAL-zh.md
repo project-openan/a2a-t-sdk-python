@@ -362,7 +362,7 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
 
 处理器只负责协议流程。两个注入缝把业务规则挡在外面：
 
-- `TaskTPrecheck` 在 SDK 接受 Task-T 之后运行，仍可开启协商（必填字段缺失、目标时段冲突、不可行的停电保障）。演示实现是 `demo/task_t_precheck.py`；不注入时处理器直接信任 SDK 的结论。同一个检查也会复核失败的校验结论：live 模型报告目标或可行性冲突、但渲染出的 Task-T prompt 里并没有该冲突时，请求（或已接受的 Task-T）视为有效并继续执行。这里以 prompt 为准，因为校验失败时提取参数中对应槽位会被置空。
+- `TaskTPrecheck` 在 SDK 接受 Task-T 之后运行，仍可开启协商（必填字段缺失、目标时段冲突、不可行的停电保障）。演示实现是 `demo/task_t_precheck.py`；不注入时处理器直接信任 SDK 的结论。同一个检查也会复核失败的校验结论：live 模型报告目标或可行性冲突、但渲染出的 Task-T prompt 里并没有该冲突时，请求（或已接受的 Task-T）视为有效并继续执行。这里以 prompt 为准，因为校验失败时提取参数中对应槽位会被置空。演示还在 `demo/served_areas.py` 维护可用区域目录：未知区域会与规范名、别名做模糊匹配，proposal 列出全部可用区域（分数足够高时推荐最接近的一个），并通过样例私有的 `sampleNegotiationOptions` metadata 把候选传给 Web UI，由工程师选择。
 - 协商策略（见下）决定已开启协商的下一步。
 
 所有 SDK 调用都是同步的，因此处理器用 `asyncio.to_thread` 执行，避免阻塞服务端事件循环。
@@ -564,7 +564,7 @@ P95 和审批等待。
 | --- | --- | --- | --- | --- |
 | `night` | 完整用例 1：直接创建夜间节能任务 | 请求包含所有必需槽位（`operationType`、区域、描述、分时段保障速率）。 | 无 | Task `COMPLETED` + 报告（`task_completed`） |
 | `information` | 目标缺参数：网管问、OSS 补 | Task-T 请求缺少分时段保障速率目标（`content.param_missing`）。 | `S:Propose(1)` → `C:Accept(1)` | Task `COMPLETED` + 报告（`task_completed`） |
-| `unknown_area` | 未知区域：确认可用区域 | 请求使用 `Region Z`/`未知区域`；样例 precheck 打开 information 协商并提供区域确认文本。 | `S:Propose(1)` → `C:Accept(1)`（保留原保障时段） | Task `COMPLETED` + 报告（`task_completed`） |
+| `unknown_area` | 未知区域：排序并选择可用区域 | 请求使用 `Region Z`/`未知区域`；样例 precheck 对可用区域（松山湖管委会、大岭山）排序，并在 information 协商中给出全部候选及模糊匹配分数。 | `S:Propose(1)` → `C:Accept(1)`（所选区域填入 `region`，原保障时段保留） | Task `COMPLETED` + 报告（`task_completed`） |
 | `target` | 时段冲突：先纠偏再执行 | 保障吞吐目标的时间段重叠（`content.value_not_allowed`）。 | `S:Propose(1)` → `C:Propose(1)`（反提议） → `S:Propose(2)`（修订） → `C:Accept(2)` | Task `COMPLETED` + 报告（`task_completed`） |
 | `feasibility` | 条件不可行：网管给替代方案 | 保障速率与 18 小时停电冲突（`content.rule_violation`）。 | `S:Propose(1)`（替代方案） → `C:Accept(1)` | Task `COMPLETED` + 报告（`task_completed`） |
 | `reject` | OSS 无法提供：协商结束 | 客户端无法提供缺失的保障速率目标。 | `S:Propose(1)` → `C:Reject(1)` → `S:Message("协商已结束")` | 无 Task（`no_task_negotiation_ended`） |
@@ -667,7 +667,8 @@ uvx --from ty==0.0.92 ty check .
 | --- | --- |
 | `test_policy.py` | 所有策略决策与轮次规则，包括 `maxRounds` 时的 abort 与错误码映射。 |
 | `test_pre_task_negotiation.py` | 消息识别、Task-T/Negotiation-T 校验调用、轮次推进、终态处理、预检注入，以及真实离线服务端。 |
-| `test_task_t_precheck.py` | 演示预检：必填字段缺失、目标时段重叠、不可行的停电保障，以及合法 Task-T。 |
+| `test_task_t_precheck.py` | 演示预检：必填字段缺失、目标时段重叠、不可行的停电保障、未知/近似区域，以及合法 Task-T。 |
+| `test_served_areas.py` | 可用区域目录：别名、规范化、未知区域候选列表与模糊推荐。 |
 | `test_client_flow.py` | 八场景流程、accept/counter/reject/abort 消息构造、意图审批闸门、`sampleProposal` 约定、两种传输。 |
 | `test_decision_provider.py` | ADK、manual、scripted、confirming 四种 Provider 的契约，包括 manual 超时、建议发布、会话落盘、内存降级与保留期清扫。 |
 | `test_approval_gate.py` | 审批注册表的批准/超时，以及 apply 工具“驳回即不写方案”的契约。 |
@@ -800,6 +801,7 @@ python run_demo.py --scenario target --mode auto --model-mode live
 | [`demo/agents/client_agent/`](demo/agents/client_agent) | 客户端 ADK 决策智能体：`agent.py` 导出 `root_agent`；`tools.py` 为 SLA 与影响评估工具；`prompts/request_instruction.md` 为 instruction。 |
 | [`protocol/pre_task_negotiation.py`](protocol/pre_task_negotiation.py) | 服务端唯一协议入口：识别任务前请求、校验 Task-T / Negotiation-T 消息，并转发被接受的请求；声明 `TaskTPrecheck` 注入缝。 |
 | [`demo/task_t_precheck.py`](demo/task_t_precheck.py) | 演示 `TaskTPrecheck`：必填字段缺失、目标时段重叠、不可行的停电保障。 |
+| [`demo/served_areas.py`](demo/served_areas.py) | 可用区域目录与模糊匹配：规范名、别名、候选排序，以及未知区域 proposal 的样例行选项负载。 |
 | [`protocol/negotiation_policy.py`](protocol/negotiation_policy.py) | 纯确定性服务端策略：`propose`、`abort`、`execute`、`end`，不调用 LLM。 |
 | [`protocol/server_executor.py`](protocol/server_executor.py) | 外层协商执行器与 `LangGraphTaskExecutor`：运行 ReAct planner 并发布 A2A Task 生命周期；不使用 ADK。 |
 | [`protocol/sqlite_task_store.py`](protocol/sqlite_task_store.py) | SQLite `TaskStore`，持久化 A2A Task 状态并为 UI 提供任务摘要；schema v2 同时拥有 Gateway push 配置表。 |
@@ -871,6 +873,7 @@ python run_demo.py --scenario target --mode auto --model-mode live
 | --- | --- | --- |
 | `protocol/pre_task_negotiation.py`（`PreTaskNegotiationHandler`） | KEEP | 协议入口、校验与短路逻辑；业务检查由注入的 `TaskTPrecheck` 提供。 |
 | `demo/task_t_precheck.py`（`RanDataTaskTPrecheck`） | **REPLACE** 预检规则 | 保留注入缝，按你的 Task-T schema 与可行性规则实现检查。 |
+| `demo/served_areas.py` | **REPLACE** 可用区域目录 | 换成你的网管实际服务的区域与小区；模糊排序与 proposal 负载属于样例约定。 |
 | `protocol/server_executor.py`（`NegotiationAgentExecutor`、`LangGraphTaskExecutor`） | KEEP 外壳 | A2A 生命周期、图循环与网关接线可复用；planner 提示词/模型与工具属于业务逻辑。 |
 | `demo/agents/server_agent/planner.py` | **REPLACE** 提示词/模型策略 | 保留 `ScriptedChatModel` 供离线测试；把在线模型指向你的端点与提示词。 |
 | `demo/agents/server_agent/langgraph_tools.py`（`PlanGuard`、工具包装） | **REPLACE** 顺序规则 | 保留包装结构；调整业务前置条件。 |

@@ -19,7 +19,7 @@ from typing import Any
 
 from langchain_core.language_models.base import LanguageModelInput
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
@@ -108,11 +108,7 @@ class ScriptedChatModel(BaseChatModel):
                     turn,
                 )
         else:
-            message = AIMessage(
-                content=(
-                    "The energy-saving plan was applied and the report was generated."
-                )
-            )
+            message = AIMessage(content=("The energy-saving plan was applied and the report was generated."))
         return ChatResult(generations=[ChatGeneration(message=message)])
 
     def _plan_args(self, messages: list[BaseMessage]) -> tuple[str, str, str]:
@@ -120,10 +116,16 @@ class ScriptedChatModel(BaseChatModel):
 
         The night-time complete request uses the macro cell's night window. A planned-outage task
         (use case 2) uses the micro cell whose available window covers the outage window, at its
-        lower saving rate. The live planner chooses from the same dataset with the same intent.
+        lower saving rate. A task confirmed for the second served area uses that area's cell. The
+        live planner chooses from the same dataset with the same intent.
         """
-        text = "\n".join(str(message.content) for message in messages)
-        if "power outage" in text.lower() or "停电" in text:
+        # Only the accepted task counts: the system prompt lists every dataset cell, so reading it
+        # would make the region check true for every run.
+        text = "\n".join(str(message.content) for message in messages if isinstance(message, HumanMessage))
+        lower = text.lower()
+        if "dalingshan" in lower or "大岭山" in text:
+            return "cell-003", "00:00~06:00", "28"
+        if "power outage" in lower or "停电" in text:
             return "cell-002", "01:00~05:00", "20"
         return "cell-001", "00:00~06:00", "30"
 
@@ -217,9 +219,10 @@ def build_system_prompt(*, dataset_catalog: str | None = None) -> str:
         "4. Call generate_energy_saving_report last, with the exact plan_id returned by apply.\n"
         "5. If a tool returns ok=false, adjust the plan within the dataset limits and retry at "
         "most twice; if it still fails, stop and explain.\n"
-        "6. The sample default plan is cell-001, window 00:00~06:00, target rate 30%. You may "
-        "choose another dataset cell/window/rate when the accepted task or tool results justify "
-        "it; the tools reject an invalid order or an infeasible plan.\n"
+        "6. The sample default plan is cell-001, window 00:00~06:00, target rate 30%. Prefer a "
+        "dataset cell whose region matches the accepted Task-T area. You may choose another "
+        "dataset cell/window/rate when the accepted task or tool results justify it; the tools "
+        "reject an invalid order or an infeasible plan.\n"
         "7. For a planned-outage task (a site list plus a background event), prefer the cell whose "
         "available window covers the outage and keep its target rate within the cell's maximum "
         "saving rate.\n"

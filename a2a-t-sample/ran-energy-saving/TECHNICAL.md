@@ -435,7 +435,11 @@ The handler contains protocol flow only. Two hooks keep business rules out of it
   also cross-checks a failed verdict: when a live model reports a target or feasibility conflict
   but the rendered Task-T prompt does not contain one, the request (or the accepted Task-T) is
   valid and proceeds. The prompt is the source of truth here because a failed validation nulls the
-  rejected slot in its extracted parameters.
+  rejected slot in its extracted parameters. The demo also keeps a served-area catalog in
+  `demo/served_areas.py`: an unknown region is matched against canonical names and aliases, the
+  proposal lists every served area (and recommends the closest match when the score is high
+  enough), and the proposal carries a sample-only `sampleNegotiationOptions` metadata map that the
+  Web UI renders as selectable areas.
 - the negotiation policy (see below) decides the next step of an open negotiation.
 
 Every SDK call is synchronous, so the handler runs it with `asyncio.to_thread` to keep the server
@@ -679,7 +683,7 @@ The expected sequences are asserted by `tests/test_scenarios.py` and `tests/test
 | --- | --- | --- | --- | --- |
 | `night` | Complete use case 1: create the night-time task directly | The request carries every required slot (`operationType`, `region`, description, guaranteed-throughput target). | none | Task `COMPLETED` + report (`task_completed`) |
 | `information` | Missing value: the NMS asks, the OSS fills it | The Task-T request omits the time-segmented guaranteed throughput target (`content.param_missing`). | `S:Propose(1)` → `C:Accept(1)` | Task `COMPLETED` + report (`task_completed`) |
-| `unknown_area` | Unknown area: confirm a served area | The request names `Region Z`/`未知区域`; the sample precheck opens an information negotiation with the area text. | `S:Propose(1)` → `C:Accept(1)` (keeps the requested windows) | Task `COMPLETED` + report (`task_completed`) |
+| `unknown_area` | Unknown area: rank and choose a served area | The request names `Region Z`/`未知区域`; the sample precheck ranks the served areas (Songshanhu Administration Committee, Dalingshan) and opens an information negotiation with every choice and its fuzzy-match score. | `S:Propose(1)` → `C:Accept(1)` (the chosen area fills `region`; the requested windows are kept) | Task `COMPLETED` + report (`task_completed`) |
 | `target` | Conflicting segments: correct the overlap before executing | The guaranteed-throughput target has overlapping time segments (`content.value_not_allowed`). | `S:Propose(1)` → `C:Propose(1)` (counter) → `S:Propose(2)` (revision) → `C:Accept(2)` | Task `COMPLETED` + report (`task_completed`) |
 | `feasibility` | Infeasible conditions: the NMS proposes an alternative | A guaranteed rate conflicts with an 18-hour power outage (`content.rule_violation`). | `S:Propose(1)` (alternative plan) → `C:Accept(1)` | Task `COMPLETED` + report (`task_completed`) |
 | `reject` | The OSS cannot provide the value: the negotiation ends | The client cannot provide the missing throughput target. | `S:Propose(1)` → `C:Reject(1)` → `S:Message("协商已结束")` | No Task (`no_task_negotiation_ended`) |
@@ -831,7 +835,8 @@ The suite is fully offline and deterministic (485 tests). What it covers:
 | --- | --- |
 | `test_policy.py` | Every policy decision and round rule, including the abort at `maxRounds` and the error-code mapping. |
 | `test_pre_task_negotiation.py` | Message classification, Task-T/Negotiation-T validation calls, round advance, terminal handling, precheck injection, and the real offline server. |
-| `test_task_t_precheck.py` | The demo precheck: missing required fields, overlapping targets, impossible outage guarantees, and a valid Task-T. |
+| `test_task_t_precheck.py` | The demo precheck: missing required fields, overlapping targets, impossible outage guarantees, unknown/near-miss areas, and a valid Task-T. |
+| `test_served_areas.py` | The served-area catalog: aliases, normalization, unknown-area candidate lists and fuzzy recommendations. |
 | `test_client_flow.py` | Seven scenario flows, accept/counter/reject/abort message construction, the intent approval gate, the `sampleProposal` convention, and both transports. |
 | `test_decision_provider.py` | Contract of the ADK, manual, scripted and confirming providers, including manual timeout, recommendation publication, durable session storage, the in-memory fallback and the retention sweep. |
 | `test_approval_gate.py` | Approval registry resolve/timeout and the apply tool's write-nothing-on-rejection contract. |
@@ -1028,6 +1033,7 @@ The sample is deliberately a prototype. Before production:
 | [`demo/agents/client_agent/`](demo/agents/client_agent) | Client ADK decision agent: `agent.py` exports `root_agent`; `tools.py` holds the SLA and impact tools; `prompts/request_instruction.md` is the instruction. |
 | [`protocol/pre_task_negotiation.py`](protocol/pre_task_negotiation.py) | The server's only protocol entry: identifies pre-task requests, validates Task-T / Negotiation-T messages, and forwards accepted requests. Declares the `TaskTPrecheck` seam. |
 | [`demo/task_t_precheck.py`](demo/task_t_precheck.py) | Demo `TaskTPrecheck`: missing required fields, overlapping target segments and impossible outage guarantees. |
+| [`demo/served_areas.py`](demo/served_areas.py) | Served-area catalog and fuzzy matcher: canonical names, aliases, candidate ranking and the sample option payload of the unknown-area proposal. |
 | [`protocol/negotiation_policy.py`](protocol/negotiation_policy.py) | Pure deterministic server policy: `propose`, `abort`, `execute`, or `end`. Never calls an LLM. |
 | [`protocol/server_executor.py`](protocol/server_executor.py) | Outer negotiation executor plus `LangGraphTaskExecutor`: runs the ReAct planner and publishes the A2A Task lifecycle, including the optional `INPUT_REQUIRED` approval gate. No ADK. |
 | [`protocol/sqlite_task_store.py`](protocol/sqlite_task_store.py) | SQLite `TaskStore` for persisted A2A Task state and the UI task summaries; schema v2 also owns the gateway push-configuration table. |
@@ -1101,6 +1107,7 @@ sample business content or demo-only machinery.
 | `protocol/pre_task_negotiation.py` (`PreTaskNegotiationHandler`) | KEEP | Protocol entry, validation and short-circuit logic; the business checks come from the injected `TaskTPrecheck`. |
 | `protocol/server_executor.py` (`NegotiationAgentExecutor`, `LangGraphTaskExecutor`) | KEEP the shell | The A2A lifecycle, graph loop and pre-task handler wiring are reusable; the planner prompt/model and tools are business logic. |
 | `demo/task_t_precheck.py` (`RanDataTaskTPrecheck`) | **REPLACE** the precheck rules | Keep the seam; implement the checks of your Task-T schema and feasibility rules. |
+| `demo/served_areas.py` | **REPLACE** the served-area catalog | Point the catalog at the areas and cells your NMS serves; the fuzzy ranking and proposal payload stay sample conventions. |
 | `demo/agents/server_agent/planner.py` | **REPLACE** the prompt/model policy | Keep the `ScriptedChatModel` for offline tests; point the live model at your endpoint and prompt. |
 | `demo/agents/server_agent/langgraph_tools.py` (`PlanGuard`, tool wrappers) | **REPLACE** the order rules | Keep the wrapper shape; adapt the business preconditions. |
 | `protocol/sqlite_task_store.py` (`SqliteTaskStore`) | KEEP | Minimal durable A2A TaskStore; swap for your database in production. |

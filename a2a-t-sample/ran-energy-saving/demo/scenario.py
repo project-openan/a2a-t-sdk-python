@@ -1,4 +1,4 @@
-"""Business scripts of the seven RAN energy-saving demonstration scenarios.
+"""Business scripts of the eight RAN energy-saving demonstration scenarios.
 
 Every scenario carries the client-side natural-language request (both languages), the expected
 negotiation kind, the exact performative/round sequence from the design, the expected final state,
@@ -36,6 +36,8 @@ from shared.run_constants import (
     LANGUAGE_ZH,
     FinalState,
 )
+
+from demo.served_areas import REGION_STRINGS
 
 #: Supported scenario names.
 SCENARIO_NIGHT = "night"
@@ -89,7 +91,7 @@ NATURAL_LANGUAGE_PROMPT_INPUT_OUTAGE_EN = (
     "energy saving. Based on the task object and task context, output a wireless network energy "
     "saving plan that achieves the energy saving goal defined in the task target and returns the "
     "energy saving result in the format defined in the expected output. Station list 1 is "
-    "[\"Site 1\", \"Site 2\"]. Planned power outage tomorrow; during the outage, 03:00~05:00, "
+    '["Site 1", "Site 2"]. Planned power outage tomorrow; during the outage, 03:00~05:00, '
     "lower the guaranteed throughput to 2Mbps to save battery; outside the outage, keep "
     "{00:00~03:00,10Mbps} and {05:00~24:00,10Mbps}."
     "The expected output is the intent report of the wireless network energy saving task."
@@ -183,13 +185,6 @@ NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_EN = (
     "The expected output is the intent report of the wireless network energy saving task."
 )
 
-#: Region display string per language (used by the scripted LLM routing fallback and the accept
-#: refill content).
-REGION_STRINGS: dict[str, str] = {
-    LANGUAGE_EN: "Songshanhu Administration Committee",
-    LANGUAGE_ZH: "松山湖管委会",
-}
-
 #: Presentation-only requests. The wire prompt keeps the longer, template-oriented wording because
 #: a live model fills the Task-T slots from it; the page shows what a network engineer would
 #: actually type, in the reference demo's concise style. The UI omits ``userRequest`` while the
@@ -200,10 +195,7 @@ PRESENTATION_REQUESTS: dict[str, dict[str, str]] = {
             "Start energy saving in the Songshanhu area with these guaranteed throughputs: "
             "00:00–17:30 at 10 Mbps, 17:30–23:00 at 20 Mbps, 23:00–24:00 at 10 Mbps."
         ),
-        LANGUAGE_ZH: (
-            "在松山湖开启节能，保障速率为：00:00–17:30 10 Mbps，"
-            "17:30–23:00 20 Mbps，23:00–24:00 10 Mbps。"
-        ),
+        LANGUAGE_ZH: ("在松山湖开启节能，保障速率为：00:00–17:30 10 Mbps，17:30–23:00 20 Mbps，23:00–24:00 10 Mbps。"),
     },
     SCENARIO_INFORMATION: {
         LANGUAGE_EN: "Start energy saving in the Songshanhu area.",
@@ -214,10 +206,7 @@ PRESENTATION_REQUESTS: dict[str, dict[str, str]] = {
             "Start energy saving in Region Z with these guaranteed throughputs: "
             "00:00–07:00 at 2 Mbps, 07:00–23:00 at 20 Mbps, 23:00–24:00 at 2 Mbps."
         ),
-        LANGUAGE_ZH: (
-            "在未知区域开启节能，保障速率为：00:00–07:00 2 Mbps，"
-            "07:00–23:00 20 Mbps，23:00–24:00 2 Mbps。"
-        ),
+        LANGUAGE_ZH: ("在未知区域开启节能，保障速率为：00:00–07:00 2 Mbps，07:00–23:00 20 Mbps，23:00–24:00 2 Mbps。"),
     },
     SCENARIO_TARGET: {
         LANGUAGE_EN: (
@@ -237,8 +226,7 @@ PRESENTATION_REQUESTS: dict[str, dict[str, str]] = {
             "from 00:00–18:00."
         ),
         LANGUAGE_ZH: (
-            "在松山湖为站点 1 和站点 2 开启节能：00:00–06:00 2 Mbps，06:00–18:00 10 Mbps；"
-            "00:00–18:00 有停电事件。"
+            "在松山湖为站点 1 和站点 2 开启节能：00:00–06:00 2 Mbps，06:00–18:00 10 Mbps；00:00–18:00 有停电事件。"
         ),
     },
     SCENARIO_OUTAGE: {
@@ -286,9 +274,7 @@ _ACCEPT_BASE_PARAMS: dict[str, dict[str, object]] = {
         ),
         "region": REGION_STRINGS[LANGUAGE_EN],
         "energySavingGoal": "Maximize energy saving under the condition that the task context is met.",
-        "guaranteedThroughputTarget": (
-            "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}"
-        ),
+        "guaranteedThroughputTarget": ("{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}"),
         "expectedOutput": "Output the intent report of the wireless network energy saving task.",
     },
     LANGUAGE_ZH: {
@@ -299,9 +285,7 @@ _ACCEPT_BASE_PARAMS: dict[str, dict[str, object]] = {
         ),
         "region": REGION_STRINGS[LANGUAGE_ZH],
         "energySavingGoal": "在满足任务上下文的前提下最大化节能。",
-        "guaranteedThroughputTarget": (
-            "{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~23:59,10Mbps}"
-        ),
+        "guaranteedThroughputTarget": ("{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~23:59,10Mbps}"),
         "expectedOutput": "输出无线网络节能任务的意图报告。",
     },
 }
@@ -313,9 +297,7 @@ TASK_T_DATA_SCHEMA: dict[str, dict[str, object]] = {
         "task_description": "task description",
         "region": "region name",
         "energySavingGoal": "energy saving goal",
-        "guaranteedThroughputTarget": (
-            "time-segmented guaranteed throughput target, format {HH:MM~HH:MM,NMbps}"
-        ),
+        "guaranteedThroughputTarget": ("time-segmented guaranteed throughput target, format {HH:MM~HH:MM,NMbps}"),
         "expectedOutput": "expected output of the task",
         "siteList": "site list",
         "backgroundEvent": "background event, for example a planned power outage",
@@ -337,31 +319,23 @@ _COMPLETE_INITIAL_OVERRIDES: dict[str, dict[str, dict[str, str]]] = {
     SCENARIO_UNKNOWN_AREA: {
         LANGUAGE_EN: {
             "region": "Region Z",
-            "guaranteedThroughputTarget": (
-                "{00:00~07:00,2Mbps}, {07:00~23:00,20Mbps}, {23:00~24:00,2Mbps}"
-            ),
+            "guaranteedThroughputTarget": ("{00:00~07:00,2Mbps}, {07:00~23:00,20Mbps}, {23:00~24:00,2Mbps}"),
         },
         LANGUAGE_ZH: {
             "region": "未知区域",
-            "guaranteedThroughputTarget": (
-                "{00:00~07:00,2Mbps}、{07:00~23:00,20Mbps}、{23:00~24:00,2Mbps}"
-            ),
+            "guaranteedThroughputTarget": ("{00:00~07:00,2Mbps}、{07:00~23:00,20Mbps}、{23:00~24:00,2Mbps}"),
         },
     },
     SCENARIO_OUTAGE: {
         LANGUAGE_EN: {
             "siteList": "Site 1,Site 2",
             "backgroundEvent": "planned power outage tomorrow 03:00~05:00",
-            "guaranteedThroughputTarget": (
-                "{00:00~03:00,10Mbps}, {03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}"
-            ),
+            "guaranteedThroughputTarget": ("{00:00~03:00,10Mbps}, {03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}"),
         },
         LANGUAGE_ZH: {
             "siteList": "站点1,站点2",
             "backgroundEvent": "明天 03:00~05:00 计划停电",
-            "guaranteedThroughputTarget": (
-                "{00:00~03:00,10Mbps}、{03:00~05:00,2Mbps}、{05:00~24:00,10Mbps}"
-            ),
+            "guaranteedThroughputTarget": ("{00:00~03:00,10Mbps}、{03:00~05:00,2Mbps}、{05:00~24:00,10Mbps}"),
         },
     },
 }
@@ -399,12 +373,8 @@ UNKNOWN_AREA_TARGET: dict[str, str] = {
 #: Corrected guaranteed-throughput targets agreed by each negotiation kind, per language.
 _ACCEPT_TARGET_OVERRIDES: dict[str, dict[str, str]] = {
     KIND_TARGET: {
-        LANGUAGE_EN: (
-            "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}"
-        ),
-        LANGUAGE_ZH: (
-            "{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~23:59,10Mbps}"
-        ),
+        LANGUAGE_EN: ("{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}"),
+        LANGUAGE_ZH: ("{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~23:59,10Mbps}"),
     },
     KIND_FEASIBILITY: {
         LANGUAGE_EN: "{00:00~06:00,2Mbps}, {06:00~18:00,2Mbps}",
@@ -550,8 +520,7 @@ SCENARIO_NIGHT_SPEC = Scenario(
     expected_final_state=FINAL_STATE_TASK_COMPLETED,
     scripted_client_decisions=(),
     description=(
-        "A complete night-time energy-saving request; the RAN Agent creates the task without a "
-        "pre-task negotiation."
+        "A complete night-time energy-saving request; the RAN Agent creates the task without a pre-task negotiation."
     ),
 )
 
@@ -577,8 +546,7 @@ SCENARIO_INFORMATION_SPEC = Scenario(
         ),
     ),
     description=(
-        "Task-T misses the guaranteed throughput target; the client accepts the server's "
-        "missing-parameter proposal."
+        "Task-T misses the guaranteed throughput target; the client accepts the server's missing-parameter proposal."
     ),
 )
 
@@ -604,8 +572,7 @@ SCENARIO_UNKNOWN_AREA_SPEC = Scenario(
         ),
     ),
     description=(
-        "The request names an unknown area; the RAN Agent asks the client to confirm a served "
-        "area before executing."
+        "The request names an unknown area; the RAN Agent asks the client to confirm a served area before executing."
     ),
 )
 
@@ -680,10 +647,7 @@ SCENARIO_REJECT_SPEC = Scenario(
             rationale="The requested guaranteed throughput target is not available from the client side.",
         ),
     ),
-    description=(
-        "The client cannot provide the missing throughput target; the negotiation ends without a "
-        "task."
-    ),
+    description=("The client cannot provide the missing throughput target; the negotiation ends without a task."),
 )
 
 SCENARIO_ABORT_SPEC = Scenario(
@@ -803,10 +767,7 @@ def expected_negotiation_target(
     user request, so it is not a negotiation accuracy check. Scenarios that do not complete
     (reject/abort) have no agreed target either.
     """
-    if (
-        scenario.expected_final_state != FINAL_STATE_TASK_COMPLETED
-        or scenario.expected_kind == KIND_NONE
-    ):
+    if scenario.expected_final_state != FINAL_STATE_TASK_COMPLETED or scenario.expected_kind == KIND_NONE:
         return None
     if scenario.name == SCENARIO_UNKNOWN_AREA:
         return _localized(UNKNOWN_AREA_TARGET, language)

@@ -34,7 +34,8 @@ sequenceDiagram
 
 - 目标缺参数；
 - 时段重叠；
-- 条件不可行（例如停电期间仍要求保障速率）。
+- 条件不可行（例如停电期间仍要求保障速率）；
+- 区域未知：网管按请求中的区域名对其服务的区域做模糊匹配并给出候选，请工程师选择，同时保留原保障速率时段。
 
 ## 2. 典型场景
 
@@ -107,6 +108,8 @@ python run_demo.py --scenario outage --mode auto --model-mode offline
 python run_demo.py --ui --model-mode offline
 # Web UI：审批 1（意图）+ 审批 2（MIE 中的 MML）
 python run_demo.py --ui --mode confirm --approval-gate --scenario target --model-mode offline
+# 未知区域：由工程师手动选择可用区域
+python run_demo.py --ui --mode manual --scenario unknown_area --model-mode offline
 # 可选：把 OSS 侧作为 A2A 后端暴露
 python run_demo.py --ui --gateway --ui-port 8080 --gateway-port 8001 --model-mode offline
 # 在局域网共享 Web UI：显式选择免 token（仅限可信网络）
@@ -130,7 +133,8 @@ Web UI 默认打开演示视图：左侧是 16:9 的舞台，依次是网络工�
 舞台按人的节奏跟随真实运行，共九步：请求、结构化 Task-T、审批 1（意图）、下发 Task-T、需要时协商、
 策略与任务启动、数据采集（第 2–8 天，时间压缩）、审批 2（MIE 中的 MML）、下发与报告。请求框展示网络
 工程师会直接输入的自然表述，例如“在松山湖开启节能，保障速率为：…”。OSS Agent 先把请求解析成自己系统所需的
-结构化意图，只有下发步骤才把意图映射成 Task-T。Task-T 被接受后，RAN Agent 依次上报 `SUBMITTED`、策略生成中、
+结构化意图，只有下发步骤才把意图映射成 Task-T。**未知区域**示例会列出模糊匹配后的可用区域，请工程师选择；
+选择只填充区域，原保障速率时段保持不变。Task-T 被接受后，RAN Agent 依次上报 `SUBMITTED`、策略生成中、
 策略就绪、任务已启动，然后才开始数据采集。右侧保留证据层：OSS Agent 理解到的任务（含 24 小时保障速率图）、
 协商轮次、**On the wire** 报文检查器，以及合并
 后的会话轨迹。On the wire 展示真实的 A2A 请求头、JSON body 和 Task-T metadata；在 A2A-T 模式下切换到

@@ -41,6 +41,7 @@ from demo.task_t_precheck import RanDataTaskTPrecheck
 from google.protobuf.json_format import MessageToDict
 from protocol.messages import (
     END_MESSAGE_TEXT,
+    SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
     SAMPLE_PROPOSAL_METADATA_KEY,
     STRUCTURED_ERRORS_METADATA_KEY,
 )
@@ -332,6 +333,28 @@ async def test_a_verified_conflict_still_opens_the_target_negotiation() -> None:
 
     metadata = _metadata(message)
     assert metadata[TEMPLATE_URI_METADATA_KEY] == TARGET_NEGOTIATION_PROPOSE_URI
+
+
+async def test_unknown_area_proposal_carries_the_served_area_options() -> None:
+    gate, server = _gate()
+    server.task_params = {
+        "operationType": "Create",
+        "region": "Region Z",
+        "guaranteedThroughputTarget": "{00:00~07:00,2Mbps}, {07:00~23:00,20Mbps}",
+    }
+
+    message = _assert_no_task(await gate.handle(_make_context(_initial_message())))
+
+    metadata = _metadata(message)
+    options = metadata[SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY]
+    assert options["field"] == "region"
+    assert options["requested"] == "Region Z"
+    assert [option["value"] for option in options["options"]] == [
+        "Songshanhu Administration Committee",
+        "Dalingshan",
+    ]
+    assert all(option["recommended"] is False for option in options["options"])
+    assert "Dalingshan" in server.propose_generations[0][0]
 
 
 async def test_without_a_precheck_the_handler_trusts_the_sdk_verdict() -> None:

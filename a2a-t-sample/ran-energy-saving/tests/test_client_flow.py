@@ -50,7 +50,11 @@ from protocol.client_flow import (
     run_client_flow,
 )
 from protocol.decision_provider import ScriptedDecisionProvider
-from protocol.messages import END_MESSAGE_TEXT, SAMPLE_PROPOSAL_METADATA_KEY
+from protocol.messages import (
+    END_MESSAGE_TEXT,
+    SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
+    SAMPLE_PROPOSAL_METADATA_KEY,
+)
 from shared.config import SampleConfig
 from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.run_constants import FINAL_STATE_INTENT_NOT_CONFIRMED
@@ -357,6 +361,22 @@ async def test_information_scenario_accepts_and_completes_a_task() -> None:
     accept_metadata = MessageToDict(transport.requests[1].message.metadata)
     assert accept_metadata[TASK_T_EXTENSION_URI].startswith("Refilled Task-T prompt:")
     assert accept_metadata[TEMPLATE_URI_METADATA_KEY] == "Negotiation-T/information-negotiation/accept-reject/v1"
+
+
+async def test_information_accept_uses_the_selected_served_area() -> None:
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="The engineer selected the second served area.",
+        filled_params={"region": "Dalingshan"},
+    )
+    result, _transport, prompt_client = await _run(
+        SCENARIO_INFORMATION_SPEC,
+        [[propose_event("information", 1)], _task_completed_batch()],
+        (decision,),
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert prompt_client.refill_data[0]["region"] == "Dalingshan"
 
 
 async def test_information_accept_discards_an_invalid_model_filled_target() -> None:
@@ -830,6 +850,40 @@ async def test_event_sink_sees_every_event_and_the_decision_hook_the_proposal() 
 
     assert seen == result.events
     assert requested == [("information", 1)]
+
+
+async def test_proposal_view_carries_the_sample_area_options() -> None:
+    requested: list[NegotiationProposeView] = []
+    event = propose_event("information", 1)
+    metadata = event["metadata"]
+    assert isinstance(metadata, dict)
+    metadata[SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY] = {
+        "field": "region",
+        "requested": "Region Z",
+        "options": [
+            {
+                "value": "Songshanhu Administration Committee",
+                "labels": {"en-US": "Songshanhu Administration Committee"},
+                "score": 0.1,
+                "recommended": False,
+            }
+        ],
+    }
+
+    await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=ScriptedTransport([[event], _task_completed_batch()]),
+        user_request="request",
+        provider=ScriptedDecisionProvider(SCENARIO_INFORMATION_SPEC.scripted_client_decisions),
+        language="en-US",
+        on_decision_requested=lambda propose, session: requested.append(propose),
+    )
+
+    assert len(requested) == 1
+    options = requested[0].options
+    assert options is not None
+    assert options.requested == "Region Z"
+    assert options.options[0].label("en-US") == "Songshanhu Administration Committee"
 
 
 async def test_decision_hook_fires_before_the_response_is_sent() -> None:

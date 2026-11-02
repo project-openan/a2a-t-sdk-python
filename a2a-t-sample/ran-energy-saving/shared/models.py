@@ -43,6 +43,44 @@ class NegotiationDecision(BaseModel):
     feasibility_summary: str | None = None
 
 
+class NegotiationAreaOption(BaseModel):
+    """One selectable area on an information proposal.
+
+    Attributes:
+        value: Canonical English name of the area.
+        labels: Localized canonical names.
+        aliases: Other accepted spellings.
+        score: Fuzzy-match score in ``[0, 1]``.
+        recommended: Whether the server ranks this area as the closest match.
+    """
+
+    value: str
+    labels: dict[str, str] = Field(default_factory=dict)
+    aliases: list[str] = Field(default_factory=list)
+    score: float = 0.0
+    recommended: bool = False
+
+    def label(self, language: str) -> str:
+        """Return the option label in ``language``, falling back to the canonical value."""
+        return self.labels.get(language, self.value)
+
+
+class NegotiationOptions(BaseModel):
+    """Sample-only choices attached to one inbound proposal.
+
+    Attributes:
+        field: Task-T parameter the choices fill.
+        requested: Value the client originally requested.
+        keep: Task-T parameters the choice leaves unchanged.
+        options: Selectable values, best match first.
+    """
+
+    field: str = "region"
+    requested: str | None = None
+    keep: list[str] = Field(default_factory=list)
+    options: list[NegotiationAreaOption] = Field(default_factory=list)
+
+
 class NegotiationProposeView(BaseModel):
     """Provider-facing view of one inbound ``Propose`` message.
 
@@ -56,6 +94,7 @@ class NegotiationProposeView(BaseModel):
         template_uri: Negotiation-T template URI carried by the message.
         context_id: A2A context id the negotiation belongs to, when known.
         parameters: Proposal parameters, when the server sent structured content.
+        options: Sample-only choices the client may select (for example served areas).
     """
 
     negotiation_id: str
@@ -67,3 +106,4 @@ class NegotiationProposeView(BaseModel):
     template_uri: str | None = None
     context_id: str | None = None
     parameters: dict[str, object] | None = None
+    options: NegotiationOptions | None = None

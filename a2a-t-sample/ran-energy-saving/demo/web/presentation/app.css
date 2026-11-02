@@ -561,6 +561,26 @@ body.resizing { cursor: col-resize; user-select: none; }
 .choices button:hover { background: var(--g900); color: var(--white); }
 .say.ask .choices button.primary { background: var(--black); color: var(--white); }
 .say.ask .choices button.danger { background: var(--white); border-color: var(--red); color: var(--red); }
+.region-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+}
+.region-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+.choices button.region-choice { font-size: 13.5px; padding: 6px 11px; }
+.choices button.region-choice.selected {
+  background: var(--orange);
+  border-color: var(--orange);
+  color: var(--black);
+}
 .counter-editor { display: flex; flex-direction: column; gap: 6px; }
 .counter-editor textarea {
   width: 100%;

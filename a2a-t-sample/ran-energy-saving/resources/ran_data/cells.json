@@ -81,6 +81,46 @@
         {"hour": 22, "load_rate": 0.5, "energy_kw": 21.0},
         {"hour": 23, "load_rate": 0.36, "energy_kw": 17.6}
       ]
+    },
+    {
+      "cell_id": "cell-003",
+      "name": "Dalingshan-Central",
+      "region": "Dalingshan",
+      "description": "Macro cell covering the central district of the Dalingshan service area.",
+      "max_saving_rate": 28,
+      "available_windows": ["00:00~06:00", "23:00~24:00"],
+      "capacity": {
+        "max_throughput_mbps": 360,
+        "sla_min_throughput_mbps": 220,
+        "carrier_count": 3,
+        "max_power_watts": 1100
+      },
+      "hourly": [
+        {"hour": 0, "load_rate": 0.2, "energy_kw": 16.8},
+        {"hour": 1, "load_rate": 0.18, "energy_kw": 16.2},
+        {"hour": 2, "load_rate": 0.17, "energy_kw": 15.8},
+        {"hour": 3, "load_rate": 0.16, "energy_kw": 15.5},
+        {"hour": 4, "load_rate": 0.17, "energy_kw": 15.8},
+        {"hour": 5, "load_rate": 0.22, "energy_kw": 17.4},
+        {"hour": 6, "load_rate": 0.35, "energy_kw": 21.0},
+        {"hour": 7, "load_rate": 0.52, "energy_kw": 25.6},
+        {"hour": 8, "load_rate": 0.64, "energy_kw": 29.2},
+        {"hour": 9, "load_rate": 0.7, "energy_kw": 31.0},
+        {"hour": 10, "load_rate": 0.74, "energy_kw": 32.2},
+        {"hour": 11, "load_rate": 0.76, "energy_kw": 32.9},
+        {"hour": 12, "load_rate": 0.73, "energy_kw": 31.8},
+        {"hour": 13, "load_rate": 0.7, "energy_kw": 30.8},
+        {"hour": 14, "load_rate": 0.72, "energy_kw": 31.3},
+        {"hour": 15, "load_rate": 0.75, "energy_kw": 32.5},
+        {"hour": 16, "load_rate": 0.78, "energy_kw": 33.5},
+        {"hour": 17, "load_rate": 0.82, "energy_kw": 34.8},
+        {"hour": 18, "load_rate": 0.86, "energy_kw": 36.0},
+        {"hour": 19, "load_rate": 0.88, "energy_kw": 36.6},
+        {"hour": 20, "load_rate": 0.84, "energy_kw": 35.2},
+        {"hour": 21, "load_rate": 0.7, "energy_kw": 30.8},
+        {"hour": 22, "load_rate": 0.48, "energy_kw": 24.0},
+        {"hour": 23, "load_rate": 0.3, "energy_kw": 19.2}
+      ]
     }
   ]
 }

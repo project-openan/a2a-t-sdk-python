@@ -17,13 +17,13 @@ from a2a_t.core.validation_pipeline import FilledParamData
 from protocol.negotiation_policy import NegotiationKind
 from protocol.pre_task_negotiation import PrecheckFinding
 
-from demo.scenario import REGION_STRINGS
-
-#: Areas the sample RAN serves. The Task-T region is localized, so both spellings are accepted.
-KNOWN_REGIONS: Final[frozenset[str]] = frozenset(REGION_STRINGS.values()) | {
-    "Songshanhu",
-    "松山湖",
-}
+from demo.served_areas import (
+    build_area_options,
+    build_area_proposal_text,
+    detect_language,
+    match_served_areas,
+    resolve_served_area,
+)
 
 #: One ``HH:MM~HH:MM`` interval in a target or background-event string.
 _TIME_INTERVAL_PATTERN: Final[re.Pattern[str]] = re.compile(
@@ -39,9 +39,7 @@ _TARGET_SEGMENT_PATTERN: Final[re.Pattern[str]] = re.compile(
 _OUTAGE_MARKERS: Final[tuple[str, ...]] = ("outage", "power", "停电")
 
 #: Sentence carrying the background event of a rendered Task-T prompt.
-_OUTAGE_SENTENCE_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"[^\n。；;]*(?:outage|停电)[^\n。；;]*", re.IGNORECASE
-)
+_OUTAGE_SENTENCE_PATTERN: Final[re.Pattern[str]] = re.compile(r"[^\n。；;]*(?:outage|停电)[^\n。；;]*", re.IGNORECASE)
 
 #: Area line of a rendered Task-T prompt (localized).
 _REGION_SENTENCE_PATTERN: Final[re.Pattern[str]] = re.compile(
@@ -89,9 +87,7 @@ def _deterministic_negotiation_kind(data: Mapping[str, object]) -> NegotiationKi
                 return NegotiationKind.TARGET
 
     background = data.get("backgroundEvent")
-    if isinstance(background, str) and any(
-        marker in background.lower() for marker in _OUTAGE_MARKERS
-    ):
+    if isinstance(background, str) and any(marker in background.lower() for marker in _OUTAGE_MARKERS):
         outage_match = _TIME_INTERVAL_PATTERN.search(background)
         if outage_match is not None:
             outage = _span(outage_match.group(1), outage_match.group(2))
@@ -188,17 +184,15 @@ class RanDataTaskTPrecheck:
                 detail=f"required fields are missing: {', '.join(missing)}",
             )
         region = checked.get("region")
-        if isinstance(region, str) and region.strip() and region not in KNOWN_REGIONS:
-            known = " / ".join(sorted(KNOWN_REGIONS))
+        if isinstance(region, str) and region.strip() and resolve_served_area(region) is None:
+            matches = match_served_areas(region)
+            language = detect_language(f"{region} {prompt or ''}")
             return PrecheckFinding(
                 kind=NegotiationKind.INFORMATION,
                 missing_items=("region",),
                 detail=f"the sample does not serve area '{region}'",
-                proposal_text=(
-                    f'The requested area "{region}" is not recognized by the RAN. '
-                    f"Please confirm a served area ({known}) and keep the requested "
-                    "guaranteed throughput windows."
-                ),
+                proposal_text=build_area_proposal_text(region, matches, language),
+                options=build_area_options(region, matches),
             )
         if prompt:
             return None

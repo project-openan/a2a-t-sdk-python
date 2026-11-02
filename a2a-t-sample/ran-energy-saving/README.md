@@ -37,7 +37,9 @@ Typical problems map to three kinds of negotiation:
 
 - missing parameters;
 - overlapping time segments;
-- infeasible conditions (for example a guaranteed rate during an outage).
+- infeasible conditions (for example a guaranteed rate during an outage);
+- an unknown area: the NMS ranks its served areas against the requested name and asks the engineer
+  to choose one, keeping the requested throughput windows.
 
 ## 2. Typical scenarios
 
@@ -110,6 +112,8 @@ python run_demo.py --scenario outage --mode auto --model-mode offline
 python run_demo.py --ui --model-mode offline
 # Web UI with approval 1 (intent) and approval 2 (MML in MIE)
 python run_demo.py --ui --mode confirm --approval-gate --scenario target --model-mode offline
+# Unknown area: choose the served area manually
+python run_demo.py --ui --mode manual --scenario unknown_area --model-mode offline
 # Optional: expose the OSS side as an A2A backend
 python run_demo.py --ui --gateway --ui-port 8080 --gateway-port 8001 --model-mode offline
 # Share the Web UI on the LAN: explicit tokenless opt-in (trusted network only)
@@ -139,7 +143,9 @@ Task-T, approval 1 (intent), Task-T sent, negotiation when needed, strategy and 
 collection (days 2 to 8, compressed), approval 2 (MML in MIE) and apply and report. The request box
 shows the concise wording a network engineer would type, for example “Start energy saving in the
 Songshanhu area with these guaranteed throughputs: …”; the OSS Agent first turns it into its own
-structured intent, and only the send step maps that intent onto the Task-T. After the Task-T is
+structured intent, and only the send step maps that intent onto the Task-T. The **Unknown area**
+example lists the served areas after a fuzzy match and lets the engineer choose one; selecting an
+area only fills the region, so the requested throughput windows are kept. After the Task-T is
 accepted the RAN Agent reports `SUBMITTED`, strategy working, strategy ready and task started before
 data collection begins. The right column keeps the evidence: what the OSS Agent understood (with
 the 24-hour throughput chart), the

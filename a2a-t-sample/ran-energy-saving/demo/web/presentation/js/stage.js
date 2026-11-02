@@ -397,7 +397,10 @@ export function createStage(els) {
         nms: { cls: "active", text: copy.states.nmsReadingAnswer },
       });
       highlightSkill(2);
-      const answer = decisionLine(copy, scenario, round) || action;
+      const selectedRegion = latestDecisionRegion(state);
+      const answer = selectedRegion
+        ? `${decisionLine(copy, scenario, round) || action} · ${selectedRegion}`
+        : decisionLine(copy, scenario, round) || action;
       note("oss", roles.oss, answer, true);
       note("eng", roles.eng, answer, true);
       fly("lane-request", copy.negotiation.answer, "neg", 1000);
@@ -947,6 +950,14 @@ export function createStage(els) {
     for (let index = state.negotiation.length - 1; index >= 0; index -= 1) {
       const turn = state.negotiation[index];
       if (turn.side === "oss") return turn.action;
+    }
+    return null;
+  }
+
+  function latestDecisionRegion(state) {
+    for (let index = state.negotiation.length - 1; index >= 0; index -= 1) {
+      const turn = state.negotiation[index];
+      if (turn.side === "oss") return turn.detail?.filledParams?.region || null;
     }
     return null;
   }

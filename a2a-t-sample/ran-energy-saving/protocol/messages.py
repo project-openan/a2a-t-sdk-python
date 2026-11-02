@@ -39,6 +39,14 @@ TASK_TEMPLATE_URI: Final[str] = ENERGY_SAVING_URI
 #: when it is absent (the policy then advances through its preset revision sequence).
 SAMPLE_PROPOSAL_METADATA_KEY: Final[str] = "sampleProposal"
 
+#: Metadata key carrying sample-only choices on an information proposal.
+#:
+#: This is a sample convention, not an A2A-T protocol field: the unknown-area negotiation lists the
+#: served areas and their fuzzy-match scores so a Web UI can render the areas as selectable choices.
+#: The plain protocol content still carries the same question, so clients that ignore this key keep
+#: working.
+SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY: Final[str] = "sampleNegotiationOptions"
+
 #: Metadata key carrying the sample-only Run Explorer run id on the initial Task-T message.
 #:
 #: The server reads it to tag its own spans with the client run id, so the Web UI can merge the
@@ -105,10 +113,7 @@ def is_negotiation_message(metadata: Mapping[str, object] | None) -> bool:
     """Report whether one message metadata map marks an A2A-T negotiation message."""
     if not metadata:
         return False
-    return (
-        NEGOTIATION_T_EXTENSION_URI in metadata
-        or NEGOTIATION_CONTEXT_METADATA_KEY in metadata
-    )
+    return NEGOTIATION_T_EXTENSION_URI in metadata or NEGOTIATION_CONTEXT_METADATA_KEY in metadata
 
 
 def parse_negotiation_context(metadata: Mapping[str, object] | None) -> NegotiationContext | None:
@@ -166,9 +171,7 @@ def missing_extensions(requested_extensions: Sequence[str] | set[str], required:
     return tuple(uri for uri in required if uri not in requested)
 
 
-def build_negotiation_metadata(
-    content: MetadataContent, *, context_id: str
-) -> dict[str, object]:
+def build_negotiation_metadata(content: MetadataContent, *, context_id: str) -> dict[str, object]:
     """Build the metadata map of one generated Negotiation-T message.
 
     The negotiation session id is forced to the A2A ``contextId`` (sample convention). ``None``

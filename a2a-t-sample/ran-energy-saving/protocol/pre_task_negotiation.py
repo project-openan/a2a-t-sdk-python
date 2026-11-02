@@ -47,6 +47,7 @@ from shared.trace import trace_stage
 from protocol.messages import (
     ABORT_MESSAGE_TEXT,
     PROPOSE_MESSAGE_TEXT,
+    SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
     SAMPLE_PROPOSAL_METADATA_KEY,
     STRUCTURED_ERRORS_METADATA_KEY,
     TASK_TEMPLATE_URI,
@@ -197,12 +198,14 @@ class PrecheckFinding:
         detail: short human-readable reason used in the log record.
         proposal_text: optional business text for the server's first proposal; when empty the
             policy uses its generic information message.
+        options: sample-only choices the client may select (for example served areas).
     """
 
     kind: NegotiationKind
     missing_items: tuple[str, ...] = ()
     detail: str = ""
     proposal_text: str = ""
+    options: Mapping[str, object] | None = None
 
 
 class TaskTPrecheck(Protocol):
@@ -297,9 +300,7 @@ class PreTaskNegotiationHandler:
     # Initial Task-T
     # ------------------------------------------------------------------
 
-    async def _handle_initial_task(
-        self, context: RequestContext, metadata: Mapping[str, object]
-    ) -> NegotiationOutcome:
+    async def _handle_initial_task(self, context: RequestContext, metadata: Mapping[str, object]) -> NegotiationOutcome:
         """Validate the initial Task-T prompt and open a negotiation when it maps to one."""
         context_id = context.context_id
         missing = missing_extensions(context.requested_extensions, (TASK_T_EXTENSION_URI,))
@@ -312,9 +313,7 @@ class PreTaskNegotiationHandler:
             )
         prompt = task_prompt_from_metadata(metadata)
         if not prompt.strip():
-            return NegotiationOutcome.short(
-                build_error_message(context_id, "The request carries no Task-T prompt.")
-            )
+            return NegotiationOutcome.short(build_error_message(context_id, "The request carries no Task-T prompt."))
         verified = False
         try:
             filled = await self._call(
@@ -340,6 +339,7 @@ class PreTaskNegotiationHandler:
                         max_rounds=self._max_rounds,
                         missing_items=finding.missing_items,
                         proposal_text=finding.proposal_text,
+                        options=finding.options,
                     )
                     return await self._emit_policy_decision(context_id, self._policy(state))
             verified = False
@@ -390,6 +390,7 @@ class PreTaskNegotiationHandler:
                 max_rounds=self._max_rounds,
                 missing_items=finding.missing_items,
                 proposal_text=finding.proposal_text,
+                options=finding.options,
             )
             return await self._emit_policy_decision(context_id, self._policy(state))
 
@@ -401,9 +402,7 @@ class PreTaskNegotiationHandler:
     # Negotiation messages
     # ------------------------------------------------------------------
 
-    async def _handle_negotiation(
-        self, context: RequestContext, metadata: Mapping[str, object]
-    ) -> NegotiationOutcome:
+    async def _handle_negotiation(self, context: RequestContext, metadata: Mapping[str, object]) -> NegotiationOutcome:
         """Dispatch one inbound negotiation message by performative."""
         context_id = context.context_id
         session = parse_negotiation_context(metadata)
@@ -469,9 +468,7 @@ class PreTaskNegotiationHandler:
                 and _TARGET_SEGMENT_PATTERN.search(task_prompt) is not None
             )
             if not confirmable or self._verified_conflict_kind(exc, task_prompt) is not None:
-                return await self._negotiation_failure(
-                    context_id, session, f"Accepted Task-T validation failed: {exc}"
-                )
+                return await self._negotiation_failure(context_id, session, f"Accepted Task-T validation failed: {exc}")
             self._logger.warning(
                 "accepted Task-T validation reported a %s conflict (%s) that the sample data does "
                 "not confirm; creating the task",
@@ -479,9 +476,7 @@ class PreTaskNegotiationHandler:
                 ", ".join(str(error.code) for error in exc.errors),
             )
         except (A2ATError, ValueError) as exc:
-            return await self._negotiation_failure(
-                context_id, session, f"Accepted Task-T validation failed: {exc}"
-            )
+            return await self._negotiation_failure(context_id, session, f"Accepted Task-T validation failed: {exc}")
 
         self._rewrite_task_prompt(context, task_prompt)
         self._logger.info("negotiation accepted at round %s; creating the task", session.round)
@@ -505,9 +500,7 @@ class PreTaskNegotiationHandler:
         prompt = negotiation_prompt_from_metadata(metadata)
         if isinstance(template_uri, str) and prompt.strip():
             try:
-                await self._call(
-                    validator, prompt, session, NEGOTIATION_PARAM_SCHEMA, template_uri, stage=stage
-                )
+                await self._call(validator, prompt, session, NEGOTIATION_PARAM_SCHEMA, template_uri, stage=stage)
             except (A2ATError, ValueError) as exc:
                 self._logger.warning("terminal negotiation message failed validation: %s", exc)
         self._logger.info(
@@ -541,9 +534,7 @@ class PreTaskNegotiationHandler:
                 stage="negotiation_propose_validation",
             )
         except (A2ATError, ValueError) as exc:
-            return await self._negotiation_failure(
-                context_id, session, f"Counter proposal validation failed: {exc}"
-            )
+            return await self._negotiation_failure(context_id, session, f"Counter proposal validation failed: {exc}")
 
         kind = negotiation_kind_for_template_uri(template_uri)
         if kind is None:
@@ -563,9 +554,7 @@ class PreTaskNegotiationHandler:
     # Shared helpers
     # ------------------------------------------------------------------
 
-    def _build_rejected_task(
-        self, context: RequestContext, error: ContentValidationError
-    ) -> Task:
+    def _build_rejected_task(self, context: RequestContext, error: ContentValidationError) -> Task:
         """Build the terminal ``REJECTED`` Task of an unmapped Task-T validation failure.
 
         The task is enqueued as-is: the agent never runs, so the pre-task negotiation model is kept.
@@ -620,11 +609,17 @@ class PreTaskNegotiationHandler:
                 return NegotiationOutcome.short(
                     build_error_message(context_id, f"Negotiation proposal generation failed: {exc}")
                 )
-            self._logger.info(
-                "server propose generated: kind=%s round=%s", content.kind.value, content.round
+            self._logger.info("server propose generated: kind=%s round=%s", content.kind.value, content.round)
+            extra_metadata = (
+                {SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY: dict(content.options)} if content.options else None
             )
             return NegotiationOutcome.short(
-                build_negotiation_message(generated, context_id=session.id, text=PROPOSE_MESSAGE_TEXT)
+                build_negotiation_message(
+                    generated,
+                    context_id=session.id,
+                    text=PROPOSE_MESSAGE_TEXT,
+                    extra_metadata=extra_metadata,
+                )
             )
         if decision.action == "abort" and isinstance(content, AbortContent):
             session = NegotiationContext(
@@ -693,9 +688,7 @@ class PreTaskNegotiationHandler:
         return await self._emit_policy_decision(context_id, decision)
 
     @staticmethod
-    async def _call(
-        function: Callable[..., _ResultT], *args: object, stage: str | None = None
-    ) -> _ResultT:
+    async def _call(function: Callable[..., _ResultT], *args: object, stage: str | None = None) -> _ResultT:
         """Run one synchronous SDK call in a worker thread under its capture stage.
 
         ``asyncio.to_thread`` copies the current context, so the ``trace_stage`` label reaches the
