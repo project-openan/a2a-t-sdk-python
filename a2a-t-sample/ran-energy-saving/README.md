@@ -144,7 +144,9 @@ outlined-node ICT style). The top-bar button switches them at runtime and rememb
 `--brand huawei` or `?brand=huawei` selects the start-up default. Eight examples cover use
 case 1 (night-time energy saving, with and without negotiation) and use case 2 (planned power
 outage). The outage run is two-phase on one Task: a Create baseline, then a real Modify Task-T on
-the same Task. The stage follows the live run at a human pace through nine steps: request, structured
+the same Task; the presentation keeps the step bar at Apply & report for the Modify phase and
+shows each Task-T's own wire payload. The stage follows the live run at a human pace through nine
+steps: request, structured
 Task-T, approval 1 (intent), Task-T sent, negotiation when needed, strategy and task start, data
 collection (days 2 to 8, compressed), approval 2 (MML in MIE) and apply and report. The request box
 shows the concise wording a network engineer would type, for example “Start energy saving in the

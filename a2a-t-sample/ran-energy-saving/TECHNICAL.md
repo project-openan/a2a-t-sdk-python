@@ -90,7 +90,9 @@ python run_demo.py --ui --scenario information --model-mode offline
 The page opens on the presentation view: a 16:9 stage (engineer, OSS Agent, RAN Agent, MIE and radio
 sites, with the A2A-T channel between them) and three evidence panels. Eight examples cover use case
 1 (night-time energy saving, complete and negotiated) and use case 2 (planned power outage, a
-Create baseline followed by a real Modify continuation on the same Task).
+Create baseline followed by a real Modify continuation on the same Task). The presentation keeps
+the step bar on Apply & report for the Modify phase, shows each Task-T's own payload in the wire
+inspector, and renders the modified report as the final card.
 
 The presentation supports two brand palettes. `--brand orange|huawei` (or
 `A2AT_SAMPLE_UI_BRAND`) sets the start-up default; the top-bar button switches at runtime and stores

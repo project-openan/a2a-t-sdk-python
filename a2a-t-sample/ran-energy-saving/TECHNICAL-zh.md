@@ -83,7 +83,7 @@ python run_demo.py --ui --scenario information --model-mode offline
 ```
 
 页面默认打开演示视图：左侧是 16:9 舞台（网络工程师、OSS Agent、RAN Agent、MIE 与无线站点，中间是
-A2A-T 通道），右侧是三块证据面板。八个示例覆盖用例 1（夜间节能，含协商与无协商）和用例 2（计划停电，同一 Task 上先 Create 基线再执行真正的 Modify 续接）。
+A2A-T 通道），右侧是三块证据面板。八个示例覆盖用例 1（夜间节能，含协商与无协商）和用例 2（计划停电，同一 Task 上先 Create 基线再执行真正的 Modify 续接）。Modify 阶段演示视图保持步骤条在“Apply & report”，wire 面板分别展示两条 Task-T 的 payload，最终卡片展示修改后的报告。
 
 演示视图支持两套品牌主题。`--brand orange|huawei`（或 `A2AT_SAMPLE_UI_BRAND`）决定启动默认值；
 顶栏按钮可实时切换并把选择写入 `localStorage`；`?brand=` 对单次页面加载覆盖前两者。CSS 使用语义
