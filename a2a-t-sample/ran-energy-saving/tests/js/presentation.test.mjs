@@ -59,8 +59,15 @@ function decision(seq, action, round, maxRounds = 3, detail = null) {
   });
 }
 
-function status(seq, summary) {
-  return event({ seq, entryType: "event", kind: "status", phase: "execution", summary });
+function status(seq, summary, extra = null) {
+  return event({
+    seq,
+    entryType: "event",
+    kind: "status",
+    phase: "execution",
+    summary,
+    ...(extra || {}),
+  });
 }
 
 function artifact(seq, phase, tool = null) {
@@ -452,6 +459,31 @@ artifactState.approvalState = "waiting";
 assert.equal(sceneFor(artifact(24, "execution", "apply_energy_saving_plan"), artifactState).key, "trace");
 artifactState.approvalState = "approved";
 assert.equal(sceneFor(artifact(25, "execution", "apply_energy_saving_plan"), artifactState).key, "apply");
+// The apply result and the ready report are status notifications for the wire/trace, not new
+// story beats: the apply artifact already drives the execute beat and the report artifact the
+// report beat. A generic WORKING fallback would replay the apply scene after execution.
+assert.equal(
+  sceneFor(
+    status(
+      29,
+      "Region: Songshanhu; Task: Multi-RAT Intelligent Network Energy Saving; Progress: plan plan-cell-001-001 was applied to cell cell-001 (Songshanhu-North) for 00:00~06:00 at 30% energy saving.",
+      { state: "TASK_STATE_WORKING" },
+    ),
+    artifactState,
+  ).key,
+  "trace",
+);
+assert.equal(
+  sceneFor(
+    status(
+      30,
+      "Region: Songshanhu; Task: Multi-RAT Intelligent Network Energy Saving; Progress: the energy-saving report is ready. Plan plan-cell-001-001 applied.",
+      { state: "TASK_STATE_WORKING" },
+    ),
+    artifactState,
+  ).key,
+  "trace",
+);
 // An unknown artifact is never mistaken for an applied plan.
 assert.equal(sceneFor(artifact(26, "execution"), artifactState).key, "trace");
 

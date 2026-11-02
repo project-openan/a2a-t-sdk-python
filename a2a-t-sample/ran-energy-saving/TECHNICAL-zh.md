@@ -295,12 +295,15 @@ python run_demo.py --ui --gateway --ui-port 8080 --gateway-port 8001 --model-mod
 | 协商提议 | Negotiation round N: the RAN server proposed an `<kind>` negotiation. | `phase=negotiation`、`round`、`performative`、`kind` |
 | 客户端决策 | Negotiation round N: the client chose `<action>`. | `phase=negotiation`、`round`、`action` |
 | 网管任务开始 | The RAN server accepted the task and started execution. | `phase=execution`、`state` |
+| 方案已下发 | The RAN server applied the energy-saving plan. | `phase=execution`、`state=applied` |
+| 报告已发布 | The RAN server published the energy-saving report. | `phase=report` |
 
 两种投递方式消费同一组事件：`message:stream` 在打开的流上转发；`message:send` 调用方通过内联
 `configuration.taskPushNotificationConfig` 或 `POST /tasks/{id}/pushNotificationConfigs` 注册 webhook
 接收。最终报告 artifact 与终态保持不变。
 
-约束：每个 Task 最多 8 条进度，按里程碑去重；trace span、提示词、工具结果与原始提案内容不外发。
+约束：每个 Task 最多 10 条进度，按里程碑去重；trace span、提示词、工具结果与原始提案内容不外发；
+只映射 apply 与 report 两类 artifact，profile 和评估结果保持内部。
 
 webhook URL 会校验（必须是绝对 http(s) URL、不得内嵌凭据；非回环地址只允许 HTTPS）。注册信息存放在
 Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2），重启不丢；未配置
@@ -406,7 +409,13 @@ executor = build_negotiation_executor(
 
 `ServerAgentFactory` 返回 `ServerAgentSpec`（图、模型、系统提示词、报告工具名、初始消息、工具结果解析器）。演示实现是 `demo/agents/server_agent/factory.py`；真实网管返回自己的图。演示在 `demo/plan_evaluator.py` 用 `RanDataPlanEvaluator` 绑定策略，在 `demo/task_t_precheck.py` 绑定 `RanDataTaskTPrecheck`。
 
-**如何验证：** 服务端 trace 出现四个工具 span；Task 以 `COMPLETED` 结束并带报告 artifact。
+执行器不只通过工具 artifact 上报执行结果：`apply_energy_saving_plan` 成功后会发一条 `WORKING` 状态消息，
+包含已下发的方案、小区、时段、节能率和节能量；`generate_energy_saving_report` 成功后会发一条带报告摘要的
+`WORKING` 状态消息。报告 artifact 的 Task-T 文本保持原 Demo 的分段结构（基本信息、明细、节能量、KPI 影响），
+终态保持不变。
+
+**如何验证：** 服务端 trace 出现四个工具 span；Task 依次带 apply 结果通知、report 就绪通知、报告
+artifact，并以 `COMPLETED` 结束。
 
 ### 4.4 任务存储与状态
 

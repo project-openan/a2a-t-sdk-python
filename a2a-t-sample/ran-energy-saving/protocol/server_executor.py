@@ -92,6 +92,50 @@ DATA_COLLECTION_COMPLETED_TEXT: Final[str] = (
 #: Final text of a completed Task.
 FINAL_TASK_TEXT: Final[str] = "RAN energy-saving task completed."
 
+#: Business task label used by every progress notification of the reference demo.
+TASK_LABEL: Final[str] = "Multi-RAT Intelligent Network Energy Saving"
+
+
+def _notification_text(region: object, progress: str) -> str:
+    """Build one ``Region; Task; Progress`` status message like the reference demo."""
+    region_text = str(region) if region not in (None, "") else "unknown"
+    return f"Region: {region_text}; Task: {TASK_LABEL}; Progress: {progress}"
+
+
+def _rate_text(value: object) -> str:
+    """Render a plan rate without doubling a percent sign or printing ``35.0%``."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{value:g}%"
+    return format_rate_percent(value)
+
+
+def _apply_completed_text(result: Mapping[str, object]) -> str:
+    """Render the apply result as an A2A status notification."""
+    plan_id = str(result.get("plan_id") or "the plan")
+    cell_id = str(result.get("cell_id") or "the cell")
+    cell_name = result.get("cell_name")
+    window = str(result.get("window") or "")
+    rate = _rate_text(result.get("target_rate"))
+    saved = result.get("estimated_saving_kwh")
+    cell = f"{cell_id} ({cell_name})" if isinstance(cell_name, str) and cell_name else cell_id
+    progress = f"plan {plan_id} was applied to cell {cell}"
+    if window:
+        progress += f" for {window}"
+    progress += f" at {rate} energy saving"
+    if isinstance(saved, (int, float)) and not isinstance(saved, bool):
+        progress += f", estimated {float(saved):.2f} kWh saved"
+    return _notification_text(result.get("region"), progress + ".")
+
+
+def _report_ready_text(result: Mapping[str, object]) -> str:
+    """Render the report result as an A2A status notification."""
+    summary = result.get("summary")
+    progress = "the energy-saving report is ready."
+    if isinstance(summary, str) and summary:
+        progress = f"the energy-saving report is ready. {summary}"
+    return _notification_text(result.get("region"), progress)
+
+
 #: Trace stages.
 EXECUTOR_STAGE: Final[str] = "server_execution_agent"
 PLANNER_STAGE: Final[str] = "server_planner"
@@ -156,12 +200,45 @@ def _negotiation_context(context: RequestContext) -> dict[str, object] | None:
     return negotiation_context_metadata(session) if session is not None else None
 
 
+def _report_task_t_text(report: Mapping[str, object]) -> str:
+    """Render the report artifact metadata in the reference demo's Task-T report shape."""
+    energy = report.get("energy")
+    energy_map = energy if isinstance(energy, Mapping) else {}
+    kpi = report.get("kpi_impact")
+    plan_id = str(report.get("plan_id") or "unknown")
+    cell_id = str(report.get("cell_id") or "unknown")
+    cell_name = report.get("cell_name")
+    cell = f"{cell_id} ({cell_name})" if isinstance(cell_name, str) and cell_name else cell_id
+    window = str(report.get("window") or "unknown")
+    rate = _rate_text(energy_map.get("saving_percent") or report.get("target_rate"))
+    lines = [
+        "1. Basic information about the intent execution result",
+        f"- Region: {report.get('region') or 'unknown'}",
+        f"- Plan: {plan_id} ({report.get('status') or 'unknown'}) for cell {cell}",
+        f"- Window: {window}; energy-saving target: {rate}",
+        "2. Details",
+    ]
+    saved = energy_map.get("saved_kwh")
+    baseline = energy_map.get("baseline_kwh")
+    if isinstance(saved, (int, float)) and isinstance(baseline, (int, float)):
+        lines.append(
+            f"- Energy saving: {float(saved):.2f} kWh of {float(baseline):.2f} kWh baseline"
+        )
+    if isinstance(kpi, Mapping) and kpi:
+        lines.append(f"- KPI impact: {json.dumps(kpi, ensure_ascii=False, sort_keys=True)}")
+    summary = report.get("summary")
+    if isinstance(summary, str) and summary:
+        lines.extend(["", summary])
+    return "\n".join(lines)
+
+
 def _report_metadata(
     context: RequestContext,
     summary: str,
     negotiation_context: dict[str, object] | None,
     *,
     pure: bool = False,
+    report: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Build the metadata stamped on the final report artifact and status.
 
@@ -174,7 +251,7 @@ def _report_metadata(
         metadata[SAMPLE_RUN_ID_METADATA_KEY] = run_id
     if pure:
         return metadata
-    metadata[TASK_T_EXTENSION_URI] = summary
+    metadata[TASK_T_EXTENSION_URI] = _report_task_t_text(report) if report is not None else summary
     metadata[TEMPLATE_URI_METADATA_KEY] = TASK_TEMPLATE_URI
     if negotiation_context is not None:
         metadata[NEGOTIATION_CONTEXT_METADATA_KEY] = negotiation_context
@@ -807,6 +884,26 @@ class LangGraphTaskExecutor(AgentExecutor):
                         )
                         steps.append(step)
                         _emit_tool_span(context, task_id, execution_span_id, step)
+                        if step.result.get("ok") is True and name == APPLY_TOOL_NAME:
+                            # The apply tool result is not only an artifact: the reference demo
+                            # reports the execution result as an A2A status message, so the OSS
+                            # side receives a real notification instead of inferring it from the
+                            # tool artifact.
+                            await updater.update_status(
+                                TaskState.TASK_STATE_WORKING,
+                                message=updater.new_agent_message(
+                                    [Part(text=_apply_completed_text(step.result))]
+                                ),
+                            )
+                        elif step.result.get("ok") is True and name == report_tool_name:
+                            # Same for the final report: publish its summary as a notification
+                            # before the report artifact and the terminal status.
+                            await updater.update_status(
+                                TaskState.TASK_STATE_WORKING,
+                                message=updater.new_agent_message(
+                                    [Part(text=_report_ready_text(step.result))]
+                                ),
+                            )
                         if name == "get_cell_energy_profile":
                             await updater.update_status(
                                 TaskState.TASK_STATE_WORKING,
@@ -858,7 +955,11 @@ class LangGraphTaskExecutor(AgentExecutor):
         report = report_steps[-1].result
         summary = str(report.get("summary", ""))
         metadata = _report_metadata(
-            context, summary, negotiation_context, pure=self._pure
+            context,
+            summary,
+            negotiation_context,
+            pure=self._pure,
+            report=report,
         )
         report_part = Part()
         ParseDict(report, report_part.data)

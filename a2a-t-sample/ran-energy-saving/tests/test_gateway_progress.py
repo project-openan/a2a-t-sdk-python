@@ -30,6 +30,38 @@ def test_maps_the_accepted_proposal_decision_and_execution_milestones() -> None:
     assert execution is not None and execution.metadata["phase"] == "execution"
 
 
+def test_maps_apply_and_report_artifacts_to_execution_milestones() -> None:
+    mapper = GatewayProgressMapper()
+    mapper.map({"type": "run_started", "runId": "run-1"})
+
+    applied = mapper.map(
+        _event(
+            eventKind="artifact",
+            phase="execution",
+            detail={"toolName": "apply_energy_saving_plan"},
+        )
+    )
+    report = mapper.map(_event(eventKind="artifact", phase="report"))
+
+    assert applied is not None and applied.metadata["phase"] == "execution"
+    assert applied.metadata["state"] == "applied"
+    assert "applied the energy-saving plan" in applied.text
+    assert report is not None and report.metadata["phase"] == "report"
+    assert "published the energy-saving report" in report.text
+    # Both milestones are deduplicated independently.
+    assert (
+        mapper.map(
+            _event(
+                eventKind="artifact",
+                phase="execution",
+                detail={"toolName": "apply_energy_saving_plan"},
+            )
+        )
+        is None
+    )
+    assert mapper.map(_event(eventKind="artifact", phase="report")) is None
+
+
 def test_ignores_trace_artifacts_and_repeated_milestones() -> None:
     mapper = GatewayProgressMapper()
     mapper.map({"type": "run_started", "runId": "run-1"})

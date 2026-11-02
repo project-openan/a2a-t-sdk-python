@@ -127,6 +127,14 @@ function eventScene(entry, state, frame) {
       if (label.includes("Data collection completed")) {
         return scene("collect-done", 1800, frame);
       }
+      // The RAN now reports the apply result and the ready report as status notifications. They
+      // are wire evidence: the apply artifact already drives the execute beat, and the report
+      // artifact drives the report beat. Treating these as generic WORKING updates would replay
+      // the apply scene after execution.
+      if (label.includes("Progress: plan ")) return scene("trace", 0, frame);
+      if (label.includes("Progress: the energy-saving report is ready.")) {
+        return scene("trace", 0, frame);
+      }
       if (taskState === "TASK_STATE_INPUT_REQUIRED" || label.includes("INPUT_REQUIRED")) {
         // The MIE review is a human gate by definition. The status only names the state; the
         // plan details arrive in the approval trace span, which the page applies while held.

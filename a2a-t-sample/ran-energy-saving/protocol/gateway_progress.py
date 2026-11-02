@@ -24,8 +24,12 @@ _EXECUTION_STATES: Final[frozenset[str]] = frozenset(
     {"TASK_STATE_SUBMITTED", "TASK_STATE_WORKING"}
 )
 
+#: Apply artifact marker of the sample's NMS tool. Kept local so this mapper does not import the
+#: LangGraph executor module (and its tool stack) just for one constant.
+_APPLY_TOOL_NAME: Final[str] = "apply_energy_saving_plan"
+
 #: Upper bound of progress updates per inbound Task.
-MAX_PROGRESS_EVENTS: Final[int] = 8
+MAX_PROGRESS_EVENTS: Final[int] = 10
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,8 @@ class GatewayProgressMapper:
             return self._decision(entry)
         if event_kind == "status":
             return self._execution(entry)
+        if event_kind == "artifact":
+            return self._artifact(entry)
         return None
 
     def _accept(self, message: Mapping[str, object]) -> ProgressUpdate | None:
@@ -142,6 +148,35 @@ class GatewayProgressMapper:
                 "clientRunId": self._run_id,
             },
         )
+
+    def _artifact(self, entry: Mapping[str, object]) -> ProgressUpdate | None:
+        """Map the apply and report artifacts to the two execution milestones callers wait for.
+
+        Other artifacts (profiles, evaluations, trace payloads) stay internal: forwarding every
+        tool result would leak NMS internals and flood the outer Task.
+        """
+        if str(entry.get("phase") or "") == "report":
+            return self._build(
+                key="execution:report",
+                text="The RAN server published the energy-saving report.",
+                metadata={
+                    "phase": "report",
+                    "clientRunId": self._run_id,
+                },
+            )
+        detail = entry.get("detail")
+        tool_name = detail.get("toolName") if isinstance(detail, Mapping) else None
+        if tool_name == _APPLY_TOOL_NAME:
+            return self._build(
+                key="execution:applied",
+                text="The RAN server applied the energy-saving plan.",
+                metadata={
+                    "phase": "execution",
+                    "state": "applied",
+                    "clientRunId": self._run_id,
+                },
+            )
+        return None
 
     def _build(
         self,

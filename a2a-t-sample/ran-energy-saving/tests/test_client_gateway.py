@@ -93,6 +93,23 @@ class FakeRuntime:
                     "state": "TASK_STATE_WORKING",
                 }
             )
+            event_sink(
+                {
+                    "kind": "artifact",
+                    "task_id": "outbound-task",
+                    "context_id": "outbound-ctx",
+                    "name": "tool result",
+                    "metadata": {"toolName": "apply_energy_saving_plan"},
+                }
+            )
+            event_sink(
+                {
+                    "kind": "artifact",
+                    "task_id": "outbound-task",
+                    "context_id": "outbound-ctx",
+                    "name": "energy saving intent report",
+                }
+            )
         propose = NegotiationProposeView(
             negotiation_id="neg-1",
             kind="information",
@@ -357,7 +374,7 @@ async def test_gateway_publishes_progress_before_the_final_report(
         and event.status.HasField("message")
         and event.status.message.HasField("metadata")
     }
-    assert {"dispatch", "negotiation", "execution"} <= phases
+    assert {"dispatch", "negotiation", "execution", "report"} <= phases
 
     progress_indexes = [
         index for index, event in enumerate(queue.events) if _is_phase_status(event, "negotiation")
@@ -466,7 +483,7 @@ async def test_gateway_streams_progress_before_the_report(
         and "message" in payload["statusUpdate"]["status"]
         and "metadata" in payload["statusUpdate"]["status"]["message"]
     ]
-    assert {"dispatch", "negotiation", "execution"} <= set(phases)
+    assert {"dispatch", "negotiation", "execution", "report"} <= set(phases)
     assert any(
         payload.get("statusUpdate", {}).get("status", {}).get("state")
         == "TASK_STATE_COMPLETED"

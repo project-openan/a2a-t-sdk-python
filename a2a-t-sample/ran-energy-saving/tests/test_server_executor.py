@@ -245,7 +245,9 @@ async def test_langgraph_executor_publishes_task_artifacts_and_report(
     report = reports[0]
     assert report.artifact.metadata[TEMPLATE_URI_METADATA_KEY] == TASK_TEMPLATE_URI
     assert _metadata(report.artifact.metadata)[NEGOTIATION_CONTEXT_METADATA_KEY]["round"] == 2
-    assert report.artifact.metadata[TASK_T_EXTENSION_URI]
+    task_t_report = str(report.artifact.metadata[TASK_T_EXTENSION_URI])
+    assert "1. Basic information about the intent execution result" in task_t_report
+    assert "Energy saving:" in task_t_report
     assert report.artifact.parts[0].HasField("data")
     assert report.artifact.parts[1].text
 
@@ -435,6 +437,12 @@ async def test_langgraph_executor_applies_only_after_approval(
     assert any("Data collection started" in text for text in status_texts)
     assert any("Data collection in progress" in text for text in status_texts)
     assert any("Data collection completed" in text for text in status_texts)
+    # Apply and report are reported as A2A notifications, not only as tool artifacts.
+    assert any(
+        "Progress: plan " in text and "was applied to cell cell-001" in text
+        for text in status_texts
+    )
+    assert any("Progress: the energy-saving report is ready." in text for text in status_texts)
     artifacts = [event for event in events if isinstance(event, TaskArtifactUpdateEvent)]
     assert any(event.artifact.name == REPORT_ARTIFACT_NAME for event in artifacts)
 

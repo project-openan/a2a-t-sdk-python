@@ -345,14 +345,17 @@ small, stable set of internal milestones to outer `WORKING` status updates:
 | negotiation proposal | Negotiation round N: the RAN server proposed an `<kind>` negotiation. | `phase=negotiation`, `round`, `performative`, `kind` |
 | client decision | Negotiation round N: the client chose `<action>`. | `phase=negotiation`, `round`, `action` |
 | RAN task started | The RAN server accepted the task and started execution. | `phase=execution`, `state` |
+| plan applied | The RAN server applied the energy-saving plan. | `phase=execution`, `state=applied` |
+| report published | The RAN server published the energy-saving report. | `phase=report` |
 
 Both delivery paths carry the same events: `message:stream` forwards them on the open stream, and a
 `message:send` caller receives them through a webhook registered inline
 (`configuration.taskPushNotificationConfig`) or with `POST /tasks/{id}/pushNotificationConfigs`.
 The final report artifact and the terminal status are unchanged.
 
-Limits: at most 8 progress updates per Task, deduplicated by milestone. Trace spans, prompts, tool
-results and raw proposal content are never forwarded.
+Limits: at most 10 progress updates per Task, deduplicated by milestone. Trace spans, prompts, tool
+results and raw proposal content are never forwarded; only the apply and report artifacts are
+mapped, so profiles and evaluations stay internal.
 
 The webhook URL is validated (absolute http(s), no embedded credentials; plain HTTP only on
 loopback). Registrations live in the gateway Task database table `push_notification_configs`
@@ -490,7 +493,14 @@ initial messages, tool-result parser). The demo implementation is
 to `RanDataPlanEvaluator` in `demo/plan_evaluator.py` and the precheck to
 `RanDataTaskTPrecheck` in `demo/task_t_precheck.py`.
 
-**Verify:** the server trace shows four tool spans; the Task ends `COMPLETED` with a report artifact.
+The executor reports execution through A2A, not only through tool artifacts: after a successful
+`apply_energy_saving_plan` it publishes a `WORKING` status message with the applied plan, cell,
+window, rate and saving, and after `generate_energy_saving_report` it publishes a `WORKING` status
+message with the report summary. The report artifact keeps the structured Task-T report text (basic
+information, details, energy saving, KPI impact) and the terminal status follows unchanged.
+
+**Verify:** the server trace shows four tool spans; the Task carries an apply-result notification, a
+report-ready notification, the report artifact, and ends `COMPLETED`.
 
 ### 4.4 Task store and state
 
