@@ -105,15 +105,15 @@
             <rect x="556" y="287" width="88" height="16" fill="#fff"/>
             <text class="div-lbl" x="600" y="299" text-anchor="middle">interconnection</text>
             <text class="lane-lbl" x="600" y="346" text-anchor="middle" id="lane-status-label">← status, questions</text>
-            <path id="lane-request" class="lane" d="M198 275 L262 275" marker-end="url(#arrow)"/>
-            <path id="lane-return" class="lane" d="M264 315 L200 315" marker-end="url(#arrow)"/>
-            <path id="lane-task" class="lane" d="M480 268 L718 268" marker-end="url(#arrow)"/>
-            <path id="lane-status" class="lane" d="M720 322 L482 322" marker-end="url(#arrow)"/>
-            <path id="lane-mie-apply" class="lane" d="M936 433 L966 433 L966 340 L996 340" marker-end="url(#arrow)"/>
-            <path id="lane-data" class="lane" d="M996 316 L938 316" marker-end="url(#arrow)"/>
-            <path id="lane-approval" class="lane dash" d="M108 402 L108 433 L718 433" marker-end="url(#arrow)"/>
-            <path id="lane-mie-request" class="lane dash" d="M720 340 L996 340" marker-end="url(#arrow)"/>
-            <line class="lane dash" x1="828" y1="401" x2="828" y2="411"/>
+            <path id="lane-request" class="lane" data-groups="request,return" d="M198 275 L262 275" marker-end="url(#arrow)"/>
+            <path id="lane-return" class="lane" data-groups="request,return" d="M264 315 L200 315" marker-end="url(#arrow)"/>
+            <path id="lane-task" class="lane" data-groups="task,status" d="M480 268 L718 268" marker-end="url(#arrow)"/>
+            <path id="lane-status" class="lane" data-groups="task,status" d="M720 322 L482 322" marker-end="url(#arrow)"/>
+            <path id="lane-mie-apply" class="lane" data-groups="mie,data" d="M936 433 L966 433 L966 340 L996 340" marker-end="url(#arrow)"/>
+            <path id="lane-data" class="lane" data-groups="mie,data" d="M996 316 L938 316" marker-end="url(#arrow)"/>
+            <path id="lane-approval" class="lane dash" data-groups="approval" d="M108 402 L108 433 L718 433" marker-end="url(#arrow)"/>
+            <path id="lane-mie-request" class="lane dash" data-groups="approval" d="M720 340 L996 340" marker-end="url(#arrow)"/>
+            <line class="lane dash" data-groups="mie" x1="828" y1="401" x2="828" y2="411"/>
             <text class="lane-lbl" x="400" y="450" text-anchor="middle" id="lane-approval-label">engineer approval before any change</text>
           </svg>
 
@@ -122,7 +122,7 @@
           <div class="bubble" id="b-nms"></div>
           <div class="bubble" id="b-cells"></div>
 
-          <div class="actor" id="a-eng">
+          <div class="actor" id="a-eng" data-groups="request,return,approval">
             <div class="actor-head">
               <svg class="actor-icon" viewBox="0 0 40 40" aria-hidden="true">
                 <rect class="icon-bg icon-bg-eng" width="40" height="40" fill="#000"/>
@@ -134,7 +134,7 @@
             <div class="actor-state" id="s-eng">Not started</div>
           </div>
 
-          <div class="actor" id="a-oss">
+          <div class="actor" id="a-oss" data-groups="request,return,task,status,approval">
             <div class="actor-head">
               <svg class="actor-icon" viewBox="0 0 40 40" aria-hidden="true">
                 <rect class="icon-bg icon-bg-oss" width="40" height="40" fill="#FF7900"/>
@@ -149,7 +149,7 @@
             <div class="actor-state" id="s-oss">Waiting for a request</div>
           </div>
 
-          <div class="actor" id="a-nms">
+          <div class="actor" id="a-nms" data-groups="task,status,mie,data,approval">
             <div class="actor-head">
               <svg class="actor-icon" viewBox="0 0 40 40" aria-hidden="true">
                 <rect class="icon-bg icon-bg-nms" width="40" height="40" fill="#4BB4E6"/>
@@ -172,7 +172,7 @@
             <i id="approval-state">idle</i>
           </div>
 
-          <div class="actor" id="a-cells">
+          <div class="actor" id="a-cells" data-groups="mie,data">
             <div class="cells-clock">
               <b id="cells-clock-main">Region A</b>
               <span id="cells-clock-sub">test cluster</span>

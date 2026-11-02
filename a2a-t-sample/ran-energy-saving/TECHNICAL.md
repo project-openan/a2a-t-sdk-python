@@ -96,7 +96,8 @@ The presentation supports two brand palettes. `--brand orange|huawei` (or
 the choice in `localStorage`; `?brand=` overrides both for one page load. The CSS keeps a semantic
 token layer: **orange** maps to the reference-demo values, while **huawei** remaps the canvas,
 cards, text and role colors and adds the low-noise outlined stage (warm canvas, 1px translucent
-borders, core/aggregation/leaf node strokes).
+borders, core/aggregation/leaf node strokes). Hovering an actor or lane in the Huawei stage dims
+unrelated elements to 15% and thickens the adjacent links.
 
 Pick a scenario, edit the network operations engineer's request if needed, and start it. The stage
 follows the real run through nine steps: request → structured Task-T → approval 1 (intent) → Task-T

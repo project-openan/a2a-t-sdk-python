@@ -78,6 +78,7 @@
   --role-ran: #6a9bcc;
   --role-negotiation: #d97757;
   --role-success: #558a42;
+  --role-success-strong: #3f6b31;
   --role-danger: #d92128;
   --role-idle: #b0aea5;
   --node-core: #2a78d6;
@@ -1301,3 +1302,71 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 [data-brand="huawei"] .steps li.done button::before,
 [data-brand="huawei"] .steps li.now button::before { background: var(--accent); }
 [data-brand="huawei"] .steps li.ask button::before { background: var(--role-negotiation); }
+
+/* ---------- Huawei phase 2: node hierarchy, link semantics and adjacency focus ---------- */
+[data-brand="huawei"] #a-eng {
+  border-width: 1px;
+  border-color: var(--border);
+}
+[data-brand="huawei"] #a-oss {
+  border-width: 2px;
+  border-color: var(--node-core);
+}
+[data-brand="huawei"] #a-nms {
+  border-width: 1.5px;
+  border-color: var(--node-aggregation);
+}
+[data-brand="huawei"] #a-cells {
+  border-width: 1px;
+  border-color: var(--node-leaf);
+}
+[data-brand="huawei"] #a-oss.active,
+[data-brand="huawei"] #a-oss.wait { border-width: 2px; }
+[data-brand="huawei"] #a-nms.active,
+[data-brand="huawei"] #a-nms.wait { border-width: 1.5px; }
+
+[data-brand="huawei"] #lane-request,
+[data-brand="huawei"] #lane-return { stroke: var(--role-idle); }
+[data-brand="huawei"] #lane-task { stroke: var(--role-oss); }
+[data-brand="huawei"] #lane-status { stroke: var(--role-ran); }
+[data-brand="huawei"] #lane-mie-apply { stroke: var(--role-success); }
+[data-brand="huawei"] #lane-data { stroke: var(--role-ran); }
+[data-brand="huawei"] #lane-approval,
+[data-brand="huawei"] #lane-mie-request { stroke: var(--role-negotiation); stroke-dasharray: 5 4; }
+
+[data-brand="huawei"] .stage .actor {
+  transition: opacity .18s, border-color .25s, box-shadow .25s;
+}
+[data-brand="huawei"] .stage .lane {
+  transition: opacity .18s, stroke .15s, stroke-width .18s, filter .18s;
+}
+[data-brand="huawei"] .stage.focusing .actor:not(.is-focus):not(.is-adjacent),
+[data-brand="huawei"] .stage.focusing .lane:not(.is-focus):not(.is-adjacent) {
+  opacity: .15;
+}
+[data-brand="huawei"] .stage.focusing .lane.is-adjacent {
+  stroke-width: 3.5;
+  filter: drop-shadow(0 0 8px rgba(31, 30, 29, .16));
+}
+[data-brand="huawei"] .stage.focusing .actor.is-adjacent {
+  box-shadow: var(--card-shadow), 0 0 0 3px var(--accent-soft);
+}
+
+/* Evidence panels: syntax, state text and semantic tags. */
+[data-brand="huawei"] .say-detail .error { color: var(--role-danger); }
+[data-brand="huawei"] .badge-confirmed { background: var(--role-success-strong); color: #fff; }
+[data-brand="huawei"] .packet.cfg { background: var(--role-success-strong); color: #fff; }
+[data-brand="huawei"] .approval.approved i { background: var(--role-success-strong); color: #fff; }
+[data-brand="huawei"] .below-card .hitl { background: var(--role-success-strong); color: #fff; }
+[data-brand="huawei"] .wire-json-string { color: var(--role-success-strong); }
+[data-brand="huawei"] .wire-json-number,
+[data-brand="huawei"] .wire-json-bool { color: var(--accent-strong); }
+[data-brand="huawei"] .tag.oss { background: var(--accent-strong); color: #fff; }
+[data-brand="huawei"] .tag.a2at { background: var(--accent-strong); color: #fff; }
+[data-brand="huawei"] .tag.nms { background: var(--role-ran); color: var(--text); }
+[data-brand="huawei"] .tag.mie { background: var(--role-negotiation); color: var(--text); }
+[data-brand="huawei"] .tag.cells { background: var(--role-success-strong); color: #fff; }
+[data-brand="huawei"] .ch-axis { stroke: var(--text-secondary); }
+[data-brand="huawei"] .ch-grid { stroke: var(--border); }
+[data-brand="huawei"] .ch-txt { fill: var(--text-secondary); }
+[data-brand="huawei"] .ch-val { fill: var(--text); }

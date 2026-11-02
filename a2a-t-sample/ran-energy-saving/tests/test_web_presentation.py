@@ -168,6 +168,24 @@ async def test_pure_meta_exposes_its_scenarios_and_mie(
     assert 'id="protocol-switch"' not in page
 
 
+def test_huawei_brand_css_keeps_the_semantic_and_focus_layers() -> None:
+    css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")
+
+    for marker in (
+        '[data-brand="huawei"]',
+        "--canvas: #faf9f5",
+        "--accent-strong: #1f5faf",
+        "--role-negotiation: #d97757",
+        "--role-success: #558a42",
+        "--role-success-strong: #3f6b31",
+        "--role-danger: #d92128",
+        ".stage.focusing",
+        "#a-oss",
+        "#lane-approval",
+    ):
+        assert marker in css, marker
+
+
 async def test_unknown_ui_mode_is_rejected(offline_config: SampleConfig, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Unsupported ui mode"):
         create_app(offline_config, runs_dir=tmp_path, ui_mode="cinema")
