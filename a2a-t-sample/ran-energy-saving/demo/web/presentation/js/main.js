@@ -174,6 +174,7 @@ const els = {
   legendCfg: byId("legend-cfg"),
   legendData: byId("legend-data"),
   splitter: byId("splitter"),
+  traceSplitter: byId("trace-splitter"),
 };
 
 const ui = {
@@ -371,6 +372,7 @@ function bindStaticEvents() {
     els.rowsHidden = open;
   });
   bindSplitter();
+  bindTraceSplitter();
   document.addEventListener("keydown", (event) => {
     if (event.target.closest && event.target.closest("textarea,select,input")) return;
     if (event.key === "ArrowRight" && !els.next.disabled && !els.next.hidden) {
@@ -1701,6 +1703,82 @@ function bindSplitter() {
       event.preventDefault();
       setWidth(current - 30, true);
     }
+  });
+}
+
+/** Resize the session-trace panel; the right column itself no longer scrolls as a whole. */
+function bindTraceSplitter() {
+  const splitter = els.traceSplitter;
+  const panel = document.querySelector("#p-trace");
+  const right = document.querySelector(".right");
+  if (!splitter || !panel || !right) return;
+  const key = "a2at-presentation-trace-px";
+  const MIN = 140;
+  const maxHeight = () => Math.max(MIN, right.getBoundingClientRect().height * 0.62);
+  const setHeight = (px, save) => {
+    const value = Math.max(MIN, Math.min(maxHeight(), px));
+    right.style.setProperty("--trace-h", `${value.toFixed(0)}px`);
+    if (save) {
+      try {
+        localStorage.setItem(key, String(value));
+      } catch {
+        /* storage is optional */
+      }
+    }
+  };
+  try {
+    const saved = Number(localStorage.getItem(key));
+    if (Number.isFinite(saved) && saved >= MIN) setHeight(saved, false);
+  } catch {
+    /* storage is optional */
+  }
+  let dragging = false;
+  let startY = 0;
+  let startHeight = 0;
+  splitter.addEventListener("pointerdown", (event) => {
+    dragging = true;
+    startY = event.clientY;
+    startHeight = panel.getBoundingClientRect().height;
+    try {
+      splitter.setPointerCapture(event.pointerId);
+    } catch {
+      /* pointer capture is best effort */
+    }
+    splitter.classList.add("drag");
+    document.body.classList.add("resizing-y");
+    event.preventDefault();
+  });
+  splitter.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    setHeight(startHeight - (event.clientY - startY), false);
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    splitter.classList.remove("drag");
+    document.body.classList.remove("resizing-y");
+    setHeight(panel.getBoundingClientRect().height, true);
+  };
+  splitter.addEventListener("pointerup", end);
+  splitter.addEventListener("pointercancel", end);
+  splitter.addEventListener("dblclick", () => {
+    right.style.removeProperty("--trace-h");
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* storage is optional */
+    }
+  });
+  splitter.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    const delta = event.key === "ArrowUp" ? 24 : -24;
+    setHeight(panel.getBoundingClientRect().height + delta, true);
+  });
+  // A narrower/shorter window must not leave the trace larger than its rail.
+  window.addEventListener("resize", () => {
+    const current = panel.getBoundingClientRect().height;
+    if (current > maxHeight()) setHeight(maxHeight(), false);
   });
 }
 

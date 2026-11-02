@@ -84,6 +84,9 @@
   --node-core: #2a78d6;
   --node-aggregation: #6a9bcc;
   --node-leaf: #87867f;
+  /* Two quiet but distinct stage grounds: warm for the OSS side, cool for the RAN side. */
+  --zone-it: #f7f2e9;
+  --zone-net: #edf4fa;
   /* Legacy aliases used by the Orange-era rules. */
   --orange: var(--accent);
   --orange-text: var(--accent-strong);
@@ -199,8 +202,10 @@ button { cursor: pointer; }
   padding: 12px max(16px, env(safe-area-inset-left, 0px));
 }
 @media (min-width: 1100px) {
-  .main { height: calc(100vh - var(--top-h)); }
-  .left, .right { min-height: 0; overflow: auto; }
+  .main { height: calc(100vh - var(--top-h)); overflow: hidden; }
+  .left { min-height: 0; overflow: auto; }
+  /* The right column is fixed; each panel scrolls on its own instead of the whole rail. */
+  .right { min-height: 0; overflow: hidden; }
 }
 .left { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
 .right { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
@@ -218,6 +223,28 @@ button { cursor: pointer; }
 .splitter:hover::before, .splitter.drag::before, .splitter:focus-visible::before { background: var(--orange); }
 .splitter:hover::after, .splitter.drag::after, .splitter:focus-visible::after { border-color: var(--orange); background: var(--orange); }
 body.resizing { cursor: col-resize; user-select: none; }
+
+.trace-splitter {
+  flex: none;
+  height: 12px;
+  cursor: row-resize;
+  position: relative;
+  touch-action: none;
+  outline-offset: -2px;
+}
+.trace-splitter::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 50%;
+  height: 2px; transform: translateY(-50%); background: var(--g200); transition: background .15s;
+}
+.trace-splitter::after {
+  content: ""; position: absolute; top: 50%; left: 50%;
+  width: 48px; height: 8px; transform: translate(-50%, -50%);
+  background: var(--white); border: 2px solid var(--g300);
+  transition: border-color .15s, background .15s;
+}
+.trace-splitter:hover::before, .trace-splitter.drag::before, .trace-splitter:focus-visible::before { background: var(--orange); }
+.trace-splitter:hover::after, .trace-splitter.drag::after, .trace-splitter:focus-visible::after { border-color: var(--orange); background: var(--orange); }
+body.resizing-y { cursor: row-resize; user-select: none; }
 
 /* ---------- toolbar + presets + request drawer ---------- */
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
@@ -750,9 +777,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 .panel > header .sub { font-size: 11px; color: var(--g700); }
 #p-nego > header { border-bottom-color: var(--orange); }
 .panel .body { padding: 9px 11px; display: flex; flex-direction: column; gap: 7px; min-width: 0; min-height: 0; overflow: auto; }
-#p-intent { flex: 0 0 auto; }
-#p-nego { flex: 1.8 1 0; min-height: 280px; }
-#p-trace { flex: 0.6 1 0; min-height: 150px; }
+#p-intent { flex: 0 1 auto; min-height: 0; max-height: 38%; }
+#p-nego { flex: 1 1 0; min-height: 180px; }
+#p-trace { flex: 0 0 var(--trace-h, 260px); min-height: 140px; max-height: 62%; }
 #p-trace .body { padding: 0; }
 .panel-toggle { all: unset; cursor: pointer; display: flex; align-items: center; gap: 6px; }
 .panel-toggle::before { content: "▾"; font-size: 11px; color: var(--g700); }
@@ -999,9 +1026,11 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 }
 @media (max-width: 1099px) {
   .main { grid-template-columns: minmax(0, 1fr); row-gap: 14px; }
-  .splitter { display: none; }
+  .splitter, .trace-splitter { display: none; }
   .left, .right { overflow: visible; }
+  #p-intent { max-height: none; }
   #p-nego { min-height: 0; }
+  #p-trace { flex: 0 0 auto; min-height: 0; max-height: none; }
   .turns, .wire-code { max-height: 340px; }
   .below-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .below-card:nth-child(3) { border-left: 0; }
@@ -1021,6 +1050,9 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
   .say { padding: 8px 11px; gap: 7px; }
   .say-text p { font-size: 14.5px; }
   .left { gap: 7px; }
+  #p-intent { max-height: 30%; }
+  #p-nego { min-height: 150px; }
+  .right { --trace-h: 200px; }
 }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
@@ -1121,8 +1153,8 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 }
 [data-brand="huawei"] .controls { border-top-color: var(--border); }
 [data-brand="huawei"] .stage { background: var(--canvas); }
-[data-brand="huawei"] .zone-it,
-[data-brand="huawei"] .zone-net { fill: var(--surface-subtle); }
+[data-brand="huawei"] .zone-it { fill: var(--zone-it); }
+[data-brand="huawei"] .zone-net { fill: var(--zone-net); }
 [data-brand="huawei"] .zone-lbl { fill: var(--text-secondary); }
 [data-brand="huawei"] .divider { stroke: var(--border-strong); stroke-width: 1; }
 [data-brand="huawei"] .chan {

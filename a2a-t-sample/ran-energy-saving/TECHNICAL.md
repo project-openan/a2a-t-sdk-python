@@ -107,7 +107,9 @@ engineer would type; the OSS Agent first builds its own structured intent, and t
 wire mapping at the send step. After task creation the RAN Agent publishes `SUBMITTED`, strategy
 working, strategy ready and task started before the collection notifications. The right column shows what the OSS Agent understood
 (with the 24-hour throughput chart), the negotiation turns, an **On the wire** inspector, and the
-merged session trace. The inspector shows the real A2A request headers and JSON body with the
+merged session trace. The right column stays fixed to the viewport and each panel scrolls on its
+own; drag the grip above the session trace to make the trace taller (double-click resets it and the
+height is remembered). The inspector shows the real A2A request headers and JSON body with the
 Task-T metadata; its **Plain A2A** toggle replaces the Task-T fields with one natural-language
 sentence and drops the extension header. It is a format comparison only, not a second run. Every
 trace row is clickable: a message row opens it in the inspector, a span row shows its fields, and a

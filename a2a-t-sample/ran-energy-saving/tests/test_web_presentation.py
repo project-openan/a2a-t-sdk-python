@@ -81,6 +81,7 @@ async def test_root_serves_the_presentation_shell(client: httpx.AsyncClient) -> 
         'id="booth-title"',
         'id="footer"',
         'id="trace-rows"',
+        'id="trace-splitter"',
     ):
         assert marker in page, marker
     # The protocol is chosen at startup; the page has no in-page switch.
@@ -182,6 +183,10 @@ def test_huawei_brand_css_keeps_the_semantic_and_focus_layers() -> None:
         ".stage.focusing",
         "#a-oss",
         "#lane-approval",
+        "--zone-it: #f7f2e9",
+        "--zone-net: #edf4fa",
+        '[data-brand="huawei"] .zone-it',
+        '[data-brand="huawei"] .zone-net',
     ):
         assert marker in css, marker
 
