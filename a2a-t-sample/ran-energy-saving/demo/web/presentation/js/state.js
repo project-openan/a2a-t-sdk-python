@@ -407,7 +407,12 @@ function applyTrace(state, span) {
   const detail = isObject(span.detail) ? span.detail : null;
   // The second Task-T of a two-phase run is the Modify continuation. Its prompt renders before
   // the send, so the phase boundary is the task_modify trace, not the second message.
-  if (span.phase === "task_modify" && state.taskTSent) startModifyPhase(state);
+  if (
+    (span.phase === "task_modify" || (detail && detail.samplePhase === "modify")) &&
+    state.taskTSent
+  ) {
+    startModifyPhase(state);
+  }
   if (kind === "message_sent" && detail && detail.performative === "TASK_T") {
     state.taskTSent = true;
     if (detail.samplePhase === "baseline" || detail.samplePhase === "modify") {

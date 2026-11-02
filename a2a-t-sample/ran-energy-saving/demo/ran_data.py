@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import date
 from functools import lru_cache
@@ -623,6 +624,75 @@ def modify_plan(plan_id: str, cell_id: str, window: str, target_rate: str) -> En
     )
     _PLANS[plan.plan_id] = plan
     return plan
+
+
+def restore_plan(payload: Mapping[str, object]) -> EnergySavingPlan | None:
+    """Restore one plan from its report or tool-artifact payload.
+
+    The plan store is process-local, while the Task itself is durable. A two-phase Modify may run
+    after a restart or a test reset, so the baseline plan is rebuilt from the Task artifact before
+    the modification tool runs. An already stored plan wins: the artifact is a recovery source, not
+    an overwrite of newer state.
+    """
+    plan_id = payload.get("plan_id")
+    if not isinstance(plan_id, str) or not plan_id:
+        return None
+    existing = _PLANS.get(plan_id)
+    if existing is not None:
+        return existing
+    cell_id = payload.get("cell_id")
+    if not isinstance(cell_id, str) or not cell_id:
+        return None
+    window = payload.get("window")
+    if not isinstance(window, str) or not window:
+        return None
+    target_rate = _number(payload.get("target_rate"))
+    if target_rate is None:
+        return None
+    baseline = _number(payload.get("baseline_energy_kwh"))
+    saved = _number(payload.get("estimated_saving_kwh"))
+    remaining = _number(payload.get("remaining_energy_kwh"))
+    baseline_value = 0.0 if baseline is None else baseline
+    saved_value = 0.0 if saved is None else saved
+    remaining_value = (
+        round(baseline_value - saved_value, 2) if remaining is None else remaining
+    )
+    kpi = payload.get("kpi_impact")
+    plan = EnergySavingPlan(
+        plan_id=plan_id,
+        cell_id=cell_id,
+        cell_name=str(payload.get("cell_name") or cell_id),
+        region=str(payload.get("region") or ""),
+        date=str(payload.get("date") or dataset_date()),
+        window=window,
+        target_rate=target_rate,
+        status=str(payload.get("status") or PLAN_STATUS_APPLIED),
+        baseline_energy_kwh=baseline_value,
+        estimated_saving_kwh=saved_value,
+        remaining_energy_kwh=remaining_value,
+        kpi_impact=dict(kpi) if isinstance(kpi, Mapping) else {},
+    )
+    _PLANS[plan.plan_id] = plan
+    _restore_plan_sequence(plan.cell_id, plan.plan_id)
+    return plan
+
+
+def _number(value: object) -> float | None:
+    """Return a finite number from an artifact payload, or ``None``."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _restore_plan_sequence(cell_id: str, plan_id: str) -> None:
+    """Keep the per-cell sequence ahead of a restored plan id."""
+    prefix = f"plan-{cell_id}-"
+    if not plan_id.startswith(prefix):
+        return
+    suffix = plan_id[len(prefix) :]
+    if suffix.isdigit():
+        _PLAN_SEQUENCES[cell_id] = max(_PLAN_SEQUENCES.get(cell_id, 0), int(suffix))
 
 
 def get_plan(plan_id: str) -> EnergySavingPlan | None:

@@ -48,7 +48,6 @@ from protocol.messages import (
     ABORT_MESSAGE_TEXT,
     PROPOSE_MESSAGE_TEXT,
     SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
-    SAMPLE_PHASE_METADATA_KEY,
     SAMPLE_PHASE_MODIFY,
     SAMPLE_PROPOSAL_METADATA_KEY,
     STRUCTURED_ERRORS_METADATA_KEY,
@@ -332,18 +331,18 @@ class PreTaskNegotiationHandler:
         """
         current = context.current_task
         message = context.message
-        metadata = metadata_to_dict(message.metadata) if message is not None else {}
-        if metadata.get(SAMPLE_PHASE_METADATA_KEY) != SAMPLE_PHASE_MODIFY:
-            return NegotiationOutcome.execution(context)
         if current is None:
             return NegotiationOutcome.execution(context)
-        if current.status.state != TaskState.TASK_STATE_WORKING:
-            return NegotiationOutcome.short(
-                build_error_message(
-                    context.context_id,
-                    "The Task is not in a modifiable state; a Modify needs a WORKING Task.",
-                )
-            )
+        metadata = metadata_to_dict(message.metadata) if message is not None else {}
+        prompt = task_prompt_from_metadata(metadata)
+        if not prompt.strip():
+            # A negotiation/accept follow-up carries Negotiation-T, not Task-T; keep the legacy
+            # no-op so the existing flows are unchanged.
+            return NegotiationOutcome.execution(context)
+        if not _MODIFY_OPERATION_PATTERN.search(prompt):
+            # The operation type is the semantic signal. A non-Modify Task-T on an existing Task
+            # is not a modification; do not spend a validation call on it and keep the no-op.
+            return NegotiationOutcome.execution(context)
         missing = missing_extensions(context.requested_extensions, (TASK_T_EXTENSION_URI,))
         if missing:
             return NegotiationOutcome.short(
@@ -351,11 +350,6 @@ class PreTaskNegotiationHandler:
                     context.context_id,
                     f"The request does not declare the required A2A extension(s): {', '.join(missing)}.",
                 )
-            )
-        prompt = task_prompt_from_metadata(metadata)
-        if not prompt.strip():
-            return NegotiationOutcome.short(
-                build_error_message(context.context_id, "The request carries no Task-T prompt.")
             )
         try:
             filled = await self._call(
@@ -376,10 +370,14 @@ class PreTaskNegotiationHandler:
         params = filled.data if isinstance(filled.data, dict) else {}
         operation = str(params.get("operationType") or params.get("operation_type") or "")
         if operation.strip().lower() != SAMPLE_PHASE_MODIFY:
+            # The Task-T operation type is the semantic signal; a non-Modify Task-T on an existing
+            # Task is not a modification and keeps the legacy no-op.
+            return NegotiationOutcome.execution(context)
+        if current.status.state != TaskState.TASK_STATE_WORKING:
             return NegotiationOutcome.short(
                 build_error_message(
                     context.context_id,
-                    "The follow-up Task-T must carry operationType=Modify.",
+                    "The Task is not in a modifiable state; a Modify needs a WORKING Task.",
                 )
             )
         finding = (
@@ -492,6 +490,19 @@ class PreTaskNegotiationHandler:
                 options=finding.options,
             )
             return await self._emit_policy_decision(context_id, self._policy(state))
+
+        params = filled.data if isinstance(filled.data, dict) else {}
+        operation = str(params.get("operationType") or params.get("operation_type") or "")
+        if operation.strip().lower() == SAMPLE_PHASE_MODIFY:
+            # This sample implements Modify as a real continuation of an existing Task. A Modify
+            # Task-T without a loaded Task has no baseline plan to update, so reject it instead of
+            # silently creating a new Task that would execute like a Create.
+            return NegotiationOutcome.short(
+                build_error_message(
+                    context_id,
+                    "A Modify Task-T must continue an existing WORKING Task; no Task was loaded.",
+                )
+            )
 
         self._rewrite_task_prompt(context, prompt)
         self._logger.info("initial Task-T validated; handing the request to the deterministic executor")
@@ -825,6 +836,12 @@ def _missing_slot_names(errors: Sequence[SlotValidationError]) -> tuple[str, ...
 #: One ``HH:MM~HH:MM,<rate>Mbps`` target segment in a rendered Task-T prompt.
 _TARGET_SEGMENT_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"\d{2}:\d{2}~\d{2}:\d{2}\s*,\s*\d+(?:\.\d+)?\s*Mbps", re.IGNORECASE
+)
+
+#: The rendered Task-T's ``Operation Type: Modify`` section, in either template language.
+_MODIFY_OPERATION_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?:^|\n)\s*##\s*(?:Operation Type|操作类型)[^\n]*\n+\s*(?:Modify|修改)\s*(?:\n|$)",
+    re.IGNORECASE,
 )
 
 

@@ -567,6 +567,9 @@ async def run_client_flow(
         sample_phase = metadata.get(SAMPLE_PHASE_METADATA_KEY)
         if isinstance(sample_phase, str) and sample_phase:
             detail["samplePhase"] = sample_phase
+        sample_run_id = metadata.get(SAMPLE_RUN_ID_METADATA_KEY)
+        if isinstance(sample_run_id, str) and sample_run_id:
+            detail["sampleRunId"] = sample_run_id
         emit_trace(
             "message_sent",
             phase=phase,
@@ -665,6 +668,7 @@ async def run_client_flow(
                 "promptText": follow_text,
                 "templateUri": follow_content.template_uri or task_template_uri,
                 "length": len(follow_text),
+                "samplePhase": SAMPLE_PHASE_MODIFY,
             },
         )
         follow_metadata: dict[str, object] = {

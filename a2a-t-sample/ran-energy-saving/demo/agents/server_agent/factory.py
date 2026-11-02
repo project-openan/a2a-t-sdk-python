@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage
 from protocol.server_agent_spec import ServerAgentSpec
 from shared.config import SampleConfig, load_config
 
+from demo import ran_data
 from demo.agents.server_agent.graph import build_execution_graph
 from demo.agents.server_agent.langgraph_tools import (
     REPORT_TOOL_NAME,
@@ -35,6 +36,10 @@ def build_server_agent(
     existing_plan: Mapping[str, object] | None = None,
 ) -> ServerAgentSpec:
     """Build one planner graph, its tools and the metadata the executor needs."""
+    if existing_plan is not None:
+        # The Task artifact is the durable source of the baseline plan; the plan store may have
+        # been reset (a restart or a test). Rebuild it before the Modify tool reads it.
+        ran_data.restore_plan(existing_plan)
     resolved = config or load_config()
     guard = PlanGuard()
     tools = build_execution_tools(guard, approval_gate=approval_gate)

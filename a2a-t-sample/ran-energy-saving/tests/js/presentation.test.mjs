@@ -1407,6 +1407,8 @@ const firstWire = buildWireModel(
       extensionUri: "urn:task-t/v1",
       templateUri: "urn:template",
       taskT: "## Operation Type\n\nCreate\n\n## Task Object\n\nBaseline area.",
+      samplePhase: "baseline",
+      sampleRunId: "run-1",
     },
   },
   { runId: "run-two-phase", intentText: rawRequest, taskTPrompt: "## Operation Type\n\nModify" },
@@ -1431,6 +1433,8 @@ const secondWire = buildWireModel(
 );
 assert.ok(wireText(firstWire).includes("Create"));
 assert.ok(!wireText(firstWire).includes("Modify"));
+assert.ok(wireText(firstWire).includes('"samplePhase": "baseline"'));
+assert.ok(wireText(firstWire).includes('"sampleRunId": "run-1"'));
 assert.ok(wireText(secondWire).includes("Modify"));
 assert.equal(secondWire.title, copy.wire.modifyTitle);
 

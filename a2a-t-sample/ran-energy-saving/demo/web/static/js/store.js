@@ -8,7 +8,7 @@
 import { numericTokens, shortId } from "./format.js";
 import { t, translateTraceTitle } from "./i18n/index.js";
 
-/** The eight Run Explorer phases, in display order. Labels resolve through ``i18n.t``. */
+/** The base Run Explorer phases, in display order. Labels resolve through ``i18n.t``. */
 export const PHASES = [
   { key: "dispatch" },
   { key: "task_prompt" },
@@ -20,8 +20,19 @@ export const PHASES = [
   { key: "done" },
 ];
 
-/** Phase key → one-based display index. */
-export const PHASE_INDEX = Object.fromEntries(PHASES.map((phase, index) => [phase.key, index + 1]));
+/** Optional phases: only shown when the run actually produced rows for them. */
+export const OPTIONAL_PHASES = [{ key: "task_modify" }];
+
+/** Phase key → one-based display index. The optional Modify phase sits before ``done``. */
+export const PHASE_INDEX = (() => {
+  const index = {};
+  let next = 1;
+  for (const phase of PHASES) {
+    if (phase.key === "done") index.task_modify = next++;
+    index[phase.key] = next++;
+  }
+  return index;
+})();
 
 /** Return the human label of one terminal outcome. */
 export function finalStateLabel(state) {
@@ -297,13 +308,22 @@ export class RunStore extends EventTarget {
   derived() {
     if (this._derived) return this._derived;
     const runFinished = this.status === "finished" || this.status === "failed";
-    const groups = PHASES.map((phase) => {
+    const groupOf = (phase) => {
       const items = this.items.filter((item) => item.phase === phase.key);
       return { ...phase, items, stats: this._phaseStats(items), rounds: this._phaseRounds(items) };
-    });
+    };
+    const baseGroups = PHASES.map(groupOf);
+    const optionalGroups = OPTIONAL_PHASES.map(groupOf);
+    // The optional Modify phase sits before ``done`` and only appears when it has rows.
+    const doneIndex = baseGroups.findIndex((group) => group.key === "done");
+    const groups = [
+      ...baseGroups.slice(0, doneIndex),
+      ...optionalGroups.filter((group) => group.items.length > 0),
+      ...baseGroups.slice(doneIndex),
+    ];
     const lastPhaseWithItems = [...groups].reverse().find((group) => group.items.length > 0)?.key ?? null;
     const states = {};
-    for (const group of groups) {
+    for (const group of [...baseGroups, ...optionalGroups]) {
       states[group.key] = this._phaseState(group, { runFinished, lastPhaseWithItems });
     }
     this._derived = {

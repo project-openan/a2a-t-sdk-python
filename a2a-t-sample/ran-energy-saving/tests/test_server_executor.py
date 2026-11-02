@@ -203,6 +203,26 @@ async def test_executor_cancel_delegates_to_the_inner_executor() -> None:
     assert inner.cancelled == [context]
 
 
+def test_build_server_agent_restores_the_existing_plan(
+    offline_config: SampleConfig,
+) -> None:
+    """A Modify execution can rebuild the process-local plan from the Task artifact."""
+    plan = ran_data.apply_plan("cell-002", "01:00~05:00", "10")
+    payload = plan.to_dict()
+    ran_data.reset()
+
+    build_server_agent(
+        offline_config,
+        task_prompt="## Operation Type\n\nModify",
+        negotiation_context=None,
+        operation="Modify",
+        existing_plan=payload,
+    )
+
+    assert ran_data.get_plan(plan.plan_id) == plan
+    ran_data.reset()
+
+
 async def test_langgraph_executor_publishes_task_artifacts_and_report(
     offline_config: SampleConfig,
 ) -> None:

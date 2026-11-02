@@ -81,6 +81,7 @@ from shared.run_constants import (
     SUPPORTED_PROTOCOLS,
 )
 from shared.trace import (
+    PHASE_TASK_MODIFY,
     PHASES,
     SCHEMA_VERSION,
 )
@@ -1179,8 +1180,11 @@ def _validate_trace_span(span: Mapping[str, object], run_id: str) -> str | None:
     if span_run_id not in (None, "") and span_run_id != run_id:
         return f"runId {span_run_id!r} does not match the run"
     phase = span.get("phase")
-    if not isinstance(phase, str) or phase not in PHASES:
-        return f"unknown phase {phase!r}; expected one of {PHASES}"
+    # ``task_modify`` is an optional two-phase phase; it is not part of every run's phase set but
+    # is a valid span phase once a Modify continuation starts.
+    allowed_phases = (*PHASES, PHASE_TASK_MODIFY)
+    if not isinstance(phase, str) or phase not in allowed_phases:
+        return f"unknown phase {phase!r}; expected one of {allowed_phases}"
     kind = span.get("kind")
     if not isinstance(kind, str) or not kind.strip():
         return "kind must be a non-empty string"

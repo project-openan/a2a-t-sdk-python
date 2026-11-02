@@ -95,6 +95,51 @@ async def test_modify_tool_updates_the_existing_plan_and_allows_the_report() -> 
     assert report_result["status"] == "modified"
 
 
+async def test_modify_tool_waits_for_the_second_approval() -> None:
+    approved = False
+
+    async def gate(*_args: object) -> bool:
+        return approved
+
+    guard = PlanGuard()
+    profile, evaluate, _apply, modify, _report = build_execution_tools(guard, approval_gate=gate)
+    plan = ran_data.apply_plan("cell-002", "01:00~05:00", "10")
+    await profile.ainvoke({"cell_id": "cell-002", "date": "2026-10-22"})
+    await evaluate.ainvoke(
+        {"cell_id": "cell-002", "window": "01:00~05:00", "target_rate": "20"}
+    )
+
+    denied = json.loads(
+        await modify.ainvoke(
+            {
+                "plan_id": plan.plan_id,
+                "cell_id": "cell-002",
+                "window": "01:00~05:00",
+                "target_rate": "20",
+            }
+        )
+    )
+
+    assert denied["ok"] is False
+    assert denied["error_code"] == APPROVAL_DENIED
+    assert ran_data.get_plan(plan.plan_id) == plan
+
+    approved = True
+    accepted = json.loads(
+        await modify.ainvoke(
+            {
+                "plan_id": plan.plan_id,
+                "cell_id": "cell-002",
+                "window": "01:00~05:00",
+                "target_rate": "20",
+            }
+        )
+    )
+
+    assert accepted["ok"] is True
+    assert accepted["status"] == "modified"
+
+
 async def test_apply_tool_writes_the_plan_after_approval() -> None:
     async def approve(*_args: object) -> bool:
         return True

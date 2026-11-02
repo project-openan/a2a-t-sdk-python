@@ -141,6 +141,7 @@ export const ZH_CN = {
     resolution: "决议",
     execution: "网管执行",
     report: "报告",
+    task_modify: "Task-T 修改",
     done: "完成",
   },
 
@@ -152,6 +153,7 @@ export const ZH_CN = {
     resolution: "决议",
     execution: "网管",
     report: "报告",
+    task_modify: "修改",
     done: "完成",
   },
 

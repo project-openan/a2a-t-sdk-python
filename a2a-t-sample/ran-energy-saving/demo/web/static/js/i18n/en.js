@@ -142,6 +142,7 @@ export const EN = {
     resolution: "Resolution",
     execution: "NMS execution",
     report: "Report",
+    task_modify: "Task-T modify",
     done: "Done",
   },
 
@@ -153,6 +154,7 @@ export const EN = {
     resolution: "Resolution",
     execution: "NMS",
     report: "Report",
+    task_modify: "Modify",
     done: "Done",
   },
 

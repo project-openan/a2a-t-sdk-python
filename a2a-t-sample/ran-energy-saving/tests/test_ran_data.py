@@ -126,6 +126,28 @@ def test_modify_plan_updates_the_same_plan_in_place() -> None:
     assert ran_data.list_plan_ids() == (plan.plan_id,)
 
 
+def test_restore_plan_recovers_the_store_from_an_artifact_payload() -> None:
+    plan = ran_data.apply_plan("cell-002", "01:00~05:00", "10")
+    payload = plan.to_dict()
+    ran_data.reset()
+
+    restored = ran_data.restore_plan(payload)
+
+    assert restored == plan
+    updated = ran_data.modify_plan(plan.plan_id, "cell-002", "01:00~05:00", "20")
+    assert updated.status == ran_data.PLAN_STATUS_MODIFIED
+
+
+def test_restore_plan_keeps_a_newer_stored_plan() -> None:
+    plan = ran_data.apply_plan("cell-002", "01:00~05:00", "10")
+    stale = plan.to_dict()
+    newer = ran_data.modify_plan(plan.plan_id, "cell-002", "01:00~05:00", "20")
+
+    restored = ran_data.restore_plan(stale)
+
+    assert restored == newer
+
+
 def test_modify_infeasible_plan_leaves_the_stored_plan_unchanged() -> None:
     plan = ran_data.apply_plan("cell-002", "01:00~05:00", "10")
 

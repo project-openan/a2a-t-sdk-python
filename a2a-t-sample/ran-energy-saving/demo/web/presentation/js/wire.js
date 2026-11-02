@@ -114,6 +114,14 @@ export function buildWireModel(entry, state, format, copy) {
       const intent = parseIntent(prompt);
       const metadata = { [extensionUri]: prompt };
       if (templateUri) metadata.templateUri = templateUri;
+      // Sample-only transport metadata is part of the real A2A message too; the wire inspector
+      // should not hide keys that the envelope actually carries.
+      if (typeof detail.samplePhase === "string" && detail.samplePhase) {
+        metadata.samplePhase = detail.samplePhase;
+      }
+      if (typeof detail.sampleRunId === "string" && detail.sampleRunId) {
+        metadata.sampleRunId = detail.sampleRunId;
+      }
       const a2aBody = {
         role: "ROLE_USER",
         parts: [{ text: label }],
