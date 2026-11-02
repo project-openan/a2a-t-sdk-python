@@ -3,6 +3,7 @@
 
 Requirement:
 1. Please provide the operation type. Allowed values: Create, Modify
+2. Normalize synonyms to the canonical value instead of rejecting them: `Create` covers Add / Implement / Establish / Deploy / Set Up / New / Enable / Activate / Configure; `Modify` covers Update / Adjust / Change / Revise
 
 ## Task Type
 Wireless network energy saving
@@ -49,7 +50,7 @@ Requirement:
     - **For the area-level setting**, the following information needs to be provided:
 
       Option 1: Time-segmented rate guarantee target
-        - Time Window: Up to 3 non-overlapping time windows can be configured. Specific and explicit time windows must be provided; vague time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to a non-disruptive user experience mode. All configured time windows must fall within the active energy-saving execution period; (required)
+        - Time Window: Non-overlapping time windows can be configured. Time windows MUST NOT overlap; if overlapping time windows are provided, they are a violation and must be rejected. Specific and explicit time windows must be provided; vague time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to a non-disruptive user experience mode. All configured time windows must fall within the active energy-saving execution period; (required)
         - Rate: Specify a target throughput for each time window, e.g., 10 Mbps; (required)
         - Example: Time-segmented rate guarantee target: {00:00~06:00, 2Mbps}, {06:00~18:00, 10Mbps}
 
@@ -60,7 +61,7 @@ Requirement:
     - **For the site-level setting**, the following information needs to be provided:
         - Site list; (required)
         - Time-segmented rate guarantee target:
-          - Time Window: Up to 3 non-overlapping time windows can be configured. Specific and explicit time windows must be provided; vague time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to a non-disruptive user experience mode; (required)
+          - Time Window: Non-overlapping time windows can be configured. Time windows MUST NOT overlap; if overlapping time windows are provided, they are a violation and must be rejected. Specific and explicit time windows must be provided; vague time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to a non-disruptive user experience mode; (required)
           - Rate: Specify a target throughput for each time window, e.g., 10 Mbps; (required)
         - Background event and event duration; (optional)
         - Example:
