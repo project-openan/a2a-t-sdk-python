@@ -27,6 +27,7 @@ from demo.scripted_llm import (
     STAGE_CONTENT_VALIDATION_FEASIBILITY,
     STAGE_CONTENT_VALIDATION_MISSING,
     STAGE_CONTENT_VALIDATION_OUTAGE,
+    STAGE_CONTENT_VALIDATION_OUTAGE_BASELINE,
     STAGE_CONTENT_VALIDATION_TARGET,
     STAGE_NEGOTIATION_ABORT_EXTRACTION,
     STAGE_NEGOTIATION_ACCEPT_EXTRACTION,
@@ -89,6 +90,13 @@ _EXPECTED_STAGES: dict[str, tuple[str, str]] = {
     "outage": (STAGE_SLOT_EXTRACTION_OUTAGE, STAGE_CONTENT_VALIDATION_OUTAGE),
 }
 
+#: Marker of the two-site baseline Task-T (phase 1 of the planned-outage run).
+_OUTAGE_BASELINE_CONTENT = (
+    "## Operation Type\n\nCreate\n\n## Task Context\n"
+    "Site list: Site 1,Site 2; time-segment-based guaranteed throughput target: "
+    "{00:00~24:00,10Mbps}"
+)
+
 
 def _messages(content: str) -> list[dict[str, str]]:
     return [{"role": "system", "content": "route me"}, {"role": "user", "content": content}]
@@ -97,6 +105,31 @@ def _messages(content: str) -> list[dict[str, str]]:
 @pytest.fixture
 def client() -> ScriptedLLMClient:
     return ScriptedLLMClient(_LLM_CONFIG, language="en-US")
+
+
+def test_outage_content_validation_extracts_modify(client: ScriptedLLMClient) -> None:
+    response = client.structured(
+        messages=_messages(SCENARIOS["outage"].user_request["en-US"]),
+        json_schema=VALIDATION_SCHEMA,
+    )
+
+    assert client.calls[-1] == STAGE_CONTENT_VALIDATION_OUTAGE
+    payload = json.loads(response.content)
+    assert payload["params"]["operationType"] == "modify"
+
+
+def test_outage_baseline_content_validation_uses_the_create_fixture(
+    client: ScriptedLLMClient,
+) -> None:
+    response = client.structured(
+        messages=_messages(_OUTAGE_BASELINE_CONTENT),
+        json_schema=VALIDATION_SCHEMA,
+    )
+
+    assert client.calls[-1] == STAGE_CONTENT_VALIDATION_OUTAGE_BASELINE
+    payload = json.loads(response.content)
+    assert payload["params"]["operationType"] == "create"
+    assert payload["params"]["guaranteedThroughputTarget"] == "{00:00~24:00,10Mbps}"
 
 
 def test_all_five_scenarios_are_defined() -> None:

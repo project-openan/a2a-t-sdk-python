@@ -106,7 +106,7 @@ The other two outcomes are simple conclusions:
 ## 4. Demo
 
 ```bash
-# CLI (offline, deterministic, no key): planned outage, no negotiation
+# CLI (offline, deterministic, no key): planned outage, Create baseline then Modify, no negotiation
 python run_demo.py --scenario outage --mode auto --model-mode offline
 # Web UI (presentation view; opens on the complete use case 1)
 python run_demo.py --ui --model-mode offline
@@ -143,7 +143,8 @@ two brand palettes: **Orange** (the reference demo, default) and **Huawei** (the
 outlined-node ICT style). The top-bar button switches them at runtime and remembers the choice;
 `--brand huawei` or `?brand=huawei` selects the start-up default. Eight examples cover use
 case 1 (night-time energy saving, with and without negotiation) and use case 2 (planned power
-outage). The stage follows the live run at a human pace through nine steps: request, structured
+outage). The outage run is two-phase on one Task: a Create baseline, then a real Modify Task-T on
+the same Task. The stage follows the live run at a human pace through nine steps: request, structured
 Task-T, approval 1 (intent), Task-T sent, negotiation when needed, strategy and task start, data
 collection (days 2 to 8, compressed), approval 2 (MML in MIE) and apply and report. The request box
 shows the concise wording a network engineer would type, for example “Start energy saving in the

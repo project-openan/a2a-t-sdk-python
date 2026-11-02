@@ -48,7 +48,7 @@ async def test_apply_tool_writes_nothing_when_the_engineer_rejects() -> None:
         return False
 
     guard = PlanGuard()
-    profile, evaluate, apply, _report = build_execution_tools(guard, approval_gate=reject)
+    profile, evaluate, apply, _modify, _report = build_execution_tools(guard, approval_gate=reject)
     await profile.ainvoke({"cell_id": "cell-001", "date": "2026-10-22"})
     await evaluate.ainvoke(
         {"cell_id": "cell-001", "window": "00:00~06:00", "target_rate": "30"}
@@ -65,12 +65,42 @@ async def test_apply_tool_writes_nothing_when_the_engineer_rejects() -> None:
     assert ran_data.list_plans() == ()
 
 
+async def test_modify_tool_updates_the_existing_plan_and_allows_the_report() -> None:
+    guard = PlanGuard()
+    profile, evaluate, _apply, modify, report = build_execution_tools(guard)
+    plan = ran_data.apply_plan("cell-002", "01:00~05:00", "10")
+    await profile.ainvoke({"cell_id": "cell-002", "date": "2026-10-22"})
+    await evaluate.ainvoke(
+        {"cell_id": "cell-002", "window": "01:00~05:00", "target_rate": "20"}
+    )
+
+    modified = json.loads(
+        await modify.ainvoke(
+            {
+                "plan_id": plan.plan_id,
+                "cell_id": "cell-002",
+                "window": "01:00~05:00",
+                "target_rate": "20",
+            }
+        )
+    )
+    report_result = json.loads(await report.ainvoke({"plan_id": plan.plan_id}))
+
+    assert modified["ok"] is True
+    assert modified["plan_id"] == plan.plan_id
+    assert modified["status"] == "modified"
+    assert guard.applied is not None
+    assert guard.applied["plan_id"] == plan.plan_id
+    assert report_result["ok"] is True
+    assert report_result["status"] == "modified"
+
+
 async def test_apply_tool_writes_the_plan_after_approval() -> None:
     async def approve(*_args: object) -> bool:
         return True
 
     guard = PlanGuard()
-    profile, evaluate, apply, _report = build_execution_tools(guard, approval_gate=approve)
+    profile, evaluate, apply, _modify, _report = build_execution_tools(guard, approval_gate=approve)
     await profile.ainvoke({"cell_id": "cell-001", "date": "2026-10-22"})
     await evaluate.ainvoke(
         {"cell_id": "cell-001", "window": "00:00~06:00", "target_rate": "30"}

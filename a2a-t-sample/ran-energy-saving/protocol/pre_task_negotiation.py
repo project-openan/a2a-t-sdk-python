@@ -48,6 +48,8 @@ from protocol.messages import (
     ABORT_MESSAGE_TEXT,
     PROPOSE_MESSAGE_TEXT,
     SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
+    SAMPLE_PHASE_METADATA_KEY,
+    SAMPLE_PHASE_MODIFY,
     SAMPLE_PROPOSAL_METADATA_KEY,
     STRUCTURED_ERRORS_METADATA_KEY,
     TASK_TEMPLATE_URI,
@@ -152,6 +154,9 @@ class NegotiationOutcome:
             A2A client can read the question and continue the Task.
         resume_prompt: prompt the pure A2A mode negotiated; the outer executor resumes the existing
             ``INPUT_REQUIRED`` Task with this prompt instead of creating a new Task.
+        modify_prompt: validated Task-T prompt of a Modify follow-up; the outer executor updates the
+            existing Task in place instead of creating a new one.
+        modify_params: parameters extracted from the Modify Task-T.
     """
 
     short_circuit: bool
@@ -160,6 +165,8 @@ class NegotiationOutcome:
     terminal_task: Task | None = None
     input_required_task: Task | None = None
     resume_prompt: str | None = None
+    modify_prompt: str | None = None
+    modify_params: Mapping[str, object] | None = None
 
     @classmethod
     def execution(cls, context: RequestContext) -> NegotiationOutcome:
@@ -185,6 +192,21 @@ class NegotiationOutcome:
     def resume(cls, context: RequestContext, prompt: str) -> NegotiationOutcome:
         """Return an outcome that resumes the existing Task with a negotiated prompt."""
         return cls(short_circuit=False, task_request=context, resume_prompt=prompt)
+
+    @classmethod
+    def modify(
+        cls,
+        context: RequestContext,
+        prompt: str,
+        params: Mapping[str, object],
+    ) -> NegotiationOutcome:
+        """Return an outcome that updates the existing Task with a validated Modify Task-T."""
+        return cls(
+            short_circuit=False,
+            task_request=context,
+            modify_prompt=prompt,
+            modify_params=dict(params),
+        )
 
 
 @dataclass(frozen=True)
@@ -284,7 +306,7 @@ class PreTaskNegotiationHandler:
             role="server",
         ):
             if context.current_task is not None:
-                return NegotiationOutcome.execution(context)
+                return await self._handle_follow_up(context)
 
             message = context.message
             if message is None:
@@ -299,6 +321,83 @@ class PreTaskNegotiationHandler:
     # ------------------------------------------------------------------
     # Initial Task-T
     # ------------------------------------------------------------------
+
+    async def _handle_follow_up(self, context: RequestContext) -> NegotiationOutcome:
+        """Validate a Modify Task-T sent on an existing Task, or keep the legacy no-op.
+
+        A plain follow-up (no ``samplePhase=modify`` marker) keeps the previous behaviour: the
+        executor re-enqueues the Task and starts no second plan. The sample's planned-outage
+        two-phase run marks its second message, so a real A2A continuation can be validated and
+        handed to the modification path.
+        """
+        current = context.current_task
+        message = context.message
+        metadata = metadata_to_dict(message.metadata) if message is not None else {}
+        if metadata.get(SAMPLE_PHASE_METADATA_KEY) != SAMPLE_PHASE_MODIFY:
+            return NegotiationOutcome.execution(context)
+        if current is None:
+            return NegotiationOutcome.execution(context)
+        if current.status.state != TaskState.TASK_STATE_WORKING:
+            return NegotiationOutcome.short(
+                build_error_message(
+                    context.context_id,
+                    "The Task is not in a modifiable state; a Modify needs a WORKING Task.",
+                )
+            )
+        missing = missing_extensions(context.requested_extensions, (TASK_T_EXTENSION_URI,))
+        if missing:
+            return NegotiationOutcome.short(
+                build_error_message(
+                    context.context_id,
+                    f"The request does not declare the required A2A extension(s): {', '.join(missing)}.",
+                )
+            )
+        prompt = task_prompt_from_metadata(metadata)
+        if not prompt.strip():
+            return NegotiationOutcome.short(
+                build_error_message(context.context_id, "The request carries no Task-T prompt.")
+            )
+        try:
+            filled = await self._call(
+                self._prompt_server.validate_task_prompt_and_data_filling,
+                prompt,
+                self._task_schema,
+                self._task_template_uri,
+                stage="task_t_modify_validation",
+            )
+        except ContentValidationError as exc:
+            return NegotiationOutcome.short(
+                build_error_message(context.context_id, f"Modify Task-T validation failed: {exc}")
+            )
+        except (A2ATError, ValueError) as exc:
+            return NegotiationOutcome.short(
+                build_error_message(context.context_id, f"Modify Task-T validation failed: {exc}")
+            )
+        params = filled.data if isinstance(filled.data, dict) else {}
+        operation = str(params.get("operationType") or params.get("operation_type") or "")
+        if operation.strip().lower() != SAMPLE_PHASE_MODIFY:
+            return NegotiationOutcome.short(
+                build_error_message(
+                    context.context_id,
+                    "The follow-up Task-T must carry operationType=Modify.",
+                )
+            )
+        finding = (
+            self._precheck(filled, self._task_schema, prompt=prompt)
+            if self._precheck is not None
+            else None
+        )
+        if finding is not None:
+            return NegotiationOutcome.short(
+                build_error_message(
+                    context.context_id,
+                    "The Modify Task-T is not executable: "
+                    f"{finding.detail or finding.kind.value}.",
+                )
+            )
+        self._rewrite_task_prompt(context, prompt)
+        self._logger.info("Modify Task-T validated; handing the existing Task to the executor")
+        return NegotiationOutcome.modify(context, prompt, params)
 
     async def _handle_initial_task(self, context: RequestContext, metadata: Mapping[str, object]) -> NegotiationOutcome:
         """Validate the initial Task-T prompt and open a negotiation when it maps to one."""

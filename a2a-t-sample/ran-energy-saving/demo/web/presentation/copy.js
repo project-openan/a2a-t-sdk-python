@@ -138,7 +138,7 @@ const EN = {
     understand: "The OSS Agent turns the request into the structured intent its own system needs and picks the right skill.",
     "intent-review":
       "Approval 1. Nothing leaves the OSS until the engineer confirms the structured intent.",
-    send: "The OSS Agent maps the confirmed intent onto a Task-T and sends it as an A2A message; the RAN Agent validates it before creating a task.",
+    send: "The OSS Agent maps the confirmed intent onto a Task-T and sends it as an A2A message; the RAN Agent validates it before running it.",
     plainSend:
       "The request leaves as one plain A2A message. The RAN Agent has only the text to interpret: no template, no typed slots and no negotiation.",
     pureSend:
@@ -315,7 +315,7 @@ const EN = {
     statusNotNeeded: "Not needed: the request was complete",
     notNeededShort: "No negotiation needed",
     notNeededHint:
-      "This request is complete, so the RAN Agent validates the Task-T and creates the task directly.",
+      "This request is complete, so the RAN Agent validates the Task-T and runs it directly.",
     empty: "Waiting for the request.",
     waiting: "Sending the request to the RAN Agent…",
     notNeeded: "The RAN Agent accepted the complete request without a pre-task negotiation.",
@@ -672,7 +672,7 @@ const EN = {
       tag: "Use case 2",
       kind: "uc2",
       story:
-        "A planned outage tomorrow on two sites; the RAN Agent accepts the lower guaranteed rate during the outage without negotiation.",
+        "A planned outage tomorrow on two sites; the RAN Agent creates a baseline task, then sends a Modify Task-T on the same running task, without negotiation.",
       proposals: {},
       decisions: {},
     },
@@ -805,7 +805,7 @@ const ZH = {
     request: "工程师用自然语言提出目标：区域，以及每个时段要保障的速率。",
     understand: "OSS Agent 把请求解析成自己系统所需的结构化意图，并选择合适的技能。",
     "intent-review": "审批 1。工程师确认结构化意图之前，任何内容都不会离开 OSS。",
-    send: "OSS Agent 把确认后的意图映射成 Task-T 作为 A2A 消息发出；RAN Agent 先校验，再决定是否创建任务。",
+    send: "OSS Agent 把确认后的意图映射成 Task-T 作为 A2A 消息发出；RAN Agent 先校验，再执行。",
     plainSend:
       "请求作为一条普通 A2A 消息发出。RAN Agent 只能从文本里自行理解：没有模板、没有类型化槽位，也没有协商。",
     pureSend:
@@ -969,7 +969,7 @@ const ZH = {
     statusEnded: "协商结束",
     statusNotNeeded: "不需要：请求本身完整",
     notNeededShort: "无需协商",
-    notNeededHint: "该请求参数完整，RAN Agent 校验 Task-T 后直接创建任务，不会触发任务前协商。",
+    notNeededHint: "该请求参数完整，RAN Agent 校验 Task-T 后直接执行，不会触发任务前协商。",
     empty: "等待发起。",
     waiting: "正在把请求发给 RAN Agent…",
     notNeeded: "RAN Agent 直接接受了完整请求，没有触发任务前协商。",
@@ -1322,7 +1322,7 @@ const ZH = {
       label: "计划停电",
       tag: "用例 2",
       kind: "uc2",
-      story: "明天两个站点计划停电；RAN Agent 直接接受停电期间的低保障速率，不触发协商。",
+      story: "明天两个站点计划停电；RAN Agent 先创建基线任务，再在同一运行中的 Task 上发送 Modify Task-T，不触发协商。",
       proposals: {},
       decisions: {},
     },

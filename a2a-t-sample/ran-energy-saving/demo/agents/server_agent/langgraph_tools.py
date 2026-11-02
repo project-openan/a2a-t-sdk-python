@@ -20,6 +20,7 @@ from demo.agents.server_agent.tools import (
     evaluate_energy_saving_plan,
     generate_energy_saving_report,
     get_cell_energy_profile,
+    modify_energy_saving_plan,
 )
 
 #: Structured error code of a tool called out of order.
@@ -33,6 +34,9 @@ ApprovalGate = Callable[[str, str, str, Mapping[str, object] | None], Awaitable[
 
 #: Report tool name.
 REPORT_TOOL_NAME: str = "generate_energy_saving_report"
+
+#: Tool that updates an existing plan in place for a Modify Task.
+MODIFY_TOOL_NAME: str = "modify_energy_saving_plan"
 
 
 @dataclass
@@ -192,6 +196,61 @@ def build_execution_tools(
             guard.report = None
         return _json(result)
 
+    @tool("modify_energy_saving_plan")
+    async def modify_energy_saving_plan_tool(
+        plan_id: str,
+        cell_id: str,
+        window: str,
+        target_rate: str,
+    ) -> str:
+        """Update an existing energy-saving plan in place and return its plan_id.
+
+        Requires the same cell/window/rate to have been evaluated successfully first, and, when the
+        deployment configures a human gate, the engineer's approval before anything is written.
+        """
+        guard.record("modify_energy_saving_plan")
+        if guard.applied_any:
+            return _violation(
+                "modify_energy_saving_plan",
+                "A plan is already applied or modified in this task; generate its report instead.",
+                plan_id=str((guard.applied or {}).get("plan_id") or ""),
+            )
+        if str(cell_id) not in guard.profiles:
+            return _violation(
+                "modify_energy_saving_plan",
+                "Read get_cell_energy_profile for this cell before modifying a plan.",
+                cell_id=str(cell_id),
+            )
+        evaluation = guard.evaluations.get((str(cell_id), str(window), _rate_key(target_rate)))
+        if evaluation is None:
+            return _violation(
+                "modify_energy_saving_plan",
+                "Evaluate this exact cell/window/rate successfully before modifying it.",
+                cell_id=str(cell_id),
+                window=str(window),
+                target_rate=str(target_rate),
+            )
+        if approval_gate is not None:
+            approved = await approval_gate(cell_id, window, target_rate, evaluation)
+            if not approved:
+                return _json(
+                    {
+                        "ok": False,
+                        "error_code": APPROVAL_DENIED,
+                        "message": "The engineer did not approve the change; nothing was modified.",
+                        "plan_id": str(plan_id),
+                        "cell_id": str(cell_id),
+                        "window": str(window),
+                        "target_rate": str(target_rate),
+                    }
+                )
+        result = modify_energy_saving_plan(plan_id, cell_id, window, target_rate)
+        if result.get("ok") is True:
+            guard.applied = result
+            guard.applied_any = True
+            guard.report = None
+        return _json(result)
+
     @tool("generate_energy_saving_report")
     def generate_energy_saving_report_tool(plan_id: str) -> str:
         """Generate the final report of an applied plan.
@@ -214,6 +273,7 @@ def build_execution_tools(
         get_cell_energy_profile_tool,
         evaluate_energy_saving_plan_tool,
         apply_energy_saving_plan_tool,
+        modify_energy_saving_plan_tool,
         generate_energy_saving_report_tool,
     ]
 

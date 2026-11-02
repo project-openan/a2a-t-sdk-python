@@ -2,7 +2,7 @@
   "semantic_verdict": true,
   "errors": [],
   "params": {
-    "operationType": "create",
+    "operationType": "modify",
     "region": "Songshanhu Administration Committee",
     "energySavingGoal": "Maximize energy saving under the condition that the task context is met.",
     "guaranteedThroughputTarget": "{00:00~03:00,10Mbps}, {03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}",

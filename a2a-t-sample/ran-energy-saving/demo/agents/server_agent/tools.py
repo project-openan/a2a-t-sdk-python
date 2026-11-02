@@ -269,6 +269,81 @@ def apply_energy_saving_plan(cell_id: str, window: str, target_rate: str) -> dic
     return _plan_confirmation(plan)
 
 
+def modify_energy_saving_plan(
+    plan_id: str,
+    cell_id: str,
+    window: str,
+    target_rate: str,
+) -> dict[str, object]:
+    """Update an existing energy-saving plan in place.
+
+    Never call this before :func:`evaluate_energy_saving_plan`; the tool re-evaluates the new plan
+    and refuses infeasible requests, so a stored plan is never left in an invalid state. The plan id
+    is kept so the Task keeps modifying the same plan instead of allocating a second one.
+
+    Args:
+        plan_id: Existing plan identifier returned by :func:`apply_energy_saving_plan`.
+        cell_id: Cell identifier, for example ``cell-002``.
+        window: Energy-saving window in ``HH:MM~HH:MM`` form, for example ``01:00~05:00``.
+        target_rate: Energy-saving rate in percent, for example ``20`` or ``20%``.
+
+    Returns:
+        On success ``{"ok": True, "plan_id", "cell_id", "cell_name", "region", "date", "window",
+        "target_rate", "status", "baseline_energy_kwh", "estimated_saving_kwh",
+        "remaining_energy_kwh", "kpi_impact", "message"}``. Unknown plans/cells, malformed
+        requests, and infeasible plans return structured errors and leave the stored plan unchanged.
+    """
+    plan_id_text = _as_text_argument(plan_id)
+    if plan_id_text is None:
+        return _argument_type_error("plan_id", plan_id)
+    cell_id_text = _as_text_argument(cell_id)
+    if cell_id_text is None:
+        return _argument_type_error("cell_id", cell_id, plan_id=plan_id_text)
+    window_text = _as_text_argument(window)
+    if window_text is None:
+        return _argument_type_error("window", window, plan_id=plan_id_text, cell_id=cell_id_text)
+    target_rate_text = _as_text_argument(target_rate, allow_number=True)
+    if target_rate_text is None:
+        return _argument_type_error(
+            "target_rate",
+            target_rate,
+            allow_number=True,
+            plan_id=plan_id_text,
+            cell_id=cell_id_text,
+        )
+
+    try:
+        plan = ran_data.modify_plan(plan_id_text, cell_id_text, window_text, target_rate_text)
+    except ran_data.UnknownPlanError as exc:
+        return _error(
+            ERROR_UNKNOWN_PLAN,
+            str(exc),
+            plan_id=plan_id_text,
+            known_plans=list(ran_data.list_plan_ids()),
+        )
+    except ran_data.UnknownCellError as exc:
+        return _error(ERROR_UNKNOWN_CELL, str(exc), cell_id=cell_id_text, known_cells=_known_cells())
+    except ran_data.PlanInfeasibleError as exc:
+        return _infeasible_result(exc.evaluation)
+    except ran_data.InvalidPlanError as exc:
+        return _error(
+            ERROR_INVALID_REQUEST,
+            str(exc),
+            plan_id=plan_id_text,
+            cell_id=cell_id_text,
+            window=window_text,
+            target_rate=target_rate_text,
+        )
+    return {
+        "ok": True,
+        "message": (
+            f"Plan {plan.plan_id} modified on cell {plan.cell_id}: "
+            f"{plan.target_rate:g}% energy saving during {plan.window}."
+        ),
+        **plan.to_dict(),
+    }
+
+
 def generate_energy_saving_report(plan_id: str) -> dict[str, object]:
     """Generate the structured final report of an applied plan.
 
@@ -298,8 +373,9 @@ def generate_energy_saving_report(plan_id: str) -> dict[str, object]:
             known_plans=list(ran_data.list_plan_ids()),
         )
 
+    action = "applied to" if plan.status == ran_data.PLAN_STATUS_APPLIED else f"{plan.status} on"
     summary = (
-        f"Plan {plan.plan_id} applied to cell {plan.cell_id} ({plan.cell_name}): "
+        f"Plan {plan.plan_id} {action} cell {plan.cell_id} ({plan.cell_name}): "
         f"a {plan.target_rate:g}% energy-saving plan during {plan.window} on {plan.date}, "
         f"saving an estimated {plan.estimated_saving_kwh:.2f} kWh of "
         f"{plan.baseline_energy_kwh:.2f} kWh."

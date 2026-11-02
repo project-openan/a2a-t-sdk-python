@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
@@ -53,6 +53,9 @@ from protocol.decision_provider import ScriptedDecisionProvider
 from protocol.messages import (
     END_MESSAGE_TEXT,
     SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
+    SAMPLE_PHASE_BASELINE,
+    SAMPLE_PHASE_METADATA_KEY,
+    SAMPLE_PHASE_MODIFY,
     SAMPLE_PROPOSAL_METADATA_KEY,
 )
 from shared.config import SampleConfig
@@ -61,6 +64,7 @@ from shared.run_constants import FINAL_STATE_INTENT_NOT_CONFIRMED
 from shared.trace import (
     PHASE_NEGOTIATION,
     PHASE_RESOLUTION,
+    PHASE_TASK_MODIFY,
     PHASE_TASK_PROMPT,
     PHASE_TASK_VALIDATION,
     PHASES,
@@ -320,6 +324,71 @@ async def test_accept_span_carries_the_refilled_task_t_and_the_negotiation_paylo
     assert str(accept["taskT"]).startswith("Refilled Task-T prompt:")
     assert str(accept["negotiationT"]).startswith("Accept:")
     assert str(accept["negotiationUri"]).endswith("/Negotiation-T/v1")
+
+
+async def test_two_phase_run_sends_a_modify_task_t_on_the_same_task() -> None:
+    """The baseline report leaves the Task open and the follow-up continues it with Modify."""
+    spans: list[dict[str, object]] = []
+    prompt_client = FakePromptClient()
+    policy = replace(
+        DEMO_CLIENT_POLICY,
+        follow_up_data=lambda _language: (
+            {"operationType": "Modify", "region": "Songshanhu"},
+            {"operationType": "operation type: Create or Modify"},
+        ),
+    )
+    baseline_batch = [
+        status_event("TASK_STATE_SUBMITTED"),
+        {
+            "kind": "artifact",
+            "task_id": "task-1",
+            "context_id": CONTEXT_ID,
+            "artifact_id": "artifact-1",
+            "name": "energy saving intent report",
+            "data": {"summary": "Baseline plan applied", "target_rate": 10},
+        },
+        status_event("TASK_STATE_WORKING"),
+    ]
+    modify_batch = [
+        {
+            "kind": "artifact",
+            "task_id": "task-1",
+            "context_id": CONTEXT_ID,
+            "artifact_id": "artifact-1",
+            "name": "energy saving intent report",
+            "data": {"summary": "Plan modified", "target_rate": 20},
+        },
+        status_event("TASK_STATE_COMPLETED"),
+    ]
+    transport = ScriptedTransport([baseline_batch, modify_batch])
+
+    result = await run_client_flow(
+        prompt_client=prompt_client,
+        transport=transport,
+        user_request="Baseline then modify",
+        provider=ScriptedDecisionProvider(()),
+        language="en-US",
+        policy=policy,
+        trace_sink=spans.append,
+    )
+
+    assert len(transport.requests) == 2
+    baseline, modify = transport.requests
+    baseline_metadata = MessageToDict(baseline.message.metadata)
+    modify_metadata = MessageToDict(modify.message.metadata)
+    assert not baseline.message.task_id
+    assert baseline_metadata[SAMPLE_PHASE_METADATA_KEY] == SAMPLE_PHASE_BASELINE
+    assert modify.message.task_id == "task-1"
+    assert modify.message.context_id == CONTEXT_ID
+    assert modify.message.parts[0].text == "modify ran energy saving task"
+    assert modify_metadata[SAMPLE_PHASE_METADATA_KEY] == SAMPLE_PHASE_MODIFY
+    assert '"operationType": "Modify"' in str(modify_metadata[TASK_T_EXTENSION_URI])
+
+    sent = [span for span in spans if span["kind"] == "message_sent"]
+    assert [span["phase"] for span in sent] == [PHASE_TASK_VALIDATION, PHASE_TASK_MODIFY]
+    assert result.task_id == "task-1"
+    assert [report["target_rate"] for report in result.reports] == [10, 20]
+    assert result.report == result.reports[-1]
 
 
 async def test_intent_gate_can_stop_the_run_before_any_task_t_is_sent() -> None:

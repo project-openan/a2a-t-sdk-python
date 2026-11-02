@@ -65,17 +65,20 @@ _REDACTED_KEYS: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: The eight Run Explorer phases, in display order.
+#: The Run Explorer phases, in display order.
 PHASE_DISPATCH: Final[str] = "dispatch"
 PHASE_TASK_PROMPT: Final[str] = "task_prompt"
 PHASE_TASK_VALIDATION: Final[str] = "task_validation"
+#: Second Task-T of a two-phase run: the Modify follow-up sent on the existing Task.
+PHASE_TASK_MODIFY: Final[str] = "task_modify"
 PHASE_NEGOTIATION: Final[str] = "negotiation"
 PHASE_RESOLUTION: Final[str] = "resolution"
 PHASE_EXECUTION: Final[str] = "execution"
 PHASE_REPORT: Final[str] = "report"
 PHASE_DONE: Final[str] = "done"
 
-#: All phases, in display order.
+#: All single-phase phases, in display order. ``PHASE_TASK_MODIFY`` is an optional phase of the
+#: two-phase planned-outage run; it is not part of every run's phase set.
 PHASES: Final[tuple[str, ...]] = (
     PHASE_DISPATCH,
     PHASE_TASK_PROMPT,
@@ -640,6 +643,8 @@ def infer_decision_phase(action: str) -> str:
 _STAGE_PHASE_PREFIXES: Final[tuple[tuple[str, str], ...]] = (
     ("task_t_accept_validation", PHASE_RESOLUTION),
     ("task_t_slot_extraction_refill", PHASE_RESOLUTION),
+    ("task_t_modify_validation", PHASE_TASK_MODIFY),
+    ("task_t_modify_extraction", PHASE_TASK_MODIFY),
     ("task_t_server_validation", PHASE_TASK_VALIDATION),
     ("content_validation", PHASE_TASK_VALIDATION),
     ("task_t_", PHASE_TASK_PROMPT),
@@ -989,6 +994,7 @@ __all__ = [
     "PHASE_NEGOTIATION",
     "PHASE_REPORT",
     "PHASE_RESOLUTION",
+    "PHASE_TASK_MODIFY",
     "PHASE_TASK_PROMPT",
     "PHASE_TASK_VALIDATION",
     "SCHEMA_VERSION",

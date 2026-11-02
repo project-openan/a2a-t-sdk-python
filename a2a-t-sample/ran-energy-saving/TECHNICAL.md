@@ -89,7 +89,8 @@ python run_demo.py --ui --scenario information --model-mode offline
 
 The page opens on the presentation view: a 16:9 stage (engineer, OSS Agent, RAN Agent, MIE and radio
 sites, with the A2A-T channel between them) and three evidence panels. Eight examples cover use case
-1 (night-time energy saving, complete and negotiated) and use case 2 (planned power outage).
+1 (night-time energy saving, complete and negotiated) and use case 2 (planned power outage, a
+Create baseline followed by a real Modify continuation on the same Task).
 
 The presentation supports two brand palettes. `--brand orange|huawei` (or
 `A2AT_SAMPLE_UI_BRAND`) sets the start-up default; the top-bar button switches at runtime and stores
@@ -698,7 +699,7 @@ The expected sequences are asserted by `tests/test_scenarios.py` and `tests/test
 | `feasibility` | Infeasible conditions: the NMS proposes an alternative | A guaranteed rate conflicts with an 18-hour power outage (`content.rule_violation`). | `S:Propose(1)` (alternative plan) → `C:Accept(1)` | Task `COMPLETED` + report (`task_completed`) |
 | `reject` | The OSS cannot provide the value: the negotiation ends | The client cannot provide the missing throughput target. | `S:Propose(1)` → `C:Reject(1)` → `S:Message("协商已结束")` | No Task (`no_task_negotiation_ended`) |
 | `abort` | No convergence: the NMS aborts after the round budget | The client keeps counter-proposing a plan the policy cannot accept. | `S:Propose(1)` → `C:Propose(1)` → `S:Propose(2)` → `C:Propose(2)` → `S:Propose(3)` → `C:Propose(3)` → `S:Abort(3)` | No Task (`no_task_negotiation_aborted`) |
-| `outage` | Complete use case 2: planned outage, lower the guarantee during the outage | The request carries the site list, the 03:00–05:00 outage and the 2 Mbps guarantee. | none | Task `COMPLETED` + report (`task_completed`, `cell-002` 01:00–05:00) |
+| `outage` | Two-phase use case 2: a Create baseline, then a real Modify continuation on the same Task | Phase 1 creates the two-site baseline (`cell-002` 01:00–05:00 at 10%) and leaves the Task `WORKING`; phase 2 sends a Modify Task-T for the 03:00–05:00 outage, updates the same plan to 20%, replaces the report artifact and completes the Task. | none | Task `COMPLETED` + modified report (`task_completed`, `cell-002` 01:00–05:00 at 20%) |
 
 Notes:
 
@@ -1073,7 +1074,7 @@ The sample is deliberately a prototype. Before production:
 | [`shared/agent_card.py`](shared/agent_card.py) | AgentCard identity constants shared by the client (discovery) and the server (card build). |
 | [`shared/sdk_env.py`](shared/sdk_env.py) | Per-run SDK `.env` builder shared by both runtimes (no client↔server import). |
 | [`shared/models.py`](shared/models.py) | `NegotiationDecision` (client `output_schema`) and the provider-facing proposal view. |
-| [`demo/scenario.py`](demo/scenario.py) | Seven scenario definitions: requests, expected performative/round sequence, terminal state, offline decisions; `night` and `outage` are complete requests with no negotiation. |
+| [`demo/scenario.py`](demo/scenario.py) | Eight scenario definitions: requests, expected performative/round sequence, terminal state, offline decisions; `night` and `outage` are complete requests with no negotiation. `outage` is two-phase: a Create baseline followed by a real Modify continuation on the same Task. |
 | [`shared/task_schema.py`](shared/task_schema.py) | Caller parameter schema used by server validation and client accept refill. |
 | [`shared/sqlite.py`](shared/sqlite.py) | Shared connection settings, read-only access, `user_version` and the ordered migration runner. |
 | [`shared/http_security.py`](shared/http_security.py) | Loopback bind policy, bearer middleware, `/health`, `/ready` and `/metrics` helpers. |

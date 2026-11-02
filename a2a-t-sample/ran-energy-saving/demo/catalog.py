@@ -19,6 +19,7 @@ from demo.scenario import (
     accept_filled_params,
     complete_initial_params,
     expected_negotiation_target,
+    follow_up_initial_params,
     get_scenario,
     resolve_user_request,
     task_t_data_schema,
@@ -43,6 +44,16 @@ def to_run_spec(scenario: Scenario, *, language: str = LANGUAGE_ZH) -> RunSpec:
         schema = task_t_data_schema(language)
         values = dict(initial)
         policy = replace(DEMO_CLIENT_POLICY, initial_data=lambda _language: (values, schema))
+    follow_up = follow_up_initial_params(scenario.name, language)
+    if follow_up is not None:
+        # The planned-outage scenario is a real two-phase A2A run: the first Task-T creates a
+        # baseline Task and the follow-up Modify Task-T continues the same Task.
+        schema = task_t_data_schema(language)
+        follow_up_values = dict(follow_up)
+        policy = replace(
+            policy,
+            follow_up_data=lambda _language: (follow_up_values, schema),
+        )
     if scenario.name == SCENARIO_UNKNOWN_AREA:
         # Only the area was wrong. The accept confirms a served area and keeps the requested
         # throughput windows instead of replacing them with the generic base target.

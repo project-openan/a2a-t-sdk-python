@@ -44,6 +44,10 @@ class ScriptedChatModel(BaseChatModel):
     """
 
     dataset_date: str = ""
+    #: Task-T operation type of this execution (``Create`` or ``Modify``).
+    operation: str = "Create"
+    #: Plan id a Modify execution updates in place.
+    existing_plan_id: str = ""
     _turn: int = PrivateAttr(default=0)
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
@@ -77,6 +81,7 @@ class ScriptedChatModel(BaseChatModel):
             self._turn += 1
 
         cell_id, window, target_rate = self._plan_args(messages)
+        modify = self.operation.strip().lower() == "modify"
         if turn == 0:
             message = self._tool_call(
                 "get_cell_energy_profile",
@@ -90,17 +95,35 @@ class ScriptedChatModel(BaseChatModel):
                 turn,
             )
         elif turn == 2:
-            message = self._tool_call(
-                "apply_energy_saving_plan",
-                {"cell_id": cell_id, "window": window, "target_rate": target_rate},
-                turn,
-            )
+            if modify:
+                message = self._tool_call(
+                    "modify_energy_saving_plan",
+                    {
+                        "plan_id": self.existing_plan_id,
+                        "cell_id": cell_id,
+                        "window": window,
+                        "target_rate": target_rate,
+                    },
+                    turn,
+                )
+            else:
+                message = self._tool_call(
+                    "apply_energy_saving_plan",
+                    {"cell_id": cell_id, "window": window, "target_rate": target_rate},
+                    turn,
+                )
         elif turn == 3:
             plan_id = self._find_plan_id(messages)
             if plan_id is None:
                 # The plan was not applied (for example the engineer rejected the change at the
                 # approval gate), so the run ends without a report.
-                message = AIMessage(content="The plan was not applied; no report is generated.")
+                message = AIMessage(
+                    content=(
+                        "The plan was not modified; no report is generated."
+                        if modify
+                        else "The plan was not applied; no report is generated."
+                    )
+                )
             else:
                 message = self._tool_call(
                     "generate_energy_saving_report",
@@ -108,7 +131,13 @@ class ScriptedChatModel(BaseChatModel):
                     turn,
                 )
         else:
-            message = AIMessage(content=("The energy-saving plan was applied and the report was generated."))
+            message = AIMessage(
+                content=(
+                    "The energy-saving plan was modified and the report was generated."
+                    if modify
+                    else "The energy-saving plan was applied and the report was generated."
+                )
+            )
         return ChatResult(generations=[ChatGeneration(message=message)])
 
     def _plan_args(self, messages: list[BaseMessage]) -> tuple[str, str, str]:
@@ -127,6 +156,10 @@ class ScriptedChatModel(BaseChatModel):
             return "cell-003", "00:00~06:00", "28"
         if "power outage" in lower or "停电" in text:
             return "cell-002", "01:00~05:00", "20"
+        if "site 1" in lower or "site 2" in lower or "站点1" in text or "站点2" in text:
+            # The two-site baseline is the micro cell's normal plan; the planned-outage Modify
+            # raises the same plan to the cell's maximum saving rate during the outage window.
+            return "cell-002", "01:00~05:00", "10"
         return "cell-001", "00:00~06:00", "30"
 
     def _tool_call(self, name: str, args: dict[str, object], turn: int) -> AIMessage:
@@ -148,7 +181,7 @@ class ScriptedChatModel(BaseChatModel):
         for message in reversed(messages):
             if not isinstance(message, ToolMessage):
                 continue
-            if message.name != "apply_energy_saving_plan":
+            if message.name not in ("apply_energy_saving_plan", "modify_energy_saving_plan"):
                 continue
             try:
                 payload = json.loads(str(message.content))
@@ -160,7 +193,12 @@ class ScriptedChatModel(BaseChatModel):
         raise PlannerError("The scripted planner reached the report step without an apply result.")
 
 
-def build_planner_model(config: SampleConfig) -> BaseChatModel:
+def build_planner_model(
+    config: SampleConfig,
+    *,
+    operation: str = "Create",
+    existing_plan_id: str = "",
+) -> BaseChatModel:
     """Build the planner model of the configured mode.
 
     Args:
@@ -170,7 +208,11 @@ def build_planner_model(config: SampleConfig) -> BaseChatModel:
         ``ScriptedChatModel`` in offline mode, ``ChatOpenAI`` in live mode.
     """
     if config.is_offline:
-        return ScriptedChatModel(dataset_date=ran_data.dataset_date())
+        return ScriptedChatModel(
+            dataset_date=ran_data.dataset_date(),
+            operation=operation,
+            existing_plan_id=existing_plan_id,
+        )
 
     from langchain_openai import ChatOpenAI
 
@@ -227,13 +269,19 @@ def build_system_prompt(*, dataset_catalog: str | None = None) -> str:
         "available window covers the outage and keep its target rate within the cell's maximum "
         "saving rate.\n"
         "8. Do not invent cells, windows, rates, or plan ids.\n"
-        "9. When the report is generated, return a short confirmation and stop calling tools."
+        "9. When the report is generated, return a short confirmation and stop calling tools.\n"
+        "10. When the accepted Task-T operation type is Modify and an existing plan is provided, "
+        "update that plan in place with modify_energy_saving_plan and keep its plan_id. Never call "
+        "apply_energy_saving_plan for a Modify task and never allocate a second plan."
     )
 
 
 def build_planner_input(
     task_prompt: str,
     negotiation_context: Mapping[str, object] | None,
+    *,
+    operation: str = "Create",
+    existing_plan: Mapping[str, object] | None = None,
 ) -> str:
     """Build the human message that carries the accepted Task-T into the graph."""
     context_block = ""
@@ -242,10 +290,18 @@ def build_planner_input(
             "\nNegotiation context (accepted):\n"
             f"{json.dumps(negotiation_context, ensure_ascii=False, sort_keys=True)}\n"
         )
+    modify_block = ""
+    if operation.strip().lower() == "modify" and existing_plan is not None:
+        modify_block = (
+            "\nOperation: Modify. Update the existing plan in place and keep its plan_id; do not "
+            "allocate a second plan.\n"
+            "Existing plan to update:\n"
+            f"{json.dumps(dict(existing_plan), ensure_ascii=False, sort_keys=True)}\n"
+        )
     return (
         "Execute the accepted task.\n"
         f"Accepted Task-T:\n{task_prompt}\n"
-        f"{context_block}\n"
+        f"{context_block}{modify_block}\n"
         "Follow the tool rules and stop once the report is generated."
     )
 

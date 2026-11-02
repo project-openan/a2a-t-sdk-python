@@ -70,6 +70,7 @@ from shared.task_schema import TASK_PARAM_SCHEMA
 from shared.trace import (
     PHASE_NEGOTIATION,
     PHASE_RESOLUTION,
+    PHASE_TASK_MODIFY,
     PHASE_TASK_PROMPT,
     PHASE_TASK_VALIDATION,
     TraceRecorder,
@@ -84,6 +85,9 @@ from protocol.decision_provider import NegotiationDecisionProvider
 from protocol.messages import (
     END_MESSAGE_TEXT,
     SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
+    SAMPLE_PHASE_BASELINE,
+    SAMPLE_PHASE_METADATA_KEY,
+    SAMPLE_PHASE_MODIFY,
     SAMPLE_PROPOSAL_METADATA_KEY,
     SAMPLE_RUN_ID_METADATA_KEY,
     TASK_TEMPLATE_URI,
@@ -99,6 +103,9 @@ _LOGGER = logging.getLogger("ran_energy_saving.client_flow")
 
 #: Short label carried in the text part of every message (the protocol content lives in metadata).
 TASK_REQUEST_LABEL: Final[str] = "create ran energy saving task"
+
+#: Short label of the follow-up Task-T that modifies an existing Task.
+TASK_MODIFY_LABEL: Final[str] = "modify ran energy saving task"
 
 #: Final state when a terminal Task state other than COMPLETED is reached.
 FINAL_STATE_TASK_REJECTED: Final[str] = "task_rejected"
@@ -230,7 +237,9 @@ class ClientFlowResult:
         decisions: Decisions returned by the provider, in order.
         context_id: A2A context id of the conversation, when observed.
         task_id: Task id of the created task, when one was created.
-        report: Report artifact payload/text of a completed task, when observed.
+        report: Last report artifact payload/text of a completed task, when observed.
+        reports: Report artifact payloads in arrival order (a two-phase run has a baseline report
+            and the modified report).
     """
 
     events: list[dict[str, object]] = field(default_factory=list)
@@ -239,6 +248,7 @@ class ClientFlowResult:
     context_id: str | None = None
     task_id: str | None = None
     report: dict[str, object] | None = None
+    reports: list[dict[str, object]] = field(default_factory=list)
 
 
 def is_terminal_event(event: Mapping[str, object]) -> bool:
@@ -564,6 +574,7 @@ async def run_client_flow(
             detail=detail,
         )
 
+    follow_up = policy.follow_up_data(language)
     with trace_stage("task_t_slot_extraction"):
         initial_data = policy.initial_data(language)
         if initial_data is not None:
@@ -605,6 +616,10 @@ async def run_client_flow(
     if run_id:
         # Sample-only correlation of the server trace with this client run (design §4).
         initial_metadata[SAMPLE_RUN_ID_METADATA_KEY] = run_id
+    if follow_up is not None:
+        # A two-phase run leaves the baseline Task WORKING so the Modify follow-up can continue
+        # it. The marker is sample-only and does not change the Task-T extension payload.
+        initial_metadata[SAMPLE_PHASE_METADATA_KEY] = SAMPLE_PHASE_BASELINE
     initial_request = _build_message_request(metadata=initial_metadata, label=label)
     initial_context = _call_context((TASK_T_EXTENSION_URI,), call_timeout_seconds)
 
@@ -624,6 +639,56 @@ async def run_client_flow(
     exchanges += 1
     collect(batch)
     context_id = context_id or _context_id_of(batch)
+
+    if follow_up is not None:
+        follow_task_id = _task_id_of(batch)
+        if not follow_task_id:
+            raise ClientFlowError(
+                "The baseline Task did not expose a task id for the Modify follow-up."
+            )
+        follow_data, follow_schema = follow_up
+        with trace_stage("task_t_modify_extraction"):
+            follow_content = prompt_client.generate_task_prompt_from_data_with_schema(
+                follow_data,
+                follow_schema,
+                task_template_uri,
+            )
+        follow_text = _require_prompt_text(follow_content, "the Modify Task-T prompt")
+        emit_trace(
+            "task_prompt_rendered",
+            phase=PHASE_TASK_MODIFY,
+            title="Modify Task-T prompt rendered",
+            detail={
+                "promptText": follow_text,
+                "templateUri": follow_content.template_uri or task_template_uri,
+                "length": len(follow_text),
+            },
+        )
+        follow_metadata: dict[str, object] = {
+            follow_content.extension_uri or TASK_T_EXTENSION_URI: follow_text,
+            TEMPLATE_URI_METADATA_KEY: follow_content.template_uri or task_template_uri,
+            SAMPLE_PHASE_METADATA_KEY: SAMPLE_PHASE_MODIFY,
+        }
+        if run_id:
+            follow_metadata[SAMPLE_RUN_ID_METADATA_KEY] = run_id
+        follow_request = _build_message_request(
+            metadata=follow_metadata,
+            label=TASK_MODIFY_LABEL,
+            context_id=context_id,
+            task_id=follow_task_id,
+        )
+        emit_message_sent(
+            follow_request,
+            phase=PHASE_TASK_MODIFY,
+            title="Modify Task-T sent",
+            performative="TASK_T",
+            round_number=None,
+            context_id=context_id,
+        )
+        batch = await transport.send(follow_request, initial_context)
+        exchanges += 1
+        collect(batch)
+        context_id = context_id or _context_id_of(batch)
 
     def finish(state: str) -> ClientFlowResult:
         """Record the terminal state, fill the result and log the outcome."""
@@ -793,14 +858,21 @@ def _build_message_request(
     metadata: Mapping[str, object],
     label: str,
     context_id: str | None = None,
+    task_id: str | None = None,
 ) -> SendMessageRequest:
-    """Build one user-role A2A message request with an optional metadata map."""
+    """Build one user-role A2A message request with an optional metadata map.
+
+    ``task_id`` turns the request into a real A2A continuation of the named Task; without it the
+    server creates a new Task.
+    """
     request = SendMessageRequest()
     request.message.message_id = str(uuid.uuid4())
     request.message.role = Role.ROLE_USER
     request.message.parts.add().text = label
     if context_id:
         request.message.context_id = context_id
+    if task_id:
+        request.message.task_id = task_id
     for key, value in metadata.items():
         if value is not None:
             # The bundled protobuf stubs do not model the dynamic Struct mapping.
@@ -1054,6 +1126,15 @@ def _string_field(event: Mapping[str, object], key: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _task_id_of(events: list[dict[str, object]]) -> str | None:
+    """Return the last task id carried by a batch of normalized events."""
+    for event in reversed(events):
+        task_id = _string_field(event, "task_id")
+        if task_id:
+            return task_id
+    return None
+
+
 def _context_id_of(events: list[dict[str, object]]) -> str | None:
     """Return the first context id carried by a batch of normalized events."""
     for event in events:
@@ -1201,7 +1282,7 @@ def _fill_result(result: ClientFlowResult, context_id: str | None) -> None:
     named report still exposes something useful.
     """
     result.context_id = result.context_id or context_id
-    report_event: dict[str, object] | None = None
+    report_events: list[dict[str, object]] = []
     fallback_event: dict[str, object] | None = None
     for event in result.events:
         task_id = _string_field(event, "task_id")
@@ -1209,16 +1290,21 @@ def _fill_result(result: ClientFlowResult, context_id: str | None) -> None:
             result.task_id = task_id
         if event.get("kind") == "artifact":
             fallback_event = fallback_event or event
-            if report_event is None and "report" in (_string_field(event, "name") or "").lower():
-                report_event = event
+            if "report" in (_string_field(event, "name") or "").lower():
+                report_events.append(event)
     # A rejected change still carries tool artifacts (the profile and the evaluation), but it has
     # no report. Never expose the first tool result as if it were the energy-saving report.
     if result.final_state != FINAL_STATE_TASK_COMPLETED:
         return
-    selected = report_event or fallback_event
-    if selected is not None and result.report is None:
-        data = selected.get("data")
+    selected = report_events or ([fallback_event] if fallback_event is not None else [])
+    for event in selected:
+        data = event.get("data")
         if isinstance(data, Mapping):
-            result.report = dict(data)
+            result.reports.append(dict(data))
         else:
-            result.report = {key: value for key, value in selected.items() if key in ("text", "name", "artifact_id")}
+            result.reports.append(
+                {key: value for key, value in event.items() if key in ("text", "name", "artifact_id")}
+            )
+    if result.reports:
+        # A two-phase run has a baseline report and the modified report; the latter is the result.
+        result.report = result.reports[-1]

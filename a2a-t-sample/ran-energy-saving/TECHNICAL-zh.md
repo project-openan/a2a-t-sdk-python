@@ -83,7 +83,7 @@ python run_demo.py --ui --scenario information --model-mode offline
 ```
 
 页面默认打开演示视图：左侧是 16:9 舞台（网络工程师、OSS Agent、RAN Agent、MIE 与无线站点，中间是
-A2A-T 通道），右侧是三块证据面板。八个示例覆盖用例 1（夜间节能，含协商与无协商）和用例 2（计划停电）。
+A2A-T 通道），右侧是三块证据面板。八个示例覆盖用例 1（夜间节能，含协商与无协商）和用例 2（计划停电，同一 Task 上先 Create 基线再执行真正的 Modify 续接）。
 
 演示视图支持两套品牌主题。`--brand orange|huawei`（或 `A2AT_SAMPLE_UI_BRAND`）决定启动默认值；
 顶栏按钮可实时切换并把选择写入 `localStorage`；`?brand=` 对单次页面加载覆盖前两者。CSS 使用语义
@@ -576,7 +576,7 @@ P95 和审批等待。
 | `feasibility` | 条件不可行：网管给替代方案 | 保障速率与 18 小时停电冲突（`content.rule_violation`）。 | `S:Propose(1)`（替代方案） → `C:Accept(1)` | Task `COMPLETED` + 报告（`task_completed`） |
 | `reject` | OSS 无法提供：协商结束 | 客户端无法提供缺失的保障速率目标。 | `S:Propose(1)` → `C:Reject(1)` → `S:Message("协商已结束")` | 无 Task（`no_task_negotiation_ended`） |
 | `abort` | 反复不收敛：达到轮次上限后主动中止 | 客户端反复反提议策略始终无法接受的方案。 | `S:Propose(1)` → `C:Propose(1)` → `S:Propose(2)` → `C:Propose(2)` → `S:Propose(3)` → `C:Propose(3)` → `S:Abort(3)` | 无 Task（`no_task_negotiation_aborted`） |
-| `outage` | 完整用例 2：计划停电，停电期间下调保障 | 请求包含站点列表、03:00–05:00 停电和 2 Mbps 保障。 | 无 | Task `COMPLETED` + 报告（`task_completed`，`cell-002` 01:00–05:00） |
+| `outage` | 两阶段用例 2：先创建 Create 基线，再在同一 Task 上执行真正的 Modify 续接 | 阶段 1 创建双站点基线（`cell-002` 01:00–05:00，10%）并让 Task 保持 `WORKING`；阶段 2 发送针对 03:00–05:00 停电的 Modify Task-T，将同一 plan 更新到 20%，替换报告 artifact 并完成 Task。 | 无 | Task `COMPLETED` + 修改后报告（`task_completed`，`cell-002` 01:00–05:00，20%） |
 
 说明：
 
@@ -841,7 +841,7 @@ python run_demo.py --scenario target --mode auto --model-mode live
 | [`shared/http_security.py`](shared/http_security.py) | 回环绑定策略、Bearer 中间件、`/health`、`/ready` 与 `/metrics` 助手。 |
 | [`shared/metrics.py`](shared/metrics.py) | 无依赖的 Counter/Gauge/Summary 注册表与 Prometheus 文本渲染。 |
 | [`shared/models.py`](shared/models.py) | `NegotiationDecision`（客户端 `output_schema`）与 Provider 视角的提议视图。 |
-| [`demo/scenario.py`](demo/scenario.py) | 八个场景定义：请求、期望 performative/round 序列、终态、离线决策；`night` 与 `outage` 是完整请求，不触发协商。 |
+| [`demo/scenario.py`](demo/scenario.py) | 八个场景定义：请求、期望 performative/round 序列、终态、离线决策；`night` 与 `outage` 是完整请求，不触发协商。`outage` 是两阶段：先 Create 基线，再在同一 Task 上执行真正的 Modify 续接。 |
 | [`shared/task_schema.py`](shared/task_schema.py) | 服务端校验与客户端 accept 重填共用的调用方参数 schema。 |
 | [`demo/ran_data.py`](demo/ran_data.py) + [`resources/ran_data/cells.json`](resources/ran_data/cells.json) | 进程内 RAN 数据集、方案评估与进程内方案存储。 |
 | [`demo/scripted_llm.py`](demo/scripted_llm.py) + [`resources/mock_llm/`](resources/mock_llm) | 通过官方工厂注册的脚本化 SDK `LLMClient`；按 schema 路由的预置响应。 |

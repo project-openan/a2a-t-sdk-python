@@ -46,4 +46,6 @@ class ServerAgentFactory(Protocol):
         task_prompt: str,
         negotiation_context: Mapping[str, object] | None,
         approval_gate: Any | None = None,
+        operation: str = "Create",
+        existing_plan: Mapping[str, object] | None = None,
     ) -> ServerAgentSpec: ...

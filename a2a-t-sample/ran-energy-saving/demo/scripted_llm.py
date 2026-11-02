@@ -67,6 +67,7 @@ STAGE_CONTENT_VALIDATION_FEASIBILITY = "content_validation_feasibility"
 STAGE_CONTENT_VALIDATION_TARGET_REFILL = "content_validation_target_refill"
 STAGE_CONTENT_VALIDATION_FEASIBILITY_REFILL = "content_validation_feasibility_refill"
 STAGE_CONTENT_VALIDATION_OUTAGE = "content_validation_outage"
+STAGE_CONTENT_VALIDATION_OUTAGE_BASELINE = "content_validation_outage_baseline"
 STAGE_NEGOTIATION_PROPOSE_EXTRACTION = "negotiation_propose_extraction"
 STAGE_NEGOTIATION_ACCEPT_EXTRACTION = "negotiation_accept_extraction"
 STAGE_NEGOTIATION_REJECT_EXTRACTION = "negotiation_reject_extraction"
@@ -98,6 +99,7 @@ _STAGE_FILES: dict[str, str] = {
     STAGE_CONTENT_VALIDATION_TARGET_REFILL: "content_validation_target_refill.json",
     STAGE_CONTENT_VALIDATION_FEASIBILITY_REFILL: "content_validation_feasibility_refill.json",
     STAGE_CONTENT_VALIDATION_OUTAGE: "content_validation_outage.json",
+    STAGE_CONTENT_VALIDATION_OUTAGE_BASELINE: "content_validation_outage_baseline.json",
     STAGE_NEGOTIATION_PROPOSE_EXTRACTION: "negotiation_propose_extraction.json",
     STAGE_NEGOTIATION_ACCEPT_EXTRACTION: "negotiation_accept_extraction.json",
     STAGE_NEGOTIATION_REJECT_EXTRACTION: "negotiation_reject_extraction.json",
@@ -151,6 +153,10 @@ _OUTAGE_VALIDATION_MARKERS = (
     "power outage from 03:00 to 05:00",
     "03:00~05:00停电",
 )
+
+#: Markers of the two-site baseline Task-T (phase 1 of the planned-outage run). It has no outage
+#: wording, so it needs its own create-shaped validation fixture.
+_OUTAGE_BASELINE_VALIDATION_MARKERS = ("00:00~24:00,10Mbps", "00:00~24:00, 10Mbps")
 
 #: Throughput segment of the complete (information-accept) target. A rendered Task-T prompt that
 #: carries the region but none of this marker omits the time-segmented guaranteed throughput
@@ -533,6 +539,8 @@ def route_structured_call(
         return STAGE_SLOT_EXTRACTION
     if "semantic_verdict" in property_names:
         head = _head_before_markers(user_content, _TEMPLATE_CONTENT_LABELS)
+        if any(marker in head for marker in _OUTAGE_BASELINE_VALIDATION_MARKERS):
+            return STAGE_CONTENT_VALIDATION_OUTAGE_BASELINE
         if any(marker in head for marker in _OUTAGE_VALIDATION_MARKERS):
             return STAGE_CONTENT_VALIDATION_OUTAGE
         if _is_target_validation_head(head):

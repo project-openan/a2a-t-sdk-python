@@ -32,13 +32,13 @@ from a2a.server.agent_execution.agent_executor import AgentExecutor
 from a2a.server.agent_execution.context import RequestContext
 from a2a.server.events.event_queue import EventQueue
 from a2a.server.tasks.task_updater import TaskUpdater
-from a2a.types import Part, TaskState
+from a2a.types import Part, Task, TaskState
 from a2a_t.core.metadata import (
     NEGOTIATION_CONTEXT_METADATA_KEY,
     TASK_T_EXTENSION_URI,
     TEMPLATE_URI_METADATA_KEY,
 )
-from google.protobuf.json_format import ParseDict
+from google.protobuf.json_format import MessageToDict, ParseDict
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
@@ -52,6 +52,8 @@ from protocol.approval_gate import (
     ApprovalRegistry,
 )
 from protocol.messages import (
+    SAMPLE_PHASE_BASELINE,
+    SAMPLE_PHASE_METADATA_KEY,
     SAMPLE_RUN_ID_METADATA_KEY,
     TASK_TEMPLATE_URI,
     format_rate_percent,
@@ -123,8 +125,8 @@ def _rate_text(value: object) -> str:
     return format_rate_percent(value)
 
 
-def _apply_completed_text(result: Mapping[str, object]) -> str:
-    """Render the apply result as an A2A status notification."""
+def _plan_change_text(result: Mapping[str, object], *, action: str = "applied to") -> str:
+    """Render one plan apply/modify result as an A2A status notification."""
     plan_id = str(result.get("plan_id") or "the plan")
     cell_id = str(result.get("cell_id") or "the cell")
     cell_name = result.get("cell_name")
@@ -132,13 +134,23 @@ def _apply_completed_text(result: Mapping[str, object]) -> str:
     rate = _rate_text(result.get("target_rate"))
     saved = result.get("estimated_saving_kwh")
     cell = f"{cell_id} ({cell_name})" if isinstance(cell_name, str) and cell_name else cell_id
-    progress = f"plan {plan_id} was applied to cell {cell}"
+    progress = f"plan {plan_id} was {action} cell {cell}"
     if window:
         progress += f" for {window}"
     progress += f" at {rate} energy saving"
     if isinstance(saved, (int, float)) and not isinstance(saved, bool):
         progress += f", estimated {float(saved):.2f} kWh saved"
     return _notification_text(result.get("region"), progress + ".")
+
+
+def _apply_completed_text(result: Mapping[str, object]) -> str:
+    """Render the apply result as an A2A status notification."""
+    return _plan_change_text(result)
+
+
+def _modify_completed_text(result: Mapping[str, object]) -> str:
+    """Render the Modify result as an A2A status notification."""
+    return _plan_change_text(result, action="modified on")
 
 
 def _report_ready_text(result: Mapping[str, object]) -> str:
@@ -159,6 +171,24 @@ DEFAULT_PLANNER_MAX_STEPS: Final[int] = 12
 
 #: Tool whose execution is gated by the engineer's approval.
 APPLY_TOOL_NAME: Final[str] = "apply_energy_saving_plan"
+
+#: Tool that updates the existing plan of a Modify Task in place.
+MODIFY_TOOL_NAME: Final[str] = "modify_energy_saving_plan"
+
+#: Status published after the baseline report, keeping the Task ``WORKING`` for the Modify follow-up.
+BASELINE_HOLD_TEXT: Final[str] = (
+    "Baseline plan applied; the task remains on duty and can be modified."
+)
+
+#: Status published when a validated Modify Task-T starts regenerating the strategy.
+MODIFY_STARTED_TEXT: Final[str] = (
+    "Target modified; the energy-saving strategy is being regenerated."
+)
+
+#: Data-collection status of a Modify execution (the baseline wording would be misleading).
+MODIFY_DATA_COLLECTED_TEXT: Final[str] = (
+    "Data collection completed for the modified sites; regenerating the optimization suggestions."
+)
 
 #: Trace stage of the approval gate.
 APPROVAL_STAGE: Final[str] = "approval_gate"
@@ -206,6 +236,73 @@ def _run_id(context: RequestContext) -> str:
         return trace_run_id
     value = _metadata(context).get(SAMPLE_RUN_ID_METADATA_KEY)
     return value if isinstance(value, str) else ""
+
+
+#: Process-local task id -> latest applied/modified plan, used by the Modify execution. The
+#: artifacts of the Task remain the durable fallback when the server restarts.
+_TASK_PLANS: dict[str, dict[str, object]] = {}
+_TASK_PLANS_LOCK = threading.Lock()
+
+
+def _sample_phase(context: RequestContext) -> str | None:
+    """Return the sample-only two-phase marker of the inbound message, when present."""
+    value = _metadata(context).get(SAMPLE_PHASE_METADATA_KEY)
+    return value if isinstance(value, str) else None
+
+
+def _remember_task_plan(task_id: str, plan: Mapping[str, object]) -> None:
+    """Remember the latest plan of one Task so a Modify follow-up can update it in place."""
+    if task_id and plan.get("plan_id"):
+        with _TASK_PLANS_LOCK:
+            _TASK_PLANS[task_id] = dict(plan)
+
+
+def _plan_from_artifact(task: Task) -> dict[str, object] | None:
+    """Read the latest plan payload from the Task's report or tool artifacts."""
+    for artifact in reversed(task.artifacts):
+        for part in artifact.parts:
+            payload: dict[str, object] | None = None
+            text = getattr(part, "text", "")
+            if text:
+                try:
+                    parsed = json.loads(text)
+                except (TypeError, ValueError):
+                    parsed = None
+                if isinstance(parsed, dict):
+                    payload = parsed
+            if payload is None:
+                data = getattr(part, "data", None)
+                if data is not None:
+                    try:
+                        parsed = MessageToDict(data)
+                    except (TypeError, ValueError):
+                        parsed = None
+                    if isinstance(parsed, dict):
+                        payload = parsed
+            if payload is not None and payload.get("plan_id"):
+                return payload
+    return None
+
+
+def _prior_plan(task: Task | None) -> dict[str, object] | None:
+    """Return the plan a Modify Task updates, preferring the in-process apply/modify result."""
+    if task is None:
+        return None
+    with _TASK_PLANS_LOCK:
+        remembered = _TASK_PLANS.get(task.id)
+    if remembered is not None:
+        return dict(remembered)
+    return _plan_from_artifact(task)
+
+
+def _report_artifact_id(task: Task | None) -> str | None:
+    """Return the artifact id of the Task's current report, when it has one."""
+    if task is None:
+        return None
+    for artifact in reversed(task.artifacts):
+        if artifact.name == REPORT_ARTIFACT_NAME and artifact.artifact_id:
+            return artifact.artifact_id
+    return None
 
 
 def _negotiation_context(context: RequestContext) -> dict[str, object] | None:
@@ -491,7 +588,62 @@ class LangGraphTaskExecutor(AgentExecutor):
             message=updater.new_agent_message([Part(text=DATA_COLLECTION_PROGRESS_TEXT)]),
         )
         _LOGGER.info("task accepted; running the planner")
-        await self._execute_task(context, updater, task.id, _task_prompt(context))
+        await self._execute_task(
+            context,
+            updater,
+            task.id,
+            _task_prompt(context),
+            hold_open=_sample_phase(context) == SAMPLE_PHASE_BASELINE,
+        )
+
+    async def execute_modify(
+        self,
+        context: RequestContext,
+        event_queue: EventQueue,
+        *,
+        prompt: str,
+        params: Mapping[str, object] | None = None,
+    ) -> None:
+        """Update an existing ``WORKING`` Task with a validated Modify Task-T.
+
+        The framework has already appended the follow-up message to the Task history. This method
+        reuses the Task id/context id, reads the plan created by the baseline phase, runs the
+        planner in Modify mode and publishes the updated report artifact and ``COMPLETED`` state on
+        the same Task.
+
+        Args:
+            context: request context whose ``current_task`` is the baseline Task.
+            event_queue: A2A event queue of the follow-up request.
+            prompt: validated Modify Task-T prompt.
+            params: parameters extracted from the Modify Task-T.
+        """
+        del params  # The prompt already carries them; the planner reads the Task-T.
+        task = context.current_task
+        if task is None:
+            raise ValueError("Cannot modify a Task that was not loaded")
+        prior_plan = _prior_plan(task)
+        if prior_plan is None:
+            updater = TaskUpdater(event_queue, task.id, task.context_id)
+            await updater.failed(
+                message=updater.new_agent_message(
+                    [Part(text="The Task has no baseline plan to modify.")]
+                )
+            )
+            return
+        updater = TaskUpdater(event_queue, task.id, task.context_id)
+        await updater.update_status(
+            TaskState.TASK_STATE_WORKING,
+            message=updater.new_agent_message([Part(text=MODIFY_STARTED_TEXT)]),
+        )
+        _LOGGER.info("task modify accepted; running the planner on plan %s", prior_plan.get("plan_id"))
+        await self._execute_task(
+            context,
+            updater,
+            task.id,
+            prompt,
+            operation="Modify",
+            existing_plan=prior_plan,
+        )
 
     async def execute_resumed(
         self,
@@ -544,8 +696,16 @@ class LangGraphTaskExecutor(AgentExecutor):
         updater: TaskUpdater,
         task_id: str,
         prompt: str,
+        *,
+        operation: str = "Create",
+        existing_plan: Mapping[str, object] | None = None,
+        hold_open: bool = False,
     ) -> None:
-        """Run the planner and map every failure to a terminal Task state."""
+        """Run the planner and map every failure to a terminal Task state.
+
+        ``hold_open`` publishes the baseline report but leaves the Task ``WORKING`` so the next
+        Task-T can continue it with a real Modify follow-up.
+        """
         execution_span_id = _emit_execution_span(context, task_id)
         negotiation_context = _negotiation_context(context)
         with log_context(
@@ -565,6 +725,9 @@ class LangGraphTaskExecutor(AgentExecutor):
                     approval_gate=self._build_approval_gate(
                         context, updater, task_id, execution_span_id
                     ),
+                    operation=operation,
+                    existing_plan=existing_plan,
+                    hold_open=hold_open,
                 )
             except asyncio.CancelledError:
                 _LOGGER.info("task cancelled")
@@ -836,13 +999,21 @@ class LangGraphTaskExecutor(AgentExecutor):
         *,
         prompt: str,
         approval_gate: Callable[..., Awaitable[bool]] | None,
+        operation: str = "Create",
+        existing_plan: Mapping[str, object] | None = None,
+        hold_open: bool = False,
     ) -> None:
         """Run the graph, publishing one artifact per tool result and the final report."""
+        factory_kwargs: dict[str, object] = {}
+        if operation.strip().lower() == "modify" or existing_plan is not None:
+            factory_kwargs["operation"] = operation
+            factory_kwargs["existing_plan"] = existing_plan
         if approval_gate is None:
             agent = self._agent_factory(
                 self._config,
                 task_prompt=prompt,
                 negotiation_context=negotiation_context,
+                **factory_kwargs,
             )
         else:
             agent = self._agent_factory(
@@ -850,6 +1021,7 @@ class LangGraphTaskExecutor(AgentExecutor):
                 task_prompt=prompt,
                 negotiation_context=negotiation_context,
                 approval_gate=approval_gate,
+                **factory_kwargs,
             )
         report_tool_name = agent.report_tool_name
         history: list[BaseMessage] = list(agent.initial_messages)
@@ -909,16 +1081,23 @@ class LangGraphTaskExecutor(AgentExecutor):
                         )
                         steps.append(step)
                         _emit_tool_span(context, task_id, execution_span_id, step)
-                        if step.result.get("ok") is True and name == APPLY_TOOL_NAME:
-                            # The apply tool result is not only an artifact: the reference demo
-                            # reports the execution result as an A2A status message, so the OSS
-                            # side receives a real notification instead of inferring it from the
-                            # tool artifact.
+                        if step.result.get("ok") is True and name in (
+                            APPLY_TOOL_NAME,
+                            MODIFY_TOOL_NAME,
+                        ):
+                            # The apply/modify tool result is not only an artifact: the reference
+                            # demo reports the execution result as an A2A status message, so the
+                            # OSS side receives a real notification instead of inferring it from
+                            # the tool artifact.
+                            _remember_task_plan(task_id, step.result)
+                            text = (
+                                _modify_completed_text(step.result)
+                                if name == MODIFY_TOOL_NAME
+                                else _apply_completed_text(step.result)
+                            )
                             await updater.update_status(
                                 TaskState.TASK_STATE_WORKING,
-                                message=updater.new_agent_message(
-                                    [Part(text=_apply_completed_text(step.result))]
-                                ),
+                                message=updater.new_agent_message([Part(text=text)]),
                             )
                         elif step.result.get("ok") is True and name == report_tool_name:
                             # Same for the final report: publish its summary as a notification
@@ -938,11 +1117,14 @@ class LangGraphTaskExecutor(AgentExecutor):
                             # The planner may read both cells before moving on; the reference demo
                             # reports "data collection completed" once, not once per profile.
                             collection_completed_sent = True
+                            collected_text = (
+                                MODIFY_DATA_COLLECTED_TEXT
+                                if operation.strip().lower() == "modify"
+                                else DATA_COLLECTION_COMPLETED_TEXT
+                            )
                             await updater.update_status(
                                 TaskState.TASK_STATE_WORKING,
-                                message=updater.new_agent_message(
-                                    [Part(text=DATA_COLLECTION_COMPLETED_TEXT)]
-                                ),
+                                message=updater.new_agent_message([Part(text=collected_text)]),
                             )
                         if name != report_tool_name:
                             await updater.add_artifact(
@@ -957,7 +1139,8 @@ class LangGraphTaskExecutor(AgentExecutor):
         denied = [
             step
             for step in steps
-            if step.name == APPLY_TOOL_NAME and step.result.get("error_code") == "approval_denied"
+            if step.name in (APPLY_TOOL_NAME, MODIFY_TOOL_NAME)
+            and step.result.get("error_code") == "approval_denied"
         ]
         if denied:
             reason = "The engineer rejected the change; nothing was applied."
@@ -998,12 +1181,25 @@ class LangGraphTaskExecutor(AgentExecutor):
         )
         report_part = Part()
         ParseDict(report, report_part.data)
+        prior_report_id = _report_artifact_id(context.current_task)
         await updater.add_artifact(
             [report_part, Part(text=summary)],
             name=REPORT_ARTIFACT_NAME,
             metadata=metadata,
+            artifact_id=prior_report_id,
+            append=False if prior_report_id else None,
             last_chunk=True,
         )
+        if hold_open:
+            # The baseline report is published, but the Task stays WORKING so the Modify follow-up
+            # can continue the same A2A Task.
+            _LOGGER.info("task baseline report ready; keeping the Task WORKING for Modify")
+            await updater.update_status(
+                TaskState.TASK_STATE_WORKING,
+                message=updater.new_agent_message([Part(text=BASELINE_HOLD_TEXT)]),
+                metadata=metadata,
+            )
+            return
         final_message = updater.new_agent_message(
             [Part(text=FINAL_TASK_TEXT)], metadata=metadata
         )
@@ -1097,6 +1293,17 @@ class NegotiationAgentExecutor(AgentExecutor):
                 return
             if outcome.task_request is None:
                 raise ValueError("The pre-task handler approved execution without a request context")
+            if outcome.modify_prompt is not None:
+                execute_modify = getattr(self._inner, "execute_modify", None)
+                if execute_modify is None:
+                    raise ValueError("The inner executor does not support modifying a Task")
+                await execute_modify(
+                    outcome.task_request,
+                    event_queue,
+                    prompt=outcome.modify_prompt,
+                    params=outcome.modify_params,
+                )
+                return
             if outcome.resume_prompt is not None:
                 execute_resumed = getattr(self._inner, "execute_resumed", None)
                 if execute_resumed is None:

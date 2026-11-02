@@ -17,6 +17,7 @@ from demo.agents.server_agent.tools import (
     evaluate_energy_saving_plan,
     generate_energy_saving_report,
     get_cell_energy_profile,
+    modify_energy_saving_plan,
 )
 
 
@@ -154,6 +155,27 @@ def test_apply_writes_a_plan_and_rejects_infeasible_plans() -> None:
     assert rejected["ok"] is False
     assert rejected["error_code"] == ERROR_PLAN_INFEASIBLE
     assert ran_data.list_plan_ids() == ("plan-cell-001-001",)
+
+
+def test_modify_updates_the_existing_plan_in_place() -> None:
+    applied = apply_energy_saving_plan("cell-002", "01:00~05:00", "10")
+    plan_id = applied["plan_id"]
+
+    modified = modify_energy_saving_plan(str(plan_id), "cell-002", "01:00~05:00", "20")
+
+    assert modified["ok"] is True
+    assert modified["plan_id"] == plan_id
+    assert modified["status"] == "modified"
+    assert modified["target_rate"] == 20
+    assert ran_data.list_plan_ids() == (plan_id,)
+
+
+def test_modify_rejects_an_unknown_plan_and_writes_nothing() -> None:
+    result = modify_energy_saving_plan("plan-cell-002-999", "cell-002", "01:00~05:00", "20")
+
+    assert result["ok"] is False
+    assert result["error_code"] == ERROR_UNKNOWN_PLAN
+    assert ran_data.list_plans() == ()
 
 
 def test_apply_reports_non_string_arguments_and_writes_nothing() -> None:

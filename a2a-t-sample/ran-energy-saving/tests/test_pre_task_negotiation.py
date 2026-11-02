@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from a2a.server.agent_execution.context import RequestContext
 from a2a.server.context import ServerCallContext, UnauthenticatedUser
-from a2a.types import Message, Role, SendMessageRequest, Task, TaskState
+from a2a.types import Message, Role, SendMessageRequest, Task, TaskState, TaskStatus
 from a2a_t.core.errors.catalog import ErrorCatalog
 from a2a_t.core.errors.exceptions import A2ATError, ContentValidationError, SlotValidationError
 from a2a_t.core.metadata import (
@@ -42,6 +42,8 @@ from google.protobuf.json_format import MessageToDict
 from protocol.messages import (
     END_MESSAGE_TEXT,
     SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
+    SAMPLE_PHASE_METADATA_KEY,
+    SAMPLE_PHASE_MODIFY,
     SAMPLE_PROPOSAL_METADATA_KEY,
     STRUCTURED_ERRORS_METADATA_KEY,
 )
@@ -664,6 +666,35 @@ async def test_pre_task_detection_uses_current_task_not_the_generated_task_id() 
     outcome = await gate.handle(context)
 
     assert outcome.short_circuit is False
+    assert len(server.task_calls) == 1
+
+
+async def test_modify_follow_up_is_validated_and_returns_a_modify_outcome() -> None:
+    gate, server = _gate()
+    server.task_params = {
+        "operationType": "Modify",
+        "region": "Songshanhu",
+        "guaranteedThroughputTarget": (
+            "{00:00~03:00,10Mbps}, {03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}"
+        ),
+        "siteList": "Site 1,Site 2",
+        "backgroundEvent": "planned power outage tomorrow 03:00~05:00",
+    }
+    message = _initial_message("## Operation Type\n\nModify\n\n## Task Type\n\nRAN energy saving")
+    message.metadata[SAMPLE_PHASE_METADATA_KEY] = SAMPLE_PHASE_MODIFY
+    task = Task(
+        id="task-1",
+        context_id=CONTEXT_ID,
+        status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
+    )
+
+    outcome = await gate.handle(_make_context(message, current_task=task))
+
+    assert outcome.short_circuit is False
+    assert outcome.task_request is not None
+    assert outcome.modify_prompt is not None
+    assert outcome.modify_params is not None
+    assert outcome.modify_params["operationType"] == "Modify"
     assert len(server.task_calls) == 1
 
 

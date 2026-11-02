@@ -49,6 +49,14 @@ def _no_initial_data(
     return None
 
 
+def _no_follow_up_data(
+    language: str,
+) -> tuple[Mapping[str, object], Mapping[str, object]] | None:
+    """Default policy: the run is single-phase and sends no Modify follow-up Task-T."""
+    del language
+    return None
+
+
 @dataclass(frozen=True)
 class ClientPolicy:
     """Business values of one OSS integration, supplied by the composition root.
@@ -58,6 +66,8 @@ class ClientPolicy:
         accept_text: natural-language accept confirmation, when the integration provides one.
         initial_data: structured Task-T values plus their data schema for integrations whose
             initial request is already complete; returning ``None`` keeps the text-extraction path.
+        follow_up_data: structured Task-T values plus their data schema for a real Modify follow-up
+            on the Task created by the initial phase; returning ``None`` keeps the run single-phase.
     """
 
     filled_params: Callable[[str, str], dict[str, object]] = _no_filled_params
@@ -65,6 +75,9 @@ class ClientPolicy:
     initial_data: Callable[[str], tuple[Mapping[str, object], Mapping[str, object]] | None] = (
         _no_initial_data
     )
+    follow_up_data: Callable[
+        [str], tuple[Mapping[str, object], Mapping[str, object]] | None
+    ] = _no_follow_up_data
 
 
 DEFAULT_CLIENT_POLICY: ClientPolicy = ClientPolicy()

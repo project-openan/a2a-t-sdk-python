@@ -31,19 +31,35 @@ def build_server_agent(
     negotiation_context: Mapping[str, object] | None,
     model: BaseChatModel | None = None,
     approval_gate: Any | None = None,
+    operation: str = "Create",
+    existing_plan: Mapping[str, object] | None = None,
 ) -> ServerAgentSpec:
     """Build one planner graph, its tools and the metadata the executor needs."""
     resolved = config or load_config()
     guard = PlanGuard()
     tools = build_execution_tools(guard, approval_gate=approval_gate)
-    planner_model = model if model is not None else build_planner_model(resolved)
+    plan_id = str(existing_plan.get("plan_id") or "") if existing_plan is not None else ""
+    planner_model = (
+        model
+        if model is not None
+        else build_planner_model(
+            resolved,
+            operation=operation,
+            existing_plan_id=plan_id,
+        )
+    )
     system_prompt = build_system_prompt()
     graph = build_execution_graph(
         model=planner_model,
         tools=tools,
         system_prompt=system_prompt,
     )
-    user_content = build_planner_input(task_prompt, negotiation_context)
+    user_content = build_planner_input(
+        task_prompt,
+        negotiation_context,
+        operation=operation,
+        existing_plan=existing_plan,
+    )
     return ServerAgentSpec(
         graph=graph,
         model=planner_model,
@@ -66,6 +82,8 @@ def server_agent_factory(
         task_prompt: str,
         negotiation_context: Mapping[str, object] | None,
         approval_gate: Any | None = None,
+        operation: str = "Create",
+        existing_plan: Mapping[str, object] | None = None,
     ) -> ServerAgentSpec:
         model = model_factory() if model_factory is not None else None
         return build_server_agent(
@@ -74,6 +92,8 @@ def server_agent_factory(
             negotiation_context=negotiation_context,
             model=model,
             approval_gate=approval_gate,
+            operation=operation,
+            existing_plan=existing_plan,
         )
 
     return factory

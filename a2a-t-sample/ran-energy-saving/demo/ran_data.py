@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
@@ -24,6 +24,9 @@ DATASET_PATH = SAMPLE_ROOT / "resources" / "ran_data" / "cells.json"
 
 #: Status of a plan written by :func:`apply_plan`.
 PLAN_STATUS_APPLIED = "applied"
+
+#: Status of a plan updated in place by :func:`modify_plan`.
+PLAN_STATUS_MODIFIED = "modified"
 
 #: Hours covered by the 24-hour curves.
 HOURS_PER_DAY = 24
@@ -573,6 +576,44 @@ def apply_plan(cell_id: str, window: str, target_rate: str) -> EnergySavingPlan:
         window=evaluation.window,
         target_rate=evaluation.target_rate,
         status=PLAN_STATUS_APPLIED,
+        baseline_energy_kwh=evaluation.baseline_energy_kwh,
+        estimated_saving_kwh=evaluation.estimated_saving_kwh,
+        remaining_energy_kwh=round(
+            evaluation.baseline_energy_kwh - evaluation.estimated_saving_kwh, 2
+        ),
+        kpi_impact=dict(evaluation.kpi_impact),
+    )
+    _PLANS[plan.plan_id] = plan
+    return plan
+
+
+def modify_plan(plan_id: str, cell_id: str, window: str, target_rate: str) -> EnergySavingPlan:
+    """Evaluate a new plan and update an existing plan in place.
+
+    The ``plan_id`` is kept so a Modify Task updates the plan it already owns instead of allocating
+    a second one. The whole plan is re-derived from the new evaluation; the store replaces the old
+    record atomically.
+
+    Raises:
+        UnknownPlanError: when ``plan_id`` has not been applied.
+        UnknownCellError: when the cell is not in the dataset.
+        InvalidPlanError: when the window or target rate is malformed.
+        PlanInfeasibleError: when the evaluation rejects the plan; the stored plan is unchanged.
+    """
+    existing = get_plan_or_raise(plan_id)
+    evaluation = evaluate_plan(cell_id, window, target_rate)
+    if not evaluation.feasible:
+        raise PlanInfeasibleError(evaluation)
+    cell = get_cell_or_raise(cell_id)
+    plan = replace(
+        existing,
+        cell_id=cell.cell_id,
+        cell_name=cell.name,
+        region=cell.region,
+        date=dataset_date(),
+        window=evaluation.window,
+        target_rate=evaluation.target_rate,
+        status=PLAN_STATUS_MODIFIED,
         baseline_energy_kwh=evaluation.baseline_energy_kwh,
         estimated_saving_kwh=evaluation.estimated_saving_kwh,
         remaining_energy_kwh=round(

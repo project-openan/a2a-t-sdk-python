@@ -43,6 +43,7 @@ from protocol.client_flow import ClientFlowResult
 from protocol.client_runtime import build_client_runtime
 from protocol.messages import metadata_to_dict, parse_negotiation_context
 from protocol.run_spec import RunSpec
+from protocol.server_executor import BASELINE_HOLD_TEXT, MODIFY_STARTED_TEXT
 from shared.models import NegotiationDecision
 
 #: Client decision action matching one expected performative.
@@ -124,10 +125,10 @@ async def test_scenario_matches_the_design_sequence(
     assert _completed_status_seen(result) is False
 
 
-async def test_planned_outage_uses_the_micro_cell_without_negotiation(
+async def test_planned_outage_creates_a_baseline_then_modifies_it_in_place(
     english_language: None,
 ) -> None:
-    """Use case 2 is a complete request: no proposal, and the outage plan targets cell-002."""
+    """Use case 2 is a two-phase same-Task run: Create 10%, then Modify 20%, no negotiation."""
     config = offline_direct_config(free_tcp_port())
 
     with running_server(config):
@@ -138,6 +139,29 @@ async def test_planned_outage_uses_the_micro_cell_without_negotiation(
     assert result.report is not None
     assert result.report.get("cell_id") == "cell-002"
     assert result.report.get("window") == "01:00~05:00"
+    assert result.report.get("target_rate") == 20
+    assert result.report.get("status") == "modified"
+
+    # The follow-up updates the plan the baseline created; it does not allocate a second plan.
+    assert len(result.reports) == 2
+    baseline, modified = result.reports
+    assert baseline.get("target_rate") == 10
+    assert baseline.get("status") == "applied"
+    assert modified.get("plan_id") == baseline.get("plan_id")
+    assert modified.get("target_rate") == 20
+    assert modified.get("status") == "modified"
+
+    # One Task for both phases: only the baseline creates it, and the Modify keeps the same id.
+    submitted = [
+        event
+        for event in result.events
+        if event.get("kind") == "status"
+        and event.get("state") == TaskState.Name(TaskState.TASK_STATE_SUBMITTED)
+    ]
+    assert len(submitted) == 1
+    texts = [str(event.get("text") or "") for event in result.events]
+    assert BASELINE_HOLD_TEXT in texts
+    assert MODIFY_STARTED_TEXT in texts
 
 
 class _DalingshanCatalog:

@@ -78,19 +78,17 @@ NATURAL_LANGUAGE_PROMPT_INPUT_EN = (
 
 #: Chinese natural-language task request of use case 2 (planned power outage, complete input).
 NATURAL_LANGUAGE_PROMPT_INPUT_OUTAGE_ZH = (
-    "在松山湖管委会创建无线网络节能任务：基于任务对象和任务上下文，输出无线网络节能方案，"
-    "达成任务目标中定义的无线网络节能目标，并按照预期输出中定义的格式返回无线网络节能结果；"
-    "站点列表1为[站点1, 站点2]；明天计划停电，停电期间 03:00~05:00 将分时段保障速率下调到 "
-    "2Mbps 以节省电池，停电之外保持 {00:00~03:00,10Mbps}、{05:00~24:00,10Mbps}。"
-    "预期输出为无线网络节能任务的意图报告。"
+    "修改松山湖管委会运行中的无线网络节能任务：基于任务对象和任务上下文，输出无线网络节能方案，"
+    "达成任务目标中定义的无线网络节能目标；站点列表1为[站点1, 站点2]；明天计划停电，"
+    "停电期间 03:00~05:00 将分时段保障速率下调到 2Mbps 以节省电池，停电之外保持 "
+    "{00:00~03:00,10Mbps}、{05:00~24:00,10Mbps}。预期输出为无线网络节能任务的意图报告。"
 )
 
 #: English natural-language task request of use case 2 (planned power outage, complete input).
 NATURAL_LANGUAGE_PROMPT_INPUT_OUTAGE_EN = (
-    "Create a RAN energy saving task in the Songshanhu Administration Committee area to maximize "
-    "energy saving. Based on the task object and task context, output a wireless network energy "
-    "saving plan that achieves the energy saving goal defined in the task target and returns the "
-    "energy saving result in the format defined in the expected output. Station list 1 is "
+    "Modify the running RAN energy saving task in the Songshanhu Administration Committee area. "
+    "Based on the task object and task context, output a wireless network energy saving plan that "
+    "achieves the energy saving goal defined in the task target. Station list 1 is "
     '["Site 1", "Site 2"]. Planned power outage tomorrow; during the outage, 03:00~05:00, '
     "lower the guaranteed throughput to 2Mbps to save battery; outside the outage, keep "
     "{00:00~03:00,10Mbps} and {05:00~24:00,10Mbps}."
@@ -231,13 +229,13 @@ PRESENTATION_REQUESTS: dict[str, dict[str, str]] = {
     },
     SCENARIO_OUTAGE: {
         LANGUAGE_EN: (
-            "Start energy saving for Site 1 and Site 2 in the Songshanhu area. During tomorrow's "
-            "03:00–05:00 outage keep 2 Mbps; otherwise use 10 Mbps: 00:00–03:00 at 10 Mbps, "
-            "03:00–05:00 at 2 Mbps, 05:00–24:00 at 10 Mbps."
+            "Create a baseline energy-saving task for Site 1 and Site 2 in the Songshanhu area, "
+            "then modify the running task for tomorrow's 03:00–05:00 planned outage: keep 2 Mbps "
+            "during the outage and 10 Mbps otherwise."
         ),
         LANGUAGE_ZH: (
-            "在松山湖为站点 1 和站点 2 开启节能。明天 03:00–05:00 停电期间保障 2 Mbps，"
-            "其余时间 10 Mbps：00:00–03:00 10 Mbps，03:00–05:00 2 Mbps，05:00–24:00 10 Mbps。"
+            "在松山湖为站点 1 和站点 2 创建节能基线任务，然后修改运行中的任务以应对明天 "
+            "03:00–05:00 的计划停电：停电期间保障 2 Mbps，其余时间 10 Mbps。"
         ),
     },
     SCENARIO_REJECT: {
@@ -327,12 +325,40 @@ _COMPLETE_INITIAL_OVERRIDES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
     SCENARIO_OUTAGE: {
+        # Phase 1 creates the normal two-site baseline; the planned outage is introduced by the
+        # follow-up Modify Task-T, so this baseline carries no background event.
         LANGUAGE_EN: {
+            "siteList": "Site 1,Site 2",
+            "guaranteedThroughputTarget": "{00:00~24:00,10Mbps}",
+        },
+        LANGUAGE_ZH: {
+            "siteList": "站点1,站点2",
+            "guaranteedThroughputTarget": "{00:00~24:00,10Mbps}",
+        },
+    },
+}
+
+#: Values the follow-up Modify Task-T supplies on top of the same base parameters, per language.
+#: Only the planned-outage scenario has a follow-up; the other complete scenarios stay single-phase.
+_FOLLOW_UP_OVERRIDES: dict[str, dict[str, dict[str, str]]] = {
+    SCENARIO_OUTAGE: {
+        LANGUAGE_EN: {
+            "operationType": "Modify",
+            "task_description": (
+                "Based on <Task Object> and <Task Context>, update the running wireless network "
+                "energy saving task and output a plan that achieves the energy saving goal defined "
+                "in <Task Target> for the planned outage."
+            ),
             "siteList": "Site 1,Site 2",
             "backgroundEvent": "planned power outage tomorrow 03:00~05:00",
             "guaranteedThroughputTarget": ("{00:00~03:00,10Mbps}, {03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}"),
         },
         LANGUAGE_ZH: {
+            "operationType": "Modify",
+            "task_description": (
+                "基于任务对象和任务上下文，修改运行中的无线网络节能任务，并输出在计划停电期间"
+                "达成任务目标中定义的无线网络节能目标的方案。"
+            ),
             "siteList": "站点1,站点2",
             "backgroundEvent": "明天 03:00~05:00 计划停电",
             "guaranteedThroughputTarget": ("{00:00~03:00,10Mbps}、{03:00~05:00,2Mbps}、{05:00~24:00,10Mbps}"),
@@ -348,7 +374,8 @@ def complete_initial_params(name: str, language: str = LANGUAGE_ZH) -> dict[str,
     Task-T is generated from these explicit values instead of relying on a live model to extract
     every required slot from free text; negotiation scenarios keep the text path so their flawed
     input can trigger the intended negotiation. ``unknown_area`` also uses explicit values so the
-    only flawed slot is the area, not a model-extracted target.
+    only flawed slot is the area, not a model-extracted target. For ``outage`` these are the
+    baseline Create values; :func:`follow_up_initial_params` returns the Modify values.
     """
     if name not in (SCENARIO_NIGHT, SCENARIO_OUTAGE, SCENARIO_UNKNOWN_AREA):
         return None
@@ -356,6 +383,20 @@ def complete_initial_params(name: str, language: str = LANGUAGE_ZH) -> dict[str,
     overrides = _COMPLETE_INITIAL_OVERRIDES.get(name, {})
     if overrides:
         params.update(overrides.get(language, overrides[LANGUAGE_ZH]))
+    return params
+
+
+def follow_up_initial_params(name: str, language: str = LANGUAGE_ZH) -> dict[str, object] | None:
+    """Return the follow-up Modify Task-T parameters of a multi-phase scenario, or ``None``.
+
+    Only the planned-outage scenario is two-phase: the first Task-T creates a baseline on the
+    existing Task, then this Modify Task-T continues that same Task through a real A2A follow-up.
+    """
+    overrides = _FOLLOW_UP_OVERRIDES.get(name)
+    if overrides is None:
+        return None
+    params = dict(_ACCEPT_BASE_PARAMS.get(language, _ACCEPT_BASE_PARAMS[LANGUAGE_ZH]))
+    params.update(overrides.get(language, overrides[LANGUAGE_ZH]))
     return params
 
 
@@ -698,8 +739,8 @@ SCENARIO_OUTAGE_SPEC = Scenario(
     expected_final_state=FINAL_STATE_TASK_COMPLETED,
     scripted_client_decisions=(),
     description=(
-        "A planned power outage tomorrow on two sites; the RAN Agent accepts the lower guaranteed "
-        "rate during the outage without a pre-task negotiation."
+        "A planned power outage tomorrow on two sites; the demo creates a baseline task, then "
+        "sends a real Modify Task-T on the same Task without a pre-task negotiation."
     ),
 )
 

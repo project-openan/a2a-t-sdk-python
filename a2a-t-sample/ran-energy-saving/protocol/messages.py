@@ -54,6 +54,15 @@ SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY: Final[str] = "sampleNegotiationOptions"
 #: without it the server simply emits no trace (the CLI and plain A2A clients keep working).
 SAMPLE_RUN_ID_METADATA_KEY: Final[str] = "sampleRunId"
 
+#: Metadata key carrying the sample-only two-phase marker of a Task-T message.
+#:
+#: This is a sample convention, not an A2A-T protocol field. ``baseline`` asks the server to keep
+#: the Task ``WORKING`` after the first report so a real A2A follow-up can modify it; ``modify``
+#: tells the server that the follow-up is the Task-T modification of the existing Task.
+SAMPLE_PHASE_METADATA_KEY: Final[str] = "samplePhase"
+SAMPLE_PHASE_BASELINE: Final[str] = "baseline"
+SAMPLE_PHASE_MODIFY: Final[str] = "modify"
+
 #: Metadata key of the machine-readable structured errors on a REJECTED Task status message.
 #:
 #: Sample convention, not an A2A-T protocol field: the underlying ``ContentValidationError`` carries

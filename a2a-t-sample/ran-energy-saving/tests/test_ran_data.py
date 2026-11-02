@@ -114,6 +114,27 @@ def test_apply_plan_writes_state_and_sequences_plan_ids() -> None:
     assert first.remaining_energy_kwh == pytest.approx(108.3 - 32.49)
 
 
+def test_modify_plan_updates_the_same_plan_in_place() -> None:
+    plan = ran_data.apply_plan("cell-002", "01:00~05:00", "10")
+
+    updated = ran_data.modify_plan(plan.plan_id, "cell-002", "01:00~05:00", "20")
+
+    assert updated.plan_id == plan.plan_id
+    assert updated.status == ran_data.PLAN_STATUS_MODIFIED
+    assert updated.target_rate == 20
+    assert ran_data.get_plan(plan.plan_id) == updated
+    assert ran_data.list_plan_ids() == (plan.plan_id,)
+
+
+def test_modify_infeasible_plan_leaves_the_stored_plan_unchanged() -> None:
+    plan = ran_data.apply_plan("cell-002", "01:00~05:00", "10")
+
+    with pytest.raises(ran_data.PlanInfeasibleError):
+        ran_data.modify_plan(plan.plan_id, "cell-002", "01:00~05:00", "30")
+
+    assert ran_data.get_plan(plan.plan_id) == plan
+
+
 def test_apply_infeasible_plan_raises_and_writes_nothing() -> None:
     with pytest.raises(ran_data.PlanInfeasibleError) as error:
         ran_data.apply_plan("cell-001", "12:00~14:00", "30")

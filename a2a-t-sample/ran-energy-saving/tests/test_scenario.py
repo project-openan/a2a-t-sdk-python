@@ -6,10 +6,13 @@ from demo.scenario import (
     FINAL_STATE_NEGOTIATION_ABORTED,
     FINAL_STATE_NEGOTIATION_ENDED,
     FINAL_STATE_TASK_COMPLETED,
+    SCENARIO_OUTAGE,
     SCENARIOS,
     SUPPORTED_SCENARIO_NAMES,
     ExpectedStep,
     accept_filled_params,
+    complete_initial_params,
+    follow_up_initial_params,
     resolve_presentation_request,
     resolve_user_request,
 )
@@ -79,6 +82,24 @@ def test_accept_params_match_the_task_schema_operation_values() -> None:
         params = accept_filled_params("information", language)
         assert params["operationType"] in operation_enum
         assert str(params["task_description"]).strip(), "data-based Task-T requires task_description"
+
+
+def test_outage_is_a_two_phase_create_then_modify_scenario() -> None:
+    """The planned-outage run creates a baseline, then sends a Modify Task-T on the same Task."""
+    for language in SUPPORTED_LANGUAGES:
+        baseline = complete_initial_params(SCENARIO_OUTAGE, language)
+        follow_up = follow_up_initial_params(SCENARIO_OUTAGE, language)
+        assert baseline is not None
+        assert follow_up is not None
+        assert baseline["operationType"] == "Create"
+        assert "backgroundEvent" not in baseline
+        assert "00:00~24:00,10Mbps" in str(baseline["guaranteedThroughputTarget"])
+        assert follow_up["operationType"] == "Modify"
+        assert "03:00~05:00,2Mbps" in str(follow_up["guaranteedThroughputTarget"])
+        assert follow_up["backgroundEvent"]
+    for name in SUPPORTED_SCENARIO_NAMES:
+        if name != SCENARIO_OUTAGE:
+            assert follow_up_initial_params(name, "en-US") is None
 
 
 def test_information_sequence() -> None:
