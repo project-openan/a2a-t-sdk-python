@@ -580,6 +580,7 @@ P95 和审批等待。
 
 说明：
 
+- `outage` 的后续消息按渲染后 Task-T 的 `Operation Type`（`Modify`）识别，而不是依赖仅样例使用的 `samplePhase` 元数据；`samplePhase` 仍用于让基线 Task 保持打开，并标注 wire/presentation。修改工具执行前会从 Task artifact 恢复基线 plan，因此进程内 plan store 只是缓存，不是正确性的前提。
 - `target` 中客户端反提议保持第 1 轮；只有服务端修订方案进入第 2 轮，客户端 `Accept` 也保持第 2 轮。
 - `reject` 与 `abort` 都不创建 Task。`reject` 以一条不含 Negotiation-T 元数据的普通 A2A `Message` 结束；`abort` 使用通用 abort 模板，在 `round = maxRounds = 3` 发出。
 - Task-T 校验错误码到协商类型的映射（`content.param_missing` → information、`content.value_not_allowed` → target、`content.rule_violation` → feasibility）是**样例约定**，不是 A2A-T 契约。实现位于 [`protocol/negotiation_policy.py`](protocol/negotiation_policy.py) 的 `NEGOTIATION_KIND_BY_ERROR_CODE`。`content.semantic_conflict` 最后才参与判定（其 facts 区分 target 与 feasibility），不会被模型先列出的顺序掩盖具体错误码。

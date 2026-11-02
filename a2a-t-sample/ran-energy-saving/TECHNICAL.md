@@ -705,6 +705,11 @@ The expected sequences are asserted by `tests/test_scenarios.py` and `tests/test
 
 Notes:
 
+- For `outage`, the follow-up is recognized from the rendered Task-T's `Operation Type`
+  (`Modify`), not from the sample-only `samplePhase` metadata. `samplePhase` is still used to hold
+  the baseline Task open and to label the wire/presentation. The baseline plan is restored from
+  the Task artifact before the modification tool runs, so the process-local plan store is a cache,
+  not a correctness dependency.
 - `target` keeps the client counter-proposal in round 1; only the server's revised plan advances
   to round 2, and the client's `Accept` stays in round 2.
 - `reject` and `abort` never create a Task. `reject` ends with a plain A2A `Message` that carries
