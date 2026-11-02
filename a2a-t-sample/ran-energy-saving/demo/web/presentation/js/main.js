@@ -72,6 +72,7 @@ const els = {
   runPill: byId("run-pill"),
   scenariosLabel: byId("scenarios-label"),
   protocolLabel: byId("protocol-label"),
+  themeToggle: byId("theme-toggle"),
   protocolBadge: byId("protocol-badge"),
   protocolHint: byId("protocol-hint"),
   wireFormat: byId("wire-format"),
@@ -178,6 +179,7 @@ const els = {
 const ui = {
   meta: null,
   copy: copyFor("zh-CN"),
+  brand: document.documentElement.dataset.brand || "orange",
   selected: null,
   protocol: "a2a-t",
   compareSaved: null,
@@ -297,6 +299,7 @@ async function boot() {
     return;
   }
   ui.copy = copyFor(ui.meta.language);
+  ui.brand = currentBrand();
   ui.selected = ui.meta.defaultScenario || ui.meta.scenarios?.[0] || null;
   ui.protocol = ui.meta.protocol || ui.meta.defaultProtocol || "a2a-t";
   ui.mieEnabled = Boolean(ui.meta.mieEnabled);
@@ -312,6 +315,7 @@ async function boot() {
 function bindStaticEvents() {
   els.start.addEventListener("click", () => startRun());
   if (els.startQuick) els.startQuick.addEventListener("click", () => startRun());
+  if (els.themeToggle) els.themeToggle.addEventListener("click", toggleBrand);
   els.reset.addEventListener("click", resetRequest);
   els.editRequest.addEventListener("click", () => {
     const open = els.drawer.hidden;
@@ -400,10 +404,43 @@ function setTab(tab) {
   render();
 }
 
+function currentBrand() {
+  return document.documentElement.dataset.brand === "huawei" ? "huawei" : "orange";
+}
+
+function brandLabel(copy, brand) {
+  return brand === "huawei" ? copy.themeHuawei : copy.themeOrange;
+}
+
+/** Apply one brand palette, optionally remembering the engineer's choice. */
+function applyBrand(brand, { persist = false } = {}) {
+  ui.brand = brand === "huawei" ? "huawei" : "orange";
+  document.documentElement.dataset.brand = ui.brand;
+  if (persist) {
+    try {
+      localStorage.setItem("a2at-ran-brand", ui.brand);
+    } catch {
+      // Private-browsing storage failures must not block the visual switch.
+    }
+  }
+  renderThemeToggle();
+}
+
+function toggleBrand() {
+  applyBrand(currentBrand() === "orange" ? "huawei" : "orange", { persist: true });
+}
+
+function renderThemeToggle() {
+  if (!els.themeToggle) return;
+  els.themeToggle.textContent = `${ui.copy.themeLabel}: ${brandLabel(ui.copy, currentBrand())}`;
+  els.themeToggle.setAttribute("aria-label", ui.copy.themeAria);
+}
+
 function applyStaticCopy() {
   const copy = ui.copy;
   document.documentElement.lang = copy.lang;
   document.title = copy.title;
+  renderThemeToggle();
   els.brandKicker.textContent = copy.kicker;
   els.title.textContent = copy.title;
   els.badge.textContent = copy.badge;

@@ -72,10 +72,12 @@ from shared.http_security import (
 )
 from shared.models import NegotiationDecision
 from shared.run_constants import (
+    BRAND_ORANGE,
     DEMO_PROTOCOLS,
     PROTOCOL_A2A_T,
     PROTOCOL_PLAIN,
     PROTOCOL_PURE,
+    SUPPORTED_BRANDS,
     SUPPORTED_PROTOCOLS,
 )
 from shared.trace import (
@@ -86,7 +88,13 @@ from sse_starlette.sse import EventSourceResponse
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from starlette.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    Response,
+    StreamingResponse,
+)
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -158,6 +166,7 @@ def create_app(
     metrics_grace_seconds: float = 0.0,
     bind_host: str = "127.0.0.1",
     ui_mode: str = WEB_UI_PRESENTATION,
+    default_brand: str = BRAND_ORANGE,
     server_url: str | None = None,
     approval_gate: bool = False,
     approval_timeout_seconds: float = 240.0,
@@ -192,6 +201,8 @@ def create_app(
         bind_host: address the caller will bind; a non-loopback bind needs an auth token.
         ui_mode: ``presentation`` (audience-facing page) or ``explorer`` (technical Run
             Explorer); both serve the same API and event stream.
+        default_brand: presentation color theme (``orange`` or ``huawei``); the page can switch it
+            at runtime and remembers the choice in local storage.
         server_url: base URL of the A2A server, used by the presentation's approval route.
         approval_gate: whether the server pauses before applying a plan.
         approval_timeout_seconds: approval window reported to the page.
@@ -211,7 +222,14 @@ def create_app(
     """
     if ui_mode not in WEB_UI_MODES:
         raise ValueError(f"Unsupported ui mode: {ui_mode}; expected one of {WEB_UI_MODES}")
+    if default_brand not in SUPPORTED_BRANDS:
+        raise ValueError(
+            f"Unsupported presentation brand: {default_brand}; expected one of {SUPPORTED_BRANDS}"
+        )
     static_dir = PRESENTATION_DIR if ui_mode == WEB_UI_PRESENTATION else STATIC_DIR
+    index_html = (static_dir / "index.html").read_text(encoding="utf-8")
+    if ui_mode == WEB_UI_PRESENTATION:
+        index_html = index_html.replace("__A2AT_DEFAULT_BRAND__", default_brand)
     validate_bind_security(
         bind_host, config.auth_token, allow_insecure=allow_insecure_bind
     )
@@ -303,6 +321,8 @@ def create_app(
 
     async def index(request: Request) -> Response:
         del request
+        if ui_mode == WEB_UI_PRESENTATION:
+            return HTMLResponse(index_html)
         return FileResponse(static_dir / "index.html")
 
     async def meta(request: Request) -> Response:
@@ -331,6 +351,8 @@ def create_app(
                 "defaultTransport": resolved_default_transport,
                 "defaultDiscovery": resolved_default_discovery,
                 "uiMode": ui_mode,
+                "defaultBrand": default_brand,
+                "brands": list(SUPPORTED_BRANDS),
                 "decisionMode": resolved_default_mode,
                 "intentReview": resolved_intent_review and resolved_default_mode == "confirm",
                 "approvalGate": approval_gate,

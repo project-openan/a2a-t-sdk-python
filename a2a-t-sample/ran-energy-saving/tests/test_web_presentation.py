@@ -56,6 +56,7 @@ async def test_root_serves_the_presentation_shell(client: httpx.AsyncClient) -> 
     assert "/static/js/main.js" in page
     for marker in (
         'id="scenario-select"',
+        'id="theme-toggle"',
         'id="start-quick"',
         'id="request-text"',
         'id="drawer"',
@@ -86,8 +87,9 @@ async def test_root_serves_the_presentation_shell(client: httpx.AsyncClient) -> 
     assert 'id="protocol-switch"' not in page
     assert 'id="proto-a2at"' not in page
     assert 'id="proto-plain"' not in page
-    # One module script, no inline payload rendering.
-    assert page.count("<script") == 1
+    # The module entry plus the tiny inline brand bootstrap (no payload rendering).
+    assert page.count("<script") == 2
+    assert "a2at-default-brand" in page
     assert "innerHTML" not in page
 
 
@@ -104,8 +106,9 @@ async def test_presentation_assets_are_served(client: httpx.AsyncClient) -> None
     css = await client.get("/static/app.css")
     assert css.status_code == 200
     assert "text/css" in css.headers["content-type"]
-    assert "--accent" not in css.text
-    assert "--orange" in css.text
+    assert "--accent:" in css.text
+    assert "--orange:" in css.text
+    assert '[data-brand="huawei"]' in css.text
 
     for name in PRESENTATION_MODULES:
         response = await client.get(f"/static/{name}")
@@ -119,6 +122,8 @@ async def test_meta_reports_the_presentation_mode_and_the_seven_scenarios(
     meta = (await client.get("/api/meta")).json()
 
     assert meta["uiMode"] == "presentation"
+    assert meta["defaultBrand"] == "orange"
+    assert meta["brands"] == ["orange", "huawei"]
     assert meta["scenarios"] == [
         "night",
         "information",
@@ -166,6 +171,30 @@ async def test_pure_meta_exposes_its_scenarios_and_mie(
 async def test_unknown_ui_mode_is_rejected(offline_config: SampleConfig, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Unsupported ui mode"):
         create_app(offline_config, runs_dir=tmp_path, ui_mode="cinema")
+
+
+async def test_unknown_brand_is_rejected(offline_config: SampleConfig, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Unsupported presentation brand"):
+        create_app(offline_config, runs_dir=tmp_path, default_brand="nokia")
+
+
+async def test_configured_brand_is_injected_into_the_page_and_meta(
+    offline_config: SampleConfig,
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        offline_config,
+        runs_dir=tmp_path,
+        default_brand="huawei",
+        finished_grace_seconds=0.0,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        page = (await http_client.get("/")).text
+        meta = (await http_client.get("/api/meta")).json()
+
+    assert '<meta name="a2at-default-brand" content="huawei">' in page
+    assert meta["defaultBrand"] == "huawei"
 
 
 async def test_explorer_mode_still_serves_the_run_explorer(

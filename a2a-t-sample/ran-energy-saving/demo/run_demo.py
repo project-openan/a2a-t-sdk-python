@@ -905,7 +905,7 @@ def _build_parser(
     """
     from protocol.client_runtime import SUPPORTED_MODES
     from shared.config import SUPPORTED_DISCOVERY_MODES, SUPPORTED_MODEL_MODES, SUPPORTED_TRANSPORTS
-    from shared.run_constants import SUPPORTED_LANGUAGES
+    from shared.run_constants import BRAND_ORANGE, SUPPORTED_BRANDS, SUPPORTED_LANGUAGES
 
     from demo.scenario import SUPPORTED_SCENARIO_NAMES
 
@@ -981,6 +981,15 @@ def _build_parser(
         help=(
             "Web UI variant: presentation (audience-facing demo, default) or explorer "
             "(protocol-level Run Explorer)"
+        ),
+    )
+    parser.add_argument(
+        "--brand",
+        default=os.environ.get("A2AT_SAMPLE_UI_BRAND", BRAND_ORANGE),
+        choices=list(SUPPORTED_BRANDS),
+        help=(
+            "presentation color theme: orange (reference demo) or huawei "
+            "(default: A2AT_SAMPLE_UI_BRAND or orange)"
         ),
     )
     parser.add_argument(
@@ -1388,6 +1397,7 @@ def main() -> int:
                 "--mode", args.mode,
                 "--transport", args.transport,
                 "--ui-mode", args.ui_mode,
+                "--brand", args.brand,
                 "--server-url", ui_server_url,
                 "--protocol", args.protocol,
             ]

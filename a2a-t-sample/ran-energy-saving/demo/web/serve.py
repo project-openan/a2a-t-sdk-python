@@ -15,7 +15,12 @@ import os
 import socket
 from pathlib import Path
 
-from shared.run_constants import DEMO_PROTOCOLS, PROTOCOL_A2A_T
+from shared.run_constants import (
+    BRAND_ORANGE,
+    DEMO_PROTOCOLS,
+    PROTOCOL_A2A_T,
+    SUPPORTED_BRANDS,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -41,6 +46,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default="presentation",
         choices=("presentation", "explorer"),
     )
+    parser.add_argument(
+        "--brand",
+        default=BRAND_ORANGE,
+        choices=list(SUPPORTED_BRANDS),
+        help="presentation color theme (default: orange)",
+    )
     parser.add_argument("--server-url", default="", help="A2A server base URL used by the MIE approval")
     parser.add_argument("--approval-gate", action="store_true")
     parser.add_argument("--approval-timeout", type=float, default=240.0)
@@ -58,6 +69,7 @@ def run_ui(
     mode: str,
     transport: str,
     ui_mode: str = "presentation",
+    brand: str = BRAND_ORANGE,
     host: str = "127.0.0.1",
     server_url: str = "",
     approval_gate: bool = False,
@@ -95,6 +107,7 @@ def run_ui(
             default_transport=transport,
             bind_host=host,
             ui_mode=ui_mode,
+            default_brand=brand,
             server_url=server_url or None,
             approval_gate=approval_gate,
             approval_timeout_seconds=approval_timeout,
@@ -149,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         mode=args.mode,
         transport=args.transport,
         ui_mode=args.ui_mode,
+        brand=args.brand,
         server_url=args.server_url,
         approval_gate=args.approval_gate,
         approval_timeout=args.approval_timeout,

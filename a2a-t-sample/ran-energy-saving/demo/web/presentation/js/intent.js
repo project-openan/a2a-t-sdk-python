@@ -297,7 +297,7 @@ function chart(intent, copy, update) {
       svg(
         "text",
         {
-          class: "ch-val",
+          class: "ch-val ch-overlap-label",
           x: x(intent.overlap.start) - 3,
           y: y0 - 6,
           "text-anchor": "end",
@@ -322,8 +322,16 @@ function hatch(id, fill, stroke) {
     patternTransform: "rotate(45)",
   });
   pattern.append(
-    svg("rect", { width: 6, height: 6, fill }),
-    svg("line", { x1: 0, y1: 0, x2: 0, y2: 6, stroke, "stroke-width": 2 }),
+    svg("rect", { class: "ch-hatch-bg", width: 6, height: 6, fill }),
+    svg("line", {
+      class: "ch-hatch-line",
+      x1: 0,
+      y1: 0,
+      x2: 0,
+      y2: 6,
+      stroke,
+      "stroke-width": 2,
+    }),
   );
   return pattern;
 }

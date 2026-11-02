@@ -1,10 +1,28 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-brand="orange">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
+  <meta name="a2at-default-brand" content="__A2AT_DEFAULT_BRAND__">
   <title>A2A-T · RAN 节能</title>
+  <script>
+    // Apply the brand before the stylesheet paints: query override, saved choice, process default.
+    (() => {
+      const allowed = ["orange", "huawei"];
+      const meta = document.querySelector('meta[name="a2at-default-brand"]');
+      let brand = meta && allowed.includes(meta.content) ? meta.content : "orange";
+      try {
+        const query = new URLSearchParams(location.search).get("brand");
+        const stored = localStorage.getItem("a2at-ran-brand");
+        if (allowed.includes(query)) brand = query;
+        else if (allowed.includes(stored)) brand = stored;
+      } catch {
+        // Storage can be unavailable in private browsing; the process default still applies.
+      }
+      document.documentElement.dataset.brand = brand;
+    })();
+  </script>
   <link rel="stylesheet" href="/static/app.css">
   <script type="module" src="/static/js/main.js"></script>
 </head>
@@ -22,6 +40,9 @@
       </div>
     </div>
     <div class="top-meta">
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="切换颜色主题">
+        主题：Orange
+      </button>
       <span class="pill" id="run-pill">离线样例 · 参考数据</span>
       <span class="badge" id="badge">任务前协商</span>
     </div>
@@ -104,7 +125,7 @@
           <div class="actor" id="a-eng">
             <div class="actor-head">
               <svg class="actor-icon" viewBox="0 0 40 40" aria-hidden="true">
-                <rect width="40" height="40" fill="#000"/>
+                <rect class="icon-bg icon-bg-eng" width="40" height="40" fill="#000"/>
                 <circle cx="20" cy="14" r="6" fill="#fff"/>
                 <path d="M9 33c1-7 6-10 11-10s10 3 11 10z" fill="#fff"/>
               </svg>
@@ -116,11 +137,11 @@
           <div class="actor" id="a-oss">
             <div class="actor-head">
               <svg class="actor-icon" viewBox="0 0 40 40" aria-hidden="true">
-                <rect width="40" height="40" fill="#FF7900"/>
-                <rect x="9" y="12" width="22" height="17" fill="none" stroke="#000" stroke-width="2.5"/>
-                <circle cx="16" cy="20" r="2.3" fill="#000"/>
-                <circle cx="24" cy="20" r="2.3" fill="#000"/>
-                <path d="M20 7v5" stroke="#000" stroke-width="2.5"/>
+                <rect class="icon-bg icon-bg-oss" width="40" height="40" fill="#FF7900"/>
+                <rect class="icon-ink-stroke" x="9" y="12" width="22" height="17" fill="none" stroke="#000" stroke-width="2.5"/>
+                <circle class="icon-ink-fill" cx="16" cy="20" r="2.3" fill="#000"/>
+                <circle class="icon-ink-fill" cx="24" cy="20" r="2.3" fill="#000"/>
+                <path class="icon-ink-stroke" d="M20 7v5" stroke="#000" stroke-width="2.5"/>
               </svg>
               <div><h3 id="oss-name">OSS Agent</h3><div class="org" id="oss-org">ADK on GCP</div></div>
             </div>
@@ -131,10 +152,10 @@
           <div class="actor" id="a-nms">
             <div class="actor-head">
               <svg class="actor-icon" viewBox="0 0 40 40" aria-hidden="true">
-                <rect width="40" height="40" fill="#4BB4E6"/>
-                <path d="M20 15L13 33M20 15l7 18M15.5 27h9" stroke="#000" stroke-width="2.3" fill="none"/>
-                <circle cx="20" cy="13" r="2.5" fill="#000"/>
-                <path d="M13 9a9 9 0 0 0 0 9M27 9a9 9 0 0 1 0 9" stroke="#000" stroke-width="2" fill="none"/>
+                <rect class="icon-bg icon-bg-nms" width="40" height="40" fill="#4BB4E6"/>
+                <path class="icon-ink-stroke" d="M20 15L13 33M20 15l7 18M15.5 27h9" stroke="#000" stroke-width="2.3" fill="none"/>
+                <circle class="icon-ink-fill" cx="20" cy="13" r="2.5" fill="#000"/>
+                <path class="icon-ink-stroke" d="M13 9a9 9 0 0 0 0 9M27 9a9 9 0 0 1 0 9" stroke="#000" stroke-width="2" fill="none"/>
               </svg>
               <div><h3 id="nms-name">RAN Agent</h3><div class="org" id="nms-org">Huawei · energy saving</div></div>
             </div>
@@ -196,12 +217,12 @@
       </div>
 
       <div class="legend" id="legend" aria-label="Legend">
-        <span><i style="background:#000"></i><span id="legend-chat">Inside the OSS</span></span>
-        <span><i style="background:#FF7900"></i><span id="legend-task">Task-T over A2A-T</span></span>
-        <span><i style="background:#4BB4E6"></i><span id="legend-status">Status from the RAN Agent</span></span>
-        <span><i style="background:#FFD200"></i><span id="legend-neg">Question or decision</span></span>
-        <span><i style="background:#50BE87"></i><span id="legend-cfg">Plan sent to the network</span></span>
-        <span><i style="background:#fff;border:3px solid #4BB4E6"></i><span id="legend-data">Measurements back</span></span>
+        <span><i class="lg-chat"></i><span id="legend-chat">Inside the OSS</span></span>
+        <span><i class="lg-task"></i><span id="legend-task">Task-T over A2A-T</span></span>
+        <span><i class="lg-status"></i><span id="legend-status">Status from the RAN Agent</span></span>
+        <span><i class="lg-neg"></i><span id="legend-neg">Question or decision</span></span>
+        <span><i class="lg-cfg"></i><span id="legend-cfg">Plan sent to the network</span></span>
+        <span><i class="lg-data"></i><span id="legend-data">Measurements back</span></span>
       </div>
     </section>
 

@@ -17,6 +17,11 @@ LANGUAGE_EN: Final[str] = "en-US"
 LANGUAGE_ZH: Final[str] = "zh-CN"
 SUPPORTED_LANGUAGES: Final[tuple[str, ...]] = (LANGUAGE_EN, LANGUAGE_ZH)
 
+#: Presentation brand palettes. The default keeps the reference demo's Orange look.
+BRAND_ORANGE: Final[str] = "orange"
+BRAND_HUAWEI: Final[str] = "huawei"
+SUPPORTED_BRANDS: Final[tuple[str, ...]] = (BRAND_ORANGE, BRAND_HUAWEI)
+
 #: Interaction protocol of one client run. ``a2a-t`` uses Task-T and Negotiation-T; ``plain``
 #: sends one natural-language A2A message and has neither a task template nor a negotiation;
 #: ``pure`` uses standard A2A Task states (``INPUT_REQUIRED`` continuation) for a multi-turn

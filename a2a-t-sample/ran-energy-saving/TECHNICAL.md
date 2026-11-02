@@ -91,6 +91,13 @@ The page opens on the presentation view: a 16:9 stage (engineer, OSS Agent, RAN 
 sites, with the A2A-T channel between them) and three evidence panels. Eight examples cover use case
 1 (night-time energy saving, complete and negotiated) and use case 2 (planned power outage).
 
+The presentation supports two brand palettes. `--brand orange|huawei` (or
+`A2AT_SAMPLE_UI_BRAND`) sets the start-up default; the top-bar button switches at runtime and stores
+the choice in `localStorage`; `?brand=` overrides both for one page load. The CSS keeps a semantic
+token layer: **orange** maps to the reference-demo values, while **huawei** remaps the canvas,
+cards, text and role colors and adds the low-noise outlined stage (warm canvas, 1px translucent
+borders, core/aggregation/leaf node strokes).
+
 Pick a scenario, edit the network operations engineer's request if needed, and start it. The stage
 follows the real run through nine steps: request → structured Task-T → approval 1 (intent) → Task-T
 sent → negotiation when needed → strategy and task start → data collection (days 2–8, compressed) →
@@ -745,6 +752,7 @@ SDK. `run_demo.py` reads `A2AT_SAMPLE_UI_PORT` only as the default of `--ui-port
 | `A2AT_SAMPLE_LLM_MAX_ATTEMPTS` | default `1` (`1`..`10`) | Live SDK protocol retry limit per retryable step, written into the per-run SDK `.env`; OpenAI transport retries are disabled separately. |
 | `A2AT_SAMPLE_UI_HOST` | default `127.0.0.1` | Default bind host of the Web UI; read by `run_demo.py` as the default of `--ui-host`. Use `0.0.0.0` to expose it on all interfaces (trusted networks only). |
 | `A2AT_SAMPLE_UI_PORT` | default `8080` | Default bind port of the Web UI; read by `run_demo.py` as the default of `--ui-port`. |
+| `A2AT_SAMPLE_UI_BRAND` | `orange` or `huawei` (default `orange`) | Presentation brand default; `--brand` overrides it and `?brand=` overrides both for one page load. The page button also switches at runtime. |
 | `A2AT_SAMPLE_TRACE_URL` | unset; `--ui` sets `http://127.0.0.1:<ui_port>` | Server trace endpoint (Web UI). Local demo only; the server POSTs spans there. |
 | `A2AT_SAMPLE_TRACE_TOKEN` | unset; `--ui` mints a random token | Local token the server presents and the UI requires; unset disables ingestion (fails closed). |
 | `A2AT_SAMPLE_TRACE_DIR` | unset; CLI sets `<sample>/runs` | Directory of the CLI server trace (`<dir>/<runId>/server-trace.jsonl`). |

@@ -85,6 +85,11 @@ python run_demo.py --ui --scenario information --model-mode offline
 页面默认打开演示视图：左侧是 16:9 舞台（网络工程师、OSS Agent、RAN Agent、MIE 与无线站点，中间是
 A2A-T 通道），右侧是三块证据面板。八个示例覆盖用例 1（夜间节能，含协商与无协商）和用例 2（计划停电）。
 
+演示视图支持两套品牌主题。`--brand orange|huawei`（或 `A2AT_SAMPLE_UI_BRAND`）决定启动默认值；
+顶栏按钮可实时切换并把选择写入 `localStorage`；`?brand=` 对单次页面加载覆盖前两者。CSS 使用语义
+token 层：**orange** 保持原 Demo 的色值，**huawei** 重映射画布、卡片、文字和角色色，并增加暖灰画布、
+1px 半透明边框、核心/汇聚/叶子节点描边的低噪声舞台。
+
 先选场景，必要时修改网络操作工程师的请求，再发起。舞台按人的节奏跟随真实运行的九步：请求 → 结构化
 Task-T → 审批 1（意图）→ 下发 Task-T → 需要时协商 → 策略与任务启动 → 数据采集（第 2–8 天，时间压缩）
 → 审批 2（MIE 中的 MML）→ 下发与报告。请求框使用网络工程师会直接输入的自然表述；OSS Agent 先构建自己系统
@@ -609,6 +614,7 @@ P95 和审批等待。
 | `A2AT_SAMPLE_LLM_MAX_ATTEMPTS` | 默认 `1`（`1`..`10`） | 在线 SDK 每个可重试步骤的协议级尝试次数，写入每次运行的 SDK `.env`；OpenAI 传输层重试另行关闭。 |
 | `A2AT_SAMPLE_UI_HOST` | 默认 `127.0.0.1` | Web UI 的默认绑定主机；`run_demo.py` 将其作为 `--ui-host` 的默认值读取。设为 `0.0.0.0` 可监听所有网卡（仅限可信网络）。 |
 | `A2AT_SAMPLE_UI_PORT` | 默认 `8080` | Web UI 的默认绑定端口；`run_demo.py` 将其作为 `--ui-port` 的默认值读取。 |
+| `A2AT_SAMPLE_UI_BRAND` | `orange` 或 `huawei`（默认 `orange`） | 演示主题默认值；`--brand` 覆盖它，`?brand=` 对单次页面加载覆盖两者；页面按钮也可实时切换。 |
 | `A2AT_SAMPLE_TRACE_URL` | 默认未设置；`--ui` 设为 `http://127.0.0.1:<ui_port>` | 服务端 trace 端点（Web UI）。仅用于本地演示；服务端把 span POST 到这里。 |
 | `A2AT_SAMPLE_TRACE_TOKEN` | 默认未设置；`--ui` 生成随机 token | 服务端出示、UI 校验的本地 token；未设置时 ingest 路由关闭（失败关闭）。 |
 | `A2AT_SAMPLE_TRACE_DIR` | 默认未设置；CLI 设为 `<sample>/runs` | CLI 服务端 trace 目录（`<dir>/<runId>/server-trace.jsonl`）。 |

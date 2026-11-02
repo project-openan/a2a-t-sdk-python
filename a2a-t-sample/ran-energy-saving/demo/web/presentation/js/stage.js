@@ -900,22 +900,27 @@ export function createStage(els) {
           class: "cell-mast",
           d: `M${cx} ${ay}L${cx - 7} ${cy + 36}M${cx} ${ay}L${cx + 7} ${cy + 36}M${cx - 4} ${cy + 27}h8`,
         }),
-        svg("circle", { cx, cy: ay, r: 2.6, fill: "#000" }),
+        svg("circle", { class: "cell-dot", cx, cy: ay, r: 2.6 }),
         svg("g", { class: "cell-bat", id: `cell-bat-${index}` }),
       );
       const batteryGroup = group.querySelector(`#cell-bat-${index}`);
       batteryGroup.append(
         svg("rect", {
+          class: "cell-battery-shell",
           x: cx + 9,
           y: cy + 24,
           width: 13,
           height: 8,
-          fill: "#fff",
-          stroke: "#000",
           "stroke-width": 1.3,
         }),
-        svg("rect", { x: cx + 22, y: cy + 26.5, width: 2, height: 3, fill: "#000" }),
-        svg("rect", { x: cx + 10.5, y: cy + 25.5, width: 5, height: 5, fill: "#FFD200" }),
+        svg("rect", { class: "cell-battery-tip", x: cx + 22, y: cy + 26.5, width: 2, height: 3 }),
+        svg("rect", {
+          class: "cell-battery-level",
+          x: cx + 10.5,
+          y: cy + 25.5,
+          width: 5,
+          height: 5,
+        }),
       );
       group.append(
         svg(

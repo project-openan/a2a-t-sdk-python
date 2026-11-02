@@ -25,14 +25,91 @@
   --font: "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace;
   --top-h: 60px;
+
+  /* Semantic layer. Orange keeps the reference demo's values exactly; Huawei only remaps these. */
+  --canvas: var(--white);
+  --surface: var(--white);
+  --surface-subtle: var(--g50);
+  --text: var(--black);
+  --text-secondary: var(--g700);
+  --text-muted: var(--g500);
+  --border: var(--g200);
+  --border-strong: var(--g300);
+  --accent: var(--orange);
+  --accent-strong: var(--orange-text);
+  --accent-soft: var(--orange-soft);
+  --on-accent: var(--black);
+  --bar-bg: var(--black);
+  --bar-text: var(--white);
+  --card-radius: 0px;
+  --card-shadow: none;
+  --role-oss: var(--orange);
+  --role-ran: var(--blue);
+  --role-negotiation: var(--yellow);
+  --role-success: var(--green);
+  --role-danger: var(--red);
+  --role-idle: var(--g500);
+  --node-core: var(--black);
+  --node-aggregation: var(--g700);
+  --node-leaf: var(--g500);
+  color-scheme: light;
+}
+
+/* Huawei ICT palette (docs-local/华为ICT-WebUI.md).
+   The brand attribute is independent of the explorer's light/dark theme attribute. */
+[data-brand="huawei"] {
+  --canvas: #faf9f5;
+  --surface: #ffffff;
+  --surface-subtle: #f4f2ec;
+  --text: #141413;
+  --text-secondary: #5c5a55;
+  --text-muted: #87867f;
+  --border: rgba(31, 30, 29, .15);
+  --border-strong: rgba(31, 30, 29, .28);
+  --accent: #2a78d6;
+  --accent-strong: #1f5faf;
+  --accent-soft: #eaf2fc;
+  --on-accent: #ffffff;
+  --bar-bg: #faf9f5;
+  --bar-text: #141413;
+  --card-radius: 6px;
+  --card-shadow: 0 1px 2px rgba(31, 30, 29, .06), 0 4px 14px rgba(31, 30, 29, .06);
+  --role-oss: #2a78d6;
+  --role-ran: #6a9bcc;
+  --role-negotiation: #d97757;
+  --role-success: #558a42;
+  --role-danger: #d92128;
+  --role-idle: #b0aea5;
+  --node-core: #2a78d6;
+  --node-aggregation: #6a9bcc;
+  --node-leaf: #87867f;
+  /* Legacy aliases used by the Orange-era rules. */
+  --orange: var(--accent);
+  --orange-text: var(--accent-strong);
+  --orange-soft: var(--accent-soft);
+  --black: var(--text);
+  --white: var(--surface);
+  --g900: #292825;
+  --g700: var(--text-secondary);
+  --g500: var(--text-muted);
+  --g300: #b0aea5;
+  --g200: rgba(31, 30, 29, .15);
+  --g100: #e9e6de;
+  --g50: #f4f2ec;
+  --blue: #6a9bcc;
+  --blue-soft: #edf4fa;
+  --green: #558a42;
+  --yellow: #d97757;
+  --yellow-soft: #f8eae4;
+  --red: #d92128;
   color-scheme: light;
 }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body {
-  background: var(--white);
-  color: var(--black);
+  background: var(--canvas);
+  color: var(--text);
   font-family: var(--font);
   font-size: 14px;
   line-height: 1.45;
@@ -54,8 +131,8 @@ button { cursor: pointer; }
 /* ---------- top bar ---------- */
 .top {
   min-height: var(--top-h);
-  background: var(--black);
-  color: var(--white);
+  background: var(--bar-bg);
+  color: var(--bar-text);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -71,8 +148,8 @@ button { cursor: pointer; }
   min-width: 62px;
   height: 40px;
   padding: 0 10px;
-  background: var(--orange);
-  color: var(--black);
+  background: var(--accent);
+  color: var(--on-accent);
   font-weight: 800;
   letter-spacing: .04em;
 }
@@ -86,6 +163,16 @@ button { cursor: pointer; }
 }
 .brand-text h1 { font-size: 19px; line-height: 1.2; }
 .top-meta { display: flex; align-items: center; gap: 8px; flex: none; }
+.theme-toggle {
+  border: 1px solid var(--g700);
+  background: transparent;
+  color: inherit;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.theme-toggle:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .pill {
   border: 1px solid var(--g700);
   padding: 5px 10px;
@@ -409,6 +496,10 @@ body.resizing { cursor: col-resize; user-select: none; }
 .cells-clock span { font-size: .8em; color: var(--g700); }
 .cells-figure { width: 100%; height: auto; display: block; margin-top: .2em; }
 .cell-mast { stroke: #000; stroke-width: 1.6; fill: none; }
+.cell-dot { fill: #000; }
+.cell-battery-shell { fill: #fff; stroke: #000; }
+.cell-battery-tip { fill: #000; }
+.cell-battery-level { fill: var(--yellow); }
 .cell-wave { stroke: #e4e4e4; stroke-width: 2; fill: none; transition: stroke .15s; }
 .cell-wave.on { stroke: var(--blue); }
 .cell-lbl { font-size: 9px; fill: #595959; }
@@ -933,3 +1024,280 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* ---------- Huawei ICT brand layer ----------
+ * The tokens above remap colors; these rules add the low-noise geometry of the Huawei reference:
+ * warm canvas, white cards with a 1px translucent border, no pure black, and outlined stage actors.
+ * The Orange brand keeps the existing reference-demo rules untouched. */
+[data-brand="huawei"] body {
+  background: var(--canvas);
+  color: var(--text);
+}
+[data-brand="huawei"] .top {
+  background: var(--surface);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+[data-brand="huawei"] .brand-mark {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+[data-brand="huawei"] .brand-text small { color: var(--accent-strong); }
+[data-brand="huawei"] .theme-toggle {
+  border-color: var(--border);
+  color: var(--text-secondary);
+  background: var(--surface);
+  border-radius: 999px;
+}
+[data-brand="huawei"] .theme-toggle:hover { border-color: var(--accent); color: var(--accent-strong); }
+[data-brand="huawei"] .pill,
+[data-brand="huawei"] .badge {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+[data-brand="huawei"] .scenario-select,
+[data-brand="huawei"] .tbtn,
+[data-brand="huawei"] .btn,
+[data-brand="huawei"] .choices button,
+[data-brand="huawei"] .counter-editor textarea {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--card-radius);
+}
+[data-brand="huawei"] .btn.primary,
+[data-brand="huawei"] .choices button.primary {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  color: var(--on-accent);
+}
+[data-brand="huawei"] .btn:hover,
+[data-brand="huawei"] .tbtn:hover,
+[data-brand="huawei"] .tbtn[aria-expanded="true"],
+[data-brand="huawei"] .choices button:hover {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--surface);
+}
+[data-brand="huawei"] .request-card,
+[data-brand="huawei"] .drawer,
+[data-brand="huawei"] .panel,
+[data-brand="huawei"] .say,
+[data-brand="huawei"] .stagewrap {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--card-radius);
+  box-shadow: var(--card-shadow);
+}
+[data-brand="huawei"] .request-card { border-left: 4px solid var(--accent); }
+[data-brand="huawei"] .drawer { background: var(--surface-subtle); }
+[data-brand="huawei"] .panel > header { border-bottom: 1px solid var(--border); }
+[data-brand="huawei"] #p-nego > header { border-bottom-color: var(--accent); }
+[data-brand="huawei"] .panel.focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft), var(--card-shadow);
+}
+[data-brand="huawei"] .say {
+  background: var(--surface);
+  color: var(--text);
+}
+[data-brand="huawei"] .say-text small { color: var(--accent-strong); }
+[data-brand="huawei"] .say-detail { color: var(--text-secondary); }
+[data-brand="huawei"] .say-detail b { color: var(--text); }
+[data-brand="huawei"] .say.ask {
+  background: var(--accent-soft);
+  color: var(--text);
+  border-color: var(--accent);
+}
+[data-brand="huawei"] .say.ask .say-text small,
+[data-brand="huawei"] .say.ask .say-detail,
+[data-brand="huawei"] .say.ask .say-detail b { color: var(--text); }
+[data-brand="huawei"] .say.ask .choices button.primary {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  color: var(--on-accent);
+}
+[data-brand="huawei"] .controls { border-top-color: var(--border); }
+[data-brand="huawei"] .stage { background: var(--canvas); }
+[data-brand="huawei"] .zone-it,
+[data-brand="huawei"] .zone-net { fill: var(--surface-subtle); }
+[data-brand="huawei"] .zone-lbl { fill: var(--text-secondary); }
+[data-brand="huawei"] .divider { stroke: var(--border-strong); stroke-width: 1; }
+[data-brand="huawei"] .chan {
+  fill: var(--surface);
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+[data-brand="huawei"] .chan-lbl { fill: var(--accent-strong); }
+[data-brand="huawei"] .chan-sub { fill: var(--text-secondary); }
+[data-brand="huawei"] .lane { stroke: var(--border-strong); stroke-width: 1.5; }
+[data-brand="huawei"] .lane.hot { stroke: var(--text); stroke-width: 2; }
+[data-brand="huawei"] .lane-lbl,
+[data-brand="huawei"] .div-lbl { fill: var(--text-muted); }
+[data-brand="huawei"] .actor,
+[data-brand="huawei"] .bubble,
+[data-brand="huawei"] .approval {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+  box-shadow: var(--card-shadow);
+}
+[data-brand="huawei"] #a-eng.active,
+[data-brand="huawei"] #a-eng.wait { border-color: var(--text-secondary); }
+[data-brand="huawei"] #a-oss.active,
+[data-brand="huawei"] #a-oss.wait {
+  border-color: var(--role-oss);
+  box-shadow: 0 0 0 3px var(--accent-soft), var(--card-shadow);
+}
+[data-brand="huawei"] #a-nms.active,
+[data-brand="huawei"] #a-nms.wait,
+[data-brand="huawei"] #a-cells.active,
+[data-brand="huawei"] #a-cells.wait {
+  border-color: var(--role-ran);
+  box-shadow: 0 0 0 3px var(--blue-soft), var(--card-shadow);
+}
+[data-brand="huawei"] .skills span.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+[data-brand="huawei"] .bubble.neg { background: var(--yellow-soft); }
+[data-brand="huawei"] .packet {
+  border-width: 1px;
+  border-color: var(--border-strong);
+  border-radius: 3px;
+  box-shadow: 0 2px 8px rgba(31, 30, 29, .12);
+}
+[data-brand="huawei"] .packet.req { background: var(--text); color: var(--surface); }
+[data-brand="huawei"] .packet.task { background: var(--role-oss); color: var(--on-accent); }
+[data-brand="huawei"] .packet.status { background: var(--role-ran); color: var(--text); }
+[data-brand="huawei"] .packet.neg { background: var(--role-negotiation); color: var(--text); }
+[data-brand="huawei"] .packet.cfg { background: var(--role-success); color: var(--surface); }
+[data-brand="huawei"] .packet.data {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--role-ran);
+  border-width: 2px;
+}
+[data-brand="huawei"] .packet.no {
+  background: var(--surface);
+  color: var(--role-danger);
+  border-color: var(--role-danger);
+}
+[data-brand="huawei"] .approval { border-style: dashed; border-color: var(--border-strong); }
+[data-brand="huawei"] .approval.waiting { border-style: solid; border-color: var(--text-secondary); }
+[data-brand="huawei"] .approval.waiting i { background: var(--role-negotiation); }
+[data-brand="huawei"] .approval.approved i { background: var(--role-success); color: var(--surface); }
+[data-brand="huawei"] .approval.rejected { border-color: var(--role-danger); }
+[data-brand="huawei"] .cell-mast { stroke: var(--node-core); stroke-width: 1.5; }
+[data-brand="huawei"] .cell-dot { fill: var(--node-core); }
+[data-brand="huawei"] .cell-battery-shell { fill: var(--surface); stroke: var(--node-core); }
+[data-brand="huawei"] .cell-battery-tip { fill: var(--node-core); }
+[data-brand="huawei"] .cell-battery-level { fill: var(--role-negotiation); }
+[data-brand="huawei"] .lanes marker path { fill: var(--text-muted); }
+[data-brand="huawei"] .cell-wave { stroke: var(--border); }
+[data-brand="huawei"] .cell-wave.on { stroke: var(--role-ran); }
+[data-brand="huawei"] .cell-lbl { fill: var(--text-secondary); }
+[data-brand="huawei"] .cell-lbl.hit { fill: var(--accent-strong); }
+[data-brand="huawei"] .wire-format,
+[data-brand="huawei"] .wire-format button,
+[data-brand="huawei"] .turn,
+[data-brand="huawei"] .turn-action,
+[data-brand="huawei"] .trace-row,
+[data-brand="huawei"] .below-grid { border-color: var(--border); }
+[data-brand="huawei"] .wire-format button,
+[data-brand="huawei"] .turn { background: var(--surface); }
+[data-brand="huawei"] .turn[data-action="propose"] .turn-action { background: var(--yellow-soft); }
+[data-brand="huawei"] .trace-day.on,
+[data-brand="huawei"] .trace-row.sel { background: var(--accent-soft); color: var(--text); }
+[data-brand="huawei"] .trace-day.on { box-shadow: inset 0 -2px 0 var(--accent); }
+[data-brand="huawei"] .below-card .when,
+[data-brand="huawei"] .wire-ext-key,
+[data-brand="huawei"] .wire-json-key { color: var(--accent-strong); }
+[data-brand="huawei"] .notes h3::before { background: var(--accent); }
+[data-brand="huawei"] .choices button.region-choice.selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+[data-brand="huawei"] #hatch-g .ch-hatch-bg { fill: var(--surface-subtle); }
+[data-brand="huawei"] #hatch-g .ch-hatch-line { stroke: var(--border-strong); }
+[data-brand="huawei"] #hatch-r .ch-hatch-bg { fill: var(--surface); }
+[data-brand="huawei"] #hatch-r .ch-hatch-line { stroke: var(--role-danger); }
+[data-brand="huawei"] .ch-overlap-label { fill: var(--role-danger); }
+
+/* Theme-aware vector marks and playback chrome. */
+.actor-icon .icon-bg-eng { fill: #000; }
+.actor-icon .icon-bg-oss { fill: #ff7900; }
+.actor-icon .icon-bg-nms { fill: #4bb4e6; }
+.actor-icon .icon-ink-fill { fill: #000; }
+.actor-icon .icon-ink-stroke { stroke: #000; }
+.legend i.lg-chat { background: #000; border-color: #000; }
+.legend i.lg-task { background: #ff7900; border-color: #ff7900; }
+.legend i.lg-status { background: #4bb4e6; border-color: #4bb4e6; }
+.legend i.lg-neg { background: #ffd200; border-color: #ffd200; }
+.legend i.lg-cfg { background: #50be87; border-color: #50be87; }
+.legend i.lg-data { background: #fff; border: 3px solid #4bb4e6; }
+
+[data-brand="huawei"] .actor-icon .icon-bg-eng { fill: var(--text); }
+[data-brand="huawei"] .actor-icon .icon-bg-oss { fill: var(--role-oss); }
+[data-brand="huawei"] .actor-icon .icon-bg-nms { fill: var(--role-ran); }
+[data-brand="huawei"] .actor-icon .icon-ink-fill { fill: #fff; }
+[data-brand="huawei"] .actor-icon .icon-ink-stroke { stroke: #fff; }
+[data-brand="huawei"] .legend i.lg-chat { background: var(--text); border-color: var(--text); }
+[data-brand="huawei"] .legend i.lg-task { background: var(--role-oss); border-color: var(--role-oss); }
+[data-brand="huawei"] .legend i.lg-status { background: var(--role-ran); border-color: var(--role-ran); }
+[data-brand="huawei"] .legend i.lg-neg { background: var(--role-negotiation); border-color: var(--role-negotiation); }
+[data-brand="huawei"] .legend i.lg-cfg { background: var(--role-success); border-color: var(--role-success); }
+[data-brand="huawei"] .legend i.lg-data { background: var(--surface); border: 3px solid var(--role-ran); }
+[data-brand="huawei"] .opts select {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--card-radius);
+}
+[data-brand="huawei"] .playback-buttons button {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border-strong);
+  border-radius: var(--card-radius);
+}
+[data-brand="huawei"] .playback-buttons button:hover:not(:disabled) {
+  background: var(--text);
+  color: var(--surface);
+  border-color: var(--text);
+}
+[data-brand="huawei"] .playback-buttons button.on {
+  background: var(--accent-soft);
+  color: var(--text);
+  border-color: var(--accent);
+}
+[data-brand="huawei"] .playback-buttons button.next {
+  background: var(--accent-strong);
+  color: var(--on-accent);
+  border-color: var(--accent-strong);
+}
+[data-brand="huawei"] .wire-format { border-color: var(--border); }
+[data-brand="huawei"] .wire-format button[aria-pressed="true"] {
+  background: var(--accent-strong);
+  color: var(--on-accent);
+}
+[data-brand="huawei"] .seg {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--card-radius);
+  overflow: hidden;
+}
+[data-brand="huawei"] .seg button {
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+[data-brand="huawei"] .seg button[aria-pressed="true"] {
+  background: var(--accent-strong);
+  color: var(--on-accent);
+}
+[data-brand="huawei"] .steps li.done button,
+[data-brand="huawei"] .steps li.now button { color: var(--text); }
+[data-brand="huawei"] .steps li.done button::before,
+[data-brand="huawei"] .steps li.now button::before { background: var(--accent); }
+[data-brand="huawei"] .steps li.ask button::before { background: var(--role-negotiation); }

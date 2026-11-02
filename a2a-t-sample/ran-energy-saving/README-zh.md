@@ -106,6 +106,8 @@ sequenceDiagram
 python run_demo.py --scenario outage --mode auto --model-mode offline
 # Web UI（演示视图；默认打开完整的用例 1）
 python run_demo.py --ui --model-mode offline
+# 华为主题演示（页面也可切换，?brand=huawei 可临时覆盖）
+python run_demo.py --ui --brand huawei --model-mode offline
 # Web UI：审批 1（意图）+ 审批 2（MIE 中的 MML）
 python run_demo.py --ui --mode confirm --approval-gate --scenario target --model-mode offline
 # 未知区域：由工程师手动选择可用区域
@@ -129,7 +131,9 @@ A2AT_SAMPLE_AUTH_TOKEN=<token> python run_demo.py --ui --ui-host 0.0.0.0 --model
 会在最终节能报告之前收到协商与执行里程碑的进度通知——可以走流式连接，也可以注册 webhook。
 
 Web UI 默认打开演示视图：左侧是 16:9 的舞台，依次是网络工程师、OSS Agent、RAN Agent、MIE 与
-无线站点，中间是 A2A-T 通道。八个示例覆盖用例 1（夜间节能，含协商与无协商）和用例 2（计划停电）。
+无线站点，中间是 A2A-T 通道。演示视图支持两套品牌主题：**Orange**（原 Demo 风格，默认）和
+**Huawei**（暖灰画布、描边节点、低噪声的 ICT 风格）。顶栏按钮可实时切换并记忆选择；
+`--brand huawei` 或 `?brand=huawei` 可指定启动默认值。八个示例覆盖用例 1（夜间节能，含协商与无协商）和用例 2（计划停电）。
 舞台按人的节奏跟随真实运行，共九步：请求、结构化 Task-T、审批 1（意图）、下发 Task-T、需要时协商、
 策略与任务启动、数据采集（第 2–8 天，时间压缩）、审批 2（MIE 中的 MML）、下发与报告。请求框展示网络
 工程师会直接输入的自然表述，例如“在松山湖开启节能，保障速率为：…”。OSS Agent 先把请求解析成自己系统所需的
