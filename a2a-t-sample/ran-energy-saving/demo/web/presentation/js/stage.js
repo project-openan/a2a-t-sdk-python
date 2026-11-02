@@ -373,6 +373,23 @@ export function createStage(els) {
       });
       return;
     }
+    if (key === "modify-send") {
+      setActors({
+        ...base,
+        eng: { cls: "ok", text: copy.states.engApproved },
+        oss: { cls: "active", text: copy.states.ossBuilding },
+        nms: { cls: "active", text: copy.states.nmsReading },
+      });
+      focusIntent(false);
+      fly("lane-task", copy.packet.modifyTaskT, "task", 1600);
+      note("oss", roles.oss, copy.states.ossModifySending);
+      note("nms", roles.nms, copy.states.nmsModifyReadingBubble);
+      later(900, () => {
+        setActor("oss", { cls: "", text: copy.states.ossSent });
+        setActor("nms", { cls: "active", text: copy.states.nmsReading });
+      });
+      return;
+    }
     if (key === "propose") {
       setActors({
         ...base,

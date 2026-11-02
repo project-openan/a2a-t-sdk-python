@@ -98,6 +98,7 @@ const EN = {
   packet: {
     request: "Request",
     taskT: "Task-T",
+    modifyTaskT: "Modify Task-T",
     plain: "Message",
   },
   compare: {
@@ -139,6 +140,8 @@ const EN = {
     "intent-review":
       "Approval 1. Nothing leaves the OSS until the engineer confirms the structured intent.",
     send: "The OSS Agent maps the confirmed intent onto a Task-T and sends it as an A2A message; the RAN Agent validates it before running it.",
+    modifySend:
+      "The OSS Agent sends a second Task-T — a Modify — on the same running A2A Task. The RAN Agent validates it and updates the existing plan in place.",
     plainSend:
       "The request leaves as one plain A2A message. The RAN Agent has only the text to interpret: no template, no typed slots and no negotiation.",
     pureSend:
@@ -215,9 +218,12 @@ const EN = {
     ossUnderstanding: "Understanding the request",
     ossReading: "Reading the request",
     ossSending: "Sending the Task-T",
+    ossModifySending: "Sending the Modify Task-T on the running task",
     ossSendingPlain: "Sending the request",
     ossBuilding: "Structuring the intent",
     ossSent: "Task sent, waiting for the answer",
+    nmsModifyReadingBubble:
+      "RAN Agent receives the Modify Task-T for the same Task and regenerates the strategy.",
     ossWaitingAck: "Waiting for the Task-T check",
     ossNegotiating: "Negotiating with the RAN Agent",
     ossAsking: "Asking the engineer",
@@ -341,6 +347,7 @@ const EN = {
     emptyTitle: "No message yet",
     empty: "Messages appear here as they are sent. Click a line in the session trace to inspect it.",
     requestTitle: "OSS Agent → RAN Agent · Task-T sent",
+    modifyTitle: "OSS Agent → RAN Agent · Modify Task-T sent",
     messageTitle: "OSS Agent → RAN Agent · message",
     plainMessageTitle: "OSS Agent → RAN Agent · plain A2A message",
     plainMessageNote:
@@ -474,6 +481,7 @@ const EN = {
     remaining: "Remaining",
     saved: "Estimated saving",
     onDuty: "The task stays on duty until it is cancelled.",
+    modified: "The running task was modified in place; the updated plan is now in effect.",
     noNumbers: "The MML was applied and the task is on duty.",
     endedTitle: "Negotiation ended · no task created",
     rejected: "The OSS cannot provide the requested value.",
@@ -767,6 +775,7 @@ const ZH = {
   packet: {
     request: "请求",
     taskT: "Task-T",
+    modifyTaskT: "Modify Task-T",
     plain: "消息",
   },
   compare: {
@@ -806,6 +815,8 @@ const ZH = {
     understand: "OSS Agent 把请求解析成自己系统所需的结构化意图，并选择合适的技能。",
     "intent-review": "审批 1。工程师确认结构化意图之前，任何内容都不会离开 OSS。",
     send: "OSS Agent 把确认后的意图映射成 Task-T 作为 A2A 消息发出；RAN Agent 先校验，再执行。",
+    modifySend:
+      "OSS Agent 在同一运行中的 A2A Task 上发送第二条 Task-T（Modify）；RAN Agent 校验后原地更新已有方案。",
     plainSend:
       "请求作为一条普通 A2A 消息发出。RAN Agent 只能从文本里自行理解：没有模板、没有类型化槽位，也没有协商。",
     pureSend:
@@ -870,9 +881,11 @@ const ZH = {
     ossUnderstanding: "理解请求中",
     ossReading: "正在阅读请求",
     ossSending: "发送 Task-T 中",
+    ossModifySending: "在运行中的任务上发送 Modify Task-T",
     ossSendingPlain: "发送请求中",
     ossBuilding: "整理意图中",
     ossSent: "Task-T 已发送，等待应答",
+    nmsModifyReadingBubble: "RAN Agent 收到同一 Task 的 Modify Task-T，重新生成策略。",
     ossWaitingAck: "等待 Task-T 校验",
     ossNegotiating: "与 RAN Agent 协商中",
     ossAsking: "正在询问工程师",
@@ -995,6 +1008,7 @@ const ZH = {
     emptyTitle: "暂无消息",
     empty: "消息发送后会显示在这里。点击会话轨迹中的一行查看。",
     requestTitle: "OSS Agent → RAN Agent · 下发 Task-T",
+    modifyTitle: "OSS Agent → RAN Agent · 下发 Modify Task-T",
     messageTitle: "OSS Agent → RAN Agent · 消息",
     plainMessageTitle: "OSS Agent → RAN Agent · 普通 A2A 消息",
     plainMessageNote:
@@ -1128,6 +1142,7 @@ const ZH = {
     remaining: "剩余用电",
     saved: "预计节省",
     onDuty: "任务持续值守，直到被取消。",
+    modified: "运行中的任务已原地修改，更新后的方案已生效。",
     noNumbers: "MML 已下发，任务进入值守。",
     endedTitle: "协商结束 · 未创建任务",
     rejected: "OSS 无法提供所需参数。",

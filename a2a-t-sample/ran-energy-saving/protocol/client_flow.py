@@ -564,6 +564,9 @@ async def run_client_flow(
             detail["taskT"] = task_t[:4000]
         if negotiation_t is not None:
             detail["negotiationT"] = negotiation_t[:4000]
+        sample_phase = metadata.get(SAMPLE_PHASE_METADATA_KEY)
+        if isinstance(sample_phase, str) and sample_phase:
+            detail["samplePhase"] = sample_phase
         emit_trace(
             "message_sent",
             phase=phase,

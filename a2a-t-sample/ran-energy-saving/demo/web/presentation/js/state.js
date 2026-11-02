@@ -37,6 +37,17 @@ export function createState() {
     seen: new Set(),
     taskCreated: false,
     taskState: null,
+    taskCompleted: false,
+    //: 0 for the baseline Create phase, 1 for the Modify continuation.
+    phaseIndex: 0,
+    //: Phase discriminator used by the trace dedupe keys.
+    phaseKey: "baseline",
+    //: Whether at least one Task-T has been sent (the next Task-T is a Modify).
+    taskTSent: false,
+    //: Whether this run has a planned second (Modify) phase.
+    twoPhase: false,
+    //: Whether the second (Modify) phase has started.
+    modifyPhaseStarted: false,
     executionArtifacts: 0,
     reportArtifact: false,
     report: null,
@@ -65,6 +76,39 @@ export function createState() {
     mieResolved: null,
     mieWaiting: false,
   };
+}
+
+/**
+ * Start the Modify phase of a two-phase run.
+ *
+ * The A2A Task is the same, so `taskCreated`/`taskState` stay. Everything that describes the
+ * current execution pass resets, so the second MIE approval gate can reopen and the second report
+ * becomes the result card instead of being hidden by the baseline one.
+ */
+function startModifyPhase(state) {
+  if (state.modifyPhaseStarted) return;
+  state.modifyPhaseStarted = true;
+  state.phaseIndex += 1;
+  state.phaseKey = "modify";
+  state.reportArtifact = false;
+  state.report = null;
+  state.executionArtifacts = 0;
+  state.artifactTools = [];
+  state.dataCollection = null;
+  state.mmlSent = false;
+  state.executed = false;
+  state.approval = null;
+  state.approvalState = null;
+  state.decision = null;
+  state.intentReview = null;
+  state.negotiationEnded = false;
+  state.taskTPrompt = null;
+  state.lastStatusText = "";
+  state.nmsTool = null;
+  state.nmsStage = "strategy";
+  state.mieApproval = null;
+  state.mieResolved = null;
+  state.mieWaiting = false;
 }
 
 /** Apply one SSE frame to the state; returns the same state for chaining. */
@@ -323,6 +367,7 @@ function applyEvent(state, entry) {
       } else if (taskState === "TASK_STATE_REJECTED" || label.includes("REJECTED")) {
         state.approvalState = APPROVAL.REJECTED;
       }
+      if (taskState === "TASK_STATE_COMPLETED") state.taskCompleted = true;
       if (label) state.taskState = label;
       break;
     }
@@ -337,7 +382,7 @@ function applyEvent(state, entry) {
       }
       const tool = artifactTool(entry);
       if (tool) state.artifactTools.push(tool);
-      if (tool === "apply_energy_saving_plan") {
+      if (tool === "apply_energy_saving_plan" || tool === "modify_energy_saving_plan") {
         // The artifact is the execution confirmation: MIE dispatched the MML and the sites
         // executed it. A gate-off run has no earlier WORKING update to mark the dispatch.
         state.mmlSent = true;
@@ -360,6 +405,15 @@ function applyTrace(state, span) {
   }
   const kind = typeof span.kind === "string" ? span.kind : "trace";
   const detail = isObject(span.detail) ? span.detail : null;
+  // The second Task-T of a two-phase run is the Modify continuation. Its prompt renders before
+  // the send, so the phase boundary is the task_modify trace, not the second message.
+  if (span.phase === "task_modify" && state.taskTSent) startModifyPhase(state);
+  if (kind === "message_sent" && detail && detail.performative === "TASK_T") {
+    state.taskTSent = true;
+    if (detail.samplePhase === "baseline" || detail.samplePhase === "modify") {
+      state.twoPhase = true;
+    }
+  }
   // A planner turn is internal evidence for the tool that follows it. Tagging every turn as
   // "strategy" made the day badge jump back to Day 1 between collection and approval rows.
   let stage = traceStageKey(span);
@@ -510,9 +564,12 @@ export function executionSteps(state) {
   // The NMS publishes one artifact per tool call. Classify them by the tool that produced them:
   // the live planner may read several profiles and evaluate several candidates, so the artifact
   // position says nothing about whether a plan was applied.
+  const changed =
+    state.artifactTools.includes("apply_energy_saving_plan") ||
+    state.artifactTools.includes("modify_energy_saving_plan");
   const steps = [
     { key: "evaluate", done: state.artifactTools.includes("evaluate_energy_saving_plan") },
-    { key: "apply", done: state.artifactTools.includes("apply_energy_saving_plan") },
+    { key: "apply", done: changed },
     { key: "report", done: state.reportArtifact || state.report !== null },
   ];
   const activeIndex =
@@ -570,6 +627,8 @@ function statusTitle(entry, summary) {
   const stateOnly = !summary || /^task_state_/i.test(summary);
   if (stateOnly && entry.state === "TASK_STATE_SUBMITTED") return "Task created";
   if (stateOnly && entry.state === "TASK_STATE_WORKING") return "Working";
+  if (text.includes("baseline plan applied")) return "Baseline plan ready";
+  if (text.includes("target modified")) return "Modify accepted";
   if (text.includes("strategy recommendation is being executed")) return "Strategy generation started";
   if (text.includes("strategy recommendation and parameter setting")) return "Strategy ready";
   if (text.includes("energy-saving task has started")) return "Task started";
@@ -581,6 +640,7 @@ function statusTitle(entry, summary) {
   }
   if (text.includes("mie approved") || text.includes("approved. applying")) return "MML approved";
   if (text.includes("was applied to cell")) return "Suggestions executed";
+  if (text.includes("was modified on cell")) return "Suggestions modified";
   if (text.includes("report is ready")) return "Intent report ready";
   if (text.includes("ran agent is working")) return "Task started";
   if (text.includes("oss agent completed")) return "Task completed";
@@ -597,6 +657,7 @@ function artifactTitle(entry) {
   if (tool === "get_cell_energy_profile") return "Cell profile read";
   if (tool === "evaluate_energy_saving_plan") return "Plan evaluated";
   if (tool === "apply_energy_saving_plan") return "Suggestions executed";
+  if (tool === "modify_energy_saving_plan") return "Suggestions modified";
   if (tool === "generate_energy_saving_report") return "Intent report";
   return "Tool result";
 }
@@ -663,9 +724,19 @@ export function traceStageKey(entry) {
   const tool = isObject(entry.detail) && typeof entry.detail.toolName === "string"
     ? entry.detail.toolName
     : "";
+  if (
+    entry.phase === "task_modify" &&
+    (kind === "message_sent" || kind === "task_prompt_rendered" || kind === "llm")
+  ) {
+    return "report";
+  }
   if (kind === "artifact") {
     if (entry.phase === "report" || entry.name === "energy saving intent report") return "report";
-    if (tool === "apply_energy_saving_plan" || tool === "generate_energy_saving_report") {
+    if (
+      tool === "apply_energy_saving_plan" ||
+      tool === "modify_energy_saving_plan" ||
+      tool === "generate_energy_saving_report"
+    ) {
       return "report";
     }
     if (tool === "get_cell_energy_profile") return "collection";
@@ -679,6 +750,7 @@ export function traceStageKey(entry) {
     if (entry.title === "get_cell_energy_profile") return "collection";
     if (
       entry.title === "apply_energy_saving_plan" ||
+      entry.title === "modify_energy_saving_plan" ||
       entry.title === "generate_energy_saving_report"
     ) {
       return "report";
@@ -699,6 +771,9 @@ export function traceStageKey(entry) {
     }
     if (
       summary.includes("was applied") ||
+      summary.includes("was modified") ||
+      summary.includes("Baseline plan applied") ||
+      summary.includes("Target modified") ||
       summary.includes("report is ready") ||
       state === "TASK_STATE_COMPLETED"
     ) {
@@ -763,30 +838,38 @@ export function traceDedupeKey(entry) {
   const kind = typeof entry.kind === "string" ? entry.kind : "";
   const summary = typeof entry.summary === "string" ? entry.summary : "";
   const detail = isObject(entry.detail) ? entry.detail : {};
+  // A two-phase run repeats the same status/approval vocabulary. Prefixing the phase keeps the
+  // second phase's rows instead of treating them as duplicates of the baseline phase.
+  const phase = typeof entry.phase === "string" ? entry.phase : "";
+  const prefix = `${phase}:`;
   if (kind === "status") {
-    if (summary.includes("Data collection completed")) return "status:collection-completed";
-    if (entry.state === "TASK_STATE_INPUT_REQUIRED") return "approval:requested";
-    if (summary.includes("MIE Agent's approval")) return "approval:requested";
-    if (/MIE approved\. Applying|^Approved\. Applying/.test(summary)) return "approval:resolved";
-    if (summary.includes("was applied to cell")) return "status:apply-completed";
-    if (summary.includes("energy-saving report is ready")) return "status:report-ready";
+    if (summary.includes("Data collection completed")) return `${prefix}status:collection-completed`;
+    if (entry.state === "TASK_STATE_INPUT_REQUIRED") return `${prefix}approval:requested`;
+    if (summary.includes("MIE Agent's approval")) return `${prefix}approval:requested`;
+    if (/MIE approved\. Applying|^Approved\. Applying/.test(summary)) {
+      return `${prefix}approval:resolved`;
+    }
+    if (summary.includes("was applied to cell") || summary.includes("was modified on cell")) {
+      return `${prefix}status:apply-completed`;
+    }
+    if (summary.includes("energy-saving report is ready")) return `${prefix}status:report-ready`;
   }
   if (kind === "approval" || detail.pureKind === "approval") {
     const requested =
       summary.includes("requested") ||
       entry.title === "Approval requested" ||
       detail.approvalState === "requested";
-    if (requested) return "approval:requested";
+    if (requested) return `${prefix}approval:requested`;
     const resolved =
       summary.includes("resolved") ||
       entry.title === "Approval resolved" ||
       detail.approvalState === "approved" ||
       detail.approvalState === "rejected";
-    if (resolved) return "approval:resolved";
+    if (resolved) return `${prefix}approval:resolved`;
   }
-  if (kind === "decision_requested") return `decision:${entry.round ?? "?"}`;
+  if (kind === "decision_requested") return `${prefix}decision:${entry.round ?? "?"}`;
   if (kind === "propose" && entry.phase === "negotiation") {
-    return `propose:${entry.round ?? "?"}:${entry.performative ?? ""}`;
+    return `${prefix}propose:${entry.round ?? "?"}:${entry.performative ?? ""}`;
   }
   return null;
 }
@@ -802,7 +885,10 @@ export function traceDedupeKey(entry) {
 export function pushTrace(state, row) {
   const entry = isObject(row.entry) ? row.entry : null;
   const order = Number.isFinite(row.order) ? row.order : traceOrder(entry);
-  const dedupeKey = row.dedupeKey ?? traceDedupeKey(entry);
+  const baseKey = row.dedupeKey ?? traceDedupeKey(entry);
+  // The same protocol row can repeat in the baseline and the Modify phase; the state phase keeps
+  // the second one instead of treating it as a duplicate.
+  const dedupeKey = baseKey === null ? null : `${state.phaseKey || "baseline"}:${baseKey}`;
   if (dedupeKey !== null) {
     const existingIndex = state.trace.findIndex((item) => item.dedupeKey === dedupeKey);
     if (existingIndex >= 0) {
@@ -816,6 +902,7 @@ export function pushTrace(state, row) {
   const item = {
     ...row,
     order,
+    phase: typeof entry?.phase === "string" ? entry.phase : "",
     stage: row.stage ?? traceStageKey(entry),
     dir: row.dir ?? traceDirection(entry),
     dedupeKey,

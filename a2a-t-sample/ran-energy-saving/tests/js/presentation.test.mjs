@@ -1240,4 +1240,220 @@ openGatePlayer.enqueue({
 });
 assert.equal(openGatePlayer.status().hold, true);
 
+// --- Two-phase planned outage: Create baseline, then Modify on the same Task --------------
+
+const twoPhase = createState();
+applyFrame(twoPhase, {
+  type: "run_started",
+  runId: "run-two-phase",
+  scenario: "outage",
+  protocol: "a2a-t",
+});
+twoPhase.intentText = "Create a baseline, then modify the running task for the outage.";
+applyFrame(twoPhase, {
+  type: "trace",
+  event: {
+    seq: 1,
+    entryType: "trace",
+    kind: "task_prompt_rendered",
+    phase: "task_prompt",
+    detail: { promptText: "## Operation Type\n\nCreate" },
+  },
+});
+applyFrame(twoPhase, {
+  type: "trace",
+  event: {
+    seq: 2,
+    entryType: "trace",
+    kind: "message_sent",
+    phase: "task_validation",
+    detail: {
+      performative: "TASK_T",
+      summary: "create ran energy saving task",
+      samplePhase: "baseline",
+      taskT: "## Operation Type\n\nCreate",
+    },
+  },
+});
+assert.equal(twoPhase.taskTSent, true);
+assert.equal(twoPhase.twoPhase, true);
+assert.equal(twoPhase.phaseIndex, 0);
+assert.equal(twoPhase.taskTPrompt, "## Operation Type\n\nCreate");
+
+applyFrame(
+  twoPhase,
+  status(3, "Waiting for the engineer's approval before applying the plan: cell-002, 01:00~05:00, 10%.", {
+    state: "TASK_STATE_INPUT_REQUIRED",
+  }),
+);
+assert.equal(twoPhase.approvalState, "waiting");
+applyFrame(twoPhase, status(4, "Approved. Applying the plan.", { state: "TASK_STATE_WORKING" }));
+assert.equal(twoPhase.approvalState, "approved");
+applyFrame(
+  twoPhase,
+  event({
+    seq: 5,
+    entryType: "event",
+    kind: "artifact",
+    phase: "report",
+    name: "energy saving intent report",
+    data: { target_rate: 10 },
+  }),
+);
+assert.equal(twoPhase.report.target_rate, 10);
+
+// The Modify prompt is the phase boundary: the execution pass resets, the same Task remains.
+applyFrame(twoPhase, {
+  type: "trace",
+  event: {
+    seq: 6,
+    entryType: "trace",
+    kind: "task_prompt_rendered",
+    phase: "task_modify",
+    detail: { promptText: "## Operation Type\n\nModify" },
+  },
+});
+assert.equal(twoPhase.phaseIndex, 1);
+assert.equal(twoPhase.phaseKey, "modify");
+assert.equal(twoPhase.modifyPhaseStarted, true);
+assert.equal(twoPhase.taskTPrompt, "## Operation Type\n\nModify");
+assert.equal(twoPhase.report, null);
+assert.equal(twoPhase.approvalState, null);
+assert.equal(twoPhase.mmlSent, false);
+assert.equal(twoPhase.taskCreated, true);
+
+applyFrame(
+  twoPhase,
+  status(7, "Waiting for the engineer's approval before applying the plan: cell-002, 01:00~05:00, 20%.", {
+    state: "TASK_STATE_INPUT_REQUIRED",
+  }),
+);
+assert.equal(twoPhase.approvalState, "waiting");
+assert.equal(pendingHuman(twoPhase), "approval");
+applyFrame(
+  twoPhase,
+  event({
+    seq: 8,
+    entryType: "event",
+    kind: "artifact",
+    phase: "report",
+    name: "energy saving intent report",
+    data: { target_rate: 20 },
+  }),
+);
+applyFrame(twoPhase, status(9, "", { state: "TASK_STATE_COMPLETED" }));
+assert.equal(twoPhase.report.target_rate, 20);
+assert.equal(twoPhase.taskCompleted, true);
+
+// The same protocol row may repeat in both phases; the phase-aware key keeps both rows.
+const phaseRows = createState();
+applyFrame(phaseRows, status(1, "Data collection completed: baseline ready.", { state: "TASK_STATE_WORKING" }));
+applyFrame(phaseRows, {
+  type: "trace",
+  event: {
+    seq: 2,
+    entryType: "trace",
+    kind: "message_sent",
+    phase: "task_validation",
+    detail: { performative: "TASK_T", samplePhase: "baseline", taskT: "Create" },
+  },
+});
+applyFrame(phaseRows, {
+  type: "trace",
+  event: {
+    seq: 3,
+    entryType: "trace",
+    kind: "task_prompt_rendered",
+    phase: "task_modify",
+    detail: { promptText: "Modify" },
+  },
+});
+applyFrame(phaseRows, status(4, "Data collection completed: baseline ready.", { state: "TASK_STATE_WORKING" }));
+assert.equal(phaseRows.trace.filter((row) => row.title === "Data collection completed").length, 2);
+
+// The second Task-T uses its own scene and stays on the apply step instead of rewinding.
+const secondSendFrame = {
+  type: "trace",
+  event: {
+    seq: 20,
+    entryType: "trace",
+    kind: "message_sent",
+    phase: "task_modify",
+    detail: { performative: "TASK_T", summary: "modify ran energy saving task", taskT: "Modify" },
+  },
+};
+assert.equal(sceneFor(secondSendFrame, twoPhase).key, "modify-send");
+assert.equal(sceneFor(secondSendFrame, twoPhase).step, 8);
+const firstSendFrame = {
+  type: "trace",
+  event: {
+    seq: 21,
+    entryType: "trace",
+    kind: "message_sent",
+    phase: "task_validation",
+    detail: { performative: "TASK_T", summary: "create ran energy saving task", taskT: "Create" },
+  },
+};
+assert.equal(sceneFor(firstSendFrame, createState()).key, "send");
+
+// The wire inspector keeps each send's own Task-T instead of the state's latest prompt.
+const firstWire = buildWireModel(
+  {
+    kind: "message_sent",
+    spanId: "d".repeat(16),
+    detail: {
+      performative: "TASK_T",
+      summary: "create ran energy saving task",
+      extensionUri: "urn:task-t/v1",
+      templateUri: "urn:template",
+      taskT: "## Operation Type\n\nCreate\n\n## Task Object\n\nBaseline area.",
+    },
+  },
+  { runId: "run-two-phase", intentText: rawRequest, taskTPrompt: "## Operation Type\n\nModify" },
+  "t",
+  copy,
+);
+const secondWire = buildWireModel(
+  {
+    kind: "message_sent",
+    spanId: "e".repeat(16),
+    detail: {
+      performative: "TASK_T",
+      summary: "modify ran energy saving task",
+      extensionUri: "urn:task-t/v1",
+      templateUri: "urn:template",
+      taskT: "## Operation Type\n\nModify\n\n## Task Object\n\nModified area.",
+    },
+  },
+  { runId: "run-two-phase", intentText: rawRequest, taskTPrompt: "## Operation Type\n\nModify" },
+  "t",
+  copy,
+);
+assert.ok(wireText(firstWire).includes("Create"));
+assert.ok(!wireText(firstWire).includes("Modify"));
+assert.ok(wireText(secondWire).includes("Modify"));
+assert.equal(secondWire.title, copy.wire.modifyTitle);
+
+// The execution milestones understand the Modify tool.
+const modifyMilestones = createState();
+applyFrame(
+  modifyMilestones,
+  event({
+    seq: 30,
+    entryType: "event",
+    kind: "artifact",
+    phase: "execution",
+    detail: { toolName: "modify_energy_saving_plan" },
+  }),
+);
+assert.equal(executionSteps(modifyMilestones).find((step) => step.key === "apply").done, true);
+assert.equal(
+  traceStageKey({
+    kind: "message_sent",
+    phase: "task_modify",
+    summary: "Modify Task-T sent",
+  }),
+  "report",
+);
+
 console.log("presentation model harness: ok");

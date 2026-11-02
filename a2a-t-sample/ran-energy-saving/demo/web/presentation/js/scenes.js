@@ -123,6 +123,8 @@ function eventScene(entry, state, frame) {
     case "status": {
       const label = typeof entry.summary === "string" ? entry.summary : "";
       const taskState = typeof entry.state === "string" ? entry.state : "";
+      if (label.includes("Baseline plan applied")) return scene("trace", 0, frame);
+      if (label.includes("Target modified")) return scene("strategy", 4200, frame);
       if (label.includes("Data collection started")) {
         return scene("collect-start", 2200, frame);
       }
@@ -186,7 +188,7 @@ function eventScene(entry, state, frame) {
           : scene("collect-done", 1400, frame);
       }
       if (tool === "evaluate_energy_saving_plan") return scene("approval-ready", 2000, frame);
-      if (tool === "apply_energy_saving_plan") {
+      if (tool === "apply_energy_saving_plan" || tool === "modify_energy_saving_plan") {
         // Never show MML going to the network while the MIE review is still open. The artifact
         // is the execution confirmation: after the MIE dispatch it is the sites' report, not a
         // second dispatch.
@@ -216,7 +218,9 @@ function traceScene(span, state, frame) {
   if (span.kind === "message_sent") {
     const detail = isObject(span.detail) ? span.detail : {};
     const performative = typeof detail.performative === "string" ? detail.performative : "";
-    if (performative === "TASK_T") return scene("send", 1800, frame);
+    if (performative === "TASK_T") {
+      return state.taskTSent ? scene("modify-send", 1800, frame) : scene("send", 1800, frame);
+    }
     return scene("negotiate-send", 500, frame);
   }
   if (span.kind === "tool") {
@@ -229,7 +233,9 @@ function traceScene(span, state, frame) {
         : scene("collect-start", 1200, frame);
     }
     if (name === "evaluate_energy_saving_plan") return scene("approval-ready", 900, frame);
-    if (name === "apply_energy_saving_plan") return scene("apply", 900, frame);
+    if (name === "apply_energy_saving_plan" || name === "modify_energy_saving_plan") {
+      return scene("apply", 900, frame);
+    }
   }
   if (span.kind === "approval") {
     const detail = isObject(span.detail) ? span.detail : {};
@@ -261,6 +267,10 @@ function stepOf(key) {
       return "intent";
     case "send":
       return "send";
+    case "modify-send":
+      // The Modify happens after the baseline report. Reusing the apply step keeps the step bar
+      // from rewinding; the narration and the wire payload make the Modify explicit.
+      return "apply";
     case "propose":
     case "decision":
     case "negotiate-send":

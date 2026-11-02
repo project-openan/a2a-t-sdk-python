@@ -128,8 +128,9 @@ export function buildWireModel(entry, state, format, copy) {
       const headers = requestHeaders(extensionUri, state, entry);
       const plainHeaders = headers.filter((line) => !line.startsWith("A2A-Extensions:"));
       const usePlain = format === "a";
+      const modify = detail.summary === "modify ran energy saving task";
       return {
-        title: copy.wire.requestTitle,
+        title: modify ? copy.wire.modifyTitle : copy.wire.requestTitle,
         alternate: true,
         note: usePlain ? copy.wire.plainNote : copy.wire.taskTNote,
         nodes: [...headerNodes(usePlain ? plainHeaders : headers), ...jsonNodes(usePlain ? plainBody : a2aBody, 0)],
@@ -233,10 +234,11 @@ export function buildWireModel(entry, state, format, copy) {
 
 /** Return the Task-T payload that was actually sent with one message. */
 function sentTaskT(entry, state) {
-  // The rendered prompt is the full Task-T; the send span copies it for older transcripts.
-  if (typeof state.taskTPrompt === "string" && state.taskTPrompt) return state.taskTPrompt;
+  // Every send span carries its own payload. A two-phase run has a baseline Create prompt and a
+  // later Modify prompt; the state's last prompt must not leak into the earlier row.
   const detail = isObject(entry.detail) ? entry.detail : {};
   if (typeof detail.taskT === "string" && detail.taskT) return detail.taskT;
+  if (typeof state.taskTPrompt === "string" && state.taskTPrompt) return state.taskTPrompt;
   return typeof state.intentText === "string" ? state.intentText : "";
 }
 

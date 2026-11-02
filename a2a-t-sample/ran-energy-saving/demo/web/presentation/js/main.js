@@ -751,6 +751,11 @@ function enqueueFrame(frame) {
   if ((scene.key === "trace" || scene.key === "event") && ui.lastScene !== null) {
     scene.step = ui.lastScene.step;
   }
+  // The Modify phase repeats the baseline vocabulary (strategy, collection, approval, apply).
+  // Keep the step bar at the step the audience already reached instead of rewinding it.
+  if (ui.shadow.modifyPhaseStarted && ui.lastScene !== null && scene.step < ui.lastScene.step) {
+    scene.step = ui.lastScene.step;
+  }
   // A repeated beat (the live planner may evaluate several candidates, and a late span may
   // repeat a scene) adds evidence without replaying the animation and its narration.
   if (
@@ -1300,15 +1305,18 @@ function renderControls() {
 
 function renderResult() {
   // Show the report as soon as its artifact arrives; the terminal frame may trail a live model by
-  // several seconds. The card is cached per run, so the later finished frame does not duplicate it.
-  if (!ui.view.finished && !ui.view.report) return;
-  // The ending (and the comparison card) is built once per run and re-appended on later
+  // several seconds. The card is cached per phase, so the later finished frame does not duplicate
+  // it and the baseline report of a two-phase run does not become the ending card.
+  if (!ui.view.finished && !ui.view.taskCompleted && !ui.view.report) return;
+  if (ui.view.twoPhase && !ui.view.modifyPhaseStarted) return;
+  const cardKey = `${ui.view.runId || ""}:${ui.view.phaseIndex}`;
+  // The ending (and the comparison card) is built once per phase and re-appended on later
   // renders; building it again would reset the scroll and any click target in the card.
-  if (ui.resultCard === null || ui.resultCardRun !== ui.view.runId) {
+  if (ui.resultCard === null || ui.resultCardRun !== cardKey) {
     const built = buildResultCard();
     if (built === null) return;
     ui.resultCard = built;
-    ui.resultCardRun = ui.view.runId;
+    ui.resultCardRun = cardKey;
     ui.compareSaved = null;
   }
   els.sayDetail.hidden = false;
@@ -1442,7 +1450,13 @@ function reportCard(report, copy) {
   if (saved !== null) {
     wrapper.append(el("p", "report-saved", `${copy.result.saved} ≈ ${saved.toFixed(1)} kWh`));
   }
-  wrapper.append(el("p", "report-note", copy.result.onDuty));
+  wrapper.append(
+    el(
+      "p",
+      "report-note",
+      report.status === "modified" ? copy.result.modified : copy.result.onDuty,
+    ),
+  );
   return wrapper;
 }
 
@@ -1555,7 +1569,7 @@ function stopCountdown() {
 }
 
 function handleLoop(scene) {
-  if (scene.key !== "finish" || !els.loop.checked || ui.looping) return;
+  if (scene.key !== "finish" || !ui.view.finished || !els.loop.checked || ui.looping) return;
   ui.looping = true;
   window.setTimeout(() => {
     if (!els.loop.checked) {
