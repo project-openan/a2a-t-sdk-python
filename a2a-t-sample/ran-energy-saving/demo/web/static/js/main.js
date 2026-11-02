@@ -640,12 +640,17 @@ async function startRun(event) {
   stopSubscription();
   api.clearSpanCache();
   try {
+    const scenario = $("scenario-select").value;
+    const entered = $("user-request-input").value.trim();
+    // The input shows the concise presentation wording. While unchanged, keep the backend's
+    // richer catalog prompt so the offline scripted extractor still routes the run.
+    const defaultRequest = app.meta?.scenarioRequests?.[scenario] || "";
     const payload = await api.startRun({
-      scenario: $("scenario-select").value,
+      scenario,
       mode: $("mode-select").value,
       transport: $("transport-select").value,
       discovery: $("discovery-select").value,
-      userRequest: $("user-request-input").value.trim() || null,
+      userRequest: entered && entered !== defaultRequest ? entered : null,
     });
     app.runId = payload.runId;
     if (payload.deduplicated) {

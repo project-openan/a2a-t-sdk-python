@@ -169,6 +169,75 @@ REGION_STRINGS: dict[str, str] = {
     LANGUAGE_ZH: "松山湖管委会",
 }
 
+#: Presentation-only requests. The wire prompt keeps the longer, template-oriented wording because
+#: a live model fills the Task-T slots from it; the page shows what a network engineer would
+#: actually type, in the reference demo's concise style. The UI omits ``userRequest`` while the
+#: textarea still matches this text, so the run keeps using the rich prompt.
+PRESENTATION_REQUESTS: dict[str, dict[str, str]] = {
+    SCENARIO_NIGHT: {
+        LANGUAGE_EN: (
+            "Start energy saving in the Songshanhu area with these guaranteed throughputs: "
+            "00:00–17:30 at 10 Mbps, 17:30–23:00 at 20 Mbps, 23:00–24:00 at 10 Mbps."
+        ),
+        LANGUAGE_ZH: (
+            "在松山湖开启节能，保障速率为：00:00–17:30 10 Mbps，"
+            "17:30–23:00 20 Mbps，23:00–24:00 10 Mbps。"
+        ),
+    },
+    SCENARIO_INFORMATION: {
+        LANGUAGE_EN: "Start energy saving in the Songshanhu area.",
+        LANGUAGE_ZH: "在松山湖开启节能。",
+    },
+    SCENARIO_TARGET: {
+        LANGUAGE_EN: (
+            "Start energy saving in the Songshanhu area with these guaranteed throughputs: "
+            "00:00–07:00 at 2 Mbps, 07:00–09:00 at 10 Mbps, 09:00–17:30 at 10 Mbps, "
+            "17:30–23:00 at 20 Mbps, 20:00–00:00 at 10 Mbps."
+        ),
+        LANGUAGE_ZH: (
+            "在松山湖开启节能，保障速率为：00:00–07:00 2 Mbps，07:00–09:00 10 Mbps，"
+            "09:00–17:30 10 Mbps，17:30–23:00 20 Mbps，20:00–00:00 10 Mbps。"
+        ),
+    },
+    SCENARIO_FEASIBILITY: {
+        LANGUAGE_EN: (
+            "Start energy saving for Site 1 and Site 2 in the Songshanhu area: "
+            "00:00–06:00 at 2 Mbps and 06:00–18:00 at 10 Mbps. A power outage runs "
+            "from 00:00–18:00."
+        ),
+        LANGUAGE_ZH: (
+            "在松山湖为站点 1 和站点 2 开启节能：00:00–06:00 2 Mbps，06:00–18:00 10 Mbps；"
+            "00:00–18:00 有停电事件。"
+        ),
+    },
+    SCENARIO_OUTAGE: {
+        LANGUAGE_EN: (
+            "Start energy saving for Site 1 and Site 2 in the Songshanhu area. During tomorrow's "
+            "03:00–05:00 outage keep 2 Mbps; otherwise use 10 Mbps: 00:00–03:00 at 10 Mbps, "
+            "03:00–05:00 at 2 Mbps, 05:00–24:00 at 10 Mbps."
+        ),
+        LANGUAGE_ZH: (
+            "在松山湖为站点 1 和站点 2 开启节能。明天 03:00–05:00 停电期间保障 2 Mbps，"
+            "其余时间 10 Mbps：00:00–03:00 10 Mbps，03:00–05:00 2 Mbps，05:00–24:00 10 Mbps。"
+        ),
+    },
+    SCENARIO_REJECT: {
+        LANGUAGE_EN: "Start energy saving in the Songshanhu area.",
+        LANGUAGE_ZH: "在松山湖开启节能。",
+    },
+    SCENARIO_ABORT: {
+        LANGUAGE_EN: (
+            "Start energy saving in the Songshanhu area with these guaranteed throughputs: "
+            "00:00–07:00 at 2 Mbps, 07:00–09:00 at 10 Mbps, 09:00–17:30 at 10 Mbps, "
+            "17:30–23:00 at 20 Mbps, 20:00–00:00 at 10 Mbps."
+        ),
+        LANGUAGE_ZH: (
+            "在松山湖开启节能，保障速率为：00:00–07:00 2 Mbps，07:00–09:00 10 Mbps，"
+            "09:00–17:30 10 Mbps，17:30–23:00 20 Mbps，20:00–00:00 10 Mbps。"
+        ),
+    },
+}
+
 #: Task-T parameters the client refills on accept, per language. The base set is the complete,
 #: non-overlapping request; the information kind uses it to supply the throughput target it omitted
 #: on purpose, while the target and feasibility kinds override the guaranteed-throughput target with
@@ -626,6 +695,14 @@ def resolve_user_request(scenario: Scenario, language: str) -> str:
     if language not in scenario.user_request:
         raise KeyError(f"Scenario '{scenario.name}' has no request for language '{language}'")
     return scenario.user_request[language]
+
+
+def resolve_presentation_request(name: str, language: str) -> str:
+    """Return the concise request shown in the presentation for one scenario."""
+    by_language = PRESENTATION_REQUESTS.get(name)
+    if by_language is not None and language in by_language:
+        return by_language[language]
+    return resolve_user_request(get_scenario(name), language)
 
 
 def expected_negotiation_target(

@@ -20,6 +20,8 @@ const REDUCED =
 export function createStage(els) {
   buildCells(els.cellsFigure);
   let bubbles = {};
+  let typingTarget = "";
+  let typingUntil = 0;
   const packetTimers = new Set();
   let dayProgress = 0;
   let dayTimer = null;
@@ -84,11 +86,32 @@ export function createStage(els) {
     barTimer = window.requestAnimationFrame(frame);
   }
 
+  function typingDuration(text) {
+    // Human typing pace: the reference request is one sentence, not a protocol dump. Keep the
+    // animation between 2.2 s and 6 s so a long edited request is still readable.
+    return Math.min(6000, Math.max(2200, String(text || "").length * 40));
+  }
+
+  function typingRemaining() {
+    return Math.max(0, typingUntil - performance.now());
+  }
+
   function typeBubble(actor, who, text, duration) {
     if (REDUCED || !text) {
       note(actor, who, text);
       return;
     }
+    if (bubbles[actor]?.text === text) {
+      // The start button already typed the same request while the run was being created.
+      paintBubble(actor);
+      return;
+    }
+    if (typingTarget === text && performance.now() < typingUntil) {
+      // The optimistic start animation is still running; let it finish instead of restarting.
+      return;
+    }
+    typingTarget = text;
+    typingUntil = performance.now() + duration;
     bubbles[actor] = { who, text: "", neg: false };
     paintBubble(actor);
     const start = performance.now();
@@ -286,9 +309,14 @@ export function createStage(els) {
       setMie("", copy.states.approvalIdle);
       highlightSkill(0);
       focusIntent(false);
-      typeBubble("eng", roles.eng, (state.userRequest || "").trim() || copy.states.engWriting, 1400);
+      const request = (state.userRequest || "").trim();
+      const text = request || copy.states.engWriting;
+      const alreadyTyped = bubbles.eng?.text === text;
+      const remaining = typingRemaining();
+      const typingMs = alreadyTyped ? 400 : remaining > 0 ? remaining : typingDuration(text);
+      if (!alreadyTyped) typeBubble("eng", roles.eng, text, typingMs);
       fly("lane-request", copy.packet.request, "req", 1000);
-      later(1400, () => setActor("eng", { cls: "", text: copy.states.engSent }));
+      later(typingMs + 300, () => setActor("eng", { cls: "", text: copy.states.engSent }));
       return;
     }
     if (key === "understand") {
@@ -388,12 +416,29 @@ export function createStage(els) {
       note("oss", roles.oss, copy.states.ossTaskRunningBubble);
       fly("lane-status", "SUBMITTED", "status", 900);
       later(400, () => progressBar(100, 2400));
-      later(2900, () => {
-        setActor("nms", { cls: "ok", text: copy.states.nmsTaskStarted });
-        note("nms", roles.nms, copy.states.nmsStrategyReadyBubble);
-        note("cells", roles.cells, copy.dataCollection.noMml);
-        fly("lane-status", copy.states.nmsStrategyReadyShort, "status", 900);
+      return;
+    }
+    if (key === "strategy-ready") {
+      setActors({
+        ...base,
+        eng: { cls: "ok", text: copy.states.engApproved },
+        oss: { cls: "", text: copy.states.ossFollowing },
+        nms: { cls: "active", text: copy.states.nmsStrategyReadyShort },
       });
+      note("nms", roles.nms, copy.states.nmsStrategyReadyShort);
+      fly("lane-status", copy.states.nmsStrategyReadyShort, "status", 900);
+      return;
+    }
+    if (key === "task-started") {
+      setActors({
+        ...base,
+        eng: { cls: "ok", text: copy.states.engApproved },
+        oss: { cls: "", text: copy.states.ossFollowing },
+        nms: { cls: "ok", text: copy.states.nmsTaskStarted },
+      });
+      note("nms", roles.nms, copy.states.nmsStrategyReadyBubble);
+      note("cells", roles.cells, copy.dataCollection.noMml);
+      fly("lane-status", copy.states.nmsTaskStarted, "status", 900);
       return;
     }
     if (key === "collect-start") {
@@ -906,7 +951,25 @@ export function createStage(els) {
     return null;
   }
 
-  return { render, scene, note, reset, fly, intentResolved, approvalResolved };
+  function showRequest(copy, text) {
+    const value = String(text || "").trim();
+    if (!value) return;
+    directed = false;
+    setActor("eng", { cls: "active", text: copy.states.engWriting || "" });
+    typeBubble("eng", copy.roles.eng, value, typingDuration(value));
+  }
+
+  return {
+    render,
+    scene,
+    note,
+    reset,
+    fly,
+    showRequest,
+    typingRemaining,
+    intentResolved,
+    approvalResolved,
+  };
 }
 
 export function setStageCopy(copy) {

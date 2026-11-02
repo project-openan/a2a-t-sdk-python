@@ -43,6 +43,7 @@ export function createState() {
     finished: false,
     negotiationEnded: false,
     intentText: null,
+    taskTPrompt: null,
     intentReview: null,
     dataCollection: null,
     mmlSent: false,
@@ -77,7 +78,13 @@ export function applyFrame(state, frame) {
       if (frame.protocol === "plain") state.protocol = "plain";
       else if (frame.protocol === "pure") state.protocol = "pure";
       else if (frame.protocol === "a2a-t") state.protocol = "a2a-t";
-      if (typeof frame.userRequest === "string") state.userRequest = frame.userRequest;
+      // The page starts with the engineer's concise request. The backend `run_started` frame may
+      // carry the richer catalog prompt used for Task-T generation; keep the visible request as
+      // the engineer wrote it.
+      if (typeof frame.userRequest === "string" && !state.userRequest) {
+        state.userRequest = frame.userRequest;
+      }
+      if (state.userRequest && !state.intentText) state.intentText = state.userRequest;
       if (Array.isArray(frame.expectedSequence)) state.expectedSequence = frame.expectedSequence;
       if (state.status === STATUS.IDLE) state.status = STATUS.RUNNING;
       return state;
@@ -376,7 +383,9 @@ function applyTrace(state, span) {
   });
 
   if (kind === "task_prompt_rendered" && detail && typeof detail.promptText === "string") {
-    state.intentText = detail.promptText;
+    // The rendered prompt is the Task-T wire payload. The OSS intent panel shows the engineer's
+    // own structured intent, not the Task-T; the wire inspector opens the prompt when needed.
+    state.taskTPrompt = detail.promptText;
   }
   if (kind === "tool" && detail && typeof detail.toolName === "string") {
     state.nmsTool = detail.toolName;

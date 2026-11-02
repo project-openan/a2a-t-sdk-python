@@ -434,6 +434,9 @@ async def test_langgraph_executor_applies_only_after_approval(
         and event.status.HasField("message")
         and event.status.message.parts
     ]
+    assert any("Strategy recommendation is being executed" in text for text in status_texts)
+    assert any("Strategy recommendation and parameter setting" in text for text in status_texts)
+    assert any("energy-saving task has started" in text for text in status_texts)
     assert any("Data collection started" in text for text in status_texts)
     assert any("Data collection in progress" in text for text in status_texts)
     assert sum("Data collection completed" in text for text in status_texts) == 1

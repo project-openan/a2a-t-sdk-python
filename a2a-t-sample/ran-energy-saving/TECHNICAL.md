@@ -94,7 +94,10 @@ sites, with the A2A-T channel between them) and three evidence panels. Seven exa
 Pick a scenario, edit the network operations engineer's request if needed, and start it. The stage
 follows the real run through nine steps: request → structured Task-T → approval 1 (intent) → Task-T
 sent → negotiation when needed → strategy and task start → data collection (days 2–8, compressed) →
-approval 2 (MML in MIE) → apply and report. The right column shows what the OSS Agent understood
+approval 2 (MML in MIE) → apply and report. The request box uses the concise wording a network
+engineer would type; the OSS Agent first builds its own structured intent, and the Task-T is only the
+wire mapping at the send step. After task creation the RAN Agent publishes `SUBMITTED`, strategy
+working, strategy ready and task started before the collection notifications. The right column shows what the OSS Agent understood
 (with the 24-hour throughput chart), the negotiation turns, an **On the wire** inspector, and the
 merged session trace. The inspector shows the real A2A request headers and JSON body with the
 Task-T metadata; its **Plain A2A** toggle replaces the Task-T fields with one natural-language

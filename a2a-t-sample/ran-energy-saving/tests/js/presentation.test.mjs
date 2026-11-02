@@ -419,6 +419,34 @@ assert.equal(
   ).step,
   6,
 );
+// The reference demo's post-Task-T ladder maps to three distinct beats.
+assert.equal(
+  sceneFor(
+    status(31, "Strategy recommendation is being executed; no optimization is applied yet.", {
+      state: "TASK_STATE_WORKING",
+    }),
+    sceneState,
+  ).key,
+  "strategy",
+);
+assert.equal(
+  sceneFor(
+    status(32, "Strategy recommendation and parameter setting are complete.", {
+      state: "TASK_STATE_WORKING",
+    }),
+    sceneState,
+  ).key,
+  "strategy-ready",
+);
+assert.equal(
+  sceneFor(
+    status(33, "The energy-saving task has started; the RAN Agent is now running it.", {
+      state: "TASK_STATE_WORKING",
+    }),
+    sceneState,
+  ).key,
+  "task-started",
+);
 assert.equal(sceneFor({ type: "finished", finalState: "task_completed" }, sceneState).key, "finish");
 
 // Server spans are evidence, not story beats: a late batch must not replay a step.
@@ -662,6 +690,26 @@ assert.equal(outage.area, "Songshanhu Administration Committee");
 assert.deepEqual(outage.sites, ["Site 1", "Site 2"]);
 assert.deepEqual(outage.outage, { start: 180, end: 300 });
 assert.equal(outage.slots.length, 3);
+
+// The presentation shows a concise engineer request, not the Task-T wire text. The OSS still
+// parses it into its own structured intent before the Task-T exists.
+const conciseNight = parseIntent(
+  "Start energy saving in the Songshanhu area with these guaranteed throughputs: " +
+    "00:00–17:30 at 10 Mbps, 17:30–23:00 at 20 Mbps, 23:00–24:00 at 10 Mbps.",
+);
+assert.equal(conciseNight.operation, "create");
+assert.equal(conciseNight.area, "Songshanhu");
+assert.equal(conciseNight.slots.length, 3);
+assert.deepEqual(conciseNight.slots[1], { start: 1050, end: 1380, rate: 20 });
+
+const conciseOutage = parseIntent(
+  "Start energy saving for Site 1 and Site 2 in the Songshanhu area. During tomorrow's " +
+    "03:00–05:00 outage keep 2 Mbps; otherwise use 10 Mbps: 00:00–03:00 at 10 Mbps, " +
+    "03:00–05:00 at 2 Mbps, 05:00–24:00 at 10 Mbps.",
+);
+assert.deepEqual(conciseOutage.sites, ["Site 1", "Site 2"]);
+assert.deepEqual(conciseOutage.outage, { start: 180, end: 300 });
+assert.equal(conciseOutage.slots.length, 3);
 
 // --- Remaining time -----------------------------------------------------
 

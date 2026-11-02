@@ -90,7 +90,11 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from demo.scenario import PLAIN_PROTOCOL_SCENARIOS, PURE_PROTOCOL_SCENARIOS
+from demo.scenario import (
+    PLAIN_PROTOCOL_SCENARIOS,
+    PURE_PROTOCOL_SCENARIOS,
+    resolve_presentation_request,
+)
 
 _LOGGER = logging.getLogger("ran_energy_saving.web")
 
@@ -310,7 +314,7 @@ def create_app(
                 "modelLabel": config.model_label,
                 "scenarios": list(active_scenarios),
                 "scenarioRequests": {
-                    name: resolved_catalog.spec(name, language=config.language).user_request
+                    name: resolve_presentation_request(name, config.language)
                     for name in active_scenarios
                 },
                 "modes": list(UI_MODES),

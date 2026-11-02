@@ -102,7 +102,7 @@ const EN = {
     negotiation: "Negotiation",
     validation: "Validation",
     outcome: "Outcome",
-    intentA2at: "Structured Task-T with typed slots",
+    intentA2at: "Structured intent with typed fields",
     intentPlain: "Free text only; nothing to approve",
     validationA2at: "Template validation, then the agreed value is re-checked",
     validationPlain: "No template, so nothing is validated",
@@ -131,10 +131,10 @@ const EN = {
   narration: {
     request:
       "The engineer writes a goal in plain language: an area and a guaranteed rate per time slot.",
-    understand: "The OSS Agent turns the request into a structured Task-T and picks the right skill.",
+    understand: "The OSS Agent turns the request into the structured intent its own system needs and picks the right skill.",
     "intent-review":
       "Approval 1. Nothing leaves the OSS until the engineer confirms the structured intent.",
-    send: "The Task-T travels as an A2A message; the RAN Agent validates it before creating a task.",
+    send: "The OSS Agent maps the confirmed intent onto a Task-T and sends it as an A2A message; the RAN Agent validates it before creating a task.",
     plainSend:
       "The request leaves as one plain A2A message. The RAN Agent has only the text to interpret: no template, no typed slots and no negotiation.",
     pureSend:
@@ -212,7 +212,7 @@ const EN = {
     ossReading: "Reading the request",
     ossSending: "Sending the Task-T",
     ossSendingPlain: "Sending the request",
-    ossBuilding: "Building the Task-T",
+    ossBuilding: "Structuring the intent",
     ossSent: "Task sent, waiting for the answer",
     ossWaitingAck: "Waiting for the Task-T check",
     ossNegotiating: "Negotiating with the RAN Agent",
@@ -383,7 +383,7 @@ const EN = {
     kicker: "Approval 1 · Intent",
     title: "Confirm what the OSS Agent understood",
     text: "Nothing leaves the OSS until you confirm the structured intent.",
-    detail: "The Task-T is ready. Check the area, sites, outage and guaranteed throughput before sending it.",
+    detail: "The intent is ready. Check the area, sites, outage and guaranteed throughput before it is mapped to the Task-T.",
     checkPacket: "Check the intent",
     approvedPacket: "Approved",
     confirm: "Confirm intent and send",
@@ -752,7 +752,7 @@ const ZH = {
     negotiation: "协商",
     validation: "校验",
     outcome: "结局",
-    intentA2at: "结构化 Task-T，带类型化槽位",
+    intentA2at: "结构化意图，带类型化字段",
     intentPlain: "只有自由文本，无法审批",
     validationA2at: "模板校验，接受值再复核",
     validationPlain: "没有模板，无从校验",
@@ -780,9 +780,9 @@ const ZH = {
   auto: "自动确认",
   narration: {
     request: "工程师用自然语言提出目标：区域，以及每个时段要保障的速率。",
-    understand: "OSS Agent 把请求解析成结构化 Task-T，并选择合适的技能。",
+    understand: "OSS Agent 把请求解析成自己系统所需的结构化意图，并选择合适的技能。",
     "intent-review": "审批 1。工程师确认结构化意图之前，任何内容都不会离开 OSS。",
-    send: "Task-T 作为 A2A 消息发出；RAN Agent 先校验，再决定是否创建任务。",
+    send: "OSS Agent 把确认后的意图映射成 Task-T 作为 A2A 消息发出；RAN Agent 先校验，再决定是否创建任务。",
     plainSend:
       "请求作为一条普通 A2A 消息发出。RAN Agent 只能从文本里自行理解：没有模板、没有类型化槽位，也没有协商。",
     pureSend:
@@ -848,7 +848,7 @@ const ZH = {
     ossReading: "正在阅读请求",
     ossSending: "发送 Task-T 中",
     ossSendingPlain: "发送请求中",
-    ossBuilding: "构建 Task-T 中",
+    ossBuilding: "整理意图中",
     ossSent: "Task-T 已发送，等待应答",
     ossWaitingAck: "等待 Task-T 校验",
     ossNegotiating: "与 RAN Agent 协商中",
@@ -1018,7 +1018,7 @@ const ZH = {
     kicker: "审批 1 · 意图",
     title: "确认 OSS Agent 理解的任务",
     text: "工程师确认结构化意图之前，任何内容都不会离开 OSS。",
-    detail: "Task-T 已就绪。请检查区域、站点、停电事件和保障速率，再发送给 RAN Agent。",
+    detail: "意图已就绪。请检查区域、站点、停电事件和保障速率；确认后才会映射为 Task-T。",
     checkPacket: "确认意图",
     approvedPacket: "已确认",
     confirm: "确认意图并发送",

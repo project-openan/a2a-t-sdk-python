@@ -136,8 +136,13 @@ Agent, the MIE and the radio sites, plus the A2A-T channel between them. Seven e
 case 1 (night-time energy saving, with and without negotiation) and use case 2 (planned power
 outage). The stage follows the live run at a human pace through nine steps: request, structured
 Task-T, approval 1 (intent), Task-T sent, negotiation when needed, strategy and task start, data
-collection (days 2 to 8, compressed), approval 2 (MML in MIE) and apply and report. The right column
-keeps the evidence: what the OSS Agent understood (with the 24-hour throughput chart), the
+collection (days 2 to 8, compressed), approval 2 (MML in MIE) and apply and report. The request box
+shows the concise wording a network engineer would type, for example “Start energy saving in the
+Songshanhu area with these guaranteed throughputs: …”; the OSS Agent first turns it into its own
+structured intent, and only the send step maps that intent onto the Task-T. After the Task-T is
+accepted the RAN Agent reports `SUBMITTED`, strategy working, strategy ready and task started before
+data collection begins. The right column keeps the evidence: what the OSS Agent understood (with
+the 24-hour throughput chart), the
 negotiation turns, an **On the wire** inspector, and the merged session trace. On the wire shows the
 real A2A request headers and JSON body with the Task-T metadata; its **Plain A2A** toggle shows the
 same request as one natural-language sentence without the extension header or Task-T fields (a

@@ -75,7 +75,7 @@ const els = {
   protocolBadge: byId("protocol-badge"),
   protocolHint: byId("protocol-hint"),
   wireFormat: byId("wire-format"),
-  chips: byId("scenario-chips"),
+  scenarioSelect: byId("scenario-select"),
   scenarioDesc: byId("scenario-desc"),
   requestCard: byId("request-card"),
   requestCardLabel: byId("request-card-label"),
@@ -88,6 +88,7 @@ const els = {
   requestHint: byId("request-hint"),
   requestError: byId("request-error"),
   start: byId("start"),
+  startQuick: byId("start-quick"),
   reset: byId("reset-request"),
   steps: byId("steps"),
   stage: byId("stage"),
@@ -309,6 +310,7 @@ async function boot() {
 
 function bindStaticEvents() {
   els.start.addEventListener("click", () => startRun());
+  if (els.startQuick) els.startQuick.addEventListener("click", () => startRun());
   els.reset.addEventListener("click", resetRequest);
   els.editRequest.addEventListener("click", () => {
     const open = els.drawer.hidden;
@@ -469,22 +471,26 @@ function renderBottomCopy() {
 }
 
 function renderPresets() {
-  els.chips.replaceChildren();
+  const select = els.scenarioSelect;
+  if (!select) return;
+  select.replaceChildren();
   for (const name of ui.meta?.scenarios || []) {
-    const button = el("button", "preset");
-    button.type = "button";
-    button.dataset.scenario = name;
-    button.setAttribute("aria-pressed", String(name === ui.selected));
-    button.title = scenarioStory(ui.copy, name);
-    const nameRow = el("span", "nm");
-    const mark = el("i", scenarioKind(ui.copy, name));
-    nameRow.append(mark, el("span", "", scenarioLabel(ui.copy, name)));
-    button.append(nameRow, el("small", "", scenarioTag(ui.copy, name)));
-    button.addEventListener("click", () => {
-      if (ui.busy) return;
-      selectScenario(name, { start: true });
+    const option = el("option", "", `${scenarioLabel(ui.copy, name)} · ${scenarioTag(ui.copy, name)}`);
+    option.value = name;
+    option.title = scenarioStory(ui.copy, name);
+    select.append(option);
+  }
+  select.value = ui.selected;
+  select.disabled = Boolean(ui.busy);
+  if (!select.dataset.bound) {
+    select.addEventListener("change", () => {
+      if (ui.busy) {
+        select.value = ui.selected;
+        return;
+      }
+      selectScenario(select.value);
     });
-    els.chips.append(button);
+    select.dataset.bound = "1";
   }
   renderScenarioDescription();
 }
@@ -517,9 +523,7 @@ function selectScenario(name, { start = false } = {}) {
   stage.reset();
   trace.reset();
   hideError();
-  for (const chip of els.chips.children) {
-    chip.setAttribute("aria-pressed", String(chip.dataset.scenario === name));
-  }
+  if (els.scenarioSelect) els.scenarioSelect.value = name;
   renderScenarioDescription();
   render();
   if (start) startRun();
@@ -563,6 +567,16 @@ async function startRun() {
   trace.reset();
   clear(els.techLog);
   setBusy(true);
+  // Show the engineer writing immediately. Starting a run can take a few seconds (session claim
+  // in live mode); waiting for the first SSE frame made the page look dead.
+  const defaultRequest = ui.meta?.scenarioRequests?.[ui.selected] || "";
+  ui.view.userRequest = request;
+  ui.view.intentText = request;
+  ui.view.started = true;
+  ui.view.status = "running";
+  ui.shadow.userRequest = request;
+  ui.shadow.intentText = request;
+  stage.showRequest(ui.copy, request);
   render();
 
   try {
@@ -571,7 +585,9 @@ async function startRun() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         scenario: ui.selected,
-        userRequest: request || undefined,
+        // The textarea shows the concise presentation wording. While it is unchanged, let the
+        // backend use the richer catalog prompt that the live model extracts Task-T from.
+        userRequest: request && request !== defaultRequest ? request : undefined,
         protocol: ui.protocol,
       }),
     });
@@ -709,6 +725,12 @@ function enqueueFrame(frame) {
     scene.duration = EVIDENCE_MS;
     scene.evidence = true;
   }
+  if (scene.key === "request" && typeof stage.typingRemaining === "function") {
+    // The start button began typing while the run was being created. Keep the scene alive until
+    // that animation finishes instead of cutting the request bubble off mid-sentence.
+    const remaining = stage.typingRemaining();
+    if (remaining > 0) scene.duration = Math.max(scene.duration, remaining + 250);
+  }
   if (
     frame.type === "trace" &&
     frame.event &&
@@ -774,7 +796,8 @@ function setBusy(busy) {
   els.start.disabled = busy;
   els.reset.disabled = busy;
   els.requestText.disabled = busy;
-  for (const chip of els.chips.children) chip.disabled = busy;
+  if (els.scenarioSelect) els.scenarioSelect.disabled = busy;
+  if (els.startQuick) els.startQuick.disabled = busy;
   renderControls();
 }
 
@@ -806,11 +829,11 @@ function render() {
  */
 function renderRequest() {
   const text = (ui.view.userRequest || els.requestText.value || "").trim();
-  // The card introduces the ask at the start. Once the story moves on, the engineer bubble and
-  // the intent panel carry the request, and the space goes to the stage and the decision card.
-  const early = !ui.view.started || (ui.lastScene !== null && ui.lastScene.step <= 3);
-  els.requestCard.hidden = text === "" || !early;
   if (text !== "") els.requestCardText.textContent = text;
+  // Vertical space is scarce: the engineer bubble already carries the request while it is typed,
+  // and the edit drawer opens the full text when the presenter needs it. Do not reserve a second
+  // full-width request block on the stage page.
+  els.requestCard.hidden = true;
 }
 
 function renderIntentPanel() {
@@ -1193,6 +1216,10 @@ function renderControls() {
     els.start.textContent = ui.copy.start;
   } else if (ui.busy) {
     els.start.textContent = ui.copy.running;
+  }
+  if (els.startQuick) {
+    els.startQuick.textContent = ui.busy ? ui.copy.running : ui.copy.start;
+    els.startQuick.disabled = ui.busy;
   }
 }
 

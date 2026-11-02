@@ -22,7 +22,12 @@ from a2a_t.core.metadata import (
     NegotiationContext,
     NegotiationPerformative,
 )
-from demo.scenario import FINAL_STATE_TASK_COMPLETED, get_scenario, resolve_user_request
+from demo.scenario import (
+    FINAL_STATE_TASK_COMPLETED,
+    get_scenario,
+    resolve_presentation_request,
+    resolve_user_request,
+)
 from demo.web.app import create_app
 from integration_helpers import (
     free_tcp_port,
@@ -876,7 +881,7 @@ async def test_meta_exposes_the_default_request_per_scenario(client: httpx.Async
     meta = (await client.get("/api/meta")).json()
 
     for scenario in meta["scenarios"]:
-        assert meta["scenarioRequests"][scenario] == resolve_user_request(get_scenario(scenario), "en-US")
+        assert meta["scenarioRequests"][scenario] == resolve_presentation_request(scenario, "en-US")
 
 
 async def test_custom_user_request_reaches_run_started_and_runtime(

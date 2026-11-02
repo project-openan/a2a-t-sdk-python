@@ -29,7 +29,7 @@
 
   <main class="main">
     <section class="left" aria-label="演示舞台">
-      <div class="protocol-row">
+      <div class="protocol-row" hidden>
         <span class="micro-label" id="protocol-label">协议</span>
         <span class="protocol-badge" id="protocol-badge">A2A-T</span>
         <span class="protocol-hint" id="protocol-hint"></span>
@@ -37,7 +37,8 @@
 
       <div class="toolbar">
         <span class="micro-label" id="scenarios-label">演示场景</span>
-        <div class="presets" id="scenario-chips" role="group" aria-labelledby="scenarios-label"></div>
+        <select class="scenario-select" id="scenario-select" aria-labelledby="scenarios-label"></select>
+        <button class="btn primary" id="start-quick" type="button">发送给 OSS Agent</button>
         <button class="tbtn" id="edit-request" type="button" aria-expanded="false" aria-controls="drawer">
           ✎ <span id="edit-label">编辑请求</span>
         </button>

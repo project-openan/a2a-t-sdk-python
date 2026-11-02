@@ -55,7 +55,8 @@ async def test_root_serves_the_presentation_shell(client: httpx.AsyncClient) -> 
     assert "/static/app.css" in page
     assert "/static/js/main.js" in page
     for marker in (
-        'id="scenario-chips"',
+        'id="scenario-select"',
+        'id="start-quick"',
         'id="request-text"',
         'id="drawer"',
         'id="start"',

@@ -10,6 +10,7 @@ from demo.scenario import (
     SUPPORTED_SCENARIO_NAMES,
     ExpectedStep,
     accept_filled_params,
+    resolve_presentation_request,
     resolve_user_request,
 )
 from shared.run_constants import MAX_ROUNDS, SUPPORTED_LANGUAGES
@@ -52,6 +53,17 @@ def test_every_request_supplies_the_required_task_description() -> None:
     for scenario in SCENARIOS.values():
         for language, marker in markers.items():
             assert marker in resolve_user_request(scenario, language)
+
+
+def test_presentation_requests_are_concise_and_keep_the_wire_prompt_separate() -> None:
+    """The page shows what an engineer types; Task-T generation keeps the richer prompt."""
+    for scenario in SCENARIOS.values():
+        for language in SUPPORTED_LANGUAGES:
+            presented = resolve_presentation_request(scenario.name, language)
+            assert presented
+            assert presented != resolve_user_request(scenario, language)
+            assert "output a wireless network energy saving plan" not in presented
+            assert "预期输出" not in presented
 
 
 def test_accept_params_match_the_task_schema_operation_values() -> None:

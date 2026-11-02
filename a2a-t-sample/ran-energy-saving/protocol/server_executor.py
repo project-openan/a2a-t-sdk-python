@@ -76,6 +76,20 @@ class TaskRequestHandler(Protocol):
 REPORT_ARTIFACT_NAME: Final[str] = "energy saving intent report"
 TOOL_ARTIFACT_NAME: Final[str] = "tool result"
 
+#: Business status updates after task creation: strategy generation, strategy ready, then the
+#: long-running task start. They mirror the reference demo's SUBMITTED -> WORKING -> strategy ->
+#: task started sequence before data collection begins.
+STRATEGY_STARTED_TEXT: Final[str] = (
+    "Strategy recommendation is being executed; no optimization is applied yet."
+)
+STRATEGY_READY_TEXT: Final[str] = (
+    "Strategy recommendation and parameter setting are complete."
+)
+TASK_STARTED_TEXT: Final[str] = (
+    "The energy-saving task has started; the RAN Agent is now running the long-running "
+    "optimization task."
+)
+
 #: Business status updates of the compressed baseline-collection phase (days 2-8 in the PoC).
 DATA_COLLECTION_STARTED_TEXT: Final[str] = (
     "Data collection started: measuring the cluster baseline (3 to 7 days in the PoC; compressed "
@@ -469,11 +483,9 @@ class LangGraphTaskExecutor(AgentExecutor):
         await event_queue.enqueue_event(task)
 
         updater = TaskUpdater(event_queue, task.id, task.context_id)
-        await updater.start_work()
-        await updater.update_status(
-            TaskState.TASK_STATE_WORKING,
-            message=updater.new_agent_message([Part(text=DATA_COLLECTION_STARTED_TEXT)]),
-        )
+        # The first working notification is the reference demo's strategy-started message; do
+        # not emit a blank WORKING status before it.
+        await self._announce_execution_start(updater)
         await updater.update_status(
             TaskState.TASK_STATE_WORKING,
             message=updater.new_agent_message([Part(text=DATA_COLLECTION_PROGRESS_TEXT)]),
@@ -503,17 +515,28 @@ class LangGraphTaskExecutor(AgentExecutor):
         if task is None:
             raise ValueError("Cannot resume a Task that was not loaded")
         updater = TaskUpdater(event_queue, task.id, task.context_id)
-        await updater.start_work()
-        await updater.update_status(
-            TaskState.TASK_STATE_WORKING,
-            message=updater.new_agent_message([Part(text=DATA_COLLECTION_STARTED_TEXT)]),
-        )
+        # The first working notification is the reference demo's strategy-started message; do
+        # not emit a blank WORKING status before it.
+        await self._announce_execution_start(updater)
         await updater.update_status(
             TaskState.TASK_STATE_WORKING,
             message=updater.new_agent_message([Part(text=DATA_COLLECTION_PROGRESS_TEXT)]),
         )
         _LOGGER.info("task resumed after negotiation; running the planner")
         await self._execute_task(context, updater, task.id, prompt)
+
+    async def _announce_execution_start(self, updater: TaskUpdater) -> None:
+        """Publish the reference demo's strategy -> task-started status ladder."""
+        for text in (
+            STRATEGY_STARTED_TEXT,
+            STRATEGY_READY_TEXT,
+            TASK_STARTED_TEXT,
+            DATA_COLLECTION_STARTED_TEXT,
+        ):
+            await updater.update_status(
+                TaskState.TASK_STATE_WORKING,
+                message=updater.new_agent_message([Part(text=text)]),
+            )
 
     async def _execute_task(
         self,

@@ -34,8 +34,13 @@ export function stepIndex(key) {
 export function sceneFor(frame, state) {
   if (!isObject(frame)) return null;
   switch (frame.type) {
-    case "run_started":
-      return scene("request", 2200, frame);
+    case "run_started": {
+      // The engineer's request is typed at a human pace. Match the scene duration to that typing
+      // animation; the start button may already have started it while the run was being created.
+      const request = typeof frame.userRequest === "string" ? frame.userRequest : "";
+      const duration = Math.min(6000, Math.max(2200, request.length * 40));
+      return scene("request", duration, frame);
+    }
     case "event":
       return eventScene(frame.event, state, frame);
     case "trace":
@@ -126,6 +131,17 @@ function eventScene(entry, state, frame) {
       }
       if (label.includes("Data collection completed")) {
         return scene("collect-done", 1800, frame);
+      }
+      // The reference demo's post-Task-T ladder: strategy started -> strategy ready -> the
+      // long-running task started. Each is a separate RAN -> OSS notification.
+      if (label.includes("Strategy recommendation is being executed")) {
+        return scene("strategy", 4200, frame);
+      }
+      if (label.includes("Strategy recommendation and parameter setting")) {
+        return scene("strategy-ready", 1800, frame);
+      }
+      if (label.includes("energy-saving task has started")) {
+        return scene("task-started", 1600, frame);
       }
       // The RAN now reports the apply result and the ready report as status notifications. They
       // are wire evidence: the apply artifact already drives the execute beat, and the report
@@ -252,6 +268,8 @@ function stepOf(key) {
     case "abort":
       return "negotiate";
     case "strategy":
+    case "strategy-ready":
+    case "task-started":
       return "strategy";
     case "collect-start":
     case "collect-progress":

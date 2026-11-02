@@ -1,8 +1,8 @@
 /** Structured intent and the 24-hour guaranteed-throughput chart.
  *
- * The intent comes from the rendered Task-T of the run (`task_prompt_rendered` trace detail),
- * falling back to the engineer's request. Parsing is deliberately small: the sample Task-T has
- * stable section headings and `{HH:MM~HH:MM,NMbps}` targets.
+ * The intent is the OSS's own structured reading of the engineer's request; the Task-T is the
+ * later wire mapping and is not used here. Parsing is deliberately small: it accepts both the
+ * Task-T ``{HH:MM~HH:MM,NMbps}`` notation and the concise ``HH:MM–HH:MM at N Mbps`` wording.
  */
 
 import { clear, el, isObject, svg } from "./dom.js";
@@ -10,8 +10,13 @@ import { format } from "../copy.js";
 
 const SLOT_RE =
   /\{?\s*(\d{1,2}):(\d{2})\s*[~\-–]\s*(\d{1,2}):(\d{2})\s*,\s*([\d.]+)\s*Mbps\s*\}?/gi;
-const OUTAGE_EN_RE = /power outage from\s+(\d{1,2}):(\d{2})\s+to\s+(\d{1,2}):(\d{2})/i;
-const OUTAGE_ZH_RE = /(\d{1,2}):(\d{2})\s*[~\-–]\s*(\d{1,2}):(\d{2})\s*停电/;
+const NATURAL_SLOT_RE =
+  /(\d{1,2}):(\d{2})\s*[~\-–]\s*(\d{1,2}):(\d{2})\s*(?:,\s*|\s+at\s+|\s+)([\d.]+)\s*Mbps/gi;
+const OUTAGE_EN_RE =
+  /(?:power outage|outage)[^0-9]*(?:from\s+)?(\d{1,2}):(\d{2})\s*(?:to|[~\-–])\s*(\d{1,2}):(\d{2})/i;
+const OUTAGE_TIME_FIRST_EN_RE =
+  /(\d{1,2}):(\d{2})\s*[~\-–]\s*(\d{1,2}):(\d{2})\s*(?:power\s+)?outage/i;
+const OUTAGE_ZH_RE = /(\d{1,2}):(\d{2})\s*[~\-–]\s*(\d{1,2}):(\d{2})\s*(?:有)?\s*停电/;
 
 /** Parse the Task-T text (or the request) into the facts the page shows. */
 export function parseIntent(text) {
@@ -345,20 +350,25 @@ function sectionMap(text) {
 
 function parseSlots(text) {
   const slots = [];
-  for (const match of text.matchAll(SLOT_RE)) {
-    const start = timeToMinutes(match[1], match[2]);
-    let end = timeToMinutes(match[3], match[4]);
-    if (end === 0) end = 1440;
-    const rate = Number(match[5]);
-    if (end > start && end <= 1440 && rate > 0) {
-      slots.push({ start, end, rate });
+  const seen = new Set();
+  for (const regex of [SLOT_RE, NATURAL_SLOT_RE]) {
+    for (const match of text.matchAll(regex)) {
+      const start = timeToMinutes(match[1], match[2]);
+      let end = timeToMinutes(match[3], match[4]);
+      if (end === 0) end = 1440;
+      const rate = Number(match[5]);
+      const key = `${start}:${end}:${rate}`;
+      if (end > start && end <= 1440 && rate > 0 && !seen.has(key)) {
+        seen.add(key);
+        slots.push({ start, end, rate });
+      }
     }
   }
   return slots.sort((a, b) => a.start - b.start);
 }
 
 function parseOutage(text) {
-  const en = text.match(OUTAGE_EN_RE);
+  const en = text.match(OUTAGE_EN_RE) || text.match(OUTAGE_TIME_FIRST_EN_RE);
   if (en) {
     return {
       start: timeToMinutes(en[1], en[2]),
@@ -376,11 +386,20 @@ function parseOutage(text) {
 }
 
 function parseSites(text) {
-  const match = text.match(/(?:Station list|Site list|站点列表)\s*1\s*(?:为|[:：])?\s*\[([^\]]+)\]/i);
-  if (!match) return [];
-  return match[1]
-    .split(",")
-    .map((item) => item.trim().replace(/^["'“”]+|["'“”]+$/g, ""))
+  const listed = text.match(/(?:Station list|Site list|站点列表)\s*1\s*(?:为|[:：])?\s*\[([^\]]+)\]/i);
+  if (listed) {
+    return listed[1]
+      .split(",")
+      .map((item) => item.trim().replace(/^["'“”]+|["'“”]+$/g, ""))
+      .filter(Boolean);
+  }
+  const natural =
+    text.match(/\b(?:for|at)\s+((?:Site|Station)\s*\d+(?:\s*(?:,|and|、|和)\s*(?:Site|Station)\s*\d+)*)/i) ||
+    text.match(/(?:为|站点)\s*((?:站点|Site|Station)\s*\d+(?:\s*(?:,|and|、|和)\s*(?:站点|Site|Station)\s*\d+)*)/i);
+  if (!natural) return [];
+  return natural[1]
+    .split(/\s*(?:,|and|、|和)\s*/i)
+    .map((item) => item.trim())
     .filter(Boolean);
 }
 
@@ -399,7 +418,7 @@ function cleanArea(raw) {
 function parseArea(text) {
   const en = text.match(/\bin\s+the\s+(.+?)\s+area\b/i);
   if (en) return en[1].trim();
-  const zh = text.match(/(?:在|区域[:：]\s*)([一-龥A-Za-z0-9]+?)(?:创建|区域|进行)/);
+  const zh = text.match(/(?:在|区域[:：]\s*)([一-龥A-Za-z0-9]+?)(?:创建|区域|进行|开启|为|，|,)/);
   return zh ? zh[1].trim() : "";
 }
 
