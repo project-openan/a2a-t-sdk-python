@@ -742,7 +742,7 @@ class TestTaskFamily:
         assert message is not None
         assert outcome.llm_calls == 1, "the task from-text pipeline makes exactly one slot-extraction call"
         assert message.template_uri == PRIVATE_LINE_COMPLAINT_URI
-        assert "## 任务对象(Task Object)" in (message.prompt_text or "")
+        assert "## 任务对象" in (message.prompt_text or "")
         assert "P533" not in (message.prompt_text or ""), "no port name may leak into the incomplete task prompt"
 
     def test_runs_a_task_from_data_with_schema_case_through_the_mirrored_client_wiring(self) -> None:

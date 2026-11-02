@@ -3,7 +3,6 @@
 
 Requirement:
 1. Please provide the operation type. Allowed values: Create, Modify
-2. Normalize synonyms to the canonical value instead of rejecting them: `Create` covers Add / Implement / Establish / Deploy / Set Up / New / Enable / Activate / Configure; `Modify` covers Update / Adjust / Change / Revise
 
 ## Task Type
 Wireless network energy saving
@@ -12,9 +11,9 @@ Wireless network energy saving
 {{task_description}} (required)
 
 Requirement:
-1. Please dynamically provide the task description based on <Operation Type> (Create/Modify):
-    - When the type is `Create`: Based on <Task Object> and <Task Context>, output a wireless network energy saving plan that achieves the wireless network energy saving goal defined in <Task Target>, and return the wireless network energy saving result in the format defined in <Expected Output>.
-    - When the type is `Modify`: Based on <Task Object> and <Task Context>, output a wireless network energy saving plan that achieves the wireless network energy saving goal defined in <Task Target>.
+1. Please dynamically provide the task description based on [Operation Type](#operation-type):
+    - When the operation type is `Create`: Based on [Task Object](#task-object) and [Task Context](#task-context), execute the energy-saving task to achieve the goal defined in [Task Target](#task-target), and return the wireless network energy saving result in the format defined in [Expected Output](#expected-output).
+    - When the operation type is `Modify`: Based on [Task Object](#task-object) and [Task Context](#task-context), execute the energy-saving task to achieve the goal defined in [Task Target](#task-target).
 
 ## Task Object
 {{task_object}} (required)
@@ -22,9 +21,9 @@ Requirement:
 Requirement:
 1. Area name: (required)
     - Explicitly specify the energy saving coverage scope information, a geographic or logical area (e.g., district-level administrative unit)
-    - Must be a concrete and physically real community name such as "Songshanhu Administration Committee", rather than a description without a specific physical location such as "all communities", "indoor communities", or "outdoor communities"
-    - Only one region name is allowed
-    - Example: Area: "Songshanhu Administration Committee"
+    - Must be a concrete area name (e.g., "Region A"), and must not be a non-specific designation such as "all cells", "indoor cells", or "outdoor cells".
+    - Only one area name is allowed
+    - Example: Area: "Region A"
 
 ## Task Target
 {{task_target}} (optional)
@@ -33,7 +32,7 @@ Requirement:
 1. Define the quantitative or qualitative goals the task must achieve. Quantitative and qualitative goals cannot be selected at the same time. The specific description of energy saving goals is as follows:
     - Quantitative goal: energy saving gain target. The target value format must be a percentage, such as the percentage by which total power consumption is reduced. Example: energy saving gain target: 15%
     - Qualitative goal: energy saving aggressiveness. Allowed values: Aggressive, Conservative
-2. When <Operation Type> is set to `Modify`, updating the task target is supported.
+2. When [Operation Type](#operation-type) is set to `Modify`, updating the task target is supported.
 
 ## Task Context
 {{task_context}} (optional)
@@ -46,11 +45,11 @@ Requirement:
 5. Coverage layer and capacity layer requirements (optional): specify which frequencies are used as the coverage layer and which as the capacity layer. Example: frequency 1650 serves as the coverage layer for carrier shutdown
 6. Carrier frequencies that can be turned off during energy saving (optional); Example: Downlink frequency numbers: 1650, 1600
 7. Rate guarantee target (optional): the minimum downlink throughput target that must be guaranteed and its effective time period
-
+    - Supports both area-level and site-level configuration modes, where site-level configuration is supported only when [Operation Type](#operation-type) is set to `Modify`.
     - **For the area-level setting**, the following information needs to be provided:
 
       Option 1: Time-segmented rate guarantee target
-        - Time Window: Non-overlapping time windows can be configured. Time windows MUST NOT overlap; if overlapping time windows are provided, they are a violation and must be rejected. Specific and explicit time windows must be provided; vague time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to a non-disruptive user experience mode. All configured time windows must fall within the active energy-saving execution period; (required)
+        - Time Window: Specific and explicit time windows must be provided; vague time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to a non-disruptive user experience mode. All configured time windows must fall within the active energy-saving execution period; (required)
         - Rate: Specify a target throughput for each time window, e.g., 10 Mbps; (required)
         - Example: Time-segmented rate guarantee target: {00:00~06:00, 2Mbps}, {06:00~18:00, 10Mbps}
 
@@ -61,19 +60,19 @@ Requirement:
     - **For the site-level setting**, the following information needs to be provided:
         - Site list; (required)
         - Time-segmented rate guarantee target:
-          - Time Window: Non-overlapping time windows can be configured. Time windows MUST NOT overlap; if overlapping time windows are provided, they are a violation and must be rejected. Specific and explicit time windows must be provided; vague time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to a non-disruptive user experience mode; (required)
+          - Time Window: Specific and explicit time windows must be provided; vague time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to a non-disruptive user experience mode; (required)
           - Rate: Specify a target throughput for each time window, e.g., 10 Mbps; (required)
         - Background event and event duration; (optional)
         - Example:
             - Site list 1: ["Site Name 1", "Site Name 2"], Time-segmented rate guarantee target: {00:00~06:00,2Mbps}, {06:00~18:00,10Mbps}, Background event: power outage from 00:00 to 18:00.
             - Site list 2: ["Site Name 3", "Site Name 4"], Time-segmented rate guarantee target: {01:00~06:00,2Mbps}, {06:00~18:00,10Mbps}, Background event: power outage from 01:00 to 18:00.
-8. When <Operation Type> is set to `Modify`, the configurable parameter is: Rate guarantee target.
+8. When [Operation Type](#operation-type) is set to `Modify`, the configurable parameter is: Rate guarantee target.
 
 ## Expected Output
-{{expected_output}} (optional when creating, not required when modifying)
+{{expected_output}} (optional)
 
 Requirement:
-1. When the task object is a geographic/logical area, output the intent report for the network energy saving task. The intent report should contain the following information:
+1. When [Operation Type](#operation-type) is set to `Create`, the following content is optional:
     - Basic information about the intent execution result, including:
         - Area
         - Intent goal achievement status

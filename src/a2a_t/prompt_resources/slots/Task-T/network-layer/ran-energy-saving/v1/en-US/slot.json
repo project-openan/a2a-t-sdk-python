@@ -15,9 +15,9 @@
       "type": "string",
       "description": "Dynamically provide the task description based on the operation type (Create/Modify).",
       "examples": [
-        "Based on <Task Object> and <Task Context>, output a wireless network energy saving plan that achieves the wireless network energy saving goal defined in <Task Target>, and return the wireless network energy saving result in the format defined in <Expected Output>."
+        "Based on [Task Object](#task-object) and [Task Context](#task-context), output a wireless network energy saving plan that achieves the wireless network energy saving goal defined in [Task Target](#task-target), and return the wireless network energy saving result in the format defined in [Expected Output](#expected-output)."
       ],
-      "x-a2at-value-constraint": "When the type is [Create]: Based on <Task Object> and <Task Context>, output a wireless network energy saving plan that achieves the wireless network energy saving goal defined in <Task Target>, and return the wireless network energy saving result in the format defined in <Expected Output>. When the type is [Modify]: Based on <Task Object> and <Task Context>, output a wireless network energy saving plan that achieves the wireless network energy saving goal defined in <Task Target>. The value must always be non-null. The <Task Object> and <Task Context> placeholders must be formatted from the values of the task_object and task_context slots respectively."
+      "x-a2at-value-constraint": "When the type is [Create]: Based on [Task Object](#task-object) and [Task Context](#task-context), output a wireless network energy saving plan that achieves the wireless network energy saving goal defined in [Task Target](#task-target), and return the wireless network energy saving result in the format defined in [Expected Output](#expected-output). When the type is [Modify]: Based on [Task Object](#task-object) and [Task Context](#task-context), output a wireless network energy saving plan that achieves the wireless network energy saving goal defined in [Task Target](#task-target). The value must always be non-null. The [Task Object](#task-object) and [Task Context](#task-context) placeholders must be formatted from the values of the task_object and task_context slots respectively."
     },
     "task_object": {
       "type": "string",

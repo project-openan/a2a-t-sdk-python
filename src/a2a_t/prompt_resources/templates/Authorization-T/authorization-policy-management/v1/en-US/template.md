@@ -1,13 +1,15 @@
 ## Authorization Policy Operation Type
 {{authorization_policy_operation_type}} (required)
+
 Requirement:
 Provide the operation type of the authorization policy. Allowed values: add authorization policy, modify authorization policy, delete authorization policy, query authorization policy
 
 ## Authorization Policy Operation Description
-Please complete the corresponding authorization operation based on <Authorization Policy Operation Type> and <Network Operation Authorization Policy List>, and return the authorization policy operation execution result in the structure defined in <Expected Output>. <Expected Output> indicates the expected return content.
+Please complete the corresponding authorization operation based on [Authorization Policy Operation Type](#authorization-policy-operation-type) and [Network Operation Authorization Policy List](#network-operation-authorization-policy-list), and return the authorization policy operation execution result in the structure defined in [Expected Output](#expected-output). [Expected Output](#expected-output) indicates the expected return content.
 
 ## Network Operation Authorization Policy List
 {{network_operation_authorization_policy_list}} (required for add, required for modify, required for delete, optional for query)
+
 Requirement:
 1. Supports a list format, where each item in the list contains the following information:
    - Network operation authorization policy identifier: uniquely identifies a network operation authorization policy. Example: 7d8c7b00-3c8c-4f8e-9b1e-9b17b6a3e5c3
@@ -24,8 +26,8 @@ Requirement:
    When deleting authorization policies, the required parameters include: network operation authorization policy identifier
 
 ## Expected Output
-1. Authorization operation execution result. Allowed values: success, failure, partial success
-2. When the authorization operation is executed successfully, return the <Network Operation Authorization Policy List> that was executed successfully
+1. Authorization operation execution result; Allowed values: success, failure, partial success
+2. When the authorization operation is executed successfully, return the [Network Operation Authorization Policy List](#network-operation-authorization-policy-list) that was executed successfully
 3. When the authorization operation fails or is partially successful, return a failure list containing the authorization policies and the failure reasons
 
 ## Terminology Explanation
