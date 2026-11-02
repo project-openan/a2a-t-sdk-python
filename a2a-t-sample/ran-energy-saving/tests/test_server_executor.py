@@ -436,7 +436,7 @@ async def test_langgraph_executor_applies_only_after_approval(
     ]
     assert any("Data collection started" in text for text in status_texts)
     assert any("Data collection in progress" in text for text in status_texts)
-    assert any("Data collection completed" in text for text in status_texts)
+    assert sum("Data collection completed" in text for text in status_texts) == 1
     # Apply and report are reported as A2A notifications, not only as tool artifacts.
     assert any(
         "Progress: plan " in text and "was applied to cell cell-001" in text

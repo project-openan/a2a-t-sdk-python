@@ -9,6 +9,16 @@ import { el } from "./dom.js";
 
 const FOLLOW_SLACK_PX = 12;
 
+/** Demo day bands; the trace row stage selects the active one. */
+const STAGE_BAND = {
+  request: 0,
+  negotiation: 0,
+  strategy: 0,
+  collection: 1,
+  mml: 2,
+  report: 3,
+};
+
 export function createTrace(els, getCopy, onSelect) {
   let selectedKey = null;
   let follow = true;
@@ -16,10 +26,10 @@ export function createTrace(els, getCopy, onSelect) {
   // Programmatic scrolls also fire ``scroll``; ignore them so a click near the bottom does not
   // silently re-enable following and yank the list away on the next frame.
   let quietUntil = 0;
-  // Rows are only appended during a run, so the list is built incrementally. Replacing every
-  // row on each frame made the whole panel flash whenever a span arrived.
-  let renderedCount = 0;
-  let renderedFirst = null;
+  // Rows are inserted in event-time order: a late server span can belong before rows already on
+  // screen. Track the full key list so an insertion rebuilds the small window, while a plain
+  // append still updates the list incrementally.
+  let renderedKeys = [];
   let selectedApplied = undefined;
 
   els.body.addEventListener("scroll", () => {
@@ -37,24 +47,29 @@ export function createTrace(els, getCopy, onSelect) {
     const copy = getCopy();
     const rows = state.trace.slice(-200);
     const offset = state.trace.length - rows.length;
-    els.empty.hidden = rows.length > 0;
-    const first = rows.length > 0 ? rowKey(rows[0], offset) : null;
-    if (rows.length < renderedCount || first !== renderedFirst) {
-      // A rewind or a new run: the window no longer extends what is on screen.
+    const keys = rows.map((row, index) => rowKey(row, offset + index));
+    renderDays(els, rows, copy);
+    const appendOnly =
+      renderedKeys.length <= keys.length &&
+      renderedKeys.every((key, index) => key === keys[index]);
+    if (!appendOnly) {
+      // A rewind, a new run or a late span inserted before the visible rows. Rebuild the window,
+      // but keep the reader's scroll position; following still goes to the newest row below.
+      const previousScroll = els.body.scrollTop;
       els.rows.replaceChildren();
-      renderedCount = 0;
+      renderedKeys = [];
       selectedApplied = undefined;
-      els.body.scrollTop = 0;
+      els.body.scrollTop = Math.min(previousScroll, els.body.scrollHeight);
     }
+    els.empty.hidden = rows.length > 0;
     let appended = 0;
-    for (let index = renderedCount; index < rows.length; index += 1) {
+    for (let index = renderedKeys.length; index < rows.length; index += 1) {
       const row = rows[index];
-      const key = rowKey(row, offset + index);
+      const key = keys[index];
       els.rows.append(rowNode(row, copy, key, () => select(key, row)));
       appended += 1;
     }
-    renderedCount = rows.length;
-    renderedFirst = first;
+    renderedKeys = keys;
 
     if (selectedApplied !== selectedKey) {
       for (const node of els.rows.children) {
@@ -82,13 +97,29 @@ export function createTrace(els, getCopy, onSelect) {
   function reset() {
     selectedKey = null;
     follow = true;
-    renderedCount = 0;
-    renderedFirst = null;
+    renderedKeys = [];
     selectedApplied = undefined;
     els.rows.replaceChildren();
   }
 
   return { render, reset };
+}
+
+/** Render the four demo day bands; the furthest stage reached is highlighted. */
+function renderDays(els, rows, copy) {
+  if (!els.days) return;
+  const bands = Array.isArray(copy.trace.days) ? copy.trace.days : [];
+  let active = -1;
+  for (const row of rows) {
+    const band = STAGE_BAND[row.stage];
+    if (band !== undefined) active = Math.max(active, band);
+  }
+  const nodes = bands.map((band, index) => {
+    const node = el("div", index === active ? "trace-day on" : "trace-day");
+    node.append(el("strong", "", band.label || ""), el("small", "", band.sub || ""));
+    return node;
+  });
+  els.days.replaceChildren(...nodes);
 }
 
 function rowNode(row, copy, key, open) {
@@ -104,12 +135,23 @@ function rowNode(row, copy, key, open) {
     }
   });
 
+  const stageKey = typeof row.stage === "string" ? row.stage : "";
+  const stageText = copy.trace.stages?.[stageKey] || "";
   const time = el("span", "w", shortTime(row.ts || row.entry?.ts || row.entry?.startedAt));
+  const stage = el("span", "stage", stageText);
+  if (stageText) stage.title = stageText;
   const tag = el("span", `tag ${row.tag || "a2at"}`, copy.trace.tags[row.tag] || row.tag || "");
   const text = el("span", "t", (row.titleKey && copy.trace[row.titleKey]) || row.title || "");
-  if (row.sub) text.append(el("small", "", row.sub));
+  const dir = typeof row.dir === "string" ? row.dir : "";
+  if (dir || row.sub) {
+    const small = el("small", "");
+    if (dir) small.append(el("span", "dir", dir));
+    if (dir && row.sub) small.append(document.createTextNode(" · "));
+    if (row.sub) small.append(document.createTextNode(row.sub));
+    text.append(small);
+  }
   const chip = el("span", row.chipKind ? `chip ${row.chipKind}` : "chip", row.chip || "");
-  node.append(time, tag, text, chip);
+  node.append(time, stage, tag, text, chip);
   return node;
 }
 

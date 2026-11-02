@@ -834,6 +834,8 @@ class LangGraphTaskExecutor(AgentExecutor):
         pending: dict[str, _PendingToolCall] = {}
         final_text = ""
         last_update_at = time.perf_counter()
+        collection_completed_sent = False
+        report_ready = False
 
         async for update in agent.graph.astream(
             {"messages": list(agent.initial_messages)},
@@ -904,7 +906,15 @@ class LangGraphTaskExecutor(AgentExecutor):
                                     [Part(text=_report_ready_text(step.result))]
                                 ),
                             )
-                        if name == "get_cell_energy_profile":
+                            # The report is the terminal tool. Stop consuming the graph even if
+                            # the live model would keep exploring; otherwise a late extra step can
+                            # hit the recursion limit and turn a successful report into a failed
+                            # Task (the report artifact is emitted after this loop).
+                            report_ready = True
+                        if name == "get_cell_energy_profile" and not collection_completed_sent:
+                            # The planner may read both cells before moving on; the reference demo
+                            # reports "data collection completed" once, not once per profile.
+                            collection_completed_sent = True
                             await updater.update_status(
                                 TaskState.TASK_STATE_WORKING,
                                 message=updater.new_agent_message(
@@ -918,6 +928,8 @@ class LangGraphTaskExecutor(AgentExecutor):
                                 metadata={"toolName": step.name},
                                 last_chunk=True,
                             )
+            if report_ready:
+                break
 
         denied = [
             step

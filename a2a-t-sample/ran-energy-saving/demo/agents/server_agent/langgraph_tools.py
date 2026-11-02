@@ -51,6 +51,9 @@ class PlanGuard:
     applied: dict[str, object] | None = None
     report: dict[str, object] | None = None
     tool_calls: list[str] = field(default_factory=list)
+    #: One task applies one plan. Keeping this separate from ``applied`` means a profile re-read
+    #: cannot silently open a second apply (and a second human approval) in the same task.
+    applied_any: bool = False
 
     def record(self, name: str) -> None:
         """Record one tool call name (diagnostics and tests)."""
@@ -116,7 +119,11 @@ def build_execution_tools(
             guard.evaluations = {
                 key: value for key, value in guard.evaluations.items() if key[0] != cell_key
             }
-            if guard.applied is not None and str(guard.applied.get("cell_id")) == cell_key:
+            if (
+                not guard.applied_any
+                and guard.applied is not None
+                and str(guard.applied.get("cell_id")) == cell_key
+            ):
                 guard.applied = None
                 guard.report = None
         return _json(result)
@@ -147,6 +154,15 @@ def build_execution_tools(
         configures a human gate, the engineer's approval before anything is written.
         """
         guard.record("apply_energy_saving_plan")
+        if guard.applied_any:
+            # A live planner sometimes explores several candidates and tries to apply another
+            # plan after the first one. That would open a second approval gate and delay the
+            # report; the task contract is one applied plan followed by its report.
+            return _violation(
+                "apply_energy_saving_plan",
+                "A plan is already applied in this task; generate its report instead.",
+                plan_id=str((guard.applied or {}).get("plan_id") or ""),
+            )
         evaluation = guard.evaluations.get((str(cell_id), str(window), _rate_key(target_rate)))
         if evaluation is None:
             return _violation(
@@ -172,6 +188,7 @@ def build_execution_tools(
         result = apply_energy_saving_plan(cell_id, window, target_rate)
         if result.get("ok") is True:
             guard.applied = result
+            guard.applied_any = True
             guard.report = None
         return _json(result)
 

@@ -78,6 +78,7 @@ Offline mode needs no `.env` and no API key: `run_demo.py` falls back to `env.ex
 | a port is already in use | a previous `--keep-alive` process is still running | `python run_demo.py --stop` |
 | `ModuleNotFoundError: a2a_t` | the environment is not active | use the absolute venv Python, or run `uv sync --dev` again |
 | startup rejects the language or model mode | an existing process runs with other settings | `--stop` first, then start with the new settings |
+| a live run waits a long time at the first Task-T step | the OpenAI-compatible endpoint was cold | the launcher sends one warm-up completion; retry once if the endpoint was still starting |
 
 ### 1.3 Read the interaction in the UI
 
@@ -100,7 +101,11 @@ Task-T metadata; its **Plain A2A** toggle replaces the Task-T fields with one na
 sentence and drops the extension header. It is a format comparison only, not a second run. Every
 trace row is clickable: a message row opens it in the inspector, a span row shows its fields, and a
 decision row without a message opens a readable summary. The clicked row stays highlighted and the
-list stops following the newest row until you scroll back to the bottom.
+list stops following the newest row until you scroll back to the bottom. Rows are grouped by the
+demo day (Day 1, Days 2–8, Day 9, Day 9+) and show the message direction (OSS → RAN, RAN → OSS,
+MIE ⇄ Engineer). Server spans arrive in batches with earlier timestamps, so the trace inserts them
+by event time instead of arrival order; a status and its matching approval/decision span share one
+dedupe key and render as one row.
 
 Two human approvals can be enabled at startup:
 
@@ -497,7 +502,11 @@ The executor reports execution through A2A, not only through tool artifacts: aft
 `apply_energy_saving_plan` it publishes a `WORKING` status message with the applied plan, cell,
 window, rate and saving, and after `generate_energy_saving_report` it publishes a `WORKING` status
 message with the report summary. The report artifact keeps the structured Task-T report text (basic
-information, details, energy saving, KPI impact) and the terminal status follows unchanged.
+information, details, energy saving, KPI impact) and the terminal status follows unchanged. The
+executor stops consuming the graph as soon as a successful report tool result arrives, and
+`PlanGuard` rejects a second apply in the same task. A live planner that keeps exploring therefore
+cannot hit the recursion limit after a valid report (which used to turn a finished run into a failed
+Task with no report artifact) or open a second approval gate.
 
 **Verify:** the server trace shows four tool spans; the Task carries an apply-result notification, a
 report-ready notification, the report artifact, and ends `COMPLETED`.

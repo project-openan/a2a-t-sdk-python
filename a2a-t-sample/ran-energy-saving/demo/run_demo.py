@@ -148,6 +148,47 @@ def _gateway_port_default(values: dict[str, str]) -> int:
     return _env_int(values, "A2AT_SAMPLE_GATEWAY_PORT", 8001)
 
 
+def _warm_live_model(config: object) -> None:
+    """Prime the live model endpoint before the first demo turn.
+
+    A cold OpenAI-compatible endpoint can take tens of seconds on its first call; that delay lands
+    on the Task-T validation and looks like the demo is stuck. One tiny completion at startup
+    keeps the first visible step on the normal path. Failures are ignored: the run itself still
+    reports the real error.
+    """
+    import httpx
+
+    model_mode = getattr(config, "model_mode", "")
+    if model_mode != "live":
+        return
+    base = str(getattr(config, "planner_api_base", "") or getattr(config, "adk_model_api_base", ""))
+    if not base:
+        return
+    model = str(
+        getattr(config, "planner_model", "")
+        or str(getattr(config, "adk_model_name", "")).removeprefix("openai/")
+    )
+    if not model:
+        return
+    key = str(getattr(config, "planner_api_key", "") or getattr(config, "adk_model_api_key", ""))
+    headers = {"authorization": f"Bearer {key}"} if key else {}
+    try:
+        response = httpx.post(
+            f"{base.rstrip('/')}/chat/completions",
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": "ping"}],
+                "max_tokens": 1,
+            },
+            headers=headers,
+            timeout=8.0,
+        )
+        response.raise_for_status()
+        print("[run_demo] live model warm-up completed")
+    except Exception as exc:  # noqa: BLE001 - warm-up must never block the demo
+        print(f"[run_demo] live model warm-up skipped: {exc}")
+
+
 def _child_env(language: str, extra: dict[str, str] | None = None) -> dict[str, str]:
     """Return the environment of the child processes (sample root on ``PYTHONPATH``)."""
     env = os.environ.copy()
@@ -974,6 +1015,7 @@ def main() -> int:
     from shared.config import load_config
 
     resolved_config = load_config(env_path=env_path)
+    _warm_live_model(resolved_config)
     print(
         f"[run_demo] resolved: model_mode={resolved_config.model_mode}, "
         f"model={resolved_config.model_label}, language={resolved_config.language}, "

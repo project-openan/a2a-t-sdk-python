@@ -73,6 +73,7 @@ python run_demo.py --scenario information --mode auto --model-mode offline
 | 端口被占用 | 上次的 `--keep-alive` 进程还在 | `python run_demo.py --stop` |
 | `ModuleNotFoundError: a2a_t` | 没有激活环境 | 用绝对路径的 venv Python，或重新 `uv sync --dev` |
 | 启动即失败并提示语言/模型模式不一致 | 已有进程以另一组参数运行 | 先 `--stop`，再用新参数启动 |
+| live 运行在第一个 Task-T 步骤等待很久 | OpenAI 兼容端点处于冷启动 | 启动器会先发一次 warm-up；若端点当时仍在启动，重试一次 |
 
 ### 1.3 在 UI 里看懂交互
 
@@ -91,6 +92,9 @@ Task-T → 审批 1（意图）→ 下发 Task-T → 需要时协商 → 策略�
 Task-T metadata；切换到 **普通 A2A** 时，Task-T 字段被替换成一句自然语言，扩展头也被去掉。这里只做
 格式对照，不是第二次运行。会话轨迹的每一行都可点击：消息行在检查器中打开该消息，轨迹点行显示该
 轨迹点的字段，没有消息的决策行显示可读摘要；被点击的行保持高亮，列表停止跟随最新一行，直到你滚回底部。
+轨迹按演示日分组（第 1 天、第 2–8 天、第 9 天、第 9 天+），并标出消息流向（OSS → RAN、RAN → OSS、
+MIE ⇄ 工程师）。服务端 span 是批量到达的，且时间戳早于到达时间，因此轨迹按事件时间插入而不是到达顺序；
+状态与对应的审批/决策 span 共用一个去重键，只显示一行。
 
 启动时可开启两次人工审批：
 
@@ -412,7 +416,9 @@ executor = build_negotiation_executor(
 执行器不只通过工具 artifact 上报执行结果：`apply_energy_saving_plan` 成功后会发一条 `WORKING` 状态消息，
 包含已下发的方案、小区、时段、节能率和节能量；`generate_energy_saving_report` 成功后会发一条带报告摘要的
 `WORKING` 状态消息。报告 artifact 的 Task-T 文本保持原 Demo 的分段结构（基本信息、明细、节能量、KPI 影响），
-终态保持不变。
+终态保持不变。执行器在收到成功的报告工具结果后立即停止消费图，`PlanGuard` 也会拒绝同一任务中的第二次 apply；
+这样 live planner 继续探索时不会在有效报告之后撞上递归上限（旧行为会把已完成的运行变成失败 Task、丢失报告
+artifact），也不会再次打开审批门。
 
 **如何验证：** 服务端 trace 出现四个工具 span；Task 依次带 apply 结果通知、report 就绪通知、报告
 artifact，并以 `COMPLETED` 结束。

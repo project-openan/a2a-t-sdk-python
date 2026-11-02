@@ -149,6 +149,7 @@ const els = {
   traceSub: byId("trace-sub"),
   traceToggle: byId("trace-toggle"),
   traceBody: byId("trace-body"),
+  traceDays: byId("trace-days"),
   traceRows: byId("trace-rows"),
   traceEmpty: byId("trace-empty"),
   tech: byId("tech"),
@@ -237,7 +238,7 @@ const wire = createWire(
   () => ui,
 );
 const trace = createTrace(
-  { body: els.traceBody, rows: els.traceRows, empty: els.traceEmpty },
+  { body: els.traceBody, days: els.traceDays, rows: els.traceRows, empty: els.traceEmpty },
   () => ui.copy,
   (row) => {
     const entry = entryOfRow(row);
@@ -1196,7 +1197,9 @@ function renderControls() {
 }
 
 function renderResult() {
-  if (!ui.view.finished) return;
+  // Show the report as soon as its artifact arrives; the terminal frame may trail a live model by
+  // several seconds. The card is cached per run, so the later finished frame does not duplicate it.
+  if (!ui.view.finished && !ui.view.report) return;
   // The ending (and the comparison card) is built once per run and re-appended on later
   // renders; building it again would reset the scroll and any click target in the card.
   if (ui.resultCard === null || ui.resultCardRun !== ui.view.runId) {

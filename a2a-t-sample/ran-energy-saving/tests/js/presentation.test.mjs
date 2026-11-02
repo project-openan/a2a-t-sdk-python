@@ -12,9 +12,12 @@ import {
   executionSteps,
   negotiationExpected,
   pendingHuman,
+  pushTrace,
   resolutionOf,
   roundInfo,
   stageOf,
+  traceDirection,
+  traceStageKey,
 } from "../../demo/web/presentation/js/state.js";
 import { sceneFor } from "../../demo/web/presentation/js/scenes.js";
 import { createPlayer } from "../../demo/web/presentation/js/player.js";
@@ -505,6 +508,53 @@ applyFrame(executedState, { type: "run_started", runId: "s3", scenario: "night",
 applyFrame(executedState, artifact(1, "execution", "apply_energy_saving_plan"));
 assert.equal(executedState.mmlSent, true);
 assert.equal(executedState.executed, true);
+
+// --- Trace: demo day labels, direction and duplicate collapse --------------
+
+assert.equal(traceStageKey({ kind: "status", summary: "Data collection started: ..." }), "collection");
+assert.equal(
+  traceStageKey({ kind: "status", state: "TASK_STATE_INPUT_REQUIRED", summary: "Waiting ..." }),
+  "mml",
+);
+assert.equal(
+  traceStageKey({ kind: "artifact", phase: "report", name: "energy saving intent report" }),
+  "report",
+);
+assert.equal(
+  traceStageKey({ kind: "tool", title: "evaluate_energy_saving_plan", side: "server" }),
+  "mml",
+);
+assert.equal(traceDirection({ direction: "client->server" }), "OSS → RAN");
+assert.equal(traceDirection({ direction: "server->client" }), "RAN → OSS");
+assert.equal(traceDirection({ kind: "approval", side: "server", actor: "human" }), "MIE ⇄ Engineer");
+assert.equal(traceDirection({ detail: { hop: "mie" }, direction: "server->client" }), "MIE ⇄ RAN");
+
+const orderedTrace = createState();
+pushTrace(orderedTrace, { title: "later", order: 200 });
+pushTrace(orderedTrace, { title: "earlier", order: 100 });
+assert.deepEqual(orderedTrace.trace.map((row) => row.title), ["earlier", "later"]);
+
+const dedupedTrace = createState();
+pushTrace(dedupedTrace, {
+  title: "Approval 2 · MIE",
+  entry: {
+    entryType: "event",
+    kind: "status",
+    state: "TASK_STATE_INPUT_REQUIRED",
+    summary: "Waiting for the engineer's approval before applying the plan.",
+  },
+});
+pushTrace(dedupedTrace, {
+  title: "Approval requested",
+  entry: {
+    entryType: "trace",
+    kind: "approval",
+    title: "Approval requested",
+    detail: { approvalState: "requested" },
+  },
+});
+assert.equal(dedupedTrace.trace.length, 1);
+assert.equal(dedupedTrace.trace[0].title, "Approval 2 · MIE");
 
 // --- Player: a hold waits for the engineer, then resumes ----------------
 

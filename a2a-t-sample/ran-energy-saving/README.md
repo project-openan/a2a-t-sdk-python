@@ -141,7 +141,10 @@ keeps the evidence: what the OSS Agent understood (with the 24-hour throughput c
 negotiation turns, an **On the wire** inspector, and the merged session trace. On the wire shows the
 real A2A request headers and JSON body with the Task-T metadata; its **Plain A2A** toggle shows the
 same request as one natural-language sentence without the extension header or Task-T fields (a
-format view of the same message). Clicking a trace row selects that message in the inspector.
+format view of the same message). Clicking a trace row selects that message in the inspector. The
+trace labels each row with its demo day (Day 1, Days 2–8, Day 9, Day 9+) and message direction
+(OSS → RAN, RAN → OSS, MIE ⇄ Engineer); late server spans are merged by event time and a status and
+its matching span collapse to one row.
 
 ### Pure A2A mode (three hops, standard A2A only)
 

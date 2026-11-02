@@ -53,6 +53,7 @@ export function createState() {
     approvalState: null,
     nmsTool: null,
     lastStatusText: "",
+    nmsStage: "strategy",
     pure: null,
     hop: null,
     pureRound: 0,
@@ -108,7 +109,7 @@ export function applyFrame(state, frame) {
         recommendation: isObject(frame.recommendation) ? frame.recommendation : null,
         resolved: false,
       };
-      state.trace.push({
+      pushTrace(state, {
         tag: "a2at",
         title: "Decision requested",
         titleKey: "decisionRequested",
@@ -116,6 +117,10 @@ export function applyFrame(state, frame) {
         chip: "decision",
         chipKind: "neg",
         decision: true,
+        stage: "negotiation",
+        dir: "OSS internal",
+        order: traceOrder({ ts: frame.requestedAt }, Date.now()),
+        dedupeKey: `decision:${frame.round ?? "?"}`,
       });
       return state;
     }
@@ -205,7 +210,7 @@ function applyEvent(state, entry) {
     }
   }
 
-  state.trace.push({
+  pushTrace(state, {
     tag: traceTag(entry),
     title: traceTitle(entry, summary),
     titleKey:
@@ -313,8 +318,14 @@ function applyEvent(state, entry) {
       break;
     }
     case "artifact": {
-      if (entry.phase === "report") state.reportArtifact = true;
-      else state.executionArtifacts += 1;
+      if (entry.phase === "report") {
+        state.reportArtifact = true;
+        // The transcript carries the report data on the artifact, so the ending card can appear
+        // before the terminal frame (a live planner may take seconds to close the Task).
+        if (isObject(entry.data)) state.report = entry.data;
+      } else {
+        state.executionArtifacts += 1;
+      }
       const tool = artifactTool(entry);
       if (tool) state.artifactTools.push(tool);
       if (tool === "apply_energy_saving_plan") {
@@ -340,8 +351,13 @@ function applyTrace(state, span) {
   }
   const kind = typeof span.kind === "string" ? span.kind : "trace";
   const detail = isObject(span.detail) ? span.detail : null;
+  // A planner turn is internal evidence for the tool that follows it. Tagging every turn as
+  // "strategy" made the day badge jump back to Day 1 between collection and approval rows.
+  let stage = traceStageKey(span);
+  if (kind === "llm" && span.title === "Planner turn") stage = state.nmsStage || "strategy";
+  if (kind === "tool") state.nmsStage = stage;
 
-  state.trace.push({
+  pushTrace(state, {
     tag: traceSpanTag(span, kind),
     title: typeof span.title === "string" ? span.title : kind,
     titleKey:
@@ -355,6 +371,7 @@ function applyTrace(state, span) {
     sub: typeof span.purpose === "string" ? span.purpose : "",
     chip: kind === "tool" ? "tool" : kind === "llm" ? "LLM" : "",
     chipKind: kind === "tool" ? "status" : "",
+    stage,
     entry: span,
   });
 
@@ -552,6 +569,185 @@ function chipKind(entry) {
 
 //: ``cell-001, 00:00~06:00, 30%`` inside the INPUT_REQUIRED status text.
 const APPROVAL_PLAN_PATTERN = /([A-Za-z0-9_-]+),\s*(\d{2}:\d{2}\s*[~-]\s*\d{2}:\d{2}),\s*([\d.]+%)/;
+
+/**
+ * Demo stage of one trace row: the reference demo's day and step vocabulary.
+ *
+ * Protocol phases (``task_prompt``, ``negotiation``, ``execution``, ``report``) describe the SDK
+ * layers, not what the audience is watching. The trace groups the same rows into the nine demo
+ * steps: Day 1 covers request, negotiation and strategy; Days 2–8 are data collection; Day 9 is
+ * the MML review; Day 9+ is apply and report.
+ */
+export function traceStageKey(entry) {
+  if (!isObject(entry)) return "request";
+  const kind = typeof entry.kind === "string" ? entry.kind : "";
+  const summary = typeof entry.summary === "string" ? entry.summary : "";
+  const state = typeof entry.state === "string" ? entry.state : "";
+  const tool = isObject(entry.detail) && typeof entry.detail.toolName === "string"
+    ? entry.detail.toolName
+    : "";
+  if (kind === "artifact") {
+    if (entry.phase === "report" || entry.name === "energy saving intent report") return "report";
+    if (tool === "apply_energy_saving_plan" || tool === "generate_energy_saving_report") {
+      return "report";
+    }
+    if (tool === "get_cell_energy_profile") return "collection";
+    if (tool === "evaluate_energy_saving_plan") return "mml";
+    return "strategy";
+  }
+  if (kind === "approval") return "mml";
+  if (kind === "decision_requested") return "negotiation";
+  if (entry.phase === "negotiation" || entry.phase === "resolution") return "negotiation";
+  if (kind === "tool") {
+    if (entry.title === "get_cell_energy_profile") return "collection";
+    if (
+      entry.title === "apply_energy_saving_plan" ||
+      entry.title === "generate_energy_saving_report"
+    ) {
+      return "report";
+    }
+    if (entry.title === "evaluate_energy_saving_plan") return "mml";
+    return "strategy";
+  }
+  if (kind === "status") {
+    if (summary.includes("Data collection")) return "collection";
+    if (
+      summary.includes("MIE Agent's approval") ||
+      summary.includes("engineer's approval") ||
+      summary.includes("MIE approved") ||
+      summary.includes("Approved. Applying") ||
+      state === "TASK_STATE_INPUT_REQUIRED"
+    ) {
+      return "mml";
+    }
+    if (
+      summary.includes("was applied") ||
+      summary.includes("report is ready") ||
+      state === "TASK_STATE_COMPLETED"
+    ) {
+      return "report";
+    }
+    return "strategy";
+  }
+  if (kind === "message_sent" && summary.includes("Accept")) return "negotiation";
+  if (kind === "llm") {
+    const stage = typeof entry.stage === "string" ? entry.stage : "";
+    if (stage.startsWith("negotiation") || stage.includes("accept")) return "negotiation";
+    if (stage.startsWith("task_t_") || stage.includes("task_prompt")) return "request";
+    return "strategy";
+  }
+  if (entry.phase === "negotiation" || ["propose", "accept", "counter", "reject", "abort"].includes(kind)) {
+    return "negotiation";
+  }
+  if (entry.phase === "task_prompt" || entry.phase === "task_validation" || entry.phase === "dispatch") {
+    return "request";
+  }
+  if (entry.phase === "execution") return "strategy";
+  return "request";
+}
+
+/** Who is talking to whom, in the demo's roles, or ``""`` when the row is not a message. */
+export function traceDirection(entry) {
+  if (!isObject(entry)) return "";
+  const hop = isObject(entry.detail) && typeof entry.detail.hop === "string" ? entry.detail.hop : "";
+  if (hop === "oss") return "OSS → RAN";
+  if (hop === "ran") return "RAN → OSS";
+  if (hop === "mie") return "MIE ⇄ RAN";
+  if (entry.kind === "approval" || entry.actor === "human") return "MIE ⇄ Engineer";
+  if (entry.direction === "client->server") return "OSS → RAN";
+  if (entry.direction === "server->client") return "RAN → OSS";
+  if (entry.side === "server") return "RAN internal";
+  if (entry.side === "client") return "OSS internal";
+  if (entry.actor === "engineer") return "Engineer";
+  return "";
+}
+
+/** Event time used to keep late server spans in causal order instead of arrival order. */
+export function traceOrder(entry, fallback = Date.now()) {
+  if (!isObject(entry)) return fallback;
+  for (const value of [entry.ts, entry.startedAt, entry.endedAt]) {
+    if (typeof value !== "string" || value === "") continue;
+    const parsed = Date.parse(value);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+/**
+ * Logical identity of a row that the wire and the trace describe twice.
+ *
+ * The server emits an ``INPUT_REQUIRED`` status and an approval span for the same gate; the
+ * client also renders a status and a span for the same decision request. Keeping both looked like
+ * "approval requested" repeated several times. The event row wins because it opens the real wire
+ * message; the span only supplies state.
+ */
+export function traceDedupeKey(entry) {
+  if (!isObject(entry)) return null;
+  const kind = typeof entry.kind === "string" ? entry.kind : "";
+  const summary = typeof entry.summary === "string" ? entry.summary : "";
+  const detail = isObject(entry.detail) ? entry.detail : {};
+  if (kind === "status") {
+    if (summary.includes("Data collection completed")) return "status:collection-completed";
+    if (entry.state === "TASK_STATE_INPUT_REQUIRED") return "approval:requested";
+    if (summary.includes("MIE Agent's approval")) return "approval:requested";
+    if (/MIE approved\. Applying|^Approved\. Applying/.test(summary)) return "approval:resolved";
+    if (summary.includes("was applied to cell")) return "status:apply-completed";
+    if (summary.includes("energy-saving report is ready")) return "status:report-ready";
+  }
+  if (kind === "approval" || detail.pureKind === "approval") {
+    const requested =
+      summary.includes("requested") ||
+      entry.title === "Approval requested" ||
+      detail.approvalState === "requested";
+    if (requested) return "approval:requested";
+    const resolved =
+      summary.includes("resolved") ||
+      entry.title === "Approval resolved" ||
+      detail.approvalState === "approved" ||
+      detail.approvalState === "rejected";
+    if (resolved) return "approval:resolved";
+  }
+  if (kind === "decision_requested") return `decision:${entry.round ?? "?"}`;
+  if (kind === "propose" && entry.phase === "negotiation") {
+    return `propose:${entry.round ?? "?"}:${entry.performative ?? ""}`;
+  }
+  return null;
+}
+
+/**
+ * Insert one trace row in event-time order and drop duplicate protocol/span pairs.
+ *
+ * Rows arrive from two producers: the live event stream and the batched server trace. Server spans
+ * are flushed later but carry an earlier timestamp, so appending them at the end made the time
+ * column jump backwards. Inserting by timestamp keeps the session readable; the trace component
+ * rebuilds its small window when an insertion is not an append.
+ */
+export function pushTrace(state, row) {
+  const entry = isObject(row.entry) ? row.entry : null;
+  const order = Number.isFinite(row.order) ? row.order : traceOrder(entry);
+  const dedupeKey = row.dedupeKey ?? traceDedupeKey(entry);
+  if (dedupeKey !== null) {
+    const existingIndex = state.trace.findIndex((item) => item.dedupeKey === dedupeKey);
+    if (existingIndex >= 0) {
+      const existing = state.trace[existingIndex];
+      const existingIsEvent = existing.entry?.entryType === "event";
+      const nextIsEvent = entry?.entryType === "event";
+      if (existingIsEvent || !nextIsEvent) return false;
+      state.trace.splice(existingIndex, 1);
+    }
+  }
+  const item = {
+    ...row,
+    order,
+    stage: row.stage ?? traceStageKey(entry),
+    dir: row.dir ?? traceDirection(entry),
+    dedupeKey,
+  };
+  let index = state.trace.length;
+  while (index > 0 && (state.trace[index - 1].order ?? 0) > order) index -= 1;
+  state.trace.splice(index, 0, item);
+  return true;
+}
 
 /** Read the plan the approval status names, or ``null`` when the text carries none. */
 function approvalFromText(text) {

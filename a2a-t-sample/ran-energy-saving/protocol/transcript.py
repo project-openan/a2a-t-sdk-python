@@ -23,7 +23,7 @@ from a2a_t.core.metadata import (
 )
 from shared.logging_utils import summarize_text
 from shared.models import NegotiationDecision, NegotiationProposeView
-from shared.trace import PHASE_NEGOTIATION, infer_event_phase
+from shared.trace import PHASE_NEGOTIATION, infer_event_phase, is_report_artifact
 
 from protocol.client_flow import ClientFlowResult
 from protocol.messages import parse_negotiation_context
@@ -245,6 +245,12 @@ class NegotiationTranscript:
             "durationMs": duration_ms,
             "detail": dict(explicit_detail) if explicit_detail is not None else None,
         }
+        if _text(event.get("kind")) == "artifact" and is_report_artifact(event):
+            # The UI can render the report as soon as the artifact arrives instead of waiting for
+            # the terminal frame, which live models can delay by many seconds.
+            data = event.get("data")
+            if isinstance(data, Mapping) and data:
+                entry["data"] = dict(data)
         self.events.append(entry)
         self.context_id = self.context_id or (
             entry["contextId"] if isinstance(entry["contextId"], str) else None

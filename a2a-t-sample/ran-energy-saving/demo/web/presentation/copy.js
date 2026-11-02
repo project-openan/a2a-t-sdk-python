@@ -497,6 +497,20 @@ const EN = {
     intentReview: "Approval 1 requested",
     approved: "MML approved",
     decisionRequested: "Decision requested",
+    stages: {
+      request: "Day 1 · 1–4",
+      negotiation: "Day 1 · 5",
+      strategy: "Day 1 · 6",
+      collection: "Days 2–8 · 7",
+      mml: "Day 9 · 8",
+      report: "Day 9+ · 9",
+    },
+    days: [
+      { label: "Day 1", sub: "request · negotiate · strategy" },
+      { label: "Days 2–8", sub: "data collection" },
+      { label: "Day 9", sub: "MML review" },
+      { label: "Day 9+", sub: "apply · report" },
+    ],
   },
   map: {
     zones: ["IT environment · OSS side", "Network environment · Songshanhu"],
@@ -1116,6 +1130,20 @@ const ZH = {
     intentReview: "请求审批 1",
     approved: "MML 已确认",
     decisionRequested: "请求决策",
+    stages: {
+      request: "第1天 · 1–4",
+      negotiation: "第1天 · 5",
+      strategy: "第1天 · 6",
+      collection: "第2–8天 · 7",
+      mml: "第9天 · 8",
+      report: "第9天+ · 9",
+    },
+    days: [
+      { label: "第1天", sub: "请求 · 协商 · 策略" },
+      { label: "第2–8天", sub: "数据采集" },
+      { label: "第9天", sub: "MML 审核" },
+      { label: "第9天+", sub: "下发 · 报告" },
+    ],
   },
   map: {
     zones: ["IT 环境 · OSS 侧", "网络环境 · 松山湖"],
