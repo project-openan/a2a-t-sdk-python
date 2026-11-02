@@ -794,7 +794,7 @@ python run_demo.py --scenario target --mode auto --model-mode live
 
 | 路径 | 职责 |
 | --- | --- |
-| [`run_demo.py`](run_demo.py) | 多进程启动器：后台启动注册中心、服务端（以及 `--gateway` 时的入站 A2A Gateway），前台运行 CLI 客户端（`--ui` 时改为 Web UI），结束后停止子进程。 |
+| [`run_demo.py`](run_demo.py) | 多进程启动器：后台启动注册中心、服务端、Web UI（`--ui`）以及（`--gateway` 时的）入站 A2A Gateway；非 UI 模式下前台运行 CLI 客户端；结束后停止已记录的子进程。Web UI 也是子进程，因此 `--stop` 能一并回收（旧版遗留 UI 还会按端口兜底）。 |
 | [`env.example`](env.example) | 统一的、可直接离线运行的配置模板。 |
 | [`demo/agents/server_agent/`](demo/agents/server_agent) | 服务端 LangGraph 执行：`planner.py`（脚本化/在线模型 + 提示词）、`langgraph_tools.py`（受约束工具 + `PlanGuard`）、`graph.py`（ReAct 状态图）、`tools.py`（纯网管工具）；不使用 ADK。 |
 | [`demo/agents/client_agent/`](demo/agents/client_agent) | 客户端 ADK 决策智能体：`agent.py` 导出 `root_agent`；`tools.py` 为 SLA 与影响评估工具；`prompts/request_instruction.md` 为 instruction。 |
@@ -840,7 +840,7 @@ python run_demo.py --scenario target --mode auto --model-mode live
 | [`shared/webhook_receiver.py`](shared/webhook_receiver.py) | 内置 webhook 推送接收器，校验 token。 |
 | [`shared/sse_event_consumer.py`](shared/sse_event_consumer.py) | 将 A2A 流事件归一化为统一事件结构。 |
 | [`demo/registry/`](demo/registry) | Mock 注册中心（AgentCard 注册/查询，端口 5001）。 |
-| [`demo/web/`](demo/web) | Starlette Web UI（`app.py`）、演示前端（`presentation/`，默认）与 Run Explorer（`static/`）。演示页消费同一 SSE 流；Web UI 负责审批 1（`POST /api/runs/{id}/intent`）并把审批 2 转发给 RAN Agent。 |
+| [`demo/web/`](demo/web) | Starlette Web UI（`app.py`，由 `serve.py` 作为受管子进程启动）、演示前端（`presentation/`，默认）与 Run Explorer（`static/`）。演示页消费同一 SSE 流；Web UI 负责审批 1（`POST /api/runs/{id}/intent`）并把审批 2 转发给 RAN Agent。 |
 | [`tests/`](tests) | 单元、集成、传输、Web UI 与八场景离线验收测试；`tests/js/` 为 pytest 驱动的 Node harness。 |
 
 ### B.2 替换清单

@@ -4,10 +4,15 @@
 The registry center and the A2A server each bind a port; started in the foreground they would
 block the terminal. This launcher starts them as **background subprocesses** (new layout:
 ``registry.registry_main`` and ``protocol.server_app``), waits for their ports, then runs the client
-in the foreground — or serves the Web UI with ``--ui`` — and finally stops the background processes
-unless ``--keep-alive`` is given.
+in the foreground — or starts the Web UI as one more managed subprocess with ``--ui`` — and finally
+stops the background processes unless ``--keep-alive`` is given.
 
-Both background processes stream their output to the terminal live and interleaved (through a pipe
+The Web UI is a managed child (``demo.web.serve``), not ``uvicorn.run`` inside this process: its PID
+is therefore recorded in the state file, so ``--stop`` also reclaims a UI left behind when the
+launcher itself was killed abruptly. ``--stop`` additionally probes the recorded UI port and stops
+the listener when its command line proves it is this sample (a legacy UI from older launchers).
+
+All background processes stream their output to the terminal live and interleaved (through a pipe
 in a normal run, through a file follower under ``--keep-alive``). ``PYTHONPATH`` points at the sample
 root; the legacy ``src/`` tree is never imported.
 
@@ -36,8 +41,10 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import secrets
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -65,6 +72,7 @@ ENV_CANDIDATES = (CASE_DIR / ".env", SAMPLE_DIR / ".env", SAMPLE_DIR / "env.exam
 
 REGISTRY_MODULE = "demo.registry.registry_main"
 SERVER_MODULE = "protocol.server_app"
+UI_MODULE = "demo.web.serve"
 GATEWAY_MODULE = "protocol.client_gateway"
 OSS_MODULE = "protocol.oss_agent"
 MIE_MODULE = "protocol.mie_agent"
@@ -90,13 +98,23 @@ def _port_open(port: int, host: str = "127.0.0.1") -> bool:
         return sock.connect_ex((host, port)) == 0
 
 
-def _wait_port(port: int, timeout: float, proc: subprocess.Popen[str] | None = None) -> bool:
+def _probe_host(bind_host: str) -> str:
+    """Return the host used to probe a port bound to ``bind_host``."""
+    return "127.0.0.1" if bind_host in ("", "0.0.0.0", "::") else bind_host
+
+
+def _wait_port(
+    port: int,
+    timeout: float,
+    proc: subprocess.Popen[str] | None = None,
+    host: str = "127.0.0.1",
+) -> bool:
     """Wait until a port accepts connections, failing fast when the child exits."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if proc is not None and proc.poll() is not None:
             return False
-        if _port_open(port):
+        if _port_open(port, host):
             return True
         time.sleep(0.3)
     return False
@@ -328,24 +346,203 @@ def _write_run_env(
     return env_path
 
 
+def _pid_alive(pid: int) -> bool:
+    """Return whether ``pid`` is still running."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                check=False,
+                capture_output=True,
+            )
+        except OSError:
+            return True
+        if result.returncode != 0:
+            return True
+        # ``tasklist`` follows the console code page (e.g. GBK), so match the ASCII PID bytes
+        # instead of decoding the whole line.
+        marker = f'","{pid}"'.encode("ascii")
+        return any(marker in line for line in result.stdout.splitlines())
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    # A zombie is not running any more; it only waits to be reaped by its parent. Counting it as
+    # alive would make ``--stop`` report a kill that already happened.
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return True
+    try:
+        return stat.rsplit(")", 1)[1].split()[0] != "Z"
+    except IndexError:
+        return True
+
+
+def _wait_pid_exit(pid: int, timeout: float) -> bool:
+    """Wait until ``pid`` exits; return whether it did."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            return True
+        time.sleep(0.1)
+    return not _pid_alive(pid)
+
+
 def _stop_pids(pids: list[int]) -> int:
-    """Terminate the recorded background processes."""
+    """Terminate the recorded background processes and return how many actually exited.
+
+    PIDs that are already gone are not counted, so the printed ``stopped N`` never claims a
+    kill that did not happen (the previous implementation counted attempts).
+    """
     stopped = 0
-    for pid in pids:
+    for pid in dict.fromkeys(pids):
+        if not _pid_alive(pid):
+            continue
         try:
             if os.name == "nt":
-                subprocess.run(
+                result = subprocess.run(
                     ["taskkill", "/PID", str(pid), "/T", "/F"],
                     check=False,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
+                if result.returncode == 0 and _wait_pid_exit(pid, 3.0):
+                    stopped += 1
             else:
-                os.kill(pid, 15)
-            stopped += 1
+                os.kill(pid, signal.SIGTERM)
+                if not _wait_pid_exit(pid, 3.0):
+                    os.kill(pid, signal.SIGKILL)
+                if _wait_pid_exit(pid, 2.0):
+                    stopped += 1
         except (ProcessLookupError, PermissionError, OSError):
             pass
     return stopped
+
+
+def _listener_pids(port: int) -> list[int]:
+    """Return the PIDs listening on a TCP ``port`` (best effort, platform-specific)."""
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["netstat", "-ano", "-p", "TCP"],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError:
+            return []
+        pids: list[int] = []
+        for line in result.stdout.splitlines():
+            fields = line.split()
+            if len(fields) < 5 or fields[0].upper() != "TCP" or fields[3].upper() != "LISTENING":
+                continue
+            if fields[1].rsplit(":", 1)[-1] != str(port):
+                continue
+            try:
+                pids.append(int(fields[4]))
+            except ValueError:
+                continue
+        return list(dict.fromkeys(pids))
+    if shutil.which("lsof"):
+        result = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        return [int(token) for token in result.stdout.split() if token.isdigit()]
+    if shutil.which("ss"):
+        result = subprocess.run(
+            ["ss", "-ltnpH"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        pids = []
+        for line in result.stdout.splitlines():
+            fields = line.split()
+            if len(fields) < 4 or not fields[3].endswith(f":{port}"):
+                continue
+            pids.extend(int(match) for match in re.findall(r"pid=(\d+)", line))
+        return list(dict.fromkeys(pids))
+    return []
+
+
+def _process_command_line(pid: int) -> str:
+    """Return the command line of ``pid``, or an empty string when it cannot be read."""
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    f'(Get-CimInstance Win32_Process -Filter "ProcessId={pid}").CommandLine',
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError:
+            return ""
+        return result.stdout.strip()
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        raw = b""
+    if raw:
+        return raw.replace(b"\0", b" ").decode("utf-8", "replace").strip()
+    result = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "command="],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    return result.stdout.strip()
+
+
+def _is_ui_child(pid: int) -> bool:
+    """Return whether ``pid`` is the managed ``demo.web.serve`` UI child.
+
+    Only this leaf process is safe to restart from the launcher: killing an older launcher that
+    served the UI in-process would also take down the registry/server children it owns.
+    """
+    return "demo.web.serve" in _process_command_line(pid)
+
+
+def _is_demo_process(pid: int) -> bool:
+    """Return whether ``pid`` runs this sample's launcher or its Web UI.
+
+    The check guards :func:`_kill_port_listener`: a port can be occupied by an unrelated service,
+    so only a command line that names ``demo.web.serve`` (managed UI child) or the launcher with
+    ``--ui`` (UI served inside an older launcher) may be stopped.
+    """
+    command = _process_command_line(pid)
+    if not command:
+        return False
+    if "demo.web.serve" in command:
+        return True
+    return ("demo.run_demo" in command or "run_demo.py" in command) and "--ui" in command
+
+
+def _kill_port_listener(port: int) -> int:
+    """Stop the listener of ``port`` when it is demonstrably this sample; return the count."""
+    return _stop_pids([pid for pid in _listener_pids(port) if _is_demo_process(pid)])
 
 
 def _load_state() -> dict[str, object]:
@@ -400,17 +597,23 @@ def _save_state(
     listening server was started with the requested model mode/language and trace target. The file
     carries the local trace token, so it is owner-only like the SDK ``.env``.
     """
-    state: dict[str, object] = {
-        "pids": pids,
-        "model_mode": model_mode,
-        "language": language,
-        "trace_token": trace_token,
-        "trace_url": trace_url,
-        "ui_port": ui_port,
-        "gateway_port": gateway_port,
-        "approval_gate": approval_gate,
-        "approval_timeout": approval_timeout,
-    }
+    _write_state(
+        {
+            "pids": pids,
+            "model_mode": model_mode,
+            "language": language,
+            "trace_token": trace_token,
+            "trace_url": trace_url,
+            "ui_port": ui_port,
+            "gateway_port": gateway_port,
+            "approval_gate": approval_gate,
+            "approval_timeout": approval_timeout,
+        }
+    )
+
+
+def _write_state(state: dict[str, object]) -> None:
+    """Atomically write a launcher state record; the file carries the local trace token."""
     tmp_path = PID_FILE.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(state), encoding="utf-8")
     os.replace(tmp_path, PID_FILE)
@@ -675,95 +878,14 @@ async def _run_client_foreground(
     return 0
 
 
-def _run_ui(
-    *,
-    env_path: Path,
-    ui_port: int,
-    scenario: str,
-    mode: str,
-    transport: str,
-    ui_mode: str = "presentation",
-    host: str = "127.0.0.1",
-    server_url: str = "",
-    approval_gate: bool = False,
-    approval_timeout: float = 240.0,
-    allow_insecure_bind: bool = False,
-    protocol: str = PROTOCOL_A2A_T,
-    mie_url: str | None = None,
-) -> int:
-    """Serve the Web UI of the client process until interrupted."""
-    import uvicorn
-    from protocol.client_store import SqliteClientStore
-    from shared.config import load_config
-    from shared.http_security import is_loopback
-    from shared.logging_setup import configure_logging
-
-    from demo.catalog import DemoRunCatalog
-    from demo.web.app import create_app
-
-    configure_logging()
-    config = load_config(env_path=env_path)
-    client_store = (
-        SqliteClientStore(config.client_db_path)
-        if config.client_db_path is not None
-        else None
-    )
+def _wait_ui(proc: subprocess.Popen[str]) -> int:
+    """Block until the managed Web UI child exits and return its (normalized) exit code."""
     try:
-        app = create_app(
-            config,
-            env_path=env_path,
-            catalog=DemoRunCatalog(),
-            client_store=client_store,
-            memory_turns=config.client_memory_turns,
-            default_scenario=scenario,
-            default_mode=mode,
-            default_transport=transport,
-            bind_host=host,
-            ui_mode=ui_mode,
-            server_url=server_url or None,
-            approval_gate=approval_gate,
-            approval_timeout_seconds=approval_timeout,
-            allow_insecure_bind=allow_insecure_bind,
-            protocol=protocol,
-            mie_url=mie_url,
-            # The server trace emitter flushes in batches; aggregate the persisted metrics after
-            # the same short window the SSE stream uses to forward its last spans.
-            metrics_grace_seconds=2.0,
-        )
-    except ValueError as exc:
-        print(f"[run_demo] {exc}")
-        return 2
-    trace_enabled = bool(os.environ.get("A2AT_SAMPLE_TRACE_TOKEN", "").strip())
-    print(
-        f"[run_demo] Web UI on http://{host}:{ui_port} (ui_mode={ui_mode}) "
-        f"(language={config.language}, model_mode={config.model_mode} [{config.model_label}], "
-        f"provider={config.adk_model_provider}, "
-        f"defaults: scenario={scenario}, mode={mode}, transport={transport}, "
-        f"approval_gate={approval_gate}, "
-        f"server trace ingestion: {'enabled' if trace_enabled else 'disabled (no local token)'})"
-    )
-    if not is_loopback(host):
-        try:
-            lan_ip = socket.gethostbyname(socket.gethostname())
-        except OSError:
-            lan_ip = "<your-lan-ip>"
-        if config.auth_token:
-            print(
-                f"[run_demo] share on the LAN: http://{lan_ip}:{ui_port}/?token="
-                "<A2AT_SAMPLE_AUTH_TOKEN>"
-            )
-        else:
-            print(
-                "[run_demo] WARNING: the Web UI is reachable on the LAN without a bearer "
-                "token; anyone who can reach the port can start runs. Use only on a trusted "
-                f"network. Share: http://{lan_ip}:{ui_port}/"
-            )
-    try:
-        uvicorn.run(app, host=host, port=ui_port, log_level="info")
+        while proc.poll() is None:
+            time.sleep(0.2)
     except KeyboardInterrupt:
-        print("\n[run_demo] Web UI stopped")
-        return 130
-    return 0
+        raise
+    return 0 if proc.returncode == 0 else 1
 
 
 def _build_parser(
@@ -949,13 +1071,32 @@ def main() -> int:
     configure_logging()
 
     if args.stop:
-        pids = _load_pids()
-        if not pids:
+        state = _load_state()
+        pids = _state_pids(state)
+        ui_port = state.get("ui_port")
+        ui_listening = isinstance(ui_port, int) and _port_open(ui_port)
+        if not pids and not ui_listening:
+            PID_FILE.unlink(missing_ok=True)
             print("[run_demo] nothing to stop (no recorded background processes)")
             return 0
         stopped = _stop_pids(pids)
+        # Older launchers served the UI in their own foreground process and never recorded it, so
+        # its port is the only trace left. Reclaim it only when the command line proves ownership.
+        reclaimed = 0
+        if isinstance(ui_port, int) and _port_open(ui_port):
+            reclaimed = _kill_port_listener(ui_port)
+            if reclaimed:
+                print(f"[run_demo] reclaimed {reclaimed} orphaned Web UI process(es) on port {ui_port}")
+            else:
+                print(
+                    f"[run_demo] port {ui_port} is still in use by a process this launcher does not "
+                    f"recognize; free it manually or start with another --ui-port"
+                )
         PID_FILE.unlink(missing_ok=True)
-        print(f"[run_demo] stopped {stopped}/{len(pids)} recorded background processes")
+        print(
+            f"[run_demo] stopped {stopped + reclaimed} process(es) "
+            f"({len(pids)} recorded; already-exited processes are not counted)"
+        )
         return 0
 
     if args.mode in ("manual", "confirm") and not args.ui:
@@ -1076,6 +1217,7 @@ def main() -> int:
 
     managed: list[int] = list(existing)
     started_pids: list[int] = []
+    processes: dict[str, subprocess.Popen[str]] = {}
     log_handles: list[TextIO] = []
     followers: list[threading.Thread] = []
     pumps: list[threading.Thread] = []
@@ -1099,23 +1241,48 @@ def main() -> int:
         module: str,
         port: int,
         extra_env: dict[str, str] | None = None,
+        *,
+        cli_args: list[str] | None = None,
+        probe_host: str = "127.0.0.1",
+        reuse: bool = True,
     ) -> str | None:
-        """Return ``started``/``reused``, or ``None`` on failure."""
-        if _port_open(port):
-            if not managed:
+        """Return ``started``/``reused``, or ``None`` on failure.
+
+        ``reuse=False`` is used for the Web UI: its behavior depends on more per-run options than
+        the reuse decision covers, so an occupied port means "restart our recorded UI" or "refuse".
+        """
+        if _port_open(port, probe_host):
+            if not reuse:
+                stale = [pid for pid in _listener_pids(port) if _is_ui_child(pid)]
+                if not stale:
+                    print(
+                        f"[run_demo] {name} port {port} is already in use by a process this "
+                        f"launcher cannot restart safely; run --stop to reclaim a previous demo "
+                        f"process, free the port, or choose another port"
+                    )
+                    return None
+                print(f"[run_demo] {name} port {port} is held by a stale Web UI process; restarting it")
+                _stop_pids(stale)
+                if not _wait_ports_closed([port], timeout=args.timeout):
+                    print(f"[run_demo] {name} port {port} was not released; free it and retry")
+                    return None
+                managed[:] = [pid for pid in managed if pid not in stale]
+            elif not managed:
                 print(f"[run_demo] port {port} is already in use by another process; free it first")
                 return None
-            print(f"[run_demo] {name} already listening on {port} (reusing recorded process)")
-            attach_follower(RUN_DIR / f"{name}.log", from_end=True)
-            return "reused"
+            else:
+                print(f"[run_demo] {name} already listening on {port} (reusing recorded process)")
+                attach_follower(RUN_DIR / f"{name}.log", from_end=True)
+                return "reused"
         print(f"[run_demo] starting {name} on {port} ...")
+        command = [python, "-m", module, *(cli_args or [])]
         log_path = RUN_DIR / f"{name}.log"
         log_handle = log_path.open("w", encoding="utf-8")
         log_handles.append(log_handle)
         pump: threading.Thread | None = None
         if args.keep_alive:
             proc = subprocess.Popen(
-                [python, "-m", module],
+                command,
                 cwd=str(RUN_DIR),
                 env=_child_env(args.language, extra_env),
                 stdout=log_handle,
@@ -1125,7 +1292,7 @@ def main() -> int:
             attach_follower(log_path)
         else:
             proc = subprocess.Popen(
-                [python, "-m", module],
+                command,
                 cwd=str(RUN_DIR),
                 env=_child_env(args.language, extra_env),
                 stdout=subprocess.PIPE,
@@ -1139,7 +1306,7 @@ def main() -> int:
             pump = threading.Thread(target=_pump_pipe, args=(proc.stdout, log_handle), daemon=True)
             pump.start()
             pumps.append(pump)
-        if not _wait_port(port, args.timeout, proc):
+        if not _wait_port(port, args.timeout, proc, probe_host):
             print(f"[run_demo] {name} failed to start")
             if pump is not None:
                 pump.join(timeout=1.0)
@@ -1148,6 +1315,7 @@ def main() -> int:
             return None
         started_pids.append(proc.pid)
         managed.append(proc.pid)
+        processes[name] = proc
         return "started"
 
     return_code = 0
@@ -1195,19 +1363,8 @@ def main() -> int:
                 return 1
         elif args.gateway and start("gateway", GATEWAY_MODULE, args.gateway_port) is None:
             return 1
-        _save_state(
-            list(dict.fromkeys(managed)),
-            model_mode=args.model_mode,
-            language=args.language,
-            trace_token=server_trace_env.get("A2AT_SAMPLE_TRACE_TOKEN", ""),
-            trace_url=_trace_url(args.ui_port) if args.ui else "",
-            ui_port=args.ui_port if args.ui else None,
-            gateway_port=args.gateway_port if args.gateway else None,
-            approval_gate=args.approval_gate,
-            approval_timeout=args.approval_timeout,
-        )
-        persisted = True
 
+        ui_proc: subprocess.Popen[str] | None = None
         if args.ui:
             print(
                 f"[run_demo] starting Web UI (scenario selectable, mode manual/auto, "
@@ -1223,21 +1380,63 @@ def main() -> int:
                 if args.protocol == "pure"
                 else None
             )
-            return_code = _run_ui(
-                env_path=env_path,
-                ui_port=args.ui_port,
-                host=args.ui_host,
-                scenario=args.scenario,
-                mode=args.mode,
-                transport=args.transport,
-                ui_mode=args.ui_mode,
-                server_url=ui_server_url,
-                approval_gate=args.approval_gate or args.protocol == "pure",
-                approval_timeout=args.approval_timeout,
-                allow_insecure_bind=args.allow_insecure_bind,
-                protocol=args.protocol,
-                mie_url=mie_url,
-            )
+            ui_args = [
+                "--env-file", str(env_path),
+                "--host", args.ui_host,
+                "--port", str(args.ui_port),
+                "--scenario", args.scenario,
+                "--mode", args.mode,
+                "--transport", args.transport,
+                "--ui-mode", args.ui_mode,
+                "--server-url", ui_server_url,
+                "--protocol", args.protocol,
+            ]
+            if args.approval_gate or args.protocol == "pure":
+                ui_args += ["--approval-gate", "--approval-timeout", str(args.approval_timeout)]
+            if args.allow_insecure_bind:
+                ui_args.append("--allow-insecure-bind")
+            if mie_url is not None:
+                ui_args += ["--mie-url", mie_url]
+            if start(
+                "ui",
+                UI_MODULE,
+                args.ui_port,
+                cli_args=ui_args,
+                probe_host=_probe_host(args.ui_host),
+                reuse=False,
+            ) is None:
+                return 1
+            ui_proc = processes.get("ui")
+
+        # Record every live child, including the UI. Reused processes keep their previous PID;
+        # dead PIDs from an older record are dropped instead of being carried forward.
+        _save_state(
+            [pid for pid in dict.fromkeys(managed) if _pid_alive(pid)],
+            model_mode=args.model_mode,
+            language=args.language,
+            trace_token=server_trace_env.get("A2AT_SAMPLE_TRACE_TOKEN", ""),
+            trace_url=_trace_url(args.ui_port) if args.ui else "",
+            ui_port=args.ui_port if args.ui else None,
+            gateway_port=args.gateway_port if args.gateway else None,
+            approval_gate=args.approval_gate,
+            approval_timeout=args.approval_timeout,
+        )
+        persisted = True
+
+        if ui_proc is not None:
+            return_code = _wait_ui(ui_proc)
+            if return_code != 0:
+                # A concurrent ``--stop`` kills the UI child and removes the state file; that is a
+                # requested shutdown, not a failure of this run.
+                if args.keep_alive:
+                    deadline = time.monotonic() + 2.0
+                    while time.monotonic() < deadline and PID_FILE.exists():
+                        time.sleep(0.1)
+                if args.keep_alive and not PID_FILE.exists():
+                    print("[run_demo] Web UI stopped by --stop")
+                    return_code = 0
+                else:
+                    print(f"[run_demo] Web UI exited with code {ui_proc.returncode}")
         else:
             print(
                 f"[run_demo] running client (scenario={args.scenario}, mode={args.mode}, "
@@ -1259,9 +1458,28 @@ def main() -> int:
         print("\n[run_demo] interrupted")
         return 130
     finally:
+        ui_pid = processes["ui"].pid if "ui" in processes else None
         if args.keep_alive:
-            if persisted:
-                print(f"\n[run_demo] --keep-alive set; stop later with: {python} {Path(__file__).name} --stop")
+            # The UI belongs to this launcher run, not to the long-lived registry/server pair:
+            # stop it with the launcher and keep only the processes that stay alive in the state.
+            if ui_pid is not None:
+                _stop_pids([ui_pid])
+            if persisted and PID_FILE.exists():
+                current = _load_state()
+                remaining = [
+                    pid
+                    for pid in _state_pids(current)
+                    if pid != ui_pid and _pid_alive(pid)
+                ]
+                if remaining:
+                    current["pids"] = remaining
+                    _write_state(current)
+                    print(
+                        f"\n[run_demo] --keep-alive set; stop later with: "
+                        f"{python} {Path(__file__).name} --stop"
+                    )
+                else:
+                    PID_FILE.unlink(missing_ok=True)
         else:
             stopped = _stop_pids(managed)
             PID_FILE.unlink(missing_ok=True)

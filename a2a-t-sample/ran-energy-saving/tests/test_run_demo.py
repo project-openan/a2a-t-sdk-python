@@ -242,6 +242,102 @@ class TestServerReuseDecision:
         assert self.decide(state={}) == run_demo.REUSE_REFUSE
 
 
+def test_stop_pids_does_not_count_already_exited_processes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reported ``stopped N`` counts real terminations, not kill attempts."""
+    monkeypatch.setattr(run_demo, "_pid_alive", lambda pid: False)
+    monkeypatch.setattr(
+        run_demo.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("a dead PID must not be killed again"),
+    )
+
+    assert run_demo._stop_pids([11, 12, 12]) == 0
+
+
+def test_probe_host_maps_wildcard_binds_to_loopback() -> None:
+    """A UI bound to ``0.0.0.0`` is probed through loopback; a specific host is used directly."""
+    assert run_demo._probe_host("0.0.0.0") == "127.0.0.1"
+    assert run_demo._probe_host("") == "127.0.0.1"
+    assert run_demo._probe_host("192.168.1.20") == "192.168.1.20"
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("python -m demo.web.serve --port 8080", True),
+        ("python -m demo.run_demo --ui --ui-port 8080", True),
+        ("python run_demo.py --ui", True),
+        ("python -m demo.run_demo --scenario night", False),
+        ("nginx -g daemon off;", False),
+        ("", False),
+    ],
+)
+def test_is_demo_process_only_accepts_this_samples_ui(
+    monkeypatch: pytest.MonkeyPatch, command: str, expected: bool
+) -> None:
+    """The port fallback of ``--stop`` must never kill an unrelated service."""
+    monkeypatch.setattr(run_demo, "_process_command_line", lambda pid: command)
+
+    assert run_demo._is_demo_process(1234) is expected
+
+
+def test_is_ui_child_only_matches_the_managed_ui_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Restarting a stale UI must not kill an older launcher (it owns the server too)."""
+    monkeypatch.setattr(run_demo, "_process_command_line", lambda pid: "python -m demo.web.serve")
+    assert run_demo._is_ui_child(111) is True
+
+    monkeypatch.setattr(
+        run_demo,
+        "_process_command_line",
+        lambda pid: "python -m demo.run_demo --ui --keep-alive",
+    )
+    assert run_demo._is_ui_child(111) is False
+
+
+def test_kill_port_listener_skips_unrelated_listeners(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A foreign listener on the recorded UI port is left alone."""
+    killed: list[list[int]] = []
+    monkeypatch.setattr(run_demo, "_listener_pids", lambda port: [111, 222])
+    monkeypatch.setattr(run_demo, "_is_demo_process", lambda pid: False)
+    monkeypatch.setattr(run_demo, "_stop_pids", lambda pids: killed.append(pids) or 0)
+
+    assert run_demo._kill_port_listener(8080) == 0
+    assert killed == [[]]
+
+
+def test_kill_port_listener_stops_a_verified_ui(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An orphaned UI whose command line names this sample is reclaimed."""
+    monkeypatch.setattr(run_demo, "_listener_pids", lambda port: [111, 222])
+    monkeypatch.setattr(run_demo, "_is_demo_process", lambda pid: pid == 222)
+    monkeypatch.setattr(run_demo, "_stop_pids", lambda pids: len(pids))
+
+    assert run_demo._kill_port_listener(8080) == 1
+
+
+def test_web_serve_parser_accepts_the_launcher_arguments(tmp_path: Path) -> None:
+    """The UI child entrypoint understands everything the launcher passes."""
+    from demo.web import serve
+
+    args = serve._build_parser().parse_args(
+        [
+            "--env-file", str(tmp_path / ".env"),
+            "--host", "0.0.0.0",
+            "--port", "8080",
+            "--scenario", "night",
+            "--mode", "auto",
+            "--transport", "sse",
+            "--server-url", "http://127.0.0.1:8000",
+            "--approval-gate",
+        ]
+    )
+
+    assert args.env_file == tmp_path / ".env"
+    assert args.port == 8080
+    assert args.approval_gate is True
+
+
 def test_trace_summary_reports_llm_and_tool_counts() -> None:
     """The CLI summary prints LLM/tool counts and never fabricates scripted tokens."""
     scripted: list[dict[str, object]] = [
