@@ -279,9 +279,10 @@ async def _run(
 
 async def test_message_sent_span_carries_the_wire_fields() -> None:
     spans: list[dict[str, object]] = []
+    prompt_client = FakePromptClient()
 
     await run_client_flow(
-        prompt_client=FakePromptClient(),
+        prompt_client=prompt_client,
         transport=ScriptedTransport([_task_completed_batch()]),
         user_request=SCENARIO_INFORMATION_SPEC.user_request["en-US"],
         provider=ScriptedDecisionProvider(()),
@@ -295,6 +296,30 @@ async def test_message_sent_span_carries_the_wire_fields() -> None:
     assert isinstance(detail["messageId"], str) and detail["messageId"]
     assert str(detail["extensionUri"]).endswith("/Task-T/v1")
     assert detail["performative"] == "TASK_T"
+    # The wire inspector shows the rendered Task-T, not the natural-language request.
+    assert detail["taskT"] == f"Task-T prompt for: {prompt_client.task_prompts[-1]}"
+
+
+async def test_accept_span_carries_the_refilled_task_t_and_the_negotiation_payload() -> None:
+    spans: list[dict[str, object]] = []
+
+    await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=ScriptedTransport([[propose_event("information", 1)], _task_completed_batch()]),
+        user_request=SCENARIO_INFORMATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((SCENARIO_INFORMATION_SPEC.scripted_client_decisions[0],)),
+        language="en-US",
+        trace_sink=spans.append,
+    )
+
+    sent = [span for span in spans if span["kind"] == "message_sent"]
+    assert len(sent) == 2
+    accept = sent[1]["detail"]
+    assert isinstance(accept, dict)
+    assert accept["performative"] == "ACCEPT"
+    assert str(accept["taskT"]).startswith("Refilled Task-T prompt:")
+    assert str(accept["negotiationT"]).startswith("Accept:")
+    assert str(accept["negotiationUri"]).endswith("/Negotiation-T/v1")
 
 
 async def test_intent_gate_can_stop_the_run_before_any_task_t_is_sent() -> None:

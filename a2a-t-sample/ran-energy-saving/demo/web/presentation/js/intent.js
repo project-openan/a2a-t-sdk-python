@@ -18,6 +18,19 @@ const OUTAGE_TIME_FIRST_EN_RE =
   /(\d{1,2}):(\d{2})\s*[~\-–]\s*(\d{1,2}):(\d{2})\s*(?:power\s+)?outage/i;
 const OUTAGE_ZH_RE = /(\d{1,2}):(\d{2})\s*[~\-–]\s*(\d{1,2}):(\d{2})\s*(?:有)?\s*停电/;
 
+/** Return the Task-T text echoed by a Task creation payload's history, or ``""``. */
+export function taskTFromTask(task) {
+  const history = isObject(task) && Array.isArray(task.history) ? task.history : [];
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index];
+    const metadata = isObject(message) && isObject(message.metadata) ? message.metadata : null;
+    if (metadata === null) continue;
+    const key = Object.keys(metadata).find((name) => String(name).includes("Task-T"));
+    if (key && typeof metadata[key] === "string" && metadata[key]) return metadata[key];
+  }
+  return "";
+}
+
 /** Parse the Task-T text (or the request) into the facts the page shows. */
 export function parseIntent(text) {
   if (typeof text !== "string" || text.trim() === "") return null;

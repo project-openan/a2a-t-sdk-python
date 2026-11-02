@@ -32,6 +32,17 @@ import {
 } from "../../demo/web/presentation/js/decisions.js";
 import { copyFor } from "../../demo/web/presentation/copy.js";
 import { buildRecord, compareRows, outcomeText } from "../../demo/web/presentation/js/compare.js";
+import { buildWireModel } from "../../demo/web/presentation/js/wire.js";
+
+// The wire-model builder creates detached nodes; no page is rendered in this harness.
+globalThis.document = {
+  createElement(tag) {
+    return { tagName: String(tag).toUpperCase(), className: "", textContent: "", setAttribute() {} };
+  },
+  createTextNode(text) {
+    return { textContent: String(text) };
+  },
+};
 
 const copy = copyFor("zh-CN");
 const event = (payload) => ({ type: "event", event: payload });
@@ -786,6 +797,165 @@ const conciseOutage = parseIntent(
 assert.deepEqual(conciseOutage.sites, ["Site 1", "Site 2"]);
 assert.deepEqual(conciseOutage.outage, { start: 180, end: 300 });
 assert.equal(conciseOutage.slots.length, 3);
+
+// --- On the wire: the structured payloads --------------------------------
+
+function wireText(model) {
+  return model.nodes.map((node) => String(node.textContent ?? "")).join("");
+}
+
+const structuredTaskT = `## Operation Type
+
+Create
+
+## Task Object
+
+The area is Songshanhu Administration Committee.
+
+## Task Context
+
+Time-segment-based guaranteed throughput target: {00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}.`;
+const rawRequest = "在松山湖开启节能，保障速率为 00:00–06:00 30Mbps。";
+
+const taskTSentModel = buildWireModel(
+  {
+    kind: "message_sent",
+    spanId: "a".repeat(16),
+    detail: {
+      performative: "TASK_T",
+      summary: "create ran energy saving task",
+      extensionUri: "urn:task-t/v1",
+      templateUri: "urn:template",
+      taskT: structuredTaskT,
+    },
+  },
+  { runId: "run-wire", intentText: rawRequest, taskTPrompt: structuredTaskT },
+  "t",
+  copy,
+);
+const taskTSentText = wireText(taskTSentModel);
+assert.ok(taskTSentText.includes("The area is Songshanhu Administration Committee."));
+assert.ok(!taskTSentText.includes(rawRequest));
+
+// The plain-A2A comparison is derived from the same structured Task-T, not from the request.
+const plainTaskTModel = buildWireModel(
+  {
+    kind: "message_sent",
+    spanId: "c".repeat(16),
+    detail: {
+      performative: "TASK_T",
+      summary: "create ran energy saving task",
+      extensionUri: "urn:task-t/v1",
+      templateUri: "urn:template",
+      taskT: structuredTaskT,
+    },
+  },
+  { runId: "run-wire", intentText: rawRequest, taskTPrompt: structuredTaskT },
+  "a",
+  copy,
+);
+const plainTaskTText = wireText(plainTaskTModel);
+assert.ok(plainTaskTText.includes("保障速率"));
+assert.ok(!plainTaskTText.includes("## Operation Type"));
+
+const acceptModel = buildWireModel(
+  {
+    kind: "message_sent",
+    spanId: "b".repeat(16),
+    detail: {
+      performative: "ACCEPT",
+      summary: "create ran energy saving task",
+      extensionUri: "urn:task-t/v1",
+      negotiationUri: "urn:negotiation-t/v1",
+      taskT: "Refilled Task-T\n## Task Object",
+      negotiationT: "Accept. target: 00:00~06:00.",
+      templateUri: "urn:accept-template",
+    },
+  },
+  { runId: "run-wire", intentText: rawRequest },
+  "t",
+  copy,
+);
+const acceptText = wireText(acceptModel);
+assert.ok(acceptText.includes("urn:negotiation-t/v1"));
+assert.ok(acceptText.includes("Accept. target: 00:00~06:00."));
+assert.ok(acceptText.includes("Refilled Task-T"));
+assert.ok(acceptText.includes("urn:accept-template"));
+
+const creationModel = buildWireModel(
+  {
+    entryType: "event",
+    kind: "status",
+    state: "TASK_STATE_SUBMITTED",
+    summary: "TASK_STATE_SUBMITTED",
+    task: {
+      id: "task-1",
+      status: { state: "TASK_STATE_SUBMITTED" },
+      history: [{ role: "ROLE_USER", metadata: { "urn:task-t/v1": structuredTaskT } }],
+    },
+  },
+  { runId: "run-wire" },
+  "t",
+  copy,
+);
+const creationText = wireText(creationModel);
+assert.ok(creationText.includes('"task"'));
+assert.ok(creationText.includes("The area is Songshanhu Administration Committee."));
+
+const workingModel = buildWireModel(
+  {
+    entryType: "event",
+    kind: "status",
+    state: "TASK_STATE_WORKING",
+    summary: "Region: Songshanhu; Progress: strategy ready.",
+  },
+  { runId: "run-wire" },
+  "t",
+  copy,
+);
+const workingText = wireText(workingModel);
+assert.ok(workingText.includes('"state": "TASK_STATE_WORKING"'));
+assert.ok(workingText.includes("Region: Songshanhu"));
+assert.ok(!workingText.includes('"state": "Region'));
+
+const proposeModel = buildWireModel(
+  {
+    entryType: "event",
+    kind: "propose",
+    content: "Please provide the guaranteed throughput target.",
+    summary: "Please provide the target.",
+    templateUri: "urn:information-propose",
+    negotiationType: "information",
+  },
+  { runId: "run-wire" },
+  "t",
+  copy,
+);
+const proposeText = wireText(proposeModel);
+assert.ok(proposeText.includes('"Negotiation-T": "Please provide the guaranteed throughput target."'));
+assert.ok(proposeText.includes('"templateUri": "urn:information-propose"'));
+assert.ok(!proposeText.includes('"Negotiation-T": "information"'));
+
+const createdState = createState();
+applyFrame(createdState, { type: "run_started", runId: "r-created", scenario: "night", mode: "auto" });
+applyFrame(createdState, {
+  type: "trace",
+  event: { seq: 1, kind: "task_prompt_rendered", detail: { promptText: structuredTaskT } },
+});
+applyFrame(
+  createdState,
+  event({
+    seq: 2,
+    entryType: "event",
+    kind: "status",
+    state: "TASK_STATE_SUBMITTED",
+    summary: "TASK_STATE_SUBMITTED",
+  }),
+);
+const createdRow = createdState.trace.find((row) => row.title === "Task created");
+assert.ok(createdRow);
+assert.ok(createdRow.sub.includes("Songshanhu Administration Committee"));
+assert.ok(createdRow.sub.includes("00:00–17:30 10Mbps +2"));
 
 // --- Remaining time -----------------------------------------------------
 

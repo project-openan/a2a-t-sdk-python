@@ -8,6 +8,7 @@ from pathlib import Path
 from a2a_t.core.metadata import (
     NEGOTIATION_CONTEXT_METADATA_KEY,
     NEGOTIATION_T_EXTENSION_URI,
+    TASK_T_EXTENSION_URI,
     TEMPLATE_URI_METADATA_KEY,
 )
 from demo.scenario import FINAL_STATE_TASK_COMPLETED
@@ -283,6 +284,31 @@ def test_record_event_infers_phase_and_seq_when_omitted() -> None:
     assert proposal["seq"] == 2
     assert proposal["phase"] == "negotiation"
     assert proposal["phaseStep"] == 1
+
+
+def test_record_event_carries_the_task_payload_and_the_extension_metadata() -> None:
+    transcript = _transcript()
+    task_payload = {
+        "id": "task-1",
+        "status": {"state": "TASK_STATE_SUBMITTED"},
+        "history": [{"metadata": {TASK_T_EXTENSION_URI: "## Operation Type\n\nCreate"}}],
+    }
+    event = {
+        "kind": "status",
+        "task_id": "task-1",
+        "context_id": CONTEXT_ID,
+        "state": "TASK_STATE_SUBMITTED",
+        "task": task_payload,
+        "metadata": {
+            TASK_T_EXTENSION_URI: "1. Basic information\n- Region: Songshanhu",
+            "unrelated": "not part of the wire payload",
+        },
+    }
+
+    entry = transcript.record_event(event)
+
+    assert entry["task"] == task_payload
+    assert entry["metadata"] == {TASK_T_EXTENSION_URI: "1. Basic information\n- Region: Songshanhu"}
 
 
 def test_record_error_marks_the_run_failed() -> None:

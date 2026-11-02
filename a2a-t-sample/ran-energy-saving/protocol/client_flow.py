@@ -517,14 +517,26 @@ async def run_client_flow(
             (key for key in metadata_keys if "Task-T" in key),
             None,
         )
+        negotiation_uri = next(
+            (key for key in metadata_keys if "Negotiation-T" in key),
+            None,
+        )
         # The refilled Task-T is the authoritative record of the values the client actually sent
-        # (the accept decision itself carries no filled params). Keep a bounded copy so the metrics
-        # view can verify the agreed throughput target without re-deriving it from the policy.
+        # (the accept decision itself carries no filled params). Keep a bounded copy so the wire
+        # view can show the structured payload rather than the short text-part label.
         task_t = next(
             (
                 value
                 for key, value in metadata.items()
                 if isinstance(key, str) and "Task-T" in key and isinstance(value, str)
+            ),
+            None,
+        )
+        negotiation_t = next(
+            (
+                value
+                for key, value in metadata.items()
+                if isinstance(key, str) and "Negotiation-T" in key and isinstance(value, str)
             ),
             None,
         )
@@ -534,11 +546,14 @@ async def run_client_flow(
             "metadataKeys": metadata_keys,
             "templateUri": template_uri if isinstance(template_uri, str) else None,
             "extensionUri": extension_uri,
+            "negotiationUri": negotiation_uri,
             "messageId": getattr(request.message, "message_id", None),
             "taskId": getattr(request.message, "task_id", None),
         }
         if task_t is not None:
             detail["taskT"] = task_t[:4000]
+        if negotiation_t is not None:
+            detail["negotiationT"] = negotiation_t[:4000]
         emit_trace(
             "message_sent",
             phase=phase,

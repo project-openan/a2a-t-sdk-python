@@ -90,6 +90,21 @@ def _negotiation_type(template_uri: object) -> str | None:
     return kind.value if kind is not None else None
 
 
+def _wire_metadata(event: Mapping[str, object]) -> dict[str, object] | None:
+    """Return the extension metadata the wire view should show, dropping sample-only fields."""
+    metadata = event.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return None
+    selected = {
+        str(key): value
+        for key, value in metadata.items()
+        if str(key) == TEMPLATE_URI_METADATA_KEY
+        or "Task-T" in str(key)
+        or "Negotiation-T" in str(key)
+    }
+    return selected or None
+
+
 def _event_summary(
     event: Mapping[str, object],
     performative: str | None,
@@ -251,6 +266,15 @@ class NegotiationTranscript:
             data = event.get("data")
             if isinstance(data, Mapping) and data:
                 entry["data"] = dict(data)
+        # The Task creation event carries the Task envelope; its history is the original request
+        # with the Task-T metadata. Status updates and artifacts carry extension metadata on the
+        # event, which the wire view needs to show what was actually sent.
+        task_payload = event.get("task")
+        if isinstance(task_payload, Mapping):
+            entry["task"] = dict(task_payload)
+        wire_metadata = _wire_metadata(event)
+        if wire_metadata is not None:
+            entry["metadata"] = wire_metadata
         self.events.append(entry)
         self.context_id = self.context_id or (
             entry["contextId"] if isinstance(entry["contextId"], str) else None

@@ -353,6 +353,10 @@ const EN = {
     eventTitle: "Session event",
     requestLabel: "RAN energy saving task",
     extensionFallback: "Task-T extension URI",
+    negotiationFallback: "Negotiation-T extension URI",
+    taskCreatedTitle: "RAN Agent → OSS Agent · task created",
+    taskCreatedNote:
+      "The Task object echoes the accepted Task-T in its history, so the creation parameters are visible without re-reading the request.",
     formatT: "A2A-T (Task-T)",
     formatA: "Plain A2A",
     taskTNote:
@@ -1003,6 +1007,10 @@ const ZH = {
     eventTitle: "会话事件",
     requestLabel: "无线网络节能任务",
     extensionFallback: "Task-T 扩展 URI",
+    negotiationFallback: "Negotiation-T 扩展 URI",
+    taskCreatedTitle: "RAN Agent → OSS Agent · 任务已创建",
+    taskCreatedNote:
+      "Task 对象在 history 中回显了已接受的 Task-T，因此无需回看请求即可看到任务创建参数。",
     formatT: "A2A-T (Task-T)",
     formatA: "普通 A2A",
     taskTNote:

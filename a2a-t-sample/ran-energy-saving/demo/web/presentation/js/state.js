@@ -6,6 +6,8 @@
  * reconnect (or a step back) never duplicates a row.
  */
 
+import { hhmm, parseIntent, taskTFromTask } from "./intent.js";
+
 export const STATUS = {
   IDLE: "idle",
   RUNNING: "running",
@@ -225,7 +227,7 @@ function applyEvent(state, entry) {
       (entry.state === "TASK_STATE_INPUT_REQUIRED" || summary.includes("INPUT_REQUIRED"))
         ? "approval"
         : null,
-    sub: traceSub(entry),
+    sub: traceSub(entry) || taskCreationSub(entry, state),
     chip: traceChip(entry),
     chipKind: chipKind(entry),
     entry,
@@ -614,6 +616,24 @@ function traceSub(entry) {
   if (entry.entryType === "decision") return entry.rationale || "";
   if (entry.kind === "status" || entry.kind === "artifact") return "";
   return entry.negotiationType || entry.performative || "";
+}
+
+/** Compact creation parameters of the ``SUBMITTED`` status: area and guaranteed throughput. */
+function taskCreationSub(entry, state) {
+  if (entry.kind !== "status" || entry.state !== "TASK_STATE_SUBMITTED") return "";
+  const prompt = state.taskTPrompt || taskTFromTask(entry.task);
+  const intent = parseIntent(prompt);
+  if (intent === null) return "";
+  const parts = [];
+  if (intent.area) parts.push(intent.area);
+  if (intent.slots.length > 0) {
+    // Keep the trace row short: the first target window plus the number of the remaining ones.
+    // The wire inspector shows the full Task-T.
+    const first = intent.slots[0];
+    const window = `${hhmm(first.start)}–${hhmm(first.end)} ${first.rate}Mbps`;
+    parts.push(intent.slots.length === 1 ? window : `${window} +${intent.slots.length - 1}`);
+  }
+  return parts.join(" · ");
 }
 
 function chipKind(entry) {
