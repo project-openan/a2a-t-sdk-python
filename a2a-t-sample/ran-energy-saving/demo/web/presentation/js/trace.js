@@ -138,20 +138,26 @@ function rowNode(row, copy, key, open) {
   const stageKey = typeof row.stage === "string" ? row.stage : "";
   const stageText = copy.trace.stages?.[stageKey] || "";
   const time = el("span", "w", shortTime(row.ts || row.entry?.ts || row.entry?.startedAt));
-  const stage = el("span", "stage", stageText);
-  if (stageText) stage.title = stageText;
   const tag = el("span", `tag ${row.tag || "a2at"}`, copy.trace.tags[row.tag] || row.tag || "");
-  const text = el("span", "t", (row.titleKey && copy.trace[row.titleKey]) || row.title || "");
+  const text = el("span", "t");
+  const title = el("span", "title", (row.titleKey && copy.trace[row.titleKey]) || row.title || "");
+  text.append(title);
   const dir = typeof row.dir === "string" ? row.dir : "";
-  if (dir || row.sub) {
+  if (stageText || dir || row.sub) {
     const small = el("small", "");
-    if (dir) small.append(el("span", "dir", dir));
-    if (dir && row.sub) small.append(document.createTextNode(" · "));
-    if (row.sub) small.append(document.createTextNode(row.sub));
+    if (stageText) small.append(el("span", "stage-meta", stageText));
+    if (dir) {
+      if (stageText) small.append(document.createTextNode(" · "));
+      small.append(el("span", "dir", dir));
+    }
+    if (row.sub) {
+      if (stageText || dir) small.append(document.createTextNode(" · "));
+      small.append(document.createTextNode(row.sub));
+    }
     text.append(small);
   }
   const chip = el("span", row.chipKind ? `chip ${row.chipKind}` : "chip", row.chip || "");
-  node.append(time, stage, tag, text, chip);
+  node.append(time, tag, text, chip);
   return node;
 }
 

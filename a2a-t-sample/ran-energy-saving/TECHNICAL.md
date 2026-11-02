@@ -106,9 +106,12 @@ trace row is clickable: a message row opens it in the inspector, a span row show
 decision row without a message opens a readable summary. The clicked row stays highlighted and the
 list stops following the newest row until you scroll back to the bottom. Rows are grouped by the
 demo day (Day 1, Days 2–8, Day 9, Day 9+) and show the message direction (OSS → RAN, RAN → OSS,
-MIE ⇄ Engineer). Server spans arrive in batches with earlier timestamps, so the trace inserts them
-by event time instead of arrival order; a status and its matching approval/decision span share one
-dedupe key and render as one row.
+MIE ⇄ Engineer). Rows follow the reference demo's two-line shape: a short event title, a second
+line with the demo day and direction, and a short A2A state chip (`SUBMITTED`, `WORKING`,
+`INPUT_REQUIRED`, …) on the right; the full status sentence stays in the wire inspector. Server
+spans arrive in batches with earlier timestamps, so the trace inserts them by event time instead of
+arrival order; a status and its matching approval/decision span share one dedupe key and render as
+one row.
 
 Two human approvals can be enabled at startup:
 

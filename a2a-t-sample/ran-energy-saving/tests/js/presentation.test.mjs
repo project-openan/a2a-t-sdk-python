@@ -584,6 +584,36 @@ pushTrace(dedupedTrace, {
 assert.equal(dedupedTrace.trace.length, 1);
 assert.equal(dedupedTrace.trace[0].title, "Approval 2 · MIE");
 
+// Status rows use a short title plus the task state as the right-hand chip, like the reference
+// demo's title / from-to / state row.
+const titledTrace = createState();
+applyFrame(
+  titledTrace,
+  status(41, "Strategy recommendation is being executed; no optimization is applied yet.", {
+    state: "TASK_STATE_WORKING",
+  }),
+);
+assert.equal(titledTrace.trace[0].title, "Strategy generation started");
+assert.equal(titledTrace.trace[0].chip, "WORKING");
+assert.equal(titledTrace.trace[0].stage, "strategy");
+applyFrame(titledTrace, status(40, "", { state: "TASK_STATE_SUBMITTED" }));
+assert.equal(titledTrace.trace[1].title, "Task created");
+assert.equal(titledTrace.trace[1].chip, "SUBMITTED");
+applyFrame(
+  titledTrace,
+  event({
+    seq: 42,
+    entryType: "event",
+    kind: "artifact",
+    phase: "execution",
+    summary: "tool result",
+    detail: { toolName: "apply_energy_saving_plan" },
+  }),
+);
+const artifactRow = titledTrace.trace.find((row) => row.title === "Suggestions executed");
+assert.ok(artifactRow);
+assert.equal(artifactRow.chip, "artifact");
+
 // --- Player: a hold waits for the engineer, then resumes ----------------
 
 const applied = [];

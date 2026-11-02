@@ -226,7 +226,7 @@ function applyEvent(state, entry) {
         ? "approval"
         : null,
     sub: traceSub(entry),
-    chip: entry.performative || entry.kind || "",
+    chip: traceChip(entry),
     chipKind: chipKind(entry),
     entry,
   });
@@ -557,9 +557,57 @@ function traceTitle(entry, summary) {
   if (entry.kind === "accept") return "ACCEPT · OSS";
   if (entry.kind === "reject") return "REJECT · OSS";
   if (entry.kind === "counter") return "COUNTER · OSS";
-  if (entry.kind === "status") return summary.replace("TASK_STATE_", "") || "status";
-  if (entry.kind === "artifact") return entry.phase === "report" ? "report artifact" : "tool result";
+  if (entry.kind === "status") return statusTitle(entry, summary);
+  if (entry.kind === "artifact") return artifactTitle(entry);
   return summary || entry.kind || "event";
+}
+
+/** Short human title of one status notification; the full sentence stays in the wire/inspector. */
+function statusTitle(entry, summary) {
+  const text = summary.toLowerCase();
+  const stateOnly = !summary || /^task_state_/i.test(summary);
+  if (stateOnly && entry.state === "TASK_STATE_SUBMITTED") return "Task created";
+  if (stateOnly && entry.state === "TASK_STATE_WORKING") return "Working";
+  if (text.includes("strategy recommendation is being executed")) return "Strategy generation started";
+  if (text.includes("strategy recommendation and parameter setting")) return "Strategy ready";
+  if (text.includes("energy-saving task has started")) return "Task started";
+  if (text.includes("data collection started")) return "Data collection started";
+  if (text.includes("data collection in progress")) return "Data collection in progress";
+  if (text.includes("data collection completed")) return "Data collection completed";
+  if (text.includes("mie agent's approval") || text.includes("engineer's approval")) {
+    return "Approval 2 requested";
+  }
+  if (text.includes("mie approved") || text.includes("approved. applying")) return "MML approved";
+  if (text.includes("was applied to cell")) return "Suggestions executed";
+  if (text.includes("report is ready")) return "Intent report ready";
+  if (text.includes("ran agent is working")) return "Task started";
+  if (text.includes("oss agent completed")) return "Task completed";
+  if (text.includes("ran energy-saving task completed")) return "Task completed";
+  if (entry.state) return String(entry.state).replace("TASK_STATE_", "");
+  return summary.length > 80 ? `${summary.slice(0, 79)}…` : summary || "status";
+}
+
+/** Short title of one artifact update. */
+function artifactTitle(entry) {
+  if (entry.phase === "report" || entry.name === "energy saving intent report") return "Intent report";
+  const tool =
+    isObject(entry.detail) && typeof entry.detail.toolName === "string" ? entry.detail.toolName : "";
+  if (tool === "get_cell_energy_profile") return "Cell profile read";
+  if (tool === "evaluate_energy_saving_plan") return "Plan evaluated";
+  if (tool === "apply_energy_saving_plan") return "Suggestions executed";
+  if (tool === "generate_energy_saving_report") return "Intent report";
+  return "Tool result";
+}
+
+/** Short right-hand chip: the A2A task state, not the generic word "status". */
+function traceChip(entry) {
+  if (entry.kind === "status") {
+    if (entry.state) return String(entry.state).replace("TASK_STATE_", "");
+    return "status";
+  }
+  if (entry.kind === "artifact") return "artifact";
+  if (entry.kind === "message") return entry.performative || "message";
+  return entry.performative || entry.kind || "";
 }
 
 function traceSub(entry) {

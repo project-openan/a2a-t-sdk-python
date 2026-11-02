@@ -786,9 +786,9 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 .trace-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .trace-row {
   display: grid;
-  grid-template-columns: 54px 88px 46px minmax(0, 1fr) auto;
+  grid-template-columns: 54px 46px minmax(0, 1fr) auto;
   gap: 6px;
-  align-items: center;
+  align-items: start;
   padding: 4px 9px;
   border-bottom: 1px solid var(--g100);
   font-size: 11.8px;
@@ -797,14 +797,27 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 .trace-row.click:hover { background: var(--g50); }
 .trace-row.sel { background: var(--orange-soft); }
 .trace-row .w { white-space: nowrap; font-family: var(--mono); font-size: 10px; color: var(--g700); font-variant-numeric: tabular-nums; }
-.trace-row .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.trace-row .t small { display: block; color: var(--g700); font-size: 10px; }
+.trace-row .t { min-width: 0; line-height: 1.25; }
+.trace-row .t .title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.trace-row .t small {
+  display: block;
+  margin-top: 1px;
+  color: var(--g700);
+  font-size: 10px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
 .trace-row .t small .dir { color: var(--black); font-weight: 700; }
-.trace-row .stage {
+.trace-row .t small .stage-meta {
   font-family: var(--mono);
   font-size: 9.5px;
-  color: var(--g700);
-  white-space: nowrap;
+  color: var(--g500);
   border-left: 2px solid var(--orange);
   padding-left: 4px;
 }
@@ -815,7 +828,16 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 .tag.nms { background: var(--blue); }
 .tag.mie { background: var(--yellow); }
 .tag.cells { background: var(--green); }
-.chip { font-family: var(--mono); font-size: 9.5px; padding: 1px 5px; border: 1.5px solid var(--black); white-space: nowrap; }
+.chip {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  padding: 1px 5px;
+  border: 1.5px solid var(--black);
+  white-space: nowrap;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .chip.neg { background: var(--yellow); }
 .chip.status { background: var(--blue); }
 .chip.art { background: var(--black); color: var(--white); }
