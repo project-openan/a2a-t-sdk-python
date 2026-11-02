@@ -16,6 +16,7 @@ replaying one canned response. Use :func:`register_scripted_provider` before con
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -151,6 +152,11 @@ _OUTAGE_VALIDATION_MARKERS = (
 #: carries the region but none of this marker omits the time-segmented guaranteed throughput
 #: target, i.e. it is the information scenario's intentionally incomplete prompt.
 _COMPLETE_THROUGHPUT_MARKER = "07:00~17:30,10Mbps"
+
+#: Throughput marker of the unknown-area scenario. The area is the only invalid slot, so its
+#: Task-T must validate successfully and reach the sample precheck instead of being treated as the
+#: intentionally incomplete information request.
+_UNKNOWN_AREA_VALIDATION_MARKER = "07:00~23:00,20Mbps"
 
 #: From-data Task-T refill markers (the accepted values are the only distinguishing text).
 #:
@@ -521,6 +527,8 @@ def route_structured_call(
             return STAGE_CONTENT_VALIDATION_TARGET_REFILL
         if any(scenario_input in head for scenario_input in _MISSING_SCENARIO_INPUTS):
             return STAGE_CONTENT_VALIDATION_MISSING
+        if _UNKNOWN_AREA_VALIDATION_MARKER in head:
+            return STAGE_CONTENT_VALIDATION
         region_string = REGION_STRINGS.get(language or "", "")
         if region_string and region_string not in head:
             return STAGE_CONTENT_VALIDATION_MISSING
@@ -537,6 +545,72 @@ def route_structured_call(
                 return _NEGOTIATION_REJECT_STAGES.get(signature, stage)
             return stage
     raise ValueError(f"The scripted LLM cannot route this structured call: {sorted(property_names)}")
+
+
+def data_slot_extraction_response(user_content: str, language: str) -> str | None:
+    """Echo the explicit ``[input]`` values of a data-based slot extraction.
+
+    Complete requests and the unknown-area scenario render their Task-T from a data map instead of
+    free text. The canned slot responses assume the default Songshanhu request, so without this
+    echo ``Region Z`` was silently replaced by Songshanhu before the server precheck could see it.
+    """
+    marker = user_content.find("[input]")
+    if marker < 0:
+        return None
+    line_start = user_content.find("\n", marker)
+    line_end = user_content.find("\n", line_start + 1)
+    if line_start < 0 or line_end < 0:
+        return None
+    raw = user_content[line_start + 1 : line_end].strip()
+    if not raw.startswith("{"):
+        return None
+    try:
+        data = ast.literal_eval(raw)
+    except (SyntaxError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    region = data.get("region")
+    target = data.get("guaranteedThroughputTarget")
+    if not isinstance(region, str) or not isinstance(target, str):
+        return None
+    zh = language == LANGUAGE_ZH
+    task_object = f"区域为{region}。" if zh else f"The area is the {region}."
+    sites = data.get("siteList")
+    if isinstance(sites, str) and sites.strip():
+        items = [item.strip() for item in sites.split(",") if item.strip()]
+        if zh:
+            task_object += f" 站点列表1为[{'、'.join(items)}]。"
+        else:
+            quoted = ", ".join(f'"{item}"' for item in items)
+            task_object += f" Site list 1: [{quoted}]."
+    context = (
+        f"分时段保障速率目标为 {target}。" if zh else f"Time-segment-based guaranteed throughput target: {target}."
+    )
+    background = data.get("backgroundEvent")
+    if isinstance(background, str) and background.strip():
+        context += f" 背景事件为{background}。" if zh else f" Background event: {background}."
+    operation = str(data.get("operationType") or "Create")
+    if zh:
+        operation = {"Create": "创建", "Modify": "修改"}.get(operation, operation)
+        slots = {
+            "操作类型": operation,
+            "任务描述": data.get("task_description") or "",
+            "任务对象": task_object,
+            "任务目标": data.get("energySavingGoal") or "",
+            "任务上下文": context,
+            "预期输出": data.get("expectedOutput") or "",
+        }
+    else:
+        slots = {
+            "operation_type": operation,
+            "task_description": data.get("task_description") or "",
+            "task_object": task_object,
+            "task_target": data.get("energySavingGoal") or "",
+            "task_context": context,
+            "expected_output": data.get("expectedOutput") or "",
+        }
+    return json.dumps({"slots": slots, "slot_errors": []}, ensure_ascii=False)
 
 
 class ScriptedLLMClient:
@@ -587,6 +661,26 @@ class ScriptedLLMClient:
             content = target_propose_extraction_response(user_content, self.language)
         elif stage == STAGE_NEGOTIATION_ABORT_EXTRACTION:
             content = abort_extraction_response(user_content, self.language)
+        if content is None and stage.startswith("slot_extraction"):
+            content = data_slot_extraction_response(user_content, self.language)
+        if (
+            content is None
+            and stage == STAGE_NEGOTIATION_PROPOSE_EXTRACTION
+            and "not recognized by the RAN" in user_content
+        ):
+            unknown = re.search(r'The requested area "([^"]+)"', user_content)
+            requested = unknown.group(1) if unknown is not None else "the requested area"
+            if self.language == LANGUAGE_ZH:
+                value = f"无法识别区域“{requested}”，请确认可用区域：松山湖管委会。"
+            else:
+                value = (
+                    f'The requested area "{requested}" is not recognized. '
+                    "Please confirm a served area: Songshanhu Administration Committee."
+                )
+            content = json.dumps(
+                {"items": [{"name": "region", "value": value}], "relationship": None},
+                ensure_ascii=False,
+            )
         if content is None:
             content = self._script[stage]
         if stage == STAGE_NEGOTIATION_PROPOSE_EXTRACTION and _PROPOSE_RELATIONSHIP_MARKER in user_content:

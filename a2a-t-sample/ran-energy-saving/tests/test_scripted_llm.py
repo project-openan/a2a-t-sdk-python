@@ -81,6 +81,7 @@ _LLM_CONFIG = LLMClientConfig(
 _EXPECTED_STAGES: dict[str, tuple[str, str]] = {
     "night": (STAGE_SLOT_EXTRACTION, STAGE_CONTENT_VALIDATION),
     "information": (STAGE_SLOT_EXTRACTION_MISSING, STAGE_CONTENT_VALIDATION_MISSING),
+    "unknown_area": (STAGE_SLOT_EXTRACTION, STAGE_CONTENT_VALIDATION),
     "target": (STAGE_SLOT_EXTRACTION_TARGET, STAGE_CONTENT_VALIDATION_TARGET),
     "feasibility": (STAGE_SLOT_EXTRACTION_FEASIBILITY, STAGE_CONTENT_VALIDATION_FEASIBILITY),
     "reject": (STAGE_SLOT_EXTRACTION_MISSING, STAGE_CONTENT_VALIDATION_MISSING),
@@ -102,6 +103,7 @@ def test_all_five_scenarios_are_defined() -> None:
     assert tuple(SCENARIOS) == (
         "night",
         "information",
+        "unknown_area",
         "target",
         "feasibility",
         "reject",

@@ -178,6 +178,7 @@ class NegotiationState:
         max_rounds: round budget of the negotiation.
         inbound: inbound performative; ``None`` for the initial Task-T validation failure.
         missing_items: slot names reported by a failed Task-T validation (information kind).
+        proposal_text: business text the deployment wants in the first proposal, when it has one.
     """
 
     kind: NegotiationKind
@@ -185,6 +186,7 @@ class NegotiationState:
     max_rounds: int = MAX_ROUNDS
     inbound: InboundDecision | None = None
     missing_items: tuple[str, ...] = ()
+    proposal_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -342,7 +344,7 @@ def _initial_decision(state: NegotiationState) -> PolicyDecision:
         )
     if state.kind is NegotiationKind.INFORMATION:
         items = ", ".join(state.missing_items) if state.missing_items else "the required task parameters"
-        text = (
+        text = state.proposal_text or (
             "Additional information is required before the RAN energy saving task can start. "
             f"Please provide the following missing items: {items}."
         )

@@ -40,6 +40,7 @@ from shared.run_constants import (
 #: Supported scenario names.
 SCENARIO_NIGHT = "night"
 SCENARIO_INFORMATION = "information"
+SCENARIO_UNKNOWN_AREA = "unknown_area"
 SCENARIO_TARGET = "target"
 SCENARIO_FEASIBILITY = "feasibility"
 SCENARIO_REJECT = "reject"
@@ -117,6 +118,26 @@ NATURAL_LANGUAGE_PROMPT_INPUT_MISSING_EN = (
     "The expected output is the intent report of the wireless network energy saving task."
 )
 
+#: Chinese natural-language task request of the unknown-area negotiation: the area does not exist
+#: in the RAN dataset, so the server asks the client to confirm a served area.
+NATURAL_LANGUAGE_PROMPT_INPUT_UNKNOWN_ZH = (
+    "在未知区域创建无线网络节能任务：基于任务对象和任务上下文，输出无线网络节能方案，"
+    "达成任务目标中定义的无线网络节能目标，并按照预期输出中定义的格式返回无线网络节能结果；"
+    "在满足任务上下文的前提下最大化节能；分时段保障速率目标为 {00:00~07:00,2Mbps}、"
+    "{07:00~23:00,20Mbps}、{23:00~24:00,2Mbps}。"
+    "预期输出为无线网络节能任务的意图报告。"
+)
+
+#: English natural-language task request of the unknown-area negotiation.
+NATURAL_LANGUAGE_PROMPT_INPUT_UNKNOWN_EN = (
+    "Create a RAN energy saving task in Region Z. Based on the task object and task context, "
+    "output a wireless network energy saving plan that achieves the energy saving goal defined "
+    "in the task target and returns the energy saving result in the format defined in the "
+    "expected output. The time-segment-based guaranteed throughput target is "
+    "{00:00~07:00,2Mbps}, {07:00~23:00,20Mbps}, {23:00~24:00,2Mbps}. "
+    "The expected output is the intent report of the wireless network energy saving task."
+)
+
 #: Chinese natural-language task request of the target negotiation: the guaranteed throughput
 #: target has two overlapping time segments, so the Task-T validation reports the
 #: value-not-allowed content error.
@@ -187,6 +208,16 @@ PRESENTATION_REQUESTS: dict[str, dict[str, str]] = {
     SCENARIO_INFORMATION: {
         LANGUAGE_EN: "Start energy saving in the Songshanhu area.",
         LANGUAGE_ZH: "在松山湖开启节能。",
+    },
+    SCENARIO_UNKNOWN_AREA: {
+        LANGUAGE_EN: (
+            "Start energy saving in Region Z with these guaranteed throughputs: "
+            "00:00–07:00 at 2 Mbps, 07:00–23:00 at 20 Mbps, 23:00–24:00 at 2 Mbps."
+        ),
+        LANGUAGE_ZH: (
+            "在未知区域开启节能，保障速率为：00:00–07:00 2 Mbps，"
+            "07:00–23:00 20 Mbps，23:00–24:00 2 Mbps。"
+        ),
     },
     SCENARIO_TARGET: {
         LANGUAGE_EN: (
@@ -303,6 +334,20 @@ TASK_T_DATA_SCHEMA: dict[str, dict[str, object]] = {
 
 #: Values a complete scenario supplies on top of the base parameters, per language.
 _COMPLETE_INITIAL_OVERRIDES: dict[str, dict[str, dict[str, str]]] = {
+    SCENARIO_UNKNOWN_AREA: {
+        LANGUAGE_EN: {
+            "region": "Region Z",
+            "guaranteedThroughputTarget": (
+                "{00:00~07:00,2Mbps}, {07:00~23:00,20Mbps}, {23:00~24:00,2Mbps}"
+            ),
+        },
+        LANGUAGE_ZH: {
+            "region": "未知区域",
+            "guaranteedThroughputTarget": (
+                "{00:00~07:00,2Mbps}、{07:00~23:00,20Mbps}、{23:00~24:00,2Mbps}"
+            ),
+        },
+    },
     SCENARIO_OUTAGE: {
         LANGUAGE_EN: {
             "siteList": "Site 1,Site 2",
@@ -328,9 +373,10 @@ def complete_initial_params(name: str, language: str = LANGUAGE_ZH) -> dict[str,
     Complete scenarios (``night`` and ``outage``) must never open a pre-task negotiation. Their
     Task-T is generated from these explicit values instead of relying on a live model to extract
     every required slot from free text; negotiation scenarios keep the text path so their flawed
-    input can trigger the intended negotiation.
+    input can trigger the intended negotiation. ``unknown_area`` also uses explicit values so the
+    only flawed slot is the area, not a model-extracted target.
     """
-    if name not in (SCENARIO_NIGHT, SCENARIO_OUTAGE):
+    if name not in (SCENARIO_NIGHT, SCENARIO_OUTAGE, SCENARIO_UNKNOWN_AREA):
         return None
     params = dict(_ACCEPT_BASE_PARAMS.get(language, _ACCEPT_BASE_PARAMS[LANGUAGE_ZH]))
     overrides = _COMPLETE_INITIAL_OVERRIDES.get(name, {})
@@ -343,6 +389,12 @@ def task_t_data_schema(language: str = LANGUAGE_ZH) -> dict[str, object]:
     """Return the Task-T data schema used with :func:`complete_initial_params`."""
     return dict(TASK_T_DATA_SCHEMA.get(language, TASK_T_DATA_SCHEMA[LANGUAGE_ZH]))
 
+
+#: Guaranteed-throughput target kept when the unknown-area negotiation confirms the served area.
+UNKNOWN_AREA_TARGET: dict[str, str] = {
+    LANGUAGE_EN: "{00:00~07:00,2Mbps}, {07:00~23:00,20Mbps}, {23:00~24:00,2Mbps}",
+    LANGUAGE_ZH: "{00:00~07:00,2Mbps}、{07:00~23:00,20Mbps}、{23:00~24:00,2Mbps}",
+}
 
 #: Corrected guaranteed-throughput targets agreed by each negotiation kind, per language.
 _ACCEPT_TARGET_OVERRIDES: dict[str, dict[str, str]] = {
@@ -416,6 +468,14 @@ def accept_filled_params(kind: str, language: str = LANGUAGE_ZH) -> dict[str, ob
         params["guaranteedThroughputTarget"] = _localized(override, language)
     if kind == KIND_FEASIBILITY:
         params.update(_ACCEPT_FEASIBILITY_CONTEXT.get(language, _ACCEPT_FEASIBILITY_CONTEXT[LANGUAGE_ZH]))
+    return params
+
+
+def unknown_area_accept_params(language: str = LANGUAGE_ZH) -> dict[str, object]:
+    """Return the accept refill of the unknown-area scenario: a served area and the same windows."""
+    params = dict(_ACCEPT_BASE_PARAMS.get(language, _ACCEPT_BASE_PARAMS[LANGUAGE_ZH]))
+    params["region"] = REGION_STRINGS.get(language, REGION_STRINGS[LANGUAGE_ZH])
+    params["guaranteedThroughputTarget"] = _localized(UNKNOWN_AREA_TARGET, language)
     return params
 
 
@@ -519,6 +579,33 @@ SCENARIO_INFORMATION_SPEC = Scenario(
     description=(
         "Task-T misses the guaranteed throughput target; the client accepts the server's "
         "missing-parameter proposal."
+    ),
+)
+
+SCENARIO_UNKNOWN_AREA_SPEC = Scenario(
+    name=SCENARIO_UNKNOWN_AREA,
+    expected_kind=KIND_INFORMATION,
+    user_request={
+        LANGUAGE_EN: NATURAL_LANGUAGE_PROMPT_INPUT_UNKNOWN_EN,
+        LANGUAGE_ZH: NATURAL_LANGUAGE_PROMPT_INPUT_UNKNOWN_ZH,
+    },
+    expected_sequence=(
+        ExpectedStep(actor="server", performative="PROPOSE", round=1),
+        ExpectedStep(actor="client", performative="ACCEPT", round=1),
+    ),
+    expected_final_state=FINAL_STATE_TASK_COMPLETED,
+    scripted_client_decisions=(
+        NegotiationDecision(
+            action="accept",
+            rationale=(
+                "The area is not served; the client confirms the Songshanhu area and keeps the "
+                "requested guaranteed throughput windows."
+            ),
+        ),
+    ),
+    description=(
+        "The request names an unknown area; the RAN Agent asks the client to confirm a served "
+        "area before executing."
     ),
 )
 
@@ -656,6 +743,7 @@ SCENARIO_OUTAGE_SPEC = Scenario(
 SCENARIOS: dict[str, Scenario] = {
     SCENARIO_NIGHT_SPEC.name: SCENARIO_NIGHT_SPEC,
     SCENARIO_INFORMATION_SPEC.name: SCENARIO_INFORMATION_SPEC,
+    SCENARIO_UNKNOWN_AREA_SPEC.name: SCENARIO_UNKNOWN_AREA_SPEC,
     SCENARIO_TARGET_SPEC.name: SCENARIO_TARGET_SPEC,
     SCENARIO_FEASIBILITY_SPEC.name: SCENARIO_FEASIBILITY_SPEC,
     SCENARIO_REJECT_SPEC.name: SCENARIO_REJECT_SPEC,
@@ -720,6 +808,8 @@ def expected_negotiation_target(
         or scenario.expected_kind == KIND_NONE
     ):
         return None
+    if scenario.name == SCENARIO_UNKNOWN_AREA:
+        return _localized(UNKNOWN_AREA_TARGET, language)
     params = accept_filled_params(scenario.expected_kind, language)
     value = params.get("guaranteedThroughputTarget") if params else None
     return value if isinstance(value, str) else None

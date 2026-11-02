@@ -195,11 +195,14 @@ class PrecheckFinding:
         missing_items: caller-schema fields the Task-T left empty, when the finding is an
             information negotiation.
         detail: short human-readable reason used in the log record.
+        proposal_text: optional business text for the server's first proposal; when empty the
+            policy uses its generic information message.
     """
 
     kind: NegotiationKind
     missing_items: tuple[str, ...] = ()
     detail: str = ""
+    proposal_text: str = ""
 
 
 class TaskTPrecheck(Protocol):
@@ -325,6 +328,20 @@ class PreTaskNegotiationHandler:
             kind = negotiation_kind_for_errors(exc.errors)
             if kind is None:
                 return NegotiationOutcome.rejected(self._build_rejected_task(context, exc))
+            # The live validator may reject an unknown area as a generic value conflict. The
+            # sample precheck has the business text for that case; let it win before the generic
+            # conflict heuristic treats the verdict as a false overlap.
+            if self._precheck is not None:
+                finding = self._precheck(_filled_from_error(exc), self._task_schema, prompt=prompt)
+                if finding is not None and finding.proposal_text:
+                    state = NegotiationState(
+                        kind=finding.kind,
+                        round=1,
+                        max_rounds=self._max_rounds,
+                        missing_items=finding.missing_items,
+                        proposal_text=finding.proposal_text,
+                    )
+                    return await self._emit_policy_decision(context_id, self._policy(state))
             verified = False
             if kind is not NegotiationKind.INFORMATION and _TARGET_SEGMENT_PATTERN.search(prompt):
                 # A conflict verdict is model-judged. When the sample's own check of the Task-T
@@ -372,6 +389,7 @@ class PreTaskNegotiationHandler:
                 round=1,
                 max_rounds=self._max_rounds,
                 missing_items=finding.missing_items,
+                proposal_text=finding.proposal_text,
             )
             return await self._emit_policy_decision(context_id, self._policy(state))
 

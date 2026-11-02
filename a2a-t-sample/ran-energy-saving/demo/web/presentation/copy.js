@@ -601,6 +601,14 @@ const EN = {
       proposals: { 1: "The time-segmented guaranteed throughput target is missing. Please provide it." },
       decisions: { 1: "Accept: supply the missing guaranteed throughput target." },
     },
+    unknown_area: {
+      label: "Unknown area",
+      tag: "Use case 1 · negotiation",
+      kind: "neg",
+      story: "The request names an area the RAN does not serve; the RAN Agent asks to confirm a served area.",
+      proposals: { 1: "The requested area is not recognized. Please confirm a served area." },
+      decisions: { 1: "Accept: confirm the Songshanhu area and keep the throughput windows." },
+    },
     target: {
       label: "Overlapping windows",
       tag: "Use case 1 · negotiation",
@@ -1232,6 +1240,14 @@ const ZH = {
       story: "请求缺少分时段保障速率，RAN Agent 要求补充后再执行。",
       proposals: { 1: "请求缺少分时段保障速率，请补充后再执行。" },
       decisions: { 1: "接受：补齐分时段保障速率。" },
+    },
+    unknown_area: {
+      label: "未知区域",
+      tag: "用例 1 · 协商",
+      kind: "neg",
+      story: "请求中的区域不在 RAN 服务范围内，RAN Agent 要求确认可用区域。",
+      proposals: { 1: "无法识别请求中的区域，请确认可用区域。" },
+      decisions: { 1: "接受：确认松山湖区域，保留原保障速率时段。" },
     },
     target: {
       label: "时段重叠",

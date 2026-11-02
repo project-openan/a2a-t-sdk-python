@@ -29,6 +29,7 @@ def test_scenario_names_and_request_languages() -> None:
     assert SUPPORTED_SCENARIO_NAMES == (
         "night",
         "information",
+        "unknown_area",
         "target",
         "feasibility",
         "reject",

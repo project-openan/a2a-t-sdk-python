@@ -122,6 +122,7 @@ async def test_meta_reports_the_presentation_mode_and_the_seven_scenarios(
     assert meta["scenarios"] == [
         "night",
         "information",
+        "unknown_area",
         "target",
         "feasibility",
         "reject",

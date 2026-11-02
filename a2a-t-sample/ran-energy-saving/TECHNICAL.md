@@ -88,7 +88,7 @@ python run_demo.py --ui --scenario information --model-mode offline
 ```
 
 The page opens on the presentation view: a 16:9 stage (engineer, OSS Agent, RAN Agent, MIE and radio
-sites, with the A2A-T channel between them) and three evidence panels. Seven examples cover use case
+sites, with the A2A-T channel between them) and three evidence panels. Eight examples cover use case
 1 (night-time energy saving, complete and negotiated) and use case 2 (planned power outage).
 
 Pick a scenario, edit the network operations engineer's request if needed, and start it. The stage
@@ -330,8 +330,8 @@ corrective turn; only then does it raise. Your implementation should at least:
 2. include `counter_params` (`cellId`, `window`, `targetRate`) on a counter;
 3. put the values the proposal asked for into `filled_params` on accept.
 
-**Verify:** the client logs `decision-made action=... round=...`; the offline seven-scenario
-`final_state` matches [§5.3](#53-protocol-sequences-of-the-seven-scenarios).
+**Verify:** the client logs `decision-made action=... round=...`; the offline eight-scenario
+`final_state` matches [§5.3](#53-protocol-sequences-of-the-eight-scenarios).
 
 ### 3.4 Optional: expose the OSS as an A2A backend
 
@@ -670,7 +670,7 @@ Round rules:
 Negotiation content uses **`fromText` only**. (`fromData` for Negotiation-T is out of scope for
 this sample; the Task-T accept refill uses the separate `fromDataWithSchema` API.)
 
-### 5.3 Protocol sequences of the seven scenarios
+### 5.3 Protocol sequences of the eight scenarios
 
 All sequences are initiated by the server. `S` = server, `C` = client; parentheses show the round.
 The expected sequences are asserted by `tests/test_scenarios.py` and `tests/test_client_flow.py`.
@@ -679,6 +679,7 @@ The expected sequences are asserted by `tests/test_scenarios.py` and `tests/test
 | --- | --- | --- | --- | --- |
 | `night` | Complete use case 1: create the night-time task directly | The request carries every required slot (`operationType`, `region`, description, guaranteed-throughput target). | none | Task `COMPLETED` + report (`task_completed`) |
 | `information` | Missing value: the NMS asks, the OSS fills it | The Task-T request omits the time-segmented guaranteed throughput target (`content.param_missing`). | `S:Propose(1)` → `C:Accept(1)` | Task `COMPLETED` + report (`task_completed`) |
+| `unknown_area` | Unknown area: confirm a served area | The request names `Region Z`/`未知区域`; the sample precheck opens an information negotiation with the area text. | `S:Propose(1)` → `C:Accept(1)` (keeps the requested windows) | Task `COMPLETED` + report (`task_completed`) |
 | `target` | Conflicting segments: correct the overlap before executing | The guaranteed-throughput target has overlapping time segments (`content.value_not_allowed`). | `S:Propose(1)` → `C:Propose(1)` (counter) → `S:Propose(2)` (revision) → `C:Accept(2)` | Task `COMPLETED` + report (`task_completed`) |
 | `feasibility` | Infeasible conditions: the NMS proposes an alternative | A guaranteed rate conflicts with an 18-hour power outage (`content.rule_violation`). | `S:Propose(1)` (alternative plan) → `C:Accept(1)` | Task `COMPLETED` + report (`task_completed`) |
 | `reject` | The OSS cannot provide the value: the negotiation ends | The client cannot provide the missing throughput target. | `S:Propose(1)` → `C:Reject(1)` → `S:Message("协商已结束")` | No Task (`no_task_negotiation_ended`) |
@@ -1049,7 +1050,7 @@ The sample is deliberately a prototype. Before production:
 | [`shared/logging_setup.py`](shared/logging_setup.py) | Root logging, run-correlation context, text/JSON formats and credential redaction. |
 | [`protocol/run_spec.py`](protocol/run_spec.py) | `RunSpec`, `RunCatalog` and `ClientPolicy`: what a run is and which values an accept fills. |
 | [`protocol/server_agent_spec.py`](protocol/server_agent_spec.py) | `ServerAgentSpec` / `ServerAgentFactory`: the planner graph a deployment plugs into the executor. |
-| [`demo/catalog.py`](demo/catalog.py) | Demo `RunCatalog` and `ClientPolicy` over the seven scenarios. |
+| [`demo/catalog.py`](demo/catalog.py) | Demo `RunCatalog` and `ClientPolicy` over the eight scenarios. |
 | [`demo/composition.py`](demo/composition.py) | Composition root: offline model/provider, demo runtime and negotiation policy. |
 | [`demo/plan_evaluator.py`](demo/plan_evaluator.py) | `RanDataPlanEvaluator`: feasibility and revision of a counter-proposed plan. |
 | [`shared/agent_card.py`](shared/agent_card.py) | AgentCard identity constants shared by the client (discovery) and the server (card build). |
@@ -1068,7 +1069,7 @@ The sample is deliberately a prototype. Before production:
 | [`shared/sse_event_consumer.py`](shared/sse_event_consumer.py) | Normalizes A2A stream events into one event shape. |
 | [`demo/registry/`](demo/registry) | Mock registry center (AgentCard register/query, port 5001). |
 | [`demo/web/`](demo/web) | Starlette Web UI (`app.py`), the presentation front end (`presentation/`, `--ui-mode presentation`, default) and the Run Explorer (`static/`, `--ui-mode explorer`). The presentation page consumes the same SSE stream; the Web UI resolves approval 1 (`POST /api/runs/{id}/intent`) and proxies approval 2 to the RAN Agent. |
-| [`tests/`](tests) | Unit, integration, transport, Web UI, and seven-scenario offline acceptance tests; `tests/js/` holds the Node harnesses run by pytest. |
+| [`tests/`](tests) | Unit, integration, transport, Web UI, and eight-scenario offline acceptance tests; `tests/js/` holds the Node harnesses run by pytest. |
 
 ### B.2 Replace checklist
 

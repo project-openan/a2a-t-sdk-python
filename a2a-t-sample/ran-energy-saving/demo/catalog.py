@@ -12,6 +12,7 @@ from protocol.run_spec import ClientPolicy, ExpectedStep, RunSpec
 from shared.run_constants import LANGUAGE_ZH
 
 from demo.scenario import (
+    SCENARIO_UNKNOWN_AREA,
     SUPPORTED_SCENARIO_NAMES,
     Scenario,
     accept_confirmation_text,
@@ -21,6 +22,7 @@ from demo.scenario import (
     get_scenario,
     resolve_user_request,
     task_t_data_schema,
+    unknown_area_accept_params,
 )
 
 #: Business values of the sample OSS: the negotiated Task-T parameters and its accept text.
@@ -41,6 +43,13 @@ def to_run_spec(scenario: Scenario, *, language: str = LANGUAGE_ZH) -> RunSpec:
         schema = task_t_data_schema(language)
         values = dict(initial)
         policy = replace(DEMO_CLIENT_POLICY, initial_data=lambda _language: (values, schema))
+    if scenario.name == SCENARIO_UNKNOWN_AREA:
+        # Only the area was wrong. The accept confirms a served area and keeps the requested
+        # throughput windows instead of replacing them with the generic base target.
+        policy = replace(
+            policy,
+            filled_params=lambda _kind, language: unknown_area_accept_params(language),
+        )
     return RunSpec(
         name=scenario.name,
         description=scenario.description,

@@ -17,6 +17,14 @@ from a2a_t.core.validation_pipeline import FilledParamData
 from protocol.negotiation_policy import NegotiationKind
 from protocol.pre_task_negotiation import PrecheckFinding
 
+from demo.scenario import REGION_STRINGS
+
+#: Areas the sample RAN serves. The Task-T region is localized, so both spellings are accepted.
+KNOWN_REGIONS: Final[frozenset[str]] = frozenset(REGION_STRINGS.values()) | {
+    "Songshanhu",
+    "松山湖",
+}
+
 #: One ``HH:MM~HH:MM`` interval in a target or background-event string.
 _TIME_INTERVAL_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(\d{2}:\d{2})\s*(?:~|to|-)\s*(\d{2}:\d{2})", re.IGNORECASE
@@ -33,6 +41,11 @@ _OUTAGE_MARKERS: Final[tuple[str, ...]] = ("outage", "power", "停电")
 #: Sentence carrying the background event of a rendered Task-T prompt.
 _OUTAGE_SENTENCE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"[^\n。；;]*(?:outage|停电)[^\n。；;]*", re.IGNORECASE
+)
+
+#: Area line of a rendered Task-T prompt (localized).
+_REGION_SENTENCE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?:The area is the|区域为)\s*([^.\n。]+)", re.IGNORECASE
 )
 
 
@@ -101,6 +114,9 @@ def _conflict_data(
     merged = dict(data)
     # Only override a field the prompt actually carries: a stub prompt in a unit test must not
     # hide the parameters it was given.
+    region = _REGION_SENTENCE_PATTERN.search(prompt)
+    if region is not None:
+        merged["region"] = region.group(1).strip()
     if _TARGET_SEGMENT_PATTERN.search(prompt):
         merged["guaranteedThroughputTarget"] = prompt
     sentence = _OUTAGE_SENTENCE_PATTERN.search(prompt)
@@ -156,8 +172,9 @@ class RanDataTaskTPrecheck:
         # With the prompt at hand, check the conflict first: a failed validation nulls the
         # rejected slot, so the parameters alone would look incomplete even when the prompt
         # carries a target that genuinely overlaps.
+        checked = _conflict_data(data, prompt) if prompt else data
         if prompt:
-            kind = _deterministic_negotiation_kind(_conflict_data(data, prompt))
+            kind = _deterministic_negotiation_kind(checked)
             if kind is not None:
                 return PrecheckFinding(
                     kind=kind,
@@ -169,6 +186,19 @@ class RanDataTaskTPrecheck:
                 kind=NegotiationKind.INFORMATION,
                 missing_items=missing,
                 detail=f"required fields are missing: {', '.join(missing)}",
+            )
+        region = checked.get("region")
+        if isinstance(region, str) and region.strip() and region not in KNOWN_REGIONS:
+            known = " / ".join(sorted(KNOWN_REGIONS))
+            return PrecheckFinding(
+                kind=NegotiationKind.INFORMATION,
+                missing_items=("region",),
+                detail=f"the sample does not serve area '{region}'",
+                proposal_text=(
+                    f'The requested area "{region}" is not recognized by the RAN. '
+                    f"Please confirm a served area ({known}) and keep the requested "
+                    "guaranteed throughput windows."
+                ),
             )
         if prompt:
             return None

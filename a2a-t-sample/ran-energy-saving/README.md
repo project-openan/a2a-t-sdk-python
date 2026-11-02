@@ -132,7 +132,7 @@ sends one request and receives progress notifications (negotiation and execution
 the final energy-saving report, either on a stream or through a registered webhook.
 
 The Web UI opens on the presentation view: a 16:9 stage with the engineer, the OSS Agent, the RAN
-Agent, the MIE and the radio sites, plus the A2A-T channel between them. Seven examples cover use
+Agent, the MIE and the radio sites, plus the A2A-T channel between them. Eight examples cover use
 case 1 (night-time energy saving, with and without negotiation) and use case 2 (planned power
 outage). The stage follows the live run at a human pace through nine steps: request, structured
 Task-T, approval 1 (intent), Task-T sent, negotiation when needed, strategy and task start, data

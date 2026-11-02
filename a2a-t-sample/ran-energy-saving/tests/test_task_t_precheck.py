@@ -53,6 +53,23 @@ def test_an_impossible_outage_guarantee_opens_a_feasibility_negotiation() -> Non
     assert finding.kind is NegotiationKind.FEASIBILITY
 
 
+def test_an_unknown_area_opens_an_information_negotiation() -> None:
+    finding = RanDataTaskTPrecheck()(
+        _filled(
+            operationType="Create",
+            region="Region Z",
+            guaranteedThroughputTarget="{00:00~07:00,2Mbps}, {07:00~23:00,20Mbps}",
+        ),
+        TASK_PARAM_SCHEMA,
+    )
+
+    assert finding is not None
+    assert finding.kind is NegotiationKind.INFORMATION
+    assert finding.missing_items == ("region",)
+    assert "Region Z" in finding.proposal_text
+    assert "Songshanhu" in finding.proposal_text
+
+
 def test_a_valid_task_needs_no_negotiation() -> None:
     finding = RanDataTaskTPrecheck()(
         _filled(

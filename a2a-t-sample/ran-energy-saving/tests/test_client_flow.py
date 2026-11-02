@@ -929,7 +929,7 @@ def _scenario_batches(scenario_name: str) -> list[list[dict[str, object]]]:
     """Return the transport batches that replay one scenario's server behavior."""
     if scenario_name in {"night", "outage"}:
         return [_task_completed_batch()]
-    if scenario_name == "information":
+    if scenario_name in {"information", "unknown_area"}:
         return [[propose_event("information", 1)], _task_completed_batch()]
     if scenario_name == "target":
         return [
