@@ -340,6 +340,7 @@ body.resizing-y { cursor: row-resize; user-select: none; }
 .continuity[hidden] { display: none; }
 .continuity-badge { font-weight: 700; color: var(--text); }
 .continuity-change { color: var(--text-secondary); }
+.report-download { margin-top: 8px; }
 .request-card {
   margin: 4px 0 0;
   border: 2px solid var(--black);

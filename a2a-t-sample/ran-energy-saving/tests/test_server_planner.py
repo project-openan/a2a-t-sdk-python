@@ -249,6 +249,24 @@ def test_build_planner_model_live_builds_chat_openai(offline_config: SampleConfi
     assert model.model_name == "mass/volcengine/deepseek-v4.1-flash"
 
 
+def test_modify_planner_input_includes_the_existing_plan() -> None:
+    text = build_planner_input(
+        "## Operation Type\n\nModify",
+        None,
+        operation="Modify",
+        existing_plan={
+            "plan_id": "plan-cell-002-001",
+            "cell_id": "cell-002",
+            "window": "01:00~05:00",
+            "target_rate": 10,
+        },
+    )
+
+    assert "Operation: Modify" in text
+    assert "plan-cell-002-001" in text
+    assert "do not allocate a second plan" in text
+
+
 def test_system_prompt_describes_the_dataset_and_tool_rules(offline_config: SampleConfig) -> None:
     del offline_config
     catalog = describe_dataset()

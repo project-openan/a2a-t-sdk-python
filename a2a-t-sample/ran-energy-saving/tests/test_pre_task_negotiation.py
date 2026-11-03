@@ -695,6 +695,29 @@ async def test_modify_follow_up_is_validated_and_returns_a_modify_outcome() -> N
     assert len(server.task_calls) == 1
 
 
+async def test_modify_follow_up_rejects_a_completed_task() -> None:
+    gate, server = _gate()
+    server.task_params = {
+        "operationType": "Modify",
+        "region": "Songshanhu",
+        "guaranteedThroughputTarget": (
+            "{00:00~03:00,10Mbps}, {03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}"
+        ),
+        "siteList": "Site 1,Site 2",
+        "backgroundEvent": "planned power outage tomorrow 03:00~05:00",
+    }
+    message = _initial_message("## Operation Type\n\nModify")
+    task = Task(
+        id="task-1",
+        context_id=CONTEXT_ID,
+        status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
+    )
+
+    result = _assert_no_task(await gate.handle(_make_context(message, current_task=task)))
+
+    assert "not in a modifiable state" in result.parts[0].text
+
+
 async def test_initial_modify_task_t_is_rejected_without_an_existing_task() -> None:
     gate, server = _gate()
     server.task_params = {

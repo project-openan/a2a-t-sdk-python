@@ -1494,7 +1494,22 @@ function reportCard(report, copy) {
       report.status === "modified" ? copy.result.modified : copy.result.onDuty,
     ),
   );
+  const download = el("button", "btn report-download", copy.result.download);
+  download.type = "button";
+  download.addEventListener("click", () => downloadReport(report));
+  wrapper.append(download);
   return wrapper;
+}
+
+/** Download the current report as JSON, so a demo can leave an evidence file. */
+function downloadReport(report) {
+  const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = el("a");
+  link.href = url;
+  link.download = `energy-saving-report-${ui.view.runId || "run"}.json`;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function reportPercent(report) {
