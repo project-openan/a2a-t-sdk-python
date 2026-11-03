@@ -100,6 +100,7 @@ async def test_root_serves_the_presentation_shell(client: httpx.AsyncClient) -> 
         'id="continuity"',
         'id="continuity-badge"',
         'id="continuity-change"',
+        'aria-live="polite"',
     ):
         assert marker in page, marker
     # The protocol is chosen at startup; the page has no in-page switch.
