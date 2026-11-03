@@ -19,7 +19,6 @@ const REDUCED =
 
 export function createStage(els) {
   buildCells(els.cellsFigure);
-  bindStageFocus(els.stage);
   let bubbles = {};
   let typingTarget = "";
   let typingUntil = 0;
@@ -883,42 +882,6 @@ export function createStage(els) {
   function setActors(map) {
     for (const [name, value] of Object.entries(map)) setActor(name, value);
   }
-
-  /** Dim unrelated stage elements while one actor or lane is hovered (Huawei adjacency focus). */
-function bindStageFocus(stage) {
-  if (!stage) return;
-  const items = () => [...stage.querySelectorAll(".actor, .lane")];
-  const groupsOf = (element) =>
-    new Set(String(element.dataset.groups || "").split(",").filter(Boolean));
-  const clear = () => {
-    stage.classList.remove("focusing");
-    for (const element of items()) element.classList.remove("is-focus", "is-adjacent");
-  };
-  const focus = (target) => {
-    const targetGroups = groupsOf(target);
-    if (targetGroups.size === 0) return;
-    clear();
-    stage.classList.add("focusing");
-    for (const element of items()) {
-      if (element === target) element.classList.add("is-focus");
-      else if ([...groupsOf(element)].some((group) => targetGroups.has(group))) {
-        element.classList.add("is-adjacent");
-      }
-    }
-  };
-  stage.addEventListener("pointerover", (event) => {
-    const target = event.target.closest?.(".actor, .lane");
-    if (!target || !stage.contains(target)) return;
-    focus(target);
-  });
-  stage.addEventListener("pointerout", (event) => {
-    if (!event.target.closest?.(".actor, .lane")) return;
-    const related = event.relatedTarget;
-    if (related && related !== stage && stage.contains(related)) return;
-    clear();
-  });
-  stage.addEventListener("pointerleave", clear);
-}
 
 function buildCells(figure) {
     figure.replaceChildren();

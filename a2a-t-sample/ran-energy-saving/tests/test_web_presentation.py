@@ -197,6 +197,24 @@ def test_phone_breakpoint_wraps_the_header_meta() -> None:
     assert ".top-meta { flex: 1 1 100%; flex-wrap: wrap; }" in block.group(1)
 
 
+def test_huawei_theme_has_no_pointer_hover_effects() -> None:
+    """The Huawei skin stays static on pointer hover; only explicit states may change."""
+    css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")
+
+    assert re.search(r'\[data-brand="huawei"\][^{]*:hover', css) is None
+    unscoped = [
+        line
+        for line in css.splitlines()
+        if ":hover" in line and '[data-brand="orange"]' not in line
+    ]
+    assert unscoped == []
+    # The stage adjacency focus was a pointer-driven dimming effect; it must not come back.
+    stage = (PRESENTATION_DIR / "js" / "stage.js").read_text(encoding="utf-8")
+    for marker in (".stage.focusing", "bindStageFocus", "pointerover", "pointerout", "pointerleave", "is-adjacent"):
+        assert marker not in css
+        assert marker not in stage
+
+
 def test_huawei_brand_css_keeps_the_semantic_and_focus_layers() -> None:
     css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")
 
@@ -208,7 +226,6 @@ def test_huawei_brand_css_keeps_the_semantic_and_focus_layers() -> None:
         "--role-success: #558a42",
         "--role-success-strong: #3f6b31",
         "--role-danger: #d92128",
-        ".stage.focusing",
         "#a-oss",
         "#lane-approval",
         "--zone-it: #f7f2e9",
