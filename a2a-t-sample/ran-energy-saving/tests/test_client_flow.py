@@ -391,6 +391,49 @@ async def test_two_phase_run_sends_a_modify_task_t_on_the_same_task() -> None:
     assert result.report == result.reports[-1]
 
 
+class FailingModifyTransport(ScriptedTransport):
+    """Baseline send succeeds, the Modify send raises, and the cancel is recorded."""
+
+    def __init__(self, batches: list[list[dict[str, object]]]) -> None:
+        super().__init__(batches)
+        self.cancelled: list[tuple[str, ClientCallContext | None]] = []
+
+    async def send(
+        self,
+        request: SendMessageRequest,
+        call_context: ClientCallContext,
+    ) -> list[dict[str, object]]:
+        if self.requests:
+            raise RuntimeError("modify send failed")
+        return await super().send(request, call_context)
+
+    async def cancel(self, task_id: str, call_context: ClientCallContext | None = None) -> None:
+        self.cancelled.append((task_id, call_context))
+
+
+async def test_failed_modify_send_cancels_the_baseline_task() -> None:
+    policy = replace(
+        DEMO_CLIENT_POLICY,
+        follow_up_data=lambda _language: (
+            {"operationType": "Modify", "region": "Songshanhu"},
+            {"operationType": "operation type: Create or Modify"},
+        ),
+    )
+    transport = FailingModifyTransport([_task_completed_batch()])
+
+    with pytest.raises(RuntimeError, match="modify send failed"):
+        await run_client_flow(
+            prompt_client=FakePromptClient(),
+            transport=transport,
+            user_request="Baseline then modify",
+            provider=ScriptedDecisionProvider(()),
+            language="en-US",
+            policy=policy,
+        )
+
+    assert [task_id for task_id, _ in transport.cancelled] == ["task-1"]
+
+
 async def test_intent_gate_can_stop_the_run_before_any_task_t_is_sent() -> None:
     prompt_client = FakePromptClient()
     transport = ScriptedTransport([])

@@ -25,11 +25,13 @@ import logging
 import re
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Final, Protocol
 
 from a2a.client.client import ClientCallContext
 from a2a.types import (
+    CancelTaskRequest,
     Role,
     SendMessageRequest,
     StreamResponse,
@@ -312,6 +314,10 @@ class SseClientTransport:
         _LOGGER.debug("sse phase finished: events=%d", len(events))
         return events
 
+    async def cancel(self, task_id: str, call_context: ClientCallContext | None = None) -> None:
+        """Cancel the named Task (used when a two-phase run cannot send its Modify)."""
+        await _cancel_task(self._client, task_id, call_context)
+
 
 class WebhookClientTransport:
     """Webhook transport: non-blocking send with inline push registration.
@@ -390,6 +396,22 @@ class WebhookClientTransport:
             # artifact ends the phase; stopping at the first tool artifact would lose the report.
             if is_stop_event(event) or is_report_artifact(event):
                 return events
+
+    async def cancel(self, task_id: str, call_context: ClientCallContext | None = None) -> None:
+        """Cancel the named Task (used when a two-phase run cannot send its Modify)."""
+        await _cancel_task(self._client, task_id, call_context)
+
+
+async def _cancel_task(
+    client: SendMessageClient,
+    task_id: str,
+    call_context: ClientCallContext | None,
+) -> None:
+    """Cancel one Task through the SDK client, failing clearly when it cannot."""
+    cancel_task = getattr(client, "cancel_task", None)
+    if cancel_task is None:
+        raise ClientFlowError("The A2A client does not support cancelling a Task.")
+    await cancel_task(CancelTaskRequest(id=task_id), context=call_context)
 
 
 def build_webhook_receiver(
@@ -652,47 +674,56 @@ async def run_client_flow(
             raise ClientFlowError(
                 "The baseline Task did not expose a task id for the Modify follow-up."
             )
-        follow_data, follow_schema = follow_up
-        with trace_stage("task_t_modify_extraction"):
-            follow_content = prompt_client.generate_task_prompt_from_data_with_schema(
-                follow_data,
-                follow_schema,
-                task_template_uri,
+        try:
+            follow_data, follow_schema = follow_up
+            with trace_stage("task_t_modify_extraction"):
+                follow_content = prompt_client.generate_task_prompt_from_data_with_schema(
+                    follow_data,
+                    follow_schema,
+                    task_template_uri,
+                )
+            follow_text = _require_prompt_text(follow_content, "the Modify Task-T prompt")
+            emit_trace(
+                "task_prompt_rendered",
+                phase=PHASE_TASK_MODIFY,
+                title="Modify Task-T prompt rendered",
+                detail={
+                    "promptText": follow_text,
+                    "templateUri": follow_content.template_uri or task_template_uri,
+                    "length": len(follow_text),
+                    "samplePhase": SAMPLE_PHASE_MODIFY,
+                },
             )
-        follow_text = _require_prompt_text(follow_content, "the Modify Task-T prompt")
-        emit_trace(
-            "task_prompt_rendered",
-            phase=PHASE_TASK_MODIFY,
-            title="Modify Task-T prompt rendered",
-            detail={
-                "promptText": follow_text,
-                "templateUri": follow_content.template_uri or task_template_uri,
-                "length": len(follow_text),
-                "samplePhase": SAMPLE_PHASE_MODIFY,
-            },
-        )
-        follow_metadata: dict[str, object] = {
-            follow_content.extension_uri or TASK_T_EXTENSION_URI: follow_text,
-            TEMPLATE_URI_METADATA_KEY: follow_content.template_uri or task_template_uri,
-            SAMPLE_PHASE_METADATA_KEY: SAMPLE_PHASE_MODIFY,
-        }
-        if run_id:
-            follow_metadata[SAMPLE_RUN_ID_METADATA_KEY] = run_id
-        follow_request = _build_message_request(
-            metadata=follow_metadata,
-            label=TASK_MODIFY_LABEL,
-            context_id=context_id,
-            task_id=follow_task_id,
-        )
-        emit_message_sent(
-            follow_request,
-            phase=PHASE_TASK_MODIFY,
-            title="Modify Task-T sent",
-            performative="TASK_T",
-            round_number=None,
-            context_id=context_id,
-        )
-        batch = await transport.send(follow_request, initial_context)
+            follow_metadata: dict[str, object] = {
+                follow_content.extension_uri or TASK_T_EXTENSION_URI: follow_text,
+                TEMPLATE_URI_METADATA_KEY: follow_content.template_uri or task_template_uri,
+                SAMPLE_PHASE_METADATA_KEY: SAMPLE_PHASE_MODIFY,
+            }
+            if run_id:
+                follow_metadata[SAMPLE_RUN_ID_METADATA_KEY] = run_id
+            follow_request = _build_message_request(
+                metadata=follow_metadata,
+                label=TASK_MODIFY_LABEL,
+                context_id=context_id,
+                task_id=follow_task_id,
+            )
+            emit_message_sent(
+                follow_request,
+                phase=PHASE_TASK_MODIFY,
+                title="Modify Task-T sent",
+                performative="TASK_T",
+                round_number=None,
+                context_id=context_id,
+            )
+            batch = await transport.send(follow_request, initial_context)
+        except Exception:
+            # The baseline Task is WORKING. If the Modify cannot be generated or sent, cancel it
+            # instead of leaving a half-open Task behind for a presenter to discover later.
+            cancel = getattr(transport, "cancel", None)
+            if callable(cancel):
+                with suppress(Exception):
+                    await cancel(follow_task_id, initial_context)
+            raise
         exchanges += 1
         collect(batch)
         context_id = context_id or _context_id_of(batch)
