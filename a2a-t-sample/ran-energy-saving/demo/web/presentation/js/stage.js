@@ -73,6 +73,11 @@ export function createStage(els) {
     nodes.forEach((node, position) => node.classList.toggle("on", position === index - 1));
   }
 
+  /** Skill chip of the selected use case: use case 2 is the planned outage, all others use case 1. */
+  function skillIndex(scenario) {
+    return scenario === "outage" ? 2 : 1;
+  }
+
   function progressBar(to, ms) {
     stopBar();
     const from = parseFloat(els.nmsBar.style.width) || 0;
@@ -307,7 +312,7 @@ export function createStage(els) {
       setActors({ ...base, eng: { cls: "active", text: copy.states.engWriting } });
       setClock(roles.cellsRegion, roles.cellsSub);
       setMie("", copy.states.approvalIdle);
-      highlightSkill(0);
+      highlightSkill(skillIndex(scenario));
       focusIntent(false);
       const request = (state.userRequest || "").trim();
       const text = request || copy.states.engWriting;
@@ -325,7 +330,7 @@ export function createStage(els) {
         eng: { cls: "", text: copy.states.engSent },
         oss: { cls: "active", text: copy.states.ossUnderstanding },
       });
-      highlightSkill(0);
+      highlightSkill(skillIndex(scenario));
       note("oss", roles.oss, copy.states.ossReading);
       later(1200, () => {
         const intent = parseIntent(state.intentText || state.userRequest || "");
@@ -396,7 +401,7 @@ export function createStage(els) {
         oss: { cls: "active", text: copy.states.ossAsking },
         nms: { cls: "wait", text: copy.states.nmsNeedsConfirm },
       });
-      highlightSkill(1);
+      highlightSkill(skillIndex(scenario));
       note("nms", roles.nms, proposalLine(copy, scenario, round) || copy.negotiation.generic, true);
       fly("lane-status", copy.negotiation.inputRequired, "neg", 1400);
       later(500, () => {
@@ -413,7 +418,7 @@ export function createStage(els) {
         oss: { cls: "active", text: copy.states.ossSendingAnswer },
         nms: { cls: "active", text: copy.states.nmsReadingAnswer },
       });
-      highlightSkill(2);
+      highlightSkill(skillIndex(scenario));
       const selectedRegion = latestDecisionRegion(state);
       const answer = selectedRegion
         ? `${decisionLine(copy, scenario, round) || action} · ${selectedRegion}`

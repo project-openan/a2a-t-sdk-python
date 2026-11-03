@@ -48,6 +48,23 @@ globalThis.document = {
 const copy = copyFor("zh-CN");
 const event = (payload) => ({ type: "event", event: payload });
 
+// The sample has exactly two use cases: use case 1 covers the energy-saving scenarios (complete,
+// negotiation and ending), use case 2 is the planned outage.
+const tagOrder = ["night", "information", "unknown_area", "target", "feasibility", "reject", "abort", "outage"];
+assert.deepEqual(
+  tagOrder.map((name) => copyFor("en-US").scenarios[name].tag),
+  ["Use case 1", "Use case 1 · negotiation", "Use case 1 · negotiation", "Use case 1 · negotiation", "Use case 1 · negotiation", "Use case 1 · ending", "Use case 1 · ending", "Use case 2"],
+);
+assert.deepEqual(
+  tagOrder.map((name) => copy.scenarios[name].tag),
+  ["用例 1", "用例 1 · 协商", "用例 1 · 协商", "用例 1 · 协商", "用例 1 · 协商", "用例 1 · 终止", "用例 1 · 终止", "用例 2"],
+);
+
+// The OSS Agent exposes one skill per use case; the tools behind them are not skills.
+assert.deepEqual(copyFor("en-US").roles.ossSkills, ["Skill 1 · Energy saving", "Skill 2 · Planned outage"]);
+assert.deepEqual(copy.roles.ossSkills, ["技能 1 · 节能", "技能 2 · 计划停电"]);
+assert.equal(copy.roles.ossSkillTools, undefined);
+
 function proposal(seq, round, maxRounds = 3) {
   return event({
     seq,
