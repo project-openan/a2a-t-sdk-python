@@ -7,7 +7,7 @@ instead of log text.
 
 ``night`` and ``outage`` are complete requests: the RAN Agent creates the task without a pre-task
 negotiation. ``night`` uses the area-level complete request, while ``outage`` carries the Site 1 /
-Site 2 planned-outage context of use case 2.
+Site 2 planned-outage context.
 
 The ``reject`` scenario reuses the missing-throughput request: the server opens an ``information``
 negotiation and the client rejects because it cannot provide the missing content. The ``abort``
@@ -76,7 +76,7 @@ NATURAL_LANGUAGE_PROMPT_INPUT_EN = (
     "The expected output is the intent report of the wireless network energy saving task."
 )
 
-#: Chinese natural-language task request of use case 2 (planned power outage, complete input).
+#: Chinese natural-language task request of the planned outage (complete input).
 NATURAL_LANGUAGE_PROMPT_INPUT_OUTAGE_ZH = (
     "修改松山湖管委会运行中的无线网络节能任务：基于任务对象和任务上下文，输出无线网络节能方案，"
     "达成任务目标中定义的无线网络节能目标；站点列表1为[站点1, 站点2]；明天计划停电，"
@@ -84,7 +84,7 @@ NATURAL_LANGUAGE_PROMPT_INPUT_OUTAGE_ZH = (
     "{00:00~03:00,10Mbps}、{05:00~24:00,10Mbps}。预期输出为无线网络节能任务的意图报告。"
 )
 
-#: English natural-language task request of use case 2 (planned power outage, complete input).
+#: English natural-language task request of the planned outage (complete input).
 NATURAL_LANGUAGE_PROMPT_INPUT_OUTAGE_EN = (
     "Modify the running RAN energy saving task in the Songshanhu Administration Committee area. "
     "Based on the task object and task context, output a wireless network energy saving plan that "
