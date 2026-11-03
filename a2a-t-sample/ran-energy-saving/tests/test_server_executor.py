@@ -259,7 +259,12 @@ async def test_langgraph_executor_publishes_task_artifacts_and_report(
     assert len(tasks) == 1
     assert tasks[0].id == context.task_id
     assert tasks[0].context_id == CONTEXT_ID
-    assert len(tool_artifacts) == 3
+    assert len(tool_artifacts) == 2
+    # The apply result is a status notification; a second tool artifact would duplicate it.
+    assert all(
+        _metadata(event.artifact.metadata).get("toolName") != "apply_energy_saving_plan"
+        for event in tool_artifacts
+    )
     assert final_statuses
     assert len(reports) == 1
     report = reports[0]

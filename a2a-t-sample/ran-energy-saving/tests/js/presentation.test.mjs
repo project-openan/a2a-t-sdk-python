@@ -569,9 +569,8 @@ artifactState.approvalState = "waiting";
 assert.equal(sceneFor(artifact(24, "execution", "apply_energy_saving_plan"), artifactState).key, "trace");
 artifactState.approvalState = "approved";
 assert.equal(sceneFor(artifact(25, "execution", "apply_energy_saving_plan"), artifactState).key, "apply");
-// The apply result and the ready report are status notifications for the wire/trace, not new
-// story beats: the apply artifact already drives the execute beat and the report artifact the
-// report beat. A generic WORKING fallback would replay the apply scene after execution.
+// The apply result is a status notification now, so it drives the execution beat itself; the
+// report-ready status stays evidence and the report artifact drives the report beat.
 assert.equal(
   sceneFor(
     status(
@@ -581,7 +580,7 @@ assert.equal(
     ),
     artifactState,
   ).key,
-  "trace",
+  "apply",
 );
 assert.equal(
   sceneFor(
@@ -1501,5 +1500,37 @@ assert.equal(
   }),
   "report",
 );
+
+// Trace tags describe the channel or the actor type: communication is A2A-T (or A2A in pure
+// mode), human gates are Human, and model calls are LLM. OSS/RAN stay for internal spans only.
+const tagState = createState();
+applyFrame(tagState, { type: "run_started", runId: "tags", scenario: "night", protocol: "a2a-t" });
+applyFrame(tagState, event({ seq: 60, entryType: "event", kind: "status", state: "TASK_STATE_WORKING", summary: "Working" }));
+applyFrame(tagState, event({ seq: 61, entryType: "event", kind: "artifact", detail: { toolName: "evaluate_energy_saving_plan" } }));
+applyFrame(tagState, event({ seq: 62, entryType: "decision", kind: "accept", summary: "accept" }));
+applyFrame(tagState, { type: "trace", event: { seq: 63, kind: "llm", title: "LLM call", actor: "llm" } });
+applyFrame(tagState, { type: "trace", event: { seq: 64, kind: "message_sent", title: "Task-T sent", actor: "oss" } });
+assert.deepEqual(tagState.trace.map((row) => row.tag), ["a2at", "a2at", "human", "llm", "a2at"]);
+
+const pureTagState = createState();
+applyFrame(pureTagState, { type: "run_started", runId: "tags-pure", scenario: "night", protocol: "pure" });
+applyFrame(pureTagState, event({ seq: 70, entryType: "event", kind: "status", state: "TASK_STATE_WORKING", summary: "Working" }));
+assert.deepEqual(pureTagState.trace.map((row) => row.tag), ["a2a"]);
+
+// The apply result is a status notification now; it still advances the apply milestone and beat.
+const applyResult = event({
+  seq: 80,
+  entryType: "event",
+  kind: "status",
+  state: "TASK_STATE_WORKING",
+  summary: "Progress: plan plan-cell-001-001 was applied to cell cell-001.",
+});
+const applyStatusState = createState();
+applyFrame(applyStatusState, applyResult);
+assert.equal(executionSteps(applyStatusState).find((step) => step.key === "apply").done, true);
+assert.equal(sceneFor(applyResult, createState()).key, "apply");
+const dispatched = createState();
+dispatched.mmlSent = true;
+assert.equal(sceneFor(applyResult, dispatched).key, "execute");
 
 console.log("presentation model harness: ok");

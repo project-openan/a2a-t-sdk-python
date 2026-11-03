@@ -1130,7 +1130,14 @@ class LangGraphTaskExecutor(AgentExecutor):
                                 TaskState.TASK_STATE_WORKING,
                                 message=updater.new_agent_message([Part(text=collected_text)]),
                             )
-                        if name != report_tool_name:
+                        # The apply/modify result is already reported as a status notification.
+                        # Do not publish a second, duplicate artifact for it in A2A-T mode; the
+                        # pure three-hop comparison keeps it because its presentation drives the
+                        # execution beat from the relayed artifact.
+                        duplicate_apply = (
+                            name in (APPLY_TOOL_NAME, MODIFY_TOOL_NAME) and not self._pure
+                        )
+                        if name != report_tool_name and not duplicate_apply:
                             await updater.add_artifact(
                                 [Part(text=json.dumps(step.result, ensure_ascii=False))],
                                 name=TOOL_ARTIFACT_NAME,

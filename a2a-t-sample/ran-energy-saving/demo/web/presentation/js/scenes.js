@@ -145,10 +145,14 @@ function eventScene(entry, state, frame) {
       if (label.includes("energy-saving task has started")) {
         return scene("task-started", 1600, frame);
       }
-      // The RAN now reports the apply result and the ready report as status notifications. They
-      // are wire evidence: the apply artifact already drives the execute beat, and the report
-      // artifact drives the report beat. Treating these as generic WORKING updates would replay
-      // the apply scene after execution.
+      // The apply/modify result is a status notification now, not a tool artifact. It drives the
+      // execution beat: after a gate approval MIE already dispatched, otherwise this is the apply.
+      if (label.includes("was applied to cell") || label.includes("was modified on cell")) {
+        return state.mmlSent ? scene("execute", 1800, frame) : scene("apply", 6500, frame);
+      }
+      // The ready report is wire evidence: the apply status drove the execution beat above and
+      // the report artifact drives the report beat. Treating it as a generic WORKING update would
+      // replay a story beat after execution.
       if (label.includes("Progress: plan ")) return scene("trace", 0, frame);
       if (label.includes("Progress: the energy-saving report is ready.")) {
         return scene("trace", 0, frame);

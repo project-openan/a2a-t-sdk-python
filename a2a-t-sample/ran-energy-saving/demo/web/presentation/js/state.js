@@ -167,7 +167,7 @@ export function applyFrame(state, frame) {
         resolved: false,
       };
       pushTrace(state, {
-        tag: "a2at",
+        tag: "human",
         title: "Decision requested",
         titleKey: "decisionRequested",
         sub: `round ${frame.round ?? "?"} · ${frame.proposal?.kind ?? ""}`,
@@ -271,7 +271,7 @@ function applyEvent(state, entry) {
   }
 
   pushTrace(state, {
-    tag: traceTag(entry),
+    tag: traceTag(entry, state.protocol),
     title: traceTitle(entry, summary),
     titleKey:
       entry.kind === "status" &&
@@ -374,6 +374,12 @@ function applyEvent(state, entry) {
       } else if (taskState === "TASK_STATE_REJECTED" || label.includes("REJECTED")) {
         state.approvalState = APPROVAL.REJECTED;
       }
+      // The apply/modify result now arrives as a status notification only. Treat it as the
+      // execution confirmation so a gate-off run still advances the apply/execute beat.
+      if (label.includes("was applied to cell") || label.includes("was modified on cell")) {
+        state.mmlSent = true;
+        state.executed = true;
+      }
       if (taskState === "TASK_STATE_COMPLETED") state.taskCompleted = true;
       if (label) state.taskState = label;
       break;
@@ -434,7 +440,7 @@ function applyTrace(state, span) {
   if (kind === "tool") state.nmsStage = stage;
 
   pushTrace(state, {
-    tag: traceSpanTag(span, kind),
+    tag: traceSpanTag(span, kind, state.protocol),
     title: typeof span.title === "string" ? span.title : kind,
     titleKey:
       kind === "decision_requested"
@@ -445,7 +451,7 @@ function applyTrace(state, span) {
             ? "intentReview"
             : null,
     sub: typeof span.purpose === "string" ? span.purpose : "",
-    chip: kind === "tool" ? "tool" : kind === "llm" ? "LLM" : "",
+    chip: kind === "tool" ? "tool" : "",
     chipKind: kind === "tool" ? "status" : "",
     stage,
     entry: span,
@@ -578,6 +584,7 @@ export function executionSteps(state) {
   // the live planner may read several profiles and evaluate several candidates, so the artifact
   // position says nothing about whether a plan was applied.
   const changed =
+    state.executed ||
     state.artifactTools.includes("apply_energy_saving_plan") ||
     state.artifactTools.includes("modify_energy_saving_plan");
   const steps = [
@@ -618,27 +625,41 @@ export function continuityModel(state) {
   };
 }
 
-function traceSpanTag(span, kind) {
-  if (kind === "approval") return "mie";
+/** Tag of the channel that carries one message: A2A-T or plain/pure A2A. */
+function protocolTag(protocol) {
+  return protocol === "a2a-t" ? "a2at" : "a2a";
+}
+
+function traceSpanTag(span, kind, protocol) {
+  if (kind === "llm") return "llm";
+  if (kind === "approval" || span.actor === "human") return "human";
+  if (kind === "intent_review_requested" || kind === "decision_requested") return "human";
   if (kind === "tool" || kind === "execution") return "nms";
-  if (kind === "task_prompt_rendered" || kind === "decision_requested") return "oss";
-  if (kind === "message_sent") return "a2at";
-  if (kind === "llm") {
-    const detail = isObject(span.detail) ? span.detail : {};
-    return detail.provider === "langgraph" ? "nms" : "oss";
-  }
+  if (kind === "message_sent") return protocolTag(protocol);
   return "oss";
 }
 
-function traceTag(entry) {
+function traceTag(entry, protocol) {
+  if (entry.entryType === "decision") return "human";
+  if (entry.kind === "approval" || entry.actor === "human") return "human";
   const hop = isObject(entry.detail) ? entry.detail.hop : null;
-  if (hop === "oss") return "oss";
-  if (hop === "ran") return "nms";
-  if (hop === "ran->mie" || hop === "mie->ran") return "mie";
-  if (entry.entryType === "decision") return "oss";
-  if (entry.direction === "client->server") return "a2at";
-  if (entry.direction === "server->client") return "nms";
-  return "a2at";
+  if (hop) return protocolTag(protocol);
+  if (
+    entry.kind === "status" ||
+    entry.kind === "artifact" ||
+    entry.kind === "message" ||
+    entry.kind === "propose" ||
+    entry.kind === "accept" ||
+    entry.kind === "reject" ||
+    entry.kind === "counter" ||
+    entry.kind === "abort"
+  ) {
+    return protocolTag(protocol);
+  }
+  if (entry.direction === "client->server" || entry.direction === "server->client") {
+    return protocolTag(protocol);
+  }
+  return "oss";
 }
 
 function traceTitle(entry, summary) {
