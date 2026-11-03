@@ -364,7 +364,11 @@ const EN = {
     taskCreatedNote:
       "The Task object echoes the accepted Task-T in its history, so the creation parameters are visible without re-reading the request.",
     formatT: "A2A-T (Task-T)",
+    formatX: "Extension",
     formatA: "Plain A2A",
+    extensionTitle: "Extension payload",
+    extensionNote:
+      "Only the Task-T / Negotiation-T extension content, without the A2A envelope.",
     taskTNote:
       "A2A-T: Task-T is carried in the A2A message metadata under the extension URI; the text part is only a short label. The A2A-Extensions header is what switches it on.",
     plainNote:
@@ -508,11 +512,14 @@ const EN = {
     title: "Session trace",
     sub: "one session, both sides",
     empty: "Nothing yet.",
+    callsFilter: "LLM & tool calls",
     tags: {
       eng: "Engineer",
       oss: "OSS",
       a2at: "A2A-T",
       a2a: "A2A",
+      "task-t": "Task-T",
+      "neg-t": "Negotiation-T",
       human: "Human",
       llm: "LLM",
       nms: "RAN",
@@ -1034,7 +1041,10 @@ const ZH = {
     taskCreatedNote:
       "Task 对象在 history 中回显了已接受的 Task-T，因此无需回看请求即可看到任务创建参数。",
     formatT: "A2A-T (Task-T)",
+    formatX: "扩展报文",
     formatA: "普通 A2A",
+    extensionTitle: "扩展报文",
+    extensionNote: "只显示 Task-T / Negotiation-T 扩展内容，不含 A2A 信封字段。",
     taskTNote:
       "A2A-T：Task-T 放在 A2A 消息的扩展 metadata 中，文本部分只是一个短标签；打开它的是 A2A-Extensions 头。",
     plainNote:
@@ -1176,11 +1186,14 @@ const ZH = {
     title: "会话轨迹",
     sub: "一个会话，双方",
     empty: "暂无记录。",
+    callsFilter: "LLM 与 tool 调用",
     tags: {
       eng: "工程师",
       oss: "OSS",
       a2at: "A2A-T",
       a2a: "A2A",
+      "task-t": "Task-T",
+      "neg-t": "Negotiation-T",
       human: "人工",
       llm: "LLM",
       nms: "RAN",

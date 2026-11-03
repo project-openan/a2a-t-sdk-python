@@ -258,6 +258,7 @@
           <div class="wire" id="wire" hidden>
             <div class="wire-format" id="wire-format" role="group" aria-label="Message format">
               <button id="wire-t" type="button" aria-pressed="true">A2A-T (Task-T)</button>
+              <button id="wire-x" type="button" aria-pressed="false">Extension</button>
               <button id="wire-a" type="button" aria-pressed="false">Plain A2A</button>
             </div>
             <p class="wire-title" id="wire-title"></p>
@@ -278,6 +279,10 @@
             <h2 id="trace-title">Session trace</h2>
           </button>
           <span class="sub" id="trace-sub">one session, both sides</span>
+          <label class="trace-filter" for="trace-calls">
+            <input type="checkbox" id="trace-calls">
+            <span id="trace-calls-label">LLM &amp; tool calls</span>
+          </label>
         </header>
         <div class="body trace-body" id="trace-body">
           <div class="trace-days" id="trace-days"></div>

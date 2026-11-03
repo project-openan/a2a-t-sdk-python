@@ -35,10 +35,10 @@ export function createWire(els, getCopy, getUi) {
       els.title.textContent = copy.wire.emptyTitle;
       els.code.replaceChildren(el("span", "wire-empty", copy.wire.empty));
       els.note.hidden = true;
-      setFormat(copy, "t", false);
+      setFormat(copy, "t", false, false);
       return;
     }
-    if (!model.alternate) ui.wireFormat = "t";
+    if (!model.alternate && !model.extension) ui.wireFormat = "t";
     const key = wireKey(entry);
     const changed = key !== lastKey || ui.wireFormat !== lastFormat;
     const scroll = els.code.scrollTop;
@@ -52,15 +52,18 @@ export function createWire(els, getCopy, getUi) {
     }|${state.taskTPrompt || ""}`;
     els.note.textContent = model.note || "";
     els.note.hidden = !model.note;
-    setFormat(copy, ui.wireFormat, model.alternate);
+    setFormat(copy, ui.wireFormat, model.alternate, extensionPayload(entry) !== null);
   }
 
-  function setFormat(copy, format, alternate) {
+  function setFormat(copy, format, alternate, hasExtension) {
     els.formatT.textContent = copy.wire.formatT;
+    els.formatX.textContent = copy.wire.formatX;
     els.formatA.textContent = copy.wire.formatA;
     els.formatT.setAttribute("aria-pressed", String(format === "t"));
+    els.formatX.setAttribute("aria-pressed", String(format === "x"));
     els.formatA.setAttribute("aria-pressed", String(format === "a"));
     els.formatT.disabled = false;
+    els.formatX.disabled = !hasExtension;
     els.formatA.disabled = !alternate;
   }
 
@@ -93,9 +96,45 @@ export function latestWireEntry(state) {
   return null;
 }
 
+/** The Task-T / Negotiation-T payload of one entry, or ``null`` when it carries none. */
+export function extensionPayload(entry) {
+  if (!isObject(entry)) return null;
+  const metadata = isObject(entry.metadata) ? entry.metadata : {};
+  const detail = isObject(entry.detail) ? entry.detail : {};
+  const payload = {};
+  const taskKey = Object.keys(metadata).find((key) => String(key).includes("Task-T"));
+  const taskT = taskKey ? metadata[taskKey] : detail.taskT;
+  if (typeof taskT === "string" && taskT) payload[taskKey || "Task-T"] = taskT;
+  const negotiationKey = Object.keys(metadata).find((key) =>
+    String(key).includes("Negotiation-T"),
+  );
+  const negotiation =
+    negotiationKey && typeof metadata[negotiationKey] === "string"
+      ? metadata[negotiationKey]
+      : detail.negotiationT ||
+        (entry.kind === "propose" && typeof entry.content === "string" ? entry.content : "");
+  if (typeof negotiation === "string" && negotiation) {
+    payload[negotiationKey || "Negotiation-T"] = negotiation;
+  }
+  const template = detail.templateUri || entry.templateUri;
+  if (typeof template === "string" && template) payload.templateUri = template;
+  return Object.keys(payload).length > 0 ? payload : null;
+}
+
 /** Build the headers, JSON body, title and note of one wire entry. */
 export function buildWireModel(entry, state, format, copy) {
   if (!isObject(entry)) return null;
+  if (format === "x") {
+    const payload = extensionPayload(entry);
+    if (payload === null) return null;
+    return {
+      title: copy.wire.extensionTitle,
+      alternate: false,
+      extension: true,
+      note: copy.wire.extensionNote,
+      nodes: jsonNodes(payload, 0),
+    };
+  }
   if (entry.kind === "message_sent") {
     const detail = isObject(entry.detail) ? entry.detail : {};
     if (detail.performative === "TASK_T") {
@@ -206,10 +245,9 @@ export function buildWireModel(entry, state, format, copy) {
       nodes: jsonNodes(
         {
           artifactUpdate: {
-            phase: entry.phase || "execution",
             artifact: {
               name: entry.name || "tool result",
-              part: { text: entry.text || "" },
+              part: { text: entry.text || entry.summary || "" },
               ...(metadata ? { metadata } : {}),
             },
           },

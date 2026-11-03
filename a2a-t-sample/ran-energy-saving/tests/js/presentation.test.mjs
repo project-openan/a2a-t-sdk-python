@@ -1533,4 +1533,79 @@ const dispatched = createState();
 dispatched.mmlSent = true;
 assert.equal(sceneFor(applyResult, dispatched).key, "execute");
 
+// Task-T / Negotiation-T rows are distinguished by the extension payload they carry.
+const extensionTagState = createState();
+applyFrame(extensionTagState, {
+  type: "trace",
+  event: { seq: 90, kind: "message_sent", title: "Task-T sent", detail: { performative: "TASK_T" } },
+});
+applyFrame(extensionTagState, {
+  type: "trace",
+  event: { seq: 91, kind: "task_prompt_rendered", title: "Task-T prompt rendered" },
+});
+applyFrame(
+  extensionTagState,
+  event({
+    seq: 92,
+    entryType: "event",
+    kind: "artifact",
+    phase: "report",
+    templateUri: "Task-T/network-layer/ran-energy-saving/v1",
+  }),
+);
+applyFrame(
+  extensionTagState,
+  event({ seq: 93, entryType: "event", kind: "propose", phase: "negotiation", performative: "PROPOSE" }),
+);
+applyFrame(extensionTagState, {
+  type: "trace",
+  event: {
+    seq: 94,
+    kind: "message_sent",
+    title: "ACCEPT sent",
+    detail: { performative: "ACCEPT", templateUri: "Negotiation-T/information/accept/v1" },
+  },
+});
+assert.deepEqual(extensionTagState.trace.map((row) => row.tag), [
+  "task-t",
+  "task-t",
+  "task-t",
+  "neg-t",
+  "neg-t",
+]);
+
+// The Extension view shows only the Task-T / Negotiation-T payload, and an artifact update must
+// not invent a "phase" field that the A2A standard does not define.
+const extensionEntry = {
+  entryType: "event",
+  kind: "artifact",
+  metadata: {
+    "https://projects.tmforum.org/a2aproject/telecommunication/extensions/Task-T/v1":
+      "## Operation Type\nModify",
+    templateUri: "Task-T/network-layer/ran-energy-saving/v1",
+  },
+};
+const extensionModel = buildWireModel(extensionEntry, createState(), "x", copy);
+assert.ok(extensionModel);
+assert.ok(wireText(extensionModel).includes("Operation Type"));
+assert.ok(!wireText(extensionModel).includes("artifactUpdate"));
+assert.equal(
+  buildWireModel({ entryType: "event", kind: "status", summary: "Working" }, createState(), "x", copy),
+  null,
+);
+const artifactModel = buildWireModel(
+  {
+    entryType: "event",
+    kind: "artifact",
+    name: "tool result",
+    summary: '{"ok": true}',
+    phase: "execution",
+  },
+  createState(),
+  "t",
+  copy,
+);
+assert.ok(!wireText(artifactModel).includes('"phase"'));
+assert.ok(wireText(artifactModel).includes("ok"));
+
 console.log("presentation model harness: ok");

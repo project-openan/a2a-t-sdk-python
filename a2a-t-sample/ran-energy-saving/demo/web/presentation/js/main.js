@@ -146,6 +146,7 @@ const els = {
   wire: byId("wire"),
   wireFormat: byId("wire-format"),
   wireT: byId("wire-t"),
+  wireX: byId("wire-x"),
   wireA: byId("wire-a"),
   wireTitle: byId("wire-title"),
   wireCode: byId("wire-code"),
@@ -153,6 +154,8 @@ const els = {
   negoEmpty: byId("nego-empty"),
   traceTitle: byId("trace-title"),
   traceSub: byId("trace-sub"),
+  traceCalls: byId("trace-calls"),
+  traceCallsLabel: byId("trace-calls-label"),
   traceToggle: byId("trace-toggle"),
   traceBody: byId("trace-body"),
   traceDays: byId("trace-days"),
@@ -209,6 +212,7 @@ const ui = {
   wireEntry: null,
   wireFormat: "t",
   wirePinned: false,
+  showCalls: false,
   submitting: false,
   counterOpen: false,
   counterText: "",
@@ -240,6 +244,7 @@ const rail = createRail(
 const wire = createWire(
   {
     formatT: els.wireT,
+    formatX: els.wireX,
     formatA: els.wireA,
     title: els.wireTitle,
     code: els.wireCode,
@@ -260,6 +265,7 @@ const trace = createTrace(
     wire.showEntry(entry);
     setTab("wire");
   },
+  () => ui.showCalls,
 );
 
 const player = createPlayer({
@@ -366,10 +372,19 @@ function bindStaticEvents() {
     ui.wireFormat = "t";
     wire.render(ui.view);
   });
+  els.wireX.addEventListener("click", () => {
+    if (els.wireX.disabled) return;
+    ui.wireFormat = "x";
+    wire.render(ui.view);
+  });
   els.wireA.addEventListener("click", () => {
     if (els.wireA.disabled) return;
     ui.wireFormat = "a";
     wire.render(ui.view);
+  });
+  els.traceCalls.addEventListener("change", () => {
+    ui.showCalls = els.traceCalls.checked;
+    trace.render(ui.view);
   });
   els.traceToggle.addEventListener("click", () => {
     const open = els.traceToggle.getAttribute("aria-expanded") === "true";
@@ -470,6 +485,7 @@ function applyStaticCopy() {
   els.tabWire.textContent = copy.negotiation.wire;
   els.traceTitle.textContent = copy.trace.title;
   els.traceSub.textContent = copy.trace.sub;
+  if (els.traceCallsLabel) els.traceCallsLabel.textContent = copy.trace.callsFilter;
   els.techSummary.textContent = copy.tech;
   els.legendChat.textContent = copy.legend.chat;
   els.legendTask.textContent = copy.legend.task;

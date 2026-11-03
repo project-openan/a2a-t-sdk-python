@@ -792,6 +792,15 @@ body.resizing-y { cursor: row-resize; user-select: none; }
 }
 .panel > header h2 { font-size: 14.5px; }
 .panel > header .sub { font-size: 11px; color: var(--g700); }
+.trace-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--g700);
+  cursor: pointer;
+}
+.trace-filter input { width: 13px; height: 13px; margin: 0; accent-color: var(--orange); }
 #p-nego > header { border-bottom-color: var(--orange); }
 .panel .body { padding: 9px 11px; display: flex; flex-direction: column; gap: 7px; min-width: 0; min-height: 0; overflow: auto; }
 #p-intent { flex: 0 1 auto; min-height: 0; max-height: 38%; }
@@ -942,12 +951,12 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 .trace-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .trace-row {
   display: grid;
-  grid-template-columns: 54px 46px minmax(0, 1fr) auto;
+  grid-template-columns: 54px 74px minmax(0, 1fr) auto;
   gap: 6px;
   align-items: start;
-  padding: 4px 9px;
+  padding: 6px 9px;
   border-bottom: 1px solid var(--g100);
-  font-size: 11.8px;
+  font-size: 12.6px;
 }
 .trace-row.click { cursor: pointer; }
 [data-brand="orange"] .trace-row.click:hover { background: var(--g50); }
@@ -982,7 +991,9 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 .tag.oss { background: var(--orange); }
 .tag.a2at { background: var(--black); color: var(--white); }
 .tag.a2a { background: var(--g500); color: var(--white); }
-.tag.human { background: var(--yellow); }
+.tag.task-t { background: var(--orange); color: var(--black); }
+.tag.neg-t { background: var(--yellow); color: var(--black); }
+.tag.human { background: var(--g700); color: var(--white); }
 .tag.llm { background: var(--green); color: var(--black); }
 .tag.nms { background: var(--blue); }
 .tag.mie { background: var(--yellow); }
@@ -1401,7 +1412,9 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 [data-brand="huawei"] .tag.oss { background: var(--accent-strong); color: #fff; }
 [data-brand="huawei"] .tag.a2at { background: var(--accent-strong); color: #fff; }
 [data-brand="huawei"] .tag.a2a { background: var(--text-secondary); color: #fff; }
-[data-brand="huawei"] .tag.human { background: var(--role-negotiation); color: var(--text); }
+[data-brand="huawei"] .tag.task-t { background: var(--role-oss); color: var(--text); }
+[data-brand="huawei"] .tag.neg-t { background: var(--role-negotiation); color: var(--text); }
+[data-brand="huawei"] .tag.human { background: var(--role-danger); color: #fff; }
 [data-brand="huawei"] .tag.llm { background: var(--role-success-strong); color: #fff; }
 [data-brand="huawei"] .tag.nms { background: var(--role-ran); color: var(--text); }
 [data-brand="huawei"] .tag.mie { background: var(--role-negotiation); color: var(--text); }

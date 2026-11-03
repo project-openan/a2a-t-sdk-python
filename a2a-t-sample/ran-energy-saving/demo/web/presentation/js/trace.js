@@ -19,7 +19,7 @@ const STAGE_BAND = {
   report: 3,
 };
 
-export function createTrace(els, getCopy, onSelect) {
+export function createTrace(els, getCopy, onSelect, getShowCalls = () => true) {
   let selectedKey = null;
   let follow = true;
   let lastState = null;
@@ -45,8 +45,11 @@ export function createTrace(els, getCopy, onSelect) {
   function render(state) {
     lastState = state;
     const copy = getCopy();
-    const rows = state.trace.slice(-200);
-    const offset = state.trace.length - rows.length;
+    const source = state.trace.slice(-200);
+    const offset = state.trace.length - source.length;
+    const rows = getShowCalls()
+      ? source
+      : source.filter((row) => row.tag !== "llm" && row.tag !== "nms");
     const keys = rows.map((row, index) => rowKey(row, offset + index));
     renderDays(els, rows, copy);
     const appendOnly =

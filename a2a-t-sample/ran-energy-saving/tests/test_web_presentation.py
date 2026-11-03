@@ -92,7 +92,10 @@ async def test_root_serves_the_presentation_shell(client: httpx.AsyncClient) -> 
         'id="turns"',
         'id="wire"',
         'id="wire-t"',
+        'id="wire-x"',
         'id="wire-a"',
+        'id="trace-calls"',
+        'id="trace-calls-label"',
         'id="booth-title"',
         'id="footer"',
         'id="trace-rows"',
@@ -235,6 +238,9 @@ def test_huawei_brand_css_keeps_the_semantic_and_focus_layers() -> None:
         ".continuity",
         ".continuity-badge",
         ".continuity-change",
+        ".trace-filter",
+        ".tag.task-t",
+        ".tag.neg-t",
     ):
         assert marker in css, marker
 

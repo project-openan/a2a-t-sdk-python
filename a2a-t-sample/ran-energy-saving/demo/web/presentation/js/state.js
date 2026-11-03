@@ -630,18 +630,49 @@ function protocolTag(protocol) {
   return protocol === "a2a-t" ? "a2at" : "a2a";
 }
 
+//: Performatives that carry a Negotiation-T payload.
+const NEGOTIATION_PERFORMATIVES = new Set(["PROPOSE", "ACCEPT", "REJECT", "COUNTER", "ABORT"]);
+
+/** Return ``task-t``, ``neg-t`` or ``null`` when one row carries an A2A-T extension payload. */
+function extensionTag(entry) {
+  const detail = isObject(entry.detail) ? entry.detail : {};
+  const template =
+    (typeof detail.templateUri === "string" && detail.templateUri) ||
+    (typeof entry.templateUri === "string" && entry.templateUri) ||
+    "";
+  if (template.startsWith("Task-T")) return "task-t";
+  if (template.startsWith("Negotiation-T")) return "neg-t";
+  const negotiationUri =
+    typeof detail.negotiationUri === "string" ? detail.negotiationUri : "";
+  if (negotiationUri.includes("Negotiation-T")) return "neg-t";
+  const extensionUri = typeof detail.extensionUri === "string" ? detail.extensionUri : "";
+  if (extensionUri.includes("Task-T")) return "task-t";
+  const keys = Array.isArray(detail.metadataKeys)
+    ? detail.metadataKeys.map((key) => String(key))
+    : [];
+  if (keys.some((key) => key.includes("Negotiation-T"))) return "neg-t";
+  if (keys.some((key) => key.includes("Task-T"))) return "task-t";
+  const performative = detail.performative || entry.performative || "";
+  if (performative === "TASK_T") return "task-t";
+  if (NEGOTIATION_PERFORMATIVES.has(performative) || entry.kind === "propose") return "neg-t";
+  return null;
+}
+
 function traceSpanTag(span, kind, protocol) {
   if (kind === "llm") return "llm";
   if (kind === "approval" || span.actor === "human") return "human";
   if (kind === "intent_review_requested" || kind === "decision_requested") return "human";
+  if (kind === "task_prompt_rendered") return "task-t";
   if (kind === "tool" || kind === "execution") return "nms";
-  if (kind === "message_sent") return protocolTag(protocol);
+  if (kind === "message_sent") return extensionTag(span) || protocolTag(protocol);
   return "oss";
 }
 
 function traceTag(entry, protocol) {
   if (entry.entryType === "decision") return "human";
   if (entry.kind === "approval" || entry.actor === "human") return "human";
+  const extension = extensionTag(entry);
+  if (extension !== null) return extension;
   const hop = isObject(entry.detail) ? entry.detail.hop : null;
   if (hop) return protocolTag(protocol);
   if (
