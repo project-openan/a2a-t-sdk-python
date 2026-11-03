@@ -1054,6 +1054,10 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
   .below-card:nth-child(n + 3) { border-top: 1px solid var(--g200); }
 }
 @media (max-width: 720px) {
+  /* The brand row and its badges do not fit side by side on a phone; let the meta row wrap
+   * under the brand instead of widening the document. */
+  .top { flex-wrap: wrap; row-gap: 6px; }
+  .top-meta { flex: 1 1 100%; flex-wrap: wrap; }
   .presets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .steps { grid-template-columns: repeat(4, minmax(0, 1fr)); row-gap: 6px; }
   .below-grid, .notes { grid-template-columns: minmax(0, 1fr); }

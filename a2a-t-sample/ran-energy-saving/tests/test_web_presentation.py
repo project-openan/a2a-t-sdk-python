@@ -188,6 +188,15 @@ async def test_pure_meta_exposes_its_scenarios_and_mie(
     assert 'id="protocol-switch"' not in page
 
 
+def test_phone_breakpoint_wraps_the_header_meta() -> None:
+    """The brand row must not widen the document on a phone (390 px audit)."""
+    css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")
+    block = re.search(r"@media \(max-width: 720px\) \{(.*?)\n\}", css, re.S)
+    assert block is not None
+    assert ".top { flex-wrap: wrap" in block.group(1)
+    assert ".top-meta { flex: 1 1 100%; flex-wrap: wrap; }" in block.group(1)
+
+
 def test_huawei_brand_css_keeps_the_semantic_and_focus_layers() -> None:
     css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")
 
