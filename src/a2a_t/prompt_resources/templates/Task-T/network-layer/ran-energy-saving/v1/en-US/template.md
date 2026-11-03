@@ -5,7 +5,7 @@ Requirement:
 1. Please provide the operation type. Allowed values: Create, Modify
 
 ## Task Type
-Wireless network energy saving
+RAN energy saving
 
 ## Task Description
 {{task_description}} (required)
