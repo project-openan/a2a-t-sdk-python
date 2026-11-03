@@ -580,8 +580,10 @@ class LangGraphTaskExecutor(AgentExecutor):
         await event_queue.enqueue_event(task)
 
         updater = TaskUpdater(event_queue, task.id, task.context_id)
-        # The first working notification is the reference demo's strategy-started message; do
-        # not emit a blank WORKING status before it.
+        # The reference demo reports Task creation (SUBMITTED), then a generic WORKING update,
+        # then the strategy ladder. Keep the generic update: the engineer must see that the RAN
+        # Agent started working before the more specific strategy notifications arrive.
+        await updater.start_work()
         await self._announce_execution_start(updater)
         await updater.update_status(
             TaskState.TASK_STATE_WORKING,
@@ -667,8 +669,10 @@ class LangGraphTaskExecutor(AgentExecutor):
         if task is None:
             raise ValueError("Cannot resume a Task that was not loaded")
         updater = TaskUpdater(event_queue, task.id, task.context_id)
-        # The first working notification is the reference demo's strategy-started message; do
-        # not emit a blank WORKING status before it.
+        # Same lifecycle as a fresh Task: a generic WORKING update first, then the strategy
+        # ladder. The resume follows an INPUT_REQUIRED pause, so the working report is what tells
+        # the engineer the RAN Agent is back on the task.
+        await updater.start_work()
         await self._announce_execution_start(updater)
         await updater.update_status(
             TaskState.TASK_STATE_WORKING,

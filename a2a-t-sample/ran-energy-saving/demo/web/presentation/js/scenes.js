@@ -161,6 +161,11 @@ function eventScene(entry, state, frame) {
       if (taskState === "TASK_STATE_SUBMITTED" || label.includes("SUBMITTED")) {
         return scene("strategy", 4200, frame);
       }
+      // The generic WORKING lifecycle update carries no business text; it is evidence that the
+      // RAN Agent started working, and the strategy-started notification drives the beat itself.
+      if (taskState === "TASK_STATE_WORKING" && (label === "" || label === taskState)) {
+        return scene("trace", 0, frame);
+      }
       if (taskState === "TASK_STATE_WORKING" || label.includes("WORKING")) {
         // Only a change the engineer approved may reach the network. Without that approval a
         // WORKING update is just progress; the apply artifact is the only other apply signal.

@@ -447,6 +447,19 @@ async def test_langgraph_executor_applies_only_after_approval(
     ]
     assert TaskState.TASK_STATE_INPUT_REQUIRED in states
     assert states[-1] == TaskState.TASK_STATE_COMPLETED
+    # Task creation reports SUBMITTED, then a generic WORKING update with no business text, and
+    # only then the strategy ladder. The working report must not be folded into the first
+    # strategy notification.
+    created = [event for event in events if isinstance(event, Task)]
+    assert created and created[0].status.state == TaskState.TASK_STATE_SUBMITTED
+    working_updates = [
+        event
+        for event in events
+        if isinstance(event, TaskStatusUpdateEvent)
+        and event.status.state == TaskState.TASK_STATE_WORKING
+    ]
+    assert working_updates
+    assert not working_updates[0].status.HasField("message")
     status_texts = [
         event.status.message.parts[0].text
         for event in events

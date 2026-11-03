@@ -138,6 +138,10 @@ assert.equal(stageOf(accepted), "negotiating");
 
 applyFrame(accepted, status(5, "TASK_STATE_SUBMITTED"));
 assert.equal(stageOf(accepted), "executing");
+
+// The generic WORKING lifecycle update after SUBMITTED is evidence, not a second strategy beat.
+const genericWorking = status(6, "TASK_STATE_WORKING", { state: "TASK_STATE_WORKING" });
+assert.equal(sceneFor(genericWorking, accepted).key, "trace");
 assert.equal(accepted.taskCreated, true);
 
 assert.deepEqual(
