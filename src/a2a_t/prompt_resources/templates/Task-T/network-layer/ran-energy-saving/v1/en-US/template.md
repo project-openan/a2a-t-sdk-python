@@ -3,7 +3,7 @@
 
 Requirement:
 1. Please provide the operation type. Allowed values: Create, Modify
-2. Normalize synonyms to the canonical value instead of rejecting them: `Create` covers Add / Implement / Establish / Deploy / Set Up / New / Enable / Activate / Configure; `Modify` covers Update / Adjust / Change / Revise
+2. Synonyms are normalized to the canonical value: `Create` covers Add / Implement / Establish / Deploy / Set Up / New / Enable / Activate / Configure; `Modify` covers Update / Adjust / Change / Revise
 
 ## Task Type
 Wireless network energy saving
@@ -50,7 +50,7 @@ Requirement:
     - **For the area-level setting**, the following information needs to be provided:
 
       Option 1: Time-segmented rate guarantee target
-        - Time Window: Non-overlapping time windows can be configured. Time windows MUST NOT overlap; if overlapping time windows are provided, they are a violation and must be rejected. Specific and explicit time windows must be provided; vague time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to a non-disruptive user experience mode. All configured time windows must fall within the active energy-saving execution period; (required)
+        - Time Window: Non-overlapping time windows can be configured. Time windows MUST NOT overlap; if overlapping time windows are provided, they are a violation and the configuration is invalid. Specific and explicit time windows must be provided; vague time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to a non-disruptive user experience mode. All configured time windows must fall within the active energy-saving execution period; (required)
         - Rate: Specify a target throughput for each time window, e.g., 10 Mbps; (required)
         - Example: Time-segmented rate guarantee target: {00:00~06:00, 2Mbps}, {06:00~18:00, 10Mbps}
 
@@ -61,14 +61,14 @@ Requirement:
     - **For the site-level setting**, the following information needs to be provided:
         - Site list; (required)
         - Time-segmented rate guarantee target:
-          - Time Window: Non-overlapping time windows can be configured. Time windows MUST NOT overlap; if overlapping time windows are provided, they are a violation and must be rejected. Specific and explicit time windows must be provided; vague time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to a non-disruptive user experience mode; (required)
+          - Time Window: Non-overlapping time windows can be configured. Time windows MUST NOT overlap; if overlapping time windows are provided, they are a violation and the configuration is invalid. Specific and explicit time windows must be provided; vague time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to a non-disruptive user experience mode; (required)
           - Rate: Specify a target throughput for each time window, e.g., 10 Mbps; (required)
         - Background event and event duration; (optional)
         - Example:
             - Site list 1: ["Site Name 1", "Site Name 2"], Time-segmented rate guarantee target: {00:00~06:00,2Mbps}, {06:00~18:00,10Mbps}, Background event: power outage from 00:00 to 18:00.
             - Site list 2: ["Site Name 3", "Site Name 4"], Time-segmented rate guarantee target: {01:00~06:00,2Mbps}, {06:00~18:00,10Mbps}, Background event: power outage from 01:00 to 18:00.
 8. When [Operation Type](#operation-type) is set to `Modify`, the configurable parameter is: Rate guarantee target.
-9. Cross-task reference: when the input inherits context parameters by referencing an earlier/previous task, the reference must be unambiguous. If multiple earlier tasks are mentioned and the reference does not specify which one to inherit from, the input is ambiguous and must be rejected. Do not silently pick one of the candidate tasks.
+9. Cross-task reference: when the input inherits context parameters by referencing an earlier/previous task, the reference must be unambiguous. If multiple earlier tasks are mentioned and the reference does not specify which one to inherit from, the input is ambiguous and the configuration is invalid. Do not silently pick one of the candidate tasks.
 
 ## Expected Output
 {{expected_output}} (optional)
