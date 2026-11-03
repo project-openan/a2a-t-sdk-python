@@ -43,6 +43,20 @@ def pytest_configure(config: pytest.Config) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def install_offline_providers() -> None:
+    """Register both scripted LLM providers for every test.
+
+    Several integration tests build the real ``A2ATClient`` with the ``scripted_traced`` provider.
+    Registering both providers here makes each test independent of file order: running
+    ``test_scripted_llm.py`` alone must not depend on another module having registered the traced
+    provider first.
+    """
+    from demo.composition import install_offline_provider
+
+    install_offline_provider()
+
+
 @pytest.fixture
 def english_language(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pin the process language to ``en-US`` for the scripted SDK provider.

@@ -8,6 +8,7 @@ behind ``--ui-mode explorer``.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from collections.abc import AsyncIterator
@@ -17,6 +18,7 @@ import httpx
 import pytest
 from demo.web.app import PRESENTATION_DIR, create_app
 from shared.config import SampleConfig
+from shared.trace import PHASE_TASK_MODIFY, PHASES
 
 #: Modules the page loads directly or transitively.
 PRESENTATION_MODULES = (
@@ -45,6 +47,19 @@ async def client(
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
         yield http_client
+
+
+def test_run_explorer_phase_vocabulary_matches_the_python_contract() -> None:
+    """The Run Explorer's JS phase list must not drift from the Python trace vocabulary."""
+    source = (PRESENTATION_DIR.parent / "static" / "js" / "store.js").read_text(encoding="utf-8")
+    base_block = re.search(r"export const PHASES = \[(.*?)\];", source, re.S)
+    optional_block = re.search(r"export const OPTIONAL_PHASES = \[(.*?)\];", source, re.S)
+    assert base_block is not None
+    assert optional_block is not None
+    base = tuple(re.findall(r'key: "([^"]+)"', base_block.group(1)))
+    optional = tuple(re.findall(r'key: "([^"]+)"', optional_block.group(1)))
+    assert base == PHASES
+    assert PHASE_TASK_MODIFY in optional
 
 
 async def test_root_serves_the_presentation_shell(client: httpx.AsyncClient) -> None:
@@ -82,6 +97,9 @@ async def test_root_serves_the_presentation_shell(client: httpx.AsyncClient) -> 
         'id="footer"',
         'id="trace-rows"',
         'id="trace-splitter"',
+        'id="continuity"',
+        'id="continuity-badge"',
+        'id="continuity-change"',
     ):
         assert marker in page, marker
     # The protocol is chosen at startup; the page has no in-page switch.
@@ -187,6 +205,9 @@ def test_huawei_brand_css_keeps_the_semantic_and_focus_layers() -> None:
         "--zone-net: #edf4fa",
         '[data-brand="huawei"] .zone-it',
         '[data-brand="huawei"] .zone-net',
+        ".continuity",
+        ".continuity-badge",
+        ".continuity-change",
     ):
         assert marker in css, marker
 

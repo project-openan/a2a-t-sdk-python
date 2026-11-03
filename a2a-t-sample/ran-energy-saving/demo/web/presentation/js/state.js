@@ -38,6 +38,9 @@ export function createState() {
     taskCreated: false,
     taskState: null,
     taskCompleted: false,
+    taskId: null,
+    //: Report of the baseline phase, kept when the Modify phase starts.
+    baselineReport: null,
     //: 0 for the baseline Create phase, 1 for the Modify continuation.
     phaseIndex: 0,
     //: Phase discriminator used by the trace dedupe keys.
@@ -90,6 +93,7 @@ function startModifyPhase(state) {
   state.modifyPhaseStarted = true;
   state.phaseIndex += 1;
   state.phaseKey = "modify";
+  state.baselineReport = isObject(state.report) ? state.report : null;
   state.reportArtifact = false;
   state.report = null;
   state.executionArtifacts = 0;
@@ -226,6 +230,9 @@ function applyEvent(state, entry) {
   const content = typeof entry.content === "string" ? entry.content : "";
   const pure = isObject(entry.detail?.pure) ? entry.detail.pure : null;
   const hop = typeof entry.detail?.hop === "string" ? entry.detail.hop : null;
+  if (isObject(entry.task) && typeof entry.task.id === "string" && entry.task.id) {
+    state.taskId = entry.task.id;
+  }
 
   if (pure !== null || hop !== null) {
     if (pure !== null) state.pure = { ...(state.pure || {}), ...pure };
@@ -415,6 +422,7 @@ function applyTrace(state, span) {
   }
   if (kind === "message_sent" && detail && detail.performative === "TASK_T") {
     state.taskTSent = true;
+    if (typeof detail.taskId === "string" && detail.taskId) state.taskId = detail.taskId;
     if (detail.samplePhase === "baseline" || detail.samplePhase === "modify") {
       state.twoPhase = true;
     }
@@ -590,6 +598,24 @@ export function pendingHuman(state) {
   if (state.approvalState === APPROVAL.WAITING) return "approval";
   if (state.decision !== null && !state.decision.resolved) return "decision";
   return null;
+}
+
+/** Continuity evidence of a two-phase run: same Task, same plan, before/after rate. */
+export function continuityModel(state) {
+  if (!state.twoPhase || !state.modifyPhaseStarted) return null;
+  const before = isObject(state.baselineReport) ? state.baselineReport : null;
+  const after = isObject(state.report) ? state.report : null;
+  if (before === null && after === null) return null;
+  const beforeRate = numberOrNull(before?.target_rate ?? before?.energy?.saving_percent);
+  const afterRate = numberOrNull(after?.target_rate ?? after?.energy?.saving_percent);
+  return {
+    taskId: typeof state.taskId === "string" ? state.taskId : "",
+    planId: String(after?.plan_id || before?.plan_id || ""),
+    beforeRate,
+    afterRate,
+    window: String(after?.window || before?.window || ""),
+    status: String(after?.status || ""),
+  };
 }
 
 function traceSpanTag(span, kind) {

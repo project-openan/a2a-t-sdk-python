@@ -471,6 +471,12 @@ const EN = {
     report: "Generate the report",
     notCreated: "No task created",
   },
+  continuity: {
+    same: "Same Task · Same plan",
+    task: "Task",
+    plan: "plan",
+    note: "The Modify continues the running task; it does not create a new one. Look for the same Task id and plan id across both Task-T rows.",
+  },
   result: {
     title: "Result",
     report: "Energy-saving report",
@@ -1131,6 +1137,12 @@ const ZH = {
     apply: "下发 MML",
     report: "生成报告",
     notCreated: "未创建任务",
+  },
+  continuity: {
+    same: "同一 Task · 同一 plan",
+    task: "Task",
+    plan: "plan",
+    note: "Modify 续接运行中的任务，不会新建任务。请对照两条 Task-T 的同一 Task id 与 plan id。",
   },
   result: {
     title: "结果",

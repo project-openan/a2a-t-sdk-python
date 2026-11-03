@@ -15,6 +15,7 @@ import {
 } from "../copy.js";
 import {
   applyFrame,
+  continuityModel,
   createState,
   endingOf,
   negotiationExpected,
@@ -78,6 +79,9 @@ const els = {
   wireFormat: byId("wire-format"),
   scenarioSelect: byId("scenario-select"),
   scenarioDesc: byId("scenario-desc"),
+  continuity: byId("continuity"),
+  continuityBadge: byId("continuity-badge"),
+  continuityChange: byId("continuity-change"),
   requestCard: byId("request-card"),
   requestCardLabel: byId("request-card-label"),
   requestCardText: byId("request-card-text"),
@@ -193,6 +197,8 @@ const ui = {
   seenFrames: new Set(),
   lastScene: null,
   lastQueuedScene: null,
+  //: Highest story step reached in the current playhead; prevents a late phase from rewinding it.
+  maxStep: 0,
   terminalApplied: null,
   source: null,
   mieSource: null,
@@ -551,6 +557,7 @@ function selectScenario(name, { start = false } = {}) {
   ui.seenFrames = new Set();
   ui.lastScene = null;
   ui.lastQueuedScene = null;
+  ui.maxStep = 0;
   ui.terminalApplied = null;
   ui.tab = "business";
   ui.selectedTurn = -1;
@@ -593,6 +600,7 @@ async function startRun() {
   ui.seenFrames = new Set();
   ui.lastScene = null;
   ui.lastQueuedScene = null;
+  ui.maxStep = 0;
   ui.terminalApplied = null;
   ui.tab = "business";
   ui.selectedTurn = -1;
@@ -818,6 +826,7 @@ function rebuild(index) {
   }
   ui.view = view;
   ui.lastScene = lastStoryScene(index - 1);
+  ui.maxStep = ui.lastScene ? ui.lastScene.step : 0;
   render();
   // The authored scenes own the stage; a rewind restores the scene it lands on.
   if (ui.lastScene !== null) stage.scene(ui.lastScene, ui.view, ui.copy);
@@ -855,6 +864,7 @@ function render() {
   try {
     renderProtocol();
     renderSteps();
+    renderContinuity();
     els.negoTitle.textContent =
       ui.tab === "wire" ? ui.copy.wire.panelTitle : ui.copy.negotiation.title;
     stage.render(ui.view, ui.copy);
@@ -868,6 +878,27 @@ function render() {
   } finally {
     ui.rendering = false;
   }
+}
+
+/** Show the two-phase continuity evidence: same Task, same plan, before/after rate. */
+function renderContinuity() {
+  if (!els.continuity) return;
+  const model = continuityModel(ui.view);
+  els.continuity.hidden = model === null;
+  if (model === null) return;
+  const text = ui.copy.continuity;
+  els.continuityBadge.textContent = text.same;
+  const parts = [];
+  if (model.taskId) parts.push(`${text.task} ${model.taskId.slice(0, 8)}…`);
+  if (model.planId) parts.push(`${text.plan} ${model.planId}`);
+  if (model.beforeRate !== null && model.afterRate !== null) {
+    parts.push(`${model.beforeRate}% → ${model.afterRate}%`);
+  } else if (model.afterRate !== null) {
+    parts.push(`${model.afterRate}%`);
+  }
+  if (model.window) parts.push(model.window);
+  els.continuityChange.textContent = parts.join(" · ");
+  els.continuity.title = text.note;
 }
 
 /** Show the natural-language request from the moment a scenario is selected.
@@ -918,7 +949,13 @@ function renderSteps() {
     }
     ui.steps = [...els.steps.children];
   }
-  const current = ui.lastScene ? ui.lastScene.step : -1;
+  let current = ui.lastScene ? ui.lastScene.step : -1;
+  if (current >= 0) {
+    // The run is paced; a late phase may queue a scene with an earlier step while the playhead is
+    // still catching up. Keep the bar monotonic within the current playhead.
+    current = Math.max(current, ui.maxStep || 0);
+    ui.maxStep = current;
+  }
   const pending = pendingHuman(ui.view);
   const stage = stageOf(ui.view);
   const expectedNegotiation = negotiationExpected(ui.view);

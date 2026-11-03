@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 
 import {
   applyFrame,
+  continuityModel,
   createState,
   endingOf,
   executionSteps,
@@ -1250,6 +1251,7 @@ applyFrame(twoPhase, {
   protocol: "a2a-t",
 });
 twoPhase.intentText = "Create a baseline, then modify the running task for the outage.";
+twoPhase.taskId = "task-1";
 applyFrame(twoPhase, {
   type: "trace",
   event: {
@@ -1297,7 +1299,12 @@ applyFrame(
     kind: "artifact",
     phase: "report",
     name: "energy saving intent report",
-    data: { target_rate: 10 },
+    data: {
+      target_rate: 10,
+      plan_id: "plan-cell-002-001",
+      window: "01:00~05:00",
+      status: "applied",
+    },
   }),
 );
 assert.equal(twoPhase.report.target_rate, 10);
@@ -1338,12 +1345,26 @@ applyFrame(
     kind: "artifact",
     phase: "report",
     name: "energy saving intent report",
-    data: { target_rate: 20 },
+    data: {
+      target_rate: 20,
+      plan_id: "plan-cell-002-001",
+      window: "01:00~05:00",
+      status: "modified",
+    },
   }),
 );
 applyFrame(twoPhase, status(9, "", { state: "TASK_STATE_COMPLETED" }));
 assert.equal(twoPhase.report.target_rate, 20);
 assert.equal(twoPhase.taskCompleted, true);
+assert.deepEqual(continuityModel(twoPhase), {
+  taskId: "task-1",
+  planId: "plan-cell-002-001",
+  beforeRate: 10,
+  afterRate: 20,
+  window: "01:00~05:00",
+  status: "modified",
+});
+assert.equal(continuityModel(createState()), null);
 
 // The same protocol row may repeat in both phases; the phase-aware key keeps both rows.
 const phaseRows = createState();
