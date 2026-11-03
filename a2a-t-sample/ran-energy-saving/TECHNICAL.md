@@ -57,7 +57,7 @@ Every `python` below means this interpreter. Without activation, use
 ```bash
 cd ran-energy-saving
 python run_demo.py --scenario information --mode auto --model-mode offline
-# complete planned outage, no negotiation
+# complete use case 2, no negotiation
 python run_demo.py --scenario outage --mode auto --model-mode offline
 ```
 
@@ -88,9 +88,9 @@ python run_demo.py --ui --scenario information --model-mode offline
 ```
 
 The page opens on the presentation view: a 16:9 stage (engineer, OSS Agent, RAN Agent, MIE and radio
-sites, with the A2A-T channel between them) and three evidence panels. Eight examples cover one
-complete run, five negotiation runs, two ending runs and one planned-outage Modify run (a Create
-baseline followed by a real Modify continuation on the same Task). The presentation keeps
+sites, with the A2A-T channel between them) and three evidence panels. Eight examples cover use case
+1 (night-time energy saving, complete and negotiated) and use case 2 (planned power outage, a
+Create baseline followed by a real Modify continuation on the same Task). The presentation keeps
 the step bar on Apply & report for the Modify phase, shows each Task-T's own payload in the wire
 inspector, and renders the modified report as the final card.
 
@@ -694,14 +694,14 @@ The expected sequences are asserted by `tests/test_scenarios.py` and `tests/test
 
 | Scenario | Business reading | Trigger | Negotiation sequence | Final state |
 | --- | --- | --- | --- | --- |
-| `night` | Complete run: create the night-time task directly | The request carries every required slot (`operationType`, `region`, description, guaranteed-throughput target). | none | Task `COMPLETED` + report (`task_completed`) |
+| `night` | Complete use case 1: create the night-time task directly | The request carries every required slot (`operationType`, `region`, description, guaranteed-throughput target). | none | Task `COMPLETED` + report (`task_completed`) |
 | `information` | Missing value: the NMS asks, the OSS fills it | The Task-T request omits the time-segmented guaranteed throughput target (`content.param_missing`). | `S:Propose(1)` → `C:Accept(1)` | Task `COMPLETED` + report (`task_completed`) |
 | `unknown_area` | Unknown area: rank and choose a served area | The request names `Region Z`/`未知区域`; the sample precheck ranks the served areas (Songshanhu Administration Committee, Dalingshan) and opens an information negotiation with every choice and its fuzzy-match score. | `S:Propose(1)` → `C:Accept(1)` (the chosen area fills `region`; the requested windows are kept) | Task `COMPLETED` + report (`task_completed`) |
 | `target` | Conflicting segments: correct the overlap before executing | The guaranteed-throughput target has overlapping time segments (`content.value_not_allowed`). | `S:Propose(1)` → `C:Propose(1)` (counter) → `S:Propose(2)` (revision) → `C:Accept(2)` | Task `COMPLETED` + report (`task_completed`) |
 | `feasibility` | Infeasible conditions: the NMS proposes an alternative | A guaranteed rate conflicts with an 18-hour power outage (`content.rule_violation`). | `S:Propose(1)` (alternative plan) → `C:Accept(1)` | Task `COMPLETED` + report (`task_completed`) |
 | `reject` | The OSS cannot provide the value: the negotiation ends | The client cannot provide the missing throughput target. | `S:Propose(1)` → `C:Reject(1)` → `S:Message("协商已结束")` | No Task (`no_task_negotiation_ended`) |
 | `abort` | No convergence: the NMS aborts after the round budget | The client keeps counter-proposing a plan the policy cannot accept. | `S:Propose(1)` → `C:Propose(1)` → `S:Propose(2)` → `C:Propose(2)` → `S:Propose(3)` → `C:Propose(3)` → `S:Abort(3)` | No Task (`no_task_negotiation_aborted`) |
-| `outage` | Two-phase Modify run: a Create baseline, then a real Modify continuation on the same Task | Phase 1 creates the two-site baseline (`cell-002` 01:00–05:00 at 10%) and leaves the Task `WORKING`; phase 2 sends a Modify Task-T for the 03:00–05:00 outage, updates the same plan to 20%, replaces the report artifact and completes the Task. | none | Task `COMPLETED` + modified report (`task_completed`, `cell-002` 01:00–05:00 at 20%) |
+| `outage` | Two-phase use case 2: a Create baseline, then a real Modify continuation on the same Task | Phase 1 creates the two-site baseline (`cell-002` 01:00–05:00 at 10%) and leaves the Task `WORKING`; phase 2 sends a Modify Task-T for the 03:00–05:00 outage, updates the same plan to 20%, replaces the report artifact and completes the Task. | none | Task `COMPLETED` + modified report (`task_completed`, `cell-002` 01:00–05:00 at 20%) |
 
 Notes:
 

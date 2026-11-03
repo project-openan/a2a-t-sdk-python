@@ -144,8 +144,8 @@ class ScriptedChatModel(BaseChatModel):
         """Choose the sample plan carried by the accepted Task-T.
 
         The night-time complete request uses the macro cell's night window. A planned-outage task
-        uses the micro cell whose available window covers the outage window, at its lower saving
-        rate. A task confirmed for the second served area uses that area's cell. The
+        (use case 2) uses the micro cell whose available window covers the outage window, at its
+        lower saving rate. A task confirmed for the second served area uses that area's cell. The
         live planner chooses from the same dataset with the same intent.
         """
         # Only the accepted task counts: the system prompt lists every dataset cell, so reading it

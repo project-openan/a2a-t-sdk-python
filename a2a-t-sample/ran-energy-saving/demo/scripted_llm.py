@@ -116,7 +116,7 @@ _STAGE_FILES: dict[str, str] = {
 #: through to a negotiation variant.
 _COMPLETE_SCENARIO_INPUTS = (NATURAL_LANGUAGE_PROMPT_INPUT_EN, NATURAL_LANGUAGE_PROMPT_INPUT_ZH)
 
-#: Planned-outage inputs. They are complete requests too, but carry the site list and
+#: Planned-outage inputs of use case 2. They are complete requests too, but carry the site list and
 #: the background event, so they need their own canned slot extraction and validation.
 _OUTAGE_SCENARIO_INPUTS = (
     NATURAL_LANGUAGE_PROMPT_INPUT_OUTAGE_EN,

@@ -108,7 +108,7 @@ The other two outcomes are simple conclusions:
 ```bash
 # CLI (offline, deterministic, no key): planned outage, Create baseline then Modify, no negotiation
 python run_demo.py --scenario outage --mode auto --model-mode offline
-# Web UI (presentation view; opens on the complete run)
+# Web UI (presentation view; opens on the complete use case 1)
 python run_demo.py --ui --model-mode offline
 # Huawei-themed presentation (the page can also switch it, and ?brand=huawei overrides)
 python run_demo.py --ui --brand huawei --model-mode offline
@@ -141,9 +141,10 @@ The Web UI opens on the presentation view: a 16:9 stage with the engineer, the O
 Agent, the MIE and the radio sites, plus the A2A-T channel between them. The presentation supports
 two brand palettes: **Orange** (the reference demo, default) and **Huawei** (the warm-canvas,
 outlined-node ICT style). The top-bar button switches them at runtime and remembers the choice;
-`--brand huawei` or `?brand=huawei` selects the start-up default. Eight examples cover one
-complete run, five negotiation runs, two ending runs and the planned-outage Modify run. The outage
-run is two-phase on one Task: a Create baseline, then a real Modify Task-T on the same Task; the presentation keeps the step bar at Apply & report for the Modify phase and
+`--brand huawei` or `?brand=huawei` selects the start-up default. Eight examples cover use
+case 1 (night-time energy saving, with and without negotiation) and use case 2 (planned power
+outage). The outage run is two-phase on one Task: a Create baseline, then a real Modify Task-T on
+the same Task; the presentation keeps the step bar at Apply & report for the Modify phase and
 shows each Task-T's own wire payload. The stage follows the live run at a human pace through nine
 steps: request, structured
 Task-T, approval 1 (intent), Task-T sent, negotiation when needed, strategy and task start, data

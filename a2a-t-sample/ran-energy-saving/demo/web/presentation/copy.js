@@ -610,7 +610,7 @@ const EN = {
   scenarios: {
     night: {
       label: "Night-time energy saving",
-      tag: "Complete",
+      tag: "Use case 1",
       kind: "uc1",
       story:
         "A complete request with four guaranteed-throughput windows; the RAN Agent creates the task without negotiation.",
@@ -619,7 +619,7 @@ const EN = {
     },
     information: {
       label: "Missing value",
-      tag: "Negotiation",
+      tag: "Use case 1 · negotiation",
       kind: "neg",
       story: "The request has no guaranteed throughput target; the RAN Agent asks for it before executing.",
       proposals: { 1: "The time-segmented guaranteed throughput target is missing. Please provide it." },
@@ -627,7 +627,7 @@ const EN = {
     },
     unknown_area: {
       label: "Unknown area",
-      tag: "Negotiation",
+      tag: "Use case 1 · negotiation",
       kind: "neg",
       story: "The request names an area the RAN does not serve; the RAN Agent ranks the served areas and asks the engineer to choose one.",
       proposals: {
@@ -637,7 +637,7 @@ const EN = {
     },
     target: {
       label: "Overlapping windows",
-      tag: "Negotiation",
+      tag: "Use case 1 · negotiation",
       kind: "neg",
       story: "Two guaranteed-rate windows overlap; the RAN Agent proposes a correction before executing.",
       proposals: {
@@ -652,7 +652,7 @@ const EN = {
     },
     feasibility: {
       label: "Infeasible condition",
-      tag: "Negotiation",
+      tag: "Use case 1 · negotiation",
       kind: "neg",
       story: "A guaranteed rate is requested during a power outage; the RAN Agent offers a feasible alternative.",
       proposals: { 1: "The rate cannot be guaranteed during the outage. Lower 06:00~18:00 to 2Mbps." },
@@ -660,7 +660,7 @@ const EN = {
     },
     reject: {
       label: "OSS rejects",
-      tag: "Ending",
+      tag: "Use case 1 · ending",
       kind: "end",
       story: "The RAN Agent asks for a missing value; the OSS cannot provide it and the negotiation ends.",
       proposals: { 1: "The time-segmented guaranteed throughput target is missing. Please provide it." },
@@ -668,7 +668,7 @@ const EN = {
     },
     abort: {
       label: "Round limit",
-      tag: "Ending",
+      tag: "Use case 1 · ending",
       kind: "end",
       story: "Counter-proposals never converge; the RAN Agent aborts at the round limit.",
       proposals: {
@@ -684,7 +684,7 @@ const EN = {
     },
     outage: {
       label: "Planned power outage",
-      tag: "Modify",
+      tag: "Use case 2",
       kind: "uc2",
       story:
         "A planned outage tomorrow on two sites; the RAN Agent creates a baseline task, then sends a Modify Task-T on the same running task, without negotiation.",
@@ -1276,7 +1276,7 @@ const ZH = {
   scenarios: {
     night: {
       label: "夜间节能",
-      tag: "完整流程",
+      tag: "用例 1",
       kind: "uc1",
       story: "完整请求：四个时段保障速率；RAN Agent 直接创建任务，不触发协商。",
       proposals: {},
@@ -1284,7 +1284,7 @@ const ZH = {
     },
     information: {
       label: "缺参数",
-      tag: "协商",
+      tag: "用例 1 · 协商",
       kind: "neg",
       story: "请求缺少分时段保障速率，RAN Agent 要求补充后再执行。",
       proposals: { 1: "请求缺少分时段保障速率，请补充后再执行。" },
@@ -1292,7 +1292,7 @@ const ZH = {
     },
     unknown_area: {
       label: "未知区域",
-      tag: "协商",
+      tag: "用例 1 · 协商",
       kind: "neg",
       story: "请求中的区域不在 RAN 服务范围内，RAN Agent 对可用区域排序后请工程师选择。",
       proposals: {
@@ -1302,7 +1302,7 @@ const ZH = {
     },
     target: {
       label: "时段重叠",
-      tag: "协商",
+      tag: "用例 1 · 协商",
       kind: "neg",
       story: "两个保障时段重叠，RAN Agent 先提议修正，达成一致后再执行。",
       proposals: {
@@ -1317,7 +1317,7 @@ const ZH = {
     },
     feasibility: {
       label: "条件不可行",
-      tag: "协商",
+      tag: "用例 1 · 协商",
       kind: "neg",
       story: "停电期间仍要求保障速率，RAN Agent 给出可行替代方案。",
       proposals: { 1: "停电期间无法保障速率，建议把 06:00~18:00 下调到 2Mbps。" },
@@ -1325,7 +1325,7 @@ const ZH = {
     },
     reject: {
       label: "拒绝",
-      tag: "终止",
+      tag: "用例 1 · 终止",
       kind: "end",
       story: "RAN Agent 要求补充参数，OSS 无法提供，协商结束。",
       proposals: { 1: "请求缺少分时段保障速率，请补充后再执行。" },
@@ -1333,7 +1333,7 @@ const ZH = {
     },
     abort: {
       label: "轮次超限",
-      tag: "终止",
+      tag: "用例 1 · 终止",
       kind: "end",
       story: "多轮反提议仍不收敛，RAN Agent 在轮次上限时中止。",
       proposals: {
@@ -1349,7 +1349,7 @@ const ZH = {
     },
     outage: {
       label: "计划停电",
-      tag: "修改",
+      tag: "用例 2",
       kind: "uc2",
       story: "明天两个站点计划停电；RAN Agent 先创建基线任务，再在同一运行中的 Task 上发送 Modify Task-T，不触发协商。",
       proposals: {},
@@ -1375,7 +1375,7 @@ export function scenarioStory(copy, name) {
   return copy.scenarios[name]?.story || "";
 }
 
-/** Return the tag of one scenario (complete / negotiation / ending / modify). */
+/** Return the tag of one scenario (use case / negotiation / ending). */
 export function scenarioTag(copy, name) {
   return copy.scenarios[name]?.tag || "";
 }

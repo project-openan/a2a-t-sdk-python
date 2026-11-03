@@ -128,7 +128,7 @@ async def test_scenario_matches_the_design_sequence(
 async def test_planned_outage_creates_a_baseline_then_modifies_it_in_place(
     english_language: None,
 ) -> None:
-    """The planned outage is a two-phase same-Task run: Create 10%, then Modify 20%, no negotiation."""
+    """Use case 2 is a two-phase same-Task run: Create 10%, then Modify 20%, no negotiation."""
     config = offline_direct_config(free_tcp_port())
 
     with running_server(config):

@@ -83,7 +83,7 @@ python run_demo.py --ui --scenario information --model-mode offline
 ```
 
 页面默认打开演示视图：左侧是 16:9 舞台（网络工程师、OSS Agent、RAN Agent、MIE 与无线站点，中间是
-A2A-T 通道），右侧是三块证据面板。八个示例包括一个完整流程、五个协商示例、两个终止示例，以及计划停电的两阶段 Modify 示例（同一 Task 上先 Create 基线再执行真正的 Modify 续接）。Modify 阶段演示视图保持步骤条在“Apply & report”，wire 面板分别展示两条 Task-T 的 payload，最终卡片展示修改后的报告。
+A2A-T 通道），右侧是三块证据面板。八个示例覆盖用例 1（夜间节能，含协商与无协商）和用例 2（计划停电，同一 Task 上先 Create 基线再执行真正的 Modify 续接）。Modify 阶段演示视图保持步骤条在“Apply & report”，wire 面板分别展示两条 Task-T 的 payload，最终卡片展示修改后的报告。
 
 演示视图支持两套品牌主题。`--brand orange|huawei`（或 `A2AT_SAMPLE_UI_BRAND`）决定启动默认值；
 顶栏按钮可实时切换并把选择写入 `localStorage`；`?brand=` 对单次页面加载覆盖前两者。CSS 使用语义
@@ -569,14 +569,14 @@ P95 和审批等待。
 
 | 场景 | 业务说法 | 触发 | 协商序列 | 最终状态 |
 | --- | --- | --- | --- | --- |
-| `night` | 完整流程：直接创建夜间节能任务 | 请求包含所有必需槽位（`operationType`、区域、描述、分时段保障速率）。 | 无 | Task `COMPLETED` + 报告（`task_completed`） |
+| `night` | 完整用例 1：直接创建夜间节能任务 | 请求包含所有必需槽位（`operationType`、区域、描述、分时段保障速率）。 | 无 | Task `COMPLETED` + 报告（`task_completed`） |
 | `information` | 目标缺参数：网管问、OSS 补 | Task-T 请求缺少分时段保障速率目标（`content.param_missing`）。 | `S:Propose(1)` → `C:Accept(1)` | Task `COMPLETED` + 报告（`task_completed`） |
 | `unknown_area` | 未知区域：排序并选择可用区域 | 请求使用 `Region Z`/`未知区域`；样例 precheck 对可用区域（松山湖管委会、大岭山）排序，并在 information 协商中给出全部候选及模糊匹配分数。 | `S:Propose(1)` → `C:Accept(1)`（所选区域填入 `region`，原保障时段保留） | Task `COMPLETED` + 报告（`task_completed`） |
 | `target` | 时段冲突：先纠偏再执行 | 保障吞吐目标的时间段重叠（`content.value_not_allowed`）。 | `S:Propose(1)` → `C:Propose(1)`（反提议） → `S:Propose(2)`（修订） → `C:Accept(2)` | Task `COMPLETED` + 报告（`task_completed`） |
 | `feasibility` | 条件不可行：网管给替代方案 | 保障速率与 18 小时停电冲突（`content.rule_violation`）。 | `S:Propose(1)`（替代方案） → `C:Accept(1)` | Task `COMPLETED` + 报告（`task_completed`） |
 | `reject` | OSS 无法提供：协商结束 | 客户端无法提供缺失的保障速率目标。 | `S:Propose(1)` → `C:Reject(1)` → `S:Message("协商已结束")` | 无 Task（`no_task_negotiation_ended`） |
 | `abort` | 反复不收敛：达到轮次上限后主动中止 | 客户端反复反提议策略始终无法接受的方案。 | `S:Propose(1)` → `C:Propose(1)` → `S:Propose(2)` → `C:Propose(2)` → `S:Propose(3)` → `C:Propose(3)` → `S:Abort(3)` | 无 Task（`no_task_negotiation_aborted`） |
-| `outage` | 两阶段 Modify：先创建 Create 基线，再在同一 Task 上执行真正的 Modify 续接 | 阶段 1 创建双站点基线（`cell-002` 01:00–05:00，10%）并让 Task 保持 `WORKING`；阶段 2 发送针对 03:00–05:00 停电的 Modify Task-T，将同一 plan 更新到 20%，替换报告 artifact 并完成 Task。 | 无 | Task `COMPLETED` + 修改后报告（`task_completed`，`cell-002` 01:00–05:00，20%） |
+| `outage` | 两阶段用例 2：先创建 Create 基线，再在同一 Task 上执行真正的 Modify 续接 | 阶段 1 创建双站点基线（`cell-002` 01:00–05:00，10%）并让 Task 保持 `WORKING`；阶段 2 发送针对 03:00–05:00 停电的 Modify Task-T，将同一 plan 更新到 20%，替换报告 artifact 并完成 Task。 | 无 | Task `COMPLETED` + 修改后报告（`task_completed`，`cell-002` 01:00–05:00，20%） |
 
 说明：
 

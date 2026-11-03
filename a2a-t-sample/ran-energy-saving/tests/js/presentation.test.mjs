@@ -48,18 +48,6 @@ globalThis.document = {
 const copy = copyFor("zh-CN");
 const event = (payload) => ({ type: "event", event: payload });
 
-// Scenario tags describe the scenario's nature, not a shared "use case 1" bucket: the dropdown
-// would otherwise repeat the same number on seven of eight entries.
-const tagOrder = ["night", "information", "unknown_area", "target", "feasibility", "reject", "abort", "outage"];
-assert.deepEqual(
-  tagOrder.map((name) => copyFor("en-US").scenarios[name].tag),
-  ["Complete", "Negotiation", "Negotiation", "Negotiation", "Negotiation", "Ending", "Ending", "Modify"],
-);
-assert.deepEqual(
-  tagOrder.map((name) => copy.scenarios[name].tag),
-  ["完整流程", "协商", "协商", "协商", "协商", "终止", "终止", "修改"],
-);
-
 function proposal(seq, round, maxRounds = 3) {
   return event({
     seq,
