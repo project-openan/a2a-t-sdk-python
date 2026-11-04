@@ -10,7 +10,7 @@ import uuid
 from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from a2a_t.core.metadata import NegotiationContext
 from shared.config import DISCOVERY_REGISTRY, SampleConfig
@@ -58,6 +58,16 @@ _LOGGER = logging.getLogger("ran_energy_saving.client_service")
 #: Human budget of approval 1 (the OSS intent review) before the Task-T is sent.
 INTENT_REVIEW_TIMEOUT_SECONDS = 300.0
 
+#: Best-effort budget for the remote Task cancel before the local run is stopped anyway.
+REMOTE_CANCEL_TIMEOUT_SECONDS: Final[float] = 5.0
+
+#: How long a cancel request waits for the run task to unwind.
+CANCEL_UNWIND_TIMEOUT_SECONDS: Final[float] = 5.0
+
+#: Cancellation reasons recorded in the transcript.
+CANCELED_BY_OPERATOR: Final[str] = "The run was cancelled by the operator."
+CANCELED_BY_SHUTDOWN: Final[str] = "The run was cancelled because the process is shutting down."
+
 
 class RunManager:
     """Owns client runs and conversations of one process.
@@ -103,6 +113,52 @@ class RunManager:
     def get(self, run_id: str) -> RunState | None:
         """Return one run by id, ``None`` when unknown."""
         return self._runs.get(run_id)
+
+    async def cancel(self, run_id: str) -> bool:
+        """Cancel one active run, asking the remote side to cancel its Task first.
+
+        The remote cancel is best effort: the vendor NMS may answer HTTP 503, and the local run
+        must stop regardless. The terminal ``finished`` frame is still published by the run task.
+
+        Args:
+            run_id: run to cancel.
+
+        Returns:
+            ``True`` when a running run was cancelled, ``False`` for an unknown or finished run.
+        """
+        run = self._runs.get(run_id)
+        if run is None or run.finished():
+            return False
+        run.cancel_requested = True
+        await self._cancel_remote_task(run)
+        task = run.task
+        if task is not None and not task.done():
+            task.cancel()
+            _, pending = await asyncio.wait({task}, timeout=CANCEL_UNWIND_TIMEOUT_SECONDS)
+            if pending:
+                _LOGGER.warning(
+                    "run %s did not unwind within %.0fs after cancel",
+                    run.run_id,
+                    CANCEL_UNWIND_TIMEOUT_SECONDS,
+                )
+        return True
+
+    async def _cancel_remote_task(self, run: RunState) -> None:
+        """Ask the runtime transport to cancel the remote Task, when it exposes one."""
+        runtime = run.runtime
+        transport = getattr(runtime, "transport", None) if runtime is not None else None
+        cancel = getattr(transport, "cancel", None)
+        if run.remote_task_id is None or not callable(cancel):
+            return
+        try:
+            await asyncio.wait_for(
+                cancel(run.remote_task_id),
+                timeout=REMOTE_CANCEL_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            _LOGGER.warning("remote cancel timed out for task %s", run.remote_task_id)
+        except Exception:  # noqa: BLE001 - cancel must never block the local stop
+            _LOGGER.warning("remote cancel failed for task %s", run.remote_task_id, exc_info=True)
 
     def active_for_conversation(self, conversation_id: str) -> RunState | None:
         """Return the active run of one conversation, when there is one."""
@@ -557,7 +613,7 @@ class RunManager:
             run.status = STATUS_FINISHED
         except asyncio.CancelledError:
             run.status = STATUS_INTERRUPTED
-            run.error = "The run was cancelled because the process is shutting down."
+            run.error = CANCELED_BY_OPERATOR if run.cancel_requested else CANCELED_BY_SHUTDOWN
             transcript.record_error(run.error)
             raise
         except Exception as exc:  # noqa: BLE001 - a failed run must reach the UI, not a bare task

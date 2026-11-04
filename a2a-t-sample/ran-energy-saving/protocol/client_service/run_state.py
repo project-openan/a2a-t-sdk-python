@@ -113,6 +113,8 @@ class RunState:
         pending_decision: whether the manual provider currently waits for a decision.
         pending_intent: whether the run waits for approval 1 (the OSS intent review).
         intent_future: resolver of the pending intent review.
+        cancel_requested: whether the operator asked to cancel the run.
+        remote_task_id: last Task id observed on the remote side (cancel target).
         proposals: inbound proposals in order.
         discovery: discovery mode of the run.
         traces: every trace span produced/ingested for the run.
@@ -151,6 +153,8 @@ class RunState:
     pending_decision: bool = False
     pending_intent: bool = False
     intent_future: asyncio.Future[bool] | None = None
+    cancel_requested: bool = False
+    remote_task_id: str | None = None
     proposals: list[NegotiationProposeView] = field(default_factory=list)
     traces: list[dict[str, object]] = field(default_factory=list)
     spans: dict[str, dict[str, object]] = field(default_factory=dict)
@@ -444,6 +448,9 @@ class RunState:
         entry["spanId"] = span.span_id
         self._store_span(span, seq=seq, record=False, broadcast_frame=False)
         self.broadcast({"type": "event", "event": entry}, seq=seq)
+        task_id = _string_value(event.get("task_id"))
+        if task_id is not None:
+            self.remote_task_id = task_id
         self._persist_task_snapshot(event)
         return entry
 

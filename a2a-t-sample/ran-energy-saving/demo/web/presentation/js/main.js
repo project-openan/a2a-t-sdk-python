@@ -87,6 +87,8 @@ const els = {
   requestCardText: byId("request-card-text"),
   editRequest: byId("edit-request"),
   editLabel: byId("edit-label"),
+  cancelRun: byId("cancel-run"),
+  cancelLabel: byId("cancel-label"),
   drawer: byId("drawer"),
   requestTitle: byId("request-title"),
   requestText: byId("request-text"),
@@ -336,6 +338,7 @@ function bindStaticEvents() {
     els.editRequest.setAttribute("aria-expanded", String(open));
     if (open) els.requestText.focus();
   });
+  if (els.cancelRun) els.cancelRun.addEventListener("click", () => cancelRun());
   els.requestText.addEventListener("input", () => {
     hideError();
     if (!ui.busy && ui.view.status === "idle") renderIntentPanel();
@@ -472,6 +475,10 @@ function applyStaticCopy() {
     ui.meta?.modelMode === "offline" ? copy.runPillOffline : copy.runPillLive;
   els.scenariosLabel.textContent = copy.scenarioLabel;
   els.editLabel.textContent = copy.editRequest;
+  if (els.cancelLabel) {
+    els.cancelLabel.textContent = ui.cancelling ? copy.cancelling : copy.cancelRequest;
+  }
+  if (els.cancelRun) els.cancelRun.setAttribute("aria-label", copy.cancelRequest);
   els.requestCardLabel.textContent = copy.requestCardLabel;
   els.requestTitle.textContent = copy.requestTitle;
   els.requestHint.textContent = copy.requestHint;
@@ -623,6 +630,7 @@ async function startRun() {
   ui.counterText = "";
   ui.selectedRegion = "";
   ui.submitting = false;
+  ui.cancelling = false;
   ui.deadline = null;
   ui.looping = false;
   stage.reset();
@@ -665,6 +673,31 @@ async function startRun() {
     render();
     const detail = error instanceof Error && error.message ? ` (${error.message})` : "";
     showError(`${ui.copy.startFailed}${detail}`);
+  }
+}
+
+/** Stop the running task. The backend cancels the remote Task best effort and the local run. */
+async function cancelRun() {
+  if (!ui.busy || ui.cancelling || !ui.view.runId) return;
+  ui.cancelling = true;
+  if (els.cancelLabel) els.cancelLabel.textContent = ui.copy.cancelling;
+  if (els.cancelRun) els.cancelRun.disabled = true;
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(ui.view.runId)}/cancel`, {
+      method: "POST",
+    });
+    // A run that just reached its terminal frame is already stopped; the SSE finished frame will
+    // release the page, so 409 is not an error here.
+    if (!response.ok && response.status !== 409) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+  } catch (error) {
+    ui.cancelling = false;
+    if (els.cancelLabel) els.cancelLabel.textContent = ui.copy.cancelRequest;
+    if (els.cancelRun) els.cancelRun.disabled = false;
+    const detail = error instanceof Error && error.message ? ` (${error.message})` : "";
+    showError(`${ui.copy.cancelFailed}${detail}`);
   }
 }
 
@@ -867,6 +900,13 @@ function setBusy(busy) {
   els.requestText.disabled = busy;
   if (els.scenarioSelect) els.scenarioSelect.disabled = busy;
   if (els.startQuick) els.startQuick.disabled = busy;
+  if (!busy) {
+    ui.cancelling = false;
+    if (els.cancelLabel) els.cancelLabel.textContent = ui.copy.cancelRequest;
+  }
+  if (els.cancelRun) {
+    els.cancelRun.disabled = !busy || ui.cancelling || !ui.view.runId;
+  }
   renderControls();
 }
 
@@ -1350,6 +1390,9 @@ function renderControls() {
     els.startQuick.textContent = ui.busy ? ui.copy.running : ui.copy.start;
     els.startQuick.disabled = ui.busy;
   }
+  if (els.cancelRun) {
+    els.cancelRun.disabled = !ui.busy || ui.cancelling || !ui.view.runId;
+  }
 }
 
 function renderResult() {
@@ -1411,6 +1454,11 @@ function buildResultCard() {
     if (ending.detail && ending.resolution !== "rejected" && ending.resolution !== "aborted") {
       card.append(el("p", "result-detail", ending.detail));
     }
+  } else if (stage === "canceled") {
+    card.append(
+      el("h3", "result-title", ui.copy.result.canceledTitle),
+      el("p", "result-reason", ui.copy.result.canceled),
+    );
   } else if (stage === "failed") {
     card.append(
       el("h3", "result-title", ui.copy.result.failedTitle),
@@ -1553,6 +1601,9 @@ function narration(scene, stepKey) {
   }
   if (protocol === "plain" && scene.key === "send") {
     return ui.copy.narration.plainSend || ui.copy.narration.send;
+  }
+  if (scene.key === "finish" && ui.view.status === "canceled") {
+    return ui.copy.narration.canceled || ui.copy.narration.finish;
   }
   return ui.copy.narration[scene.key] || ui.copy.narration[stepKey] || scenarioStory(ui.copy, ui.selected);
 }

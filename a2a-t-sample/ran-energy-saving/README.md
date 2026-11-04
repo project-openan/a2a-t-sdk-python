@@ -219,6 +219,9 @@ Vendor contract notes:
   `wire-error.jsonl` and stops with a clear protocol error instead of silently ending.
 - Task cancellation returns HTTP 503; the client treats it as a known limitation and never retries
   the send.
+- The presentation toolbar has **Cancel task** next to **Edit request**. It asks the remote NMS to
+  cancel its Task first (best effort, currently HTTP 503) and then stops the local run, so a
+  long-running or repeatedly tested task can be stopped without restarting the page.
 - The NMS publishes no AgentCard, so discovery uses a static card; a real registry integration is
   a later step.
 

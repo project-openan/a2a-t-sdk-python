@@ -12,6 +12,7 @@ export const STATUS = {
   IDLE: "idle",
   RUNNING: "running",
   FINISHED: "finished",
+  CANCELED: "canceled",
   FAILED: "failed",
 };
 
@@ -190,10 +191,16 @@ export function applyFrame(state, frame) {
     case "finished": {
       if (state.finished) return state;
       state.finished = true;
-      state.status =
-        frame.status === "failed" || (typeof frame.error === "string" && frame.error)
-          ? STATUS.FAILED
-          : STATUS.FINISHED;
+      if (frame.status === "interrupted") {
+        // The run task was cancelled: either by the operator's Cancel button or by a process
+        // shutdown. Both stop the same way and the presentation says so.
+        state.status = STATUS.CANCELED;
+      } else {
+        state.status =
+          frame.status === "failed" || (typeof frame.error === "string" && frame.error)
+            ? STATUS.FAILED
+            : STATUS.FINISHED;
+      }
       state.finalState = typeof frame.finalState === "string" ? frame.finalState : null;
       state.report = isObject(frame.report) ? frame.report : null;
       state.error =
@@ -499,6 +506,7 @@ function applyTrace(state, span) {
 
 /** The act the page should show. */
 export function stageOf(state) {
+  if (state.status === STATUS.CANCELED) return "canceled";
   if (state.status === STATUS.FAILED) return "failed";
   if (state.status === STATUS.FINISHED) {
     if (state.finalState === "intent_not_confirmed") return "notSent";

@@ -10,6 +10,8 @@ The Starlette app observes and steers the client flow, it never re-implements pr
 * ``POST /api/runs/{id}/decisions`` submits a :class:`~shared.models.NegotiationDecision` to the
   manual provider (404 for an unknown run, 409 when no decision is pending);
 * ``GET /api/runs/{id}`` returns the status, result and transcript;
+* ``POST /api/runs/{id}/cancel`` cancels the running Task (presentation UI), best effort on the
+  remote side and always on the local run;
 * ``POST /api/runs/{id}/trace`` ingests the cross-process server spans (local token, envelope
   validation, broadcast; re-sent producer spans are deduplicated by original ``spanId``);
 * ``GET /api/runs/{id}/transcript.json`` / ``.md`` download the run transcript.
@@ -718,6 +720,23 @@ def create_app(
             return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
         return JSONResponse(run.snapshot())
 
+    async def cancel_run(request: Request) -> Response:
+        """Stop one running task (presentation UI cancel button).
+
+        The manager asks the remote transport to cancel its Task first (best effort; the vendor
+        NMS is known to answer HTTP 503), then stops the local run. The run task still publishes
+        its terminal ``finished`` frame, so every subscriber sees the cancellation.
+        """
+        run = manager.get(request.path_params["run_id"])
+        if run is None:
+            return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
+        if not await manager.cancel(run.run_id):
+            return JSONResponse(
+                {"error": "The run is already finished.", "code": "run_not_active"},
+                status_code=409,
+            )
+        return JSONResponse({"runId": run.run_id, "status": "cancelled"}, status_code=202)
+
     async def run_events(request: Request) -> Response:
         run = manager.get(request.path_params["run_id"])
         if run is None:
@@ -1076,6 +1095,7 @@ def create_app(
             Route("/comparison", comparison_page),
             Route("/api/runs", start_run, methods=["POST"]),
             Route("/api/runs/{run_id}", run_status),
+            Route("/api/runs/{run_id}/cancel", cancel_run, methods=["POST"]),
             Route("/api/runs/{run_id}/events", run_events),
             Route("/api/runs/{run_id}/decisions", submit_decision, methods=["POST"]),
             Route("/api/runs/{run_id}/intent", submit_intent, methods=["POST"]),

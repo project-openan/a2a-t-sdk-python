@@ -344,6 +344,39 @@ async def test_shutdown_marks_running_run_interrupted(
     assert stored.status == "interrupted"
 
 
+async def test_cancel_asks_the_remote_side_and_stops_the_run(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    wait = asyncio.Event()
+    manager, store, runtimes = _manager(tmp_path, offline_config, wait=wait)
+    run = await manager.start("information", "auto", "sse", user_request="slow")
+    while not runtimes or not runtimes[0].entered.is_set():
+        await asyncio.sleep(0.01)
+
+    canceled: list[str] = []
+
+    async def cancel_remote(task_id: str) -> None:
+        canceled.append(task_id)
+
+    runtime = run.runtime
+    assert runtime is not None
+    runtime.transport = SimpleNamespace(cancel=cancel_remote)  # type: ignore[attr-defined]
+    run.remote_task_id = "task-1"
+
+    assert await manager.cancel(run.run_id) is True
+
+    assert canceled == ["task-1"]
+    assert run.status == "interrupted"
+    assert run.error == "The run was cancelled by the operator."
+    assert run.runtime is None
+    stored = await store.get_run(run.run_id)
+    assert stored is not None
+    assert stored.status == "interrupted"
+    assert stored.error == "The run was cancelled by the operator."
+    assert await manager.cancel(run.run_id) is False
+
+
 async def test_a_finished_run_records_metrics(
     tmp_path: Path,
     offline_config: SampleConfig,

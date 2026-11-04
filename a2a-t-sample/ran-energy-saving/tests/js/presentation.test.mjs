@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 
 import {
+  STATUS,
   applyFrame,
   continuityModel,
   createState,
@@ -263,6 +264,20 @@ applyFrame(failed, { type: "run_started", runId: "r4", scenario: "information", 
 applyFrame(failed, finished("incomplete", null, "server unavailable"));
 assert.equal(stageOf(failed), "failed");
 assert.equal(failed.error, "server unavailable");
+
+// --- A cancelled run reports its own ending ------------------------------
+
+const canceled = createState();
+applyFrame(canceled, { type: "run_started", runId: "r4c", scenario: "information", mode: "manual" });
+applyFrame(canceled, {
+  type: "finished",
+  status: "interrupted",
+  finalState: null,
+  report: null,
+  error: "The run was cancelled by the operator.",
+});
+assert.equal(canceled.status, STATUS.CANCELED);
+assert.equal(stageOf(canceled), "canceled");
 
 // --- Confirm mode: the decision frame carries the recommendation --------
 

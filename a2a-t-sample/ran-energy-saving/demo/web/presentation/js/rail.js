@@ -227,7 +227,9 @@ function statusText(state, copy) {
         })
       : copy.negotiation.statusWaiting;
   }
-  if (stage === "failed" || stage === "notApplied") return copy.negotiation.statusEnded;
+  if (stage === "canceled" || stage === "failed" || stage === "notApplied") {
+    return copy.negotiation.statusEnded;
+  }
   return copy.negotiation.statusIdle;
 }
 

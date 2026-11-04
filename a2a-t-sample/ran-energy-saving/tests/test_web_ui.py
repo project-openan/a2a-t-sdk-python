@@ -599,6 +599,39 @@ async def test_manual_decision_submission_advances_the_run(
     assert runtimes[0].closed is True
 
 
+async def test_cancel_endpoint_stops_a_running_run(
+    client: httpx.AsyncClient,
+    runtimes: list[FakeRuntime],
+) -> None:
+    """The presentation Cancel button stops a long-running task through the API."""
+    start = await client.post(
+        "/api/runs",
+        json={"scenario": "information", "mode": "manual", "transport": "sse"},
+    )
+    assert start.status_code == 202
+    run_id = start.json()["runId"]
+    await _wait_status(client, run_id, lambda data: data["pendingDecision"] is True)
+
+    response = await client.post(f"/api/runs/{run_id}/cancel")
+
+    assert response.status_code == 202
+    assert response.json() == {"runId": run_id, "status": "cancelled"}
+    finished = await _wait_status(client, run_id, lambda data: data["status"] != "running")
+    assert finished["status"] == "interrupted"
+    assert finished["error"] == "The run was cancelled by the operator."
+    assert runtimes[0].closed is True
+
+    again = await client.post(f"/api/runs/{run_id}/cancel")
+    assert again.status_code == 409
+    assert again.json()["code"] == "run_not_active"
+
+
+async def test_cancel_unknown_run_is_not_found(client: httpx.AsyncClient) -> None:
+    response = await client.post("/api/runs/missing/cancel")
+    assert response.status_code == 404
+    assert response.json()["code"] == "unknown_run"
+
+
 async def test_each_decision_produces_exactly_one_timeline_row(
     client: httpx.AsyncClient,
 ) -> None:

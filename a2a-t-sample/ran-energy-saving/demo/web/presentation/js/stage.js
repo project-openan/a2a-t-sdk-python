@@ -682,6 +682,13 @@ export function createStage(els) {
           nms: { cls: "fail", text: copy.states.nmsDone },
           cells: { cls: "", text: copy.states.cellsNormal },
         });
+      } else if (ending === "canceled") {
+        setActors({
+          eng: { cls: "wait", text: copy.states.engCanceled },
+          oss: { cls: "", text: copy.states.ossWaiting },
+          nms: { cls: "", text: copy.states.nmsWaiting },
+          cells: { cls: "", text: copy.states.cellsNormal },
+        });
       }
       return;
     }

@@ -360,7 +360,9 @@ body.resizing-y { cursor: row-resize; user-select: none; }
   overflow: hidden;
 }
 .tbtn { border: 2px solid var(--black); background: var(--white); padding: 5px 10px; font-weight: 700; font-size: 12.5px; }
-[data-brand="orange"] .tbtn:hover, .tbtn[aria-expanded="true"] { background: var(--black); color: var(--white); }
+[data-brand="orange"] .tbtn:hover:not(:disabled), .tbtn[aria-expanded="true"] { background: var(--black); color: var(--white); }
+.tbtn:disabled { opacity: .45; cursor: not-allowed; }
+.tbtn.danger:not(:disabled) { border-color: var(--red); color: var(--red); }
 .drawer {
   border: 2px solid var(--black);
   background: var(--g50);
