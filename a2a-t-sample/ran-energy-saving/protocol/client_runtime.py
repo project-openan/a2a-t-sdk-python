@@ -84,7 +84,12 @@ from protocol.intent import (
     ProcessedIntent,
     RawIntentProcessor,
 )
-from protocol.nms_client import NmsClient, NmsConfig, NmsSseTransport
+from protocol.nms_client import (
+    NmsClient,
+    NmsConfig,
+    NmsSseTransport,
+    NmsWebhookTransport,
+)
 from protocol.plain_client_flow import run_plain_client_flow
 from protocol.pure_client_flow import run_pure_client_flow
 from protocol.run_spec import DEFAULT_CLIENT_POLICY, ClientPolicy, RunCatalog, RunSpec
@@ -614,14 +619,35 @@ async def build_client_runtime(
     httpx_client: httpx.AsyncClient | None = None
     receiver: WebhookReceiver | None = None
     if config.discovery == DISCOVERY_NMS:
-        # The vendor NMS has no AgentCard and no a2a-sdk-compatible transport: the raw client owns
-        # authentication, the never-closing SSE stream and task polling.
+        # The vendor NMS has no AgentCard and no a2a-sdk-compatible transport. The real machine
+        # uses the non-streaming ``message:send`` + webhook; the SSE/stream path remains available
+        # for the offline simulator and contract tests.
         nms_client = NmsClient(NmsConfig.from_config(config))
-        flow_transport: ClientTransport = NmsSseTransport(
-            nms_client,
-            protocol=protocol,
-            request_timeout=config.nms_request_timeout,
-        )
+        if transport == TRANSPORT_WEBHOOK:
+            queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+            receiver = build_webhook_receiver(
+                token=config.webhook_token,
+                queue=queue,
+                host=config.webhook_host,
+                port=config.webhook_port,
+            )
+            await receiver.start()
+            _LOGGER.info("NMS webhook mode: push_url=%s", receiver.url)
+            flow_transport: ClientTransport = NmsWebhookTransport(
+                nms_client,
+                queue=queue,
+                push_url=receiver.url,
+                push_token=config.webhook_token,
+                protocol=protocol,
+                idle_timeout=float(config.webhook_idle_timeout),
+            )
+        else:
+            flow_transport = NmsSseTransport(
+                nms_client,
+                protocol=protocol,
+                request_timeout=config.nms_request_timeout,
+                read_after_send=config.nms_read_after_send,
+            )
     else:
         # One budget for both the transport and the per-call context (the SDK applies the context
         # timeout to every request, overriding the httpx client default).
@@ -643,6 +669,7 @@ async def build_client_runtime(
                 receiver = build_webhook_receiver(
                     token=config.webhook_token,
                     queue=queue,
+                    host=config.webhook_host,
                     port=config.webhook_port,
                 )
                 await receiver.start()

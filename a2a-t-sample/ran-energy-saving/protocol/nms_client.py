@@ -29,7 +29,7 @@ from typing import Any, Final
 
 import httpx
 from a2a.client.client import ClientCallContext
-from a2a.types import SendMessageRequest, StreamResponse
+from a2a.types import SendMessageRequest, StreamResponse, TaskPushNotificationConfig
 from a2a_t.core.metadata import (
     NEGOTIATION_CONTEXT_METADATA_KEY,
     NEGOTIATION_T_EXTENSION_URI,
@@ -43,7 +43,13 @@ from shared.config import (
 )
 from shared.run_constants import PROTOCOL_A2A_T
 from shared.sse_event_consumer import normalize_event
-from shared.trace import PHASE_DISPATCH, PHASE_EXECUTION, PHASE_NEGOTIATION, record_span
+from shared.trace import (
+    PHASE_DISPATCH,
+    PHASE_EXECUTION,
+    PHASE_NEGOTIATION,
+    is_report_artifact,
+    record_span,
+)
 
 from protocol.client_flow import is_stop_event, is_terminal_event
 
@@ -132,6 +138,7 @@ class NmsConfig:
     token_value: str = field(repr=False)
     verify_tls: bool = False
     idle_timeout: float = DEFAULT_NMS_IDLE_TIMEOUT_SECONDS
+    read_after_send: bool = True
     request_timeout: float = DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS
     poll_interval: float = DEFAULT_NMS_POLL_INTERVAL_SECONDS
     token_refresh_skew: float = 60.0
@@ -163,6 +170,7 @@ class NmsConfig:
             token_value=config.nms_token_value,
             verify_tls=config.nms_verify_tls,
             idle_timeout=config.nms_idle_timeout,
+            read_after_send=config.nms_read_after_send,
             request_timeout=config.nms_request_timeout,
             poll_interval=config.nms_poll_interval,
             wire_log=config.nms_wire_log,
@@ -312,13 +320,18 @@ class NmsClient:
                     body = (await response.aread()).decode("utf-8", "replace")
                     raise NmsProtocolError(f"NMS A2A request returned HTTP {response.status_code}: {_excerpt(body)}")
                 lines = response.aiter_lines()
+                # The NMS emits ``: heartbeat`` every 15 s forever, so an idle window measured
+                # between *any* two lines never expires: the stream hung for minutes after the
+                # Task went to WORKING and never reached polling. Only a ``data:`` frame proves
+                # progress; heartbeats are skipped without moving ``idle_deadline``.
+                idle_deadline = time.monotonic() + self._config.idle_timeout
                 while True:
-                    try:
-                        line = await asyncio.wait_for(anext(lines), timeout=self._config.idle_timeout)
-                    except StopAsyncIteration:
-                        break
-                    except asyncio.TimeoutError:
-                        self._write_wire("in", line=f": idle {self._config.idle_timeout:g}s; polling")
+                    remaining = idle_deadline - time.monotonic()
+                    if remaining <= 0:
+                        self._write_wire(
+                            "in",
+                            line=f": idle {self._config.idle_timeout:g}s without a data frame; polling",
+                        )
                         _nms_span(
                             phase=PHASE_EXECUTION,
                             title="NMS stream idle; polling the task",
@@ -326,13 +339,21 @@ class NmsClient:
                             detail={"idleSeconds": self._config.idle_timeout},
                         )
                         break
+                    try:
+                        line = await asyncio.wait_for(anext(lines), timeout=remaining)
+                    except StopAsyncIteration:
+                        break
+                    except asyncio.TimeoutError:
+                        continue
                     self._write_wire("in", line=line)
                     if not line.startswith("data:"):
-                        # ``: heartbeat`` comments and blank separator lines.
+                        # ``: heartbeat`` comments and blank separator lines; they do not reset
+                        # the deadline.
                         continue
                     raw = line[5:].strip()
                     if not raw:
                         continue
+                    idle_deadline = time.monotonic() + self._config.idle_timeout
                     try:
                         frame = json.loads(raw)
                     except json.JSONDecodeError as exc:
@@ -362,6 +383,76 @@ class NmsClient:
                     yield frame
         except httpx.HTTPError as exc:
             raise NmsProtocolError(f"NMS A2A request failed: {exc}") from exc
+
+    async def send_message(
+        self,
+        payload: Mapping[str, object],
+        *,
+        extension_header: str = "",
+    ) -> dict[str, object]:
+        """Send one non-streaming ``message:send`` request and return its JSON reply.
+
+        The real NMS uses this endpoint for direct machine-to-machine integration; task progress
+        is delivered through the registered webhook instead of an SSE stream.
+
+        Raises:
+            NmsAuthError: when the token cannot be acquired.
+            NmsProtocolError: on a non-200 response or a non-object body.
+        """
+        token = await self.token()
+        url = f"{self._config.a2a_base}/message:send"
+        headers = self._headers(token, extension_header)
+        headers["Accept"] = "application/json"
+        self._write_wire("out", method="POST", url=url, headers=headers, body=dict(payload))
+        _nms_span(
+            phase=PHASE_DISPATCH,
+            title="NMS A2A message sent",
+            title_key="nmsSend",
+            detail={"url": url, "a2aT": bool(extension_header)},
+        )
+        timeout = httpx.Timeout(
+            self._config.request_timeout,
+            connect=min(DEFAULT_NMS_CONNECT_TIMEOUT_SECONDS, self._config.request_timeout),
+        )
+        try:
+            response = await self._http.post(
+                url,
+                json=dict(payload),
+                headers=headers,
+                timeout=timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise NmsProtocolError(f"NMS A2A request failed: {exc}") from exc
+        if response.status_code != 200:
+            body = response.text
+            self.record_error(
+                "NmsProtocolError",
+                f"HTTP {response.status_code}: {_excerpt(body)}",
+                body,
+            )
+            raise NmsProtocolError(
+                f"NMS A2A request returned HTTP {response.status_code}: {_excerpt(body)}"
+            )
+        try:
+            body = response.json()
+        except ValueError as exc:
+            self.record_error("ParseError", "NMS response is not JSON", response.text)
+            raise NmsProtocolError("NMS A2A response is not JSON") from exc
+        if not isinstance(body, dict):
+            self.record_error("ParseError", "NMS response is not a JSON object", body)
+            raise NmsProtocolError("NMS A2A response is not a JSON object")
+        self._write_wire("in", body=body)
+        if "error" in body:
+            message = _frame_error_message(body)
+            self.record_error("NmsProtocolError", message, body)
+            _nms_span(
+                phase=PHASE_EXECUTION,
+                title="NMS returned an error frame",
+                title_key="nmsError",
+                detail={"message": message[:1000]},
+            )
+            raise NmsProtocolError(message)
+        return body
 
     async def get_task(self, task_id: str) -> dict[str, object]:
         """Return one Task document.
@@ -535,6 +626,7 @@ class NmsSseTransport:
         *,
         protocol: str = PROTOCOL_A2A_T,
         request_timeout: float | None = None,
+        read_after_send: bool | None = None,
     ) -> None:
         """Create one transport.
 
@@ -542,10 +634,15 @@ class NmsSseTransport:
             client: raw NMS client.
             protocol: interaction protocol; only ``a2a-t`` sends extension headers.
             request_timeout: terminal-poll budget; defaults to the client configuration.
+            read_after_send: keep reading a negotiation-response stream for the next proposal;
+                defaults to the client configuration.
         """
         self._client = client
         self._protocol = protocol
         self._request_timeout = client.config.request_timeout if request_timeout is None else request_timeout
+        self._read_after_send = (
+            client.config.read_after_send if read_after_send is None else read_after_send
+        )
         self._event_sink: Any | None = None
 
     def set_event_sink(self, event_sink: Any | None) -> None:
@@ -574,6 +671,11 @@ class NmsSseTransport:
             extension_header = str(call_context.service_parameters.get("A2A-Extensions", "") or "")
         events: list[dict[str, object]] = []
         task_id: str | None = None
+        # The vendor answers a negotiation response on a new stream; after ACCEPT the next
+        # proposal carries a *new* negotiation id on the same context id. Returning at the first
+        # structured message would drop it, so response sends keep reading until the stream idles
+        # or reaches a terminal Task.
+        read_after_send = self._read_after_send and _is_negotiation_response(payload)
         async for frame in self._client.stream_message(payload, extension_header=extension_header):
             if "message" in frame and task_id is None:
                 message = frame.get("message")
@@ -585,7 +687,9 @@ class NmsSseTransport:
                         event = _frame_to_event(frame)
                         events.append(event)
                         self._emit(event)
-                        return events
+                        if not read_after_send:
+                            return events
+                        continue
                     context_id = _context_id(message)
                     text = _message_text(message)
                     self._client.record_error("NmsNegotiationRequiredError", text, frame)
@@ -607,7 +711,16 @@ class NmsSseTransport:
             self._emit(event)
             if is_stop_event(event):
                 break
-        if task_id is not None and not any(is_terminal_event(event) for event in events):
+        has_negotiation = any(
+            isinstance(event.get("metadata"), Mapping)
+            and _is_negotiation_metadata(event["metadata"])
+            for event in events
+        )
+        if (
+            task_id is not None
+            and not has_negotiation
+            and not any(is_terminal_event(event) for event in events)
+        ):
             try:
                 task = await self._client.wait_for_terminal(task_id, timeout=self._request_timeout)
             except NmsTimeoutError:
@@ -626,6 +739,122 @@ class NmsSseTransport:
         """Cancel one Task; the known HTTP 503 is not an error."""
         del call_context
         await self._client.cancel_task(task_id)
+
+
+class NmsWebhookTransport:
+    """Client-flow transport for the vendor's non-streaming ``message:send`` + webhook mode.
+
+    The real NMS is addressed with ``POST <base>/message:send``; task progress arrives through the
+    embedded webhook receiver. The initial reply is inspected first because a negotiation message
+    may be returned synchronously; pushed events are then consumed until a terminal state, a
+    negotiation message or the idle backstop.
+    """
+
+    def __init__(
+        self,
+        client: NmsClient,
+        *,
+        queue: asyncio.Queue[dict[str, object]],
+        push_url: str,
+        push_token: str,
+        protocol: str = PROTOCOL_A2A_T,
+        idle_timeout: float = DEFAULT_NMS_IDLE_TIMEOUT_SECONDS,
+    ) -> None:
+        """Create one webhook transport.
+
+        Args:
+            client: raw NMS client.
+            queue: queue fed by the webhook receiver.
+            push_url: callback URL registered inline on every request.
+            push_token: push token checked by the receiver.
+            protocol: interaction protocol; only ``a2a-t`` sends extension headers.
+            idle_timeout: backstop when no push arrives.
+        """
+        self._client = client
+        self._queue = queue
+        self._push_url = push_url
+        self._push_token = push_token
+        self._protocol = protocol
+        self._idle_timeout = idle_timeout
+        self._event_sink: Any | None = None
+
+    def set_event_sink(self, event_sink: Any | None) -> None:
+        """Attach the live event sink used by ``run_client_flow``."""
+        self._event_sink = event_sink
+
+    def _emit(self, event: dict[str, object]) -> None:
+        """Forward one normalized event to the attached sink, when any."""
+        if self._event_sink is not None:
+            self._event_sink(event)
+
+    async def send(
+        self,
+        request: SendMessageRequest,
+        call_context: ClientCallContext,
+    ) -> list[dict[str, object]]:
+        """Send one non-streaming message, register the webhook, and collect its events."""
+        request.configuration.return_immediately = True
+        request.configuration.task_push_notification_config.CopyFrom(
+            TaskPushNotificationConfig(url=self._push_url, token=self._push_token)
+        )
+        extension_header = ""
+        if self._protocol == PROTOCOL_A2A_T:
+            extension_header = str(call_context.service_parameters.get("A2A-Extensions", "") or "")
+        payload = MessageToDict(request)
+        response_mode = _is_negotiation_response(payload)
+        reply = await self._client.send_message(payload, extension_header=extension_header)
+        events: list[dict[str, object]] = []
+        reply_event = _reply_event(reply)
+        events.append(reply_event)
+        self._emit(reply_event)
+        if _is_negotiation_event(reply_event):
+            # A synchronous negotiation reply is the whole response for an initial send. For a
+            # negotiation response, the vendor may push the next proposal on the same webhook, so
+            # keep waiting like the SSE response path.
+            if not response_mode:
+                return events
+        elif is_stop_event(reply_event):
+            return events
+        while True:
+            try:
+                pushed = await asyncio.wait_for(self._queue.get(), timeout=self._idle_timeout)
+            except asyncio.TimeoutError:
+                _LOGGER.info(
+                    "NMS webhook phase idle for %.0fs; returning the events received",
+                    self._idle_timeout,
+                )
+                return events
+            event = _frame_to_event(pushed)
+            events.append(event)
+            self._emit(event)
+            if (
+                is_stop_event(event)
+                or is_report_artifact(event)
+                or _is_negotiation_event(event)
+            ):
+                return events
+
+    async def cancel(self, task_id: str, call_context: ClientCallContext | None = None) -> None:
+        """Cancel one Task; the known HTTP 503 is not an error."""
+        del call_context
+        await self._client.cancel_task(task_id)
+
+
+def _reply_event(reply: Mapping[str, object]) -> dict[str, object]:
+    """Normalize one ``message:send`` reply into the shared event shape."""
+    if "task" in reply or "message" in reply:
+        return _frame_to_event(reply)
+    if isinstance(reply.get("id"), str) and "status" in reply:
+        return _frame_to_event({"task": reply})
+    if isinstance(reply.get("messageId"), str):
+        return _frame_to_event({"message": reply})
+    return _frame_to_event(reply)
+
+
+def _is_negotiation_event(event: Mapping[str, object]) -> bool:
+    """Return whether one normalized event carries structured negotiation metadata."""
+    metadata = event.get("metadata")
+    return isinstance(metadata, Mapping) and _is_negotiation_metadata(metadata)
 
 
 def _frame_to_event(frame: Mapping[str, object]) -> dict[str, object]:
@@ -697,6 +926,26 @@ def _excerpt(text: str, limit: int = _ERROR_EXCERPT_LENGTH) -> str:
 def _is_negotiation_metadata(metadata: Mapping[str, object]) -> bool:
     """Return whether one message metadata map carries a structured negotiation."""
     return NEGOTIATION_T_EXTENSION_URI in metadata or NEGOTIATION_CONTEXT_METADATA_KEY in metadata
+
+
+def _is_negotiation_response(payload: Mapping[str, object]) -> bool:
+    """Return whether an outbound payload is a negotiation response (not the initial Task-T)."""
+    message = payload.get("message")
+    if not isinstance(message, Mapping):
+        return False
+    metadata = message.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return False
+    context = metadata.get(NEGOTIATION_CONTEXT_METADATA_KEY)
+    if not isinstance(context, Mapping):
+        return False
+    performative = context.get("performative")
+    return isinstance(performative, str) and performative.upper() in {
+        "ACCEPT",
+        "PROPOSE",
+        "REJECT",
+        "ABORT",
+    }
 
 
 def _frame_error_message(frame: Mapping[str, object]) -> str:

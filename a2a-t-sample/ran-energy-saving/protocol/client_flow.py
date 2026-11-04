@@ -804,6 +804,9 @@ async def run_client_flow(
             context_id=context_id,
         ):
             decision = await provider.respond(propose, session)
+            decision = await _reask_rejected_region(
+                provider, decision, propose, session, trace_sink=trace_sink
+            )
         _LOGGER.info("decision made: action=%s round=%s", decision.action, session.round)
         # Exactly one timeline row per decision: a consumer callback (Web UI/transcript) records
         # the decision itself, so the synthetic span would be an adjacent duplicate. Without a
@@ -896,7 +899,11 @@ async def run_client_flow(
         if decision.action in ("reject", "abort"):
             return finish(FINAL_STATE_NEGOTIATION_ENDED)
         if decision.action == "accept":
-            return finish(_final_state(batch))
+            # The vendor may open a new negotiation id on the same context id right after the
+            # accept. That new PROPOSE is part of the accept response stream and must be decided;
+            # only an accept batch without another proposal finishes the flow.
+            if _find_negotiation_message(batch) is None:
+                return finish(_final_state(batch))
 
 
 # ----------------------------------------------------------------------
@@ -955,9 +962,13 @@ def _negotiation_request(
 ) -> tuple[SendMessageRequest, ClientCallContext]:
     """Build one negotiation response request from generated protocol content."""
     metadata = {key: value for key, value in content.build_metadata_content().items() if value is not None}
+    # The negotiation id is the server's own handle for the negotiation and differs from the
+    # context id. The vendor NMS rejects a reply that carries the context id in its place with
+    # ``negotiation id missing or mismatched``; the context id still travels in ``contextId``.
+    # A continuing negotiation may also start a new negotiation id on the same context id.
     metadata[NEGOTIATION_CONTEXT_METADATA_KEY] = negotiation_context_metadata(
         NegotiationContext(
-            id=context_id,
+            id=session.id or context_id,
             round=session.round,
             max_rounds=session.max_rounds,
             performative=session.performative,
@@ -1093,6 +1104,130 @@ def _build_accept_request(
         call_timeout_seconds=call_timeout_seconds,
         extra_metadata=metadata,
     )
+
+
+#: Markers of an information proposal that rejected the requested region.
+_REGION_REJECTION_MARKERS: Final[tuple[str, ...]] = (
+    "not recognized",
+    "not served",
+    "does not serve",
+    "unrecognized",
+    "不识别",
+    "无法识别",
+    "不支持",
+    "未识别",
+)
+
+#: Candidate-list labels the vendor uses in an information proposal.
+_REGION_CANDIDATE_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
+    re.compile(r"(?:Served areas|Available areas)\s*:\s*([^.\n]+)", re.IGNORECASE),
+    re.compile(r"(?:可用区域|受服务区域)\s*[：:]\s*([^。\n]+)"),
+)
+
+#: Quoted region in an information proposal.
+_REGION_QUOTED_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
+    re.compile(r"(?:Region|area)\s+['\"“]([^'\"”]+)['\"”]", re.IGNORECASE),
+    re.compile(r"(?:区域|地区)\s*[“\"]([^”\"]+)[”\"]"),
+)
+
+
+def _rejected_region(propose: NegotiationProposeView) -> str | None:
+    """Return the region an information proposal rejected, or ``None`` when it did not."""
+    content = propose.content or ""
+    lowered = content.lower()
+    if not any(marker.lower() in lowered for marker in _REGION_REJECTION_MARKERS):
+        return None
+    for pattern in _REGION_QUOTED_PATTERNS:
+        match = pattern.search(content)
+        if match is not None and match.group(1).strip():
+            return match.group(1).strip()
+    return ""
+
+
+def _region_candidates(propose: NegotiationProposeView) -> tuple[str, ...]:
+    """Return the served regions an information proposal offers, best first."""
+    options = propose.options
+    if options is not None and options.options:
+        return tuple(option.value for option in options.options if option.value)
+    for pattern in _REGION_CANDIDATE_PATTERNS:
+        match = pattern.search(propose.content or "")
+        if match is None:
+            continue
+        values = [part.strip(" .;，；") for part in re.split(r"[;；,，、]", match.group(1))]
+        candidates = tuple(value for value in values if value)
+        if candidates:
+            return candidates
+    return ()
+
+
+def _region_reask_needed(
+    decision: NegotiationDecision,
+    propose: NegotiationProposeView,
+) -> tuple[str, tuple[str, ...]] | None:
+    """Return the rejected region and candidates when the accept should be re-asked."""
+    if decision.action != "accept" or propose.kind != "information":
+        return None
+    rejected = _rejected_region(propose)
+    if rejected is None:
+        return None
+    candidates = _region_candidates(propose)
+    if not candidates:
+        return None
+    current = (decision.filled_params or {}).get("region")
+    if isinstance(current, str) and current.strip() and current.strip() != rejected:
+        return None
+    return rejected, candidates
+
+
+def _region_reask_content(propose: NegotiationProposeView, candidates: tuple[str, ...]) -> str:
+    """Append the candidate regions to a proposal for one corrective model turn."""
+    joined = "; ".join(candidates)
+    return (
+        f"{propose.content}\n\n"
+        "## Region Correction\n"
+        "The previous ACCEPT used a region the server rejected. Return one corrected ACCEPT and "
+        f"set `filled_params.region` to one of these served regions: {joined}. Keep every other "
+        "value unchanged. Return only the NegotiationDecision JSON object."
+    )
+
+
+async def _reask_rejected_region(
+    provider: NegotiationDecisionProvider,
+    decision: NegotiationDecision,
+    propose: NegotiationProposeView,
+    session: NegotiationContext,
+    *,
+    trace_sink: Callable[[dict[str, object]], None] | None = None,
+) -> NegotiationDecision:
+    """Ask the ADK decision agent once more when it repeated a rejected region."""
+    reask = _region_reask_needed(decision, propose)
+    if reask is None:
+        return decision
+    # Only the ADK provider can take a corrective model turn. Manual and scripted providers keep
+    # their existing behavior; the human can choose the region in the approval card.
+    from protocol.decision_provider import AdkDecisionProvider
+
+    if not isinstance(provider, AdkDecisionProvider):
+        return decision
+    rejected, candidates = reask
+    if trace_sink is not None:
+        recorder = TraceRecorder(current_trace().run_id or "", id_prefix="flow")
+        span = recorder.emit(
+            kind="region_reask",
+            phase=PHASE_NEGOTIATION,
+            title="Region rejected; asking the decision model again",
+            actor="client",
+            side="client",
+            direction="internal",
+            round=session.round,
+            context_id=propose.context_id,
+            detail={"rejectedRegion": rejected, "candidates": list(candidates)},
+        )
+        trace_sink(span.to_dict())
+    corrected = propose.model_copy(
+        update={"content": _region_reask_content(propose, candidates)}
+    )
+    return await provider.respond(corrected, session)
 
 
 def _build_counter_request(

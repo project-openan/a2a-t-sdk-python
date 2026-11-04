@@ -413,9 +413,23 @@ but replaces discovery and transport:
 | --- | --- | --- |
 | Discovery | registry or direct AgentCard | static card derived from `A2AT_SAMPLE_NMS_HOST` |
 | Auth | static `A2AT_SAMPLE_SERVER_AUTH_TOKEN` | session token from the derived `/rest/plat/smapp/v1/sessions` |
-| Transport | a2a-sdk SSE/webhook | `protocol/nms_client.py` raw SSE + task polling |
+| Transport | a2a-sdk SSE/webhook | real NMS: `message:send` + webhook; simulator: raw SSE + task polling |
 | Execution | local RAN Agent | vendor NMS |
 | Approval 2 | local MIE gate | not present; the vendor owns execution |
+
+A real `--nms` run defaults to `--transport webhook`: the client posts
+`POST <base>/message:send` with an inline `taskPushNotificationConfig` and consumes task events
+from the embedded webhook. `A2AT_SAMPLE_WEBHOOK_HOST` must be an address the vendor NMS can reach,
+and `A2AT_SAMPLE_WEBHOOK_PORT` must be open. The local `--nms-sim` run keeps the SSE
+`message:stream` contract and defaults to `--transport sse`. An explicit `--nms --transport sse`
+is rejected; the simulator rejects `--transport webhook`.
+
+The same request/response objects and normalization are shared by both NMS transports:
+
+- `NmsWebhookTransport` sends non-streaming `message:send`, registers
+  `configuration.taskPushNotificationConfig`, inspects the synchronous reply first, then waits for
+  pushed `statusUpdate` / `artifactUpdate` / `message` frames.
+- `NmsSseTransport` remains the simulator/contract path.
 
 `A2AT_SAMPLE_NMS_HOST` is the single required address. The configuration layer derives
 `https://<host>:31127/a2a/json` and `https://<host>:27417/rest/plat/smapp/v1/sessions`; the scheme,
@@ -435,8 +449,20 @@ Implementation details:
   accept (`forced_region`), so an operator can point the demo at the served region without editing
   the scenario.
 - The SSE reader skips `: heartbeat` comments and leaves the stream after
-  `A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS` without a `data:` frame. It then polls
-  `GET <base>/tasks/{id}` to a terminal state; a send timeout is never retried.
+  `A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS` (default 45 s) without a `data:` frame. Heartbeats do not
+  reset that window. It then polls `GET <base>/tasks/{id}` to a terminal state; a send timeout is
+  never retried.
+- `negotiationContext.id` is the vendor's negotiation handle, not the A2A `contextId`. The client
+  replies with `session.id` (falling back to the context id only when the server sent none).
+  `build_negotiation_metadata()` follows the same rule, which is a no-op for the local server
+  because it uses the context id as its negotiation id.
+- After an accept/counter/reject, `NmsSseTransport.send()` keeps reading because the vendor answers
+  on a new stream and may open a new negotiation id on the same context id;
+  `A2AT_SAMPLE_NMS_READ_AFTER_SEND` (default on) controls that behavior.
+- An accept batch that carries another PROPOSE loops back into the negotiation instead of finishing
+  the flow.
+- The `abort` scenario now counters inside the information negotiation (the vendor opens it before
+  any target check) and reaches the server's max-round abort.
 - Raw frames are parsed back into `StreamResponse` and normalized by the existing
   `shared.sse_event_consumer.normalize_event`, so the negotiation/trace code is unchanged.
 - A `message` frame with Negotiation-T metadata is returned to the flow, which asks the decision
@@ -791,7 +817,7 @@ The expected sequences are asserted by `tests/test_scenarios.py` and `tests/test
 | `target` | Conflicting segments: correct the overlap before executing | The guaranteed-throughput target has overlapping time segments (`content.value_not_allowed`). | `S:Propose(1)` → `C:Propose(1)` (counter) → `S:Propose(2)` (revision) → `C:Accept(2)` | Task `COMPLETED` + report (`task_completed`) |
 | `feasibility` | Infeasible conditions: the NMS proposes an alternative | A guaranteed rate conflicts with an 18-hour power outage (`content.rule_violation`). | `S:Propose(1)` (alternative plan) → `C:Accept(1)` | Task `COMPLETED` + report (`task_completed`) |
 | `reject` | The OSS cannot provide the value: the negotiation ends | The client cannot provide the missing throughput target. | `S:Propose(1)` → `C:Reject(1)` → `S:Message("协商已结束")` | No Task (`no_task_negotiation_ended`) |
-| `abort` | No convergence: the NMS aborts after the round budget | The client keeps counter-proposing a plan the policy cannot accept. | `S:Propose(1)` → `C:Propose(1)` → `S:Propose(2)` → `C:Propose(2)` → `S:Propose(3)` → `C:Propose(3)` → `S:Abort(3)` | No Task (`no_task_negotiation_aborted`) |
+| `abort` | No convergence: the NMS aborts after the round budget | The information negotiation asks for the missing target; the client keeps countering with the requested region instead. | `S:Propose(1)` → `C:Propose(1)` → `S:Propose(2)` → `C:Propose(2)` → `S:Propose(3)` → `C:Propose(3)` → `S:Abort(3)` | No Task (`no_task_negotiation_aborted`) |
 | `outage` | Two-phase use case 2: a Create baseline, then a real Modify continuation on the same Task | Phase 1 creates the two-site baseline (`cell-002` 01:00–05:00 at 10%) and leaves the Task `WORKING`; phase 2 sends a Modify Task-T for the 03:00–05:00 outage, updates the same plan to 20%, replaces the report artifact and completes the Task. | none | Task `COMPLETED` + modified report (`task_completed`, `cell-002` 01:00–05:00 at 20%) |
 
 Notes:
@@ -845,7 +871,8 @@ SDK. `run_demo.py` reads `A2AT_SAMPLE_UI_PORT` only as the default of `--ui-port
 | `REGISTRY_CENTER_HOST` / `REGISTRY_CENTER_PORT` | default `127.0.0.1` / `5001` | Mock registry bind and lookup URL. |
 | `A2AT_SAMPLE_DISCOVERY` | `registry` (default), `direct` | Discovery mode. |
 | `A2AT_SAMPLE_DIRECT_SERVER_URL` | default `http://127.0.0.1:8000` | Base URL read by `direct` discovery. |
-| `A2AT_SAMPLE_TRANSPORT` | `sse` (default), `webhook` | Client event transport. |
+| `A2AT_SAMPLE_TRANSPORT` | `sse` (default), `webhook` | Client event transport. A real `--nms` run defaults to webhook (`message:send` + pushes); `--nms-sim` keeps sse. |
+| `A2AT_SAMPLE_WEBHOOK_HOST` / `A2AT_SAMPLE_WEBHOOK_PORT` | default `127.0.0.1` / `9000` | Webhook receiver address; the real NMS must be able to reach this host and port. |
 | `A2AT_SAMPLE_INTENT_MODE` | `processed` (default), `raw` | Run the business intent layer before the A2A/A2A-T mapping, or send the operator text directly. `--intent-mode` and `POST /api/runs.intentMode` override it per run. |
 | `A2AT_SAMPLE_WEBHOOK_PORT` | default `9000` (`0` = ephemeral) | Embedded webhook receiver port. |
 | `A2AT_SAMPLE_WEBHOOK_TOKEN` | default `demo-webhook-token` | Static push token checked against `X-A2A-Notification-Token`. |

@@ -183,9 +183,10 @@ def missing_extensions(requested_extensions: Sequence[str] | set[str], required:
 def build_negotiation_metadata(content: MetadataContent, *, context_id: str) -> dict[str, object]:
     """Build the metadata map of one generated Negotiation-T message.
 
-    The negotiation session id is forced to the A2A ``contextId`` (sample convention). ``None``
-    values (for example a generated message without a template URI) are omitted because the
-    protobuf metadata struct cannot carry them.
+    The negotiation id is the server's own handle. The local sample server uses the context id as
+    that handle, while the vendor NMS opens a new negotiation id on the same context id; using the
+    generated session id covers both. ``None`` values (for example a generated message without a
+    template URI) are omitted because the protobuf metadata struct cannot carry them.
 
     Args:
         content: generated negotiation content returned by the SDK.
@@ -203,7 +204,7 @@ def build_negotiation_metadata(content: MetadataContent, *, context_id: str) -> 
     metadata = content.build_metadata_content()
     metadata[NEGOTIATION_CONTEXT_METADATA_KEY] = negotiation_context_metadata(
         NegotiationContext(
-            id=context_id,
+            id=session.id or context_id,
             round=session.round,
             max_rounds=session.max_rounds,
             performative=session.performative,

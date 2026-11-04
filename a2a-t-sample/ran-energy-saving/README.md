@@ -196,8 +196,11 @@ The sample can also act as the OSS client of a real vendor NMS. With `--nms`, th
 no local registry, RAN Agent, MIE or OSS: the client obtains a session token from the NMS token
 endpoint and calls its A2A surface directly.
 
+A real `--nms` run uses **`POST /a2a/json/message:send` plus a webhook** (the vendor's direct
+machine-to-machine mode). The local NMS simulator keeps the SSE `message:stream` contract.
+
 ```bash
-# Real NMS: fill A2AT_SAMPLE_NMS_* in .env first
+# Real NMS: fill A2AT_SAMPLE_NMS_* and a reachable A2AT_SAMPLE_WEBHOOK_HOST in .env first
 python run_demo.py --nms --ui --brand huawei
 
 # Local NMS simulator: same client path, no lab network, no real network change
@@ -212,6 +215,9 @@ A2AT_SAMPLE_NMS_TOKEN_USER=<northbound-user>
 A2AT_SAMPLE_NMS_TOKEN_VALUE=<password>
 A2AT_SAMPLE_NMS_REGION=A2ATestRegion
 A2AT_SAMPLE_NMS_VERIFY_TLS=false
+# The real NMS must be able to reach this address and the webhook port.
+A2AT_SAMPLE_WEBHOOK_HOST=<client-lan-address>
+A2AT_SAMPLE_WEBHOOK_PORT=9000
 # Raw exchange log (default on in NMS mode; set 0 to keep business payloads off disk)
 A2AT_SAMPLE_NMS_WIRE_LOG=1
 ```
@@ -242,6 +248,13 @@ Vendor contract notes:
   Negotiation-T only; the local demo server keeps the refilled Task-T on the accept.
 - A continuing PROPOSE can arrive inside an `error` envelope. The client records it in
   `wire-error.jsonl` and stops with a clear protocol error instead of silently ending.
+- `negotiationContext.id` is the server's negotiation handle, not the A2A `contextId`. A reply
+  carries the proposal's negotiation id; a continuing negotiation may open a **new** negotiation id
+  on the same context id.
+- After an accept/counter/reject, the client keeps reading the response stream until it idles
+  (`A2AT_SAMPLE_NMS_READ_AFTER_SEND`, on by default) so a new proposal on that stream is not lost.
+- The idle window is 45 s by default (`A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS`); `: heartbeat`
+  frames do not count as progress.
 - Task cancellation returns HTTP 503; the client treats it as a known limitation and never retries
   the send.
 - The presentation toolbar has **Cancel task** next to **Edit request**. It asks the remote NMS to

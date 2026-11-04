@@ -172,8 +172,11 @@ sample 不再把操作员原文直接送进 A2A / A2A-T。默认的 `processed` 
 sample 也可以作为真实厂商网管的 OSS 客户端。加 `--nms` 后，启动器不再启动本地 registry、RAN
 Agent、MIE 和 OSS：客户端从网管的令牌接口获取会话，再直接调用网管的 A2A 面。
 
+真实 `--nms` run 使用 **`POST /a2a/json/message:send` + webhook**（网管的直连机器模式）；
+本地网管仿真器继续使用 SSE `message:stream` 契约。
+
 ```bash
-# 真实网管：先在 .env 填好 A2AT_SAMPLE_NMS_*
+# 真实网管：先在 .env 填好 A2AT_SAMPLE_NMS_* 和网管可达的 A2AT_SAMPLE_WEBHOOK_HOST
 python run_demo.py --nms --ui --brand huawei
 
 # 本地网管仿真器：同一套客户端路径，不依赖联调网络，也不会改动真实网络
@@ -188,6 +191,9 @@ A2AT_SAMPLE_NMS_TOKEN_USER=<northbound-user>
 A2AT_SAMPLE_NMS_TOKEN_VALUE=<password>
 A2AT_SAMPLE_NMS_REGION=A2ATestRegion
 A2AT_SAMPLE_NMS_VERIFY_TLS=false
+# 真实网管必须能访问这个地址和 webhook 端口
+A2AT_SAMPLE_WEBHOOK_HOST=<客户端局域网地址>
+A2AT_SAMPLE_WEBHOOK_PORT=9000
 # 原始报文日志：NMS 模式默认开启；设为 0 可避免业务数据落盘
 A2AT_SAMPLE_NMS_WIRE_LOG=1
 ```
@@ -214,6 +220,11 @@ A2AT_SAMPLE_NMS_WIRE_LOG=1
   仍保留回填的 Task-T。
 - 继续协商的 PROPOSE 可能被包在 `error` 信封里。客户端把它写入 `wire-error.jsonl` 并以明确的
   协议错误结束，而不是静默当作协商结束。
+- `negotiationContext.id` 是网管的协商句柄，不是 A2A 的 `contextId`。应答必须携带 PROPOSE 的
+  协商 id；继续协商时，网管可能在同一个 context id 上开启**新的**协商 id。
+- ACCEPT / COUNTER / REJECT 之后，客户端会继续读响应流直到空闲
+  （`A2AT_SAMPLE_NMS_READ_AFTER_SEND`，默认开启），避免丢掉同一流里的下一个 PROPOSE。
+- idle 窗口默认 45 秒（`A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS`）；`: heartbeat` 不算作进展。
 - 任务取消返回 HTTP 503；客户端把它当作已知限制，且发送超时后不重试。
 - 展示视图工具栏在“编辑请求”旁提供“取消任务”。它会先尽力请求远端网管取消 Task（当前返回
   HTTP 503），然后停止本地运行，因此长周期任务或反复测试时不需要重启页面。

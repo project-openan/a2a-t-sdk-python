@@ -290,6 +290,7 @@ def _write_run_env(
     webhook_port: int,
     server_host: str,
     server_port: int,
+    webhook_host: str | None = None,
     registry_host: str,
     registry_port: int,
     ui_port: int,
@@ -313,6 +314,11 @@ def _write_run_env(
             "A2AT_SAMPLE_MODEL_MODE": model_mode,
             "A2AT_SAMPLE_DISCOVERY": client_discovery,
             "A2AT_SAMPLE_TRANSPORT": transport,
+            "A2AT_SAMPLE_WEBHOOK_HOST": (
+                webhook_host
+                or values.get("A2AT_SAMPLE_WEBHOOK_HOST")
+                or "127.0.0.1"
+            ),
             "A2AT_SAMPLE_WEBHOOK_PORT": str(webhook_port),
             "A2AT_SAMPLE_HOST": server_host,
             "A2AT_SAMPLE_PORT": str(server_port),
@@ -961,9 +967,20 @@ def _build_parser(
     )
     parser.add_argument(
         "--transport",
-        default="sse",
+        default=None,
         choices=list(SUPPORTED_TRANSPORTS),
-        help="event transport (default: sse)",
+        help=(
+            "event transport (default: sse for the local demo and NMS simulator; webhook for a "
+            "real --nms run, which uses message:send + push notifications)"
+        ),
+    )
+    parser.add_argument(
+        "--webhook-host",
+        default=None,
+        help=(
+            "host the real NMS uses to reach the webhook receiver; use a reachable LAN address "
+            "(default: the source .env A2AT_SAMPLE_WEBHOOK_HOST or 127.0.0.1)"
+        ),
     )
     parser.add_argument(
         "--discovery",
@@ -1117,6 +1134,8 @@ def main() -> int:
         default_gateway_port=_gateway_port_default(source_values),
     )
     args = parser.parse_args()
+    if args.transport is None:
+        args.transport = "sse" if args.nms_sim or not args.nms else "webhook"
 
     from shared.logging_setup import configure_logging
 
@@ -1162,7 +1181,14 @@ def main() -> int:
             parser.error("--gateway is not supported with --protocol pure")
     if args.nms_sim and not args.nms:
         parser.error("--nms-sim requires --nms")
+    if args.nms_sim and args.transport == "webhook":
+        parser.error("--nms-sim currently supports --transport sse only")
     if args.nms:
+        if not args.nms_sim and args.transport != "webhook":
+            parser.error(
+                "a real --nms run requires --transport webhook (message:send + push notifications); "
+                "use --nms-sim for the local SSE simulator"
+            )
         if args.protocol == "pure":
             parser.error("--nms is not supported with --protocol pure")
         if args.gateway:
@@ -1217,6 +1243,7 @@ def main() -> int:
         discovery="nms" if args.nms else args.discovery,
         transport=args.transport,
         webhook_port=webhook_port,
+        webhook_host=args.webhook_host,
         server_host=server_host,
         server_port=server_port,
         registry_host=registry_host,

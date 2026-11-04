@@ -11,8 +11,9 @@ Site 2 planned-outage context of use case 2.
 
 The ``reject`` scenario reuses the missing-throughput request: the server opens an ``information``
 negotiation and the client rejects because it cannot provide the missing content. The ``abort``
-scenario reuses the overlapping-throughput ``target`` request and counter-proposes an
-unacceptable schedule until the server aborts at ``maxRounds``.
+scenario uses the same information request and keeps countering with the requested region instead
+of the missing target until the server aborts at ``maxRounds``. This mirrors the real NMS, which
+opens an information negotiation for the unresolved region before any target check.
 
 The information request deliberately omits the time-segmented guaranteed throughput target
 (``task_context``): the Task-T template marks that slot optional, so the client can still render
@@ -693,10 +694,15 @@ SCENARIO_REJECT_SPEC = Scenario(
 
 SCENARIO_ABORT_SPEC = Scenario(
     name=SCENARIO_ABORT,
-    expected_kind=KIND_TARGET,
+    # The real NMS opens an information negotiation for the unresolved region before it ever
+    # reaches the target check. The abort exercise therefore counters inside that information
+    # negotiation: it keeps repeating the requested region instead of supplying the missing
+    # throughput target, and the server aborts at maxRounds. This matches the real NMS behavior
+    # better than forcing a target negotiation the vendor does not open.
+    expected_kind=KIND_INFORMATION,
     user_request={
-        LANGUAGE_EN: NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_EN,
-        LANGUAGE_ZH: NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_ZH,
+        LANGUAGE_EN: NATURAL_LANGUAGE_PROMPT_INPUT_MISSING_EN,
+        LANGUAGE_ZH: NATURAL_LANGUAGE_PROMPT_INPUT_MISSING_ZH,
     },
     expected_sequence=(
         ExpectedStep(actor="server", performative="PROPOSE", round=1),
@@ -711,21 +717,24 @@ SCENARIO_ABORT_SPEC = Scenario(
     scripted_client_decisions=(
         NegotiationDecision(
             action="counter",
-            rationale="The client insists on the original overlapping high-throughput window.",
-            counter_proposal="Keep the {20:00~00:00,10Mbps} segment as originally requested.",
+            rationale="The client repeats the requested region instead of supplying the missing target.",
+            counter_proposal="region: Songshanhu Administration Committee",
         ),
         NegotiationDecision(
             action="counter",
-            rationale="The client still cannot accept dropping the overlapping window.",
-            counter_proposal="Keep the {17:30~23:00,20Mbps} and {20:00~00:00,10Mbps} segments.",
+            rationale="The client still cannot supply the missing target and repeats its region.",
+            counter_proposal="region: Songshanhu Administration Committee",
         ),
         NegotiationDecision(
             action="counter",
-            rationale="No acceptable compromise remains; the client repeats its position.",
-            counter_proposal="Keep the full original segmented throughput target unchanged.",
+            rationale="No further information is available; the client repeats its position.",
+            counter_proposal="region: Songshanhu Administration Committee",
         ),
     ),
-    description="The client keeps counter-proposing an infeasible plan until the server aborts at maxRounds.",
+    description=(
+        "The information negotiation does not converge because the client keeps countering with "
+        "the requested region instead of the missing target; the server aborts at maxRounds."
+    ),
 )
 
 SCENARIO_OUTAGE_SPEC = Scenario(

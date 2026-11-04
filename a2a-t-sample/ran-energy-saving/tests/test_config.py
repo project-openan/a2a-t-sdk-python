@@ -30,6 +30,7 @@ from shared.config import (
     NMS_A2A_PORT_ENV_KEY,
     NMS_HOST_ENV_KEY,
     NMS_IDLE_TIMEOUT_ENV_KEY,
+    NMS_READ_AFTER_SEND_ENV_KEY,
     NMS_REGION_ENV_KEY,
     NMS_REQUEST_TIMEOUT_ENV_KEY,
     NMS_SCHEME_ENV_KEY,
@@ -444,6 +445,44 @@ def test_nms_region_and_wire_log_settings(tmp_path: Path) -> None:
     assert config.nms_wire_log is False
 
 
+def test_nms_idle_defaults_to_45_seconds_and_read_after_send_is_on(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_DISCOVERY=nms",
+                f"{NMS_HOST_ENV_KEY}=127.0.0.1",
+                f"{NMS_TOKEN_USER_ENV_KEY}=user",
+                f"{NMS_TOKEN_VALUE_ENV_KEY}=value",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert config.nms_idle_timeout == 45.0
+    assert config.nms_read_after_send is True
+
+
+def test_nms_read_after_send_can_be_disabled(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                f"{NMS_READ_AFTER_SEND_ENV_KEY}=0",
+                f"{NMS_IDLE_TIMEOUT_ENV_KEY}=60",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert config.nms_read_after_send is False
+    assert config.nms_idle_timeout == 60.0
+
+
 def test_nms_wire_log_defaults_to_on(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -477,6 +516,13 @@ def test_nms_tls_verification_defaults_to_off(tmp_path: Path) -> None:
     )
 
     assert load_config(env_path=env_file).nms_verify_tls is False
+
+
+def test_webhook_host_is_configurable_for_a_real_nms(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("A2AT_SAMPLE_WEBHOOK_HOST=192.0.2.10\n", encoding="utf-8")
+
+    assert load_config(env_path=env_file).webhook_host == "192.0.2.10"
 
 
 def test_intent_mode_defaults_to_processed(tmp_path: Path) -> None:

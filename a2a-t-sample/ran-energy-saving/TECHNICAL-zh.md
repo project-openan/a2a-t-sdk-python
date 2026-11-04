@@ -350,9 +350,21 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
 | --- | --- | --- |
 | 发现 | registry 或 direct AgentCard | 由 `A2AT_SAMPLE_NMS_HOST` 推导并构造静态卡 |
 | 认证 | 静态 `A2AT_SAMPLE_SERVER_AUTH_TOKEN` | 从推导出的 `/rest/plat/smapp/v1/sessions` 取会话令牌 |
-| 传输 | a2a-sdk SSE/webhook | `protocol/nms_client.py` 原始 SSE + 任务轮询 |
+| 传输 | a2a-sdk SSE/webhook | 真实网管：`message:send` + webhook；仿真器：原始 SSE + 任务轮询 |
 | 执行 | 本地 RAN Agent | 厂商网管 |
 | 审批 2 | 本地 MIE 审批 | 不存在；执行侧由厂商负责 |
+
+真实 `--nms` 默认使用 `--transport webhook`：客户端向 `POST <base>/message:send` 发送请求并内联
+`taskPushNotificationConfig`，从嵌入式 webhook 消费任务事件。`A2AT_SAMPLE_WEBHOOK_HOST` 必须是
+网管可达的地址，`A2AT_SAMPLE_WEBHOOK_PORT` 必须放通。本地 `--nms-sim` 继续使用 SSE
+`message:stream`，默认 `--transport sse`。显式 `--nms --transport sse` 会被拒绝，仿真器也不接受
+`--transport webhook`。
+
+两种 NMS 传输共用同一套请求/响应对象和归一化逻辑：
+
+- `NmsWebhookTransport`：非流式 `message:send`，注册 `configuration.taskPushNotificationConfig`，
+  先检查同步应答，再等待 webhook 推送的 `statusUpdate` / `artifactUpdate` / `message`。
+- `NmsSseTransport`：保留给仿真器和契约测试。
 
 `A2AT_SAMPLE_NMS_HOST` 是唯一必填地址。配置层自动推导
 `https://<host>:31127/a2a/json` 和 `https://<host>:27417/rest/plat/smapp/v1/sessions`；
@@ -368,7 +380,15 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
   server 保留回填的 Task-T。对应参数是 `single_extension_per_message`。
 - `A2AT_SAMPLE_NMS_REGION` 覆盖 scenario 区域，也覆盖决策模型在 ACCEPT 里填写的区域
   （`forced_region`）；因此不用改 scenario 就能指向网管认识的区域。
-- SSE 读取跳过 `: heartbeat`；连续 `A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS` 秒没有 `data:`
+- `negotiationContext.id` 是网管的协商句柄，不是 A2A 的 `contextId`。应答使用 `session.id`
+  （只有服务端没给时才回退到 context id）。`build_negotiation_metadata()` 采用同一规则；本地
+  server 用 context id 作为协商 id，因此行为不变。
+- ACCEPT / COUNTER / REJECT 之后 `NmsSseTransport.send()` 会继续读响应流：网管在新流上应答，
+  并可能在同一 context id 上开启新的协商 id；`A2AT_SAMPLE_NMS_READ_AFTER_SEND`（默认开启）
+  控制该行为。ACCEPT 批次里若还有 PROPOSE，流程会回到协商循环而不是直接结束。
+- `abort` 用例改为在 information 协商中持续 counter（真机网管会先开信息协商），直到服务端
+  达到最大轮次并 ABORT。
+- SSE 读取跳过 `: heartbeat`；连续 `A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS`（默认 45 秒）没有 `data:`
   帧就断开，转为 `GET <base>/tasks/{id}` 轮询到终态；发送超时后不重试。
 - 原始帧回填为 `StreamResponse`，继续由 `shared.sse_event_consumer.normalize_event` 归一化，
   因此协商和 trace 代码不变。
@@ -653,7 +673,7 @@ P95 和审批等待。
 | `target` | 时段冲突：先纠偏再执行 | 保障吞吐目标的时间段重叠（`content.value_not_allowed`）。 | `S:Propose(1)` → `C:Propose(1)`（反提议） → `S:Propose(2)`（修订） → `C:Accept(2)` | Task `COMPLETED` + 报告（`task_completed`） |
 | `feasibility` | 条件不可行：网管给替代方案 | 保障速率与 18 小时停电冲突（`content.rule_violation`）。 | `S:Propose(1)`（替代方案） → `C:Accept(1)` | Task `COMPLETED` + 报告（`task_completed`） |
 | `reject` | OSS 无法提供：协商结束 | 客户端无法提供缺失的保障速率目标。 | `S:Propose(1)` → `C:Reject(1)` → `S:Message("协商已结束")` | 无 Task（`no_task_negotiation_ended`） |
-| `abort` | 反复不收敛：达到轮次上限后主动中止 | 客户端反复反提议策略始终无法接受的方案。 | `S:Propose(1)` → `C:Propose(1)` → `S:Propose(2)` → `C:Propose(2)` → `S:Propose(3)` → `C:Propose(3)` → `S:Abort(3)` | 无 Task（`no_task_negotiation_aborted`） |
+| `abort` | 反复不收敛：达到轮次上限后主动中止 | information 协商索取缺失目标，客户端持续以请求区域 counter。 | `S:Propose(1)` → `C:Propose(1)` → `S:Propose(2)` → `C:Propose(2)` → `S:Propose(3)` → `C:Propose(3)` → `S:Abort(3)` | 无 Task（`no_task_negotiation_aborted`） |
 | `outage` | 两阶段用例 2：先创建 Create 基线，再在同一 Task 上执行真正的 Modify 续接 | 阶段 1 创建双站点基线（`cell-002` 01:00–05:00，10%）并让 Task 保持 `WORKING`；阶段 2 发送针对 03:00–05:00 停电的 Modify Task-T，将同一 plan 更新到 20%，替换报告 artifact 并完成 Task。 | 无 | Task `COMPLETED` + 修改后报告（`task_completed`，`cell-002` 01:00–05:00，20%） |
 
 说明：
@@ -686,7 +706,8 @@ P95 和审批等待。
 | `REGISTRY_CENTER_HOST` / `REGISTRY_CENTER_PORT` | 默认 `127.0.0.1` / `5001` | Mock 注册中心绑定与查询 URL。 |
 | `A2AT_SAMPLE_DISCOVERY` | `registry`（默认）、`direct` | 服务发现方式。 |
 | `A2AT_SAMPLE_DIRECT_SERVER_URL` | 默认 `http://127.0.0.1:8000` | `direct` 发现读取的基础 URL。 |
-| `A2AT_SAMPLE_TRANSPORT` | `sse`（默认）、`webhook` | 客户端事件传输。 |
+| `A2AT_SAMPLE_TRANSPORT` | `sse`（默认）、`webhook` | 客户端事件传输。真实 `--nms` 默认 webhook（`message:send` + 推送）；`--nms-sim` 保持 sse。 |
+| `A2AT_SAMPLE_WEBHOOK_HOST` / `A2AT_SAMPLE_WEBHOOK_PORT` | 默认 `127.0.0.1` / `9000` | webhook 接收地址；真实网管必须能访问该主机和端口。 |
 | `A2AT_SAMPLE_INTENT_MODE` | `processed`（默认）、`raw` | 在 A2A/A2A-T 映射前执行业务意图层，或直接发送操作员文本。`--intent-mode` 与 `POST /api/runs.intentMode` 可按 run 覆盖。 |
 | `A2AT_SAMPLE_WEBHOOK_PORT` | 默认 `9000`（`0` = 临时端口） | 内置 webhook 接收器端口。 |
 | `A2AT_SAMPLE_WEBHOOK_TOKEN` | 默认 `demo-webhook-token` | 与 `X-A2A-Notification-Token` 比对的静态推送 token。 |

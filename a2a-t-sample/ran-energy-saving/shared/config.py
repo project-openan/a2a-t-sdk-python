@@ -48,6 +48,7 @@ HOST_ENV_KEY = "A2AT_SAMPLE_HOST"
 PORT_ENV_KEY = "A2AT_SAMPLE_PORT"
 REGISTRY_HOST_ENV_KEY = "REGISTRY_CENTER_HOST"
 REGISTRY_PORT_ENV_KEY = "REGISTRY_CENTER_PORT"
+WEBHOOK_HOST_ENV_KEY = "A2AT_SAMPLE_WEBHOOK_HOST"
 WEBHOOK_PORT_ENV_KEY = "A2AT_SAMPLE_WEBHOOK_PORT"
 WEBHOOK_TOKEN_ENV_KEY = "A2AT_SAMPLE_WEBHOOK_TOKEN"
 WEBHOOK_IDLE_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT"
@@ -86,6 +87,7 @@ NMS_TOKEN_USER_ENV_KEY = "A2AT_SAMPLE_NMS_TOKEN_USER"
 NMS_TOKEN_VALUE_ENV_KEY = "A2AT_SAMPLE_NMS_TOKEN_VALUE"
 NMS_VERIFY_TLS_ENV_KEY = "A2AT_SAMPLE_NMS_VERIFY_TLS"
 NMS_IDLE_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS"
+NMS_READ_AFTER_SEND_ENV_KEY = "A2AT_SAMPLE_NMS_READ_AFTER_SEND"
 NMS_REQUEST_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_NMS_REQUEST_TIMEOUT_SECONDS"
 #: Region the vendor NMS serves. When set, ``--nms`` overrides the scenario region with it.
 NMS_REGION_ENV_KEY = "A2AT_SAMPLE_NMS_REGION"
@@ -138,8 +140,9 @@ DEFAULT_GATEWAY_PORT = 8001
 DEFAULT_GATEWAY_SCENARIO = "information"
 
 #: Vendor NMS defaults. The A2A stream sends heartbeat comments every 15 s; the client treats a
-#: 15 s window without a ``data:`` frame as idle and switches to task polling.
-DEFAULT_NMS_IDLE_TIMEOUT_SECONDS = 15.0
+#: 45 s window without a ``data:`` frame as idle and switches to task polling. The window is wider
+#: than one heartbeat because heartbeats do not count as progress.
+DEFAULT_NMS_IDLE_TIMEOUT_SECONDS = 45.0
 DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS = 120.0
 DEFAULT_NMS_POLL_INTERVAL_SECONDS = 1.0
 
@@ -250,6 +253,7 @@ class SampleConfig:
         host: Sample bind host.
         port: Sample bind port.
         registry_url: Registry center base URL.
+        webhook_host: Webhook receiver bind host; use a reachable LAN address for a real NMS.
         webhook_port: Webhook receiver bind port (``0`` selects an ephemeral port).
         webhook_token: Push token checked by the webhook receiver.
         webhook_idle_timeout: Webhook idle backstop timeout in seconds.
@@ -289,7 +293,9 @@ class SampleConfig:
         nms_verify_tls: whether the NMS calls verify TLS certificates; ``False`` by default because
             the test environment uses a self-signed certificate.
         nms_idle_timeout: seconds without a ``data:`` frame before the client leaves the SSE stream
-            and polls the task instead.
+            and polls the task instead. Heartbeats do not reset this window.
+        nms_read_after_send: whether a negotiation response keeps reading its stream for the next
+            proposal (the vendor opens a new negotiation id on the same context id).
         nms_request_timeout: per-request budget of one NMS A2A call.
         nms_poll_interval: seconds between task polls while waiting for a terminal state.
         nms_region: region the vendor NMS serves; when set, ``--nms`` overrides the scenario
@@ -317,6 +323,7 @@ class SampleConfig:
     discovery: str = DISCOVERY_REGISTRY
     transport: str = TRANSPORT_SSE
     intent_mode: str = INTENT_MODE_PROCESSED
+    webhook_host: str = DEFAULT_HOST
     http_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS
     llm_timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS
     llm_max_attempts: int = DEFAULT_LLM_MAX_ATTEMPTS
@@ -337,6 +344,7 @@ class SampleConfig:
     nms_token_value: str = ""
     nms_verify_tls: bool = False
     nms_idle_timeout: float = DEFAULT_NMS_IDLE_TIMEOUT_SECONDS
+    nms_read_after_send: bool = True
     nms_request_timeout: float = DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS
     nms_poll_interval: float = DEFAULT_NMS_POLL_INTERVAL_SECONDS
     nms_region: str = ""
@@ -446,6 +454,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         host=_env_value(values, HOST_ENV_KEY, DEFAULT_HOST),
         port=_env_int(values, PORT_ENV_KEY, DEFAULT_PORT),
         registry_url=f"http://{registry_host}:{registry_port}",
+        webhook_host=_env_value(values, WEBHOOK_HOST_ENV_KEY, DEFAULT_HOST),
         webhook_port=_env_int(values, WEBHOOK_PORT_ENV_KEY, DEFAULT_WEBHOOK_PORT),
         webhook_token=_env_value(values, WEBHOOK_TOKEN_ENV_KEY, DEFAULT_WEBHOOK_TOKEN),
         webhook_idle_timeout=_env_int(values, WEBHOOK_IDLE_TIMEOUT_ENV_KEY, DEFAULT_WEBHOOK_IDLE_TIMEOUT),
@@ -478,6 +487,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         nms_token_value=nms_token_value,
         nms_verify_tls=_env_bool(values, NMS_VERIFY_TLS_ENV_KEY, False),
         nms_idle_timeout=_positive_seconds(values, NMS_IDLE_TIMEOUT_ENV_KEY, DEFAULT_NMS_IDLE_TIMEOUT_SECONDS),
+        nms_read_after_send=_env_bool(values, NMS_READ_AFTER_SEND_ENV_KEY, True),
         nms_request_timeout=_positive_seconds(values, NMS_REQUEST_TIMEOUT_ENV_KEY, DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS),
         nms_region=_env_value(values, NMS_REGION_ENV_KEY, "").strip(),
         nms_wire_log=_env_bool(values, NMS_WIRE_LOG_ENV_KEY, True),

@@ -46,6 +46,8 @@ from protocol.client_flow import (
     ClientFlowResult,
     SseClientTransport,
     WebhookClientTransport,
+    _region_reask_content,
+    _region_reask_needed,
     normalize_webhook_payload,
     run_client_flow,
 )
@@ -172,12 +174,13 @@ def _negotiation_metadata(
     round_number: int,
     template_uri: str,
     content: str = "negotiation content",
+    negotiation_id: str = CONTEXT_ID,
 ) -> dict[str, object]:
     return {
         NEGOTIATION_T_EXTENSION_URI: content,
         TEMPLATE_URI_METADATA_KEY: template_uri,
         NEGOTIATION_CONTEXT_METADATA_KEY: {
-            "id": CONTEXT_ID,
+            "id": negotiation_id,
             "round": round_number,
             "maxRounds": 3,
             "performative": performative,
@@ -185,7 +188,13 @@ def _negotiation_metadata(
     }
 
 
-def propose_event(kind: str, round_number: int, *, content: str | None = None) -> dict[str, object]:
+def propose_event(
+    kind: str,
+    round_number: int,
+    *,
+    content: str | None = None,
+    negotiation_id: str = CONTEXT_ID,
+) -> dict[str, object]:
     return {
         "kind": "message",
         "text": "Negotiation proposal",
@@ -196,6 +205,7 @@ def propose_event(kind: str, round_number: int, *, content: str | None = None) -
             round_number=round_number,
             template_uri=_PROPOSE_URIS[kind],
             content=content or f"Server proposal for round {round_number}",
+            negotiation_id=negotiation_id,
         ),
     }
 
@@ -500,6 +510,78 @@ async def test_information_scenario_accepts_and_completes_a_task() -> None:
     accept_metadata = MessageToDict(transport.requests[1].message.metadata)
     assert accept_metadata[TASK_T_EXTENSION_URI].startswith("Refilled Task-T prompt:")
     assert accept_metadata[TEMPLATE_URI_METADATA_KEY] == "Negotiation-T/information-negotiation/accept-reject/v1"
+
+
+async def test_accept_carries_the_proposal_negotiation_id_not_the_context_id() -> None:
+    """The vendor rejects a reply whose negotiationContext.id is the A2A context id."""
+    result, transport, _prompt_client = await _run(
+        SCENARIO_INFORMATION_SPEC,
+        [[propose_event("information", 1, negotiation_id="negotiation-1")], _task_completed_batch()],
+        SCENARIO_INFORMATION_SPEC.scripted_client_decisions,
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    accept_metadata = MessageToDict(transport.requests[1].message.metadata)
+    assert accept_metadata[NEGOTIATION_CONTEXT_METADATA_KEY]["id"] == "negotiation-1"
+
+
+async def test_accept_continues_when_the_response_stream_carries_a_new_negotiation_id() -> None:
+    """After ACCEPT the vendor may open a new negotiation id on the same context id."""
+    completion = NegotiationDecision(action="accept", rationale="accept")
+    result, transport, _prompt_client = await _run(
+        SCENARIO_INFORMATION_SPEC,
+        [
+            [propose_event("information", 1, negotiation_id="negotiation-1")],
+            [propose_event("information", 2, negotiation_id="negotiation-2")],
+            _task_completed_batch(),
+        ],
+        (completion, completion),
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1), ("ACCEPT", 2)]
+    first_accept = MessageToDict(transport.requests[1].message.metadata)
+    second_accept = MessageToDict(transport.requests[2].message.metadata)
+    assert first_accept[NEGOTIATION_CONTEXT_METADATA_KEY]["id"] == "negotiation-1"
+    assert second_accept[NEGOTIATION_CONTEXT_METADATA_KEY]["id"] == "negotiation-2"
+
+
+def test_region_reask_detects_a_rejected_region_and_offers_candidates() -> None:
+    propose = NegotiationProposeView(
+        negotiation_id="negotiation-1",
+        kind="information",
+        round=1,
+        max_rounds=3,
+        content=(
+            "Region 'Songshanhu Administration Committee' is not recognized. "
+            "Served areas: A2ATestRegion; Dalingshan."
+        ),
+        context_id=CONTEXT_ID,
+    )
+    decision = NegotiationDecision(action="accept", rationale="accept")
+
+    reask = _region_reask_needed(decision, propose)
+
+    assert reask is not None
+    assert reask[0] == "Songshanhu Administration Committee"
+    assert reask[1] == ("A2ATestRegion", "Dalingshan")
+    assert "A2ATestRegion" in _region_reask_content(propose, reask[1])
+
+
+def test_region_reask_is_not_needed_when_the_model_changed_the_region() -> None:
+    propose = NegotiationProposeView(
+        negotiation_id="negotiation-1",
+        kind="information",
+        round=1,
+        max_rounds=3,
+        content="Region 'Old' is not recognized. Served areas: New.",
+        context_id=CONTEXT_ID,
+    )
+    decision = NegotiationDecision(
+        action="accept", rationale="accept", filled_params={"region": "New"}
+    )
+
+    assert _region_reask_needed(decision, propose) is None
 
 
 async def test_nms_accept_carries_only_the_negotiation_extension_key() -> None:

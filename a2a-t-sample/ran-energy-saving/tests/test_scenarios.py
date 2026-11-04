@@ -299,7 +299,7 @@ async def test_server_abort_reason_names_the_server_and_the_round_limit(
 
     proposals = _negotiation_contents(result.events, "PROPOSE")
     assert [round_number for round_number, _ in proposals] == [1, 2, 3]
-    assert len({content for _, content in proposals}) == 3
+    assert all("Information Negotiation" in content for _, content in proposals)
 
     aborts = _negotiation_contents(result.events, "ABORT")
     assert len(aborts) == 1

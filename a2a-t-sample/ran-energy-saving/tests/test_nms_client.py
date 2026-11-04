@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
@@ -21,6 +22,7 @@ from protocol.nms_client import (
     NmsNegotiationRequiredError,
     NmsProtocolError,
     NmsSseTransport,
+    NmsWebhookTransport,
     _frame_to_event,
 )
 
@@ -245,12 +247,298 @@ class _FakeStreamClient:
         return False
 
 
+class _FakeWebhookClient:
+    """Minimal ``NmsClient`` surface used by the webhook transport tests."""
+
+    def __init__(self, reply: Mapping[str, object]) -> None:
+        self.reply = dict(reply)
+        self.config = _config()
+        self.payload: dict[str, object] | None = None
+        self.extension_header = ""
+
+    async def send_message(
+        self, payload: Mapping[str, object], *, extension_header: str = ""
+    ) -> dict[str, object]:
+        self.payload = dict(payload)
+        self.extension_header = extension_header
+        return dict(self.reply)
+
+    async def cancel_task(self, task_id: str) -> bool:
+        return False
+
+
+def _propose_message(negotiation_id: str, text: str) -> dict[str, object]:
+    return {
+        "message": {
+            "messageId": f"m-{negotiation_id}",
+            "contextId": "ctx-1",
+            "role": "ROLE_AGENT",
+            "parts": [{"text": text}],
+            "metadata": {
+                NEGOTIATION_T_EXTENSION_URI: text,
+                NEGOTIATION_CONTEXT_METADATA_KEY: {
+                    "id": negotiation_id,
+                    "round": 1,
+                    "maxRounds": 3,
+                    "performative": "PROPOSE",
+                },
+            },
+        }
+    }
+
+
+async def test_webhook_transport_registers_the_push_url_and_returns_a_negotiation_reply() -> None:
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _FakeWebhookClient(_propose_message("neg-1", "initial proposal"))
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        idle_timeout=0.05,
+    )
+    request, context = _request()
+    request.message.metadata[NEGOTIATION_T_EXTENSION_URI] = "task prompt"
+
+    events = await transport.send(request, context)
+
+    assert events[0]["kind"] == "message"
+    assert client.payload is not None
+    configuration = client.payload["configuration"]
+    assert isinstance(configuration, dict)
+    assert configuration["taskPushNotificationConfig"]["url"] == "http://host:9000/webhook"
+    assert configuration["taskPushNotificationConfig"]["token"] == "push-token"
+    assert client.extension_header == TASK_T_URI
+
+
+async def test_webhook_transport_keeps_waiting_after_a_negotiation_response_reply() -> None:
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _FakeWebhookClient(_propose_message("neg-1", "accepted proposal"))
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        idle_timeout=1.0,
+    )
+    request, context = _request()
+    request.message.metadata.update(
+        {
+            NEGOTIATION_CONTEXT_METADATA_KEY: {
+                "id": "neg-1",
+                "round": 1,
+                "maxRounds": 3,
+                "performative": "ACCEPT",
+            }
+        }
+    )
+    await queue.put(_propose_message("neg-2", "next proposal"))
+
+    events = await transport.send(request, context)
+
+    assert [event.get("metadata", {}).get(NEGOTIATION_CONTEXT_METADATA_KEY, {}).get("id") for event in events] == [
+        "neg-1",
+        "neg-2",
+    ]
+
+
+async def test_webhook_transport_returns_task_events_until_terminal() -> None:
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _FakeWebhookClient(
+        {"task": {"id": "task-1", "status": {"state": "TASK_STATE_SUBMITTED"}}}
+    )
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        idle_timeout=1.0,
+    )
+    request, context = _request()
+    await queue.put(
+        {"statusUpdate": {"taskId": "task-1", "status": {"state": "TASK_STATE_WORKING"}}}
+    )
+    await queue.put(
+        {"statusUpdate": {"taskId": "task-1", "status": {"state": "TASK_STATE_COMPLETED"}}}
+    )
+
+    events = await transport.send(request, context)
+
+    assert events[-1]["kind"] == "status"
+    assert events[-1]["state"] == "TASK_STATE_COMPLETED"
+
+
 def _request() -> tuple[SendMessageRequest, ClientCallContext]:
     request = SendMessageRequest()
     request.message.message_id = "m1"
     request.message.role = Role.ROLE_USER
     request.message.parts.add().text = "create ran energy saving task"
     return request, ClientCallContext(timeout=5.0, service_parameters={"A2A-Extensions": TASK_T_URI})
+
+
+async def test_send_message_posts_to_message_send_and_returns_the_json_reply() -> None:
+    captured: dict[str, object] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"task": {"id": "task-1", "status": {"state": "TASK_STATE_SUBMITTED"}}},
+        )
+
+    client = _client(httpx.MockTransport(handle))
+
+    reply = await client.send_message({"message": {"messageId": "m1"}})
+
+    assert reply["task"]["id"] == "task-1"
+    assert str(captured["url"]).endswith("/message:send")
+    assert captured["body"] == {"message": {"messageId": "m1"}}
+    await client.aclose()
+
+
+async def test_a_stream_of_heartbeats_does_not_postpone_the_idle_window() -> None:
+    """The NMS heartbeats every 15 s forever; counting those as progress hangs the run."""
+
+    class _HeartbeatStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            while True:
+                await asyncio.sleep(0.02)
+                yield b": heartbeat\n\n"
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_HeartbeatStream(),
+        )
+
+    client = _client(httpx.MockTransport(handle), idle_timeout=0.1)
+
+    frames = [frame async for frame in client.stream_message({"message": {}})]
+
+    assert frames == []
+    await client.aclose()
+
+
+def _negotiation_response_request() -> SendMessageRequest:
+    request = SendMessageRequest()
+    request.message.message_id = "m-accept"
+    request.message.role = Role.ROLE_USER
+    request.message.parts.add().text = "accept"
+    request.message.metadata.update(
+        {
+            NEGOTIATION_CONTEXT_METADATA_KEY: {
+                "id": "neg-1",
+                "round": 1,
+                "maxRounds": 3,
+                "performative": "ACCEPT",
+            }
+        }
+    )
+    return request
+
+
+async def test_transport_keeps_reading_a_negotiation_response_for_the_next_propose() -> None:
+    def propose(negotiation_id: str, text: str) -> dict[str, object]:
+        return {
+            "message": {
+                "messageId": f"m-{negotiation_id}",
+                "contextId": "ctx-1",
+                "role": "ROLE_AGENT",
+                "parts": [{"text": text}],
+                "metadata": {
+                    NEGOTIATION_T_EXTENSION_URI: text,
+                    NEGOTIATION_CONTEXT_METADATA_KEY: {
+                        "id": negotiation_id,
+                        "round": 1,
+                        "maxRounds": 3,
+                        "performative": "PROPOSE",
+                    },
+                },
+            }
+        }
+
+    client = _FakeStreamClient(
+        [
+            propose("neg-1", "first proposal"),
+            propose("neg-2", "second proposal after the accept"),
+        ]
+    )
+    transport = NmsSseTransport(client)  # ty: ignore[invalid-argument-type]
+    request, context = _request()
+    request.message.metadata.update(
+        {
+            NEGOTIATION_CONTEXT_METADATA_KEY: {
+                "id": "neg-1",
+                "round": 1,
+                "maxRounds": 3,
+                "performative": "ACCEPT",
+            }
+        }
+    )
+
+    events = await transport.send(request, context)
+
+    assert [event.get("text") for event in events] == [
+        "first proposal",
+        "second proposal after the accept",
+    ]
+    assert client.extension_header == TASK_T_URI
+
+
+async def test_transport_still_returns_the_first_propose_of_an_initial_request() -> None:
+    class _ProposeClient(_FakeStreamClient):
+        pass
+
+    client = _ProposeClient(
+        [
+            {
+                "message": {
+                    "messageId": "m-1",
+                    "contextId": "ctx-1",
+                    "role": "ROLE_AGENT",
+                    "parts": [{"text": "initial proposal"}],
+                    "metadata": {
+                        NEGOTIATION_T_EXTENSION_URI: "initial proposal",
+                        NEGOTIATION_CONTEXT_METADATA_KEY: {
+                            "id": "neg-1",
+                            "round": 1,
+                            "maxRounds": 3,
+                            "performative": "PROPOSE",
+                        },
+                    },
+                }
+            },
+            {
+                "message": {
+                    "messageId": "m-2",
+                    "contextId": "ctx-1",
+                    "role": "ROLE_AGENT",
+                    "parts": [{"text": "never read"}],
+                    "metadata": {
+                        NEGOTIATION_T_EXTENSION_URI: "never read",
+                        NEGOTIATION_CONTEXT_METADATA_KEY: {
+                            "id": "neg-2",
+                            "round": 2,
+                            "maxRounds": 3,
+                            "performative": "PROPOSE",
+                        },
+                    },
+                }
+            },
+        ]
+    )
+    transport = NmsSseTransport(client)  # ty: ignore[invalid-argument-type]
+    request, context = _request()
+
+    events = await transport.send(request, context)
+
+    assert [event.get("text") for event in events] == ["initial proposal"]
 
 
 async def test_transport_reports_a_message_without_a_task_as_negotiation_required() -> None:
