@@ -67,6 +67,12 @@ AUTH_TOKEN_ENV_KEY = "A2AT_SAMPLE_AUTH_TOKEN"
 SERVER_AUTH_TOKEN_ENV_KEY = "A2AT_SAMPLE_SERVER_AUTH_TOKEN"
 
 #: Vendor NMS integration (``A2AT_SAMPLE_DISCOVERY=nms``).
+#: ``A2AT_SAMPLE_NMS_HOST`` is the single value most deployments set; the two full URLs are
+#: derived from it with the standard 910 ports, and the explicit keys below override them.
+NMS_HOST_ENV_KEY = "A2AT_SAMPLE_NMS_HOST"
+NMS_SCHEME_ENV_KEY = "A2AT_SAMPLE_NMS_SCHEME"
+NMS_A2A_PORT_ENV_KEY = "A2AT_SAMPLE_NMS_A2A_PORT"
+NMS_TOKEN_PORT_ENV_KEY = "A2AT_SAMPLE_NMS_TOKEN_PORT"
 NMS_A2A_BASE_ENV_KEY = "A2AT_SAMPLE_NMS_A2A_BASE"
 NMS_TOKEN_URL_ENV_KEY = "A2AT_SAMPLE_NMS_TOKEN_URL"
 NMS_TOKEN_USER_ENV_KEY = "A2AT_SAMPLE_NMS_TOKEN_USER"
@@ -125,6 +131,13 @@ DEFAULT_GATEWAY_SCENARIO = "information"
 DEFAULT_NMS_IDLE_TIMEOUT_SECONDS = 15.0
 DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS = 120.0
 DEFAULT_NMS_POLL_INTERVAL_SECONDS = 1.0
+
+#: Standard vendor NMS surface, used to derive both URLs from ``A2AT_SAMPLE_NMS_HOST``.
+DEFAULT_NMS_SCHEME = "https"
+DEFAULT_NMS_A2A_PORT = 31127
+DEFAULT_NMS_TOKEN_PORT = 27417
+DEFAULT_NMS_A2A_PATH = "/a2a/json"
+DEFAULT_NMS_TOKEN_PATH = "/rest/plat/smapp/v1/sessions"
 
 #: LangGraph planner defaults (the server's post-accept execution agent).
 DEFAULT_PLANNER_MAX_STEPS = 12
@@ -354,16 +367,32 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
     if transport not in SUPPORTED_TRANSPORTS:
         raise ValueError(f"Unsupported {TRANSPORT_ENV_KEY}: {transport}; expected one of {SUPPORTED_TRANSPORTS}")
 
+    nms_host = _env_value(values, NMS_HOST_ENV_KEY, "").strip()
+    nms_scheme = _env_value(values, NMS_SCHEME_ENV_KEY, DEFAULT_NMS_SCHEME).strip().lower()
+    if nms_scheme not in ("http", "https"):
+        raise ValueError(f"Unsupported {NMS_SCHEME_ENV_KEY}: {nms_scheme}; expected http or https")
+    nms_a2a_port = _env_int(values, NMS_A2A_PORT_ENV_KEY, DEFAULT_NMS_A2A_PORT)
+    nms_token_port = _env_int(values, NMS_TOKEN_PORT_ENV_KEY, DEFAULT_NMS_TOKEN_PORT)
+    for key, port in (
+        (NMS_A2A_PORT_ENV_KEY, nms_a2a_port),
+        (NMS_TOKEN_PORT_ENV_KEY, nms_token_port),
+    ):
+        if not 1 <= port <= 65535:
+            raise ValueError(f"Invalid {key}: {port}; expected a port in 1..65535")
     nms_a2a_base = _env_value(values, NMS_A2A_BASE_ENV_KEY, "")
     nms_token_url = _env_value(values, NMS_TOKEN_URL_ENV_KEY, "")
+    if nms_host and not nms_a2a_base:
+        nms_a2a_base = f"{nms_scheme}://{nms_host}:{nms_a2a_port}{DEFAULT_NMS_A2A_PATH}"
+    if nms_host and not nms_token_url:
+        nms_token_url = f"{nms_scheme}://{nms_host}:{nms_token_port}{DEFAULT_NMS_TOKEN_PATH}"
     nms_token_user = _env_value(values, NMS_TOKEN_USER_ENV_KEY, "")
     nms_token_value = _env_value(values, NMS_TOKEN_VALUE_ENV_KEY, "")
     if discovery == DISCOVERY_NMS:
         missing = [
             key
             for key, value in (
-                (NMS_A2A_BASE_ENV_KEY, nms_a2a_base),
-                (NMS_TOKEN_URL_ENV_KEY, nms_token_url),
+                (f"{NMS_HOST_ENV_KEY} (or {NMS_A2A_BASE_ENV_KEY})", nms_a2a_base),
+                (f"{NMS_HOST_ENV_KEY} (or {NMS_TOKEN_URL_ENV_KEY})", nms_token_url),
                 (NMS_TOKEN_USER_ENV_KEY, nms_token_user),
                 (NMS_TOKEN_VALUE_ENV_KEY, nms_token_value),
             )

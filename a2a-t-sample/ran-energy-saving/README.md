@@ -182,12 +182,17 @@ python run_demo.py --nms --nms-sim --ui --brand huawei
 Required `.env` keys:
 
 ```ini
-A2AT_SAMPLE_NMS_A2A_BASE=https://<nms-host>:31127/a2a/json
-A2AT_SAMPLE_NMS_TOKEN_URL=https://<nms-host>:27417/rest/plat/smapp/v1/sessions
+A2AT_SAMPLE_NMS_HOST=<nms-host>
 A2AT_SAMPLE_NMS_TOKEN_USER=<northbound-user>
 A2AT_SAMPLE_NMS_TOKEN_VALUE=<password>
 A2AT_SAMPLE_NMS_VERIFY_TLS=false
 ```
+
+Only the host is required. The sample derives the standard 910 surface from it:
+`https://<host>:31127/a2a/json` and
+`https://<host>:27417/rest/plat/smapp/v1/sessions`. For a non-standard deployment, override
+`A2AT_SAMPLE_NMS_SCHEME`, `A2AT_SAMPLE_NMS_A2A_PORT` / `A2AT_SAMPLE_NMS_TOKEN_PORT`, or set the
+full `A2AT_SAMPLE_NMS_A2A_BASE` / `A2AT_SAMPLE_NMS_TOKEN_URL`; an explicit full URL wins.
 
 The test environment uses a self-signed certificate, so TLS verification is off by default; set
 `A2AT_SAMPLE_NMS_VERIFY_TLS=true` only for a trusted chain. The client sends both accepted auth

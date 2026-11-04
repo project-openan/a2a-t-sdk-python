@@ -411,11 +411,15 @@ but replaces discovery and transport:
 
 | Layer | Local demo | `--nms` |
 | --- | --- | --- |
-| Discovery | registry or direct AgentCard | static card from `A2AT_SAMPLE_NMS_A2A_BASE` |
-| Auth | static `A2AT_SAMPLE_SERVER_AUTH_TOKEN` | session token from `A2AT_SAMPLE_NMS_TOKEN_URL` |
+| Discovery | registry or direct AgentCard | static card derived from `A2AT_SAMPLE_NMS_HOST` |
+| Auth | static `A2AT_SAMPLE_SERVER_AUTH_TOKEN` | session token from the derived `/rest/plat/smapp/v1/sessions` |
 | Transport | a2a-sdk SSE/webhook | `protocol/nms_client.py` raw SSE + task polling |
 | Execution | local RAN Agent | vendor NMS |
 | Approval 2 | local MIE gate | not present; the vendor owns execution |
+
+`A2AT_SAMPLE_NMS_HOST` is the single required address. The configuration layer derives
+`https://<host>:31127/a2a/json` and `https://<host>:27417/rest/plat/smapp/v1/sessions`; the scheme,
+ports and full URLs are optional overrides for non-standard deployments.
 
 Implementation details:
 

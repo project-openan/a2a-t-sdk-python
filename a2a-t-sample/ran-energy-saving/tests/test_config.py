@@ -26,8 +26,12 @@ from shared.config import (
     MODEL_MODE_LIVE,
     MODEL_MODE_OFFLINE,
     NMS_A2A_BASE_ENV_KEY,
+    NMS_A2A_PORT_ENV_KEY,
+    NMS_HOST_ENV_KEY,
     NMS_IDLE_TIMEOUT_ENV_KEY,
     NMS_REQUEST_TIMEOUT_ENV_KEY,
+    NMS_SCHEME_ENV_KEY,
+    NMS_TOKEN_PORT_ENV_KEY,
     NMS_TOKEN_URL_ENV_KEY,
     NMS_TOKEN_USER_ENV_KEY,
     NMS_TOKEN_VALUE_ENV_KEY,
@@ -58,6 +62,10 @@ _ENV_KEYS = (
     PLANNER_MODEL_ENV_KEY,
     PLANNER_TIMEOUT_ENV_KEY,
     PLANNER_MAX_STEPS_ENV_KEY,
+    NMS_HOST_ENV_KEY,
+    NMS_SCHEME_ENV_KEY,
+    NMS_A2A_PORT_ENV_KEY,
+    NMS_TOKEN_PORT_ENV_KEY,
     NMS_A2A_BASE_ENV_KEY,
     NMS_TOKEN_URL_ENV_KEY,
     NMS_TOKEN_USER_ENV_KEY,
@@ -199,9 +207,7 @@ def test_planner_defaults_follow_the_adk_endpoint(tmp_path: Path) -> None:
         (PLANNER_MAX_STEPS_ENV_KEY, "0"),
     ],
 )
-def test_client_gateway_and_planner_reject_invalid_values(
-    tmp_path: Path, key: str, value: str
-) -> None:
+def test_client_gateway_and_planner_reject_invalid_values(tmp_path: Path, key: str, value: str) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(f"{key}={value}\n", encoding="utf-8")
 
@@ -244,9 +250,7 @@ def test_timeout_budgets_are_read_from_the_env_file(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("key", [HTTP_TIMEOUT_ENV_KEY, LLM_TIMEOUT_ENV_KEY])
 @pytest.mark.parametrize("value", ["not-a-number", "0", "-1", "nan", "inf"])
-def test_timeout_budgets_reject_non_positive_values(
-    tmp_path: Path, key: str, value: str
-) -> None:
+def test_timeout_budgets_reject_non_positive_values(tmp_path: Path, key: str, value: str) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(f"{key}={value}\n", encoding="utf-8")
 
@@ -338,6 +342,71 @@ def test_nms_discovery_loads_the_vendor_connection_settings(tmp_path: Path) -> N
     assert config.nms_verify_tls is True
     assert config.nms_idle_timeout == 4.5
     assert config.nms_request_timeout == 90.0
+
+
+def test_nms_host_alone_derives_both_standard_urls(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_DISCOVERY=nms",
+                f"{NMS_HOST_ENV_KEY}=141.71.97.174",
+                f"{NMS_TOKEN_USER_ENV_KEY}=northbound",
+                f"{NMS_TOKEN_VALUE_ENV_KEY}=secret",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert config.nms_a2a_base == "https://141.71.97.174:31127/a2a/json"
+    assert config.nms_token_url == ("https://141.71.97.174:27417/rest/plat/smapp/v1/sessions")
+
+
+def test_nms_scheme_and_ports_override_the_standard_surface(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_DISCOVERY=nms",
+                f"{NMS_HOST_ENV_KEY}=127.0.0.1",
+                f"{NMS_SCHEME_ENV_KEY}=http",
+                f"{NMS_A2A_PORT_ENV_KEY}=18080",
+                f"{NMS_TOKEN_PORT_ENV_KEY}=18080",
+                f"{NMS_TOKEN_USER_ENV_KEY}=northbound",
+                f"{NMS_TOKEN_VALUE_ENV_KEY}=secret",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert config.nms_a2a_base == "http://127.0.0.1:18080/a2a/json"
+    assert config.nms_token_url == "http://127.0.0.1:18080/rest/plat/smapp/v1/sessions"
+
+
+def test_nms_explicit_urls_win_over_the_derived_ones(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_DISCOVERY=nms",
+                f"{NMS_HOST_ENV_KEY}=ignored.example",
+                f"{NMS_A2A_BASE_ENV_KEY}=https://gateway.example/custom/a2a",
+                f"{NMS_TOKEN_URL_ENV_KEY}=https://gateway.example/custom/sessions",
+                f"{NMS_TOKEN_USER_ENV_KEY}=northbound",
+                f"{NMS_TOKEN_VALUE_ENV_KEY}=secret",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert config.nms_a2a_base == "https://gateway.example/custom/a2a"
+    assert config.nms_token_url == "https://gateway.example/custom/sessions"
 
 
 def test_nms_discovery_rejects_an_incomplete_configuration(tmp_path: Path) -> None:

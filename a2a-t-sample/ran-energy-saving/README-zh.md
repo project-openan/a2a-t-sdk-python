@@ -162,12 +162,17 @@ python run_demo.py --nms --nms-sim --ui --brand huawei
 `.env` 必填项：
 
 ```ini
-A2AT_SAMPLE_NMS_A2A_BASE=https://<nms-host>:31127/a2a/json
-A2AT_SAMPLE_NMS_TOKEN_URL=https://<nms-host>:27417/rest/plat/smapp/v1/sessions
+A2AT_SAMPLE_NMS_HOST=<nms-host>
 A2AT_SAMPLE_NMS_TOKEN_USER=<northbound-user>
 A2AT_SAMPLE_NMS_TOKEN_VALUE=<password>
 A2AT_SAMPLE_NMS_VERIFY_TLS=false
 ```
+
+只需配置主机地址。sample 会按 910 标准面自动推导两个 URL：
+`https://<host>:31127/a2a/json` 和
+`https://<host>:27417/rest/plat/smapp/v1/sessions`。非标准部署可以覆盖
+`A2AT_SAMPLE_NMS_SCHEME`、`A2AT_SAMPLE_NMS_A2A_PORT` / `A2AT_SAMPLE_NMS_TOKEN_PORT`，或直接
+设置完整的 `A2AT_SAMPLE_NMS_A2A_BASE` / `A2AT_SAMPLE_NMS_TOKEN_URL`；显式完整 URL 优先。
 
 联调环境使用自签名证书，因此默认关闭 TLS 校验；只有证书链可信时才设为
 `A2AT_SAMPLE_NMS_VERIFY_TLS=true`。客户端同时发送两种被接受的认证头（`Authorization: Bearer`

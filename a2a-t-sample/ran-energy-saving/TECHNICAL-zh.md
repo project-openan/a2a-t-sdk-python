@@ -348,11 +348,15 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
 
 | 层 | 本地演示 | `--nms` |
 | --- | --- | --- |
-| 发现 | registry 或 direct AgentCard | 由 `A2AT_SAMPLE_NMS_A2A_BASE` 构造静态卡 |
-| 认证 | 静态 `A2AT_SAMPLE_SERVER_AUTH_TOKEN` | 从 `A2AT_SAMPLE_NMS_TOKEN_URL` 取会话令牌 |
+| 发现 | registry 或 direct AgentCard | 由 `A2AT_SAMPLE_NMS_HOST` 推导并构造静态卡 |
+| 认证 | 静态 `A2AT_SAMPLE_SERVER_AUTH_TOKEN` | 从推导出的 `/rest/plat/smapp/v1/sessions` 取会话令牌 |
 | 传输 | a2a-sdk SSE/webhook | `protocol/nms_client.py` 原始 SSE + 任务轮询 |
 | 执行 | 本地 RAN Agent | 厂商网管 |
 | 审批 2 | 本地 MIE 审批 | 不存在；执行侧由厂商负责 |
+
+`A2AT_SAMPLE_NMS_HOST` 是唯一必填地址。配置层自动推导
+`https://<host>:31127/a2a/json` 和 `https://<host>:27417/rest/plat/smapp/v1/sessions`；
+协议、端口和完整 URL 都是非标准部署时的可选覆盖。
 
 实现要点：
 

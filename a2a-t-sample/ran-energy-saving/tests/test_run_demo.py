@@ -51,9 +51,7 @@ def test_write_run_env_points_both_processes_at_the_task_database(
     assert values["A2AT_SAMPLE_GATEWAY_REGISTER"] == "1"
 
 
-def test_write_run_env_applies_the_nms_simulator_overrides(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_write_run_env_applies_the_nms_simulator_overrides(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """`--nms-sim` points the per-run .env at the local simulator."""
     monkeypatch.setattr(run_demo, "RUN_DIR", tmp_path)
     env_path = run_demo._write_run_env(
@@ -69,8 +67,10 @@ def test_write_run_env_applies_the_nms_simulator_overrides(
         registry_port=5001,
         ui_port=8080,
         extra={
-            "A2AT_SAMPLE_NMS_A2A_BASE": "http://127.0.0.1:18080/a2a/json",
-            "A2AT_SAMPLE_NMS_TOKEN_URL": "http://127.0.0.1:18080/rest/plat/smapp/v1/sessions",
+            "A2AT_SAMPLE_NMS_HOST": "127.0.0.1",
+            "A2AT_SAMPLE_NMS_SCHEME": "http",
+            "A2AT_SAMPLE_NMS_A2A_PORT": "18080",
+            "A2AT_SAMPLE_NMS_TOKEN_PORT": "18080",
             "A2AT_SAMPLE_NMS_TOKEN_USER": "snbitestDefaultNorth",
             "A2AT_SAMPLE_NMS_TOKEN_VALUE": "Changeme_123",
             "A2AT_SAMPLE_NMS_VERIFY_TLS": "false",
@@ -79,7 +79,8 @@ def test_write_run_env_applies_the_nms_simulator_overrides(
 
     values = dotenv_values(env_path)
     assert values["A2AT_SAMPLE_DISCOVERY"] == "nms"
-    assert values["A2AT_SAMPLE_NMS_A2A_BASE"] == "http://127.0.0.1:18080/a2a/json"
+    assert values["A2AT_SAMPLE_NMS_HOST"] == "127.0.0.1"
+    assert values["A2AT_SAMPLE_NMS_A2A_PORT"] == "18080"
     assert values["A2AT_SAMPLE_NMS_TOKEN_USER"] == "snbitestDefaultNorth"
     assert values["A2AT_SAMPLE_NMS_VERIFY_TLS"] == "false"
 
@@ -188,9 +189,7 @@ def test_state_file_is_written_owner_only(
     pid_file = tmp_path / "pids.json"
     monkeypatch.setattr(run_demo, "PID_FILE", pid_file)
     chmod_calls: list[tuple[str, int]] = []
-    monkeypatch.setattr(
-        run_demo.os, "chmod", lambda path, mode: chmod_calls.append((str(path), mode))
-    )
+    monkeypatch.setattr(run_demo.os, "chmod", lambda path, mode: chmod_calls.append((str(path), mode)))
 
     run_demo._save_state([1], model_mode="offline", language="en-US", trace_token="tok")
 
@@ -251,19 +250,14 @@ class TestServerReuseDecision:
 
     def test_model_mode_mismatch_restarts(self) -> None:
         """The offline-UI/live-server bug: the recorded live server must not be reused."""
-        assert (
-            self.decide(state={**self.STATE, "model_mode": "live"}) == run_demo.REUSE_RESTART
-        )
+        assert self.decide(state={**self.STATE, "model_mode": "live"}) == run_demo.REUSE_RESTART
 
     def test_language_mismatch_restarts(self) -> None:
         assert self.decide(state={**self.STATE, "language": "zh-CN"}) == run_demo.REUSE_RESTART
 
     def test_trace_url_mismatch_restarts(self) -> None:
         """A server pointed at another UI port would post its spans to the wrong process."""
-        assert (
-            self.decide(trace_url="http://127.0.0.1:9090", ui_port=8080)
-            == run_demo.REUSE_RESTART
-        )
+        assert self.decide(trace_url="http://127.0.0.1:9090", ui_port=8080) == run_demo.REUSE_RESTART
 
     def test_ui_port_mismatch_restarts(self) -> None:
         assert self.decide(ui_port=9090) == run_demo.REUSE_RESTART
@@ -278,9 +272,7 @@ class TestServerReuseDecision:
 
     def test_cli_run_restarts_a_ui_keep_alive_server(self) -> None:
         """A UI server posts spans to its UI; the CLI runs cannot consume them."""
-        assert (
-            self.decide(ui=False, trace_url="", ui_port=None) == run_demo.REUSE_RESTART
-        )
+        assert self.decide(ui=False, trace_url="", ui_port=None) == run_demo.REUSE_RESTART
 
     def test_legacy_record_without_metadata_restarts(self) -> None:
         assert self.decide(state={"pids": [11]}) == run_demo.REUSE_RESTART
@@ -370,13 +362,20 @@ def test_web_serve_parser_accepts_the_launcher_arguments(tmp_path: Path) -> None
 
     args = serve._build_parser().parse_args(
         [
-            "--env-file", str(tmp_path / ".env"),
-            "--host", "0.0.0.0",
-            "--port", "8080",
-            "--scenario", "night",
-            "--mode", "auto",
-            "--transport", "sse",
-            "--server-url", "http://127.0.0.1:8000",
+            "--env-file",
+            str(tmp_path / ".env"),
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8080",
+            "--scenario",
+            "night",
+            "--mode",
+            "auto",
+            "--transport",
+            "sse",
+            "--server-url",
+            "http://127.0.0.1:8000",
             "--approval-gate",
         ]
     )
@@ -395,7 +394,5 @@ def test_trace_summary_reports_llm_and_tool_counts() -> None:
     ]
     assert run_demo._trace_summary(scripted) == "llm=1 tool=1 tokens=n/a (scripted)"
 
-    live: list[dict[str, object]] = [
-        {"kind": "llm", "tokens": {"prompt": 10, "completion": 5, "total": 15}}
-    ]
+    live: list[dict[str, object]] = [{"kind": "llm", "tokens": {"prompt": 10, "completion": 5, "total": 15}}]
     assert run_demo._trace_summary(live) == "llm=1 tool=0 tokens=prompt=10 completion=5 total=15"

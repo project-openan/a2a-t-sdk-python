@@ -1181,10 +1181,11 @@ def main() -> int:
 
     nms_overrides: dict[str, str] = {}
     if args.nms_sim:
-        sim_base = f"http://127.0.0.1:{args.nms_sim_port}"
         nms_overrides = {
-            "A2AT_SAMPLE_NMS_A2A_BASE": f"{sim_base}/a2a/json",
-            "A2AT_SAMPLE_NMS_TOKEN_URL": f"{sim_base}/rest/plat/smapp/v1/sessions",
+            "A2AT_SAMPLE_NMS_HOST": "127.0.0.1",
+            "A2AT_SAMPLE_NMS_SCHEME": "http",
+            "A2AT_SAMPLE_NMS_A2A_PORT": str(args.nms_sim_port),
+            "A2AT_SAMPLE_NMS_TOKEN_PORT": str(args.nms_sim_port),
             "A2AT_SAMPLE_NMS_TOKEN_USER": "snbitestDefaultNorth",
             "A2AT_SAMPLE_NMS_TOKEN_VALUE": "Changeme_123",
             "A2AT_SAMPLE_NMS_VERIFY_TLS": "false",
