@@ -164,6 +164,7 @@ class NegotiationTranscript:
         report: Report artifact payload of a completed task, when observed.
         error: Failure message of a run that raised.
         runs_dir: Directory the transcript is written to.
+        intent: Business intent document produced before the protocol mapping, when observed.
     """
 
     scenario: str
@@ -181,6 +182,7 @@ class NegotiationTranscript:
     report: dict[str, object] | None = None
     error: str | None = None
     runs_dir: Path = DEFAULT_RUNS_DIR
+    intent: dict[str, object] | None = None
     _seq: int = field(default=0, repr=False)
 
     def _next_seq(self, seq: int | None) -> int:
@@ -422,6 +424,7 @@ class NegotiationTranscript:
             "taskId": self.task_id,
             "report": self.report,
             "error": self.error,
+            "intent": self.intent,
             "events": list(self.events),
             "decisions": list(self.decisions),
             "timeline": self.timeline(),

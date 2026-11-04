@@ -86,4 +86,7 @@ def offline_config() -> SampleConfig:
         adk_model_api_key="not-needed",
         discovery=DISCOVERY_REGISTRY,
         transport=TRANSPORT_SSE,
+        # Existing tests exercise the protocol directly; the processed intent layer has dedicated
+        # tests that opt in explicitly.
+        intent_mode="raw",
     )

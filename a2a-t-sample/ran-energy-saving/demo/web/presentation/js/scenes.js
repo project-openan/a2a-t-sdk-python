@@ -83,6 +83,7 @@ function eventScene(entry, state, frame) {
     }
     if (pure?.kind === "negotiation") return scene("propose", 1800, frame);
     if (hop === "oss" && pure?.phase === "receive") return scene("understand", 2600, frame);
+    if (hop === "oss" && pure?.phase === "intent") return scene("understand", 2200, frame);
     if (hop === "oss" && pure?.phase === "answer") return scene("decision", 1600, frame);
     if (hop === "oss" && pure?.phase === "report") return scene("report", 2600, frame);
     if (summary.includes("Data collection started")) return scene("collect-start", 2200, frame);
@@ -220,6 +221,9 @@ function traceScene(span, state, frame) {
   if (span.kind === "intent_review_requested") {
     // The dedicated intent frame drives the hold and the card; its trace span only adds a row.
     return null;
+  }
+  if (span.kind === "intent_processed") {
+    return scene("understand", 2200, frame);
   }
   if (span.kind === "task_prompt_rendered") {
     return state.intentText === null ? scene("understand", 2600, frame) : scene("trace", 0, frame);

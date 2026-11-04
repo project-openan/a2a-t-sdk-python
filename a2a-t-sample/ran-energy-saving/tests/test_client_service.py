@@ -344,6 +344,21 @@ async def test_shutdown_marks_running_run_interrupted(
     assert stored.status == "interrupted"
 
 
+async def test_processed_run_records_the_built_in_raw_request(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    from demo.intent import build_scenario_intent
+
+    manager, _, _ = _manager(tmp_path, replace(offline_config, intent_mode="processed"))
+    run = await manager.start("information", "auto", "sse")
+    await _finish(manager, run.run_id)
+
+    expected = build_scenario_intent("information", offline_config.language)
+    assert run.intent_mode == "processed"
+    assert run.raw_request == expected.raw_request
+
+
 async def test_cancel_asks_the_remote_side_and_stops_the_run(
     tmp_path: Path,
     offline_config: SampleConfig,

@@ -19,6 +19,8 @@ from typing import Protocol, runtime_checkable
 from shared.models import NegotiationDecision
 from shared.run_constants import LANGUAGE_ZH
 
+from protocol.intent import ProcessedIntent
+
 
 @dataclass(frozen=True)
 class ExpectedStep:
@@ -97,6 +99,8 @@ class RunSpec:
         expected_final_state: terminal state the run must reach, when the catalog provides one.
         expected_negotiation_target: guaranteed-throughput target the negotiation must agree on,
             when the scenario ends with a completed task.
+        intent: built-in business intent of the scenario, used when the operator did not override
+            the canned request.
     """
 
     name: str
@@ -107,6 +111,7 @@ class RunSpec:
     policy: ClientPolicy = DEFAULT_CLIENT_POLICY
     expected_final_state: str | None = None
     expected_negotiation_target: str | None = None
+    intent: ProcessedIntent | None = None
 
 
 @runtime_checkable

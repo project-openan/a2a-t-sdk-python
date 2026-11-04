@@ -115,6 +115,10 @@ class RunState:
         intent_future: resolver of the pending intent review.
         cancel_requested: whether the operator asked to cancel the run.
         remote_task_id: last Task id observed on the remote side (cancel target).
+        intent_mode: ``processed`` or ``raw`` for this run.
+        raw_request: operator request before the business intent layer.
+        normalized_request: canonical text produced by the business intent layer.
+        processed_intent: structured intent document, once the layer has run.
         proposals: inbound proposals in order.
         discovery: discovery mode of the run.
         traces: every trace span produced/ingested for the run.
@@ -155,6 +159,10 @@ class RunState:
     intent_future: asyncio.Future[bool] | None = None
     cancel_requested: bool = False
     remote_task_id: str | None = None
+    intent_mode: str = ""
+    raw_request: str | None = None
+    normalized_request: str | None = None
+    processed_intent: dict[str, object] | None = None
     proposals: list[NegotiationProposeView] = field(default_factory=list)
     traces: list[dict[str, object]] = field(default_factory=list)
     spans: dict[str, dict[str, object]] = field(default_factory=dict)
@@ -268,6 +276,7 @@ class RunState:
             "protocol": self.protocol,
             "transport": self.transport,
             "discovery": self.discovery,
+            "intentMode": self.intent_mode,
             "modelMode": model_mode,
             "modelLabel": model_label,
             "expectedSequence": expected_sequence,
@@ -295,6 +304,7 @@ class RunState:
             "protocol": self.protocol,
             "transport": self.transport,
             "discovery": self.discovery,
+            "intentMode": self.intent_mode,
             "modelMode": model_mode,
             "modelLabel": model_label,
             "expectedSequence": expected_sequence,
@@ -356,6 +366,8 @@ class RunState:
             existing_span_id = self._producer_spans.get(original_span_id)
             if existing_span_id is not None:
                 return self.spans.get(existing_span_id, {})
+        if candidate.kind == "intent_processed" and isinstance(candidate.detail, Mapping):
+            self.record_intent(candidate.detail)
         phase = candidate.phase
         seq, step = self.allocate(phase)
         span_id: str | None = candidate.span_id or None
@@ -422,12 +434,15 @@ class RunState:
             return {}
         phase = infer_event_phase(event)
         seq, step = self.allocate(phase)
+        detail = _pure_detail(event)
+        if isinstance(detail, Mapping) and isinstance(detail.get("intentProcessed"), Mapping):
+            self.record_intent(detail["intentProcessed"])
         entry = self.transcript.record_event(
             event,
             phase=phase,
             phase_step=step,
             seq=seq,
-            detail=_pure_detail(event),
+            detail=detail,
         )
         round_number = entry.get("round")
         context_value = entry.get("contextId")
@@ -453,6 +468,18 @@ class RunState:
             self.remote_task_id = task_id
         self._persist_task_snapshot(event)
         return entry
+
+    def record_intent(self, detail: Mapping[str, object]) -> None:
+        """Capture the business intent carried by one ``intent_processed`` trace row."""
+        raw = _string_value(detail.get("rawRequest"))
+        if raw is not None:
+            self.raw_request = raw
+        normalized = _string_value(detail.get("normalizedText"))
+        if normalized is not None:
+            self.normalized_request = normalized
+        intent = detail.get("intent")
+        if isinstance(intent, Mapping):
+            self.processed_intent = {str(key): value for key, value in intent.items()}
 
     def _persist_task_snapshot(self, event: Mapping[str, object]) -> None:
         """Upsert the last observed Task state of this run."""
@@ -674,6 +701,10 @@ class RunState:
             "protocol": self.protocol,
             "transport": self.transport,
             "discovery": self.discovery,
+            "intentMode": self.intent_mode,
+            "rawRequest": self.raw_request,
+            "normalizedRequest": self.normalized_request,
+            "intent": self.processed_intent,
             "status": self.status,
             "pendingDecision": self.pending_decision,
             "pendingIntent": self.pending_intent,
@@ -710,6 +741,9 @@ def _pure_detail(event: Mapping[str, object]) -> dict[str, object] | None:
         detail["pure"] = dict(pure)
     if isinstance(tool_name, str) and tool_name:
         detail["toolName"] = tool_name
+    intent = metadata.get("intentProcessed")
+    if isinstance(intent, Mapping):
+        detail["intentProcessed"] = {str(key): value for key, value in intent.items()}
     return detail or None
 
 

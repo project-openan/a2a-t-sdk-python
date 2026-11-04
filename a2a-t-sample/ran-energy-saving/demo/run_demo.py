@@ -298,6 +298,7 @@ def _write_run_env(
     protocol: str = PROTOCOL_A2A_T,
     oss_port: int = 8001,
     mie_port: int = 8002,
+    intent_mode: str | None = None,
     extra: dict[str, str] | None = None,
 ) -> Path:
     """Write the per-run ``.env`` and return its path."""
@@ -333,6 +334,8 @@ def _write_run_env(
             "REGISTRY_CENTER_PORT": str(registry_port),
         }
     )
+    if intent_mode:
+        values["A2AT_SAMPLE_INTENT_MODE"] = intent_mode
     if extra:
         values.update(extra)
     text = "\n".join(f"{key}={value}" for key, value in values.items()) + "\n"
@@ -904,7 +907,12 @@ def _build_parser(
             ``A2AT_SAMPLE_GATEWAY_PORT`` by the caller (``8001`` when the key is absent).
     """
     from protocol.client_runtime import SUPPORTED_MODES
-    from shared.config import SUPPORTED_DISCOVERY_MODES, SUPPORTED_MODEL_MODES, SUPPORTED_TRANSPORTS
+    from shared.config import (
+        SUPPORTED_DISCOVERY_MODES,
+        SUPPORTED_INTENT_MODES,
+        SUPPORTED_MODEL_MODES,
+        SUPPORTED_TRANSPORTS,
+    )
     from shared.run_constants import BRAND_ORANGE, SUPPORTED_BRANDS, SUPPORTED_LANGUAGES
 
     from demo.scenario import SUPPORTED_SCENARIO_NAMES
@@ -1004,6 +1012,15 @@ def _build_parser(
         default="offline",
         choices=list(SUPPORTED_MODEL_MODES),
         help="offline (scripted + fake ADK model) or live (OpenAI-compatible endpoint)",
+    )
+    parser.add_argument(
+        "--intent-mode",
+        default=None,
+        choices=list(SUPPORTED_INTENT_MODES),
+        help=(
+            "operator intent handling: processed (business intent layer, default from "
+            "A2AT_SAMPLE_INTENT_MODE) or raw (send the operator text directly)"
+        ),
     )
     parser.add_argument("--ui", action="store_true", help="serve the Web UI instead of the CLI client")
     parser.add_argument(
@@ -1210,6 +1227,7 @@ def main() -> int:
         protocol=args.protocol,
         oss_port=args.oss_port,
         mie_port=args.mie_port,
+        intent_mode=args.intent_mode,
         extra=nms_overrides,
     )
 
@@ -1225,7 +1243,8 @@ def main() -> int:
         f"[run_demo] resolved: model_mode={resolved_config.model_mode}, "
         f"model={resolved_config.model_label}, language={resolved_config.language}, "
         f"provider={resolved_config.adk_model_provider}, discovery={resolved_config.discovery}, "
-        f"transport={resolved_config.transport}, nms_region={resolved_config.nms_region or '-'}"
+        f"transport={resolved_config.transport}, intent_mode={resolved_config.intent_mode}, "
+        f"nms_region={resolved_config.nms_region or '-'}"
     )
 
     if args.nms:

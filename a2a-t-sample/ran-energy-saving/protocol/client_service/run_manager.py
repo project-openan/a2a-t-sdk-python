@@ -9,11 +9,17 @@ import time
 import uuid
 from collections.abc import Mapping
 from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Final, cast
 
 from a2a_t.core.metadata import NegotiationContext
-from shared.config import DISCOVERY_REGISTRY, SampleConfig
+from shared.config import (
+    DISCOVERY_REGISTRY,
+    INTENT_MODE_PROCESSED,
+    SUPPORTED_INTENT_MODES,
+    SampleConfig,
+)
 from shared.logging_setup import log_context
 from shared.metrics import (
     CLIENT_RUN_DURATION_SECONDS,
@@ -184,6 +190,7 @@ class RunManager:
         external_conversation_id: str | None = None,
         user_id: str = "web-user",
         idempotency_key: str | None = None,
+        intent_mode: str | None = None,
     ) -> RunState:
         """Start one background run and broadcast ``run_started`` before the task is scheduled.
 
@@ -200,10 +207,18 @@ class RunManager:
             external_conversation_id: caller-side conversation id (Gemini Enterprise, console).
             user_id: caller identity.
             idempotency_key: optional key that deduplicates a repeated request.
+            intent_mode: per-run override of the process intent mode (``processed`` / ``raw``).
 
         Raises:
             RunConflictError: when the same conversation already has an active run.
+            ValueError: when ``intent_mode`` is unsupported.
         """
+        resolved_intent_mode = (intent_mode or self._config.intent_mode).strip()
+        if resolved_intent_mode not in SUPPORTED_INTENT_MODES:
+            raise ValueError(
+                f"Unsupported intent mode: {resolved_intent_mode}; "
+                f"expected one of {SUPPORTED_INTENT_MODES}"
+            )
         resolved_conversation = conversation_id or f"conv-{uuid.uuid4().hex}"
         active = self.active_for_conversation(resolved_conversation)
         if active is not None:
@@ -223,6 +238,12 @@ class RunManager:
         custom_request = user_request.strip() if isinstance(user_request, str) else None
         if not custom_request:
             custom_request = None
+        spec = self._catalog.spec(scenario, language=self._config.language)
+        raw_request = custom_request or (
+            spec.intent.raw_request
+            if resolved_intent_mode == INTENT_MODE_PROCESSED and spec.intent is not None
+            else None
+        )
         run = RunState(
             run_id=uuid.uuid4().hex,
             scenario=scenario,
@@ -236,6 +257,8 @@ class RunManager:
             user_id=user_id,
             idempotency_key=resolved_key,
             store=self._store,
+            intent_mode=resolved_intent_mode,
+            raw_request=raw_request,
         )
         run.transcript = NegotiationTranscript(
             scenario=scenario,
@@ -245,10 +268,9 @@ class RunManager:
             transport=transport,
             runs_dir=self._runs_dir or DEFAULT_RUNS_DIR,
         )
-        spec = self._catalog.spec(scenario, language=self._config.language)
         run.emit_run_started(
             description=spec.description,
-            user_request=custom_request or spec.user_request,
+            user_request=raw_request or spec.user_request,
             language=self._config.language,
             model_mode=self._config.model_mode,
             model_label=self._config.model_label,
@@ -549,7 +571,7 @@ class RunManager:
 
         try:
             run.runtime = await self._runtime_factory(
-                self._config,
+                replace(self._config, intent_mode=run.intent_mode),
                 run.scenario,
                 run.mode,
                 run.transport,
@@ -609,6 +631,7 @@ class RunManager:
                     continue
                 propose = run.proposals[index] if index < len(run.proposals) else None
                 run.record_decision(decision, propose)
+            transcript.intent = run.processed_intent
             transcript.record_final(result)
             run.status = STATUS_FINISHED
         except asyncio.CancelledError:
@@ -632,6 +655,7 @@ class RunManager:
                 # only the transcript, traces and result, so a long-lived UI/gateway process does
                 # not accumulate one agent history per run.
                 run.runtime = None
+            transcript.intent = run.processed_intent
             try:
                 run.paths = transcript.write(self._runs_dir)
             except OSError as exc:

@@ -1623,4 +1623,81 @@ const artifactModel = buildWireModel(
 assert.ok(!wireText(artifactModel).includes('"phase"'));
 assert.ok(wireText(artifactModel).includes("ok"));
 
+// --- Business intent processing ------------------------------------------
+
+const processed = createState();
+applyFrame(processed, {
+  type: "run_started",
+  runId: "intent-1",
+  scenario: "night",
+  mode: "confirm",
+  userRequest: "Start energy saving in the Songshanhu area.",
+  intentMode: "processed",
+});
+applyFrame(processed, {
+  type: "trace",
+  event: {
+    seq: 2,
+    phase: "task_prompt",
+    kind: "intent_processed",
+    title: "Intent processed",
+    actor: "client",
+    side: "client",
+    detail: {
+      mode: "processed",
+      source: "scenario",
+      rawRequest: "Start energy saving in the Songshanhu area.",
+      normalizedText: "## Operation Type\nCreate\n\n## Task Object\nThe area is Songshanhu.",
+      intent: {
+        rawRequest: "Start energy saving in the Songshanhu area.",
+        normalizedText: "## Operation Type\nCreate\n\n## Task Object\nThe area is Songshanhu.",
+        operationType: "Create",
+        region: "Songshanhu",
+        sites: [],
+        windows: ["{00:00~06:00,10Mbps}"],
+        missingFields: [],
+        conflicts: [],
+        source: "scenario",
+        warnings: [],
+      },
+      warnings: [],
+    },
+  },
+});
+assert.equal(processed.rawRequest, "Start energy saving in the Songshanhu area.");
+assert.ok(processed.normalizedRequest.includes("Operation Type"));
+assert.equal(processed.intentSource, "scenario");
+assert.equal(processed.businessIntent.operationType, "Create");
+assert.equal(processed.intentText, processed.normalizedRequest);
+
+applyFrame(processed, {
+  type: "intent_review_requested",
+  promptText: processed.normalizedRequest,
+  timeoutSeconds: 300,
+});
+assert.equal(processed.intentReview.promptText, processed.normalizedRequest);
+
+const pureIntent = createState();
+applyFrame(pureIntent, {
+  type: "event",
+  event: {
+    seq: 1,
+    kind: "status",
+    summary: "Business intent ready: Songshanhu",
+    detail: {
+      hop: "oss",
+      pure: { hop: "oss", phase: "intent" },
+      intentProcessed: {
+        rawRequest: "raw text",
+        normalizedText: "normalized text",
+        operationType: "Create",
+        source: "scenario",
+        warnings: [],
+      },
+    },
+  },
+});
+assert.equal(pureIntent.rawRequest, "raw text");
+assert.equal(pureIntent.normalizedRequest, "normalized text");
+
 console.log("presentation model harness: ok");

@@ -139,7 +139,8 @@ const EN = {
   narration: {
     request:
       "The engineer writes a goal in plain language: an area and a guaranteed rate per time slot.",
-    understand: "The OSS Agent interprets the request and picks the right skill.",
+    understand:
+      "The business system reads the operator request and turns it into a normalized intent.",
     "intent-review":
       "Approval 1. Nothing is sent until the engineer confirms the request details.",
     send: "The OSS Agent maps the confirmed intent onto a Task-T and sends it as an A2A message; the RAN Agent validates it before running it.",
@@ -314,6 +315,18 @@ const EN = {
     defaultPolicy: "default policy",
     overlapLabel: "overlap",
     noTarget: "No target given",
+    business: "Business intent",
+    raw: "Operator request",
+    normalized: "Normalized request",
+    source: "Source",
+    missingFields: "Missing fields",
+    conflicts: "Conflicts",
+    sources: {
+      scenario: "Scenario intent",
+      model: "Model extraction",
+      raw_fallback: "Raw fallback",
+      raw: "Raw request",
+    },
   },
   negotiation: {
     title: "Negotiation",
@@ -535,6 +548,7 @@ const EN = {
     },
     approval: "Approval 2 requested",
     intentReview: "Approval 1 requested",
+    intentProcessed: "Business intent processed",
     approved: "MML approved",
     decisionRequested: "Decision requested",
     nmsToken: "NMS session token acquired",
@@ -845,7 +859,7 @@ const ZH = {
   auto: "自动确认",
   narration: {
     request: "工程师用自然语言提出目标：区域，以及每个时段要保障的速率。",
-    understand: "OSS Agent 解读请求，并选择合适的技能。",
+    understand: "业务系统先理解操作员请求，生成规范化的业务意图。",
     "intent-review": "审批 1。工程师确认请求内容之前，不会发送任何内容。",
     send: "OSS Agent 把确认后的意图映射成 Task-T 作为 A2A 消息发出；RAN Agent 先校验，再执行。",
     modifySend:
@@ -1006,6 +1020,18 @@ const ZH = {
     defaultPolicy: "默认策略",
     overlapLabel: "重叠",
     noTarget: "未给出目标",
+    business: "业务意图",
+    raw: "操作员请求",
+    normalized: "规范化文本",
+    source: "来源",
+    missingFields: "缺失字段",
+    conflicts: "冲突",
+    sources: {
+      scenario: "场景内置意图",
+      model: "模型抽取",
+      raw_fallback: "回退原文",
+      raw: "原始请求",
+    },
   },
   negotiation: {
     title: "协商",
@@ -1223,6 +1249,7 @@ const ZH = {
     },
     approval: "请求审批 2",
     intentReview: "请求审批 1",
+    intentProcessed: "业务意图已处理",
     approved: "MML 已确认",
     decisionRequested: "请求决策",
     nmsToken: "已获取网管会话令牌",

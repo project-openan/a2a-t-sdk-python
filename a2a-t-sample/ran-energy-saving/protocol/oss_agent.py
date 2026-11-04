@@ -44,10 +44,12 @@ from google.protobuf.json_format import ParseDict
 from shared.agent_card import AGENT_CARD_NAME, AGENT_CARD_ORGANIZATION
 from shared.config import DEFAULT_HTTP_TIMEOUT_SECONDS, SampleConfig, load_config
 from shared.logging_setup import configure_logging
+from shared.run_constants import LANGUAGE_ZH
 from starlette.applications import Starlette
 
 from protocol.client_flow import ClientFlowResult, SseClientTransport
 from protocol.discovery import DISCOVERY_DIRECT, discover_agent
+from protocol.intent import IntentProcessor, OperatorRequest, ProcessedIntent
 from protocol.messages import SAMPLE_RUN_ID_METADATA_KEY, metadata_to_dict
 from protocol.pure_client_flow import run_pure_client_flow
 
@@ -78,6 +80,8 @@ class OSSPureExecutor(AgentExecutor):
         answer: Callable[[dict[str, object]], str],
         max_rounds: int = 3,
         timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
+        intent_processor: IntentProcessor | None = None,
+        language: str = LANGUAGE_ZH,
     ) -> None:
         """Create one OSS executor.
 
@@ -86,11 +90,15 @@ class OSSPureExecutor(AgentExecutor):
             answer: decision function answering one RAN ``INPUT_REQUIRED`` event.
             max_rounds: negotiation round budget.
             timeout_seconds: A2A call budget of the OSS->RAN hop.
+            intent_processor: business intent layer run before the RAN hop.
+            language: process-level language used by the intent processor.
         """
         self._ran_url = ran_url.rstrip("/")
         self._answer = answer
         self._max_rounds = max_rounds
         self._timeout_seconds = timeout_seconds
+        self._intent_processor = intent_processor
+        self._language = language
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Create the outer Task, run the RAN hop, and publish the aggregated result."""
@@ -120,9 +128,12 @@ class OSSPureExecutor(AgentExecutor):
         consumer = asyncio.create_task(
             self._consume(events, updater), name=f"oss-ran-consumer-{task.id}"
         )
+        raw_text = _message_text(message)
+        intent = await self._process_intent(raw_text)
+        await self._publish_intent(updater, intent)
         try:
             result = await self._run_ran(
-                _message_text(message),
+                intent.normalized_text,
                 _run_id_of(message),
                 events.put_nowait,
                 updater,
@@ -179,6 +190,32 @@ class OSSPureExecutor(AgentExecutor):
             message=updater.new_agent_message(
                 [Part(text=f"The RAN hop ended with state {result.final_state}.")]
             )
+        )
+
+    async def _process_intent(self, raw_text: str) -> ProcessedIntent:
+        """Run the business intent layer on the inbound engineer request."""
+        if self._intent_processor is None:
+            return ProcessedIntent.raw(raw_text)
+        return await self._intent_processor.process(
+            OperatorRequest(
+                text=raw_text,
+                language=self._language,
+                source="a2a",
+                custom=False,
+            )
+        )
+
+    async def _publish_intent(self, updater: TaskUpdater, intent: ProcessedIntent) -> None:
+        """Expose the normalized intent on the outer Task before the RAN hop starts."""
+        await updater.update_status(
+            TaskState.TASK_STATE_WORKING,
+            message=updater.new_agent_message(
+                [Part(text=f"Business intent ready: {intent.region or intent.operation_type}")],
+                metadata={
+                    "pure": {"hop": "oss", "phase": "intent"},
+                    "intentProcessed": intent.to_dict(),
+                },
+            ),
         )
 
     async def _run_ran(
@@ -373,6 +410,8 @@ def build_oss_app(
     host: str | None = None,
     port: int | None = None,
     timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
+    intent_processor: IntentProcessor | None = None,
+    language: str = LANGUAGE_ZH,
 ) -> Starlette:
     """Build the OSS A2A app."""
     del config
@@ -388,6 +427,8 @@ def build_oss_app(
         ran_url=resolved_ran_url,
         answer=resolved_answer,
         timeout_seconds=timeout_seconds,
+        intent_processor=intent_processor,
+        language=language,
     )
     request_handler = DefaultRequestHandler(
         agent_executor=executor,
@@ -412,6 +453,7 @@ def main() -> None:
     config = load_config(env_path=env_path if env_path.exists() else None)
     host = os.environ.get("A2AT_SAMPLE_OSS_HOST", "127.0.0.1")
     port = int(os.environ.get("A2AT_SAMPLE_OSS_PORT", str(DEFAULT_OSS_PORT)))
+    from demo.intent import build_demo_intent_processor
     from demo.pure_policy import pure_answer_from_event
 
     app = build_oss_app(
@@ -419,6 +461,8 @@ def main() -> None:
         host=host,
         port=port,
         answer=lambda event: pure_answer_from_event(event, config.language),
+        intent_processor=build_demo_intent_processor(config),
+        language=config.language,
     )
     _LOGGER.info("starting OSS Agent on %s:%s", host, port)
     uvicorn.run(app, host=host, port=port)

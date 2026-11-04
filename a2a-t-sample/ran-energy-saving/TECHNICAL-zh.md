@@ -390,6 +390,36 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
 原始客户端对仿真器的集成测试。真实联调需要 910 网络，并设置
 `A2AT_SAMPLE_NMS_REGION=A2ATestRegion` 或在请求文本里写明该区域。
 
+### 3.7 操作员意图处理层
+
+真实 OSS 不会把操作员原文原样发出：它先理解请求、可能展示给工程师，也可能把同一意图路由到多个
+下游系统。sample 把这一步显式建模：
+
+```text
+OperatorRequest → IntentProcessor → ProcessedIntent → 规范化文本
+                → 审批 1 → A2A-T Task-T / Plain A2A 消息
+```
+
+- `protocol/intent.py` 定义协议中立的 `OperatorRequest`、`ProcessedIntent` 和 `IntentProcessor` 接口，
+  不修复缺失值，也不修正冲突。
+- `demo/intent.py` 提供 8 个场景的内置确定性意图，以及自由文本的 live 模型抽取；offline 自由文本
+  回退原文并写 warning。
+- `RunSpec.intent` 携带场景内置意图；`demo/composition.py` 通过
+  `build_client_runtime(intent_processor_factory=...)` 注入 `build_demo_intent_processor`。
+- `processed` 模式下 `ClientRuntime.run` 先发布 `intent_processed` trace，再用**规范化文本**调用
+  审批 1；`run_client_flow` 不再接收审批钩子，Task-T 严格从规范化文本抽取（禁用
+  `initial_data` 结构化快路径）。
+- Plain A2A 发送规范化文本。Pure A2A 由 OSS Agent 处理原文，在外层 Task 的
+  `metadata.intentProcessed` 上发布意图，再把规范化文本转发给 RAN。
+- Gateway 的入站 A2A 文本一律视为 raw，进入同一处理层。
+- `A2AT_SAMPLE_INTENT_MODE`（`processed` / `raw`）、`--intent-mode` 和
+  `POST /api/runs.intentMode` 选择模式；`raw` 绕过该层，保持旧行为。
+- 展示页保存 `rawRequest`、`normalizedRequest`、结构化意图、来源和 warning；意图面板并列显示
+  操作员请求与规范化文本，trace 记录 `intent_processed`。
+- `RunState` 快照和 transcript 携带 `intentMode`、`rawRequest`、`normalizedRequest` 和意图文档。
+  内置请求的会话记忆使用规范化文本。
+- 本期不实现第三方网管路由；业务意图层就是真实部署向其他下游系统分发的扩展点。
+
 ## 4. 网管侧开发指南（操作）
 
 **本节目标：** 把任务前协商处理器、执行器与工具接到真实网管系统。
@@ -657,6 +687,7 @@ P95 和审批等待。
 | `A2AT_SAMPLE_DISCOVERY` | `registry`（默认）、`direct` | 服务发现方式。 |
 | `A2AT_SAMPLE_DIRECT_SERVER_URL` | 默认 `http://127.0.0.1:8000` | `direct` 发现读取的基础 URL。 |
 | `A2AT_SAMPLE_TRANSPORT` | `sse`（默认）、`webhook` | 客户端事件传输。 |
+| `A2AT_SAMPLE_INTENT_MODE` | `processed`（默认）、`raw` | 在 A2A/A2A-T 映射前执行业务意图层，或直接发送操作员文本。`--intent-mode` 与 `POST /api/runs.intentMode` 可按 run 覆盖。 |
 | `A2AT_SAMPLE_WEBHOOK_PORT` | 默认 `9000`（`0` = 临时端口） | 内置 webhook 接收器端口。 |
 | `A2AT_SAMPLE_WEBHOOK_TOKEN` | 默认 `demo-webhook-token` | 与 `X-A2A-Notification-Token` 比对的静态推送 token。 |
 | `A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT` | 默认 `300`（与 HTTP 预算一致） | 无推送多少秒后结束 webhook 阶段；阶段不能早于客户端预算结束。 |
@@ -865,6 +896,8 @@ python run_demo.py --scenario target --mode auto --model-mode live
 | [`protocol/server_app.py`](protocol/server_app.py) | 服务端装配：AgentCard（声明 `Task-T/v1` 与 `Negotiation-T/v1`）、请求处理器、Starlette 应用、注册中心注册。 |
 | [`protocol/client_flow.py`](protocol/client_flow.py) | 客户端协议流程：初始 Task-T、多轮协商、accept 重填、SSE/webhook 终态处理。 |
 | [`protocol/client_runtime.py`](protocol/client_runtime.py) | 客户端单次运行装配：每次运行的 SDK `.env`、服务发现、SDK 客户端、传输、决策 Provider。 |
+| [`protocol/intent.py`](protocol/intent.py) | 协议中立的操作员请求、处理后的意图和意图处理器接口。 |
+| [`demo/intent.py`](demo/intent.py) | 演示场景内置意图、规范化文本渲染、live 抽取与 offline 回退。 |
 | [`protocol/client_service/`](protocol/client_service) | 客户端应用服务，拆为 `run_state.py`（运行状态、span、决策）与 `run_manager.py`（生命周期、会话、持久化钩子）。 |
 | [`protocol/client_store/`](protocol/client_store) | 客户端持久化，拆为 `store.py`（写入）与 `reader.py`（UI 只读查询）。 |
 | [`protocol/client_gateway.py`](protocol/client_gateway.py) | 可选入站 A2A Gateway：一条入站消息 -> 一次客户端运行 -> 进度状态与最终报告 artifact。 |
@@ -917,6 +950,7 @@ python run_demo.py --scenario target --mode auto --model-mode live
 | `demo/agents/client_agent/tools.py`（`get_sla_policy`、`evaluate_proposal_impact`） | **REPLACE** | 改为读取你的 SLA/目录系统，而不是进程内数据集。 |
 | `demo/scenario.py`（脚本化决策、用户请求） | **REPLACE** | 演示输入；仅离线演示/测试保留。 |
 | `protocol/client_runtime.py` | KEEP | 单次运行装配；通过配置调整 SDK 端点。 |
+| `protocol/intent.py` | KEEP | 业务意图接口；把 `demo/intent.py` 替换为你们 OSS 的意图实现。 |
 | `protocol/client_service/` | KEEP | 会话身份、运行生命周期、记忆与每会话并发约束。 |
 | `protocol/client_store/` | KEEP | 最小持久化客户端库；生产环境可替换为自有数据库。 |
 | `protocol/client_gateway.py` | KEEP（调整 AgentCard/身份） | 可选入站 A2A 接口；替换演示卡片、鉴权与注册。 |

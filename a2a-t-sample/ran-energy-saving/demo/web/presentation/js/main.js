@@ -972,7 +972,13 @@ function renderIntentPanel() {
   ui.renderingIntent = true;
   try {
     const text = ui.view.intentText || els.requestText.value;
-    renderIntent(els.intentBody, text, ui.copy);
+    renderIntent(els.intentBody, text, ui.copy, {
+      rawRequest: ui.view.rawRequest,
+      source: ui.view.intentSource,
+      warnings: ui.view.intentWarnings || [],
+      missingFields: ui.view.businessIntent?.missingFields || [],
+      conflicts: ui.view.businessIntent?.conflicts || [],
+    });
   } finally {
     ui.renderingIntent = false;
   }

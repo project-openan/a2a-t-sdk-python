@@ -65,6 +65,7 @@ async def build_demo_runtime(
     """Build one client runtime with the demo catalog and offline assets."""
     from demo.agents.client_agent.agent import build_client_agent
     from demo.catalog import DemoRunCatalog
+    from demo.intent import build_demo_intent_processor
     from demo.pure_policy import pure_answer_from_event
 
     return await build_client_runtime(
@@ -84,4 +85,5 @@ async def build_demo_runtime(
             if protocol == PROTOCOL_PURE
             else None
         ),
+        intent_processor_factory=build_demo_intent_processor,
     )

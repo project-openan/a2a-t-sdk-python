@@ -38,6 +38,8 @@ from demo.scenario import (
     NATURAL_LANGUAGE_PROMPT_INPUT_OUTAGE_ZH,
     NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_EN,
     NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_ZH,
+    NATURAL_LANGUAGE_PROMPT_INPUT_UNKNOWN_EN,
+    NATURAL_LANGUAGE_PROMPT_INPUT_UNKNOWN_ZH,
     NATURAL_LANGUAGE_PROMPT_INPUT_ZH,
 )
 from demo.served_areas import (
@@ -60,6 +62,8 @@ STAGE_SLOT_EXTRACTION_FEASIBILITY = "slot_extraction_feasibility"
 STAGE_SLOT_EXTRACTION_TARGET_REFILL = "slot_extraction_target_refill"
 STAGE_SLOT_EXTRACTION_FEASIBILITY_REFILL = "slot_extraction_feasibility_refill"
 STAGE_SLOT_EXTRACTION_OUTAGE = "slot_extraction_outage"
+STAGE_SLOT_EXTRACTION_OUTAGE_BASELINE = "slot_extraction_outage_baseline"
+STAGE_SLOT_EXTRACTION_UNKNOWN = "slot_extraction_unknown"
 STAGE_CONTENT_VALIDATION = "content_validation"
 STAGE_CONTENT_VALIDATION_MISSING = "content_validation_missing"
 STAGE_CONTENT_VALIDATION_TARGET = "content_validation_target"
@@ -92,6 +96,8 @@ _STAGE_FILES: dict[str, str] = {
     STAGE_SLOT_EXTRACTION_TARGET_REFILL: "slot_extraction_target_refill.json",
     STAGE_SLOT_EXTRACTION_FEASIBILITY_REFILL: "slot_extraction_feasibility_refill.json",
     STAGE_SLOT_EXTRACTION_OUTAGE: "slot_extraction_outage.json",
+    STAGE_SLOT_EXTRACTION_OUTAGE_BASELINE: "slot_extraction_outage_baseline.json",
+    STAGE_SLOT_EXTRACTION_UNKNOWN: "slot_extraction_unknown.json",
     STAGE_CONTENT_VALIDATION: "content_validation.json",
     STAGE_CONTENT_VALIDATION_MISSING: "content_validation_missing.json",
     STAGE_CONTENT_VALIDATION_TARGET: "content_validation_target.json",
@@ -131,6 +137,10 @@ _TARGET_SCENARIO_INPUTS = (NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_EN, NATURAL_LANG
 _FEASIBILITY_SCENARIO_INPUTS = (
     NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_EN,
     NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_ZH,
+)
+_UNKNOWN_SCENARIO_INPUTS = (
+    NATURAL_LANGUAGE_PROMPT_INPUT_UNKNOWN_EN,
+    NATURAL_LANGUAGE_PROMPT_INPUT_UNKNOWN_ZH,
 )
 
 #: Missing-throughput scenario inputs that flip the slot-extraction routing to the missing variant.
@@ -522,6 +532,8 @@ def route_structured_call(
         # scenario request; route it to the outage variant as well.
         if any(marker in user_content for marker in _OUTAGE_VALIDATION_MARKERS):
             return STAGE_SLOT_EXTRACTION_OUTAGE
+        if any(marker in user_content for marker in _OUTAGE_BASELINE_VALIDATION_MARKERS):
+            return STAGE_SLOT_EXTRACTION_OUTAGE_BASELINE
         if any(scenario_input in user_content for scenario_input in _OUTAGE_SCENARIO_INPUTS):
             return STAGE_SLOT_EXTRACTION_OUTAGE
         if any(scenario_input in user_content for scenario_input in _COMPLETE_SCENARIO_INPUTS):
@@ -530,6 +542,8 @@ def route_structured_call(
             return STAGE_SLOT_EXTRACTION_TARGET
         if any(scenario_input in user_content for scenario_input in _FEASIBILITY_SCENARIO_INPUTS):
             return STAGE_SLOT_EXTRACTION_FEASIBILITY
+        if any(scenario_input in user_content for scenario_input in _UNKNOWN_SCENARIO_INPUTS):
+            return STAGE_SLOT_EXTRACTION_UNKNOWN
         if any(marker in user_content for marker in _FEASIBILITY_REFILL_MARKERS):
             return STAGE_SLOT_EXTRACTION_FEASIBILITY_REFILL
         if any(marker in user_content for marker in _TARGET_REFILL_MARKERS):

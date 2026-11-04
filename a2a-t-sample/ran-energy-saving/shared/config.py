@@ -35,6 +35,12 @@ TRANSPORT_SSE = "sse"
 TRANSPORT_WEBHOOK = "webhook"
 SUPPORTED_TRANSPORTS = (TRANSPORT_SSE, TRANSPORT_WEBHOOK)
 
+#: Intent handling. ``processed`` puts the business intent layer before the protocol mapping;
+#: ``raw`` keeps the previous direct-text behavior.
+INTENT_MODE_PROCESSED = "processed"
+INTENT_MODE_RAW = "raw"
+SUPPORTED_INTENT_MODES = (INTENT_MODE_PROCESSED, INTENT_MODE_RAW)
+
 #: ``.env`` keys.
 MODEL_MODE_ENV_KEY = "A2AT_SAMPLE_MODEL_MODE"
 LANGUAGE_ENV_KEY = "A2AT_LANGUAGE"
@@ -51,6 +57,7 @@ ADK_MODEL_API_BASE_ENV_KEY = "ADK_MODEL_API_BASE"
 ADK_MODEL_API_KEY_ENV_KEY = "ADK_MODEL_API_KEY"
 DISCOVERY_ENV_KEY = "A2AT_SAMPLE_DISCOVERY"
 TRANSPORT_ENV_KEY = "A2AT_SAMPLE_TRANSPORT"
+INTENT_MODE_ENV_KEY = "A2AT_SAMPLE_INTENT_MODE"
 HTTP_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS"
 LLM_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_LLM_TIMEOUT_SECONDS"
 LLM_MAX_ATTEMPTS_ENV_KEY = "A2AT_SAMPLE_LLM_MAX_ATTEMPTS"
@@ -252,6 +259,7 @@ class SampleConfig:
         adk_model_api_key: API key of the ADK model endpoint.
         discovery: Discovery mode (``registry`` / ``direct``).
         transport: Event transport (``sse`` / ``webhook``).
+        intent_mode: Intent handling (``processed`` / ``raw``).
         http_timeout_seconds: Client HTTP budget of one A2A request, in seconds.
         llm_timeout_seconds: Live LLM budget of one call (SDK structured call or ADK turn), in seconds.
         llm_max_attempts: Live SDK LLM attempt limit per retryable step.
@@ -308,6 +316,7 @@ class SampleConfig:
     adk_model_api_key: str
     discovery: str = DISCOVERY_REGISTRY
     transport: str = TRANSPORT_SSE
+    intent_mode: str = INTENT_MODE_PROCESSED
     http_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS
     llm_timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS
     llm_max_attempts: int = DEFAULT_LLM_MAX_ATTEMPTS
@@ -354,8 +363,8 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
 
     Raises:
         ValueError: when ``A2AT_SAMPLE_MODEL_MODE``, ``A2AT_LANGUAGE``, a port, a timeout, the LLM
-            attempt limit, a discovery / transport key, or ``A2AT_SAMPLE_TASK_DB`` carries an
-            unsupported value.
+            attempt limit, a discovery / transport / intent-mode key, or ``A2AT_SAMPLE_TASK_DB``
+            carries an unsupported value.
     """
     resolved = env_path or Path.cwd() / ".env"
     values: dict[str, str | None] = dict(dotenv_values(resolved)) if resolved.exists() else {}
@@ -375,6 +384,13 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
     transport = _env_value(values, TRANSPORT_ENV_KEY, TRANSPORT_SSE)
     if transport not in SUPPORTED_TRANSPORTS:
         raise ValueError(f"Unsupported {TRANSPORT_ENV_KEY}: {transport}; expected one of {SUPPORTED_TRANSPORTS}")
+
+    intent_mode = _env_value(values, INTENT_MODE_ENV_KEY, INTENT_MODE_PROCESSED)
+    if intent_mode not in SUPPORTED_INTENT_MODES:
+        raise ValueError(
+            f"Unsupported {INTENT_MODE_ENV_KEY}: {intent_mode}; "
+            f"expected one of {SUPPORTED_INTENT_MODES}"
+        )
 
     nms_host = _env_value(values, NMS_HOST_ENV_KEY, "").strip()
     nms_scheme = _env_value(values, NMS_SCHEME_ENV_KEY, DEFAULT_NMS_SCHEME).strip().lower()
@@ -439,6 +455,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         adk_model_api_key=adk_model_api_key,
         discovery=discovery,
         transport=transport,
+        intent_mode=intent_mode,
         http_timeout_seconds=_positive_seconds(values, HTTP_TIMEOUT_ENV_KEY, DEFAULT_HTTP_TIMEOUT_SECONDS),
         llm_timeout_seconds=_positive_seconds(values, LLM_TIMEOUT_ENV_KEY, DEFAULT_LLM_TIMEOUT_SECONDS),
         llm_max_attempts=_llm_max_attempts(values),

@@ -99,8 +99,32 @@ export function plainSentence(intent, language = "en-US") {
 }
 
 /** Render the facts grid and the chart into one container. */
-export function renderIntent(container, intentText, copy, { update } = {}) {
+export function renderIntent(
+  container,
+  intentText,
+  copy,
+  {
+    update,
+    rawRequest = null,
+    source = null,
+    warnings = [],
+    missingFields = [],
+    conflicts = [],
+  } = {},
+) {
   clear(container);
+  if (rawRequest || source) {
+    container.append(
+      businessBlock(copy, {
+        rawRequest,
+        normalizedText: intentText,
+        source,
+        warnings,
+        missingFields,
+        conflicts,
+      }),
+    );
+  }
   const intent = parseIntent(intentText);
   if (intent === null) {
     container.append(el("p", "empty", copy.intent.empty));
@@ -146,6 +170,42 @@ export function renderIntent(container, intentText, copy, { update } = {}) {
   }
   container.append(facts, chart(intent, copy, update ?? false));
   return intent;
+}
+
+/** Render the raw operator request next to the normalized business intent. */
+function businessBlock(copy, { rawRequest, normalizedText, source, warnings, missingFields, conflicts }) {
+  const section = el("section", "business-intent");
+  section.append(el("span", "micro-label", copy.intent.business));
+  if (rawRequest) {
+    const raw = el("div", "business-text");
+    raw.append(el("span", "", copy.intent.raw), el("p", "", rawRequest));
+    section.append(raw);
+  }
+  if (normalizedText) {
+    const normalized = el("div", "business-text");
+    normalized.append(el("span", "", copy.intent.normalized), el("p", "", normalizedText));
+    section.append(normalized);
+  }
+  const meta = [];
+  if (source) {
+    const label = copy.intent.sources?.[source] || source;
+    meta.push([copy.intent.source, label]);
+  }
+  if (missingFields.length > 0) {
+    meta.push([copy.intent.missingFields, missingFields.join(", "), "flag"]);
+  }
+  if (conflicts.length > 0) {
+    meta.push([copy.intent.conflicts, conflicts.join(", "), "flag"]);
+  }
+  if (meta.length > 0) {
+    const facts = el("div", "facts");
+    for (const [label, value, flag] of meta) facts.append(fact(label, value, flag));
+    section.append(facts);
+  }
+  if (warnings.length > 0) {
+    section.append(el("p", "business-warning", warnings.join(" ")));
+  }
+  return section;
 }
 
 function fact(label, value, flag, wide = false) {

@@ -21,6 +21,7 @@ from shared.config import (
     GATEWAY_SCENARIO_ENV_KEY,
     GATEWAY_TASK_DB_ENV_KEY,
     HTTP_TIMEOUT_ENV_KEY,
+    INTENT_MODE_ENV_KEY,
     LLM_MAX_ATTEMPTS_ENV_KEY,
     LLM_TIMEOUT_ENV_KEY,
     MODEL_MODE_LIVE,
@@ -476,3 +477,25 @@ def test_nms_tls_verification_defaults_to_off(tmp_path: Path) -> None:
     )
 
     assert load_config(env_path=env_file).nms_verify_tls is False
+
+
+def test_intent_mode_defaults_to_processed(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+
+    assert load_config(env_path=env_file).intent_mode == "processed"
+
+
+def test_intent_mode_can_be_raw(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{INTENT_MODE_ENV_KEY}=raw\n", encoding="utf-8")
+
+    assert load_config(env_path=env_file).intent_mode == "raw"
+
+
+def test_unsupported_intent_mode_is_rejected(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{INTENT_MODE_ENV_KEY}=guessed\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="INTENT_MODE"):
+        load_config(env_path=env_file)

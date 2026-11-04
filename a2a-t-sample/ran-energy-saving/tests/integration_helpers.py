@@ -85,6 +85,7 @@ def offline_direct_config(
         adk_model_api_key="not-needed",
         discovery=DISCOVERY_DIRECT,
         transport=transport,
+        intent_mode="raw",
     )
 
 

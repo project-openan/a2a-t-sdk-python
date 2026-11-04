@@ -165,6 +165,31 @@ trace labels each row with its demo day (Day 1, Days 2–8, Day 9, Day 9+) and m
 (OSS → RAN, RAN → OSS, MIE ⇄ Engineer); late server spans are merged by event time and a status and
 its matching span collapse to one row.
 
+### Operator intent layer
+
+The sample no longer sends the operator's text straight to A2A or A2A-T. The default
+`processed` mode inserts the business step a real OSS performs first:
+
+```text
+operator request → business intent (ProcessedIntent) → normalized text → approval 1
+                 → A2A-T Task-T / Plain A2A message
+```
+
+- Known scenarios use a deterministic built-in intent. A free-text request (`--request` or an
+  edited Web UI request) uses the live model; in offline mode it falls back to the raw text and
+  records a warning.
+- The business layer never repairs a gap or conflict. A missing throughput target, an unknown
+  area and overlapping windows stay in the intent, so the A2A-T negotiation still happens.
+- Approval 1 confirms the **normalized text** before the protocol mapping. In A2A-T the Task-T is
+  then extracted strictly from that text; Plain A2A sends the same text.
+- Pure A2A keeps the same story inside the OSS Agent: the engineer client sends the raw request,
+  the OSS Agent normalizes it, publishes the intent, and forwards the normalized text to RAN.
+- The presentation page shows the operator request, the normalized text and the structured intent
+  fields side by side; the trace records `intent_processed`.
+- `processed` is the default. Use `A2AT_SAMPLE_INTENT_MODE=raw`, `--intent-mode raw` or
+  `POST /api/runs {"intentMode":"raw"}` for the old direct-text behavior. Gateway input is always
+  treated as raw.
+
 ### Real vendor NMS mode
 
 The sample can also act as the OSS client of a real vendor NMS. With `--nms`, the launcher starts

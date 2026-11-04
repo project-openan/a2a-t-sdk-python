@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from protocol.run_spec import ClientPolicy, ExpectedStep, RunSpec
 from shared.run_constants import LANGUAGE_ZH
 
+from demo.intent import build_scenario_intent
 from demo.scenario import (
     SCENARIO_UNKNOWN_AREA,
     SUPPORTED_SCENARIO_NAMES,
@@ -73,6 +74,7 @@ def to_run_spec(scenario: Scenario, *, language: str = LANGUAGE_ZH) -> RunSpec:
         policy=policy,
         expected_final_state=scenario.expected_final_state,
         expected_negotiation_target=expected_negotiation_target(scenario, language),
+        intent=build_scenario_intent(scenario.name, language),
     )
 
 

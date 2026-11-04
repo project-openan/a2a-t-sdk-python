@@ -32,6 +32,11 @@ export function createState() {
     mode: null,
     protocol: "a2a-t",
     userRequest: null,
+    rawRequest: null,
+    normalizedRequest: null,
+    businessIntent: null,
+    intentSource: null,
+    intentWarnings: [],
     expectedSequence: [],
     artifactTools: [],
     negotiation: [],
@@ -224,6 +229,31 @@ export function applyFrame(state, frame) {
   }
 }
 
+/** Record the business intent carried by a trace or a pure-mode OSS status event. */
+function applyBusinessIntent(state, detail) {
+  if (!isObject(detail)) return;
+  const document = isObject(detail.intent) ? detail.intent : detail;
+  if (typeof detail.rawRequest === "string" && detail.rawRequest) {
+    state.rawRequest = detail.rawRequest;
+  } else if (typeof document.rawRequest === "string" && document.rawRequest) {
+    state.rawRequest = document.rawRequest;
+  }
+  if (typeof detail.normalizedText === "string" && detail.normalizedText) {
+    state.normalizedRequest = detail.normalizedText;
+    state.intentText = detail.normalizedText;
+  } else if (typeof document.normalizedText === "string" && document.normalizedText) {
+    state.normalizedRequest = document.normalizedText;
+    state.intentText = document.normalizedText;
+  }
+  if (typeof document.source === "string") state.intentSource = document.source;
+  else if (typeof detail.source === "string") state.intentSource = detail.source;
+  const warnings = Array.isArray(document.warnings) ? document.warnings : detail.warnings;
+  state.intentWarnings = Array.isArray(warnings)
+    ? warnings.filter((item) => typeof item === "string")
+    : [];
+  state.businessIntent = document;
+}
+
 function applyEvent(state, entry) {
   if (!isObject(entry)) return state;
   const seq = entry.seq;
@@ -237,9 +267,13 @@ function applyEvent(state, entry) {
   const content = typeof entry.content === "string" ? entry.content : "";
   const pure = isObject(entry.detail?.pure) ? entry.detail.pure : null;
   const hop = typeof entry.detail?.hop === "string" ? entry.detail.hop : null;
+  const intentProcessed = isObject(entry.detail?.intentProcessed)
+    ? entry.detail.intentProcessed
+    : null;
   if (isObject(entry.task) && typeof entry.task.id === "string" && entry.task.id) {
     state.taskId = entry.task.id;
   }
+  if (intentProcessed !== null) applyBusinessIntent(state, intentProcessed);
 
   if (pure !== null || hop !== null) {
     if (pure !== null) state.pure = { ...(state.pure || {}), ...pure };
@@ -458,7 +492,9 @@ function applyTrace(state, span) {
             ? "approval"
             : kind === "intent_review_requested"
               ? "intentReview"
-              : null,
+              : kind === "intent_processed"
+                ? "intentProcessed"
+                : null,
     sub: typeof span.purpose === "string" ? span.purpose : "",
     chip: kind === "tool" ? "tool" : "",
     chipKind: kind === "tool" ? "status" : "",
@@ -466,6 +502,9 @@ function applyTrace(state, span) {
     entry: span,
   });
 
+  if (kind === "intent_processed" && detail) {
+    applyBusinessIntent(state, detail);
+  }
   if (kind === "task_prompt_rendered" && detail && typeof detail.promptText === "string") {
     // The rendered prompt is the Task-T wire payload. The OSS intent panel shows the engineer's
     // own structured intent, not the Task-T; the wire inspector opens the prompt when needed.

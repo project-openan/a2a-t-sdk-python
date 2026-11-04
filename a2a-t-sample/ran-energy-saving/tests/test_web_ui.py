@@ -504,6 +504,31 @@ async def test_cli_defaults_are_exposed_and_used_when_the_body_omits_them(
     assert status["transport"] == "webhook"
 
 
+async def test_intent_mode_is_exposed_and_applied_per_run(
+    client: httpx.AsyncClient,
+) -> None:
+    meta = (await client.get("/api/meta")).json()
+    assert meta["defaultIntentMode"] == "raw"
+    assert meta["intentModes"] == ["processed", "raw"]
+
+    start = await client.post(
+        "/api/runs",
+        json={"scenario": "information", "intentMode": "processed"},
+    )
+    assert start.status_code == 202
+    assert start.json()["intentMode"] == "processed"
+    run_id = start.json()["runId"]
+
+    status = await _wait_status(client, run_id, lambda data: data["status"] != "running")
+    assert status["intentMode"] == "processed"
+
+    invalid = await client.post(
+        "/api/runs",
+        json={"scenario": "information", "intentMode": "guessed"},
+    )
+    assert invalid.status_code == 400
+
+
 async def test_root_serves_the_run_explorer_shell(client: httpx.AsyncClient) -> None:
     response = await client.get("/")
 

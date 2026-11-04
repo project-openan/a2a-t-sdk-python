@@ -922,6 +922,11 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 .fact span { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--g700); }
 .fact b { font-size: 12.3px; font-weight: 600; word-break: break-word; }
 .fact b.flag { background: var(--yellow); align-self: flex-start; padding: 0 4px; }
+.business-intent { border: 1px solid var(--g200); border-left: 3px solid var(--accent); padding: 6px 8px; margin-bottom: 6px; display: flex; flex-direction: column; gap: 5px; }
+.business-intent .business-text span { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--g700); }
+.business-intent .business-text p { margin: 1px 0 0; font-size: 12px; line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
+.business-intent .facts { border-top: 1px solid var(--g200); }
+.business-warning { margin: 0; font-size: 11px; color: var(--red); }
 .chart { width: 100%; height: auto; max-height: 170px; display: block; }
 .ch-axis { stroke: #000; stroke-width: 1; }
 .ch-grid { stroke: #eee; stroke-width: 1; }

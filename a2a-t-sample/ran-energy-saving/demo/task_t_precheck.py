@@ -43,7 +43,7 @@ _OUTAGE_SENTENCE_PATTERN: Final[re.Pattern[str]] = re.compile(r"[^\n。；;]*(?:
 
 #: Area line of a rendered Task-T prompt (localized).
 _REGION_SENTENCE_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"(?:The area is the|区域为)\s*([^.\n。]+)", re.IGNORECASE
+    r"(?:The area is(?: the)?|区域为)\s*([^.\n。]+)", re.IGNORECASE
 )
 
 

@@ -146,6 +146,27 @@ Web UI 默认打开演示视图：左侧是 16:9 的舞台，依次是网络工�
 会话轨迹的一行会在检查器中选中该消息。轨迹行现在带演示日（第 1 天、第 2–8 天、第 9 天、第 9 天+）和
 消息流向（OSS → RAN、RAN → OSS、MIE ⇄ 工程师）；晚到的服务端 span 按事件时间合并，状态与对应 span 只保留一行。
 
+### 操作员意图处理层
+
+sample 不再把操作员原文直接送进 A2A / A2A-T。默认的 `processed` 模式先插入真实 OSS 会做的业务处理：
+
+```text
+操作员请求 → 业务意图（ProcessedIntent） → 规范化文本 → 审批 1
+           → A2A-T Task-T / Plain A2A 消息
+```
+
+- 已知场景使用确定性的内置意图。自由文本（`--request` 或页面编辑的请求）在 live 模式下走模型抽取；
+  offline 模式回退原文并记录 warning。
+- 业务层**不修复**缺失或冲突。缺失的保障速率、未知区域、重叠时段都会保留在意图里，
+  后续 A2A-T 协商仍然会发生。
+- 审批 1 确认的是**规范化文本**，发生在协议映射之前。A2A-T 再从该文本严格抽取 Task-T；
+  Plain A2A 直接发送同一份文本。
+- Pure A2A 把同样的处理放在 OSS Agent 内：工程师客户端发送原文，OSS Agent 规范化并发布意图，
+  再把规范化文本转发给 RAN。
+- 展示页并列显示操作员请求、规范化文本和结构化意图；trace 记录 `intent_processed`。
+- 默认 `processed`。需要旧行为时使用 `A2AT_SAMPLE_INTENT_MODE=raw`、`--intent-mode raw` 或
+  `POST /api/runs {"intentMode":"raw"}`。Gateway 入站文本一律按 raw 处理。
+
 ### 真实厂商网管模式
 
 sample 也可以作为真实厂商网管的 OSS 客户端。加 `--nms` 后，启动器不再启动本地 registry、RAN

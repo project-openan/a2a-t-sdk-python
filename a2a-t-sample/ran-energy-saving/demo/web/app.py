@@ -62,6 +62,7 @@ from protocol.run_spec import RunCatalog
 from protocol.sqlite_task_store import read_task_summaries
 from shared.config import (
     SUPPORTED_DISCOVERY_MODES,
+    SUPPORTED_INTENT_MODES,
     SUPPORTED_TRANSPORTS,
     SampleConfig,
 )
@@ -270,6 +271,11 @@ def create_app(
     resolved_default_discovery = _resolve_default(
         default_discovery, SUPPORTED_DISCOVERY_MODES, config_discovery, "discovery"
     )
+    resolved_intent_mode = (
+        config.intent_mode
+        if config.intent_mode in SUPPORTED_INTENT_MODES
+        else SUPPORTED_INTENT_MODES[0]
+    )
     resolved_intent_review = (
         ui_mode == WEB_UI_PRESENTATION if intent_review is None else intent_review
     )
@@ -354,6 +360,8 @@ def create_app(
                 "defaultMode": resolved_default_mode,
                 "defaultTransport": resolved_default_transport,
                 "defaultDiscovery": resolved_default_discovery,
+                "defaultIntentMode": resolved_intent_mode,
+                "intentModes": list(SUPPORTED_INTENT_MODES),
                 "uiMode": ui_mode,
                 "defaultBrand": default_brand,
                 "brands": list(SUPPORTED_BRANDS),
@@ -622,6 +630,7 @@ def create_app(
         protocol = body.get("protocol", resolved_protocol)
         transport = body.get("transport", resolved_default_transport)
         discovery = body.get("discovery", resolved_default_discovery)
+        intent_mode = body.get("intentMode", resolved_intent_mode)
         raw_user_request = body.get("userRequest")
         if raw_user_request is not None and not isinstance(raw_user_request, str):
             return JSONResponse(
@@ -684,6 +693,16 @@ def create_app(
                 {"error": f"Unsupported discovery: {discovery}; expected one of {SUPPORTED_DISCOVERY_MODES}"},
                 status_code=400,
             )
+        if intent_mode not in SUPPORTED_INTENT_MODES:
+            return JSONResponse(
+                {
+                    "error": (
+                        f"Unsupported intent mode: {intent_mode}; "
+                        f"expected one of {SUPPORTED_INTENT_MODES}"
+                    )
+                },
+                status_code=400,
+            )
         try:
             run = await manager.start(
                 str(scenario),
@@ -696,6 +715,7 @@ def create_app(
                 external_conversation_id=optional_strings["externalConversationId"],
                 user_id=optional_strings["userId"] or "web-user",
                 idempotency_key=optional_strings["idempotencyKey"],
+                intent_mode=str(intent_mode),
             )
         except RunConflictError as exc:
             return JSONResponse({"error": str(exc), "code": "run_conflict"}, status_code=409)
@@ -710,6 +730,7 @@ def create_app(
                 "modelMode": config.model_mode,
                 "modelLabel": config.model_label,
                 "discovery": discovery,
+                "intentMode": run.intent_mode or str(intent_mode),
             },
             status_code=200 if reused else 202,
         )

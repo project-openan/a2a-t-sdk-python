@@ -34,6 +34,7 @@ from dotenv import dotenv_values
 from shared.agent_card import AGENT_CARD_NAME, AGENT_CARD_ORGANIZATION
 from shared.config import (
     DISCOVERY_NMS,
+    INTENT_MODE_PROCESSED,
     SUPPORTED_TRANSPORTS,
     TRANSPORT_SSE,
     TRANSPORT_WEBHOOK,
@@ -42,6 +43,7 @@ from shared.config import (
 from shared.model_factory import build_traced_adk_model
 from shared.models import NegotiationProposeView
 from shared.run_constants import (
+    FINAL_STATE_INTENT_NOT_CONFIRMED,
     MAX_ROUNDS,
     PROTOCOL_A2A_T,
     PROTOCOL_PLAIN,
@@ -49,7 +51,13 @@ from shared.run_constants import (
     SUPPORTED_PROTOCOLS,
 )
 from shared.sdk_env import SdkEnvFile, prepare_sdk_env
-from shared.trace import set_global_sink, trace_scope
+from shared.trace import (
+    PHASE_TASK_PROMPT,
+    TraceRecorder,
+    current_trace,
+    set_global_sink,
+    trace_scope,
+)
 from shared.traced_llm import register_traced_providers
 from shared.webhook_receiver import WebhookReceiver
 
@@ -70,6 +78,12 @@ from protocol.decision_provider import (
     ScriptedDecisionProvider,
 )
 from protocol.discovery import DiscoveredAgent, discover_agent
+from protocol.intent import (
+    IntentProcessor,
+    OperatorRequest,
+    ProcessedIntent,
+    RawIntentProcessor,
+)
 from protocol.nms_client import NmsClient, NmsConfig, NmsSseTransport
 from protocol.plain_client_flow import run_plain_client_flow
 from protocol.pure_client_flow import run_pure_client_flow
@@ -187,6 +201,39 @@ def _effective_policy(
     return policy
 
 
+def _emit_intent_span(
+    *,
+    trace_sink: Callable[[dict[str, object]], None] | None,
+    intent: ProcessedIntent,
+    mode: str,
+    scenario: str,
+) -> None:
+    """Publish the business intent as one Run Explorer trace row."""
+    if trace_sink is None:
+        return
+    recorder = TraceRecorder(current_trace().run_id or "", id_prefix="intent")
+    span = recorder.emit(
+        kind="intent_processed",
+        phase=PHASE_TASK_PROMPT,
+        title="Intent processed",
+        actor="client",
+        side="client",
+        direction="internal",
+        detail={
+            "mode": mode,
+            "scenario": scenario,
+            "source": intent.source,
+            "rawRequest": intent.raw_request,
+            "normalizedText": intent.normalized_text,
+            "intent": intent.to_dict(),
+            "missingFields": list(intent.missing_fields),
+            "conflicts": list(intent.conflicts),
+            "warnings": list(intent.warnings),
+        },
+    )
+    trace_sink(span.to_dict())
+
+
 def _decision_provider(
     config: SampleConfig,
     run_spec: RunSpec,
@@ -249,6 +296,7 @@ class ClientRuntime:
         manual_provider: manual provider when ``mode == "manual"``, else ``None``.
         nms_client: raw vendor NMS client; ``None`` outside NMS mode.
         pure_answer: callback answering one pure ``INPUT_REQUIRED`` event.
+        intent_processor: business intent understanding step; ``None`` falls back to raw text.
     """
 
     config: SampleConfig
@@ -269,6 +317,7 @@ class ClientRuntime:
     _closed: bool = False
     trace_sink: Callable[[dict[str, object]], None] | None = None
     pure_answer: Callable[[dict[str, object]], str] | None = None
+    intent_processor: IntentProcessor | None = None
 
     def set_recommendation_sink(
         self,
@@ -282,6 +331,41 @@ class ClientRuntime:
         setter = getattr(self.provider, "set_recommendation_sink", None)
         if callable(setter):
             setter(sink)
+
+    def _scenario_raw_request(self) -> str:
+        """Return the operator-facing request of the scenario, when one is defined."""
+        if self.run_spec.intent is not None:
+            return self.run_spec.intent.raw_request
+        return self.run_spec.user_request
+
+    def _raw_mode_request(self, custom_request: str) -> str:
+        """Return the request used by the raw (no intent processing) mode."""
+        return custom_request or self.run_spec.user_request
+
+    async def _process_intent(self, raw_text: str, *, custom: bool) -> ProcessedIntent:
+        """Run the business intent layer, falling back to the scenario intent or raw text."""
+        processor = self.intent_processor
+        if processor is not None:
+            return await processor.process(
+                OperatorRequest(
+                    text=raw_text,
+                    language=self.config.language,
+                    scenario=self.run_spec.name,
+                    source="client",
+                    custom=custom,
+                )
+            )
+        if not custom and self.run_spec.intent is not None:
+            return self.run_spec.intent
+        return await RawIntentProcessor().process(
+            OperatorRequest(
+                text=raw_text,
+                language=self.config.language,
+                scenario=self.run_spec.name,
+                source="client",
+                custom=custom,
+            )
+        )
 
     async def run(
         self,
@@ -330,17 +414,19 @@ class ClientRuntime:
             set_global_sink(sink)
         try:
             with trace_scope(run_id=run_id, role="client"):
-                request_text = (
+                custom_request = (
                     user_request.strip()
                     if isinstance(user_request, str) and user_request.strip()
-                    else self.run_spec.user_request
+                    else ""
                 )
+                processed = self.config.intent_mode == INTENT_MODE_PROCESSED
+                raw_text = custom_request or self._scenario_raw_request()
                 if self.protocol == PROTOCOL_PURE:
-                    # Pure A2A uses standard Task states only: the server may answer with
-                    # INPUT_REQUIRED and the flow continues the same Task with taskId/contextId.
+                    # Pure A2A uses standard Task states only: the OSS Agent owns the business
+                    # intent layer, so the engineer client sends the raw request to it.
                     return await run_pure_client_flow(
                         transport=self.transport,
-                        user_request=request_text,
+                        user_request=raw_text if processed else self._raw_mode_request(custom_request),
                         answer=self.pure_answer,
                         max_rounds=MAX_ROUNDS,
                         call_timeout_seconds=self.config.http_timeout_seconds,
@@ -348,6 +434,18 @@ class ClientRuntime:
                         trace_sink=sink,
                         run_id=run_id,
                     )
+                intent: ProcessedIntent | None = None
+                if processed:
+                    intent = await self._process_intent(raw_text, custom=bool(custom_request))
+                    request_text = intent.normalized_text
+                    _emit_intent_span(
+                        trace_sink=sink,
+                        intent=intent,
+                        mode=self.config.intent_mode,
+                        scenario=self.run_spec.name,
+                    )
+                else:
+                    request_text = self._raw_mode_request(custom_request)
                 if self.protocol == PROTOCOL_PLAIN:
                     # Plain A2A has no Task-T, no intent gate and no negotiation: one message in,
                     # task events out.
@@ -370,6 +468,18 @@ class ClientRuntime:
                     request_text,
                     self.config.language,
                 )
+                if processed:
+                    # The intent layer already contains every business value. Task-T must now be
+                    # extracted from the normalized text, not rendered from a structured shortcut.
+                    policy = replace(policy, initial_data=DEFAULT_CLIENT_POLICY.initial_data)
+                flow_on_intent_ready = on_intent_ready
+                if processed and on_intent_ready is not None:
+                    # Approval 1 belongs to the business intent, before the protocol mapping.
+                    if not await on_intent_ready(request_text):
+                        blocked = ClientFlowResult()
+                        blocked.final_state = FINAL_STATE_INTENT_NOT_CONFIRMED
+                        return blocked
+                    flow_on_intent_ready = None
                 return await run_client_flow(
                     prompt_client=self.prompt_client,
                     transport=self.transport,
@@ -380,7 +490,7 @@ class ClientRuntime:
                     event_sink=event_sink,
                     on_decision_requested=on_decision_requested,
                     on_decision_made=on_decision_made,
-                    on_intent_ready=on_intent_ready,
+                    on_intent_ready=flow_on_intent_ready,
                     trace_sink=sink,
                     call_timeout_seconds=self.config.http_timeout_seconds,
                     conversation_context=conversation_context,
@@ -425,6 +535,7 @@ async def build_client_runtime(
     install_offline_provider: Callable[[], None] | None = None,
     client_agent_factory: Callable[[Any], Any] | None = None,
     pure_answer: Callable[[dict[str, object]], str] | None = None,
+    intent_processor_factory: Callable[[SampleConfig, RunSpec], IntentProcessor] | None = None,
 ) -> ClientRuntime:
     """Assemble the client runtime of one run.
 
@@ -443,6 +554,8 @@ async def build_client_runtime(
         client_agent_factory: optional builder of the ADK decision agent from its model.
         pure_answer: callback answering one pure ``INPUT_REQUIRED`` event. Pure mode skips the
             A2A-T SDK facade and the negotiation decision provider entirely.
+        intent_processor_factory: optional builder of the business intent layer; when omitted,
+            processed mode falls back to the run's built-in intent or raw text.
 
     Returns:
         The assembled runtime; the caller owns it and must call :meth:`ClientRuntime.aclose`.
@@ -461,6 +574,11 @@ async def build_client_runtime(
         raise ClientRuntimeError(f"Unsupported protocol: {protocol}; expected one of {SUPPORTED_PROTOCOLS}")
 
     run_spec = catalog.spec(scenario, language=config.language)
+    intent_processor = (
+        intent_processor_factory(config, run_spec)
+        if intent_processor_factory is not None
+        else None
+    )
     register_traced_providers()
     if config.is_offline:
         if offline_model_factory is None:
@@ -577,4 +695,5 @@ async def build_client_runtime(
         _webhook_receiver=receiver,
         trace_sink=trace_sink,
         pure_answer=pure_answer,
+        intent_processor=intent_processor,
     )

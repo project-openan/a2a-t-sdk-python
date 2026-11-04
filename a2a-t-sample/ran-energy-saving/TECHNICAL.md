@@ -460,6 +460,41 @@ Tests: `tests/test_nms_client.py` (token, headers, heartbeat, idle, negotiation,
 stream), and the raw-client integration test against the simulator. A real lab run requires the
 910 network and either `A2AT_SAMPLE_NMS_REGION=A2ATestRegion` or a request that names that region.
 
+### 3.7 Operator intent layer
+
+A real OSS does not send the operator's text verbatim: it understands the request, may show it to
+an engineer, and may route it to more than one downstream. The sample models that step explicitly.
+
+```text
+OperatorRequest → IntentProcessor → ProcessedIntent → normalized text
+                → approval 1 → A2A-T Task-T / Plain A2A message
+```
+
+- `protocol/intent.py` owns the protocol-neutral `OperatorRequest`, `ProcessedIntent` and
+  `IntentProcessor` seam. It never repairs a missing or conflicting value.
+- `demo/intent.py` supplies the deterministic built-in intent of the eight scenarios and the live
+  model extractor for free text. An offline free-text request falls back to raw text with a warning.
+- `RunSpec.intent` carries the scenario's built-in intent. `build_demo_intent_processor` is injected
+  from `demo/composition.py` through `build_client_runtime(intent_processor_factory=...)`.
+- In `processed` mode `ClientRuntime.run` emits an `intent_processed` trace, then calls approval 1
+  with the **normalized text**. `run_client_flow` no longer receives the approval hook in processed
+  mode; the Task-T is generated strictly from the normalized text (the structured `initial_data`
+  shortcut is disabled).
+- Plain A2A sends the normalized text. Pure A2A sends the raw request to the OSS Agent, which runs
+  its own processor, publishes the intent on the outer Task
+  (`metadata.intentProcessed`) and forwards the normalized text to RAN.
+- The Gateway treats every inbound A2A text as raw input to the same layer.
+- `A2AT_SAMPLE_INTENT_MODE` (`processed` / `raw`), `--intent-mode` and the `intentMode` field of
+  `POST /api/runs` select the mode. `raw` bypasses the layer and preserves the previous behavior.
+- The presentation reducer stores `rawRequest`, `normalizedRequest`, the structured intent, its
+  source and its warnings; the intent panel renders the operator request next to the normalized
+  text, and the trace records `intent_processed`.
+- `RunState` snapshots and the transcript carry `intentMode`, `rawRequest`, `normalizedRequest` and
+  the intent document. Conversation persistence uses the normalized text for a canned request.
+
+Third-party NMS routing is intentionally not implemented in this sample. The business intent layer
+is the seam where a real deployment dispatches the same intent to additional downstream systems.
+
 ## 4. NMS-side developer guide (how-to)
 
 **Goal:** connect the pre-task negotiation handler, executor and tools to the real network
@@ -811,6 +846,7 @@ SDK. `run_demo.py` reads `A2AT_SAMPLE_UI_PORT` only as the default of `--ui-port
 | `A2AT_SAMPLE_DISCOVERY` | `registry` (default), `direct` | Discovery mode. |
 | `A2AT_SAMPLE_DIRECT_SERVER_URL` | default `http://127.0.0.1:8000` | Base URL read by `direct` discovery. |
 | `A2AT_SAMPLE_TRANSPORT` | `sse` (default), `webhook` | Client event transport. |
+| `A2AT_SAMPLE_INTENT_MODE` | `processed` (default), `raw` | Run the business intent layer before the A2A/A2A-T mapping, or send the operator text directly. `--intent-mode` and `POST /api/runs.intentMode` override it per run. |
 | `A2AT_SAMPLE_WEBHOOK_PORT` | default `9000` (`0` = ephemeral) | Embedded webhook receiver port. |
 | `A2AT_SAMPLE_WEBHOOK_TOKEN` | default `demo-webhook-token` | Static push token checked against `X-A2A-Notification-Token`. |
 | `A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT` | default `300` (the HTTP budget) | Seconds without a push before a webhook phase ends; a phase must not end before the client gives up. |
@@ -1115,6 +1151,8 @@ The sample is deliberately a prototype. Before production:
 | [`protocol/server_app.py`](protocol/server_app.py) | Server assembly: AgentCard (declares `Task-T/v1` and `Negotiation-T/v1`), request handler, Starlette app, registry registration. |
 | [`protocol/client_flow.py`](protocol/client_flow.py) | Client protocol flow: initial Task-T, multi-round negotiation, accept refill, and terminal handling over SSE or webhook. |
 | [`protocol/client_runtime.py`](protocol/client_runtime.py) | Client per-run assembly: per-run SDK `.env`, discovery, SDK client, transport, and decision provider. |
+| [`protocol/intent.py`](protocol/intent.py) | Protocol-neutral operator request, processed intent and intent-processor seam. |
+| [`demo/intent.py`](demo/intent.py) | Demo built-in scenario intents, normalized-text renderer, live extractor and offline fallback. |
 | [`protocol/client_service/`](protocol/client_service) | Client application service split into `run_state.py` (run state, spans, decisions) and `run_manager.py` (lifecycle, conversations, persistence hooks). |
 | [`protocol/client_store/`](protocol/client_store) | Client persistence split into `store.py` (writes) and `reader.py` (read-only UI queries). |
 | [`protocol/client_gateway.py`](protocol/client_gateway.py) | Optional inbound A2A gateway: one inbound message -> one client run -> progress statuses and the final report artifact. |
@@ -1168,6 +1206,7 @@ sample business content or demo-only machinery.
 | `demo/agents/client_agent/tools.py` (`get_sla_policy`, `evaluate_proposal_impact`) | **REPLACE** | Read your SLA/catalog systems instead of the in-memory dataset. |
 | `demo/scenario.py` (scripted decisions, user requests) | **REPLACE** | Demo inputs; keep only for offline demos/tests. |
 | `protocol/client_runtime.py` | KEEP | Per-run assembly; adapt the SDK endpoint values via configuration. |
+| `protocol/intent.py` | KEEP | Business intent seam; replace `demo/intent.py` with your OSS's intent implementation. |
 | `protocol/client_service/` | KEEP | Conversation identity, run lifecycle, memory and per-conversation concurrency. |
 | `protocol/client_store/` | KEEP | Minimal durable client store; swap for your database in production. |
 | `protocol/client_gateway.py` | KEEP (adapt the AgentCard/identity) | Optional inbound A2A surface; replace the demo agent card, auth and registration. |
