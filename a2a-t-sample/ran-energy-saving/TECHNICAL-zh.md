@@ -342,6 +342,39 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
 | 任务前协商处理器拒绝 accept | 没有用协商结果重填 Task-T | 把 `filled_params` 交给 `generate_task_prompt_from_data_with_schema` |
 | HTTP 409 `run_conflict` | 同一会话已有运行 | 等待结束或换会话；客户端数据库的部分唯一索引保证跨进程互斥 |
 
+### 3.6 真实厂商网管模式（`--nms`）
+
+`--nms` 保留客户端流程、Task-T 渲染、发送前意图确认和 trace，只替换发现与传输：
+
+| 层 | 本地演示 | `--nms` |
+| --- | --- | --- |
+| 发现 | registry 或 direct AgentCard | 由 `A2AT_SAMPLE_NMS_A2A_BASE` 构造静态卡 |
+| 认证 | 静态 `A2AT_SAMPLE_SERVER_AUTH_TOKEN` | 从 `A2AT_SAMPLE_NMS_TOKEN_URL` 取会话令牌 |
+| 传输 | a2a-sdk SSE/webhook | `protocol/nms_client.py` 原始 SSE + 任务轮询 |
+| 执行 | 本地 RAN Agent | 厂商网管 |
+| 审批 2 | 本地 MIE 审批 | 不存在；执行侧由厂商负责 |
+
+实现要点：
+
+- `protocol/nms_client.py` 缓存 `accessSession`，到期前 60 s 刷新。A2A-T 同时发送
+  `Authorization: Bearer` / `X-Auth-Token` 和 `A2A-Extensions` / `X-A2A-Extensions`。
+- SSE 读取跳过 `: heartbeat`；连续 `A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS` 秒没有 `data:`
+  帧就断开，转为 `GET <base>/tasks/{id}` 轮询到终态；发送超时后不重试。
+- 原始帧回填为 `StreamResponse`，继续由 `shared.sse_event_consumer.normalize_event` 归一化，
+  因此协商和 trace 代码不变。
+- 只有 `message` 帧、没有 `task` 时抛 `NmsNegotiationRequiredError(context_id, text)`。这是
+  传输层事实，不是语义猜测；sample 不实现针对厂商无 metadata 协商消息的文本/结构兜底。
+- 每次交互写入 `runs/<runId>/wire.jsonl`，`Authorization`、`X-Auth-Token`、`accessSession`
+  和 cookie 已脱敏。
+
+`demo/nms_sim/` 是离线契约仿真器，实现令牌接口、`POST /a2a/json/message:stream`、
+`GET /a2a/json/tasks[/{id}]` 和已知的 cancel 503。默认 `strict` 档 SSE 永不关闭、每 15 s
+心跳；测试用 `fast` 档去掉延迟。业务结果复用 `demo/ran_data.py` 和 sample tools。
+
+测试：`tests/test_nms_client.py`（令牌、请求头、心跳、空闲、协商、wire 脱敏）、
+`tests/test_nms_sim.py`（422 配对、静态区域/时段/速率规则、任务生命周期、strict 流），以及
+原始客户端对仿真器的集成测试。真实联调需要 910 网络，并使用包含 `A2ATestRegion` 的完整请求。
+
 ## 4. 网管侧开发指南（操作）
 
 **本节目标：** 把任务前协商处理器、执行器与工具接到真实网管系统。

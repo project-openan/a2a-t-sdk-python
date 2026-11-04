@@ -55,6 +55,7 @@ import uuid
 from pathlib import Path
 from typing import TextIO
 
+from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from shared.run_constants import DEMO_PROTOCOLS, PROTOCOL_A2A_T
 
 #: The demo lives one level below the sample directory that owns ``runs/`` and the SDK path.
@@ -183,8 +184,7 @@ def _warm_live_model(config: object) -> None:
     if not base:
         return
     model = str(
-        getattr(config, "planner_model", "")
-        or str(getattr(config, "adk_model_name", "")).removeprefix("openai/")
+        getattr(config, "planner_model", "") or str(getattr(config, "adk_model_name", "")).removeprefix("openai/")
     )
     if not model:
         return
@@ -227,7 +227,7 @@ def _server_trace_env(
     ui_port: int,
     trace_token: str | None = None,
     approval_gate: bool = False,
-    approval_timeout: float = 240.0,
+    approval_timeout: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
 ) -> dict[str, str]:
     """Return the Run Explorer and approval-gate environment of the server process.
 
@@ -276,11 +276,7 @@ def _trace_summary(spans: list[dict[str, object]]) -> str:
         if isinstance(total_value, int):
             total += total_value
             measured = True
-    usage = (
-        f"prompt={prompt} completion={completion} total={total}"
-        if measured
-        else "n/a (scripted)"
-    )
+    usage = f"prompt={prompt} completion={completion} total={total}" if measured else "n/a (scripted)"
     return f"llm={len(llm)} tool={len(tools)} tokens={usage}"
 
 
@@ -302,6 +298,7 @@ def _write_run_env(
     protocol: str = PROTOCOL_A2A_T,
     oss_port: int = 8001,
     mie_port: int = 8002,
+    extra: dict[str, str] | None = None,
 ) -> Path:
     """Write the per-run ``.env`` and return its path."""
     values = _read_env(source) if source is not None else {}
@@ -336,6 +333,8 @@ def _write_run_env(
             "REGISTRY_CENTER_PORT": str(registry_port),
         }
     )
+    if extra:
+        values.update(extra)
     text = "\n".join(f"{key}={value}" for key, value in values.items()) + "\n"
     env_path = RUN_DIR / ".env"
     env_path.write_text(text, encoding="utf-8", newline="\n")
@@ -589,7 +588,7 @@ def _save_state(
     ui_port: int | None = None,
     gateway_port: int | None = None,
     approval_gate: bool = False,
-    approval_timeout: float = 240.0,
+    approval_timeout: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
 ) -> None:
     """Persist the managed PIDs and their run metadata atomically.
 
@@ -633,7 +632,7 @@ def _server_reuse_decision(
     trace_url: str = "",
     ui_port: int | None = None,
     approval_gate: bool = False,
-    approval_timeout: float = 240.0,
+    approval_timeout: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
 ) -> str:
     """Decide whether a listening A2A server may be reused for the requested run.
 
@@ -666,7 +665,7 @@ def _server_reuse_decision(
         return REUSE_RESTART
     if bool(state.get("approval_gate")) != approval_gate:
         return REUSE_RESTART
-    if approval_gate and float(state.get("approval_timeout") or 240.0) != approval_timeout:
+    if approval_gate and float(state.get("approval_timeout") or DEFAULT_APPROVAL_TIMEOUT_SECONDS) != approval_timeout:
         return REUSE_RESTART
     recorded_token = str(state.get("trace_token") or "")
     if ui and not recorded_token:
@@ -757,8 +756,7 @@ def _preflight(python: str, source_env: Path | None) -> bool:
         [
             python,
             "-c",
-            "import a2a, a2a_t, google.adk, langgraph, langchain_openai, "
-            "sse_starlette, starlette, uvicorn",
+            "import a2a, a2a_t, google.adk, langgraph, langchain_openai, sse_starlette, starlette, uvicorn",
         ],
         cwd=str(SAMPLE_DIR),
         env=_child_env("en-US"),
@@ -781,6 +779,7 @@ async def _run_client_foreground(
     transport: str,
     language: str,
     protocol: str = PROTOCOL_A2A_T,
+    user_request: str | None = None,
 ) -> int:
     """Run the client flow in-process and write its transcript."""
     from protocol.transcript import NegotiationTranscript
@@ -852,6 +851,7 @@ async def _run_client_foreground(
                 on_decision_made=on_decision_made,
                 trace_sink=trace_sink,
                 run_id=run_id,
+                user_request=user_request,
             )
         for index, decision in enumerate(result.decisions):
             if index < len(transcript.decisions):
@@ -930,15 +930,17 @@ def _build_parser(
         "--approval-gate",
         action="store_true",
         help=(
-            "pause the NMS before applying a plan and wait for the engineer's approval in the "
-            "Web UI (requires --ui)"
+            "pause the NMS before applying a plan and wait for the engineer's approval in the Web UI (requires --ui)"
         ),
     )
     parser.add_argument(
         "--approval-timeout",
         type=float,
-        default=240.0,
-        help="seconds the approval gate waits before treating silence as a rejection (default: 240)",
+        default=DEFAULT_APPROVAL_TIMEOUT_SECONDS,
+        help=(
+            "seconds the approval gate waits before treating silence as a rejection "
+            f"(default: {DEFAULT_APPROVAL_TIMEOUT_SECONDS:g})"
+        ),
     )
     parser.add_argument(
         "--protocol",
@@ -959,13 +961,43 @@ def _build_parser(
         "--discovery",
         default="registry",
         choices=list(SUPPORTED_DISCOVERY_MODES),
-        help="server discovery: registry center (default) or direct AgentCard",
+        help="server discovery: registry center (default), direct AgentCard, or nms",
+    )
+    parser.add_argument(
+        "--nms",
+        action="store_true",
+        help=(
+            "connect the client to a real vendor NMS: skip the local registry, RAN server, "
+            "MIE and OSS processes and use A2AT_SAMPLE_NMS_* from the source .env"
+        ),
+    )
+    parser.add_argument(
+        "--nms-sim",
+        action="store_true",
+        help=(
+            "with --nms, start the local NMS simulator and point the client at it instead of "
+            "the values in the source .env"
+        ),
+    )
+    parser.add_argument(
+        "--nms-sim-port",
+        type=int,
+        default=18080,
+        help="bind port of the local NMS simulator (default: 18080)",
     )
     parser.add_argument(
         "--language",
         default="en-US",
         choices=list(SUPPORTED_LANGUAGES),
         help="process-level language of registry, server and client (default: en-US)",
+    )
+    parser.add_argument(
+        "--request",
+        default="",
+        help=(
+            "natural-language request override of the CLI run; required to name a region the "
+            "real NMS serves (for example A2ATestRegion) in live mode"
+        ),
     )
     parser.add_argument(
         "--model-mode",
@@ -978,19 +1010,13 @@ def _build_parser(
         "--ui-mode",
         default="presentation",
         choices=("presentation", "explorer"),
-        help=(
-            "Web UI variant: presentation (audience-facing demo, default) or explorer "
-            "(protocol-level Run Explorer)"
-        ),
+        help=("Web UI variant: presentation (audience-facing demo, default) or explorer (protocol-level Run Explorer)"),
     )
     parser.add_argument(
         "--brand",
         default=os.environ.get("A2AT_SAMPLE_UI_BRAND", BRAND_ORANGE),
         choices=list(SUPPORTED_BRANDS),
-        help=(
-            "presentation color theme: orange (reference demo) or huawei "
-            "(default: A2AT_SAMPLE_UI_BRAND or orange)"
-        ),
+        help=("presentation color theme: orange (reference demo) or huawei (default: A2AT_SAMPLE_UI_BRAND or orange)"),
     )
     parser.add_argument(
         "--ui-port",
@@ -1109,18 +1135,28 @@ def main() -> int:
         return 0
 
     if args.mode in ("manual", "confirm") and not args.ui:
-        parser.error(
-            f"--mode {args.mode} requires --ui (the decision lives in the Web UI)"
-        )
+        parser.error(f"--mode {args.mode} requires --ui (the decision lives in the Web UI)")
     if args.protocol == "pure":
         from demo.scenario import PURE_PROTOCOL_SCENARIOS
 
         if args.scenario not in PURE_PROTOCOL_SCENARIOS:
-            parser.error(
-                f"--protocol pure supports only {', '.join(PURE_PROTOCOL_SCENARIOS)}"
-            )
+            parser.error(f"--protocol pure supports only {', '.join(PURE_PROTOCOL_SCENARIOS)}")
         if args.gateway:
             parser.error("--gateway is not supported with --protocol pure")
+    if args.nms_sim and not args.nms:
+        parser.error("--nms-sim requires --nms")
+    if args.nms:
+        if args.protocol == "pure":
+            parser.error("--nms is not supported with --protocol pure")
+        if args.gateway:
+            parser.error("--nms is not supported with --gateway")
+        if args.approval_gate:
+            parser.error(
+                "--approval-gate is the local MIE review; a real NMS owns execution approval. "
+                "Use --mode confirm for the send-time intent review instead."
+            )
+        if args.discovery != "registry":
+            parser.error("--nms selects nms discovery; do not pass --discovery")
 
     python = sys.executable
     if not _preflight(python, source_env):
@@ -1135,19 +1171,30 @@ def main() -> int:
     server_host = source_values.get("A2AT_SAMPLE_HOST") or "127.0.0.1"
     server_port = _env_int(source_values, "A2AT_SAMPLE_PORT", DEFAULT_SERVER_PORT)
     webhook_port = _env_int(source_values, "A2AT_SAMPLE_WEBHOOK_PORT", 9000)
-    reserved_ports = {registry_port, server_port}
+    reserved_ports = {args.ui_port} if args.nms else {registry_port, server_port}
     if args.ui:
         reserved_ports.add(args.ui_port)
+    if args.nms_sim:
+        reserved_ports.add(args.nms_sim_port)
     if args.gateway and args.gateway_port in reserved_ports:
-        parser.error(
-            f"--gateway-port {args.gateway_port} collides with the registry/server/UI port"
-        )
+        parser.error(f"--gateway-port {args.gateway_port} collides with the registry/server/UI port")
+
+    nms_overrides: dict[str, str] = {}
+    if args.nms_sim:
+        sim_base = f"http://127.0.0.1:{args.nms_sim_port}"
+        nms_overrides = {
+            "A2AT_SAMPLE_NMS_A2A_BASE": f"{sim_base}/a2a/json",
+            "A2AT_SAMPLE_NMS_TOKEN_URL": f"{sim_base}/rest/plat/smapp/v1/sessions",
+            "A2AT_SAMPLE_NMS_TOKEN_USER": "snbitestDefaultNorth",
+            "A2AT_SAMPLE_NMS_TOKEN_VALUE": "Changeme_123",
+            "A2AT_SAMPLE_NMS_VERIFY_TLS": "false",
+        }
 
     env_path = _write_run_env(
         source=source_env,
         language=args.language,
         model_mode=args.model_mode,
-        discovery=args.discovery,
+        discovery="nms" if args.nms else args.discovery,
         transport=args.transport,
         webhook_port=webhook_port,
         server_host=server_host,
@@ -1160,11 +1207,16 @@ def main() -> int:
         protocol=args.protocol,
         oss_port=args.oss_port,
         mie_port=args.mie_port,
+        extra=nms_overrides,
     )
 
     from shared.config import load_config
 
-    resolved_config = load_config(env_path=env_path)
+    try:
+        resolved_config = load_config(env_path=env_path)
+    except ValueError as exc:
+        print(f"[run_demo] {exc}")
+        return 1
     _warm_live_model(resolved_config)
     print(
         f"[run_demo] resolved: model_mode={resolved_config.model_mode}, "
@@ -1173,56 +1225,61 @@ def main() -> int:
         f"transport={resolved_config.transport}"
     )
 
-    # Drop a stale PID file only when its processes are gone (both ports closed).
-    if existing and not _port_open(registry_port) and not _port_open(server_port):
-        PID_FILE.unlink(missing_ok=True)
-        state = {}
-        existing = []
-
-    # A followed run is only reusable when its recorded configuration matches the request; the
-    # server owns the model mode and language, so a mismatch stops it instead of silently keeping
-    # live LiteLlm behind an offline UI.
-    reuse = _server_reuse_decision(
-        port_open=_port_open(server_port),
-        state=state,
-        model_mode=args.model_mode,
-        language=args.language,
-        ui=args.ui,
-        trace_url=_trace_url(args.ui_port) if args.ui else "",
-        ui_port=args.ui_port if args.ui else None,
-        approval_gate=args.approval_gate,
-        approval_timeout=args.approval_timeout,
-    )
-    if reuse == REUSE_REFUSE:
-        print(
-            f"[run_demo] port {server_port} is already in use by a process this launcher does not "
-            f"manage (no PID record); cannot verify its model_mode/language. Free the port or run "
-            f"--stop, then retry."
-        )
-        return 1
-    if reuse == REUSE_RESTART:
-        recorded_mode = state.get("model_mode", "unknown")
-        recorded_language = state.get("language", "unknown")
-        recorded_target = state.get("trace_url") or "CLI file"
-        requested_target = _trace_url(args.ui_port) if args.ui else "CLI file"
-        print(
-            f"[run_demo] recorded server configuration does not match this run "
-            f"(recorded model_mode={recorded_mode}, language={recorded_language}, "
-            f"trace={recorded_target}; requested model_mode={args.model_mode}, "
-            f"language={args.language}, trace={requested_target}); stopping the recorded "
-            f"processes and starting fresh"
-        )
-        _stop_pids(existing)
-        close_ports = [registry_port, server_port]
-        if args.gateway:
-            close_ports.append(args.gateway_port)
-        if not _wait_ports_closed(close_ports):
-            print("[run_demo] recorded processes did not release their ports; free them and retry")
+    if args.nms:
+        # A real NMS run starts no local server, so the registry/server reuse decision does not
+        # apply. A previous local demo's PID record is left untouched.
+        reuse = REUSE_START
+    else:
+        # Drop a stale PID file only when its processes are gone (both ports closed).
+        if existing and not _port_open(registry_port) and not _port_open(server_port):
             PID_FILE.unlink(missing_ok=True)
+            state = {}
+            existing = []
+
+        # A followed run is only reusable when its recorded configuration matches the request; the
+        # server owns the model mode and language, so a mismatch stops it instead of silently
+        # keeping live LiteLlm behind an offline UI.
+        reuse = _server_reuse_decision(
+            port_open=_port_open(server_port),
+            state=state,
+            model_mode=args.model_mode,
+            language=args.language,
+            ui=args.ui,
+            trace_url=_trace_url(args.ui_port) if args.ui else "",
+            ui_port=args.ui_port if args.ui else None,
+            approval_gate=args.approval_gate,
+            approval_timeout=args.approval_timeout,
+        )
+        if reuse == REUSE_REFUSE:
+            print(
+                f"[run_demo] port {server_port} is already in use by a process this launcher does "
+                f"not manage (no PID record); cannot verify its model_mode/language. Free the port "
+                f"or run --stop, then retry."
+            )
             return 1
-        PID_FILE.unlink(missing_ok=True)
-        state = {}
-        existing = []
+        if reuse == REUSE_RESTART:
+            recorded_mode = state.get("model_mode", "unknown")
+            recorded_language = state.get("language", "unknown")
+            recorded_target = state.get("trace_url") or "CLI file"
+            requested_target = _trace_url(args.ui_port) if args.ui else "CLI file"
+            print(
+                f"[run_demo] recorded server configuration does not match this run "
+                f"(recorded model_mode={recorded_mode}, language={recorded_language}, "
+                f"trace={recorded_target}; requested model_mode={args.model_mode}, "
+                f"language={args.language}, trace={requested_target}); stopping the recorded "
+                f"processes and starting fresh"
+            )
+            _stop_pids(existing)
+            close_ports = [registry_port, server_port]
+            if args.gateway:
+                close_ports.append(args.gateway_port)
+            if not _wait_ports_closed(close_ports):
+                print("[run_demo] recorded processes did not release their ports; free them and retry")
+                PID_FILE.unlink(missing_ok=True)
+                return 1
+            PID_FILE.unlink(missing_ok=True)
+            state = {}
+            existing = []
 
     managed: list[int] = list(existing)
     started_pids: list[int] = []
@@ -1330,48 +1387,53 @@ def main() -> int:
     return_code = 0
     persisted = False
     try:
-        if start("registry", REGISTRY_MODULE, registry_port) is None:
-            return 1
-        # Reusing a compatible keep-alive server must also reuse its trace token: the UI validates
-        # that token, so a fresh one would silently drop every server span.
-        recorded_token = str(state.get("trace_token") or "") if reuse == REUSE_REUSE else ""
-        server_trace_env = _server_trace_env(
-            ui=args.ui,
-            ui_port=args.ui_port,
-            trace_token=recorded_token or None,
-            approval_gate=args.approval_gate,
-            approval_timeout=args.approval_timeout,
-        )
-        if args.ui:
-            # The UI process checks the same token the server sends; the URL is only read by the
-            # server process, but keeping both keys together documents the paired configuration.
-            os.environ["A2AT_SAMPLE_TRACE_TOKEN"] = server_trace_env["A2AT_SAMPLE_TRACE_TOKEN"]
-        server_env = dict(server_trace_env)
-        server_env["A2AT_SAMPLE_PROTOCOL_MODE"] = args.protocol
-        if args.protocol == "pure":
-            mie_env = {"A2AT_SAMPLE_MIE_PORT": str(args.mie_port)}
-            if start("mie", MIE_MODULE, args.mie_port, mie_env) is None:
-                return 1
-            server_env["A2AT_SAMPLE_MIE_URL"] = (
-                f"http://{server_host}:{args.mie_port}"
-            )
-            if args.ui or args.approval_gate:
-                server_env["A2AT_SAMPLE_APPROVAL_GATE"] = "1"
-                server_env["A2AT_SAMPLE_APPROVAL_TIMEOUT_SECONDS"] = str(
-                    args.approval_timeout
-                )
-        if start("server", SERVER_MODULE, server_port, server_env) is None:
-            return 1
-        if args.protocol == "pure":
-            oss_env = {
-                "A2AT_SAMPLE_RAN_URL": f"http://{server_host}:{server_port}",
-                "A2AT_SAMPLE_OSS_HOST": server_host,
-                "A2AT_SAMPLE_OSS_PORT": str(args.oss_port),
+        server_trace_env: dict[str, str] = {}
+        if args.nms_sim:
+            sim_env = {
+                "A2AT_SAMPLE_NMS_SIM_PORT": str(args.nms_sim_port),
+                "A2AT_SAMPLE_NMS_SIM_FIDELITY": "strict",
             }
-            if start("oss", OSS_MODULE, args.oss_port, oss_env) is None:
+            if start("nms-sim", "demo.nms_sim.main", args.nms_sim_port, sim_env) is None:
                 return 1
-        elif args.gateway and start("gateway", GATEWAY_MODULE, args.gateway_port) is None:
-            return 1
+        if not args.nms:
+            if start("registry", REGISTRY_MODULE, registry_port) is None:
+                return 1
+            # Reusing a compatible keep-alive server must also reuse its trace token: the UI
+            # validates that token, so a fresh one would silently drop every server span.
+            recorded_token = str(state.get("trace_token") or "") if reuse == REUSE_REUSE else ""
+            server_trace_env = _server_trace_env(
+                ui=args.ui,
+                ui_port=args.ui_port,
+                trace_token=recorded_token or None,
+                approval_gate=args.approval_gate,
+                approval_timeout=args.approval_timeout,
+            )
+            if args.ui:
+                # The UI process checks the same token the server sends; the URL is only read by
+                # the server process, but keeping both keys together documents the pairing.
+                os.environ["A2AT_SAMPLE_TRACE_TOKEN"] = server_trace_env["A2AT_SAMPLE_TRACE_TOKEN"]
+            server_env = dict(server_trace_env)
+            server_env["A2AT_SAMPLE_PROTOCOL_MODE"] = args.protocol
+            if args.protocol == "pure":
+                mie_env = {"A2AT_SAMPLE_MIE_PORT": str(args.mie_port)}
+                if start("mie", MIE_MODULE, args.mie_port, mie_env) is None:
+                    return 1
+                server_env["A2AT_SAMPLE_MIE_URL"] = f"http://{server_host}:{args.mie_port}"
+                if args.ui or args.approval_gate:
+                    server_env["A2AT_SAMPLE_APPROVAL_GATE"] = "1"
+                    server_env["A2AT_SAMPLE_APPROVAL_TIMEOUT_SECONDS"] = str(args.approval_timeout)
+            if start("server", SERVER_MODULE, server_port, server_env) is None:
+                return 1
+            if args.protocol == "pure":
+                oss_env = {
+                    "A2AT_SAMPLE_RAN_URL": f"http://{server_host}:{server_port}",
+                    "A2AT_SAMPLE_OSS_HOST": server_host,
+                    "A2AT_SAMPLE_OSS_PORT": str(args.oss_port),
+                }
+                if start("oss", OSS_MODULE, args.oss_port, oss_env) is None:
+                    return 1
+            elif args.gateway and start("gateway", GATEWAY_MODULE, args.gateway_port) is None:
+                return 1
 
         ui_proc: subprocess.Popen[str] | None = None
         if args.ui:
@@ -1379,42 +1441,54 @@ def main() -> int:
                 f"[run_demo] starting Web UI (scenario selectable, mode manual/auto, "
                 f"transport={args.transport}, language={args.language}, model_mode={args.model_mode}) ..."
             )
-            ui_server_url = args.server_url or (
-                f"http://{server_host}:{args.oss_port}"
-                if args.protocol == "pure"
-                else f"http://{server_host}:{server_port}"
-            )
-            mie_url = (
-                f"http://{server_host}:{args.mie_port}"
-                if args.protocol == "pure"
-                else None
-            )
+            if args.nms:
+                ui_server_url = args.server_url or resolved_config.nms_a2a_base
+            else:
+                ui_server_url = args.server_url or (
+                    f"http://{server_host}:{args.oss_port}"
+                    if args.protocol == "pure"
+                    else f"http://{server_host}:{server_port}"
+                )
+            mie_url = f"http://{server_host}:{args.mie_port}" if args.protocol == "pure" else None
             ui_args = [
-                "--env-file", str(env_path),
-                "--host", args.ui_host,
-                "--port", str(args.ui_port),
-                "--scenario", args.scenario,
-                "--mode", args.mode,
-                "--transport", args.transport,
-                "--ui-mode", args.ui_mode,
-                "--brand", args.brand,
-                "--server-url", ui_server_url,
-                "--protocol", args.protocol,
+                "--env-file",
+                str(env_path),
+                "--host",
+                args.ui_host,
+                "--port",
+                str(args.ui_port),
+                "--scenario",
+                args.scenario,
+                "--mode",
+                args.mode,
+                "--transport",
+                args.transport,
+                "--ui-mode",
+                args.ui_mode,
+                "--brand",
+                args.brand,
+                "--server-url",
+                ui_server_url,
+                "--protocol",
+                args.protocol,
             ]
-            if args.approval_gate or args.protocol == "pure":
+            if (args.approval_gate and not args.nms) or args.protocol == "pure":
                 ui_args += ["--approval-gate", "--approval-timeout", str(args.approval_timeout)]
             if args.allow_insecure_bind:
                 ui_args.append("--allow-insecure-bind")
             if mie_url is not None:
                 ui_args += ["--mie-url", mie_url]
-            if start(
-                "ui",
-                UI_MODULE,
-                args.ui_port,
-                cli_args=ui_args,
-                probe_host=_probe_host(args.ui_host),
-                reuse=False,
-            ) is None:
+            if (
+                start(
+                    "ui",
+                    UI_MODULE,
+                    args.ui_port,
+                    cli_args=ui_args,
+                    probe_host=_probe_host(args.ui_host),
+                    reuse=False,
+                )
+                is None
+            ):
                 return 1
             ui_proc = processes.get("ui")
 
@@ -1450,7 +1524,8 @@ def main() -> int:
         else:
             print(
                 f"[run_demo] running client (scenario={args.scenario}, mode={args.mode}, "
-                f"transport={args.transport}, discovery={args.discovery}, language={args.language}, "
+                f"transport={args.transport}, discovery={resolved_config.discovery}, "
+                f"language={args.language}, "
                 f"model_mode={args.model_mode}) ..."
             )
             return_code = asyncio.run(
@@ -1461,6 +1536,7 @@ def main() -> int:
                     transport=args.transport,
                     language=args.language,
                     protocol=args.protocol,
+                    user_request=args.request or None,
                 )
             )
         return return_code
@@ -1476,18 +1552,11 @@ def main() -> int:
                 _stop_pids([ui_pid])
             if persisted and PID_FILE.exists():
                 current = _load_state()
-                remaining = [
-                    pid
-                    for pid in _state_pids(current)
-                    if pid != ui_pid and _pid_alive(pid)
-                ]
+                remaining = [pid for pid in _state_pids(current) if pid != ui_pid and _pid_alive(pid)]
                 if remaining:
                     current["pids"] = remaining
                     _write_state(current)
-                    print(
-                        f"\n[run_demo] --keep-alive set; stop later with: "
-                        f"{python} {Path(__file__).name} --stop"
-                    )
+                    print(f"\n[run_demo] --keep-alive set; stop later with: {python} {Path(__file__).name} --stop")
                 else:
                     PID_FILE.unlink(missing_ok=True)
         else:

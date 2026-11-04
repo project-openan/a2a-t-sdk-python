@@ -404,6 +404,46 @@ and an egress allowlist (SSRF).
 | the pre-task handler rejects an accept | Task-T was not refilled from the negotiation | pass `filled_params` through `generate_task_prompt_from_data_with_schema` |
 | HTTP 409 `run_conflict` | the conversation already has an active run | wait for it, or use another conversation; the claim is enforced by a partial unique index in the client database, so it also holds across processes |
 
+### 3.6 Real vendor NMS mode (`--nms`)
+
+`--nms` keeps the client flow, the Task-T rendering, the send-time intent review and the trace,
+but replaces discovery and transport:
+
+| Layer | Local demo | `--nms` |
+| --- | --- | --- |
+| Discovery | registry or direct AgentCard | static card from `A2AT_SAMPLE_NMS_A2A_BASE` |
+| Auth | static `A2AT_SAMPLE_SERVER_AUTH_TOKEN` | session token from `A2AT_SAMPLE_NMS_TOKEN_URL` |
+| Transport | a2a-sdk SSE/webhook | `protocol/nms_client.py` raw SSE + task polling |
+| Execution | local RAN Agent | vendor NMS |
+| Approval 2 | local MIE gate | not present; the vendor owns execution |
+
+Implementation details:
+
+- `protocol/nms_client.py` caches the `accessSession` token and refreshes it 60 s before expiry.
+  It sends both `Authorization: Bearer` and `X-Auth-Token`, and both `A2A-Extensions` and
+  `X-A2A-Extensions` for A2A-T.
+- The SSE reader skips `: heartbeat` comments and leaves the stream after
+  `A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS` without a `data:` frame. It then polls
+  `GET <base>/tasks/{id}` to a terminal state; a send timeout is never retried.
+- Raw frames are parsed back into `StreamResponse` and normalized by the existing
+  `shared.sse_event_consumer.normalize_event`, so the negotiation/trace code is unchanged.
+- A `message` frame without a `task` raises `NmsNegotiationRequiredError(context_id, text)`. This
+  is a transport fact, not a semantic guess; the sample does not implement the text/structure
+  fallback for the vendor's metadata-less negotiation message.
+- Every exchange is appended to `runs/<runId>/wire.jsonl` with `Authorization`, `X-Auth-Token`,
+  `accessSession` and cookies redacted.
+
+`demo/nms_sim/` is the offline contract simulator. It implements the token endpoint,
+`POST /a2a/json/message:stream`, `GET /a2a/json/tasks[/{id}]` and the known cancel 503. The
+`strict` profile (default) never closes the SSE stream and emits heartbeats every 15 s; the `fast`
+profile removes the delays for tests. It reuses `demo/ran_data.py` and the sample tools for the
+business result.
+
+Tests: `tests/test_nms_client.py` (token, headers, heartbeat, idle, negotiation, wire redaction),
+`tests/test_nms_sim.py` (422 pairing, static region/window/rate rules, task lifecycle, strict
+stream), and the raw-client integration test against the simulator. A real lab run requires the
+910 network and a complete request using `A2ATestRegion`.
+
 ## 4. NMS-side developer guide (how-to)
 
 **Goal:** connect the pre-task negotiation handler, executor and tools to the real network

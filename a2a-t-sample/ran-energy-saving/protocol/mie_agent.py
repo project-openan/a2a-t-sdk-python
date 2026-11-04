@@ -364,7 +364,10 @@ def main() -> None:
     host = os.environ.get("A2AT_SAMPLE_MIE_HOST", "127.0.0.1")
     port = int(os.environ.get("A2AT_SAMPLE_MIE_PORT", str(DEFAULT_MIE_PORT)))
     timeout = float(
-        os.environ.get("A2AT_SAMPLE_APPROVAL_TIMEOUT_SECONDS", "240") or "240"
+        os.environ.get(
+            "A2AT_SAMPLE_APPROVAL_TIMEOUT_SECONDS", str(int(DEFAULT_APPROVAL_TIMEOUT_SECONDS))
+        )
+        or str(int(DEFAULT_APPROVAL_TIMEOUT_SECONDS))
     )
     app = build_mie_app(config=config, host=host, port=port, timeout_seconds=timeout)
     _LOGGER.info("starting MIE Agent on %s:%s", host, port)

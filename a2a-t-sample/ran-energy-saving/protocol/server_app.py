@@ -78,7 +78,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from protocol.approval_gate import ApprovalRegistry
+from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS, ApprovalRegistry
 from protocol.mie_client import MIEApprovalClient
 from protocol.negotiation_policy import NegotiationState, PolicyDecision
 from protocol.plain_a2a import PlainTaskHandler, ProtocolDispatchHandler
@@ -456,7 +456,13 @@ def build_server_runtime(
     approval_timeout = (
         approval_timeout_seconds
         if approval_timeout_seconds is not None
-        else float(os.environ.get("A2AT_SAMPLE_APPROVAL_TIMEOUT_SECONDS", "240") or "240")
+        else float(
+            os.environ.get(
+                "A2AT_SAMPLE_APPROVAL_TIMEOUT_SECONDS",
+                str(DEFAULT_APPROVAL_TIMEOUT_SECONDS),
+            )
+            or str(DEFAULT_APPROVAL_TIMEOUT_SECONDS)
+        )
     )
     approval_registry = ApprovalRegistry() if approval_enabled else None
     if protocol_mode == PROTOCOL_PURE and approval_enabled and mie_client is None:

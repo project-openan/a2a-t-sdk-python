@@ -257,9 +257,7 @@ def test_prepare_client_sdk_env_does_not_mutate_the_source(
     assert values["A2AT_LLM_MAX_ATTEMPTS"] == "1"
 
 
-def test_offline_sdk_env_carries_the_configured_fail_fast_policy(
-    offline_config: SampleConfig, tmp_path: Path
-) -> None:
+def test_offline_sdk_env_carries_the_configured_fail_fast_policy(offline_config: SampleConfig, tmp_path: Path) -> None:
     config = replace(offline_config, llm_timeout_seconds=12.5, llm_max_attempts=2)
 
     values = dotenv_values(prepare_client_sdk_env(config, tmp_path / "missing.env").path)
@@ -370,3 +368,67 @@ def test_importing_the_client_runtime_does_not_build_a_server_model() -> None:
     )
     assert result.returncode == 0, result.stderr or result.stdout
     assert "client-import-ok" in result.stdout
+
+
+def test_nms_policy_uses_the_operator_request_text(offline_config: SampleConfig) -> None:
+    from dataclasses import replace
+
+    from protocol.client_runtime import _effective_policy
+    from protocol.run_spec import ClientPolicy
+
+    policy = ClientPolicy(initial_data=lambda _language: ({"region": "canned"}, {}))
+    nms_config = replace(offline_config, discovery="nms")
+
+    assert _effective_policy(policy, nms_config, "A2ATestRegion").initial_data("en-US") is None
+    assert _effective_policy(policy, nms_config, "").initial_data("en-US") == (
+        {"region": "canned"},
+        {},
+    )
+    assert _effective_policy(policy, offline_config, "A2ATestRegion").initial_data("en-US") == (
+        {"region": "canned"},
+        {},
+    )
+
+
+async def test_nms_runtime_uses_the_raw_transport_and_skips_the_a2a_sdk_client(
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from dataclasses import replace
+
+    import protocol.client_runtime as client_runtime
+    from protocol.nms_client import NmsSseTransport
+
+    async def fake_discover(**kwargs: object) -> DiscoveredAgent:
+        return _card()
+
+    async def fail_create(*args: object, **kwargs: object) -> object:
+        raise AssertionError("the NMS runtime must not build an a2a-sdk client")
+
+    monkeypatch.setattr(client_runtime, "discover_agent", fake_discover)
+    monkeypatch.setattr(client_runtime, "create_client", fail_create)
+    monkeypatch.setenv("A2AT_LANGUAGE", offline_config.language)
+
+    nms_config = replace(
+        offline_config,
+        discovery="nms",
+        nms_a2a_base="https://nms.example:31127/a2a/json",
+        nms_token_url="https://nms.example:27417/rest/plat/smapp/v1/sessions",
+        nms_token_user="northbound",
+        nms_token_value="secret",
+    )
+    runtime = await build_demo_runtime(
+        nms_config,
+        "information",
+        "manual",
+        "sse",
+        "nms",
+        env_path=tmp_path / "missing.env",
+    )
+
+    assert isinstance(runtime.transport, NmsSseTransport)
+    assert runtime.nms_client is not None
+    assert runtime.a2a_client is None
+    assert runtime._httpx_client is None
+    await runtime.aclose()

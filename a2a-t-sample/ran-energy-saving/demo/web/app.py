@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from protocol.client_runtime import MODE_AUTO
 from protocol.client_service import (
     STATUS_RUNNING,
@@ -170,7 +171,7 @@ def create_app(
     default_brand: str = BRAND_ORANGE,
     server_url: str | None = None,
     approval_gate: bool = False,
-    approval_timeout_seconds: float = 240.0,
+    approval_timeout_seconds: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
     allow_insecure_bind: bool = False,
     intent_review: bool | None = None,
     protocol: str = PROTOCOL_A2A_T,

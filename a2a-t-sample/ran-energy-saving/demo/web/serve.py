@@ -15,6 +15,7 @@ import os
 import socket
 from pathlib import Path
 
+from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from shared.run_constants import (
     BRAND_ORANGE,
     DEMO_PROTOCOLS,
@@ -54,7 +55,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--server-url", default="", help="A2A server base URL used by the MIE approval")
     parser.add_argument("--approval-gate", action="store_true")
-    parser.add_argument("--approval-timeout", type=float, default=240.0)
+    parser.add_argument(
+        "--approval-timeout", type=float, default=DEFAULT_APPROVAL_TIMEOUT_SECONDS
+    )
     parser.add_argument("--allow-insecure-bind", action="store_true")
     parser.add_argument("--protocol", default=PROTOCOL_A2A_T, choices=list(DEMO_PROTOCOLS))
     parser.add_argument("--mie-url", default=None)
@@ -73,7 +76,7 @@ def run_ui(
     host: str = "127.0.0.1",
     server_url: str = "",
     approval_gate: bool = False,
-    approval_timeout: float = 240.0,
+    approval_timeout: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
     allow_insecure_bind: bool = False,
     protocol: str = PROTOCOL_A2A_T,
     mie_url: str | None = None,

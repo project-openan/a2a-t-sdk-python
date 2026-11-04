@@ -443,13 +443,15 @@ function applyTrace(state, span) {
     tag: traceSpanTag(span, kind, state.protocol),
     title: typeof span.title === "string" ? span.title : kind,
     titleKey:
-      kind === "decision_requested"
-        ? "decisionRequested"
-        : kind === "approval"
-          ? "approval"
-          : kind === "intent_review_requested"
-            ? "intentReview"
-            : null,
+      detail && typeof detail.titleKey === "string"
+        ? detail.titleKey
+        : kind === "decision_requested"
+          ? "decisionRequested"
+          : kind === "approval"
+            ? "approval"
+            : kind === "intent_review_requested"
+              ? "intentReview"
+              : null,
     sub: typeof span.purpose === "string" ? span.purpose : "",
     chip: kind === "tool" ? "tool" : "",
     chipKind: kind === "tool" ? "status" : "",

@@ -348,7 +348,7 @@ async def test_meta_exposes_the_read_only_process_language(client: httpx.AsyncCl
     assert meta["modelLabel"] == "offline (scripted)"
     assert "information" in meta["scenarios"]
     assert meta["modes"] == ["auto", "manual", "confirm"]
-    assert meta["discoveries"] == ["registry", "direct"]
+    assert meta["discoveries"] == ["registry", "direct", "nms"]
     assert meta["defaultScenario"] == "night"
     assert meta["defaultMode"] == "auto"
     assert meta["defaultTransport"] == "sse"

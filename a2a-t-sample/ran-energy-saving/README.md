@@ -165,6 +165,54 @@ trace labels each row with its demo day (Day 1, Days 2–8, Day 9, Day 9+) and m
 (OSS → RAN, RAN → OSS, MIE ⇄ Engineer); late server spans are merged by event time and a status and
 its matching span collapse to one row.
 
+### Real vendor NMS mode
+
+The sample can also act as the OSS client of a real vendor NMS. With `--nms`, the launcher starts
+no local registry, RAN Agent, MIE or OSS: the client obtains a session token from the NMS token
+endpoint and calls its A2A surface directly.
+
+```bash
+# Real NMS: fill A2AT_SAMPLE_NMS_* in .env first
+python run_demo.py --nms --ui --brand huawei
+
+# Local NMS simulator: same client path, no lab network, no real network change
+python run_demo.py --nms --nms-sim --ui --brand huawei
+```
+
+Required `.env` keys:
+
+```ini
+A2AT_SAMPLE_NMS_A2A_BASE=https://<nms-host>:31127/a2a/json
+A2AT_SAMPLE_NMS_TOKEN_URL=https://<nms-host>:27417/rest/plat/smapp/v1/sessions
+A2AT_SAMPLE_NMS_TOKEN_USER=<northbound-user>
+A2AT_SAMPLE_NMS_TOKEN_VALUE=<password>
+A2AT_SAMPLE_NMS_VERIFY_TLS=false
+```
+
+The test environment uses a self-signed certificate, so TLS verification is off by default; set
+`A2AT_SAMPLE_NMS_VERIFY_TLS=true` only for a trusted chain. The client sends both accepted auth
+headers (`Authorization: Bearer` and `X-Auth-Token`) and both extension-header spellings
+(`A2A-Extensions` and `X-A2A-Extensions`).
+
+The request text must use the region the NMS serves. In the 910 environment that is
+`A2ATestRegion`; other regions and activation windows are rejected. For example: “Create a RAN
+energy saving task in the A2ATestRegion region; activation 00:00-06:00 with 30 Mbps for each
+cell.”
+
+Limitations of the current vendor contract:
+
+- A real negotiation reply carries no `Negotiation-T` metadata. The sample does not guess the
+  semantics, so the run reports “the NMS did not create a Task” instead of silently treating it as
+  the end of the negotiation. Use a complete request while the vendor fixes the metadata.
+- Task cancellation returns HTTP 503; the client treats it as a known limitation and never retries
+  the send.
+- The NMS publishes no AgentCard, so discovery uses a static card; a real registry integration is
+  a later step.
+
+The raw exchange is recorded in `runs/<runId>/wire.jsonl` with credentials redacted. Use
+`--ui --mode confirm` for the send-time intent review; server-side approval 2 does not exist in
+NMS mode because the vendor owns execution.
+
 ### Pure A2A mode (three hops, standard A2A only)
 
 The page is single-mode: the protocol is fixed when the process starts, and the page has no

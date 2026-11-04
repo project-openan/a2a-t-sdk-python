@@ -26,7 +26,9 @@ ModelMode = Literal["live", "offline"]
 #: Discovery modes.
 DISCOVERY_REGISTRY = "registry"
 DISCOVERY_DIRECT = "direct"
-SUPPORTED_DISCOVERY_MODES = (DISCOVERY_REGISTRY, DISCOVERY_DIRECT)
+#: Direct A2A surface of a vendor NMS that publishes no AgentCard.
+DISCOVERY_NMS = "nms"
+SUPPORTED_DISCOVERY_MODES = (DISCOVERY_REGISTRY, DISCOVERY_DIRECT, DISCOVERY_NMS)
 
 #: Transport modes.
 TRANSPORT_SSE = "sse"
@@ -63,6 +65,15 @@ GATEWAY_SCENARIO_ENV_KEY = "A2AT_SAMPLE_GATEWAY_SCENARIO"
 GATEWAY_TASK_DB_ENV_KEY = "A2AT_SAMPLE_GATEWAY_TASK_DB"
 AUTH_TOKEN_ENV_KEY = "A2AT_SAMPLE_AUTH_TOKEN"
 SERVER_AUTH_TOKEN_ENV_KEY = "A2AT_SAMPLE_SERVER_AUTH_TOKEN"
+
+#: Vendor NMS integration (``A2AT_SAMPLE_DISCOVERY=nms``).
+NMS_A2A_BASE_ENV_KEY = "A2AT_SAMPLE_NMS_A2A_BASE"
+NMS_TOKEN_URL_ENV_KEY = "A2AT_SAMPLE_NMS_TOKEN_URL"
+NMS_TOKEN_USER_ENV_KEY = "A2AT_SAMPLE_NMS_TOKEN_USER"
+NMS_TOKEN_VALUE_ENV_KEY = "A2AT_SAMPLE_NMS_TOKEN_VALUE"
+NMS_VERIFY_TLS_ENV_KEY = "A2AT_SAMPLE_NMS_VERIFY_TLS"
+NMS_IDLE_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS"
+NMS_REQUEST_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_NMS_REQUEST_TIMEOUT_SECONDS"
 PLANNER_MODEL_ENV_KEY = "A2AT_SAMPLE_PLANNER_MODEL"
 PLANNER_API_BASE_ENV_KEY = "A2AT_SAMPLE_PLANNER_API_BASE"
 PLANNER_API_KEY_ENV_KEY = "A2AT_SAMPLE_PLANNER_API_KEY"
@@ -108,6 +119,12 @@ DEFAULT_ADK_SESSION_RETENTION_DAYS = 7
 #: A2A gateway defaults (the client agent's inbound A2A surface).
 DEFAULT_GATEWAY_PORT = 8001
 DEFAULT_GATEWAY_SCENARIO = "information"
+
+#: Vendor NMS defaults. The A2A stream sends heartbeat comments every 15 s; the client treats a
+#: 15 s window without a ``data:`` frame as idle and switches to task polling.
+DEFAULT_NMS_IDLE_TIMEOUT_SECONDS = 15.0
+DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS = 120.0
+DEFAULT_NMS_POLL_INTERVAL_SECONDS = 1.0
 
 #: LangGraph planner defaults (the server's post-accept execution agent).
 DEFAULT_PLANNER_MAX_STEPS = 12
@@ -239,6 +256,17 @@ class SampleConfig:
         server_auth_token: bearer token the client presents to the A2A server and the server
             requires on every route except its AgentCard and health endpoints; empty keeps the
             server open (loopback-only deployments).
+        nms_a2a_base: full A2A surface URL of a vendor NMS (``.../a2a/json``); required by the
+            ``nms`` discovery mode and used as the static AgentCard interface.
+        nms_token_url: session/token endpoint of the vendor NMS.
+        nms_token_user: northbound user name presented to the token endpoint.
+        nms_token_value: password presented to the token endpoint; never logged or traced.
+        nms_verify_tls: whether the NMS calls verify TLS certificates; ``False`` by default because
+            the test environment uses a self-signed certificate.
+        nms_idle_timeout: seconds without a ``data:`` frame before the client leaves the SSE stream
+            and polls the task instead.
+        nms_request_timeout: per-request budget of one NMS A2A call.
+        nms_poll_interval: seconds between task polls while waiting for a terminal state.
         planner_model: LangChain model id of the server's LangGraph planner.
         planner_api_base: OpenAI-compatible endpoint of the planner.
         planner_api_key: API key of the planner endpoint.
@@ -274,6 +302,14 @@ class SampleConfig:
     gateway_task_db_path: str | None = None
     auth_token: str = ""
     server_auth_token: str = ""
+    nms_a2a_base: str = ""
+    nms_token_url: str = ""
+    nms_token_user: str = ""
+    nms_token_value: str = ""
+    nms_verify_tls: bool = False
+    nms_idle_timeout: float = DEFAULT_NMS_IDLE_TIMEOUT_SECONDS
+    nms_request_timeout: float = DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS
+    nms_poll_interval: float = DEFAULT_NMS_POLL_INTERVAL_SECONDS
     planner_model: str = ""
     planner_api_base: str = ""
     planner_api_key: str = ""
@@ -318,22 +354,34 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
     if transport not in SUPPORTED_TRANSPORTS:
         raise ValueError(f"Unsupported {TRANSPORT_ENV_KEY}: {transport}; expected one of {SUPPORTED_TRANSPORTS}")
 
+    nms_a2a_base = _env_value(values, NMS_A2A_BASE_ENV_KEY, "")
+    nms_token_url = _env_value(values, NMS_TOKEN_URL_ENV_KEY, "")
+    nms_token_user = _env_value(values, NMS_TOKEN_USER_ENV_KEY, "")
+    nms_token_value = _env_value(values, NMS_TOKEN_VALUE_ENV_KEY, "")
+    if discovery == DISCOVERY_NMS:
+        missing = [
+            key
+            for key, value in (
+                (NMS_A2A_BASE_ENV_KEY, nms_a2a_base),
+                (NMS_TOKEN_URL_ENV_KEY, nms_token_url),
+                (NMS_TOKEN_USER_ENV_KEY, nms_token_user),
+                (NMS_TOKEN_VALUE_ENV_KEY, nms_token_value),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(f"NMS discovery requires {', '.join(missing)}; set them in the .env used by the run")
+
     registry_host = _env_value(values, REGISTRY_HOST_ENV_KEY, DEFAULT_REGISTRY_HOST)
     registry_port = _env_int(values, REGISTRY_PORT_ENV_KEY, DEFAULT_REGISTRY_PORT)
 
     # The scenario catalog is supplied by the composition root, so config only carries the name:
     # validating it against the demo scenarios here would couple configuration to demo assets.
-    gateway_scenario = _env_value(
-        values, GATEWAY_SCENARIO_ENV_KEY, DEFAULT_GATEWAY_SCENARIO
-    )
+    gateway_scenario = _env_value(values, GATEWAY_SCENARIO_ENV_KEY, DEFAULT_GATEWAY_SCENARIO)
 
     adk_model_name = _env_value(values, ADK_MODEL_NAME_ENV_KEY, DEFAULT_ADK_MODEL_NAME)
-    adk_model_api_base = _env_value(
-        values, ADK_MODEL_API_BASE_ENV_KEY, DEFAULT_ADK_MODEL_API_BASE
-    )
-    adk_model_api_key = _env_value(
-        values, ADK_MODEL_API_KEY_ENV_KEY, DEFAULT_ADK_MODEL_API_KEY
-    )
+    adk_model_api_base = _env_value(values, ADK_MODEL_API_BASE_ENV_KEY, DEFAULT_ADK_MODEL_API_BASE)
+    adk_model_api_key = _env_value(values, ADK_MODEL_API_KEY_ENV_KEY, DEFAULT_ADK_MODEL_API_KEY)
     # The ADK model id is a LiteLLM id ("openai/..."); ChatOpenAI takes the bare model id. The
     # planner keys are independent so a deployment can point the server at a different model.
     planner_model_default = adk_model_name.removeprefix("openai/")
@@ -353,16 +401,12 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         adk_model_api_key=adk_model_api_key,
         discovery=discovery,
         transport=transport,
-        http_timeout_seconds=_positive_seconds(
-            values, HTTP_TIMEOUT_ENV_KEY, DEFAULT_HTTP_TIMEOUT_SECONDS
-        ),
+        http_timeout_seconds=_positive_seconds(values, HTTP_TIMEOUT_ENV_KEY, DEFAULT_HTTP_TIMEOUT_SECONDS),
         llm_timeout_seconds=_positive_seconds(values, LLM_TIMEOUT_ENV_KEY, DEFAULT_LLM_TIMEOUT_SECONDS),
         llm_max_attempts=_llm_max_attempts(values),
         task_db_path=_optional_absolute_path(values, TASK_DB_ENV_KEY),
         client_db_path=_optional_absolute_path(values, CLIENT_DB_ENV_KEY),
-        client_memory_turns=_non_negative_int(
-            values, CLIENT_MEMORY_TURNS_ENV_KEY, DEFAULT_CLIENT_MEMORY_TURNS
-        ),
+        client_memory_turns=_non_negative_int(values, CLIENT_MEMORY_TURNS_ENV_KEY, DEFAULT_CLIENT_MEMORY_TURNS),
         adk_session_retention_days=_positive_int(
             values, ADK_SESSION_RETENTION_DAYS_ENV_KEY, DEFAULT_ADK_SESSION_RETENTION_DAYS
         ),
@@ -373,13 +417,16 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         gateway_task_db_path=_optional_absolute_path(values, GATEWAY_TASK_DB_ENV_KEY),
         auth_token=_env_value(values, AUTH_TOKEN_ENV_KEY, "").strip(),
         server_auth_token=_env_value(values, SERVER_AUTH_TOKEN_ENV_KEY, "").strip(),
+        nms_a2a_base=nms_a2a_base.rstrip("/"),
+        nms_token_url=nms_token_url,
+        nms_token_user=nms_token_user,
+        nms_token_value=nms_token_value,
+        nms_verify_tls=_env_bool(values, NMS_VERIFY_TLS_ENV_KEY, False),
+        nms_idle_timeout=_positive_seconds(values, NMS_IDLE_TIMEOUT_ENV_KEY, DEFAULT_NMS_IDLE_TIMEOUT_SECONDS),
+        nms_request_timeout=_positive_seconds(values, NMS_REQUEST_TIMEOUT_ENV_KEY, DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS),
         planner_model=_env_value(values, PLANNER_MODEL_ENV_KEY, planner_model_default),
         planner_api_base=_env_value(values, PLANNER_API_BASE_ENV_KEY, adk_model_api_base),
         planner_api_key=_env_value(values, PLANNER_API_KEY_ENV_KEY, adk_model_api_key),
-        planner_timeout_seconds=_positive_seconds(
-            values, PLANNER_TIMEOUT_ENV_KEY, DEFAULT_LLM_TIMEOUT_SECONDS
-        ),
-        planner_max_steps=_positive_int(
-            values, PLANNER_MAX_STEPS_ENV_KEY, DEFAULT_PLANNER_MAX_STEPS
-        ),
+        planner_timeout_seconds=_positive_seconds(values, PLANNER_TIMEOUT_ENV_KEY, DEFAULT_LLM_TIMEOUT_SECONDS),
+        planner_max_steps=_positive_int(values, PLANNER_MAX_STEPS_ENV_KEY, DEFAULT_PLANNER_MAX_STEPS),
     )

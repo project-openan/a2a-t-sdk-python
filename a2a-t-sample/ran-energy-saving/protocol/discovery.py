@@ -20,8 +20,9 @@ from typing import Any, Final
 import httpx
 from a2a.types import AgentCard
 from a2a.utils.constants import TransportProtocol
+from a2a_t.core.metadata import NEGOTIATION_T_EXTENSION_URI, TASK_T_EXTENSION_URI
 from google.protobuf.json_format import ParseDict, ParseError
-from shared.config import DISCOVERY_DIRECT, DISCOVERY_REGISTRY
+from shared.config import DISCOVERY_DIRECT, DISCOVERY_NMS, DISCOVERY_REGISTRY
 from shared.registry_client import query_by_name_org
 
 #: Well-known path of the direct AgentCard endpoint.
@@ -151,6 +152,60 @@ async def discover_from_registry(
     raise DiscoveryError(f"No usable AgentCard for '{organization}/{name}': {detail}")
 
 
+def nms_agent_card(base_url: str, *, name: str = "RAN Energy Saving Agent") -> AgentCard:
+    """Build the static AgentCard of a vendor NMS that publishes no ``/.well-known`` card.
+
+    The URL must be the full A2A surface (``.../a2a/json``), not the host root: the a2a-sdk
+    client appends ``/message:stream`` to this value.
+
+    Args:
+        base_url: Full A2A JSON surface of the vendor NMS.
+        name: Card name shown in the discovery trace.
+
+    Returns:
+        A parsed AgentCard declaring streaming and the two A2A-T extensions.
+    """
+    payload: dict[str, object] = {
+        "name": name,
+        "description": ("Vendor NMS energy-saving agent reached through its A2A HTTP JSON surface."),
+        "version": "1.0.0",
+        "capabilities": {
+            "streaming": True,
+            "pushNotifications": False,
+            "extensions": [
+                {
+                    "uri": TASK_T_EXTENSION_URI,
+                    "description": "Structured Task-T prompt requests.",
+                    "required": False,
+                },
+                {
+                    "uri": NEGOTIATION_T_EXTENSION_URI,
+                    "description": "Structured Negotiation-T requests.",
+                    "required": False,
+                },
+            ],
+        },
+        "defaultInputModes": ["application/json", "text/plain"],
+        "defaultOutputModes": ["application/json", "text/plain"],
+        "skills": [
+            {
+                "id": "ran-energy-saving",
+                "name": "RAN energy saving",
+                "description": "Apply and report energy-saving plans on RAN cells.",
+                "tags": ["energy-saving", "RAN"],
+            }
+        ],
+        "supportedInterfaces": [
+            {
+                "url": base_url.rstrip("/"),
+                "protocolBinding": TransportProtocol.HTTP_JSON.value,
+                "protocolVersion": "1.0",
+            }
+        ],
+    }
+    return parse_agent_card(payload)
+
+
 async def discover_agent(
     *,
     discovery: str = DISCOVERY_REGISTRY,
@@ -158,6 +213,7 @@ async def discover_agent(
     name: str,
     registry_center_url: str | None = None,
     direct_base_url: str | None = None,
+    nms_a2a_base: str | None = None,
     env_path: Path | None = None,
     timeout_seconds: float = 30.0,
     http_client: Any | None = None,
@@ -165,19 +221,24 @@ async def discover_agent(
     """Discover the server endpoint in the configured mode.
 
     Args:
-        discovery: ``registry`` (default) or ``direct``.
+        discovery: ``registry`` (default), ``direct``, or ``nms``.
         organization: Provider organization the registry lookup uses.
         name: Agent card name the registry lookup uses.
         registry_center_url: Registry base URL; defaults to the sample configuration.
         direct_base_url: Server base URL used by the direct mode.
+        nms_a2a_base: Full A2A surface of a vendor NMS used by the ``nms`` mode.
         env_path: Optional ``.env`` path for the registry client.
         timeout_seconds: HTTP timeout.
         http_client: Optional injected HTTP client (tests).
 
     Raises:
-        ValueError: when ``discovery`` is not a supported mode or the direct base URL is missing.
+        ValueError: when ``discovery`` is not a supported mode or its required URL is missing.
         DiscoveryError: when no usable endpoint is found.
     """
+    if discovery == DISCOVERY_NMS:
+        if not nms_a2a_base:
+            raise ValueError("NMS discovery requires nms_a2a_base")
+        return discovered_from_card(nms_agent_card(nms_a2a_base))
     if discovery == DISCOVERY_DIRECT:
         if not direct_base_url:
             raise ValueError("Direct discovery requires direct_base_url")

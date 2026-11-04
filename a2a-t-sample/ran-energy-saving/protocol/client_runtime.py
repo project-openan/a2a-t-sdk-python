@@ -21,7 +21,7 @@ import asyncio
 import logging
 import shutil
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Final
 
@@ -33,6 +33,7 @@ from a2a_t.core.metadata import NegotiationContext
 from dotenv import dotenv_values
 from shared.agent_card import AGENT_CARD_NAME, AGENT_CARD_ORGANIZATION
 from shared.config import (
+    DISCOVERY_NMS,
     SUPPORTED_TRANSPORTS,
     TRANSPORT_SSE,
     TRANSPORT_WEBHOOK,
@@ -69,9 +70,11 @@ from protocol.decision_provider import (
     ScriptedDecisionProvider,
 )
 from protocol.discovery import DiscoveredAgent, discover_agent
+from protocol.nms_client import NmsClient, NmsConfig, NmsSseTransport
 from protocol.plain_client_flow import run_plain_client_flow
 from protocol.pure_client_flow import run_pure_client_flow
-from protocol.run_spec import RunCatalog, RunSpec
+from protocol.run_spec import DEFAULT_CLIENT_POLICY, ClientPolicy, RunCatalog, RunSpec
+from protocol.transcript import DEFAULT_RUNS_DIR
 
 _LOGGER = logging.getLogger("ran_energy_saving.client_runtime")
 
@@ -98,9 +101,7 @@ def _env_values(env_path: Path | None) -> dict[str, str]:
     if env_path is None or not env_path.exists():
         return {}
     return {
-        str(key): str(value)
-        for key, value in dotenv_values(env_path).items()
-        if key is not None and value is not None
+        str(key): str(value) for key, value in dotenv_values(env_path).items() if key is not None and value is not None
     }
 
 
@@ -133,6 +134,21 @@ def _server_auth_headers(config: SampleConfig) -> dict[str, str]:
     """Return the bearer header of the client-to-server A2A calls, empty when open."""
     token = config.server_auth_token.strip()
     return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def _effective_policy(
+    policy: ClientPolicy,
+    config: SampleConfig,
+    request_text: str,
+) -> ClientPolicy:
+    """Return the policy a run uses.
+
+    A real NMS run must honor the operator's request text (region, window and throughput), so the
+    scenario's canned ``initial_data`` cannot override it. Other modes keep the scenario policy.
+    """
+    if config.discovery == DISCOVERY_NMS and request_text.strip():
+        return replace(policy, initial_data=DEFAULT_CLIENT_POLICY.initial_data)
+    return policy
 
 
 def _decision_provider(
@@ -188,12 +204,13 @@ class ClientRuntime:
         protocol: interaction protocol (``a2a-t`` / ``plain`` / ``pure``).
         transport_name: event transport (``sse`` / ``webhook``).
         prompt_client: A2A-T SDK prompt facade; ``None`` in pure mode.
-        a2a_client: a2a-sdk client used by the transports.
+        a2a_client: a2a-sdk client used by the transports; ``None`` in NMS mode.
         transport: normalized-event transport.
         provider: negotiation decision provider; ``None`` in pure mode.
         discovered: discovered server endpoint.
         sdk_env: generated SDK ``.env`` owned by this runtime; ``None`` in pure mode.
         manual_provider: manual provider when ``mode == "manual"``, else ``None``.
+        nms_client: raw vendor NMS client; ``None`` outside NMS mode.
         pure_answer: callback answering one pure ``INPUT_REQUIRED`` event.
     """
 
@@ -203,13 +220,14 @@ class ClientRuntime:
     protocol: str
     transport_name: str
     prompt_client: A2ATClient | None
-    a2a_client: Any
+    a2a_client: Any | None
     transport: ClientTransport
     provider: NegotiationDecisionProvider | None
     discovered: DiscoveredAgent
     sdk_env: SdkEnvFile | None
     manual_provider: Any | None
-    _httpx_client: httpx.AsyncClient
+    _httpx_client: httpx.AsyncClient | None
+    nms_client: NmsClient | None = None
     _webhook_receiver: WebhookReceiver | None = None
     _closed: bool = False
     trace_sink: Callable[[dict[str, object]], None] | None = None
@@ -265,6 +283,8 @@ class ClientRuntime:
         """
         if self._closed:
             raise ClientRuntimeError("The client runtime is already closed.")
+        if self.nms_client is not None:
+            self.nms_client.set_wire_path(DEFAULT_RUNS_DIR / run_id / "wire.jsonl" if run_id else None)
         sink = trace_sink if trace_sink is not None else self.trace_sink
         # A run-level sink is restored to the construction-time sink after the run; the
         # construction-time sink stays attached until ``aclose``.
@@ -304,13 +324,14 @@ class ClientRuntime:
                 set_context = getattr(self.provider, "set_conversation_context", None)
                 if callable(set_context):
                     set_context(conversation_context)
+                policy = _effective_policy(self.run_spec.policy, self.config, request_text)
                 return await run_client_flow(
                     prompt_client=self.prompt_client,
                     transport=self.transport,
                     user_request=request_text,
                     provider=self.provider,
                     language=self.config.language,
-                    policy=self.run_spec.policy,
+                    policy=policy,
                     event_sink=event_sink,
                     on_decision_requested=on_decision_requested,
                     on_decision_made=on_decision_made,
@@ -333,7 +354,10 @@ class ClientRuntime:
         close_client = getattr(self.a2a_client, "close", None)
         if callable(close_client):
             await close_client()
-        await self._httpx_client.aclose()
+        if self.nms_client is not None:
+            await self.nms_client.aclose()
+        if self._httpx_client is not None:
+            await self._httpx_client.aclose()
         if self.trace_sink is not None:
             set_global_sink(None)
         if self.sdk_env is not None:
@@ -387,9 +411,7 @@ async def build_client_runtime(
     if transport not in SUPPORTED_TRANSPORTS:
         raise ClientRuntimeError(f"Unsupported transport: {transport}; expected one of {SUPPORTED_TRANSPORTS}")
     if protocol not in SUPPORTED_PROTOCOLS:
-        raise ClientRuntimeError(
-            f"Unsupported protocol: {protocol}; expected one of {SUPPORTED_PROTOCOLS}"
-        )
+        raise ClientRuntimeError(f"Unsupported protocol: {protocol}; expected one of {SUPPORTED_PROTOCOLS}")
 
     run_spec = catalog.spec(scenario, language=config.language)
     register_traced_providers()
@@ -417,56 +439,68 @@ async def build_client_runtime(
         name=AGENT_CARD_NAME,
         registry_center_url=config.registry_url,
         direct_base_url=_direct_base_url(config, env_path),
+        nms_a2a_base=config.nms_a2a_base,
         env_path=env_path,
     )
     _LOGGER.info("agent discovered: url=%s discovery=%s", discovered.url, config.discovery)
 
-    # One budget for both the transport and the per-call context (the SDK applies the context
-    # timeout to every request, overriding the httpx client default).
-    httpx_client = httpx.AsyncClient(
-        timeout=config.http_timeout_seconds,
-        trust_env=False,
-        headers=_server_auth_headers(config),
-    )
-    client_config = ClientConfig(
-        streaming=transport == TRANSPORT_SSE,
-        httpx_client=httpx_client,
-        supported_protocol_bindings=[TransportProtocol.HTTP_JSON],
-        use_client_preference=True,
-    )
-    try:
-        a2a_client = await create_client(discovered.agent_card, client_config=client_config)
-        if transport == TRANSPORT_WEBHOOK:
-            queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
-            receiver = build_webhook_receiver(
-                token=config.webhook_token,
-                queue=queue,
-                port=config.webhook_port,
-            )
-            await receiver.start()
-            _LOGGER.info("webhook mode: push_url=%s", receiver.url)
-            flow_transport: ClientTransport = WebhookClientTransport(
-                a2a_client,
-                queue=queue,
-                push_url=receiver.url,
-                push_token=config.webhook_token,
-                idle_timeout=float(config.webhook_idle_timeout),
-            )
-        else:
-            receiver = None
-            flow_transport = SseClientTransport(a2a_client)
-    except Exception:
-        await httpx_client.aclose()
-        if sdk_env is not None:
-            shutil.rmtree(sdk_env.directory, ignore_errors=True)
-        raise
+    nms_client: NmsClient | None = None
+    a2a_client: Any | None = None
+    httpx_client: httpx.AsyncClient | None = None
+    receiver: WebhookReceiver | None = None
+    if config.discovery == DISCOVERY_NMS:
+        # The vendor NMS has no AgentCard and no a2a-sdk-compatible transport: the raw client owns
+        # authentication, the never-closing SSE stream and task polling.
+        nms_client = NmsClient(NmsConfig.from_config(config))
+        flow_transport: ClientTransport = NmsSseTransport(
+            nms_client,
+            protocol=protocol,
+            request_timeout=config.nms_request_timeout,
+        )
+    else:
+        # One budget for both the transport and the per-call context (the SDK applies the context
+        # timeout to every request, overriding the httpx client default).
+        httpx_client = httpx.AsyncClient(
+            timeout=config.http_timeout_seconds,
+            trust_env=False,
+            headers=_server_auth_headers(config),
+        )
+        client_config = ClientConfig(
+            streaming=transport == TRANSPORT_SSE,
+            httpx_client=httpx_client,
+            supported_protocol_bindings=[TransportProtocol.HTTP_JSON],
+            use_client_preference=True,
+        )
+        try:
+            a2a_client = await create_client(discovered.agent_card, client_config=client_config)
+            if transport == TRANSPORT_WEBHOOK:
+                queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+                receiver = build_webhook_receiver(
+                    token=config.webhook_token,
+                    queue=queue,
+                    port=config.webhook_port,
+                )
+                await receiver.start()
+                _LOGGER.info("webhook mode: push_url=%s", receiver.url)
+                flow_transport = WebhookClientTransport(
+                    a2a_client,
+                    queue=queue,
+                    push_url=receiver.url,
+                    push_token=config.webhook_token,
+                    idle_timeout=float(config.webhook_idle_timeout),
+                )
+            else:
+                flow_transport = SseClientTransport(a2a_client)
+        except Exception:
+            await httpx_client.aclose()
+            if sdk_env is not None:
+                shutil.rmtree(sdk_env.directory, ignore_errors=True)
+            raise
 
     if protocol == PROTOCOL_PURE:
         provider: NegotiationDecisionProvider | None = None
     else:
-        offline_model = (
-            offline_model_factory(run_spec) if offline_model_factory is not None else None
-        )
+        offline_model = offline_model_factory(run_spec) if offline_model_factory is not None else None
         provider = _decision_provider(
             config,
             run_spec,
@@ -488,11 +522,11 @@ async def build_client_runtime(
         sdk_env=sdk_env,
         manual_provider=(
             provider
-            if protocol == PROTOCOL_A2A_T
-            and isinstance(provider, (ManualDecisionProvider, ConfirmingDecisionProvider))
+            if protocol == PROTOCOL_A2A_T and isinstance(provider, (ManualDecisionProvider, ConfirmingDecisionProvider))
             else None
         ),
         _httpx_client=httpx_client,
+        nms_client=nms_client,
         _webhook_receiver=receiver,
         trace_sink=trace_sink,
         pure_answer=pure_answer,

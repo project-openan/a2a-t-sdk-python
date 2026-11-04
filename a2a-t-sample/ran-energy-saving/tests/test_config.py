@@ -25,6 +25,13 @@ from shared.config import (
     LLM_TIMEOUT_ENV_KEY,
     MODEL_MODE_LIVE,
     MODEL_MODE_OFFLINE,
+    NMS_A2A_BASE_ENV_KEY,
+    NMS_IDLE_TIMEOUT_ENV_KEY,
+    NMS_REQUEST_TIMEOUT_ENV_KEY,
+    NMS_TOKEN_URL_ENV_KEY,
+    NMS_TOKEN_USER_ENV_KEY,
+    NMS_TOKEN_VALUE_ENV_KEY,
+    NMS_VERIFY_TLS_ENV_KEY,
     PLANNER_MAX_STEPS_ENV_KEY,
     PLANNER_MODEL_ENV_KEY,
     PLANNER_TIMEOUT_ENV_KEY,
@@ -51,6 +58,13 @@ _ENV_KEYS = (
     PLANNER_MODEL_ENV_KEY,
     PLANNER_TIMEOUT_ENV_KEY,
     PLANNER_MAX_STEPS_ENV_KEY,
+    NMS_A2A_BASE_ENV_KEY,
+    NMS_TOKEN_URL_ENV_KEY,
+    NMS_TOKEN_USER_ENV_KEY,
+    NMS_TOKEN_VALUE_ENV_KEY,
+    NMS_VERIFY_TLS_ENV_KEY,
+    NMS_IDLE_TIMEOUT_ENV_KEY,
+    NMS_REQUEST_TIMEOUT_ENV_KEY,
 )
 
 
@@ -294,3 +308,59 @@ def test_build_adk_model_applies_the_live_timeout_and_disables_retries(
     additional_args = getattr(model, "_additional_args")
     assert additional_args["timeout"] == 42.0
     assert additional_args["num_retries"] == 0
+
+
+def test_nms_discovery_loads_the_vendor_connection_settings(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_DISCOVERY=nms",
+                f"{NMS_A2A_BASE_ENV_KEY}=https://nms.example:31127/a2a/json/",
+                f"{NMS_TOKEN_URL_ENV_KEY}=https://nms.example:27417/rest/plat/smapp/v1/sessions",
+                f"{NMS_TOKEN_USER_ENV_KEY}=northbound",
+                f"{NMS_TOKEN_VALUE_ENV_KEY}=secret",
+                f"{NMS_VERIFY_TLS_ENV_KEY}=true",
+                f"{NMS_IDLE_TIMEOUT_ENV_KEY}=4.5",
+                f"{NMS_REQUEST_TIMEOUT_ENV_KEY}=90",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert config.discovery == "nms"
+    assert config.nms_a2a_base == "https://nms.example:31127/a2a/json"
+    assert config.nms_token_url.endswith("/rest/plat/smapp/v1/sessions")
+    assert config.nms_token_user == "northbound"
+    assert config.nms_token_value == "secret"
+    assert config.nms_verify_tls is True
+    assert config.nms_idle_timeout == 4.5
+    assert config.nms_request_timeout == 90.0
+
+
+def test_nms_discovery_rejects_an_incomplete_configuration(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("A2AT_SAMPLE_DISCOVERY=nms\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="NMS discovery requires"):
+        load_config(env_path=env_file)
+
+
+def test_nms_tls_verification_defaults_to_off(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_DISCOVERY=nms",
+                f"{NMS_A2A_BASE_ENV_KEY}=https://nms.example/a2a/json",
+                f"{NMS_TOKEN_URL_ENV_KEY}=https://nms.example/sessions",
+                f"{NMS_TOKEN_USER_ENV_KEY}=user",
+                f"{NMS_TOKEN_VALUE_ENV_KEY}=value",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_config(env_path=env_file).nms_verify_tls is False

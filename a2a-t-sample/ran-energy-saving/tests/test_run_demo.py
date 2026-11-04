@@ -9,6 +9,7 @@ from typing import Any
 import demo.run_demo as run_demo
 import pytest
 from dotenv import dotenv_values
+from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 
 
 def test_write_run_env_points_both_processes_at_the_task_database(
@@ -48,6 +49,53 @@ def test_write_run_env_points_both_processes_at_the_task_database(
     assert gateway_db.name == "gateway-task-status.sqlite3"
     assert values["A2AT_SAMPLE_GATEWAY_PORT"] == "8001"
     assert values["A2AT_SAMPLE_GATEWAY_REGISTER"] == "1"
+
+
+def test_write_run_env_applies_the_nms_simulator_overrides(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--nms-sim` points the per-run .env at the local simulator."""
+    monkeypatch.setattr(run_demo, "RUN_DIR", tmp_path)
+    env_path = run_demo._write_run_env(
+        source=None,
+        language="en-US",
+        model_mode="offline",
+        discovery="nms",
+        transport="sse",
+        webhook_port=0,
+        server_host="127.0.0.1",
+        server_port=8000,
+        registry_host="127.0.0.1",
+        registry_port=5001,
+        ui_port=8080,
+        extra={
+            "A2AT_SAMPLE_NMS_A2A_BASE": "http://127.0.0.1:18080/a2a/json",
+            "A2AT_SAMPLE_NMS_TOKEN_URL": "http://127.0.0.1:18080/rest/plat/smapp/v1/sessions",
+            "A2AT_SAMPLE_NMS_TOKEN_USER": "snbitestDefaultNorth",
+            "A2AT_SAMPLE_NMS_TOKEN_VALUE": "Changeme_123",
+            "A2AT_SAMPLE_NMS_VERIFY_TLS": "false",
+        },
+    )
+
+    values = dotenv_values(env_path)
+    assert values["A2AT_SAMPLE_DISCOVERY"] == "nms"
+    assert values["A2AT_SAMPLE_NMS_A2A_BASE"] == "http://127.0.0.1:18080/a2a/json"
+    assert values["A2AT_SAMPLE_NMS_TOKEN_USER"] == "snbitestDefaultNorth"
+    assert values["A2AT_SAMPLE_NMS_VERIFY_TLS"] == "false"
+
+
+def test_parser_exposes_the_nms_flags() -> None:
+    parser = run_demo._build_parser(
+        default_ui_port=8080,
+        default_ui_host="127.0.0.1",
+        default_gateway_port=8001,
+    )
+
+    args = parser.parse_args(["--nms", "--nms-sim", "--nms-sim-port", "18090"])
+
+    assert args.nms is True
+    assert args.nms_sim is True
+    assert args.nms_sim_port == 18090
 
 
 def test_ui_port_default_reads_the_env_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -127,7 +175,7 @@ def test_state_round_trip_records_the_run_metadata(monkeypatch: pytest.MonkeyPat
         "ui_port": 8080,
         "gateway_port": None,
         "approval_gate": False,
-        "approval_timeout": 240.0,
+        "approval_timeout": DEFAULT_APPROVAL_TIMEOUT_SECONDS,
     }
     assert run_demo._load_pids() == [11, 12]
 

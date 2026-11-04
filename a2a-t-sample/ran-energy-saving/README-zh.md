@@ -146,6 +146,46 @@ Web UI 默认打开演示视图：左侧是 16:9 的舞台，依次是网络工�
 会话轨迹的一行会在检查器中选中该消息。轨迹行现在带演示日（第 1 天、第 2–8 天、第 9 天、第 9 天+）和
 消息流向（OSS → RAN、RAN → OSS、MIE ⇄ 工程师）；晚到的服务端 span 按事件时间合并，状态与对应 span 只保留一行。
 
+### 真实厂商网管模式
+
+sample 也可以作为真实厂商网管的 OSS 客户端。加 `--nms` 后，启动器不再启动本地 registry、RAN
+Agent、MIE 和 OSS：客户端从网管的令牌接口获取会话，再直接调用网管的 A2A 面。
+
+```bash
+# 真实网管：先在 .env 填好 A2AT_SAMPLE_NMS_*
+python run_demo.py --nms --ui --brand huawei
+
+# 本地网管仿真器：同一套客户端路径，不依赖联调网络，也不会改动真实网络
+python run_demo.py --nms --nms-sim --ui --brand huawei
+```
+
+`.env` 必填项：
+
+```ini
+A2AT_SAMPLE_NMS_A2A_BASE=https://<nms-host>:31127/a2a/json
+A2AT_SAMPLE_NMS_TOKEN_URL=https://<nms-host>:27417/rest/plat/smapp/v1/sessions
+A2AT_SAMPLE_NMS_TOKEN_USER=<northbound-user>
+A2AT_SAMPLE_NMS_TOKEN_VALUE=<password>
+A2AT_SAMPLE_NMS_VERIFY_TLS=false
+```
+
+联调环境使用自签名证书，因此默认关闭 TLS 校验；只有证书链可信时才设为
+`A2AT_SAMPLE_NMS_VERIFY_TLS=true`。客户端同时发送两种被接受的认证头（`Authorization: Bearer`
+和 `X-Auth-Token`）以及两种扩展头拼写（`A2A-Extensions` 和 `X-A2A-Extensions`）。
+
+请求文本必须使用网管认识的区域。910 联调环境是 `A2ATestRegion`，其他区域和激活时段会被拒绝。
+例如：“在 A2ATestRegion 区域创建无线网络节能任务；激活时段 00:00-06:00，每小区保证 30 Mbps。”
+
+当前厂商契约的限制：
+
+- 真实协商回复不带 `Negotiation-T` metadata。sample 不猜语义，因此会明确报“网管未创建
+  Task”，而不是静默当作协商结束。网管补齐 metadata 前，请使用完整参数的请求。
+- 任务取消返回 HTTP 503；客户端把它当作已知限制，且发送超时后不重试。
+- 网管不发布 AgentCard，因此发现使用静态卡；真实注册中心对接是后续步骤。
+
+原始报文写入 `runs/<runId>/wire.jsonl`，凭据已脱敏。发送前的人审用
+`--ui --mode confirm`；NMS 模式没有服务端审批 2，因为执行侧由厂商网管负责。
+
 ### 纯 A2A 模式（三跳，只用标准 A2A）
 
 页面是单模式的：协议在进程启动时确定，页面不再提供协议切换或对比卡。要对比两种模式，分别启动

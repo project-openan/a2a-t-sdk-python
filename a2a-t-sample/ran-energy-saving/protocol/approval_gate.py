@@ -11,8 +11,9 @@ from __future__ import annotations
 import asyncio
 from typing import Final
 
-#: Default seconds an approval may wait before it is treated as rejected.
-DEFAULT_APPROVAL_TIMEOUT_SECONDS: Final[float] = 240.0
+#: Default seconds an approval may wait before it is treated as rejected. The real NMS demo keeps
+#: the intent review open for a working day instead of four minutes.
+DEFAULT_APPROVAL_TIMEOUT_SECONDS: Final[float] = 86_400.0
 
 
 class ApprovalRegistry:

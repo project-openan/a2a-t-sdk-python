@@ -162,7 +162,7 @@ async def test_meta_reports_the_presentation_mode_and_the_seven_scenarios(
     assert meta["decisionMode"] == "auto"
     assert meta["intentReview"] is False
     assert meta["approvalGate"] is False
-    assert meta["approvalTimeoutSeconds"] == 240.0
+    assert meta["approvalTimeoutSeconds"] == 86400.0
     assert "confirm" in meta["modes"]
 
 
