@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
-from a2a_t.core.metadata import TASK_T_EXTENSION_URI
+from a2a_t.core.metadata import NEGOTIATION_T_EXTENSION_URI, TASK_T_EXTENSION_URI
 
 from demo.nms_sim.config import SimConfig
 
@@ -98,12 +98,19 @@ def parse_message_request(
     metadata = message.get("metadata")
     metadata_map = metadata if isinstance(metadata, Mapping) else {}
     extension_header = extension_header_value(headers)
+    declared = {item.strip() for item in extension_header.split(",") if item.strip()}
+    metadata_keys = {str(key) for key in metadata_map}
+    if extension_header and not (declared & metadata_keys):
+        # The vendor requires at least one declared ``-T`` key, not specifically Task-T: an
+        # accept carries Negotiation-T only.
+        raise SimRequestError(422, dict(MISSING_EXTENSION_METADATA))
     prompt = metadata_map.get(TASK_T_EXTENSION_URI)
     prompt_text = prompt if isinstance(prompt, str) else ""
-    if extension_header and not prompt_text:
-        raise SimRequestError(422, dict(MISSING_EXTENSION_METADATA))
+    negotiation = metadata_map.get(NEGOTIATION_T_EXTENSION_URI)
+    negotiation_text = negotiation if isinstance(negotiation, str) else ""
     text = _first_text(message)
-    source = prompt_text or text
+    # An accept carries only Negotiation-T; its refilled values live in that metadata body.
+    source = prompt_text or negotiation_text or text
     if not source.strip():
         raise SimNegotiationRequiredError(_negotiation_text(["Task content"]))
 
@@ -173,6 +180,15 @@ def extension_header_value(headers: Mapping[str, str]) -> str:
         if value:
             return value
     return ""
+
+
+def declares_negotiation(headers: Mapping[str, str]) -> bool:
+    """Return whether the request declares the Negotiation-T extension.
+
+    The vendor only returns structured negotiation metadata when the request declares it; the
+    simulator reproduces that behavior so the root-cause path is exercised locally.
+    """
+    return NEGOTIATION_T_EXTENSION_URI in extension_header_value(headers)
 
 
 def _first_text(message: Mapping[str, object]) -> str:

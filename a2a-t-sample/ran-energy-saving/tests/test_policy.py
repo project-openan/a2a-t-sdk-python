@@ -129,9 +129,7 @@ def test_client_abort_ends_the_negotiation(kind: NegotiationKind) -> None:
 def test_counter_propose_advances_the_server_round(
     round_number: int, sample: SampleProposal, expected_round: int
 ) -> None:
-    content = _proposal(
-        decide(_state(NegotiationKind.TARGET, round_number=round_number, inbound=_counter(sample)))
-    )
+    content = _proposal(decide(_state(NegotiationKind.TARGET, round_number=round_number, inbound=_counter(sample))))
 
     assert content.round == expected_round
     assert content.template_uri == TARGET_NEGOTIATION_PROPOSE_URI
@@ -160,9 +158,7 @@ def test_feasible_counter_propose_is_published_as_the_final_proposal() -> None:
 
 @pytest.mark.parametrize("round_number", [1, 2])
 def test_counter_propose_without_a_sample_advances_the_preset_sequence(round_number: int) -> None:
-    content = _proposal(
-        decide(_state(NegotiationKind.FEASIBILITY, round_number=round_number, inbound=_counter()))
-    )
+    content = _proposal(decide(_state(NegotiationKind.FEASIBILITY, round_number=round_number, inbound=_counter())))
 
     assert content.round == round_number + 1
     assert content.kind is NegotiationKind.FEASIBILITY
@@ -181,18 +177,14 @@ def test_counter_propose_at_max_rounds_aborts_and_keeps_the_round(kind: Negotiat
 
 
 def test_information_counter_propose_still_lists_the_missing_items() -> None:
-    content = _proposal(
-        decide(_state(NegotiationKind.INFORMATION, inbound=_counter(), missing=("region",)))
-    )
+    content = _proposal(decide(_state(NegotiationKind.INFORMATION, inbound=_counter(), missing=("region",))))
 
     assert content.round == 2
     assert "region" in content.text
 
 
 def test_information_counter_propose_at_max_rounds_aborts() -> None:
-    content = _abort(
-        decide(_state(NegotiationKind.INFORMATION, round_number=3, inbound=_counter()))
-    )
+    content = _abort(decide(_state(NegotiationKind.INFORMATION, round_number=3, inbound=_counter())))
 
     assert content.round == 3
     assert content.template_uri == NEGOTIATION_ABORT_URI
@@ -206,6 +198,11 @@ def test_template_and_error_code_mapping() -> None:
     assert negotiation_kind_for_error_code("content.format_error") is None
     assert negotiation_kind_for_template_uri(TARGET_NEGOTIATION_PROPOSE_URI) is NegotiationKind.TARGET
     assert negotiation_kind_for_template_uri(NEGOTIATION_ABORT_URI) is None
+
+
+def test_vendor_information_template_segment_is_recognized() -> None:
+    """The vendor abbreviates ``information-negotiation`` as ``info-negotiation``."""
+    assert negotiation_kind_for_template_uri("Negotiation-T/info-negotiation/propose/v1") is NegotiationKind.INFORMATION
 
 
 def test_semantic_conflicts_are_split_into_target_and_feasibility() -> None:

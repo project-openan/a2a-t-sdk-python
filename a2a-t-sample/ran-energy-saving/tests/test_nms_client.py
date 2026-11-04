@@ -10,6 +10,10 @@ import httpx
 import pytest
 from a2a.client.client import ClientCallContext
 from a2a.types import Role, SendMessageRequest
+from a2a_t.core.metadata import (
+    NEGOTIATION_CONTEXT_METADATA_KEY,
+    NEGOTIATION_T_EXTENSION_URI,
+)
 from protocol.nms_client import (
     NmsClient,
     NmsConfig,
@@ -220,6 +224,10 @@ class _FakeStreamClient:
         self.config = _config()
         self.payload: dict[str, object] | None = None
         self.extension_header = ""
+        self.errors: list[tuple[str, str, object | None]] = []
+
+    def record_error(self, kind: str, message: str, frame: object | None = None) -> None:
+        self.errors.append((kind, message, frame))
 
     async def stream_message(
         self, payload: Mapping[str, object], *, extension_header: str = ""
@@ -267,6 +275,40 @@ async def test_transport_reports_a_message_without_a_task_as_negotiation_require
     assert excinfo.value.context_id == "ctx-1"
     assert "Energy saving region is missing" in excinfo.value.text
     assert client.extension_header == TASK_T_URI
+
+
+async def test_transport_returns_a_structured_negotiation_message() -> None:
+    client = _FakeStreamClient(
+        [
+            {
+                "message": {
+                    "messageId": "m2",
+                    "contextId": "ctx-1",
+                    "role": "ROLE_AGENT",
+                    "parts": [{"text": "See metadata for details."}],
+                    "metadata": {
+                        NEGOTIATION_T_EXTENSION_URI: ("## Information Negotiation\nEnergy saving region is missing."),
+                        NEGOTIATION_CONTEXT_METADATA_KEY: {
+                            "id": "n1",
+                            "round": 1,
+                            "maxRounds": 5,
+                            "performative": "PROPOSE",
+                        },
+                    },
+                }
+            }
+        ]
+    )
+    transport = NmsSseTransport(client)  # ty: ignore[invalid-argument-type]
+    request, context = _request()
+
+    events = await transport.send(request, context)
+
+    assert events[0]["kind"] == "message"
+    metadata = events[0]["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[NEGOTIATION_CONTEXT_METADATA_KEY]["performative"] == "PROPOSE"
+    assert client.errors == []
 
 
 async def test_transport_polls_to_terminal_and_emits_a_status_event() -> None:
@@ -317,6 +359,42 @@ async def test_nms_discovery_returns_the_static_card_without_the_registry() -> N
 
     assert discovered.url == "https://nms.example:31127/a2a/json"
     assert discovered.agent_card.name == "RAN Energy Saving Agent"
+
+
+async def test_error_envelope_raises_and_is_written_to_wire_error(tmp_path: Path) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=(b'data: {"error":{"code":422,"status":"INVALID_ARGUMENT","message":"no active negotiation"}}\n\n'),
+        )
+
+    client = _client(httpx.MockTransport(handle))
+    wire_path = tmp_path / "run" / "wire.jsonl"
+    client.set_wire_path(wire_path)
+
+    with pytest.raises(NmsProtocolError, match="no active negotiation"):
+        [frame async for frame in client.stream_message({"message": {}})]
+
+    error_text = (tmp_path / "run" / "wire-error.jsonl").read_text(encoding="utf-8")
+    assert "no active negotiation" in error_text
+    assert "NmsProtocolError" in error_text
+    await client.aclose()
+
+
+async def test_wire_log_switch_disables_both_files(tmp_path: Path) -> None:
+    client = _client(_handler(frames=[]), wire_log=False)
+    wire_path = tmp_path / "run" / "wire.jsonl"
+    client.set_wire_path(wire_path)
+
+    client._write_wire("out", method="POST", body={"message": {"messageId": "m1"}})
+    client.record_error("ParseError", "boom", {"frame": "x"})
+
+    assert not wire_path.exists()
+    assert not (tmp_path / "run" / "wire-error.jsonl").exists()
+    await client.aclose()
 
 
 async def test_wire_log_redacts_the_credentials(tmp_path: Path) -> None:

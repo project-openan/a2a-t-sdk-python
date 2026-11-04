@@ -103,6 +103,31 @@ def test_record_event_extracts_round_performative_and_kind() -> None:
     assert transcript.context_id == CONTEXT_ID
 
 
+def test_wire_metadata_keeps_the_negotiation_context() -> None:
+    transcript = _transcript()
+
+    entry = transcript.record_event(_propose_event())
+
+    metadata = entry["metadata"]
+    assert isinstance(metadata, dict)
+    assert NEGOTIATION_CONTEXT_METADATA_KEY in metadata
+    assert metadata[NEGOTIATION_CONTEXT_METADATA_KEY]["performative"] == "PROPOSE"
+
+
+def test_plain_message_content_falls_back_to_the_event_text() -> None:
+    """A metadata-less message still shows its full body instead of a truncated summary."""
+    transcript = _transcript()
+    event = {
+        "kind": "message",
+        "text": "## Information Negotiation\n\nThe energy saving region is missing.",
+        "context_id": CONTEXT_ID,
+    }
+
+    entry = transcript.record_event(event)
+
+    assert entry["content"] == event["text"]
+
+
 def test_record_decision_carries_the_rationale_and_params() -> None:
     transcript = _transcript()
     propose = NegotiationProposeView(

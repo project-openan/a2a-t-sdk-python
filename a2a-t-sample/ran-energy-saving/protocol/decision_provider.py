@@ -94,9 +94,7 @@ def build_session_service(db_path: str | None) -> tuple[BaseSessionService, bool
             connection.execute("PRAGMA user_version")
         return SqliteSessionService(str(path)), True
     except (OSError, RuntimeError, sqlite3.Error) as exc:
-        _LOGGER.warning(
-            "decision sessions fall back to in-memory storage: cannot open %s: %s", db_path, exc
-        )
+        _LOGGER.warning("decision sessions fall back to in-memory storage: cannot open %s: %s", db_path, exc)
         return InMemorySessionService(), False
 
 
@@ -155,9 +153,7 @@ async def sweep_stale_sessions(
         if session.last_update_time >= cutoff:
             continue
         try:
-            await service.delete_session(
-                app_name=app_name, user_id=session.user_id, session_id=session.id
-            )
+            await service.delete_session(app_name=app_name, user_id=session.user_id, session_id=session.id)
         except Exception as exc:  # noqa: BLE001 - a stale row must not break the startup
             _LOGGER.warning("decision session %s could not be deleted: %s", session.id, exc)
             continue
@@ -192,6 +188,7 @@ def build_decision_prompt(
     *,
     user_request: str | None = None,
     conversation_context: str | None = None,
+    default_region: str | None = None,
 ) -> str:
     """Build the user message handed to the ADK decision agent for one proposal.
 
@@ -206,6 +203,7 @@ def build_decision_prompt(
         if conversation_context and conversation_context.strip()
         else ""
     )
+    configured_region = f"Configured NMS region: {default_region}\n\n" if default_region else ""
     if propose.kind == "information":
         tool_rule = (
             "This information proposal does not name a concrete plan. Before deciding, call "
@@ -224,9 +222,12 @@ def build_decision_prompt(
         f"Proposal template: {propose.template_uri or 'unknown'}\n"
         f"{original}"
         f"{history}"
+        f"{configured_region}"
         "Proposal content:\n"
         f"{propose.content}\n\n"
         f"{tool_rule}"
+        "If the proposal lists Required Information Items, answer every item in filled_params "
+        "using the exact Task-T parameter name; do not omit one.\n"
         "Return exactly one NegotiationDecision JSON object and nothing else: no reasoning, "
         "markdown, or prose outside the JSON."
     )
@@ -257,6 +258,7 @@ class AdkDecisionProvider:
         conversation_context: str | None = None,
         session_db_path: str | None = None,
         agent_factory: Callable[[BaseLlm], Any] | None = None,
+        default_region: str | None = None,
     ) -> None:
         """Create one ADK-backed provider.
 
@@ -280,6 +282,8 @@ class AdkDecisionProvider:
                 with a logged warning (see :func:`build_session_service`).
             agent_factory: builder of the decision agent from the configured model, supplied by
                 the composition root (the sample's client agent lives with the demo assets).
+            default_region: region the vendor NMS serves, included in the decision prompt so the
+                model can answer a requested region item.
 
         Raises:
             ValueError: when neither ``agent`` nor ``agent_factory`` is supplied.
@@ -308,11 +312,16 @@ class AdkDecisionProvider:
         self._fallback = fallback_decision or (OFFLINE_FALLBACK_DECISION if offline else None)
         self._user_request = user_request
         self._conversation_context = conversation_context
+        self._default_region = default_region
         self._durable_sessions = durable
 
     def set_conversation_context(self, conversation_context: str | None) -> None:
         """Set the recent-turn block used by the next decision prompts."""
         self._conversation_context = conversation_context
+
+    def set_user_request(self, user_request: str | None) -> None:
+        """Set the natural-language request used by the next decision prompts."""
+        self._user_request = user_request
 
     @property
     def runner(self) -> Runner:
@@ -358,6 +367,7 @@ class AdkDecisionProvider:
                 session,
                 user_request=self._user_request,
                 conversation_context=self._conversation_context,
+                default_region=self._default_region,
             ),
         )
         if final_event is None:
@@ -366,6 +376,7 @@ class AdkDecisionProvider:
         decision = _decision_from_event(final_event)
         if decision is not None:
             return decision
+        _log_unparseable_decision("decision model", final_event)
 
         # A live model can answer with prose even though the request carries a JSON schema (some
         # OpenAI-compatible gateways drop ``response_format``). One corrective turn in the same ADK
@@ -376,6 +387,7 @@ class AdkDecisionProvider:
             decision = _decision_from_event(retry_event)
             if decision is not None:
                 return decision
+            _log_unparseable_decision("decision retry", retry_event)
         return self._fallback_or_raise("The ADK agent produced no parseable NegotiationDecision.")
 
     async def _run_turn(self, session_id: str, text: str) -> AdkEvent | None:
@@ -399,6 +411,21 @@ class AdkDecisionProvider:
         if self._fallback is not None:
             return self._fallback
         raise DecisionProviderError(message)
+
+
+def _log_unparseable_decision(label: str, event: AdkEvent) -> None:
+    """Log the raw model text of an unparseable decision (truncated for the log)."""
+    raw = _event_text(event)
+    if raw:
+        _LOGGER.warning("%s returned no parseable JSON: %s", label, raw[:300])
+
+
+def _event_text(event: AdkEvent) -> str:
+    """Return the text content of one ADK final event."""
+    content = event.content
+    if content is None:
+        return ""
+    return " ".join(part.text for part in content.parts or () if part.text).strip()
 
 
 def _decision_from_event(event: AdkEvent) -> NegotiationDecision | None:
@@ -508,6 +535,18 @@ class ConfirmingDecisionProvider:
     ) -> None:
         """Install the callback invoked with the agent recommendation, before the human wait."""
         self._sink = sink
+
+    def set_conversation_context(self, conversation_context: str | None) -> None:
+        """Forward the conversation context to the inner decision provider."""
+        setter = getattr(self._inner, "set_conversation_context", None)
+        if callable(setter):
+            setter(conversation_context)
+
+    def set_user_request(self, user_request: str | None) -> None:
+        """Forward the natural-language request to the inner decision provider."""
+        setter = getattr(self._inner, "set_user_request", None)
+        if callable(setter):
+            setter(user_request)
 
     def submit(self, decision: NegotiationDecision) -> None:
         """Hand the engineer's decision to the waiting flow."""

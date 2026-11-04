@@ -17,6 +17,7 @@ from demo.nms_sim.executor import apply_intent, report_artifact, structured_outp
 from demo.nms_sim.intent import (
     SimNegotiationRequiredError,
     SimRequestError,
+    declares_negotiation,
     parse_message_request,
 )
 from demo.nms_sim.sse import message_stream, task_stream
@@ -100,7 +101,12 @@ def build_routes(
             return JSONResponse(exc.payload, status_code=exc.status_code)
         except SimNegotiationRequiredError as exc:
             return StreamingResponse(
-                message_stream(exc.text, context_id=_context_id(body), config=config),
+                message_stream(
+                    exc.text,
+                    context_id=_context_id(body),
+                    config=config,
+                    structured=declares_negotiation(request.headers),
+                ),
                 media_type=EVENT_STREAM,
                 headers={"Cache-Control": "no-cache"},
             )

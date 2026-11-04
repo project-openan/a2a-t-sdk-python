@@ -80,6 +80,10 @@ NMS_TOKEN_VALUE_ENV_KEY = "A2AT_SAMPLE_NMS_TOKEN_VALUE"
 NMS_VERIFY_TLS_ENV_KEY = "A2AT_SAMPLE_NMS_VERIFY_TLS"
 NMS_IDLE_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS"
 NMS_REQUEST_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_NMS_REQUEST_TIMEOUT_SECONDS"
+#: Region the vendor NMS serves. When set, ``--nms`` overrides the scenario region with it.
+NMS_REGION_ENV_KEY = "A2AT_SAMPLE_NMS_REGION"
+#: Whether the raw NMS exchange is written to ``runs/<runId>/wire.jsonl``.
+NMS_WIRE_LOG_ENV_KEY = "A2AT_SAMPLE_NMS_WIRE_LOG"
 PLANNER_MODEL_ENV_KEY = "A2AT_SAMPLE_PLANNER_MODEL"
 PLANNER_API_BASE_ENV_KEY = "A2AT_SAMPLE_PLANNER_API_BASE"
 PLANNER_API_KEY_ENV_KEY = "A2AT_SAMPLE_PLANNER_API_KEY"
@@ -280,6 +284,9 @@ class SampleConfig:
             and polls the task instead.
         nms_request_timeout: per-request budget of one NMS A2A call.
         nms_poll_interval: seconds between task polls while waiting for a terminal state.
+        nms_region: region the vendor NMS serves; when set, ``--nms`` overrides the scenario
+            region with it.
+        nms_wire_log: whether the raw NMS exchange is written to ``wire.jsonl``.
         planner_model: LangChain model id of the server's LangGraph planner.
         planner_api_base: OpenAI-compatible endpoint of the planner.
         planner_api_key: API key of the planner endpoint.
@@ -323,6 +330,8 @@ class SampleConfig:
     nms_idle_timeout: float = DEFAULT_NMS_IDLE_TIMEOUT_SECONDS
     nms_request_timeout: float = DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS
     nms_poll_interval: float = DEFAULT_NMS_POLL_INTERVAL_SECONDS
+    nms_region: str = ""
+    nms_wire_log: bool = True
     planner_model: str = ""
     planner_api_base: str = ""
     planner_api_key: str = ""
@@ -453,6 +462,8 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         nms_verify_tls=_env_bool(values, NMS_VERIFY_TLS_ENV_KEY, False),
         nms_idle_timeout=_positive_seconds(values, NMS_IDLE_TIMEOUT_ENV_KEY, DEFAULT_NMS_IDLE_TIMEOUT_SECONDS),
         nms_request_timeout=_positive_seconds(values, NMS_REQUEST_TIMEOUT_ENV_KEY, DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS),
+        nms_region=_env_value(values, NMS_REGION_ENV_KEY, "").strip(),
+        nms_wire_log=_env_bool(values, NMS_WIRE_LOG_ENV_KEY, True),
         planner_model=_env_value(values, PLANNER_MODEL_ENV_KEY, planner_model_default),
         planner_api_base=_env_value(values, PLANNER_API_BASE_ENV_KEY, adk_model_api_base),
         planner_api_key=_env_value(values, PLANNER_API_KEY_ENV_KEY, adk_model_api_key),

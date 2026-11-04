@@ -77,6 +77,18 @@ def test_build_decision_prompt_carries_the_round_and_content() -> None:
     assert "Please provide the region." in prompt
 
 
+def test_build_decision_prompt_requires_answering_required_items() -> None:
+    prompt = build_decision_prompt(
+        _view(content="## Required Information Items\n1. Energy saving region"),
+        _session(1),
+        default_region="A2ATestRegion",
+    )
+
+    assert "Required Information Items" in prompt
+    assert "answer every item in filled_params" in prompt
+    assert "Configured NMS region: A2ATestRegion" in prompt
+
+
 def test_build_decision_prompt_carries_the_conversation_context() -> None:
     prompt = build_decision_prompt(
         _view(),
@@ -173,9 +185,7 @@ async def test_confirming_provider_publishes_the_recommendation_then_waits() -> 
     submitted = NegotiationDecision(action="accept", rationale="engineer confirmed")
     provider = ConfirmingDecisionProvider(ScriptedDecisionProvider([recommendation]))
     seen: list[str] = []
-    provider.set_recommendation_sink(
-        lambda decision, propose, session: seen.append(decision.action)
-    )
+    provider.set_recommendation_sink(lambda decision, propose, session: seen.append(decision.action))
 
     async def submit_later() -> None:
         await asyncio.sleep(0.01)
@@ -330,12 +340,8 @@ async def test_adk_provider_falls_back_to_memory_when_the_database_cannot_be_ope
 async def test_sweep_deletes_only_sessions_past_the_retention_window(tmp_path: Path) -> None:
     db_path = tmp_path / "client.sqlite3"
     service = SqliteSessionService(str(db_path))
-    await service.create_session(
-        app_name=CLIENT_APP_NAME, user_id=CLIENT_USER_ID, session_id="ran-client-old"
-    )
-    await service.create_session(
-        app_name=CLIENT_APP_NAME, user_id=CLIENT_USER_ID, session_id="ran-client-new"
-    )
+    await service.create_session(app_name=CLIENT_APP_NAME, user_id=CLIENT_USER_ID, session_id="ran-client-old")
+    await service.create_session(app_name=CLIENT_APP_NAME, user_id=CLIENT_USER_ID, session_id="ran-client-new")
     with sqlite3.connect(db_path) as connection:
         connection.execute(
             "UPDATE sessions SET update_time = ? WHERE id = ?",
@@ -360,8 +366,5 @@ async def test_sweep_skips_a_database_without_session_tables(tmp_path: Path) -> 
     assert await sweep_stale_sessions(str(db_path)) == 0
 
     with sqlite3.connect(db_path) as connection:
-        tables = {
-            row[0]
-            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
-        }
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert "sessions" not in tables

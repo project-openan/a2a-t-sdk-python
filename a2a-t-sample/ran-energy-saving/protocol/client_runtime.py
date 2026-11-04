@@ -140,13 +140,49 @@ def _effective_policy(
     policy: ClientPolicy,
     config: SampleConfig,
     request_text: str,
+    language: str,
 ) -> ClientPolicy:
     """Return the policy a run uses.
 
-    A real NMS run must honor the operator's request text (region, window and throughput), so the
-    scenario's canned ``initial_data`` cannot override it. Other modes keep the scenario policy.
+    A real NMS run honors the operator's request text (region, window and throughput), so the
+    scenario's canned ``initial_data`` cannot override it. When ``A2AT_SAMPLE_NMS_REGION`` is set
+    and the request text does not already name that region, the scenario's structured values are
+    kept and only the region is replaced: the vendor rejects the demo region, and the scenario
+    text is already a complete request. An explicit request that names the configured region wins,
+    so an operator can still choose windows or rates. Other modes keep the scenario policy
+    unchanged.
     """
-    if config.discovery == DISCOVERY_NMS and request_text.strip():
+    if config.discovery != DISCOVERY_NMS:
+        return policy
+    region = config.nms_region.strip()
+    if region:
+        base_filled = policy.filled_params
+
+        def filled_params(
+            kind: str,
+            language_code: str,
+            *,
+            base: Callable[[str, str], dict[str, object]] = base_filled,
+            region_value: str = region,
+        ) -> dict[str, object]:
+            params = dict(base(kind, language_code))
+            params["region"] = region_value
+            return params
+
+        policy = replace(policy, filled_params=filled_params)
+        if region.lower() not in request_text.lower():
+            initial = policy.initial_data(language)
+            if initial is not None:
+                values, schema = initial
+                overridden = {**values, "region": region}
+                return replace(
+                    policy,
+                    initial_data=lambda _language, values=overridden, schema=schema: (
+                        values,
+                        schema,
+                    ),
+                )
+    if request_text.strip():
         return replace(policy, initial_data=DEFAULT_CLIENT_POLICY.initial_data)
     return policy
 
@@ -186,6 +222,7 @@ def _decision_provider(
             user_request=run_spec.user_request,
             session_db_path=config.client_db_path,
             agent_factory=client_agent_factory,
+            default_region=(config.nms_region if config.discovery == DISCOVERY_NMS else None),
         )
         if mode == MODE_CONFIRM:
             return ConfirmingDecisionProvider(provider)
@@ -324,7 +361,15 @@ class ClientRuntime:
                 set_context = getattr(self.provider, "set_conversation_context", None)
                 if callable(set_context):
                     set_context(conversation_context)
-                policy = _effective_policy(self.run_spec.policy, self.config, request_text)
+                set_request = getattr(self.provider, "set_user_request", None)
+                if callable(set_request):
+                    set_request(request_text)
+                policy = _effective_policy(
+                    self.run_spec.policy,
+                    self.config,
+                    request_text,
+                    self.config.language,
+                )
                 return await run_client_flow(
                     prompt_client=self.prompt_client,
                     transport=self.transport,
@@ -339,6 +384,8 @@ class ClientRuntime:
                     trace_sink=sink,
                     call_timeout_seconds=self.config.http_timeout_seconds,
                     conversation_context=conversation_context,
+                    single_extension_per_message=(self.config.discovery == DISCOVERY_NMS),
+                    forced_region=(self.config.nms_region if self.config.discovery == DISCOVERY_NMS else None),
                 )
         finally:
             if temporary_sink:

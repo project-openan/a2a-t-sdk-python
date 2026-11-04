@@ -185,7 +185,10 @@ Required `.env` keys:
 A2AT_SAMPLE_NMS_HOST=<nms-host>
 A2AT_SAMPLE_NMS_TOKEN_USER=<northbound-user>
 A2AT_SAMPLE_NMS_TOKEN_VALUE=<password>
+A2AT_SAMPLE_NMS_REGION=A2ATestRegion
 A2AT_SAMPLE_NMS_VERIFY_TLS=false
+# Raw exchange log (default on in NMS mode; set 0 to keep business payloads off disk)
+A2AT_SAMPLE_NMS_WIRE_LOG=1
 ```
 
 Only the host is required. The sample derives the standard 910 surface from it:
@@ -199,24 +202,29 @@ The test environment uses a self-signed certificate, so TLS verification is off 
 headers (`Authorization: Bearer` and `X-Auth-Token`) and both extension-header spellings
 (`A2A-Extensions` and `X-A2A-Extensions`).
 
-The request text must use the region the NMS serves. In the 910 environment that is
+`A2AT_SAMPLE_NMS_REGION` replaces the scenario region when the request text does not already name
+it; an explicit request that names the region wins. In the 910 environment the served region is
 `A2ATestRegion`; other regions and activation windows are rejected. For example: “Create a RAN
 energy saving task in the A2ATestRegion region; activation 00:00-06:00 with 30 Mbps for each
 cell.”
 
-Limitations of the current vendor contract:
+Vendor contract notes:
 
-- A real negotiation reply carries no `Negotiation-T` metadata. The sample does not guess the
-  semantics, so the run reports “the NMS did not create a Task” instead of silently treating it as
-  the end of the negotiation. Use a complete request while the vendor fixes the metadata.
+- The NMS returns structured negotiation metadata only when the request declares **both** Task-T
+  and Negotiation-T. The client does that on the initial request; declaring Task-T alone produces a
+  bare Message with empty metadata.
+- One message may carry only one `-T` metadata key. In NMS mode an accept therefore carries
+  Negotiation-T only; the local demo server keeps the refilled Task-T on the accept.
+- A continuing PROPOSE can arrive inside an `error` envelope. The client records it in
+  `wire-error.jsonl` and stops with a clear protocol error instead of silently ending.
 - Task cancellation returns HTTP 503; the client treats it as a known limitation and never retries
   the send.
 - The NMS publishes no AgentCard, so discovery uses a static card; a real registry integration is
   a later step.
 
-The raw exchange is recorded in `runs/<runId>/wire.jsonl` with credentials redacted. Use
-`--ui --mode confirm` for the send-time intent review; server-side approval 2 does not exist in
-NMS mode because the vendor owns execution.
+The raw exchange is recorded in `runs/<runId>/wire.jsonl` and failed frames in
+`wire-error.jsonl`, with credentials redacted. Use `--ui --mode confirm` for the send-time intent
+review; server-side approval 2 does not exist in NMS mode because the vendor owns execution.
 
 ### Pure A2A mode (three hops, standard A2A only)
 

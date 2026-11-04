@@ -9,7 +9,10 @@ import httpx
 import pytest
 from a2a.client.client import ClientCallContext
 from a2a.types import Role, SendMessageRequest
-from a2a_t.core.metadata import TASK_T_EXTENSION_URI
+from a2a_t.core.metadata import (
+    NEGOTIATION_T_EXTENSION_URI,
+    TASK_T_EXTENSION_URI,
+)
 from demo import ran_data
 from demo.nms_sim.app import build_sim_app
 from demo.nms_sim.config import FIDELITY_FAST, FIDELITY_STRICT, SimConfig
@@ -85,11 +88,27 @@ def _body(prompt: str | None, *, text: str = "create ran energy saving task") ->
     return {"message": message}
 
 
-def _headers(token: str, *, extension: str | None = TASK_T_EXTENSION_URI) -> dict[str, str]:
+def _headers(
+    token: str,
+    *,
+    extension: str | None = f"{TASK_T_EXTENSION_URI},{NEGOTIATION_T_EXTENSION_URI}",
+) -> dict[str, str]:
     headers = {"Authorization": f"Bearer {token}"}
     if extension is not None:
         headers["A2A-Extensions"] = extension
     return headers
+
+
+def _message_text(frame: dict[str, object]) -> str:
+    """Return the full text of one negotiation message, preferring its metadata body."""
+    message = frame["message"]
+    assert isinstance(message, dict)
+    metadata = message.get("metadata")
+    if isinstance(metadata, dict):
+        text = metadata.get(NEGOTIATION_T_EXTENSION_URI)
+        if isinstance(text, str):
+            return text
+    return str(message["parts"][0]["text"])
 
 
 async def _frames(
@@ -166,8 +185,9 @@ async def test_missing_region_returns_an_information_negotiation_message() -> No
         )
 
         assert "message" in frames[0]
-        assert "Information Negotiation" in frames[0]["message"]["parts"][0]["text"]
-        assert "Energy saving region" in frames[0]["message"]["parts"][0]["text"]
+        text = _message_text(frames[0])
+        assert "Information Negotiation" in text
+        assert "Energy saving region" in text
 
 
 async def test_unknown_region_is_rejected_with_the_available_test_region() -> None:
@@ -179,9 +199,32 @@ async def test_unknown_region_is_rejected_with_the_available_test_region() -> No
             _headers(token),
         )
 
-        text = frames[0]["message"]["parts"][0]["text"]
+        text = _message_text(frames[0])
         assert "not served" in text
         assert "A2ATestRegion" in text
+
+
+async def test_negotiation_metadata_requires_declaring_the_negotiation_extension() -> None:
+    async for client in _client():
+        token = await _token(client)
+
+        unstructured = await _frames(
+            client,
+            _body(_prompt(region="Songshanhu Administration Committee")),
+            _headers(token, extension=TASK_T_EXTENSION_URI),
+        )
+        message = unstructured[0]["message"]
+        assert message["metadata"] == {}
+        assert "not served" in message["parts"][0]["text"]
+
+        structured = await _frames(
+            client,
+            _body(_prompt(region="Songshanhu Administration Committee")),
+            _headers(token),
+        )
+        metadata = structured[0]["message"]["metadata"]
+        assert NEGOTIATION_T_EXTENSION_URI in metadata
+        assert metadata["negotiationContext"]["performative"] == "PROPOSE"
 
 
 async def test_unavailable_window_is_rejected() -> None:
@@ -193,7 +236,7 @@ async def test_unavailable_window_is_rejected() -> None:
             _headers(token),
         )
 
-        text = frames[0]["message"]["parts"][0]["text"]
+        text = _message_text(frames[0])
         assert "not available" in text
         assert "00:00~06:00" in text
 
@@ -207,7 +250,7 @@ async def test_missing_time_segmented_throughput_uses_the_vendor_wording() -> No
             _headers(token),
         )
 
-        text = frames[0]["message"]["parts"][0]["text"]
+        text = _message_text(frames[0])
         assert "missing explicit time-segmented rate goals" in text
 
 
@@ -220,7 +263,7 @@ async def test_rate_above_the_cell_maximum_is_rejected() -> None:
             _headers(token),
         )
 
-        text = frames[0]["message"]["parts"][0]["text"]
+        text = _message_text(frames[0])
         assert "35%" in text
 
 
@@ -285,7 +328,10 @@ async def test_raw_nms_client_completes_against_the_simulator() -> None:
     request.message.parts.add().text = "create ran energy saving task"
     request.message.metadata[TASK_T_EXTENSION_URI] = _prompt()
     transport = NmsSseTransport(client)
-    context = ClientCallContext(timeout=5.0, service_parameters={"A2A-Extensions": TASK_T_EXTENSION_URI})
+    context = ClientCallContext(
+        timeout=5.0,
+        service_parameters={"A2A-Extensions": f"{TASK_T_EXTENSION_URI},{NEGOTIATION_T_EXTENSION_URI}"},
+    )
 
     events = await transport.send(request, context)
 

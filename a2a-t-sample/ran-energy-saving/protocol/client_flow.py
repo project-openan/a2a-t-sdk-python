@@ -448,6 +448,8 @@ async def run_client_flow(
     on_intent_ready: Callable[[str], Awaitable[bool]] | None = None,
     trace_sink: Callable[[dict[str, object]], None] | None = None,
     conversation_context: str | None = None,
+    single_extension_per_message: bool = False,
+    forced_region: str | None = None,
 ) -> ClientFlowResult:
     """Run one complete client flow: initial Task-T, multi-round negotiation, task or end.
 
@@ -481,6 +483,13 @@ async def run_client_flow(
         conversation_context: Optional recent-turn block prepended to the natural-language request
             before Task-T generation, so a follow-up can refer to an earlier run. The wire prompt
             still contains only the current request plus this delimited context.
+        single_extension_per_message: When true (the real NMS), an accept carries only the
+            Negotiation-T key because that server rejects a message with more than one ``-T``
+            extension key. The local demo server instead requires the agreed Task-T on the accept,
+            so it keeps the default ``False``.
+        forced_region: Region the vendor NMS serves. When set, it replaces the region a decision
+            model fills on an accept, so the operator's configured region wins over a model that
+            repeats the demo region.
 
     Returns:
         The collected events, provider decisions and terminal state.
@@ -649,7 +658,11 @@ async def run_client_flow(
         # it. The marker is sample-only and does not change the Task-T extension payload.
         initial_metadata[SAMPLE_PHASE_METADATA_KEY] = SAMPLE_PHASE_BASELINE
     initial_request = _build_message_request(metadata=initial_metadata, label=label)
-    initial_context = _call_context((TASK_T_EXTENSION_URI,), call_timeout_seconds)
+    # Declare Negotiation-T alongside Task-T: the vendor NMS only returns a structured negotiation
+    # (Negotiation-T metadata plus negotiationContext) when the negotiation extension is declared.
+    # Declaring Task-T alone makes it answer with a bare Message whose empty metadata the client
+    # cannot distinguish from a negotiation-ended message.
+    initial_context = _call_context((TASK_T_EXTENSION_URI, NEGOTIATION_T_EXTENSION_URI), call_timeout_seconds)
 
     result = ClientFlowResult()
     context_id: str | None = None
@@ -671,9 +684,7 @@ async def run_client_flow(
     if follow_up is not None:
         follow_task_id = _task_id_of(batch)
         if not follow_task_id:
-            raise ClientFlowError(
-                "The baseline Task did not expose a task id for the Modify follow-up."
-            )
+            raise ClientFlowError("The baseline Task did not expose a task id for the Modify follow-up.")
         try:
             follow_data, follow_schema = follow_up
             with trace_stage("task_t_modify_extraction"):
@@ -833,6 +844,8 @@ async def run_client_flow(
                 language=language,
                 policy=policy,
                 call_timeout_seconds=call_timeout_seconds,
+                single_extension_per_message=single_extension_per_message,
+                forced_region=forced_region,
             )
             send_phase = PHASE_RESOLUTION
             send_performative = NegotiationPerformative.ACCEPT.value
@@ -961,6 +974,8 @@ def _accept_filled_values(
     decision: NegotiationDecision,
     language: str,
     policy: ClientPolicy,
+    *,
+    forced_region: str | None = None,
 ) -> dict[str, object]:
     """Merge model-filled values into the policy's agreed Task-T parameters safely.
 
@@ -983,6 +998,10 @@ def _accept_filled_values(
             filled["guaranteedThroughputTarget"] = policy.filled_params(kind.value, language).get(
                 "guaranteedThroughputTarget"
             )
+    if forced_region:
+        # The operator configured the region the vendor serves; a decision model must not replace
+        # it with the demo region.
+        filled["region"] = forced_region
     if filled.get("operationType") not in {"Create", "Modify"}:
         filled["operationType"] = "Create"
     return filled
@@ -1037,22 +1056,34 @@ def _build_accept_request(
     language: str,
     policy: ClientPolicy,
     call_timeout_seconds: float,
+    single_extension_per_message: bool,
+    forced_region: str | None = None,
 ) -> tuple[SendMessageRequest, ClientCallContext]:
     """Refill the Task-T prompt and generate the Negotiation-T accept of the proposal type."""
-    filled = _accept_filled_values(kind, decision, language, policy)
+    filled = _accept_filled_values(kind, decision, language, policy, forced_region=forced_region)
     with trace_stage("task_t_slot_extraction_refill"):
         task_content = prompt_client.generate_task_prompt_from_data_with_schema(
             filled, TASK_PARAM_SCHEMA, task_template_uri
         )
     task_text = _ensure_agreed_target(_require_prompt_text(task_content, "the refilled Task-T prompt"), filled)
 
-    accept_text = _accept_text(kind, filled, decision, language, policy)
+    accept_text = _accept_text(
+        kind,
+        filled,
+        decision,
+        language,
+        policy,
+        forced_region=forced_region,
+    )
     accept_context = session.with_performative(NegotiationPerformative.ACCEPT)
     with trace_stage("negotiation_accept_extraction"):
         content = prompt_client.generate_negotiation_accept_prompt_from_text(
             accept_text, accept_context, _ACCEPT_REJECT_TEMPLATE_URI_BY_KIND[kind.value]
         )
-    metadata = {task_content.extension_uri or TASK_T_EXTENSION_URI: task_text}
+    # The real NMS rejects a message whose metadata holds more than one ``-T`` extension key, so
+    # the NMS path sends the accept with the negotiation key only; the local demo server reads the
+    # refilled Task-T prompt from the accept message and keeps receiving it.
+    metadata = None if single_extension_per_message else {task_content.extension_uri or TASK_T_EXTENSION_URI: task_text}
     return _negotiation_request(
         prompt_client=prompt_client,
         content=content,
@@ -1250,16 +1281,21 @@ def _accept_text(
     decision: NegotiationDecision,
     language: str,
     policy: ClientPolicy,
+    *,
+    forced_region: str | None = None,
 ) -> str:
     """Render the natural-language input of an accept for the proposal type."""
     if kind is NegotiationKind.INFORMATION:
         # The information accept result must answer the requested item only. Repeating every base
         # Task-T field (region, description, ...) makes the Negotiation-T validator treat unrelated
-        # text as result content and, on live models, reject the accept.
+        # text as result content and, on live models, reject the accept. The configured NMS region
+        # is the exception: the operator selected it, so an accept always states it.
         allowed = TASK_PARAM_SCHEMA.get("properties")
         requested = [
             name for name in (decision.filled_params or {}) if isinstance(allowed, Mapping) and name in allowed
         ]
+        if forced_region and "region" not in requested:
+            requested.insert(0, "region")
         if not requested:
             requested = ["guaranteedThroughputTarget"]
         items = " ".join(f"{name}: {filled.get(name, '')}." for name in requested)

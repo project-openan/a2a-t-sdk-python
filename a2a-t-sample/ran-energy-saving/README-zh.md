@@ -165,7 +165,10 @@ python run_demo.py --nms --nms-sim --ui --brand huawei
 A2AT_SAMPLE_NMS_HOST=<nms-host>
 A2AT_SAMPLE_NMS_TOKEN_USER=<northbound-user>
 A2AT_SAMPLE_NMS_TOKEN_VALUE=<password>
+A2AT_SAMPLE_NMS_REGION=A2ATestRegion
 A2AT_SAMPLE_NMS_VERIFY_TLS=false
+# 原始报文日志：NMS 模式默认开启；设为 0 可避免业务数据落盘
+A2AT_SAMPLE_NMS_WIRE_LOG=1
 ```
 
 只需配置主机地址。sample 会按 910 标准面自动推导两个 URL：
@@ -178,18 +181,23 @@ A2AT_SAMPLE_NMS_VERIFY_TLS=false
 `A2AT_SAMPLE_NMS_VERIFY_TLS=true`。客户端同时发送两种被接受的认证头（`Authorization: Bearer`
 和 `X-Auth-Token`）以及两种扩展头拼写（`A2A-Extensions` 和 `X-A2A-Extensions`）。
 
-请求文本必须使用网管认识的区域。910 联调环境是 `A2ATestRegion`，其他区域和激活时段会被拒绝。
+`A2AT_SAMPLE_NMS_REGION` 会在请求文本没有写明该区域时覆盖 scenario 区域；显式请求里写了区域则
+以请求为准。910 联调环境认识的区域是 `A2ATestRegion`，其他区域和激活时段会被拒绝。
 例如：“在 A2ATestRegion 区域创建无线网络节能任务；激活时段 00:00-06:00，每小区保证 30 Mbps。”
 
-当前厂商契约的限制：
+厂商契约说明：
 
-- 真实协商回复不带 `Negotiation-T` metadata。sample 不猜语义，因此会明确报“网管未创建
-  Task”，而不是静默当作协商结束。网管补齐 metadata 前，请使用完整参数的请求。
+- 只有同时声明 Task-T 和 Negotiation-T 时，网管才返回结构化协商 metadata。客户端在初始请求里
+  两者都声明；只声明 Task-T 会得到 metadata 为空的普通 Message。
+- 一条消息只能带一个 `-T` metadata 键。NMS 模式的 ACCEPT 只带 Negotiation-T；本地 demo server
+  仍保留回填的 Task-T。
+- 继续协商的 PROPOSE 可能被包在 `error` 信封里。客户端把它写入 `wire-error.jsonl` 并以明确的
+  协议错误结束，而不是静默当作协商结束。
 - 任务取消返回 HTTP 503；客户端把它当作已知限制，且发送超时后不重试。
 - 网管不发布 AgentCard，因此发现使用静态卡；真实注册中心对接是后续步骤。
 
-原始报文写入 `runs/<runId>/wire.jsonl`，凭据已脱敏。发送前的人审用
-`--ui --mode confirm`；NMS 模式没有服务端审批 2，因为执行侧由厂商网管负责。
+原始报文写入 `runs/<runId>/wire.jsonl`，失败帧写入 `wire-error.jsonl`，凭据已脱敏。发送前的
+人审用 `--ui --mode confirm`；NMS 模式没有服务端审批 2，因为执行侧由厂商网管负责。
 
 ### 纯 A2A 模式（三跳，只用标准 A2A）
 

@@ -29,6 +29,7 @@ from shared.config import (
     NMS_A2A_PORT_ENV_KEY,
     NMS_HOST_ENV_KEY,
     NMS_IDLE_TIMEOUT_ENV_KEY,
+    NMS_REGION_ENV_KEY,
     NMS_REQUEST_TIMEOUT_ENV_KEY,
     NMS_SCHEME_ENV_KEY,
     NMS_TOKEN_PORT_ENV_KEY,
@@ -36,6 +37,7 @@ from shared.config import (
     NMS_TOKEN_USER_ENV_KEY,
     NMS_TOKEN_VALUE_ENV_KEY,
     NMS_VERIFY_TLS_ENV_KEY,
+    NMS_WIRE_LOG_ENV_KEY,
     PLANNER_MAX_STEPS_ENV_KEY,
     PLANNER_MODEL_ENV_KEY,
     PLANNER_TIMEOUT_ENV_KEY,
@@ -73,6 +75,8 @@ _ENV_KEYS = (
     NMS_VERIFY_TLS_ENV_KEY,
     NMS_IDLE_TIMEOUT_ENV_KEY,
     NMS_REQUEST_TIMEOUT_ENV_KEY,
+    NMS_REGION_ENV_KEY,
+    NMS_WIRE_LOG_ENV_KEY,
 )
 
 
@@ -415,6 +419,45 @@ def test_nms_discovery_rejects_an_incomplete_configuration(tmp_path: Path) -> No
 
     with pytest.raises(ValueError, match="NMS discovery requires"):
         load_config(env_path=env_file)
+
+
+def test_nms_region_and_wire_log_settings(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_DISCOVERY=nms",
+                f"{NMS_HOST_ENV_KEY}=127.0.0.1",
+                f"{NMS_TOKEN_USER_ENV_KEY}=user",
+                f"{NMS_TOKEN_VALUE_ENV_KEY}=value",
+                f"{NMS_REGION_ENV_KEY}=A2ATestRegion",
+                f"{NMS_WIRE_LOG_ENV_KEY}=0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert config.nms_region == "A2ATestRegion"
+    assert config.nms_wire_log is False
+
+
+def test_nms_wire_log_defaults_to_on(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_DISCOVERY=nms",
+                f"{NMS_HOST_ENV_KEY}=127.0.0.1",
+                f"{NMS_TOKEN_USER_ENV_KEY}=user",
+                f"{NMS_TOKEN_VALUE_ENV_KEY}=value",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_config(env_path=env_file).nms_wire_log is True
 
 
 def test_nms_tls_verification_defaults_to_off(tmp_path: Path) -> None:

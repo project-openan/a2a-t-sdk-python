@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Final
 
 from a2a_t.core.metadata import (
+    NEGOTIATION_CONTEXT_METADATA_KEY,
     NEGOTIATION_T_EXTENSION_URI,
     TEMPLATE_URI_METADATA_KEY,
     NegotiationPerformative,
@@ -99,6 +100,7 @@ def _wire_metadata(event: Mapping[str, object]) -> dict[str, object] | None:
         str(key): value
         for key, value in metadata.items()
         if str(key) == TEMPLATE_URI_METADATA_KEY
+        or str(key) == NEGOTIATION_CONTEXT_METADATA_KEY
         or "Task-T" in str(key)
         or "Negotiation-T" in str(key)
     }
@@ -214,11 +216,12 @@ class NegotiationTranscript:
         # Only a negotiation message has a performative; artifacts and status updates carry the
         # agreeing context as audit metadata but are not themselves messages of that performative.
         is_negotiation_message = _text(event.get("kind")) == "message"
-        performative = (
-            session.performative.value if is_negotiation_message and session is not None else None
-        )
+        performative = session.performative.value if is_negotiation_message and session is not None else None
         template_uri = metadata_map.get(TEMPLATE_URI_METADATA_KEY)
-        negotiation_text = _text(metadata_map.get(NEGOTIATION_T_EXTENSION_URI))
+        # The vendor NMS puts the negotiation body in the Negotiation-T metadata, but a plain
+        # message may carry only its text part. Fall back to the full text so the UI never shows a
+        # truncated summary when the structured value is absent.
+        negotiation_text = _text(metadata_map.get(NEGOTIATION_T_EXTENSION_URI)) or _text(event.get("text"))
         explicit_detail = detail if detail is not None else event.get("detail")
         if not isinstance(explicit_detail, Mapping):
             explicit_detail = None
@@ -276,9 +279,7 @@ class NegotiationTranscript:
         if wire_metadata is not None:
             entry["metadata"] = wire_metadata
         self.events.append(entry)
-        self.context_id = self.context_id or (
-            entry["contextId"] if isinstance(entry["contextId"], str) else None
-        )
+        self.context_id = self.context_id or (entry["contextId"] if isinstance(entry["contextId"], str) else None)
         task_id = _text(event.get("task_id"))
         if task_id:
             self.task_id = self.task_id or task_id
@@ -385,9 +386,7 @@ class NegotiationTranscript:
 
     def _count_phase(self, phase: str) -> int:
         """Return the next step number of one phase in the recorded timeline."""
-        return 1 + sum(
-            1 for entry in (*self.events, *self.decisions) if entry.get("phase") == phase
-        )
+        return 1 + sum(1 for entry in (*self.events, *self.decisions) if entry.get("phase") == phase)
 
     def record_final(self, result: ClientFlowResult) -> None:
         """Record the terminal state, ids and report of one finished run."""

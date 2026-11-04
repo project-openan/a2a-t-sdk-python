@@ -362,14 +362,24 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
 
 - `protocol/nms_client.py` 缓存 `accessSession`，到期前 60 s 刷新。A2A-T 同时发送
   `Authorization: Bearer` / `X-Auth-Token` 和 `A2A-Extensions` / `X-A2A-Extensions`。
+- 初始请求同时声明 Task-T 和 Negotiation-T。只有两者都声明时，网管才返回结构化协商
+  （Negotiation-T metadata + `negotiationContext`）；只声明 Task-T 会得到空 metadata。
+- 一条消息只能带一个 `-T` metadata 键。NMS 模式的 ACCEPT 只带 Negotiation-T；本地 demo
+  server 保留回填的 Task-T。对应参数是 `single_extension_per_message`。
+- `A2AT_SAMPLE_NMS_REGION` 覆盖 scenario 区域，也覆盖决策模型在 ACCEPT 里填写的区域
+  （`forced_region`）；因此不用改 scenario 就能指向网管认识的区域。
 - SSE 读取跳过 `: heartbeat`；连续 `A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS` 秒没有 `data:`
   帧就断开，转为 `GET <base>/tasks/{id}` 轮询到终态；发送超时后不重试。
 - 原始帧回填为 `StreamResponse`，继续由 `shared.sse_event_consumer.normalize_event` 归一化，
   因此协商和 trace 代码不变。
-- 只有 `message` 帧、没有 `task` 时抛 `NmsNegotiationRequiredError(context_id, text)`。这是
-  传输层事实，不是语义猜测；sample 不实现针对厂商无 metadata 协商消息的文本/结构兜底。
-- 每次交互写入 `runs/<runId>/wire.jsonl`，`Authorization`、`X-Auth-Token`、`accessSession`
-  和 cookie 已脱敏。
+- 带 Negotiation-T metadata 的 `message` 帧交给现有 flow 处理；只有 metadata 为空的
+  `message` 帧才抛 `NmsNegotiationRequiredError(context_id, text)`，因为客户端无法把它和
+  “协商结束”区分开。
+- `data: {"error": ...}` 帧写入 `wire-error.jsonl` 并抛 `NmsProtocolError`；run 以网管给出的
+  原因明确结束，不静默继续。
+- 每次交互写入 `runs/<runId>/wire.jsonl`（`A2AT_SAMPLE_NMS_WIRE_LOG` 开启时），
+  `Authorization`、`X-Auth-Token`、`accessSession` 和 cookie 已脱敏；无法解析的帧写入
+  `wire-error.jsonl`。
 
 `demo/nms_sim/` 是离线契约仿真器，实现令牌接口、`POST /a2a/json/message:stream`、
 `GET /a2a/json/tasks[/{id}]` 和已知的 cancel 503。默认 `strict` 档 SSE 永不关闭、每 15 s
@@ -377,7 +387,8 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
 
 测试：`tests/test_nms_client.py`（令牌、请求头、心跳、空闲、协商、wire 脱敏）、
 `tests/test_nms_sim.py`（422 配对、静态区域/时段/速率规则、任务生命周期、strict 流），以及
-原始客户端对仿真器的集成测试。真实联调需要 910 网络，并使用包含 `A2ATestRegion` 的完整请求。
+原始客户端对仿真器的集成测试。真实联调需要 910 网络，并设置
+`A2AT_SAMPLE_NMS_REGION=A2ATestRegion` 或在请求文本里写明该区域。
 
 ## 4. 网管侧开发指南（操作）
 

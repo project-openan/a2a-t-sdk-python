@@ -266,6 +266,9 @@ async def _run(
     scenario_spec: Scenario,
     batches: list[list[dict[str, object]]],
     decisions: tuple[NegotiationDecision, ...],
+    *,
+    single_extension_per_message: bool = False,
+    forced_region: str | None = None,
 ) -> tuple[ClientFlowResult, ScriptedTransport, FakePromptClient]:
     prompt_client = FakePromptClient()
     transport = ScriptedTransport(batches)
@@ -277,6 +280,8 @@ async def _run(
         provider=ScriptedDecisionProvider(decisions),
         language="en-US",
         policy=DEMO_CLIENT_POLICY,
+        single_extension_per_message=single_extension_per_message,
+        forced_region=forced_region,
     )
     return result, transport, prompt_client
 
@@ -461,9 +466,7 @@ async def test_intent_gate_can_stop_the_run_before_any_task_t_is_sent() -> None:
 
 async def test_conversation_context_is_prepended_to_task_t_generation() -> None:
     prompt_client = FakePromptClient()
-    transport = ScriptedTransport(
-        [[propose_event("information", 1)], _task_completed_batch()]
-    )
+    transport = ScriptedTransport([[propose_event("information", 1)], _task_completed_batch()])
 
     await run_client_flow(
         prompt_client=prompt_client,
@@ -492,12 +495,45 @@ async def test_information_scenario_accepts_and_completes_a_task() -> None:
     assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1)]
     assert prompt_client.refill_data[0]["region"] == "Songshanhu Administration Committee"
     assert prompt_client.refill_data[0]["guaranteedThroughputTarget"] == (
-        "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, "
-        "{23:00~23:59,10Mbps}"
+        "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}"
     )
     accept_metadata = MessageToDict(transport.requests[1].message.metadata)
     assert accept_metadata[TASK_T_EXTENSION_URI].startswith("Refilled Task-T prompt:")
     assert accept_metadata[TEMPLATE_URI_METADATA_KEY] == "Negotiation-T/information-negotiation/accept-reject/v1"
+
+
+async def test_nms_accept_carries_only_the_negotiation_extension_key() -> None:
+    """The vendor rejects an accept whose metadata has more than one ``-T`` key."""
+    result, transport, _prompt_client = await _run(
+        SCENARIO_INFORMATION_SPEC,
+        [[propose_event("information", 1)], _task_completed_batch()],
+        SCENARIO_INFORMATION_SPEC.scripted_client_decisions,
+        single_extension_per_message=True,
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    accept_metadata = MessageToDict(transport.requests[1].message.metadata)
+    assert TASK_T_EXTENSION_URI not in accept_metadata
+    assert NEGOTIATION_T_EXTENSION_URI in accept_metadata
+    assert NEGOTIATION_CONTEXT_METADATA_KEY in accept_metadata
+
+
+async def test_forced_region_wins_over_a_decision_model_value() -> None:
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="accept",
+        filled_params={"region": "Songshanhu Administration Committee"},
+    )
+    result, _transport, prompt_client = await _run(
+        SCENARIO_INFORMATION_SPEC,
+        [[propose_event("information", 1)], _task_completed_batch()],
+        (decision,),
+        forced_region="A2ATestRegion",
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert prompt_client.refill_data[0]["region"] == "A2ATestRegion"
+    assert "region: A2ATestRegion" in prompt_client.accept_texts[0]
 
 
 async def test_information_accept_uses_the_selected_served_area() -> None:
@@ -534,8 +570,7 @@ async def test_information_accept_discards_an_invalid_model_filled_target() -> N
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
     assert prompt_client.refill_data[0]["guaranteedThroughputTarget"] == (
-        "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, "
-        "{23:00~23:59,10Mbps}"
+        "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}"
     )
     assert "unit" not in prompt_client.refill_data[0]
 
@@ -616,10 +651,7 @@ async def test_reject_scenario_ends_without_a_task() -> None:
                 propose_event(
                     "information",
                     1,
-                    content=(
-                        "Please provide the following missing items: "
-                        "guaranteedThroughputTarget."
-                    ),
+                    content=("Please provide the following missing items: guaranteedThroughputTarget."),
                 )
             ],
             [end_event()],
@@ -699,7 +731,12 @@ async def test_initial_request_matches_the_old_message_shape() -> None:
     assert metadata[TEMPLATE_URI_METADATA_KEY] == "Task-T/network-layer/ran-energy-saving/v1"
     service_parameters = transport.call_contexts[0].service_parameters
     assert service_parameters is not None
-    assert service_parameters["A2A-Extensions"] == TASK_T_EXTENSION_URI
+    # Both extensions are declared: without Negotiation-T the vendor answers a missing slot with a
+    # bare Message whose empty metadata reads like a negotiation-ended message.
+    assert set(service_parameters["A2A-Extensions"].split(",")) == {
+        TASK_T_EXTENSION_URI,
+        NEGOTIATION_T_EXTENSION_URI,
+    }
 
 
 async def test_every_send_carries_the_configured_call_timeout() -> None:
@@ -1051,9 +1088,7 @@ async def test_decision_hook_fires_before_the_response_is_sent() -> None:
 
     result = await run_client_flow(
         prompt_client=FakePromptClient(),
-        transport=RecordingTransport(
-            [[propose_event("information", 1)], _task_completed_batch()]
-        ),
+        transport=RecordingTransport([[propose_event("information", 1)], _task_completed_batch()]),
         user_request="request",
         provider=ScriptedDecisionProvider(SCENARIO_INFORMATION_SPEC.scripted_client_decisions),
         language="en-US",

@@ -91,6 +91,9 @@ _KIND_BY_URI_SEGMENT: Final[dict[str, NegotiationKind]] = {
     "information-negotiation": NegotiationKind.INFORMATION,
     "target-negotiation": NegotiationKind.TARGET,
     "feasibility-negotiation": NegotiationKind.FEASIBILITY,
+    # The vendor NMS abbreviates the information kind. Both spellings name the same negotiation,
+    # so an NMS proposal must not be rejected as "not a sample negotiation template".
+    "info-negotiation": NegotiationKind.INFORMATION,
 }
 
 

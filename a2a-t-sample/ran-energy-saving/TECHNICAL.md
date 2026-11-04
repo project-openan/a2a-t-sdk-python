@@ -426,16 +426,28 @@ Implementation details:
 - `protocol/nms_client.py` caches the `accessSession` token and refreshes it 60 s before expiry.
   It sends both `Authorization: Bearer` and `X-Auth-Token`, and both `A2A-Extensions` and
   `X-A2A-Extensions` for A2A-T.
+- The initial request declares **both** Task-T and Negotiation-T. The vendor only returns a
+  structured negotiation (Negotiation-T metadata plus `negotiationContext`) when both are declared.
+- One message may carry only one `-T` metadata key. In NMS mode the accept carries Negotiation-T
+  only; the local demo server keeps the refilled Task-T. The flow parameter is
+  `single_extension_per_message`.
+- `A2AT_SAMPLE_NMS_REGION` overrides the scenario region and the region a decision model fills on an
+  accept (`forced_region`), so an operator can point the demo at the served region without editing
+  the scenario.
 - The SSE reader skips `: heartbeat` comments and leaves the stream after
   `A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS` without a `data:` frame. It then polls
   `GET <base>/tasks/{id}` to a terminal state; a send timeout is never retried.
 - Raw frames are parsed back into `StreamResponse` and normalized by the existing
   `shared.sse_event_consumer.normalize_event`, so the negotiation/trace code is unchanged.
-- A `message` frame without a `task` raises `NmsNegotiationRequiredError(context_id, text)`. This
-  is a transport fact, not a semantic guess; the sample does not implement the text/structure
-  fallback for the vendor's metadata-less negotiation message.
-- Every exchange is appended to `runs/<runId>/wire.jsonl` with `Authorization`, `X-Auth-Token`,
-  `accessSession` and cookies redacted.
+- A `message` frame with Negotiation-T metadata is returned to the flow, which asks the decision
+  provider. Only a metadata-less message raises
+  `NmsNegotiationRequiredError(context_id, text)`: the client cannot tell it apart from a
+  negotiation-ended message.
+- A `data: {"error": ...}` envelope is recorded in `wire-error.jsonl` and raises
+  `NmsProtocolError`; the run stops with the vendor's reason instead of silently continuing.
+- Every exchange is appended to `runs/<runId>/wire.jsonl` (when
+  `A2AT_SAMPLE_NMS_WIRE_LOG` is on) with `Authorization`, `X-Auth-Token`, `accessSession` and
+  cookies redacted. Frames the reader cannot parse go to `wire-error.jsonl`.
 
 `demo/nms_sim/` is the offline contract simulator. It implements the token endpoint,
 `POST /a2a/json/message:stream`, `GET /a2a/json/tasks[/{id}]` and the known cancel 503. The
@@ -446,7 +458,7 @@ business result.
 Tests: `tests/test_nms_client.py` (token, headers, heartbeat, idle, negotiation, wire redaction),
 `tests/test_nms_sim.py` (422 pairing, static region/window/rate rules, task lifecycle, strict
 stream), and the raw-client integration test against the simulator. A real lab run requires the
-910 network and a complete request using `A2ATestRegion`.
+910 network and either `A2AT_SAMPLE_NMS_REGION=A2ATestRegion` or a request that names that region.
 
 ## 4. NMS-side developer guide (how-to)
 

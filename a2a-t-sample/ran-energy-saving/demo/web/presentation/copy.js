@@ -536,6 +536,7 @@ const EN = {
     nmsPoll: "NMS task polled",
     nmsNegotiation: "NMS asked for more information",
     nmsCancel: "NMS cancel unavailable (HTTP 503)",
+    nmsError: "NMS returned an error frame",
     stages: {
       request: "Day 1 · 1–4",
       negotiation: "Day 1 · 5",
@@ -1216,6 +1217,7 @@ const ZH = {
     nmsPoll: "已轮询网管任务",
     nmsNegotiation: "网管请求补充信息",
     nmsCancel: "网管不支持取消（HTTP 503）",
+    nmsError: "网管返回了错误帧",
     stages: {
       request: "第1天 · 1–4",
       negotiation: "第1天 · 5",

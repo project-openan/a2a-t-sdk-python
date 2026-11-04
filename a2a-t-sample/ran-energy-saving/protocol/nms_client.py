@@ -30,6 +30,10 @@ from typing import Any, Final
 import httpx
 from a2a.client.client import ClientCallContext
 from a2a.types import SendMessageRequest, StreamResponse
+from a2a_t.core.metadata import (
+    NEGOTIATION_CONTEXT_METADATA_KEY,
+    NEGOTIATION_T_EXTENSION_URI,
+)
 from google.protobuf.json_format import MessageToDict, ParseDict, ParseError
 from shared.config import (
     DEFAULT_NMS_IDLE_TIMEOUT_SECONDS,
@@ -119,6 +123,7 @@ class NmsConfig:
         request_timeout: Per-request budget.
         poll_interval: Seconds between task polls.
         token_refresh_skew: Refresh the token this many seconds before it expires.
+        wire_log: Whether the raw exchange is written to ``wire.jsonl``.
     """
 
     a2a_base: str
@@ -130,6 +135,7 @@ class NmsConfig:
     request_timeout: float = DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS
     poll_interval: float = DEFAULT_NMS_POLL_INTERVAL_SECONDS
     token_refresh_skew: float = 60.0
+    wire_log: bool = True
 
     @classmethod
     def from_config(cls, config: SampleConfig) -> NmsConfig:
@@ -159,6 +165,7 @@ class NmsConfig:
             idle_timeout=config.nms_idle_timeout,
             request_timeout=config.nms_request_timeout,
             poll_interval=config.nms_poll_interval,
+            wire_log=config.nms_wire_log,
         )
 
 
@@ -329,9 +336,29 @@ class NmsClient:
                     try:
                         frame = json.loads(raw)
                     except json.JSONDecodeError as exc:
+                        self.record_error(
+                            "ParseError",
+                            f"Invalid SSE data frame: {_excerpt(raw)}",
+                            {"line": line},
+                        )
                         raise NmsProtocolError(f"Invalid SSE data frame: {_excerpt(raw)}") from exc
                     if not isinstance(frame, dict):
+                        self.record_error(
+                            "ParseError",
+                            "SSE data frame is not a JSON object",
+                            frame,
+                        )
                         raise NmsProtocolError("SSE data frame is not a JSON object")
+                    if "error" in frame:
+                        message = _frame_error_message(frame)
+                        self.record_error("NmsProtocolError", message, frame)
+                        _nms_span(
+                            phase=PHASE_EXECUTION,
+                            title="NMS returned an error frame",
+                            title_key="nmsError",
+                            detail={"message": message[:1000]},
+                        )
+                        raise NmsProtocolError(message)
                     yield frame
         except httpx.HTTPError as exc:
             raise NmsProtocolError(f"NMS A2A request failed: {exc}") from exc
@@ -454,16 +481,42 @@ class NmsClient:
 
     def _write_wire(self, direction: str, **fields: object) -> None:
         """Append one redacted record to the run's ``wire.jsonl``."""
-        if self._wire_path is None:
+        if not self._config.wire_log or self._wire_path is None:
             return
         record: dict[str, object] = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "dir": direction,
             **fields,
         }
+        self._append_wire(self._wire_path, record)
+
+    def record_error(
+        self,
+        kind: str,
+        message: str,
+        frame: object | None = None,
+    ) -> None:
+        """Append one failed exchange to ``wire-error.jsonl``.
+
+        The SDK or the raw reader may reject a frame before any ``wire.jsonl`` record is written;
+        this keeps the frame that explains the failure.
+        """
+        if not self._config.wire_log or self._wire_path is None:
+            return
+        record: dict[str, object] = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "type": kind,
+            "message": message,
+        }
+        if frame is not None:
+            record["frame"] = frame
+        self._append_wire(self._wire_path.with_name("wire-error.jsonl"), record)
+
+    def _append_wire(self, path: Path, record: Mapping[str, object]) -> None:
+        """Append one redacted record to a wire log file."""
         try:
-            self._wire_path.parent.mkdir(parents=True, exist_ok=True)
-            with self._wire_path.open("a", encoding="utf-8") as handle:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(_redact(record), ensure_ascii=False) + "\n")
         except OSError:
             _LOGGER.debug("wire log write failed", exc_info=True)
@@ -525,8 +578,17 @@ class NmsSseTransport:
             if "message" in frame and task_id is None:
                 message = frame.get("message")
                 if isinstance(message, Mapping):
+                    metadata = message.get("metadata")
+                    if isinstance(metadata, Mapping) and _is_negotiation_metadata(metadata):
+                        # A structured negotiation: let the existing flow read the
+                        # Negotiation-T metadata and ask the decision provider.
+                        event = _frame_to_event(frame)
+                        events.append(event)
+                        self._emit(event)
+                        return events
                     context_id = _context_id(message)
                     text = _message_text(message)
+                    self._client.record_error("NmsNegotiationRequiredError", text, frame)
                     _nms_span(
                         phase=PHASE_NEGOTIATION,
                         title="NMS asked for more information",
@@ -539,6 +601,8 @@ class NmsSseTransport:
                 if isinstance(task, Mapping) and isinstance(task.get("id"), str):
                     task_id = task["id"]
             event = _frame_to_event(frame)
+            if event.get("kind") == "raw":
+                self._client.record_error("ParseError", "Unrecognized StreamResponse frame", frame)
             events.append(event)
             self._emit(event)
             if is_stop_event(event):
@@ -628,6 +692,24 @@ def _excerpt(text: str, limit: int = _ERROR_EXCERPT_LENGTH) -> str:
     """Return a short single-line excerpt of one response body."""
     compact = " ".join(text.split())
     return compact[:limit] + ("..." if len(compact) > limit else "")
+
+
+def _is_negotiation_metadata(metadata: Mapping[str, object]) -> bool:
+    """Return whether one message metadata map carries a structured negotiation."""
+    return NEGOTIATION_T_EXTENSION_URI in metadata or NEGOTIATION_CONTEXT_METADATA_KEY in metadata
+
+
+def _frame_error_message(frame: Mapping[str, object]) -> str:
+    """Render the vendor's ``error`` envelope as one readable message."""
+    error = frame.get("error")
+    if isinstance(error, Mapping):
+        code = error.get("code")
+        message = str(error.get("message") or "").strip()
+        status = str(error.get("status") or "").strip()
+        parts = [part for part in (status, f"code={code}" if code is not None else "") if part]
+        prefix = f"NMS error frame ({', '.join(parts)})" if parts else "NMS error frame"
+        return f"{prefix}: {message or _excerpt(json.dumps(dict(frame), ensure_ascii=False))}"
+    return f"NMS error frame: {_excerpt(json.dumps(dict(frame), ensure_ascii=False))}"
 
 
 def _nms_span(

@@ -378,16 +378,24 @@ def test_nms_policy_uses_the_operator_request_text(offline_config: SampleConfig)
 
     policy = ClientPolicy(initial_data=lambda _language: ({"region": "canned"}, {}))
     nms_config = replace(offline_config, discovery="nms")
+    region_config = replace(nms_config, nms_region="A2ATestRegion")
 
-    assert _effective_policy(policy, nms_config, "A2ATestRegion").initial_data("en-US") is None
-    assert _effective_policy(policy, nms_config, "").initial_data("en-US") == (
+    assert _effective_policy(policy, nms_config, "A2ATestRegion", "en-US").initial_data("en-US") is None
+    assert _effective_policy(policy, nms_config, "", "en-US").initial_data("en-US") == (
         {"region": "canned"},
         {},
     )
-    assert _effective_policy(policy, offline_config, "A2ATestRegion").initial_data("en-US") == (
+    assert _effective_policy(policy, offline_config, "A2ATestRegion", "en-US").initial_data("en-US") == (
         {"region": "canned"},
         {},
     )
+    region_policy = _effective_policy(policy, region_config, "anything", "en-US")
+    assert region_policy.initial_data("en-US") == (
+        {"region": "A2ATestRegion"},
+        {},
+    )
+    assert region_policy.filled_params("information", "en-US") == {"region": "A2ATestRegion"}
+    assert _effective_policy(policy, region_config, "use A2ATestRegion here", "en-US").initial_data("en-US") is None
 
 
 async def test_nms_runtime_uses_the_raw_transport_and_skips_the_a2a_sdk_client(
