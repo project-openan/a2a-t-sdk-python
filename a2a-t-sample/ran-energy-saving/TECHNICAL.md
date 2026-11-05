@@ -922,8 +922,11 @@ SDK. `run_demo.py` reads `A2AT_SAMPLE_UI_PORT` only as the default of `--ui-port
 | `A2AT_SAMPLE_RUNS_DIR` | default `<sample>/runs` | Data directory: transcripts, client/task/gateway SQLite stores, NMS `wire.jsonl` and the Web UI history. Relative values resolve against the sample root. |
 | `A2AT_SAMPLE_PURE_FOLLOWUP` | `both` (default), `task`, `context` | Conversation fields of a pure A2A follow-up. Switch to `context` when the vendor rejects a follow-up carrying `taskId`. |
 | `A2AT_SAMPLE_WEBHOOK_PORT` | default `9000` (`0` = ephemeral) | Embedded webhook receiver port. |
-| `A2AT_SAMPLE_WEBHOOK_TOKEN` | default `demo-webhook-token` | Static push token checked against `X-A2A-Notification-Token`. |
+| `A2AT_SAMPLE_WEBHOOK_TOKEN` | default `demo-webhook-token` | Static push token checked against `X-A2A-Notification-Token`; unused when `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` is set. |
 | `A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT` | default `300` (the HTTP budget) | Seconds without a push before a webhook phase ends; a phase must not end before the client gives up. |
+| `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` | unset; the bind address | Callback URL registered in the push config. The vendor NMS requires `https` and reaches the client through a gateway address, so `127.0.0.1` only works for the local simulator. |
+| `A2AT_SAMPLE_WEBHOOK_TLS_CERT` / `A2AT_SAMPLE_WEBHOOK_TLS_KEY` | unset; plain `http` | PEM certificate and matching key of the receiver's TLS listener. The launcher resolves relative paths against the sample root in the per-run `.env`. |
+| `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` | unset; push token | `user:password` registered as the push config's Basic auth and the only credential the receiver accepts while set. Keep it in `.env` only. |
 | `A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS` | default `300` (> 0) | Client HTTP budget of one A2A request: the `httpx` client timeout and `ClientCallContext.timeout` of every send. |
 | `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` | default `120` (> 0) | Live LLM budget of one call (SDK structured call or ADK `LiteLlm` turn), written into the per-run SDK `.env`. |
 | `A2AT_SAMPLE_LLM_MAX_ATTEMPTS` | default `1` (`1`..`10`) | Live SDK protocol retry limit per retryable step, written into the per-run SDK `.env`; OpenAI transport retries are disabled separately. |
@@ -1151,7 +1154,9 @@ The sample is deliberately a prototype. Before production:
   dumped at `info`.
 - **Registry.** `registry/` is a mock. Use the deployment's real registry center or configure
   `direct` discovery with a stable AgentCard endpoint.
-- **Webhook security.** `A2AT_SAMPLE_WEBHOOK_TOKEN` is a static demo token. Use per-client secrets,
+- **Webhook security.** `A2AT_SAMPLE_WEBHOOK_TOKEN` is a static demo token; when
+  `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` is set, the receiver checks Basic auth instead. The
+  credentials are plaintext in `.env` and travel in the push config, so use per-client secrets,
   rotation, replay protection, and TLS; treat the receiver as an exposed HTTP endpoint.
 - **Authentication and TLS.** Two independent boundaries: `A2AT_SAMPLE_AUTH_TOKEN` guards the
   inbound Web UI `/api/*` and gateway routes, and `A2AT_SAMPLE_SERVER_AUTH_TOKEN` guards the A2A

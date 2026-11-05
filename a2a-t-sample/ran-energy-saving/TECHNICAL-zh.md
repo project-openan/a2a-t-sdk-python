@@ -751,8 +751,11 @@ P95 和审批等待。
 | `A2AT_SAMPLE_RUNS_DIR` | 默认 `<sample>/runs` | 数据目录：transcript、client/task/gateway SQLite、NMS `wire.jsonl` 和 Web UI 历史。相对路径按 sample 根目录解析。 |
 | `A2AT_SAMPLE_PURE_FOLLOWUP` | `both`（默认）、`task`、`context` | pure A2A follow-up 携带的会话字段。网管拒绝带 `taskId` 的 follow-up 时切到 `context`。 |
 | `A2AT_SAMPLE_WEBHOOK_PORT` | 默认 `9000`（`0` = 临时端口） | 内置 webhook 接收器端口。 |
-| `A2AT_SAMPLE_WEBHOOK_TOKEN` | 默认 `demo-webhook-token` | 与 `X-A2A-Notification-Token` 比对的静态推送 token。 |
+| `A2AT_SAMPLE_WEBHOOK_TOKEN` | 默认 `demo-webhook-token` | 与 `X-A2A-Notification-Token` 比对的静态推送 token；设置 `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` 后不再使用。 |
 | `A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT` | 默认 `300`（与 HTTP 预算一致） | 无推送多少秒后结束 webhook 阶段；阶段不能早于客户端预算结束。 |
+| `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` | 未设置时使用绑定地址 | 注册到 push config 的回调 URL。真实网管要求 `https`，且通过网关地址访问客户端，`127.0.0.1` 只适用于本地模拟器。 |
+| `A2AT_SAMPLE_WEBHOOK_TLS_CERT` / `A2AT_SAMPLE_WEBHOOK_TLS_KEY` | 未设置时使用明文 `http` | 接收器 TLS 监听的 PEM 证书与私钥。启动器会在每次运行的 `.env` 中把相对路径解析到样例根目录。 |
+| `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` | 未设置时校验推送 token | `user:password`，注册为 push config 的 Basic 鉴权，也是设置后接收器唯一接受的凭据。只放在 `.env`。 |
 | `A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS` | 默认 `300`（> 0） | 单次 A2A 请求的客户端 HTTP 预算：`httpx` 客户端超时与每次发送的 `ClientCallContext.timeout`。 |
 | `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` | 默认 `120`（> 0） | 在线单次 LLM 调用预算（SDK 结构化调用或 ADK `LiteLlm` turn），写入每次运行的 SDK `.env`。 |
 | `A2AT_SAMPLE_LLM_MAX_ATTEMPTS` | 默认 `1`（`1`..`10`） | 在线 SDK 每个可重试步骤的协议级尝试次数，写入每次运行的 SDK `.env`；OpenAI 传输层重试另行关闭。 |
@@ -919,7 +922,7 @@ python run_demo.py --scenario target --mode auto --model-mode live
 - **持久化。** 本样例的 SQLite 存储包括：服务端 Task（`protocol/sqlite_task_store.py`）、入站 Gateway Task（同一实现，独立文件）与客户端会话/运行/协商（`protocol/client_store/`）。`shared/sqlite.py` 通过 `PRAGMA user_version` 执行有序 schema 迁移；生产仍应使用自有数据库与迁移工具。方案仍保存在进程内存储（`demo/ran_data._PLANS`）。入站 push 注册持久化在 Gateway Task 数据库；未配置该数据库时回退到 SDK 的内存存储。客户端 ADK 决策会话按 `A2AT_SAMPLE_ADK_SESSION_RETENTION_DAYS`（默认 7 天）作为审计数据保留，到期清扫；其中包含提示词与工具结果，保留窗口应按审计与数据合规要求设定，并据此规划客户端数据库容量。网管执行不引入持久 checkpointer，只有需要断点恢复时才增加；服务端没有 ADK 会话。
 - **日志。** 客户端、网管与 Gateway 共用一条 stdlib 日志流；接入采集器时设 `A2AT_SAMPLE_LOG_FORMAT=json`。每条记录带 `runId` / `conversationId` / `taskId` / `contextId` / `negotiationId` / `round`，可跨进程追踪一次协商。凭据会被脱敏，提示词与工具结果只做摘要，不在 `info` 级别整段输出。
 - **注册中心。** `registry/` 是 mock。使用部署环境的真实注册中心，或配置 `direct` 发现并固定 AgentCard 端点。
-- **Webhook 安全。** `A2AT_SAMPLE_WEBHOOK_TOKEN` 是静态演示 token。生产应使用按客户端的密钥、轮换、重放防护与 TLS；把接收器视为对外暴露的 HTTP 端点。
+- **Webhook 安全。** `A2AT_SAMPLE_WEBHOOK_TOKEN` 是静态演示 token；设置 `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` 后改为校验 Basic 鉴权。凭据在 `.env` 中是明文，并随 push config 传输，生产应使用按客户端的密钥、轮换、重放防护与 TLS；把接收器视为对外暴露的 HTTP 端点。
 - **鉴权与 TLS。** 两个独立边界：`A2AT_SAMPLE_AUTH_TOKEN` 保护入站 Web UI `/api/*` 与 Gateway 路由；`A2AT_SAMPLE_SERVER_AUTH_TOKEN` 保护 A2A 服务端（客户端携带，卡片声明 scheme）。两者在绑定非回环地址却未配置时都会启动失败，唯一例外是 Web UI 的 `--allow-insecure-bind` 演示开关（不适用于 A2A 服务端）。trace ingest 路由使用每次运行的 trace token，而不是用户 Bearer。mock 注册中心仍为开放。应在部署网关终止 TLS；`A2A-Version: 1.0` 与 AgentCard 不是安全控制。
 - **健康检查。** Web UI、Gateway 与服务端都提供 `/health`（存活）与 `/ready`（SQLite 可访问）。平台探针应使用它们，而不是业务路由。
 - **推送投递。** Gateway 会校验调用方提供的 webhook（绝对 http(s) URL、无内嵌凭据；非回环只允许 HTTPS），并发送 A2A 通知 token。SDK sender 每个事件只 POST 一次并记录失败；生产需要重试/排队、死信路径与出站白名单以防止 SSRF。push 注册存放在 Gateway Task 数据库，应按敏感文件保护。样例的 Bearer 中间件只认证调用方，不填充 `ServerCallContext.user`，因此所有注册共享空 owner 分区；多租户部署必须在调用上下文中提供已认证用户。

@@ -286,6 +286,11 @@ SSE）。OSS Agent 复用与 A2A-T 客户端相同的 ADK 决策 Agent 回答网
 如果网管拒绝带 `taskId` 的 pure follow-up，设置 `A2AT_SAMPLE_PURE_FOLLOWUP=context`
 （或 `task` 只带 taskId）后重试；默认是 `both`。
 
+真实网管要求通过网关访问的 https 回调：把 `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` 设为该 URL，
+`A2AT_SAMPLE_WEBHOOK_TLS_CERT` / `A2AT_SAMPLE_WEBHOOK_TLS_KEY` 设为接收端证书对，
+`A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` 设为网管推送时携带的 `user:password`。此时接收器改为校验
+Basic 鉴权，不再校验 `A2AT_SAMPLE_WEBHOOK_TOKEN`；同一凭据也会注册到内联 push config。
+
 ### 纯 A2A 模式（三跳，只用标准 A2A）
 
 页面是单模式的：协议在进程启动时确定，页面不再提供协议切换或对比卡。要对比两种模式，分别启动

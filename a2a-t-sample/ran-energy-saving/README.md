@@ -321,6 +321,13 @@ as natural-language text.
 If the NMS rejects a pure follow-up that carries `taskId`, set
 `A2AT_SAMPLE_PURE_FOLLOWUP=context` (or `task` for `taskId` only) and retry; the default is `both`.
 
+A real NMS requires an https callback reachable through a gateway. Set
+`A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` to that URL, `A2AT_SAMPLE_WEBHOOK_TLS_CERT` /
+`A2AT_SAMPLE_WEBHOOK_TLS_KEY` to the receiver's certificate pair, and
+`A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` to the `user:password` the NMS pushes with. The receiver then
+checks Basic auth instead of `A2AT_SAMPLE_WEBHOOK_TOKEN`, and the same credentials are registered in
+the inline push config.
+
 ### Pure A2A mode (three hops, standard A2A only)
 
 The page is single-mode: the protocol is fixed when the process starts, and the page has no
