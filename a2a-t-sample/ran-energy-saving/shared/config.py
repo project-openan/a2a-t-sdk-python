@@ -41,6 +41,13 @@ INTENT_MODE_PROCESSED = "processed"
 INTENT_MODE_RAW = "raw"
 SUPPORTED_INTENT_MODES = (INTENT_MODE_PROCESSED, INTENT_MODE_RAW)
 
+#: Conversation fields of a pure A2A follow-up. The vendor may reject ``taskId``; the yellow-zone
+#: run can switch to ``context`` without a code change.
+PURE_FOLLOWUP_BOTH = "both"
+PURE_FOLLOWUP_TASK = "task"
+PURE_FOLLOWUP_CONTEXT = "context"
+SUPPORTED_PURE_FOLLOWUPS = (PURE_FOLLOWUP_BOTH, PURE_FOLLOWUP_TASK, PURE_FOLLOWUP_CONTEXT)
+
 #: ``.env`` keys.
 MODEL_MODE_ENV_KEY = "A2AT_SAMPLE_MODEL_MODE"
 LANGUAGE_ENV_KEY = "A2AT_LANGUAGE"
@@ -59,6 +66,10 @@ ADK_MODEL_API_KEY_ENV_KEY = "ADK_MODEL_API_KEY"
 DISCOVERY_ENV_KEY = "A2AT_SAMPLE_DISCOVERY"
 TRANSPORT_ENV_KEY = "A2AT_SAMPLE_TRANSPORT"
 INTENT_MODE_ENV_KEY = "A2AT_SAMPLE_INTENT_MODE"
+#: Directory of the run transcripts, NMS wire logs and the UI/SQLite history.
+RUNS_DIR_ENV_KEY = "A2AT_SAMPLE_RUNS_DIR"
+#: Which conversation fields a pure A2A follow-up carries (``both`` / ``task`` / ``context``).
+PURE_FOLLOWUP_ENV_KEY = "A2AT_SAMPLE_PURE_FOLLOWUP"
 HTTP_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS"
 LLM_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_LLM_TIMEOUT_SECONDS"
 LLM_MAX_ATTEMPTS_ENV_KEY = "A2AT_SAMPLE_LLM_MAX_ATTEMPTS"
@@ -171,6 +182,30 @@ DEFAULT_ADK_MODEL_API_KEY = "not-needed"
 #: Langfuse Cloud endpoint and environment label of the client observability export.
 DEFAULT_LANGFUSE_BASE_URL = "https://us.cloud.langfuse.com"
 DEFAULT_LANGFUSE_ENVIRONMENT = "demo"
+
+#: Sample root (the directory that owns ``runs/``). Relative runs directories resolve here.
+SAMPLE_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_RUNS_DIR = SAMPLE_ROOT / "runs"
+
+
+def _resolved_dir(values: dict[str, str | None], key: str, default: Path) -> str:
+    """Resolve one directory key; a relative value is relative to the sample root."""
+    raw_value = _env_value(values, key, str(default))
+    path = Path(raw_value).expanduser()
+    if not path.is_absolute():
+        path = SAMPLE_ROOT / path
+    return str(path.resolve())
+
+
+def _pure_followup(values: dict[str, str | None]) -> str:
+    """Resolve the pure follow-up field selection, rejecting an unsupported value."""
+    value = _env_value(values, PURE_FOLLOWUP_ENV_KEY, PURE_FOLLOWUP_BOTH).lower()
+    if value not in SUPPORTED_PURE_FOLLOWUPS:
+        raise ValueError(
+            f"Unsupported {PURE_FOLLOWUP_ENV_KEY}: {value}; "
+            f"expected one of {SUPPORTED_PURE_FOLLOWUPS}"
+        )
+    return value
 
 
 def _env_value(values: dict[str, str | None], key: str, default: str) -> str:
@@ -300,6 +335,8 @@ class SampleConfig:
         gateway_port: bind port of the optional inbound A2A gateway.
         gateway_register: whether the gateway registers its AgentCard in the registry center.
         gateway_scenario: scenario used for an inbound gateway request.
+        runs_dir: directory of run transcripts, NMS wire logs and the UI history.
+        pure_followup: conversation fields of a pure A2A follow-up (``both`` / ``task`` / ``context``).
         gateway_task_db_path: Absolute SQLite path of the inbound gateway Task store and its push
             notification registrations; ``None`` keeps both in memory.
         auth_token: bearer token required by the Web UI API and the inbound gateway; empty keeps
@@ -363,6 +400,8 @@ class SampleConfig:
     gateway_port: int = DEFAULT_GATEWAY_PORT
     gateway_register: bool = False
     gateway_scenario: str = DEFAULT_GATEWAY_SCENARIO
+    runs_dir: str = str(DEFAULT_RUNS_DIR)
+    pure_followup: str = PURE_FOLLOWUP_BOTH
     gateway_task_db_path: str | None = None
     auth_token: str = ""
     server_auth_token: str = ""
@@ -519,6 +558,8 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         gateway_port=_env_int(values, GATEWAY_PORT_ENV_KEY, DEFAULT_GATEWAY_PORT),
         gateway_register=_env_bool(values, GATEWAY_REGISTER_ENV_KEY, False),
         gateway_scenario=gateway_scenario,
+        runs_dir=_resolved_dir(values, RUNS_DIR_ENV_KEY, DEFAULT_RUNS_DIR),
+        pure_followup=_pure_followup(values),
         gateway_task_db_path=_optional_absolute_path(values, GATEWAY_TASK_DB_ENV_KEY),
         auth_token=_env_value(values, AUTH_TOKEN_ENV_KEY, "").strip(),
         server_auth_token=_env_value(values, SERVER_AUTH_TOKEN_ENV_KEY, "").strip(),

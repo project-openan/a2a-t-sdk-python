@@ -8,13 +8,19 @@ the answer resolves the negotiation.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 
 from a2a.client.client import ClientCallContext
 from a2a.types import Role, SendMessageRequest
-from shared.config import DEFAULT_HTTP_TIMEOUT_SECONDS
+from shared.config import (
+    DEFAULT_HTTP_TIMEOUT_SECONDS,
+    PURE_FOLLOWUP_BOTH,
+    PURE_FOLLOWUP_CONTEXT,
+    PURE_FOLLOWUP_TASK,
+)
 from shared.trace import PHASE_TASK_PROMPT, TraceRecorder, current_trace
 
 from protocol.client_flow import (
@@ -35,27 +41,30 @@ async def run_pure_client_flow(
     *,
     transport: ClientTransport,
     user_request: str,
-    answer: Callable[[dict[str, object]], str] | None = None,
+    answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = None,
     on_answer: Callable[[dict[str, object], str], Awaitable[None]] | None = None,
     max_rounds: int = 3,
     call_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
     event_sink: Callable[[dict[str, object]], None] | None = None,
     trace_sink: Callable[[dict[str, object]], None] | None = None,
     run_id: str | None = None,
+    followup: str = PURE_FOLLOWUP_BOTH,
 ) -> ClientFlowResult:
     """Send one pure A2A request and answer its ``INPUT_REQUIRED`` rounds.
 
     Args:
         transport: SSE or webhook transport (the demo uses SSE).
         user_request: Natural-language request.
-        answer: Callback receiving one ``INPUT_REQUIRED`` event and returning the follow-up text;
-            defaults to the server proposal carried by the event metadata.
+        answer: Callback receiving one ``INPUT_REQUIRED`` event and returning the follow-up text
+            (or an awaitable of text); defaults to the server proposal carried by the event
+            metadata.
         max_rounds: Maximum negotiation rounds.
         call_timeout_seconds: HTTP budget of one send.
         event_sink: Optional live observer of normalized events.
         trace_sink: Optional observer of synthetic ``message_sent`` spans.
         run_id: Run Explorer run id carried as sample-local message metadata so the downstream
             agents can attach their trace spans to the same run. It is not an A2A-T field.
+        followup: Conversation fields of the follow-up message (``both``/``task``/``context``).
 
     Returns:
         The collected events, task id and report.
@@ -81,7 +90,7 @@ async def run_pure_client_flow(
         pending = _pending_negotiation(batch)
         if pending is None:
             break
-        text = _answer_for(pending, answer)
+        text = await _answer_for(pending, answer)
         if not text.strip():
             break
         if on_answer is not None:
@@ -91,6 +100,7 @@ async def run_pure_client_flow(
             task_id=_text(pending.get("task_id")),
             context_id=_text(pending.get("context_id")),
             run_id=run_id,
+            followup=followup,
         )
         _emit_message_sent(follow, text, trace_sink)
         batch = await transport.send(follow, _call_context(call_timeout_seconds))
@@ -122,12 +132,13 @@ def _follow_up_request(
     task_id: str | None,
     context_id: str | None,
     run_id: str | None = None,
+    followup: str = PURE_FOLLOWUP_BOTH,
 ) -> SendMessageRequest:
     """Build the continuation message that resumes an ``INPUT_REQUIRED`` Task."""
     request = _message_request(text, run_id=run_id)
-    if task_id:
+    if task_id and followup in (PURE_FOLLOWUP_BOTH, PURE_FOLLOWUP_TASK):
         request.message.task_id = task_id
-    if context_id:
+    if context_id and followup in (PURE_FOLLOWUP_BOTH, PURE_FOLLOWUP_CONTEXT):
         request.message.context_id = context_id
     return request
 
@@ -158,14 +169,23 @@ def _call_context(timeout: float) -> ClientCallContext:
 def _pending_negotiation(
     events: list[dict[str, object]],
 ) -> dict[str, object] | None:
-    """Return the newest pure negotiation ``INPUT_REQUIRED`` status, when present."""
+    """Return the newest ``INPUT_REQUIRED`` status the client must answer.
+
+    The local sample tags a negotiation with its ``pure`` metadata; a real NMS returns a standard
+    A2A status without that tag. An MIE ``approval`` phase belongs to the RAN Agent and is not
+    answered by the OSS Agent.
+    """
     for event in reversed(events):
         if event.get("kind") != "status":
             continue
         if event.get("state") != "TASK_STATE_INPUT_REQUIRED":
             continue
-        if pure_metadata(event).get("kind") == "negotiation":
-            return event
+        pure = pure_metadata(event)
+        if pure.get("kind") == "approval":
+            continue
+        if pure and pure.get("kind") not in (None, "negotiation"):
+            continue
+        return event
     return None
 
 
@@ -178,15 +198,18 @@ def pure_metadata(event: Mapping[str, object]) -> dict[str, object]:
     return dict(raw) if isinstance(raw, Mapping) else {}
 
 
-def _answer_for(
+async def _answer_for(
     event: dict[str, object],
-    answer: Callable[[dict[str, object]], str] | None,
+    answer: Callable[[dict[str, object]], str | Awaitable[str]] | None,
 ) -> str:
-    """Return the follow-up text for one negotiation event."""
-    if answer is not None:
-        return answer(event)
-    proposal = pure_metadata(event).get("proposal")
-    return proposal if isinstance(proposal, str) else ""
+    """Return the follow-up text for one negotiation event (sync or async callback)."""
+    if answer is None:
+        proposal = pure_metadata(event).get("proposal")
+        return proposal if isinstance(proposal, str) else ""
+    result = answer(event)
+    if inspect.isawaitable(result):
+        result = await result
+    return result if isinstance(result, str) else ""
 
 
 def _emit_message_sent(

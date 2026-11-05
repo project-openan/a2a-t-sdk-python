@@ -615,6 +615,28 @@ A2A-T 路径完全不变：`--protocol a2a-t` 仍安装
 旧的单轮 `plain` 路径（`protocol/plain_a2a.py`、`run_plain_client_flow`）保留为测试内部基线。
 `POST /api/runs` 仍接受它，但 CLI 和页面不再暴露。
 
+#### 4.6.1 pure A2A 对接真实网管
+
+`--nms --protocol pure` 保留 OSS Agent，只去掉本地 RAN Agent 和 MIE：
+
+```text
+Engineer UI ──A2A (direct + SSE)──> OSS Agent ──A2A (nms + webhook)──> 真实网管
+```
+
+- `run_demo.py` 在 `--oss-port` 启动 OSS Agent；UI 用 `--discovery direct --transport sse` 指向
+  它。每次运行的 `.env` 仍为 OSS 进程保留 `nms`/`webhook`（`--nms-sim` 时为 `nms`/`sse`）。
+- `OSSPureExecutor.start()` 按 `SampleConfig` 构建一次下游传输：真实网管用
+  `NmsWebhookTransport` + 内置 webhook receiver；仿真器用 `NmsSseTransport`；本地三跳 demo 继续
+  用 direct `SseClientTransport`。
+- live OSS Agent 用与 A2A-T 客户端相同的 `AdkDecisionProvider` 回答网管的 `INPUT_REQUIRED`；
+  `demo.pure_policy.render_pure_answer` 把 `NegotiationDecision` 渲染成网管期望的自然语言
+  目标/理由。离线仿真器使用确定性回答。
+- `_pending_negotiation` 接受任意标准 `TASK_STATE_INPUT_REQUIRED`，不再要求样例私有的 `pure`
+  元数据；MIE 的 `approval` 阶段仍会被 OSS Agent 忽略。
+- pure 模式下两种 NMS 传输收到 `INPUT_REQUIRED` 立即返回，不再等 idle 兜底或轮询终态。
+- follow-up 默认同时带 `taskId` + `contextId`；`A2AT_SAMPLE_PURE_FOLLOWUP` 可选 `task`、
+  `context` 或 `both`。
+
 ### 4.7 单次运行指标与协议基准
 
 `protocol/run_metrics.py` 为每次结束的 run 生成一条指标记录，直接读取已经存在的 trace span，
@@ -725,6 +747,9 @@ P95 和审批等待。
 | `A2AT_SAMPLE_TRANSPORT` | `sse`（默认）、`webhook` | 客户端事件传输。真实 `--nms` 默认 webhook（`message:send` + 推送）；`--nms-sim` 保持 sse。 |
 | `A2AT_SAMPLE_WEBHOOK_HOST` / `A2AT_SAMPLE_WEBHOOK_PORT` | 默认 `127.0.0.1` / `9000` | webhook 接收地址；真实网管必须能访问该主机和端口。 |
 | `A2AT_SAMPLE_INTENT_MODE` | `processed`（默认）、`raw` | 在 A2A/A2A-T 映射前执行业务意图层，或直接发送操作员文本。`--intent-mode` 与 `POST /api/runs.intentMode` 可按 run 覆盖。 |
+| `A2AT_SAMPLE_RUN_DIR` | 未设置；`%TEMP%/a2at-ran-energy-saving-adk` | 启动器状态目录：`pids.json`、子进程日志和每次运行的 `.env`。第二个实例设置不同值，`--stop` 只停自己的进程。 |
+| `A2AT_SAMPLE_RUNS_DIR` | 默认 `<sample>/runs` | 数据目录：transcript、client/task/gateway SQLite、NMS `wire.jsonl` 和 Web UI 历史。相对路径按 sample 根目录解析。 |
+| `A2AT_SAMPLE_PURE_FOLLOWUP` | `both`（默认）、`task`、`context` | pure A2A follow-up 携带的会话字段。网管拒绝带 `taskId` 的 follow-up 时切到 `context`。 |
 | `A2AT_SAMPLE_WEBHOOK_PORT` | 默认 `9000`（`0` = 临时端口） | 内置 webhook 接收器端口。 |
 | `A2AT_SAMPLE_WEBHOOK_TOKEN` | 默认 `demo-webhook-token` | 与 `X-A2A-Notification-Token` 比对的静态推送 token。 |
 | `A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT` | 默认 `300`（与 HTTP 预算一致） | 无推送多少秒后结束 webhook 阶段；阶段不能早于客户端预算结束。 |

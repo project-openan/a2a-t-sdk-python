@@ -12,10 +12,11 @@ aggregation: forward, answer, tag each event with its hop, and return the final 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Final
 
@@ -40,17 +41,33 @@ from a2a.types import (
     TaskState,
 )
 from a2a.utils.constants import TransportProtocol
+from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
 from google.protobuf.json_format import ParseDict
 from shared.agent_card import AGENT_CARD_NAME, AGENT_CARD_ORGANIZATION
-from shared.config import DEFAULT_HTTP_TIMEOUT_SECONDS, SampleConfig, load_config
+from shared.config import (
+    DEFAULT_HTTP_TIMEOUT_SECONDS,
+    DISCOVERY_NMS,
+    PURE_FOLLOWUP_BOTH,
+    TRANSPORT_WEBHOOK,
+    SampleConfig,
+    load_config,
+)
 from shared.logging_setup import configure_logging
-from shared.run_constants import LANGUAGE_ZH
+from shared.models import NegotiationProposeView
+from shared.run_constants import LANGUAGE_ZH, PROTOCOL_PURE
+from shared.webhook_receiver import WebhookReceiver
 from starlette.applications import Starlette
 
-from protocol.client_flow import ClientFlowResult, SseClientTransport
+from protocol.client_flow import (
+    ClientFlowResult,
+    ClientTransport,
+    SseClientTransport,
+    build_webhook_receiver,
+)
 from protocol.discovery import DISCOVERY_DIRECT, discover_agent
 from protocol.intent import IntentProcessor, OperatorRequest, ProcessedIntent
 from protocol.messages import SAMPLE_RUN_ID_METADATA_KEY, metadata_to_dict
+from protocol.nms_client import NmsClient, NmsConfig, NmsSseTransport, NmsWebhookTransport
 from protocol.pure_client_flow import run_pure_client_flow
 
 #: Agent identity and skill.
@@ -76,29 +93,88 @@ class OSSPureExecutor(AgentExecutor):
     def __init__(
         self,
         *,
-        ran_url: str,
-        answer: Callable[[dict[str, object]], str],
+        config: SampleConfig | None = None,
+        ran_url: str | None = None,
+        answer: Callable[[dict[str, object]], str | Awaitable[str]],
+        decision_provider: object | None = None,
         max_rounds: int = 3,
         timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
         intent_processor: IntentProcessor | None = None,
         language: str = LANGUAGE_ZH,
+        followup: str = PURE_FOLLOWUP_BOTH,
     ) -> None:
         """Create one OSS executor.
 
         Args:
-            ran_url: RAN Agent base URL.
-            answer: decision function answering one RAN ``INPUT_REQUIRED`` event.
+            config: sample configuration; when it selects NMS discovery the downstream hop uses
+                the vendor ``message:send`` + webhook (or SSE for the simulator) transport.
+            ran_url: RAN Agent base URL used by the local direct topology.
+            answer: decision function answering one downstream ``INPUT_REQUIRED`` event. It may
+                return text or an awaitable of text.
+            decision_provider: optional live decision provider; the executor calls its
+                ``set_user_request`` hook with the normalized intent before the downstream hop.
             max_rounds: negotiation round budget.
-            timeout_seconds: A2A call budget of the OSS->RAN hop.
-            intent_processor: business intent layer run before the RAN hop.
+            timeout_seconds: A2A call budget of the downstream hop.
+            intent_processor: business intent layer run before the downstream hop.
             language: process-level language used by the intent processor.
+            followup: conversation fields carried by one pure follow-up (``both``/``task``/``context``).
         """
-        self._ran_url = ran_url.rstrip("/")
+        self._config = config
+        self._ran_url = (ran_url or "").rstrip("/")
         self._answer = answer
+        self._decision_provider = decision_provider
         self._max_rounds = max_rounds
         self._timeout_seconds = timeout_seconds
         self._intent_processor = intent_processor
         self._language = language
+        self._followup = followup
+        # NMS downstream transport, created once by ``start`` and shared by every request.
+        self._nms_client: NmsClient | None = None
+        self._nms_transport: ClientTransport | None = None
+        self._webhook_receiver: WebhookReceiver | None = None
+
+    async def start(self) -> None:
+        """Create the long-lived NMS downstream transport, when NMS discovery is configured."""
+        if self._config is None or self._config.discovery != DISCOVERY_NMS:
+            return
+        self._nms_client = NmsClient(NmsConfig.from_config(self._config))
+        if self._config.transport == TRANSPORT_WEBHOOK:
+            queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+            receiver = build_webhook_receiver(
+                token=self._config.webhook_token,
+                queue=queue,
+                host=self._config.webhook_host,
+                port=self._config.webhook_port,
+            )
+            await receiver.start()
+            self._webhook_receiver = receiver
+            _LOGGER.info("OSS Agent NMS webhook: push_url=%s", receiver.url)
+            self._nms_transport = NmsWebhookTransport(
+                self._nms_client,
+                queue=queue,
+                push_url=receiver.url,
+                push_token=self._config.webhook_token,
+                protocol=PROTOCOL_PURE,
+                idle_timeout=float(self._config.webhook_idle_timeout),
+            )
+        else:
+            self._nms_transport = NmsSseTransport(
+                self._nms_client,
+                protocol=PROTOCOL_PURE,
+                request_timeout=self._config.nms_request_timeout,
+                read_after_send=self._config.nms_read_after_send,
+            )
+
+    async def stop(self) -> None:
+        """Stop the webhook receiver and close the NMS client."""
+        receiver = self._webhook_receiver
+        if receiver is not None:
+            await receiver.stop()
+            self._webhook_receiver = None
+        if self._nms_client is not None:
+            await self._nms_client.aclose()
+            self._nms_client = None
+        self._nms_transport = None
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Create the outer Task, run the RAN hop, and publish the aggregated result."""
@@ -225,7 +301,22 @@ class OSSPureExecutor(AgentExecutor):
         event_sink: Callable[[dict[str, object]], None],
         updater: TaskUpdater,
     ) -> ClientFlowResult:
-        """Run the standard A2A client flow against RAN."""
+        """Run the standard A2A client flow against the configured downstream agent."""
+        setter = getattr(self._decision_provider, "set_user_request", None)
+        if callable(setter):
+            setter(user_request)
+        if self._nms_transport is not None:
+            return await run_pure_client_flow(
+                transport=self._nms_transport,
+                user_request=user_request,
+                answer=self._answer,
+                on_answer=lambda event, text: self._publish_answer(updater, event, text),
+                max_rounds=self._max_rounds,
+                call_timeout_seconds=self._timeout_seconds,
+                event_sink=event_sink,
+                run_id=run_id,
+                followup=self._followup,
+            )
         discovered = await discover_agent(
             discovery=DISCOVERY_DIRECT,
             organization=AGENT_CARD_ORGANIZATION,
@@ -258,6 +349,7 @@ class OSSPureExecutor(AgentExecutor):
                     call_timeout_seconds=self._timeout_seconds,
                     event_sink=event_sink,
                     run_id=run_id,
+                    followup=self._followup,
                 )
             finally:
                 close = getattr(client, "close", None)
@@ -405,16 +497,17 @@ def build_oss_app(
     *,
     config: SampleConfig | None = None,
     ran_url: str | None = None,
-    answer: Callable[[dict[str, object]], str] | None = None,
+    answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = None,
+    decision_provider: object | None = None,
     task_store: TaskStore | None = None,
     host: str | None = None,
     port: int | None = None,
     timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
     intent_processor: IntentProcessor | None = None,
     language: str = LANGUAGE_ZH,
+    followup: str = PURE_FOLLOWUP_BOTH,
 ) -> Starlette:
     """Build the OSS A2A app."""
-    del config
     resolved_host = host or os.environ.get("A2AT_SAMPLE_OSS_HOST", "127.0.0.1")
     resolved_port = port or int(os.environ.get("A2AT_SAMPLE_OSS_PORT", str(DEFAULT_OSS_PORT)))
     resolved_ran_url = (
@@ -424,12 +517,25 @@ def build_oss_app(
     resolved_answer = answer or (lambda event: _proposal_of(event))
     card = build_oss_agent_card(host=resolved_host, port=resolved_port)
     executor = OSSPureExecutor(
+        config=config,
         ran_url=resolved_ran_url,
         answer=resolved_answer,
+        decision_provider=decision_provider,
         timeout_seconds=timeout_seconds,
         intent_processor=intent_processor,
         language=language,
+        followup=followup,
     )
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: Starlette) -> AsyncIterator[None]:
+        del app
+        await executor.start()
+        try:
+            yield
+        finally:
+            await executor.stop()
+
     request_handler = DefaultRequestHandler(
         agent_executor=executor,
         task_store=task_store or InMemoryTaskStore(),
@@ -439,7 +545,8 @@ def build_oss_app(
         routes=[
             *create_agent_card_routes(card),
             *create_rest_routes(request_handler),
-        ]
+        ],
+        lifespan=lifespan,
     )
     app.state.agent_card = card
     app.state.request_handler = request_handler
@@ -454,18 +561,88 @@ def main() -> None:
     host = os.environ.get("A2AT_SAMPLE_OSS_HOST", "127.0.0.1")
     port = int(os.environ.get("A2AT_SAMPLE_OSS_PORT", str(DEFAULT_OSS_PORT)))
     from demo.intent import build_demo_intent_processor
-    from demo.pure_policy import pure_answer_from_event
+
+    decision_provider: object | None = None
+    if config.discovery == DISCOVERY_NMS:
+        if config.is_offline:
+            # The simulator runs offline with the deterministic fake model; a scripted answer
+            # keeps the pure round-trip testable without a live endpoint. The simulator serves
+            # 00:00~06:00 and accepts a 30% rate, so the answer fills both missing values.
+            def answer(event: dict[str, object]) -> str:
+                del event
+                return "{00:00~06:00,30Mbps}"
+
+        else:
+            from demo.agents.client_agent.agent import build_client_agent
+
+            from protocol.decision_provider import AdkDecisionProvider
+
+            decision_provider = AdkDecisionProvider(
+                agent_factory=build_client_agent,
+                offline=False,
+                default_region=config.nms_region or None,
+            )
+            answer = build_live_pure_answer(decision_provider)
+    else:
+        from demo.pure_policy import pure_answer_from_event
+
+        def answer(event: dict[str, object]) -> str:
+            return pure_answer_from_event(event, config.language)
 
     app = build_oss_app(
         config=config,
         host=host,
         port=port,
-        answer=lambda event: pure_answer_from_event(event, config.language),
+        answer=answer,
+        decision_provider=decision_provider,
         intent_processor=build_demo_intent_processor(config),
         language=config.language,
+        followup=config.pure_followup,
     )
     _LOGGER.info("starting OSS Agent on %s:%s", host, port)
     uvicorn.run(app, host=host, port=port)
+
+
+def build_live_pure_answer(
+    provider: object,
+) -> Callable[[dict[str, object]], Awaitable[str]]:
+    """Build the live pure-A2A answer callback around an ADK decision provider.
+
+    The vendor's ``INPUT_REQUIRED`` is free text, while the decision agent returns a structured
+    :class:`~shared.models.NegotiationDecision`; :func:`~demo.pure_policy.render_pure_answer`
+    renders it back to the text the vendor expects. The executor sets the original normalized
+    request on the provider before every downstream hop.
+    """
+    from demo.pure_policy import render_pure_answer
+
+    async def answer(event: dict[str, object]) -> str:
+        text = str(event.get("text") or "").strip()
+        pure = _pure_metadata(event)
+        round_value = pure.get("round", 1)
+        try:
+            round_number = max(1, int(round_value or 1))
+        except (TypeError, ValueError):
+            round_number = 1
+        context_id = str(event.get("context_id") or event.get("task_id") or "pure-negotiation")
+        propose = NegotiationProposeView(
+            negotiation_id=context_id,
+            kind="information",
+            round=round_number,
+            max_rounds=3,
+            content=text or "The NMS requested additional information.",
+            template_uri=None,
+            context_id=context_id,
+        )
+        session = NegotiationContext(
+            id=context_id,
+            round=round_number,
+            max_rounds=3,
+            performative=NegotiationPerformative.PROPOSE,
+        )
+        decision = await provider.respond(propose, session)  # type: ignore[attr-defined]
+        return render_pure_answer(decision)
+
+    return answer
 
 
 def _run_id_of(message: object) -> str | None:

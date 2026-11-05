@@ -27,7 +27,7 @@ from shared.run_constants import (
 def _build_parser() -> argparse.ArgumentParser:
     """Build the argument parser shared with the launcher."""
     from protocol.client_runtime import SUPPORTED_MODES
-    from shared.config import SUPPORTED_TRANSPORTS
+    from shared.config import SUPPORTED_DISCOVERY_MODES, SUPPORTED_TRANSPORTS
 
     from demo.scenario import SUPPORTED_SCENARIO_NAMES
 
@@ -42,6 +42,12 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=[mode for mode in SUPPORTED_MODES if mode != "scripted"],
     )
     parser.add_argument("--transport", required=True, choices=list(SUPPORTED_TRANSPORTS))
+    parser.add_argument(
+        "--discovery",
+        default=None,
+        choices=list(SUPPORTED_DISCOVERY_MODES),
+        help="run discovery default; the process .env value is used when omitted",
+    )
     parser.add_argument(
         "--ui-mode",
         default="presentation",
@@ -71,6 +77,7 @@ def run_ui(
     scenario: str,
     mode: str,
     transport: str,
+    discovery: str | None = None,
     ui_mode: str = "presentation",
     brand: str = BRAND_ORANGE,
     host: str = "127.0.0.1",
@@ -108,6 +115,7 @@ def run_ui(
             default_scenario=scenario,
             default_mode=mode,
             default_transport=transport,
+            default_discovery=discovery,
             bind_host=host,
             ui_mode=ui_mode,
             default_brand=brand,
@@ -164,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
         scenario=args.scenario,
         mode=args.mode,
         transport=args.transport,
+        discovery=args.discovery,
         ui_mode=args.ui_mode,
         brand=args.brand,
         server_url=args.server_url,

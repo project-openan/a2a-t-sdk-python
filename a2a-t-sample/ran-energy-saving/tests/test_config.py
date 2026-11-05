@@ -49,6 +49,8 @@ from shared.config import (
     PLANNER_MAX_STEPS_ENV_KEY,
     PLANNER_MODEL_ENV_KEY,
     PLANNER_TIMEOUT_ENV_KEY,
+    PURE_FOLLOWUP_ENV_KEY,
+    RUNS_DIR_ENV_KEY,
     SERVER_AUTH_TOKEN_ENV_KEY,
     TASK_DB_ENV_KEY,
     SampleConfig,
@@ -91,6 +93,8 @@ _ENV_KEYS = (
     LANGFUSE_ENVIRONMENT_ENV_KEY,
     LANGFUSE_PUBLIC_KEY_ENV_KEY,
     LANGFUSE_SECRET_KEY_ENV_KEY,
+    RUNS_DIR_ENV_KEY,
+    PURE_FOLLOWUP_ENV_KEY,
 )
 
 
@@ -621,4 +625,50 @@ def test_langfuse_rejects_an_invalid_switch(tmp_path: Path) -> None:
     env_file.write_text(f"{LANGFUSE_ENABLED_ENV_KEY}=sometimes\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match=LANGFUSE_ENABLED_ENV_KEY):
+        load_config(env_path=env_file)
+
+
+def test_runs_dir_defaults_to_the_sample_runs_directory(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+
+    config = load_config(env_path=env_file)
+
+    assert Path(config.runs_dir).name == "runs"
+    assert Path(config.runs_dir).is_absolute()
+
+
+def test_runs_dir_resolves_a_relative_value_against_the_sample_root(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{RUNS_DIR_ENV_KEY}=runs-pure\n", encoding="utf-8")
+
+    config = load_config(env_path=env_file)
+
+    assert Path(config.runs_dir).name == "runs-pure"
+    assert Path(config.runs_dir).is_absolute()
+
+
+def test_runs_dir_accepts_an_absolute_value(tmp_path: Path) -> None:
+    target = tmp_path / "custom-runs"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{RUNS_DIR_ENV_KEY}={target}\n", encoding="utf-8")
+
+    assert Path(load_config(env_path=env_file).runs_dir) == target
+
+
+def test_pure_followup_defaults_to_both_and_accepts_the_three_modes(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+    assert load_config(env_path=env_file).pure_followup == "both"
+
+    for value in ("both", "task", "context"):
+        env_file.write_text(f"{PURE_FOLLOWUP_ENV_KEY}={value}\n", encoding="utf-8")
+        assert load_config(env_path=env_file).pure_followup == value
+
+
+def test_pure_followup_rejects_an_unknown_mode(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{PURE_FOLLOWUP_ENV_KEY}=guessed\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=PURE_FOLLOWUP_ENV_KEY):
         load_config(env_path=env_file)

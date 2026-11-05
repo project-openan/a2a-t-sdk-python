@@ -41,7 +41,7 @@ from shared.config import (
     DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS,
     SampleConfig,
 )
-from shared.run_constants import PROTOCOL_A2A_T
+from shared.run_constants import PROTOCOL_A2A_T, PROTOCOL_PURE
 from shared.sse_event_consumer import normalize_event
 from shared.trace import (
     PHASE_DISPATCH,
@@ -709,6 +709,10 @@ class NmsSseTransport:
                 self._client.record_error("ParseError", "Unrecognized StreamResponse frame", frame)
             events.append(event)
             self._emit(event)
+            if self._protocol == PROTOCOL_PURE and _is_input_required(event):
+                # Pure A2A: INPUT_REQUIRED is the server's turn boundary; do not wait for a
+                # terminal state that arrives only after the client answers.
+                return events
             if is_stop_event(event):
                 break
         has_negotiation = any(
@@ -807,6 +811,8 @@ class NmsWebhookTransport:
         reply_event = _reply_event(reply)
         events.append(reply_event)
         self._emit(reply_event)
+        if self._protocol == PROTOCOL_PURE and _is_input_required(reply_event):
+            return events
         if _is_negotiation_event(reply_event):
             # A synchronous negotiation reply is the whole response for an initial send. For a
             # negotiation response, the vendor may push the next proposal on the same webhook, so
@@ -827,6 +833,8 @@ class NmsWebhookTransport:
             event = _frame_to_event(pushed)
             events.append(event)
             self._emit(event)
+            if self._protocol == PROTOCOL_PURE and _is_input_required(event):
+                return events
             if (
                 is_stop_event(event)
                 or is_report_artifact(event)
@@ -926,6 +934,11 @@ def _excerpt(text: str, limit: int = _ERROR_EXCERPT_LENGTH) -> str:
 def _is_negotiation_metadata(metadata: Mapping[str, object]) -> bool:
     """Return whether one message metadata map carries a structured negotiation."""
     return NEGOTIATION_T_EXTENSION_URI in metadata or NEGOTIATION_CONTEXT_METADATA_KEY in metadata
+
+
+def _is_input_required(event: Mapping[str, object]) -> bool:
+    """Return whether one normalized event hands the turn back to the client (pure A2A)."""
+    return event.get("state") == "TASK_STATE_INPUT_REQUIRED"
 
 
 def _is_negotiation_response(payload: Mapping[str, object]) -> bool:

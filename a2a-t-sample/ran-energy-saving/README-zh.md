@@ -184,7 +184,9 @@ sample 的可选依赖；未安装或未配置 key 时导出器为空操作。
 ### 真实厂商网管模式
 
 sample 也可以作为真实厂商网管的 OSS 客户端。加 `--nms` 后，启动器不再启动本地 registry、RAN
-Agent、MIE 和 OSS：客户端从网管的令牌接口获取会话，再直接调用网管的 A2A 面。
+Agent 和 MIE：A2A-T 客户端从网管的令牌接口获取会话，再直接调用网管的 A2A 面。
+`--nms --protocol pure` 仍保留本地 OSS Agent（工程师 UI → OSS Agent → 网管），只去掉 RAN
+Agent 和 MIE。
 
 真实 `--nms` run 使用 **`POST /a2a/json/message:send` + webhook**（网管的直连机器模式）；
 本地网管仿真器继续使用 SSE `message:stream` 契约。
@@ -246,6 +248,43 @@ A2AT_SAMPLE_NMS_WIRE_LOG=1
 
 原始报文写入 `runs/<runId>/wire.jsonl`，失败帧写入 `wire-error.jsonl`，凭据已脱敏。发送前的
 人审用 `--ui --mode confirm`；NMS 模式没有服务端审批 2，因为执行侧由厂商网管负责。
+
+### 同一台机器并行两个实例
+
+A2A-T 与 pure A2A 可以同时连同一个网管。两个实例必须使用不同的启动状态目录、数据目录、UI 端口
+和 webhook 端口：
+
+| | A2A-T | pure A2A |
+|---|---|---|
+| UI | 8080 | 8081 |
+| Webhook | 9000 | 9001 |
+| OSS Agent | 不启动 | 8011 |
+| `A2AT_SAMPLE_RUN_DIR` | `%TEMP%/a2at-ran-energy-saving-adk` | `%TEMP%/a2at-ran-energy-saving-adk-pure` |
+| `A2AT_SAMPLE_RUNS_DIR` | `runs` | `runs-pure` |
+
+```bash
+# 实例 A（A2A-T）
+A2AT_SAMPLE_RUN_DIR=/tmp/a2at-adk \
+A2AT_SAMPLE_RUNS_DIR=runs \
+A2AT_SAMPLE_UI_PORT=8080 \
+A2AT_SAMPLE_WEBHOOK_PORT=9000 \
+python run_demo.py --nms --ui --brand huawei
+
+# 实例 B（pure A2A：UI -> 本地 OSS Agent -> 网管）
+A2AT_SAMPLE_RUN_DIR=/tmp/a2at-adk-pure \
+A2AT_SAMPLE_RUNS_DIR=runs-pure \
+A2AT_SAMPLE_UI_PORT=8081 \
+A2AT_SAMPLE_WEBHOOK_PORT=9001 \
+python run_demo.py --nms --protocol pure --ui --brand huawei --oss-port 8011
+```
+
+`--stop` 只读本实例 `A2AT_SAMPLE_RUN_DIR/pids.json`，停 B 不影响 A。pure + NMS 中，UI 通过
+direct A2A/SSE 访问本地 OSS Agent；OSS Agent 通过纯 A2A 访问网管（webhook，`--nms-sim` 时用
+SSE）。OSS Agent 复用与 A2A-T 客户端相同的 ADK 决策 Agent 回答网管的 `INPUT_REQUIRED`，并把
+决策渲染成自然语言文本。
+
+如果网管拒绝带 `taskId` 的 pure follow-up，设置 `A2AT_SAMPLE_PURE_FOLLOWUP=context`
+（或 `task` 只带 taskId）后重试；默认是 `both`。
 
 ### 纯 A2A 模式（三跳，只用标准 A2A）
 

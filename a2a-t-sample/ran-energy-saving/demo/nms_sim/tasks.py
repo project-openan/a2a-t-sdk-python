@@ -41,6 +41,10 @@ class SimTask:
     message: str = ""
     artifacts: list[dict[str, object]] = field(default_factory=list)
     history: list[dict[str, object]] = field(default_factory=list)
+    #: Pure A2A negotiation state: the accumulated request text and the round counter.
+    pure_text: str = ""
+    pure_round: int = 0
+    pure_max_rounds: int = 3
 
     def to_dict(self) -> dict[str, object]:
         """Return the simulator's Task JSON document."""

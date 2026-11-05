@@ -123,3 +123,81 @@ async def test_no_answer_stops_the_flow() -> None:
 
     assert len(transport.requests) == 1
     assert result.final_state != FINAL_STATE_TASK_COMPLETED
+
+
+async def test_input_required_without_sample_metadata_is_still_detected() -> None:
+    """A real NMS returns a standard A2A status without the sample's ``pure`` metadata."""
+    event = _input_required()
+    event["metadata"] = {}
+    transport = _FakeTransport([[event], [_completed()]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "Use {00:00~06:00,10Mbps}.",
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert len(transport.requests) == 2
+    assert transport.requests[1][0].message.task_id == "task-1"
+
+
+async def test_an_async_answer_callback_is_awaited() -> None:
+    transport = _FakeTransport([[_input_required()], [_completed()]])
+
+    async def answer(event: dict[str, object]) -> str:
+        del event
+        return "Use {00:00~06:00,10Mbps}."
+
+    await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=answer,
+    )
+
+    assert transport.requests[1][0].message.parts[0].text == "Use {00:00~06:00,10Mbps}."
+
+
+async def test_followup_can_carry_only_the_context_id() -> None:
+    transport = _FakeTransport([[_input_required()], [_completed()]])
+
+    await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "Use {00:00~06:00,10Mbps}.",
+        followup="context",
+    )
+
+    follow_up = transport.requests[1][0]
+    assert follow_up.message.task_id == ""
+    assert follow_up.message.context_id == "ctx-1"
+
+
+async def test_followup_can_carry_only_the_task_id() -> None:
+    transport = _FakeTransport([[_input_required()], [_completed()]])
+
+    await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "Use {00:00~06:00,10Mbps}.",
+        followup="task",
+    )
+
+    follow_up = transport.requests[1][0]
+    assert follow_up.message.task_id == "task-1"
+    assert follow_up.message.context_id == ""
+
+
+async def test_an_approval_input_required_is_not_answered() -> None:
+    event = _input_required()
+    event["metadata"] = {"pure": {"kind": "approval", "phase": "approval", "round": 1}}
+    transport = _FakeTransport([[event]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "should not be sent",
+    )
+
+    assert len(transport.requests) == 1
+    assert result.final_state != FINAL_STATE_TASK_COMPLETED

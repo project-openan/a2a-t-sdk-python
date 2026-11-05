@@ -62,11 +62,19 @@ from shared.run_constants import DEMO_PROTOCOLS, PROTOCOL_A2A_T
 CASE_DIR = Path(__file__).resolve().parent.parent
 SAMPLE_DIR = CASE_DIR.parent
 REPO_ROOT = SAMPLE_DIR.parent
-RUN_DIR = Path(tempfile.gettempdir()) / "a2at-ran-energy-saving-adk"
+#: Launcher state (pids, logs, per-run .env). A second instance sets a different value so
+#: ``--stop`` only touches its own processes.
+RUN_DIR = Path(
+    os.environ.get("A2AT_SAMPLE_RUN_DIR")
+    or Path(tempfile.gettempdir()) / "a2at-ran-energy-saving-adk"
+)
 PID_FILE = RUN_DIR / "pids.json"
-TASK_DB_PATH = CASE_DIR / "runs" / "task-status.sqlite3"
-CLIENT_DB_PATH = CASE_DIR / "runs" / "client-state.sqlite3"
-GATEWAY_TASK_DB_PATH = CASE_DIR / "runs" / "gateway-task-status.sqlite3"
+#: Data directory (transcripts, sqlite stores, NMS wire logs, Web UI history). It defaults to the
+#: sample's ``runs/`` and is also written into the per-run .env as ``A2AT_SAMPLE_RUNS_DIR``.
+RUNS_DIR = Path(os.environ.get("A2AT_SAMPLE_RUNS_DIR") or CASE_DIR / "runs")
+TASK_DB_PATH = RUNS_DIR / "task-status.sqlite3"
+CLIENT_DB_PATH = RUNS_DIR / "client-state.sqlite3"
+GATEWAY_TASK_DB_PATH = RUNS_DIR / "gateway-task-status.sqlite3"
 
 #: Source ``.env`` candidates, in resolution order.
 ENV_CANDIDATES = (CASE_DIR / ".env", SAMPLE_DIR / ".env", SAMPLE_DIR / "env.example")
@@ -307,7 +315,9 @@ def _write_run_env(
     direct_port = oss_port if protocol == "pure" else server_port
     # The pure engineer client must discover the OSS Agent, not the RAN Agent. The OSS card is
     # not registered under the RAN card's name, so direct discovery of its URL is the only path.
-    client_discovery = "direct" if protocol == "pure" else discovery
+    # In pure + NMS the same .env is also read by the OSS Agent: it must keep ``nms`` for its
+    # downstream hop, while the Web UI overrides discovery back to ``direct`` on its CLI.
+    client_discovery = "direct" if protocol == "pure" and discovery != "nms" else discovery
     values.update(
         {
             "A2AT_LANGUAGE": language,
@@ -330,6 +340,7 @@ def _write_run_env(
             "A2AT_SAMPLE_OSS_PORT": str(oss_port),
             "A2AT_SAMPLE_MIE_URL": f"http://{server_host}:{mie_port}",
             "A2AT_SAMPLE_MIE_PORT": str(mie_port),
+            "A2AT_SAMPLE_RUNS_DIR": str(RUNS_DIR),
             "A2AT_SAMPLE_TASK_DB": str(TASK_DB_PATH),
             "A2AT_SAMPLE_CLIENT_DB": str(CLIENT_DB_PATH),
             "A2AT_SAMPLE_GATEWAY_TASK_DB": str(GATEWAY_TASK_DB_PATH),
@@ -788,6 +799,7 @@ async def _run_client_foreground(
     transport: str,
     language: str,
     protocol: str = PROTOCOL_A2A_T,
+    discovery: str | None = None,
     user_request: str | None = None,
 ) -> int:
     """Run the client flow in-process and write its transcript."""
@@ -805,6 +817,7 @@ async def _run_client_foreground(
         model_mode=config.model_mode,
         mode=mode,
         transport=transport,
+        runs_dir=Path(config.runs_dir),
     )
 
     def event_sink(event: dict[str, object]) -> None:
@@ -873,7 +886,7 @@ async def _run_client_foreground(
                 scenario,
                 mode,
                 transport,
-                config.discovery,
+                discovery or config.discovery,
                 protocol=protocol,
                 env_path=env_path,
             )
@@ -894,7 +907,7 @@ async def _run_client_foreground(
         print(f"[client] final_state={result.final_state} task_id={result.task_id or '-'}")
         print(f"[client] trace: {_trace_summary(trace_spans)}")
         print(f"[client] run id: {run_id}")
-        print(f"[client] server trace: {CASE_DIR / 'runs' / run_id / 'server-trace.jsonl'}")
+        print(f"[client] server trace: {Path(config.runs_dir) / run_id / 'server-trace.jsonl'}")
         if result.report:
             print(f"[client] report={json.dumps(result.report, ensure_ascii=False)}")
     except Exception as exc:  # noqa: BLE001 - the launcher reports the failure and exits non-zero
@@ -1217,8 +1230,6 @@ def main() -> int:
                 "a real --nms run requires --transport webhook (message:send + push notifications); "
                 "use --nms-sim for the local SSE simulator"
             )
-        if args.protocol == "pure":
-            parser.error("--nms is not supported with --protocol pure")
         if args.gateway:
             parser.error("--nms is not supported with --gateway")
         if args.approval_gate:
@@ -1511,6 +1522,15 @@ def main() -> int:
                     return 1
             elif args.gateway and start("gateway", GATEWAY_MODULE, args.gateway_port) is None:
                 return 1
+        elif args.protocol == "pure":
+            # pure + NMS keeps the OSS Agent but drops the local RAN Agent and MIE: the OSS Agent
+            # forwards the normalized request to the vendor NMS over plain A2A.
+            oss_env = {
+                "A2AT_SAMPLE_OSS_HOST": server_host,
+                "A2AT_SAMPLE_OSS_PORT": str(args.oss_port),
+            }
+            if start("oss", OSS_MODULE, args.oss_port, oss_env) is None:
+                return 1
 
         ui_proc: subprocess.Popen[str] | None = None
         if args.ui:
@@ -1518,7 +1538,11 @@ def main() -> int:
                 f"[run_demo] starting Web UI (scenario selectable, mode manual/auto, "
                 f"transport={args.transport}, language={args.language}, model_mode={args.model_mode}) ..."
             )
-            if args.nms:
+            pure_nms = args.nms and args.protocol == "pure"
+            if pure_nms:
+                # The engineer client talks to the local OSS Agent; the OSS Agent owns the NMS hop.
+                ui_server_url = args.server_url or f"http://{server_host}:{args.oss_port}"
+            elif args.nms:
                 ui_server_url = args.server_url or resolved_config.nms_a2a_base
             else:
                 ui_server_url = args.server_url or (
@@ -1526,7 +1550,13 @@ def main() -> int:
                     if args.protocol == "pure"
                     else f"http://{server_host}:{server_port}"
                 )
-            mie_url = f"http://{server_host}:{args.mie_port}" if args.protocol == "pure" else None
+            mie_url = (
+                f"http://{server_host}:{args.mie_port}"
+                if args.protocol == "pure" and not args.nms
+                else None
+            )
+            # The UI -> OSS hop is local plain A2A; only the OSS Agent uses the NMS webhook.
+            ui_transport = "sse" if pure_nms else args.transport
             ui_args = [
                 "--env-file",
                 str(env_path),
@@ -1539,7 +1569,7 @@ def main() -> int:
                 "--mode",
                 args.mode,
                 "--transport",
-                args.transport,
+                ui_transport,
                 "--ui-mode",
                 args.ui_mode,
                 "--brand",
@@ -1549,7 +1579,9 @@ def main() -> int:
                 "--protocol",
                 args.protocol,
             ]
-            if (args.approval_gate and not args.nms) or args.protocol == "pure":
+            if pure_nms:
+                ui_args += ["--discovery", "direct"]
+            if not args.nms and (args.approval_gate or args.protocol == "pure"):
                 ui_args += ["--approval-gate", "--approval-timeout", str(args.approval_timeout)]
             if args.allow_insecure_bind:
                 ui_args.append("--allow-insecure-bind")
@@ -1605,14 +1637,16 @@ def main() -> int:
                 f"language={args.language}, "
                 f"model_mode={args.model_mode}) ..."
             )
+            pure_nms = args.nms and args.protocol == "pure"
             return_code = asyncio.run(
                 _run_client_foreground(
                     env_path=env_path,
                     scenario=args.scenario,
                     mode=args.mode,
-                    transport=args.transport,
+                    transport="sse" if pure_nms else args.transport,
                     language=args.language,
                     protocol=args.protocol,
+                    discovery="direct" if pure_nms else None,
                     user_request=args.request or None,
                 )
             )

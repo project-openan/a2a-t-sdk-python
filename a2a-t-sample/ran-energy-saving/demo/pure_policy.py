@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from typing import Final
 
 from protocol.pure_a2a import RegexPureTargetPolicy
+from shared.models import NegotiationDecision
 from shared.run_constants import LANGUAGE_EN, LANGUAGE_ZH
 
 from demo.scenario import KIND_INFORMATION, KIND_TARGET, accept_filled_params
@@ -86,10 +87,32 @@ def pure_answer_from_event(
     return pure_answer_for(kind, round_number, language)
 
 
+def render_pure_answer(decision: NegotiationDecision) -> str:
+    """Render one decision as the natural-language answer a pure A2A server expects.
+
+    A counter/accept decision carries the negotiated target; fall back to the rationale so the
+    vendor still receives a meaningful reply when the model chose a different action.
+    """
+    if decision.action == "counter":
+        if decision.counter_proposal:
+            return decision.counter_proposal
+        target = (decision.counter_params or {}).get("guaranteedThroughputTarget")
+        if isinstance(target, str) and target:
+            return target
+        return decision.rationale
+    if decision.action == "accept":
+        target = (decision.filled_params or {}).get("guaranteedThroughputTarget")
+        if isinstance(target, str) and target:
+            return target
+        return decision.rationale or "Accepted. Please proceed."
+    return decision.rationale or ("Rejected." if decision.action == "reject" else "Aborted.")
+
+
 __all__ = [
     "build_demo_pure_policy",
     "pure_answer_for",
     "pure_answer_from_event",
     "pure_base_target",
     "pure_corrected_target",
+    "render_pure_answer",
 ]

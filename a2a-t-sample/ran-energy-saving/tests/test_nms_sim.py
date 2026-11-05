@@ -363,3 +363,49 @@ async def test_strict_task_stream_emits_heartbeats_before_completion() -> None:
 
     assert any(chunk.startswith(": heartbeat") for chunk in chunks)
     assert any('"TASK_STATE_COMPLETED"' in chunk for chunk in chunks)
+
+
+async def test_pure_missing_target_asks_then_resumes_to_completed() -> None:
+    async for client in _client():
+        token = await _token(client)
+        headers = {"Authorization": f"Bearer {token}"}
+        body = {
+            "message": {
+                "messageId": "m1",
+                "role": "ROLE_USER",
+                "parts": [
+                    {
+                        "text": (
+                            "Create a RAN energy saving task in the A2ATestRegion area. "
+                            "Energy saving time is 00:00~06:00."
+                        )
+                    }
+                ],
+            }
+        }
+        frames = await _frames(client, body, headers)
+
+        assert "task" in frames[0]
+        assert any(
+            frame.get("statusUpdate", {}).get("status", {}).get("state")
+            == "TASK_STATE_INPUT_REQUIRED"
+            for frame in frames
+        )
+        task_id = str(frames[0]["task"]["id"])
+
+        follow_up = {
+            "message": {
+                "messageId": "m2",
+                "taskId": task_id,
+                "role": "ROLE_USER",
+                "parts": [{"text": "{00:00~06:00,30Mbps}"}],
+            }
+        }
+        resumed = await _frames(client, follow_up, headers)
+
+        assert any(
+            frame.get("statusUpdate", {}).get("status", {}).get("state")
+            == "TASK_STATE_COMPLETED"
+            for frame in resumed
+        )
+        assert any(frame.get("artifactUpdate") for frame in resumed)

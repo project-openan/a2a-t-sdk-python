@@ -11,6 +11,7 @@ from demo.pure_policy import (
     pure_answer_for,
     pure_base_target,
     pure_corrected_target,
+    render_pure_answer,
 )
 from demo.scenario import (
     KIND_TARGET,
@@ -20,6 +21,7 @@ from demo.scenario import (
 )
 from protocol.pure_a2a import PureTaskHandler
 from protocol.server_executor import _report_metadata
+from shared.models import NegotiationDecision
 from shared.run_constants import LANGUAGE_EN
 
 
@@ -188,3 +190,25 @@ def test_pure_report_metadata_carries_no_a2a_t_keys() -> None:
     assert TASK_T_EXTENSION_URI not in metadata
     assert "templateUri" not in metadata
     assert "negotiationContext" not in metadata
+
+
+def test_a_counter_decision_renders_its_counter_proposal() -> None:
+    decision = NegotiationDecision(action="counter", rationale="Use a non-overlapping target.")
+
+    assert render_pure_answer(decision) == "Use a non-overlapping target."
+
+
+def test_an_accept_decision_renders_the_negotiated_target() -> None:
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="Accepted.",
+        filled_params={"guaranteedThroughputTarget": "{00:00~06:00,30Mbps}"},
+    )
+
+    assert render_pure_answer(decision) == "{00:00~06:00,30Mbps}"
+
+
+def test_a_reject_decision_renders_its_rationale() -> None:
+    decision = NegotiationDecision(action="reject", rationale="The target is not feasible.")
+
+    assert render_pure_answer(decision) == "The target is not feasible."

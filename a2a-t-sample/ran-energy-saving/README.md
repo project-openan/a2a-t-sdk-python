@@ -208,8 +208,9 @@ without it, or without keys, the exporter is a no-op.
 ### Real vendor NMS mode
 
 The sample can also act as the OSS client of a real vendor NMS. With `--nms`, the launcher starts
-no local registry, RAN Agent, MIE or OSS: the client obtains a session token from the NMS token
-endpoint and calls its A2A surface directly.
+no local registry, RAN Agent or MIE: the A2A-T client obtains a session token from the NMS token
+endpoint and calls its A2A surface directly. `--nms --protocol pure` keeps the local OSS Agent
+(engineer UI → OSS Agent → NMS) and drops only the RAN Agent and MIE.
 
 A real `--nms` run uses **`POST /a2a/json/message:send` plus a webhook** (the vendor's direct
 machine-to-machine mode). The local NMS simulator keeps the SSE `message:stream` contract.
@@ -281,6 +282,44 @@ Vendor contract notes:
 The raw exchange is recorded in `runs/<runId>/wire.jsonl` and failed frames in
 `wire-error.jsonl`, with credentials redacted. Use `--ui --mode confirm` for the send-time intent
 review; server-side approval 2 does not exist in NMS mode because the vendor owns execution.
+
+### Two instances on one machine
+
+The A2A-T and pure A2A demos can run side by side against the same NMS. Each instance needs its
+own launcher state, data directory, UI port and webhook port:
+
+| | A2A-T | pure A2A |
+|---|---|---|
+| UI | 8080 | 8081 |
+| Webhook | 9000 | 9001 |
+| OSS Agent | not started | 8011 |
+| `A2AT_SAMPLE_RUN_DIR` | `%TEMP%/a2at-ran-energy-saving-adk` | `%TEMP%/a2at-ran-energy-saving-adk-pure` |
+| `A2AT_SAMPLE_RUNS_DIR` | `runs` | `runs-pure` |
+
+```bash
+# Instance A (A2A-T)
+A2AT_SAMPLE_RUN_DIR=/tmp/a2at-adk \
+A2AT_SAMPLE_RUNS_DIR=runs \
+A2AT_SAMPLE_UI_PORT=8080 \
+A2AT_SAMPLE_WEBHOOK_PORT=9000 \
+python run_demo.py --nms --ui --brand huawei
+
+# Instance B (pure A2A: UI -> local OSS Agent -> NMS)
+A2AT_SAMPLE_RUN_DIR=/tmp/a2at-adk-pure \
+A2AT_SAMPLE_RUNS_DIR=runs-pure \
+A2AT_SAMPLE_UI_PORT=8081 \
+A2AT_SAMPLE_WEBHOOK_PORT=9001 \
+python run_demo.py --nms --protocol pure --ui --brand huawei --oss-port 8011
+```
+
+`--stop` reads only that instance's `A2AT_SAMPLE_RUN_DIR/pids.json`, so stopping B leaves A
+running. In pure + NMS the UI talks to the local OSS Agent over direct A2A/SSE; the OSS Agent talks
+to the NMS over plain A2A (webhook, or SSE for `--nms-sim`). The OSS Agent answers the NMS's
+`INPUT_REQUIRED` with the same ADK decision agent used by the A2A-T client and renders the decision
+as natural-language text.
+
+If the NMS rejects a pure follow-up that carries `taskId`, set
+`A2AT_SAMPLE_PURE_FOLLOWUP=context` (or `task` for `taskId` only) and retry; the default is `both`.
 
 ### Pure A2A mode (three hops, standard A2A only)
 

@@ -22,6 +22,7 @@ from a2a_t.core.metadata import (
     TEMPLATE_URI_METADATA_KEY,
     NegotiationPerformative,
 )
+from shared.config import DEFAULT_RUNS_DIR
 from shared.logging_utils import summarize_text
 from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.trace import PHASE_NEGOTIATION, infer_event_phase, is_report_artifact
@@ -35,9 +36,6 @@ DIRECTION_SERVER_TO_CLIENT: Final[str] = "server->client"
 
 #: Direction of a decision or an outbound message (client to server).
 DIRECTION_CLIENT_TO_SERVER: Final[str] = "client->server"
-
-#: Default directory of the run transcripts, relative to the sample root.
-DEFAULT_RUNS_DIR: Final[Path] = Path(__file__).resolve().parents[1] / "runs"
 
 #: Performative carried by each decision action on the wire.
 PERFORMATIVE_BY_ACTION: Final[dict[str, str]] = {

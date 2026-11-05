@@ -306,7 +306,7 @@ def create_app(
         config=config,
         runtime_factory=runtime_factory or default_factory,
         catalog=resolved_catalog,
-        runs_dir=runs_dir,
+        runs_dir=runs_dir or Path(config.runs_dir),
         store=client_store,
         memory_turns=memory_turns,
         intent_review=resolved_intent_review,

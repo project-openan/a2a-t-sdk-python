@@ -7,6 +7,7 @@ import logging
 import uuid
 from collections.abc import Mapping
 
+from a2a_t.core.metadata import NEGOTIATION_T_EXTENSION_URI, TASK_T_EXTENSION_URI
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import BaseRoute, Route
@@ -15,13 +16,16 @@ from demo import ran_data
 from demo.nms_sim.config import SimConfig
 from demo.nms_sim.executor import apply_intent, report_artifact, structured_output
 from demo.nms_sim.intent import (
+    ParsedIntent,
     SimNegotiationRequiredError,
     SimRequestError,
     declares_negotiation,
+    extension_header_value,
+    message_text,
     parse_message_request,
 )
-from demo.nms_sim.sse import message_stream, task_stream
-from demo.nms_sim.tasks import TASK_SUBMITTED, TaskStore
+from demo.nms_sim.sse import message_stream, status_stream, task_stream
+from demo.nms_sim.tasks import TASK_INPUT_REQUIRED, TASK_REJECTED, TASK_SUBMITTED, SimTask, TaskStore
 from demo.nms_sim.token import TokenStore
 
 _LOGGER = logging.getLogger("ran_energy_saving.nms_sim")
@@ -88,6 +92,81 @@ def build_routes(
             status_code=200,
         )
 
+    def _completed_response(task: SimTask, intent: ParsedIntent, config: SimConfig) -> Response:
+        """Stream one parsed request from execution to its completed report."""
+        output = structured_output(intent)
+        task.message = f"Task creation succeeded{_json_compact(output)}"
+        try:
+            report = apply_intent(intent)
+        except ran_data.RanDataError as exc:
+            _LOGGER.warning("simulator execution failed: %s", exc)
+            return JSONResponse(
+                {"error": {"code": 500, "message": str(exc)}},
+                status_code=500,
+            )
+        artifact = report_artifact(task.task_id, report)
+        return StreamingResponse(
+            task_stream(task, report=report, artifact=artifact, config=config),
+            media_type=EVENT_STREAM,
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    def _pure_response(body: Mapping[str, object], request: Request) -> Response:
+        """Handle one plain A2A request: ask for missing values and resume on the follow-up."""
+        message = body.get("message")
+        message_map = message if isinstance(message, Mapping) else {}
+        text = message_text(message_map)
+        requested_task_id = message_map.get("taskId") or message_map.get("task_id")
+        task = (
+            resolved_store.get(str(requested_task_id))
+            if isinstance(requested_task_id, str)
+            else None
+        )
+        if task is None:
+            task = resolved_store.create(
+                context_id=_context_id(body) or str(uuid.uuid4()),
+                message="Task creation succeeded",
+            )
+            task.pure_text = text
+        else:
+            task.pure_text = f"{task.pure_text}\n{text}".strip()
+            task.pure_round += 1
+            resolved_store.update(
+                task.task_id, state=TASK_SUBMITTED, message="Task creation succeeded"
+            )
+        synthetic = {"message": {"parts": [{"text": task.pure_text}], "metadata": {}}}
+        try:
+            intent = parse_message_request(synthetic, {}, config)
+        except SimNegotiationRequiredError as exc:
+            if task.pure_round >= task.pure_max_rounds:
+                task.state = TASK_REJECTED
+                task.message = f"Negotiation did not converge: {exc.text}"
+            else:
+                task.state = TASK_INPUT_REQUIRED
+                task.message = exc.text
+            return StreamingResponse(
+                status_stream(task, config=config),
+                media_type=EVENT_STREAM,
+                headers={"Cache-Control": "no-cache"},
+            )
+        except SimRequestError as exc:
+            return JSONResponse(exc.payload, status_code=exc.status_code)
+        return _completed_response(task, intent, config)
+
+    def _is_pure_request(body: Mapping[str, object], request: Request) -> bool:
+        """Return whether the message is plain A2A (no Task-T / Negotiation-T extension)."""
+        message = body.get("message")
+        if not isinstance(message, Mapping):
+            return False
+        metadata = message.get("metadata")
+        metadata_map = metadata if isinstance(metadata, Mapping) else {}
+        if extension_header_value(request.headers):
+            return False
+        return (
+            TASK_T_EXTENSION_URI not in metadata_map
+            and NEGOTIATION_T_EXTENSION_URI not in metadata_map
+        )
+
     async def send_message(request: Request) -> Response:
         """Accept one A2A message and stream the Task or negotiation message."""
         if not authorized(request):
@@ -95,6 +174,8 @@ def build_routes(
         body = await _json_body(request)
         if body is None:
             return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if _is_pure_request(body, request):
+            return _pure_response(body, request)
         try:
             intent = parse_message_request(body, request.headers, config)
         except SimRequestError as exc:
@@ -122,22 +203,7 @@ def build_routes(
             )
         else:
             resolved_store.update(task.task_id, state=TASK_SUBMITTED, message="Task creation succeeded")
-        output = structured_output(intent)
-        task.message = f"Task creation succeeded{_json_compact(output)}"
-        try:
-            report = apply_intent(intent)
-        except ran_data.RanDataError as exc:
-            _LOGGER.warning("simulator execution failed: %s", exc)
-            return JSONResponse(
-                {"error": {"code": 500, "message": str(exc)}},
-                status_code=500,
-            )
-        artifact = report_artifact(task.task_id, report)
-        return StreamingResponse(
-            task_stream(task, report=report, artifact=artifact, config=config),
-            media_type=EVENT_STREAM,
-            headers={"Cache-Control": "no-cache"},
-        )
+        return _completed_response(task, intent, config)
 
     async def list_tasks(request: Request) -> Response:
         """List the latest Tasks."""

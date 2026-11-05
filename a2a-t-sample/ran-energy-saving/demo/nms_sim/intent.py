@@ -191,6 +191,11 @@ def declares_negotiation(headers: Mapping[str, str]) -> bool:
     return NEGOTIATION_T_EXTENSION_URI in extension_header_value(headers)
 
 
+def message_text(message: Mapping[str, object]) -> str:
+    """Return the first text part of one message (public helper for the pure path)."""
+    return _first_text(message)
+
+
 def _first_text(message: Mapping[str, object]) -> str:
     """Return the first text part of one message."""
     parts = message.get("parts")

@@ -26,6 +26,16 @@ from demo.nms_sim.tasks import (
 )
 
 
+async def status_stream(task: SimTask, *, config: SimConfig) -> AsyncIterator[str]:
+    """Stream one non-terminal Task state (INPUT_REQUIRED / REJECTED) and keep the SSE open."""
+    yield _data({"task": task.to_dict()})
+    yield _data(task.status_frame())
+    if config.strict:
+        while True:
+            yield ": heartbeat\n\n"
+            await asyncio.sleep(config.heartbeat_seconds or 15.0)
+
+
 def _data(payload: dict[str, object]) -> str:
     """Render one SSE ``data:`` frame."""
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"

@@ -93,7 +93,6 @@ from protocol.nms_client import (
 from protocol.plain_client_flow import run_plain_client_flow
 from protocol.pure_client_flow import run_pure_client_flow
 from protocol.run_spec import DEFAULT_CLIENT_POLICY, ClientPolicy, RunCatalog, RunSpec
-from protocol.transcript import DEFAULT_RUNS_DIR
 
 _LOGGER = logging.getLogger("ran_energy_saving.client_runtime")
 
@@ -410,7 +409,9 @@ class ClientRuntime:
         if self._closed:
             raise ClientRuntimeError("The client runtime is already closed.")
         if self.nms_client is not None:
-            self.nms_client.set_wire_path(DEFAULT_RUNS_DIR / run_id / "wire.jsonl" if run_id else None)
+            self.nms_client.set_wire_path(
+                Path(self.config.runs_dir) / run_id / "wire.jsonl" if run_id else None
+            )
         sink = trace_sink if trace_sink is not None else self.trace_sink
         # A run-level sink is restored to the construction-time sink after the run; the
         # construction-time sink stays attached until ``aclose``.

@@ -751,6 +751,31 @@ The legacy single-turn `plain` path (`protocol/plain_a2a.py`, `run_plain_client_
 internal baseline for tests. `POST /api/runs` still validates it, but the CLI and the page no longer
 expose it.
 
+#### 4.6.1 Pure A2A against the vendor NMS
+
+`--nms --protocol pure` keeps the OSS Agent and drops only the local RAN Agent and MIE:
+
+```text
+Engineer UI ──A2A (direct + SSE)──> OSS Agent ──A2A (nms + webhook)──> vendor NMS
+```
+
+- `run_demo.py` starts the OSS Agent on `--oss-port`; the UI is pointed at it with
+  `--discovery direct --transport sse`. The per-run `.env` keeps `nms`/`webhook` for the OSS
+  process (and for `--nms-sim`: `nms`/`sse`).
+- `OSSPureExecutor.start()` builds the downstream transport once from `SampleConfig`:
+  `NmsWebhookTransport` with an embedded webhook receiver for a real NMS, `NmsSseTransport` for the
+  simulator, or the existing direct `SseClientTransport` for the local three-hop demo.
+- The live OSS Agent answers a vendor `INPUT_REQUIRED` with the same `AdkDecisionProvider` as the
+  A2A-T client; `demo.pure_policy.render_pure_answer` turns its `NegotiationDecision` into the
+  natural-language target/rationale the vendor expects. The offline simulator uses a deterministic
+  answer.
+- `_pending_negotiation` accepts any standard `TASK_STATE_INPUT_REQUIRED`, not only the sample's
+  `pure` metadata; an MIE `approval` phase is still ignored by the OSS Agent.
+- Both NMS transports return immediately on `INPUT_REQUIRED` in pure mode instead of waiting for
+  the idle backstop or polling to a terminal state.
+- The follow-up carries `taskId` + `contextId` by default; `A2AT_SAMPLE_PURE_FOLLOWUP` selects
+  `task`, `context`, or `both`.
+
 ### 4.7 Per-run metrics and the protocol benchmark
 
 `protocol/run_metrics.py` builds one record per finished run. It reads the already-emitted trace
@@ -893,6 +918,9 @@ SDK. `run_demo.py` reads `A2AT_SAMPLE_UI_PORT` only as the default of `--ui-port
 | `A2AT_SAMPLE_TRANSPORT` | `sse` (default), `webhook` | Client event transport. A real `--nms` run defaults to webhook (`message:send` + pushes); `--nms-sim` keeps sse. |
 | `A2AT_SAMPLE_WEBHOOK_HOST` / `A2AT_SAMPLE_WEBHOOK_PORT` | default `127.0.0.1` / `9000` | Webhook receiver address; the real NMS must be able to reach this host and port. |
 | `A2AT_SAMPLE_INTENT_MODE` | `processed` (default), `raw` | Run the business intent layer before the A2A/A2A-T mapping, or send the operator text directly. `--intent-mode` and `POST /api/runs.intentMode` override it per run. |
+| `A2AT_SAMPLE_RUN_DIR` | unset; `%TEMP%/a2at-ran-energy-saving-adk` | Launcher state: `pids.json`, child logs and the per-run `.env`. Set a different value for a second instance so `--stop` only stops its own processes. |
+| `A2AT_SAMPLE_RUNS_DIR` | default `<sample>/runs` | Data directory: transcripts, client/task/gateway SQLite stores, NMS `wire.jsonl` and the Web UI history. Relative values resolve against the sample root. |
+| `A2AT_SAMPLE_PURE_FOLLOWUP` | `both` (default), `task`, `context` | Conversation fields of a pure A2A follow-up. Switch to `context` when the vendor rejects a follow-up carrying `taskId`. |
 | `A2AT_SAMPLE_WEBHOOK_PORT` | default `9000` (`0` = ephemeral) | Embedded webhook receiver port. |
 | `A2AT_SAMPLE_WEBHOOK_TOKEN` | default `demo-webhook-token` | Static push token checked against `X-A2A-Notification-Token`. |
 | `A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT` | default `300` (the HTTP budget) | Seconds without a push before a webhook phase ends; a phase must not end before the client gives up. |

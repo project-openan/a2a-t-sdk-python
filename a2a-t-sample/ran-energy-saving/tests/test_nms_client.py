@@ -25,6 +25,7 @@ from protocol.nms_client import (
     NmsWebhookTransport,
     _frame_to_event,
 )
+from shared.run_constants import PROTOCOL_PURE
 
 TOKEN_URL = "https://nms.example:27417/rest/plat/smapp/v1/sessions"
 A2A_BASE = "https://nms.example:31127/a2a/json"
@@ -703,3 +704,64 @@ async def test_wire_log_redacts_the_credentials(tmp_path: Path) -> None:
     assert "***" in text
     assert "m1" in text
     await client.aclose()
+
+
+async def test_webhook_pure_returns_on_a_synchronous_input_required_reply() -> None:
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _FakeWebhookClient(
+        {"task": {"id": "task-1", "status": {"state": "TASK_STATE_INPUT_REQUIRED"}}}
+    )
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9001/webhook",
+        push_token="push-token",
+        protocol=PROTOCOL_PURE,
+        idle_timeout=30.0,
+    )
+
+    events = await asyncio.wait_for(transport.send(*_request()), timeout=1.0)
+
+    assert len(events) == 1
+    assert events[0]["state"] == "TASK_STATE_INPUT_REQUIRED"
+
+
+async def test_webhook_pure_returns_on_a_pushed_input_required_event() -> None:
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _FakeWebhookClient(
+        {"task": {"id": "task-1", "status": {"state": "TASK_STATE_SUBMITTED"}}}
+    )
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9001/webhook",
+        push_token="push-token",
+        protocol=PROTOCOL_PURE,
+        idle_timeout=30.0,
+    )
+    await queue.put(
+        {"statusUpdate": {"taskId": "task-1", "status": {"state": "TASK_STATE_INPUT_REQUIRED"}}}
+    )
+
+    events = await asyncio.wait_for(transport.send(*_request()), timeout=1.0)
+
+    assert events[-1]["state"] == "TASK_STATE_INPUT_REQUIRED"
+
+
+async def test_sse_pure_returns_on_input_required_without_polling() -> None:
+    client = _FakeStreamClient(
+        [
+            {
+                "statusUpdate": {
+                    "taskId": "task-1",
+                    "status": {"state": "TASK_STATE_INPUT_REQUIRED"},
+                }
+            }
+        ],
+        terminal=None,
+    )
+    transport = NmsSseTransport(client, protocol=PROTOCOL_PURE)  # ty: ignore[invalid-argument-type]
+
+    events = await asyncio.wait_for(transport.send(*_request()), timeout=1.0)
+
+    assert events[-1]["state"] == "TASK_STATE_INPUT_REQUIRED"

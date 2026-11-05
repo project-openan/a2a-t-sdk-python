@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +52,59 @@ def test_write_run_env_points_both_processes_at_the_task_database(
     assert gateway_db.name == "gateway-task-status.sqlite3"
     assert values["A2AT_SAMPLE_GATEWAY_PORT"] == "8001"
     assert values["A2AT_SAMPLE_GATEWAY_REGISTER"] == "1"
+    assert Path(str(values["A2AT_SAMPLE_RUNS_DIR"])) == run_demo.RUNS_DIR
+
+
+def test_write_run_env_keeps_nms_discovery_for_pure_nms(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The OSS Agent reads the same .env; pure + NMS must keep nms discovery for it."""
+    monkeypatch.setattr(run_demo, "RUN_DIR", tmp_path)
+    env_path = run_demo._write_run_env(
+        source=None,
+        language="en-US",
+        model_mode="live",
+        discovery="nms",
+        transport="webhook",
+        webhook_port=9001,
+        server_host="127.0.0.1",
+        server_port=8000,
+        registry_host="127.0.0.1",
+        registry_port=5001,
+        ui_port=8081,
+        protocol="pure",
+        oss_port=8011,
+    )
+
+    values = dotenv_values(env_path)
+    assert values["A2AT_SAMPLE_DISCOVERY"] == "nms"
+    assert values["A2AT_SAMPLE_TRANSPORT"] == "webhook"
+    assert values["A2AT_SAMPLE_DIRECT_SERVER_URL"] == "http://127.0.0.1:8011"
+    assert values["A2AT_SAMPLE_OSS_PORT"] == "8011"
+
+
+def test_run_state_and_data_directories_are_configurable(tmp_path: Path) -> None:
+    """Two launchers can use isolated pids/logs and isolated runs/sqlite directories."""
+    env = dict(os.environ)
+    env["A2AT_SAMPLE_RUN_DIR"] = str(tmp_path / "state")
+    env["A2AT_SAMPLE_RUNS_DIR"] = str(tmp_path / "data")
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import demo.run_demo as m; print(m.RUN_DIR); print(m.RUNS_DIR); print(m.TASK_DB_PATH)",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    lines = result.stdout.strip().splitlines()
+
+    assert Path(lines[0]) == tmp_path / "state"
+    assert Path(lines[1]) == tmp_path / "data"
+    assert Path(lines[2]) == tmp_path / "data" / "task-status.sqlite3"
 
 
 def test_write_run_env_applies_the_nms_simulator_overrides(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
