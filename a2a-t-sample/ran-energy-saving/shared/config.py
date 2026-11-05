@@ -59,6 +59,10 @@ WEBHOOK_HOST_ENV_KEY = "A2AT_SAMPLE_WEBHOOK_HOST"
 WEBHOOK_PORT_ENV_KEY = "A2AT_SAMPLE_WEBHOOK_PORT"
 WEBHOOK_TOKEN_ENV_KEY = "A2AT_SAMPLE_WEBHOOK_TOKEN"
 WEBHOOK_IDLE_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT"
+WEBHOOK_PUBLIC_URL_ENV_KEY = "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"
+WEBHOOK_TLS_CERT_ENV_KEY = "A2AT_SAMPLE_WEBHOOK_TLS_CERT"
+WEBHOOK_TLS_KEY_ENV_KEY = "A2AT_SAMPLE_WEBHOOK_TLS_KEY"
+WEBHOOK_AUTH_CREDENTIALS_ENV_KEY = "A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS"
 ADK_MODEL_PROVIDER_ENV_KEY = "ADK_MODEL_PROVIDER"
 ADK_MODEL_NAME_ENV_KEY = "ADK_MODEL_NAME"
 ADK_MODEL_API_BASE_ENV_KEY = "ADK_MODEL_API_BASE"
@@ -289,6 +293,14 @@ def _env_optional_bool(values: dict[str, str | None], key: str) -> bool | None:
     return _env_bool(values, key, True)
 
 
+def _webhook_auth_credentials(values: dict[str, str | None]) -> str:
+    """Resolve the receiver's Basic-auth credentials (``user:password``), empty when unset."""
+    raw_value = _env_value(values, WEBHOOK_AUTH_CREDENTIALS_ENV_KEY, "")
+    if raw_value and ":" not in raw_value:
+        raise ValueError(f"Invalid value for {WEBHOOK_AUTH_CREDENTIALS_ENV_KEY}; expected user:password")
+    return raw_value
+
+
 def _optional_absolute_path(values: dict[str, str | None], key: str) -> str | None:
     """Resolve an optional absolute path key, rejecting relative values."""
     raw_value = _env_value(values, key, "")
@@ -314,6 +326,12 @@ class SampleConfig:
         webhook_port: Webhook receiver bind port (``0`` selects an ephemeral port).
         webhook_token: Push token checked by the webhook receiver.
         webhook_idle_timeout: Webhook idle backstop timeout in seconds.
+        webhook_public_url: callback URL registered with the server instead of the bind address
+            (the real NMS requires https and reaches the client through a gateway address).
+        webhook_tls_cert: PEM certificate of the receiver's TLS listener; empty serves plain http.
+        webhook_tls_key: private key matching ``webhook_tls_cert``.
+        webhook_auth_credentials: ``user:password`` the pushed requests must carry as Basic auth;
+            empty accepts any caller with the push token.
         adk_model_provider: ADK model provider name (``litellm``).
         adk_model_name: LiteLlm model id.
         adk_model_api_base: OpenAI-compatible endpoint of the ADK model.
@@ -389,6 +407,10 @@ class SampleConfig:
     transport: str = TRANSPORT_SSE
     intent_mode: str = INTENT_MODE_PROCESSED
     webhook_host: str = DEFAULT_HOST
+    webhook_public_url: str = ""
+    webhook_tls_cert: str = ""
+    webhook_tls_key: str = ""
+    webhook_auth_credentials: str = ""
     http_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS
     llm_timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS
     llm_max_attempts: int = DEFAULT_LLM_MAX_ATTEMPTS
@@ -538,6 +560,10 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         webhook_port=_env_int(values, WEBHOOK_PORT_ENV_KEY, DEFAULT_WEBHOOK_PORT),
         webhook_token=_env_value(values, WEBHOOK_TOKEN_ENV_KEY, DEFAULT_WEBHOOK_TOKEN),
         webhook_idle_timeout=_env_int(values, WEBHOOK_IDLE_TIMEOUT_ENV_KEY, DEFAULT_WEBHOOK_IDLE_TIMEOUT),
+        webhook_public_url=_env_value(values, WEBHOOK_PUBLIC_URL_ENV_KEY, ""),
+        webhook_tls_cert=_env_value(values, WEBHOOK_TLS_CERT_ENV_KEY, ""),
+        webhook_tls_key=_env_value(values, WEBHOOK_TLS_KEY_ENV_KEY, ""),
+        webhook_auth_credentials=_webhook_auth_credentials(values),
         adk_model_provider=_env_value(values, ADK_MODEL_PROVIDER_ENV_KEY, DEFAULT_ADK_MODEL_PROVIDER),
         adk_model_name=adk_model_name,
         adk_model_api_base=adk_model_api_base,

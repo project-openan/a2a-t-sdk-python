@@ -3,13 +3,18 @@
 In webhook transport mode the client does not consume the SSE stream: the server's push sender
 delivers each task event as an HTTP POST whose JSON body is the ``MessageToDict`` of a
 ``StreamResponse`` — the same shape the SSE stream carries, one of the ``task`` /
-``statusUpdate`` / ``artifactUpdate`` / ``message`` top-level keys — and whose
-``X-A2A-Notification-Token`` header carries the registered push token. ``WebhookReceiver`` serves
-the single ``POST /webhook`` route: a missing or wrong token answers ``401`` and the event is
-dropped; an unparseable JSON body, or one without a recognized ``StreamResponse`` key, answers
-``400``; a valid event is handed to the injected callback as the raw parsed dict (typically
+``statusUpdate`` / ``artifactUpdate`` / ``message`` top-level keys. The a2a-sdk push sender carries
+the registered push token in ``X-A2A-Notification-Token``; the vendor NMS has no push-token concept
+and authenticates with ``Authorization: Basic`` instead, so the receiver supports both. ``WebhookReceiver``
+serves the single ``POST /webhook`` route: a missing or wrong credential answers ``401`` and the
+event is dropped; an unparseable JSON body, or one without a recognized ``StreamResponse`` key,
+answers ``400``; a valid event is handed to the injected callback as the raw parsed dict (typically
 enqueueing it on the client's asyncio loop). The receiver stays transport-agnostic on purpose —
 the dict-to-event adaptation lives with the caller, not here.
+
+The bind address is not necessarily the address the server reaches: ``public_url`` is registered in
+the push config instead, and ``tls_cert`` / ``tls_key`` make the listener serve https (the vendor
+NMS requires an https callback).
 
 Hosting follows the client's lifecycle: ``start()`` runs ``uvicorn.Server.serve()`` as an asyncio
 task on the running event loop and resolves the bound port before returning (an OS-assigned
@@ -24,6 +29,7 @@ semantics as the SSE path).
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import logging
@@ -46,8 +52,12 @@ DEFAULT_WEBHOOK_PORT = 9000
 #: Path of the single webhook route (the path part of the registered push-config URL).
 _WEBHOOK_PATH = "/webhook"
 
-#: Push-token header carried by the a2a-sdk push sender on every webhook POST.
+#: Push-token header carried by the a2a-sdk push sender on every webhook POST. The real NMS does
+#: not send it (it has no push token concept); it authenticates with Basic auth instead.
 _TOKEN_HEADER = "X-A2A-Notification-Token"
+
+#: Header carrying the optional Basic credentials the real NMS sends with every push.
+_AUTH_HEADER = "Authorization"
 
 #: Top-level keys of a StreamResponse JSON body (``MessageToDict`` camelCase field names); a body
 #: carrying none of them is not a task event.
@@ -103,11 +113,21 @@ class WebhookReceiver:
         on_event: Callable[[dict[str, object]], None],
         host: str = DEFAULT_WEBHOOK_HOST,
         port: int = DEFAULT_WEBHOOK_PORT,
+        public_url: str = "",
+        tls_cert: str = "",
+        tls_key: str = "",
+        auth_credentials: str = "",
     ) -> None:
         self._token = token
         self._on_event = on_event
         self._host = host
         self._port = port
+        self._public_url = public_url
+        self._tls_cert = tls_cert
+        self._tls_key = tls_key
+        self._auth_header = (
+            f"Basic {base64.b64encode(auth_credentials.encode()).decode()}" if auth_credentials else ""
+        )
         self._resolved_port = port
         self._server: uvicorn.Server | None = None
         self._serve_task: asyncio.Task[None] | None = None
@@ -120,8 +140,16 @@ class WebhookReceiver:
 
     @property
     def url(self) -> str:
-        """The webhook callback URL to register in the task push-notification config."""
-        return f"http://{self._host}:{self.port}{_WEBHOOK_PATH}"
+        """The webhook callback URL to register in the task push-notification config.
+
+        The configured public URL wins: the real NMS requires ``https`` and reaches the client
+        through a gateway address that is not the bind address. Otherwise the bind address is used
+        with the scheme of the served listener.
+        """
+        if self._public_url:
+            return self._public_url
+        scheme = "https" if self._tls_cert else "http"
+        return f"{scheme}://{self._host}:{self.port}{_WEBHOOK_PATH}"
 
     async def start(self) -> None:
         """Serve the webhook route as an asyncio task on the running event loop.
@@ -132,7 +160,15 @@ class WebhookReceiver:
         """
         if self._serve_task is not None:
             return
-        config = uvicorn.Config(self._app, host=self._host, port=self._port, log_level="warning", access_log=False)
+        config = uvicorn.Config(
+            self._app,
+            host=self._host,
+            port=self._port,
+            log_level="warning",
+            access_log=False,
+            ssl_certfile=self._tls_cert or None,
+            ssl_keyfile=self._tls_key or None,
+        )
         server: uvicorn.Server = _HostSignalServer(config)
         serve_task = asyncio.create_task(self._serve(server), name="webhook-receiver")
         deadline = time.monotonic() + _STARTUP_TIMEOUT_SECONDS
@@ -195,7 +231,18 @@ class WebhookReceiver:
 
     async def _handle_webhook(self, request: Request) -> Response:
         """Authenticate, parse and deliver one webhook POST (the class docstring's contract)."""
-        if request.headers.get(_TOKEN_HEADER, "") != self._token:
+        received = request.headers.get(_AUTH_HEADER, "")
+        if self._auth_header and received != self._auth_header:
+            # Never log the value: it is the sender's credential. The shape tells us whether the
+            # NMS echoed the push config or used different/basic-mangled credentials.
+            scheme, _, payload = received.partition(" ")
+            self._log(
+                "auth-rejected",
+                f"status=401 Basic credentials mismatch scheme={scheme or '<none>'} "
+                f"present={bool(received)} length={len(payload)}",
+            )
+            return JSONResponse(status_code=401, content={"error": "missing or invalid Basic credentials"})
+        if not self._auth_header and request.headers.get(_TOKEN_HEADER, "") != self._token:
             self._log("token-rejected", f"status=401 header={_TOKEN_HEADER} mismatch")
             return JSONResponse(status_code=401, content={"error": "missing or invalid X-A2A-Notification-Token"})
         raw_body = await request.body()
@@ -215,6 +262,7 @@ class WebhookReceiver:
     def _log(self, stage: str, detail: str) -> None:
         """Emit one receiver event at the level its operational meaning deserves."""
         level = {
+            "auth-rejected": logging.WARNING,
             "token-rejected": logging.WARNING,
             "body-rejected": logging.WARNING,
             "stop-error": logging.ERROR,

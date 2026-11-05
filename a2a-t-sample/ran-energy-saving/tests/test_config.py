@@ -53,6 +53,10 @@ from shared.config import (
     RUNS_DIR_ENV_KEY,
     SERVER_AUTH_TOKEN_ENV_KEY,
     TASK_DB_ENV_KEY,
+    WEBHOOK_AUTH_CREDENTIALS_ENV_KEY,
+    WEBHOOK_PUBLIC_URL_ENV_KEY,
+    WEBHOOK_TLS_CERT_ENV_KEY,
+    WEBHOOK_TLS_KEY_ENV_KEY,
     SampleConfig,
     load_config,
 )
@@ -71,6 +75,10 @@ _ENV_KEYS = (
     GATEWAY_SCENARIO_ENV_KEY,
     GATEWAY_TASK_DB_ENV_KEY,
     SERVER_AUTH_TOKEN_ENV_KEY,
+    WEBHOOK_PUBLIC_URL_ENV_KEY,
+    WEBHOOK_TLS_CERT_ENV_KEY,
+    WEBHOOK_TLS_KEY_ENV_KEY,
+    WEBHOOK_AUTH_CREDENTIALS_ENV_KEY,
     PLANNER_MODEL_ENV_KEY,
     PLANNER_TIMEOUT_ENV_KEY,
     PLANNER_MAX_STEPS_ENV_KEY,
@@ -671,4 +679,42 @@ def test_pure_followup_rejects_an_unknown_mode(tmp_path: Path) -> None:
     env_file.write_text(f"{PURE_FOLLOWUP_ENV_KEY}=guessed\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match=PURE_FOLLOWUP_ENV_KEY):
+        load_config(env_path=env_file)
+
+
+def test_webhook_callback_defaults_are_empty(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+
+    config = load_config(env_path=env_file)
+
+    assert config.webhook_public_url == ""
+    assert config.webhook_tls_cert == ""
+    assert config.webhook_tls_key == ""
+    assert config.webhook_auth_credentials == ""
+
+
+def test_webhook_callback_keys_are_read(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL=https://198.51.100.7:9000/webhook\n"
+        "A2AT_SAMPLE_WEBHOOK_TLS_CERT=Orange/server.cer\n"
+        "A2AT_SAMPLE_WEBHOOK_TLS_KEY=Orange/server_key_nopass.pem\n"
+        "A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS=north:secret\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert config.webhook_public_url == "https://198.51.100.7:9000/webhook"
+    assert config.webhook_tls_cert == "Orange/server.cer"
+    assert config.webhook_tls_key == "Orange/server_key_nopass.pem"
+    assert config.webhook_auth_credentials == "north:secret"
+
+
+def test_webhook_auth_credentials_require_user_and_password(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS=no-colon\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="expected user:password"):
         load_config(env_path=env_file)

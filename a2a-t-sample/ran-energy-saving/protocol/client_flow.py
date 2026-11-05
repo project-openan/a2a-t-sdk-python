@@ -420,6 +420,10 @@ def build_webhook_receiver(
     queue: asyncio.Queue[dict[str, object]],
     host: str = "127.0.0.1",
     port: int = 9000,
+    public_url: str = "",
+    tls_cert: str = "",
+    tls_key: str = "",
+    auth_credentials: str = "",
 ) -> WebhookReceiver:
     """Build the embedded receiver feeding one flow event queue."""
     return WebhookReceiver(
@@ -427,6 +431,10 @@ def build_webhook_receiver(
         on_event=queue.put_nowait,
         host=host,
         port=port,
+        public_url=public_url,
+        tls_cert=tls_cert,
+        tls_key=tls_key,
+        auth_credentials=auth_credentials,
     )
 
 

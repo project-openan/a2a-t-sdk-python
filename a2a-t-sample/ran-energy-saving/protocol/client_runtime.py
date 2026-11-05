@@ -631,6 +631,10 @@ async def build_client_runtime(
                 queue=queue,
                 host=config.webhook_host,
                 port=config.webhook_port,
+                public_url=config.webhook_public_url,
+                tls_cert=config.webhook_tls_cert,
+                tls_key=config.webhook_tls_key,
+                auth_credentials=config.webhook_auth_credentials,
             )
             await receiver.start()
             _LOGGER.info("NMS webhook mode: push_url=%s", receiver.url)
@@ -639,6 +643,7 @@ async def build_client_runtime(
                 queue=queue,
                 push_url=receiver.url,
                 push_token=config.webhook_token,
+                push_auth_credentials=config.webhook_auth_credentials,
                 protocol=protocol,
                 idle_timeout=float(config.webhook_idle_timeout),
             )
@@ -672,6 +677,10 @@ async def build_client_runtime(
                     queue=queue,
                     host=config.webhook_host,
                     port=config.webhook_port,
+                    public_url=config.webhook_public_url,
+                    tls_cert=config.webhook_tls_cert,
+                    tls_key=config.webhook_tls_key,
+                    auth_credentials=config.webhook_auth_credentials,
                 )
                 await receiver.start()
                 _LOGGER.info("webhook mode: push_url=%s", receiver.url)
