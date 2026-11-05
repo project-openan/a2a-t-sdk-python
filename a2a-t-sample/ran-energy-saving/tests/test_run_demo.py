@@ -518,3 +518,34 @@ def test_write_run_env_carries_the_langfuse_keys(monkeypatch: pytest.MonkeyPatch
     assert values["LANGFUSE_PUBLIC_KEY"] == "pk-lf-test"
     assert values["LANGFUSE_SECRET_KEY"] == "sk-lf-test"
     assert values["LANGFUSE_BASE_URL"] == "http://localhost:18080"
+
+
+def test_write_run_env_lets_the_shell_override_the_webhook_callback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A second instance registers its own callback instead of the shared one in the source .env."""
+    monkeypatch.setattr(run_demo, "RUN_DIR", tmp_path)
+    monkeypatch.setenv("A2AT_SAMPLE_WEBHOOK_PUBLIC_URL", "https://example.test:9001/webhook")
+    source = tmp_path / "source.env"
+    source.write_text(
+        "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL=https://example.test:9000/webhook\n",
+        encoding="utf-8",
+    )
+
+    env_path = run_demo._write_run_env(
+        source=source,
+        language="en-US",
+        model_mode="live",
+        discovery="nms",
+        transport="webhook",
+        webhook_port=9000,
+        server_host="127.0.0.1",
+        server_port=8000,
+        registry_host="127.0.0.1",
+        registry_port=5001,
+        ui_port=8080,
+    )
+
+    assert dotenv_values(env_path)["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] == (
+        "https://example.test:9001/webhook"
+    )

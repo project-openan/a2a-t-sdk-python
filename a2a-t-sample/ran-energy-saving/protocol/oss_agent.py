@@ -140,11 +140,18 @@ class OSSPureExecutor(AgentExecutor):
         self._nms_client = NmsClient(NmsConfig.from_config(self._config))
         if self._config.transport == TRANSPORT_WEBHOOK:
             queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+            # The real NMS reaches the callback through the VPN gateway over https, so the bind
+            # address is never the URL to register: carry the public URL, TLS and Basic auth over
+            # exactly as the A2A-T client flow does.
             receiver = build_webhook_receiver(
                 token=self._config.webhook_token,
                 queue=queue,
                 host=self._config.webhook_host,
                 port=self._config.webhook_port,
+                public_url=self._config.webhook_public_url,
+                tls_cert=self._config.webhook_tls_cert,
+                tls_key=self._config.webhook_tls_key,
+                auth_credentials=self._config.webhook_auth_credentials,
             )
             await receiver.start()
             self._webhook_receiver = receiver

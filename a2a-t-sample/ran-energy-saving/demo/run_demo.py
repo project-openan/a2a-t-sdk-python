@@ -83,6 +83,14 @@ ENV_CANDIDATES = (CASE_DIR / ".env", SAMPLE_DIR / ".env", SAMPLE_DIR / "env.exam
 #: (the child processes run from ``RUN_DIR``, where relative paths do not resolve).
 _TLS_PATH_KEYS = ("A2AT_SAMPLE_WEBHOOK_TLS_CERT", "A2AT_SAMPLE_WEBHOOK_TLS_KEY")
 
+#: Webhook keys a shell environment may override in the per-run .env, so a second instance can
+#: register its own callback address instead of the one the shared .env holds.
+_WEBHOOK_OVERRIDE_KEYS = (
+    "A2AT_SAMPLE_WEBHOOK_PORT",
+    "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL",
+    "A2AT_SAMPLE_WEBHOOK_HOST",
+)
+
 REGISTRY_MODULE = "demo.registry.registry_main"
 SERVER_MODULE = "protocol.server_app"
 UI_MODULE = "demo.web.serve"
@@ -155,9 +163,17 @@ def _read_env(path: Path) -> dict[str, str]:
     return values
 
 
-def _env_int(values: dict[str, str], key: str, default: int) -> int:
-    """Resolve one integer value with a readable failure."""
-    raw = values.get(key) or os.environ.get(key) or str(default)
+def _env_int(
+    values: dict[str, str], key: str, default: int, *, env_first: bool = False
+) -> int:
+    """Resolve one integer value with a readable failure.
+
+    ``env_first`` lets an exported value beat the .env one, for keys a second instance overrides.
+    """
+    if env_first:
+        raw = os.environ.get(key) or values.get(key) or str(default)
+    else:
+        raw = values.get(key) or os.environ.get(key) or str(default)
     try:
         return int(raw)
     except ValueError as exc:
@@ -374,6 +390,12 @@ def _write_run_env(
         values["A2AT_SAMPLE_INTENT_MODE"] = intent_mode
     if extra:
         values.update(extra)
+    # The webhook keys are carried over from the source .env above, but a second instance on the
+    # same machine needs a different callback (port and public URL). The launcher reads .env first,
+    # so an exported value would otherwise be silently overwritten by the shared one.
+    for key in _WEBHOOK_OVERRIDE_KEYS:
+        if os.environ.get(key):
+            values[key] = os.environ[key]
     for key in _TLS_PATH_KEYS:
         path = values.get(key)
         if path and not Path(path).is_absolute():
@@ -1277,7 +1299,8 @@ def main() -> int:
     registry_port = _env_int(source_values, "REGISTRY_CENTER_PORT", DEFAULT_REGISTRY_PORT)
     server_host = source_values.get("A2AT_SAMPLE_HOST") or "127.0.0.1"
     server_port = _env_int(source_values, "A2AT_SAMPLE_PORT", DEFAULT_SERVER_PORT)
-    webhook_port = _env_int(source_values, "A2AT_SAMPLE_WEBHOOK_PORT", 9000)
+    # The shell wins here so a second instance can pick its own callback port.
+    webhook_port = _env_int(source_values, "A2AT_SAMPLE_WEBHOOK_PORT", 9000, env_first=True)
     reserved_ports = {args.ui_port} if args.nms else {registry_port, server_port}
     if args.ui:
         reserved_ports.add(args.ui_port)
