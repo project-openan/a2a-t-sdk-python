@@ -96,6 +96,9 @@ SERVER_AUTH_TOKEN_ENV_KEY = "A2AT_SAMPLE_SERVER_AUTH_TOKEN"
 LANGFUSE_PUBLIC_KEY_ENV_KEY = "LANGFUSE_PUBLIC_KEY"
 LANGFUSE_SECRET_KEY_ENV_KEY = "LANGFUSE_SECRET_KEY"
 LANGFUSE_BASE_URL_ENV_KEY = "LANGFUSE_BASE_URL"
+#: Browser-facing Langfuse UI base URL. It differs from ``LANGFUSE_BASE_URL`` when the SDK reports
+#: through a proxy while the browser opens the Langfuse UI directly (or through another relay).
+LANGFUSE_UI_BASE_URL_ENV_KEY = "A2AT_SAMPLE_LANGFUSE_UI_BASE_URL"
 LANGFUSE_ENABLED_ENV_KEY = "A2AT_SAMPLE_LANGFUSE_ENABLED"
 LANGFUSE_CAPTURE_CONTENT_ENV_KEY = "A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT"
 LANGFUSE_ENVIRONMENT_ENV_KEY = "A2AT_SAMPLE_LANGFUSE_ENVIRONMENT"
@@ -195,6 +198,7 @@ DEFAULT_ADK_MODEL_API_KEY = "not-needed"
 
 #: Langfuse Cloud endpoint and environment label of the client observability export.
 DEFAULT_LANGFUSE_BASE_URL = "https://us.cloud.langfuse.com"
+DEFAULT_LANGFUSE_UI_BASE_URL = "https://us.cloud.langfuse.com"
 DEFAULT_LANGFUSE_ENVIRONMENT = "demo"
 
 #: Sample root (the directory that owns ``runs/``). Relative runs directories resolve here.
@@ -423,7 +427,11 @@ class SampleConfig:
         planner_max_steps: LangGraph recursion limit of one execution.
         langfuse_public_key: Langfuse public key; with the secret key it enables the client export.
         langfuse_secret_key: Langfuse secret key; never logged or traced.
-        langfuse_base_url: Langfuse Cloud or self-hosted base URL.
+        langfuse_base_url: Langfuse Cloud or self-hosted API base URL; may point at a reporting
+            proxy in a restricted network.
+        langfuse_ui_base_url: browser-facing Langfuse UI base URL, used only for the
+            "Open in Langfuse" link. It defaults to Langfuse Cloud and may differ from the API
+            base URL when the SDK reports through a proxy.
         langfuse_enabled: explicit on/off switch; ``None`` enables when both keys are present.
         langfuse_capture_content: whether prompt/response text is sent, or only metadata.
         langfuse_environment: Langfuse environment label (``demo`` by default).
@@ -485,6 +493,7 @@ class SampleConfig:
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_base_url: str = DEFAULT_LANGFUSE_BASE_URL
+    langfuse_ui_base_url: str = DEFAULT_LANGFUSE_UI_BASE_URL
     langfuse_enabled: bool | None = None
     langfuse_capture_content: bool = True
     langfuse_environment: str = DEFAULT_LANGFUSE_ENVIRONMENT
@@ -655,6 +664,9 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         langfuse_public_key=_env_value(values, LANGFUSE_PUBLIC_KEY_ENV_KEY, "").strip(),
         langfuse_secret_key=_env_value(values, LANGFUSE_SECRET_KEY_ENV_KEY, "").strip(),
         langfuse_base_url=_env_value(values, LANGFUSE_BASE_URL_ENV_KEY, DEFAULT_LANGFUSE_BASE_URL).rstrip("/"),
+        langfuse_ui_base_url=_env_value(
+            values, LANGFUSE_UI_BASE_URL_ENV_KEY, DEFAULT_LANGFUSE_UI_BASE_URL
+        ).rstrip("/"),
         langfuse_enabled=_env_optional_bool(values, LANGFUSE_ENABLED_ENV_KEY),
         langfuse_capture_content=_env_bool(values, LANGFUSE_CAPTURE_CONTENT_ENV_KEY, True),
         langfuse_environment=_env_value(

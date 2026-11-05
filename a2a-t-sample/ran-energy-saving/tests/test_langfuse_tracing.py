@@ -241,7 +241,9 @@ def test_finish_flushes_and_exposes_the_trace_url(offline_config: SampleConfig) 
 
     assert runtime.client.flushed == 1
     assert snapshot["status"] == "exported"
-    assert snapshot["url"] == f"https://langfuse.example/project/p1/traces/{snapshot['traceId']}"
+    assert snapshot["url"] == (
+        f"https://us.cloud.langfuse.com/project/p1/traces/{snapshot['traceId']}"
+    )
     assert snapshot["exportedSpans"] == 1
     exporter.finish(result=None, error=None)
     assert runtime.client.flushed == 1  # idempotent
@@ -318,3 +320,18 @@ def test_missing_langfuse_package_is_a_noop(tmp_path, monkeypatch: pytest.Monkey
     monkeypatch.setattr("shared.langfuse_tracing.LANGFUSE_AVAILABLE", False)
 
     assert create_langfuse_exporter(load_config(env_path=env), _metadata()) is None
+
+
+def test_the_trace_url_uses_the_browser_facing_ui_base(offline_config: SampleConfig) -> None:
+    """Reporting may go through a proxy; the reported link must stay on the UI address."""
+    exporter, _runtime = _exporter(
+        replace(offline_config, langfuse_ui_base_url="https://langfuse-ui.example/relay")
+    )
+
+    exporter(_llm_span())
+    exporter.finish(result=None, error=None)
+    snapshot = exporter.snapshot(resolve_url=True)
+
+    assert snapshot["url"] == (
+        f"https://langfuse-ui.example/relay/project/p1/traces/{snapshot['traceId']}"
+    )

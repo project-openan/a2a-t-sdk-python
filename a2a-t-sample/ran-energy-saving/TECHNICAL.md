@@ -950,7 +950,8 @@ script can switch the model with a plain `export ADK_MODEL_NAME=...`.
 | `A2AT_SAMPLE_TRACE_TOKEN` | unset; `--ui` mints a random token | Local token the server presents and the UI requires; unset disables ingestion (fails closed). |
 | `A2AT_SAMPLE_TRACE_DIR` | unset; CLI sets `<sample>/runs` | Directory of the CLI server trace (`<dir>/<runId>/server-trace.jsonl`). |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | unset = disabled | Langfuse export of a live client run; both keys must be set. |
-| `LANGFUSE_BASE_URL` | `https://us.cloud.langfuse.com` | Langfuse Cloud or self-hosted endpoint. |
+| `LANGFUSE_BASE_URL` | `https://us.cloud.langfuse.com` | Langfuse SDK reporting endpoint (Cloud, self-hosted, or a reporting proxy). |
+| `A2AT_SAMPLE_LANGFUSE_UI_BASE_URL` | `https://us.cloud.langfuse.com` | Browser-facing UI base for the trace link; set it when the reporting endpoint is a proxy or the self-hosted UI has another origin. |
 | `A2AT_SAMPLE_LANGFUSE_ENABLED` | unset = auto | `0` forces the export off even with keys; `1` keeps the key-based enable. |
 | `A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT` | default `1` | `0` sends only model, token, status and timing metadata (no prompt/response text). |
 | `A2AT_SAMPLE_LANGFUSE_ENVIRONMENT` | default `demo` | Langfuse environment label. |

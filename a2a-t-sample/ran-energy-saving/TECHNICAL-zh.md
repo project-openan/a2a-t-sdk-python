@@ -777,7 +777,8 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_SAMPLE_TRACE_TOKEN` | 默认未设置；`--ui` 生成随机 token | 服务端出示、UI 校验的本地 token；未设置时 ingest 路由关闭（失败关闭）。 |
 | `A2AT_SAMPLE_TRACE_DIR` | 默认未设置；CLI 设为 `<sample>/runs` | CLI 服务端 trace 目录（`<dir>/<runId>/server-trace.jsonl`）。 |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | 未设置 = 关闭 | live client run 的 Langfuse 导出；两个 key 必须同时配置。 |
-| `LANGFUSE_BASE_URL` | `https://us.cloud.langfuse.com` | Langfuse Cloud 或自托管地址。 |
+| `LANGFUSE_BASE_URL` | `https://us.cloud.langfuse.com` | Langfuse SDK 上报端点（Cloud、自托管或上报代理）。 |
+| `A2AT_SAMPLE_LANGFUSE_UI_BASE_URL` | `https://us.cloud.langfuse.com` | 浏览器打开 trace 链接所用的 UI 地址；上报端点走代理或自托管 UI 使用其他 origin 时设置它。 |
 | `A2AT_SAMPLE_LANGFUSE_ENABLED` | 未设置 = 自动 | 即使有 key，`0` 也强制关闭；`1` 保持按 key 自动启用。 |
 | `A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT` | 默认 `1` | `0` 时只上报模型、token、状态和耗时元数据，不上报 prompt/response 文本。 |
 | `A2AT_SAMPLE_LANGFUSE_ENVIRONMENT` | 默认 `demo` | Langfuse environment 标签。 |

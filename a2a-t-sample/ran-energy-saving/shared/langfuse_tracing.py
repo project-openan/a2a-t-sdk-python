@@ -29,6 +29,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final
+from urllib.parse import urlsplit
 
 from shared.config import SampleConfig
 
@@ -284,7 +285,8 @@ class LangfuseSpanExporter:
         with self._lock:
             if resolve_url and self._trace_url is None:
                 try:
-                    self._trace_url = self._runtime.client.get_trace_url(trace_id=self._trace_id)
+                    sdk_url = self._runtime.client.get_trace_url(trace_id=self._trace_id)
+                    self._trace_url = _ui_trace_url(sdk_url, self._config.langfuse_ui_base_url)
                 except Exception as exc:  # noqa: BLE001 - the trace id is still useful
                     self._warning = self._warning or f"{type(exc).__name__}: {exc}"
             return {
@@ -507,6 +509,27 @@ def _usage_details(tokens: object) -> dict[str, int] | None:
         if isinstance(value, int) and not isinstance(value, bool):
             usage[target] = value
     return usage or None
+
+
+def _ui_trace_url(url: str | None, ui_base_url: str) -> str | None:
+    """Move a Langfuse trace URL onto the browser-facing UI base.
+
+    The SDK builds the URL from its API ``base_url``. When reporting goes through a proxy (the
+    yellow-zone setup), that host is not what the browser opens, so the path — project id and trace
+    id included — is kept and only the origin is replaced with ``A2AT_SAMPLE_LANGFUSE_UI_BASE_URL``.
+    """
+    if not url:
+        return url
+    base = (ui_base_url or "").rstrip("/")
+    if not base:
+        return url
+    parsed = urlsplit(url)
+    suffix = parsed.path or ""
+    if parsed.query:
+        suffix = f"{suffix}?{parsed.query}"
+    if parsed.fragment:
+        suffix = f"{suffix}#{parsed.fragment}"
+    return f"{base}{suffix}"
 
 
 def _final_payload(result: Any | None, error: str | None) -> dict[str, object] | None:

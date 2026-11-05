@@ -173,6 +173,8 @@ sample 不再把操作员原文直接送进 A2A / A2A-T。默认的 `processed` 
 live 模式的 client run 可以把 Run Explorer span 导出到 Langfuse，每次 run 一条 trace：
 
 - 设置 `LANGFUSE_PUBLIC_KEY` 和 `LANGFUSE_SECRET_KEY`（可选 `LANGFUSE_BASE_URL`）；
+- `LANGFUSE_BASE_URL` 是 SDK 上报端点，可以指向代理；`A2AT_SAMPLE_LANGFUSE_UI_BASE_URL`
+  是浏览器打开 trace 链接所用的 UI 地址（默认 `https://us.cloud.langfuse.com`）；
 - `A2AT_SAMPLE_LANGFUSE_ENABLED=0` 强制关闭；`A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT=0`
   只上报模型、token、状态和耗时元数据；
 - offline/scripted 运行不上报。

@@ -197,6 +197,9 @@ operator request → business intent (ProcessedIntent) → normalized text → a
 A live client run can export its Run Explorer spans to Langfuse as one trace per run:
 
 - set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` (optionally `LANGFUSE_BASE_URL`);
+- `LANGFUSE_BASE_URL` is the SDK reporting endpoint and may point at a proxy;
+  `A2AT_SAMPLE_LANGFUSE_UI_BASE_URL` is the browser-facing UI base used only for the trace link
+  (default `https://us.cloud.langfuse.com`);
 - `A2AT_SAMPLE_LANGFUSE_ENABLED=0` forces the export off, and
   `A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT=0` sends only model, token, status and timing metadata;
 - offline/scripted runs are not exported.

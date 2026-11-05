@@ -31,6 +31,7 @@ from shared.config import (
     LANGFUSE_ENVIRONMENT_ENV_KEY,
     LANGFUSE_PUBLIC_KEY_ENV_KEY,
     LANGFUSE_SECRET_KEY_ENV_KEY,
+    LANGFUSE_UI_BASE_URL_ENV_KEY,
     LLM_MAX_ATTEMPTS_ENV_KEY,
     LLM_TIMEOUT_ENV_KEY,
     MODEL_MODE_LIVE,
@@ -109,6 +110,7 @@ _ENV_KEYS = (
     LANGFUSE_ENVIRONMENT_ENV_KEY,
     LANGFUSE_PUBLIC_KEY_ENV_KEY,
     LANGFUSE_SECRET_KEY_ENV_KEY,
+    LANGFUSE_UI_BASE_URL_ENV_KEY,
     RUNS_DIR_ENV_KEY,
     PURE_FOLLOWUP_ENV_KEY,
 )
@@ -588,6 +590,7 @@ def test_langfuse_defaults_are_disabled_and_capture_content(tmp_path: Path) -> N
     assert config.langfuse_configured is False
     assert config.langfuse_enabled is None
     assert config.langfuse_base_url == "https://us.cloud.langfuse.com"
+    assert config.langfuse_ui_base_url == "https://us.cloud.langfuse.com"
     assert config.langfuse_capture_content is True
     assert config.langfuse_environment == "demo"
 
@@ -795,3 +798,18 @@ def test_the_process_environment_wins_over_the_env_file(
     assert config.adk_model_name == "openai/qwen3-32b"
     assert config.adk_model_api_base == "http://71.77.65.40:8008/v1"
     assert config.adk_model_api_key == "lab-key"
+
+
+def test_the_langfuse_ui_base_is_separate_from_the_reporting_endpoint(tmp_path: Path) -> None:
+    """A proxy is the SDK endpoint, not the URL the browser opens."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "LANGFUSE_BASE_URL=http://langfuse-proxy.internal:8080\n"
+        "A2AT_SAMPLE_LANGFUSE_UI_BASE_URL=https://us.cloud.langfuse.com/\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert config.langfuse_base_url == "http://langfuse-proxy.internal:8080"
+    assert config.langfuse_ui_base_url == "https://us.cloud.langfuse.com"
