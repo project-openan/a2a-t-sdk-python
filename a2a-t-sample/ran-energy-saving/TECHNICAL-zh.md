@@ -394,8 +394,10 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
   （Negotiation-T metadata + `negotiationContext`）；只声明 Task-T 会得到空 metadata。
 - 一条消息只能带一个 `-T` metadata 键。NMS 模式的 ACCEPT 只带 Negotiation-T；本地 demo
   server 保留回填的 Task-T。对应参数是 `single_extension_per_message`。
-- `A2AT_SAMPLE_NMS_REGION` 覆盖 scenario 区域，也覆盖决策模型在 ACCEPT 里填写的区域
-  （`forced_region`）；因此不用改 scenario 就能指向网管认识的区域。
+- `A2AT_SAMPLE_NMS_REGION` 与 `A2AT_SAMPLE_NMS_SITES` 会把每个发往网管的 Task-T（经意图层的
+  初始提示词、accept 重填、Modify follow-up）中的中性示例区域和 scenario 站点列表替换为网管值。
+  `nms` 运行默认是 `A2ATestRegion` 和 `NRES_XCS_6102937,LTE_26441_LNR_OCL`；本地三跳演示保持
+  中性名称。
 - `negotiationContext.id` 是网管的协商句柄，不是 A2A 的 `contextId`。应答使用 `session.id`
   （只有服务端没给时才回退到 context id）。`build_negotiation_metadata()` 采用同一规则；本地
   server 用 context id 作为协商 id，因此行为不变。
@@ -424,7 +426,8 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
 测试：`tests/test_nms_client.py`（令牌、请求头、心跳、空闲、协商、wire 脱敏）、
 `tests/test_nms_sim.py`（422 配对、静态区域/时段/速率规则、任务生命周期、strict 流），以及
 原始客户端对仿真器的集成测试。真实联调需要 910 网络，并设置
-`A2AT_SAMPLE_NMS_REGION=A2ATestRegion` 或在请求文本里写明该区域。
+910 网络；NMS 默认值是 `A2AT_SAMPLE_NMS_REGION=A2ATestRegion` 和
+`A2AT_SAMPLE_NMS_SITES=NRES_XCS_6102937,LTE_26441_LNR_OCL`。
 
 ### 3.7 操作员意图处理层
 
@@ -707,7 +710,7 @@ P95 和审批等待。
 | --- | --- | --- | --- | --- |
 | `night` | 完整用例 1：直接创建夜间节能任务 | 请求包含所有必需槽位（`operationType`、区域、描述、分时段保障速率）。 | 无 | Task `COMPLETED` + 报告（`task_completed`） |
 | `information` | 目标缺参数：网管问、OSS 补 | Task-T 请求缺少分时段保障速率目标（`content.param_missing`）。 | `S:Propose(1)` → `C:Accept(1)` | Task `COMPLETED` + 报告（`task_completed`） |
-| `unknown_area` | 未知区域：排序并选择可用区域 | 请求使用 `Region Z`/`未知区域`；样例 precheck 对可用区域（松山湖管委会、大岭山）排序，并在 information 协商中给出全部候选及模糊匹配分数。 | `S:Propose(1)` → `C:Accept(1)`（所选区域填入 `region`，原保障时段保留） | Task `COMPLETED` + 报告（`task_completed`） |
+| `unknown_area` | 未知区域：排序并选择可用区域 | 请求使用 `Region Z`/`未知区域`；样例 precheck 对可用区域（区域 A、区域 B）排序，并在 information 协商中给出全部候选及模糊匹配分数。 | `S:Propose(1)` → `C:Accept(1)`（所选区域填入 `region`，原保障时段保留） | Task `COMPLETED` + 报告（`task_completed`） |
 | `target` | 时段冲突：先纠偏再执行 | 保障吞吐目标的时间段重叠（`content.value_not_allowed`）。 | `S:Propose(1)` → `C:Propose(1)`（反提议） → `S:Propose(2)`（修订） → `C:Accept(2)` | Task `COMPLETED` + 报告（`task_completed`） |
 | `feasibility` | 条件不可行：网管给替代方案 | 保障速率与 18 小时停电冲突（`content.rule_violation`）。 | `S:Propose(1)`（替代方案） → `C:Accept(1)` | Task `COMPLETED` + 报告（`task_completed`） |
 | `reject` | OSS 无法提供：协商结束 | 客户端无法提供缺失的保障速率目标。 | `S:Propose(1)` → `C:Reject(1)` → `S:Message("协商已结束")` | 无 Task（`no_task_negotiation_ended`） |

@@ -59,7 +59,7 @@ KIND_FEASIBILITY = "feasibility"
 
 #: Chinese natural-language task request used for prompt generation (UC1, complete input).
 NATURAL_LANGUAGE_PROMPT_INPUT_ZH = (
-    "在松山湖管委会创建无线网络节能任务：基于任务对象和任务上下文，输出无线网络节能方案，"
+    "在区域 A 创建无线网络节能任务：基于任务对象和任务上下文，输出无线网络节能方案，"
     "达成任务目标中定义的无线网络节能目标，并按照预期输出中定义的格式返回无线网络节能结果；"
     "在满足任务上下文的前提下最大化节能；分时段保障速率目标为 {00:00~17:30,10Mbps}、"
     "{17:30~23:00,20Mbps}、{23:00~23:59,10Mbps}。"
@@ -68,7 +68,7 @@ NATURAL_LANGUAGE_PROMPT_INPUT_ZH = (
 
 #: English natural-language task request used for prompt generation (UC1, complete input).
 NATURAL_LANGUAGE_PROMPT_INPUT_EN = (
-    "Create a RAN energy saving task in the Songshanhu Administration Committee area to maximize "
+    "Create a RAN energy saving task in Region A to maximize "
     "energy saving. Based on the task object and task context, output a wireless network energy "
     "saving plan that achieves the energy saving goal defined in the task target and returns the "
     "energy saving result in the format defined in the expected output. The time-segment-based "
@@ -79,7 +79,7 @@ NATURAL_LANGUAGE_PROMPT_INPUT_EN = (
 
 #: Chinese natural-language task request of use case 2 (planned power outage, complete input).
 NATURAL_LANGUAGE_PROMPT_INPUT_OUTAGE_ZH = (
-    "修改松山湖管委会运行中的无线网络节能任务：基于任务对象和任务上下文，输出无线网络节能方案，"
+    "修改区域 A 运行中的无线网络节能任务：基于任务对象和任务上下文，输出无线网络节能方案，"
     "达成任务目标中定义的无线网络节能目标；站点列表1为[站点1, 站点2]；明天计划停电，"
     "停电期间 03:00~05:00 将分时段保障速率下调到 2Mbps 以节省电池，停电之外保持 "
     "{00:00~03:00,10Mbps}、{05:00~24:00,10Mbps}。预期输出为无线网络节能任务的意图报告。"
@@ -87,7 +87,7 @@ NATURAL_LANGUAGE_PROMPT_INPUT_OUTAGE_ZH = (
 
 #: English natural-language task request of use case 2 (planned power outage, complete input).
 NATURAL_LANGUAGE_PROMPT_INPUT_OUTAGE_EN = (
-    "Modify the running RAN energy saving task in the Songshanhu Administration Committee area. "
+    "Modify the running RAN energy saving task in Region A. "
     "Based on the task object and task context, output a wireless network energy saving plan that "
     "achieves the energy saving goal defined in the task target. Station list 1 is "
     '["Site 1", "Site 2"]. Planned power outage tomorrow; during the outage, 03:00~05:00, '
@@ -101,7 +101,7 @@ NATURAL_LANGUAGE_PROMPT_INPUT_OUTAGE_EN = (
 #: ``task_context`` slot is optional, so the client renders the prompt; the server's caller schema
 #: requires ``guaranteedThroughputTarget`` and reports the missing-parameter content error.
 NATURAL_LANGUAGE_PROMPT_INPUT_MISSING_ZH = (
-    "在松山湖管委会创建无线网络节能任务：基于任务对象和任务上下文，输出无线网络节能方案，"
+    "在区域 A 创建无线网络节能任务：基于任务对象和任务上下文，输出无线网络节能方案，"
     "达成任务目标中定义的无线网络节能目标，并按照预期输出中定义的格式返回无线网络节能结果；"
     "在满足任务上下文的前提下最大化节能。"
     "预期输出为无线网络节能任务的意图报告。"
@@ -112,7 +112,7 @@ NATURAL_LANGUAGE_PROMPT_INPUT_MISSING_ZH = (
 #: a live model to fill the template's required ``task_description`` slot; the omitted slot remains
 #: only the time-segmented guaranteed throughput target.
 NATURAL_LANGUAGE_PROMPT_INPUT_MISSING_EN = (
-    "Create a RAN energy saving task in the Songshanhu Administration Committee area. Based on the "
+    "Create a RAN energy saving task in Region A. Based on the "
     "task object and task context, output a wireless network energy saving plan that achieves the "
     "energy saving goal defined in the task target and returns the energy saving result in the "
     "format defined in the expected output; maximize energy saving under the task context."
@@ -143,7 +143,7 @@ NATURAL_LANGUAGE_PROMPT_INPUT_UNKNOWN_EN = (
 #: target has two overlapping time segments, so the Task-T validation reports the
 #: value-not-allowed content error.
 NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_ZH = (
-    "在松山湖管委会创建无线网络节能任务：基于任务对象和任务上下文，输出无线网络节能方案，"
+    "在区域 A 创建无线网络节能任务：基于任务对象和任务上下文，输出无线网络节能方案，"
     "达成任务目标中定义的无线网络节能目标，并按照预期输出中定义的格式返回无线网络节能结果；"
     "在满足任务上下文的前提下最大化节能；分时段保障速率目标为 {00:00~07:00,2Mbps}、"
     "{07:00~09:00,10Mbps}、{09:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{20:00~00:00,10Mbps}。"
@@ -152,7 +152,7 @@ NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_ZH = (
 
 #: English natural-language task request of the target negotiation (overlapping segments).
 NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_EN = (
-    "Create a RAN energy saving task in the Songshanhu Administration Committee area to maximize "
+    "Create a RAN energy saving task in Region A to maximize "
     "energy saving. Based on the task object and task context, output a wireless network energy "
     "saving plan that achieves the energy saving goal defined in the task target and returns the "
     "energy saving result in the format defined in the expected output. The time-segment-based "
@@ -165,7 +165,7 @@ NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_EN = (
 #: guaranteed rate through an 18-hour power outage, so the Task-T validation reports the
 #: rule-violation content error.
 NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_ZH = (
-    "在松山湖管委会创建无线网络节能任务：基于任务对象和任务上下文，输出无线网络节能方案，"
+    "在区域 A 创建无线网络节能任务：基于任务对象和任务上下文，输出无线网络节能方案，"
     "达成任务目标中定义的无线网络节能目标，并按照预期输出中定义的格式返回无线网络节能结果；"
     "站点列表1为[站点名称1, 站点名称2]；分时段保障速率目标为 {00:00~06:00,2Mbps}、"
     "{06:00~18:00,10Mbps}；背景事件为在00:00~18:00停电；在满足任务上下文的前提下最大化节能。"
@@ -174,7 +174,7 @@ NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_ZH = (
 
 #: English natural-language task request of the feasibility negotiation (outage case).
 NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_EN = (
-    "Create a RAN energy saving task in the Songshanhu Administration Committee area to maximize "
+    "Create a RAN energy saving task in Region A to maximize "
     "energy saving. Based on the task object and task context, output a wireless network energy "
     "saving plan that achieves the energy saving goal defined in the task target and returns the "
     "energy saving result in the format defined in the expected output. Station list 1 is "
@@ -191,14 +191,14 @@ NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_EN = (
 PRESENTATION_REQUESTS: dict[str, dict[str, str]] = {
     SCENARIO_NIGHT: {
         LANGUAGE_EN: (
-            "Start energy saving in the Songshanhu area with these guaranteed throughputs: "
+            "Start energy saving in Region A with these guaranteed throughputs: "
             "00:00–17:30 at 10 Mbps, 17:30–23:00 at 20 Mbps, 23:00–24:00 at 10 Mbps."
         ),
-        LANGUAGE_ZH: ("在松山湖开启节能，保障速率为：00:00–17:30 10 Mbps，17:30–23:00 20 Mbps，23:00–24:00 10 Mbps。"),
+        LANGUAGE_ZH: ("在区域 A 开启节能，保障速率为：00:00–17:30 10 Mbps，17:30–23:00 20 Mbps，23:00–24:00 10 Mbps。"),
     },
     SCENARIO_INFORMATION: {
-        LANGUAGE_EN: "Start energy saving in the Songshanhu area.",
-        LANGUAGE_ZH: "在松山湖开启节能。",
+        LANGUAGE_EN: "Start energy saving in Region A.",
+        LANGUAGE_ZH: "在区域 A 开启节能。",
     },
     SCENARIO_UNKNOWN_AREA: {
         LANGUAGE_EN: (
@@ -209,48 +209,48 @@ PRESENTATION_REQUESTS: dict[str, dict[str, str]] = {
     },
     SCENARIO_TARGET: {
         LANGUAGE_EN: (
-            "Start energy saving in the Songshanhu area with these guaranteed throughputs: "
+            "Start energy saving in Region A with these guaranteed throughputs: "
             "00:00–07:00 at 2 Mbps, 07:00–09:00 at 10 Mbps, 09:00–17:30 at 10 Mbps, "
             "17:30–23:00 at 20 Mbps, 20:00–00:00 at 10 Mbps."
         ),
         LANGUAGE_ZH: (
-            "在松山湖开启节能，保障速率为：00:00–07:00 2 Mbps，07:00–09:00 10 Mbps，"
+            "在区域 A 开启节能，保障速率为：00:00–07:00 2 Mbps，07:00–09:00 10 Mbps，"
             "09:00–17:30 10 Mbps，17:30–23:00 20 Mbps，20:00–00:00 10 Mbps。"
         ),
     },
     SCENARIO_FEASIBILITY: {
         LANGUAGE_EN: (
-            "Start energy saving for Site 1 and Site 2 in the Songshanhu area: "
+            "Start energy saving for Site 1 and Site 2 in Region A: "
             "00:00–06:00 at 2 Mbps and 06:00–18:00 at 10 Mbps. A power outage runs "
             "from 00:00–18:00."
         ),
         LANGUAGE_ZH: (
-            "在松山湖为站点 1 和站点 2 开启节能：00:00–06:00 2 Mbps，06:00–18:00 10 Mbps；00:00–18:00 有停电事件。"
+            "在区域 A 为站点 1 和站点 2 开启节能：00:00–06:00 2 Mbps，06:00–18:00 10 Mbps；00:00–18:00 有停电事件。"
         ),
     },
     SCENARIO_OUTAGE: {
         LANGUAGE_EN: (
-            "Create a baseline energy-saving task for Site 1 and Site 2 in the Songshanhu area, "
+            "Create a baseline energy-saving task for Site 1 and Site 2 in Region A, "
             "then modify the running task for tomorrow's 03:00–05:00 planned outage: keep 2 Mbps "
             "during the outage and 10 Mbps otherwise."
         ),
         LANGUAGE_ZH: (
-            "在松山湖为站点 1 和站点 2 创建节能基线任务，然后修改运行中的任务以应对明天 "
+            "在区域 A 为站点 1 和站点 2 创建节能基线任务，然后修改运行中的任务以应对明天 "
             "03:00–05:00 的计划停电：停电期间保障 2 Mbps，其余时间 10 Mbps。"
         ),
     },
     SCENARIO_REJECT: {
-        LANGUAGE_EN: "Start energy saving in the Songshanhu area.",
-        LANGUAGE_ZH: "在松山湖开启节能。",
+        LANGUAGE_EN: "Start energy saving in Region A.",
+        LANGUAGE_ZH: "在区域 A 开启节能。",
     },
     SCENARIO_ABORT: {
         LANGUAGE_EN: (
-            "Start energy saving in the Songshanhu area with these guaranteed throughputs: "
+            "Start energy saving in Region A with these guaranteed throughputs: "
             "00:00–07:00 at 2 Mbps, 07:00–09:00 at 10 Mbps, 09:00–17:30 at 10 Mbps, "
             "17:30–23:00 at 20 Mbps, 20:00–00:00 at 10 Mbps."
         ),
         LANGUAGE_ZH: (
-            "在松山湖开启节能，保障速率为：00:00–07:00 2 Mbps，07:00–09:00 10 Mbps，"
+            "在区域 A 开启节能，保障速率为：00:00–07:00 2 Mbps，07:00–09:00 10 Mbps，"
             "09:00–17:30 10 Mbps，17:30–23:00 20 Mbps，20:00–00:00 10 Mbps。"
         ),
     },
@@ -608,7 +608,7 @@ SCENARIO_UNKNOWN_AREA_SPEC = Scenario(
         NegotiationDecision(
             action="accept",
             rationale=(
-                "The area is not served; the client confirms the Songshanhu area and keeps the "
+                "The area is not served; the client confirms Region A and keeps the "
                 "requested guaranteed throughput windows."
             ),
         ),
@@ -718,17 +718,17 @@ SCENARIO_ABORT_SPEC = Scenario(
         NegotiationDecision(
             action="counter",
             rationale="The client repeats the requested region instead of supplying the missing target.",
-            counter_proposal="region: Songshanhu Administration Committee",
+            counter_proposal="region: Region A",
         ),
         NegotiationDecision(
             action="counter",
             rationale="The client still cannot supply the missing target and repeats its region.",
-            counter_proposal="region: Songshanhu Administration Committee",
+            counter_proposal="region: Region A",
         ),
         NegotiationDecision(
             action="counter",
             rationale="No further information is available; the client repeats its position.",
-            counter_proposal="region: Songshanhu Administration Committee",
+            counter_proposal="region: Region A",
         ),
     ),
     description=(

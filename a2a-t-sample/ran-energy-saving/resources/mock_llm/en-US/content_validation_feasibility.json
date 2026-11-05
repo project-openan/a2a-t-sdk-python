@@ -11,7 +11,7 @@
   ],
   "params": {
     "operationType": "create",
-    "region": "Songshanhu Administration Committee",
+    "region": "Region A",
     "energySavingGoal": "Maximize energy saving under the condition that the task context is met.",
     "guaranteedThroughputTarget": null,
     "siteList": "Station 1,Station 2",

@@ -134,7 +134,7 @@ def build_gateway_agent_card(*, host: str, port: int) -> AgentCard:
                 ),
                 tags=["energy saving", "negotiation"],
                 examples=[
-                    "Maximize energy saving in the Songshanhu Administration Committee area while "
+                    "Maximize energy saving in Region A while "
                     "keeping the time-segmented guaranteed throughput target."
                 ],
             )

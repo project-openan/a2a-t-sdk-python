@@ -497,6 +497,12 @@ function cleanArea(raw) {
 }
 
 function parseArea(text) {
+  // The neutral demo names are "Region A" / "区域 A"; the shorter spelling omits the "area"
+  // word the older pattern required.
+  const neutralEn = text.match(/\b(Region\s+[A-Z])\b/i);
+  if (neutralEn) return neutralEn[1].trim();
+  const neutralZh = text.match(/(区域\s*[A-Z])/i);
+  if (neutralZh) return neutralZh[1].trim();
   const en = text.match(/\bin\s+the\s+(.+?)\s+area\b/i);
   if (en) return en[1].trim();
   const zh = text.match(/(?:在|区域[:：]\s*)([一-龥A-Za-z0-9]+?)(?:创建|区域|进行|开启|为|，|,)/);

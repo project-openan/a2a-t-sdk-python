@@ -379,7 +379,7 @@ def test_information_client_extraction_succeeds_and_server_maps_to_information(
     prompt_text = content.prompt_text
     assert prompt_text is not None
 
-    assert "Songshanhu Administration Committee" in prompt_text
+    assert "Region A" in prompt_text
     assert "07:00~17:30,10Mbps" not in prompt_text
     with pytest.raises(ContentValidationError) as excinfo:
         server.validate_task_prompt_and_data_filling(
@@ -396,7 +396,7 @@ def test_information_client_extraction_succeeds_and_server_maps_to_information(
 
 def test_real_server_validates_accept_offline(real_negotiation_server: A2ATServer) -> None:
     result = real_negotiation_server.validate_accept_prompt_and_data_filling(
-        "Accept. region: Songshanhu Administration Committee.",
+        "Accept. region: Region A.",
         _negotiation_context(NegotiationPerformative.ACCEPT),
         {"type": "object", "properties": {}},
         INFORMATION_NEGOTIATION_ACCEPT_REJECT_URI,
@@ -448,7 +448,7 @@ _ZH_VALIDATION_CASES: tuple[tuple[str, NegotiationPerformative, str, str], ...] 
         "accept",
         NegotiationPerformative.ACCEPT,
         INFORMATION_NEGOTIATION_ACCEPT_REJECT_URI,
-        "Accept. region: 松山湖管委会。",
+        "Accept. region: 区域 A。",
     ),
     (
         "reject",
@@ -563,15 +563,15 @@ def test_unknown_area_propose_lists_the_served_areas(client: ScriptedLLMClient) 
     }
     proposal = (
         'The requested area "Region Z" is not recognized by the RAN. '
-        "Served areas: Songshanhu Administration Committee; Dalingshan."
+        "Served areas: Region A; Region B."
     )
 
     response = client.structured(messages=_messages(proposal), json_schema=schema)
     payload = json.loads(response.content)
     value = payload["items"][0]["value"]
 
-    assert "Songshanhu Administration Committee" in value
-    assert "Dalingshan" in value
+    assert "Region A" in value
+    assert "Region B" in value
 
 
 def test_unknown_area_propose_lists_the_served_areas_in_chinese() -> None:
@@ -581,7 +581,7 @@ def test_unknown_area_propose_lists_the_served_areas_in_chinese() -> None:
         "properties": {"items": {"type": "array"}, "relationship": {"type": "string"}},
     }
     proposal = (
-        "无法识别区域“未知区域”。可用区域：松山湖管委会；大岭山。"
+        "无法识别区域“未知区域”。可用区域：区域 A；区域 B。"
         "未找到相近区域，请确认一个可用区域，并保留原保障速率时段。"
     )
 
@@ -589,5 +589,5 @@ def test_unknown_area_propose_lists_the_served_areas_in_chinese() -> None:
     payload = json.loads(response.content)
     value = payload["items"][0]["value"]
 
-    assert "松山湖管委会" in value
-    assert "大岭山" in value
+    assert "区域 A" in value
+    assert "区域 B" in value

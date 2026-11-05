@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Final
@@ -160,47 +160,70 @@ def _effective_policy(
     request_text: str,
     language: str,
 ) -> ClientPolicy:
-    """Return the policy a run uses.
+    """Return the policy a run uses on the vendor NMS.
 
-    A real NMS run honors the operator's request text (region, window and throughput), so the
-    scenario's canned ``initial_data`` cannot override it. When ``A2AT_SAMPLE_NMS_REGION`` is set
-    and the request text does not already name that region, the scenario's structured values are
-    kept and only the region is replaced: the vendor rejects the demo region, and the scenario
-    text is already a complete request. An explicit request that names the configured region wins,
-    so an operator can still choose windows or rates. Other modes keep the scenario policy
-    unchanged.
+    The vendor serves exactly one region and a fixed set of sites, so the neutral demo values must
+    never reach it: every structured value the policy produces — accept refill, complete initial
+    data, Modify follow-up — gets the configured region and, where the value has one, the configured
+    site list. An operator's request text still chooses windows, rates and whether a free-text
+    extraction runs. Other discovery modes keep the scenario policy unchanged.
     """
     if config.discovery != DISCOVERY_NMS:
         return policy
     region = config.nms_region.strip()
-    if region:
-        base_filled = policy.filled_params
+    sites = config.nms_sites
 
-        def filled_params(
-            kind: str,
-            language_code: str,
-            *,
-            base: Callable[[str, str], dict[str, object]] = base_filled,
-            region_value: str = region,
-        ) -> dict[str, object]:
-            params = dict(base(kind, language_code))
-            params["region"] = region_value
-            return params
+    def apply_nms(values: Mapping[str, object]) -> dict[str, object]:
+        updated = dict(values)
+        if region:
+            updated["region"] = region
+        if sites and "siteList" in updated:
+            updated["siteList"] = ",".join(sites)
+        return updated
 
-        policy = replace(policy, filled_params=filled_params)
-        if region.lower() not in request_text.lower():
-            initial = policy.initial_data(language)
-            if initial is not None:
-                values, schema = initial
-                overridden = {**values, "region": region}
-                return replace(
-                    policy,
-                    initial_data=lambda _language, values=overridden, schema=schema: (
-                        values,
-                        schema,
-                    ),
-                )
+    base_filled = policy.filled_params
+
+    def filled_params(
+        kind: str,
+        language_code: str,
+        *,
+        base: Callable[[str, str], dict[str, object]] = base_filled,
+    ) -> dict[str, object]:
+        return apply_nms(base(kind, language_code))
+
+    base_initial = policy.initial_data
+
+    def initial_data(
+        language_code: str,
+        *,
+        base: Callable[[str], tuple[Mapping[str, object], Mapping[str, object]] | None] = base_initial,
+    ) -> tuple[Mapping[str, object], Mapping[str, object]] | None:
+        data = base(language_code)
+        return None if data is None else (apply_nms(data[0]), data[1])
+
+    base_follow_up = policy.follow_up_data
+
+    def follow_up_data(
+        language_code: str,
+        *,
+        base: Callable[[str], tuple[Mapping[str, object], Mapping[str, object]] | None] = base_follow_up,
+    ) -> tuple[Mapping[str, object], Mapping[str, object]] | None:
+        data = base(language_code)
+        return None if data is None else (apply_nms(data[0]), data[1])
+
+    if region or sites:
+        policy = replace(
+            policy,
+            filled_params=filled_params,
+            initial_data=initial_data,
+            follow_up_data=follow_up_data,
+        )
+        if region and region.lower() not in request_text.lower():
+            # The request does not name the served region: keep the structured shortcut, with the
+            # vendor's region and sites, instead of relying on free-text extraction.
+            return policy
     if request_text.strip():
+        # The operator's text drives Task-T extraction; the structured shortcut is not used.
         return replace(policy, initial_data=DEFAULT_CLIENT_POLICY.initial_data)
     return policy
 

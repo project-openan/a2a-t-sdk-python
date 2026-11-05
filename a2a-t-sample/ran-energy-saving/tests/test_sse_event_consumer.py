@@ -21,7 +21,7 @@ from a2a.types import (
 from a2a_t.core.metadata import TASK_T_EXTENSION_URI, TEMPLATE_URI_METADATA_KEY
 from shared.sse_event_consumer import normalize_event
 
-TASK_T_TEXT = "## Operation Type\n\nCreate\n\n## Task Object\n\nThe area is Songshanhu."
+TASK_T_TEXT = "## Operation Type\n\nCreate\n\n## Task Object\n\nThe area is Region A."
 
 
 def _user_message() -> Message:
@@ -50,7 +50,7 @@ def test_task_creation_event_keeps_the_task_history_with_its_task_t_metadata() -
 
 def test_status_update_keeps_the_event_metadata_and_the_status_message() -> None:
     message = Message(role=Role.ROLE_AGENT, message_id="message-2")
-    message.parts.add(text="Region: Songshanhu; Progress: the report is ready.")
+    message.parts.add(text="Region: Region A; Progress: the report is ready.")
 
     status = TaskStatus(state=TaskState.TASK_STATE_WORKING)
     status.message.CopyFrom(message)
@@ -60,7 +60,7 @@ def test_status_update_keeps_the_event_metadata_and_the_status_message() -> None
             context_id="context-1",
             status=status,
             metadata={
-                TASK_T_EXTENSION_URI: "1. Basic information\n- Region: Songshanhu",
+                TASK_T_EXTENSION_URI: "1. Basic information\n- Region: Region A",
                 TEMPLATE_URI_METADATA_KEY: "urn:task-t-template",
             },
         )
@@ -69,10 +69,10 @@ def test_status_update_keeps_the_event_metadata_and_the_status_message() -> None
     event = normalize_event(response)
 
     assert event["kind"] == "status"
-    assert event["text"] == "Region: Songshanhu; Progress: the report is ready."
+    assert event["text"] == "Region: Region A; Progress: the report is ready."
     metadata = event["metadata"]
     assert isinstance(metadata, dict)
-    assert metadata[TASK_T_EXTENSION_URI] == "1. Basic information\n- Region: Songshanhu"
+    assert metadata[TASK_T_EXTENSION_URI] == "1. Basic information\n- Region: Region A"
 
 
 def test_artifact_update_keeps_the_event_metadata() -> None:

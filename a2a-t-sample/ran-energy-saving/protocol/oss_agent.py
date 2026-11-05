@@ -481,7 +481,7 @@ def build_oss_agent_card(*, host: str, port: int) -> AgentCard:
                 name="RAN energy saving request",
                 description=OSS_AGENT_DESCRIPTION,
                 tags=["energy saving", "request"],
-                examples=["Create a RAN energy saving task in the Songshanhu area."],
+                examples=["Create a RAN energy saving task in Region A."],
             )
         ],
     )

@@ -20,7 +20,7 @@ from shared.run_constants import LANGUAGE_EN, LANGUAGE_ZH
 #: Similarity at or above which the first candidate is recommended to the engineer.
 RECOMMENDATION_THRESHOLD: Final[float] = 0.62
 
-#: Words removed before matching so "Songshanhu area" still matches the area name.
+#: Words removed before matching so "Region A area" still matches the area name.
 _GENERIC_WORDS: Final[frozenset[str]] = frozenset({"area", "region", "zone", "the", "of", "in", "at"})
 
 #: Chinese suffixes removed before matching.
@@ -59,24 +59,25 @@ class ServedArea:
         return (self.labels[LANGUAGE_EN], self.labels[LANGUAGE_ZH], *self.aliases)
 
 
-#: Areas served by the sample RAN, in display order. The first one is the default.
+#: Areas served by the sample RAN, in display order. The first one is the default. The names are
+#: deliberately neutral: a real NMS run replaces them with the region and sites the vendor serves.
 SERVED_AREAS: Final[tuple[ServedArea, ...]] = (
     ServedArea(
-        area_id="songshanhu",
+        area_id="region-a",
         labels={
-            LANGUAGE_EN: "Songshanhu Administration Committee",
-            LANGUAGE_ZH: "松山湖管委会",
+            LANGUAGE_EN: "Region A",
+            LANGUAGE_ZH: "区域 A",
         },
-        aliases=("Songshanhu", "Songshanhu Admin Committee", "松山湖", "松山湖区域"),
+        aliases=("Region A Area", "Region-A", "区域 A 区域", "区域A"),
         cell_ids=("cell-001", "cell-002"),
     ),
     ServedArea(
-        area_id="dalingshan",
+        area_id="region-b",
         labels={
-            LANGUAGE_EN: "Dalingshan",
-            LANGUAGE_ZH: "大岭山",
+            LANGUAGE_EN: "Region B",
+            LANGUAGE_ZH: "区域 B",
         },
-        aliases=("Dalingshan Town", "大岭山镇", "大岭山区域"),
+        aliases=("Region B Area", "Region-B", "区域 B 区域", "区域B"),
         cell_ids=("cell-003",),
     ),
 )

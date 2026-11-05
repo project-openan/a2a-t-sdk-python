@@ -142,7 +142,7 @@ def test_record_decision_carries_the_rationale_and_params() -> None:
     decision = NegotiationDecision(
         action="accept",
         rationale="The region is now supplied.",
-        filled_params={"region": "Songshanhu Administration Committee"},
+        filled_params={"region": "Region A"},
     )
 
     entry = transcript.record_decision(decision, propose=propose)
@@ -152,7 +152,7 @@ def test_record_decision_carries_the_rationale_and_params() -> None:
     assert entry["performative"] == "ACCEPT"
     assert entry["round"] == 2
     assert entry["rationale"] == "The region is now supplied."
-    assert entry["filledParams"] == {"region": "Songshanhu Administration Committee"}
+    assert entry["filledParams"] == {"region": "Region A"}
     assert transcript.decisions == [entry]
 
 
@@ -325,7 +325,7 @@ def test_record_event_carries_the_task_payload_and_the_extension_metadata() -> N
         "state": "TASK_STATE_SUBMITTED",
         "task": task_payload,
         "metadata": {
-            TASK_T_EXTENSION_URI: "1. Basic information\n- Region: Songshanhu",
+            TASK_T_EXTENSION_URI: "1. Basic information\n- Region: Region A",
             "unrelated": "not part of the wire payload",
         },
     }
@@ -333,7 +333,7 @@ def test_record_event_carries_the_task_payload_and_the_extension_metadata() -> N
     entry = transcript.record_event(event)
 
     assert entry["task"] == task_payload
-    assert entry["metadata"] == {TASK_T_EXTENSION_URI: "1. Basic information\n- Region: Songshanhu"}
+    assert entry["metadata"] == {TASK_T_EXTENSION_URI: "1. Basic information\n- Region: Region A"}
 
 
 def test_record_error_marks_the_run_failed() -> None:

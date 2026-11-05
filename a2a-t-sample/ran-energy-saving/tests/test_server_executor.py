@@ -60,7 +60,7 @@ from shared.config import MODEL_MODE_LIVE, SampleConfig
 from shared.metrics import render_prometheus, reset_metrics
 
 CONTEXT_ID = "ctx-executor"
-TASK_PROMPT = "Create a RAN energy saving task in the Songshanhu area."
+TASK_PROMPT = "Create a RAN energy saving task in Region A."
 
 
 def _metadata(metadata: Struct) -> dict[str, Any]:

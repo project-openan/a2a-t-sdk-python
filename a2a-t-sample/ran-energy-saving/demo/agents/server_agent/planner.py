@@ -152,7 +152,7 @@ class ScriptedChatModel(BaseChatModel):
         # would make the region check true for every run.
         text = "\n".join(str(message.content) for message in messages if isinstance(message, HumanMessage))
         lower = text.lower()
-        if "dalingshan" in lower or "大岭山" in text:
+        if "region b" in lower or "区域 b" in lower:
             return "cell-003", "00:00~06:00", "28"
         if "power outage" in lower or "停电" in text:
             return "cell-002", "01:00~05:00", "20"

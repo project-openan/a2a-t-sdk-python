@@ -1297,6 +1297,7 @@ def main() -> int:
             "A2AT_SAMPLE_NMS_TOKEN_VALUE": "Changeme_123",
             "A2AT_SAMPLE_NMS_VERIFY_TLS": "false",
             "A2AT_SAMPLE_NMS_REGION": "A2ATestRegion",
+            "A2AT_SAMPLE_NMS_SITES": "NRES_XCS_6102937,LTE_26441_LNR_OCL",
             "A2AT_SAMPLE_NMS_WIRE_LOG": "1",
         }
 
@@ -1335,7 +1336,8 @@ def main() -> int:
         f"model={resolved_config.model_label}, language={resolved_config.language}, "
         f"provider={resolved_config.adk_model_provider}, discovery={resolved_config.discovery}, "
         f"transport={resolved_config.transport}, intent_mode={resolved_config.intent_mode}, "
-        f"nms_region={resolved_config.nms_region or '-'}"
+        f"nms_region={resolved_config.nms_region or '-'}, "
+        f"nms_sites={','.join(resolved_config.nms_sites) or '-'}"
     )
 
     if args.nms:

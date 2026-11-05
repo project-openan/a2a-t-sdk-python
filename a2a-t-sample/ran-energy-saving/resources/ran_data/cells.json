@@ -4,9 +4,9 @@
   "cells": [
     {
       "cell_id": "cell-001",
-      "name": "Songshanhu-North",
-      "region": "Songshanhu Administration Committee",
-      "description": "Macro cell covering the northern business district of the Songshanhu Administration Committee area.",
+      "name": "Region-A-North",
+      "region": "Region A",
+      "description": "Macro cell covering the northern business district of Region A.",
       "max_saving_rate": 35,
       "available_windows": ["00:00~06:00", "23:00~24:00"],
       "capacity": {
@@ -44,9 +44,9 @@
     },
     {
       "cell_id": "cell-002",
-      "name": "Songshanhu-South",
-      "region": "Songshanhu Administration Committee",
-      "description": "Micro cell covering the southern residential area of the Songshanhu Administration Committee area.",
+      "name": "Region-A-South",
+      "region": "Region A",
+      "description": "Micro cell covering the southern residential area of Region A.",
       "max_saving_rate": 20,
       "available_windows": ["01:00~05:00"],
       "capacity": {
@@ -84,9 +84,9 @@
     },
     {
       "cell_id": "cell-003",
-      "name": "Dalingshan-Central",
-      "region": "Dalingshan",
-      "description": "Macro cell covering the central district of the Dalingshan service area.",
+      "name": "Region-B-Central",
+      "region": "Region B",
+      "description": "Macro cell covering the central district of the Region B service area.",
       "max_saving_rate": 28,
       "available_windows": ["00:00~06:00", "23:00~24:00"],
       "capacity": {

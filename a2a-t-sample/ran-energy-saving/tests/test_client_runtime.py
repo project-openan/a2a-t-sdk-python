@@ -440,3 +440,42 @@ async def test_nms_runtime_uses_the_raw_transport_and_skips_the_a2a_sdk_client(
     assert runtime.a2a_client is None
     assert runtime._httpx_client is None
     await runtime.aclose()
+
+
+def test_nms_policy_replaces_the_demo_sites(offline_config: SampleConfig) -> None:
+    """A site-level Task-T must carry the sites the vendor serves, not the demo placeholders."""
+    from dataclasses import replace
+
+    from protocol.client_runtime import _effective_policy
+    from protocol.run_spec import ClientPolicy
+
+    values = {"region": "Region A", "siteList": "Site 1,Site 2"}
+    policy = ClientPolicy(
+        filled_params=lambda _kind, _language: dict(values),
+        initial_data=lambda _language: (dict(values), {}),
+        follow_up_data=lambda _language: (dict(values), {}),
+    )
+    config = replace(
+        offline_config,
+        discovery="nms",
+        nms_region="A2ATestRegion",
+        nms_sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
+    )
+
+    applied = _effective_policy(policy, config, "anything", "en-US")
+
+    assert applied.filled_params("feasibility", "en-US") == {
+        "region": "A2ATestRegion",
+        "siteList": "NRES_XCS_6102937,LTE_26441_LNR_OCL",
+    }
+    initial = applied.initial_data("en-US")
+    assert initial is not None
+    assert initial[0]["siteList"] == "NRES_XCS_6102937,LTE_26441_LNR_OCL"
+    follow_up = applied.follow_up_data("en-US")
+    assert follow_up is not None
+    assert follow_up[0]["siteList"] == "NRES_XCS_6102937,LTE_26441_LNR_OCL"
+
+    region_only = ClientPolicy(initial_data=lambda _language: ({"region": "Region A"}, {}))
+    untouched = _effective_policy(region_only, config, "anything", "en-US").initial_data("en-US")
+    assert untouched is not None
+    assert "siteList" not in untouched[0]

@@ -16,12 +16,12 @@ from protocol.plain_a2a import (
 
 #: Complete plain request: carries a time-segmented target, so it can be planned.
 COMPLETE_REQUEST = (
-    "Create a RAN energy saving task in the Songshanhu area. The guaranteed throughput target is "
+    "Create a RAN energy saving task in Region A. The guaranteed throughput target is "
     "{00:00~06:00,10Mbps}."
 )
 
 #: The missing-parameter request: no target segment.
-MISSING_REQUEST = "Create a RAN energy saving task in the Songshanhu area to save energy."
+MISSING_REQUEST = "Create a RAN energy saving task in Region A to save energy."
 
 
 def _context(

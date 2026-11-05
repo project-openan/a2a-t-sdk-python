@@ -332,21 +332,21 @@ applyFrame(areaDecision, {
     content:
       '## Information Negotiation\n\n## Required Information Items\n' +
       '1. region: The requested area "Region Z" is not recognized by the RAN. ' +
-      "Served areas: Songshanhu Administration Committee; Dalingshan.",
+      "Served areas: Region A; Region B.",
     options: {
       field: "region",
       requested: "Region Z",
       keep: ["guaranteedThroughputTarget"],
       options: [
         {
-          value: "Songshanhu Administration Committee",
-          labels: { "en-US": "Songshanhu Administration Committee", "zh-CN": "松山湖管委会" },
+          value: "Region A",
+          labels: { "en-US": "Region A", "zh-CN": "区域 A" },
           score: 0,
           recommended: false,
         },
         {
-          value: "Dalingshan",
-          labels: { "en-US": "Dalingshan", "zh-CN": "大岭山" },
+          value: "Region B",
+          labels: { "en-US": "Region B", "zh-CN": "区域 B" },
           score: 0,
           recommended: false,
         },
@@ -359,12 +359,12 @@ applyFrame(areaDecision, {
 const areaCard = decisionCard(areaDecision, copy);
 assert.ok(areaCard);
 assert.equal(areaCard.regionOptions.length, 2);
-assert.equal(areaCard.regionOptions[0].label, "松山湖管委会");
+assert.equal(areaCard.regionOptions[0].label, "区域 A");
 assert.ok(areaCard.text.includes("Region Z"));
-assert.deepEqual(decisionPayload(areaCard, "accept", copy, "", "大岭山").filled_params, {
-  region: "大岭山",
+assert.deepEqual(decisionPayload(areaCard, "accept", copy, "", "区域 B").filled_params, {
+  region: "区域 B",
 });
-assert.equal(decisionPayload(areaCard, "reject", copy, "", "大岭山").filled_params, undefined);
+assert.equal(decisionPayload(areaCard, "reject", copy, "", "区域 B").filled_params, undefined);
 
 // --- Approval 1: intent review ------------------------------------------
 
@@ -590,7 +590,7 @@ assert.equal(
   sceneFor(
     status(
       29,
-      "Region: Songshanhu; Task: Multi-RAT Intelligent Network Energy Saving; Progress: plan plan-cell-001-001 was applied to cell cell-001 (Songshanhu-North) for 00:00~06:00 at 30% energy saving.",
+      "Region: Region A; Task: Multi-RAT Intelligent Network Energy Saving; Progress: plan plan-cell-001-001 was applied to cell cell-001 (Region-A-North) for 00:00~06:00 at 30% energy saving.",
       { state: "TASK_STATE_WORKING" },
     ),
     artifactState,
@@ -601,7 +601,7 @@ assert.equal(
   sceneFor(
     status(
       30,
-      "Region: Songshanhu; Task: Multi-RAT Intelligent Network Energy Saving; Progress: the energy-saving report is ready. Plan plan-cell-001-001 applied.",
+      "Region: Region A; Task: Multi-RAT Intelligent Network Energy Saving; Progress: the energy-saving report is ready. Plan plan-cell-001-001 applied.",
       { state: "TASK_STATE_WORKING" },
     ),
     artifactState,
@@ -750,17 +750,17 @@ const englishTaskT = `## Operation Type
 Create
 
 ## Task Object
-The area is the Songshanhu Administration Committee.
+The area is Region A.
 
 ## Task Context
 Time-segment-based guaranteed throughput target: {00:00~07:00,2Mbps}, {07:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,2Mbps}.`;
 const english = parseIntent(englishTaskT);
 assert.equal(english.operation, "create");
-assert.equal(english.area, "Songshanhu Administration Committee");
+assert.equal(english.area, "Region A");
 assert.equal(english.slots.length, 4);
 assert.equal(english.overlap, null);
 const englishSentence = plainSentence(english, "en-US");
-assert.ok(englishSentence.includes("Perform RAN energy saving in Songshanhu Administration Committee"));
+assert.ok(englishSentence.includes("Perform RAN energy saving in Region A"));
 assert.ok(englishSentence.includes("Guarantee 2 Mbps from 00:00 to 07:00"));
 
 const overlapTaskT = englishTaskT.replace(
@@ -775,14 +775,14 @@ const chineseTaskT = `## 操作类型(Operation Type)
 
 ## 任务对象(Task Object)
 
-区域为松山湖管委会。
+区域为区域 A。
 
 ## 任务上下文(Task Context)
 
 分时段保障速率目标：{00:00~07:00,2Mbps}、{07:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~24:00,2Mbps}。`;
 const chinese = parseIntent(chineseTaskT);
 assert.equal(chinese.operation, "create");
-assert.equal(chinese.area, "松山湖管委会");
+assert.equal(chinese.area, "区域 A");
 assert.equal(chinese.slots.length, 4);
 
 const feasibility = parseIntent(
@@ -803,13 +803,13 @@ Create
 
 ## Task Object
 
-The area is the Songshanhu Administration Committee. Site list 1: ["Site 1", "Site 2"].
+The area is Region A. Site list 1: ["Site 1", "Site 2"].
 
 ## Task Context
 
 Time-segment-based guaranteed throughput target: {00:00~03:00,10Mbps}, {03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}. Background event: power outage from 03:00 to 05:00.`;
 const outage = parseIntent(outageTaskT);
-assert.equal(outage.area, "Songshanhu Administration Committee");
+assert.equal(outage.area, "Region A");
 assert.deepEqual(outage.sites, ["Site 1", "Site 2"]);
 assert.deepEqual(outage.outage, { start: 180, end: 300 });
 assert.equal(outage.slots.length, 3);
@@ -817,16 +817,16 @@ assert.equal(outage.slots.length, 3);
 // The presentation shows a concise engineer request, not the Task-T wire text. The OSS still
 // parses it into its own structured intent before the Task-T exists.
 const conciseNight = parseIntent(
-  "Start energy saving in the Songshanhu area with these guaranteed throughputs: " +
+  "Start energy saving in Region A with these guaranteed throughputs: " +
     "00:00–17:30 at 10 Mbps, 17:30–23:00 at 20 Mbps, 23:00–24:00 at 10 Mbps.",
 );
 assert.equal(conciseNight.operation, "create");
-assert.equal(conciseNight.area, "Songshanhu");
+assert.equal(conciseNight.area, "Region A");
 assert.equal(conciseNight.slots.length, 3);
 assert.deepEqual(conciseNight.slots[1], { start: 1050, end: 1380, rate: 20 });
 
 const conciseOutage = parseIntent(
-  "Start energy saving for Site 1 and Site 2 in the Songshanhu area. During tomorrow's " +
+  "Start energy saving for Site 1 and Site 2 in Region A. During tomorrow's " +
     "03:00–05:00 outage keep 2 Mbps; otherwise use 10 Mbps: 00:00–03:00 at 10 Mbps, " +
     "03:00–05:00 at 2 Mbps, 05:00–24:00 at 10 Mbps.",
 );
@@ -846,12 +846,12 @@ Create
 
 ## Task Object
 
-The area is Songshanhu Administration Committee.
+The area is Region A.
 
 ## Task Context
 
 Time-segment-based guaranteed throughput target: {00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}.`;
-const rawRequest = "在松山湖开启节能，保障速率为 00:00–06:00 30Mbps。";
+const rawRequest = "在区域 A 开启节能，保障速率为 00:00–06:00 30Mbps。";
 
 const taskTSentModel = buildWireModel(
   {
@@ -870,7 +870,7 @@ const taskTSentModel = buildWireModel(
   copy,
 );
 const taskTSentText = wireText(taskTSentModel);
-assert.ok(taskTSentText.includes("The area is Songshanhu Administration Committee."));
+assert.ok(taskTSentText.includes("The area is Region A."));
 assert.ok(!taskTSentText.includes(rawRequest));
 
 // The plain-A2A comparison is derived from the same structured Task-T, not from the request.
@@ -936,14 +936,14 @@ const creationModel = buildWireModel(
 );
 const creationText = wireText(creationModel);
 assert.ok(creationText.includes('"task"'));
-assert.ok(creationText.includes("The area is Songshanhu Administration Committee."));
+assert.ok(creationText.includes("The area is Region A."));
 
 const workingModel = buildWireModel(
   {
     entryType: "event",
     kind: "status",
     state: "TASK_STATE_WORKING",
-    summary: "Region: Songshanhu; Progress: strategy ready.",
+    summary: "Region: Region A; Progress: strategy ready.",
   },
   { runId: "run-wire" },
   "t",
@@ -951,7 +951,7 @@ const workingModel = buildWireModel(
 );
 const workingText = wireText(workingModel);
 assert.ok(workingText.includes('"state": "TASK_STATE_WORKING"'));
-assert.ok(workingText.includes("Region: Songshanhu"));
+assert.ok(workingText.includes("Region: Region A"));
 assert.ok(!workingText.includes('"state": "Region'));
 
 const proposeModel = buildWireModel(
@@ -990,7 +990,7 @@ applyFrame(
 );
 const createdRow = createdState.trace.find((row) => row.title === "Task created");
 assert.ok(createdRow);
-assert.ok(createdRow.sub.includes("Songshanhu Administration Committee"));
+assert.ok(createdRow.sub.includes("Region A"));
 assert.ok(createdRow.sub.includes("00:00–17:30 10Mbps +2"));
 
 // --- Remaining time -----------------------------------------------------
@@ -1631,7 +1631,7 @@ applyFrame(processed, {
   runId: "intent-1",
   scenario: "night",
   mode: "confirm",
-  userRequest: "Start energy saving in the Songshanhu area.",
+  userRequest: "Start energy saving in Region A.",
   intentMode: "processed",
 });
 applyFrame(processed, {
@@ -1646,13 +1646,13 @@ applyFrame(processed, {
     detail: {
       mode: "processed",
       source: "scenario",
-      rawRequest: "Start energy saving in the Songshanhu area.",
-      normalizedText: "## Operation Type\nCreate\n\n## Task Object\nThe area is Songshanhu.",
+      rawRequest: "Start energy saving in Region A.",
+      normalizedText: "## Operation Type\nCreate\n\n## Task Object\nThe area is Region A.",
       intent: {
-        rawRequest: "Start energy saving in the Songshanhu area.",
-        normalizedText: "## Operation Type\nCreate\n\n## Task Object\nThe area is Songshanhu.",
+        rawRequest: "Start energy saving in Region A.",
+        normalizedText: "## Operation Type\nCreate\n\n## Task Object\nThe area is Region A.",
         operationType: "Create",
-        region: "Songshanhu",
+        region: "Region A",
         sites: [],
         windows: ["{00:00~06:00,10Mbps}"],
         missingFields: [],
@@ -1664,7 +1664,7 @@ applyFrame(processed, {
     },
   },
 });
-assert.equal(processed.rawRequest, "Start energy saving in the Songshanhu area.");
+assert.equal(processed.rawRequest, "Start energy saving in Region A.");
 assert.ok(processed.normalizedRequest.includes("Operation Type"));
 assert.equal(processed.intentSource, "scenario");
 assert.equal(processed.businessIntent.operationType, "Create");
@@ -1683,7 +1683,7 @@ applyFrame(pureIntent, {
   event: {
     seq: 1,
     kind: "status",
-    summary: "Business intent ready: Songshanhu",
+    summary: "Business intent ready: Region A",
     detail: {
       hop: "oss",
       pure: { hop: "oss", phase: "intent" },

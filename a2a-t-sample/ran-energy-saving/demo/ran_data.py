@@ -1,6 +1,6 @@
 """In-memory RAN dataset and energy-saving plan store of the sample.
 
-The dataset lives in ``resources/ran_data/cells.json``. It holds two radio cells of the Songshanhu
+The dataset lives in ``resources/ran_data/cells.json``. It holds two radio cells of Region A
 Administration Committee area, each with a representative 24-hour load and energy curve, the
 energy-saving windows the cell accepts, and its capacity / SLA limits.
 

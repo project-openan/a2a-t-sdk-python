@@ -141,7 +141,7 @@ class FakeRuntime:
         self.closed = True
 
 
-def _context(text: str = "Save energy in Songshanhu.", context_id: str = CONTEXT_ID) -> RequestContext:
+def _context(text: str = "Save energy in Region A.", context_id: str = CONTEXT_ID) -> RequestContext:
     message = Message(message_id="message-1", role=Role.ROLE_USER, context_id=context_id)
     message.parts.add(text=text)
     request = SendMessageRequest(message=message)
@@ -411,7 +411,7 @@ async def test_gateway_pushes_progress_and_the_report_to_a_webhook(
         push_sender=sender,
     )
     message = Message(message_id="message-1", role=Role.ROLE_USER, context_id=CONTEXT_ID)
-    message.parts.add(text="Save energy in Songshanhu.")
+    message.parts.add(text="Save energy in Region A.")
     request = SendMessageRequest(message=message)
     request.configuration.task_push_notification_config.url = "https://caller.example/hook"
     request.configuration.task_push_notification_config.token = "hook-token"
@@ -459,7 +459,7 @@ async def test_gateway_streams_progress_before_the_report(
     manager, _ = _manager(tmp_path, offline_config)
     app = build_gateway_app(config=offline_config, service=manager)
     message = Message(message_id="message-1", role=Role.ROLE_USER, context_id=CONTEXT_ID)
-    message.parts.add(text="Save energy in Songshanhu.")
+    message.parts.add(text="Save energy in Region A.")
     body = MessageToDict(SendMessageRequest(message=message))
 
     transport = httpx.ASGITransport(app=app)
@@ -513,7 +513,7 @@ async def test_a_failing_webhook_does_not_fail_the_run(
         push_sender=sender,
     )
     message = Message(message_id="message-1", role=Role.ROLE_USER, context_id=CONTEXT_ID)
-    message.parts.add(text="Save energy in Songshanhu.")
+    message.parts.add(text="Save energy in Region A.")
     request = SendMessageRequest(message=message)
     request.configuration.task_push_notification_config.url = "https://caller.example/hook"
     body = MessageToDict(request)

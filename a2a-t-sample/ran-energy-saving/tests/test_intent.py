@@ -9,6 +9,10 @@ from demo.intent import (
     build_scenario_intent,
     render_normalized_text,
 )
+from demo.scenario import (
+    NATURAL_LANGUAGE_PROMPT_INPUT_EN,
+    NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_EN,
+)
 from protocol.intent import OperatorRequest, ProcessedIntent
 
 
@@ -144,3 +148,47 @@ def test_a_stated_goal_is_rendered_verbatim() -> None:
     )
 
     assert "## Task Target\nReduce energy consumption by 10%." in text
+
+
+async def test_the_nms_context_replaces_the_neutral_region_and_sites() -> None:
+    """A real-NMS run must send only the region and sites the vendor serves."""
+    processor = DemoIntentProcessor(
+        language="en-US",
+        forced_region="A2ATestRegion",
+        forced_sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
+    )
+
+    intent = await processor.process(
+        OperatorRequest(
+            text=NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_EN,
+            language="en-US",
+            scenario="feasibility",
+        )
+    )
+
+    assert intent.region == "A2ATestRegion"
+    assert intent.sites == ("NRES_XCS_6102937", "LTE_26441_LNR_OCL")
+    assert "NRES_XCS_6102937" in intent.normalized_text
+    assert "LTE_26441_LNR_OCL" in intent.normalized_text
+    assert "Station 1" not in intent.normalized_text
+    assert "Station 2" not in intent.normalized_text
+
+
+async def test_the_nms_sites_do_not_turn_a_region_task_into_a_site_task() -> None:
+    processor = DemoIntentProcessor(
+        language="en-US",
+        forced_region="A2ATestRegion",
+        forced_sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
+    )
+
+    intent = await processor.process(
+        OperatorRequest(
+            text=NATURAL_LANGUAGE_PROMPT_INPUT_EN,
+            language="en-US",
+            scenario="night",
+        )
+    )
+
+    assert intent.region == "A2ATestRegion"
+    assert intent.sites == ()
+    assert "NRES_XCS_6102937" not in intent.normalized_text

@@ -149,8 +149,8 @@ shows each Task-T's own wire payload. The stage follows the live run at a human 
 steps: request, structured
 Task-T, approval 1 (intent), Task-T sent, negotiation when needed, strategy and task start, data
 collection (days 2 to 8, compressed), approval 2 (MML in MIE) and apply and report. The request box
-shows the concise wording a network engineer would type, for example “Start energy saving in the
-Songshanhu area with these guaranteed throughputs: …”; the OSS Agent first turns it into its own
+shows the concise wording a network engineer would type, for example “Start energy saving in
+Region A with these guaranteed throughputs: …”; the OSS Agent first turns it into its own
 structured intent, and only the send step maps that intent onto the Task-T. The **Unknown area**
 example lists the served areas after a fuzzy match and lets the engineer choose one; selecting an
 area only fills the region, so the requested throughput windows are kept. After the Task-T is
@@ -229,7 +229,9 @@ Required `.env` keys:
 A2AT_SAMPLE_NMS_HOST=<nms-host>
 A2AT_SAMPLE_NMS_TOKEN_USER=<northbound-user>
 A2AT_SAMPLE_NMS_TOKEN_VALUE=<password>
+# NMS-mode defaults; override them for another deployment.
 A2AT_SAMPLE_NMS_REGION=A2ATestRegion
+A2AT_SAMPLE_NMS_SITES=NRES_XCS_6102937,LTE_26441_LNR_OCL
 A2AT_SAMPLE_NMS_VERIFY_TLS=false
 # The real NMS must be able to reach this address and the webhook port.
 A2AT_SAMPLE_WEBHOOK_HOST=<client-lan-address>
@@ -249,11 +251,12 @@ The test environment uses a self-signed certificate, so TLS verification is off 
 headers (`Authorization: Bearer` and `X-Auth-Token`) and both extension-header spellings
 (`A2A-Extensions` and `X-A2A-Extensions`).
 
-`A2AT_SAMPLE_NMS_REGION` replaces the scenario region when the request text does not already name
-it; an explicit request that names the region wins. In the 910 environment the served region is
-`A2ATestRegion`; other regions and activation windows are rejected. For example: “Create a RAN
-energy saving task in the A2ATestRegion region; activation 00:00-06:00 with 30 Mbps for each
-cell.”
+In NMS mode `A2AT_SAMPLE_NMS_REGION` and `A2AT_SAMPLE_NMS_SITES` replace the neutral demo region
+(`Region A` / `Region B`) and the scenario site list in every Task-T sent to the vendor — the initial
+prompt, the accept refill and the Modify follow-up. They default to `A2ATestRegion` and the two 910
+sites above; other regions and activation windows are rejected. The local three-hop demo keeps the
+neutral names and is unaffected. For example: “Create a RAN energy saving task in the A2ATestRegion
+region; activation 00:00-06:00 with 30 Mbps for each cell.”
 
 Vendor contract notes:
 

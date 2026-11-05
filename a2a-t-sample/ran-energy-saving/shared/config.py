@@ -114,6 +114,8 @@ NMS_READ_AFTER_SEND_ENV_KEY = "A2AT_SAMPLE_NMS_READ_AFTER_SEND"
 NMS_REQUEST_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_NMS_REQUEST_TIMEOUT_SECONDS"
 #: Region the vendor NMS serves. When set, ``--nms`` overrides the scenario region with it.
 NMS_REGION_ENV_KEY = "A2AT_SAMPLE_NMS_REGION"
+#: Comma-separated site names the vendor NMS serves. ``--nms`` overrides the scenario site list.
+NMS_SITES_ENV_KEY = "A2AT_SAMPLE_NMS_SITES"
 #: Whether the raw NMS exchange is written to ``runs/<runId>/wire.jsonl``.
 NMS_WIRE_LOG_ENV_KEY = "A2AT_SAMPLE_NMS_WIRE_LOG"
 PLANNER_MODEL_ENV_KEY = "A2AT_SAMPLE_PLANNER_MODEL"
@@ -168,6 +170,11 @@ DEFAULT_GATEWAY_SCENARIO = "information"
 DEFAULT_NMS_IDLE_TIMEOUT_SECONDS = 45.0
 DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS = 120.0
 DEFAULT_NMS_POLL_INTERVAL_SECONDS = 1.0
+
+#: Region and sites of the 910 test environment. They are the defaults of an ``nms`` run so the
+#: sample never sends the neutral demo region to the vendor; the two keys override them.
+DEFAULT_NMS_REGION = "A2ATestRegion"
+DEFAULT_NMS_SITES: tuple[str, ...] = ("NRES_XCS_6102937", "LTE_26441_LNR_OCL")
 
 #: Standard vendor NMS surface, used to derive both URLs from ``A2AT_SAMPLE_NMS_HOST``.
 DEFAULT_NMS_SCHEME = "https"
@@ -293,6 +300,12 @@ def _env_optional_bool(values: dict[str, str | None], key: str) -> bool | None:
     return _env_bool(values, key, True)
 
 
+def _nms_sites(values: dict[str, str | None], default: tuple[str, ...]) -> tuple[str, ...]:
+    """Resolve the comma-separated site names the vendor NMS serves."""
+    raw_value = _env_value(values, NMS_SITES_ENV_KEY, ",".join(default))
+    return tuple(item.strip() for item in raw_value.split(",") if item.strip())
+
+
 def _webhook_auth_credentials(values: dict[str, str | None]) -> str:
     """Resolve the receiver's Basic-auth credentials (``user:password``), empty when unset."""
     raw_value = _env_value(values, WEBHOOK_AUTH_CREDENTIALS_ENV_KEY, "")
@@ -377,6 +390,8 @@ class SampleConfig:
         nms_poll_interval: seconds between task polls while waiting for a terminal state.
         nms_region: region the vendor NMS serves; when set, ``--nms`` overrides the scenario
             region with it.
+        nms_sites: site names the vendor NMS serves; when set, ``--nms`` replaces the scenario site
+            list with it.
         nms_wire_log: whether the raw NMS exchange is written to ``wire.jsonl``.
         planner_model: LangChain model id of the server's LangGraph planner.
         planner_api_base: OpenAI-compatible endpoint of the planner.
@@ -437,6 +452,7 @@ class SampleConfig:
     nms_request_timeout: float = DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS
     nms_poll_interval: float = DEFAULT_NMS_POLL_INTERVAL_SECONDS
     nms_region: str = ""
+    nms_sites: tuple[str, ...] = ()
     nms_wire_log: bool = True
     planner_model: str = ""
     planner_api_base: str = ""
@@ -597,7 +613,12 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         nms_idle_timeout=_positive_seconds(values, NMS_IDLE_TIMEOUT_ENV_KEY, DEFAULT_NMS_IDLE_TIMEOUT_SECONDS),
         nms_read_after_send=_env_bool(values, NMS_READ_AFTER_SEND_ENV_KEY, True),
         nms_request_timeout=_positive_seconds(values, NMS_REQUEST_TIMEOUT_ENV_KEY, DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS),
-        nms_region=_env_value(values, NMS_REGION_ENV_KEY, "").strip(),
+        nms_region=_env_value(
+            values,
+            NMS_REGION_ENV_KEY,
+            DEFAULT_NMS_REGION if discovery == DISCOVERY_NMS else "",
+        ).strip(),
+        nms_sites=_nms_sites(values, DEFAULT_NMS_SITES if discovery == DISCOVERY_NMS else ()),
         nms_wire_log=_env_bool(values, NMS_WIRE_LOG_ENV_KEY, True),
         planner_model=_env_value(values, PLANNER_MODEL_ENV_KEY, planner_model_default),
         planner_api_base=_env_value(values, PLANNER_API_BASE_ENV_KEY, adk_model_api_base),

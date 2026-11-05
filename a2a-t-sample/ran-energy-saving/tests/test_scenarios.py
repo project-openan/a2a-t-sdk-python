@@ -164,7 +164,7 @@ async def test_planned_outage_creates_a_baseline_then_modifies_it_in_place(
     assert MODIFY_STARTED_TEXT in texts
 
 
-class _DalingshanCatalog:
+class _RegionBCatalog:
     """Catalog that accepts the unknown-area proposal with the second served area."""
 
     @property
@@ -178,15 +178,15 @@ class _DalingshanCatalog:
             scripted_decisions=(
                 NegotiationDecision(
                     action="accept",
-                    rationale="The engineer selected Dalingshan.",
-                    filled_params={"region": "Dalingshan"},
+                    rationale="The engineer selected Region B.",
+                    filled_params={"region": "Region B"},
                 ),
             ),
         )
 
 
 async def test_unknown_area_can_use_the_second_served_area(english_language: None) -> None:
-    """Selecting Dalingshan in the unknown-area proposal runs the Dalingshan cell."""
+    """Selecting Region B in the unknown-area proposal runs the Region B cell."""
     config = offline_direct_config(free_tcp_port())
 
     with running_server(config):
@@ -195,7 +195,7 @@ async def test_unknown_area_can_use_the_second_served_area(english_language: Non
             "unknown_area",
             "scripted",
             "sse",
-            catalog=_DalingshanCatalog(),
+            catalog=_RegionBCatalog(),
             offline_model_factory=offline_model_factory,
             install_offline_provider=install_offline_provider,
             client_agent_factory=build_client_agent,
@@ -207,7 +207,7 @@ async def test_unknown_area_can_use_the_second_served_area(english_language: Non
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
     assert result.report is not None
-    assert result.report.get("region") == "Dalingshan"
+    assert result.report.get("region") == "Region B"
     assert result.report.get("cell_id") == "cell-003"
 
 

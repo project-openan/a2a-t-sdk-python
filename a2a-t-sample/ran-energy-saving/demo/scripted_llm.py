@@ -593,8 +593,8 @@ def data_slot_extraction_response(user_content: str, language: str) -> str | Non
     """Echo the explicit ``[input]`` values of a data-based slot extraction.
 
     Complete requests and the unknown-area scenario render their Task-T from a data map instead of
-    free text. The canned slot responses assume the default Songshanhu request, so without this
-    echo ``Region Z`` was silently replaced by Songshanhu before the server precheck could see it.
+    free text. The canned slot responses assume the default Region A request, so without this
+    echo ``Region Z`` was silently replaced by Region A before the server precheck could see it.
     """
     marker = user_content.find("[input]")
     if marker < 0:

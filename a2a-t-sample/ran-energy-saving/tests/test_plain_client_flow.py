@@ -11,7 +11,7 @@ from shared.run_constants import (
 )
 
 CONTEXT_ID = "ctx-plain-flow"
-REQUEST = "Create a RAN energy saving task in the Songshanhu area with a guaranteed target."
+REQUEST = "Create a RAN energy saving task in Region A with a guaranteed target."
 
 
 class _Transport:

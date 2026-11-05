@@ -40,6 +40,7 @@ from shared.config import (
     NMS_REGION_ENV_KEY,
     NMS_REQUEST_TIMEOUT_ENV_KEY,
     NMS_SCHEME_ENV_KEY,
+    NMS_SITES_ENV_KEY,
     NMS_TOKEN_PORT_ENV_KEY,
     NMS_TOKEN_URL_ENV_KEY,
     NMS_TOKEN_USER_ENV_KEY,
@@ -94,6 +95,7 @@ _ENV_KEYS = (
     NMS_IDLE_TIMEOUT_ENV_KEY,
     NMS_REQUEST_TIMEOUT_ENV_KEY,
     NMS_REGION_ENV_KEY,
+    NMS_SITES_ENV_KEY,
     NMS_WIRE_LOG_ENV_KEY,
     LANGFUSE_BASE_URL_ENV_KEY,
     LANGFUSE_CAPTURE_CONTENT_ENV_KEY,
@@ -718,3 +720,47 @@ def test_webhook_auth_credentials_require_user_and_password(tmp_path: Path) -> N
 
     with pytest.raises(ValueError, match="expected user:password"):
         load_config(env_path=env_file)
+
+
+def _nms_env_file(tmp_path: Path, extra: str = "") -> Path:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "A2AT_SAMPLE_DISCOVERY=nms\n"
+        "A2AT_SAMPLE_NMS_HOST=nms.example\n"
+        "A2AT_SAMPLE_NMS_TOKEN_USER=northbound\n"
+        "A2AT_SAMPLE_NMS_TOKEN_VALUE=secret\n"
+        + extra,
+        encoding="utf-8",
+    )
+    return env_file
+
+
+def test_nms_discovery_defaults_to_the_910_region_and_sites(tmp_path: Path) -> None:
+    """A real-NMS run must never send the neutral demo region or site names."""
+    config = load_config(env_path=_nms_env_file(tmp_path))
+
+    assert config.nms_region == "A2ATestRegion"
+    assert config.nms_sites == ("NRES_XCS_6102937", "LTE_26441_LNR_OCL")
+
+
+def test_nms_region_and_sites_can_be_overridden(tmp_path: Path) -> None:
+    config = load_config(
+        env_path=_nms_env_file(
+            tmp_path,
+            "A2AT_SAMPLE_NMS_REGION=OtherRegion\n"
+            "A2AT_SAMPLE_NMS_SITES=SITE-A, SITE-B\n",
+        )
+    )
+
+    assert config.nms_region == "OtherRegion"
+    assert config.nms_sites == ("SITE-A", "SITE-B")
+
+
+def test_the_local_demo_keeps_the_neutral_region_and_no_nms_sites(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("A2AT_SAMPLE_DISCOVERY=direct\n", encoding="utf-8")
+
+    config = load_config(env_path=env_file)
+
+    assert config.nms_region == ""
+    assert config.nms_sites == ()

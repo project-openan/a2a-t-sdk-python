@@ -348,7 +348,7 @@ async def test_two_phase_run_sends_a_modify_task_t_on_the_same_task() -> None:
     policy = replace(
         DEMO_CLIENT_POLICY,
         follow_up_data=lambda _language: (
-            {"operationType": "Modify", "region": "Songshanhu"},
+            {"operationType": "Modify", "region": "Region A"},
             {"operationType": "operation type: Create or Modify"},
         ),
     )
@@ -430,7 +430,7 @@ async def test_failed_modify_send_cancels_the_baseline_task() -> None:
     policy = replace(
         DEMO_CLIENT_POLICY,
         follow_up_data=lambda _language: (
-            {"operationType": "Modify", "region": "Songshanhu"},
+            {"operationType": "Modify", "region": "Region A"},
             {"operationType": "operation type: Create or Modify"},
         ),
     )
@@ -503,7 +503,7 @@ async def test_information_scenario_accepts_and_completes_a_task() -> None:
     assert result.task_id == "task-1"
     assert result.report == {"summary": "Plan applied", "estimated_saving_kwh": 12.5}
     assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1)]
-    assert prompt_client.refill_data[0]["region"] == "Songshanhu Administration Committee"
+    assert prompt_client.refill_data[0]["region"] == "Region A"
     assert prompt_client.refill_data[0]["guaranteedThroughputTarget"] == (
         "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}"
     )
@@ -553,8 +553,8 @@ def test_region_reask_detects_a_rejected_region_and_offers_candidates() -> None:
         round=1,
         max_rounds=3,
         content=(
-            "Region 'Songshanhu Administration Committee' is not recognized. "
-            "Served areas: A2ATestRegion; Dalingshan."
+            "Region 'Region A' is not recognized. "
+            "Served areas: A2ATestRegion; Region B."
         ),
         context_id=CONTEXT_ID,
     )
@@ -563,8 +563,8 @@ def test_region_reask_detects_a_rejected_region_and_offers_candidates() -> None:
     reask = _region_reask_needed(decision, propose)
 
     assert reask is not None
-    assert reask[0] == "Songshanhu Administration Committee"
-    assert reask[1] == ("A2ATestRegion", "Dalingshan")
+    assert reask[0] == "Region A"
+    assert reask[1] == ("A2ATestRegion", "Region B")
     assert "A2ATestRegion" in _region_reask_content(propose, reask[1])
 
 
@@ -604,7 +604,7 @@ async def test_forced_region_wins_over_a_decision_model_value() -> None:
     decision = NegotiationDecision(
         action="accept",
         rationale="accept",
-        filled_params={"region": "Songshanhu Administration Committee"},
+        filled_params={"region": "Region A"},
     )
     result, _transport, prompt_client = await _run(
         SCENARIO_INFORMATION_SPEC,
@@ -622,7 +622,7 @@ async def test_information_accept_uses_the_selected_served_area() -> None:
     decision = NegotiationDecision(
         action="accept",
         rationale="The engineer selected the second served area.",
-        filled_params={"region": "Dalingshan"},
+        filled_params={"region": "Region B"},
     )
     result, _transport, prompt_client = await _run(
         SCENARIO_INFORMATION_SPEC,
@@ -631,7 +631,7 @@ async def test_information_accept_uses_the_selected_served_area() -> None:
     )
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
-    assert prompt_client.refill_data[0]["region"] == "Dalingshan"
+    assert prompt_client.refill_data[0]["region"] == "Region B"
 
 
 async def test_information_accept_discards_an_invalid_model_filled_target() -> None:
@@ -1118,8 +1118,8 @@ async def test_proposal_view_carries_the_sample_area_options() -> None:
         "requested": "Region Z",
         "options": [
             {
-                "value": "Songshanhu Administration Committee",
-                "labels": {"en-US": "Songshanhu Administration Committee"},
+                "value": "Region A",
+                "labels": {"en-US": "Region A"},
                 "score": 0.1,
                 "recommended": False,
             }
@@ -1139,7 +1139,7 @@ async def test_proposal_view_carries_the_sample_area_options() -> None:
     options = requested[0].options
     assert options is not None
     assert options.requested == "Region Z"
-    assert options.options[0].label("en-US") == "Songshanhu Administration Committee"
+    assert options.options[0].label("en-US") == "Region A"
 
 
 async def test_decision_hook_fires_before_the_response_is_sent() -> None:

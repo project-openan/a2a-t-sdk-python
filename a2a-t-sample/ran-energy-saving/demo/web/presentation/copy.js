@@ -670,7 +670,7 @@ const EN = {
       kind: "neg",
       story: "The request names an area the RAN does not serve; the RAN Agent ranks the served areas and asks the engineer to choose one.",
       proposals: {
-        1: "The requested area is not recognized. Choose a served area: Songshanhu Administration Committee or Dalingshan; the throughput windows are kept.",
+        1: "The requested area is not recognized. Choose a served area: Region A or Region B; the throughput windows are kept.",
       },
       decisions: { 1: "Accept: use the selected served area and keep the throughput windows." },
     },
@@ -1372,7 +1372,7 @@ const ZH = {
       kind: "neg",
       story: "请求中的区域不在 RAN 服务范围内，RAN Agent 对可用区域排序后请工程师选择。",
       proposals: {
-        1: "无法识别请求中的区域，请选择可用区域：松山湖管委会或大岭山；原保障速率时段保持不变。",
+        1: "无法识别请求中的区域，请选择可用区域：区域 A 或区域 B；原保障速率时段保持不变。",
       },
       decisions: { 1: "接受：使用所选可用区域，保留原保障速率时段。" },
     },

@@ -285,7 +285,7 @@ def test_scripted_model_reads_the_plan_id_from_the_apply_result() -> None:
 
 def test_scripted_planner_uses_the_cell_of_a_confirmed_second_area() -> None:
     model = ScriptedChatModel(dataset_date=ran_data.dataset_date())
-    messages = [HumanMessage(content="## Task Object\nThe area is the Dalingshan.")]
+    messages = [HumanMessage(content="## Task Object\nThe area is Region B.")]
 
     assert model._plan_args(messages) == ("cell-003", "00:00~06:00", "28")
 
@@ -293,8 +293,8 @@ def test_scripted_planner_uses_the_cell_of_a_confirmed_second_area() -> None:
 def test_scripted_planner_ignores_area_names_in_the_system_prompt() -> None:
     model = ScriptedChatModel(dataset_date=ran_data.dataset_date())
     messages = [
-        SystemMessage(content="Dataset cells: cell-003 (Dalingshan-Central, Dalingshan)"),
-        HumanMessage(content="## Task Object\nThe area is the Songshanhu Administration Committee."),
+        SystemMessage(content="Dataset cells: cell-003 (Region-B-Central, Region B)"),
+        HumanMessage(content="## Task Object\nThe area is Region A."),
     ]
 
     assert model._plan_args(messages) == ("cell-001", "00:00~06:00", "30")

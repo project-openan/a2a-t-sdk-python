@@ -464,9 +464,11 @@ Implementation details:
 - One message may carry only one `-T` metadata key. In NMS mode the accept carries Negotiation-T
   only; the local demo server keeps the refilled Task-T. The flow parameter is
   `single_extension_per_message`.
-- `A2AT_SAMPLE_NMS_REGION` overrides the scenario region and the region a decision model fills on an
-  accept (`forced_region`), so an operator can point the demo at the served region without editing
-  the scenario.
+- `A2AT_SAMPLE_NMS_REGION` and `A2AT_SAMPLE_NMS_SITES` override the neutral demo region and the
+  scenario site list in every Task-T sent to the vendor — the initial prompt (through the intent
+  layer), the accept refill and the Modify follow-up. They default to `A2ATestRegion` and
+  `NRES_XCS_6102937,LTE_26441_LNR_OCL` for an `nms` run; the local three-hop demo keeps the neutral
+  names.
 - The SSE reader skips `: heartbeat` comments and leaves the stream after
   `A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS` (default 45 s) without a `data:` frame. Heartbeats do not
   reset that window. It then polls `GET <base>/tasks/{id}` to a terminal state; a send timeout is
@@ -503,7 +505,8 @@ business result.
 Tests: `tests/test_nms_client.py` (token, headers, heartbeat, idle, negotiation, wire redaction),
 `tests/test_nms_sim.py` (422 pairing, static region/window/rate rules, task lifecycle, strict
 stream), and the raw-client integration test against the simulator. A real lab run requires the
-910 network and either `A2AT_SAMPLE_NMS_REGION=A2ATestRegion` or a request that names that region.
+910 network; the NMS defaults are `A2AT_SAMPLE_NMS_REGION=A2ATestRegion` and
+`A2AT_SAMPLE_NMS_SITES=NRES_XCS_6102937,LTE_26441_LNR_OCL`.
 
 ### 3.7 Operator intent layer
 
@@ -857,7 +860,7 @@ The expected sequences are asserted by `tests/test_scenarios.py` and `tests/test
 | --- | --- | --- | --- | --- |
 | `night` | Complete use case 1: create the night-time task directly | The request carries every required slot (`operationType`, `region`, description, guaranteed-throughput target). | none | Task `COMPLETED` + report (`task_completed`) |
 | `information` | Missing value: the NMS asks, the OSS fills it | The Task-T request omits the time-segmented guaranteed throughput target (`content.param_missing`). | `S:Propose(1)` → `C:Accept(1)` | Task `COMPLETED` + report (`task_completed`) |
-| `unknown_area` | Unknown area: rank and choose a served area | The request names `Region Z`/`未知区域`; the sample precheck ranks the served areas (Songshanhu Administration Committee, Dalingshan) and opens an information negotiation with every choice and its fuzzy-match score. | `S:Propose(1)` → `C:Accept(1)` (the chosen area fills `region`; the requested windows are kept) | Task `COMPLETED` + report (`task_completed`) |
+| `unknown_area` | Unknown area: rank and choose a served area | The request names `Region Z`/`未知区域`; the sample precheck ranks the served areas (Region A, Region B) and opens an information negotiation with every choice and its fuzzy-match score. | `S:Propose(1)` → `C:Accept(1)` (the chosen area fills `region`; the requested windows are kept) | Task `COMPLETED` + report (`task_completed`) |
 | `target` | Conflicting segments: correct the overlap before executing | The guaranteed-throughput target has overlapping time segments (`content.value_not_allowed`). | `S:Propose(1)` → `C:Propose(1)` (counter) → `S:Propose(2)` (revision) → `C:Accept(2)` | Task `COMPLETED` + report (`task_completed`) |
 | `feasibility` | Infeasible conditions: the NMS proposes an alternative | A guaranteed rate conflicts with an 18-hour power outage (`content.rule_violation`). | `S:Propose(1)` (alternative plan) → `C:Accept(1)` | Task `COMPLETED` + report (`task_completed`) |
 | `reject` | The OSS cannot provide the value: the negotiation ends | The client cannot provide the missing throughput target. | `S:Propose(1)` → `C:Reject(1)` → `S:Message("协商已结束")` | No Task (`no_task_negotiation_ended`) |

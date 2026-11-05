@@ -3,7 +3,7 @@
   "intent_understanding": [
     {
       "name": "Region",
-      "value": "Songshanhu Administration Committee"
+      "value": "Region A"
     },
     {
       "name": "Time-segment-based guaranteed throughput target",

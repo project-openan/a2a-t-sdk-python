@@ -16,7 +16,6 @@ from dataclasses import replace
 from typing import Final
 
 import httpx
-
 from protocol.intent import (
     INTENT_SOURCE_MODEL,
     INTENT_SOURCE_SCENARIO,
@@ -74,8 +73,8 @@ _FEASIBILITY_EVENT: Final[dict[str, str]] = {
 #: Scenario surface text used as the built-in raw operator request.
 _RAW_OVERRIDES: Final[dict[str, dict[str, str]]] = {
     SCENARIO_NIGHT: {
-        LANGUAGE_EN: "Start energy saving in the Songshanhu area.",
-        LANGUAGE_ZH: "在松山湖开启节能。",
+        LANGUAGE_EN: "Start energy saving in Region A.",
+        LANGUAGE_ZH: "在区域 A 开启节能。",
     },
 }
 
@@ -189,15 +188,39 @@ def _text_or_none(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
-def _with_forced_region(intent: ProcessedIntent, region: str) -> ProcessedIntent:
-    """Apply the configured NMS region to one built-in intent."""
-    if not region or intent.region == region:
+def _with_forced_context(
+    intent: ProcessedIntent,
+    region: str,
+    sites: tuple[str, ...],
+) -> ProcessedIntent:
+    """Apply the configured NMS region and site list to one intent.
+
+    The vendor serves exactly one region and a fixed set of sites; the neutral demo names must
+    never reach it. A scenario that carries no site list stays region-level and gains none.
+    """
+    new_region = region or intent.region
+    new_sites = sites if sites and intent.sites else intent.sites
+    if new_region == intent.region and new_sites == intent.sites:
         return intent
     normalized = intent.normalized_text
-    if intent.region:
+    if region and intent.region and intent.region != region:
         normalized = normalized.replace(intent.region, region)
-    missing = tuple(item for item in intent.missing_fields if item != "region")
-    return replace(intent, region=region, normalized_text=normalized, missing_fields=missing)
+    if sites and intent.sites:
+        for old_site, new_site in zip(intent.sites, sites):
+            if old_site and old_site != new_site:
+                normalized = normalized.replace(old_site, new_site)
+    missing = (
+        tuple(item for item in intent.missing_fields if item != "region")
+        if region and region != intent.region
+        else intent.missing_fields
+    )
+    return replace(
+        intent,
+        region=new_region,
+        sites=new_sites,
+        normalized_text=normalized,
+        missing_fields=missing,
+    )
 
 
 class DemoIntentProcessor:
@@ -210,6 +233,7 @@ class DemoIntentProcessor:
         built_in: Mapping[str, ProcessedIntent] | None = None,
         extractor: DemoIntentExtractor | None = None,
         forced_region: str = "",
+        forced_sites: tuple[str, ...] = (),
     ) -> None:
         """Create one processor.
 
@@ -218,17 +242,19 @@ class DemoIntentProcessor:
             built_in: scenario intents keyed by scenario name.
             extractor: live-model extractor; ``None`` in offline mode.
             forced_region: NMS region applied to the normalized intent.
+            forced_sites: NMS sites applied to the normalized intent's site list.
         """
         self._language = language
         self._built_in = dict(built_in or build_all_scenario_intents(language))
         self._extractor = extractor
         self._forced_region = forced_region
+        self._forced_sites = forced_sites
 
     async def process(self, request: OperatorRequest) -> ProcessedIntent:
         """Understand one operator request."""
         built_in = self._matching_built_in(request)
         if built_in is not None:
-            return _with_forced_region(built_in, self._forced_region)
+            return _with_forced_context(built_in, self._forced_region, self._forced_sites)
         if self._extractor is None:
             return ProcessedIntent.raw(
                 request.text,
@@ -242,7 +268,7 @@ class DemoIntentProcessor:
                 request.text,
                 reason=f"Intent extraction failed: {type(exc).__name__}: {exc}",
             )
-        return _with_forced_region(intent, self._forced_region)
+        return _with_forced_context(intent, self._forced_region, self._forced_sites)
 
     def _matching_built_in(self, request: OperatorRequest) -> ProcessedIntent | None:
         """Return the built-in intent when the request matches a canned scenario request."""
@@ -310,6 +336,7 @@ def build_demo_intent_processor(
     """Build the intent processor of one demo run, or of the OSS Agent when ``run_spec`` is None."""
     extractor = None if config.is_offline else DemoIntentExtractor(config)
     forced_region = config.nms_region if config.discovery == DISCOVERY_NMS else ""
+    forced_sites = config.nms_sites if config.discovery == DISCOVERY_NMS else ()
     built_in = build_all_scenario_intents(config.language)
     if run_spec is not None and run_spec.intent is not None:
         built_in[run_spec.name] = run_spec.intent
@@ -318,6 +345,7 @@ def build_demo_intent_processor(
         built_in=built_in,
         extractor=extractor,
         forced_region=forced_region,
+        forced_sites=forced_sites,
     )
 
 

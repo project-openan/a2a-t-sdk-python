@@ -612,7 +612,7 @@ async def test_manual_decision_submission_advances_the_run(
     decision = {
         "action": "accept",
         "rationale": "The region is supplied by the operator.",
-        "filled_params": {"region": "Songshanhu Administration Committee"},
+        "filled_params": {"region": "Region A"},
     }
     response = await client.post(f"/api/runs/{run_id}/decisions", json=decision)
 
@@ -946,7 +946,7 @@ async def test_custom_user_request_reaches_run_started_and_runtime(
     client: httpx.AsyncClient,
     runtimes: list[FakeRuntime],
 ) -> None:
-    custom = "Create a RAN energy saving task for the Songshanhu area at 30% saving."
+    custom = "Create a RAN energy saving task for Region A at 30% saving."
     start = await client.post(
         "/api/runs",
         json={

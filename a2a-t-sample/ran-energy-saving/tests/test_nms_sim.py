@@ -195,7 +195,7 @@ async def test_unknown_region_is_rejected_with_the_available_test_region() -> No
         token = await _token(client)
         frames = await _frames(
             client,
-            _body(_prompt(region="Songshanhu Administration Committee")),
+            _body(_prompt(region="Region A")),
             _headers(token),
         )
 
@@ -210,7 +210,7 @@ async def test_negotiation_metadata_requires_declaring_the_negotiation_extension
 
         unstructured = await _frames(
             client,
-            _body(_prompt(region="Songshanhu Administration Committee")),
+            _body(_prompt(region="Region A")),
             _headers(token, extension=TASK_T_EXTENSION_URI),
         )
         message = unstructured[0]["message"]
@@ -219,7 +219,7 @@ async def test_negotiation_metadata_requires_declaring_the_negotiation_extension
 
         structured = await _frames(
             client,
-            _body(_prompt(region="Songshanhu Administration Committee")),
+            _body(_prompt(region="Region A")),
             _headers(token),
         )
         metadata = structured[0]["message"]["metadata"]

@@ -50,7 +50,7 @@ from protocol.server_app import prepare_sdk_env_path
 from shared.config import SampleConfig
 
 CONTEXT_ID = "ctx-negotiation"
-TASK_PROMPT = "Create a RAN energy saving task in the Songshanhu area."
+TASK_PROMPT = "Create a RAN energy saving task in Region A."
 
 
 def _metadata(message: Message) -> dict[str, Any]:
@@ -88,7 +88,7 @@ class FakePromptServer:
             if self.task_params is not None
             else {
                 "operationType": "Create",
-                "region": "Songshanhu",
+                "region": "Region A",
                 "guaranteedThroughputTarget": "{00:00~06:00,2Mbps}",
             }
         )
@@ -192,7 +192,7 @@ def _conflict_error(target: str) -> ContentValidationError:
         ],
         params={
             "operationType": "Create",
-            "region": "Songshanhu",
+            "region": "Region A",
             "guaranteedThroughputTarget": target,
         },
     )
@@ -279,7 +279,7 @@ async def test_initial_task_with_a_missing_required_field_opens_information_nego
     gate, server = _gate()
     server.task_params = {
         "operationType": "Create",
-        "region": "Songshanhu",
+        "region": "Region A",
         "guaranteedThroughputTarget": None,
     }
 
@@ -350,11 +350,11 @@ async def test_unknown_area_proposal_carries_the_served_area_options() -> None:
     assert options["field"] == "region"
     assert options["requested"] == "Region Z"
     assert [option["value"] for option in options["options"]] == [
-        "Songshanhu Administration Committee",
-        "Dalingshan",
+        "Region A",
+        "Region B",
     ]
     assert all(option["recommended"] is False for option in options["options"])
-    assert "Dalingshan" in server.propose_generations[0][0]
+    assert "Region B" in server.propose_generations[0][0]
 
 
 async def test_without_a_precheck_the_handler_trusts_the_sdk_verdict() -> None:
@@ -362,7 +362,7 @@ async def test_without_a_precheck_the_handler_trusts_the_sdk_verdict() -> None:
     server = FakePromptServer()
     server.task_params = {
         "operationType": "Create",
-        "region": "Songshanhu",
+        "region": "Region A",
         "guaranteedThroughputTarget": None,
     }
     handler = PreTaskNegotiationHandler(server)
@@ -380,7 +380,7 @@ async def test_without_a_precheck_the_handler_trusts_the_sdk_verdict() -> None:
         (
             {
                 "operationType": "Create",
-                "region": "Songshanhu",
+                "region": "Region A",
                 "guaranteedThroughputTarget": (
                     "{17:30~23:00,20Mbps}, {20:00~00:00,10Mbps}"
                 ),
@@ -390,7 +390,7 @@ async def test_without_a_precheck_the_handler_trusts_the_sdk_verdict() -> None:
         (
             {
                 "operationType": "Create",
-                "region": "Songshanhu",
+                "region": "Region A",
                 "guaranteedThroughputTarget": (
                     "{00:00~06:00,2Mbps}, {06:00~18:00,10Mbps}"
                 ),
@@ -671,7 +671,7 @@ async def test_modify_follow_up_is_validated_and_returns_a_modify_outcome() -> N
     gate, server = _gate()
     server.task_params = {
         "operationType": "Modify",
-        "region": "Songshanhu",
+        "region": "Region A",
         "guaranteedThroughputTarget": (
             "{00:00~03:00,10Mbps}, {03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}"
         ),
@@ -699,7 +699,7 @@ async def test_modify_follow_up_rejects_a_completed_task() -> None:
     gate, server = _gate()
     server.task_params = {
         "operationType": "Modify",
-        "region": "Songshanhu",
+        "region": "Region A",
         "guaranteedThroughputTarget": (
             "{00:00~03:00,10Mbps}, {03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}"
         ),
@@ -722,7 +722,7 @@ async def test_initial_modify_task_t_is_rejected_without_an_existing_task() -> N
     gate, server = _gate()
     server.task_params = {
         "operationType": "Modify",
-        "region": "Songshanhu",
+        "region": "Region A",
         "guaranteedThroughputTarget": "{00:00~03:00,10Mbps}",
     }
 

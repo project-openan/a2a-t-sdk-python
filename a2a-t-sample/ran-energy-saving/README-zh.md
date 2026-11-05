@@ -136,7 +136,7 @@ Web UI 默认打开演示视图：左侧是 16:9 的舞台，依次是网络工�
 `--brand huawei` 或 `?brand=huawei` 可指定启动默认值。八个示例覆盖用例 1（夜间节能，含协商与无协商）和用例 2（计划停电）；计划停电是同一 Task 上的两阶段：先 Create 基线，再发送真正的 Modify Task-T。Modify 阶段步骤条保持在“Apply & report”，wire 面板分别展示两条 Task-T 的 payload。
 舞台按人的节奏跟随真实运行，共九步：请求、结构化 Task-T、审批 1（意图）、下发 Task-T、需要时协商、
 策略与任务启动、数据采集（第 2–8 天，时间压缩）、审批 2（MIE 中的 MML）、下发与报告。请求框展示网络
-工程师会直接输入的自然表述，例如“在松山湖开启节能，保障速率为：…”。OSS Agent 先把请求解析成自己系统所需的
+工程师会直接输入的自然表述，例如“在区域 A 开启节能，保障速率为：…”。OSS Agent 先把请求解析成自己系统所需的
 结构化意图，只有下发步骤才把意图映射成 Task-T。**未知区域**示例会列出模糊匹配后的可用区域，请工程师选择；
 选择只填充区域，原保障速率时段保持不变。Task-T 被接受后，RAN Agent 依次上报 `SUBMITTED`、策略生成中、
 策略就绪、任务已启动，然后才开始数据采集。右侧保留证据层：OSS Agent 理解到的任务（含 24 小时保障速率图）、
@@ -205,7 +205,9 @@ python run_demo.py --nms --nms-sim --ui --brand huawei
 A2AT_SAMPLE_NMS_HOST=<nms-host>
 A2AT_SAMPLE_NMS_TOKEN_USER=<northbound-user>
 A2AT_SAMPLE_NMS_TOKEN_VALUE=<password>
+# NMS 模式默认值；其他部署可覆盖
 A2AT_SAMPLE_NMS_REGION=A2ATestRegion
+A2AT_SAMPLE_NMS_SITES=NRES_XCS_6102937,LTE_26441_LNR_OCL
 A2AT_SAMPLE_NMS_VERIFY_TLS=false
 # 真实网管必须能访问这个地址和 webhook 端口
 A2AT_SAMPLE_WEBHOOK_HOST=<客户端局域网地址>
@@ -224,8 +226,10 @@ A2AT_SAMPLE_NMS_WIRE_LOG=1
 `A2AT_SAMPLE_NMS_VERIFY_TLS=true`。客户端同时发送两种被接受的认证头（`Authorization: Bearer`
 和 `X-Auth-Token`）以及两种扩展头拼写（`A2A-Extensions` 和 `X-A2A-Extensions`）。
 
-`A2AT_SAMPLE_NMS_REGION` 会在请求文本没有写明该区域时覆盖 scenario 区域；显式请求里写了区域则
-以请求为准。910 联调环境认识的区域是 `A2ATestRegion`，其他区域和激活时段会被拒绝。
+NMS 模式下，`A2AT_SAMPLE_NMS_REGION` 与 `A2AT_SAMPLE_NMS_SITES` 会把每个发往网管的 Task-T
+（初始提示词、accept 重填、Modify follow-up）中的中性示例区域（`Region A` / `Region B`）和
+scenario 站点列表替换为网管实际服务的值。二者默认是 `A2ATestRegion` 和上表中的两个 910 站点；
+其他区域和激活时段会被拒绝。本地三跳演示保持中性名称，不受影响。
 例如：“在 A2ATestRegion 区域创建无线网络节能任务；激活时段 00:00-06:00，每小区保证 30 Mbps。”
 
 厂商契约说明：
