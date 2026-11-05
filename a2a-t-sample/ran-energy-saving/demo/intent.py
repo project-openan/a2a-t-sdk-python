@@ -457,7 +457,10 @@ def _render_en(
     if sites:
         lines.append(f"Site list 1: [{', '.join(sites)}].")
     lines.extend(
-        ["", "## Task Target", goal or "Maximize energy saving under the task context."]
+        # No goal means no goal: never invent a "maximize" policy the NMS would execute. The
+        # neutral placeholder keeps the Task-T section present while ``missingFields`` still
+        # reports the omission.
+        ["", "## Task Target", goal or "Not provided."]
     )
     lines.extend(["", "## Task Context"])
     if windows:
@@ -494,7 +497,7 @@ def _render_zh(
     if sites:
         lines.append(f"站点列表1为[{', '.join(sites)}]。")
     lines.extend(
-        ["", "## 任务目标(Task Target)", goal or "在满足任务上下文的前提下最大化节能。"]
+        ["", "## 任务目标(Task Target)", goal or "未提供。"]
     )
     lines.extend(["", "## 任务上下文(Task Context)"])
     if windows:

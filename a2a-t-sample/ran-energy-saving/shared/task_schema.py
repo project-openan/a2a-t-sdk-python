@@ -28,8 +28,9 @@ TASK_PARAM_SCHEMA: dict[str, object] = {
         "energySavingGoal": {
             "type": "string",
             "description": (
-                "Energy-saving goal (task target): a quantitative target (a percentage) or the "
-                "qualitative goal to maximize energy saving under the task context."
+                "Energy-saving goal (task target) stated by the user: a quantitative target (a "
+                "percentage) or a qualitative goal. Leave empty when the request does not state "
+                "one; never invent a goal."
             ),
         },
         "guaranteedThroughputTarget": {

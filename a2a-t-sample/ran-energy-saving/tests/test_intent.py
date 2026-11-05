@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import pytest
-
 from demo.intent import (
     DemoIntentProcessor,
-    build_scenario_intent,
     build_all_scenario_intents,
+    build_scenario_intent,
+    render_normalized_text,
 )
 from protocol.intent import OperatorRequest, ProcessedIntent
 
@@ -99,3 +99,48 @@ def test_all_scenarios_have_a_raw_and_normalized_request() -> None:
         assert intent.raw_request
         assert intent.normalized_text
         assert intent.raw_request != "" and intent.normalized_text != ""
+
+
+def _render_without_goal(language: str) -> str:
+    return render_normalized_text(
+        operation="Create",
+        region="Region A",
+        sites=(),
+        windows=("00:00~06:00,30Mbps",),
+        goal="",
+        description="",
+        expected="",
+        background=None,
+        language=language,
+    )
+
+
+def test_an_unstated_goal_renders_a_neutral_placeholder() -> None:
+    """No goal must not become an invented "maximize energy saving" policy at the NMS."""
+    text = _render_without_goal("en-US")
+
+    assert "## Task Target\nNot provided." in text
+    assert "Maximize energy saving" not in text
+
+
+def test_an_unstated_goal_renders_a_neutral_placeholder_in_chinese() -> None:
+    text = _render_without_goal("zh-CN")
+
+    assert "## 任务目标(Task Target)\n未提供。" in text
+    assert "最大化节能" not in text
+
+
+def test_a_stated_goal_is_rendered_verbatim() -> None:
+    text = render_normalized_text(
+        operation="Create",
+        region="Region A",
+        sites=(),
+        windows=(),
+        goal="Reduce energy consumption by 10%.",
+        description="",
+        expected="",
+        background=None,
+        language="en-US",
+    )
+
+    assert "## Task Target\nReduce energy consumption by 10%." in text
