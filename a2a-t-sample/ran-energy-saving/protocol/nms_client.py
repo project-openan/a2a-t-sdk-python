@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -517,7 +518,10 @@ class NmsClient:
             "X-Auth-Token": token,
         }
         try:
-            response = await self._http.post(url, headers=headers, timeout=self._config.request_timeout)
+            # The NMS answers 500 INTERNAL for an empty or ``{"taskId": …}`` body.
+            response = await self._http.post(
+                url, headers=headers, json={"id": task_id}, timeout=self._config.request_timeout
+            )
         except httpx.HTTPError as exc:
             raise NmsProtocolError(f"NMS cancel request failed: {exc}") from exc
         if response.status_code == 503:
@@ -761,6 +765,7 @@ class NmsWebhookTransport:
         queue: asyncio.Queue[dict[str, object]],
         push_url: str,
         push_token: str,
+        push_auth_credentials: str = "",
         protocol: str = PROTOCOL_A2A_T,
         idle_timeout: float = DEFAULT_NMS_IDLE_TIMEOUT_SECONDS,
     ) -> None:
@@ -770,7 +775,9 @@ class NmsWebhookTransport:
             client: raw NMS client.
             queue: queue fed by the webhook receiver.
             push_url: callback URL registered inline on every request.
-            push_token: push token checked by the receiver.
+            push_token: push token registered inline; the vendor ignores it.
+            push_auth_credentials: ``user:password`` registered as the push Basic auth. The vendor
+                rejects a push config without ``id`` or ``authentication`` with 500 INTERNAL.
             protocol: interaction protocol; only ``a2a-t`` sends extension headers.
             idle_timeout: backstop when no push arrives.
         """
@@ -778,6 +785,7 @@ class NmsWebhookTransport:
         self._queue = queue
         self._push_url = push_url
         self._push_token = push_token
+        self._push_auth_credentials = push_auth_credentials
         self._protocol = protocol
         self._idle_timeout = idle_timeout
         self._event_sink: Any | None = None
@@ -798,9 +806,11 @@ class NmsWebhookTransport:
     ) -> list[dict[str, object]]:
         """Send one non-streaming message, register the webhook, and collect its events."""
         request.configuration.return_immediately = True
-        request.configuration.task_push_notification_config.CopyFrom(
-            TaskPushNotificationConfig(url=self._push_url, token=self._push_token)
-        )
+        config = TaskPushNotificationConfig(id=str(uuid.uuid4()), url=self._push_url, token=self._push_token)
+        if self._push_auth_credentials:
+            config.authentication.scheme = "Basic"
+            config.authentication.credentials = self._push_auth_credentials
+        request.configuration.task_push_notification_config.CopyFrom(config)
         extension_header = ""
         if self._protocol == PROTOCOL_A2A_T:
             extension_header = str(call_context.service_parameters.get("A2A-Extensions", "") or "")

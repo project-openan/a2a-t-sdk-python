@@ -765,3 +765,44 @@ async def test_sse_pure_returns_on_input_required_without_polling() -> None:
     events = await asyncio.wait_for(transport.send(*_request()), timeout=1.0)
 
     assert events[-1]["state"] == "TASK_STATE_INPUT_REQUIRED"
+
+
+async def test_cancel_posts_the_body_the_nms_requires() -> None:
+    """An empty or ``taskId`` body is answered with 500 INTERNAL; only ``{"id": …}`` cancels."""
+    seen: dict[str, object] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        if request.method == "POST" and str(request.url).endswith(":cancel"):
+            seen.update(json.loads(request.content))
+            seen["url"] = str(request.url)
+            return httpx.Response(200, json={"id": "task-1", "status": {"state": "TASK_STATE_CANCELED"}})
+        return httpx.Response(404)
+
+    client = _client(httpx.MockTransport(handle))
+
+    assert await client.cancel_task("task-1") is True
+    assert seen == {"id": "task-1", "url": f"{A2A_BASE}/tasks/task-1:cancel"}
+    await client.aclose()
+
+
+async def test_webhook_transport_registers_the_push_config_the_vendor_accepts() -> None:
+    """The NMS answers 500 INTERNAL unless the inline config carries an id and authentication."""
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _FakeWebhookClient(_propose_message("neg-1", "initial proposal"))
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="https://141.5.146.234:9000/webhook",
+        push_token="push-token",
+        push_auth_credentials="north:secret",
+        idle_timeout=0.05,
+    )
+
+    await transport.send(*_request())
+
+    assert client.payload is not None
+    config = client.payload["configuration"]["taskPushNotificationConfig"]  # ty: ignore[index]
+    assert config["id"] and len(config["id"]) <= 36
+    assert config["authentication"] == {"scheme": "Basic", "credentials": "north:secret"}
