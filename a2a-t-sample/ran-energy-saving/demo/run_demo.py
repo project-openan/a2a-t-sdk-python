@@ -837,12 +837,35 @@ async def _run_client_foreground(
 
     run_id = uuid.uuid4().hex
     trace_spans: list[dict[str, object]] = []
+    from shared.langfuse_tracing import LangfuseRunMetadata, create_langfuse_exporter
+
+    langfuse_exporter = create_langfuse_exporter(
+        config,
+        LangfuseRunMetadata(
+            run_id=run_id,
+            scenario=scenario,
+            conversation_id=run_id,
+            user_id="cli",
+            language=language,
+            mode=mode,
+            protocol=protocol,
+            transport=transport,
+            discovery=config.discovery,
+            intent_mode=config.intent_mode,
+            model_mode=config.model_mode,
+            model_label=config.model_label,
+        ),
+    )
 
     def trace_sink(span: dict[str, object]) -> None:
         trace_spans.append(span)
         transcript.record_trace(span)
+        if langfuse_exporter is not None:
+            langfuse_exporter(span)
 
     runtime = None
+    result = None
+    error_text: str | None = None
     try:
         with log_context(run_id=run_id, role="client"):
             runtime = await build_demo_runtime(
@@ -875,12 +898,17 @@ async def _run_client_foreground(
         if result.report:
             print(f"[client] report={json.dumps(result.report, ensure_ascii=False)}")
     except Exception as exc:  # noqa: BLE001 - the launcher reports the failure and exits non-zero
-        transcript.record_error(f"{type(exc).__name__}: {exc}")
-        print(f"[client] failed: {type(exc).__name__}: {exc}")
+        error_text = f"{type(exc).__name__}: {exc}"
+        transcript.record_error(error_text)
+        print(f"[client] failed: {error_text}")
         return 1
     finally:
         if runtime is not None:
             await runtime.aclose()
+        if langfuse_exporter is not None:
+            await asyncio.to_thread(langfuse_exporter.finish, result=result, error=error_text)
+            langfuse_snapshot = await asyncio.to_thread(langfuse_exporter.snapshot, resolve_url=True)
+            print(f"[client] langfuse trace: {langfuse_snapshot.get('url') or langfuse_snapshot.get('traceId')}")
         paths = transcript.write()
         print(f"[client] transcript: {paths.json_path}")
         print(f"[client] transcript: {paths.markdown_path}")

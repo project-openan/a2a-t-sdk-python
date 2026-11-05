@@ -1477,6 +1477,21 @@ function buildResultCard() {
     const metrics = ui.view.pureMetrics || pureMetricsFromLog();
     if (metrics) card.append(pureMetricsBlock(metrics, ui.copy));
   }
+  const langfuse = ui.view.langfuse;
+  if (langfuse && langfuse.enabled && typeof langfuse.traceId === "string") {
+    if (typeof langfuse.url === "string" && langfuse.url) {
+      const link = el("a", "result-langfuse", ui.copy.result.openInLangfuse);
+      link.href = langfuse.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      card.append(link);
+    } else {
+      card.append(el("p", "result-detail", `${ui.copy.result.langfuseTrace}: ${langfuse.traceId}`));
+    }
+    if (typeof langfuse.warning === "string" && langfuse.warning) {
+      card.append(el("p", "result-detail", langfuse.warning));
+    }
+  }
   return card;
 }
 

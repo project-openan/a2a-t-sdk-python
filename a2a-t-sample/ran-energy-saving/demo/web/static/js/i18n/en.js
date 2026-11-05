@@ -280,6 +280,7 @@ export const EN = {
     traceJson: "Trace JSON",
     transcriptJson: "Transcript JSON",
     transcriptMarkdown: "Transcript Markdown",
+    langfuse: "Open in Langfuse",
     scriptedSuffix: " ({count} scripted)",
     toolsAndErrors: "{tools} · {errors} errors",
     tokensInOut: "{prompt} in / {completion} out",

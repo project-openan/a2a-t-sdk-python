@@ -126,6 +126,25 @@ spans arrive in batches with earlier timestamps, so the trace inserts them by ev
 arrival order; a status and its matching approval/decision span share one dedupe key and render as
 one row.
 
+### Langfuse export
+
+`shared/langfuse_tracing.py` observes the same span stream as the Run Explorer. `RunManager`
+(Web UI and gateway) and the CLI client attach it next to the UI/transcript sink, so the exporter
+sees exactly the spans the UI sees. One run is one Langfuse trace: `session.id` is the conversation,
+`user.id` the caller, the root is the run, and each phase and negotiation round is a lazily created
+child span. `llm` spans become `generation` observations with the recorded model and token usage,
+`tool` spans become `tool`, and everything else stays a span. The exporter replays the recorded
+`startedAt` / `endedAt`, so Langfuse shows the real timeline even though export happens after each
+span completes.
+
+It uses an isolated `TracerProvider` handed to `Langfuse(tracer_provider=...)`. Langfuse v5 filters
+unknown instrumentation scopes by default, so `should_export_span` allows exactly
+`ran_energy_saving.trace`; the `langfuse.*` attribute names are the SDK ingestion contract and stay
+in one module. A zero-length `run started` child is exported first so the trace is named and carries
+session/user from the start; the long-lived root closes at run end. Spans that arrive later (the
+local demo's batched server trace) are still exported, and the Langfuse atexit handler flushes them.
+Every failure is a warning on the run snapshot, never a run failure.
+
 Two human approvals can be enabled at startup:
 
 - `--mode confirm`: approval 1 holds the Task-T before it leaves the OSS Agent; the engineer confirms
@@ -886,6 +905,11 @@ SDK. `run_demo.py` reads `A2AT_SAMPLE_UI_PORT` only as the default of `--ui-port
 | `A2AT_SAMPLE_TRACE_URL` | unset; `--ui` sets `http://127.0.0.1:<ui_port>` | Server trace endpoint (Web UI). Local demo only; the server POSTs spans there. |
 | `A2AT_SAMPLE_TRACE_TOKEN` | unset; `--ui` mints a random token | Local token the server presents and the UI requires; unset disables ingestion (fails closed). |
 | `A2AT_SAMPLE_TRACE_DIR` | unset; CLI sets `<sample>/runs` | Directory of the CLI server trace (`<dir>/<runId>/server-trace.jsonl`). |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | unset = disabled | Langfuse export of a live client run; both keys must be set. |
+| `LANGFUSE_BASE_URL` | `https://us.cloud.langfuse.com` | Langfuse Cloud or self-hosted endpoint. |
+| `A2AT_SAMPLE_LANGFUSE_ENABLED` | unset = auto | `0` forces the export off even with keys; `1` keeps the key-based enable. |
+| `A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT` | default `1` | `0` sends only model, token, status and timing metadata (no prompt/response text). |
+| `A2AT_SAMPLE_LANGFUSE_ENVIRONMENT` | default `demo` | Langfuse environment label. |
 | `A2AT_SAMPLE_TASK_DB` | unset = in-memory; `run_demo.py` writes `<sample>/runs/task-status.sqlite3` | Absolute SQLite path of the server's persisted A2A Task store, also read by `GET /api/tasks`. |
 | `A2AT_SAMPLE_CLIENT_DB` | unset = in-memory; `run_demo.py` writes `<sample>/runs/client-state.sqlite3` | Absolute SQLite path of the client's conversation/run/negotiation store and of the ADK decision-agent sessions. |
 | `A2AT_SAMPLE_CLIENT_MEMORY_TURNS` | default `6` (>= 0) | Number of recent conversation turns injected into the next decision prompt and Task-T generation. |

@@ -190,6 +190,21 @@ operator request → business intent (ProcessedIntent) → normalized text → a
   `POST /api/runs {"intentMode":"raw"}` for the old direct-text behavior. Gateway input is always
   treated as raw.
 
+### Langfuse observability
+
+A live client run can export its Run Explorer spans to Langfuse as one trace per run:
+
+- set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` (optionally `LANGFUSE_BASE_URL`);
+- `A2AT_SAMPLE_LANGFUSE_ENABLED=0` forces the export off, and
+  `A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT=0` sends only model, token, status and timing metadata;
+- offline/scripted runs are not exported.
+
+The trace follows `run → phase → negotiation round`; `llm` spans become generations with model and
+token usage, `tool` spans become tools, and every other span stays a span. The presentation ending
+card and the Run Explorer **Exports** panel link to the trace. Export is best effort: a failure is
+shown as a warning and never changes the run result. `langfuse` is an optional sample dependency;
+without it, or without keys, the exporter is a no-op.
+
 ### Real vendor NMS mode
 
 The sample can also act as the OSS client of a real vendor NMS. With `--nms`, the launcher starts

@@ -278,6 +278,7 @@ export const ZH_CN = {
     traceJson: "Trace JSON",
     transcriptJson: "Transcript JSON",
     transcriptMarkdown: "Transcript Markdown",
+    langfuse: "在 Langfuse 中打开",
     scriptedSuffix: "（{count} 次脚本化）",
     toolsAndErrors: "{tools} · {errors} 个错误",
     tokensInOut: "输入 {prompt} / 输出 {completion}",

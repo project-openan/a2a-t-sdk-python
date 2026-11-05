@@ -131,6 +131,8 @@ class RunState:
         idempotency_key: optional caller key preventing a duplicate run.
         conversation_context: rendered recent turns injected into prompts.
         store: optional client persistence store.
+        langfuse_exporter: optional Langfuse exporter of this run (``None`` when disabled).
+        langfuse: Langfuse trace snapshot shown by the API and the presentation UI.
     """
 
     run_id: str
@@ -168,6 +170,8 @@ class RunState:
     spans: dict[str, dict[str, object]] = field(default_factory=dict)
     task: asyncio.Task[None] | None = None
     finished_at: float | None = None
+    langfuse_exporter: Any | None = field(default=None, repr=False)
+    langfuse: dict[str, object] = field(default_factory=dict)
     store: ClientStore | None = field(default=None, repr=False)
     _seq: int = field(default=0, repr=False)
     _phase_steps: dict[str, int] = field(default_factory=dict, repr=False)
@@ -308,6 +312,7 @@ class RunState:
             "modelMode": model_mode,
             "modelLabel": model_label,
             "expectedSequence": expected_sequence,
+            "langfuse": self.langfuse,
             "phase": PHASE_DISPATCH,
             "phaseStep": step,
             "spanId": span.span_id,
@@ -426,6 +431,11 @@ class RunState:
             self.transcript.record_trace(payload, seq=seq, phase_step=span.phase_step)
         if broadcast_frame:
             self.broadcast({"type": "trace", "event": payload}, seq=seq)
+        # Export from the single storage funnel: local synthetic spans (events, decisions,
+        # approvals, run_started) and ingested producer spans (LLM/tool/client flow) all pass
+        # here, and a re-sent producer span is filtered before it reaches this method.
+        if self.langfuse_exporter is not None:
+            self.langfuse_exporter(payload)
         return payload
 
     def record_event(self, event: Mapping[str, object]) -> dict[str, object]:
@@ -685,6 +695,7 @@ class RunState:
             "transcriptJson": f"/api/runs/{self.run_id}/transcript.json",
             "transcriptMarkdown": f"/api/runs/{self.run_id}/transcript.md",
             "traceJson": f"/api/runs/{self.run_id}/trace.json",
+            "langfuse": self.langfuse,
         }
 
     def snapshot(self) -> dict[str, object]:
@@ -716,6 +727,7 @@ class RunState:
             "transcriptError": self.transcript_error,
             "seq": self._seq,
             "traceCount": len(self.traces),
+            "langfuse": self.langfuse,
             "transcript": transcript,
         }
 

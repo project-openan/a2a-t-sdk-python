@@ -74,6 +74,14 @@ GATEWAY_TASK_DB_ENV_KEY = "A2AT_SAMPLE_GATEWAY_TASK_DB"
 AUTH_TOKEN_ENV_KEY = "A2AT_SAMPLE_AUTH_TOKEN"
 SERVER_AUTH_TOKEN_ENV_KEY = "A2AT_SAMPLE_SERVER_AUTH_TOKEN"
 
+#: Langfuse observability of the client run (see :mod:`shared.langfuse_tracing`).
+LANGFUSE_PUBLIC_KEY_ENV_KEY = "LANGFUSE_PUBLIC_KEY"
+LANGFUSE_SECRET_KEY_ENV_KEY = "LANGFUSE_SECRET_KEY"
+LANGFUSE_BASE_URL_ENV_KEY = "LANGFUSE_BASE_URL"
+LANGFUSE_ENABLED_ENV_KEY = "A2AT_SAMPLE_LANGFUSE_ENABLED"
+LANGFUSE_CAPTURE_CONTENT_ENV_KEY = "A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT"
+LANGFUSE_ENVIRONMENT_ENV_KEY = "A2AT_SAMPLE_LANGFUSE_ENVIRONMENT"
+
 #: Vendor NMS integration (``A2AT_SAMPLE_DISCOVERY=nms``).
 #: ``A2AT_SAMPLE_NMS_HOST`` is the single value most deployments set; the two full URLs are
 #: derived from it with the standard 910 ports, and the explicit keys below override them.
@@ -160,6 +168,10 @@ DEFAULT_ADK_MODEL_NAME = "openai/mass/volcengine/deepseek-v4.1-flash"
 DEFAULT_ADK_MODEL_API_BASE = "http://127.0.0.1:31943/v1"
 DEFAULT_ADK_MODEL_API_KEY = "not-needed"
 
+#: Langfuse Cloud endpoint and environment label of the client observability export.
+DEFAULT_LANGFUSE_BASE_URL = "https://us.cloud.langfuse.com"
+DEFAULT_LANGFUSE_ENVIRONMENT = "demo"
+
 
 def _env_value(values: dict[str, str | None], key: str, default: str) -> str:
     """Resolve one key from the ``.env`` values, then the process environment, then a default."""
@@ -230,6 +242,16 @@ def _env_bool(values: dict[str, str | None], key: str, default: bool) -> bool:
     if raw_value in ("0", "false", "no", "off"):
         return False
     raise ValueError(f"Invalid boolean value for {key}: {raw_value}")
+
+
+def _env_optional_bool(values: dict[str, str | None], key: str) -> bool | None:
+    """Resolve a tri-state key: unset means "auto", otherwise a validated boolean."""
+    raw_value = values.get(key)
+    if raw_value is None or not str(raw_value).strip():
+        raw_value = os.environ.get(key)
+    if raw_value is None or not str(raw_value).strip():
+        return None
+    return _env_bool(values, key, True)
 
 
 def _optional_absolute_path(values: dict[str, str | None], key: str) -> str | None:
@@ -306,6 +328,12 @@ class SampleConfig:
         planner_api_key: API key of the planner endpoint.
         planner_timeout_seconds: per-call planner budget.
         planner_max_steps: LangGraph recursion limit of one execution.
+        langfuse_public_key: Langfuse public key; with the secret key it enables the client export.
+        langfuse_secret_key: Langfuse secret key; never logged or traced.
+        langfuse_base_url: Langfuse Cloud or self-hosted base URL.
+        langfuse_enabled: explicit on/off switch; ``None`` enables when both keys are present.
+        langfuse_capture_content: whether prompt/response text is sent, or only metadata.
+        langfuse_environment: Langfuse environment label (``demo`` by default).
     """
 
     model_mode: ModelMode
@@ -354,11 +382,24 @@ class SampleConfig:
     planner_api_key: str = ""
     planner_timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS
     planner_max_steps: int = DEFAULT_PLANNER_MAX_STEPS
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_base_url: str = DEFAULT_LANGFUSE_BASE_URL
+    langfuse_enabled: bool | None = None
+    langfuse_capture_content: bool = True
+    langfuse_environment: str = DEFAULT_LANGFUSE_ENVIRONMENT
 
     @property
     def is_offline(self) -> bool:
         """Return whether the sample runs with the scripted LLM and the fake ADK model."""
         return self.model_mode == MODEL_MODE_OFFLINE
+
+    @property
+    def langfuse_configured(self) -> bool:
+        """Return whether the client Langfuse export is enabled and has both keys."""
+        if self.langfuse_enabled is False:
+            return False
+        return bool(self.langfuse_public_key and self.langfuse_secret_key)
 
     @property
     def model_label(self) -> str:
@@ -496,4 +537,12 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         planner_api_key=_env_value(values, PLANNER_API_KEY_ENV_KEY, adk_model_api_key),
         planner_timeout_seconds=_positive_seconds(values, PLANNER_TIMEOUT_ENV_KEY, DEFAULT_LLM_TIMEOUT_SECONDS),
         planner_max_steps=_positive_int(values, PLANNER_MAX_STEPS_ENV_KEY, DEFAULT_PLANNER_MAX_STEPS),
+        langfuse_public_key=_env_value(values, LANGFUSE_PUBLIC_KEY_ENV_KEY, "").strip(),
+        langfuse_secret_key=_env_value(values, LANGFUSE_SECRET_KEY_ENV_KEY, "").strip(),
+        langfuse_base_url=_env_value(values, LANGFUSE_BASE_URL_ENV_KEY, DEFAULT_LANGFUSE_BASE_URL).rstrip("/"),
+        langfuse_enabled=_env_optional_bool(values, LANGFUSE_ENABLED_ENV_KEY),
+        langfuse_capture_content=_env_bool(values, LANGFUSE_CAPTURE_CONTENT_ENV_KEY, True),
+        langfuse_environment=_env_value(
+            values, LANGFUSE_ENVIRONMENT_ENV_KEY, DEFAULT_LANGFUSE_ENVIRONMENT
+        ),
     )

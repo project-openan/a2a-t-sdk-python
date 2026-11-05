@@ -22,6 +22,12 @@ from shared.config import (
     GATEWAY_TASK_DB_ENV_KEY,
     HTTP_TIMEOUT_ENV_KEY,
     INTENT_MODE_ENV_KEY,
+    LANGFUSE_BASE_URL_ENV_KEY,
+    LANGFUSE_CAPTURE_CONTENT_ENV_KEY,
+    LANGFUSE_ENABLED_ENV_KEY,
+    LANGFUSE_ENVIRONMENT_ENV_KEY,
+    LANGFUSE_PUBLIC_KEY_ENV_KEY,
+    LANGFUSE_SECRET_KEY_ENV_KEY,
     LLM_MAX_ATTEMPTS_ENV_KEY,
     LLM_TIMEOUT_ENV_KEY,
     MODEL_MODE_LIVE,
@@ -79,6 +85,12 @@ _ENV_KEYS = (
     NMS_REQUEST_TIMEOUT_ENV_KEY,
     NMS_REGION_ENV_KEY,
     NMS_WIRE_LOG_ENV_KEY,
+    LANGFUSE_BASE_URL_ENV_KEY,
+    LANGFUSE_CAPTURE_CONTENT_ENV_KEY,
+    LANGFUSE_ENABLED_ENV_KEY,
+    LANGFUSE_ENVIRONMENT_ENV_KEY,
+    LANGFUSE_PUBLIC_KEY_ENV_KEY,
+    LANGFUSE_SECRET_KEY_ENV_KEY,
 )
 
 
@@ -544,4 +556,69 @@ def test_unsupported_intent_mode_is_rejected(tmp_path: Path) -> None:
     env_file.write_text(f"{INTENT_MODE_ENV_KEY}=guessed\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="INTENT_MODE"):
+        load_config(env_path=env_file)
+
+
+def test_langfuse_defaults_are_disabled_and_capture_content(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+
+    config = load_config(env_path=env_file)
+
+    assert config.langfuse_configured is False
+    assert config.langfuse_enabled is None
+    assert config.langfuse_base_url == "https://us.cloud.langfuse.com"
+    assert config.langfuse_capture_content is True
+    assert config.langfuse_environment == "demo"
+
+
+def test_langfuse_keys_enable_the_export(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                f"{LANGFUSE_PUBLIC_KEY_ENV_KEY}=pk-lf-test",
+                f"{LANGFUSE_SECRET_KEY_ENV_KEY}=sk-lf-test",
+                f"{LANGFUSE_BASE_URL_ENV_KEY}=https://langfuse.internal/",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert config.langfuse_configured is True
+    assert config.langfuse_public_key == "pk-lf-test"
+    assert config.langfuse_secret_key == "sk-lf-test"
+    assert config.langfuse_base_url == "https://langfuse.internal"
+
+
+def test_langfuse_can_be_forced_off_and_content_capture_disabled(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                f"{LANGFUSE_PUBLIC_KEY_ENV_KEY}=pk-lf-test",
+                f"{LANGFUSE_SECRET_KEY_ENV_KEY}=sk-lf-test",
+                f"{LANGFUSE_ENABLED_ENV_KEY}=0",
+                f"{LANGFUSE_CAPTURE_CONTENT_ENV_KEY}=0",
+                f"{LANGFUSE_ENVIRONMENT_ENV_KEY}=blue-zone",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert config.langfuse_enabled is False
+    assert config.langfuse_configured is False
+    assert config.langfuse_capture_content is False
+    assert config.langfuse_environment == "blue-zone"
+
+
+def test_langfuse_rejects_an_invalid_switch(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{LANGFUSE_ENABLED_ENV_KEY}=sometimes\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=LANGFUSE_ENABLED_ENV_KEY):
         load_config(env_path=env_file)

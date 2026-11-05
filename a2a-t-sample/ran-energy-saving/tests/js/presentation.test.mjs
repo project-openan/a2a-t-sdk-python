@@ -1700,4 +1700,28 @@ applyFrame(pureIntent, {
 assert.equal(pureIntent.rawRequest, "raw text");
 assert.equal(pureIntent.normalizedRequest, "normalized text");
 
+// Langfuse: the trace id arrives with run_started, the URL with finished.
+assert.equal(copy.result.openInLangfuse, "在 Langfuse 中打开");
+assert.equal(copyFor("en-US").result.openInLangfuse, "Open in Langfuse");
+const langfuseState = createState();
+applyFrame(langfuseState, {
+  type: "run_started",
+  runId: "run-lf",
+  langfuse: { enabled: true, traceId: "trace-1", status: "exporting" },
+});
+assert.equal(langfuseState.langfuse.traceId, "trace-1");
+applyFrame(langfuseState, {
+  type: "finished",
+  runId: "run-lf",
+  status: "finished",
+  langfuse: {
+    enabled: true,
+    traceId: "trace-1",
+    url: "https://langfuse.example/project/p/traces/trace-1",
+    status: "exported",
+  },
+});
+assert.equal(langfuseState.langfuse.url, "https://langfuse.example/project/p/traces/trace-1");
+assert.equal(langfuseState.langfuse.status, "exported");
+
 console.log("presentation model harness: ok");

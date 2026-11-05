@@ -131,6 +131,22 @@ collection completed”。工程师在 MIE 中确认后，绿色 `MML commands` 
 需要阶段、LLM 与工具调用、原始报文和历史记录时，加 `--ui-mode explorer`，使用 Run Explorer 的
 左侧栏、时间线与检查器。
 
+### Langfuse 导出
+
+`shared/langfuse_tracing.py` 观察与 Run Explorer 相同的 span 流。`RunManager`（Web UI 与
+Gateway）和 CLI 客户端把它挂在 UI/transcript sink 旁边，因此导出器看到的 span 与界面完全一致。
+一次 run 对应一条 Langfuse trace：`session.id` 是会话、`user.id` 是调用方，根 span 是本次 run，
+每个 phase 和协商轮次按需创建子 span。`llm` span 映射为带模型和 token 用量的 `generation`，
+`tool` span 映射为 `tool`，其余保持 span。导出器回放已记录的 `startedAt` / `endedAt`，因此即使
+是 span 完成后才发送，Langfuse 中的时间轴仍与真实运行一致。
+
+实现使用独立的 `TracerProvider` 传给 `Langfuse(tracer_provider=...)`。Langfuse v5 默认会过滤未知
+instrumentation scope，因此 `should_export_span` 只放行 `ran_energy_saving.trace`；`langfuse.*`
+属性名属于 SDK 的 ingest 契约，集中在一个模块内。启动时先导出一个零长度的 `run started` 子 span，
+让 trace 从一开始就有名称和 session/user；长生命周期的根 span 在 run 结束时关闭。之后到达的 span
+（本地 demo 服务端 trace 是批量上报的）仍会导出，并由 Langfuse 的 atexit 处理器刷写。所有失败只
+体现在 run snapshot 的 warning 上，不会让 run 失败。
+
 **如何验证：** 演示视图最终出现节能报告；拒绝与中止场景显示“未创建任务”；审批 1 取消显示“意图未确认”；审批 2 驳回显示“MML 未确认 · 未下发任何变更”。
 
 ## 2. 架构速览（解释）
@@ -721,6 +737,11 @@ P95 和审批等待。
 | `A2AT_SAMPLE_TRACE_URL` | 默认未设置；`--ui` 设为 `http://127.0.0.1:<ui_port>` | 服务端 trace 端点（Web UI）。仅用于本地演示；服务端把 span POST 到这里。 |
 | `A2AT_SAMPLE_TRACE_TOKEN` | 默认未设置；`--ui` 生成随机 token | 服务端出示、UI 校验的本地 token；未设置时 ingest 路由关闭（失败关闭）。 |
 | `A2AT_SAMPLE_TRACE_DIR` | 默认未设置；CLI 设为 `<sample>/runs` | CLI 服务端 trace 目录（`<dir>/<runId>/server-trace.jsonl`）。 |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | 未设置 = 关闭 | live client run 的 Langfuse 导出；两个 key 必须同时配置。 |
+| `LANGFUSE_BASE_URL` | `https://us.cloud.langfuse.com` | Langfuse Cloud 或自托管地址。 |
+| `A2AT_SAMPLE_LANGFUSE_ENABLED` | 未设置 = 自动 | 即使有 key，`0` 也强制关闭；`1` 保持按 key 自动启用。 |
+| `A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT` | 默认 `1` | `0` 时只上报模型、token、状态和耗时元数据，不上报 prompt/response 文本。 |
+| `A2AT_SAMPLE_LANGFUSE_ENVIRONMENT` | 默认 `demo` | Langfuse environment 标签。 |
 | `A2AT_SAMPLE_TASK_DB` | 未设置 = 内存；`run_demo.py` 写入 `<sample>/runs/task-status.sqlite3` | 服务端持久化 A2A Task 存储的绝对 SQLite 路径，也由 `GET /api/tasks` 读取。 |
 | `A2AT_SAMPLE_CLIENT_DB` | 未设置 = 内存；`run_demo.py` 写入 `<sample>/runs/client-state.sqlite3` | 客户端会话/运行/协商存储，以及 ADK 决策智能体会话的绝对 SQLite 路径。 |
 | `A2AT_SAMPLE_CLIENT_MEMORY_TURNS` | 默认 `6`（>= 0） | 注入下一次决策提示词与 Task-T 生成的最近会话轮数。 |

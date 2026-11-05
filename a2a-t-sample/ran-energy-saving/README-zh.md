@@ -167,6 +167,20 @@ sample 不再把操作员原文直接送进 A2A / A2A-T。默认的 `processed` 
 - 默认 `processed`。需要旧行为时使用 `A2AT_SAMPLE_INTENT_MODE=raw`、`--intent-mode raw` 或
   `POST /api/runs {"intentMode":"raw"}`。Gateway 入站文本一律按 raw 处理。
 
+### Langfuse 可观测
+
+live 模式的 client run 可以把 Run Explorer span 导出到 Langfuse，每次 run 一条 trace：
+
+- 设置 `LANGFUSE_PUBLIC_KEY` 和 `LANGFUSE_SECRET_KEY`（可选 `LANGFUSE_BASE_URL`）；
+- `A2AT_SAMPLE_LANGFUSE_ENABLED=0` 强制关闭；`A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT=0`
+  只上报模型、token、状态和耗时元数据；
+- offline/scripted 运行不上报。
+
+trace 结构为 `run → phase → 协商轮次`；`llm` span 映射为 generation（带模型和 token 用量），
+`tool` span 映射为 tool，其余保持 span。演示页结束卡片和 Run Explorer 的 **Exports** 面板会显示
+Langfuse trace 链接。导出是 best-effort：失败只显示 warning，不改变 run 结果。`langfuse` 是
+sample 的可选依赖；未安装或未配置 key 时导出器为空操作。
+
 ### 真实厂商网管模式
 
 sample 也可以作为真实厂商网管的 OSS 客户端。加 `--nms` 后，启动器不再启动本地 registry、RAN

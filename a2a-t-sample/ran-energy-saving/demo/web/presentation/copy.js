@@ -527,6 +527,8 @@ const EN = {
     failedTitle: "The demo did not complete",
     canceledTitle: "Run cancelled",
     canceled: "The engineer stopped this run; no further steps follow.",
+    openInLangfuse: "Open in Langfuse",
+    langfuseTrace: "Langfuse trace",
   },
   trace: {
     title: "Session trace",
@@ -1228,6 +1230,8 @@ const ZH = {
     failedTitle: "演示未能完成",
     canceledTitle: "运行已取消",
     canceled: "工程师停止了本次运行，后续步骤不再执行。",
+    openInLangfuse: "在 Langfuse 中打开",
+    langfuseTrace: "Langfuse trace",
   },
   trace: {
     title: "会话轨迹",

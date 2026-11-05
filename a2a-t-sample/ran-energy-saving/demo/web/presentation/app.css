@@ -671,6 +671,18 @@ body.resizing-y { cursor: row-resize; user-select: none; }
   color: var(--g300);
   overflow-wrap: anywhere;
 }
+.result-langfuse {
+  display: inline-block;
+  margin-top: 7px;
+  padding: 4px 9px;
+  border: 2px solid var(--black);
+  background: var(--white);
+  color: var(--black);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-decoration: none;
+}
+[data-brand="orange"] .result-langfuse:hover { background: var(--black); color: var(--white); }
 .report-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .report-rate { font-size: 20px; font-weight: 800; color: var(--green); }
 .report-line { margin: 2px 0 5px; font-size: 12px; }

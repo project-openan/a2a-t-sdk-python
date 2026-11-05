@@ -495,3 +495,44 @@ async def test_read_detail_exposes_persisted_paths(
     assert detail["status"] == "finished"
     assert detail["transcriptJson"] is not None
     assert Path(str(detail["transcriptJson"])).is_file()
+
+
+async def test_run_publishes_langfuse_trace_state(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The run frames carry the Langfuse trace id at start and the URL at finish."""
+
+    class _Exporter:
+        def __call__(self, span: dict[str, object]) -> None:
+            del span
+
+        def finish(self, *, result: object | None = None, error: str | None = None) -> None:
+            del result, error
+
+        def snapshot(self, *, resolve_url: bool = False) -> dict[str, object]:
+            return {
+                "enabled": True,
+                "traceId": "trace-1",
+                "url": "https://langfuse.example/trace-1" if resolve_url else None,
+                "status": "exported" if resolve_url else "exporting",
+                "warning": None,
+            }
+
+    monkeypatch.setattr(
+        "protocol.client_service.run_manager.create_langfuse_exporter",
+        lambda config, metadata: _Exporter(),
+    )
+    manager, _store, _runtimes = _manager(tmp_path, offline_config)
+
+    run = await manager.start("information", "auto", "sse")
+    started = next(message for message in run.messages if message.get("type") == "run_started")
+    assert started["langfuse"]["traceId"] == "trace-1"
+
+    await _finish(manager, run.run_id)
+
+    finished = next(message for message in run.messages if message.get("type") == "finished")
+    assert finished["langfuse"]["url"] == "https://langfuse.example/trace-1"
+    assert run.langfuse["status"] == "exported"
+    assert run.snapshot()["langfuse"]["traceId"] == "trace-1"

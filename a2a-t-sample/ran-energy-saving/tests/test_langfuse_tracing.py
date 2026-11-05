@@ -1,0 +1,320 @@
+"""Tests for the Langfuse export of one client run's Run Explorer spans."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import replace
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from shared.config import MODEL_MODE_LIVE, SampleConfig, load_config
+from shared.langfuse_tracing import (
+    LANGFUSE_SCOPE_NAME,
+    LangfuseRunMetadata,
+    LangfuseSpanExporter,
+    create_langfuse_exporter,
+)
+
+
+class _FakeClient:
+    """Minimal Langfuse client double recording flush/URL calls."""
+
+    def __init__(self) -> None:
+        self.flushed = 0
+        self.flush_error: Exception | None = None
+
+    def flush(self) -> None:
+        self.flushed += 1
+        if self.flush_error is not None:
+            raise self.flush_error
+
+    def get_trace_url(self, *, trace_id: str | None = None) -> str:
+        return f"https://langfuse.example/project/p1/traces/{trace_id}"
+
+
+class _Runtime:
+    """Runtime double with a real OTel tracer and an in-memory exporter."""
+
+    def __init__(self) -> None:
+        self.spans = InMemorySpanExporter()
+        self.provider = TracerProvider()
+        self.provider.add_span_processor(SimpleSpanProcessor(self.spans))
+        self.tracer = self.provider.get_tracer(LANGFUSE_SCOPE_NAME)
+        self.client = _FakeClient()
+
+
+def _metadata() -> LangfuseRunMetadata:
+    return LangfuseRunMetadata(
+        run_id="run-1",
+        scenario="night",
+        conversation_id="conv-1",
+        user_id="user-1",
+        language="en-US",
+        mode="auto",
+        protocol="a2a-t",
+        transport="sse",
+        discovery="registry",
+        intent_mode="processed",
+        model_mode="live",
+        model_label="live (m)",
+    )
+
+
+def _exporter(offline_config: SampleConfig, *, capture: bool = True) -> tuple[LangfuseSpanExporter, _Runtime]:
+    runtime = _Runtime()
+    config = replace(
+        offline_config,
+        model_mode=MODEL_MODE_LIVE,
+        langfuse_public_key="pk",
+        langfuse_secret_key="sk",
+        langfuse_capture_content=capture,
+    )
+    return LangfuseSpanExporter(runtime=runtime, config=config, metadata=_metadata()), runtime
+
+
+def _llm_span(**overrides: object) -> dict[str, object]:
+    span: dict[str, object] = {
+        "kind": "llm",
+        "phase": "negotiation",
+        "title": "LLM call · negotiation_propose_extraction",
+        "status": "ok",
+        "startedAt": "2026-11-05T10:00:00.000Z",
+        "endedAt": "2026-11-05T10:00:01.000Z",
+        "durationMs": 1000,
+        "model": "deepseek-v4.1-flash",
+        "tokens": {"prompt": 30, "completion": 20, "total": 50},
+        "spanId": "llm_0001",
+        "round": 1,
+        "detail": {
+            "request": {"messages": [{"role": "user", "content": "propose"}]},
+            "response": {"rawContent": '{"ok":true}', "parsed": {"ok": True}},
+        },
+    }
+    span.update(overrides)
+    return span
+
+
+def _by_name(runtime: _Runtime) -> dict[str, Any]:
+    return {span.name: span for span in runtime.spans.get_finished_spans()}
+
+
+def test_exporter_is_disabled_without_keys(tmp_path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("A2AT_SAMPLE_MODEL_MODE=live\n", encoding="utf-8")
+
+    assert create_langfuse_exporter(load_config(env_path=env), _metadata()) is None
+
+
+def test_exporter_is_disabled_in_offline_mode(tmp_path) -> None:
+    env = tmp_path / ".env"
+    env.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_MODEL_MODE=offline",
+                "LANGFUSE_PUBLIC_KEY=pk",
+                "LANGFUSE_SECRET_KEY=sk",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert create_langfuse_exporter(load_config(env_path=env), _metadata()) is None
+
+
+def test_exporter_can_be_forced_off(tmp_path) -> None:
+    env = tmp_path / ".env"
+    env.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_MODEL_MODE=live",
+                "LANGFUSE_PUBLIC_KEY=pk",
+                "LANGFUSE_SECRET_KEY=sk",
+                "A2AT_SAMPLE_LANGFUSE_ENABLED=0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env)
+    assert config.langfuse_configured is False
+    assert create_langfuse_exporter(config, _metadata()) is None
+
+
+def test_llm_span_becomes_a_generation_with_usage(offline_config: SampleConfig) -> None:
+    exporter, runtime = _exporter(offline_config)
+
+    exporter(_llm_span())
+
+    spans = _by_name(runtime)
+    generation = next(span for span in spans.values() if span.name == "LLM call · negotiation_propose_extraction")
+    attributes = generation.attributes
+    assert attributes["langfuse.observation.type"] == "generation"
+    assert attributes["langfuse.observation.model.name"] == "deepseek-v4.1-flash"
+    assert json.loads(attributes["langfuse.observation.usage_details"]) == {
+        "input": 30,
+        "output": 20,
+        "total": 50,
+    }
+    assert json.loads(attributes["langfuse.observation.input"]) == [
+        {"role": "user", "content": "propose"}
+    ]
+    assert attributes["langfuse.observation.output"] == '{"ok":true}'
+    # The recorded timestamps are replayed exactly.
+    started = int(datetime(2026, 11, 5, 10, 0, 0, tzinfo=UTC).timestamp() * 1_000_000_000)
+    assert generation.start_time == started
+    assert generation.end_time == started + 1_000_000_000
+    assert generation.parent is not None
+
+
+def test_round_spans_group_negotiation_observations(offline_config: SampleConfig) -> None:
+    exporter, runtime = _exporter(offline_config)
+
+    exporter(_llm_span(spanId="llm_0001", round=1))
+    exporter(_llm_span(spanId="llm_0002", round=2, title="LLM call · accept"))
+    exporter.finish(result=None, error=None)
+
+    spans = _by_name(runtime)
+    round_one = spans["round 1"]
+    round_two = spans["round 2"]
+    first = spans["LLM call · negotiation_propose_extraction"]
+    second = spans["LLM call · accept"]
+    assert first.parent.span_id == round_one.context.span_id
+    assert second.parent.span_id == round_two.context.span_id
+    assert round_one.parent.span_id == round_two.parent.span_id  # both under the negotiation phase
+
+
+def test_capture_content_off_only_sends_metadata(offline_config: SampleConfig) -> None:
+    exporter, runtime = _exporter(offline_config, capture=False)
+
+    exporter(_llm_span())
+
+    spans = _by_name(runtime)
+    generation = spans["LLM call · negotiation_propose_extraction"]
+    assert "langfuse.observation.input" not in generation.attributes
+    assert "langfuse.observation.output" not in generation.attributes
+    assert generation.attributes["langfuse.observation.model.name"] == "deepseek-v4.1-flash"
+
+
+def test_tool_and_intent_spans_keep_their_payloads(offline_config: SampleConfig) -> None:
+    exporter, runtime = _exporter(offline_config)
+
+    exporter(
+        {
+            "kind": "tool",
+            "phase": "execution",
+            "title": "Tool call · get_cell",
+            "startedAt": "2026-11-05T10:00:00.000Z",
+            "endedAt": "2026-11-05T10:00:00.500Z",
+            "detail": {"toolName": "get_cell", "args": {"cell": "c1"}, "result": {"rate": 30}},
+        }
+    )
+    exporter(
+        {
+            "kind": "intent_processed",
+            "phase": "task_prompt",
+            "title": "Intent processed",
+            "startedAt": "2026-11-05T10:00:00.000Z",
+            "endedAt": "2026-11-05T10:00:00.200Z",
+            "detail": {"rawRequest": "save power", "normalizedText": "Create baseline ..."},
+        }
+    )
+
+    spans = _by_name(runtime)
+    tool = spans["Tool call · get_cell"]
+    assert tool.attributes["langfuse.observation.type"] == "tool"
+    assert json.loads(tool.attributes["langfuse.observation.input"]) == {"cell": "c1"}
+    intent = spans["Intent processed"]
+    assert intent.attributes["langfuse.observation.input"] == "save power"
+    assert intent.attributes["langfuse.observation.output"] == "Create baseline ..."
+
+
+def test_finish_flushes_and_exposes_the_trace_url(offline_config: SampleConfig) -> None:
+    exporter, runtime = _exporter(offline_config)
+
+    exporter(_llm_span())
+    exporter.finish(result=None, error=None)
+    snapshot = exporter.snapshot(resolve_url=True)
+
+    assert runtime.client.flushed == 1
+    assert snapshot["status"] == "exported"
+    assert snapshot["url"] == f"https://langfuse.example/project/p1/traces/{snapshot['traceId']}"
+    assert snapshot["exportedSpans"] == 1
+    exporter.finish(result=None, error=None)
+    assert runtime.client.flushed == 1  # idempotent
+
+
+class _FlakyTracer:
+    """Delegate the root span, then fail on the next observation."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self._calls = 0
+
+    def start_span(self, *args: Any, **kwargs: Any) -> Any:
+        self._calls += 1
+        if self._calls > 1:
+            raise RuntimeError("tracer unavailable")
+        return self._inner.start_span(*args, **kwargs)
+
+
+def test_export_failure_never_raises(offline_config: SampleConfig) -> None:
+    exporter, runtime = _exporter(offline_config)
+    runtime.tracer = _FlakyTracer(runtime.tracer)
+
+    exporter(_llm_span())
+
+    snapshot = exporter.snapshot()
+    assert snapshot["warning"] is not None
+    assert snapshot["exportedSpans"] == 0
+
+
+def test_flush_failure_is_reported(offline_config: SampleConfig) -> None:
+    exporter, runtime = _exporter(offline_config)
+    runtime.client.flush_error = RuntimeError("network down")
+
+    exporter.finish(result=None, error=None)
+
+    snapshot = exporter.snapshot()
+    assert snapshot["status"] == "failed"
+    assert "network down" in str(snapshot["warning"])
+
+
+@pytest.mark.parametrize(
+    ("tokens", "expected"),
+    [
+        ({"prompt": 1, "completion": 2}, {"input": 1, "output": 2}),
+        ({"prompt": None, "completion": None, "total": 3}, {"total": 3}),
+        ({"estimated": True, "label": "n/a (scripted)"}, None),
+    ],
+)
+def test_usage_details_tolerates_scripted_tokens(
+    offline_config: SampleConfig, tokens: dict[str, object], expected: dict[str, int] | None
+) -> None:
+    exporter, runtime = _exporter(offline_config)
+
+    exporter(_llm_span(tokens=tokens))
+
+    generation = _by_name(runtime)["LLM call · negotiation_propose_extraction"]
+    attribute = generation.attributes.get("langfuse.observation.usage_details")
+    assert (json.loads(attribute) if attribute is not None else None) == expected
+
+
+def test_missing_langfuse_package_is_a_noop(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = tmp_path / ".env"
+    env.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_MODEL_MODE=live",
+                "LANGFUSE_PUBLIC_KEY=pk",
+                "LANGFUSE_SECRET_KEY=sk",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("shared.langfuse_tracing.LANGFUSE_AVAILABLE", False)
+
+    assert create_langfuse_exporter(load_config(env_path=env), _metadata()) is None

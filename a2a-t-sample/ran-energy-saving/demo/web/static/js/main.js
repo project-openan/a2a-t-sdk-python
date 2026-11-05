@@ -374,6 +374,7 @@ function renderRail() {
   setLink("export-md", enabled, urls.transcriptMarkdown);
   setLink("menu-trace", enabled, urls.trace);
   setLink("menu-transcript", enabled, urls.transcriptJson);
+  renderLangfuseLink();
 
   renderRoundFilter();
 
@@ -403,6 +404,21 @@ function setLink(id, enabled, href) {
     link.href = "#";
     link.setAttribute("aria-disabled", "true");
     link.removeAttribute("download");
+  }
+}
+
+/** Show the Langfuse trace link when the run exported one. */
+function renderLangfuseLink() {
+  const link = $("export-langfuse");
+  if (!link) return;
+  const langfuse = store.finishedFrame?.langfuse || store.snapshot?.langfuse || null;
+  const url = langfuse && langfuse.enabled && typeof langfuse.url === "string" ? langfuse.url : "";
+  if (url) {
+    link.href = url;
+    link.hidden = false;
+  } else {
+    link.href = "#";
+    link.hidden = true;
   }
 }
 

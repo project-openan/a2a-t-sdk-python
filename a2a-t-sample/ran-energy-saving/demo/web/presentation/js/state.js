@@ -78,6 +78,8 @@ export function createState() {
     lastStatusText: "",
     nmsStage: "strategy",
     pure: null,
+    //: Langfuse export state carried by ``run_started`` / ``finished``.
+    langfuse: null,
     hop: null,
     pureRound: 0,
     pureMetrics: null,
@@ -142,6 +144,7 @@ export function applyFrame(state, frame) {
       }
       if (state.userRequest && !state.intentText) state.intentText = state.userRequest;
       if (Array.isArray(frame.expectedSequence)) state.expectedSequence = frame.expectedSequence;
+      if (isObject(frame.langfuse)) state.langfuse = frame.langfuse;
       if (state.status === STATUS.IDLE) state.status = STATUS.RUNNING;
       return state;
     }
@@ -208,6 +211,7 @@ export function applyFrame(state, frame) {
       }
       state.finalState = typeof frame.finalState === "string" ? frame.finalState : null;
       state.report = isObject(frame.report) ? frame.report : null;
+      if (isObject(frame.langfuse)) state.langfuse = frame.langfuse;
       state.error =
         typeof frame.error === "string" && frame.error ? frame.error : state.error;
       if (state.decision !== null) state.decision.resolved = true;

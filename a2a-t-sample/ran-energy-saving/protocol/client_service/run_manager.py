@@ -20,6 +20,7 @@ from shared.config import (
     SUPPORTED_INTENT_MODES,
     SampleConfig,
 )
+from shared.langfuse_tracing import LangfuseRunMetadata, create_langfuse_exporter
 from shared.logging_setup import log_context
 from shared.metrics import (
     CLIENT_RUN_DURATION_SECONDS,
@@ -73,6 +74,17 @@ CANCEL_UNWIND_TIMEOUT_SECONDS: Final[float] = 5.0
 #: Cancellation reasons recorded in the transcript.
 CANCELED_BY_OPERATOR: Final[str] = "The run was cancelled by the operator."
 CANCELED_BY_SHUTDOWN: Final[str] = "The run was cancelled because the process is shutting down."
+
+
+def _langfuse_disabled() -> dict[str, object]:
+    """Return the Langfuse snapshot of a run that does not export to Langfuse."""
+    return {
+        "enabled": False,
+        "traceId": None,
+        "url": None,
+        "status": "disabled",
+        "warning": None,
+    }
 
 
 class RunManager:
@@ -267,6 +279,28 @@ class RunManager:
             mode=mode,
             transport=transport,
             runs_dir=self._runs_dir or DEFAULT_RUNS_DIR,
+        )
+        run.langfuse_exporter = create_langfuse_exporter(
+            self._config,
+            LangfuseRunMetadata(
+                run_id=run.run_id,
+                scenario=run.scenario,
+                conversation_id=run.conversation_id,
+                user_id=run.user_id,
+                language=self._config.language,
+                mode=run.mode,
+                protocol=run.protocol,
+                transport=run.transport,
+                discovery=run.discovery,
+                intent_mode=run.intent_mode,
+                model_mode=self._config.model_mode,
+                model_label=self._config.model_label,
+            ),
+        )
+        run.langfuse = (
+            run.langfuse_exporter.snapshot()
+            if run.langfuse_exporter is not None
+            else _langfuse_disabled()
         )
         run.emit_run_started(
             description=spec.description,
@@ -663,6 +697,13 @@ class RunManager:
             await run.drain_persistence()
             await self._finalize_persistence(run)
             self._active_by_conversation.pop(run.conversation_id or "", None)
+            exporter = run.langfuse_exporter
+            if exporter is not None:
+                with suppress(asyncio.CancelledError, Exception):
+                    # ``finish`` flushes over HTTP and resolves the trace URL; keep both off the
+                    # event loop so a slow Langfuse endpoint cannot delay the terminal frame.
+                    await asyncio.to_thread(exporter.finish, result=run.result, error=run.error)
+                    run.langfuse = await asyncio.to_thread(exporter.snapshot, resolve_url=True)
             run.emit_finished()
 
     async def _prepare_persistence(self, run: RunState) -> None:
