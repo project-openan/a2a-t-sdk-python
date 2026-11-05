@@ -56,6 +56,7 @@ from pathlib import Path
 from typing import TextIO
 
 from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
+from shared.config import merge_sample_process_env
 from shared.run_constants import DEMO_PROTOCOLS, PROTOCOL_A2A_T
 
 #: The demo lives one level below the sample directory that owns ``runs/`` and the SDK path.
@@ -82,14 +83,6 @@ ENV_CANDIDATES = (CASE_DIR / ".env", SAMPLE_DIR / ".env", SAMPLE_DIR / "env.exam
 #: Webhook TLS files whose relative source paths are anchored to the sample root in the run ``.env``
 #: (the child processes run from ``RUN_DIR``, where relative paths do not resolve).
 _TLS_PATH_KEYS = ("A2AT_SAMPLE_WEBHOOK_TLS_CERT", "A2AT_SAMPLE_WEBHOOK_TLS_KEY")
-
-#: Webhook keys a shell environment may override in the per-run .env, so a second instance can
-#: register its own callback address instead of the one the shared .env holds.
-_WEBHOOK_OVERRIDE_KEYS = (
-    "A2AT_SAMPLE_WEBHOOK_PORT",
-    "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL",
-    "A2AT_SAMPLE_WEBHOOK_HOST",
-)
 
 REGISTRY_MODULE = "demo.registry.registry_main"
 SERVER_MODULE = "protocol.server_app"
@@ -163,17 +156,14 @@ def _read_env(path: Path) -> dict[str, str]:
     return values
 
 
-def _env_int(
-    values: dict[str, str], key: str, default: int, *, env_first: bool = False
-) -> int:
-    """Resolve one integer value with a readable failure.
+def _env_str(values: dict[str, str], key: str, default: str = "") -> str:
+    """Resolve one string value: shell environment, then the source .env, then a default."""
+    return os.environ.get(key) or values.get(key) or default
 
-    ``env_first`` lets an exported value beat the .env one, for keys a second instance overrides.
-    """
-    if env_first:
-        raw = os.environ.get(key) or values.get(key) or str(default)
-    else:
-        raw = values.get(key) or os.environ.get(key) or str(default)
+
+def _env_int(values: dict[str, str], key: str, default: int) -> int:
+    """Resolve one integer value with a readable failure (shell environment first)."""
+    raw = _env_str(values, key, str(default))
     try:
         return int(raw)
     except ValueError as exc:
@@ -187,7 +177,7 @@ def _ui_port_default(values: dict[str, str]) -> int:
 
 def _ui_host_default(values: dict[str, str]) -> str:
     """Return the ``--ui-host`` default: ``A2AT_SAMPLE_UI_HOST``, else ``127.0.0.1``."""
-    return values.get("A2AT_SAMPLE_UI_HOST") or os.environ.get("A2AT_SAMPLE_UI_HOST") or DEFAULT_UI_HOST
+    return _env_str(values, "A2AT_SAMPLE_UI_HOST", DEFAULT_UI_HOST)
 
 
 def _gateway_port_default(values: dict[str, str]) -> int:
@@ -332,6 +322,10 @@ def _write_run_env(
 ) -> Path:
     """Write the per-run ``.env`` and return its path."""
     values = _read_env(source) if source is not None else {}
+    # Precedence: CLI arguments > shell environment > source .env > defaults. The launcher's CLI
+    # values are written below, so the shell overlay happens first; every sample-prefixed export
+    # (model endpoints included) survives into the per-run file read by the children and the SDK.
+    values = merge_sample_process_env(values)
     direct_port = oss_port if protocol == "pure" else server_port
     # The pure engineer client must discover the OSS Agent, not the RAN Agent. The OSS card is
     # not registered under the RAN card's name, so direct discovery of its URL is the only path.
@@ -350,21 +344,6 @@ def _write_run_env(
                 or "127.0.0.1"
             ),
             "A2AT_SAMPLE_WEBHOOK_PORT": str(webhook_port),
-            # Carried over from the source .env: they are not launcher options and dropping them
-            # here is what made the real-NMS callback loopback+http.
-            **{
-                key: values[key]
-                for key in (
-                    "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL",
-                    "A2AT_SAMPLE_WEBHOOK_TLS_CERT",
-                    "A2AT_SAMPLE_WEBHOOK_TLS_KEY",
-                    "A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS",
-                    "LANGFUSE_PUBLIC_KEY",
-                    "LANGFUSE_SECRET_KEY",
-                    "LANGFUSE_BASE_URL",
-                )
-                if values.get(key)
-            },
             "A2AT_SAMPLE_HOST": server_host,
             "A2AT_SAMPLE_PORT": str(server_port),
             "A2AT_SAMPLE_UI_PORT": str(ui_port),
@@ -390,12 +369,6 @@ def _write_run_env(
         values["A2AT_SAMPLE_INTENT_MODE"] = intent_mode
     if extra:
         values.update(extra)
-    # The webhook keys are carried over from the source .env above, but a second instance on the
-    # same machine needs a different callback (port and public URL). The launcher reads .env first,
-    # so an exported value would otherwise be silently overwritten by the shared one.
-    for key in _WEBHOOK_OVERRIDE_KEYS:
-        if os.environ.get(key):
-            values[key] = os.environ[key]
     for key in _TLS_PATH_KEYS:
         path = values.get(key)
         if path and not Path(path).is_absolute():
@@ -989,6 +962,7 @@ def _build_parser(
     default_ui_port: int = DEFAULT_UI_PORT,
     default_ui_host: str = DEFAULT_UI_HOST,
     default_gateway_port: int = 8001,
+    values: dict[str, str] | None = None,
 ) -> argparse.ArgumentParser:
     """Build the CLI parser of the new launcher.
 
@@ -999,7 +973,10 @@ def _build_parser(
             caller (``127.0.0.1`` when the key is absent).
         default_gateway_port: default of ``--gateway-port``, resolved from
             ``A2AT_SAMPLE_GATEWAY_PORT`` by the caller (``8001`` when the key is absent).
+        values: source ``.env`` values; a shell export wins over them for the defaults that have
+            an environment key (precedence: CLI argument > shell > ``.env``).
     """
+    env = values or {}
     from protocol.client_runtime import SUPPORTED_MODES
     from shared.config import (
         SUPPORTED_DISCOVERY_MODES,
@@ -1046,7 +1023,7 @@ def _build_parser(
     )
     parser.add_argument(
         "--protocol",
-        default=PROTOCOL_A2A_T,
+        default=_env_str(env, "A2AT_SAMPLE_PROTOCOL_MODE", PROTOCOL_A2A_T),
         choices=list(DEMO_PROTOCOLS),
         help=(
             "interaction protocol: a2a-t (Task-T + Negotiation-T, default) or pure (standard "
@@ -1072,7 +1049,7 @@ def _build_parser(
     )
     parser.add_argument(
         "--discovery",
-        default="registry",
+        default=_env_str(env, "A2AT_SAMPLE_DISCOVERY", "registry"),
         choices=list(SUPPORTED_DISCOVERY_MODES),
         help="server discovery: registry center (default), direct AgentCard, or nms",
     )
@@ -1100,7 +1077,7 @@ def _build_parser(
     )
     parser.add_argument(
         "--language",
-        default="en-US",
+        default=_env_str(env, "A2AT_LANGUAGE", "en-US"),
         choices=list(SUPPORTED_LANGUAGES),
         help="process-level language of registry, server and client (default: en-US)",
     )
@@ -1114,7 +1091,7 @@ def _build_parser(
     )
     parser.add_argument(
         "--model-mode",
-        default="offline",
+        default=_env_str(env, "A2AT_SAMPLE_MODEL_MODE", "offline"),
         choices=list(SUPPORTED_MODEL_MODES),
         help="offline (scripted + fake ADK model) or live (OpenAI-compatible endpoint)",
     )
@@ -1136,7 +1113,7 @@ def _build_parser(
     )
     parser.add_argument(
         "--brand",
-        default=os.environ.get("A2AT_SAMPLE_UI_BRAND", BRAND_ORANGE),
+        default=_env_str(env, "A2AT_SAMPLE_UI_BRAND", BRAND_ORANGE),
         choices=list(SUPPORTED_BRANDS),
         help=("presentation color theme: orange (reference demo) or huawei (default: A2AT_SAMPLE_UI_BRAND or orange)"),
     )
@@ -1156,7 +1133,7 @@ def _build_parser(
     )
     parser.add_argument(
         "--server-url",
-        default=os.environ.get("A2AT_SAMPLE_SERVER_URL", ""),
+        default=_env_str(env, "A2AT_SAMPLE_SERVER_URL", ""),
         help=(
             "A2A server base URL the Web UI forwards the MIE approval to; defaults to the "
             "server this launcher starts (A2AT_SAMPLE_SERVER_URL)"
@@ -1220,6 +1197,7 @@ def main() -> int:
         default_ui_port=_ui_port_default(source_values),
         default_ui_host=_ui_host_default(source_values),
         default_gateway_port=_gateway_port_default(source_values),
+        values=source_values,
     )
     args = parser.parse_args()
     if args.transport is None:
@@ -1295,12 +1273,11 @@ def main() -> int:
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     state = _load_state()
     existing = _state_pids(state)
-    registry_host = source_values.get("REGISTRY_CENTER_HOST") or "127.0.0.1"
+    registry_host = _env_str(source_values, "REGISTRY_CENTER_HOST", "127.0.0.1")
     registry_port = _env_int(source_values, "REGISTRY_CENTER_PORT", DEFAULT_REGISTRY_PORT)
-    server_host = source_values.get("A2AT_SAMPLE_HOST") or "127.0.0.1"
+    server_host = _env_str(source_values, "A2AT_SAMPLE_HOST", "127.0.0.1")
     server_port = _env_int(source_values, "A2AT_SAMPLE_PORT", DEFAULT_SERVER_PORT)
-    # The shell wins here so a second instance can pick its own callback port.
-    webhook_port = _env_int(source_values, "A2AT_SAMPLE_WEBHOOK_PORT", 9000, env_first=True)
+    webhook_port = _env_int(source_values, "A2AT_SAMPLE_WEBHOOK_PORT", 9000)
     reserved_ports = {args.ui_port} if args.nms else {registry_port, server_port}
     if args.ui:
         reserved_ports.add(args.ui_port)

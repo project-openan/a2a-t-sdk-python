@@ -35,13 +35,13 @@ def resolve_registry_center_url(*, env_path: Path | None = None) -> str:
     resolved_env_path = env_path or Path.cwd() / ".env"
     env_values = dotenv_values(resolved_env_path) if resolved_env_path.exists() else {}
     host = str(
-        env_values.get("REGISTRY_CENTER_HOST")
-        or os.environ.get("REGISTRY_CENTER_HOST")
+        os.environ.get("REGISTRY_CENTER_HOST")
+        or env_values.get("REGISTRY_CENTER_HOST")
         or "127.0.0.1"
     )
     port = int(
-        env_values.get("REGISTRY_CENTER_PORT")
-        or os.environ.get("REGISTRY_CENTER_PORT")
+        os.environ.get("REGISTRY_CENTER_PORT")
+        or env_values.get("REGISTRY_CENTER_PORT")
         or "5001"
     )
     return f"http://{host}:{port}"

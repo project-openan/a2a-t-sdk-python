@@ -7,6 +7,9 @@ from pathlib import Path
 import pytest
 from demo.adk_fake_model import FakeLlm, build_fake_model
 from shared.config import (
+    ADK_MODEL_API_BASE_ENV_KEY,
+    ADK_MODEL_API_KEY_ENV_KEY,
+    ADK_MODEL_NAME_ENV_KEY,
     ADK_SESSION_RETENTION_DAYS_ENV_KEY,
     CLIENT_DB_ENV_KEY,
     CLIENT_MEMORY_TURNS_ENV_KEY,
@@ -64,6 +67,9 @@ from shared.config import (
 from shared.model_factory import build_adk_model
 
 _ENV_KEYS = (
+    ADK_MODEL_NAME_ENV_KEY,
+    ADK_MODEL_API_BASE_ENV_KEY,
+    ADK_MODEL_API_KEY_ENV_KEY,
     HTTP_TIMEOUT_ENV_KEY,
     LLM_TIMEOUT_ENV_KEY,
     LLM_MAX_ATTEMPTS_ENV_KEY,
@@ -764,3 +770,28 @@ def test_the_local_demo_keeps_the_neutral_region_and_no_nms_sites(tmp_path: Path
 
     assert config.nms_region == ""
     assert config.nms_sites == ()
+
+
+def test_the_process_environment_wins_over_the_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A launcher script exporting a model must override the source .env, not be shadowed by it."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "A2AT_LANGUAGE=zh-CN\n"
+        "ADK_MODEL_NAME=openai/deepseek-from-file\n"
+        "ADK_MODEL_API_BASE=http://127.0.0.1:31943/v1\n"
+        "ADK_MODEL_API_KEY=file-key\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("A2AT_LANGUAGE", "en-US")
+    monkeypatch.setenv("ADK_MODEL_NAME", "openai/qwen3-32b")
+    monkeypatch.setenv("ADK_MODEL_API_BASE", "http://71.77.65.40:8008/v1")
+    monkeypatch.setenv("ADK_MODEL_API_KEY", "lab-key")
+
+    config = load_config(env_path=env_file)
+
+    assert config.language == "en-US"
+    assert config.adk_model_name == "openai/qwen3-32b"
+    assert config.adk_model_api_base == "http://71.77.65.40:8008/v1"
+    assert config.adk_model_api_key == "lab-key"

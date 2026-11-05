@@ -549,3 +549,44 @@ def test_write_run_env_lets_the_shell_override_the_webhook_callback(
     assert dotenv_values(env_path)["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] == (
         "https://example.test:9001/webhook"
     )
+
+
+def test_write_run_env_lets_the_shell_override_the_model_keys(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A launcher script exporting the lab model must not be shadowed by the source .env."""
+    monkeypatch.setattr(run_demo, "RUN_DIR", tmp_path)
+    monkeypatch.setenv("ADK_MODEL_NAME", "openai/qwen3-32b")
+    monkeypatch.setenv("ADK_MODEL_API_BASE", "http://71.77.65.40:8008/v1")
+    monkeypatch.setenv("ADK_MODEL_API_KEY", "lab-key")
+    monkeypatch.setenv("A2AT_LLM_MODEL", "qwen3-32b")
+    monkeypatch.setenv("A2AT_LLM_BASE_URL", "http://71.77.65.40:8008/v1")
+    source = tmp_path / "source.env"
+    source.write_text(
+        "ADK_MODEL_NAME=openai/deepseek-from-file\n"
+        "ADK_MODEL_API_BASE=http://127.0.0.1:31943/v1\n"
+        "A2AT_LLM_MODEL=deepseek-from-file\n"
+        "A2AT_LLM_BASE_URL=http://127.0.0.1:31943/v1\n",
+        encoding="utf-8",
+    )
+
+    env_path = run_demo._write_run_env(
+        source=source,
+        language="en-US",
+        model_mode="live",
+        discovery="nms",
+        transport="webhook",
+        webhook_port=9000,
+        server_host="127.0.0.1",
+        server_port=8000,
+        registry_host="127.0.0.1",
+        registry_port=5001,
+        ui_port=8080,
+    )
+
+    values = dotenv_values(env_path)
+    assert values["ADK_MODEL_NAME"] == "openai/qwen3-32b"
+    assert values["ADK_MODEL_API_BASE"] == "http://71.77.65.40:8008/v1"
+    assert values["ADK_MODEL_API_KEY"] == "lab-key"
+    assert values["A2AT_LLM_MODEL"] == "qwen3-32b"
+    assert values["A2AT_LLM_BASE_URL"] == "http://71.77.65.40:8008/v1"

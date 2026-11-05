@@ -1,14 +1,17 @@
 """Unified configuration of the RAN energy-saving ADK sample.
 
-All values come from the sample's ``.env`` (falling back to process environment variables and then
-to defaults). Model construction lives in :mod:`shared.model_factory`, so this module stays a pure,
-injectable value object.
+Values resolve as process environment > sample ``.env`` > defaults, the standard dotenv order. A
+shell export therefore overrides the file, and the launcher writes the merged values into the
+per-run ``.env`` so file readers (the SDK facade, helper scripts) see the same configuration. Model
+construction lives in :mod:`shared.model_factory`, so this module stays a pure, injectable value
+object.
 """
 
 from __future__ import annotations
 
 import math
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -219,9 +222,29 @@ def _pure_followup(values: dict[str, str | None]) -> str:
     return value
 
 
+#: Prefixes of the keys the sample owns. A shell export with one of these prefixes overrides the
+#: source ``.env``; the launcher also merges them into the per-run ``.env`` so every file reader
+#: (the SDK facade, helper scripts) sees the same effective value.
+SAMPLE_ENV_PREFIXES = ("A2AT_", "ADK_", "LANGFUSE_", "REGISTRY_", "OTEL_")
+
+
+def merge_sample_process_env(values: Mapping[str, str]) -> dict[str, str]:
+    """Overlay every sample-prefixed process variable on a ``.env`` mapping.
+
+    The process environment wins over the file, matching the standard dotenv semantics and the
+    sample's precedence rule: CLI arguments > shell environment > per-run ``.env`` > source
+    ``.env`` > defaults. Keys outside the sample prefixes (``PATH`` and friends) are never copied.
+    """
+    merged = dict(values)
+    for key, value in os.environ.items():
+        if value.strip() and key.startswith(SAMPLE_ENV_PREFIXES):
+            merged[key] = value
+    return merged
+
+
 def _env_value(values: dict[str, str | None], key: str, default: str) -> str:
-    """Resolve one key from the ``.env`` values, then the process environment, then a default."""
-    for candidate in (values.get(key), os.environ.get(key)):
+    """Resolve one key: process environment, then the ``.env`` values, then a default."""
+    for candidate in (os.environ.get(key), values.get(key)):
         if candidate is not None and str(candidate).strip():
             return str(candidate).strip()
     return default
@@ -292,9 +315,9 @@ def _env_bool(values: dict[str, str | None], key: str, default: bool) -> bool:
 
 def _env_optional_bool(values: dict[str, str | None], key: str) -> bool | None:
     """Resolve a tri-state key: unset means "auto", otherwise a validated boolean."""
-    raw_value = values.get(key)
+    raw_value = os.environ.get(key)
     if raw_value is None or not str(raw_value).strip():
-        raw_value = os.environ.get(key)
+        raw_value = values.get(key)
     if raw_value is None or not str(raw_value).strip():
         return None
     return _env_bool(values, key, True)
@@ -486,6 +509,10 @@ class SampleConfig:
 
 def load_config(*, env_path: Path | None = None) -> SampleConfig:
     """Load the sample configuration from ``.env`` (defaults to ``$CWD/.env``).
+
+    A process environment variable always wins over the file value, then the file value wins over
+    the built-in default. This is what makes ``export ADK_MODEL_NAME=...`` in a launcher script
+    effective even when the source ``.env`` names another model.
 
     Raises:
         ValueError: when ``A2AT_SAMPLE_MODEL_MODE``, ``A2AT_LANGUAGE``, a port, a timeout, the LLM

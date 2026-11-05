@@ -23,14 +23,16 @@ transport retries so this budget stays predictable.
 
 from __future__ import annotations
 
+import os
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
 from dotenv import dotenv_values
 
-from shared.config import MODEL_MODE_OFFLINE, SampleConfig
+from shared.config import MODEL_MODE_OFFLINE, SampleConfig, merge_sample_process_env
 from shared.traced_llm import register_traced_providers, sdk_provider_name
 
 #: Prefix of the temporary SDK ``.env`` directories.
@@ -51,14 +53,32 @@ class SdkEnvFile:
 
 
 def _env_values(env_path: Path | None) -> dict[str, str]:
-    """Read the source ``.env`` values as plain strings (empty when the file is missing)."""
+    """Read the source ``.env`` values with the shell overlay (empty when the file is missing)."""
     if env_path is None or not env_path.exists():
-        return {}
-    return {
-        str(key): str(value)
-        for key, value in dotenv_values(env_path).items()
-        if key is not None and value is not None
-    }
+        values: dict[str, str] = {}
+    else:
+        values = {
+            str(key): str(value)
+            for key, value in dotenv_values(env_path).items()
+            if key is not None and value is not None
+        }
+    return merge_sample_process_env(values)
+
+
+def _sdk_value(name_env: str, sdk_key: str, config_value: str, values: Mapping[str, str]) -> str:
+    """Resolve one SDK endpoint value with the sample precedence.
+
+    A shell ``A2AT_LLM_*`` export wins directly. Otherwise a shell ``ADK_MODEL_*`` export makes the
+    resolved ADK configuration win over a stale source ``A2AT_LLM_*`` value, so exporting only the
+    ADK model keys is enough to switch the whole client to one endpoint. Without any shell model
+    key, a source ``A2AT_LLM_*`` value still allows the SDK and ADK to use different endpoints.
+    """
+    shell_sdk = os.environ.get(sdk_key, "").strip()
+    if shell_sdk:
+        return shell_sdk
+    if os.environ.get(name_env, "").strip():
+        return config_value
+    return values.get(sdk_key) or config_value
 
 
 def _sdk_model_name(adk_model_name: str) -> str:
@@ -107,9 +127,15 @@ def prepare_sdk_env(
                 # The traced provider is a drop-in replacement of the SDK OpenAI provider; the Run
                 # Explorer must see every structured call, so the source value never wins.
                 "A2AT_LLM_PROVIDER": sdk_provider_name(offline=False),
-                "A2AT_LLM_MODEL": values.get("A2AT_LLM_MODEL") or _sdk_model_name(config.adk_model_name),
-                "A2AT_LLM_API_KEY": values.get("A2AT_LLM_API_KEY") or config.adk_model_api_key,
-                "A2AT_LLM_BASE_URL": values.get("A2AT_LLM_BASE_URL") or config.adk_model_api_base,
+                "A2AT_LLM_MODEL": _sdk_value(
+                    "ADK_MODEL_NAME", "A2AT_LLM_MODEL", _sdk_model_name(config.adk_model_name), values
+                ),
+                "A2AT_LLM_API_KEY": _sdk_value(
+                    "ADK_MODEL_API_KEY", "A2AT_LLM_API_KEY", config.adk_model_api_key, values
+                ),
+                "A2AT_LLM_BASE_URL": _sdk_value(
+                    "ADK_MODEL_API_BASE", "A2AT_LLM_BASE_URL", config.adk_model_api_base, values
+                ),
             }
         )
     values.update(

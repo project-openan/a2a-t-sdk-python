@@ -914,6 +914,12 @@ SDK. `run_demo.py` reads `A2AT_SAMPLE_UI_PORT` only as the default of `--ui-port
 `--ui-port` overrides it. Full template: [`env.example`](env.example) (also
 [`../env.example`](../env.example)).
 
+**Precedence:** CLI arguments > shell environment > per-run `.env` > source `.env` > defaults.
+Any `A2AT_*`, `ADK_*`, `LANGFUSE_*`, `REGISTRY_*` or `OTEL_*` variable exported by the shell
+overrides the source file; the launcher merges those values into the per-run `.env`, so the SDK
+facade and every child process see the same effective configuration. This is the reason a launcher
+script can switch the model with a plain `export ADK_MODEL_NAME=...`.
+
 | Key | Values | Effect |
 | --- | --- | --- |
 | `A2AT_SAMPLE_MODEL_MODE` | `offline` (default), `live` | `offline` = scripted SDK provider + deterministic client ADK fake model + scripted LangGraph planner; `live` = SDK on both sides, client ADK model and server LangGraph planner use the OpenAI-compatible endpoint. |

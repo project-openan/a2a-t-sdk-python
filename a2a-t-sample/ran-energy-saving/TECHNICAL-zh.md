@@ -742,6 +742,11 @@ P95 和审批等待。
 
 所有样例键由 [`shared/config.py`](shared/config.py)、`run_demo.py` 或 A2A-T SDK 读取。`run_demo.py` 只把 `A2AT_SAMPLE_UI_PORT` 作为 `--ui-port` 的默认值；显式传入 `--ui-port` 会覆盖它。完整模板：[`env.example`](env.example)（以及 [`../env.example`](../env.example)）。
 
+**优先级：** CLI 参数 > shell 环境变量 > per-run `.env` > 源 `.env` > 默认值。shell 中导出的
+`A2AT_*`、`ADK_*`、`LANGFUSE_*`、`REGISTRY_*`、`OTEL_*` 变量会覆盖源文件；启动器会把这些值合并进
+per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置。这就是启动脚本可以通过简单的
+`export ADK_MODEL_NAME=...` 切换模型的原因。
+
 | 键 | 取值 | 作用 |
 | --- | --- | --- |
 | `A2AT_SAMPLE_MODEL_MODE` | `offline`（默认）、`live` | `offline` = 脚本化 SDK Provider + 确定性客户端 ADK fake model + 脚本化 LangGraph planner；`live` = 两侧 SDK、客户端 ADK 与服务端 LangGraph planner 使用 OpenAI-compatible 端点。 |

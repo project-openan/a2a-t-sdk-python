@@ -39,6 +39,7 @@ from shared.config import (
     TRANSPORT_SSE,
     TRANSPORT_WEBHOOK,
     SampleConfig,
+    merge_sample_process_env,
 )
 from shared.model_factory import build_traced_adk_model
 from shared.models import NegotiationProposeView
@@ -115,12 +116,16 @@ class ClientRuntimeError(RuntimeError):
 
 
 def _env_values(env_path: Path | None) -> dict[str, str]:
-    """Read the source ``.env`` values as plain strings (empty when the file is missing)."""
+    """Read the source ``.env`` values with the shell overlay (empty when the file is missing)."""
     if env_path is None or not env_path.exists():
-        return {}
-    return {
-        str(key): str(value) for key, value in dotenv_values(env_path).items() if key is not None and value is not None
-    }
+        values: dict[str, str] = {}
+    else:
+        values = {
+            str(key): str(value)
+            for key, value in dotenv_values(env_path).items()
+            if key is not None and value is not None
+        }
+    return merge_sample_process_env(values)
 
 
 def prepare_client_sdk_env(

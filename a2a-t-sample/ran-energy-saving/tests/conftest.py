@@ -6,6 +6,7 @@ import as top-level packages without an installation step.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from demo.scenario import LANGUAGE_EN  # noqa: E402
 from shared.config import (  # noqa: E402
     DISCOVERY_REGISTRY,
     MODEL_MODE_OFFLINE,
+    SAMPLE_ENV_PREFIXES,
     TRANSPORT_SSE,
     SampleConfig,
 )
@@ -31,6 +33,19 @@ from shared.config import (  # noqa: E402
 #: ``A2ATClient`` pulls in the retired ``a2a_t.negotiation.*`` state-machine demo modules. None of
 #: them indicates a problem in the sample, so the test output stays pristine. The entries match on
 #: the warning message and category only, so an unexpected new warning is still reported.
+@pytest.fixture(autouse=True)
+def _clear_sample_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the shell's sample exports out of the file-based tests.
+
+    The sample resolves the process environment before ``.env``; a developer with
+    ``ADK_MODEL_NAME`` or ``A2AT_SAMPLE_*`` exported would otherwise change what every test sees.
+    A test that needs an export sets it through ``monkeypatch`` after this fixture has run.
+    """
+    for key in list(os.environ):
+        if key.startswith(SAMPLE_ENV_PREFIXES):
+            monkeypatch.delenv(key, raising=False)
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Register the targeted warning filters of the sample test suite."""
     config.addinivalue_line(

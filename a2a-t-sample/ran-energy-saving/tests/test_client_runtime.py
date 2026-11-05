@@ -479,3 +479,34 @@ def test_nms_policy_replaces_the_demo_sites(offline_config: SampleConfig) -> Non
     untouched = _effective_policy(region_only, config, "anything", "en-US").initial_data("en-US")
     assert untouched is not None
     assert "siteList" not in untouched[0]
+
+
+def test_sdk_env_follows_a_shell_adk_model_over_the_source_sdk_keys(
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Exporting only ADK_MODEL_* must switch the SDK facade to the same lab endpoint."""
+    source = tmp_path / ".env"
+    source.write_text(
+        "A2AT_LLM_MODEL=deepseek-from-file\n"
+        "A2AT_LLM_BASE_URL=http://127.0.0.1:31943/v1\n"
+        "A2AT_LLM_API_KEY=file-key\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ADK_MODEL_NAME", "openai/qwen3-32b")
+    monkeypatch.setenv("ADK_MODEL_API_BASE", "http://71.77.65.40:8008/v1")
+    monkeypatch.setenv("ADK_MODEL_API_KEY", "lab-key")
+    live_config = replace(
+        offline_config,
+        model_mode=MODEL_MODE_LIVE,
+        adk_model_name="openai/qwen3-32b",
+        adk_model_api_base="http://71.77.65.40:8008/v1",
+        adk_model_api_key="lab-key",
+    )
+
+    values = dotenv_values(prepare_client_sdk_env(live_config, source).path)
+
+    assert values["A2AT_LLM_MODEL"] == "qwen3-32b"
+    assert values["A2AT_LLM_BASE_URL"] == "http://71.77.65.40:8008/v1"
+    assert values["A2AT_LLM_API_KEY"] == "lab-key"
