@@ -1569,7 +1569,7 @@ function pureMetricsFromLog() {
 /** Compact metrics block of one pure A2A run. */
 function pureMetricsBlock(metrics, copy) {
   const block = el("section", "pure-metrics");
-  block.append(el("h4", "pure-metrics-title", copy.pure?.metrics || "This pure A2A run"));
+  block.append(el("h4", "pure-metrics-title", copy.pure?.metrics || "This A2A run"));
   const rows = [
     [copy.pure?.hops || "hops", metrics.hops],
     [copy.pure?.rounds || "rounds", metrics.rounds],
