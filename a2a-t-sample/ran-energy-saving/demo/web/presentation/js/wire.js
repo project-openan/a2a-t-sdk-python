@@ -413,9 +413,9 @@ function jsonNodes(value, depth) {
     return nodes;
   }
   if (typeof value === "string") {
-    const escaped = JSON.stringify(value);
-    const display = escaped.length > 900 ? `${escaped.slice(0, 900)}…"` : escaped;
-    return [el("span", "wire-json-string", display)];
+    // The wire view is the raw payload: render every string in full (the container scrolls).
+    // Truncating here hid the end of real Task-T prompts and looked like data loss.
+    return [el("span", "wire-json-string", JSON.stringify(value))];
   }
   if (typeof value === "number") return [el("span", "wire-json-number", String(value))];
   if (typeof value === "boolean") return [el("span", "wire-json-bool", String(value))];
