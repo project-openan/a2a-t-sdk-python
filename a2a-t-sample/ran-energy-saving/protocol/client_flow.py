@@ -91,7 +91,6 @@ from protocol.messages import (
     SAMPLE_PHASE_METADATA_KEY,
     SAMPLE_PHASE_MODIFY,
     SAMPLE_PROPOSAL_METADATA_KEY,
-    SAMPLE_RUN_ID_METADATA_KEY,
     TASK_TEMPLATE_URI,
     is_negotiation_message,
     metadata_to_dict,
@@ -606,9 +605,6 @@ async def run_client_flow(
         sample_phase = metadata.get(SAMPLE_PHASE_METADATA_KEY)
         if isinstance(sample_phase, str) and sample_phase:
             detail["samplePhase"] = sample_phase
-        sample_run_id = metadata.get(SAMPLE_RUN_ID_METADATA_KEY)
-        if isinstance(sample_run_id, str) and sample_run_id:
-            detail["sampleRunId"] = sample_run_id
         emit_trace(
             "message_sent",
             phase=phase,
@@ -657,10 +653,6 @@ async def run_client_flow(
         prompt_content.extension_uri or TASK_T_EXTENSION_URI: prompt_text,
         TEMPLATE_URI_METADATA_KEY: prompt_content.template_uri or task_template_uri,
     }
-    run_id = current_trace().run_id
-    if run_id:
-        # Sample-only correlation of the server trace with this client run (design §4).
-        initial_metadata[SAMPLE_RUN_ID_METADATA_KEY] = run_id
     if follow_up is not None:
         # A two-phase run leaves the baseline Task WORKING so the Modify follow-up can continue
         # it. The marker is sample-only and does not change the Task-T extension payload.
@@ -718,8 +710,6 @@ async def run_client_flow(
                 TEMPLATE_URI_METADATA_KEY: follow_content.template_uri or task_template_uri,
                 SAMPLE_PHASE_METADATA_KEY: SAMPLE_PHASE_MODIFY,
             }
-            if run_id:
-                follow_metadata[SAMPLE_RUN_ID_METADATA_KEY] = run_id
             follow_request = _build_message_request(
                 metadata=follow_metadata,
                 label=TASK_MODIFY_LABEL,

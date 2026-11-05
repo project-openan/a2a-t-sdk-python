@@ -71,7 +71,6 @@ class MIEApprovalClient:
         window: str,
         target_rate: str,
         evaluation: Mapping[str, object] | None,
-        run_id: str | None,
         ran_task_id: str,
     ) -> ApprovalDecision:
         """Send the plan to MIE and return its decision."""
@@ -86,7 +85,7 @@ class MIEApprovalClient:
             ),
             "ranTaskId": ran_task_id,
         }
-        request = _approval_request(plan, run_id=run_id)
+        request = _approval_request(plan)
         try:
             discovered = await discover_agent(
                 discovery=DISCOVERY_DIRECT,
@@ -168,9 +167,7 @@ async def _send_events(
     return events
 
 
-def _approval_request(
-    plan: Mapping[str, object], *, run_id: str | None
-) -> SendMessageRequest:
+def _approval_request(plan: Mapping[str, object]) -> SendMessageRequest:
     """Build the plain A2A approval request of the RAN->MIE hop."""
     request = SendMessageRequest()
     request.message.message_id = str(uuid.uuid4())
@@ -180,8 +177,6 @@ def _approval_request(
         f"{plan.get('cellId')}, {plan.get('window')}, {plan.get('rate')}."
     )
     request.message.metadata[PLAN_METADATA_KEY] = dict(plan)
-    if run_id:
-        request.message.metadata["sampleRunId"] = run_id
     return request
 
 

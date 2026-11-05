@@ -80,22 +80,20 @@ async def test_the_flow_continues_the_same_task_after_input_required() -> None:
     assert all(span["detail"]["protocol"] == "pure" for span in spans)
 
 
-async def test_the_run_id_travels_as_sample_metadata_on_both_messages() -> None:
+async def test_the_messages_carry_no_sample_or_extension_metadata() -> None:
+    """The run correlation travels on headers, so a standard A2A message stays clean."""
     transport = _FakeTransport([[_input_required()], [_completed()]])
 
     await run_pure_client_flow(
         transport=transport,  # type: ignore[arg-type]
         user_request="Create a RAN energy saving task.",
         answer=lambda event: "Use {00:00~06:00,10Mbps}.",
-        run_id="run-42",
     )
 
     first_request, _ = transport.requests[0]
     follow_up, _ = transport.requests[1]
-    assert first_request.message.metadata["sampleRunId"] == "run-42"
-    assert follow_up.message.metadata["sampleRunId"] == "run-42"
-    # The sample key is the only metadata; no A2A-T extension metadata is attached.
-    assert set(first_request.message.metadata) == {"sampleRunId"}
+    assert set(first_request.message.metadata) == set()
+    assert set(follow_up.message.metadata) == set()
 
 
 async def test_the_default_answer_uses_the_server_proposal() -> None:

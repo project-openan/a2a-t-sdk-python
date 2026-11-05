@@ -56,7 +56,11 @@ from shared.logging_setup import configure_logging
 from shared.models import NegotiationProposeView
 from shared.run_constants import LANGUAGE_ZH, PROTOCOL_PURE
 from shared.trace import FileTraceEmitter, HttpTraceEmitter, set_global_sink, trace_scope
-from shared.trace_propagation import TracePropagationMiddleware, inject_outgoing
+from shared.trace_propagation import (
+    TracePropagationMiddleware,
+    current_run_id,
+    inject_outgoing,
+)
 from shared.webhook_receiver import WebhookReceiver, start_receiver_with_fallback
 from starlette.applications import Starlette
 
@@ -358,7 +362,6 @@ class OSSPureExecutor(AgentExecutor):
                 call_timeout_seconds=self._timeout_seconds,
                 event_sink=event_sink,
                 trace_sink=self._trace_sink,
-                run_id=run_id,
                 followup=self._followup,
             )
         discovered = await discover_agent(
@@ -395,7 +398,6 @@ class OSSPureExecutor(AgentExecutor):
                     call_timeout_seconds=self._timeout_seconds,
                     event_sink=event_sink,
                     trace_sink=self._trace_sink,
-                    run_id=run_id,
                     followup=self._followup,
                 )
             finally:
@@ -733,10 +735,16 @@ def build_live_pure_answer(
 
 
 def _run_id_of(message: object) -> str | None:
-    """Return the sample-local Run Explorer id carried by one A2A message."""
+    """Return the Run Explorer id of one A2A message.
+
+    The current contract carries it on ``X-A2AT-Run-Id`` (exposed through the propagation
+    context); the message metadata remains the fallback for an external caller.
+    """
     metadata = getattr(message, "metadata", None)
     value = metadata_to_dict(metadata).get(SAMPLE_RUN_ID_METADATA_KEY)
-    return value if isinstance(value, str) and value else None
+    if isinstance(value, str) and value:
+        return value
+    return current_run_id() or None
 
 
 def _message_text(message: object) -> str:

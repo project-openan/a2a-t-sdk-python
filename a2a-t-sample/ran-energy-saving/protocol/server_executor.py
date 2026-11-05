@@ -46,7 +46,7 @@ from shared.config import SampleConfig
 from shared.logging_setup import log_context
 from shared.metrics import SERVER_TASKS_TOTAL
 from shared.trace import PHASE_EXECUTION, Span, current_trace, emit_span, trace_scope
-from shared.trace_propagation import annotate_run_id
+from shared.trace_propagation import annotate_run_id, current_run_id
 
 from protocol.approval_gate import (
     DEFAULT_APPROVAL_TIMEOUT_SECONDS,
@@ -238,14 +238,14 @@ def _metadata(context: RequestContext) -> dict[str, object]:
 
 def _run_id(context: RequestContext) -> str:
     """Return the Run Explorer run id carried by the current trace or message."""
-    trace_run_id = current_trace().run_id
+    trace_run_id = current_trace().run_id or current_run_id()
     if trace_run_id:
         annotate_run_id(trace_run_id)
         return trace_run_id
     value = _metadata(context).get(SAMPLE_RUN_ID_METADATA_KEY)
     run_id = value if isinstance(value, str) else ""
-    # The server trace must be searchable by run even when the client did not send the sample
-    # correlation headers (or the server could not join the client trace).
+    # The server trace must be searchable by run even for an external client that sends only the
+    # legacy message metadata (no X-A2AT-Run-Id header).
     annotate_run_id(run_id)
     return run_id
 
@@ -971,7 +971,6 @@ class LangGraphTaskExecutor(AgentExecutor):
                 window=window,
                 target_rate=target_rate,
                 evaluation=evaluation,
-                run_id=key,
                 ran_task_id=task_id,
             )
             emit_span(
@@ -1348,14 +1347,22 @@ class NegotiationAgentExecutor(AgentExecutor):
             await self._inner.execute(outcome.task_request, event_queue)
 
     def _resolve_run_id(self, context: RequestContext) -> str | None:
-        """Return the client run id advertised on the initial message (sticky per context)."""
+        """Return the client run id from the header or the legacy message metadata.
+
+        The header is the current contract; ``sampleRunId`` remains the fallback for an external
+        client that only knows the sample's message convention. The value is sticky per context so
+        a follow-up without either signal keeps the same run.
+        """
         key = context.context_id or context.task_id or ""
         metadata = _metadata(context)
         advertised = metadata.get(SAMPLE_RUN_ID_METADATA_KEY)
+        header_run_id = current_run_id()
         if isinstance(advertised, str) and advertised.strip():
+            header_run_id = advertised.strip()
+        if header_run_id:
             with self._run_ids_lock:
-                self._run_ids[key] = advertised.strip()
-            return advertised.strip()
+                self._run_ids[key] = header_run_id
+            return header_run_id
         with self._run_ids_lock:
             return self._run_ids.get(key)
 

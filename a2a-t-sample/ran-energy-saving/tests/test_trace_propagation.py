@@ -12,6 +12,7 @@ from shared.trace_propagation import (
     TracePropagationMiddleware,
     current_trace_id,
     extract_trace_id,
+    extract_traceparent,
     inject_outgoing,
     propagated_trace,
 )
@@ -50,6 +51,37 @@ def test_extract_trace_id_is_case_insensitive() -> None:
         )
         == _TRACE_ID
     )
+
+
+async def test_a_traceparent_falls_back_to_the_run_id_without_langfuse() -> None:
+    """Local A2A hops stay traceable even when no Langfuse exporter owns the trace."""
+    request = httpx.Request("POST", "http://agent.test/a2a/json/message:send")
+    with propagated_trace(run_id=_TRACE_ID):
+        await inject_outgoing(request)
+
+    traceparent = request.headers[TRACEPARENT_HEADER]
+    trace_id, span_id = extract_traceparent(request.headers)
+    assert traceparent.startswith(f"00-{_TRACE_ID}-")
+    assert len(span_id) == 16
+    assert trace_id == _TRACE_ID
+
+
+async def test_a_non_hex_run_id_is_hashed_into_a_valid_trace_id() -> None:
+    request = httpx.Request("POST", "http://agent.test/a2a/json/message:send")
+    with propagated_trace(run_id="run-42"):
+        await inject_outgoing(request)
+
+    trace_id, _ = extract_traceparent(request.headers)
+    assert len(trace_id) == 32
+    assert trace_id != "0" * 32
+
+
+async def test_no_run_id_means_no_traceparent() -> None:
+    request = httpx.Request("POST", "http://agent.test/a2a/json/message:send")
+    with propagated_trace():
+        await inject_outgoing(request)
+
+    assert TRACEPARENT_HEADER not in request.headers
 
 
 async def test_the_middleware_binds_the_incoming_context_for_the_request() -> None:

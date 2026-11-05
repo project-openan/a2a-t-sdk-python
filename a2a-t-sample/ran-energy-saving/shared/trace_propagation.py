@@ -17,6 +17,7 @@ Langfuse project; only local a2a-sdk hops use this module.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
@@ -118,17 +119,38 @@ def propagated_trace(
 
 
 def current_trace_id() -> str:
-    """Return the active 32-hex trace id, ``""`` when propagation is off."""
+    """Return the active Langfuse trace id, ``""`` when the exporter is disabled."""
     return _valid_trace_id(_TRACE_ID.get())
 
 
+def current_run_id() -> str:
+    """Return the sample run id carried by the current request, ``""`` when absent."""
+    return _RUN_ID.get().strip()
+
+
+def _fallback_trace_id() -> str:
+    """Derive a stable 32-hex trace id from the run id when Langfuse owns no trace.
+
+    A run id is normally already 32 hex digits (``uuid4().hex``), so it can be used directly; any
+    other id is hashed. This keeps the local A2A hops traceable even when the run has no Langfuse
+    exporter, and makes the request carry a valid W3C ``traceparent`` in every mode.
+    """
+    run_id = current_run_id().lower()
+    if not run_id:
+        return ""
+    if _is_hex(run_id, 32) and run_id != "0" * 32:
+        return run_id
+    return hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:32]
+
+
 def current_traceparent() -> str:
-    """Return a W3C ``traceparent`` for one outgoing call, ``""`` when off.
+    """Return a W3C ``traceparent`` for one outgoing call, ``""`` without a run.
 
     The client's Langfuse root span id is the parent, so the server spans hang directly under the
-    run root instead of becoming unrelated children of the same trace.
+    run root. When the exporter is disabled, the run id (or a hash of it) is the trace id, matching
+    the vendor-NMS path; the span id is generated per request.
     """
-    trace_id = current_trace_id()
+    trace_id = current_trace_id() or _fallback_trace_id()
     if not trace_id:
         return ""
     parent = _PARENT_SPAN_ID.get().strip().lower()
@@ -320,6 +342,7 @@ __all__ = [
     "TracePropagationMiddleware",
     "USER_ID_HEADER",
     "annotate_run_id",
+    "current_run_id",
     "current_trace_id",
     "current_traceparent",
     "extract_trace_id",

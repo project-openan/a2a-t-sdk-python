@@ -59,6 +59,7 @@ from protocol.server_executor import (
 )
 from shared.config import MODEL_MODE_LIVE, SampleConfig
 from shared.metrics import render_prometheus, reset_metrics
+from shared.trace_propagation import propagated_trace
 
 CONTEXT_ID = "ctx-executor"
 TASK_PROMPT = "Create a RAN energy saving task in Region A."
@@ -164,6 +165,21 @@ def test_the_executor_resolves_standard_a2a_per_request() -> None:
 
     assert executor._is_pure(_make_context()) is False
     assert executor._is_pure(untagged) is True
+
+
+def test_the_server_resolves_the_run_id_from_the_correlation_header() -> None:
+    """The wire carries X-A2AT-Run-Id; message metadata is no longer required."""
+    executor = NegotiationAgentExecutor(
+        handler=cast(Any, object()),
+        inner=RecordingExecutor(),
+    )
+    context = _make_context()
+
+    with propagated_trace(run_id="header-run"):
+        assert executor._resolve_run_id(context) == "header-run"
+
+    # A follow-up without the header keeps the same run through the sticky context map.
+    assert executor._resolve_run_id(context) == "header-run"
 
 
 async def test_executor_short_circuits_without_calling_the_inner_executor() -> None:

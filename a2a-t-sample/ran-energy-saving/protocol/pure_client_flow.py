@@ -29,7 +29,6 @@ from protocol.client_flow import (
     _fill_result,
     _final_state,
 )
-from protocol.messages import SAMPLE_RUN_ID_METADATA_KEY
 
 _LOGGER = logging.getLogger("ran_energy_saving.pure_client_flow")
 
@@ -47,7 +46,6 @@ async def run_pure_client_flow(
     call_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
     event_sink: Callable[[dict[str, object]], None] | None = None,
     trace_sink: Callable[[dict[str, object]], None] | None = None,
-    run_id: str | None = None,
     followup: str = PURE_FOLLOWUP_BOTH,
 ) -> ClientFlowResult:
     """Send one pure A2A request and answer its ``INPUT_REQUIRED`` rounds.
@@ -62,9 +60,10 @@ async def run_pure_client_flow(
         call_timeout_seconds: HTTP budget of one send.
         event_sink: Optional live observer of normalized events.
         trace_sink: Optional observer of synthetic ``message_sent`` spans.
-        run_id: Run Explorer run id carried as sample-local message metadata so the downstream
-            agents can attach their trace spans to the same run. It is not an A2A-T field.
         followup: Conversation fields of the follow-up message (``both``/``task``/``context``).
+
+    The downstream correlation travels on the ``X-A2AT-Run-Id``/``traceparent`` headers (the
+    propagation context), so the message itself carries no sample-local metadata.
 
     Returns:
         The collected events, task id and report.
@@ -77,7 +76,7 @@ async def run_pure_client_flow(
             transport_emits_events = True
 
     result = ClientFlowResult()
-    request = _pure_request(user_request, run_id=run_id)
+    request = _pure_request(user_request)
     _emit_message_sent(request, user_request, trace_sink)
     batch = await transport.send(request, _call_context(call_timeout_seconds))
     result.events.extend(batch)
@@ -99,7 +98,6 @@ async def run_pure_client_flow(
             text,
             task_id=_text(pending.get("task_id")),
             context_id=_text(pending.get("context_id")),
-            run_id=run_id,
             followup=followup,
         )
         _emit_message_sent(follow, text, trace_sink)
@@ -121,9 +119,9 @@ async def run_pure_client_flow(
     return result
 
 
-def _pure_request(text: str, *, run_id: str | None = None) -> SendMessageRequest:
-    """Build one user-role A2A message with sample-local metadata only."""
-    return _message_request(text, run_id=run_id)
+def _pure_request(text: str) -> SendMessageRequest:
+    """Build one user-role A2A message with no metadata."""
+    return _message_request(text)
 
 
 def _follow_up_request(
@@ -131,11 +129,10 @@ def _follow_up_request(
     *,
     task_id: str | None,
     context_id: str | None,
-    run_id: str | None = None,
     followup: str = PURE_FOLLOWUP_BOTH,
 ) -> SendMessageRequest:
     """Build the continuation message that resumes an ``INPUT_REQUIRED`` Task."""
-    request = _message_request(text, run_id=run_id)
+    request = _message_request(text)
     if task_id and followup in (PURE_FOLLOWUP_BOTH, PURE_FOLLOWUP_TASK):
         request.message.task_id = task_id
     if context_id and followup in (PURE_FOLLOWUP_BOTH, PURE_FOLLOWUP_CONTEXT):
@@ -143,18 +140,16 @@ def _follow_up_request(
     return request
 
 
-def _message_request(text: str, *, run_id: str | None = None) -> SendMessageRequest:
-    """Build one user-role A2A message.
+def _message_request(text: str) -> SendMessageRequest:
+    """Build one user-role A2A message with no metadata.
 
-    ``run_id`` is the sample's own Run Explorer correlation key; a pure message carries no A2A-T
-    metadata (no Task-T or Negotiation-T extension).
+    The run correlation travels on ``X-A2AT-Run-Id``/``traceparent`` headers, so a standard A2A
+    message stays exactly that: no sample-local key and no A2A-T extension.
     """
     request = SendMessageRequest()
     request.message.message_id = str(uuid.uuid4())
     request.message.role = Role.ROLE_USER
     request.message.parts.add().text = text
-    if run_id:
-        request.message.metadata[SAMPLE_RUN_ID_METADATA_KEY] = run_id
     return request
 
 

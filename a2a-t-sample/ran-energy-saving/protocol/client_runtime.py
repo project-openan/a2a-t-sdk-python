@@ -474,7 +474,6 @@ class ClientRuntime:
                         call_timeout_seconds=self.config.http_timeout_seconds,
                         event_sink=event_sink,
                         trace_sink=sink,
-                        run_id=run_id,
                     )
                 intent: ProcessedIntent | None = None
                 if processed:
