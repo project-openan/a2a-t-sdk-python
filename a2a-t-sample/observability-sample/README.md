@@ -84,20 +84,6 @@ Server 终端（SERVER/INTERNAL Span，与 Client 同 trace_id —— W3C tracep
 | `OTEL_SERVICE_NAME`（或 `A2AT_SERVICE_NAME`） | `a2a-t-agent` | Resource `service.name` |
 | `OTEL_INSTRUMENTATION_A2AT_SDK_ENABLED` | `true` | OTel 主开关；`false` → 全部 NoOp 直通 |
 
-## Langfuse 后端
-
-设置以下环境变量即可把 A2A-T 装饰器 Span 直接送到 Langfuse（Python SDK v5，匹配 Langfuse v4 服务端）：
-
-```powershell
-$env:LANGFUSE_PUBLIC_KEY = "pk-lf-..."
-$env:LANGFUSE_SECRET_KEY = "sk-lf-..."
-$env:LANGFUSE_BASE_URL   = "https://us.cloud.langfuse.com"   # 自托管时改为内网地址
-```
-
-`langfuse_setup.py` 会放行 `a2at-observability` instrumentation scope（Langfuse v5 默认只导出
-Langfuse/genai/已知 LLM instrumentation 的 Span）。凭证只从环境变量读取，不要写进代码或提交。
-`check_*.py` / `verify_langfuse.py` 同样读取上述环境变量。
-
 ## 切换 OTLP 后端
 
 ```powershell

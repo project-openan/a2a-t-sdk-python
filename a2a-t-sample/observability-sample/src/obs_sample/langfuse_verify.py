@@ -2,17 +2,17 @@
 import asyncio
 import os
 
-# 1. Langfuse init (reads LANGFUSE_* env vars; never hard-code credentials)
-if not os.environ.get("LANGFUSE_PUBLIC_KEY") or not os.environ.get("LANGFUSE_SECRET_KEY"):
-    raise SystemExit("Set LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY (optionally LANGFUSE_BASE_URL).")
-os.environ.setdefault("LANGFUSE_BASE_URL", "https://us.cloud.langfuse.com")
+# 1. Langfuse init (reads LANGFUSE_* env vars or explicit params)
+os.environ["LANGFUSE_PUBLIC_KEY"] = "pk-lf-661d8d9f-d5e1-4bd4-ae9f-68c7f1c93b8a"
+os.environ["LANGFUSE_SECRET_KEY"] = "sk-lf-ff9d6ca0-4eb8-4288-9839-eca9e5a12a8f"
+os.environ["LANGFUSE_BASE_URL"] = "https://us.cloud.langfuse.com"
 
 from langfuse import Langfuse
 
 lf = Langfuse()
 print("Langfuse initialized, base_url:", os.environ.get("LANGFUSE_BASE_URL"))
 
-# Langfuse v5 sets a global TracerProvider — our setup() will detect it and skip
+# Langfuse v4 sets a global TracerProvider — our setup() will detect it and skip
 from opentelemetry import trace  # noqa: E402
 
 tp = trace.get_tracer_provider()
