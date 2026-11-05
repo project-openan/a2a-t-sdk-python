@@ -172,8 +172,13 @@ export function buildWireModel(entry, state, format, copy) {
         parts: [{ text: plainSentence(intent, copy.lang) || label }],
         messageId,
       };
-      const headers = requestHeaders(extensionUri, state, entry);
-      const plainHeaders = headers.filter((line) => !line.startsWith("A2A-Extensions:"));
+      // Only a captured exchange is shown as the request. Without one the body still explains the
+      // payload, but the headers section says so instead of inventing a request line.
+      const record = outboundRecord(state.wire);
+      const headers = record ? capturedHeaders(record) : [copy.wire.noWireCapture];
+      const plainHeaders = record
+        ? headers.filter((line) => !line.startsWith("A2A-Extensions:"))
+        : headers;
       const usePlain = format === "a";
       const modify = detail.summary === "modify ran energy saving task";
       return {
@@ -346,17 +351,40 @@ function eventModel(entry, title, role, copy) {
   };
 }
 
-function requestHeaders(extensionUri, state, entry) {
-  const runId = String(state.runId || "").replace(/[^0-9a-f]/gi, "").padEnd(32, "0").slice(0, 32);
-  const spanId = String(entry.spanId || "").replace(/[^0-9a-f]/gi, "").padEnd(16, "0").slice(-16);
-  return [
-    "POST /a2a/v1/json/message:stream HTTP/1.1",
-    "Content-Type: application/json",
-    "Authorization: Bearer <redacted>",
-    "A2A-Version: 1.0",
-    `A2A-Extensions: ${extensionUri}`,
-    `traceparent: 00-${runId}-${spanId}-01`,
-  ];
+/** Render the captured request line and headers of one outbound record. */
+function capturedHeaders(record) {
+  const url = typeof record.url === "string" ? record.url : "";
+  // The path carries no host: the inspector shows what went on the wire, not the origin.
+  let path = url;
+  try {
+    const parsed = new URL(url);
+    path = parsed.pathname + parsed.search;
+  } catch {
+    // A relative or malformed URL is shown verbatim.
+  }
+  const method = typeof record.method === "string" ? record.method : "POST";
+  const lines = [`${method} ${path} HTTP/1.1`];
+  const headers = isObject(record.headers) ? record.headers : {};
+  for (const [name, value] of Object.entries(headers)) {
+    // The NMS client already redacts credentials to "***" when it writes the log.
+    lines.push(`${name}: ${value}`);
+  }
+  return lines;
+}
+
+/** Pick the outbound record that carries the Task-T message, falling back to the first send. */
+function outboundRecord(records) {
+  if (!Array.isArray(records)) return null;
+  const outbound = records.filter(
+    (record) => isObject(record) && record.dir === "out" && typeof record.url === "string",
+  );
+  if (outbound.length === 0) return null;
+  return (
+    outbound.find((record) => {
+      const text = JSON.stringify(record.body ?? "");
+      return text.includes("Task-T");
+    }) || outbound[0]
+  );
 }
 
 function headerNodes(lines) {

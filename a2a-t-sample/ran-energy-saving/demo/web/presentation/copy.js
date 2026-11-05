@@ -377,6 +377,8 @@ const EN = {
     eventTitle: "Session event",
     requestLabel: "RAN energy saving task",
     extensionFallback: "Task-T extension URI",
+    noWireCapture:
+      "No captured exchange for this run (the wire log is written for real-NMS runs only)",
     negotiationFallback: "Negotiation-T extension URI",
     taskCreatedTitle: "RAN Agent → OSS Agent · task created",
     taskCreatedNote:
@@ -1083,6 +1085,7 @@ const ZH = {
     eventTitle: "会话事件",
     requestLabel: "无线网络节能任务",
     extensionFallback: "Task-T 扩展 URI",
+    noWireCapture: "本次运行没有捕获到真实报文（wire 日志只对真机网管运行写入）",
     negotiationFallback: "Negotiation-T 扩展 URI",
     taskCreatedTitle: "RAN Agent → OSS Agent · 任务已创建",
     taskCreatedNote:

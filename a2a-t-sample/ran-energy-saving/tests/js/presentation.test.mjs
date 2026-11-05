@@ -1750,3 +1750,40 @@ assert.equal(serverIntent.area, "A2ATestRegion");
 assert.equal(serverIntent.operation, "create");
 assert.deepEqual(serverIntent.sites, ["NRES_XCS_6102937", "LTE_26441_LNR_OCL"]);
 assert.deepEqual(serverIntent.slots, [{ start: 0, end: 360, rate: 30 }]);
+
+// The wire inspector renders the captured exchange, never a reconstructed request line.
+const capturedEntry = {
+  kind: "message_sent",
+  spanId: "d".repeat(16),
+  detail: {
+    performative: "TASK_T",
+    summary: "create ran energy saving task",
+    extensionUri: "urn:task-t/v1",
+    taskT: structuredTaskT,
+  },
+};
+const capturedState = {
+  runId: "run-wire",
+  intentText: rawRequest,
+  taskTPrompt: structuredTaskT,
+  wire: [
+    {
+      dir: "out",
+      method: "POST",
+      url: "https://nms.test:31127/a2a/json/message:send",
+      headers: { Accept: "application/json", Authorization: "***" },
+      body: { message: { parts: [{ text: "Task-T" }] } },
+    },
+  ],
+};
+const capturedText = wireText(buildWireModel(capturedEntry, capturedState, "t", copy));
+assert.ok(capturedText.includes("POST /a2a/json/message:send HTTP/1.1"));
+assert.ok(capturedText.includes("Authorization"));
+assert.ok(capturedText.includes("***"));
+assert.ok(!capturedText.includes("/a2a/v1/"));
+assert.ok(!capturedText.includes("traceparent: 00-"));
+
+const uncapturedText = wireText(
+  buildWireModel(capturedEntry, { ...capturedState, wire: [] }, "t", copy),
+);
+assert.ok(uncapturedText.includes(copy.wire.noWireCapture));

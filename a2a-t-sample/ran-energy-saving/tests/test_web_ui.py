@@ -1560,3 +1560,37 @@ async def test_start_accepts_the_plain_protocol_and_rejects_unknown_values(
         "/api/runs", json={"scenario": "information", "mode": "auto", "protocol": "nope"}
     )
     assert rejected.status_code == 400
+
+
+async def test_wire_endpoint_returns_the_captured_exchange(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    """The inspector renders the request from the wire log, never from a reconstructed one."""
+    run_dir = tmp_path / "run-wire"
+    run_dir.mkdir()
+    record = {
+        "dir": "out",
+        "method": "POST",
+        "url": "https://nms.test:31127/a2a/json/message:send",
+        "headers": {"Accept": "application/json", "Authorization": "***"},
+        "body": {"message": {"parts": [{"text": "create ran energy saving task"}]}},
+    }
+    (run_dir / "wire.jsonl").write_text(
+        json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    response = await client.get("/api/runs/run-wire/wire")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["enabled"] is True
+    assert payload["records"] == [record]
+
+
+async def test_wire_endpoint_reports_no_capture_instead_of_inventing_one(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get("/api/runs/unknown-run/wire")
+
+    assert response.status_code == 200
+    assert response.json() == {"runId": "unknown-run", "records": [], "enabled": False}

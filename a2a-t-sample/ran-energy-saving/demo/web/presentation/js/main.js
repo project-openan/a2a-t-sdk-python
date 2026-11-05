@@ -717,6 +717,11 @@ function subscribe(runId) {
       return;
     }
     logFrame(frame);
+    // The request is on the wire by the time its span arrives, so the captured exchange can be
+    // read back here and rendered as-is instead of being reconstructed from the span.
+    if (frame.type === "trace" && frame.event?.kind === "message_sent") {
+      loadWire(runId);
+    }
     // An approval trace span carries the plan details and may arrive after the status frame that
     // stopped the show. Apply it immediately so the card is never stuck on a generic message.
     if (frame.type === "trace" && isApprovalTrace(frame.event) && player.status().hold) {
@@ -739,6 +744,20 @@ function subscribe(runId) {
       setBusy(false);
     }
   };
+}
+
+/** Read the captured NMS exchanges of one run; the wire inspector renders the request from them. */
+async function loadWire(runId) {
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/wire`);
+    if (!response.ok) return;
+    const payload = await response.json();
+    if (ui.view.runId !== runId) return; // a newer run replaced this one
+    ui.view.wire = Array.isArray(payload.records) ? payload.records : [];
+    render();
+  } catch {
+    // A missing capture leaves the inspector on its "no captured exchange" wording.
+  }
 }
 
 /** Subscribe to the MIE Agent approval stream of the pure A2A three-hop mode. */

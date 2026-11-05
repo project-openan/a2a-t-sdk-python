@@ -28,6 +28,9 @@ export function createState() {
     status: STATUS.IDLE,
     started: false,
     runId: null,
+    // Redacted NMS exchanges captured for this run; the wire inspector renders the request from
+    // them instead of reconstructing one.
+    wire: [],
     scenario: null,
     mode: null,
     protocol: "a2a-t",

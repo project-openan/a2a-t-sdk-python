@@ -427,6 +427,13 @@ def create_app(
         rows = await asyncio.to_thread(read_client_run_summaries, path, limit)
         return JSONResponse({"enabled": True, "runs": rows})
 
+    async def run_wire(request: Request) -> Response:
+        """Return the redacted NMS exchanges of one run, as the wire inspector shows them."""
+        run_id = request.path_params["run_id"]
+        root = runs_dir or Path(config.runs_dir)
+        records = await asyncio.to_thread(_read_wire_records, root, run_id)
+        return JSONResponse({"runId": run_id, "records": records, "enabled": bool(records)})
+
     async def client_run_detail(request: Request) -> Response:
         """Return one persisted client run with turns and negotiation events."""
         path = config.client_db_path
@@ -440,6 +447,13 @@ def create_app(
         )
         if detail is None:
             return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
+        # The wire inspector shows what the client really sent. These records are written redacted
+        # by the NMS client, so credentials arrive as "***" and need no second scrub.
+        wire = await asyncio.to_thread(
+            _read_wire_records, runs_dir or Path(config.runs_dir), request.path_params["run_id"]
+        )
+        if wire:
+            detail["wire"] = wire
         live = manager.get(request.path_params["run_id"])
         if live is not None:
             detail["live"] = live.snapshot()
@@ -1109,6 +1123,7 @@ def create_app(
             Route("/api/client/runs/{run_id}", client_run_detail),
             Route("/api/client/conversations", client_conversations),
             Route("/api/client/conversations/{conversation_id}", client_conversation_detail),
+            Route("/api/runs/{run_id}/wire", run_wire),
             Route("/api/runs/{run_id}/metrics", run_metrics_detail),
             Route("/api/metrics/runs", metrics_runs),
             Route("/api/metrics/summary", metrics_summary),
@@ -1164,6 +1179,37 @@ def create_app(
 def _now_iso() -> str:
     """Return the current UTC time in ISO 8601 form (UI timestamps)."""
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+#: Cap on the wire records returned to the detail view; a long run appends one per exchange.
+_WIRE_RECORD_LIMIT = 200
+
+
+def _read_wire_records(runs_dir: Path, run_id: str) -> list[dict[str, object]]:
+    """Return the redacted ``wire.jsonl`` records of one run, bounded and in order.
+
+    Returns an empty list when the run has no wire log (SSE transport, simulator or a run older
+    than the log), which the inspector renders as "no captured exchange" rather than inventing one.
+    """
+    path = Path(runs_dir) / run_id / "wire.jsonl"
+    if not path.is_file():
+        return []
+    records: list[dict[str, object]] = []
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    record = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(record, dict):
+                    records.append(record)
+    except OSError:
+        return []
+    return records[-_WIRE_RECORD_LIMIT:]
 
 
 def _sse_data(message: dict[str, object]) -> dict[str, str]:
