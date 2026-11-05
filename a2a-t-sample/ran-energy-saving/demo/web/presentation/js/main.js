@@ -978,6 +978,7 @@ function renderIntentPanel() {
       warnings: ui.view.intentWarnings || [],
       missingFields: ui.view.businessIntent?.missingFields || [],
       conflicts: ui.view.businessIntent?.conflicts || [],
+      businessIntent: ui.view.businessIntent,
     });
   } finally {
     ui.renderingIntent = false;

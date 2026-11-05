@@ -132,7 +132,7 @@ export function createStage(els) {
 
   function animatePreview(state, copy) {
     stopPreview();
-    const intent = parseIntent(state.intentText || state.userRequest || "");
+    const intent = parseIntent(state.intentText || state.userRequest || "", state.businessIntent);
     const slots = intent && Array.isArray(intent.slots) ? intent.slots : [];
     const rateAt = (minute) => {
       for (const slot of slots) {
@@ -333,7 +333,7 @@ export function createStage(els) {
       highlightSkill(skillIndex(scenario));
       note("oss", roles.oss, copy.states.ossReading);
       later(1200, () => {
-        const intent = parseIntent(state.intentText || state.userRequest || "");
+        const intent = parseIntent(state.intentText || state.userRequest || "", state.businessIntent);
         const sentence = intent ? plainSentence(intent, copy.lang) : "";
         note(
           "oss",

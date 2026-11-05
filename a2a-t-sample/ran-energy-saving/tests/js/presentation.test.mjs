@@ -1725,3 +1725,28 @@ assert.equal(langfuseState.langfuse.url, "https://langfuse.example/project/p/tra
 assert.equal(langfuseState.langfuse.status, "exported");
 
 console.log("presentation model harness: ok");
+
+// A real-NMS region is one compact token; the free-form normalized request must still resolve it.
+const compactRegion = parseIntent(
+  "Create a RAN energy saving task in A2ATestRegion. Based on the task object and task context, " +
+    "the time-segment-based guaranteed throughput target is {00:00~06:00,30Mbps}.",
+);
+assert.equal(compactRegion.area, "A2ATestRegion");
+assert.deepEqual(compactRegion.slots, [{ start: 0, end: 360, rate: 30 }]);
+
+const compactRegionZh = parseIntent(
+  "在 A2ATestRegion 区域创建无线网络节能任务：分时段保障速率目标为 {00:00~06:00,30Mbps}。",
+);
+assert.equal(compactRegionZh.area, "A2ATestRegion");
+
+// The structured intent is authoritative: it wins over a sentence the parser cannot classify.
+const serverIntent = parseIntent("Start energy saving in the requested area.", {
+  region: "A2ATestRegion",
+  operationType: "Create",
+  sites: ["NRES_XCS_6102937", "LTE_26441_LNR_OCL"],
+  windows: ["{00:00~06:00,30Mbps}"],
+});
+assert.equal(serverIntent.area, "A2ATestRegion");
+assert.equal(serverIntent.operation, "create");
+assert.deepEqual(serverIntent.sites, ["NRES_XCS_6102937", "LTE_26441_LNR_OCL"]);
+assert.deepEqual(serverIntent.slots, [{ start: 0, end: 360, rate: 30 }]);

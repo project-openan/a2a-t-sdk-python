@@ -31,8 +31,14 @@ export function taskTFromTask(task) {
   return "";
 }
 
-/** Parse the Task-T text (or the request) into the facts the page shows. */
-export function parseIntent(text) {
+/** Parse the Task-T text (or the request) into the facts the page shows.
+ *
+ * ``businessIntent`` is the server's structured intent; when present it is authoritative. The text
+ * is still parsed for the fields the server does not carry (outage windows and chart gaps), but a
+ * value the server resolved — notably a region replaced for a real NMS — must not be re-guessed
+ * from a free-form sentence.
+ */
+export function parseIntent(text, businessIntent = null) {
   if (typeof text !== "string" || text.trim() === "") return null;
   const sections = sectionMap(text);
   const operationRaw = sections["operation type"] || "";
@@ -49,16 +55,49 @@ export function parseIntent(text) {
       ? "create"
       : null;
 
-  return {
-    raw: text,
-    operation,
-    area,
-    sites,
-    slots,
-    outage,
-    overlap: findOverlap(slots),
-    gaps: findGaps(slots),
-  };
+  return mergeBusinessIntent(
+    {
+      raw: text,
+      operation,
+      area,
+      sites,
+      slots,
+      outage,
+      overlap: findOverlap(slots),
+      gaps: findGaps(slots),
+    },
+    businessIntent,
+  );
+}
+
+/** Overlay the server's structured intent on the text-derived facts. */
+function mergeBusinessIntent(parsed, businessIntent) {
+  if (!isObject(businessIntent)) return parsed;
+  const merged = { ...parsed };
+  const region = typeof businessIntent.region === "string" ? businessIntent.region.trim() : "";
+  if (region) merged.area = region;
+  const operation = String(businessIntent.operationType || "").toLowerCase();
+  if (operation === "create" || operation === "modify") merged.operation = operation;
+  if (Array.isArray(businessIntent.sites)) {
+    const sites = businessIntent.sites.filter((item) => typeof item === "string" && item.trim());
+    if (sites.length > 0) merged.sites = sites;
+  }
+  if (Array.isArray(businessIntent.windows)) {
+    const windows = businessIntent.windows.filter((item) => typeof item === "string" && item.trim());
+    if (windows.length > 0) {
+      const slots = parseSlots(windows.join(" "));
+      if (slots.length > 0) {
+        merged.slots = slots;
+        merged.overlap = findOverlap(slots);
+        merged.gaps = findGaps(slots);
+      }
+    }
+  }
+  if (merged.outage === null && typeof businessIntent.backgroundEvent === "string") {
+    const outage = parseOutage(businessIntent.backgroundEvent);
+    if (outage !== null) merged.outage = outage;
+  }
+  return merged;
 }
 
 /** Return the plain-A2A sentence of one parsed intent (no Task-T fields). */
@@ -110,6 +149,7 @@ export function renderIntent(
     warnings = [],
     missingFields = [],
     conflicts = [],
+    businessIntent = null,
   } = {},
 ) {
   clear(container);
@@ -125,7 +165,7 @@ export function renderIntent(
       }),
     );
   }
-  const intent = parseIntent(intentText);
+  const intent = parseIntent(intentText, businessIntent);
   if (intent === null) {
     container.append(el("p", "empty", copy.intent.empty));
     return null;
@@ -501,8 +541,13 @@ function parseArea(text) {
   // word the older pattern required.
   const neutralEn = text.match(/\b(Region\s+[A-Z])\b/i);
   if (neutralEn) return neutralEn[1].trim();
+  // A real-NMS region is one compact token ("A2ATestRegion") with no space before "Region".
+  const compactEn = text.match(/\bin\s+([A-Za-z0-9_-]*Region[A-Za-z0-9_-]*)\b/i);
+  if (compactEn) return compactEn[1].trim();
   const neutralZh = text.match(/(区域\s*[A-Z])/i);
   if (neutralZh) return neutralZh[1].trim();
+  const compactZh = text.match(/(?:在|区域[:：])\s*([A-Za-z0-9_-]*Region[A-Za-z0-9_-]*)/i);
+  if (compactZh) return compactZh[1].trim();
   const en = text.match(/\bin\s+the\s+(.+?)\s+area\b/i);
   if (en) return en[1].trim();
   const zh = text.match(/(?:在|区域[:：]\s*)([一-龥A-Za-z0-9]+?)(?:创建|区域|进行|开启|为|，|,)/);
