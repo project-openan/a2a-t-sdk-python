@@ -5,17 +5,12 @@ template-directed metadata prompt APIs (``generate_{task,auth,notification}_prom
 ``..._from_data_with_schema``, each bypassing scenario recognition for one addressed template), the
 twelve negotiation content methods
 of the shared :class:`~a2a_t.negotiation.generation.content_service.NegotiationContentService`
-(eight generation plus four validation methods) and the extension-agnostic template queries of the
-:class:`~a2a_t.common.prompt_resources.catalog.TemplateQueryService`. The three legacy
-``start/receive/continue_negotiation`` methods of the deprecated state-machine negotiation demo
-are kept for one release with a :class:`DeprecationWarning` and will be removed in the next
-release (port decision D1).
+(eight generation plus four validation methods).
 """
 
 from __future__ import annotations
 
 import logging
-import warnings
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -27,7 +22,6 @@ from a2a_t.core.template_uri import TemplateUri
 from a2a_t.core.validation_pipeline import FilledParamData
 from a2a_t.llm.config_loader import LLMConfigLoader
 from a2a_t.llm.factory import LLMClientFactory
-from a2a_t.negotiation.common.models import ContinueNegotiationInput, StartNegotiationInput
 from a2a_t.negotiation.content.models import (
     NegotiationAbortData,
     NegotiationEndingData,
@@ -37,7 +31,6 @@ from a2a_t.negotiation.generation import NegotiationContentService
 from a2a_t.observability.llm_decorator import A2ATLLMClientDecorator
 from a2a_t.observability.negotiation_metrics import report_terminal_negotiation_rounds
 
-from .negotiation.negotiation_orchestrator_builder import ClientNegotiationOrchestratorBuilder
 from .prompt_generation.models import PromptGenerationResult
 from .prompt_generation.prompt_generation_orchestrator_builder import PromptGenerationOrchestratorBuilder
 
@@ -60,17 +53,6 @@ def _default_env_path() -> Path:
     return Path(__file__).resolve().parents[3] / "package_data" / ".env"
 
 
-def _deprecation_message(method: str) -> str:
-    """Return the D1 deprecation message of one legacy negotiation facade method."""
-    return (
-        f"A2ATClient.{method} is deprecated since 1.1.0 and will be removed in the next release; "
-        "the state-machine negotiation demo it belongs to is retired. Use the negotiation content "
-        "API instead: generate_negotiation_{propose,accept,reject,abort}_prompt_from_data / "
-        "..._from_text and validate_{propose,accept,reject,abort}_prompt_and_data_filling, backed "
-        "by a2a_t.negotiation.generation.NegotiationContentService."
-    )
-
-
 def _parse_template_uri(template_uri: str | TemplateUri | None) -> TemplateUri:
     """Parse the raw template URI string boundary fail-fast (D16, Java ``parseTemplateUri``).
 
@@ -89,9 +71,9 @@ def _parse_template_uri(template_uri: str | TemplateUri | None) -> TemplateUri:
 
 
 class A2ATClient:
-    """Client-side facade of the A2A-T SDK: prompt generation, negotiation, and template queries.
+    """Client-side facade of the A2A-T SDK: prompt generation and negotiation.
 
-    The facade is the single client entry point of the SDK and exposes four groups of operations:
+    The facade is the single client entry point of the SDK and exposes three groups of operations:
 
     - **Scenario-recognition prompt generation** — :meth:`generate_task_prompt` normalizes the
       caller input, recognizes the scenario, extracts the slots with one LLM call and renders the
@@ -103,18 +85,12 @@ class A2ATClient:
     - **Negotiation content** — the twelve Negotiation-T methods: eight message-generation methods
       (``generate_negotiation_{propose,accept,reject,abort}_prompt_from_{data,text}``) and four
       message-validation methods (``validate_{...}_prompt_and_data_filling``).
-    - **Template queries** — :meth:`get_prompts` and :meth:`get_prompt`, the extension-agnostic
-      catalog queries that never throw.
 
     Every method that addresses a template takes the template URI in its raw string spelling and
     parses it fail-fast; use the constants of :mod:`a2a_t.core.standard_templates` instead of
     hand-written URI strings. Business failures are raised as catalog-coded exceptions of the
     :mod:`a2a_t.core.errors.exceptions` tree (catch :class:`~a2a_t.core.errors.exceptions.A2ATError`
     and branch on ``code_str``); programming errors stay ``TypeError`` / ``ValueError``.
-
-    The three legacy ``start/receive/continue_negotiation`` methods of the retired state-machine
-    negotiation demo are kept for one release with a :class:`DeprecationWarning` and will be
-    removed in the next release.
     """
 
     def __init__(
@@ -125,18 +101,18 @@ class A2ATClient:
     ) -> None:
         """Create one client facade from a ``.env`` file.
 
-        The configuration, the LLM client and both orchestrators are resolved eagerly so that a
-        misconfiguration surfaces at construction instead of on the first call. The negotiation
-        content service and the template query service are assembled lazily on first use: both
-        capture resource snapshots at that point, so constructing the facade stays side-effect free
-        for the prompt-only flows.
+        The configuration and the LLM client are resolved eagerly so that a misconfiguration
+        surfaces at construction instead of on the first call. The negotiation content service and
+        the template query service are assembled lazily on first use: both capture resource
+        snapshots at that point, so constructing the facade stays side-effect free for the
+        prompt-only flows.
 
         Args:
             env_path: path of the ``.env`` file carrying the SDK configuration; ``None`` uses the
                 packaged ``package_data/.env`` default. The resolved file must exist — copy
                 ``env.example`` to ``.env`` first (every key is optional, an empty file works).
-            logger: optional logger injected into the LLM client and the orchestrators; ``None``
-                uses each component's module-level logger.
+            logger: optional logger injected into the LLM client and the prompt generation
+                orchestrator; ``None`` uses each component's module-level logger.
 
         Raises:
             ConfigFileNotFoundError: when the resolved ``.env`` path does not exist.
@@ -153,10 +129,6 @@ class A2ATClient:
         self._prompt_generation_orchestrator = PromptGenerationOrchestratorBuilder().build(
             config=self._config,
             llm_client=self._llm_client,
-            logger=logger,
-        )
-        self._negotiation_orchestrator = ClientNegotiationOrchestratorBuilder().build(
-            env_path=resolved_env_path,
             logger=logger,
         )
         # Lazily assembled negotiation content service and template query service: both capture
@@ -380,57 +352,6 @@ class A2ATClient:
         return self._prompt_generation_orchestrator.generate_notification_prompt_from_data_with_schema(
             data, schema, _parse_template_uri(template_uri)
         )
-
-    def start_negotiation(self, input: StartNegotiationInput) -> dict[str, object]:
-        """Start a client-side negotiation round.
-
-        Deprecated (D1): the state-machine negotiation demo is retired; this method emits a
-        :class:`DeprecationWarning`, forwards to the legacy orchestrator unchanged, and will be
-        removed in the next release. Use the negotiation content API instead —
-        :meth:`generate_negotiation_propose_prompt_from_data` and its siblings.
-
-        Args:
-            input: legacy negotiation start input.
-
-        Returns:
-            the legacy orchestrator's round result as a plain mapping.
-        """
-        warnings.warn(_deprecation_message("start_negotiation"), DeprecationWarning, stacklevel=2)
-        return self._negotiation_orchestrator.start_negotiation(input)
-
-    def receive_negotiation(self, message: str, context: dict[str, object]) -> dict[str, object]:
-        """Process a negotiation message received from the remote peer.
-
-        Deprecated (D1): the state-machine negotiation demo is retired; this method forwards to the
-        legacy orchestrator unchanged and will be removed in the next release. Use the negotiation
-        content API instead — :meth:`validate_propose_prompt_and_data_filling` and its siblings.
-
-        Args:
-            message: received negotiation message text.
-            context: legacy negotiation context mapping.
-
-        Returns:
-            the legacy orchestrator's round result as a plain mapping.
-        """
-        warnings.warn(_deprecation_message("receive_negotiation"), DeprecationWarning, stacklevel=2)
-        return self._negotiation_orchestrator.receive_negotiation(message, context)
-
-    def continue_negotiation(self, input: ContinueNegotiationInput) -> dict[str, object]:
-        """Continue an existing negotiation with a local response.
-
-        Deprecated (D1): the state-machine negotiation demo is retired; this method forwards to the
-        legacy orchestrator unchanged and will be removed in the next release. Use the negotiation
-        content API instead — :meth:`generate_negotiation_accept_prompt_from_data` and its
-        siblings.
-
-        Args:
-            input: legacy negotiation continuation input.
-
-        Returns:
-            the legacy orchestrator's round result as a plain mapping.
-        """
-        warnings.warn(_deprecation_message("continue_negotiation"), DeprecationWarning, stacklevel=2)
-        return self._negotiation_orchestrator.continue_negotiation(input)
 
     # ------------------------------------------------------------------
     # Negotiation content generation (from data: deterministic, zero LLM)
@@ -850,10 +771,10 @@ class A2ATClient:
         )
 
     # ------------------------------------------------------------------
-    # Template queries
+    # Internal template queries
     # ------------------------------------------------------------------
 
-    def get_prompts(self) -> list[PromptTemplate]:
+    def _get_prompts(self) -> list[PromptTemplate]:
         """List every template available for the configured language across all A2A-T extensions.
 
         This query never throws: the extension directories are discovered from the configured
@@ -867,7 +788,7 @@ class A2ATClient:
         """
         return self._template_queries().get_prompts()
 
-    def get_prompt(self, template_uri: str | TemplateUri) -> PromptTemplate | None:
+    def _get_prompt(self, template_uri: str | TemplateUri) -> PromptTemplate | None:
         """Load one template by its URI, regardless of the extension.
 
         This query never throws for a well-formed template URI: a missing template yields ``None``

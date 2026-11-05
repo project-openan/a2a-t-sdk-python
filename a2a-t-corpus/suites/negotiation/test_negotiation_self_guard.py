@@ -1,14 +1,20 @@
 """Negotiation-T corpus self-guard (mirror of the Task-T ``CorpusSelfGuardTest``).
 
-Validates every Negotiation-T scenario case file structurally without any LLM call: strict loading
-plus the category/expectation contract. This gate runs in CI alongside the Task-T one.
+Validates every Negotiation-T scenario case file structurally without any LLM call, including the
+committed non-default-language variants (``input_case_from_*_en-US.json``) when present: strict
+loading plus the category/expectation contract. This gate runs in CI alongside the Task-T one.
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-from engine.constants import INPUT_CASE_FROM_DATA, INPUT_CASE_FROM_TEXT, NEGOTIATION_API_NAMES
+from engine.constants import (
+    INPUT_CASE_FROM_DATA,
+    INPUT_CASE_FROM_TEXT,
+    NEGOTIATION_API_NAMES,
+    case_file_variants,
+)
 from engine.discover import ScenarioScanner
 from engine.loader import CaseFileLoader, InputCase
 
@@ -19,7 +25,7 @@ __all__ = [
     "test_negotiation_scenario_case_files_are_structurally_valid",
 ]
 
-#: Categories carrying a cross-step expectation contract (case data is Chinese).
+#: Categories carrying a cross-step expectation contract (the report/self-guard vocabulary is Chinese).
 CATEGORY_NORMAL: Final[str] = "正常"
 
 CATEGORY_EXCEPTION: Final[str] = "异常"
@@ -28,8 +34,9 @@ CATEGORY_EXCEPTION: Final[str] = "异常"
 def test_negotiation_scenario_case_files_are_structurally_valid() -> None:
     """Load every Negotiation-T case file strictly and enforce the category/expectation contract."""
     problems: list[str] = []
-    for flow_file in (INPUT_CASE_FROM_TEXT, INPUT_CASE_FROM_DATA):
-        for scenario in ScenarioScanner.discover("negotiation", flow_file):
+    flow_files = (*case_file_variants(INPUT_CASE_FROM_TEXT), *case_file_variants(INPUT_CASE_FROM_DATA))
+    for flow_file in flow_files:
+        for scenario in ScenarioScanner.discover_optional("negotiation", flow_file):
             cases = CaseFileLoader().load(scenario.input_file(flow_file), NEGOTIATION_API_NAMES)
             for input_case in cases:
                 check_category_contract(input_case, problems)

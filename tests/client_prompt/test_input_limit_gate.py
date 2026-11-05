@@ -228,9 +228,7 @@ class A2ATClientInputLimitGateTest(ManagedTempDirTestCase):
             patch("a2a_t.client.a2at_client._default_env_path", return_value=env_path),
             patch("a2a_t.client.a2at_client.LLMConfigLoader.load", return_value=_build_llm_config()),
             patch("a2a_t.client.a2at_client.LLMClientFactory.create", return_value=object()),
-            patch("a2a_t.client.a2at_client.ClientNegotiationOrchestratorBuilder") as negotiation_builder_cls,
         ):
-            negotiation_builder_cls.return_value.build.return_value = object()
             client = A2ATClient(env_path=env_path)
 
             result = client.generate_task_prompt("x" * (DEFAULT_MAX_TEXT_CHARS + 1))

@@ -2,9 +2,9 @@
 
 Every component is produced by the production builders; the sole test seam is the recording client
 injected through the ``llm_client`` parameter. The unified ``A2ATConfig`` is constructed directly
-from the corpus test configuration (packaged zh-CN prompt resources, corpus attempt limit), so the
-module never reads the production ``.env`` loading paths. A separate runtime is provided for each
--T extension the corpus exercises (Task-T / Negotiation-T / …).
+from the corpus test configuration (packaged prompt resources of the configured language, corpus
+attempt limit), so the module never reads the production ``.env`` loading paths. A separate
+runtime is provided for each -T extension the corpus exercises (Task-T / Negotiation-T / …).
 """
 
 from __future__ import annotations
@@ -45,9 +45,6 @@ __all__ = [
     "task_runtime",
 ]
 
-#: Prompt language fixed by the corpus (the packaged zh-CN resources serve the business payloads).
-_LANGUAGE = "zh-CN"
-
 #: Fixed LLM client-config entries the corpus bridge does not override.
 _HISTORY_WINDOW = 10
 _SESSION_MAX_TOTAL = 300
@@ -87,7 +84,7 @@ def task_runtime() -> Runtime:
     recorder = _new_recorder(env)
 
     config = A2ATConfig(
-        prompt=PromptRuntimeConfig(language=_LANGUAGE, source_type="packaged"),
+        prompt=PromptRuntimeConfig(language=env.language, source_type="packaged"),
         input_limits=InputLimitConfig(),
         llm=LlmRuntimeConfig(max_attempts=env.max_attempts),
     )
@@ -120,7 +117,7 @@ def negotiation_runtime() -> NegotiationRuntime:
     recorder = _new_recorder(env)
 
     orchestrator = NegotiationGenerationOrchestratorBuilder(
-        language=_LANGUAGE,
+        language=env.language,
         llm_client=recorder,
         max_attempts=env.max_attempts,
     ).build()
@@ -150,7 +147,7 @@ def notification_runtime() -> NotificationRuntime:
     recorder = _new_recorder(env)
 
     config = A2ATConfig(
-        prompt=PromptRuntimeConfig(language=_LANGUAGE, source_type="packaged"),
+        prompt=PromptRuntimeConfig(language=env.language, source_type="packaged"),
         input_limits=InputLimitConfig(),
         llm=LlmRuntimeConfig(max_attempts=env.max_attempts),
     )

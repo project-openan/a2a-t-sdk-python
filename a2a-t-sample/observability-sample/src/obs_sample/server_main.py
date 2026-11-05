@@ -1,14 +1,12 @@
 """Observability sample server (v3.0 decorator architecture, no LLM needed).
 
-One-line wiring: ``A2ATRequestHandlerDecorator(LegacyRequestHandler(...))`` creates the
-SERVER entry spans, wraps the executor for per-event spans and wraps the push sender —
-no ASGI middleware and no manual OTel setup (the SDK auto-configures Console/OTLP
+One-line wiring: ``A2ATRequestHandlerDecorator(DefaultRequestHandler(...))`` creates the
+SERVER entry spans, wraps the executor for per-event spans and wraps the push sender —?no ASGI middleware and no manual OTel setup (the SDK auto-configures Console/OTLP
 exporters on first use when ``A2AT_OBSERVABILITY_ENABLED=true``).
 
-Uses ``LegacyRequestHandler``: a2a-sdk 1.1.2's default ``DefaultRequestHandler`` (V2)
-captures raw ``agent_executor``/``_push_sender`` references at construction time, so the
-decorator's post-construction wraps would be bypassed (see README "a2a-sdk 1.1.x handler
-caveat").
+Uses the official default ``DefaultRequestHandler`` (a2a-sdk 1.1.x): the decorator
+detects the V2 shape and rebuilds its ``ActiveTaskRegistry`` with the decorated
+executor / push sender, so per-event and push spans work on the official handler too.
 """
 
 from __future__ import annotations
@@ -22,12 +20,19 @@ import uvicorn
 from a2a.server.agent_execution.agent_executor import AgentExecutor
 from a2a.server.agent_execution.context import RequestContext
 from a2a.server.events.event_queue import EventQueue
-from a2a.server.request_handlers.default_request_handler import LegacyRequestHandler
+from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_rest_routes
 from a2a.server.tasks.base_push_notification_sender import BasePushNotificationSender
 from a2a.server.tasks.inmemory_push_notification_config_store import InMemoryPushNotificationConfigStore
 from a2a.server.tasks.inmemory_task_store import InMemoryTaskStore
-from a2a.types import Artifact, TaskArtifactUpdateEvent, TaskState, TaskStatus, TaskStatusUpdateEvent
+from a2a.types import (
+    Artifact,
+    Task,
+    TaskArtifactUpdateEvent,
+    TaskState,
+    TaskStatus,
+    TaskStatusUpdateEvent,
+)
 from a2a.utils.constants import TransportProtocol
 from a2a_t.observability import A2ATRequestHandlerDecorator
 from google.protobuf.json_format import MessageToDict, ParseDict
@@ -43,11 +48,19 @@ def _sample_port() -> int:
 
 
 class EchoExecutor(AgentExecutor):
-    """Emits submitted -> working -> artifact -> completed; mirrors a Task-T streaming flow."""
+    """Emits the initial Task snapshot -> submitted -> working -> artifact -> completed
+    (V2 protocol: the Task snapshot must precede any status event)."""
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id or "T-sample"
         context_id = context.context_id or "C-sample"
+        await event_queue.enqueue_event(
+            Task(
+                id=task_id,
+                context_id=context_id,
+                status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
+            )
+        )
         for state in (TaskState.TASK_STATE_SUBMITTED, TaskState.TASK_STATE_WORKING):
             await event_queue.enqueue_event(
                 TaskStatusUpdateEvent(task_id=task_id, context_id=context_id, status=TaskStatus(state=state))
@@ -74,11 +87,11 @@ _NEGOTIATION_T_URI = "https://projects.tmforum.org/a2aproject/telecommunication/
 class NegotiationExecutor(AgentExecutor):
     """Negotiation-T flow with real per-round timing (2026-09-30):
 
-    - **Negotiation rounds happen over bare Messages — NO task is created before
+    - **Negotiation rounds happen over bare Messages —?NO task is created before
       agreement.** Each round: the client sends a Message carrying the
       Negotiation-T metadata + ``negotiationContext``; the server responds with a
       single negotiation Message (counter-offer, or ACCEPT confirmation for the
-      accepting round) and the stream ends — the server disconnects after the
+      accepting round) and the stream ends —?the server disconnects after the
       Message. No task lifecycle events during rounds.
     - **The task starts only AFTER agreement**: a separate task request (Task-T
       metadata) triggers the full task lifecycle (submitted -> working ->
@@ -87,7 +100,7 @@ class NegotiationExecutor(AgentExecutor):
     The decorators create the ``SendStreamingMessage-negotiation`` spans
     (PARENT -> entry, both ends) during rounds, and the regular per-event spans
     only for the post-agreement task request. Each round is an independent
-    trace; backends aggregate rounds by ``negotiation.id`` (spec §6.3 mode A).
+    trace; backends aggregate rounds by ``negotiation.id`` (spec 搂6.3 mode A).
     """
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
@@ -102,7 +115,7 @@ class NegotiationExecutor(AgentExecutor):
     async def _negotiation_round(
         self, context: RequestContext, event_queue: EventQueue, negotiation_context: dict[str, Any]
     ) -> None:
-        """One negotiation round: respond with a single negotiation Message — no task."""
+        """One negotiation round: respond with a single negotiation Message —?no task."""
         incoming_round = int(negotiation_context.get("round", 1))
         performative = str(negotiation_context.get("performative", "PROPOSE"))
         if performative == "PROPOSE":
@@ -129,7 +142,7 @@ class NegotiationExecutor(AgentExecutor):
         message.metadata[_NEGOTIATION_T_URI] = offer
         message.metadata["negotiationContext"] = response_context
         await event_queue.enqueue_event(message)
-        # Stream ends here on purpose: no task events, no completed — the server
+        # Stream ends here on purpose: no task events, no completed —?the server
         # disconnects after the negotiation Message. The task is started later by
         # a separate request, only after agreement.
 
@@ -137,6 +150,13 @@ class NegotiationExecutor(AgentExecutor):
         """Post-agreement task execution: the task is created and runs to completion."""
         task_id = context.task_id or "T-negotiation-agreed"
         context_id = context.context_id or "C-negotiation"
+        await event_queue.enqueue_event(
+            Task(
+                id=task_id,
+                context_id=context_id,
+                status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
+            )
+        )
         for state in (TaskState.TASK_STATE_SUBMITTED, TaskState.TASK_STATE_WORKING):
             await event_queue.enqueue_event(
                 TaskStatusUpdateEvent(task_id=task_id, context_id=context_id, status=TaskStatus(state=state))
@@ -187,7 +207,7 @@ def build_app(*, scenario: str = "native") -> Starlette:
     push_store = InMemoryPushNotificationConfigStore()
     push_http = httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", trust_env=False)
     handler = A2ATRequestHandlerDecorator(
-        LegacyRequestHandler(
+        DefaultRequestHandler(
             agent_executor=executor,
             task_store=InMemoryTaskStore(),
             agent_card=agent_card,
@@ -231,3 +251,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

@@ -5,11 +5,11 @@
   "properties": {
     "operation_type": {
       "type": "string",
-      "description": "Please provide the operation type. Allowed values: Create, Modify.",
+      "description": "Please provide the operation type. Allowed values: Create, Modify. Synonyms such as 'add' or 'new' should be mapped to Create; 'adjust' or 'change' should be mapped to Modify.",
       "examples": [
         "Create"
       ],
-      "x-a2at-value-constraint": "Allowed values: Create, Modify"
+      "x-a2at-value-constraint": "Allowed values: Create, Modify. Synonyms such as add/new map to Create; adjust/change map to Modify."
     },
     "task_description": {
       "type": "string",
@@ -21,19 +21,20 @@
     },
     "task_target": {
       "type": "string",
-      "description": "The task target supports 3 options: Create New Tiered Power-Down Task, Create Restoration Task, Modify Tiered Power-Down Task. Among them, Create Restoration Task is used to roll back the configuration delivered by an existing tiered power-down task. When selecting Create New Tiered Power-Down Task or Modify Tiered Power-Down Task, the backup power endurance duration target must be provided.",
+      "description": "The task target supports 3 options: Create New Tiered Power-Down Task, Create Restoration Task, Modify Tiered Power-Down Task. Among them, Create Restoration Task is used to roll back the configuration delivered by an existing tiered power-down task. When selecting Create New Tiered Power-Down Task or Modify Tiered Power-Down Task, the backup power endurance duration target must be provided. When selecting Create Restoration Task, the content is to roll back wireless intelligent backup power configuration.",
       "examples": [
-        "Create New Tiered Power-Down Task, backup power endurance duration target: 4h"
+        "4h",
+        "Roll back wireless intelligent backup power configuration"
       ],
-      "x-a2at-value-constraint": "1. Create New Tiered Power-Down Task: backup power endurance duration target required, e.g. 4h. 2. Create Restoration Task: roll back wireless intelligent backup power configuration. 3. Modify Tiered Power-Down Task: backup power endurance duration target required, e.g. 4h."
+      "x-a2at-value-constraint": "Task target value rules: 1. Create New Tiered Power-Down Task: fill in backup power endurance duration target, e.g. 4h, 6h, 8h. 2. Create Restoration Task: fill in Roll back wireless intelligent backup power configuration. 3. Modify Tiered Power-Down Task: fill in backup power endurance duration target, e.g. 4h, 6h, 8h."
     },
     "task_object": {
       "type": "string",
       "description": "Supports list format, where each item contains site name and the list of cells included in the site. Required for Create New Tiered Power-Down Task, optional for Modify Tiered Power-Down Task, optional for Create Restoration Task.",
       "examples": [
-        "Longyan Xinluo Crystal Lanting-HRHH: 460-00-2136088-511: Critical Protection, 4G, 2.3GHz; 460-00-2136088-512: Critical Protection, 4G, 2.3GHz; 460-00-2136088-513: Key, 4G, 2.3GHz"
+        " - Longyan Xinluo Crystal Lanting-HRHH:\n   - 460-00-2136088-511: Critical Protection, 4G, 2.3GHz\n   - 460-00-2136088-512: Critical Protection, 4G, 2.3GHz\n   - 460-00-2136088-513: Key, 4G, 2.3GHz\n - Longyan Xinluo Longhui Community-HRHH:\n   - 460-00-2134161-514: Key, 5G, 2.6GHz\n   - 460-00-2134161-515: General, 5G, 2.6GHz\n   - 460-00-2134161-516: General, 5G, 2.6GHz"
       ],
-      "x-a2at-value-constraint": "Site name (required for Create New Tiered Power-Down Task, optional for Modify Tiered Power-Down Task, optional for Create Restoration Task). Cell list contains: cell identifier (CGI, e.g. 460-00-2136088-512), cell protection level (Critical Protection/Key/General), cell frequency band (e.g. 2.6GHz), cell technology (4G or LTE/5G or NR), resident users, current RRC users, traffic, voice traffic. Cell list is optional for Create New Tiered Power-Down Task and Modify Tiered Power-Down Task, not required for Create Restoration Task."
+      "x-a2at-value-constraint": "Site name (required for Create New Tiered Power-Down Task, optional for Modify Tiered Power-Down Task, optional for Create Restoration Task). Must strictly follow the example format: each site starts with ' - Site Name:', cells under each site are indented as '   - CGI: Protection Level, Technology, Frequency Band'. Cell list contains: cell identifier (CGI), cell protection level (Critical Protection/Key/General), cell frequency band, cell technology (4G or LTE/5G or NR), resident users, current RRC users, traffic, voice traffic. Cell list is optional for Create New Tiered Power-Down Task and Modify Tiered Power-Down Task, not required for Create Restoration Task."
     },
     "task_context": {
       "type": "string",

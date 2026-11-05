@@ -64,7 +64,6 @@ def env_file_for(config: LiveLlmConfig) -> Path:
                     f"A2AT_LLM_TEMPERATURE={config.temperature}",
                     f"A2AT_LLM_TIMEOUT_SECONDS={config.timeout_seconds}",
                     f"A2AT_LLM_MAX_ATTEMPTS={MAX_ATTEMPTS}",
-                    "A2AT_NEGOTIATION_STATE_STORE_TYPE=in_memory",
                     "",
                 )
             ),

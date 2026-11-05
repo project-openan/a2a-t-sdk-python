@@ -6,7 +6,7 @@ inject a placeholder api_key AND patches OpenAIClient.structured to return the c
 responses (subscribe-incident does the latter in its llm_logger, which this sample
 does not carry).
 
-Mock response files live under ../subscribe-incident/resources/mock_responses/.
+Mock response files live under ../fault-management/resources/mock_responses/.
 """
 
 from __future__ import annotations
@@ -19,8 +19,14 @@ from a2a_t.llm.models import LLMResponse
 from dotenv import dotenv_values
 
 # mock_llm.py → obs_sample → src → observability-sample → a2a-t-sample (parents[3]),
-# then into subscribe-incident's shared mock resources.
-_RESOURCES_DIR = Path(__file__).resolve().parents[3] / "subscribe-incident" / "resources" / "mock_responses"
+# then into the shared mock resources (the directory was renamed from
+# subscribe-incident to fault-management in #74; both names are accepted so the
+# sample keeps working on older checkouts).
+_MOCK_DIR_CANDIDATES = [
+    Path(__file__).resolve().parents[3] / "fault-management" / "resources" / "mock_responses",
+    Path(__file__).resolve().parents[3] / "subscribe-incident" / "resources" / "mock_responses",
+]
+_RESOURCES_DIR = next((p for p in _MOCK_DIR_CANDIDATES if p.exists()), _MOCK_DIR_CANDIDATES[0])
 
 _MOCK_RESPONSE_FILES = [
     "scenario_recognition.json",

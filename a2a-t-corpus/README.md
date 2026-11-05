@@ -9,14 +9,14 @@ It currently covers **Task-T**, **Negotiation-T** (RAN energy-saving target / in
 Three things to know before use:
 
 - **Test-only**: lives under `a2a-t-corpus/`, is not packaged into the `a2a_t` wheel, and is deselected in CI with `-m 'not live'`.
-- **A real LLM is required**: when the three required `A2AT_LLM_*` settings are missing it fails with an actionable error; the `.env` keys match the project-root `env.example`.
+- **A real LLM is required**: when the three required `A2AT_LLM_*` settings are missing it fails with an actionable error; the `.env` keys (`A2AT_LANGUAGE`, `A2AT_LLM_*`) reuse the project-root `env.example` names.
 - **The case format is shared with the Java repository**: case files, the schemas under `schemas/`, and the tools under `tools/` are kept identical across both repositories.
 
 ## 2. Module directory
 
 ```
 a2a-t-corpus/
-├── env.example                      configuration template, with the three required A2AT_LLM_* entries
+├── env.example                      configuration template, with A2AT_LANGUAGE and the three required A2AT_LLM_* entries
 ├── .env                             local configuration (secrets, gitignored; copied from env.example)
 ├── README.md                        English guide
 ├── README_zh.md                     Chinese guide
@@ -220,6 +220,7 @@ python a2a-t-corpus/tools/inputCsvToJson.py --reverse --csv a2a-t-corpus/suites/
 
 - **Only `input_case_*.json` is committed**: the CSV design table is for human review, `input_case_*.json` is what the code runs; they hold the same content, but only the JSON is committed.
 - **Adding a case needs no new code**: just create a scenario directory (`suites/<extension>/resources/<scenario>/`) and put the `input_case_*.json` in it; the suite discovers scenarios at collection time. Afterwards run the matching `test_*_self_guard.py` for a structural check.
+- **Non-default languages**: set `A2AT_LANGUAGE` in `a2a-t-corpus/.env` (or the process environment) and place the translated file next to the Chinese one as `input_case_from_text_<language>.json` / `input_case_from_data_<language>.json`, for example `input_case_from_text_en-US.json`. Keep the existing `caseDimension` / `caseCategory` vocabulary (for example `正常` / `异常`) so the report statistics and the self-guard category contract stay consistent. When no case file exists for the configured language, the workflow suites skip with an actionable message; no code change is needed once the file is added.
 
 ### 4.3 Case file format
 
@@ -253,6 +254,8 @@ All commands run from the repository root. First prepare the LLM configuration (
 ```
 cp a2a-t-corpus/env.example a2a-t-corpus/.env
 ```
+
+`A2AT_LANGUAGE` selects the prompt-resource language and the case-file variant. It defaults to `zh-CN`; set `en-US` to use the English templates. The corpus reads `a2a-t-corpus/.env` and the process environment (the project-root `.env` is not read). English cases live next to the Chinese ones as `input_case_from_text_en-US.json` / `input_case_from_data_en-US.json`; when no case file exists for the configured language, the workflow suites skip with an actionable message. Non-default languages write `output_result_<flow>_<language>.json` and `summary_report_<flow>_<language>.json`, so the Chinese run results are not overwritten.
 
 **Run every case**:
 
@@ -288,7 +291,7 @@ uv run pytest a2a-t-corpus/suites/task/test_task_t_from_text_workflow.py -m live
 - For Negotiation-T / Notification-T, just replace the suite path with `a2a-t-corpus/suites/negotiation` or `a2a-t-corpus/suites/notification`; the scenario name supports wildcards too.
 - Every executed case prints to the console as it completes; failed or crashed cases additionally print their full call record. Result files reflect only the current run, and a filtered run overwrites only the matched cases.
 - `--corpus-output-dir=<dir>` redirects the result files and the summary report to a given directory; by default result files write back into each scenario directory and the summary report goes to `a2a-t-corpus/.corpus/`.
-- Each scenario produces `output_result_from_text.json` / `output_result_from_data.json`, aggregated into `summary_report_<flow>.json` and a console table (pass rate overall / by scenario / by dimension / by category / by API step, with the 95% target marked, plus latency p50/p95 and token totals).
+- Each scenario produces `output_result_<flow>.json` (for non-default languages `output_result_<flow>_<language>.json`), aggregated into `summary_report_<flow>.json` and a console table (pass rate overall / by scenario / by dimension / by category / by API step, with the 95% target marked, plus latency p50/p95 and token totals).
 - Without an LLM, run the structural self-guards first (these run in CI):
 
 ```

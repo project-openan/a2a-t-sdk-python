@@ -141,9 +141,7 @@ class PromptComplianceIntegrationRuntimeTest(ManagedTempDirTestCase):
                 "a2a_t.server.a2at_server.PromptComplianceOrchestratorBuilder",
                 return_value=FakePromptComplianceBuilder(service),
             ),
-            patch("a2a_t.server.a2at_server.ServerNegotiationOrchestratorBuilder") as negotiation_builder_cls,
         ):
-            negotiation_builder_cls.return_value.build.return_value = object()
             server = A2ATServer()
 
             result = server.check_task_prompt(processed_prompt_text="processed body")
@@ -189,9 +187,7 @@ class PromptComplianceIntegrationRuntimeTest(ManagedTempDirTestCase):
                 "a2a_t.server.a2at_server.PromptComplianceOrchestratorBuilder",
                 return_value=FakePromptComplianceBuilder(service),
             ),
-            patch("a2a_t.server.a2at_server.ServerNegotiationOrchestratorBuilder") as negotiation_builder_cls,
         ):
-            negotiation_builder_cls.return_value.build.return_value = object()
             server = A2ATServer()
 
             result = server.check_task_prompt(processed_prompt_text="processed body")
@@ -255,9 +251,7 @@ class PromptComplianceIntegrationRuntimeTest(ManagedTempDirTestCase):
                 "a2a_t.server.a2at_server.PromptComplianceOrchestratorBuilder",
                 return_value=FakePromptComplianceBuilder(service),
             ),
-            patch("a2a_t.server.a2at_server.ServerNegotiationOrchestratorBuilder") as negotiation_builder_cls,
         ):
-            negotiation_builder_cls.return_value.build.return_value = object()
             server = A2ATServer()
 
             result = server.check_task_prompt(processed_prompt_text="processed body")

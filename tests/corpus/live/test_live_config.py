@@ -234,7 +234,6 @@ def test_env_file_carries_the_live_bridge_entries() -> None:
         "A2AT_LLM_TEMPERATURE=0",
         "A2AT_LLM_TIMEOUT_SECONDS=60",
         "A2AT_LLM_MAX_ATTEMPTS=3",
-        "A2AT_NEGOTIATION_STATE_STORE_TYPE=in_memory",
     ]
 
 

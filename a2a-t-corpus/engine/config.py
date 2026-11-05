@@ -1,8 +1,11 @@
-"""Unified LLM configuration of the accuracy verification corpus (port of the Java ``CorpusEnvConfig``).
+"""Unified runtime configuration of the accuracy verification corpus (port of the Java ``CorpusEnvConfig``).
 
-The configuration keys reuse the project-root ``env.example`` naming (the ``A2AT_LLM_*`` family),
-so the corpus ``env.example`` is a tuned subset of the root template and one set of names serves
-both production and testing. One shared configuration serves every -T extension suite.
+The configuration keys reuse the project-root ``env.example`` naming (``A2AT_LANGUAGE`` and the
+``A2AT_LLM_*`` family), so the corpus ``env.example`` is a tuned subset of the root template and
+one set of names serves both production and testing. One shared configuration serves every -T
+extension suite. ``A2AT_LANGUAGE`` selects both the prompt-resource language and the language-
+specific case-file variant (``input_case_from_*_en-US.json``); it defaults to ``zh-CN`` so the
+committed Chinese corpus keeps working unchanged.
 
 Resolution order: process environment variables > the ``.env`` file next to this module
 (Python has no ``-D`` system-property channel; the environment is the override channel). Blank
@@ -21,11 +24,13 @@ from pathlib import Path
 from typing import Final
 
 from dotenv import dotenv_values
+from engine.constants import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 
-__all__ = ["CorpusEnvConfig"]
+__all__ = ["CorpusEnvConfig", "resolve_language"]
 
 #: Environment-file keys (also accepted as process environment variables); names mirror the
 #: project-root ``env.example``.
+ENV_LANGUAGE: Final[str] = "A2AT_LANGUAGE"
 ENV_PROVIDER: Final[str] = "A2AT_LLM_PROVIDER"
 ENV_BASE_URL: Final[str] = "A2AT_LLM_BASE_URL"
 ENV_API_KEY: Final[str] = "A2AT_LLM_API_KEY"
@@ -47,11 +52,53 @@ def _env_file() -> Path:
     return Path(__file__).resolve().parent.parent / ".env"
 
 
+def _language_problem(language: str) -> str | None:
+    """Return the validation problem of one prompt language, or ``None`` when it is supported."""
+    if language in SUPPORTED_LANGUAGES:
+        return None
+    supported = ", ".join(sorted(SUPPORTED_LANGUAGES))
+    return f"- {ENV_LANGUAGE} must be one of: {supported} (currently \"{language}\")"
+
+
+def _resolve_language(env_file_values: dict[str, str | None]) -> str:
+    """Resolve the prompt language from the environment over the ``.env`` file."""
+    return _resolve(ENV_LANGUAGE, env_file_values) or DEFAULT_LANGUAGE
+
+
+def resolve_language(env_path: Path | None = None) -> str:
+    """Resolve only the corpus prompt language, without validating the LLM configuration.
+
+    The corpus selects its language-specific case files at pytest collection time, before the
+    lazy :class:`CorpusEnvConfig` runtime loading. This helper therefore touches only
+    ``A2AT_LANGUAGE``; it keeps the CI collection path free of the fail-fast LLM checks.
+
+    Args:
+        env_path: optional ``.env`` path; defaults to the corpus ``.env`` file.
+
+    Returns:
+        the configured language, or ``zh-CN`` when unset.
+
+    Raises:
+        RuntimeError: when the configured language is not supported by the bundled resources.
+    """
+    values = dotenv_values(env_path or _env_file())
+    language = _resolve_language(values)
+    problem = _language_problem(language)
+    if problem:
+        source = env_path or _env_file()
+        raise RuntimeError(
+            f"a2a-t-corpus has an invalid prompt-language configuration in {source}:\n"
+            f"{problem}\nSet {ENV_LANGUAGE} in the environment or the corpus .env file."
+        )
+    return language
+
+
 @lru_cache(maxsize=1)
 def _create() -> CorpusEnvConfig:
     """Resolve and validate the configuration exactly once per process."""
     env_file_values = dotenv_values(_env_file())
 
+    language = _resolve_language(env_file_values)
     provider = _resolve(ENV_PROVIDER, env_file_values)
     if not provider:
         provider = DEFAULT_PROVIDER
@@ -60,6 +107,9 @@ def _create() -> CorpusEnvConfig:
     model = _resolve(ENV_MODEL, env_file_values)
 
     problems: list[str] = []
+    language_problem = _language_problem(language)
+    if language_problem:
+        problems.append(language_problem)
     if provider != DEFAULT_PROVIDER:
         problems.append(f"- {ENV_PROVIDER} must be \"{DEFAULT_PROVIDER}\" (currently \"{provider}\")")
     if not base_url:
@@ -78,6 +128,7 @@ def _create() -> CorpusEnvConfig:
         )
 
     return CorpusEnvConfig(
+        language=language,
         provider=provider,
         base_url=base_url,
         api_key=api_key,
@@ -137,9 +188,10 @@ def _resolve_max_attempts(env_file_values: dict[str, str | None]) -> int:
 
 @dataclass(frozen=True, slots=True)
 class CorpusEnvConfig:
-    """Resolved corpus test-LLM configuration.
+    """Resolved corpus test runtime configuration.
 
     Attributes:
+        language: prompt-resource and case-file language, ``zh-CN`` or ``en-US``.
         provider: LLM provider, always ``openai``.
         base_url: OpenAI-compatible endpoint base URL.
         api_key: endpoint API key.
@@ -150,6 +202,7 @@ class CorpusEnvConfig:
         max_tokens: optional maximum number of completion tokens.
     """
 
+    language: str
     provider: str
     base_url: str
     api_key: str

@@ -66,6 +66,7 @@ flowchart LR
 | Negotiation content API | Supports `information` / `feasibility` / `target` negotiation types plus `abort` termination messages, with template-driven negotiation message generation and validation; negotiation session state travels in the message metadata (`negotiationContext`) and the SDK itself is stateless |
 | Resource organization | Bundled prompt resources (`prompts` / `scenarios` / `slots` / `templates` / `negotiation-vocabulary`) ship with the package, supporting both `packaged` built-in resources and `local_file` local files |
 | LLM adaptation | Connects to external LLMs through OpenAI-compatible call chains, retrying retryable error codes up to the configured attempt limit |
+| Observability | Automatically records traces, duration metrics, and structured logs of A2A-T interactions based on OpenTelemetry; integrate with one registration on the client and one wrapper on the server, with no business code changes, and it can be switched off entirely as needed |
 | Bundled samples | The repository ships runnable sample scenarios such as `subscribe_incident` (event subscription); without an API key they automatically degrade to scripted mock LLM responses, running end to end with zero external dependencies |
 
 ## Project Structure
@@ -82,6 +83,7 @@ The repository is organized with `uv`; the core code lives under `src/a2a_t`:
 | `llm` | LLM adaptation layer with a default OpenAI-compatible client; supports custom LLM integration |
 | `prompt` | Prompt resource analysis, slot extraction, template rendering, and validation |
 | `negotiation` | Negotiation content models, the generation pipeline, and the validation pipeline |
+| `observability` | The observability module, automatically recording interaction traces, metrics, and logs (requires the `a2a-t-sdk[observability]` extra dependency) |
 | `a2a-t-sample` | Runnable client/server sample case collection |
 | `a2a-t-corpus` | Accuracy verification corpus (pure test assets): data-driven workflow cases |
 
@@ -159,7 +161,7 @@ More runnable samples (event subscription end-to-end, RAN energy saving with an 
 
 | Document | Location | Content |
 | --- | --- | --- |
-| Developer Guide | [docs/en/developer_guide.md](docs/en/developer_guide.md) | Feature introduction, installation and integration, parameter configuration, and minimal practices |
+| Developer Guide | [docs/en/developer_guide.md](docs/en/developer_guide.md) | Feature introduction, installation and integration, parameter configuration, observability integration, and minimal practices |
 | API Reference | [docs/en/API_Reference.md](docs/en/API_Reference.md) | Full API definitions and usage of `A2ATClient` / `A2ATServer` |
 
 ## Current Support Scope
@@ -168,7 +170,7 @@ Confirm the following limitations before use:
 
 - The built-in LLM call chain is uniformly exposed as an OpenAI adaptation layer.
 - The LLM prompt resources are built in and do not support custom extension (`prompts` and `errors` are always read from the built-in resources).
-- Negotiation session state travels in the message metadata (the SDK is stateless) and no negotiation state store is provided; the legacy state-machine negotiation APIs (`start_negotiation` / `receive_negotiation` / `continue_negotiation`) are deprecated since 1.1.0.
+- Negotiation session state travels in the message metadata (the SDK is stateless) and no negotiation state store is provided; the legacy state-machine negotiation APIs (`start_negotiation` / `receive_negotiation` / `continue_negotiation`) were deprecated since v1.1.0 and removed in v1.2.0.
 - Bundled resources and language coverage are limited, and remote resource loading such as `registry-center` (the registry center) is not included.
 - This document mainly introduces the SDK itself and does not cover CLI tools, hosted services, deployment flows, or ready-to-use application solutions.
 

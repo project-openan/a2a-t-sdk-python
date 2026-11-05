@@ -534,7 +534,17 @@ class A2ATPushSenderDecorator:
         if not self._decorator_active():
             return await self._inner.send_notification(task_id, event)
         info = classify_event(_unwrap(event))
-        self._log_push(task_id, info)
+        dispatch_bearing = _safe_getattr(self._inner, "_dispatch_notification") is not None
+        if not dispatch_bearing:
+            # Only the plain-ABC path logs here: dispatch-bearing inners emit one
+            # log per push_info inside their wrapped _dispatch_notification.
+            self._log_push(task_id, info)
+        # V2/core senders route fanout through ``_dispatch_notification`` (whose
+        # wrapper already emits the per-push_info span with the URL) - forward
+        # without a second span. Plain ABC senders (no dispatch method) get the
+        # span here, with the URL read off the event (when present).
+        if dispatch_bearing:
+            return await self._inner.send_notification(task_id, event)
         span = self._start_push_span_for_url(task_id, info, _safe_getattr(event, "url"))
         cm: Any = _safe_use_span(span)
         try:
@@ -608,25 +618,6 @@ class A2ATRequestHandlerDecorator:
     # plumbing
     # ------------------------------------------------------------------
 
-    def _warn_if_v2_handler(self) -> None:
-        """One-time WARNING for a2a-sdk 1.1.x V2 ``DefaultRequestHandler`` inners.
-
-        The V2 implementation's ``ActiveTaskRegistry`` captures the original
-        executor/push-sender references at construction, so post-construction
-        wraps (``agent_executor`` / ``_push_sender`` attribute swaps) are silently
-        bypassed — per-event spans and push LINKs are lost while the entry spans
-        keep working. ``LegacyRequestHandler`` keeps full observability.
-        """
-        if getattr(self, "_v2_warned", False):
-            return
-        if _safe_getattr(self._inner, "_active_task_registry") is None:
-            return
-        self._v2_warned = True
-        logger.warning(
-            "a2at: DefaultRequestHandler V2 bypasses post-construction executor/push wraps; "
-            "use LegacyRequestHandler for full per-event/push observability"
-        )
-
     def _decorator_active(self) -> bool:
         """Master gate (spec §8.1): full pass-through only when OTel is unavailable/off.
 
@@ -647,14 +638,29 @@ class A2ATRequestHandlerDecorator:
         return getattr(inner, name)
 
     def _wrap_collaborators(self) -> None:
-        """Wrap the inner handler's ``agent_executor``/``_push_sender`` attrs (DefaultRequestHandler shape)."""
+        """Wrap the inner handler's collaborators for both handler shapes.
+
+        - ``LegacyRequestHandler``: per-attribute ``setattr`` is sufficient (the
+          handler resolves ``agent_executor`` / ``_push_sender`` per access).
+        - ``DefaultRequestHandlerV2`` (``_active_task_registry`` present): the
+          registry captured RAW references at construction, so setattr alone is
+          bypassed - rebuild the registry with the DECORATED executor /
+          push sender (D9). The registry is request-state-free at decoration
+          time, so the rebuild loses nothing.
+        """
         executor = _safe_getattr(self._inner, "agent_executor")
+        push_sender = _safe_getattr(self._inner, "_push_sender")
+        if _safe_getattr(self._inner, "_active_task_registry") is None:
+            self._wrap_legacy_collaborators(executor, push_sender)
+            return
+        self._wrap_v2_collaborators(executor, push_sender)
+
+    def _wrap_legacy_collaborators(self, executor: Any, push_sender: Any) -> None:
         if executor is not None and not isinstance(executor, A2ATAgentExecutorDecorator):
             try:
                 self._inner.agent_executor = A2ATAgentExecutorDecorator(executor, config=self._config)
             except Exception:  # noqa: BLE001
                 logger.warning("a2at: failed to wrap agent_executor", exc_info=True)
-        push_sender = _safe_getattr(self._inner, "_push_sender")
         if push_sender is not None and not isinstance(push_sender, A2ATPushSenderDecorator):
             try:
                 decorator = A2ATPushSenderDecorator(push_sender, config=self._config)
@@ -662,7 +668,34 @@ class A2ATRequestHandlerDecorator:
                     self._inner._push_sender = decorator
             except Exception:  # noqa: BLE001
                 logger.warning("a2at: failed to wrap push sender", exc_info=True)
-        self._warn_if_v2_handler()
+
+    def _wrap_v2_collaborators(self, executor: Any, push_sender: Any) -> None:
+        """D9: rebuild the V2 ``ActiveTaskRegistry`` with decorated collaborators."""
+        try:
+            if executor is not None and not isinstance(executor, A2ATAgentExecutorDecorator):
+                executor = A2ATAgentExecutorDecorator(executor, config=self._config)
+                self._inner.agent_executor = executor
+            if push_sender is not None and not isinstance(push_sender, A2ATPushSenderDecorator):
+                push_sender = A2ATPushSenderDecorator(push_sender, config=self._config)
+                self._inner._push_sender = push_sender
+                if not push_sender.install_dispatch_wrapper():
+                    logger.debug(
+                        "a2at: V2 push sender has no _dispatch_notification; "
+                        "push spans will be emitted via the send_notification surface"
+                    )
+            registry = _safe_getattr(self._inner, "_active_task_registry")
+            registry_cls = type(registry)
+            self._inner._active_task_registry = registry_cls(
+                agent_executor=executor,
+                task_store=_safe_getattr(self._inner, "task_store"),
+                push_sender=push_sender,
+            )
+            logger.info("a2at: DefaultRequestHandler V2 detected - registry rebuilt with decorated collaborators")
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "a2at: V2 registry rebuild failed; entry spans keep working, per-event/push spans are degraded",
+                exc_info=True,
+            )
 
     def _start_server_entry_span(self, name: str, params: Any, context: Any) -> Any | None:
         if not _otel_compat.is_trace_enabled() or not self._config.trace_enabled:

@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "a2a-t-sdk"
-version = "1.1.0"
+version = "1.2.0"
 description = "Python A2A SDK for Telecom Scenarios"
 readme = "README.md"
 license = "Apache-2.0"
@@ -64,10 +64,6 @@ integration = [
 [project.urls]
 Homepage = "https://github.com/project-openan/a2a-t-sdk-python"
 Documentation = "https://github.com/project-openan/a2a-t-sdk-python#readme"
-
-[[tool.uv.index]]
-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
-default = true
 
 [tool.uv.build-backend]
 module-name = "a2a_t"

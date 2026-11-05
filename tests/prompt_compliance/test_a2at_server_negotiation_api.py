@@ -1,20 +1,17 @@
 """Negotiation content API of the server facade (port of Java ``A2ATServerNegotiationApiTest``).
 
-The server facade exposes the same twelve negotiation content methods and template queries as the
+The server facade exposes the same twelve negotiation content methods and internal template queries as the
 client facade over the same shared service, so this suite pins the symmetric surface: the
 from-data legs render the Java golden fixtures byte-for-byte against the packaged templates, the
 from-text and validation legs run against a scripted LLM client, the raw string template URI
-boundary fails fast on every method (D16), every method delegates to the matching service method
-with the typed URI, and the deprecation shim round (D1) warns on the three legacy state-machine
-facade methods and on the import of every old negotiation demo package.
+boundary fails fast on every method (D16), and every method delegates to the matching service
+method with the typed URI.
 """
 
 from __future__ import annotations
 
-import importlib
 import sys
 from pathlib import Path
-from types import ModuleType
 from typing import Any, Callable
 from unittest.mock import patch
 
@@ -72,17 +69,6 @@ NEGOTIATION_API_METHODS = (
     "validate_reject_prompt_and_data_filling",
     "validate_abort_prompt_and_data_filling",
 )
-
-#: The six retired state-machine negotiation demo packages kept for one release (D1).
-OLD_NEGOTIATION_PACKAGES = (
-    "a2a_t.negotiation.common",
-    "a2a_t.negotiation.types",
-    "a2a_t.negotiation.store",
-    "a2a_t.negotiation.runtime",
-    "a2a_t.negotiation.handling",
-    "a2a_t.negotiation.rendering",
-)
-
 
 class ScriptedLlmClient:
     """LLM boundary fake replaying scripted payloads and recording every structured call."""
@@ -453,11 +439,11 @@ def _boundary_calls(server: A2ATServer) -> dict[str, Callable[..., Any]]:
         "validate_abort_prompt_and_data_filling": lambda uri: server.validate_abort_prompt_and_data_filling(
             "message", abort_context, {"type": "object"}, uri
         ),
-        "get_prompt": server.get_prompt,
+        "_get_prompt": server._get_prompt,
     }
 
 
-@pytest.mark.parametrize("method_name", (*NEGOTIATION_API_METHODS, "get_prompt"))
+@pytest.mark.parametrize("method_name", (*NEGOTIATION_API_METHODS, "_get_prompt"))
 @pytest.mark.parametrize("malformed_uri", _MALFORMED_URIS, ids=["one-segment", "blank", "two-segments"])
 def test_template_uri_boundary_rejects_malformed_uris(method_name: str, malformed_uri: str, tmp_path: Path) -> None:
     server = build_server(write_env(tmp_path, "zh-CN"))
@@ -466,7 +452,7 @@ def test_template_uri_boundary_rejects_malformed_uris(method_name: str, malforme
         _boundary_calls(server)[method_name](malformed_uri)
 
 
-@pytest.mark.parametrize("method_name", (*NEGOTIATION_API_METHODS, "get_prompt"))
+@pytest.mark.parametrize("method_name", (*NEGOTIATION_API_METHODS, "_get_prompt"))
 def test_template_uri_boundary_rejects_a_null_uri(method_name: str, tmp_path: Path) -> None:
     server = build_server(write_env(tmp_path, "zh-CN"))
 
@@ -641,28 +627,28 @@ class RecordingQueryService:
         return None
 
 
-def test_template_queries_delegate_to_the_query_service(tmp_path: Path) -> None:
+def test_private_template_queries_delegate_to_the_query_service(tmp_path: Path) -> None:
     server = build_server(write_env(tmp_path, "zh-CN"))
     recording = RecordingQueryService()
     server._template_query_service = recording
 
-    assert server.get_prompts() == []
-    assert server.get_prompt(INFORMATION_NEGOTIATION_PROPOSE_URI) is None
+    assert server._get_prompts() == []
+    assert server._get_prompt(INFORMATION_NEGOTIATION_PROPOSE_URI) is None
 
     assert recording.prompts_calls == 1
     assert recording.prompt_calls == [INFORMATION_NEGOTIATION_PROPOSE]
 
 
 # --------------------------------------------------------------------------------------
-# template queries over the packaged tree
+# internal template queries over the packaged tree
 # --------------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
-def test_get_prompts_lists_every_bundled_template_sorted_by_uri(language: str, tmp_path: Path) -> None:
+def test_private_get_prompts_lists_every_bundled_template_sorted_by_uri(language: str, tmp_path: Path) -> None:
     server = build_server(write_env(tmp_path, language))
 
-    prompts = server.get_prompts()
+    prompts = server._get_prompts()
 
     assert len(prompts) == 13
     uris = [template.template_uri.uri for template in prompts]
@@ -687,10 +673,10 @@ def test_get_prompts_lists_every_bundled_template_sorted_by_uri(language: str, t
         "Authorization-T/authorization-policy-management/v1",
     ),
 )
-def test_get_prompt_loads_one_bundled_template(template_uri: str, language: str, tmp_path: Path) -> None:
+def test_private_get_prompt_loads_one_bundled_template(template_uri: str, language: str, tmp_path: Path) -> None:
     server = build_server(write_env(tmp_path, language))
 
-    template = server.get_prompt(template_uri)
+    template = server._get_prompt(template_uri)
 
     assert template is not None
     assert template.template_uri == TemplateUri.parse(template_uri)
@@ -708,50 +694,12 @@ def test_get_prompt_loads_one_bundled_template(template_uri: str, language: str,
         "Task-T/network-layer/unknown-scenario/v1",
     ),
 )
-def test_get_prompt_answers_none_for_unknown_templates(unknown_uri: str, tmp_path: Path) -> None:
+def test_private_get_prompt_answers_none_for_unknown_templates(unknown_uri: str, tmp_path: Path) -> None:
     server = build_server(write_env(tmp_path, "zh-CN"))
 
-    assert server.get_prompt(unknown_uri) is None
-
-
-# --------------------------------------------------------------------------------------
-# deprecation shim round (D1)
-# --------------------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("method", "build_input"),
-    (
-        ("start_negotiation", lambda: object()),
-        ("receive_negotiation", lambda: ("message", {})),
-        ("continue_negotiation", lambda: object()),
-    ),
-)
-def test_legacy_negotiation_methods_warn_and_still_delegate(
-    method: str, build_input: Callable[[], Any], tmp_path: Path
-) -> None:
-    server = build_server(write_env(tmp_path, "zh-CN"))
-    input = build_input()
-    with patch.object(server._negotiation_orchestrator, method, return_value={"legacy": True}) as delegated:
-        with pytest.warns(DeprecationWarning, match=f"A2ATServer\\.{method} is deprecated since 1\\.1\\.0"):
-            result = (
-                getattr(server, method)(input)
-                if method != "receive_negotiation"
-                else server.receive_negotiation(*input)
-            )
-
-    assert result == {"legacy": True}
-    delegated.assert_called_once()
-
-
-@pytest.mark.parametrize("package_name", OLD_NEGOTIATION_PACKAGES)
-def test_importing_an_old_negotiation_package_warns(package_name: str) -> None:
-    module: ModuleType = importlib.import_module(package_name)
-
-    with pytest.warns(DeprecationWarning, match=f"{package_name} package is deprecated since 1\\.1\\.0"):
-        importlib.reload(module)
+    assert server._get_prompt(unknown_uri) is None
 
 
 def test_negotiation_api_surface_is_complete() -> None:
-    for method in (*NEGOTIATION_API_METHODS, "get_prompts", "get_prompt"):
+    for method in NEGOTIATION_API_METHODS:
         assert callable(getattr(A2ATServer, method, None)), f"A2ATServer is missing {method}"

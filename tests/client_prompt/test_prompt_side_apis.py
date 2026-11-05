@@ -423,7 +423,6 @@ def test_facade_checks_input_arguments_before_the_template_uri(method_name: str,
         patch("a2a_t.client.a2at_client.LLMConfigLoader.load", return_value=llm_config),
         patch("a2a_t.client.a2at_client.LLMClientFactory.create", return_value=object()),
         patch("a2a_t.client.a2at_client.PromptGenerationOrchestratorBuilder"),
-        patch("a2a_t.client.a2at_client.ClientNegotiationOrchestratorBuilder"),
     ):
         client = A2ATClient()
 

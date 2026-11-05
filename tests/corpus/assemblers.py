@@ -238,7 +238,6 @@ def _minimal_env_for(language: str, max_attempts: int) -> Path:
                     "A2AT_LLM_BASE_URL=https://llm.example.test/v1",
                     "A2AT_LLM_API_KEY=corpus-scripted",
                     f"A2AT_LLM_MAX_ATTEMPTS={max_attempts}",
-                    "A2AT_NEGOTIATION_STATE_STORE_TYPE=in_memory",
                     "",
                 )
             ),

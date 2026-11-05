@@ -30,7 +30,17 @@ __all__ = [
     "FLOW_FROM_TEXT",
     "INPUT_CASE_FROM_DATA",
     "INPUT_CASE_FROM_TEXT",
+    "DEFAULT_LANGUAGE",
+    "SUPPORTED_LANGUAGES",
+    "case_file_variants",
+    "localized_case_file",
 ]
+
+#: Default prompt and case-file language of the corpus (the committed cases are zh-CN).
+DEFAULT_LANGUAGE: Final[str] = "zh-CN"
+
+#: Languages the SDK bundles prompt resources for and the corpus accepts as case-file variants.
+SUPPORTED_LANGUAGES: Final[frozenset[str]] = frozenset({"zh-CN", "en-US"})
 
 #: Case file consumed by the natural-language workflow suites.
 INPUT_CASE_FROM_TEXT: Final[str] = "input_case_from_text.json"
@@ -43,6 +53,42 @@ FLOW_FROM_TEXT: Final[str] = "from_text"
 
 #: Flow tag of the structured-input suites.
 FLOW_FROM_DATA: Final[str] = "from_data"
+
+
+def localized_case_file(base_name: str, language: str) -> str:
+    """Return the case-file name of one language.
+
+    The committed zh-CN cases keep the historical ``input_case_from_*.json`` names; every other
+    supported language appends its locale tag before the extension, for example
+    ``input_case_from_text_en-US.json``.
+
+    Args:
+        base_name: language-neutral case-file name such as ``input_case_from_text.json``.
+        language: locale identifier such as ``zh-CN`` or ``en-US``.
+
+    Returns:
+        the language-specific case-file name.
+    """
+    if language == DEFAULT_LANGUAGE:
+        return base_name
+    stem, separator, suffix = base_name.rpartition(".")
+    if not separator:
+        return f"{base_name}_{language}"
+    return f"{stem}_{language}.{suffix}"
+
+
+def case_file_variants(base_name: str) -> tuple[str, ...]:
+    """Return the default case file followed by every optional language variant.
+
+    Args:
+        base_name: language-neutral case-file name such as ``input_case_from_text.json``.
+
+    Returns:
+        the default-language name first, then one name per non-default supported language in
+        sorted order.
+    """
+    others = (language for language in sorted(SUPPORTED_LANGUAGES) if language != DEFAULT_LANGUAGE)
+    return (base_name, *(localized_case_file(base_name, language) for language in others))
 
 # ---------- Task-T ----------
 
