@@ -50,9 +50,12 @@
 
   <main class="main">
     <section class="left" aria-label="演示舞台">
-      <div class="protocol-row" hidden>
+      <div class="protocol-row" id="protocol-row" hidden>
         <span class="micro-label" id="protocol-label">协议</span>
-        <span class="protocol-badge" id="protocol-badge">A2A-T</span>
+        <span class="protocols" id="protocol-switch" role="group" aria-labelledby="protocol-label">
+          <button type="button" class="pbtn" data-protocol="a2a-t" aria-pressed="true">A2A-T</button>
+          <button type="button" class="pbtn" data-protocol="pure" aria-pressed="false">A2A</button>
+        </span>
         <span class="protocol-hint" id="protocol-hint"></span>
       </div>
 

@@ -75,12 +75,16 @@ class PlainTaskHandler:
 
 
 class ProtocolDispatchHandler:
-    """Route one inbound request to the A2A-T pre-task gate or the plain entry."""
+    """Route one inbound request to the A2A-T gate or the request form without the extension.
 
-    def __init__(self, negotiation: Any, plain: PlainTaskHandler) -> None:
-        """Create one dispatcher over the two protocol entries."""
+    The fallback handler is the plain entry for a single-protocol deployment, and the pure
+    (standard A2A Task lifecycle) handler for the single-agent server that serves both forms.
+    """
+
+    def __init__(self, negotiation: Any, fallback: Any) -> None:
+        """Create one dispatcher over the extension and fallback entries."""
         self._negotiation = negotiation
-        self._plain = plain
+        self._plain = fallback
 
     async def handle(self, context: RequestContext) -> NegotiationOutcome:
         """Handle one request with the entry its protocol selects."""

@@ -39,6 +39,18 @@ SUPPORTED_PROTOCOLS: Final[tuple[str, ...]] = (
 #: ``/api/runs`` and the tests as an internal single-turn baseline, but is not advertised.
 DEMO_PROTOCOLS: Final[tuple[str, ...]] = (PROTOCOL_A2A_T, PROTOCOL_PURE)
 
+#: Server-side mode of the single-agent server. A2A-T is an optional extension of A2A, so one
+#: process serves both request forms and decides per request whether the extension was used.
+#: This is not a client protocol and never appears in :data:`SUPPORTED_PROTOCOLS`.
+PROTOCOL_MODE_BOTH: Final[str] = "both"
+
+#: Accepted values of the server's ``A2AT_SAMPLE_PROTOCOL_MODE`` setting.
+SERVER_PROTOCOL_MODES: Final[tuple[str, ...]] = (
+    PROTOCOL_A2A_T,
+    PROTOCOL_PURE,
+    PROTOCOL_MODE_BOTH,
+)
+
 #: Terminal client outcomes.
 FinalState = Literal[
     "task_completed",

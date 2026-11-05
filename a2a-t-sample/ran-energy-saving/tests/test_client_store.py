@@ -83,12 +83,14 @@ async def test_run_idempotency_update_and_listing(tmp_path: Path) -> None:
         mode="auto",
         transport="sse",
         discovery="registry",
+        protocol="pure",
         user_request="please save energy",
         idempotency_key="key-1",
     )
     await store.create_run(run)
 
-    assert (await store.get_run("run-1")) is not None
+    created = await store.get_run("run-1")
+    assert created is not None and created.protocol == "pure"
     found = await store.find_run_by_idempotency("conv-1", "key-1")
     assert found is not None and found.run_id == "run-1"
     assert await store.find_run_by_idempotency("conv-1", "") is None
@@ -248,14 +250,20 @@ def test_v2_migration_dedupes_active_runs(tmp_path: Path) -> None:
     # Constructing the store applies migration 2.
     SqliteClientStore(path)
     with connect(path) as connection:
-        assert schema_version(connection) == 3
+        assert schema_version(connection) == 4
         statuses = {
             str(run_id): str(status)
             for run_id, status in connection.execute(
                 "SELECT run_id, status FROM runs"
             ).fetchall()
         }
+        protocols = {
+            str(protocol)
+            for (protocol,) in connection.execute("SELECT protocol FROM runs").fetchall()
+        }
     assert statuses == {"older": "interrupted", "newer": "running"}
+    # Rows written before the switch existed were A2A-T; the migration keeps that history.
+    assert protocols == {"a2a-t"}
 
     with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
         with connect(path) as connection:

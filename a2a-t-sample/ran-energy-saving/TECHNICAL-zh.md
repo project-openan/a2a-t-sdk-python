@@ -606,9 +606,12 @@ artifact，并以 `COMPLETED` 结束。
 工程师/UI ──A2A──► OSS Agent ──A2A──► RAN Agent ──A2A──► MIE Agent
 ```
 
-A2A-T 路径完全不变：`--protocol a2a-t` 仍安装
-`ProtocolDispatchHandler(PreTaskNegotiationHandler, PlainTaskHandler)`。纯 A2A 模式只在 RAN 进程中安装
-`PureTaskHandler`（`build_server_runtime(protocol_mode="pure")`），两种模式可以并行启动、互不影响。
+A2A-T 是 A2A 的扩展，所以 RAN 进程可以同时服务两种形态。`--protocol both` 构建
+`ProtocolDispatchHandler(PreTaskNegotiationHandler, PureTaskHandler)`：声明或携带 `Task-T` 的请求
+进入预任务协商门，其余请求走标准 A2A Task 生命周期。执行器不再在构造时固定 `pure`，而是按请求
+判定（`is_plain_request`），因此最终 artifact metadata 和审批门都跟随请求。一个
+`A2AT_SAMPLE_PROTOCOL_MODE=both` 进程即对应真机网管那种“一个服务、扩展可选”的形态。
+`--protocol a2a-t` / `--protocol pure` 仍保留为单形态构建，供只需要一种形态的部署使用。
 
 **RAN 协商（`protocol/pure_a2a.py`）。** `PureTaskHandler` 检查入站消息：
 
@@ -633,9 +636,13 @@ A2A-T 路径完全不变：`--protocol a2a-t` 仍安装
 继续或拒绝。默认超时 240 秒，与 A2A-T 审批门一致。
 
 **客户端与 UI。** `protocol/pure_client_flow.py` 发送纯文本消息，收到
-`INPUT_REQUIRED(kind=negotiation)` 后带 `taskId`/`contextId` 续传。演示进程是单模式的：
-`--protocol pure` 只暴露 pure 场景和 `mieEnabled`，移除协议开关与对比卡，代理
-`/api/mie/events` 与 `/api/mie/approvals/{taskId}`，并在结果卡展示 OSS 最终状态里的 per-run metrics。
+`INPUT_REQUIRED(kind=negotiation)` 后带 `taskId`/`contextId` 续传。`/api/meta` 广告请求形态
+（`protocols`、`scenariosByProtocol`、`protocolDefaults`）；`--protocol both` 时页面提供页内切换，
+每次 run 记录自己的形态。每一形态的跳转由后端决定：A2A-T 在真机部署用 `nms`（否则 `registry`），
+标准 A2A 用 `direct` 指向 OSS Agent，transport 同样分流。标准 A2A 的 MIE 审批卡由 `mieEnabled`
+驱动，A2A-T 的服务端审批由 `approvalGate` 单独表示，因此同一进程可以只启用 MIE 审批而不暂停
+A2A-T run（`A2AT_SAMPLE_PURE_APPROVAL_GATE`）。页面代理 `/api/mie/events` 与
+`/api/mie/approvals/{taskId}`，并在结果卡展示 OSS 最终状态里的 per-run metrics。
 工程师客户端直接发现 OSS（`A2AT_SAMPLE_DIRECT_SERVER_URL`），OSS 发现 RAN
 （`A2AT_SAMPLE_RAN_URL`），RAN 发现 MIE（`A2AT_SAMPLE_MIE_URL`）。
 

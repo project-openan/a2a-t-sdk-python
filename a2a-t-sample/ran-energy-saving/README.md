@@ -322,8 +322,9 @@ review; server-side approval 2 does not exist in NMS mode because the vendor own
 
 ### Two instances on one machine
 
-The A2A-T and pure A2A demos can run side by side against the same NMS. Each instance needs its
-own launcher state, data directory, UI port and webhook port:
+One instance can switch request forms in the page (`--protocol both`). Running two instances is
+still useful when each side needs its own NMS credentials, data directory or webhook endpoint. Each
+instance needs its own launcher state, data directory, UI port and webhook port:
 
 | | A2A-T | pure A2A |
 |---|---|---|
@@ -365,11 +366,29 @@ A real NMS requires an https callback reachable through a gateway. Set
 checks Basic auth instead of `A2AT_SAMPLE_WEBHOOK_TOKEN`, and the same credentials are registered in
 the inline push config.
 
-### Pure A2A mode (three hops, standard A2A only)
+### One agent, two request forms
 
-The page is single-mode: the protocol is fixed when the process starts, and the page has no
-protocol switch or comparison card. Run the A2A-T demo and the pure A2A demo separately to compare
-them.
+A2A-T is an extension of A2A, not a second protocol. The RAN Agent always speaks standard A2A;
+when a request declares or carries `Task-T`, the same agent runs the pre-task negotiation and
+stamps A2A-T metadata on the result. The vendor NMS works the same way: one service, and the
+request says whether the extension is used.
+
+`--protocol both` starts that single agent and a page with a protocol switch:
+
+```bash
+uv run python -m demo.run_demo --protocol both --ui --model-mode offline
+```
+
+- **A2A** — standard Task lifecycle (`INPUT_REQUIRED` continuation). In the local topology the
+  request takes three hops: UI → OSS Agent → RAN Agent → MIE Agent.
+- **A2A + A2A-T** — Task-T template validation and pre-task negotiation, served by the same RAN
+  Agent.
+
+Every run records its request form, so the session trace, metrics and history stay consistent when
+the page switches. `--protocol a2a-t` and `--protocol pure` remain available for a deployment that
+serves only one form or for a deterministic CLI run.
+
+### Pure A2A mode (three hops, standard A2A only)
 
 `--protocol pure` starts a real three-hop A2A chain:
 

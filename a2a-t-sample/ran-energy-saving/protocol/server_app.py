@@ -1,10 +1,10 @@
 """Application assembly of the RAN energy-saving A2A-T server.
 
 The module builds the AgentCard (declaring the Task-T and Negotiation-T extensions), the A2A
-request handler, the Starlette app and the registry registration. The server always runs the
-pre-task negotiation handler in front of the deterministic RAN NMS executor, so all negotiation
-happens before a
-Task is created and the server uses no ADK agent.
+request handler, the Starlette app and the registry registration. One agent serves both request
+forms: the pre-task negotiation handler runs in front of the deterministic RAN NMS executor when a
+request declares or carries the Task-T extension, and a standard A2A Task lifecycle otherwise. All
+negotiation happens before a Task is created and the server uses no ADK agent.
 
 Offline mode registers the traced scripted SDK provider and points the SDK at a temporary ``.env``
 carrying ``A2AT_LLM_PROVIDER=scripted_traced`` / ``A2AT_LLM_MODEL=scripted`` /
@@ -68,7 +68,13 @@ from shared.http_security import (
 )
 from shared.logging_setup import configure_logging
 from shared.registry_client import register_agentcard
-from shared.run_constants import MAX_ROUNDS, PROTOCOL_A2A_T, PROTOCOL_PURE
+from shared.run_constants import (
+    MAX_ROUNDS,
+    PROTOCOL_A2A_T,
+    PROTOCOL_MODE_BOTH,
+    PROTOCOL_PURE,
+    SERVER_PROTOCOL_MODES,
+)
 from shared.sdk_env import prepare_sdk_env
 from shared.trace import FileTraceEmitter, HttpTraceEmitter, set_global_sink
 from shared.trace_propagation import TracePropagationMiddleware
@@ -82,12 +88,13 @@ from starlette.routing import Route
 from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS, ApprovalRegistry
 from protocol.mie_client import MIEApprovalClient
 from protocol.negotiation_policy import NegotiationState, PolicyDecision
-from protocol.plain_a2a import PlainTaskHandler, ProtocolDispatchHandler
+from protocol.plain_a2a import PlainTaskHandler, ProtocolDispatchHandler, is_plain_request
 from protocol.pre_task_negotiation import PreTaskNegotiationHandler, TaskTPrecheck
 from protocol.pure_a2a import PureTargetPolicy, PureTaskHandler
 from protocol.server_agent_spec import ServerAgentFactory
 from protocol.server_executor import (
     NegotiationAgentExecutor,
+    PureResolver,
     TaskRequestHandler,
     build_negotiation_executor,
 )
@@ -373,6 +380,7 @@ def build_server_runtime(
     mie_url: str | None = None,
     mie_client: MIEApprovalClient | None = None,
     approval_gate: bool | None = None,
+    pure_approval_gate: bool | None = None,
     approval_timeout_seconds: float | None = None,
 ) -> ServerRuntime:
     """Assemble the full server runtime.
@@ -388,8 +396,9 @@ def build_server_runtime(
         logger: optional logger shared by the gate and the runtime.
         install_offline_provider: installer of the deterministic SDK LLM routing; required in
             offline mode.
-        protocol_mode: ``a2a-t`` keeps the existing pre-task gate; ``pure`` installs the
-            extension-free INPUT_REQUIRED handler.
+        protocol_mode: ``a2a-t`` keeps the existing pre-task gate with the plain fallback;
+            ``pure`` installs only the extension-free INPUT_REQUIRED handler; ``both`` serves
+            both forms in one agent, deciding per request from the Task-T extension.
         pure_policy: business policy of the pure target negotiation; when omitted, a policy with
             no configured baseline target is used (tests may inject one).
         mie_url: MIE Agent base URL of the pure approval hop; defaults to
@@ -397,6 +406,9 @@ def build_server_runtime(
         mie_client: optional pre-built MIE approval client (tests).
         approval_gate: override of the ``A2AT_SAMPLE_APPROVAL_GATE`` switch (tests); ``None``
             keeps the environment-driven behavior.
+        pure_approval_gate: whether a standard A2A request waits for the MIE approval. Defaults to
+            the local approval switch, but the single agent sets it independently so A2A-T and
+            standard A2A can enable different gates in one process.
         approval_timeout_seconds: override of the approval timeout (tests).
 
     Returns:
@@ -406,9 +418,10 @@ def build_server_runtime(
         ValueError: when offline mode has no deterministic provider installer, or when
             ``protocol_mode`` is unknown.
     """
-    if protocol_mode not in (PROTOCOL_A2A_T, PROTOCOL_PURE):
+    if protocol_mode not in SERVER_PROTOCOL_MODES:
         raise ValueError(
-            f"Unsupported server protocol mode: {protocol_mode}; expected a2a-t or pure"
+            f"Unsupported server protocol mode: {protocol_mode}; expected one of "
+            f"{', '.join(SERVER_PROTOCOL_MODES)}"
         )
     resolved_logger = logger or _LOGGER
     resolved_config = config or load_config(env_path=env_path)
@@ -429,25 +442,32 @@ def build_server_runtime(
         set_global_sink(trace_emitter)
     sdk_env_path = prepare_sdk_env_path(resolved_config, env_path)
     prompt_server = A2ATServer(env_path=sdk_env_path, logger=resolved_logger)
-    if protocol_mode == PROTOCOL_PURE:
-        from protocol.pure_a2a import RegexPureTargetPolicy
+    from protocol.pure_a2a import RegexPureTargetPolicy
 
-        pre_task_handler: TaskRequestHandler = PureTaskHandler(
-            policy=pure_policy or RegexPureTargetPolicy(),
-            language=resolved_config.language,
-            max_rounds=MAX_ROUNDS,
-            logger=resolved_logger,
-        )
+    pure_handler = PureTaskHandler(
+        policy=pure_policy or RegexPureTargetPolicy(),
+        language=resolved_config.language,
+        max_rounds=MAX_ROUNDS,
+        logger=resolved_logger,
+    )
+    negotiation_handler = PreTaskNegotiationHandler(
+        prompt_server,
+        max_rounds=MAX_ROUNDS,
+        logger=resolved_logger,
+        policy=policy,
+        precheck=precheck,
+    )
+    pre_task_handler: TaskRequestHandler
+    if protocol_mode == PROTOCOL_PURE:
+        pre_task_handler = pure_handler
+    elif protocol_mode == PROTOCOL_MODE_BOTH:
+        # A2A-T is an optional extension of A2A. One agent serves both forms: a request that
+        # declares or carries Task-T goes through the pre-task gate; everything else gets the
+        # standard A2A Task lifecycle, exactly like a vendor NMS that exposes both surfaces.
+        pre_task_handler = ProtocolDispatchHandler(negotiation_handler, pure_handler)
     else:
         pre_task_handler = ProtocolDispatchHandler(
-            PreTaskNegotiationHandler(
-                prompt_server,
-                max_rounds=MAX_ROUNDS,
-                logger=resolved_logger,
-                policy=policy,
-                precheck=precheck,
-            ),
-            PlainTaskHandler(logger=resolved_logger),
+            negotiation_handler, PlainTaskHandler(logger=resolved_logger)
         )
     if approval_gate is None:
         approval_enabled = os.environ.get(
@@ -471,7 +491,15 @@ def build_server_runtime(
         )
     )
     approval_registry = ApprovalRegistry() if approval_enabled else None
-    if protocol_mode == PROTOCOL_PURE and approval_enabled and mie_client is None:
+    pure_enabled = protocol_mode in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH)
+    if pure_approval_gate is None:
+        raw_pure_gate = os.environ.get("A2AT_SAMPLE_PURE_APPROVAL_GATE", "").strip().lower()
+        pure_gate_enabled = (
+            raw_pure_gate in {"1", "true", "yes"} if raw_pure_gate else approval_enabled
+        )
+    else:
+        pure_gate_enabled = pure_approval_gate
+    if pure_enabled and pure_gate_enabled and mie_client is None:
         resolved_mie_url = (
             mie_url
             or os.environ.get("A2AT_SAMPLE_MIE_URL", "http://127.0.0.1:8002")
@@ -481,13 +509,16 @@ def build_server_runtime(
                 base_url=resolved_mie_url,
                 timeout_seconds=resolved_config.http_timeout_seconds,
             )
+    pure_for_executor: bool | PureResolver = (
+        is_plain_request if protocol_mode == PROTOCOL_MODE_BOTH else protocol_mode == PROTOCOL_PURE
+    )
     executor = build_negotiation_executor(
         handler=pre_task_handler,
         agent_factory=agent_factory,
         config=resolved_config,
         approval_registry=approval_registry,
         approval_timeout_seconds=approval_timeout,
-        pure=protocol_mode == PROTOCOL_PURE,
+        pure=pure_for_executor,
         mie_client=mie_client,
     )
     task_store: TaskStore = (
@@ -542,6 +573,7 @@ def build_server_app(
     mie_url: str | None = None,
     mie_client: MIEApprovalClient | None = None,
     approval_gate: bool | None = None,
+    pure_approval_gate: bool | None = None,
     approval_timeout_seconds: float | None = None,
 ) -> Starlette:
     """Build only the Starlette app (see :func:`build_server_runtime` for the full runtime)."""
@@ -558,6 +590,7 @@ def build_server_app(
         mie_url=mie_url,
         mie_client=mie_client,
         approval_gate=approval_gate,
+        pure_approval_gate=pure_approval_gate,
         approval_timeout_seconds=approval_timeout_seconds,
     ).app
 
@@ -616,7 +649,7 @@ def main() -> None:
     )
     pure_policy = (
         build_demo_pure_policy(resolved_config.language)
-        if protocol_mode == PROTOCOL_PURE
+        if protocol_mode in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH)
         else None
     )
     runtime = build_server_runtime(

@@ -20,6 +20,7 @@ from shared.run_constants import (
     BRAND_ORANGE,
     DEMO_PROTOCOLS,
     PROTOCOL_A2A_T,
+    PROTOCOL_MODE_BOTH,
     SUPPORTED_BRANDS,
 )
 
@@ -65,7 +66,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--approval-timeout", type=float, default=DEFAULT_APPROVAL_TIMEOUT_SECONDS
     )
     parser.add_argument("--allow-insecure-bind", action="store_true")
-    parser.add_argument("--protocol", default=PROTOCOL_A2A_T, choices=list(DEMO_PROTOCOLS))
+    parser.add_argument(
+        "--protocol",
+        default=PROTOCOL_A2A_T,
+        choices=[*DEMO_PROTOCOLS, PROTOCOL_MODE_BOTH],
+        help="advertised interaction protocol, or both for the in-page switch",
+    )
+    parser.add_argument(
+        "--nms",
+        action="store_true",
+        help="the deployment uses the vendor NMS; the page derives each protocol's hop",
+    )
     parser.add_argument("--mie-url", default=None)
     return parser
 
@@ -86,6 +97,7 @@ def run_ui(
     approval_timeout: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
     allow_insecure_bind: bool = False,
     protocol: str = PROTOCOL_A2A_T,
+    nms: bool = False,
     mie_url: str | None = None,
 ) -> int:
     """Serve the Web UI until interrupted, returning a process exit code."""
@@ -105,6 +117,8 @@ def run_ui(
         if config.client_db_path is not None
         else None
     )
+    protocols = DEMO_PROTOCOLS if protocol == PROTOCOL_MODE_BOTH else (protocol,)
+    default_protocol = PROTOCOL_A2A_T if protocol == PROTOCOL_MODE_BOTH else protocol
     try:
         app = create_app(
             config,
@@ -123,7 +137,9 @@ def run_ui(
             approval_gate=approval_gate,
             approval_timeout_seconds=approval_timeout,
             allow_insecure_bind=allow_insecure_bind,
-            protocol=protocol,
+            protocol=default_protocol,
+            protocols=protocols,
+            nms_enabled=nms,
             mie_url=mie_url,
             # The server trace emitter flushes in batches; aggregate the persisted metrics after
             # the same short window the SSE stream uses to forward its last spans.
@@ -138,7 +154,7 @@ def run_ui(
         f"(language={config.language}, model_mode={config.model_mode} [{config.model_label}], "
         f"provider={config.adk_model_provider}, "
         f"defaults: scenario={scenario}, mode={mode}, transport={transport}, "
-        f"approval_gate={approval_gate}, "
+        f"protocols={','.join(protocols)}, approval_gate={approval_gate}, "
         f"server trace ingestion: {'enabled' if trace_enabled else 'disabled (no local token)'})"
     )
     if not is_loopback(host):
@@ -180,6 +196,7 @@ def main(argv: list[str] | None = None) -> int:
         approval_timeout=args.approval_timeout,
         allow_insecure_bind=args.allow_insecure_bind,
         protocol=args.protocol,
+        nms=args.nms,
         mie_url=args.mie_url,
     )
 

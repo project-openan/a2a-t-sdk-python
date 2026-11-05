@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final, Protocol
 
+from shared.run_constants import PROTOCOL_A2A_T
 from shared.sqlite import SchemaMigration, apply_migrations, connect
 
 _LOGGER = logging.getLogger("ran_energy_saving.client_store")
@@ -123,6 +124,7 @@ CREATE TABLE IF NOT EXISTS runs (
   mode              TEXT NOT NULL,
   transport         TEXT NOT NULL,
   discovery         TEXT NOT NULL,
+  protocol          TEXT NOT NULL DEFAULT 'a2a-t',
   user_request      TEXT NOT NULL,
   status            TEXT NOT NULL,
   final_state       TEXT,
@@ -213,11 +215,24 @@ def _create_run_metrics(connection: sqlite3.Connection) -> None:
     connection.executescript(_RUN_METRICS_SCHEMA)
 
 
+def _add_run_protocol(connection: sqlite3.Connection) -> None:
+    """Persist the client request form so an idempotent replay keeps it.
+
+    Existing rows were written by an A2A-T-only client, which is the correct historical default.
+    """
+    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)")}
+    if "protocol" not in columns:
+        connection.execute(
+            "ALTER TABLE runs ADD COLUMN protocol TEXT NOT NULL DEFAULT 'a2a-t'"
+        )
+
+
 #: Ordered schema migrations; index ``i`` upgrades version ``i`` to ``i + 1``.
 _MIGRATIONS: Final[tuple[SchemaMigration, ...]] = (
     _create_schema,
     _enforce_one_active_run,
     _create_run_metrics,
+    _add_run_protocol,
 )
 
 
@@ -362,6 +377,7 @@ class ClientRunRecord:
     created_at: str = field(default_factory=now_iso)
     updated_at: str = field(default_factory=now_iso)
     finished_at: str | None = None
+    protocol: str = PROTOCOL_A2A_T
 
 
 @dataclass(frozen=True)
@@ -886,10 +902,10 @@ class SqliteClientStore:
                 """
                 INSERT INTO runs
                     (run_id, conversation_id, turn_id, scenario, mode, transport, discovery,
-                     user_request, status, final_state, server_context_id, server_task_id, error,
-                     owner_pid, idempotency_key, transcript_json, transcript_markdown, trace_json,
-                     created_at, updated_at, finished_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     protocol, user_request, status, final_state, server_context_id, server_task_id,
+                     error, owner_pid, idempotency_key, transcript_json, transcript_markdown,
+                     trace_json, created_at, updated_at, finished_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.run_id,
@@ -899,6 +915,7 @@ class SqliteClientStore:
                     record.mode,
                     record.transport,
                     record.discovery,
+                    record.protocol,
                     record.user_request,
                     record.status,
                     record.final_state,
@@ -938,6 +955,7 @@ class SqliteClientStore:
             mode=str(row["mode"]),
             transport=str(row["transport"]),
             discovery=str(row["discovery"]),
+            protocol=str(row["protocol"]),
             user_request=str(row["user_request"]),
             status=str(row["status"]),
             final_state=str(row["final_state"]) if row["final_state"] else None,

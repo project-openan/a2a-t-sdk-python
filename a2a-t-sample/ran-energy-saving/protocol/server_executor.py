@@ -75,6 +75,12 @@ class TaskRequestHandler(Protocol):
         """Classify the request and return the executor outcome."""
         ...
 
+
+#: Decides whether one request uses the standard A2A lifecycle instead of the A2A-T extension.
+#: A single-agent server serves both request forms, so the decision is per request (see
+#: :func:`protocol.plain_a2a.is_plain_request`); a single-protocol deployment keeps a boolean.
+PureResolver = Callable[[RequestContext], bool]
+
 #: Artifact names.
 REPORT_ARTIFACT_NAME: Final[str] = "energy saving intent report"
 TOOL_ARTIFACT_NAME: Final[str] = "tool result"
@@ -529,7 +535,7 @@ class LangGraphTaskExecutor(AgentExecutor):
         config: SampleConfig | None = None,
         approval_registry: ApprovalRegistry | None = None,
         approval_timeout_seconds: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
-        pure: bool = False,
+        pure: bool | PureResolver = False,
         mie_client: MIEApprovalClient | None = None,
     ) -> None:
         """Create one executor.
@@ -541,9 +547,10 @@ class LangGraphTaskExecutor(AgentExecutor):
             approval_registry: optional human gate registry; ``None`` applies plans without a pause.
             approval_timeout_seconds: seconds the gate waits before treating the approval as a
                 rejection.
-            pure: ``True`` for the pure A2A server; its final artifacts must not carry A2A-T
-                metadata.
-            mie_client: A2A client of the MIE Agent; when set in pure mode, the gate asks MIE
+            pure: whether the request uses the standard A2A lifecycle instead of the A2A-T
+                extension. A boolean serves one protocol; a callable decides per request, which is
+                what lets one server accept both forms.
+            mie_client: A2A client of the MIE Agent; when set for a pure request, the gate asks MIE
                 instead of waiting on the local HTTP approval registry.
         """
         self._config = config
@@ -552,6 +559,12 @@ class LangGraphTaskExecutor(AgentExecutor):
         self._approval_timeout_seconds = approval_timeout_seconds
         self._pure = pure
         self._mie_client = mie_client
+
+    def _is_pure(self, context: RequestContext) -> bool:
+        """Return whether this request uses standard A2A instead of the A2A-T extension."""
+        if callable(self._pure):
+            return bool(self._pure(context))
+        return bool(self._pure)
 
     @property
     def recursion_limit(self) -> int:
@@ -776,7 +789,7 @@ class LangGraphTaskExecutor(AgentExecutor):
         execution_span_id: str,
     ) -> Callable[..., Awaitable[bool]] | None:
         """Build the approval gate used by the planner, or ``None`` when the gate is disabled."""
-        if self._pure and self._mie_client is not None:
+        if self._is_pure(context) and self._mie_client is not None:
             return self._build_mie_approval_gate(
                 context, updater, task_id, execution_span_id
             )
@@ -1141,7 +1154,8 @@ class LangGraphTaskExecutor(AgentExecutor):
                         # pure three-hop comparison keeps it because its presentation drives the
                         # execution beat from the relayed artifact.
                         duplicate_apply = (
-                            name in (APPLY_TOOL_NAME, MODIFY_TOOL_NAME) and not self._pure
+                            name in (APPLY_TOOL_NAME, MODIFY_TOOL_NAME)
+                            and not self._is_pure(context)
                         )
                         if name != report_tool_name and not duplicate_apply:
                             await updater.add_artifact(
@@ -1193,7 +1207,7 @@ class LangGraphTaskExecutor(AgentExecutor):
             context,
             summary,
             negotiation_context,
-            pure=self._pure,
+            pure=self._is_pure(context),
             report=report,
         )
         report_part = Part()
@@ -1357,7 +1371,7 @@ def build_negotiation_executor(
     config: SampleConfig | None = None,
     approval_registry: ApprovalRegistry | None = None,
     approval_timeout_seconds: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
-    pure: bool = False,
+    pure: bool | PureResolver = False,
     mie_client: MIEApprovalClient | None = None,
 ) -> NegotiationAgentExecutor:
     """Build the outer executor with the LangGraph executor inside.
@@ -1368,7 +1382,9 @@ def build_negotiation_executor(
         config: resolved sample configuration.
         approval_registry: optional human gate registry.
         approval_timeout_seconds: seconds the gate waits before rejecting.
-        pure: ``True`` for the pure A2A server; final artifacts carry no A2A-T metadata.
+        pure: whether a request uses standard A2A; a callable decides per request when one server
+            serves both forms, which keeps final artifacts free of A2A-T metadata only for those
+            requests.
         mie_client: optional A2A client of the MIE Agent used by the pure approval gate.
     """
     return NegotiationAgentExecutor(

@@ -88,7 +88,7 @@ async def test_root_serves_the_presentation_shell(client: httpx.AsyncClient) -> 
         'id="p-intent"',
         'id="p-nego"',
         'id="p-trace"',
-        'id="protocol-badge"',
+        'id="protocol-switch"',
         'id="turns"',
         'id="wire"',
         'id="wire-t"',
@@ -106,10 +106,10 @@ async def test_root_serves_the_presentation_shell(client: httpx.AsyncClient) -> 
         'aria-live="polite"',
     ):
         assert marker in page, marker
-    # The protocol is chosen at startup; the page has no in-page switch.
-    assert 'id="protocol-switch"' not in page
-    assert 'id="proto-a2at"' not in page
-    assert 'id="proto-plain"' not in page
+    # One agent serves both request forms, so the page carries the in-page switch.
+    assert 'id="protocol-switch"' in page
+    assert 'data-protocol="a2a-t"' in page
+    assert 'data-protocol="pure"' in page
     # The module entry plus the tiny inline brand bootstrap (no payload rendering).
     assert page.count("<script") == 2
     assert "a2at-default-brand" in page
@@ -187,8 +187,7 @@ async def test_pure_meta_exposes_its_scenarios_and_mie(
     assert meta["scenarios"] == ["night", "information", "target"]
     assert meta["pureScenarios"] == ["night", "information", "target"]
     assert meta["mieEnabled"] is True
-    assert 'id="protocol-badge"' in page
-    assert 'id="protocol-switch"' not in page
+    assert 'id="protocol-switch"' in page
 
 
 def test_phone_breakpoint_wraps_the_header_meta() -> None:

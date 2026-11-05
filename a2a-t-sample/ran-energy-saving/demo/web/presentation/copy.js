@@ -59,11 +59,13 @@ const EN = {
   },
   protocol: {
     label: "Protocol",
-    a2at: "A2A-T",
+    a2at: "A2A + A2A-T",
     plain: "Plain A2A",
-    pure: "Pure A2A",
+    pure: "A2A",
     pureHint:
-      "Three hops: OSS Agent → RAN Agent → MIE Agent. Standard A2A only; no Task-T or Negotiation-T.",
+      "Standard A2A only: no Task-T or Negotiation-T extension. Three hops: OSS Agent → RAN Agent → MIE Agent.",
+    a2atHint:
+      "A2A with the Task-T and Negotiation-T extensions: template validation and pre-task negotiation in the same agent.",
     plainHint:
       "Plain A2A sends one natural-language message: no Task-T, no intent approval and no negotiation.",
     unavailable: "The protocol comparison is available for the night and missing-parameter examples.",
@@ -790,10 +792,11 @@ const ZH = {
   },
   protocol: {
     label: "协议",
-    a2at: "A2A-T",
+    a2at: "A2A + A2A-T 扩展",
     plain: "普通 A2A",
-    pure: "纯 A2A",
-    pureHint: "三跳：OSS Agent → RAN Agent → MIE Agent。只使用标准 A2A，不带 Task-T / Negotiation-T。",
+    pure: "A2A",
+    pureHint: "只使用标准 A2A，不带 Task-T / Negotiation-T 扩展。三跳：OSS Agent → RAN Agent → MIE Agent。",
+    a2atHint: "在 A2A 基础上启用 Task-T / Negotiation-T 扩展：模板校验与预任务协商，由同一个 Agent 处理。",
     plainHint: "普通 A2A 只发一条自然语言消息：没有 Task-T、没有意图审批、没有协商。",
     unavailable: "协议对比仅支持“夜间节能”和“缺参数”两个场景。",
     na: "不适用",

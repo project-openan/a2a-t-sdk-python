@@ -283,7 +283,8 @@ pure + `--nms` 的 OSS Agent 现在会把网管的 token、发送、轮询 span 
 
 ### 同一台机器并行两个实例
 
-A2A-T 与 pure A2A 可以同时连同一个网管。两个实例必须使用不同的启动状态目录、数据目录、UI 端口
+单个实例即可在页面切换请求形态（`--protocol both`）。当两边需要不同的网管凭据、数据目录或
+webhook 地址时，仍可并行两个实例。两个实例必须使用不同的启动状态目录、数据目录、UI 端口
 和 webhook 端口：
 
 | | A2A-T | pure A2A |
@@ -323,10 +324,26 @@ SSE）。OSS Agent 复用与 A2A-T 客户端相同的 ADK 决策 Agent 回答网
 `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` 设为网管推送时携带的 `user:password`。此时接收器改为校验
 Basic 鉴权，不再校验 `A2AT_SAMPLE_WEBHOOK_TOKEN`；同一凭据也会注册到内联 push config。
 
-### 纯 A2A 模式（三跳，只用标准 A2A）
+### 一个 Agent，两种请求形态
 
-页面是单模式的：协议在进程启动时确定，页面不再提供协议切换或对比卡。要对比两种模式，分别启动
-A2A-T 演示和纯 A2A 演示即可。
+A2A-T 是 A2A 的扩展，不是第二套协议。RAN Agent 始终支持标准 A2A；当请求声明或携带 `Task-T` 时，
+同一个 Agent 先执行预任务协商，再在结果上写入 A2A-T 元数据。真机网管也是这个模型：一个服务，
+由请求本身决定是否使用扩展。
+
+`--protocol both` 启动这个单一 Agent，并在页面上提供协议切换：
+
+```bash
+uv run python -m demo.run_demo --protocol both --ui --model-mode offline
+```
+
+- **A2A**：标准 Task 生命周期（`INPUT_REQUIRED` 续传）。本地拓扑为三跳：UI → OSS Agent →
+  RAN Agent → MIE Agent。
+- **A2A + A2A-T**：Task-T 模板校验与预任务协商，由同一个 RAN Agent 处理。
+
+每次 run 都会记录请求形态，因此切换后 session trace、metrics 和历史仍然可区分。
+`--protocol a2a-t` 和 `--protocol pure` 继续保留，供只服务一种形态的部署或确定性 CLI 运行使用。
+
+### 纯 A2A 模式（三跳，只用标准 A2A）
 
 `--protocol pure` 启动真实的三跳 A2A 链路：
 

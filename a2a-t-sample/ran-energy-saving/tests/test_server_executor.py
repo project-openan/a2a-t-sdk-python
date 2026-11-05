@@ -38,6 +38,7 @@ from google.protobuf.json_format import MessageToDict
 from google.protobuf.struct_pb2 import Struct
 from protocol.approval_gate import ApprovalRegistry
 from protocol.messages import SAMPLE_PROPOSAL_METADATA_KEY, TASK_TEMPLATE_URI
+from protocol.plain_a2a import is_plain_request
 from protocol.pre_task_negotiation import (
     NegotiationContentServer,
     NegotiationOutcome,
@@ -144,6 +145,25 @@ def _make_context(
         requested_extensions={TASK_T_EXTENSION_URI},
     )
     return RequestContext(call_context=call_context, request=request)
+
+
+def test_the_executor_resolves_standard_a2a_per_request() -> None:
+    """One server serves both request forms; the executor must not bake the mode at build time."""
+    executor = LangGraphTaskExecutor(
+        agent_factory=server_agent_factory,
+        pure=is_plain_request,
+    )
+    message = Message(message_id="message-2", role=Role.ROLE_USER, context_id=CONTEXT_ID)
+    message.parts.add(text=TASK_PROMPT)
+    untagged = RequestContext(
+        call_context=ServerCallContext(
+            state={}, user=UnauthenticatedUser(), requested_extensions=set()
+        ),
+        request=SendMessageRequest(message=message),
+    )
+
+    assert executor._is_pure(_make_context()) is False
+    assert executor._is_pure(untagged) is True
 
 
 async def test_executor_short_circuits_without_calling_the_inner_executor() -> None:

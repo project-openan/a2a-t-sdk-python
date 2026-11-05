@@ -74,7 +74,9 @@ const els = {
   scenariosLabel: byId("scenarios-label"),
   protocolLabel: byId("protocol-label"),
   themeToggle: byId("theme-toggle"),
-  protocolBadge: byId("protocol-badge"),
+  protocolRow: byId("protocol-row"),
+  protocolSwitch: byId("protocol-switch"),
+  protocolOptions: Array.from(document.querySelectorAll("#protocol-switch .pbtn")),
   protocolHint: byId("protocol-hint"),
   wireFormat: byId("wire-format"),
   scenarioSelect: byId("scenario-select"),
@@ -317,6 +319,8 @@ async function boot() {
   ui.brand = currentBrand();
   ui.selected = ui.meta.defaultScenario || ui.meta.scenarios?.[0] || null;
   ui.protocol = ui.meta.protocol || ui.meta.defaultProtocol || "a2a-t";
+  const bootScenarios = scenariosForProtocol(ui.protocol);
+  if (!bootScenarios.includes(ui.selected)) ui.selected = bootScenarios[0] || null;
   ui.mieEnabled = Boolean(ui.meta.mieEnabled);
   els.requestText.value = ui.meta.scenarioRequests?.[ui.selected] || "";
   applyStaticCopy();
@@ -328,6 +332,9 @@ async function boot() {
 }
 
 function bindStaticEvents() {
+  for (const button of els.protocolOptions || []) {
+    button.addEventListener("click", () => selectProtocol(button.dataset.protocol));
+  }
   els.start.addEventListener("click", () => startRun());
   if (els.startQuick) els.startQuick.addEventListener("click", () => startRun());
   if (els.themeToggle) els.themeToggle.addEventListener("click", toggleBrand);
@@ -535,11 +542,31 @@ function renderBottomCopy() {
   if (els.footer) els.footer.textContent = copy.footer;
 }
 
+/** Return the scenarios the selected request form supports. */
+function scenariosForProtocol(protocol) {
+  return ui.meta?.scenariosByProtocol?.[protocol] || ui.meta?.scenarios || [];
+}
+
+/** Switch between the A2A-T extension and standard A2A for the next run. */
+function selectProtocol(protocol) {
+  if (ui.busy || protocol === ui.protocol) return;
+  if (!(ui.meta?.protocols || []).includes(protocol)) return;
+  ui.protocol = protocol;
+  const scenarios = scenariosForProtocol(protocol);
+  if (!scenarios.includes(ui.selected)) {
+    ui.selected = scenarios[0] || ui.selected;
+  }
+  renderPresets();
+  // Reuse the scenario reset path so no frame from the previous request form stays on stage.
+  selectScenario(ui.selected);
+  renderProtocol();
+}
+
 function renderPresets() {
   const select = els.scenarioSelect;
   if (!select) return;
   select.replaceChildren();
-  for (const name of ui.meta?.scenarios || []) {
+  for (const name of scenariosForProtocol(ui.protocol)) {
     const option = el("option", "", `${scenarioLabel(ui.copy, name)} · ${scenarioTag(ui.copy, name)}`);
     option.value = name;
     option.title = scenarioStory(ui.copy, name);
@@ -930,6 +957,7 @@ function setBusy(busy) {
   if (els.cancelRun) {
     els.cancelRun.disabled = !busy || ui.cancelling || !ui.view.runId;
   }
+  renderProtocol();
   renderControls();
 }
 
@@ -1043,9 +1071,14 @@ function renderSteps() {
   const expectedNegotiation = negotiationExpected(ui.view);
   const approvalSeen = ui.view.approval !== null || ui.view.approvalState !== null;
   const intentEnabled = ui.meta?.intentReview === true;
-  const approvalEnabled = ui.meta?.approvalGate !== false;
+  const runProtocol = ui.view.protocol || ui.protocol;
+  // Standard A2A reviews through MIE; the A2A-T extension uses the server gate when it is on.
+  const approvalEnabled =
+    runProtocol === "pure"
+      ? ui.meta?.mieEnabled === true
+      : ui.meta?.approvalGate !== false;
   const finished = ui.view.finished;
-  const plain = (ui.view.protocol || ui.protocol) === "plain";
+  const plain = runProtocol === "plain";
   const plainNa = new Set(plain ? ["understand", "intent", "negotiate"] : []);
 
   ui.steps.forEach((item, index) => {
@@ -1653,21 +1686,34 @@ function narration(scene, stepKey) {
   return ui.copy.narration[scene.key] || ui.copy.narration[stepKey] || scenarioStory(ui.copy, ui.selected);
 }
 
-/** Render the active protocol of this process. The page never switches protocol at runtime. */
+/** Render the selected request form. One agent serves both; the page switches per run. */
 function renderProtocol() {
   const pure = ui.protocol === "pure";
+  const switchable = (ui.meta?.protocols || []).length > 1;
+  if (els.protocolRow) els.protocolRow.hidden = !switchable;
   if (els.protocolLabel) els.protocolLabel.textContent = ui.copy.protocol.label;
-  if (els.protocolBadge) {
-    els.protocolBadge.textContent = pure ? ui.copy.protocol.pure : ui.copy.protocol.a2at;
+  for (const button of els.protocolOptions || []) {
+    const active = button.dataset.protocol === ui.protocol;
+    button.setAttribute("aria-pressed", String(active));
+    button.disabled = Boolean(ui.busy);
+    button.textContent =
+      button.dataset.protocol === "pure"
+        ? ui.copy.protocol.pure
+        : ui.copy.protocol.a2at;
   }
-  els.protocolHint.textContent = pure ? ui.copy.protocol.pureHint : "";
-  els.protocolHint.hidden = !pure;
+  const hint = pure
+    ? ui.copy.protocol.pureHint
+    : switchable
+      ? ui.copy.protocol.a2atHint
+      : "";
+  els.protocolHint.textContent = hint;
+  els.protocolHint.hidden = !hint;
   if (els.badge) els.badge.textContent = pure ? ui.copy.pure.badge : ui.copy.badge;
   if (els.wireFormat) els.wireFormat.hidden = pure;
   if (els.tabWire) els.tabWire.hidden = pure;
 
   // The stage carries protocol-specific labels outside the copy registry (the SVG channel and
-  // the MIE role). Keep them consistent with the active process protocol.
+  // the MIE role). Keep them consistent with the selected request form.
   const setText = (id, value) => {
     const node = document.getElementById(id);
     if (node) node.textContent = value;

@@ -227,6 +227,7 @@ def test_state_round_trip_records_the_run_metadata(monkeypatch: pytest.MonkeyPat
         "pids": [11, 12],
         "model_mode": "offline",
         "language": "en-US",
+        "protocol_mode": "a2a-t",
         "trace_token": "tok",
         "trace_url": "http://127.0.0.1:8080",
         "ui_port": 8080,
@@ -310,6 +311,22 @@ class TestServerReuseDecision:
 
     def test_language_mismatch_restarts(self) -> None:
         assert self.decide(state={**self.STATE, "language": "zh-CN"}) == run_demo.REUSE_RESTART
+
+    def test_protocol_mode_mismatch_restarts(self) -> None:
+        """A pure-only server cannot serve the A2A-T switch of a ``both`` launch."""
+        assert (
+            self.decide(state={**self.STATE, "protocol_mode": "pure"}, protocol_mode="a2a-t")
+            == run_demo.REUSE_RESTART
+        )
+        assert (
+            self.decide(state={**self.STATE, "protocol_mode": "a2a-t"}, protocol_mode="both")
+            == run_demo.REUSE_RESTART
+        )
+
+    def test_legacy_record_defaults_to_a2a_t(self) -> None:
+        """Records written before the switch existed are A2A-T deployments."""
+        legacy = {key: value for key, value in self.STATE.items() if key != "protocol_mode"}
+        assert self.decide(state=legacy) == run_demo.REUSE_REUSE
 
     def test_trace_url_mismatch_restarts(self) -> None:
         """A server pointed at another UI port would post its spans to the wrong process."""

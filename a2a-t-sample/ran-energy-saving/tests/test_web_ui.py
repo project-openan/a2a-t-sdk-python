@@ -1578,6 +1578,74 @@ async def test_start_accepts_the_plain_protocol_and_rejects_unknown_values(
     assert rejected.status_code == 400
 
 
+async def test_one_ui_derives_each_request_forms_hop_from_the_protocol(
+    offline_config: SampleConfig,
+    tmp_path: Path,
+) -> None:
+    """A2A-T extension and standard A2A share one agent but keep their own discovery/transport."""
+    calls: list[tuple[str, str, str]] = []
+
+    async def build(
+        config: SampleConfig,
+        scenario: str,
+        mode: str,
+        transport: str,
+        discovery: str,
+        *,
+        protocol: str = PROTOCOL_A2A_T,
+    ) -> FakeRuntime:
+        del config, scenario, mode
+        calls.append((protocol, transport, discovery))
+        return FakeRuntime()
+
+    app = create_app(
+        offline_config,
+        runs_dir=tmp_path,
+        runtime_factory=build,
+        protocol=PROTOCOL_A2A_T,
+        protocols=(PROTOCOL_A2A_T, "pure"),
+        nms_enabled=False,
+        mie_url="http://127.0.0.1:8002",
+        finished_grace_seconds=0.0,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        meta = (await http_client.get("/api/meta")).json()
+        assert meta["protocols"] == ["a2a-t", "pure"]
+        assert meta["defaultProtocol"] == "a2a-t"
+        assert meta["scenariosByProtocol"]["pure"] == ["night", "information", "target"]
+        assert meta["protocolDefaults"]["a2a-t"] == {
+            "discovery": "registry",
+            "transport": "sse",
+        }
+        assert meta["protocolDefaults"]["pure"] == {
+            "discovery": "direct",
+            "transport": "sse",
+        }
+        assert meta["mieEnabled"] is True
+
+        extension = await http_client.post(
+            "/api/runs", json={"scenario": "night", "mode": "auto", "protocol": "a2a-t"}
+        )
+        assert extension.status_code == 202
+        await _wait_status(
+            http_client, extension.json()["runId"], lambda data: data["status"] == "finished"
+        )
+
+        standard = await http_client.post(
+            "/api/runs", json={"scenario": "information", "mode": "auto", "protocol": "pure"}
+        )
+        assert standard.status_code == 202
+        await _wait_status(
+            http_client, standard.json()["runId"], lambda data: data["status"] == "finished"
+        )
+
+    assert calls == [
+        ("a2a-t", "sse", "registry"),
+        ("pure", "sse", "direct"),
+    ]
+
+
 async def test_wire_endpoint_returns_the_captured_exchange(
     client: httpx.AsyncClient, tmp_path: Path
 ) -> None:

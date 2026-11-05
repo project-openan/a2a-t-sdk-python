@@ -61,9 +61,14 @@ from protocol.metrics_summary import summarize_metrics, summarize_protocols
 from protocol.run_spec import RunCatalog
 from protocol.sqlite_task_store import read_task_summaries
 from shared.config import (
+    DISCOVERY_DIRECT,
+    DISCOVERY_NMS,
+    DISCOVERY_REGISTRY,
     SUPPORTED_DISCOVERY_MODES,
     SUPPORTED_INTENT_MODES,
     SUPPORTED_TRANSPORTS,
+    TRANSPORT_SSE,
+    TRANSPORT_WEBHOOK,
     SampleConfig,
 )
 from shared.http_security import (
@@ -178,6 +183,8 @@ def create_app(
     allow_insecure_bind: bool = False,
     intent_review: bool | None = None,
     protocol: str = PROTOCOL_A2A_T,
+    protocols: tuple[str, ...] | None = None,
+    nms_enabled: bool | None = None,
     mie_url: str | None = None,
 ) -> Starlette:
     """Build the Starlette application of the Web UI.
@@ -215,8 +222,12 @@ def create_app(
             only the Web UI exposes this, never the A2A server.
         intent_review: whether confirm mode waits for approval 1; defaults to true only for the
             presentation view, because the explorer has no intent card.
-        protocol: active interaction protocol of this UI process; the page is single-mode and
-            offers only this protocol's scenarios.
+        protocol: default interaction protocol of this UI process.
+        protocols: interaction protocols the page may switch between; defaults to ``(protocol,)``.
+            ``("a2a-t", "pure")`` exposes both request forms of the same agent.
+        nms_enabled: whether the deployment talks to the vendor NMS; when ``None``, the process
+            discovery mode decides. It selects each protocol's default hop (A2A-T direct to the
+            NMS, standard A2A through the OSS Agent).
         mie_url: MIE Agent base URL; when set, the UI proxies its approval SSE/POST routes.
 
     Returns:
@@ -244,17 +255,31 @@ def create_app(
         catalog = DemoRunCatalog.from_config(config)
     resolved_catalog: RunCatalog = catalog
     scenario_names = resolved_catalog.names
-    resolved_protocol = protocol if protocol in DEMO_PROTOCOLS else PROTOCOL_A2A_T
-    if resolved_protocol == PROTOCOL_PURE:
-        active_scenarios = tuple(
-            name for name in PURE_PROTOCOL_SCENARIOS if name in scenario_names
-        )
-    elif resolved_protocol == PROTOCOL_PLAIN:
-        active_scenarios = tuple(
-            name for name in PLAIN_PROTOCOL_SCENARIOS if name in scenario_names
-        )
-    else:
-        active_scenarios = tuple(scenario_names)
+    advertised_protocols = tuple(
+        candidate for candidate in (protocols or (protocol,)) if candidate in DEMO_PROTOCOLS
+    ) or (PROTOCOL_A2A_T,)
+    resolved_protocol = (
+        protocol if protocol in advertised_protocols else advertised_protocols[0]
+    )
+
+    def _scenarios_for(candidate: str) -> tuple[str, ...]:
+        """Return the scenarios the page may offer for one advertised protocol."""
+        if candidate == PROTOCOL_PURE:
+            names = PURE_PROTOCOL_SCENARIOS
+        elif candidate == PROTOCOL_PLAIN:
+            names = PLAIN_PROTOCOL_SCENARIOS
+        else:
+            names = scenario_names
+        return tuple(name for name in names if name in scenario_names)
+
+    scenarios_by_protocol = {
+        candidate: _scenarios_for(candidate) for candidate in advertised_protocols
+    }
+    active_scenarios = tuple(
+        name
+        for name in scenario_names
+        if any(name in names for names in scenarios_by_protocol.values())
+    )
     if not active_scenarios:
         active_scenarios = tuple(scenario_names)
     resolved_default_scenario = _resolve_default(
@@ -271,6 +296,24 @@ def create_app(
     resolved_default_discovery = _resolve_default(
         default_discovery, SUPPORTED_DISCOVERY_MODES, config_discovery, "discovery"
     )
+    # One agent serves both request forms, but the deployment decides the hop: A2A-T calls the
+    # vendor NMS directly (or discovers the local RAN Agent), while standard A2A always enters
+    # through the OSS Agent over direct discovery.
+    resolved_nms = (
+        (config.discovery == DISCOVERY_NMS) if nms_enabled is None else nms_enabled
+    )
+    protocol_defaults: dict[str, dict[str, str]] = {
+        PROTOCOL_A2A_T: {
+            "discovery": DISCOVERY_NMS if resolved_nms else DISCOVERY_REGISTRY,
+            "transport": (
+                TRANSPORT_WEBHOOK if resolved_nms else resolved_default_transport
+            ),
+        },
+        PROTOCOL_PURE: {
+            "discovery": DISCOVERY_DIRECT,
+            "transport": TRANSPORT_SSE,
+        },
+    }
     resolved_intent_mode = (
         config.intent_mode
         if config.intent_mode in SUPPORTED_INTENT_MODES
@@ -353,11 +396,15 @@ def create_app(
                 },
                 "modes": list(UI_MODES),
                 "protocol": resolved_protocol,
-                "protocols": [resolved_protocol],
+                "protocols": list(advertised_protocols),
+                "scenariosByProtocol": {
+                    name: list(names) for name, names in scenarios_by_protocol.items()
+                },
+                "protocolDefaults": protocol_defaults,
                 "pureScenarios": list(PURE_PROTOCOL_SCENARIOS),
                 "plainScenarios": list(PLAIN_PROTOCOL_SCENARIOS),
                 "defaultProtocol": resolved_protocol,
-                "mieEnabled": bool(mie_url) and resolved_protocol == PROTOCOL_PURE,
+                "mieEnabled": bool(mie_url) and PROTOCOL_PURE in advertised_protocols,
                 "transports": list(SUPPORTED_TRANSPORTS),
                 "discoveries": list(SUPPORTED_DISCOVERY_MODES),
                 "defaultScenario": resolved_default_scenario,
@@ -646,8 +693,20 @@ def create_app(
         scenario = body.get("scenario", resolved_default_scenario)
         mode = body.get("mode", resolved_default_mode)
         protocol = body.get("protocol", resolved_protocol)
-        transport = body.get("transport", resolved_default_transport)
-        discovery = body.get("discovery", resolved_default_discovery)
+        protocol_key = str(protocol)
+        defaults = protocol_defaults.get(protocol_key, {})
+        # The page sends only the protocol; the backend owns each request form's hop so a stale
+        # browser value can never send standard A2A through the A2A-T discovery path.
+        transport = (
+            body.get("transport")
+            or defaults.get("transport")
+            or resolved_default_transport
+        )
+        discovery = (
+            body.get("discovery")
+            or defaults.get("discovery")
+            or resolved_default_discovery
+        )
         intent_mode = body.get("intentMode", resolved_intent_mode)
         raw_user_request = body.get("userRequest")
         if raw_user_request is not None and not isinstance(raw_user_request, str):
@@ -672,12 +731,15 @@ def create_app(
             optional_strings[field_name] = (
                 raw_value.strip() if isinstance(raw_value, str) and raw_value.strip() else None
             )
-        requested_scenarios = (
-            PURE_PROTOCOL_SCENARIOS
-            if protocol == PROTOCOL_PURE
-            else PLAIN_PROTOCOL_SCENARIOS
-            if protocol == PROTOCOL_PLAIN
-            else scenario_names
+        requested_scenarios = scenarios_by_protocol.get(
+            protocol_key,
+            (
+                PURE_PROTOCOL_SCENARIOS
+                if protocol == PROTOCOL_PURE
+                else PLAIN_PROTOCOL_SCENARIOS
+                if protocol == PROTOCOL_PLAIN
+                else scenario_names
+            ),
         )
         if scenario not in requested_scenarios:
             return JSONResponse(

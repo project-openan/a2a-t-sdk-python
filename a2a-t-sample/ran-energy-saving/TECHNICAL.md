@@ -740,10 +740,14 @@ edit an existing one.
 Engineer/UI ──A2A──► OSS Agent ──A2A──► RAN Agent ──A2A──► MIE Agent
 ```
 
-The A2A-T path is untouched: `--protocol a2a-t` still installs the
-`ProtocolDispatchHandler(PreTaskNegotiationHandler, PlainTaskHandler)` build. Pure mode installs
-`PureTaskHandler` only in the RAN process (`build_server_runtime(protocol_mode="pure")`), so the
-two modes can run side by side without changing each other's wiring.
+A2A-T is an extension of A2A, so the RAN process can serve both forms. `--protocol both` builds
+`ProtocolDispatchHandler(PreTaskNegotiationHandler, PureTaskHandler)`: a request that declares or
+carries `Task-T` goes to the pre-task gate, and every other request gets the standard A2A Task
+lifecycle. The executor resolves `pure` per request (`is_plain_request`) instead of baking it at
+construction, so the final artifact metadata and the approval gate follow the request. The single
+`A2AT_SAMPLE_PROTOCOL_MODE=both` process therefore matches a vendor NMS that exposes both surfaces.
+`--protocol a2a-t` and `--protocol pure` remain as single-form builds for deployments that need
+them.
 
 **RAN negotiation (`protocol/pure_a2a.py`).** `PureTaskHandler` inspects the inbound message:
 
@@ -772,12 +776,17 @@ an `approval decision` artifact and final status metadata; RAN resumes or reject
 timeout is 240 s, the same as the A2A-T gate.
 
 **Client and UI.** `protocol/pure_client_flow.py` sends text-only messages and answers
-`INPUT_REQUIRED(kind=negotiation)` with a follow-up carrying `taskId`/`contextId`. The presentation
-process is single-mode: `--protocol pure` exposes the pure scenarios and `mieEnabled`, removes the
-protocol switch and comparison card, proxies `/api/mie/events` and `/api/mie/approvals/{taskId}`,
-and shows the per-run metrics from the OSS final status. The engineer client discovers the OSS card
-directly (`A2AT_SAMPLE_DIRECT_SERVER_URL`); the OSS discovers RAN (`A2AT_SAMPLE_RAN_URL`) and RAN
-discovers MIE (`A2AT_SAMPLE_MIE_URL`).
+`INPUT_REQUIRED(kind=negotiation)` with a follow-up carrying `taskId`/`contextId`. `/api/meta`
+advertises the request forms (`protocols`, `scenariosByProtocol`, `protocolDefaults`); with
+`--protocol both` the page renders an in-page switch and each run records its form. The backend
+owns each form's hop defaults: A2A-T uses `nms` on a vendor deployment (otherwise `registry`),
+standard A2A uses `direct` to the OSS Agent, and the transport follows the same split. `mieEnabled`
+drives the MIE approval card for standard A2A; the A2A-T server gate is reported separately by
+`approvalGate`, so one process can enable the MIE gate without pausing A2A-T runs
+(`A2AT_SAMPLE_PURE_APPROVAL_GATE`). The page proxies `/api/mie/events` and
+`/api/mie/approvals/{taskId}` and shows the per-run metrics from the OSS final status. The engineer
+client discovers the OSS card directly (`A2AT_SAMPLE_DIRECT_SERVER_URL`); the OSS discovers RAN
+(`A2AT_SAMPLE_RAN_URL`) and RAN discovers MIE (`A2AT_SAMPLE_MIE_URL`).
 
 The legacy single-turn `plain` path (`protocol/plain_a2a.py`, `run_plain_client_flow`) remains as an
 internal baseline for tests. `POST /api/runs` still validates it, but the CLI and the page no longer

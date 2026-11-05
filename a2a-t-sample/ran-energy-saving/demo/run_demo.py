@@ -57,7 +57,12 @@ from typing import Final, TextIO
 
 from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from shared.config import merge_sample_process_env
-from shared.run_constants import DEMO_PROTOCOLS, PROTOCOL_A2A_T
+from shared.run_constants import (
+    DEMO_PROTOCOLS,
+    PROTOCOL_A2A_T,
+    PROTOCOL_MODE_BOTH,
+    PROTOCOL_PURE,
+)
 
 #: The demo lives one level below the sample directory that owns ``runs/`` and the SDK path.
 CASE_DIR = Path(__file__).resolve().parent.parent
@@ -382,12 +387,13 @@ def _write_run_env(
     # values are written below, so the shell overlay happens first; every sample-prefixed export
     # (model endpoints included) survives into the per-run file read by the children and the SDK.
     values = merge_sample_process_env(values)
-    direct_port = oss_port if protocol == "pure" else server_port
+    pure_stack = protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH)
+    direct_port = oss_port if pure_stack else server_port
     # The pure engineer client must discover the OSS Agent, not the RAN Agent. The OSS card is
     # not registered under the RAN card's name, so direct discovery of its URL is the only path.
     # In pure + NMS the same .env is also read by the OSS Agent: it must keep ``nms`` for its
-    # downstream hop, while the Web UI overrides discovery back to ``direct`` on its CLI.
-    client_discovery = "direct" if protocol == "pure" and discovery != "nms" else discovery
+    # downstream hop, while the Web UI chooses the discovery per run.
+    client_discovery = "direct" if pure_stack and discovery != "nms" else discovery
     values.update(
         {
             "A2AT_LANGUAGE": language,
@@ -679,6 +685,7 @@ def _save_state(
     *,
     model_mode: str,
     language: str,
+    protocol_mode: str = PROTOCOL_A2A_T,
     trace_token: str = "",
     trace_url: str = "",
     ui_port: int | None = None,
@@ -697,6 +704,7 @@ def _save_state(
             "pids": pids,
             "model_mode": model_mode,
             "language": language,
+            "protocol_mode": protocol_mode,
             "trace_token": trace_token,
             "trace_url": trace_url,
             "ui_port": ui_port,
@@ -724,6 +732,7 @@ def _server_reuse_decision(
     state: dict[str, object],
     model_mode: str,
     language: str,
+    protocol_mode: str = PROTOCOL_A2A_T,
     ui: bool,
     trace_url: str = "",
     ui_port: int | None = None,
@@ -758,6 +767,8 @@ def _server_reuse_decision(
     if not _state_pids(state):
         return REUSE_REFUSE
     if state.get("model_mode") != model_mode or state.get("language") != language:
+        return REUSE_RESTART
+    if str(state.get("protocol_mode") or PROTOCOL_A2A_T) != protocol_mode:
         return REUSE_RESTART
     if bool(state.get("approval_gate")) != approval_gate:
         return REUSE_RESTART
@@ -1107,10 +1118,11 @@ def _build_parser(
     parser.add_argument(
         "--protocol",
         default=_env_str(env, "A2AT_SAMPLE_PROTOCOL_MODE", PROTOCOL_A2A_T),
-        choices=list(DEMO_PROTOCOLS),
+        choices=[*DEMO_PROTOCOLS, PROTOCOL_MODE_BOTH],
         help=(
-            "interaction protocol: a2a-t (Task-T + Negotiation-T, default) or pure (standard "
-            "A2A Task INPUT_REQUIRED continuation, no A2A-T extension)"
+            "interaction protocol: a2a-t (Task-T + Negotiation-T, default), pure (standard A2A "
+            "Task INPUT_REQUIRED continuation, no A2A-T extension), or both (one Web UI that "
+            "switches per run; requires --ui)"
         ),
     )
     parser.add_argument(
@@ -1335,7 +1347,11 @@ def main() -> int:
 
     if args.mode in ("manual", "confirm") and not args.ui:
         parser.error(f"--mode {args.mode} requires --ui (the decision lives in the Web UI)")
-    if args.protocol == "pure":
+    if args.protocol == PROTOCOL_MODE_BOTH and not args.ui:
+        parser.error("--protocol both requires --ui (the protocol is chosen per run in the page)")
+    if args.protocol == PROTOCOL_MODE_BOTH and args.gateway:
+        parser.error("--gateway is not supported with --protocol both")
+    if args.protocol == PROTOCOL_PURE:
         from demo.scenario import PURE_PROTOCOL_SCENARIOS
 
         if args.scenario not in PURE_PROTOCOL_SCENARIOS:
@@ -1456,6 +1472,7 @@ def main() -> int:
             state=state,
             model_mode=args.model_mode,
             language=args.language,
+            protocol_mode=args.protocol,
             ui=args.ui,
             trace_url=_trace_url(args.ui_port) if args.ui else "",
             ui_port=args.ui_port if args.ui else None,
@@ -1603,7 +1620,24 @@ def main() -> int:
         # The OSS Agent is a separate process: without this env its NMS token/send/poll spans never
         # reach the UI, and a pure + --nms run looks like the local three-hop demo.
         oss_trace_env: dict[str, str] = {}
-        if args.protocol == "pure" and args.ui:
+        # In the one-instance NMS mode both the UI (A2A-T) and the OSS Agent (standard A2A) keep a
+        # callback receiver. They are different processes, so the OSS hop takes the next port; a
+        # gateway deployment can point its public URL at a separate path.
+        oss_webhook_env: dict[str, str] = {}
+        if args.protocol == PROTOCOL_MODE_BOTH and args.nms:
+            base_public_url = _env_str(source_values, "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL", "")
+            oss_public_url = _env_str(source_values, "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL", "")
+            if base_public_url and not oss_public_url:
+                print(
+                    "[run_demo] --protocol both --nms needs two reachable callbacks: set "
+                    "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL for the OSS Agent (the UI keeps "
+                    "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL)."
+                )
+                return 2
+            oss_webhook_env["A2AT_SAMPLE_WEBHOOK_PORT"] = str(args.webhook_port + 1)
+            if oss_public_url:
+                oss_webhook_env["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] = oss_public_url
+        if args.protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH) and args.ui:
             recorded_token = str(state.get("trace_token") or "") if reuse == REUSE_REUSE else ""
             oss_trace_env = _server_trace_env(
                 ui=True,
@@ -1641,34 +1675,47 @@ def main() -> int:
                 os.environ["A2AT_SAMPLE_TRACE_TOKEN"] = server_trace_env["A2AT_SAMPLE_TRACE_TOKEN"]
             server_env = dict(server_trace_env)
             server_env["A2AT_SAMPLE_PROTOCOL_MODE"] = args.protocol
-            if args.protocol == "pure":
+            needs_pure_stack = args.protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH)
+            if needs_pure_stack:
                 mie_env = {"A2AT_SAMPLE_MIE_PORT": str(args.mie_port)}
                 if start("mie", MIE_MODULE, args.mie_port, mie_env) is None:
                     return 1
                 server_env["A2AT_SAMPLE_MIE_URL"] = f"http://{server_host}:{args.mie_port}"
-                if args.ui or args.approval_gate:
+                if args.protocol == PROTOCOL_MODE_BOTH:
+                    # Standard A2A keeps its MIE review; the A2A-T extension pauses only when the
+                    # operator explicitly asked for the server-side gate.
+                    server_env["A2AT_SAMPLE_PURE_APPROVAL_GATE"] = "1"
+                    if args.approval_gate:
+                        server_env["A2AT_SAMPLE_APPROVAL_GATE"] = "1"
+                        server_env["A2AT_SAMPLE_APPROVAL_TIMEOUT_SECONDS"] = str(
+                            args.approval_timeout
+                        )
+                elif args.ui or args.approval_gate:
                     server_env["A2AT_SAMPLE_APPROVAL_GATE"] = "1"
                     server_env["A2AT_SAMPLE_APPROVAL_TIMEOUT_SECONDS"] = str(args.approval_timeout)
             if start("server", SERVER_MODULE, server_port, server_env) is None:
                 return 1
-            if args.protocol == "pure":
+            if needs_pure_stack:
                 oss_env = {
                     "A2AT_SAMPLE_RAN_URL": f"http://{server_host}:{server_port}",
                     "A2AT_SAMPLE_OSS_HOST": server_host,
                     "A2AT_SAMPLE_OSS_PORT": str(args.oss_port),
                     **oss_trace_env,
+                    **oss_webhook_env,
                 }
                 if start("oss", OSS_MODULE, args.oss_port, oss_env) is None:
                     return 1
             elif args.gateway and start("gateway", GATEWAY_MODULE, args.gateway_port) is None:
                 return 1
-        elif args.protocol == "pure":
-            # pure + NMS keeps the OSS Agent but drops the local RAN Agent and MIE: the OSS Agent
-            # forwards the normalized request to the vendor NMS over plain A2A.
+        elif args.protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH):
+            # The NMS deployment keeps the OSS Agent but drops the local RAN Agent and MIE: the OSS
+            # Agent forwards the normalized request to the vendor NMS over plain A2A. ``both`` also
+            # serves A2A-T in the UI, which talks to the NMS directly.
             oss_env = {
                 "A2AT_SAMPLE_OSS_HOST": server_host,
                 "A2AT_SAMPLE_OSS_PORT": str(args.oss_port),
                 **oss_trace_env,
+                **oss_webhook_env,
             }
             if start("oss", OSS_MODULE, args.oss_port, oss_env) is None:
                 return 1
@@ -1693,7 +1740,7 @@ def main() -> int:
                 )
             mie_url = (
                 f"http://{server_host}:{args.mie_port}"
-                if args.protocol == "pure" and not args.nms
+                if args.protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH) and not args.nms
                 else None
             )
             # The UI -> OSS hop is local plain A2A; only the OSS Agent uses the NMS webhook.
@@ -1722,7 +1769,15 @@ def main() -> int:
             ]
             if pure_nms:
                 ui_args += ["--discovery", "direct"]
-            if not args.nms and (args.approval_gate or args.protocol == "pure"):
+            if args.nms:
+                # The UI derives each protocol's discovery/transport default: A2A-T talks to the
+                # vendor NMS, standard A2A goes through the OSS Agent.
+                ui_args.append("--nms")
+            if not args.nms and (
+                args.approval_gate or args.protocol == PROTOCOL_PURE
+            ):
+                # In ``both`` the pure review is driven by mieEnabled, not by the A2A-T server
+                # gate, so the page must not advertise a gate the A2A-T request form will not hold.
                 ui_args += ["--approval-gate", "--approval-timeout", str(args.approval_timeout)]
             if args.allow_insecure_bind:
                 ui_args.append("--allow-insecure-bind")
@@ -1748,6 +1803,7 @@ def main() -> int:
             [pid for pid in dict.fromkeys(managed) if _pid_alive(pid)],
             model_mode=args.model_mode,
             language=args.language,
+            protocol_mode=args.protocol,
             trace_token=server_trace_env.get("A2AT_SAMPLE_TRACE_TOKEN", "")
             or oss_trace_env.get("A2AT_SAMPLE_TRACE_TOKEN", ""),
             trace_url=_trace_url(args.ui_port) if args.ui else "",
