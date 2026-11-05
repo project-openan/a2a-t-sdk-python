@@ -1782,8 +1782,87 @@ assert.ok(capturedText.includes("Authorization"));
 assert.ok(capturedText.includes("***"));
 assert.ok(!capturedText.includes("/a2a/v1/"));
 assert.ok(!capturedText.includes("traceparent: 00-"));
+// The body is the captured SendMessageRequest ({"message": {...}}), not a rebuilt one.
+assert.ok(capturedText.includes('"message"'));
+assert.ok(capturedText.includes('"text": "Task-T"'));
+assert.ok(!capturedText.includes("## Operation Type"));
 
 const uncapturedText = wireText(
   buildWireModel(capturedEntry, { ...capturedState, wire: [] }, "t", copy),
 );
 assert.ok(uncapturedText.includes(copy.wire.noWireCapture));
+// Without a capture the fallback still uses the real request envelope, never a bare Message.
+assert.ok(uncapturedText.includes('"message"'));
+assert.ok(uncapturedText.includes("## Operation Type"));
+
+// A pure-A2A send has no Task-T: the panel shows the captured request and picks the record by
+// message id, so a later round never renders an earlier round's body.
+const pureSentEntry = {
+  kind: "message_sent",
+  spanId: "e".repeat(16),
+  detail: {
+    protocol: "pure",
+    performative: "MESSAGE",
+    summary: "please answer with the missing rate",
+    messageId: "msg-2",
+  },
+};
+const pureSentState = {
+  runId: "run-pure",
+  wire: [
+    {
+      dir: "out",
+      method: "POST",
+      url: "http://127.0.0.1:8001/a2a/json/message:stream",
+      headers: { "content-type": "application/json" },
+      body: { message: { messageId: "msg-1", parts: [{ text: "first round" }] } },
+    },
+    {
+      dir: "out",
+      method: "POST",
+      url: "http://127.0.0.1:8001/a2a/json/message:stream",
+      headers: { "content-type": "application/json" },
+      body: { message: { messageId: "msg-2", parts: [{ text: "second round" }] } },
+    },
+  ],
+};
+const pureSentModel = buildWireModel(pureSentEntry, pureSentState, "t", copy);
+const pureSentText = wireText(pureSentModel);
+assert.equal(pureSentModel.title, copy.wire.pureMessageTitle);
+assert.ok(pureSentText.includes('"messageId": "msg-2"'));
+assert.ok(pureSentText.includes('"text": "second round"'));
+assert.ok(!pureSentText.includes("first round"));
+assert.ok(pureSentText.includes("POST /a2a/json/message:stream HTTP/1.1"));
+
+// The Extension view prefers the captured metadata (full value) over the send span's excerpt.
+const capturedExtensionEntry = {
+  kind: "message_sent",
+  spanId: "f".repeat(16),
+  detail: { performative: "TASK_T", messageId: "msg-ext", taskT: "truncated" },
+};
+const capturedExtensionState = {
+  runId: "run-ext",
+  wire: [
+    {
+      dir: "out",
+      method: "POST",
+      url: "http://127.0.0.1:8000/message:stream",
+      headers: {},
+      body: {
+        message: {
+          messageId: "msg-ext",
+          metadata: {
+            "urn:Task-T/v1": "FULL TASK T PAYLOAD",
+            templateUri: "Task-T/network-layer/ran-energy-saving/v1",
+          },
+        },
+      },
+    },
+  ],
+};
+const capturedExtensionText = wireText(
+  buildWireModel(capturedExtensionEntry, capturedExtensionState, "x", copy),
+);
+assert.ok(capturedExtensionText.includes("FULL TASK T PAYLOAD"));
+assert.ok(!capturedExtensionText.includes("truncated"));
+assert.ok(capturedExtensionText.includes("Task-T/network-layer/ran-energy-saving/v1"));

@@ -421,6 +421,11 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
 - 每次发往网管的 A2A 调用都携带 W3C `traceparent`：trace-id 使用 run id（32 位 hex），
   网管可据此把自身日志关联到一次 run；span-id 每次调用现生成。该头会和其他请求头一起写入
   `wire.jsonl`，Web UI 的 `GET /api/runs/{id}/wire` 把这些脱敏记录提供给 On-the-wire 检查器。
+- a2a-sdk 的 HTTP 传输也按同一记录格式写入 `runs/<runId>/wire.jsonl`（`protocol/wire_log.py`，
+  一个 `httpx` 请求钩子）。因此本地 A2A-T 和 pure A2A 运行显示的也是 SDK 实际发送的
+  `SendMessageRequest` body——`{"message": {...}}`，而不是从轨迹 span 重建的内部 Message 对象。
+  检查器按 A2A message id 选择捕获记录，多轮运行不会把上一轮的 body 显示到当前轨迹行。没有捕获时
+  回退到文档化的信封格式，并在头部区域明确标注。
 
 `demo/nms_sim/` 是离线契约仿真器，实现令牌接口、`POST /a2a/json/message:stream`、
 `GET /a2a/json/tasks[/{id}]` 和已知的 cancel 503。默认 `strict` 档 SSE 永不关闭、每 15 s
@@ -759,7 +764,7 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_SAMPLE_WEBHOOK_HOST` / `A2AT_SAMPLE_WEBHOOK_PORT` | 默认 `127.0.0.1` / `9000` | webhook 接收地址；真实网管必须能访问该主机和端口。 |
 | `A2AT_SAMPLE_INTENT_MODE` | `processed`（默认）、`raw` | 在 A2A/A2A-T 映射前执行业务意图层，或直接发送操作员文本。`--intent-mode` 与 `POST /api/runs.intentMode` 可按 run 覆盖。 |
 | `A2AT_SAMPLE_RUN_DIR` | 未设置；`%TEMP%/a2at-ran-energy-saving-adk` | 启动器状态目录：`pids.json`、子进程日志和每次运行的 `.env`。第二个实例设置不同值，`--stop` 只停自己的进程。 |
-| `A2AT_SAMPLE_RUNS_DIR` | 默认 `<sample>/runs` | 数据目录：transcript、client/task/gateway SQLite、NMS `wire.jsonl` 和 Web UI 历史。相对路径按 sample 根目录解析。 |
+| `A2AT_SAMPLE_RUNS_DIR` | 默认 `<sample>/runs` | 数据目录：transcript、client/task/gateway SQLite、每次 run 的 `wire.jsonl` 和 Web UI 历史。相对路径按 sample 根目录解析。 |
 | `A2AT_SAMPLE_PURE_FOLLOWUP` | `both`（默认）、`task`、`context` | pure A2A follow-up 携带的会话字段。网管拒绝带 `taskId` 的 follow-up 时切到 `context`。 |
 | `A2AT_SAMPLE_WEBHOOK_PORT` | 默认 `9000`（`0` = 临时端口） | 内置 webhook 接收器端口。 |
 | `A2AT_SAMPLE_WEBHOOK_TOKEN` | 默认 `demo-webhook-token` | 与 `X-A2A-Notification-Token` 比对的静态推送 token；设置 `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` 后不再使用。 |

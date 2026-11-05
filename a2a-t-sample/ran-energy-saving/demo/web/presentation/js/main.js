@@ -721,6 +721,10 @@ function subscribe(runId) {
     // read back here and rendered as-is instead of being reconstructed from the span.
     if (frame.type === "trace" && frame.event?.kind === "message_sent") {
       loadWire(runId);
+    } else if (frame.type === "finished" || (frame.type === "event" && ui.view.wire.length === 0)) {
+      // The send span is emitted just before the HTTP call, so the first read can land before the
+      // request hook has written the record. Retry on the next server frame and at the end.
+      loadWire(runId);
     }
     // An approval trace span carries the plan details and may arrive after the status frame that
     // stopped the show. Apply it immediately so the card is never stuck on a generic message.

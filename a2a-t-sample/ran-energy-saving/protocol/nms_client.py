@@ -54,6 +54,7 @@ from shared.trace import (
 )
 
 from protocol.client_flow import is_stop_event, is_terminal_event
+from protocol.wire_log import redact
 
 _LOGGER = logging.getLogger("ran_energy_saving.nms_client")
 
@@ -65,11 +66,6 @@ NMS_TERMINAL_STATES: Final[frozenset[str]] = frozenset(
         "TASK_STATE_FAILED",
         "TASK_STATE_REJECTED",
     }
-)
-
-#: JSON keys redacted from ``wire.jsonl``.
-_REDACT_KEYS: Final[frozenset[str]] = frozenset(
-    {"authorization", "x-auth-token", "accesssession", "access_session", "cookie", "set-cookie"}
 )
 
 #: Default request budget of one NMS call.
@@ -629,7 +625,7 @@ class NmsClient:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(_redact(record), ensure_ascii=False) + "\n")
+                handle.write(json.dumps(redact(record), ensure_ascii=False) + "\n")
         except OSError:
             _LOGGER.debug("wire log write failed", exc_info=True)
 
@@ -1027,10 +1023,3 @@ def _is_hex(value: str, length: int) -> bool:
     return len(value) == length and all(char in "0123456789abcdef" for char in value)
 
 
-def _redact(value: object) -> object:
-    """Recursively redact credentials from one wire record."""
-    if isinstance(value, Mapping):
-        return {str(key): "***" if str(key).lower() in _REDACT_KEYS else _redact(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_redact(item) for item in value]
-    return value

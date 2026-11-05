@@ -94,6 +94,7 @@ from protocol.nms_client import (
 from protocol.plain_client_flow import run_plain_client_flow
 from protocol.pure_client_flow import run_pure_client_flow
 from protocol.run_spec import DEFAULT_CLIENT_POLICY, ClientPolicy, RunCatalog, RunSpec
+from protocol.wire_log import HttpWireLog
 
 _LOGGER = logging.getLogger("ran_energy_saving.client_runtime")
 
@@ -350,6 +351,7 @@ class ClientRuntime:
     trace_sink: Callable[[dict[str, object]], None] | None = None
     pure_answer: Callable[[dict[str, object]], str] | None = None
     intent_processor: IntentProcessor | None = None
+    wire_log: HttpWireLog | None = None
 
     def set_recommendation_sink(
         self,
@@ -440,6 +442,10 @@ class ClientRuntime:
             self.nms_client.set_wire_path(
                 Path(self.config.runs_dir) / run_id / "wire.jsonl" if run_id else None
             )
+        if self.wire_log is not None:
+            # The a2a-sdk HTTP transport records the real SendMessageRequest body for this run, so
+            # the wire inspector never has to rebuild the envelope from a normalized event.
+            self.wire_log.set_run(self.config.runs_dir, run_id)
         sink = trace_sink if trace_sink is not None else self.trace_sink
         # A run-level sink is restored to the construction-time sink after the run; the
         # construction-time sink stays attached until ``aclose``.
@@ -647,6 +653,7 @@ async def build_client_runtime(
     a2a_client: Any | None = None
     httpx_client: httpx.AsyncClient | None = None
     receiver: WebhookReceiver | None = None
+    wire_log = HttpWireLog()
     if config.discovery == DISCOVERY_NMS:
         # The vendor NMS has no AgentCard and no a2a-sdk-compatible transport. The real machine
         # uses the non-streaming ``message:send`` + webhook; the SSE/stream path remains available
@@ -689,6 +696,9 @@ async def build_client_runtime(
             timeout=config.http_timeout_seconds,
             trust_env=False,
             headers=_server_auth_headers(config),
+            # Capture what the SDK really sends (the SendMessageRequest envelope), not a body
+            # rebuilt from the normalized event. Redaction happens before the record is written.
+            event_hooks={"request": [wire_log.record_request]},
         )
         client_config = ClientConfig(
             streaming=transport == TRANSPORT_SSE,
@@ -757,6 +767,7 @@ async def build_client_runtime(
         ),
         _httpx_client=httpx_client,
         nms_client=nms_client,
+        wire_log=wire_log if httpx_client is not None else None,
         _webhook_receiver=receiver,
         trace_sink=trace_sink,
         pure_answer=pure_answer,

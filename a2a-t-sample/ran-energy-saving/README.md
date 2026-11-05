@@ -159,8 +159,10 @@ data collection begins. The right column keeps the evidence: what the OSS Agent 
 the 24-hour throughput chart), the
 negotiation turns, an **On the wire** inspector, and the merged session trace. On the wire shows the
 captured redacted exchange from the run's `wire.jsonl` — request line, headers (including the real
-`traceparent`) and JSON body with the Task-T metadata — and says so when a run captured none instead
-of inventing one; its **Plain A2A** toggle shows the
+`traceparent`) and the exact `SendMessageRequest` JSON body the SDK sent (`{"message": …}`, with the
+Task-T metadata in A2A-T mode). The a2a-sdk HTTP transport is captured too, so local A2A-T and pure
+A2A runs show the real request instead of a message object rebuilt from the trace; when a run
+captured none, the panel says so instead of inventing one. Its **Plain A2A** toggle shows the
 same request as one natural-language sentence without the extension header or Task-T fields (a
 format view of the same message). Clicking a trace row selects that message in the inspector. The
 trace labels each row with its demo day (Day 1, Days 2–8, Day 9, Day 9+) and message direction

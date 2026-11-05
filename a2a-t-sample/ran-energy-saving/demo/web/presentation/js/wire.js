@@ -1,9 +1,11 @@
 /** On-the-wire inspector: the A2A-T request and its plain-A2A comparison.
  *
- * The initial Task-T request is rendered as the A2A envelope the SDK sends: request headers, the
- * JSON body, and the Task-T payload under its extension metadata key. The Plain A2A view keeps the
- * same message id and content but removes the extension header and Task-T fields, replacing the
- * short label with one natural-language sentence. It is a format comparison, not a second run.
+ * Whenever the run captured the exchange, the panel shows the request line, headers and body that
+ * the SDK really sent (a ``SendMessageRequest``, i.e. ``{"message": {...}}``). Only a run without a
+ * capture falls back to the documented envelope, and the header area says so. The Plain A2A view
+ * keeps the same message id and content but removes the extension header and Task-T fields,
+ * replacing the short label with one natural-language sentence. It is a format comparison, not a
+ * second run.
  */
 
 import { actionLabel } from "../copy.js";
@@ -22,7 +24,7 @@ export function createWire(els, getCopy, getUi) {
     const signature = entry
       ? `${wireKey(entry)}|${ui.wireFormat}|${state.runId || ""}|${copy.lang}|${
           state.intentText || ""
-        }|${state.taskTPrompt || ""}`
+        }|${state.taskTPrompt || ""}|${wireRevision(state.wire)}`
       : "empty";
     // The page renders on every frame; the message only changes when the shown entry, the
     // format or the rendered intent changes.
@@ -49,10 +51,10 @@ export function createWire(els, getCopy, getUi) {
     lastFormat = ui.wireFormat;
     lastSignature = `${key}|${ui.wireFormat}|${state.runId || ""}|${copy.lang}|${
       state.intentText || ""
-    }|${state.taskTPrompt || ""}`;
+    }|${state.taskTPrompt || ""}|${wireRevision(state.wire)}`;
     els.note.textContent = model.note || "";
     els.note.hidden = !model.note;
-    setFormat(copy, ui.wireFormat, model.alternate, extensionPayload(entry) !== null);
+    setFormat(copy, ui.wireFormat, model.alternate, extensionPayload(entry, state.wire) !== null);
   }
 
   function setFormat(copy, format, alternate, hasExtension) {
@@ -78,6 +80,13 @@ export function createWire(els, getCopy, getUi) {
   return { render, showEntry };
 }
 
+/** Identity of the currently loaded capture; a new record must re-render the panel. */
+function wireRevision(records) {
+  if (!Array.isArray(records) || records.length === 0) return "0";
+  const last = records[records.length - 1];
+  return `${records.length}:${isObject(last) && typeof last.ts === "string" ? last.ts : ""}`;
+}
+
 /** Stable identity of one displayed entry; a changed entry resets the panel scroll. */
 export function wireKey(entry) {
   if (!entry || typeof entry !== "object") return "";
@@ -97,9 +106,12 @@ export function latestWireEntry(state) {
 }
 
 /** The Task-T / Negotiation-T payload of one entry, or ``null`` when it carries none. */
-export function extensionPayload(entry) {
+export function extensionPayload(entry, wireRecords = null) {
   if (!isObject(entry)) return null;
-  const metadata = isObject(entry.metadata) ? entry.metadata : {};
+  // A captured request is the authoritative copy of the metadata; the send span keeps only a
+  // bounded excerpt. Use it when the message id proves it is this message's exchange.
+  const captured = capturedMessageMetadata(entry, wireRecords);
+  const metadata = captured || (isObject(entry.metadata) ? entry.metadata : {});
   const detail = isObject(entry.detail) ? entry.detail : {};
   const payload = {};
   const taskKey = Object.keys(metadata).find((key) => String(key).includes("Task-T"));
@@ -116,7 +128,10 @@ export function extensionPayload(entry) {
   if (typeof negotiation === "string" && negotiation) {
     payload[negotiationKey || "Negotiation-T"] = negotiation;
   }
-  const template = detail.templateUri || entry.templateUri;
+  const template =
+    (typeof metadata.templateUri === "string" && metadata.templateUri) ||
+    detail.templateUri ||
+    entry.templateUri;
   if (typeof template === "string" && template) payload.templateUri = template;
   return Object.keys(payload).length > 0 ? payload : null;
 }
@@ -125,7 +140,7 @@ export function extensionPayload(entry) {
 export function buildWireModel(entry, state, format, copy) {
   if (!isObject(entry)) return null;
   if (format === "x") {
-    const payload = extensionPayload(entry);
+    const payload = extensionPayload(entry, state.wire);
     if (payload === null) return null;
     return {
       title: copy.wire.extensionTitle,
@@ -137,6 +152,10 @@ export function buildWireModel(entry, state, format, copy) {
   }
   if (entry.kind === "message_sent") {
     const detail = isObject(entry.detail) ? entry.detail : {};
+    // What actually left the process wins over anything rebuilt from the span. The SDK sends a
+    // SendMessageRequest ({"message": {...}}); showing the inner Message object is not the wire.
+    const record = outboundRecord(state.wire, entry);
+    const headers = record ? capturedHeaders(record) : [copy.wire.noWireCapture];
     if (detail.performative === "TASK_T") {
       const extensionUri =
         (typeof detail.extensionUri === "string" && detail.extensionUri) ||
@@ -162,47 +181,53 @@ export function buildWireModel(entry, state, format, copy) {
         metadata.sampleRunId = detail.sampleRunId;
       }
       const a2aBody = {
-        role: "ROLE_USER",
-        parts: [{ text: label }],
-        metadata,
-        messageId,
+        message: {
+          role: "ROLE_USER",
+          parts: [{ text: label }],
+          metadata,
+          messageId,
+        },
       };
       const plainBody = {
-        role: "ROLE_USER",
-        parts: [{ text: plainSentence(intent, copy.lang) || label }],
-        messageId,
+        message: {
+          role: "ROLE_USER",
+          parts: [{ text: plainSentence(intent, copy.lang) || label }],
+          messageId,
+        },
       };
-      // Only a captured exchange is shown as the request. Without one the body still explains the
-      // payload, but the headers section says so instead of inventing a request line.
-      const record = outboundRecord(state.wire);
-      const headers = record ? capturedHeaders(record) : [copy.wire.noWireCapture];
-      const plainHeaders = record
-        ? headers.filter((line) => !line.startsWith("A2A-Extensions:"))
-        : headers;
       const usePlain = format === "a";
+      const plainHeaders = record
+        ? headers.filter((line) => !isExtensionHeader(line))
+        : headers;
       const modify = detail.summary === "modify ran energy saving task";
       return {
         title: modify ? copy.wire.modifyTitle : copy.wire.requestTitle,
         alternate: true,
         note: usePlain ? copy.wire.plainNote : copy.wire.taskTNote,
-        nodes: [...headerNodes(usePlain ? plainHeaders : headers), ...jsonNodes(usePlain ? plainBody : a2aBody, 0)],
+        nodes: [
+          ...headerNodes(usePlain ? plainHeaders : headers),
+          ...jsonNodes(usePlain ? plainBody : capturedBody(record, a2aBody), 0),
+        ],
       };
     }
     const plain = detail.protocol === "plain";
+    const pure = detail.protocol === "pure";
     const metadata = plain ? {} : sentMetadata(detail, copy);
+    const message = {
+      role: "ROLE_USER",
+      parts: [{ text: detail.summary || "" }],
+      ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+      ...(detail.messageId ? { messageId: detail.messageId } : {}),
+    };
     return {
-      title: plain ? copy.wire.plainMessageTitle : copy.wire.messageTitle,
+      title: plain
+        ? copy.wire.plainMessageTitle
+        : pure
+          ? copy.wire.pureMessageTitle
+          : copy.wire.messageTitle,
       alternate: false,
-      note: plain ? copy.wire.plainMessageNote : "",
-      nodes: jsonNodes(
-        {
-          role: "ROLE_USER",
-          parts: [{ text: detail.summary || "" }],
-          ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
-          ...(detail.messageId ? { messageId: detail.messageId } : {}),
-        },
-        0,
-      ),
+      note: plain ? copy.wire.plainMessageNote : pure ? copy.wire.pureMessageNote : "",
+      nodes: [...headerNodes(headers), ...jsonNodes(capturedBody(record, { message }), 0)],
     };
   }
   if (entry.entryType === "event" && entry.kind === "propose") {
@@ -372,19 +397,72 @@ function capturedHeaders(record) {
   return lines;
 }
 
-/** Pick the outbound record that carries the Task-T message, falling back to the first send. */
-function outboundRecord(records) {
+/** Pick the outbound record of one displayed message, never another round's exchange. */
+function outboundRecord(records, entry) {
   if (!Array.isArray(records)) return null;
   const outbound = records.filter(
     (record) => isObject(record) && record.dir === "out" && typeof record.url === "string",
   );
   if (outbound.length === 0) return null;
+  // The send span and the request body carry the same A2A message id, so a multi-round run never
+  // shows the previous message's body under the current trace row.
+  const messageId = entryMessageId(entry);
+  if (messageId) {
+    const exact = outbound.find((record) => recordMessageId(record) === messageId);
+    if (exact) return exact;
+  }
   return (
     outbound.find((record) => {
       const text = JSON.stringify(record.body ?? "");
       return text.includes("Task-T");
     }) || outbound[0]
   );
+}
+
+/** A2A message id of one trace entry (send span detail or transcript entry). */
+function entryMessageId(entry) {
+  const detail = isObject(entry) && isObject(entry.detail) ? entry.detail : {};
+  if (typeof detail.messageId === "string") return detail.messageId;
+  if (isObject(entry) && typeof entry.messageId === "string") return entry.messageId;
+  return "";
+}
+
+/** A2A message id of one captured request body (``{"message": {...}}``). */
+function recordMessageId(record) {
+  if (!isObject(record) || !isObject(record.body)) return "";
+  const body = record.body;
+  const message = isObject(body.message) ? body.message : body;
+  return typeof message.messageId === "string" ? message.messageId : "";
+}
+
+/** Metadata of the captured request whose message id matches this entry, when there is one. */
+function capturedMessageMetadata(entry, records) {
+  if (!Array.isArray(records)) return null;
+  const messageId = entryMessageId(entry);
+  if (!messageId) return null;
+  for (const record of records) {
+    if (!isObject(record) || record.dir !== "out" || recordMessageId(record) !== messageId) {
+      continue;
+    }
+    const body = isObject(record.body) ? record.body : {};
+    const message = isObject(body.message) ? body.message : body;
+    return isObject(message.metadata) ? message.metadata : null;
+  }
+  return null;
+}
+
+/** The body that was really sent; the documented envelope is only a no-capture fallback. */
+function capturedBody(record, fallback) {
+  if (record && record.body !== undefined && record.body !== null) return record.body;
+  return fallback;
+}
+
+/** Whether one captured header line is an A2A extension opt-in. */
+function isExtensionHeader(line) {
+  const colon = line.indexOf(":");
+  if (colon < 0) return false;
+  const name = line.slice(0, colon).trim().toLowerCase();
+  return name === "a2a-extensions" || name === "x-a2a-extensions";
 }
 
 function headerNodes(lines) {

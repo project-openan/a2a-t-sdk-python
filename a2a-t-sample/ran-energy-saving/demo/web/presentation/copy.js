@@ -367,6 +367,9 @@ const EN = {
     modifyTitle: "OSS Agent → RAN Agent · Modify Task-T sent",
     messageTitle: "OSS Agent → RAN Agent · message",
     plainMessageTitle: "OSS Agent → RAN Agent · plain A2A message",
+    pureMessageTitle: "Engineer client → OSS Agent · A2A message",
+    pureMessageNote:
+      "Standard A2A: the body is the SendMessageRequest the SDK sends. Pure mode carries no Task-T or Negotiation-T metadata.",
     plainMessageNote:
       "Plain A2A: the task is this sentence. There is no extension header, no Task-T metadata and no template for the receiver to validate before it plans.",
     negotiationTitle: "RAN Agent → OSS Agent · proposal",
@@ -378,7 +381,7 @@ const EN = {
     requestLabel: "RAN energy saving task",
     extensionFallback: "Task-T extension URI",
     noWireCapture:
-      "No captured exchange for this run (the wire log is written for real-NMS runs only)",
+      "No captured exchange for this run; the body below is reconstructed from the message span",
     negotiationFallback: "Negotiation-T extension URI",
     taskCreatedTitle: "RAN Agent → OSS Agent · task created",
     taskCreatedNote:
@@ -1075,6 +1078,9 @@ const ZH = {
     modifyTitle: "OSS Agent → RAN Agent · 下发 Modify Task-T",
     messageTitle: "OSS Agent → RAN Agent · 消息",
     plainMessageTitle: "OSS Agent → RAN Agent · 普通 A2A 消息",
+    pureMessageTitle: "工程师客户端 → OSS Agent · A2A 消息",
+    pureMessageNote:
+      "标准 A2A：报文就是 SDK 实际发送的 SendMessageRequest。pure 模式不携带 Task-T / Negotiation-T metadata。",
     plainMessageNote:
       "普通 A2A：任务就是这句话。没有扩展头、没有 Task-T metadata，接收方在规划前也没有模板可以校验。",
     negotiationTitle: "RAN Agent → OSS Agent · 提议",
@@ -1085,7 +1091,7 @@ const ZH = {
     eventTitle: "会话事件",
     requestLabel: "无线网络节能任务",
     extensionFallback: "Task-T 扩展 URI",
-    noWireCapture: "本次运行没有捕获到真实报文（wire 日志只对真机网管运行写入）",
+    noWireCapture: "本次运行没有捕获到真实报文；下面的报文由消息 span 重建",
     negotiationFallback: "Negotiation-T 扩展 URI",
     taskCreatedTitle: "RAN Agent → OSS Agent · 任务已创建",
     taskCreatedNote:
