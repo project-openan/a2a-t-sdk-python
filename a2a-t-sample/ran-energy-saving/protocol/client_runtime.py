@@ -58,6 +58,7 @@ from shared.trace import (
     set_global_sink,
     trace_scope,
 )
+from shared.trace_propagation import inject_outgoing
 from shared.traced_llm import register_traced_providers
 
 from protocol.client_flow import (
@@ -690,9 +691,9 @@ async def build_client_runtime(
             timeout=config.http_timeout_seconds,
             trust_env=False,
             headers=_server_auth_headers(config),
-            # Capture what the SDK really sends (the SendMessageRequest envelope), not a body
-            # rebuilt from the normalized event. Redaction happens before the record is written.
-            event_hooks={"request": [wire_log.record_request]},
+            # Inject the Langfuse trace context first, then capture the exact request (including
+            # the traceparent header) for the wire inspector.
+            event_hooks={"request": [inject_outgoing, wire_log.record_request]},
         )
         client_config = ClientConfig(
             streaming=transport == TRANSPORT_SSE,

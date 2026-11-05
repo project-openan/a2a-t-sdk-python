@@ -89,7 +89,7 @@ try:  # pragma: no cover - exercised by the import-guard test
     from opentelemetry.context import Context
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.trace import format_trace_id, set_span_in_context
+    from opentelemetry.trace import format_span_id, format_trace_id, set_span_in_context
 
     LANGFUSE_AVAILABLE = True
 except ImportError:  # pragma: no cover - default test environment installs the SDK
@@ -97,6 +97,7 @@ except ImportError:  # pragma: no cover - default test environment installs the 
     Context = None  # type: ignore[assignment,misc]
     Resource = None  # type: ignore[assignment,misc]
     TracerProvider = None  # type: ignore[assignment,misc]
+    format_span_id = None  # type: ignore[assignment]
     format_trace_id = None  # type: ignore[assignment]
     set_span_in_context = None  # type: ignore[assignment]
     LANGFUSE_AVAILABLE = False
@@ -217,7 +218,9 @@ class LangfuseSpanExporter:
             start_time=started,
             attributes=_root_attributes(metadata),
         )
-        self._trace_id = format_trace_id(self._root.get_span_context().trace_id)
+        root_context = self._root.get_span_context()
+        self._trace_id = format_trace_id(root_context.trace_id)
+        self._root_span_id = format_span_id(root_context.span_id)
         # The root stays open for the whole run, so its trace-level attributes would arrive only
         # at run end. Export one zero-length child immediately: it is the trace's first
         # observation, so Langfuse names the trace and fills session/user from the start.
@@ -238,6 +241,11 @@ class LangfuseSpanExporter:
     def trace_id(self) -> str:
         """Return the Langfuse trace id (the OTel trace id)."""
         return self._trace_id
+
+    @property
+    def root_span_id(self) -> str:
+        """Return the root span id, used as the parent of outgoing server hops."""
+        return self._root_span_id
 
     def __call__(self, span: Mapping[str, object]) -> None:
         """Export one completed Run Explorer span; failures become a snapshot warning.

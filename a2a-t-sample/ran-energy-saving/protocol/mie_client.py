@@ -19,6 +19,7 @@ from a2a.types import Role, SendMessageRequest
 from a2a.utils.constants import TransportProtocol
 from shared.config import DEFAULT_HTTP_TIMEOUT_SECONDS
 from shared.sse_event_consumer import normalize_event
+from shared.trace_propagation import inject_outgoing
 
 from protocol.discovery import DISCOVERY_DIRECT, discover_agent
 from protocol.messages import format_rate_percent
@@ -97,6 +98,7 @@ class MIEApprovalClient:
             httpx_client = httpx.AsyncClient(
                 timeout=self._timeout_seconds,
                 trust_env=False,
+                event_hooks={"request": [inject_outgoing]},
             )
             try:
                 client = await create_client(

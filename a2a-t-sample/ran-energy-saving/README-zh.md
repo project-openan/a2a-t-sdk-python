@@ -189,6 +189,14 @@ trace 结构为 `run → phase → 协商轮次`；`llm` span 映射为 generati
 Langfuse trace 链接。导出是 best-effort：失败只显示 warning，不改变 run 结果。`langfuse` 是
 sample 的可选依赖；未安装或未配置 key 时导出器为空操作。
 
+客户端与服务端 span 共用同一条 trace。每次本地 A2A 调用都会携带客户端的 W3C `traceparent`
+（以及 `X-A2AT-Run-Id`、conversation、user 头）；RAN、OSS、MIE 服务端在创建 a2a-sdk handler span
+之前先附加该上下文，因此服务端的 `SendMessage` / `CancelTask` 会落在同一条 Langfuse trace 里。
+如果服务端无法加入，桥接 span 会携带 `langfuse.trace.metadata.runId`，仍可按 run 检索。要导出
+服务端 span，需要把 SDK 的 OTLP 导出指向 Langfuse（`OTEL_EXPORTER_OTLP_ENDPOINT` 和
+`OTEL_EXPORTER_OTLP_HEADERS`）；所选 `.env` 中的 `OTEL_*`/`LANGFUSE_*` 会被导出给子进程。厂商网管
+不使用同一条 trace，因此发往网管的 `traceparent` 仍使用 run id。
+
 ### 真实厂商网管模式
 
 sample 也可以作为真实厂商网管的 OSS 客户端。加 `--nms` 后，启动器不再启动本地 registry、RAN

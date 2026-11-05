@@ -617,3 +617,29 @@ def test_the_parser_exposes_the_env_file_option() -> None:
     args = run_demo._build_parser().parse_args(["--env-file", "profile.env"])
 
     assert args.env_file == "profile.env"
+
+
+def test_observability_keys_from_the_selected_file_reach_child_processes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SDK exporter reads os.getenv, so a key only in --env-file must be exported."""
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.setenv("OTEL_SERVICE_NAME", "from-shell")
+
+    run_demo._export_observability_env(
+        {
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://langfuse.local/api/public/otel",
+            "OTEL_SERVICE_NAME": "from-file",
+            "LANGFUSE_PUBLIC_KEY": "pk-lf-test",
+            "A2AT_SAMPLE_RUNS_DIR": "runs",
+        }
+    )
+
+    import os
+
+    assert os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://langfuse.local/api/public/otel"
+    # A shell export wins over the file value.
+    assert os.environ["OTEL_SERVICE_NAME"] == "from-shell"
+    assert os.environ["LANGFUSE_PUBLIC_KEY"] == "pk-lf-test"
+    # Non-observability sample settings stay in the per-run .env, not the launcher environment.
+    assert "A2AT_SAMPLE_RUNS_DIR" not in os.environ

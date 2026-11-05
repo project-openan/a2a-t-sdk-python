@@ -215,6 +215,16 @@ card and the Run Explorer **Exports** panel link to the trace. Export is best ef
 shown as a warning and never changes the run result. `langfuse` is an optional sample dependency;
 without it, or without keys, the exporter is a no-op.
 
+Client and server spans share one trace. Every local A2A call carries the client trace id as a W3C
+`traceparent` (plus `X-A2AT-Run-Id`, conversation and user headers); the RAN, OSS and MIE servers
+attach that context before the a2a-sdk handler spans are created, so the server-side `SendMessage` /
+`CancelTask` spans land in the same Langfuse trace. If a server cannot join, its bridge span carries
+`langfuse.trace.metadata.runId` so the trace is still searchable by run. To export the server spans,
+point the SDK's OTLP exporter at Langfuse (`OTEL_EXPORTER_OTLP_ENDPOINT` and
+`OTEL_EXPORTER_OTLP_HEADERS`); `OTEL_*`/`LANGFUSE_*` keys from the selected `.env` are exported to
+the child processes. The vendor NMS keeps the run id as its `traceparent` because it does not report
+to the same project.
+
 ### Real vendor NMS mode
 
 The sample can also act as the OSS client of a real vendor NMS. With `--nms`, the launcher starts

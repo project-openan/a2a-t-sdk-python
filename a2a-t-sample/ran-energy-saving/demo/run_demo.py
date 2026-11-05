@@ -53,7 +53,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import TextIO
+from typing import Final, TextIO
 
 from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from shared.config import merge_sample_process_env
@@ -322,6 +322,36 @@ def _trace_summary(spans: list[dict[str, object]]) -> str:
             measured = True
     usage = f"prompt={prompt} completion={completion} total={total}" if measured else "n/a (scripted)"
     return f"llm={len(llm)} tool={len(tools)} tokens={usage}"
+
+
+#: Prefixes/exact keys of the OTel/Langfuse configuration the SDK reads from the *process*
+#: environment. Children inherit os.environ, so keys selected by ``--env-file`` must be exported
+#: here or the server-side exporter never starts.
+_OBSERVABILITY_ENV_PREFIXES: Final[tuple[str, ...]] = (
+    "OTEL_",
+    "LANGFUSE_",
+    "A2AT_OBSERVABILITY_",
+    "A2AT_TRACE_",
+    "A2AT_METRIC_",
+    "A2AT_LOG_",
+    "A2AT_EXPORTER_",
+    "A2AT_EXTRACT_",
+    "A2AT_LOGS_",
+    "A2AT_SERVICE_NAME",
+)
+
+
+def _export_observability_env(values: dict[str, str]) -> None:
+    """Expose the selected file's OTel/Langfuse settings to child processes.
+
+    A shell export still wins; a key that is only in the configuration file is copied into the
+    launcher environment because the SDK observability reads ``os.getenv`` rather than the file.
+    """
+    for key, value in values.items():
+        if key in os.environ:
+            continue
+        if key.startswith(_OBSERVABILITY_ENV_PREFIXES):
+            os.environ[key] = value
 
 
 def _write_run_env(
@@ -925,8 +955,25 @@ async def _run_client_foreground(
     runtime = None
     result = None
     error_text: str | None = None
+    from shared.trace_propagation import propagated_trace
+
     try:
-        with log_context(run_id=run_id, role="client"):
+        with (
+            log_context(run_id=run_id, role="client"),
+            propagated_trace(
+                trace_id=(
+                    langfuse_exporter.trace_id if langfuse_exporter is not None else ""
+                ),
+                parent_span_id=(
+                    langfuse_exporter.root_span_id
+                    if langfuse_exporter is not None
+                    else ""
+                ),
+                run_id=run_id,
+                conversation_id=run_id,
+                user_id="cli",
+            ),
+        ):
             runtime = await build_demo_runtime(
                 config,
                 scenario,
@@ -1236,6 +1283,7 @@ def main() -> int:
         print(f"[run_demo] {env_error}")
         return 2
     source_values = _read_env(source_env) if source_env is not None else {}
+    _export_observability_env(source_values)
     parser = _build_parser(
         default_ui_port=_ui_port_default(source_values),
         default_ui_host=_ui_host_default(source_values),

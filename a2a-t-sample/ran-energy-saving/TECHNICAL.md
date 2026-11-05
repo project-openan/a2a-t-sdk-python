@@ -128,6 +128,13 @@ one row.
 
 ### Langfuse export
 
+Cross-process association: the client exporter owns the trace id. Local A2A hops send it as
+`traceparent` (plus `X-A2AT-Run-Id` / conversation / user headers) via an `httpx` request hook;
+`TracePropagationMiddleware` on the RAN, OSS and MIE apps attaches the incoming context and starts a
+bridge span carrying `langfuse.trace.metadata.runId`. Server-side a2a-sdk spans therefore join the
+client trace. The launcher exports `OTEL_*`/`LANGFUSE_*` keys from the selected `.env` to its child
+processes because the SDK observability reads `os.getenv`, not the file.
+
 `shared/langfuse_tracing.py` observes the same span stream as the Run Explorer. `RunManager`
 (Web UI and gateway) and the CLI client attach it next to the UI/transcript sink, so the exporter
 sees exactly the spans the UI sees. One run is one Langfuse trace: `session.id` is the conversation,

@@ -56,6 +56,7 @@ from shared.logging_setup import configure_logging
 from shared.models import NegotiationProposeView
 from shared.run_constants import LANGUAGE_ZH, PROTOCOL_PURE
 from shared.trace import FileTraceEmitter, HttpTraceEmitter, set_global_sink, trace_scope
+from shared.trace_propagation import TracePropagationMiddleware, inject_outgoing
 from shared.webhook_receiver import WebhookReceiver, start_receiver_with_fallback
 from starlette.applications import Starlette
 
@@ -370,7 +371,7 @@ class OSSPureExecutor(AgentExecutor):
         httpx_client = httpx.AsyncClient(
             timeout=self._timeout_seconds,
             trust_env=False,
-            event_hooks={"request": [self._wire_log.record_request]},
+            event_hooks={"request": [inject_outgoing, self._wire_log.record_request]},
         )
         try:
             client = await create_client(
@@ -617,6 +618,7 @@ def build_oss_app(
         ],
         lifespan=lifespan,
     )
+    app.add_middleware(TracePropagationMiddleware)
     app.state.agent_card = card
     app.state.request_handler = request_handler
     return app

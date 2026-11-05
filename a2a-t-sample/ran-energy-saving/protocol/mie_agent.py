@@ -44,6 +44,7 @@ from a2a.utils.constants import TransportProtocol
 from google.protobuf.json_format import ParseDict
 from shared.config import SampleConfig, load_config
 from shared.logging_setup import configure_logging
+from shared.trace_propagation import TracePropagationMiddleware
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
@@ -350,6 +351,7 @@ def build_mie_app(
             *create_rest_routes(request_handler),
         ]
     )
+    app.add_middleware(TracePropagationMiddleware)
     app.state.agent_card = card
     app.state.approval_registry = resolved_registry
     app.state.request_handler = request_handler

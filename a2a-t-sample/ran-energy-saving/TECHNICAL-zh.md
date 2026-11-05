@@ -133,6 +133,12 @@ collection completed”。工程师在 MIE 中确认后，绿色 `MML commands` 
 
 ### Langfuse 导出
 
+跨进程关联：客户端导出器持有 trace id。本地 A2A 调用通过 `httpx` 请求钩子把它写成
+`traceparent`（并附带 `X-A2AT-Run-Id` / conversation / user 头）；RAN、OSS、MIE 应用上的
+`TracePropagationMiddleware` 附加传入上下文，并创建一个携带 `langfuse.trace.metadata.runId` 的
+桥接 span。因此服务端 a2a-sdk span 会加入客户端 trace。启动器会把所选 `.env` 中的
+`OTEL_*`/`LANGFUSE_*` 导出给子进程，因为 SDK 观测读取的是 `os.getenv` 而不是文件。
+
 `shared/langfuse_tracing.py` 观察与 Run Explorer 相同的 span 流。`RunManager`（Web UI 与
 Gateway）和 CLI 客户端把它挂在 UI/transcript sink 旁边，因此导出器看到的 span 与界面完全一致。
 一次 run 对应一条 Langfuse trace：`session.id` 是会话、`user.id` 是调用方，根 span 是本次 run，

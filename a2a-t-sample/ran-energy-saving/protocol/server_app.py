@@ -71,6 +71,7 @@ from shared.registry_client import register_agentcard
 from shared.run_constants import MAX_ROUNDS, PROTOCOL_A2A_T, PROTOCOL_PURE
 from shared.sdk_env import prepare_sdk_env
 from shared.trace import FileTraceEmitter, HttpTraceEmitter, set_global_sink
+from shared.trace_propagation import TracePropagationMiddleware
 from shared.traced_llm import register_traced_providers
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -327,20 +328,25 @@ def build_rest_app(
     app = Starlette(
         routes=routes,
         lifespan=lifespan,
-        middleware=(
-            [
-                Middleware(
-                    BearerAuthMiddleware,
-                    token=auth_token,
-                    # Default-deny: the SDK also mounts a ``/{tenant}/...`` alias, so a prefix
-                    # allowlist would leave that copy of every route unprotected.
-                    protected_prefixes=("/",),
-                    public_paths=SERVER_PUBLIC_PATHS,
-                )
-            ]
-            if auth_token
-            else []
-        ),
+        middleware=[
+            *(
+                [
+                    Middleware(
+                        BearerAuthMiddleware,
+                        token=auth_token,
+                        # Default-deny: the SDK also mounts a ``/{tenant}/...`` alias, so a prefix
+                        # allowlist would leave that copy of every route unprotected.
+                        protected_prefixes=("/",),
+                        public_paths=SERVER_PUBLIC_PATHS,
+                    )
+                ]
+                if auth_token
+                else []
+            ),
+            # Attach the client's traceparent to an OTel context: the a2a-sdk request-handler
+            # spans then join the client's Langfuse trace instead of starting a separate one.
+            Middleware(TracePropagationMiddleware),
+        ],
     )
     install_health_routes(
         app,

@@ -46,6 +46,7 @@ from shared.config import SampleConfig
 from shared.logging_setup import log_context
 from shared.metrics import SERVER_TASKS_TOTAL
 from shared.trace import PHASE_EXECUTION, Span, current_trace, emit_span, trace_scope
+from shared.trace_propagation import annotate_run_id
 
 from protocol.approval_gate import (
     DEFAULT_APPROVAL_TIMEOUT_SECONDS,
@@ -233,9 +234,14 @@ def _run_id(context: RequestContext) -> str:
     """Return the Run Explorer run id carried by the current trace or message."""
     trace_run_id = current_trace().run_id
     if trace_run_id:
+        annotate_run_id(trace_run_id)
         return trace_run_id
     value = _metadata(context).get(SAMPLE_RUN_ID_METADATA_KEY)
-    return value if isinstance(value, str) else ""
+    run_id = value if isinstance(value, str) else ""
+    # The server trace must be searchable by run even when the client did not send the sample
+    # correlation headers (or the server could not join the client trace).
+    annotate_run_id(run_id)
+    return run_id
 
 
 #: Process-local task id -> latest applied/modified plan, used by the Modify execution. The

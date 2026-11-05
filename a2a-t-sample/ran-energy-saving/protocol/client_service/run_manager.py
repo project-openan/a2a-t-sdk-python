@@ -34,6 +34,7 @@ from shared.run_constants import PROTOCOL_A2A_T
 from shared.trace import (
     PHASE_DISPATCH,
 )
+from shared.trace_propagation import reset_active_trace, set_active_trace
 
 from protocol.client_runtime import MODE_CONFIRM, MODE_MANUAL
 from protocol.client_service.run_state import (
@@ -348,9 +349,24 @@ class RunManager:
 
         self._runs[run.run_id] = run
         self._active_by_conversation[resolved_conversation] = run
-        run.task = asyncio.create_task(
-            self._execute_in_context(run), name=f"ran-client-run-{run.run_id}"
+        # The task copies the current context at creation: bind the Langfuse trace id here so
+        # every outgoing local A2A call carries it as traceparent for the server-side spans.
+        exporter = run.langfuse_exporter
+        trace_tokens = set_active_trace(
+            trace_id=getattr(exporter, "trace_id", "") if exporter is not None else "",
+            parent_span_id=(
+                getattr(exporter, "root_span_id", "") if exporter is not None else ""
+            ),
+            run_id=run.run_id,
+            conversation_id=run.conversation_id,
+            user_id=run.user_id,
         )
+        try:
+            run.task = asyncio.create_task(
+                self._execute_in_context(run), name=f"ran-client-run-{run.run_id}"
+            )
+        finally:
+            reset_active_trace(trace_tokens)
         return run
 
     async def _reuse_idempotent_run(
