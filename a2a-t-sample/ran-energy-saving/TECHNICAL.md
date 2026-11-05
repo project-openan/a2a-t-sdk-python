@@ -469,6 +469,11 @@ Implementation details:
   layer), the accept refill and the Modify follow-up. They default to `A2ATestRegion` and
   `NRES_XCS_6102937,LTE_26441_LNR_OCL` for an `nms` run; the local three-hop demo keeps the neutral
   names.
+- The profile is applied once, at the scenario catalog (`DemoRunCatalog.from_config`): the
+  pre-filled page request, the intent's `rawRequest` / `region` / `normalizedText` and the Task-T
+  all carry the same vendor values. `DemoIntentProcessor` keeps both the neutral and the profiled
+  built-in so it matches either surface, and never rewrites only the normalized text while leaving
+  the raw request neutral.
 - The SSE reader skips `: heartbeat` comments and leaves the stream after
   `A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS` (default 45 s) without a `data:` frame. Heartbeats do not
   reset that window. It then polls `GET <base>/tasks/{id}` to a terminal state; a send timeout is
@@ -505,6 +510,13 @@ Implementation details:
   object rebuilt from a trace span. The inspector matches a captured record by A2A message id, so a
   multi-round run never renders another round's body. Without a capture it falls back to the
   documented envelope and labels the section accordingly.
+- The pure OSS Agent captures its downstream hop in `wire-oss.jsonl` (the NMS client or its own
+  a2a-sdk client), and posts its NMS tool spans into the same run through `HttpTraceEmitter`. The
+  Web UI merges both wire files by timestamp.
+- The webhook callback is process-owned (`protocol/shared_webhook.py`): one receiver per process,
+  started from the launch configuration, reused by every run. The run manager serializes webhook
+  runs because a single callback queue cannot serve two task streams. A busy port falls back to an
+  OS-assigned one only when no `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` pins the external address.
 
 `demo/nms_sim/` is the offline contract simulator. It implements the token endpoint,
 `POST /a2a/json/message:stream`, `GET /a2a/json/tasks[/{id}]` and the known cancel 503. The
@@ -939,6 +951,7 @@ script can switch the model with a plain `export ADK_MODEL_NAME=...`.
 | `A2AT_SAMPLE_INTENT_MODE` | `processed` (default), `raw` | Run the business intent layer before the A2A/A2A-T mapping, or send the operator text directly. `--intent-mode` and `POST /api/runs.intentMode` override it per run. |
 | `A2AT_SAMPLE_RUN_DIR` | unset; `%TEMP%/a2at-ran-energy-saving-adk` | Launcher state: `pids.json`, child logs and the per-run `.env`. Set a different value for a second instance so `--stop` only stops its own processes. |
 | `A2AT_SAMPLE_RUNS_DIR` | default `<sample>/runs` | Data directory: transcripts, client/task/gateway SQLite stores, each run's `wire.jsonl` and the Web UI history. Relative values resolve against the sample root. |
+| `A2AT_SAMPLE_ENV_FILE` | unset | Configuration file `run_demo.py` reads when `--env-file` is not passed. Each launch script can point at its own profile instead of relying on candidate guessing. |
 | `A2AT_SAMPLE_PURE_FOLLOWUP` | `both` (default), `task`, `context` | Conversation fields of a pure A2A follow-up. Switch to `context` when the vendor rejects a follow-up carrying `taskId`. |
 | `A2AT_SAMPLE_WEBHOOK_PORT` | default `9000` (`0` = ephemeral) | Embedded webhook receiver port. |
 | `A2AT_SAMPLE_WEBHOOK_TOKEN` | default `demo-webhook-token` | Static push token checked against `X-A2A-Notification-Token`; unused when `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` is set. |

@@ -109,7 +109,7 @@ def run_ui(
         app = create_app(
             config,
             env_path=env_path,
-            catalog=DemoRunCatalog(),
+            catalog=DemoRunCatalog.from_config(config),
             client_store=client_store,
             memory_turns=config.client_memory_turns,
             default_scenario=scenario,

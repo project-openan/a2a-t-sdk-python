@@ -23,6 +23,9 @@ import httpx
 #: File name of the captured client exchange inside ``runs/<runId>/``.
 WIRE_LOG_FILENAME: Final[str] = "wire.jsonl"
 
+#: File name of the downstream hop captured by the OSS Agent (pure A2A).
+WIRE_OSS_FILENAME: Final[str] = "wire-oss.jsonl"
+
 #: JSON keys and header names redacted from ``wire.jsonl``.
 REDACT_KEYS: Final[frozenset[str]] = frozenset(
     {"authorization", "x-auth-token", "accesssession", "access_session", "cookie", "set-cookie"}
@@ -75,17 +78,27 @@ class HttpWireLog:
         """Return the current ``wire.jsonl`` path, ``None`` when capture is off."""
         return self._path
 
-    def set_run(self, runs_dir: Path | str | None, run_id: str | None) -> None:
-        """Point the log at ``<runs_dir>/<run_id>/wire.jsonl``.
+    def set_run(
+        self,
+        runs_dir: Path | str | None,
+        run_id: str | None,
+        *,
+        filename: str = WIRE_LOG_FILENAME,
+    ) -> None:
+        """Point the log at ``<runs_dir>/<run_id>/<filename>``.
+
+        The OSS Agent writes ``wire-oss.jsonl`` so its hop never interleaves lines with the
+        engineer-client log written by another process for the same run.
 
         Args:
             runs_dir: root holding one directory per run.
             run_id: current Run Explorer id; empty disables the log.
+            filename: log file name inside the run directory.
         """
         if not runs_dir or not run_id:
             self._path = None
             return
-        self._path = Path(runs_dir) / run_id / WIRE_LOG_FILENAME
+        self._path = Path(runs_dir) / run_id / filename
 
     async def record_request(self, request: httpx.Request) -> None:
         """Append one outbound request to the run's wire log.
@@ -119,4 +132,10 @@ class HttpWireLog:
             self._logger.debug("wire log write failed", exc_info=True)
 
 
-__all__ = ["HttpWireLog", "REDACT_KEYS", "WIRE_LOG_FILENAME", "redact"]
+__all__ = [
+    "HttpWireLog",
+    "REDACT_KEYS",
+    "WIRE_LOG_FILENAME",
+    "WIRE_OSS_FILENAME",
+    "redact",
+]

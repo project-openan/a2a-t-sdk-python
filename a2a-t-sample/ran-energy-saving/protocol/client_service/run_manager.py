@@ -18,6 +18,7 @@ from shared.config import (
     DISCOVERY_REGISTRY,
     INTENT_MODE_PROCESSED,
     SUPPORTED_INTENT_MODES,
+    TRANSPORT_WEBHOOK,
     SampleConfig,
 )
 from shared.langfuse_tracing import LangfuseRunMetadata, create_langfuse_exporter
@@ -238,6 +239,19 @@ class RunManager:
                 f"Conversation {resolved_conversation} already has an active run "
                 f"({active.run_id}); wait for it to finish."
             )
+        if transport == TRANSPORT_WEBHOOK:
+            # The callback receiver is process-wide (one port, one queue), so two webhook runs
+            # would consume each other's pushes. Configuration is fixed at process start; runs
+            # take turns.
+            busy = next(
+                (run for run in self._runs.values() if run.status == STATUS_RUNNING),
+                None,
+            )
+            if busy is not None:
+                raise RunConflictError(
+                    f"A webhook run is already active ({busy.run_id}); wait for it to finish or "
+                    "cancel it before starting another."
+                )
 
         resolved_key = idempotency_key.strip() if isinstance(idempotency_key, str) else ""
         if self._store is not None and resolved_key:

@@ -398,6 +398,10 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
   初始提示词、accept 重填、Modify follow-up）中的中性示例区域和 scenario 站点列表替换为网管值。
   `nms` 运行默认是 `A2ATestRegion` 和 `NRES_XCS_6102937,LTE_26441_LNR_OCL`；本地三跳演示保持
   中性名称。
+- 替换只在一处发生：scenario catalog（`DemoRunCatalog.from_config`）。页面预填请求、intent 的
+  `rawRequest` / `region` / `normalizedText` 和 Task-T 因此使用同一组真机值。
+  `DemoIntentProcessor` 同时保留中性和真机两份内置意图，两种文本都能匹配，不会再出现只改
+  normalizedText、rawRequest 仍是中性名的半替换状态。
 - `negotiationContext.id` 是网管的协商句柄，不是 A2A 的 `contextId`。应答使用 `session.id`
   （只有服务端没给时才回退到 context id）。`build_negotiation_metadata()` 采用同一规则；本地
   server 用 context id 作为协商 id，因此行为不变。
@@ -426,6 +430,12 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
   `SendMessageRequest` body——`{"message": {...}}`，而不是从轨迹 span 重建的内部 Message 对象。
   检查器按 A2A message id 选择捕获记录，多轮运行不会把上一轮的 body 显示到当前轨迹行。没有捕获时
   回退到文档化的信封格式，并在头部区域明确标注。
+- pure 的 OSS Agent 把自己的下游 hop 写入 `wire-oss.jsonl`（网管客户端或本地 a2a-sdk 客户端），
+  并通过 `HttpTraceEmitter` 把网管 token/发送/轮询 span 上报到同一次 run；Web UI 按时间戳合并
+  两个 wire 文件。
+- webhook 回调是进程级资源（`protocol/shared_webhook.py`）：每个进程启动一个接收端，由启动配置
+  决定地址，所有 run 复用。一个回调队列无法安全服务两条任务流，因此 RunManager 串行化 webhook
+  run。只有在没有 `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` 固定外部地址时，端口占用才会回退到系统分配端口。
 
 `demo/nms_sim/` 是离线契约仿真器，实现令牌接口、`POST /a2a/json/message:stream`、
 `GET /a2a/json/tasks[/{id}]` 和已知的 cancel 503。默认 `strict` 档 SSE 永不关闭、每 15 s
@@ -765,6 +775,7 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_SAMPLE_INTENT_MODE` | `processed`（默认）、`raw` | 在 A2A/A2A-T 映射前执行业务意图层，或直接发送操作员文本。`--intent-mode` 与 `POST /api/runs.intentMode` 可按 run 覆盖。 |
 | `A2AT_SAMPLE_RUN_DIR` | 未设置；`%TEMP%/a2at-ran-energy-saving-adk` | 启动器状态目录：`pids.json`、子进程日志和每次运行的 `.env`。第二个实例设置不同值，`--stop` 只停自己的进程。 |
 | `A2AT_SAMPLE_RUNS_DIR` | 默认 `<sample>/runs` | 数据目录：transcript、client/task/gateway SQLite、每次 run 的 `wire.jsonl` 和 Web UI 历史。相对路径按 sample 根目录解析。 |
+| `A2AT_SAMPLE_ENV_FILE` | 未设置 | 未传 `--env-file` 时 `run_demo.py` 读取的配置文件。每个启动脚本可以指向自己的配置，不再依赖候选路径猜测。 |
 | `A2AT_SAMPLE_PURE_FOLLOWUP` | `both`（默认）、`task`、`context` | pure A2A follow-up 携带的会话字段。网管拒绝带 `taskId` 的 follow-up 时切到 `context`。 |
 | `A2AT_SAMPLE_WEBHOOK_PORT` | 默认 `9000`（`0` = 临时端口） | 内置 webhook 接收器端口。 |
 | `A2AT_SAMPLE_WEBHOOK_TOKEN` | 默认 `demo-webhook-token` | 与 `X-A2A-Notification-Token` 比对的静态推送 token；设置 `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` 后不再使用。 |

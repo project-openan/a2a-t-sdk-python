@@ -442,7 +442,7 @@ def build_gateway_service(
     if catalog is None:
         from demo.catalog import DemoRunCatalog
 
-        catalog = DemoRunCatalog()
+        catalog = DemoRunCatalog.from_config(config)
     if config.gateway_scenario not in catalog.names:
         raise ValueError(
             f"Unsupported {GATEWAY_SCENARIO_ENV_KEY}: {config.gateway_scenario}; "

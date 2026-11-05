@@ -44,6 +44,52 @@ from starlette.routing import Route
 
 _LOGGER = logging.getLogger("ran_energy_saving.webhook_receiver")
 
+
+class WebhookPortInUseError(RuntimeError):
+    """The webhook callback port is pinned by configuration and cannot be bound."""
+
+
+async def start_receiver_with_fallback(
+    *,
+    make: Callable[[int], WebhookReceiver],
+    port: int,
+    public_url: str = "",
+) -> WebhookReceiver:
+    """Start one receiver, falling back to an OS-assigned port when the configured one is taken.
+
+    A public URL pins the callback to the configured port because a gateway forwards exactly that
+    address; a collision there is reported instead of registering a port the server cannot reach.
+    Without one, the server reaches the bind address directly, so an ephemeral port keeps a second
+    run (or a second instance) usable instead of failing after 90 ms.
+
+    Args:
+        make: factory returning a fresh receiver for one port (``0`` asks the OS).
+        port: configured callback port.
+        public_url: externally reachable callback URL, empty when the bind address is registered.
+
+    Returns:
+        The started receiver; its ``url`` carries the resolved port.
+
+    Raises:
+        WebhookPortInUseError: when the configured port is pinned by a public URL and is taken.
+    """
+    receiver = make(port)
+    try:
+        await receiver.start()
+        return receiver
+    except RuntimeError as exc:
+        if public_url or port == 0:
+            raise WebhookPortInUseError(str(exc)) from exc
+        _LOGGER.warning(
+            "webhook callback port %s is busy; retrying on an OS-assigned port "
+            "(concurrent runs are fine, but the NMS must reach the new port)",
+            port,
+        )
+    fallback = make(0)
+    await fallback.start()
+    return fallback
+
+
 #: Default bind address and port of the embedded receiver (mirrors the ``A2AT_SAMPLE_WEBHOOK_PORT``
 #: resolver default in ``client.scenario_data``).
 DEFAULT_WEBHOOK_HOST = "127.0.0.1"
@@ -204,7 +250,13 @@ class WebhookReceiver:
         try:
             await server.serve()
         except SystemExit as exc:
-            raise RuntimeError(f"webhook receiver failed to start on {self._host}:{self._port}") from exc
+            raise RuntimeError(
+                f"webhook receiver cannot bind {self._host}:{self._port}: the address is already "
+                "in use by another process. Another run may still be waiting for an NMS push "
+                "(the idle timeout can hold it for minutes); wait for it to finish or cancel it, "
+                "set A2AT_SAMPLE_WEBHOOK_PORT to a free port, or give each instance its own "
+                "A2AT_SAMPLE_RUN_DIR and ports."
+            ) from exc
 
     async def stop(self) -> None:
         """Shut the receiver down gracefully and release the port (idempotent)."""

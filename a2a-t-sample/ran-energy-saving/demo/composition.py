@@ -68,13 +68,17 @@ async def build_demo_runtime(
     from demo.intent import build_demo_intent_processor
     from demo.pure_policy import pure_answer_from_event
 
+    resolved_config = replace(config, discovery=discovery)
     return await build_client_runtime(
-        replace(config, discovery=discovery),
+        resolved_config,
         scenario,
         mode,
         transport,
         protocol=protocol,
-        catalog=DemoRunCatalog(),
+        # The scenario profile follows the deployment (the .env that selects the vendor NMS), not
+        # the engineer client's own discovery: in pure + NMS the UI talks to the local OSS Agent
+        # while the OSS Agent talks to the real NMS.
+        catalog=DemoRunCatalog.from_config(config),
         env_path=env_path,
         trace_sink=trace_sink,
         offline_model_factory=offline_model_factory,

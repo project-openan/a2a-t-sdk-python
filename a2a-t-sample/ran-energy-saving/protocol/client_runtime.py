@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import shutil
 from collections.abc import Awaitable, Callable, Mapping
@@ -60,7 +59,6 @@ from shared.trace import (
     trace_scope,
 )
 from shared.traced_llm import register_traced_providers
-from shared.webhook_receiver import WebhookReceiver
 
 from protocol.client_flow import (
     ClientFlowResult,
@@ -68,7 +66,6 @@ from protocol.client_flow import (
     DecisionMadeCallback,
     SseClientTransport,
     WebhookClientTransport,
-    build_webhook_receiver,
     run_client_flow,
 )
 from protocol.decision_provider import (
@@ -94,6 +91,7 @@ from protocol.nms_client import (
 from protocol.plain_client_flow import run_plain_client_flow
 from protocol.pure_client_flow import run_pure_client_flow
 from protocol.run_spec import DEFAULT_CLIENT_POLICY, ClientPolicy, RunCatalog, RunSpec
+from protocol.shared_webhook import SharedWebhook, drain_shared_webhook, get_shared_webhook
 from protocol.wire_log import HttpWireLog
 
 _LOGGER = logging.getLogger("ran_energy_saving.client_runtime")
@@ -346,12 +344,12 @@ class ClientRuntime:
     manual_provider: Any | None
     _httpx_client: httpx.AsyncClient | None
     nms_client: NmsClient | None = None
-    _webhook_receiver: WebhookReceiver | None = None
     _closed: bool = False
     trace_sink: Callable[[dict[str, object]], None] | None = None
     pure_answer: Callable[[dict[str, object]], str] | None = None
     intent_processor: IntentProcessor | None = None
     wire_log: HttpWireLog | None = None
+    shared_webhook: SharedWebhook | None = None
 
     def set_recommendation_sink(
         self,
@@ -446,6 +444,9 @@ class ClientRuntime:
             # The a2a-sdk HTTP transport records the real SendMessageRequest body for this run, so
             # the wire inspector never has to rebuild the envelope from a normalized event.
             self.wire_log.set_run(self.config.runs_dir, run_id)
+        if self.shared_webhook is not None:
+            # A late push from the previous run must not be mistaken for this run's first event.
+            drain_shared_webhook(self.shared_webhook)
         sink = trace_sink if trace_sink is not None else self.trace_sink
         # A run-level sink is restored to the construction-time sink after the run; the
         # construction-time sink stays attached until ``aclose``.
@@ -542,12 +543,14 @@ class ClientRuntime:
                 set_global_sink(self.trace_sink)
 
     async def aclose(self) -> None:
-        """Stop the webhook receiver, close the HTTP clients and remove the temporary SDK env."""
+        """Close the HTTP clients and remove the temporary SDK env.
+
+        The webhook receiver is process-owned (see :mod:`protocol.shared_webhook`), so a run never
+        stops it; the Web UI application lifespan does.
+        """
         if self._closed:
             return
         self._closed = True
-        if self._webhook_receiver is not None:
-            await self._webhook_receiver.stop()
         close_client = getattr(self.a2a_client, "close", None)
         if callable(close_client):
             await close_client()
@@ -652,7 +655,7 @@ async def build_client_runtime(
     nms_client: NmsClient | None = None
     a2a_client: Any | None = None
     httpx_client: httpx.AsyncClient | None = None
-    receiver: WebhookReceiver | None = None
+    shared: SharedWebhook | None = None
     wire_log = HttpWireLog()
     if config.discovery == DISCOVERY_NMS:
         # The vendor NMS has no AgentCard and no a2a-sdk-compatible transport. The real machine
@@ -660,23 +663,14 @@ async def build_client_runtime(
         # for the offline simulator and contract tests.
         nms_client = NmsClient(NmsConfig.from_config(config))
         if transport == TRANSPORT_WEBHOOK:
-            queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
-            receiver = build_webhook_receiver(
-                token=config.webhook_token,
-                queue=queue,
-                host=config.webhook_host,
-                port=config.webhook_port,
-                public_url=config.webhook_public_url,
-                tls_cert=config.webhook_tls_cert,
-                tls_key=config.webhook_tls_key,
-                auth_credentials=config.webhook_auth_credentials,
-            )
-            await receiver.start()
-            _LOGGER.info("NMS webhook mode: push_url=%s", receiver.url)
+            # Process-level receiver: the callback port is fixed by the launch script and reused
+            # by every run, so a slow NMS push never blocks the next start.
+            shared = await get_shared_webhook(config)
+            _LOGGER.info("NMS webhook mode: push_url=%s", shared.url)
             flow_transport: ClientTransport = NmsWebhookTransport(
                 nms_client,
-                queue=queue,
-                push_url=receiver.url,
+                queue=shared.queue,
+                push_url=shared.url,
                 push_token=config.webhook_token,
                 push_auth_credentials=config.webhook_auth_credentials,
                 protocol=protocol,
@@ -709,23 +703,14 @@ async def build_client_runtime(
         try:
             a2a_client = await create_client(discovered.agent_card, client_config=client_config)
             if transport == TRANSPORT_WEBHOOK:
-                queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
-                receiver = build_webhook_receiver(
-                    token=config.webhook_token,
-                    queue=queue,
-                    host=config.webhook_host,
-                    port=config.webhook_port,
-                    public_url=config.webhook_public_url,
-                    tls_cert=config.webhook_tls_cert,
-                    tls_key=config.webhook_tls_key,
-                    auth_credentials=config.webhook_auth_credentials,
-                )
-                await receiver.start()
-                _LOGGER.info("webhook mode: push_url=%s", receiver.url)
+                # One receiver per process, not per user request: a run still waiting for an NMS
+                # push no longer blocks the next click on the callback port.
+                shared = await get_shared_webhook(config)
+                _LOGGER.info("webhook mode: push_url=%s", shared.url)
                 flow_transport = WebhookClientTransport(
                     a2a_client,
-                    queue=queue,
-                    push_url=receiver.url,
+                    queue=shared.queue,
+                    push_url=shared.url,
                     push_token=config.webhook_token,
                     idle_timeout=float(config.webhook_idle_timeout),
                 )
@@ -768,7 +753,7 @@ async def build_client_runtime(
         _httpx_client=httpx_client,
         nms_client=nms_client,
         wire_log=wire_log if httpx_client is not None else None,
-        _webhook_receiver=receiver,
+        shared_webhook=shared,
         trace_sink=trace_sink,
         pure_answer=pure_answer,
         intent_processor=intent_processor,

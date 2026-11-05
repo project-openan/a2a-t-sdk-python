@@ -942,6 +942,22 @@ async def test_meta_exposes_the_default_request_per_scenario(client: httpx.Async
         assert meta["scenarioRequests"][scenario] == resolve_presentation_request(scenario, "en-US")
 
 
+def test_the_profiled_catalog_pre_fills_the_vendor_region() -> None:
+    """A real-NMS page must not show the neutral demo region it will never send."""
+    from demo.catalog import DemoRunCatalog
+    from demo.web.app import _scenario_request
+
+    catalog = DemoRunCatalog(
+        region="A2ATestRegion",
+        sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
+    )
+
+    request = _scenario_request(catalog, "information", "en-US")
+
+    assert "A2ATestRegion" in request
+    assert "Region A" not in request
+
+
 async def test_custom_user_request_reaches_run_started_and_runtime(
     client: httpx.AsyncClient,
     runtimes: list[FakeRuntime],

@@ -590,3 +590,30 @@ def test_write_run_env_lets_the_shell_override_the_model_keys(
     assert values["ADK_MODEL_API_KEY"] == "lab-key"
     assert values["A2AT_LLM_MODEL"] == "qwen3-32b"
     assert values["A2AT_LLM_BASE_URL"] == "http://71.77.65.40:8008/v1"
+
+
+def test_env_file_argument_selects_one_configuration(tmp_path: Path) -> None:
+    """Launch scripts select their profile explicitly instead of relying on the launcher's guess."""
+    path = tmp_path / "yellow.env"
+    path.write_text("A2AT_LANGUAGE=en-US\n", encoding="utf-8")
+
+    assert run_demo._env_file_argument(["--env-file", str(path)]) == str(path)
+    assert run_demo._env_file_argument([f"--env-file={path}"]) == str(path)
+
+    selected, error = run_demo._resolve_source_env(str(path))
+    assert selected == path
+    assert error is None
+
+
+def test_a_missing_env_file_is_reported(tmp_path: Path) -> None:
+    selected, error = run_demo._resolve_source_env(str(tmp_path / "missing.env"))
+
+    assert selected is None
+    assert error is not None
+    assert "not found" in error
+
+
+def test_the_parser_exposes_the_env_file_option() -> None:
+    args = run_demo._build_parser().parse_args(["--env-file", "profile.env"])
+
+    assert args.env_file == "profile.env"

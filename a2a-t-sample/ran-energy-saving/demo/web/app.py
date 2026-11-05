@@ -241,7 +241,7 @@ def create_app(
     if catalog is None:
         from demo.catalog import DemoRunCatalog
 
-        catalog = DemoRunCatalog()
+        catalog = DemoRunCatalog.from_config(config)
     resolved_catalog: RunCatalog = catalog
     scenario_names = resolved_catalog.names
     resolved_protocol = protocol if protocol in DEMO_PROTOCOLS else PROTOCOL_A2A_T
@@ -327,6 +327,10 @@ def create_app(
         await manager.sweep_sessions()
         yield
         await manager.shutdown()
+        # The callback receiver is process-owned, not run-owned; release its port on shutdown.
+        from protocol.shared_webhook import close_shared_webhooks
+
+        await close_shared_webhooks()
         _LOGGER.info("web ui stopped")
 
     async def index(request: Request) -> Response:
@@ -344,7 +348,7 @@ def create_app(
                 "modelLabel": config.model_label,
                 "scenarios": list(active_scenarios),
                 "scenarioRequests": {
-                    name: resolve_presentation_request(name, config.language)
+                    name: _scenario_request(resolved_catalog, name, config.language)
                     for name in active_scenarios
                 },
                 "modes": list(UI_MODES),
@@ -1181,17 +1185,54 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def _scenario_request(catalog: RunCatalog, name: str, language: str) -> str:
+    """Return the default request shown for one scenario.
+
+    The catalog carries the vendor profile, so a real-NMS page pre-fills the request with the
+    region and sites that the Task-T will use. Without it the stage would show the neutral demo
+    name while the wire shows ``A2ATestRegion``.
+    """
+    from demo.intent import apply_region_profile_text, build_scenario_intent
+
+    text = resolve_presentation_request(name, language)
+    try:
+        spec = catalog.spec(name, language=language)
+        neutral = build_scenario_intent(name, language)
+    except KeyError:
+        return text
+    if spec.intent is None:
+        return text
+    return apply_region_profile_text(
+        text,
+        old_region=neutral.region,
+        region=spec.intent.region,
+        old_sites=neutral.sites,
+        sites=spec.intent.sites,
+        language=language,
+    )
+
+
 #: Cap on the wire records returned to the detail view; a long run appends one per exchange.
 _WIRE_RECORD_LIMIT = 200
 
 
 def _read_wire_records(runs_dir: Path, run_id: str) -> list[dict[str, object]]:
-    """Return the redacted ``wire.jsonl`` records of one run, bounded and in order.
+    """Return the redacted wire records of one run, bounded and in event order.
 
-    Returns an empty list when the run has no wire log (SSE transport, simulator or a run older
-    than the log), which the inspector renders as "no captured exchange" rather than inventing one.
+    ``wire.jsonl`` holds the engineer-client hop. The pure OSS Agent writes its own
+    ``wire-oss.jsonl`` so two processes never append to one file; both are merged here. Returns an
+    empty list when the run captured nothing, which the inspector renders as "no captured
+    exchange" rather than inventing one.
     """
-    path = Path(runs_dir) / run_id / "wire.jsonl"
+    records: list[dict[str, object]] = []
+    for name in ("wire.jsonl", "wire-oss.jsonl"):
+        records.extend(_read_wire_file(Path(runs_dir) / run_id / name))
+    records.sort(key=lambda record: str(record.get("ts") or ""))
+    return records[-_WIRE_RECORD_LIMIT:]
+
+
+def _read_wire_file(path: Path) -> list[dict[str, object]]:
+    """Read one wire log file, skipping malformed lines."""
     if not path.is_file():
         return []
     records: list[dict[str, object]] = []
@@ -1209,7 +1250,7 @@ def _read_wire_records(runs_dir: Path, run_id: str) -> list[dict[str, object]]:
                     records.append(record)
     except OSError:
         return []
-    return records[-_WIRE_RECORD_LIMIT:]
+    return records
 
 
 def _sse_data(message: dict[str, object]) -> dict[str, str]:

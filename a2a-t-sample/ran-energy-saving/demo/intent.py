@@ -78,6 +78,13 @@ _RAW_OVERRIDES: Final[dict[str, dict[str, str]]] = {
     },
 }
 
+#: Generic site tokens a raw request may use for the n-th site, per language. The presentation
+#: copy says "Site 1" while the structured intent says "Station 1"; both must follow the profile.
+_SITE_TOKENS: Final[dict[str, tuple[str, ...]]] = {
+    LANGUAGE_EN: ("Station {n}", "station {n}", "Site {n}", "site {n}"),
+    LANGUAGE_ZH: ("站点名称{n}", "站点 {n}", "站点{n}"),
+}
+
 
 def _localized(value: Mapping[str, str], language: str) -> str:
     """Return one localized value, falling back to Chinese."""
@@ -108,11 +115,19 @@ def _base_params(language: str) -> dict[str, object]:
     return dict(complete_initial_params(SCENARIO_NIGHT, language) or {})
 
 
-def build_scenario_intent(name: str, language: str = LANGUAGE_ZH) -> ProcessedIntent:
+def build_scenario_intent(
+    name: str,
+    language: str = LANGUAGE_ZH,
+    *,
+    region: str = "",
+    sites: tuple[str, ...] = (),
+) -> ProcessedIntent:
     """Build the deterministic intent of one known scenario.
 
     The normalized text is the scenario's existing rich request, so the A2A-T extraction path and
     its offline fixtures stay stable. The raw text is the shorter request an operator would type.
+    ``region``/``sites`` apply the vendor profile to every surface of the intent, including the raw
+    request, so a real-NMS run never shows the neutral demo name next to a vendor Task-T.
     """
     scenario = get_scenario(name)
     params = _base_params(language)
@@ -161,7 +176,7 @@ def build_scenario_intent(name: str, language: str = LANGUAGE_ZH) -> ProcessedIn
             language=language,
         )
 
-    return ProcessedIntent(
+    intent = ProcessedIntent(
         raw_request=raw,
         normalized_text=normalized,
         operation_type=str(params.get("operationType") or ""),
@@ -176,11 +191,20 @@ def build_scenario_intent(name: str, language: str = LANGUAGE_ZH) -> ProcessedIn
         conflicts=conflicts,
         source=INTENT_SOURCE_SCENARIO,
     )
+    return _with_forced_context(intent, region, sites, language)
 
 
-def build_all_scenario_intents(language: str = LANGUAGE_ZH) -> dict[str, ProcessedIntent]:
+def build_all_scenario_intents(
+    language: str = LANGUAGE_ZH,
+    *,
+    region: str = "",
+    sites: tuple[str, ...] = (),
+) -> dict[str, ProcessedIntent]:
     """Return the built-in intent of every scenario, keyed by scenario name."""
-    return {name: build_scenario_intent(name, language) for name in SUPPORTED_SCENARIO_NAMES}
+    return {
+        name: build_scenario_intent(name, language, region=region, sites=sites)
+        for name in SUPPORTED_SCENARIO_NAMES
+    }
 
 
 def _text_or_none(value: object) -> str | None:
@@ -188,27 +212,68 @@ def _text_or_none(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
+def apply_region_profile_text(
+    text: str,
+    *,
+    old_region: str,
+    region: str,
+    old_sites: tuple[str, ...] = (),
+    sites: tuple[str, ...] = (),
+    language: str = LANGUAGE_EN,
+) -> str:
+    """Replace the neutral demo region/site names with the configured vendor profile.
+
+    The raw request and the normalized text must change together. Otherwise the UI shows the
+    operator asking for ``Region A`` while the Task-T on the wire names ``A2ATestRegion``.
+    """
+    if not text:
+        return text
+    updated = text
+    if old_region and region and old_region != region:
+        updated = updated.replace(old_region, region)
+    if old_sites and sites and old_sites != sites:
+        tokens = _SITE_TOKENS.get(language, _SITE_TOKENS[LANGUAGE_EN])
+        for index, (old_site, new_site) in enumerate(zip(old_sites, sites), start=1):
+            if old_site and old_site != new_site:
+                updated = updated.replace(old_site, new_site)
+            for token in sorted(tokens, key=len, reverse=True):
+                updated = updated.replace(token.format(n=index), new_site)
+    return updated
+
+
 def _with_forced_context(
     intent: ProcessedIntent,
     region: str,
     sites: tuple[str, ...],
+    language: str = LANGUAGE_EN,
 ) -> ProcessedIntent:
     """Apply the configured NMS region and site list to one intent.
 
     The vendor serves exactly one region and a fixed set of sites; the neutral demo names must
-    never reach it. A scenario that carries no site list stays region-level and gains none.
+    never reach it. A scenario that carries no site list stays region-level and gains none. The
+    raw request is rewritten too: an NMS run presents one coherent request, not a neutral operator
+    sentence next to a vendor Task-T.
     """
     new_region = region or intent.region
     new_sites = sites if sites and intent.sites else intent.sites
     if new_region == intent.region and new_sites == intent.sites:
         return intent
-    normalized = intent.normalized_text
-    if region and intent.region and intent.region != region:
-        normalized = normalized.replace(intent.region, region)
-    if sites and intent.sites:
-        for old_site, new_site in zip(intent.sites, sites):
-            if old_site and old_site != new_site:
-                normalized = normalized.replace(old_site, new_site)
+    raw = apply_region_profile_text(
+        intent.raw_request,
+        old_region=intent.region,
+        region=new_region,
+        old_sites=intent.sites,
+        sites=new_sites,
+        language=language,
+    )
+    normalized = apply_region_profile_text(
+        intent.normalized_text,
+        old_region=intent.region,
+        region=new_region,
+        old_sites=intent.sites,
+        sites=new_sites,
+        language=language,
+    )
     missing = (
         tuple(item for item in intent.missing_fields if item != "region")
         if region and region != intent.region
@@ -216,6 +281,7 @@ def _with_forced_context(
     )
     return replace(
         intent,
+        raw_request=raw,
         region=new_region,
         sites=new_sites,
         normalized_text=normalized,
@@ -245,7 +311,12 @@ class DemoIntentProcessor:
             forced_sites: NMS sites applied to the normalized intent's site list.
         """
         self._language = language
-        self._built_in = dict(built_in or build_all_scenario_intents(language))
+        # Keep both surfaces: the CLI can send the neutral scenario request, while the Web UI of a
+        # vendor run sends the profiled one. Matching either must find the same built-in intent.
+        self._built_in: dict[str, tuple[ProcessedIntent, ProcessedIntent]] = {
+            name: (intent, _with_forced_context(intent, forced_region, forced_sites, language))
+            for name, intent in (built_in or build_all_scenario_intents(language)).items()
+        }
         self._extractor = extractor
         self._forced_region = forced_region
         self._forced_sites = forced_sites
@@ -254,7 +325,9 @@ class DemoIntentProcessor:
         """Understand one operator request."""
         built_in = self._matching_built_in(request)
         if built_in is not None:
-            return _with_forced_context(built_in, self._forced_region, self._forced_sites)
+            return _with_forced_context(
+                built_in, self._forced_region, self._forced_sites, self._language
+            )
         if self._extractor is None:
             return ProcessedIntent.raw(
                 request.text,
@@ -268,7 +341,9 @@ class DemoIntentProcessor:
                 request.text,
                 reason=f"Intent extraction failed: {type(exc).__name__}: {exc}",
             )
-        return _with_forced_context(intent, self._forced_region, self._forced_sites)
+        return _with_forced_context(
+            intent, self._forced_region, self._forced_sites, self._language
+        )
 
     def _matching_built_in(self, request: OperatorRequest) -> ProcessedIntent | None:
         """Return the built-in intent when the request matches a canned scenario request."""
@@ -280,9 +355,15 @@ class DemoIntentProcessor:
             if request.scenario and request.scenario in self._built_in
             else list(self._built_in.values())
         )
-        for candidate in candidates:
-            if text in (candidate.raw_request.strip(), candidate.normalized_text.strip()):
-                return candidate
+        for neutral, profiled in candidates:
+            surfaces = (
+                neutral.raw_request.strip(),
+                neutral.normalized_text.strip(),
+                profiled.raw_request.strip(),
+                profiled.normalized_text.strip(),
+            )
+            if text and text in surfaces:
+                return profiled
         return None
 
 
@@ -553,6 +634,7 @@ def _string_list(value: object) -> tuple[str, ...]:
 __all__ = [
     "DemoIntentExtractor",
     "DemoIntentProcessor",
+    "apply_region_profile_text",
     "build_all_scenario_intents",
     "build_demo_intent_processor",
     "build_scenario_intent",

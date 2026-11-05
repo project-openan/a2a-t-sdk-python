@@ -102,6 +102,9 @@ sequenceDiagram
 ## 4. 演示
 
 ```bash
+# 用显式配置文件启动：不同启动脚本指向不同 .env，不再依赖启动器猜测
+python run_demo.py --env-file configs/yellow-zone.env --nms --ui
+# 等价写法：A2AT_SAMPLE_ENV_FILE=configs/yellow-zone.env python run_demo.py ...
 # 命令行（离线、确定性，无需 key）：计划停电，先创建基线再 Modify，无协商
 python run_demo.py --scenario outage --mode auto --model-mode offline
 # Web UI（演示视图；默认打开完整的用例 1）
@@ -231,10 +234,11 @@ A2AT_SAMPLE_NMS_WIRE_LOG=1
 `A2AT_SAMPLE_NMS_VERIFY_TLS=true`。客户端同时发送两种被接受的认证头（`Authorization: Bearer`
 和 `X-Auth-Token`）以及两种扩展头拼写（`A2A-Extensions` 和 `X-A2A-Extensions`）。
 
-NMS 模式下，`A2AT_SAMPLE_NMS_REGION` 与 `A2AT_SAMPLE_NMS_SITES` 会把每个发往网管的 Task-T
-（初始提示词、accept 重填、Modify follow-up）中的中性示例区域（`Region A` / `Region B`）和
-scenario 站点列表替换为网管实际服务的值。二者默认是 `A2ATestRegion` 和上表中的两个 910 站点；
-其他区域和激活时段会被拒绝。本地三跳演示保持中性名称，不受影响。
+NMS 模式下，`A2AT_SAMPLE_NMS_REGION` 与 `A2AT_SAMPLE_NMS_SITES` 会把整个运行的各层统一替换为
+网管实际服务的区域和站点：页面预填、工程师看到的请求、意图结果（`rawRequest`、`region`、
+`normalizedText`），以及每个发往网管的 Task-T（初始提示词、accept 重填、Modify follow-up）。
+二者默认是 `A2ATestRegion` 和上表中的两个 910 站点；其他区域和激活时段会被拒绝。页面与报文之间
+不会再出现“左侧中性名、轨迹真机名”的静默替换。本地三跳演示保持中性名称，不受影响。
 例如：“在 A2ATestRegion 区域创建无线网络节能任务；激活时段 00:00-06:00，每小区保证 30 Mbps。”
 
 厂商契约说明：
@@ -255,8 +259,19 @@ scenario 站点列表替换为网管实际服务的值。二者默认是 `A2ATes
   HTTP 503），然后停止本地运行，因此长周期任务或反复测试时不需要重启页面。
 - 网管不发布 AgentCard，因此发现使用静态卡；真实注册中心对接是后续步骤。
 
-原始报文写入 `runs/<runId>/wire.jsonl`，失败帧写入 `wire-error.jsonl`，凭据已脱敏。发送前的
+原始报文写入 `runs/<runId>/wire.jsonl`（pure 的 OSS Agent 写入同目录的 `wire-oss.jsonl`），
+失败帧写入 `wire-error.jsonl`，凭据已脱敏。发送前的
 人审用 `--ui --mode confirm`；NMS 模式没有服务端审批 2，因为执行侧由厂商网管负责。
+
+webhook 接收端是**进程级**的：启动时按 `A2AT_SAMPLE_WEBHOOK_PORT` 绑定一次，Web UI 的每次
+“开始”复用同一个回调地址，不再为每个 request 重新绑端口。因此同一个进程内一次只跑一个
+webhook 任务；第二个会返回明确的冲突提示。没有配置 `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` 时，
+如果配置端口已被占用，会自动改用系统分配的端口；配置了 public URL（网关固定转发）时不会
+静默改端口，而是给出“端口被占用、等待/取消或改端口”的明确错误。
+
+pure + `--nms` 的 OSS Agent 现在会把网管的 token、发送、轮询 span 上报到同一次 run，
+会话轨迹里能看到 `NMS session token acquired`、`NMS A2A stream opened` 等真实下游事件，
+状态文案也区分 `NMS` 与本地 `RAN Agent`，不再看起来像本地三跳演示。
 
 ### 同一台机器并行两个实例
 

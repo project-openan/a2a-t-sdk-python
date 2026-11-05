@@ -55,7 +55,8 @@ from shared.config import (
 from shared.logging_setup import configure_logging
 from shared.models import NegotiationProposeView
 from shared.run_constants import LANGUAGE_ZH, PROTOCOL_PURE
-from shared.webhook_receiver import WebhookReceiver
+from shared.trace import FileTraceEmitter, HttpTraceEmitter, set_global_sink, trace_scope
+from shared.webhook_receiver import WebhookReceiver, start_receiver_with_fallback
 from starlette.applications import Starlette
 
 from protocol.client_flow import (
@@ -69,6 +70,7 @@ from protocol.intent import IntentProcessor, OperatorRequest, ProcessedIntent
 from protocol.messages import SAMPLE_RUN_ID_METADATA_KEY, metadata_to_dict
 from protocol.nms_client import NmsClient, NmsConfig, NmsSseTransport, NmsWebhookTransport
 from protocol.pure_client_flow import run_pure_client_flow
+from protocol.wire_log import WIRE_OSS_FILENAME, HttpWireLog
 
 #: Agent identity and skill.
 OSS_AGENT_NAME: Final[str] = "OSS Agent"
@@ -102,6 +104,7 @@ class OSSPureExecutor(AgentExecutor):
         intent_processor: IntentProcessor | None = None,
         language: str = LANGUAGE_ZH,
         followup: str = PURE_FOLLOWUP_BOTH,
+        trace_sink: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         """Create one OSS executor.
 
@@ -118,6 +121,7 @@ class OSSPureExecutor(AgentExecutor):
             intent_processor: business intent layer run before the downstream hop.
             language: process-level language used by the intent processor.
             followup: conversation fields carried by one pure follow-up (``both``/``task``/``context``).
+            trace_sink: cross-process Run Explorer sink; ``None`` leaves the hop untraced.
         """
         self._config = config
         self._ran_url = (ran_url or "").rstrip("/")
@@ -128,6 +132,9 @@ class OSSPureExecutor(AgentExecutor):
         self._intent_processor = intent_processor
         self._language = language
         self._followup = followup
+        self._trace_sink = trace_sink
+        # Captures the local a2a-sdk hop to the RAN Agent (NMS runs use the NmsClient log).
+        self._wire_log = HttpWireLog()
         # NMS downstream transport, created once by ``start`` and shared by every request.
         self._nms_client: NmsClient | None = None
         self._nms_transport: ClientTransport | None = None
@@ -137,39 +144,47 @@ class OSSPureExecutor(AgentExecutor):
         """Create the long-lived NMS downstream transport, when NMS discovery is configured."""
         if self._config is None or self._config.discovery != DISCOVERY_NMS:
             return
-        self._nms_client = NmsClient(NmsConfig.from_config(self._config))
-        if self._config.transport == TRANSPORT_WEBHOOK:
+        config = self._config
+        self._nms_client = NmsClient(NmsConfig.from_config(config))
+        if config.transport == TRANSPORT_WEBHOOK:
             queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
             # The real NMS reaches the callback through the VPN gateway over https, so the bind
             # address is never the URL to register: carry the public URL, TLS and Basic auth over
             # exactly as the A2A-T client flow does.
-            receiver = build_webhook_receiver(
-                token=self._config.webhook_token,
-                queue=queue,
-                host=self._config.webhook_host,
-                port=self._config.webhook_port,
-                public_url=self._config.webhook_public_url,
-                tls_cert=self._config.webhook_tls_cert,
-                tls_key=self._config.webhook_tls_key,
-                auth_credentials=self._config.webhook_auth_credentials,
+            def _make_receiver(port: int) -> WebhookReceiver:
+                """Build the receiver for one callback port."""
+                return build_webhook_receiver(
+                    token=config.webhook_token,
+                    queue=queue,
+                    host=config.webhook_host,
+                    port=port,
+                    public_url=config.webhook_public_url,
+                    tls_cert=config.webhook_tls_cert,
+                    tls_key=config.webhook_tls_key,
+                    auth_credentials=config.webhook_auth_credentials,
+                )
+
+            receiver = await start_receiver_with_fallback(
+                make=_make_receiver,
+                port=config.webhook_port,
+                public_url=config.webhook_public_url,
             )
-            await receiver.start()
             self._webhook_receiver = receiver
             _LOGGER.info("OSS Agent NMS webhook: push_url=%s", receiver.url)
             self._nms_transport = NmsWebhookTransport(
                 self._nms_client,
                 queue=queue,
                 push_url=receiver.url,
-                push_token=self._config.webhook_token,
+                push_token=config.webhook_token,
                 protocol=PROTOCOL_PURE,
-                idle_timeout=float(self._config.webhook_idle_timeout),
+                idle_timeout=float(config.webhook_idle_timeout),
             )
         else:
             self._nms_transport = NmsSseTransport(
                 self._nms_client,
                 protocol=PROTOCOL_PURE,
-                request_timeout=self._config.nms_request_timeout,
-                read_after_send=self._config.nms_read_after_send,
+                request_timeout=config.nms_request_timeout,
+                read_after_send=config.nms_read_after_send,
             )
 
     async def stop(self) -> None:
@@ -199,10 +214,11 @@ class OSSPureExecutor(AgentExecutor):
 
         updater = TaskUpdater(event_queue, task.id, task.context_id)
         await updater.start_work()
+        downstream = self._downstream_name()
         await updater.update_status(
             TaskState.TASK_STATE_WORKING,
             message=updater.new_agent_message(
-                [Part(text="OSS Agent received the request and is forwarding it to the RAN Agent.")],
+                [Part(text=f"OSS Agent received the request and is forwarding it to the {downstream}.")],
                 metadata={"pure": {"hop": "oss", "phase": "receive"}, "hop": "oss"},
             ),
         )
@@ -211,16 +227,18 @@ class OSSPureExecutor(AgentExecutor):
         consumer = asyncio.create_task(
             self._consume(events, updater), name=f"oss-ran-consumer-{task.id}"
         )
+        run_id = _run_id_of(message)
         raw_text = _message_text(message)
         intent = await self._process_intent(raw_text)
         await self._publish_intent(updater, intent)
         try:
-            result = await self._run_ran(
-                intent.normalized_text,
-                _run_id_of(message),
-                events.put_nowait,
-                updater,
-            )
+            with trace_scope(run_id=run_id, role="oss"):
+                result = await self._run_ran(
+                    intent.normalized_text,
+                    run_id,
+                    events.put_nowait,
+                    updater,
+                )
         except Exception as exc:  # noqa: BLE001 - the outer Task must reach a terminal state
             _LOGGER.exception("OSS->RAN hop failed")
             events.put_nowait(None)
@@ -245,7 +263,7 @@ class OSSPureExecutor(AgentExecutor):
                             "phase": "report",
                             "rounds": _rounds(result.events),
                             "messages": len(result.events),
-                            "hops": 3,
+                            "hops": self._hop_count(),
                         },
                         "hop": "oss",
                     },
@@ -255,7 +273,7 @@ class OSSPureExecutor(AgentExecutor):
                         "hop": "oss",
                         "rounds": _rounds(result.events),
                         "messages": len(result.events),
-                        "hops": 3,
+                        "hops": self._hop_count(),
                     }
                 },
             )
@@ -274,6 +292,22 @@ class OSSPureExecutor(AgentExecutor):
                 [Part(text=f"The RAN hop ended with state {result.final_state}.")]
             )
         )
+
+    def _nms_mode(self) -> bool:
+        """Whether the downstream hop is the vendor NMS rather than the local RAN Agent."""
+        return self._config is not None and self._config.discovery == DISCOVERY_NMS
+
+    def _downstream_name(self) -> str:
+        """Human name of the downstream system shown on the OSS status messages."""
+        return "NMS" if self._nms_mode() else "RAN Agent"
+
+    def _downstream_hop(self) -> str:
+        """Hop tag of downstream events: ``nms`` in a vendor run, ``ran`` in the local topology."""
+        return "nms" if self._nms_mode() else "ran"
+
+    def _hop_count(self) -> int:
+        """Engineer → OSS → downstream: two hops against the NMS, three in the local topology."""
+        return 2 if self._nms_mode() else 3
 
     async def _process_intent(self, raw_text: str) -> ProcessedIntent:
         """Run the business intent layer on the inbound engineer request."""
@@ -312,6 +346,7 @@ class OSSPureExecutor(AgentExecutor):
         setter = getattr(self._decision_provider, "set_user_request", None)
         if callable(setter):
             setter(user_request)
+        self._bind_wire_log(run_id)
         if self._nms_transport is not None:
             return await run_pure_client_flow(
                 transport=self._nms_transport,
@@ -321,6 +356,7 @@ class OSSPureExecutor(AgentExecutor):
                 max_rounds=self._max_rounds,
                 call_timeout_seconds=self._timeout_seconds,
                 event_sink=event_sink,
+                trace_sink=self._trace_sink,
                 run_id=run_id,
                 followup=self._followup,
             )
@@ -332,7 +368,9 @@ class OSSPureExecutor(AgentExecutor):
             timeout_seconds=30.0,
         )
         httpx_client = httpx.AsyncClient(
-            timeout=self._timeout_seconds, trust_env=False
+            timeout=self._timeout_seconds,
+            trust_env=False,
+            event_hooks={"request": [self._wire_log.record_request]},
         )
         try:
             client = await create_client(
@@ -355,6 +393,7 @@ class OSSPureExecutor(AgentExecutor):
                     max_rounds=self._max_rounds,
                     call_timeout_seconds=self._timeout_seconds,
                     event_sink=event_sink,
+                    trace_sink=self._trace_sink,
                     run_id=run_id,
                     followup=self._followup,
                 )
@@ -364,6 +403,20 @@ class OSSPureExecutor(AgentExecutor):
                     await close()
         finally:
             await httpx_client.aclose()
+
+    def _bind_wire_log(self, run_id: str | None) -> None:
+        """Point both downstream captures at this run's ``wire-oss.jsonl``.
+
+        The OSS hop writes its own file: the engineer-client process appends to ``wire.jsonl`` for
+        the same run, and two processes appending to one file is not atomic on every platform.
+        """
+        config = self._config
+        if config is None:
+            return
+        target = Path(config.runs_dir) / run_id / WIRE_OSS_FILENAME if run_id else None
+        self._wire_log.set_run(config.runs_dir, run_id, filename=WIRE_OSS_FILENAME)
+        if self._nms_client is not None:
+            self._nms_client.set_wire_path(target)
 
     async def _consume(
         self,
@@ -400,7 +453,7 @@ class OSSPureExecutor(AgentExecutor):
         await updater.update_status(
             TaskState.TASK_STATE_WORKING,
             message=updater.new_agent_message(
-                [Part(text=f"OSS Agent answered the RAN Agent: {text}")],
+                [Part(text=f"OSS Agent answered the {self._downstream_name()}: {text}")],
                 metadata=metadata,
             ),
             metadata=metadata,
@@ -418,7 +471,8 @@ class OSSPureExecutor(AgentExecutor):
             return
         state = event.get("state")
         pure = _pure_metadata(event)
-        metadata = {"pure": {**pure, "hop": "ran"}, "hop": "ran"}
+        hop = self._downstream_hop()
+        metadata = {"pure": {**pure, "hop": hop}, "hop": hop}
         text = event.get("text")
         if state == "TASK_STATE_INPUT_REQUIRED":
             if pure.get("kind") == "approval":
@@ -456,7 +510,7 @@ class OSSPureExecutor(AgentExecutor):
             return
         metadata = event.get("metadata")
         merged = dict(metadata) if isinstance(metadata, Mapping) else {}
-        merged["hop"] = "ran"
+        merged["hop"] = self._downstream_hop()
         await updater.add_artifact(
             parts,
             name=str(event.get("name") or "ran artifact"),
@@ -513,6 +567,7 @@ def build_oss_app(
     intent_processor: IntentProcessor | None = None,
     language: str = LANGUAGE_ZH,
     followup: str = PURE_FOLLOWUP_BOTH,
+    trace_emitter: HttpTraceEmitter | FileTraceEmitter | None = None,
 ) -> Starlette:
     """Build the OSS A2A app."""
     resolved_host = host or os.environ.get("A2AT_SAMPLE_OSS_HOST", "127.0.0.1")
@@ -532,16 +587,23 @@ def build_oss_app(
         intent_processor=intent_processor,
         language=language,
         followup=followup,
+        trace_sink=trace_emitter,
     )
 
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
         del app
+        # The NMS client records its token/send/poll spans through the process-wide sink; the
+        # per-run trace scope supplies the run id, so the Web UI shows the real downstream hop.
+        set_global_sink(trace_emitter)
         await executor.start()
         try:
             yield
         finally:
             await executor.stop()
+            set_global_sink(None)
+            if trace_emitter is not None:
+                trace_emitter.close()
 
     request_handler = DefaultRequestHandler(
         agent_executor=executor,
@@ -605,9 +667,25 @@ def main() -> None:
         intent_processor=build_demo_intent_processor(config),
         language=config.language,
         followup=config.pure_followup,
+        trace_emitter=_build_trace_emitter(),
     )
     _LOGGER.info("starting OSS Agent on %s:%s", host, port)
     uvicorn.run(app, host=host, port=port)
+
+
+def _build_trace_emitter() -> HttpTraceEmitter | FileTraceEmitter | None:
+    """Build the OSS trace emitter configured by the process environment.
+
+    ``A2AT_SAMPLE_TRACE_URL`` selects the Web UI endpoint (with ``A2AT_SAMPLE_TRACE_TOKEN``);
+    ``A2AT_SAMPLE_TRACE_DIR`` selects the CLI JSONL file. Without either key the hop is untraced.
+    """
+    base_url = os.environ.get("A2AT_SAMPLE_TRACE_URL", "").strip()
+    if base_url:
+        return HttpTraceEmitter(base_url, os.environ.get("A2AT_SAMPLE_TRACE_TOKEN", "").strip())
+    directory = os.environ.get("A2AT_SAMPLE_TRACE_DIR", "").strip()
+    if directory:
+        return FileTraceEmitter(Path(directory))
+    return None
 
 
 def build_live_pure_answer(

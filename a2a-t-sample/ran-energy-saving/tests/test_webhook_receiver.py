@@ -14,7 +14,11 @@ from pathlib import Path
 
 import httpx
 import pytest
-from shared.webhook_receiver import WebhookReceiver
+from shared.webhook_receiver import (
+    WebhookPortInUseError,
+    WebhookReceiver,
+    start_receiver_with_fallback,
+)
 
 _CASE_DIR = Path(__file__).resolve().parents[1]
 _CERT = _CASE_DIR / "Orange" / "server.cer"
@@ -145,3 +149,49 @@ async def test_https_listener_refuses_a_plain_http_client(events: list[dict[str,
             await _send(receiver, _basic(_CREDENTIALS), tls=False)
 
     assert events == []
+
+
+async def test_a_busy_callback_port_falls_back_to_an_ephemeral_port() -> None:
+    """Concurrent local runs must not fail on the one configured callback port."""
+    events: list[dict[str, object]] = []
+    holder = WebhookReceiver(token="t", on_event=events.append, host="127.0.0.1", port=0)
+    await holder.start()
+    try:
+        receiver = await start_receiver_with_fallback(
+            make=lambda port: WebhookReceiver(
+                token="t", on_event=events.append, host="127.0.0.1", port=port
+            ),
+            port=holder.port,
+        )
+        try:
+            assert receiver.port != holder.port
+            assert receiver.url.endswith(f":{receiver.port}/webhook")
+        finally:
+            await receiver.stop()
+    finally:
+        await holder.stop()
+
+
+async def test_a_pinned_public_url_reports_the_busy_port() -> None:
+    """A gateway pins the external port, so silently moving it would register an unreachable URL."""
+    events: list[dict[str, object]] = []
+    holder = WebhookReceiver(token="t", on_event=events.append, host="127.0.0.1", port=0)
+    await holder.start()
+    try:
+        with pytest.raises(WebhookPortInUseError) as failure:
+            await start_receiver_with_fallback(
+                make=lambda port: WebhookReceiver(
+                    token="t",
+                    on_event=events.append,
+                    host="127.0.0.1",
+                    port=port,
+                    public_url="https://gateway.test:9000/webhook",
+                ),
+                port=holder.port,
+                public_url="https://gateway.test:9000/webhook",
+            )
+    finally:
+        await holder.stop()
+
+    assert "already in use" in str(failure.value)
+    assert "A2AT_SAMPLE_WEBHOOK_PORT" in str(failure.value)

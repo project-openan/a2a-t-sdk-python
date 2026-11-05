@@ -106,6 +106,9 @@ The other two outcomes are simple conclusions:
 ## 4. Demo
 
 ```bash
+# One explicit configuration file per launch script; the launcher no longer guesses
+python run_demo.py --env-file configs/yellow-zone.env --nms --ui
+# equivalent: A2AT_SAMPLE_ENV_FILE=configs/yellow-zone.env python run_demo.py ...
 # CLI (offline, deterministic, no key): planned outage, Create baseline then Modify, no negotiation
 python run_demo.py --scenario outage --mode auto --model-mode offline
 # Web UI (presentation view; opens on the complete use case 1)
@@ -259,11 +262,13 @@ headers (`Authorization: Bearer` and `X-Auth-Token`) and both extension-header s
 (`A2A-Extensions` and `X-A2A-Extensions`).
 
 In NMS mode `A2AT_SAMPLE_NMS_REGION` and `A2AT_SAMPLE_NMS_SITES` replace the neutral demo region
-(`Region A` / `Region B`) and the scenario site list in every Task-T sent to the vendor — the initial
-prompt, the accept refill and the Modify follow-up. They default to `A2ATestRegion` and the two 910
-sites above; other regions and activation windows are rejected. The local three-hop demo keeps the
-neutral names and is unaffected. For example: “Create a RAN energy saving task in the A2ATestRegion
-region; activation 00:00-06:00 with 30 Mbps for each cell.”
+(`Region A` / `Region B`) and the scenario site list in every layer of the run: the request the page
+pre-fills and the operator sees, the captured intent (`rawRequest`, `region`, `normalizedText`), and
+every Task-T sent to the vendor — the initial prompt, the accept refill and the Modify follow-up.
+They default to `A2ATestRegion` and the two 910 sites above; other regions and activation windows are
+rejected. Nothing silently swaps the region between the stage and the wire. The local three-hop demo
+keeps the neutral names and is unaffected. For example: “Create a RAN energy saving task in the
+A2ATestRegion region; activation 00:00-06:00 with 30 Mbps for each cell.”
 
 Vendor contract notes:
 
@@ -289,8 +294,20 @@ Vendor contract notes:
 - The NMS publishes no AgentCard, so discovery uses a static card; a real registry integration is
   a later step.
 
-The raw exchange is recorded in `runs/<runId>/wire.jsonl` and failed frames in
-`wire-error.jsonl`, with credentials redacted. Use `--ui --mode confirm` for the send-time intent
+The raw exchange is recorded in `runs/<runId>/wire.jsonl` (the pure OSS Agent writes
+`wire-oss.jsonl` in the same directory) and failed frames in `wire-error.jsonl`, with credentials
+redacted.
+
+The webhook receiver is **process-level**: it binds `A2AT_SAMPLE_WEBHOOK_PORT` once at startup and
+every Web UI "Start" reuses the same callback; a new receiver is never started per request. One
+webhook run runs at a time in a process and a second one gets an explicit conflict message. Without
+`A2AT_SAMPLE_WEBHOOK_PUBLIC_URL`, a busy configured port falls back to an OS-assigned one; with a
+public URL (a gateway forwards a fixed address) it never silently moves and instead explains that
+the port is in use.
+
+In pure + `--nms` the OSS Agent posts its NMS token/send/poll spans into the same run, so the session
+trace shows `NMS session token acquired`, `NMS A2A stream opened` and the rest of the real
+downstream hop, and status text distinguishes `NMS` from the local `RAN Agent`. Use `--ui --mode confirm` for the send-time intent
 review; server-side approval 2 does not exist in NMS mode because the vendor owns execution.
 
 ### Two instances on one machine

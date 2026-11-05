@@ -943,6 +943,7 @@ export function traceDirection(entry) {
   const hop = isObject(entry.detail) && typeof entry.detail.hop === "string" ? entry.detail.hop : "";
   if (hop === "oss") return "OSS → RAN";
   if (hop === "ran") return "RAN → OSS";
+  if (hop === "nms") return "NMS → OSS";
   if (hop === "mie") return "MIE ⇄ RAN";
   if (entry.kind === "approval" || entry.actor === "human") return "MIE ⇄ Engineer";
   if (entry.direction === "client->server") return "OSS → RAN";

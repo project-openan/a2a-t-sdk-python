@@ -142,6 +142,32 @@ def _source_env_path() -> Path | None:
     return None
 
 
+def _explicit_env_path(value: str) -> Path:
+    """Resolve an explicitly selected configuration file against the current directory."""
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else Path.cwd() / path
+
+
+def _env_file_argument(argv: list[str]) -> str:
+    """Return ``--env-file`` from raw argv before argparse builds the environment defaults."""
+    for index, token in enumerate(argv):
+        if token == "--env-file" and index + 1 < len(argv):
+            return argv[index + 1]
+        if token.startswith("--env-file="):
+            return token.partition("=")[2]
+    return ""
+
+
+def _resolve_source_env(explicit: str) -> tuple[Path | None, str | None]:
+    """Return the selected configuration file and an error message when it is missing."""
+    if not explicit:
+        return _source_env_path(), None
+    path = _explicit_env_path(explicit)
+    if not path.is_file():
+        return None, f"configuration file not found: {path}"
+    return path, None
+
+
 def _read_env(path: Path) -> dict[str, str]:
     """Read one dotenv file as plain string values."""
     values: dict[str, str] = {}
@@ -963,6 +989,7 @@ def _build_parser(
     default_ui_host: str = DEFAULT_UI_HOST,
     default_gateway_port: int = 8001,
     values: dict[str, str] | None = None,
+    env_file_default: str = "",
 ) -> argparse.ArgumentParser:
     """Build the CLI parser of the new launcher.
 
@@ -990,6 +1017,15 @@ def _build_parser(
 
     cli_modes = [mode for mode in SUPPORTED_MODES if mode != "scripted"]
     parser = argparse.ArgumentParser(description="Non-blocking launcher of the RAN energy-saving ADK sample.")
+    parser.add_argument(
+        "--env-file",
+        default=env_file_default,
+        metavar="PATH",
+        help=(
+            "configuration file to load (default: $A2AT_SAMPLE_ENV_FILE, then the sample .env). "
+            "Use one file per launch script instead of waiting for the launcher to guess"
+        ),
+    )
     parser.add_argument(
         "--scenario",
         default="night",
@@ -1191,15 +1227,28 @@ def main() -> int:
         except ValueError:
             pass
 
-    source_env = _source_env_path()
+    # ``--env-file`` selects the configuration explicitly; otherwise the first sample .env wins.
+    # The raw argv is inspected first because the parser defaults themselves come from that file.
+    default_env_file = os.environ.get("A2AT_SAMPLE_ENV_FILE", "").strip()
+    explicit_env = _env_file_argument(sys.argv[1:]) or default_env_file
+    source_env, env_error = _resolve_source_env(explicit_env)
+    if env_error is not None:
+        print(f"[run_demo] {env_error}")
+        return 2
     source_values = _read_env(source_env) if source_env is not None else {}
     parser = _build_parser(
         default_ui_port=_ui_port_default(source_values),
         default_ui_host=_ui_host_default(source_values),
         default_gateway_port=_gateway_port_default(source_values),
         values=source_values,
+        env_file_default=default_env_file,
     )
     args = parser.parse_args()
+    if args.env_file:
+        source_env, env_error = _resolve_source_env(args.env_file)
+        if env_error is not None:
+            print(f"[run_demo] {env_error}")
+            return 2
     if args.transport is None:
         args.transport = "sse" if args.nms_sim or not args.nms else "webhook"
 
@@ -1503,6 +1552,17 @@ def main() -> int:
     persisted = False
     try:
         server_trace_env: dict[str, str] = {}
+        # The OSS Agent is a separate process: without this env its NMS token/send/poll spans never
+        # reach the UI, and a pure + --nms run looks like the local three-hop demo.
+        oss_trace_env: dict[str, str] = {}
+        if args.protocol == "pure" and args.ui:
+            recorded_token = str(state.get("trace_token") or "") if reuse == REUSE_REUSE else ""
+            oss_trace_env = _server_trace_env(
+                ui=True,
+                ui_port=args.ui_port,
+                trace_token=recorded_token or None,
+            )
+            os.environ["A2AT_SAMPLE_TRACE_TOKEN"] = oss_trace_env["A2AT_SAMPLE_TRACE_TOKEN"]
         if args.nms_sim:
             sim_env = {
                 "A2AT_SAMPLE_NMS_SIM_PORT": str(args.nms_sim_port),
@@ -1519,7 +1579,11 @@ def main() -> int:
             server_trace_env = _server_trace_env(
                 ui=args.ui,
                 ui_port=args.ui_port,
-                trace_token=recorded_token or None,
+                trace_token=(
+                    oss_trace_env.get("A2AT_SAMPLE_TRACE_TOKEN")
+                    or recorded_token
+                    or None
+                ),
                 approval_gate=args.approval_gate,
                 approval_timeout=args.approval_timeout,
             )
@@ -1544,6 +1608,7 @@ def main() -> int:
                     "A2AT_SAMPLE_RAN_URL": f"http://{server_host}:{server_port}",
                     "A2AT_SAMPLE_OSS_HOST": server_host,
                     "A2AT_SAMPLE_OSS_PORT": str(args.oss_port),
+                    **oss_trace_env,
                 }
                 if start("oss", OSS_MODULE, args.oss_port, oss_env) is None:
                     return 1
@@ -1555,6 +1620,7 @@ def main() -> int:
             oss_env = {
                 "A2AT_SAMPLE_OSS_HOST": server_host,
                 "A2AT_SAMPLE_OSS_PORT": str(args.oss_port),
+                **oss_trace_env,
             }
             if start("oss", OSS_MODULE, args.oss_port, oss_env) is None:
                 return 1
@@ -1634,7 +1700,8 @@ def main() -> int:
             [pid for pid in dict.fromkeys(managed) if _pid_alive(pid)],
             model_mode=args.model_mode,
             language=args.language,
-            trace_token=server_trace_env.get("A2AT_SAMPLE_TRACE_TOKEN", ""),
+            trace_token=server_trace_env.get("A2AT_SAMPLE_TRACE_TOKEN", "")
+            or oss_trace_env.get("A2AT_SAMPLE_TRACE_TOKEN", ""),
             trace_url=_trace_url(args.ui_port) if args.ui else "",
             ui_port=args.ui_port if args.ui else None,
             gateway_port=args.gateway_port if args.gateway else None,

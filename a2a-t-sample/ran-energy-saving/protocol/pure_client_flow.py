@@ -220,7 +220,13 @@ def _emit_message_sent(
     """Emit the outbound pure message so the wire inspector has it."""
     if trace_sink is None:
         return
-    recorder = TraceRecorder(current_trace().run_id or "", id_prefix="flow")
+    # The engineer client and the OSS Agent both send pure messages for one run. Their span ids
+    # must not collide, otherwise the UI deduplicates the OSS->NMS row against the client row and
+    # the downstream hop disappears from the trace.
+    trace = current_trace()
+    recorder = TraceRecorder(
+        trace.run_id or "", id_prefix=f"flow-{trace.role or 'client'}"
+    )
     span = recorder.emit(
         kind="message_sent",
         phase=PHASE_TASK_PROMPT,

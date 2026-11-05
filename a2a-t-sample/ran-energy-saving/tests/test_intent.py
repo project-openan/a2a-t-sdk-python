@@ -174,6 +174,59 @@ async def test_the_nms_context_replaces_the_neutral_region_and_sites() -> None:
     assert "Station 2" not in intent.normalized_text
 
 
+def test_the_nms_profile_rewrites_the_raw_request_too() -> None:
+    """The request shown on the stage and the Task-T on the wire name the same region."""
+    intent = build_scenario_intent(
+        "night",
+        "en-US",
+        region="A2ATestRegion",
+        sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
+    )
+
+    assert intent.raw_request == "Start energy saving in A2ATestRegion."
+    assert intent.region == "A2ATestRegion"
+    assert "Region A" not in intent.raw_request
+    assert "Region A" not in intent.normalized_text
+
+
+async def test_a_profiled_request_still_matches_the_built_in() -> None:
+    """The OSS Agent receives the profiled request, so matching must see the same text."""
+    processor = DemoIntentProcessor(
+        language="en-US",
+        forced_region="A2ATestRegion",
+        forced_sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
+    )
+    profiled = build_scenario_intent(
+        "information",
+        "en-US",
+        region="A2ATestRegion",
+        sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
+    )
+
+    intent = await processor.process(
+        OperatorRequest(text=profiled.raw_request, language="en-US", scenario="information")
+    )
+
+    assert intent.source == "scenario"
+    assert intent.region == "A2ATestRegion"
+    assert intent.raw_request == profiled.raw_request
+    assert intent.missing_fields == ("guaranteedThroughputTarget",)
+
+
+def test_the_run_catalog_serves_the_profiled_request() -> None:
+    """The page's default request, the intent and the Task-T agree in a vendor-profile run."""
+    from demo.catalog import DemoRunCatalog
+
+    spec = DemoRunCatalog(
+        region="A2ATestRegion",
+        sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
+    ).spec("information", language="en-US")
+
+    assert spec.intent is not None
+    assert spec.intent.raw_request == "Start energy saving in A2ATestRegion."
+    assert "Region A" not in spec.user_request
+
+
 async def test_the_nms_sites_do_not_turn_a_region_task_into_a_site_task() -> None:
     processor = DemoIntentProcessor(
         language="en-US",
