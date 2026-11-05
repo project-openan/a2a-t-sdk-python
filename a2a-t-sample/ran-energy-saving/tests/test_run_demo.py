@@ -452,3 +452,69 @@ def test_trace_summary_reports_llm_and_tool_counts() -> None:
 
     live: list[dict[str, object]] = [{"kind": "llm", "tokens": {"prompt": 10, "completion": 5, "total": 15}}]
     assert run_demo._trace_summary(live) == "llm=1 tool=0 tokens=prompt=10 completion=5 total=15"
+
+
+def test_write_run_env_anchors_relative_webhook_tls_paths_to_the_sample_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The client runs from RUN_DIR, so relative certificate paths must be made absolute."""
+    monkeypatch.setattr(run_demo, "RUN_DIR", tmp_path)
+    source = tmp_path / "source.env"
+    source.write_text(
+        "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL=https://141.5.146.234:9000/webhook\n"
+        "A2AT_SAMPLE_WEBHOOK_TLS_CERT=Orange/server.cer\n"
+        "A2AT_SAMPLE_WEBHOOK_TLS_KEY=Orange/server_key_nopass.pem\n"
+        "A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS=north:secret\n",
+        encoding="utf-8",
+    )
+
+    env_path = run_demo._write_run_env(
+        source=source,
+        language="en-US",
+        model_mode="live",
+        discovery="nms",
+        transport="webhook",
+        webhook_port=9000,
+        server_host="127.0.0.1",
+        server_port=8000,
+        registry_host="127.0.0.1",
+        registry_port=5001,
+        ui_port=8080,
+    )
+
+    values = dotenv_values(env_path)
+    assert Path(str(values["A2AT_SAMPLE_WEBHOOK_TLS_CERT"])) == run_demo.CASE_DIR / "Orange" / "server.cer"
+    assert Path(str(values["A2AT_SAMPLE_WEBHOOK_TLS_KEY"])) == run_demo.CASE_DIR / "Orange" / "server_key_nopass.pem"
+    assert values["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] == "https://141.5.146.234:9000/webhook"
+    assert values["A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS"] == "north:secret"
+
+
+def test_write_run_env_carries_the_langfuse_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The client exports to Langfuse from the per-run .env, so the source keys must survive."""
+    monkeypatch.setattr(run_demo, "RUN_DIR", tmp_path)
+    source = tmp_path / "source.env"
+    source.write_text(
+        "LANGFUSE_PUBLIC_KEY=pk-lf-test\n"
+        "LANGFUSE_SECRET_KEY=sk-lf-test\n"
+        "LANGFUSE_BASE_URL=http://localhost:18080\n",
+        encoding="utf-8",
+    )
+
+    env_path = run_demo._write_run_env(
+        source=source,
+        language="en-US",
+        model_mode="live",
+        discovery="nms",
+        transport="webhook",
+        webhook_port=9000,
+        server_host="127.0.0.1",
+        server_port=8000,
+        registry_host="127.0.0.1",
+        registry_port=5001,
+        ui_port=8080,
+    )
+
+    values = dotenv_values(env_path)
+    assert values["LANGFUSE_PUBLIC_KEY"] == "pk-lf-test"
+    assert values["LANGFUSE_SECRET_KEY"] == "sk-lf-test"
+    assert values["LANGFUSE_BASE_URL"] == "http://localhost:18080"

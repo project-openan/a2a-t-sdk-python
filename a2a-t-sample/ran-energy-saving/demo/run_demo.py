@@ -79,6 +79,10 @@ GATEWAY_TASK_DB_PATH = RUNS_DIR / "gateway-task-status.sqlite3"
 #: Source ``.env`` candidates, in resolution order.
 ENV_CANDIDATES = (CASE_DIR / ".env", SAMPLE_DIR / ".env", SAMPLE_DIR / "env.example")
 
+#: Webhook TLS files whose relative source paths are anchored to the sample root in the run ``.env``
+#: (the child processes run from ``RUN_DIR``, where relative paths do not resolve).
+_TLS_PATH_KEYS = ("A2AT_SAMPLE_WEBHOOK_TLS_CERT", "A2AT_SAMPLE_WEBHOOK_TLS_KEY")
+
 REGISTRY_MODULE = "demo.registry.registry_main"
 SERVER_MODULE = "protocol.server_app"
 UI_MODULE = "demo.web.serve"
@@ -330,6 +334,21 @@ def _write_run_env(
                 or "127.0.0.1"
             ),
             "A2AT_SAMPLE_WEBHOOK_PORT": str(webhook_port),
+            # Carried over from the source .env: they are not launcher options and dropping them
+            # here is what made the real-NMS callback loopback+http.
+            **{
+                key: values[key]
+                for key in (
+                    "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL",
+                    "A2AT_SAMPLE_WEBHOOK_TLS_CERT",
+                    "A2AT_SAMPLE_WEBHOOK_TLS_KEY",
+                    "A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS",
+                    "LANGFUSE_PUBLIC_KEY",
+                    "LANGFUSE_SECRET_KEY",
+                    "LANGFUSE_BASE_URL",
+                )
+                if values.get(key)
+            },
             "A2AT_SAMPLE_HOST": server_host,
             "A2AT_SAMPLE_PORT": str(server_port),
             "A2AT_SAMPLE_UI_PORT": str(ui_port),
@@ -355,6 +374,12 @@ def _write_run_env(
         values["A2AT_SAMPLE_INTENT_MODE"] = intent_mode
     if extra:
         values.update(extra)
+    for key in _TLS_PATH_KEYS:
+        path = values.get(key)
+        if path and not Path(path).is_absolute():
+            # Relative certificate paths are resolved against the sample root here: the client
+            # runs from the run directory, where they do not exist.
+            values[key] = str(CASE_DIR / path)
     text = "\n".join(f"{key}={value}" for key, value in values.items()) + "\n"
     env_path = RUN_DIR / ".env"
     env_path.write_text(text, encoding="utf-8", newline="\n")
