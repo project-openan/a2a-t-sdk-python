@@ -495,6 +495,10 @@ Implementation details:
 - Every exchange is appended to `runs/<runId>/wire.jsonl` (when
   `A2AT_SAMPLE_NMS_WIRE_LOG` is on) with `Authorization`, `X-Auth-Token`, `accessSession` and
   cookies redacted. Frames the reader cannot parse go to `wire-error.jsonl`.
+- Every outbound A2A call carries a W3C `traceparent`: the run id (32 hex) is the trace-id, so the
+  vendor can join its logs to one run, and the span-id is generated per call. It is written to
+  `wire.jsonl` with the other headers, and the Web UI's `GET /api/runs/{id}/wire` serves those
+  redacted records to the On-the-wire inspector.
 
 `demo/nms_sim/` is the offline contract simulator. It implements the token endpoint,
 `POST /a2a/json/message:stream`, `GET /a2a/json/tasks[/{id}]` and the known cancel 503. The

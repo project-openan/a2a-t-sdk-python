@@ -418,6 +418,9 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
 - 每次交互写入 `runs/<runId>/wire.jsonl`（`A2AT_SAMPLE_NMS_WIRE_LOG` 开启时），
   `Authorization`、`X-Auth-Token`、`accessSession` 和 cookie 已脱敏；无法解析的帧写入
   `wire-error.jsonl`。
+- 每次发往网管的 A2A 调用都携带 W3C `traceparent`：trace-id 使用 run id（32 位 hex），
+  网管可据此把自身日志关联到一次 run；span-id 每次调用现生成。该头会和其他请求头一起写入
+  `wire.jsonl`，Web UI 的 `GET /api/runs/{id}/wire` 把这些脱敏记录提供给 On-the-wire 检查器。
 
 `demo/nms_sim/` 是离线契约仿真器，实现令牌接口、`POST /a2a/json/message:stream`、
 `GET /a2a/json/tasks[/{id}]` 和已知的 cancel 503。默认 `strict` 档 SSE 永不关闭、每 15 s

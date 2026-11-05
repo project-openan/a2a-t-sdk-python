@@ -26,6 +26,7 @@ from protocol.nms_client import (
     _frame_to_event,
 )
 from shared.run_constants import PROTOCOL_PURE
+from shared.trace import trace_scope
 
 TOKEN_URL = "https://nms.example:27417/rest/plat/smapp/v1/sessions"
 A2A_BASE = "https://nms.example:31127/a2a/json"
@@ -806,3 +807,41 @@ async def test_webhook_transport_registers_the_push_config_the_vendor_accepts() 
     config = client.payload["configuration"]["taskPushNotificationConfig"]  # ty: ignore[index]
     assert config["id"] and len(config["id"]) <= 36
     assert config["authentication"] == {"scheme": "Basic", "credentials": "north:secret"}
+
+
+async def test_traceparent_carries_the_run_id_as_the_w3c_trace_id() -> None:
+    """The vendor can join its logs to one run: the run id is a valid 32-hex trace-id."""
+    seen: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        seen.append(request.headers["traceparent"])
+        return httpx.Response(200, json={"task": {"id": "task-1"}})
+
+    client = _client(httpx.MockTransport(handle))
+    run_id = "0123456789abcdef0123456789abcdef"
+    with trace_scope(run_id=run_id):
+        await client.send_message({"message": {"messageId": "m1"}})
+
+    version, trace_id, span_id, flags = seen[0].split("-")
+    assert (version, trace_id, flags) == ("00", run_id, "01")
+    assert len(span_id) == 16 and all(char in "0123456789abcdef" for char in span_id)
+    await client.aclose()
+
+
+async def test_a_request_outside_a_traced_run_carries_no_traceparent() -> None:
+    seen: dict[str, str] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        seen.update(request.headers)
+        return httpx.Response(200, json={"task": {"id": "task-1"}})
+
+    client = _client(httpx.MockTransport(handle))
+    with trace_scope(run_id=""):
+        await client.send_message({"message": {"messageId": "m1"}})
+
+    assert "traceparent" not in seen
+    await client.aclose()

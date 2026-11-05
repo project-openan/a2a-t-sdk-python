@@ -48,6 +48,7 @@ from shared.trace import (
     PHASE_DISPATCH,
     PHASE_EXECUTION,
     PHASE_NEGOTIATION,
+    current_trace,
     is_report_artifact,
     record_span,
 )
@@ -281,10 +282,26 @@ class NmsClient:
             "X-Auth-Token": token,
             "A2A-Version": "1.0",
         }
+        traceparent = self._traceparent()
+        if traceparent:
+            headers["traceparent"] = traceparent
         if extension_header:
             headers["A2A-Extensions"] = extension_header
             headers["X-A2A-Extensions"] = extension_header
         return headers
+
+    def _traceparent(self) -> str:
+        """Return the W3C ``traceparent`` correlating this call with the sample run.
+
+        The run id is already 32 hex digits, so it is the trace-id: a vendor that keeps the header
+        can join its own logs to one run. The span-id is generated here because the sample's own
+        span ids are not 16 hex digits. Empty when the call runs outside a traced run.
+        """
+        trace_id = str(current_trace().run_id or "").strip().lower()
+        if not _is_hex(trace_id, 32) or trace_id == "0" * 32:
+            return ""
+        span_id = uuid.uuid4().hex[:16]
+        return f"00-{trace_id}-{span_id}-01"
 
     async def stream_message(
         self,
@@ -1003,6 +1020,11 @@ def _nms_span(
         side="client",
         detail=payload,
     )
+
+
+def _is_hex(value: str, length: int) -> bool:
+    """Return whether ``value`` is exactly ``length`` lowercase hex digits."""
+    return len(value) == length and all(char in "0123456789abcdef" for char in value)
 
 
 def _redact(value: object) -> object:

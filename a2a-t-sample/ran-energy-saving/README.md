@@ -158,7 +158,9 @@ accepted the RAN Agent reports `SUBMITTED`, strategy working, strategy ready and
 data collection begins. The right column keeps the evidence: what the OSS Agent understood (with
 the 24-hour throughput chart), the
 negotiation turns, an **On the wire** inspector, and the merged session trace. On the wire shows the
-real A2A request headers and JSON body with the Task-T metadata; its **Plain A2A** toggle shows the
+captured redacted exchange from the run's `wire.jsonl` — request line, headers (including the real
+`traceparent`) and JSON body with the Task-T metadata — and says so when a run captured none instead
+of inventing one; its **Plain A2A** toggle shows the
 same request as one natural-language sentence without the extension header or Task-T fields (a
 format view of the same message). Clicking a trace row selects that message in the inspector. The
 trace labels each row with its demo day (Day 1, Days 2–8, Day 9, Day 9+) and message direction
