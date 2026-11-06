@@ -165,8 +165,8 @@ instrumentation scope，因此 `should_export_span` 只放行 `ran_energy_saving
 （本地 demo 服务端 trace 是批量上报的）仍会导出，并由 Langfuse 的 atexit 处理器刷写。所有失败只
 体现在 run snapshot 的 warning 上，不会让 run 失败。
 
-`A2AT_SAMPLE_TRACE_SPAN_LEVEL` 控制导出量，不影响 UI 时间线。`full` 导出全部 span；`phase` 保留
-`run_started`/`message_sent`、LLM/tool 调用、每个 phase 的一条代表和最终状态；`minimal`（默认）
+`A2AT_SAMPLE_TRACE_SPAN_LEVEL` 控制导出量，不影响 UI 时间线。`full` 导出全部 span；`phase`（默认）
+保留 `run_started`/`message_sent`、LLM/tool 调用、每个 phase 的一条代表和最终状态；`minimal`
 只保留 LLM/tool 调用和最终结果。精简级别导出扁平 observation（不再创建 phase/round 分组 span），
 phase 仍记录在 observation 元数据里。带显式 `traceId` 启动的 run 会用它作为 Langfuse trace id，
 因此重试落在同一条 trace；没有显式 id 时，导出器采用传入的 `traceparent` 或新开一条。
@@ -894,7 +894,7 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_SAMPLE_LANGFUSE_ENABLED` | 未设置 = 自动 | 即使有 key，`0` 也强制关闭；`1` 保持按 key 自动启用。 |
 | `A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT` | 默认 `1` | `0` 时只上报模型、token、状态和耗时元数据，不上报 prompt/response 文本。 |
 | `A2AT_SAMPLE_LANGFUSE_ENVIRONMENT` | 默认 `demo` | Langfuse environment 标签。 |
-| `A2AT_SAMPLE_TRACE_SPAN_LEVEL` | 默认 `minimal` | Langfuse 导出粒度：`minimal` = LLM/tool + 结果，`phase` = 关键事件 + 每 phase 一条 + 最终状态，`full` = 全部 span。UI 时间线不受影响。 |
+| `A2AT_SAMPLE_TRACE_SPAN_LEVEL` | 默认 `phase` | Langfuse 导出粒度：`phase` = 关键事件 + 每 phase 一条 + 最终状态，`minimal` = LLM/tool + 结果，`full` = 全部 span。UI 时间线不受影响。 |
 | `A2AT_SAMPLE_TASK_DB` | 未设置 = 内存；`run_demo.py` 写入 `<sample>/runs/task-status.sqlite3` | 服务端持久化 A2A Task 存储的绝对 SQLite 路径，也由 `GET /api/tasks` 读取。 |
 | `A2AT_SAMPLE_CLIENT_DB` | 未设置 = 内存；`run_demo.py` 写入 `<sample>/runs/client-state.sqlite3` | 客户端会话/运行/协商存储，以及 ADK 决策智能体会话的绝对 SQLite 路径。 |
 | `A2AT_SAMPLE_CLIENT_MEMORY_TURNS` | 默认 `6`（>= 0） | 注入下一次决策提示词与 Task-T 生成的最近会话轮数。 |

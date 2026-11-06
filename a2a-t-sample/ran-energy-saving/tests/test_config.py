@@ -915,10 +915,10 @@ def test_the_langfuse_ui_base_is_separate_from_the_reporting_endpoint(tmp_path: 
     assert config.langfuse_ui_base_url == "https://us.cloud.langfuse.com"
 
 
-def test_trace_span_level_defaults_to_minimal(tmp_path: Path) -> None:
+def test_trace_span_level_defaults_to_phase(tmp_path: Path) -> None:
     config = load_config(env_path=tmp_path / "missing.env")
 
-    assert config.trace_span_level == "minimal"
+    assert config.trace_span_level == "phase"
 
 
 @pytest.mark.parametrize("value", ["full", "phase", "minimal", "MINIMAL"])

@@ -266,10 +266,11 @@ sample 的可选依赖；未安装或未配置 key 时导出器为空操作。
 出站本地 A2A 调用的 `parent-id` 使用发送方当前的 span id（服务端跳即该请求的桥接 span），
 不会复用调用它的那个 span。
 
-`A2AT_SAMPLE_TRACE_SPAN_LEVEL` 控制 Run Explorer 数据进 Langfuse 的粒度：`minimal`（默认）只保留
-LLM/tool 调用和最终结果，约为原来数量的三分之一；`phase` 额外保留 `run_started`、`message_sent`、
-每个 phase 的一条代表和最终状态；`full` 导出全部 span。Web UI 时间线始终保留全部 span，
-不影响排障。复用同一个 run `traceId` 的重试也会复用同一条 Langfuse trace。
+`A2AT_SAMPLE_TRACE_SPAN_LEVEL` 控制 Run Explorer 数据进 Langfuse 的粒度：`phase`（默认）保留
+`run_started`、`message_sent`、LLM/tool 调用、每个 phase 的一条代表和最终状态，去掉逐条状态噪声；
+`minimal` 只保留 LLM/tool 调用和最终结果，约为原来数量的三分之一；`full` 导出全部 span。
+Web UI 时间线始终保留全部 span，不影响排障。复用同一个 run `traceId` 的重试也会复用同一条
+Langfuse trace。
 
 ### 真实厂商网管模式
 
