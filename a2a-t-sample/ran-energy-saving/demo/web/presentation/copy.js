@@ -65,6 +65,8 @@ const EN = {
     pure: "A2A",
     pureHint:
       "Standard A2A only: no Task-T or Negotiation-T extension. Three hops: OSS Agent → RAN Agent → MIE Agent.",
+    pureHintNms:
+      "Standard A2A only: no Task-T or Negotiation-T extension. In the NMS deployment the request takes two hops: OSS Agent → vendor NMS.",
     a2atHint:
       "A2A with the Task-T and Negotiation-T extensions: template validation and pre-task negotiation in the same agent.",
     plainHint:
@@ -74,8 +76,10 @@ const EN = {
   },
   pure: {
     badge: "A2A · 3 hops",
+    badgeNms: "A2A · NMS",
     kicker: "A2A · RAN energy saving",
     title: "An OSS agent and a RAN agent agree on a network task over A2A",
+    titleNms: "The OSS agent and the vendor NMS agree on a network task over standard A2A",
     hint: "UI → OSS Agent → RAN Agent → MIE Agent. No Task-T / Negotiation-T extension.",
     channel: "A2A",
     channelSub1: "Standard A2A message",
@@ -833,6 +837,7 @@ const ZH = {
     plain: "普通 A2A",
     pure: "A2A",
     pureHint: "只使用标准 A2A，不带 Task-T / Negotiation-T 扩展。三跳：OSS Agent → RAN Agent → MIE Agent。",
+    pureHintNms: "只使用标准 A2A，不带 Task-T / Negotiation-T 扩展。网管部署两跳：OSS Agent → 厂商网管。",
     a2atHint: "在 A2A 基础上启用 Task-T / Negotiation-T 扩展：模板校验与预任务协商，由同一个 Agent 处理。",
     plainHint: "普通 A2A 只发一条自然语言消息：没有 Task-T、没有意图审批、没有协商。",
     unavailable: "协议对比仅支持“夜间节能”和“缺参数”两个场景。",
@@ -840,8 +845,10 @@ const ZH = {
   },
   pure: {
     badge: "A2A · 三跳",
+    badgeNms: "A2A · 网管",
     kicker: "A2A · RAN 节能",
     title: "OSS Agent 与 RAN Agent 通过 A2A 就网络任务达成一致",
+    titleNms: "OSS Agent 与厂商网管通过标准 A2A 就网络任务达成一致",
     hint: "UI → OSS Agent → RAN Agent → MIE Agent。不带 Task-T / Negotiation-T 扩展。",
     channel: "A2A",
     channelSub1: "标准 A2A 消息",

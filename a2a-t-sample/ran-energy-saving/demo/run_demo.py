@@ -1821,6 +1821,10 @@ def main() -> int:
                 return 1
             if needs_pure_stack:
                 oss_env = {
+                    # The OSS hop is direct in the local topology; pin it so a sourced .env in the
+                    # launch shell cannot turn this process into an NMS client.
+                    "A2AT_SAMPLE_DISCOVERY": "direct",
+                    "A2AT_SAMPLE_TRANSPORT": args.transport,
                     "A2AT_SAMPLE_RAN_URL": f"http://{server_host}:{server_port}",
                     "A2AT_SAMPLE_OSS_HOST": server_host,
                     "A2AT_SAMPLE_OSS_PORT": str(args.oss_port),
@@ -1846,6 +1850,12 @@ def main() -> int:
             # Agent forwards the normalized request to the vendor NMS over plain A2A. ``both`` also
             # serves A2A-T in the UI, which talks to the NMS directly.
             oss_env = {
+                # ``shared.config`` prefers the process environment over the per-run .env, so a
+                # deployment shell that sourced the source .env would otherwise let a stale
+                # discovery/transport redirect the OSS hop to a local RAN Agent.
+                "A2AT_SAMPLE_DISCOVERY": "nms",
+                "A2AT_SAMPLE_TRANSPORT": args.transport,
+                "A2AT_SAMPLE_RAN_URL": f"http://{server_host}:{server_port}",
                 "A2AT_SAMPLE_OSS_HOST": server_host,
                 "A2AT_SAMPLE_OSS_PORT": str(args.oss_port),
                 **oss_trace_env,
@@ -1870,6 +1880,17 @@ def main() -> int:
                 f"[run_demo] starting Web UI (scenario selectable, mode manual/auto, "
                 f"transport={args.transport}, language={args.language}, model_mode={args.model_mode}) ..."
             )
+            # ``shared.config`` prefers the process environment over the per-run .env, so a launch
+            # shell that sourced the source .env (``set -a``) would otherwise override the hop the
+            # launcher selected. Pin the deployment discovery and the direct endpoint so a stale
+            # export cannot point a standard-A2A run at a local RAN Agent.
+            pure_stack = args.protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH)
+            ui_topology_env = {
+                "A2AT_SAMPLE_DISCOVERY": "nms" if args.nms else args.discovery,
+                "A2AT_SAMPLE_DIRECT_SERVER_URL": (
+                    f"http://{server_host}:{args.oss_port if pure_stack else server_port}"
+                ),
+            }
             pure_nms = args.nms and args.protocol == "pure"
             if pure_nms:
                 # The engineer client talks to the local OSS Agent; the OSS Agent owns the NMS hop.
@@ -1933,6 +1954,7 @@ def main() -> int:
                     cli_args=ui_args,
                     probe_host=_probe_host(args.ui_host),
                     reuse=False,
+                    extra_env=ui_topology_env,
                 )
                 is None
             ):

@@ -949,3 +949,36 @@ def test_both_nms_rejects_a_base_webhook_port_that_matches_the_oss_port(
     assert code == 2
     assert started == []
     assert warmups == []
+
+
+def test_both_nms_pins_the_topology_env_of_the_ui_and_oss(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A sourced source .env must not redirect the children's transport or direct endpoint.
+
+    ``shared.config`` prefers the process environment over the per-run .env, so a launch shell
+    that exported ``A2AT_SAMPLE_TRANSPORT=sse`` or a stale direct URL would otherwise make the
+    OSS Agent or the page use a different hop while the launcher selected the vendor NMS.
+    """
+
+    def configure(mp: pytest.MonkeyPatch) -> None:
+        # A sourced .env exports these two; ``--discovery`` is validated separately and already
+        # fails fast when a shell export contradicts ``--nms``.
+        mp.setenv("A2AT_SAMPLE_TRANSPORT", "sse")
+        mp.setenv("A2AT_SAMPLE_DIRECT_SERVER_URL", "http://127.0.0.1:8000")
+
+    code, started, _ = _launch_both_nms(
+        monkeypatch, tmp_path, _both_nms_source(), configure=configure
+    )
+
+    assert code == 0
+    modules = [str(call["command"][2]) for call in started]
+    ui = started[modules.index("demo.web.serve")]["env"]
+    oss = started[modules.index("protocol.oss_agent")]["env"]
+    # The UI keeps the deployment discovery and the OSS endpoint, not the stale export.
+    assert ui["A2AT_SAMPLE_DISCOVERY"] == "nms"
+    assert ui["A2AT_SAMPLE_DIRECT_SERVER_URL"] == "http://127.0.0.1:18011"
+    # The OSS always takes the NMS hop in a real --nms launch.
+    assert oss["A2AT_SAMPLE_DISCOVERY"] == "nms"
+    assert oss["A2AT_SAMPLE_TRANSPORT"] == "webhook"
+    assert oss["A2AT_SAMPLE_RAN_URL"] == "http://127.0.0.1:8000"

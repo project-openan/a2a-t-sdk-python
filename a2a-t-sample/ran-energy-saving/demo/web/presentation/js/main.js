@@ -1956,16 +1956,29 @@ function renderProtocol() {
         ? ui.copy.protocol.pure
         : ui.copy.protocol.a2at;
   }
+  // The deployment decides the pure-A2A topology: the local demo has three hops (OSS → RAN →
+  // MIE), while the vendor NMS is a black box the OSS Agent addresses directly.
+  const nms = Boolean(ui.meta?.nmsTasksEnabled);
   const hint = pure
-    ? ui.copy.protocol.pureHint
+    ? nms
+      ? ui.copy.protocol.pureHintNms
+      : ui.copy.protocol.pureHint
     : switchable
       ? ui.copy.protocol.a2atHint
       : "";
   els.protocolHint.textContent = hint;
   els.protocolHint.hidden = !hint;
-  if (els.badge) els.badge.textContent = pure ? ui.copy.pure.badge : ui.copy.badge;
+  if (els.badge) {
+    els.badge.textContent = pure
+      ? nms
+        ? ui.copy.pure.badgeNms
+        : ui.copy.pure.badge
+      : ui.copy.badge;
+  }
   if (els.wireFormat) els.wireFormat.hidden = pure;
-  if (els.tabWire) els.tabWire.hidden = pure;
+  // The merged wire view carries the OSS → NMS exchange in an NMS deployment; hiding it there
+  // leaves the real downstream hop invisible even though its capture exists.
+  if (els.tabWire) els.tabWire.hidden = pure && !nms;
 
   // The stage carries protocol-specific labels outside the copy registry (the SVG channel and
   // the MIE role). Keep them consistent with the selected request form.
@@ -1975,8 +1988,9 @@ function renderProtocol() {
   };
   if (pure) {
     els.brandKicker.textContent = ui.copy.pure.kicker;
-    els.title.textContent = ui.copy.pure.title;
-    document.title = ui.copy.pure.title;
+    const pureTitle = nms ? ui.copy.pure.titleNms : ui.copy.pure.title;
+    els.title.textContent = pureTitle;
+    document.title = pureTitle;
     setText("brand-mark", "A2A");
     setText("chan-label", ui.copy.pure.channel);
     setText("chan-sub1", ui.copy.pure.channelSub1);

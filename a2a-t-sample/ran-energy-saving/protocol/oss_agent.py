@@ -158,9 +158,25 @@ class OSSPureExecutor(AgentExecutor):
 
     async def start(self) -> None:
         """Create the long-lived NMS downstream transport, when NMS discovery is configured."""
-        if self._config is None or self._config.discovery != DISCOVERY_NMS:
+        if self._config is None:
+            _LOGGER.info("OSS Agent downstream: local RAN Agent (%s)", self._ran_url)
+            return
+        if self._config.discovery != DISCOVERY_NMS:
+            # A pure + NMS deployment whose environment resolves to another discovery silently
+            # runs the local topology. Say it once at startup so ``oss.log`` answers "did this
+            # process talk to the real NMS?" without reading the source.
+            _LOGGER.info(
+                "OSS Agent downstream: local RAN Agent (%s, discovery=%s)",
+                self._ran_url,
+                self._config.discovery,
+            )
             return
         config = self._config
+        _LOGGER.info(
+            "OSS Agent downstream: NMS %s (transport=%s)",
+            config.nms_a2a_base,
+            config.transport,
+        )
         self._nms_client = NmsClient(NmsConfig.from_config(config))
         if config.transport == TRANSPORT_WEBHOOK:
             router = WebhookRouter()

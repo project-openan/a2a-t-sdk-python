@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 import time
 from collections.abc import Generator
@@ -25,7 +26,7 @@ from protocol.client_flow import ClientFlowResult
 from protocol.intent import ProcessedIntent
 from protocol.mie_agent import build_mie_app
 from protocol.oss_agent import OSSPureExecutor, a2a_request_text, build_oss_app
-from shared.config import DISCOVERY_DIRECT, TRANSPORT_SSE
+from shared.config import DISCOVERY_DIRECT, DISCOVERY_NMS, TRANSPORT_SSE
 from shared.run_constants import (
     FINAL_STATE_INCOMPLETE,
     FINAL_STATE_TASK_COMPLETED,
@@ -235,3 +236,42 @@ async def test_oss_fails_the_outer_task_when_the_downstream_failed(
 
     states = [event.status.state for event in queue.events if isinstance(event, TaskStatusUpdateEvent)]
     assert states[-1] == TaskState.TASK_STATE_FAILED
+
+
+async def test_start_announces_the_nms_downstream(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``oss.log`` must say whether this process talks to the vendor NMS, not leave it implicit."""
+    config = replace(
+        offline_direct_config(8000),
+        discovery=DISCOVERY_NMS,
+        transport=TRANSPORT_SSE,
+        nms_a2a_base="https://nms.example/a2a/json",
+        nms_token_url="https://nms.example/rest/plat/smapp/v1/sessions",
+        nms_token_user="user",
+        nms_token_value="value",
+    )
+    executor = OSSPureExecutor(config=config, answer=lambda event: "")
+
+    with caplog.at_level(logging.INFO, logger="ran_energy_saving.oss_agent"):
+        await executor.start()
+        await executor.stop()
+
+    assert "OSS Agent downstream: NMS https://nms.example/a2a/json (transport=sse)" in caplog.text
+
+
+async def test_start_announces_the_local_downstream(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A pure run whose OSS config is not NMS is the local topology; the log says so."""
+    executor = OSSPureExecutor(
+        config=offline_direct_config(8000),
+        ran_url="http://127.0.0.1:8000",
+        answer=lambda event: "",
+    )
+
+    with caplog.at_level(logging.INFO, logger="ran_energy_saving.oss_agent"):
+        await executor.start()
+        await executor.stop()
+
+    assert "OSS Agent downstream: local RAN Agent (http://127.0.0.1:8000" in caplog.text

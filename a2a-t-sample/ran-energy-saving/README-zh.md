@@ -352,6 +352,13 @@ A2A + `--nms` 的 OSS Agent 现在会把网管的 token、发送、轮询 span �
 会话轨迹里能看到 `NMS session token acquired`、`NMS A2A stream opened` 等真实下游事件，
 状态文案也区分 `NMS` 与本地 `RAN Agent`，不再看起来像本地三跳演示。
 
+启动器还会把选定的拓扑“钉”进每个子进程的环境：UI 子进程显式拿到部署 discovery 和 OSS 的
+`A2AT_SAMPLE_DIRECT_SERVER_URL`；OSS Agent 始终拿到 `A2AT_SAMPLE_DISCOVERY=nms`（本地拓扑为
+`direct`）、transport 和 RAN URL。`shared.config` 的优先级是进程环境高于每次运行的 `.env`，
+因此启动脚本用 `set -a` 载入 `.env` 时，不再可能把标准 A2A run 静默改到本地 RAN Agent。
+OSS 启动日志会明确写出下游是 `OSS Agent downstream: NMS <base>` 还是
+`OSS Agent downstream: local RAN Agent (<url>)`；pure run 看起来没到网管时，先看 `oss.log`。
+
 ### 同一台机器并行两个实例
 
 单个实例即可在页面切换请求形态（UI 默认 `--protocol both`）。当两边需要不同的网管凭据、数据目录或

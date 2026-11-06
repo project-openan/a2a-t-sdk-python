@@ -411,6 +411,15 @@ trace shows `NMS session token acquired`, `NMS A2A stream opened` and the rest o
 downstream hop, and status text distinguishes `NMS` from the local `RAN Agent`. Use `--ui --mode confirm` for the send-time intent
 review; server-side approval 2 does not exist in NMS mode because the vendor owns execution.
 
+The launcher also pins the topology it selected in each child's environment. The UI receives the
+deployment discovery and the OSS endpoint as `A2AT_SAMPLE_DIRECT_SERVER_URL`; the OSS Agent always
+receives `A2AT_SAMPLE_DISCOVERY=nms` (or `direct` in the local topology), its transport and its RAN
+URL. `shared.config` prefers the process environment over the per-run `.env`, so a launch shell
+that sourced `.env` with `set -a` can no longer redirect a standard-A2A run to a local RAN Agent.
+At startup the OSS log names its hop — `OSS Agent downstream: NMS <base>` or
+`OSS Agent downstream: local RAN Agent (<url>)` — so `oss.log` is the first place to check when a
+pure run appears not to reach the vendor NMS.
+
 ### Two instances on one machine
 
 One instance can switch request forms in the page (the UI default, `--protocol both`). Running two instances is
