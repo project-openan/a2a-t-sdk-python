@@ -70,6 +70,8 @@ ADK_MODEL_PROVIDER_ENV_KEY = "ADK_MODEL_PROVIDER"
 ADK_MODEL_NAME_ENV_KEY = "ADK_MODEL_NAME"
 ADK_MODEL_API_BASE_ENV_KEY = "ADK_MODEL_API_BASE"
 ADK_MODEL_API_KEY_ENV_KEY = "ADK_MODEL_API_KEY"
+#: Whether ADK may put a response schema and tools into the same model request.
+ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS_ENV_KEY = "ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS"
 DISCOVERY_ENV_KEY = "A2AT_SAMPLE_DISCOVERY"
 TRANSPORT_ENV_KEY = "A2AT_SAMPLE_TRANSPORT"
 INTENT_MODE_ENV_KEY = "A2AT_SAMPLE_INTENT_MODE"
@@ -195,6 +197,19 @@ DEFAULT_ADK_MODEL_PROVIDER = "litellm"
 DEFAULT_ADK_MODEL_NAME = "openai/mass/volcengine/deepseek-v4.1-flash"
 DEFAULT_ADK_MODEL_API_BASE = "http://127.0.0.1:31943/v1"
 DEFAULT_ADK_MODEL_API_KEY = "not-needed"
+
+#: ``auto`` keeps ADK's provider detection; ``true``/``false`` force the capability. Qwen-compatible
+#: endpoints reject a request that carries both tools and ``response_format``, so they set ``false``
+#: and ADK exposes the schema through the synthetic ``set_model_response`` tool instead.
+ADK_OUTPUT_SCHEMA_WITH_TOOLS_AUTO = "auto"
+ADK_OUTPUT_SCHEMA_WITH_TOOLS_TRUE = "true"
+ADK_OUTPUT_SCHEMA_WITH_TOOLS_FALSE = "false"
+SUPPORTED_ADK_OUTPUT_SCHEMA_WITH_TOOLS = (
+    ADK_OUTPUT_SCHEMA_WITH_TOOLS_AUTO,
+    ADK_OUTPUT_SCHEMA_WITH_TOOLS_TRUE,
+    ADK_OUTPUT_SCHEMA_WITH_TOOLS_FALSE,
+)
+DEFAULT_ADK_OUTPUT_SCHEMA_WITH_TOOLS = ADK_OUTPUT_SCHEMA_WITH_TOOLS_AUTO
 
 #: Langfuse Cloud endpoint and environment label of the client observability export.
 DEFAULT_LANGFUSE_BASE_URL = "https://us.cloud.langfuse.com"
@@ -376,6 +391,9 @@ class SampleConfig:
         adk_model_name: LiteLlm model id.
         adk_model_api_base: OpenAI-compatible endpoint of the ADK model.
         adk_model_api_key: API key of the ADK model endpoint.
+        adk_model_output_schema_with_tools: ``auto`` / ``true`` / ``false``; controls whether ADK
+            may send a response schema together with tools. ``false`` makes ADK expose the schema
+            through the ``set_model_response`` tool, which Qwen-compatible endpoints require.
         discovery: Discovery mode (``registry`` / ``direct``).
         transport: Event transport (``sse`` / ``webhook``).
         intent_mode: Intent handling (``processed`` / ``raw``).
@@ -449,6 +467,7 @@ class SampleConfig:
     adk_model_name: str
     adk_model_api_base: str
     adk_model_api_key: str
+    adk_model_output_schema_with_tools: str = DEFAULT_ADK_OUTPUT_SCHEMA_WITH_TOOLS
     discovery: str = DISCOVERY_REGISTRY
     transport: str = TRANSPORT_SSE
     intent_mode: str = INTENT_MODE_PROCESSED
@@ -524,9 +543,10 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
     effective even when the source ``.env`` names another model.
 
     Raises:
-        ValueError: when ``A2AT_SAMPLE_MODEL_MODE``, ``A2AT_LANGUAGE``, a port, a timeout, the LLM
-            attempt limit, a discovery / transport / intent-mode key, or ``A2AT_SAMPLE_TASK_DB``
-            carries an unsupported value.
+        ValueError: when ``A2AT_SAMPLE_MODEL_MODE``, ``A2AT_LANGUAGE``,
+            ``ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS``, a port, a timeout, the LLM attempt limit, a
+            discovery / transport / intent-mode key, or ``A2AT_SAMPLE_TASK_DB`` carries an
+            unsupported value.
     """
     resolved = env_path or Path.cwd() / ".env"
     values: dict[str, str | None] = dict(dotenv_values(resolved)) if resolved.exists() else {}
@@ -598,6 +618,16 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
     adk_model_name = _env_value(values, ADK_MODEL_NAME_ENV_KEY, DEFAULT_ADK_MODEL_NAME)
     adk_model_api_base = _env_value(values, ADK_MODEL_API_BASE_ENV_KEY, DEFAULT_ADK_MODEL_API_BASE)
     adk_model_api_key = _env_value(values, ADK_MODEL_API_KEY_ENV_KEY, DEFAULT_ADK_MODEL_API_KEY)
+    output_schema_with_tools = _env_value(
+        values,
+        ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS_ENV_KEY,
+        DEFAULT_ADK_OUTPUT_SCHEMA_WITH_TOOLS,
+    ).strip().lower()
+    if output_schema_with_tools not in SUPPORTED_ADK_OUTPUT_SCHEMA_WITH_TOOLS:
+        raise ValueError(
+            f"Unsupported {ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS_ENV_KEY}: {output_schema_with_tools}; "
+            f"expected one of {SUPPORTED_ADK_OUTPUT_SCHEMA_WITH_TOOLS}"
+        )
     # The ADK model id is a LiteLLM id ("openai/..."); ChatOpenAI takes the bare model id. The
     # planner keys are independent so a deployment can point the server at a different model.
     planner_model_default = adk_model_name.removeprefix("openai/")
@@ -620,6 +650,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         adk_model_name=adk_model_name,
         adk_model_api_base=adk_model_api_base,
         adk_model_api_key=adk_model_api_key,
+        adk_model_output_schema_with_tools=output_schema_with_tools,
         discovery=discovery,
         transport=transport,
         intent_mode=intent_mode,

@@ -12,10 +12,42 @@ from typing import Any
 
 from google.adk.models.base_llm import BaseLlm
 
-from shared.config import ADK_MODEL_NAME_ENV_KEY, SampleConfig, load_config
+from shared.config import (
+    ADK_MODEL_NAME_ENV_KEY,
+    ADK_OUTPUT_SCHEMA_WITH_TOOLS_FALSE,
+    ADK_OUTPUT_SCHEMA_WITH_TOOLS_TRUE,
+    SampleConfig,
+    load_config,
+)
 
 #: Builds the deterministic offline model (the demo supplies its fake model).
 OfflineModelFactory = Callable[[], BaseLlm]
+
+#: LiteLlm subclasses keyed by the forced schema+tools capability.
+_CAPABILITY_MODEL_CLASSES: dict[bool, Any] = {}
+
+
+def _capability_model_class(allow_schema_with_tools: bool) -> Any:
+    """Return a ``LiteLlm`` subclass whose schema+tools capability is fixed.
+
+    ADK decides the request shape from ``model.capabilities.output_schema_and_tools``: when it is
+    false, the response schema is exposed as the synthetic ``set_model_response`` tool instead of a
+    ``response_format`` field. Some OpenAI-compatible endpoints (Qwen) accept tools only when no
+    response format is present, so the deployment can force the fallback path.
+    """
+    cached = _CAPABILITY_MODEL_CLASSES.get(allow_schema_with_tools)
+    if cached is not None:
+        return cached
+    from google.adk.models import LlmCapabilities
+    from google.adk.models.lite_llm import LiteLlm
+
+    class _CapabilityLiteLlm(LiteLlm):
+        @property
+        def capabilities(self) -> LlmCapabilities:
+            return LlmCapabilities(output_schema_and_tools=allow_schema_with_tools)
+
+    _CAPABILITY_MODEL_CLASSES[allow_schema_with_tools] = _CapabilityLiteLlm
+    return _CapabilityLiteLlm
 
 
 def build_adk_model(
@@ -62,7 +94,12 @@ def build_adk_model(
         kwargs["api_base"] = resolved.adk_model_api_base
     if resolved.adk_model_api_key:
         kwargs["api_key"] = resolved.adk_model_api_key
-    return LiteLlm(model=resolved.adk_model_name, **kwargs)
+    model_class: Any = LiteLlm
+    if resolved.adk_model_output_schema_with_tools == ADK_OUTPUT_SCHEMA_WITH_TOOLS_FALSE:
+        model_class = _capability_model_class(False)
+    elif resolved.adk_model_output_schema_with_tools == ADK_OUTPUT_SCHEMA_WITH_TOOLS_TRUE:
+        model_class = _capability_model_class(True)
+    return model_class(model=resolved.adk_model_name, **kwargs)
 
 
 def build_traced_adk_model(

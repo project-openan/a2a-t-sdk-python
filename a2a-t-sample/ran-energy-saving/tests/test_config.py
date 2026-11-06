@@ -10,6 +10,9 @@ from shared.config import (
     ADK_MODEL_API_BASE_ENV_KEY,
     ADK_MODEL_API_KEY_ENV_KEY,
     ADK_MODEL_NAME_ENV_KEY,
+    ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS_ENV_KEY,
+    ADK_OUTPUT_SCHEMA_WITH_TOOLS_FALSE,
+    ADK_OUTPUT_SCHEMA_WITH_TOOLS_TRUE,
     ADK_SESSION_RETENTION_DAYS_ENV_KEY,
     CLIENT_DB_ENV_KEY,
     CLIENT_MEMORY_TURNS_ENV_KEY,
@@ -65,12 +68,13 @@ from shared.config import (
     SampleConfig,
     load_config,
 )
-from shared.model_factory import build_adk_model
+from shared.model_factory import build_adk_model, build_traced_adk_model
 
 _ENV_KEYS = (
     ADK_MODEL_NAME_ENV_KEY,
     ADK_MODEL_API_BASE_ENV_KEY,
     ADK_MODEL_API_KEY_ENV_KEY,
+    ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS_ENV_KEY,
     HTTP_TIMEOUT_ENV_KEY,
     LLM_TIMEOUT_ENV_KEY,
     LLM_MAX_ATTEMPTS_ENV_KEY,
@@ -352,6 +356,77 @@ def test_build_adk_model_applies_the_live_timeout_and_disables_retries(
     additional_args = getattr(model, "_additional_args")
     assert additional_args["timeout"] == 42.0
     assert additional_args["num_retries"] == 0
+
+
+def test_adk_output_schema_with_tools_defaults_to_auto(tmp_path: Path) -> None:
+    config = load_config(env_path=tmp_path / "missing.env")
+
+    assert config.adk_model_output_schema_with_tools == "auto"
+
+
+@pytest.mark.parametrize("value", ["auto", "true", "false", "FALSE"])
+def test_adk_output_schema_with_tools_accepts_supported_values(tmp_path: Path, value: str) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        f"{ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS_ENV_KEY}={value}\n", encoding="utf-8"
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert config.adk_model_output_schema_with_tools == value.lower()
+
+
+def test_adk_output_schema_with_tools_rejects_an_unknown_value(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        f"{ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS_ENV_KEY}=sometimes\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match=ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS_ENV_KEY):
+        load_config(env_path=env_file)
+
+
+def test_build_adk_model_can_disable_schema_with_tools(offline_config: SampleConfig) -> None:
+    from dataclasses import replace
+
+    live_config = replace(
+        offline_config,
+        model_mode=MODEL_MODE_LIVE,
+        adk_model_output_schema_with_tools=ADK_OUTPUT_SCHEMA_WITH_TOOLS_FALSE,
+    )
+
+    model = build_adk_model(live_config)
+
+    assert model.capabilities.output_schema_and_tools is False
+
+
+def test_build_adk_model_can_force_schema_with_tools(offline_config: SampleConfig) -> None:
+    from dataclasses import replace
+
+    live_config = replace(
+        offline_config,
+        model_mode=MODEL_MODE_LIVE,
+        adk_model_name="gemini-2.0-flash",
+        adk_model_output_schema_with_tools=ADK_OUTPUT_SCHEMA_WITH_TOOLS_TRUE,
+    )
+
+    model = build_adk_model(live_config)
+
+    assert model.capabilities.output_schema_and_tools is True
+
+
+def test_the_traced_wrapper_keeps_the_overridden_capability(offline_config: SampleConfig) -> None:
+    from dataclasses import replace
+
+    live_config = replace(
+        offline_config,
+        model_mode=MODEL_MODE_LIVE,
+        adk_model_output_schema_with_tools=ADK_OUTPUT_SCHEMA_WITH_TOOLS_FALSE,
+    )
+
+    model = build_traced_adk_model(live_config)
+
+    assert model.capabilities.output_schema_and_tools is False
 
 
 def test_nms_discovery_loads_the_vendor_connection_settings(tmp_path: Path) -> None:

@@ -1042,6 +1042,7 @@ script can switch the model with a plain `export ADK_MODEL_NAME=...`.
 | `ADK_MODEL_NAME` | default `openai/mass/volcengine/deepseek-v4.1-flash` | LiteLlm model id (provider prefix required). |
 | `ADK_MODEL_API_BASE` | default `http://127.0.0.1:31943/v1` | OpenAI-compatible endpoint. |
 | `ADK_MODEL_API_KEY` | default `not-needed` | Endpoint key. |
+| `ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS` | `auto` | `auto` keeps ADK's provider detection; `true`/`false` force whether a response schema may share the request with tools. Qwen-compatible endpoints need `false`. |
 | `A2AT_LLM_PROVIDER` | `openai_traced` in live mode; overridden to `scripted_traced` offline | SDK provider (traced wrappers of `openai` / `scripted`; the trace capture never changes behavior). |
 | `A2AT_LLM_MODEL` | default `mass/volcengine/deepseek-v4.1-flash` | SDK model id (no LiteLlm prefix). |
 | `A2AT_LLM_API_KEY` | default `not-needed`; overridden offline | SDK endpoint key. |
@@ -1050,6 +1051,17 @@ script can switch the model with a plain `export ADK_MODEL_NAME=...`.
 | `A2AT_LLM_DETAIL_LOG_ENABLED` | `false` (default) | Print full LLM payloads (debug; may expose sensitive content). |
 | `A2AT_SAMPLE_LOG_LEVEL` | `INFO` (default) | Root log level: `DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL`. |
 | `A2AT_SAMPLE_LOG_FORMAT` | `text` (default) or `json` | One line per record; `json` carries `runId` / `conversationId` / `taskId` / `contextId` / `negotiationId` / `round` as top-level fields. |
+
+**Provider capability and Qwen.** ADK decides the request shape from
+`model.capabilities.output_schema_and_tools`. When it is true and the agent has both tools and an
+`output_schema`, ADK sends `tools` and `response_format` in the same LiteLlm request. Some
+OpenAI-compatible endpoints (Qwen in particular) answer that request without `tool_calls`, writing
+the intended call into `content` instead, so the agent never receives tool results. Setting
+`ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS=false` makes ADK keep `output_schema` but expose it through the
+synthetic `set_model_response` tool: the request carries tools only, and the final JSON is validated
+by ADK before the sample parses it. `auto` preserves the previous behavior; `true` forces the native
+schema+tools path. The same client agent is reused by the pure-A2A OSS hop, so the switch covers
+both paths; the server planner is LangGraph and unaffected.
 
 **Offline mode.** Before constructing `A2ATClient` / `A2ATServer`, the runtimes register the traced
 wrappers (`scripted_traced`, live `openai_traced`) and build a temporary SDK `.env` with

@@ -860,6 +860,7 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `ADK_MODEL_NAME` | 默认 `openai/mass/volcengine/deepseek-v4.1-flash` | LiteLlm 模型 id（需要 provider 前缀）。 |
 | `ADK_MODEL_API_BASE` | 默认 `http://127.0.0.1:31943/v1` | OpenAI-compatible 端点。 |
 | `ADK_MODEL_API_KEY` | 默认 `not-needed` | 端点 key。 |
+| `ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS` | `auto` | `auto` 沿用 ADK 的 Provider 探测；`true`/`false` 强制 response schema 是否可与 tools 同请求发送。Qwen-compatible 端点需要设为 `false`。 |
 | `A2AT_LLM_PROVIDER` | 在线为 `openai_traced`；离线被覆盖为 `scripted_traced` | SDK Provider（`openai` / `scripted` 的 traced 包装；trace 捕获不改变行为）。 |
 | `A2AT_LLM_MODEL` | 默认 `mass/volcengine/deepseek-v4.1-flash` | SDK 模型 id（不带 LiteLlm 前缀）。 |
 | `A2AT_LLM_API_KEY` | 默认 `not-needed`；离线被覆盖 | SDK 端点 key。 |
@@ -868,6 +869,8 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_LLM_DETAIL_LOG_ENABLED` | `false`（默认） | 打印完整 LLM 载荷（调试；可能暴露敏感内容）。 |
 | `A2AT_SAMPLE_LOG_LEVEL` | 默认 `INFO` | 根日志级别：`DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL`。 |
 | `A2AT_SAMPLE_LOG_FORMAT` | 默认 `text`，可选 `json` | 每条记录一行；`json` 会把 `runId` / `conversationId` / `taskId` / `contextId` / `negotiationId` / `round` 作为顶层字段。 |
+
+**Provider 能力与 Qwen。** ADK 根据 `model.capabilities.output_schema_and_tools` 决定请求形态。为 true 且 agent 同时声明 tools 与 `output_schema` 时，ADK 会在同一个 LiteLlm 请求里发送 `tools` 和 `response_format`。部分 OpenAI-compatible 端点（典型是 Qwen）对这类请求不返回 `tool_calls`，而是把调用意图写进 `content`，agent 因此拿不到工具结果。把 `ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS` 设为 `false` 后，ADK 保留 `output_schema`，但改为通过合成的 `set_model_response` 工具暴露 schema：请求只带 tools，最终 JSON 由 ADK 校验后再交给样例解析。`auto` 保持原行为，`true` 强制 native schema+tools。pure-A2A 的 OSS 链路复用同一个 client agent，因此同样生效；服务端 planner 是 LangGraph，不受影响。
 
 **离线模式。** 在构造 `A2ATClient` / `A2ATServer` 之前，运行时注册 traced 包装（离线 `scripted_traced`、在线 `openai_traced`），并生成临时 SDK `.env`，写入 `A2AT_LLM_PROVIDER=scripted_traced`、`A2AT_LLM_MODEL=scripted`、`A2AT_LLM_API_KEY=not-needed`。源 `.env` 不会被修改。客户端 ADK agent 使用 `demo/adk_fake_model.py`；服务端 planner 使用 `ScriptedChatModel`，按顺序发出四个样例工具调用。日志与 Web UI 标注为 `offline (scripted)`。
 
