@@ -113,6 +113,7 @@ from demo.scenario import (
     PURE_PROTOCOL_SCENARIOS,
     resolve_presentation_request,
 )
+from demo.web.tester import build_tester_routes
 
 _LOGGER = logging.getLogger("ran_energy_saving.web")
 
@@ -345,15 +346,28 @@ def create_app(
             env_path=env_path,
         )
 
+    resolved_runs_dir = runs_dir or Path(config.runs_dir)
     manager = RunManager(
         config=config,
         runtime_factory=runtime_factory or default_factory,
         catalog=resolved_catalog,
-        runs_dir=runs_dir or Path(config.runs_dir),
+        runs_dir=resolved_runs_dir,
         store=client_store,
         memory_turns=memory_turns,
         intent_review=resolved_intent_review,
         metrics_grace_seconds=metrics_grace_seconds,
+    )
+    tester_routes, tester_batches = build_tester_routes(
+        runs=manager,
+        protocols=advertised_protocols,
+        scenarios_by_protocol=scenarios_by_protocol,
+        protocol_defaults=protocol_defaults,
+        default_language=config.language,
+        server_url=server_url,
+        server_auth_token=config.server_auth_token,
+        mie_url=mie_url,
+        runs_dir=resolved_runs_dir,
+        nms_enabled=resolved_nms,
     )
 
     @asynccontextmanager
@@ -369,6 +383,7 @@ def create_app(
         # Apply the decision-session retention window before the first run of this process.
         await manager.sweep_sessions()
         yield
+        await tester_batches.shutdown()
         await manager.shutdown()
         # The callback receiver is process-owned, not run-owned; release its port on shutdown.
         from protocol.shared_webhook import close_shared_webhooks
@@ -1209,6 +1224,7 @@ def create_app(
             Route("/api/runs/{run_id}/trace", ingest_trace, methods=["POST"]),
             Route("/api/runs/{run_id}/trace.json", run_trace_json),
             Route("/api/runs/{run_id}/spans/{span_id}", run_span),
+            *tester_routes,
             Mount("/static", app=StaticFiles(directory=static_dir), name="static"),
         ],
         lifespan=lifespan,
@@ -1239,6 +1255,7 @@ def create_app(
     app.state.run_manager = manager
     app.state.client_store = client_store
     app.state.config = config
+    app.state.tester_batches = tester_batches
     return app
 
 

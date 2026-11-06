@@ -9,6 +9,7 @@ langchain-openai==1.7.2
 # keep the OpenAI SDK on the 2.x API used by the A2A-T SDK, ADK and the planner
 openai>=2.31,<3
 httpx>=0.28.1
+openpyxl>=3.1
 protobuf>=6.30.2,<7
 python-dotenv>=1.1.0
 sse-starlette>=3.4.4

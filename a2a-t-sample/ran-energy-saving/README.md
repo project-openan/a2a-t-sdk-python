@@ -172,6 +172,24 @@ trace labels each row with its demo day (Day 1, Days 2–8, Day 9, Day 9+) and m
 (OSS → RAN, RAN → OSS, MIE ⇄ Engineer); late server spans are merged by event time and a status and
 its matching span collapse to one row.
 
+### Tester console (Excel import)
+
+Open `/tester` on the same UI process (the launcher prints the URL). It is a separate entry page
+for testers: download the `.xlsx` template, fill one row per case, import the workbook, and run
+the batch. Each row carries the protocol (`A2A-T` / `A2A`) and an optional user request; the
+scenario column is optional because a real customer test is usually just a business request. With
+an empty scenario the sample still uses the `night` profile internally, but asserts only the final
+state (`task_completed` by default); with an explicit scenario, blank expectation cells inherit
+that scenario's final state, negotiation kind and round count. The batch runs sequentially and
+shows the verdict, actual final state, negotiation kind/rounds, duration and the run's `wire` /
+`trace` links; the results can be exported back to `.xlsx`. An empty approval cell defaults to
+`approve`, so an unattended batch does not wait for the approval window; `reject` tests the
+rejection path and `auto` leaves the gate to a human or the timeout. Batches are persisted under
+`runs/tester`, so reloading the page reopens the latest one; **Retry failed** rebuilds a draft from
+the failed, errored or cancelled rows. On a real-NMS deployment the page shows a warning and asks
+for confirmation before starting. Transport and discovery are still chosen by the backend per
+protocol, not by the sheet.
+
 ### Operator intent layer
 
 The sample no longer sends the operator's text straight to A2A or A2A-T. The default

@@ -157,6 +157,7 @@ def run_ui(
         f"protocols={','.join(protocols)}, approval_gate={approval_gate}, "
         f"server trace ingestion: {'enabled' if trace_enabled else 'disabled (no local token)'})"
     )
+    print(f"[ui] tester console on http://{host}:{ui_port}/tester")
     if not is_loopback(host):
         try:
             lan_ip = socket.gethostbyname(socket.gethostname())
