@@ -54,7 +54,10 @@ class ProcessedIntent:
 
     Attributes:
         raw_request: Text the operator supplied.
-        normalized_text: Canonical text sent to A2A/A2A-T after approval.
+        normalized_text: Canonical Task-T text sent to A2A-T after approval.
+        plain_text: Natural-language text sent on a standard A2A hop. It carries the same
+            business values as ``normalized_text`` but no Task-T section headings, so an A2A
+            run does not look like an A2A-T prompt.
         operation_type: ``Create`` or ``Modify``.
         region: Target region, preserved even when it is not served.
         sites: Optional site list.
@@ -71,6 +74,7 @@ class ProcessedIntent:
 
     raw_request: str
     normalized_text: str
+    plain_text: str = ""
     operation_type: str = ""
     region: str = ""
     sites: tuple[str, ...] = ()
@@ -91,6 +95,7 @@ class ProcessedIntent:
         return cls(
             raw_request=text,
             normalized_text=text,
+            plain_text=text,
             source=INTENT_SOURCE_RAW,
             warnings=warnings,
         )
@@ -100,6 +105,7 @@ class ProcessedIntent:
         return {
             "rawRequest": self.raw_request,
             "normalizedText": self.normalized_text,
+            "plainText": self.plain_text,
             "operationType": self.operation_type,
             "region": self.region,
             "sites": list(self.sites),

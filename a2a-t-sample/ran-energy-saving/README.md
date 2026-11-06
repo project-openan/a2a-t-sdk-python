@@ -224,8 +224,8 @@ The sample no longer sends the operator's text straight to A2A or A2A-T. The def
 `processed` mode inserts the business step a real OSS performs first:
 
 ```text
-operator request → business intent (ProcessedIntent) → normalized text → approval 1
-                 → A2A-T Task-T / Plain A2A message
+operator request → business intent (ProcessedIntent) → normalized text / plain text
+                 → approval 1 → A2A-T Task-T / standard A2A message
 ```
 
 - Known scenarios use a deterministic built-in intent. A free-text request (`--request` or an
@@ -233,12 +233,17 @@ operator request → business intent (ProcessedIntent) → normalized text → a
   records a warning.
 - The business layer never repairs a gap or conflict. A missing throughput target, an unknown
   area and overlapping windows stay in the intent, so the A2A-T negotiation still happens.
-- Approval 1 confirms the **normalized text** before the protocol mapping. In A2A-T the Task-T is
-  then extracted strictly from that text; Plain A2A sends the same text.
+- The intent carries two renderings of the same business values. `normalizedText` is the
+  Task-T section layout used by the A2A-T hop; `plainText` is a natural-language request used by
+  standard A2A. `plainText` keeps the `{HH:MM~HH:MM,NMbps}` target tokens but contains no `##`
+  Task-T headings, so the two protocols never send the same payload.
+- Approval 1 confirms the intent before the protocol mapping. In A2A-T the Task-T is then
+  extracted strictly from `normalizedText`.
 - A2A keeps the same story inside the OSS Agent: the engineer client sends the raw request,
-  the OSS Agent normalizes it, publishes the intent, and forwards the normalized text to RAN.
+  the OSS Agent normalizes it, publishes the intent, and forwards `plainText` to RAN.
 - The presentation page shows the operator request, the normalized text and the structured intent
-  fields side by side; the trace records `intent_processed`.
+  fields side by side; the trace records `intent_processed` and the intent document carries both
+  renderings.
 - `processed` is the default. Use `A2AT_SAMPLE_INTENT_MODE=raw`, `--intent-mode raw` or
   `POST /api/runs {"intentMode":"raw"}` for the old direct-text behavior. Gateway input is always
   treated as raw.

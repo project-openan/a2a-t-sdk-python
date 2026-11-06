@@ -47,12 +47,10 @@ _LOGGER = logging.getLogger("ran_energy_saving.intent")
 #: Overlapping windows of the target/abort scenarios, kept in their original notation.
 _TARGET_WINDOWS: Final[dict[str, str]] = {
     LANGUAGE_EN: (
-        "{00:00~07:00,2Mbps}, {07:00~09:00,10Mbps}, {09:00~17:30,10Mbps}, "
-        "{17:30~23:00,20Mbps}, {20:00~00:00,10Mbps}"
+        "{00:00~07:00,2Mbps}, {07:00~09:00,10Mbps}, {09:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {20:00~00:00,10Mbps}"
     ),
     LANGUAGE_ZH: (
-        "{00:00~07:00,2Mbps}、{07:00~09:00,10Mbps}、{09:00~17:30,10Mbps}、"
-        "{17:30~23:00,20Mbps}、{20:00~00:00,10Mbps}"
+        "{00:00~07:00,2Mbps}、{07:00~09:00,10Mbps}、{09:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{20:00~00:00,10Mbps}"
     ),
 }
 
@@ -190,6 +188,16 @@ def build_scenario_intent(
         missing_fields=missing,
         conflicts=conflicts,
         source=INTENT_SOURCE_SCENARIO,
+        plain_text=render_plain_text(
+            operation=str(params.get("operationType") or ""),
+            region=str(params.get("region") or ""),
+            sites=sites,
+            windows=windows,
+            goal=str(params.get("energySavingGoal") or ""),
+            expected=str(params.get("expectedOutput") or ""),
+            background=background,
+            language=language,
+        ),
     )
     return _with_forced_context(intent, region, sites, language)
 
@@ -202,8 +210,7 @@ def build_all_scenario_intents(
 ) -> dict[str, ProcessedIntent]:
     """Return the built-in intent of every scenario, keyed by scenario name."""
     return {
-        name: build_scenario_intent(name, language, region=region, sites=sites)
-        for name in SUPPORTED_SCENARIO_NAMES
+        name: build_scenario_intent(name, language, region=region, sites=sites) for name in SUPPORTED_SCENARIO_NAMES
     }
 
 
@@ -274,6 +281,14 @@ def _with_forced_context(
         sites=new_sites,
         language=language,
     )
+    plain = apply_region_profile_text(
+        intent.plain_text,
+        old_region=intent.region,
+        region=new_region,
+        old_sites=intent.sites,
+        sites=new_sites,
+        language=language,
+    )
     missing = (
         tuple(item for item in intent.missing_fields if item != "region")
         if region and region != intent.region
@@ -285,6 +300,7 @@ def _with_forced_context(
         region=new_region,
         sites=new_sites,
         normalized_text=normalized,
+        plain_text=plain,
         missing_fields=missing,
     )
 
@@ -325,9 +341,7 @@ class DemoIntentProcessor:
         """Understand one operator request."""
         built_in = self._matching_built_in(request)
         if built_in is not None:
-            return _with_forced_context(
-                built_in, self._forced_region, self._forced_sites, self._language
-            )
+            return _with_forced_context(built_in, self._forced_region, self._forced_sites, self._language)
         if self._extractor is None:
             return ProcessedIntent.raw(
                 request.text,
@@ -341,9 +355,7 @@ class DemoIntentProcessor:
                 request.text,
                 reason=f"Intent extraction failed: {type(exc).__name__}: {exc}",
             )
-        return _with_forced_context(
-            intent, self._forced_region, self._forced_sites, self._language
-        )
+        return _with_forced_context(intent, self._forced_region, self._forced_sites, self._language)
 
     def _matching_built_in(self, request: OperatorRequest) -> ProcessedIntent | None:
         """Return the built-in intent when the request matches a canned scenario request."""
@@ -507,9 +519,20 @@ def _intent_from_fields(raw: str, fields: Mapping[str, object], language: str) -
         background=background,
         language=language,
     )
+    plain = render_plain_text(
+        operation=operation,
+        region=region,
+        sites=sites,
+        windows=windows,
+        goal=goal,
+        expected=expected,
+        background=background,
+        language=language,
+    )
     return ProcessedIntent(
         raw_request=raw,
         normalized_text=normalized,
+        plain_text=plain,
         operation_type=operation,
         region=region,
         sites=sites,
@@ -540,6 +563,92 @@ def render_normalized_text(
     if language == LANGUAGE_ZH:
         return _render_zh(operation, region, sites, windows, goal, description, expected, background)
     return _render_en(operation, region, sites, windows, goal, description, expected, background)
+
+
+def render_plain_text(
+    *,
+    operation: str,
+    region: str,
+    sites: tuple[str, ...],
+    windows: tuple[str, ...],
+    goal: str,
+    expected: str,
+    background: str | None,
+    language: str,
+) -> str:
+    """Render the natural-language request of one standard A2A hop.
+
+    A2A must not carry the Task-T section layout: the same business values are rendered as a
+    plain request instead, so the protocol comparison keeps two different request forms. The
+    throughput windows keep the ``{HH:MM~HH:MM,NMbps}`` notation because the RAN agent's pure
+    target policy and the NMS simulator parse that form.
+    """
+    if language == LANGUAGE_ZH:
+        return _render_plain_zh(operation, region, sites, windows, goal, expected, background)
+    return _render_plain_en(operation, region, sites, windows, goal, expected, background)
+
+
+def _render_plain_en(
+    operation: str,
+    region: str,
+    sites: tuple[str, ...],
+    windows: tuple[str, ...],
+    goal: str,
+    expected: str,
+    background: str | None,
+) -> str:
+    """Render the English A2A request without Task-T headings."""
+    verb = (
+        "Modify the running RAN energy saving task"
+        if operation.strip().lower() == "modify"
+        else "Create a RAN energy saving task"
+    )
+    parts = [f"{verb} in {region}." if region else f"{verb} in the target area."]
+    if sites:
+        parts.append(f"Site list 1: [{', '.join(sites)}].")
+    if windows:
+        parts.append(f"The time-segmented guaranteed throughput target is {', '.join(windows)}.")
+    if goal:
+        parts.append(_with_period(f"The energy saving goal is {goal}", language=LANGUAGE_EN))
+    if background:
+        parts.append(_with_period(f"The background event is {background}", language=LANGUAGE_EN))
+    if expected:
+        parts.append(_with_period(f"The expected output is {expected}", language=LANGUAGE_EN))
+    return " ".join(parts)
+
+
+def _render_plain_zh(
+    operation: str,
+    region: str,
+    sites: tuple[str, ...],
+    windows: tuple[str, ...],
+    goal: str,
+    expected: str,
+    background: str | None,
+) -> str:
+    """Render the Chinese A2A request without Task-T headings."""
+    verb = "修改运行中的" if operation.strip().lower() == "modify" else "创建"
+    parts = [f"在{region or '目标区域'}{verb}无线网络节能任务。"]
+    if sites:
+        parts.append(f"站点列表1为[{'、'.join(sites)}]。")
+    if windows:
+        parts.append(f"分时段保障速率目标为 {'、'.join(windows)}。")
+    if goal:
+        parts.append(_with_period(f"节能目标为{goal}", language=LANGUAGE_ZH))
+    if background:
+        parts.append(_with_period(f"背景事件为{background}", language=LANGUAGE_ZH))
+    if expected:
+        parts.append(_with_period(f"预期输出为{expected}", language=LANGUAGE_ZH))
+    return "".join(parts)
+
+
+def _with_period(text: str, *, language: str) -> str:
+    """Append the terminal punctuation of one plain sentence when it is missing."""
+    stripped = text.strip()
+    if not stripped:
+        return stripped
+    endings = "。！？" if language == LANGUAGE_ZH else ".!?"
+    return stripped if stripped[-1] in endings else f"{stripped}{'。' if language == LANGUAGE_ZH else '.'}"
 
 
 def _render_en(
@@ -605,9 +714,7 @@ def _render_zh(
     lines.append(f"区域为 {region}。" if region else "未提供区域。")
     if sites:
         lines.append(f"站点列表1为[{', '.join(sites)}]。")
-    lines.extend(
-        ["", "## 任务目标(Task Target)", goal or "未提供。"]
-    )
+    lines.extend(["", "## 任务目标(Task Target)", goal or "未提供。"])
     lines.extend(["", "## 任务上下文(Task Context)"])
     if windows:
         lines.append(f"分时段保障速率目标为 {'、'.join(windows)}。")
@@ -639,4 +746,5 @@ __all__ = [
     "build_demo_intent_processor",
     "build_scenario_intent",
     "render_normalized_text",
+    "render_plain_text",
 ]

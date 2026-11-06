@@ -547,8 +547,8 @@ A real OSS does not send the operator's text verbatim: it understands the reques
 an engineer, and may route it to more than one downstream. The sample models that step explicitly.
 
 ```text
-OperatorRequest → IntentProcessor → ProcessedIntent → normalized text
-                → approval 1 → A2A-T Task-T / Plain A2A message
+OperatorRequest → IntentProcessor → ProcessedIntent → normalized text / plain text
+                → approval 1 → A2A-T Task-T / standard A2A message
 ```
 
 - `protocol/intent.py` owns the protocol-neutral `OperatorRequest`, `ProcessedIntent` and
@@ -557,13 +557,19 @@ OperatorRequest → IntentProcessor → ProcessedIntent → normalized text
   model extractor for free text. An offline free-text request falls back to raw text with a warning.
 - `RunSpec.intent` carries the scenario's built-in intent. `build_demo_intent_processor` is injected
   from `demo/composition.py` through `build_client_runtime(intent_processor_factory=...)`.
+- `ProcessedIntent` carries two renderings of the same business values.
+  `render_normalized_text` produces the Task-T section layout (`normalizedText`) used only by the
+  A2A-T hop. `render_plain_text` produces a natural-language request (`plainText`) used by the
+  standard A2A hops; it has no `##` Task-T headings and keeps the `{HH:MM~HH:MM,NMbps}` target
+  tokens that `RegexPureTargetPolicy` and the NMS simulator parse. The A2A-T path must never send
+  `plainText`, and an A2A path must never send `normalizedText`.
 - In `processed` mode `ClientRuntime.run` emits an `intent_processed` trace, then calls approval 1
-  with the **normalized text**. `run_client_flow` no longer receives the approval hook in processed
-  mode; the Task-T is generated strictly from the normalized text (the structured `initial_data`
-  shortcut is disabled).
-- Plain A2A sends the normalized text. A2A sends the raw request to the OSS Agent, which runs
-  its own processor, publishes the intent on the outer Task
-  (`metadata.intentProcessed`) and forwards the normalized text to RAN.
+  with the intent. The A2A-T flow receives the **normalized text** and generates the Task-T
+  strictly from it (the structured `initial_data` shortcut is disabled); the `plain` flow receives
+  `plainText`.
+- A2A sends the raw request to the OSS Agent, which runs its own processor, publishes the intent on
+  the outer Task (`metadata.intentProcessed`) and forwards `plainText` to RAN. `a2a_request_text`
+  is the single selector of that hop.
 - The Gateway treats every inbound A2A text as raw input to the same layer.
 - `A2AT_SAMPLE_INTENT_MODE` (`processed` / `raw`), `--intent-mode` and the `intentMode` field of
   `POST /api/runs` select the mode. `raw` bypasses the layer and preserves the previous behavior.

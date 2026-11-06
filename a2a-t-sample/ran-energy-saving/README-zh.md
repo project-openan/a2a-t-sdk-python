@@ -192,19 +192,22 @@ Task-T metadata）。a2a-sdk 的 HTTP 传输同样会被捕获，因此本地 A2
 sample 不再把操作员原文直接送进 A2A / A2A-T。默认的 `processed` 模式先插入真实 OSS 会做的业务处理：
 
 ```text
-操作员请求 → 业务意图（ProcessedIntent） → 规范化文本 → 审批 1
-           → A2A-T Task-T / Plain A2A 消息
+操作员请求 → 业务意图（ProcessedIntent） → 规范化文本 / 自然语言文本 → 审批 1
+           → A2A-T Task-T / 标准 A2A 消息
 ```
 
 - 已知场景使用确定性的内置意图。自由文本（`--request` 或页面编辑的请求）在 live 模式下走模型抽取；
   offline 模式回退原文并记录 warning。
 - 业务层**不修复**缺失或冲突。缺失的保障速率、未知区域、重叠时段都会保留在意图里，
   后续 A2A-T 协商仍然会发生。
-- 审批 1 确认的是**规范化文本**，发生在协议映射之前。A2A-T 再从该文本严格抽取 Task-T；
-  Plain A2A 直接发送同一份文本。
+- 同一组业务值有两个渲染结果：`normalizedText` 是带 Task-T 段结构的文本，只用于 A2A-T；
+  `plainText` 是不含 `##` 标题的自然语言请求，用于标准 A2A。`plainText` 保留
+  `{HH:MM~HH:MM,NMbps}` 速率 token，因此两个协议不会发送相同的报文。
+- 审批 1 在协议映射之前确认意图。A2A-T 再从 `normalizedText` 严格抽取 Task-T。
 - A2A 把同样的处理放在 OSS Agent 内：工程师客户端发送原文，OSS Agent 规范化并发布意图，
-  再把规范化文本转发给 RAN。
-- 展示页并列显示操作员请求、规范化文本和结构化意图；trace 记录 `intent_processed`。
+  再把 `plainText` 转发给 RAN。
+- 展示页并列显示操作员请求、规范化文本和结构化意图；trace 记录 `intent_processed`，
+  意图文档同时携带两种渲染结果。
 - 默认 `processed`。需要旧行为时使用 `A2AT_SAMPLE_INTENT_MODE=raw`、`--intent-mode raw` 或
   `POST /api/runs {"intentMode":"raw"}`。Gateway 入站文本一律按 raw 处理。
 

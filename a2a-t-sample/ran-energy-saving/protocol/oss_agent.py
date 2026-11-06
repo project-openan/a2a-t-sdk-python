@@ -238,8 +238,10 @@ class OSSPureExecutor(AgentExecutor):
         await self._publish_intent(updater, intent)
         try:
             with trace_scope(run_id=run_id, role="oss"):
+                # The downstream hop is standard A2A: send the natural-language request, never
+                # the Task-T section layout used by the A2A-T path.
                 result = await self._run_ran(
-                    intent.normalized_text,
+                    a2a_request_text(intent),
                     run_id,
                     events.put_nowait,
                     updater,
@@ -734,6 +736,15 @@ def build_live_pure_answer(
     return answer
 
 
+def a2a_request_text(intent: ProcessedIntent) -> str:
+    """Return the natural-language text of one standard A2A hop.
+
+    The A2A-T hop uses ``normalized_text``; a standard A2A message must not carry the Task-T
+    section layout, so it uses ``plain_text`` and falls back to the operator's raw request.
+    """
+    return intent.plain_text or intent.raw_request or intent.normalized_text
+
+
 def _run_id_of(message: object) -> str | None:
     """Return the Run Explorer id of one A2A message.
 
@@ -788,6 +799,7 @@ __all__ = [
     "DEFAULT_RAN_PORT",
     "OSS_AGENT_NAME",
     "OSSPureExecutor",
+    "a2a_request_text",
     "build_oss_agent_card",
     "build_oss_app",
     "main",

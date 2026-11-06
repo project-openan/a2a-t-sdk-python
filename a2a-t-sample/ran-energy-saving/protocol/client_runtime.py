@@ -481,7 +481,13 @@ class ClientRuntime:
                 intent: ProcessedIntent | None = None
                 if processed:
                     intent = await self._process_intent(raw_text, custom=bool(custom_request))
-                    request_text = intent.normalized_text
+                    # A2A-T needs the canonical Task-T text; standard A2A must stay a natural
+                    # request, otherwise the protocol comparison sees the same payload twice.
+                    request_text = (
+                        intent.normalized_text
+                        if self.protocol == PROTOCOL_A2A_T
+                        else intent.plain_text or intent.raw_request or intent.normalized_text
+                    )
                     _emit_intent_span(
                         trace_sink=sink,
                         intent=intent,

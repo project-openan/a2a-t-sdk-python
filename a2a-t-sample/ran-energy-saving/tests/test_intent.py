@@ -8,6 +8,7 @@ from demo.intent import (
     build_all_scenario_intents,
     build_scenario_intent,
     render_normalized_text,
+    render_plain_text,
 )
 from demo.scenario import (
     NATURAL_LANGUAGE_PROMPT_INPUT_EN,
@@ -74,9 +75,7 @@ async def test_offline_processor_falls_back_to_raw_for_free_text() -> None:
     processor = DemoIntentProcessor(language="en-US")
     text = "Please save energy in a place I have not described."
 
-    intent = await processor.process(
-        OperatorRequest(text=text, language="en-US", source="ui", custom=True)
-    )
+    intent = await processor.process(OperatorRequest(text=text, language="en-US", source="ui", custom=True))
 
     assert intent == ProcessedIntent.raw(
         text,
@@ -103,6 +102,42 @@ def test_all_scenarios_have_a_raw_and_normalized_request() -> None:
         assert intent.raw_request
         assert intent.normalized_text
         assert intent.raw_request != "" and intent.normalized_text != ""
+
+
+def test_every_built_in_intent_has_a_plain_a2a_request() -> None:
+    """Every scenario can be sent over standard A2A without the Task-T section layout."""
+    intents = build_all_scenario_intents("en-US")
+
+    for intent in intents.values():
+        assert intent.plain_text
+        assert "\n## " not in f"\n{intent.plain_text}"
+        assert intent.to_dict()["plainText"] == intent.plain_text
+
+
+def test_the_plain_request_keeps_the_target_tokens_the_a2a_policy_parses() -> None:
+    """A2A keeps the ``{HH:MM~HH:MM,NMbps}`` form; it only loses the Task-T headings."""
+    intent = build_scenario_intent("night", "en-US")
+
+    assert "Create a RAN energy saving task in Region A." in intent.plain_text
+    assert "{00:00~17:30,10Mbps}" in intent.plain_text
+    assert intent.plain_text.startswith("Create a RAN energy saving task")
+
+
+def test_the_plain_modify_request_stays_natural_language() -> None:
+    text = render_plain_text(
+        operation="Modify",
+        region="A2ATestRegion",
+        sites=(),
+        windows=("{00:00~06:00,10Mbps}",),
+        goal="",
+        expected="",
+        background="planned power outage tomorrow 03:00~05:00",
+        language="en-US",
+    )
+
+    assert text.startswith("Modify the running RAN energy saving task in A2ATestRegion.")
+    assert "{00:00~06:00,10Mbps}" in text
+    assert "##" not in text
 
 
 def _render_without_goal(language: str) -> str:
@@ -172,6 +207,11 @@ async def test_the_nms_context_replaces_the_neutral_region_and_sites() -> None:
     assert "LTE_26441_LNR_OCL" in intent.normalized_text
     assert "Station 1" not in intent.normalized_text
     assert "Station 2" not in intent.normalized_text
+    assert "A2ATestRegion" in intent.plain_text
+    assert "NRES_XCS_6102937" in intent.plain_text
+    assert "LTE_26441_LNR_OCL" in intent.plain_text
+    assert "Region A" not in intent.plain_text
+    assert "Station 1" not in intent.plain_text
 
 
 def test_the_nms_profile_rewrites_the_raw_request_too() -> None:

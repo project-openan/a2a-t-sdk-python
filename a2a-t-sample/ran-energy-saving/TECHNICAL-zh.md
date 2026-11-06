@@ -462,8 +462,8 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
 下游系统。sample 把这一步显式建模：
 
 ```text
-OperatorRequest → IntentProcessor → ProcessedIntent → 规范化文本
-                → 审批 1 → A2A-T Task-T / Plain A2A 消息
+OperatorRequest → IntentProcessor → ProcessedIntent → 规范化文本 / 自然语言文本
+                → 审批 1 → A2A-T Task-T / 标准 A2A 消息
 ```
 
 - `protocol/intent.py` 定义协议中立的 `OperatorRequest`、`ProcessedIntent` 和 `IntentProcessor` 接口，
@@ -472,11 +472,16 @@ OperatorRequest → IntentProcessor → ProcessedIntent → 规范化文本
   回退原文并写 warning。
 - `RunSpec.intent` 携带场景内置意图；`demo/composition.py` 通过
   `build_client_runtime(intent_processor_factory=...)` 注入 `build_demo_intent_processor`。
-- `processed` 模式下 `ClientRuntime.run` 先发布 `intent_processed` trace，再用**规范化文本**调用
-  审批 1；`run_client_flow` 不再接收审批钩子，Task-T 严格从规范化文本抽取（禁用
-  `initial_data` 结构化快路径）。
-- Plain A2A 发送规范化文本。A2A 由 OSS Agent 处理原文，在外层 Task 的
-  `metadata.intentProcessed` 上发布意图，再把规范化文本转发给 RAN。
+- `ProcessedIntent` 携带同一组业务值的两个渲染结果。`render_normalized_text` 生成 Task-T
+  段结构（`normalizedText`），只用于 A2A-T；`render_plain_text` 生成自然语言请求
+  （`plainText`），用于标准 A2A，不含 `##` Task-T 标题，但保留
+  `{HH:MM~HH:MM,NMbps}` 速率 token（`RegexPureTargetPolicy` 和 NMS 模拟器依赖该格式）。
+  A2A-T 路径不得发送 `plainText`，A2A 路径不得发送 `normalizedText`。
+- `processed` 模式下 `ClientRuntime.run` 先发布 `intent_processed` trace，再携带意图调用审批 1。
+  A2A-T 流程拿到**规范化文本**并严格从中生成 Task-T（禁用 `initial_data` 结构化快路径）；
+  `plain` 流程拿到 `plainText`。
+- A2A 由 OSS Agent 处理原文，在外层 Task 的 `metadata.intentProcessed` 上发布意图，再把
+  `plainText` 转发给 RAN；`a2a_request_text` 是该跳的唯一选择器。
 - Gateway 的入站 A2A 文本一律视为 raw，进入同一处理层。
 - `A2AT_SAMPLE_INTENT_MODE`（`processed` / `raw`）、`--intent-mode` 和
   `POST /api/runs.intentMode` 选择模式；`raw` 绕过该层，保持旧行为。
