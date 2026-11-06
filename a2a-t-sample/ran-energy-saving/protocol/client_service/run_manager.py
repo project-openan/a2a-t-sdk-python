@@ -17,6 +17,8 @@ from a2a_t.core.metadata import NegotiationContext
 from shared.config import (
     DISCOVERY_REGISTRY,
     INTENT_MODE_PROCESSED,
+    PRE_SEND_VALIDATION_ALWAYS,
+    PRE_SEND_VALIDATION_ON,
     SUPPORTED_INTENT_MODES,
     TRANSPORT_WEBHOOK,
     SampleConfig,
@@ -30,7 +32,7 @@ from shared.metrics import (
     NEGOTIATION_ROUNDS_TOTAL,
 )
 from shared.models import NegotiationDecision, NegotiationProposeView
-from shared.run_constants import PROTOCOL_A2A_T
+from shared.run_constants import FINAL_STATE_INPUT_INVALID, PROTOCOL_A2A_T
 from shared.run_source import normalize_run_source
 from shared.trace import (
     PHASE_DISPATCH,
@@ -232,11 +234,11 @@ class RunManager:
             ValueError: when ``intent_mode`` is unsupported.
         """
         resolved_source = normalize_run_source(source)
+        validate_before_send = _should_validate_before_send(self._config, resolved_source)
         resolved_intent_mode = (intent_mode or self._config.intent_mode).strip()
         if resolved_intent_mode not in SUPPORTED_INTENT_MODES:
             raise ValueError(
-                f"Unsupported intent mode: {resolved_intent_mode}; "
-                f"expected one of {SUPPORTED_INTENT_MODES}"
+                f"Unsupported intent mode: {resolved_intent_mode}; expected one of {SUPPORTED_INTENT_MODES}"
             )
         resolved_conversation = conversation_id or f"conv-{uuid.uuid4().hex}"
         active = self.active_for_conversation(resolved_conversation)
@@ -290,6 +292,7 @@ class RunManager:
             idempotency_key=resolved_key,
             store=self._store,
             intent_mode=resolved_intent_mode,
+            validate_before_send=validate_before_send,
             raw_request=raw_request,
             source=dict(resolved_source),
         )
@@ -687,17 +690,16 @@ class RunManager:
                 event_sink=event_sink,
                 on_decision_requested=on_decision_requested,
                 on_decision_made=on_decision_made,
-                on_intent_ready=(
-                    on_intent_ready
-                    if run.mode == MODE_CONFIRM and self._intent_review
-                    else None
-                ),
+                on_intent_ready=(on_intent_ready if run.mode == MODE_CONFIRM and self._intent_review else None),
                 trace_sink=trace_sink,
                 run_id=run.run_id,
                 user_request=run.user_request,
                 conversation_context=run.conversation_context,
+                validate_before_send=run.validate_before_send,
             )
             run.result = result
+            if result.final_state == FINAL_STATE_INPUT_INVALID:
+                run.error = _input_invalid_summary(run)
             # Decisions are normally recorded live by ``on_decision_made``; the late loop is only
             # a fallback for a runtime double that does not call the hook.
             for index, decision in enumerate(result.decisions):
@@ -864,8 +866,34 @@ def _format_conversation_context(turns: list[Any]) -> str:
         total += len(line) + 1
     return "\n".join(lines)
 
+
+def _should_validate_before_send(
+    config: SampleConfig,
+    source: Mapping[str, object],
+) -> bool:
+    """Return whether this run enables the client-side Task-T validation gate."""
+    setting = config.pre_send_validation
+    return setting == PRE_SEND_VALIDATION_ALWAYS or (
+        setting == PRE_SEND_VALIDATION_ON and source.get("kind") == "presentation"
+    )
+
+
+def _input_invalid_summary(run: RunState) -> str:
+    """Build the run error summary of a blocked pre-send validation."""
+    for span in reversed(run.traces):
+        if span.get("kind") != "task_validation":
+            continue
+        detail = span.get("detail")
+        errors = detail.get("errors") if isinstance(detail, Mapping) else None
+        count = len(errors) if isinstance(errors, list) else 0
+        return f"Input validation failed: {count} blocking issue(s)"
+    return "Input validation failed"
+
+
 def _run_summary(run: RunState) -> str:
     """Build the assistant turn recorded for one finished run."""
+    if run.error and run.result is not None and run.result.final_state == FINAL_STATE_INPUT_INVALID:
+        return "Input validation failed; the request was not sent."
     if run.error:
         return f"Run failed: {run.error}"
     if run.result is None:

@@ -28,7 +28,7 @@ import { createStage, setStageCopy } from "./stage.js";
 import { createRail } from "./rail.js";
 import { createTrace, entryOfRow } from "./trace.js";
 import { createWire } from "./wire.js";
-import { renderIntent } from "./intent.js";
+import { renderIntent, validationBlock } from "./intent.js";
 import {
   approvalCard,
   clock,
@@ -36,6 +36,7 @@ import {
   decisionPayload,
   intentCard,
   remainingSeconds,
+  validationCard,
 } from "./decisions.js";
 import { clear, el } from "./dom.js";
 
@@ -193,6 +194,7 @@ const ui = {
   copy: copyFor("zh-CN"),
   brand: document.documentElement.dataset.brand || "orange",
   selected: null,
+  retryParentRunId: null,
   protocol: "a2a-t",
   compareSaved: null,
   resultRevealed: null,
@@ -637,6 +639,8 @@ async function startRun() {
     return;
   }
   const request = els.requestText.value.trim();
+  const parentRunId = ui.retryParentRunId;
+  ui.retryParentRunId = null;
   hideError();
   closeStream();
   player.reset();
@@ -686,7 +690,9 @@ async function startRun() {
         // backend use the richer catalog prompt that the live model extracts Task-T from.
         userRequest: request && request !== defaultRequest ? request : undefined,
         protocol: ui.protocol,
-        source: "presentation",
+        source: parentRunId
+          ? { kind: "presentation", parentRunId }
+          : "presentation",
       }),
     });
     const payload = await response.json().catch(() => ({}));
@@ -1031,6 +1037,7 @@ function renderIntentPanel() {
       missingFields: ui.view.businessIntent?.missingFields || [],
       conflicts: ui.view.businessIntent?.conflicts || [],
       businessIntent: ui.view.businessIntent,
+      validation: ui.view.validation,
     });
   } finally {
     ui.renderingIntent = false;
@@ -1153,6 +1160,10 @@ function renderNarrator() {
     els.sayDetail.replaceChildren();
     els.sayDetail.append(el("span", "", card.text));
     if (card.detail) els.sayDetail.append(el("span", "reason", card.detail));
+    if (card.validation) {
+      const block = validationBlock(card.validation, ui.copy);
+      if (block) els.sayDetail.append(block);
+    }
     if (card.mml) {
       const block = el("div", "mml-inline");
       block.append(
@@ -1226,13 +1237,39 @@ function pendingCard() {
   return (
     intentCard(ui.view, ui.copy) ||
     decisionCard(ui.view, ui.copy) ||
-    approvalCard(ui.view, ui.copy)
+    approvalCard(ui.view, ui.copy) ||
+    validationCard(ui.view, ui.copy)
   );
 }
 
 function renderChoices(card) {
   els.choices.hidden = false;
   els.choices.replaceChildren();
+  if (card.type === "validation") {
+    const area = el("textarea", "validation-editor");
+    area.value = card.rawRequest;
+    area.setAttribute("aria-label", ui.copy.validation.editorLabel);
+    const row = el("div", "choices");
+    const retry = el("button", "primary", ui.copy.validation.retry);
+    retry.type = "button";
+    retry.disabled = ui.submitting;
+    retry.addEventListener("click", () => {
+      const text = area.value.trim();
+      if (!text) return;
+      ui.retryParentRunId = ui.view.runId;
+      els.requestText.value = text;
+      startRun();
+    });
+    const dismiss = el("button", "", ui.copy.validation.dismiss);
+    dismiss.type = "button";
+    dismiss.addEventListener("click", () => {
+      ui.view.validationDismissed = true;
+      renderNarrator();
+    });
+    row.append(retry, dismiss);
+    els.choices.append(area, row);
+    return;
+  }
   if (ui.counterOpen) {
     const editor = el("div", "counter-editor");
     const area = el("textarea");

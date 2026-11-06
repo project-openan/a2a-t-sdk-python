@@ -150,10 +150,11 @@ export function renderIntent(
     missingFields = [],
     conflicts = [],
     businessIntent = null,
+    validation = null,
   } = {},
 ) {
   clear(container);
-  if (rawRequest || source) {
+  if (rawRequest || source || validation) {
     container.append(
       businessBlock(copy, {
         rawRequest,
@@ -162,6 +163,7 @@ export function renderIntent(
         warnings,
         missingFields,
         conflicts,
+        validation,
       }),
     );
   }
@@ -212,8 +214,46 @@ export function renderIntent(
   return intent;
 }
 
+/** Render the SDK Task-T validation result as a compact inline block.
+ *
+ * ``negotiable`` means the server will still receive the message, so the block is a warning;
+ * ``blocked`` means nothing was sent and the operator must repair the request; ``unavailable``
+ * means the validator itself failed and the request was allowed through.
+ */
+export function validationBlock(validation, copy) {
+  if (!isObject(validation)) return null;
+  const verdict = typeof validation.verdict === "string" ? validation.verdict : "";
+  const errors = Array.isArray(validation.errors) ? validation.errors : [];
+  if (verdict === "passed" || (errors.length === 0 && verdict !== "unavailable")) return null;
+  const labels = copy.validation || {};
+  const section = el("div", `validation-block ${verdict}`);
+  const note =
+    verdict === "blocked"
+      ? labels.blocked
+      : verdict === "negotiable"
+        ? labels.negotiable
+        : labels.unavailable;
+  if (note) section.append(el("p", "validation-note", note));
+  if (errors.length > 0) {
+    const list = el("ul", "validation-errors");
+    for (const error of errors) {
+      const item = el("li");
+      const name = error.slotName || error.code || "—";
+      item.append(el("b", "", name));
+      if (error.message) item.append(el("span", "", error.message));
+      if (error.code) item.append(el("code", "", error.code));
+      list.append(item);
+    }
+    section.append(list);
+  }
+  return section;
+}
+
 /** Render the raw operator request next to the normalized business intent. */
-function businessBlock(copy, { rawRequest, normalizedText, source, warnings, missingFields, conflicts }) {
+function businessBlock(
+  copy,
+  { rawRequest, normalizedText, source, warnings, missingFields, conflicts, validation },
+) {
   const section = el("section", "business-intent");
   section.append(el("span", "micro-label", copy.intent.business));
   if (rawRequest) {
@@ -245,6 +285,8 @@ function businessBlock(copy, { rawRequest, normalizedText, source, warnings, mis
   if (warnings.length > 0) {
     section.append(el("p", "business-warning", warnings.join(" ")));
   }
+  const validationNode = validationBlock(validation, copy);
+  if (validationNode) section.append(validationNode);
   return section;
 }
 

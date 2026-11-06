@@ -70,6 +70,8 @@ export function createState() {
     intentText: null,
     taskTPrompt: null,
     intentReview: null,
+    validation: null,
+    validationDismissed: false,
     dataCollection: null,
     mmlSent: false,
     executed: false,
@@ -211,6 +213,9 @@ export function applyFrame(state, frame) {
           frame.status === "failed" || (typeof frame.error === "string" && frame.error)
             ? STATUS.FAILED
             : STATUS.FINISHED;
+        // A blocked validation is a normal terminal outcome, not a failure: the error string is
+        // only the run-list summary.
+        if (frame.finalState === "input_invalid") state.status = STATUS.FINISHED;
       }
       state.finalState = typeof frame.finalState === "string" ? frame.finalState : null;
       state.report = isObject(frame.report) ? frame.report : null;
@@ -517,6 +522,19 @@ function applyTrace(state, span) {
     // own structured intent, not the Task-T; the wire inspector opens the prompt when needed.
     state.taskTPrompt = detail.promptText;
   }
+  if (kind === "task_validation" && detail) {
+    state.validation = {
+      verdict: typeof detail.verdict === "string" ? detail.verdict : "unavailable",
+      blocking: detail.blocking === true,
+      errors: Array.isArray(detail.errors) ? detail.errors : [],
+      negotiationKind:
+        typeof detail.negotiationKind === "string" ? detail.negotiationKind : null,
+      promptText: typeof detail.promptText === "string" ? detail.promptText : null,
+      templateUri: typeof detail.templateUri === "string" ? detail.templateUri : null,
+      reason: typeof detail.reason === "string" ? detail.reason : null,
+      phase: typeof span.phase === "string" ? span.phase : null,
+    };
+  }
   if (kind === "tool" && detail && typeof detail.toolName === "string") {
     state.nmsTool = detail.toolName;
   }
@@ -555,7 +573,9 @@ export function stageOf(state) {
   if (state.status === STATUS.CANCELED) return "canceled";
   if (state.status === STATUS.FAILED) return "failed";
   if (state.status === STATUS.FINISHED) {
-    if (state.finalState === "intent_not_confirmed") return "notSent";
+    if (state.finalState === "intent_not_confirmed" || state.finalState === "input_invalid") {
+      return "notSent";
+    }
     if (state.finalState === "task_rejected" && state.protocol === "plain") return "plainRejected";
     if (state.finalState === "task_rejected" || state.approvalState === APPROVAL.REJECTED) {
       return "notApplied";

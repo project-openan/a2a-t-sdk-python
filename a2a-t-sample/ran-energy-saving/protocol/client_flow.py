@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import suppress
@@ -38,6 +39,7 @@ from a2a.types import (
     TaskPushNotificationConfig,
     TaskState,
 )
+from a2a_t.core.errors.exceptions import ContentValidationError
 from a2a_t.core.metadata import (
     NEGOTIATION_CONTEXT_METADATA_KEY,
     NEGOTIATION_T_EXTENSION_URI,
@@ -61,6 +63,7 @@ from shared.config import DEFAULT_HTTP_TIMEOUT_SECONDS, DEFAULT_WEBHOOK_IDLE_TIM
 from shared.logging_setup import log_context
 from shared.models import NegotiationDecision, NegotiationOptions, NegotiationProposeView
 from shared.run_constants import (
+    FINAL_STATE_INPUT_INVALID,
     FINAL_STATE_INTENT_NOT_CONFIRMED,
     FINAL_STATE_NEGOTIATION_ABORTED,
     FINAL_STATE_NEGOTIATION_ENDED,
@@ -97,7 +100,11 @@ from protocol.messages import (
     negotiation_context_metadata,
     parse_negotiation_context,
 )
-from protocol.negotiation_policy import NegotiationKind, negotiation_kind_for_template_uri
+from protocol.negotiation_policy import (
+    NegotiationKind,
+    negotiation_kind_for_errors,
+    negotiation_kind_for_template_uri,
+)
 from protocol.run_spec import DEFAULT_CLIENT_POLICY, ClientPolicy
 
 _LOGGER = logging.getLogger("ran_energy_saving.client_flow")
@@ -173,6 +180,99 @@ class ClientFlowError(RuntimeError):
     """Raised when the server sends content the client flow cannot handle."""
 
 
+#: SDK validation codes that mean the validator itself failed rather than the content being invalid.
+#: Those calls degrade to ``unavailable`` so a model outage never blocks a demo run.
+_VALIDATION_UNAVAILABLE_CODES: Final[frozenset[str]] = frozenset(
+    {
+        "llm.not_configured",
+        "llm.invocation_failed",
+        "llm.response_invalid",
+        "template.load_failed",
+        "infra.resource_read_failed",
+        "infra.internal_error",
+    }
+)
+
+#: Deterministic validation failures the user can act on; they block regardless of the LLM verdict.
+_VALIDATION_BLOCKING_CODES: Final[frozenset[str]] = frozenset(
+    {
+        "input.text_too_long",
+        "template.not_found",
+        "negotiation.invalid_input",
+    }
+)
+
+
+@dataclass(frozen=True)
+class TaskValidation:
+    """Outcome of one pre-send Task-T validation call."""
+
+    verdict: str
+    negotiation_kind: NegotiationKind | None
+    errors: list[dict[str, object]]
+    reason: str | None
+    duration_ms: int
+
+
+def _elapsed_ms(started: float) -> int:
+    """Return the whole milliseconds elapsed since ``started``."""
+    return max(0, int((time.monotonic() - started) * 1000))
+
+
+def _validation_errors(error: ContentValidationError) -> list[dict[str, object]]:
+    """Render the SDK slot errors as JSON-ready documents for the trace and the UI."""
+    return [
+        {
+            "slotName": item.slot_name,
+            "code": str(item.code),
+            "message": item.message,
+            "facts": dict(item.facts or {}),
+        }
+        for item in error.errors or []
+    ]
+
+
+def _classify_validation_error(
+    error: ContentValidationError,
+) -> tuple[str, NegotiationKind | None]:
+    """Map one SDK validation failure to ``passed``-adjacent, negotiable or blocking."""
+    code = error.code_str
+    if code in _VALIDATION_UNAVAILABLE_CODES:
+        return "unavailable", None
+    if code in _VALIDATION_BLOCKING_CODES:
+        return "blocked", None
+    kind = negotiation_kind_for_errors(error.errors)
+    if kind is not None:
+        # The server maps the same errors to a negotiation kind, so the request must still be sent.
+        return "negotiable", kind
+    return "blocked", None
+
+
+async def _validate_task_prompt(
+    prompt_client: PromptClient,
+    prompt: str,
+    schema: Mapping[str, object],
+    template_uri: str,
+) -> TaskValidation:
+    """Run the SDK content validation without blocking the event loop."""
+    started = time.monotonic()
+    try:
+        await asyncio.to_thread(
+            prompt_client.validate_task_prompt_and_data_filling,
+            prompt,
+            schema,
+            template_uri,
+        )
+    except ContentValidationError as error:
+        verdict, kind = _classify_validation_error(error)
+        return TaskValidation(verdict, kind, _validation_errors(error), error.code_str, _elapsed_ms(started))
+    except Exception as error:  # noqa: BLE001 - validation must never break the send path
+        _LOGGER.warning("Task-T validation unavailable: %s", error)
+        reason = f"{type(error).__name__}: {error}"
+        return TaskValidation("unavailable", None, [], reason, _elapsed_ms(started))
+    return TaskValidation("passed", None, [], None, _elapsed_ms(started))
+
+
 class PromptClient(Protocol):
     """The ``A2ATClient`` surface the flow uses (also implemented by test fakes)."""
 
@@ -200,6 +300,13 @@ class PromptClient(Protocol):
     def generate_negotiation_propose_prompt_from_text(
         self, text: str | None, context: NegotiationContext, template_uri: str
     ) -> MetadataContent: ...
+
+    def validate_task_prompt_and_data_filling(
+        self,
+        prompt: str,
+        schema: Mapping[str, object],
+        template_uri: str,
+    ) -> object: ...
 
 
 class SendMessageClient(Protocol):
@@ -457,6 +564,7 @@ async def run_client_flow(
     conversation_context: str | None = None,
     single_extension_per_message: bool = False,
     forced_region: str | None = None,
+    validate_before_send: bool = False,
 ) -> ClientFlowResult:
     """Run one complete client flow: initial Task-T, multi-round negotiation, task or end.
 
@@ -497,6 +605,9 @@ async def run_client_flow(
         forced_region: Region the vendor NMS serves. When set, it replaces the region a decision
             model fills on an accept, so the operator's configured region wins over a model that
             repeats the demo region.
+        validate_before_send: Validate each rendered Task-T with the SDK content pipeline before
+            sending it. Negotiable errors still go to the server for negotiation; unmapped errors
+            end the flow with ``input_invalid`` and no message is sent.
 
     Returns:
         The collected events, provider decisions and terminal state.
@@ -546,6 +657,31 @@ async def run_client_flow(
             detail=detail,
         )
         trace_sink(span.to_dict())
+
+    def emit_validation(
+        validation: TaskValidation,
+        prompt_text: str,
+        template_uri: str,
+        phase: str,
+    ) -> None:
+        """Publish one pre-send validation result for the timeline and the presentation card."""
+        emit_trace(
+            "task_validation",
+            phase=phase,
+            title=f"Task-T validation {validation.verdict}",
+            detail={
+                "verdict": validation.verdict,
+                "templateUri": template_uri,
+                "promptText": prompt_text[:4000],
+                "blocking": validation.verdict == "blocked",
+                "errors": validation.errors,
+                "negotiationKind": (
+                    validation.negotiation_kind.value if validation.negotiation_kind is not None else None
+                ),
+                "durationMs": validation.duration_ms,
+                "reason": validation.reason,
+            },
+        )
 
     def emit_message_sent(
         request: SendMessageRequest,
@@ -620,12 +756,14 @@ async def run_client_flow(
         initial_data = policy.initial_data(language)
         if initial_data is not None:
             data, data_schema = initial_data
+            validation_schema: Mapping[str, object] = data_schema
             prompt_content = prompt_client.generate_task_prompt_from_data_with_schema(
                 data,
                 data_schema,
                 task_template_uri,
             )
         else:
+            validation_schema = TASK_PARAM_SCHEMA
             prompt_content = prompt_client.generate_task_prompt_from_text(
                 _request_with_context(user_request, conversation_context),
                 task_template_uri,
@@ -641,6 +779,15 @@ async def run_client_flow(
             "length": len(prompt_text),
         },
     )
+    if validate_before_send:
+        validation = await _validate_task_prompt(prompt_client, prompt_text, validation_schema, task_template_uri)
+        emit_validation(validation, prompt_text, task_template_uri, PHASE_TASK_PROMPT)
+        if validation.verdict == "blocked":
+            # Nothing is sent and no negotiation starts: the operator repairs the request first.
+            blocked = ClientFlowResult()
+            blocked.final_state = FINAL_STATE_INPUT_INVALID
+            _fill_result(blocked, None)
+            return blocked
     if on_intent_ready is not None and not await on_intent_ready(prompt_text):
         # The engineer did not confirm the structured intent, so the Task-T never leaves the OSS
         # side. No message is sent and no task is created.
@@ -705,6 +852,20 @@ async def run_client_flow(
                     "samplePhase": SAMPLE_PHASE_MODIFY,
                 },
             )
+            if validate_before_send:
+                validation = await _validate_task_prompt(prompt_client, follow_text, follow_schema, task_template_uri)
+                emit_validation(validation, follow_text, task_template_uri, PHASE_TASK_MODIFY)
+                if validation.verdict == "blocked":
+                    # The baseline Task is still WORKING; cancel it instead of leaving a half-open
+                    # Task behind, then end the run without sending the Modify.
+                    cancel = getattr(transport, "cancel", None)
+                    if callable(cancel):
+                        with suppress(Exception):
+                            await cancel(follow_task_id, initial_context)
+                    blocked = ClientFlowResult()
+                    blocked.final_state = FINAL_STATE_INPUT_INVALID
+                    _fill_result(blocked, context_id)
+                    return blocked
             follow_metadata: dict[str, object] = {
                 follow_content.extension_uri or TASK_T_EXTENSION_URI: follow_text,
                 TEMPLATE_URI_METADATA_KEY: follow_content.template_uri or task_template_uri,

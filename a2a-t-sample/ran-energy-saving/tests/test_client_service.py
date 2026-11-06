@@ -51,19 +51,17 @@ class FakeRuntime:
         self,
         *,
         event_sink: Callable[[dict[str, object]], None] | None = None,
-        on_decision_requested: Callable[[NegotiationProposeView, NegotiationContext], None]
-        | None = None,
-        on_decision_made: Callable[
-            [NegotiationDecision, NegotiationProposeView, NegotiationContext], None
-        ]
+        on_decision_requested: Callable[[NegotiationProposeView, NegotiationContext], None] | None = None,
+        on_decision_made: Callable[[NegotiationDecision, NegotiationProposeView, NegotiationContext], None]
         | None = None,
         on_intent_ready: Callable[[str], Awaitable[bool]] | None = None,
         trace_sink: Callable[[dict[str, object]], None] | None = None,
         run_id: str | None = None,
         user_request: str | None = None,
         conversation_context: str | None = None,
+        validate_before_send: bool = False,
     ) -> ClientFlowResult:
-        del on_intent_ready, trace_sink, run_id
+        del on_intent_ready, trace_sink, run_id, validate_before_send
         self.conversation_context = conversation_context
         self.user_request = user_request
         self.entered.set()

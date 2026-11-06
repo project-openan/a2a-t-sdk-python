@@ -12,11 +12,32 @@ export function intentCard(state, copy) {
     title: copy.intentReview.title,
     text: copy.intentReview.text,
     detail: copy.intentReview.detail,
+    validation: state.validation,
     remaining: remainingSeconds(review.requestedAt, review.timeoutSeconds),
     options: [
       { action: "approve", label: copy.intentReview.confirm, primary: true },
       { action: "edit", label: copy.intentReview.edit },
       { action: "cancel", label: copy.intentReview.cancel, danger: true },
+    ],
+  };
+}
+
+/** Build the pre-send validation failure card, or ``null`` when the run was not blocked. */
+export function validationCard(state, copy) {
+  if (state.finalState !== "input_invalid" || state.validationDismissed) return null;
+  const validation = state.validation;
+  if (!isObject(validation) || validation.blocking !== true) return null;
+  return {
+    type: "validation",
+    kicker: copy.validation.kicker,
+    title: copy.validation.title,
+    text: copy.validation.text,
+    detail: copy.validation.retryHint,
+    validation,
+    rawRequest: state.rawRequest || state.userRequest || state.intentText || "",
+    options: [
+      { action: "retry", label: copy.validation.retry, primary: true },
+      { action: "dismiss", label: copy.validation.dismiss },
     ],
   };
 }

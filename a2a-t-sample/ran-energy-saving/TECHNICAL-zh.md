@@ -440,8 +440,11 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
   并通过 `HttpTraceEmitter` 把网管 token/发送/轮询 span 上报到同一次 run；Web UI 按时间戳合并
   两个 wire 文件。
 - webhook 回调是进程级资源（`protocol/shared_webhook.py`）：每个进程启动一个接收端，由启动配置
-  决定地址，所有 run 复用。一个回调队列无法安全服务两条任务流，因此 RunManager 串行化 webhook
-  run。只有在没有 `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` 固定外部地址时，端口占用才会回退到系统分配端口。
+  决定地址，所有 run 复用。每个 run 从 `WebhookRouter` 获得自己的队列；推送按 `taskId` /
+  `contextId` 派发，因此 webhook run 可以并发。每个 run 在首条消息上写入客户端生成的 UUID
+  `contextId`，发送前即完成绑定；`taskId` 则在同步 RPC 应答返回时绑定。先于应答到达的推送会进入
+  缓冲，绑定后立即投递；已结束 run 的标识会在宽限期内丢弃迟到的推送，避免串到下一个 run。只有在没有 `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` 固定外部地址时，端口占用才会
+  回退到系统分配端口。
 
 `demo/nms_sim/` 是离线契约仿真器，实现令牌接口、`POST /a2a/json/message:stream`、
 `GET /a2a/json/tasks[/{id}]` 和已知的 cancel 503。默认 `strict` 档 SSE 永不关闭、每 15 s
@@ -482,6 +485,20 @@ OperatorRequest → IntentProcessor → ProcessedIntent → 规范化文本
 - `RunState` 快照和 transcript 携带 `intentMode`、`rawRequest`、`normalizedRequest` 和意图文档。
   内置请求的会话记忆使用规范化文本。
 - 本期不实现第三方网管路由；业务意图层就是真实部署向其他下游系统分发的扩展点。
+
+### 3.8 客户端发送前 Task-T 校验
+
+A2A-T 模式下，客户端可以在发送前用 SDK 的内容校验检查渲染后的 Task-T。校验位于渲染之后、审批 1 之前，被阻断的请求不会到达服务端，也不会开启协商。
+
+- `A2ATClient.validate_task_prompt_and_data_filling(prompt, schema, template_uri)` 是服务端同名方法的客户端对应入口，两者共用 `DefaultContentValidator` 和同一套语义校验提示词。样例通过 `asyncio.to_thread` 调用。
+- 结果使用与服务端相同的 `negotiation_kind_for_errors` 分类：
+  - 能映射到 `INFORMATION` / `TARGET` / `FEASIBILITY` 的错误是**可协商**的，仍然发送，保留协商演示；
+  - 映射不到的错误是**阻断**：flow 返回 `finished` + `final_state=input_invalid`，不发送消息，并记录 `task_validation` trace；
+  - `input.text_too_long` 和 `template.not_found` 是确定性错误，直接阻断；
+  - `llm.*` / `infra.*` 失败降级为 **unavailable**：记录 warning 后继续发送，模型故障不会中断演示。
+- 两阶段 Modify 的 Task-T 走同一道门；Modify 被阻断时先取消基线 Task，再结束 run。
+- `A2AT_SAMPLE_PRE_SEND_VALIDATION` 控制范围：`on`（默认）只在 run 来源为演示页时启用，`always` 覆盖所有入口，`off` 关闭。
+- 演示页内联展示错误：可协商项显示在意图卡下；阻断项变成校验卡，预填原始请求，工程师修改后**新建一次 run** 重试。失败的 run 保留在历史中，并通过 `source.parentRunId` 关联。
 
 ## 4. 网管侧开发指南（操作）
 
@@ -814,6 +831,7 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_SAMPLE_TRANSPORT` | `sse`（默认）、`webhook` | 客户端事件传输。真实 `--nms` 默认 webhook（`message:send` + 推送）；`--nms-sim` 保持 sse。 |
 | `A2AT_SAMPLE_WEBHOOK_HOST` / `A2AT_SAMPLE_WEBHOOK_PORT` | 默认 `127.0.0.1` / `9000` | webhook 接收地址；真实网管必须能访问该主机和端口。 |
 | `A2AT_SAMPLE_INTENT_MODE` | `processed`（默认）、`raw` | 在 A2A/A2A-T 映射前执行业务意图层，或直接发送操作员文本。`--intent-mode` 与 `POST /api/runs.intentMode` 可按 run 覆盖。 |
+| `A2AT_SAMPLE_PRE_SEND_VALIDATION` | `on`（默认）、`always`、`off` | 发送前用 SDK 内容校验检查渲染后的 Task-T。`on` 仅覆盖演示页；`always` 覆盖所有入口；`off` 关闭。 |
 | `A2AT_SAMPLE_RUN_DIR` | 未设置；`%TEMP%/a2at-ran-energy-saving-adk` | 启动器状态目录：`pids.json`、子进程日志和每次运行的 `.env`。第二个实例设置不同值，`--stop` 只停自己的进程。 |
 | `A2AT_SAMPLE_RUNS_DIR` | 默认 `<sample>/runs` | 数据目录：transcript、client/task/gateway SQLite、每次 run 的 `wire.jsonl` 和 Web UI 历史。相对路径按 sample 根目录解析。 |
 | `A2AT_SAMPLE_ENV_FILE` | 未设置 | 未传 `--env-file` 时 `run_demo.py` 读取的配置文件。每个启动脚本可以指向自己的配置，不再依赖候选路径猜测。 |

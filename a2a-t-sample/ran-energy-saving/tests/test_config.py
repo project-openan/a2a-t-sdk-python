@@ -75,6 +75,7 @@ _ENV_KEYS = (
     ADK_MODEL_API_BASE_ENV_KEY,
     ADK_MODEL_API_KEY_ENV_KEY,
     ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS_ENV_KEY,
+    "A2AT_SAMPLE_PRE_SEND_VALIDATION",
     HTTP_TIMEOUT_ENV_KEY,
     LLM_TIMEOUT_ENV_KEY,
     LLM_MAX_ATTEMPTS_ENV_KEY,
@@ -356,6 +357,30 @@ def test_build_adk_model_applies_the_live_timeout_and_disables_retries(
     additional_args = getattr(model, "_additional_args")
     assert additional_args["timeout"] == 42.0
     assert additional_args["num_retries"] == 0
+
+
+def test_pre_send_validation_defaults_to_on(tmp_path: Path) -> None:
+    config = load_config(env_path=tmp_path / "missing.env")
+
+    assert config.pre_send_validation == "on"
+
+
+@pytest.mark.parametrize("value", ["on", "always", "off", "ALWAYS"])
+def test_pre_send_validation_accepts_supported_values(tmp_path: Path, value: str) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"A2AT_SAMPLE_PRE_SEND_VALIDATION={value}\n", encoding="utf-8")
+
+    config = load_config(env_path=env_file)
+
+    assert config.pre_send_validation == value.lower()
+
+
+def test_pre_send_validation_rejects_an_unknown_value(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("A2AT_SAMPLE_PRE_SEND_VALIDATION=sometimes\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="A2AT_SAMPLE_PRE_SEND_VALIDATION"):
+        load_config(env_path=env_file)
 
 
 def test_adk_output_schema_with_tools_defaults_to_auto(tmp_path: Path) -> None:

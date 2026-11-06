@@ -31,6 +31,7 @@ import {
   decisionPayload,
   intentCard,
   remainingSeconds,
+  validationCard,
 } from "../../demo/web/presentation/js/decisions.js";
 import { copyFor } from "../../demo/web/presentation/copy.js";
 import { buildRecord, compareRows, outcomeText } from "../../demo/web/presentation/js/compare.js";
@@ -384,6 +385,66 @@ intentReview.intentReview.resolved = true;
 assert.equal(pendingHuman(intentReview), null);
 applyFrame(intentReview, finished("intent_not_confirmed"));
 assert.equal(stageOf(intentReview), "notSent");
+
+// --- Pre-send Task-T validation ---------------------------------------
+const blocked = createState();
+applyFrame(blocked, { type: "run_started", runId: "r-val", scenario: "night" });
+applyFrame(blocked, {
+  type: "trace",
+  event: {
+    seq: 1,
+    kind: "task_validation",
+    phase: "task_prompt",
+    title: "Task-T validation blocked",
+    detail: {
+      verdict: "blocked",
+      blocking: true,
+      errors: [
+        {
+          slotName: "guaranteedThroughputTarget",
+          code: "content.format_error",
+          message: "bad target",
+        },
+      ],
+      negotiationKind: null,
+      promptText: "## Task Object\nRegion A",
+    },
+  },
+});
+applyFrame(blocked, finished("input_invalid"));
+assert.equal(stageOf(blocked), "notSent");
+assert.equal(blocked.validation.verdict, "blocked");
+const blockedCard = validationCard(blocked, copy);
+assert.ok(blockedCard);
+assert.equal(blockedCard.type, "validation");
+assert.equal(blockedCard.validation.errors.length, 1);
+assert.equal(blockedCard.options[0].action, "retry");
+
+const negotiable = createState();
+applyFrame(negotiable, { type: "run_started", runId: "r-neg", scenario: "information" });
+applyFrame(negotiable, {
+  type: "intent_review_requested",
+  promptText: "## Operation Type\nCreate",
+  timeoutSeconds: 300,
+  requestedAt: new Date().toISOString(),
+});
+applyFrame(negotiable, {
+  type: "trace",
+  event: {
+    seq: 2,
+    kind: "task_validation",
+    phase: "task_prompt",
+    detail: {
+      verdict: "negotiable",
+      blocking: false,
+      errors: [{ slotName: "guaranteedThroughputTarget", code: "content.param_missing" }],
+      negotiationKind: "information",
+    },
+  },
+});
+const negotiableCard = intentCard(negotiable, copy);
+assert.ok(negotiableCard);
+assert.equal(negotiableCard.validation.verdict, "negotiable");
 
 // --- Approval gate ------------------------------------------------------
 

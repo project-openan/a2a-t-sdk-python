@@ -521,9 +521,13 @@ Implementation details:
   a2a-sdk client), and posts its NMS tool spans into the same run through `HttpTraceEmitter`. The
   Web UI merges both wire files by timestamp.
 - The webhook callback is process-owned (`protocol/shared_webhook.py`): one receiver per process,
-  started from the launch configuration, reused by every run. The run manager serializes webhook
-  runs because a single callback queue cannot serve two task streams. A busy port falls back to an
-  OS-assigned one only when no `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` pins the external address.
+  started from the launch configuration, reused by every run. Each run gets a private queue from
+  `WebhookRouter`; pushes are demultiplexed by `taskId` / `contextId`, so webhook runs are
+  concurrent. Each run stamps a client-assigned UUID `contextId` on its first message and binds it
+  before sending; the `taskId` is bound from the synchronous RPC reply. A push that beats the
+  reply is buffered and flushed on bind; a finished run's identities drop late pushes for a grace
+  period. A busy port falls back to an OS-assigned one only when no
+  `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` pins the external address.
 
 `demo/nms_sim/` is the offline contract simulator. It implements the token endpoint,
 `POST /a2a/json/message:stream`, `GET /a2a/json/tasks[/{id}]` and the known cancel 503. The
@@ -571,6 +575,32 @@ OperatorRequest → IntentProcessor → ProcessedIntent → normalized text
 
 Third-party NMS routing is intentionally not implemented in this sample. The business intent layer
 is the seam where a real deployment dispatches the same intent to additional downstream systems.
+
+### 3.8 Client-side pre-send Task-T validation
+
+In A2A-T mode the client can validate the rendered Task-T with the SDK content pipeline before it
+sends anything. The gate runs after rendering and before approval 1, so a blocked request never
+reaches the server and never starts a negotiation.
+
+- `A2ATClient.validate_task_prompt_and_data_filling(prompt, schema, template_uri)` is the client
+  counterpart of the server method; both use `DefaultContentValidator` and the same semantic
+  validation prompt. The sample calls it through `asyncio.to_thread`.
+- The result is classified with the same `negotiation_kind_for_errors` mapping the server uses:
+  - a verdict that maps to `INFORMATION` / `TARGET` / `FEASIBILITY` is **negotiable** and is still
+    sent, preserving the negotiation demo;
+  - an unmapped error is **blocking**: the flow returns `finished` + `final_state=input_invalid`,
+    sends no message and records a `task_validation` trace;
+  - `input.text_too_long` and `template.not_found` are deterministic and block;
+  - `llm.*` / `infra.*` failures degrade to **unavailable**: they are traced as a warning and the
+    request is sent, so a model outage cannot stop a demo.
+- The same gate runs on the two-phase Modify Task-T. A blocked Modify cancels the baseline Task
+  before ending the run.
+- `A2AT_SAMPLE_PRE_SEND_VALIDATION` selects the scope: `on` (default) enables the gate only when the
+  run source is the presentation page, `always` enables every entry point, `off` disables it.
+- The presentation page renders the errors inline: negotiable items appear under the intent card,
+  blocking items become a validation card that pre-fills the original request and starts a **new**
+  run after the engineer edits it. The failed run stays in the history and is linked through
+  `source.parentRunId`.
 
 ## 4. NMS-side developer guide (how-to)
 
@@ -996,6 +1026,7 @@ script can switch the model with a plain `export ADK_MODEL_NAME=...`.
 | `A2AT_SAMPLE_TRANSPORT` | `sse` (default), `webhook` | Client event transport. A real `--nms` run defaults to webhook (`message:send` + pushes); `--nms-sim` keeps sse. |
 | `A2AT_SAMPLE_WEBHOOK_HOST` / `A2AT_SAMPLE_WEBHOOK_PORT` | default `127.0.0.1` / `9000` | Webhook receiver address; the real NMS must be able to reach this host and port. |
 | `A2AT_SAMPLE_INTENT_MODE` | `processed` (default), `raw` | Run the business intent layer before the A2A/A2A-T mapping, or send the operator text directly. `--intent-mode` and `POST /api/runs.intentMode` override it per run. |
+| `A2AT_SAMPLE_PRE_SEND_VALIDATION` | `on` (default), `always`, `off` | Validate the rendered Task-T with the SDK content pipeline before sending. `on` covers the presentation page only; `always` covers every entry point; `off` disables the gate. |
 | `A2AT_SAMPLE_RUN_DIR` | unset; `%TEMP%/a2at-ran-energy-saving-adk` | Launcher state: `pids.json`, child logs and the per-run `.env`. Set a different value for a second instance so `--stop` only stops its own processes. |
 | `A2AT_SAMPLE_RUNS_DIR` | default `<sample>/runs` | Data directory: transcripts, client/task/gateway SQLite stores, each run's `wire.jsonl` and the Web UI history. Relative values resolve against the sample root. |
 | `A2AT_SAMPLE_ENV_FILE` | unset | Configuration file `run_demo.py` reads when `--env-file` is not passed. Each launch script can point at its own profile instead of relying on candidate guessing. |

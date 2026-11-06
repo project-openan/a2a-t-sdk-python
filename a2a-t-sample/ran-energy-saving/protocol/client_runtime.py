@@ -411,6 +411,7 @@ class ClientRuntime:
         run_id: str | None = None,
         user_request: str | None = None,
         conversation_context: str | None = None,
+        validate_before_send: bool = False,
     ) -> ClientFlowResult:
         """Run the full client flow of the configured scenario.
 
@@ -431,6 +432,8 @@ class ClientRuntime:
                 the scenario's canned request.
             conversation_context: Optional recent-turn block injected into the decision prompt
                 and Task-T generation so a follow-up can refer to an earlier run.
+            validate_before_send: Validate the rendered Task-T with the SDK content pipeline
+                before sending it; only the A2A-T flow implements the gate.
 
         Returns:
             The collected events, decisions and terminal state.
@@ -537,6 +540,7 @@ class ClientRuntime:
                     conversation_context=conversation_context,
                     single_extension_per_message=(self.config.discovery == DISCOVERY_NMS),
                     forced_region=(self.config.nms_region if self.config.discovery == DISCOVERY_NMS else None),
+                    validate_before_send=validate_before_send,
                 )
         finally:
             if temporary_sink:

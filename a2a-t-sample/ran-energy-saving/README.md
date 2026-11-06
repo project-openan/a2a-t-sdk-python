@@ -181,7 +181,8 @@ Chinese test team. Each row carries the protocol (`A2A-T` / `A2A`) and an option
 scenario column is optional because a real customer test is usually just a business request. With
 an empty scenario the sample still uses the `night` profile internally, but asserts only the final
 state (`task_completed` by default); with an explicit scenario, blank expectation cells inherit
-that scenario's final state, negotiation kind and round count. The batch runs sequentially and
+that scenario's final state, negotiation kind and round count. Cases inside one batch run
+sequentially, while separate batches (and separate webhook runs) run concurrently; the page
 shows the verdict, actual final state, negotiation kind/rounds, duration and the run's `wire` /
 `trace` links; the results can be exported back to `.xlsx`. An empty approval cell defaults to
 `approve`, so an unattended batch does not wait for the approval window; `reject` tests the
@@ -241,6 +242,26 @@ operator request → business intent (ProcessedIntent) → normalized text → a
 - `processed` is the default. Use `A2AT_SAMPLE_INTENT_MODE=raw`, `--intent-mode raw` or
   `POST /api/runs {"intentMode":"raw"}` for the old direct-text behavior. Gateway input is always
   treated as raw.
+
+### Pre-send Task-T validation
+
+In A2A-T mode the presentation page validates the rendered Task-T with the SDK content pipeline
+before sending it. The gate runs after rendering and before approval 1, so a blocked request is
+never sent and no negotiation starts.
+
+- `A2ATClient.validate_task_prompt_and_data_filling` is the client counterpart of the server
+  method and uses the same `DefaultContentValidator` and semantic validation prompt.
+- Errors that map to a server negotiation kind (`INFORMATION` / `TARGET` / `FEASIBILITY`) are
+  negotiable and still go out, so the negotiation scenarios keep working.
+- Unmapped errors block the send: the run ends `finished` with `final_state=input_invalid`, records
+  a `task_validation` trace, and the page shows the issues inline.
+- LLM/infra failures degrade to a warning and let the request through; a model outage cannot stop
+  the demo.
+- The two-phase Modify Task-T uses the same gate and cancels the baseline Task when blocked.
+- Edit the original request in the validation card to start a **new** run; the failed run stays in
+  the history and is linked with `source.parentRunId`.
+- `A2AT_SAMPLE_PRE_SEND_VALIDATION=on|always|off` selects the scope; `on` is the default and
+  covers the presentation page only.
 
 ### Langfuse observability
 

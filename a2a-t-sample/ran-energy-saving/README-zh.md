@@ -158,8 +158,9 @@ Task-T metadata）。a2a-sdk 的 HTTP 传输同样会被捕获，因此本地 A2
 一行填一条用例，导入后即可批量执行。该页面是中方测试团队的内部工具，界面固定使用中文。每行填写协议（`A2A-T` / `A2A`）和可选的用户请求；
 场景列可留空，因为客户现场的真实测试通常只有一段业务请求。场景留空时，内部仍使用 `night`
 配置模板，但只校验最终状态（默认 `task_completed`）；填写场景时，空的预期单元格继承该场景的
-最终状态、协商类型和轮次。批次串行执行，逐条展示通过/失败、实际最终状态、协商类型与轮次、
-耗时，以及本次运行的 `wire` / `trace` 链接；结果可导出回 `.xlsx`。审批结果留空时默认
+最终状态、协商类型和轮次。单个批次内的用例串行执行，不同批次（以及不同 webhook run）可以并发；
+页面逐条展示通过/失败、实际最终状态、协商类型与轮次、耗时，以及本次运行的 `wire` / `trace`
+链接；结果可导出回 `.xlsx`。审批结果留空时默认
 `approve`，无人值守批次不会卡在审批窗口；`reject` 测试拒绝路径；`auto` 交给人工或超时。
 批次持久化在 `runs/tester` 下，刷新页面会自动打开最近一批；**重跑失败** 会用失败、错误或
 取消的行新建一个草稿批次。连接真实网管时页面会显示警示并在开始前二次确认。每条用例记录墙钟耗时、
@@ -206,6 +207,23 @@ sample 不再把操作员原文直接送进 A2A / A2A-T。默认的 `processed` 
 - 展示页并列显示操作员请求、规范化文本和结构化意图；trace 记录 `intent_processed`。
 - 默认 `processed`。需要旧行为时使用 `A2AT_SAMPLE_INTENT_MODE=raw`、`--intent-mode raw` 或
   `POST /api/runs {"intentMode":"raw"}`。Gateway 入站文本一律按 raw 处理。
+
+### 发送前 Task-T 校验
+
+A2A-T 模式下，演示页在发送前用 SDK 内容校验检查渲染后的 Task-T。校验位于渲染之后、审批 1 之前，
+被阻断的请求不会发送，也不会开启协商。
+
+- `A2ATClient.validate_task_prompt_and_data_filling` 是服务端同名方法的客户端入口，共用
+  `DefaultContentValidator` 和语义校验提示词。
+- 能映射到服务端协商类型（`INFORMATION` / `TARGET` / `FEASIBILITY`）的错误是可协商的，仍然发送，
+  协商演示不受影响。
+- 映射不到的错误会阻断发送：run 以 `finished` + `final_state=input_invalid` 结束，记录
+  `task_validation` trace，页面内联展示问题。
+- LLM/基础设施失败降级为 warning 并放行；模型故障不会中断演示。
+- 两阶段 Modify 的 Task-T 走同一道门，被阻断时先取消基线 Task。
+- 在校验卡中修改原始请求会**新建一次 run**；失败的 run 保留在历史中，并通过
+  `source.parentRunId` 关联。
+- `A2AT_SAMPLE_PRE_SEND_VALIDATION=on|always|off` 控制范围；默认 `on`，只覆盖演示页。
 
 ### Langfuse 可观测
 

@@ -186,7 +186,9 @@ class FakeRuntime:
         run_id: str | None = None,
         user_request: str | None = None,
         conversation_context: str | None = None,
+        validate_before_send: bool = False,
     ) -> ClientFlowResult:
+        del validate_before_send
         self.run_id = run_id
         self.user_request = user_request
         self.conversation_context = conversation_context

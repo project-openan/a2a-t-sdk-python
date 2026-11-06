@@ -116,6 +116,7 @@ class RunState:
         cancel_requested: whether the operator asked to cancel the run.
         remote_task_id: last Task id observed on the remote side (cancel target).
         intent_mode: ``processed`` or ``raw`` for this run.
+        validate_before_send: whether the client validates the rendered Task-T before sending it.
         raw_request: operator request before the business intent layer.
         normalized_request: canonical text produced by the business intent layer.
         processed_intent: structured intent document, once the layer has run.
@@ -163,6 +164,7 @@ class RunState:
     cancel_requested: bool = False
     remote_task_id: str | None = None
     intent_mode: str = ""
+    validate_before_send: bool = False
     raw_request: str | None = None
     normalized_request: str | None = None
     processed_intent: dict[str, object] | None = None

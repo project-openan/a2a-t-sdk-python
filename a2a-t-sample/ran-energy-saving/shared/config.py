@@ -44,6 +44,18 @@ INTENT_MODE_PROCESSED = "processed"
 INTENT_MODE_RAW = "raw"
 SUPPORTED_INTENT_MODES = (INTENT_MODE_PROCESSED, INTENT_MODE_RAW)
 
+#: Client-side pre-send Task-T validation. ``on`` enables it for the presentation page only,
+#: ``always`` for every entry point, ``off`` disables it.
+PRE_SEND_VALIDATION_OFF = "off"
+PRE_SEND_VALIDATION_ON = "on"
+PRE_SEND_VALIDATION_ALWAYS = "always"
+SUPPORTED_PRE_SEND_VALIDATION = (
+    PRE_SEND_VALIDATION_OFF,
+    PRE_SEND_VALIDATION_ON,
+    PRE_SEND_VALIDATION_ALWAYS,
+)
+DEFAULT_PRE_SEND_VALIDATION = PRE_SEND_VALIDATION_ON
+
 #: Conversation fields of a pure A2A follow-up. The vendor may reject ``taskId``; the yellow-zone
 #: run can switch to ``context`` without a code change.
 PURE_FOLLOWUP_BOTH = "both"
@@ -75,6 +87,7 @@ ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS_ENV_KEY = "ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS
 DISCOVERY_ENV_KEY = "A2AT_SAMPLE_DISCOVERY"
 TRANSPORT_ENV_KEY = "A2AT_SAMPLE_TRANSPORT"
 INTENT_MODE_ENV_KEY = "A2AT_SAMPLE_INTENT_MODE"
+PRE_SEND_VALIDATION_ENV_KEY = "A2AT_SAMPLE_PRE_SEND_VALIDATION"
 #: Directory of the run transcripts, NMS wire logs and the UI/SQLite history.
 RUNS_DIR_ENV_KEY = "A2AT_SAMPLE_RUNS_DIR"
 #: Which conversation fields a pure A2A follow-up carries (``both`` / ``task`` / ``context``).
@@ -397,6 +410,8 @@ class SampleConfig:
         discovery: Discovery mode (``registry`` / ``direct``).
         transport: Event transport (``sse`` / ``webhook``).
         intent_mode: Intent handling (``processed`` / ``raw``).
+        pre_send_validation: Client-side Task-T validation scope (``off`` / ``on`` / ``always``);
+            ``on`` enables it for the presentation page only.
         http_timeout_seconds: Client HTTP budget of one A2A request, in seconds.
         llm_timeout_seconds: Live LLM budget of one call (SDK structured call or ADK turn), in seconds.
         llm_max_attempts: Live SDK LLM attempt limit per retryable step.
@@ -471,6 +486,7 @@ class SampleConfig:
     discovery: str = DISCOVERY_REGISTRY
     transport: str = TRANSPORT_SSE
     intent_mode: str = INTENT_MODE_PROCESSED
+    pre_send_validation: str = DEFAULT_PRE_SEND_VALIDATION
     webhook_host: str = DEFAULT_HOST
     webhook_public_url: str = ""
     webhook_tls_cert: str = ""
@@ -574,6 +590,15 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
             f"expected one of {SUPPORTED_INTENT_MODES}"
         )
 
+    pre_send_validation = _env_value(
+        values, PRE_SEND_VALIDATION_ENV_KEY, DEFAULT_PRE_SEND_VALIDATION
+    ).strip().lower()
+    if pre_send_validation not in SUPPORTED_PRE_SEND_VALIDATION:
+        raise ValueError(
+            f"Unsupported {PRE_SEND_VALIDATION_ENV_KEY}: {pre_send_validation}; "
+            f"expected one of {SUPPORTED_PRE_SEND_VALIDATION}"
+        )
+
     nms_host = _env_value(values, NMS_HOST_ENV_KEY, "").strip()
     nms_scheme = _env_value(values, NMS_SCHEME_ENV_KEY, DEFAULT_NMS_SCHEME).strip().lower()
     if nms_scheme not in ("http", "https"):
@@ -654,6 +679,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         discovery=discovery,
         transport=transport,
         intent_mode=intent_mode,
+        pre_send_validation=pre_send_validation,
         http_timeout_seconds=_positive_seconds(values, HTTP_TIMEOUT_ENV_KEY, DEFAULT_HTTP_TIMEOUT_SECONDS),
         llm_timeout_seconds=_positive_seconds(values, LLM_TIMEOUT_ENV_KEY, DEFAULT_LLM_TIMEOUT_SECONDS),
         llm_max_attempts=_llm_max_attempts(values),
