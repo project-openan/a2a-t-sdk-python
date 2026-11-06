@@ -338,6 +338,12 @@ webhook run runs at a time in a process and a second one gets an explicit confli
 public URL (a gateway forwards a fixed address) it never silently moves and instead explains that
 the port is in use.
 
+`--protocol both --nms` runs two receivers: the UI keeps `A2AT_SAMPLE_WEBHOOK_PORT` and the OSS
+Agent takes `A2AT_SAMPLE_OSS_WEBHOOK_PORT` (default: the next port). When
+`A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` is set, `A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL` is required as well,
+and both addresses must be reachable from the NMS. Set the OSS port explicitly when the default
+would collide with another instance; it must differ from the UI port.
+
 In A2A + `--nms` the OSS Agent posts its NMS token/send/poll spans into the same run, so the session
 trace shows `NMS session token acquired`, `NMS A2A stream opened` and the rest of the real
 downstream hop, and status text distinguishes `NMS` from the local `RAN Agent`. Use `--ui --mode confirm` for the send-time intent

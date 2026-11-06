@@ -799,6 +799,8 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_SAMPLE_WEBHOOK_TOKEN` | 默认 `demo-webhook-token` | 与 `X-A2A-Notification-Token` 比对的静态推送 token；设置 `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` 后不再使用。 |
 | `A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT` | 默认 `300`（与 HTTP 预算一致） | 无推送多少秒后结束 webhook 阶段；阶段不能早于客户端预算结束。 |
 | `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` | 未设置时使用绑定地址 | 注册到 push config 的回调 URL。真实网管要求 `https`，且通过网关地址访问客户端，`127.0.0.1` 只适用于本地模拟器。 |
+| `A2AT_SAMPLE_OSS_WEBHOOK_PORT` | 默认 `A2AT_SAMPLE_WEBHOOK_PORT + 1` | `--protocol both --nms` 下 OSS Agent 的本地接收端口。下一个端口与其它实例冲突，或 NAT 映射了不同本地端口时覆盖；必须与 UI 端口不同。 |
+| `A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL` | UI public URL 已配置时，`both + --nms` 必填 | OSS Agent 的公网回调。配置了 `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` 却没有它时启动器会拒绝启动，因为两种请求形态各自保留接收端。 |
 | `A2AT_SAMPLE_WEBHOOK_TLS_CERT` / `A2AT_SAMPLE_WEBHOOK_TLS_KEY` | 未设置时使用明文 `http` | 接收器 TLS 监听的 PEM 证书与私钥。启动器会在每次运行的 `.env` 中把相对路径解析到样例根目录。 |
 | `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` | 未设置时校验推送 token | `user:password`，注册为 push config 的 Basic 鉴权，也是设置后接收器唯一接受的凭据。只放在 `.env`。 |
 | `A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS` | 默认 `300`（> 0） | 单次 A2A 请求的客户端 HTTP 预算：`httpx` 客户端超时与每次发送的 `ClientCallContext.timeout`。 |

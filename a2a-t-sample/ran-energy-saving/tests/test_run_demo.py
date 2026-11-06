@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import demo.run_demo as run_demo
@@ -684,3 +686,142 @@ def test_observability_keys_from_the_selected_file_reach_child_processes(
     assert os.environ["LANGFUSE_PUBLIC_KEY"] == "pk-lf-test"
     # Non-observability sample settings stay in the per-run .env, not the launcher environment.
     assert "A2AT_SAMPLE_RUNS_DIR" not in os.environ
+
+
+class _FakeChild:
+    """Minimal ``Popen`` stand-in that records the env of every started child."""
+
+    started: list[dict[str, object]] = []
+
+    def __init__(self, command: list[str], **kwargs: Any) -> None:
+        self.command = command
+        self.pid = 5000 + len(_FakeChild.started)
+        self.returncode = 0
+        self.stdout = io.StringIO("")
+        _FakeChild.started.append({"command": command, "env": dict(kwargs.get("env") or {})})
+
+    def poll(self) -> int:
+        return 0
+
+
+def _resolved_config() -> SimpleNamespace:
+    """Return the config fields printed and used by the launcher after ``load_config``."""
+    return SimpleNamespace(
+        model_mode="live",
+        model_label="test-model",
+        language="zh-CN",
+        adk_model_provider="litellm",
+        discovery="nms",
+        transport="webhook",
+        intent_mode="processed",
+        nms_region="A2ATestRegion",
+        nms_sites=["site-a"],
+        nms_a2a_base="https://nms.example/a2a/json",
+    )
+
+
+def _launch_both_nms(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    source_lines: list[str],
+) -> tuple[int, list[dict[str, object]], list[int]]:
+    """Run ``main`` for ``--protocol both --nms`` with every child process stubbed out."""
+    env_file = tmp_path / "source.env"
+    env_file.write_text("\n".join(source_lines), encoding="utf-8")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    warmups: list[int] = []
+    _FakeChild.started = []
+
+    monkeypatch.setattr(run_demo, "RUN_DIR", run_dir)
+    monkeypatch.setattr(run_demo, "PID_FILE", run_dir / "pids.json")
+    monkeypatch.setattr(sys, "argv", [
+        "run_demo.py",
+        "--env-file",
+        str(env_file),
+        "--protocol",
+        "both",
+        "--nms",
+        "--transport",
+        "webhook",
+        "--ui",
+        "--ui-port",
+        "18080",
+        "--oss-port",
+        "18011",
+    ])
+    monkeypatch.setattr(run_demo, "_preflight", lambda *_: True)
+    monkeypatch.setattr(run_demo, "_warm_live_model", lambda _config: warmups.append(1))
+    monkeypatch.setattr(run_demo, "_port_open", lambda *a, **k: False)
+    monkeypatch.setattr(run_demo, "_wait_port", lambda *a, **k: True)
+    monkeypatch.setattr(run_demo, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(run_demo, "_stop_pids", lambda pids: len(pids))
+    monkeypatch.setattr(run_demo.subprocess, "Popen", _FakeChild)
+    monkeypatch.setattr("shared.config.load_config", lambda **_: _resolved_config())
+
+    code = run_demo.main()
+    return code, _FakeChild.started, warmups
+
+
+def _both_nms_source(*extra: str) -> list[str]:
+    return [
+        "A2AT_SAMPLE_WEBHOOK_PORT=9000",
+        "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL=https://nms.example:9000/webhook",
+        "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL=https://nms.example:9001/webhook",
+        *extra,
+    ]
+
+
+def test_both_nms_defaults_the_oss_webhook_port_to_the_next_port(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The OSS Agent gets its own receiver; the launcher must not read a missing CLI attribute."""
+    code, started, warmups = _launch_both_nms(monkeypatch, tmp_path, _both_nms_source())
+
+    assert code == 0
+    assert len(warmups) == 1
+    modules = [str(call["command"][2]) for call in started]
+    oss = started[modules.index("protocol.oss_agent")]["env"]
+    assert oss["A2AT_SAMPLE_WEBHOOK_PORT"] == "9001"
+    assert oss["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] == "https://nms.example:9001/webhook"
+
+
+def test_both_nms_honours_the_oss_webhook_port_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    code, started, _ = _launch_both_nms(
+        monkeypatch, tmp_path, _both_nms_source("A2AT_SAMPLE_OSS_WEBHOOK_PORT=9101")
+    )
+
+    assert code == 0
+    modules = [str(call["command"][2]) for call in started]
+    oss = started[modules.index("protocol.oss_agent")]["env"]
+    assert oss["A2AT_SAMPLE_WEBHOOK_PORT"] == "9101"
+
+
+def test_both_nms_rejects_a_missing_oss_public_url_before_warming_the_model(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A configuration error must not spend a live model call first."""
+    source = [
+        "A2AT_SAMPLE_WEBHOOK_PORT=9000",
+        "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL=https://nms.example:9000/webhook",
+    ]
+
+    code, started, warmups = _launch_both_nms(monkeypatch, tmp_path, source)
+
+    assert code == 2
+    assert started == []
+    assert warmups == []
+
+
+def test_both_nms_rejects_an_oss_port_that_matches_the_ui_port(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    code, started, warmups = _launch_both_nms(
+        monkeypatch, tmp_path, _both_nms_source("A2AT_SAMPLE_OSS_WEBHOOK_PORT=9000")
+    )
+
+    assert code == 2
+    assert started == []
+    assert warmups == []

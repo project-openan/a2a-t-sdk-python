@@ -1388,6 +1388,33 @@ def main() -> int:
     server_host = _env_str(source_values, "A2AT_SAMPLE_HOST", "127.0.0.1")
     server_port = _env_int(source_values, "A2AT_SAMPLE_PORT", DEFAULT_SERVER_PORT)
     webhook_port = _env_int(source_values, "A2AT_SAMPLE_WEBHOOK_PORT", 9000)
+    # In the one-instance NMS mode both the UI (A2A-T) and the OSS Agent (standard A2A) keep a
+    # callback receiver. They are different processes, so the OSS hop defaults to the next port;
+    # A2AT_SAMPLE_OSS_WEBHOOK_PORT overrides it for deployments where +1 collides or NAT remaps it.
+    # Validate the pair before warming the model so a configuration error fails at zero cost.
+    oss_webhook_env: dict[str, str] = {}
+    if args.protocol == PROTOCOL_MODE_BOTH and args.nms:
+        base_public_url = _env_str(source_values, "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL", "")
+        oss_public_url = _env_str(source_values, "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL", "")
+        if base_public_url and not oss_public_url:
+            print(
+                "[run_demo] --protocol both --nms needs two reachable callbacks: set "
+                "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL for the OSS Agent (the UI keeps "
+                "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL)."
+            )
+            return 2
+        oss_webhook_port = _env_int(
+            source_values, "A2AT_SAMPLE_OSS_WEBHOOK_PORT", webhook_port + 1
+        )
+        if oss_webhook_port == webhook_port:
+            print(
+                "[run_demo] A2AT_SAMPLE_OSS_WEBHOOK_PORT must differ from "
+                "A2AT_SAMPLE_WEBHOOK_PORT; the UI and the OSS Agent need separate receivers."
+            )
+            return 2
+        oss_webhook_env["A2AT_SAMPLE_WEBHOOK_PORT"] = str(oss_webhook_port)
+        if oss_public_url:
+            oss_webhook_env["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] = oss_public_url
     reserved_ports = {args.ui_port} if args.nms else {registry_port, server_port}
     if args.ui:
         reserved_ports.add(args.ui_port)
@@ -1617,23 +1644,6 @@ def main() -> int:
         # The OSS Agent is a separate process: without this env its NMS token/send/poll spans never
         # reach the UI, and a pure + --nms run looks like the local three-hop demo.
         oss_trace_env: dict[str, str] = {}
-        # In the one-instance NMS mode both the UI (A2A-T) and the OSS Agent (standard A2A) keep a
-        # callback receiver. They are different processes, so the OSS hop takes the next port; a
-        # gateway deployment can point its public URL at a separate path.
-        oss_webhook_env: dict[str, str] = {}
-        if args.protocol == PROTOCOL_MODE_BOTH and args.nms:
-            base_public_url = _env_str(source_values, "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL", "")
-            oss_public_url = _env_str(source_values, "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL", "")
-            if base_public_url and not oss_public_url:
-                print(
-                    "[run_demo] --protocol both --nms needs two reachable callbacks: set "
-                    "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL for the OSS Agent (the UI keeps "
-                    "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL)."
-                )
-                return 2
-            oss_webhook_env["A2AT_SAMPLE_WEBHOOK_PORT"] = str(args.webhook_port + 1)
-            if oss_public_url:
-                oss_webhook_env["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] = oss_public_url
         if args.protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH) and args.ui:
             recorded_token = str(state.get("trace_token") or "") if reuse == REUSE_REUSE else ""
             oss_trace_env = _server_trace_env(
