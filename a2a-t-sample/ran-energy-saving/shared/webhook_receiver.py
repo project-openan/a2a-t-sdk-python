@@ -33,8 +33,10 @@ import base64
 import contextlib
 import json
 import logging
+import os
 import time
 from collections.abc import Callable
+from urllib.parse import urlsplit
 
 import uvicorn
 from starlette.applications import Starlette
@@ -237,6 +239,37 @@ class WebhookReceiver:
         self._serve_task = serve_task
         if self._port == 0:
             self._resolved_port = int(server.servers[0].sockets[0].getsockname()[1])
+        self._warn_if_public_url_port_differs()
+
+    def _warn_if_public_url_port_differs(self) -> None:
+        """Warn when the registered callback names a port other than the bound receiver.
+
+        The launcher rejects this combination, but a process started by hand (or a stale export)
+        can still reach this path. A gateway/NAT that intentionally remaps the external port sets
+        ``A2AT_SAMPLE_ALLOW_CALLBACK_PORT_MISMATCH=1`` and is not warned.
+        """
+        if not self._public_url:
+            return
+        try:
+            public_port = urlsplit(self._public_url).port
+        except ValueError:
+            _LOGGER.warning("webhook public URL is not a valid URL: %s", self._public_url)
+            return
+        if public_port is None or self.port <= 0 or public_port == self.port:
+            return
+        allowed = os.environ.get(
+            "A2AT_SAMPLE_ALLOW_CALLBACK_PORT_MISMATCH", ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if allowed:
+            return
+        _LOGGER.warning(
+            "webhook public URL port %s does not match the bound receiver port %s; "
+            "the server will push to %s. Set A2AT_SAMPLE_ALLOW_CALLBACK_PORT_MISMATCH=1 "
+            "when a gateway/NAT maps a different external port.",
+            public_port,
+            self.port,
+            self._public_url,
+        )
         self._log("listening", f"url={self.url}")
 
     async def _serve(self, server: uvicorn.Server) -> None:

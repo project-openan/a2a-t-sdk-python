@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -724,6 +725,7 @@ def _launch_both_nms(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     source_lines: list[str],
+    configure: Callable[[pytest.MonkeyPatch], None] | None = None,
 ) -> tuple[int, list[dict[str, object]], list[int]]:
     """Run ``main`` for ``--protocol both --nms`` with every child process stubbed out."""
     env_file = tmp_path / "source.env"
@@ -758,17 +760,20 @@ def _launch_both_nms(
     monkeypatch.setattr(run_demo, "_stop_pids", lambda pids: len(pids))
     monkeypatch.setattr(run_demo.subprocess, "Popen", _FakeChild)
     monkeypatch.setattr("shared.config.load_config", lambda **_: _resolved_config())
+    if configure is not None:
+        configure(monkeypatch)
 
     code = run_demo.main()
     return code, _FakeChild.started, warmups
 
 
-def _both_nms_source(*extra: str) -> list[str]:
+def _both_nms_source(*extra: str, oss_port: int = 9001) -> list[str]:
     return [
         "A2AT_SAMPLE_WEBHOOK_PORT=9000",
         "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL=https://nms.example:9000/webhook",
-        "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL=https://nms.example:9001/webhook",
         *extra,
+        f"A2AT_SAMPLE_OSS_WEBHOOK_PORT={oss_port}",
+        f"A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL=https://nms.example:{oss_port}/webhook",
     ]
 
 
@@ -790,13 +795,103 @@ def test_both_nms_honours_the_oss_webhook_port_override(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     code, started, _ = _launch_both_nms(
-        monkeypatch, tmp_path, _both_nms_source("A2AT_SAMPLE_OSS_WEBHOOK_PORT=9101")
+        monkeypatch, tmp_path, _both_nms_source(oss_port=9101)
     )
 
     assert code == 0
     modules = [str(call["command"][2]) for call in started]
     oss = started[modules.index("protocol.oss_agent")]["env"]
     assert oss["A2AT_SAMPLE_WEBHOOK_PORT"] == "9101"
+    assert oss["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] == "https://nms.example:9101/webhook"
+
+
+def test_both_nms_uses_the_oss_public_url_not_the_inherited_ui_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Process env wins over the run .env, so the OSS must receive an explicit override."""
+    monkeypatch.setenv(
+        "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL", "https://inherited.example:9000/webhook"
+    )
+
+    code, started, _ = _launch_both_nms(
+        monkeypatch, tmp_path, _both_nms_source(oss_port=9005)
+    )
+
+    assert code == 0
+    modules = [str(call["command"][2]) for call in started]
+    oss = started[modules.index("protocol.oss_agent")]["env"]
+    assert oss["A2AT_SAMPLE_WEBHOOK_PORT"] == "9005"
+    assert oss["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] == "https://nms.example:9005/webhook"
+
+
+def test_both_nms_rejects_an_oss_public_url_with_a_different_port(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A bind port and the registered callback must not silently disagree."""
+    source = [
+        "A2AT_SAMPLE_WEBHOOK_PORT=9000",
+        "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL=https://nms.example:9000/webhook",
+        "A2AT_SAMPLE_OSS_WEBHOOK_PORT=9005",
+        "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL=https://nms.example:9001/webhook",
+    ]
+
+    code, started, warmups = _launch_both_nms(monkeypatch, tmp_path, source)
+
+    assert code == 2
+    assert started == []
+    assert warmups == []
+
+
+def test_both_nms_allows_a_gateway_port_mismatch_when_explicitly_enabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = [
+        "A2AT_SAMPLE_WEBHOOK_PORT=9000",
+        "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL=https://nms.example:9000/webhook",
+        "A2AT_SAMPLE_OSS_WEBHOOK_PORT=9005",
+        "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL=https://gateway.example:443/webhook",
+        "A2AT_SAMPLE_ALLOW_CALLBACK_PORT_MISMATCH=1",
+    ]
+
+    code, started, _ = _launch_both_nms(monkeypatch, tmp_path, source)
+
+    assert code == 0
+    modules = [str(call["command"][2]) for call in started]
+    oss = started[modules.index("protocol.oss_agent")]["env"]
+    assert oss["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] == "https://gateway.example:443/webhook"
+
+
+def test_both_nms_restarts_a_recorded_oss_holding_its_port(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A stale OSS keeps the old callback config; it must be restarted, not reused."""
+    stopped: list[int] = []
+
+    def configure(monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            run_demo, "_port_open", lambda port, *a, **k: port == 18011
+        )
+        monkeypatch.setattr(
+            run_demo, "_listener_pids", lambda port: [4242] if port == 18011 else []
+        )
+        monkeypatch.setattr(
+            run_demo,
+            "_process_command_line",
+            lambda pid: "python -m protocol.oss_agent" if pid == 4242 else "",
+        )
+        monkeypatch.setattr(
+            run_demo, "_stop_pids", lambda pids: stopped.extend(pids) or len(pids)
+        )
+        monkeypatch.setattr(run_demo, "_wait_ports_closed", lambda *a, **k: True)
+
+    code, started, _ = _launch_both_nms(
+        monkeypatch, tmp_path, _both_nms_source(), configure=configure
+    )
+
+    assert code == 0
+    assert 4242 in stopped
+    modules = [str(call["command"][2]) for call in started]
+    assert "protocol.oss_agent" in modules
 
 
 def test_both_nms_rejects_a_missing_oss_public_url_before_warming_the_model(
@@ -819,8 +914,37 @@ def test_both_nms_rejects_an_oss_port_that_matches_the_ui_port(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     code, started, warmups = _launch_both_nms(
-        monkeypatch, tmp_path, _both_nms_source("A2AT_SAMPLE_OSS_WEBHOOK_PORT=9000")
+        monkeypatch, tmp_path, _both_nms_source(oss_port=9000)
     )
+
+    assert code == 2
+    assert started == []
+    assert warmups == []
+
+
+def test_both_nms_rejects_an_oss_webhook_port_that_matches_the_ui_port(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    code, started, warmups = _launch_both_nms(
+        monkeypatch, tmp_path, _both_nms_source(oss_port=18080)
+    )
+
+    assert code == 2
+    assert started == []
+    assert warmups == []
+
+
+def test_both_nms_rejects_a_base_webhook_port_that_matches_the_oss_port(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = [
+        "A2AT_SAMPLE_WEBHOOK_PORT=18011",
+        "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL=https://nms.example:18011/webhook",
+        "A2AT_SAMPLE_OSS_WEBHOOK_PORT=18012",
+        "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL=https://nms.example:18012/webhook",
+    ]
+
+    code, started, warmups = _launch_both_nms(monkeypatch, tmp_path, source)
 
     assert code == 2
     assert started == []

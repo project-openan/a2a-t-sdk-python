@@ -339,10 +339,14 @@ public URL (a gateway forwards a fixed address) it never silently moves and inst
 the port is in use.
 
 `--protocol both --nms` runs two receivers: the UI keeps `A2AT_SAMPLE_WEBHOOK_PORT` and the OSS
-Agent takes `A2AT_SAMPLE_OSS_WEBHOOK_PORT` (default: the next port). When
-`A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` is set, `A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL` is required as well,
-and both addresses must be reachable from the NMS. Set the OSS port explicitly when the default
-would collide with another instance; it must differ from the UI port.
+Agent takes `A2AT_SAMPLE_OSS_WEBHOOK_PORT` (default: the next port).
+`A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL` is required for a real NMS run and is never inherited from the
+UI callback; both public addresses must be reachable from the NMS. Each public URL's explicit port
+must match its receiver port — a gateway/NAT that maps a different external port needs
+`A2AT_SAMPLE_ALLOW_CALLBACK_PORT_MISMATCH=1`. Set the OSS port explicitly when the default would
+collide with another instance; it must differ from the UI port. The OSS Agent is restarted when its
+port is already held by a previously recorded OSS process, so callback changes never reuse stale
+configuration.
 
 In A2A + `--nms` the OSS Agent posts its NMS token/send/poll spans into the same run, so the session
 trace shows `NMS session token acquired`, `NMS A2A stream opened` and the rest of the real

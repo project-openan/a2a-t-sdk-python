@@ -71,6 +71,67 @@ def test_public_url_wins_over_the_bind_address(events: list[dict[str, object]]) 
     assert receiver.url == "https://141.5.146.234:9000/webhook"
 
 
+def test_a_public_url_port_mismatch_logs_a_warning(
+    events: list[dict[str, object]],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hand-started process must not silently register a different port than it binds."""
+    monkeypatch.delenv("A2AT_SAMPLE_ALLOW_CALLBACK_PORT_MISMATCH", raising=False)
+    receiver = WebhookReceiver(
+        token="ignored",
+        on_event=events.append,
+        host="127.0.0.1",
+        port=9005,
+        public_url="https://141.5.146.234:9001/webhook",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="ran_energy_saving.webhook_receiver"):
+        receiver._warn_if_public_url_port_differs()
+
+    assert "does not match the bound receiver port 9005" in caplog.text
+
+
+def test_a_matching_public_url_port_does_not_warn(
+    events: list[dict[str, object]],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("A2AT_SAMPLE_ALLOW_CALLBACK_PORT_MISMATCH", raising=False)
+    receiver = WebhookReceiver(
+        token="ignored",
+        on_event=events.append,
+        host="127.0.0.1",
+        port=9005,
+        public_url="https://141.5.146.234:9005/webhook",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="ran_energy_saving.webhook_receiver"):
+        receiver._warn_if_public_url_port_differs()
+
+    assert caplog.text == ""
+
+
+def test_a_gateway_mismatch_is_quiet_when_explicitly_allowed(
+    events: list[dict[str, object]],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("A2AT_SAMPLE_ALLOW_CALLBACK_PORT_MISMATCH", "1")
+    receiver = WebhookReceiver(
+        token="ignored",
+        on_event=events.append,
+        host="127.0.0.1",
+        port=9005,
+        public_url="https://gateway.example:443/webhook",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="ran_energy_saving.webhook_receiver"):
+        receiver._warn_if_public_url_port_differs()
+
+    assert caplog.text == ""
+
+
 def test_without_a_public_url_the_scheme_follows_the_tls_pair(events: list[dict[str, object]]) -> None:
     plain = WebhookReceiver(token="token", on_event=events.append, host="192.0.2.10", port=9000)
     tls = WebhookReceiver(

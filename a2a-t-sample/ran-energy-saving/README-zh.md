@@ -294,9 +294,12 @@ webhook 任务；第二个会返回明确的冲突提示。没有配置 `A2AT_SA
 静默改端口，而是给出“端口被占用、等待/取消或改端口”的明确错误。
 
 `--protocol both --nms` 需要两个接收端：UI 使用 `A2AT_SAMPLE_WEBHOOK_PORT`，OSS Agent 使用
-`A2AT_SAMPLE_OSS_WEBHOOK_PORT`（默认取下一个端口）。配置了 `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL`
-时，必须同时配置 `A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL`，且两个地址都要能被网管访问。默认端口
-与其它实例冲突时显式设置 OSS 端口；它不能与 UI 端口相同。
+`A2AT_SAMPLE_OSS_WEBHOOK_PORT`（默认取下一个端口）。真实网管运行必须配置
+`A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL`，它绝不会从 UI 的回调地址继承；两个地址都要能被网管访问。
+public URL 中显式写出的端口必须与对应接收端口一致；网关/NAT 映射了不同外部端口时，设置
+`A2AT_SAMPLE_ALLOW_CALLBACK_PORT_MISMATCH=1`。默认端口与其它实例冲突时显式设置 OSS 端口；它
+不能与 UI 端口相同。若端口已被上一次记录的 OSS 进程占用，启动器会重启该 OSS，而不是复用旧
+回调配置。
 
 A2A + `--nms` 的 OSS Agent 现在会把网管的 token、发送、轮询 span 上报到同一次 run，
 会话轨迹里能看到 `NMS session token acquired`、`NMS A2A stream opened` 等真实下游事件，

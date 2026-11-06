@@ -54,6 +54,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Final, TextIO
+from urllib.parse import urlsplit
 
 from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from shared.config import merge_sample_process_env
@@ -200,6 +201,38 @@ def _env_int(values: dict[str, str], key: str, default: int) -> int:
         raise SystemExit(f"[run_demo] invalid integer for {key}: {raw}") from exc
 
 
+def _env_truthy(values: dict[str, str], key: str) -> bool:
+    """Return whether one flag is set to a truthy value (shell environment first)."""
+    return _env_str(values, key, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _callback_url_port_error(
+    key: str,
+    url: str,
+    bind_port: int,
+    *,
+    allow_mismatch: bool,
+) -> str | None:
+    """Return an error when one callback URL names a port different from its receiver.
+
+    A URL without an explicit port is treated as a gateway address and left alone; the explicit
+    escape hatch covers a NAT/gateway that maps a different external port to the local receiver.
+    """
+    if not url or bind_port <= 0 or allow_mismatch:
+        return None
+    try:
+        port = urlsplit(url).port
+    except ValueError:
+        return f"[run_demo] {key} is not a valid URL: {url}"
+    if port is not None and port != bind_port:
+        return (
+            f"[run_demo] {key} port {port} does not match the receiver port {bind_port}; "
+            "fix the URL or set A2AT_SAMPLE_ALLOW_CALLBACK_PORT_MISMATCH=1 when a gateway/NAT "
+            "maps a different external port."
+        )
+    return None
+
+
 def _ui_port_default(values: dict[str, str]) -> int:
     """Return the ``--ui-port`` default: ``A2AT_SAMPLE_UI_PORT``, else ``8080``."""
     return _env_int(values, "A2AT_SAMPLE_UI_PORT", DEFAULT_UI_PORT)
@@ -255,9 +288,22 @@ def _warm_live_model(config: object) -> None:
         print(f"[run_demo] live model warm-up skipped: {exc}")
 
 
-def _child_env(language: str, extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Return the environment of the child processes (sample root on ``PYTHONPATH``)."""
+def _child_env(
+    language: str,
+    extra: dict[str, str] | None = None,
+    *,
+    exclude: tuple[str, ...] = (),
+) -> dict[str, str]:
+    """Return the environment of the child processes (sample root on ``PYTHONPATH``).
+
+    ``exclude`` drops keys inherited from this process before ``extra`` is applied. A child that
+    owns its own callback receiver must not inherit the launcher's UI callback: process env wins
+    over the per-run ``.env`` in ``shared.config``, so an inherited value would silently override
+    the OSS-specific one.
+    """
     env = os.environ.copy()
+    for key in exclude:
+        env.pop(key, None)
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = str(CASE_DIR) + (os.pathsep + existing if existing else "")
     env["PYTHONUTF8"] = "1"
@@ -612,13 +658,18 @@ def _process_command_line(pid: int) -> str:
     return result.stdout.strip()
 
 
+def _is_module_child(pid: int, module: str) -> bool:
+    """Return whether ``pid`` is a child started with ``python -m <module>``."""
+    return module in _process_command_line(pid)
+
+
 def _is_ui_child(pid: int) -> bool:
     """Return whether ``pid`` is the managed ``demo.web.serve`` UI child.
 
     Only this leaf process is safe to restart from the launcher: killing an older launcher that
     served the UI in-process would also take down the registry/server children it owns.
     """
-    return "demo.web.serve" in _process_command_line(pid)
+    return _is_module_child(pid, "demo.web.serve")
 
 
 def _is_demo_process(pid: int) -> bool:
@@ -1388,32 +1439,94 @@ def main() -> int:
     server_host = _env_str(source_values, "A2AT_SAMPLE_HOST", "127.0.0.1")
     server_port = _env_int(source_values, "A2AT_SAMPLE_PORT", DEFAULT_SERVER_PORT)
     webhook_port = _env_int(source_values, "A2AT_SAMPLE_WEBHOOK_PORT", 9000)
+    # A registered callback must name the port this process actually binds. Process env, the
+    # source .env and a launch script's exports can disagree, and the NMS would push to the wrong
+    # place while the receiver still looks healthy, so fail before warming the model.
+    allow_callback_port_mismatch = _env_truthy(
+        source_values, "A2AT_SAMPLE_ALLOW_CALLBACK_PORT_MISMATCH"
+    )
+    if allow_callback_port_mismatch:
+        # The receiver warns from its own process env; keep the child view consistent with the
+        # launcher's accept decision even when the flag came from the source .env.
+        os.environ["A2AT_SAMPLE_ALLOW_CALLBACK_PORT_MISMATCH"] = "1"
+    base_public_url = _env_str(source_values, "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL", "")
+    if args.transport == "webhook":
+        error = _callback_url_port_error(
+            "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL",
+            base_public_url,
+            webhook_port,
+            allow_mismatch=allow_callback_port_mismatch,
+        )
+        if error is not None:
+            print(error)
+            return 2
+        if args.ui and webhook_port == args.ui_port:
+            print(
+                "[run_demo] A2AT_SAMPLE_WEBHOOK_PORT must differ from --ui-port; "
+                "the UI process binds both."
+            )
+            return 2
+        if (
+            args.protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH)
+            and webhook_port == args.oss_port
+        ):
+            print(
+                "[run_demo] A2AT_SAMPLE_WEBHOOK_PORT must differ from --oss-port; "
+                "the OSS Agent binds its HTTP port and its callback receiver on the same host."
+            )
+            return 2
     # In the one-instance NMS mode both the UI (A2A-T) and the OSS Agent (standard A2A) keep a
     # callback receiver. They are different processes, so the OSS hop defaults to the next port;
     # A2AT_SAMPLE_OSS_WEBHOOK_PORT overrides it for deployments where +1 collides or NAT remaps it.
-    # Validate the pair before warming the model so a configuration error fails at zero cost.
     oss_webhook_env: dict[str, str] = {}
+    oss_webhook_keys: tuple[str, ...] = ()
     if args.protocol == PROTOCOL_MODE_BOTH and args.nms:
-        base_public_url = _env_str(source_values, "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL", "")
+        # The OSS Agent owns this receiver. Never let the launcher's UI callback keys reach it:
+        # process env wins over the per-run .env, so an inherited UI public URL would silently
+        # replace the OSS address while the process still binds the OSS port.
+        oss_webhook_keys = (
+            "A2AT_SAMPLE_WEBHOOK_PORT",
+            "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL",
+            "A2AT_SAMPLE_OSS_WEBHOOK_PORT",
+            "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL",
+        )
         oss_public_url = _env_str(source_values, "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL", "")
-        if base_public_url and not oss_public_url:
-            print(
-                "[run_demo] --protocol both --nms needs two reachable callbacks: set "
-                "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL for the OSS Agent (the UI keeps "
-                "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL)."
-            )
-            return 2
         oss_webhook_port = _env_int(
             source_values, "A2AT_SAMPLE_OSS_WEBHOOK_PORT", webhook_port + 1
         )
-        if oss_webhook_port == webhook_port:
+        real_nms = not args.nms_sim
+        if real_nms:
+            for label, other_port in (
+                ("A2AT_SAMPLE_WEBHOOK_PORT", webhook_port),
+                ("--ui-port", args.ui_port),
+                ("--oss-port", args.oss_port),
+            ):
+                if oss_webhook_port == other_port:
+                    print(
+                        f"[run_demo] A2AT_SAMPLE_OSS_WEBHOOK_PORT must differ from {label}; "
+                        "the UI and the OSS Agent need separate receivers."
+                    )
+                    return 2
+        if real_nms and not oss_public_url:
             print(
-                "[run_demo] A2AT_SAMPLE_OSS_WEBHOOK_PORT must differ from "
-                "A2AT_SAMPLE_WEBHOOK_PORT; the UI and the OSS Agent need separate receivers."
+                "[run_demo] --protocol both --nms needs two reachable callbacks: set "
+                "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL for the OSS Agent (the UI keeps "
+                "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL). It is never inherited from the UI."
             )
             return 2
+        if real_nms:
+            error = _callback_url_port_error(
+                "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL",
+                oss_public_url,
+                oss_webhook_port,
+                allow_mismatch=allow_callback_port_mismatch,
+            )
+            if error is not None:
+                print(error)
+                return 2
         oss_webhook_env["A2AT_SAMPLE_WEBHOOK_PORT"] = str(oss_webhook_port)
         if oss_public_url:
+            # Unconditional when present: this key must always override the inherited UI value.
             oss_webhook_env["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] = oss_public_url
     reserved_ports = {args.ui_port} if args.nms else {registry_port, server_port}
     if args.ui:
@@ -1564,15 +1677,23 @@ def main() -> int:
         cli_args: list[str] | None = None,
         probe_host: str = "127.0.0.1",
         reuse: bool = True,
+        drop_env: tuple[str, ...] = (),
     ) -> str | None:
         """Return ``started``/``reused``, or ``None`` on failure.
 
-        ``reuse=False`` is used for the Web UI: its behavior depends on more per-run options than
-        the reuse decision covers, so an occupied port means "restart our recorded UI" or "refuse".
+        ``reuse=False`` is used for processes whose behavior depends on per-run options the reuse
+        record does not cover (the Web UI, and the OSS Agent with its callback ports): an occupied
+        port means "restart our own child of this module" or "refuse".
+
+        ``drop_env`` removes inherited keys before the child's ``extra_env`` is applied.
         """
         if _port_open(port, probe_host):
             if not reuse:
-                stale = [pid for pid in _listener_pids(port) if _is_ui_child(pid)]
+                stale = [
+                    pid
+                    for pid in _listener_pids(port)
+                    if _is_module_child(pid, module) or _is_ui_child(pid)
+                ]
                 if not stale:
                     print(
                         f"[run_demo] {name} port {port} is already in use by a process this "
@@ -1580,7 +1701,7 @@ def main() -> int:
                         f"process, free the port, or choose another port"
                     )
                     return None
-                print(f"[run_demo] {name} port {port} is held by a stale Web UI process; restarting it")
+                print(f"[run_demo] {name} port {port} is held by a stale {name} process; restarting it")
                 _stop_pids(stale)
                 if not _wait_ports_closed([port], timeout=args.timeout):
                     print(f"[run_demo] {name} port {port} was not released; free it and retry")
@@ -1603,7 +1724,7 @@ def main() -> int:
             proc = subprocess.Popen(
                 command,
                 cwd=str(RUN_DIR),
-                env=_child_env(args.language, extra_env),
+                env=_child_env(args.language, extra_env, exclude=drop_env),
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -1613,7 +1734,7 @@ def main() -> int:
             proc = subprocess.Popen(
                 command,
                 cwd=str(RUN_DIR),
-                env=_child_env(args.language, extra_env),
+                env=_child_env(args.language, extra_env, exclude=drop_env),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -1704,7 +1825,17 @@ def main() -> int:
                     **oss_trace_env,
                     **oss_webhook_env,
                 }
-                if start("oss", OSS_MODULE, args.oss_port, oss_env) is None:
+                if (
+                    start(
+                        "oss",
+                        OSS_MODULE,
+                        args.oss_port,
+                        oss_env,
+                        reuse=False,
+                        drop_env=oss_webhook_keys,
+                    )
+                    is None
+                ):
                     return 1
             elif args.gateway and start("gateway", GATEWAY_MODULE, args.gateway_port) is None:
                 return 1
@@ -1718,7 +1849,17 @@ def main() -> int:
                 **oss_trace_env,
                 **oss_webhook_env,
             }
-            if start("oss", OSS_MODULE, args.oss_port, oss_env) is None:
+            if (
+                start(
+                    "oss",
+                    OSS_MODULE,
+                    args.oss_port,
+                    oss_env,
+                    reuse=False,
+                    drop_env=oss_webhook_keys,
+                )
+                is None
+            ):
                 return 1
 
         ui_proc: subprocess.Popen[str] | None = None
