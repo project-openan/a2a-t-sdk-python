@@ -532,6 +532,7 @@ A2A-T 模式下，客户端可以在发送前用 SDK 的内容校验检查渲染
   - `input.text_too_long` 和 `template.not_found` 是确定性错误，直接阻断；
   - `llm.*` / `infra.*` 失败降级为 **unavailable**：记录 warning 后继续发送，模型故障不会中断演示。
 - 业务 slot 抽取失败（`slot.constraint_violated`、`slot.not_provided` 等）发生在 Task-T 存在之前。`run_client_flow` 把 `PromptGenerationError.failed_parameters` 转成同样的 blocked `task_validation` 记录并返回 `input_invalid`，操作员可修改请求后重试。没有 failed slot 参数的生成失败（LLM 故障、模板缺失）仍然抛出，不会误报成输入问题。
+- OSS agent 在请求离开前执行自己的调用方 schema：内容校验成功后再用 `_missing_required_fields` 检查 `TASK_PARAM_SCHEMA.required` 对应的 `FilledParamData`。缺失值（如 `guaranteedThroughputTarget`）会变成 blocked 的 `content.param_missing` 校验，带业务 `section_label`（“速率保障目标”），请求不会发送。这是业务门，不是网管侧的 Task-T 协商：调用方 schema 未要求的 `entry_field_missing` 仍会发出，由服务端协商。`ClientRuntime` 对操作员输入/编辑的请求启用该门，对刻意省略必填值的信息 / 拒绝 / 中止演示场景关闭该门。
 - SDK slot 抽取提示词要求一个片段只落一个 slot、缺失值保持 null；同一个 `actual` 的重复 `slot.constraint_violated` 在到达调用方前会折叠到最具体的 slot。
 - 两阶段 Modify 的 Task-T 走同一道门；Modify 被阻断时先取消基线 Task，再结束 run。
 - `A2AT_SAMPLE_PRE_SEND_VALIDATION` 控制范围：`on`（默认）只在 run 来源为演示页时启用，`always` 覆盖所有入口，`off` 关闭。

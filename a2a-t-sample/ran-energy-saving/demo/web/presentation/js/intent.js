@@ -227,19 +227,21 @@ export function validationBlock(validation, copy) {
   if (verdict === "passed" || (errors.length === 0 && verdict !== "unavailable")) return null;
   const labels = copy.validation || {};
   const section = el("div", `validation-block ${verdict}`);
-  const note =
-    verdict === "blocked"
-      ? labels.blocked
-      : verdict === "negotiable"
-        ? labels.negotiable
-        : labels.unavailable;
+  const missingInfo =
+    errors.length > 0 &&
+    errors.every((error) => isObject(error) && error.code === "content.param_missing");
+  let note = labels.blocked;
+  if (verdict === "negotiable") note = labels.negotiable;
+  else if (verdict === "unavailable") note = labels.unavailable;
+  else if (verdict === "blocked" && missingInfo) note = labels.missingInfo;
   if (note) section.append(el("p", "validation-note", note));
   if (errors.length > 0) {
     const list = el("ul", "validation-errors");
     for (const error of errors) {
       const item = el("li");
       const facts = isObject(error.facts) ? error.facts : {};
-      const name = facts.slot_label || error.slotName || error.code || "—";
+      const name =
+        facts.slot_label || facts.field_label || facts.section_label || error.slotName || error.code || "—";
       item.append(el("b", "", name));
       if (error.message) item.append(el("span", "", error.message));
       if (error.code) item.append(el("code", "", error.code));

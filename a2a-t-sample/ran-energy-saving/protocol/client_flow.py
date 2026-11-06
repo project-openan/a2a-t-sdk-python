@@ -271,16 +271,79 @@ def _classify_validation_error(
     return "blocked", None
 
 
+#: Business labels of the caller-schema required fields, used by the OSS-agent interception.
+_REQUIRED_FIELD_LABELS: Final[dict[str, str]] = {
+    "operationType": "Operation Type",
+    "region": "Area",
+    "guaranteedThroughputTarget": "Rate guarantee goal",
+}
+
+#: Business labels of the same required fields in Chinese.
+_REQUIRED_FIELD_LABELS_ZH: Final[dict[str, str]] = {
+    "operationType": "操作类型",
+    "region": "区域",
+    "guaranteedThroughputTarget": "速率保障目标",
+}
+
+
+def _missing_required_fields(
+    filled: object,
+    schema: Mapping[str, object],
+    language: str,
+) -> list[dict[str, object]]:
+    """Return the caller-schema required fields the OSS agent must ask the operator to supply.
+
+    The SDK content validator treats the Task-T template's optional fields as optional; the OSS
+    agent's own business schema may still require them (for example a guaranteed rate for every
+    energy-saving request). This deterministic check runs on the client side so the OSS agent
+    intercepts its own required gaps before they reach the network. The returned errors use the
+    same ``content.param_missing`` shape as the SDK, including a business ``section_label`` that
+    the presentation and the negotiation proposal can display.
+    """
+    required = schema.get("required")
+    if not isinstance(required, list):
+        return []
+    data = getattr(filled, "data", None)
+    if not isinstance(data, Mapping):
+        return []
+    labels = _REQUIRED_FIELD_LABELS_ZH if language == LANGUAGE_ZH else _REQUIRED_FIELD_LABELS
+    errors: list[dict[str, object]] = []
+    for name in required:
+        if not isinstance(name, str):
+            continue
+        value = data.get(name)
+        if value is not None and not (isinstance(value, str) and not value.strip()):
+            continue
+        label = labels.get(name, name)
+        message = (
+            f"缺少必填项「{label}」，请补充后重试"
+            if language == LANGUAGE_ZH
+            else f"'{label}' is empty; please provide a value"
+        )
+        errors.append(
+            {
+                "slotName": name,
+                "code": "content.param_missing",
+                "message": message,
+                "facts": {"section_label": label},
+            }
+        )
+    return errors
+
+
 async def _validate_task_prompt(
     prompt_client: PromptClient,
     prompt: str,
     schema: Mapping[str, object],
     template_uri: str,
+    *,
+    language: str,
+    enforce_required_fields: bool = True,
 ) -> TaskValidation:
     """Run the SDK content validation without blocking the event loop."""
     started = time.monotonic()
     try:
-        await asyncio.to_thread(
+        filled = await asyncio.to_thread(
             prompt_client.validate_task_prompt_and_data_filling,
             prompt,
             schema,
@@ -293,6 +356,12 @@ async def _validate_task_prompt(
         _LOGGER.warning("Task-T validation unavailable: %s", error)
         reason = f"{type(error).__name__}: {error}"
         return TaskValidation("unavailable", None, [], reason, _elapsed_ms(started))
+    if enforce_required_fields:
+        missing = _missing_required_fields(filled, schema, language)
+        if missing:
+            # The OSS agent owns the business-required fields: do not send an incomplete Task-T
+            # and rely on the network's negotiation for a value the operator can supply here.
+            return TaskValidation("blocked", None, missing, "content.param_missing", _elapsed_ms(started))
     return TaskValidation("passed", None, [], None, _elapsed_ms(started))
 
 
@@ -596,6 +665,7 @@ async def run_client_flow(
     single_extension_per_message: bool = False,
     forced_region: str | None = None,
     validate_before_send: bool = False,
+    enforce_required_fields: bool = True,
     run_mode: str = RUN_MODE_CREATE,
     target_task_id: str | None = None,
     target_context_id: str | None = None,
@@ -642,6 +712,10 @@ async def run_client_flow(
         validate_before_send: Validate each rendered Task-T with the SDK content pipeline before
             sending it. Negotiable errors still go to the server for negotiation; unmapped errors
             end the flow with ``input_invalid`` and no message is sent.
+        enforce_required_fields: After a successful content validation, check the caller schema's
+            required parameters against the extracted data and stop before sending when one is
+            empty. Callers may disable this for a curated demonstration request whose deliberate
+            gap is meant to exercise the server's negotiation.
         run_mode: ``create`` starts a new A2A Task; ``modify`` sends the scenario's Modify Task-T
             as the first message so an existing running Task is continued.
         target_task_id: Task the Modify-only run continues; required by ``run_mode="modify"``.
@@ -843,7 +917,14 @@ async def run_client_flow(
         },
     )
     if validate_before_send:
-        validation = await _validate_task_prompt(prompt_client, prompt_text, validation_schema, task_template_uri)
+        validation = await _validate_task_prompt(
+            prompt_client,
+            prompt_text,
+            validation_schema,
+            task_template_uri,
+            language=language,
+            enforce_required_fields=enforce_required_fields,
+        )
         emit_validation(validation, prompt_text, task_template_uri, initial_phase)
         if validation.verdict == "blocked":
             # Nothing is sent and no negotiation starts: the operator repairs the request first.
@@ -923,7 +1004,14 @@ async def run_client_flow(
                 },
             )
             if validate_before_send:
-                validation = await _validate_task_prompt(prompt_client, follow_text, follow_schema, task_template_uri)
+                validation = await _validate_task_prompt(
+                    prompt_client,
+                    follow_text,
+                    follow_schema,
+                    task_template_uri,
+                    language=language,
+                    enforce_required_fields=enforce_required_fields,
+                )
                 emit_validation(validation, follow_text, task_template_uri, PHASE_TASK_MODIFY)
                 if validation.verdict == "blocked":
                     # The baseline Task is still WORKING; cancel it instead of leaving a half-open

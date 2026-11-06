@@ -13,6 +13,7 @@ from a2a_t.core.errors.catalog import ErrorCatalog
 from a2a_t.core.errors.exceptions import ContentValidationError, PromptGenerationError, SlotValidationError
 from a2a_t.core.metadata import TASK_T_EXTENSION_URI, MetadataContent
 from a2a_t.core.standard_templates import ENERGY_SAVING_URI
+from a2a_t.core.validation_pipeline import FilledParamData
 from protocol.client_flow import run_client_flow
 from protocol.decision_provider import ScriptedDecisionProvider
 from protocol.run_spec import ClientPolicy
@@ -29,6 +30,7 @@ class ValidatingPromptClient:
 
     validation_errors: list[Exception | None] = field(default_factory=list)
     generation_errors: list[Exception | None] = field(default_factory=list)
+    filled_data: Mapping[str, object] | None = None
     validation_calls: list[tuple[str, Mapping[str, object], str]] = field(default_factory=list)
     generation_calls: list[str] = field(default_factory=list)
 
@@ -67,6 +69,8 @@ class ValidatingPromptClient:
         error = self.validation_errors.pop(0) if self.validation_errors else None
         if error is not None:
             raise error
+        if self.filled_data is not None:
+            return FilledParamData(data=dict(self.filled_data))
         return object()
 
 
@@ -156,6 +160,7 @@ async def _run(
     transport: RecordingTransport,
     trace_sink: list[dict[str, object]],
     validate: bool = True,
+    enforce_required_fields: bool = True,
     policy: ClientPolicy | None = None,
 ):
     return await run_client_flow(
@@ -164,9 +169,11 @@ async def _run(
         user_request="create ran energy saving task",
         provider=ScriptedDecisionProvider([]),
         task_template_uri=ENERGY_SAVING_URI,
+        language="en-US",
         trace_sink=trace_sink.append,
         single_extension_per_message=False,
         validate_before_send=validate,
+        enforce_required_fields=enforce_required_fields,
         policy=policy or ClientPolicy(),
     )
 
@@ -249,6 +256,75 @@ async def test_a_missing_entry_field_is_negotiable_information() -> None:
     assert isinstance(detail, dict)
     assert detail["verdict"] == "negotiable"
     assert detail["negotiationKind"] == "information"
+
+
+@pytest.mark.asyncio
+async def test_the_oss_agent_intercepts_a_missing_required_field() -> None:
+    """The caller schema's required values are the OSS agent's own business gate."""
+    prompt_client = ValidatingPromptClient(
+        filled_data={
+            "operationType": "Create",
+            "region": "A2ATestRegion",
+            "guaranteedThroughputTarget": None,
+        }
+    )
+    transport = RecordingTransport([_completed_task()])
+    traces: list[dict[str, object]] = []
+
+    result = await _run(prompt_client=prompt_client, transport=transport, trace_sink=traces)
+
+    assert result.final_state == FINAL_STATE_INPUT_INVALID
+    assert transport.requests == []
+    detail = _validation_spans(traces)[0]["detail"]
+    assert isinstance(detail, dict)
+    assert detail["verdict"] == "blocked"
+    assert detail["errors"][0]["code"] == "content.param_missing"
+    assert detail["errors"][0]["facts"]["section_label"] == "Rate guarantee goal"
+    assert "Rate guarantee goal" in detail["errors"][0]["message"]
+
+
+@pytest.mark.asyncio
+async def test_a_curated_request_can_skip_the_oss_required_gate() -> None:
+    """The information-negotiation demo deliberately omits a required value."""
+    prompt_client = ValidatingPromptClient(
+        filled_data={
+            "operationType": "Create",
+            "region": "A2ATestRegion",
+            "guaranteedThroughputTarget": None,
+        }
+    )
+    transport = RecordingTransport([_completed_task()])
+    traces: list[dict[str, object]] = []
+
+    result = await _run(
+        prompt_client=prompt_client,
+        transport=transport,
+        trace_sink=traces,
+        enforce_required_fields=False,
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert len(transport.requests) == 1
+    assert _validation_spans(traces)[0]["detail"]["verdict"] == "passed"
+
+
+@pytest.mark.asyncio
+async def test_a_complete_caller_schema_still_reaches_the_server() -> None:
+    prompt_client = ValidatingPromptClient(
+        filled_data={
+            "operationType": "Create",
+            "region": "A2ATestRegion",
+            "guaranteedThroughputTarget": "{00:00~06:00,2Mbps}",
+        }
+    )
+    transport = RecordingTransport([_completed_task()])
+    traces: list[dict[str, object]] = []
+
+    result = await _run(prompt_client=prompt_client, transport=transport, trace_sink=traces)
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert len(transport.requests) == 1
+    assert _validation_spans(traces)[0]["detail"]["verdict"] == "passed"
 
 
 @pytest.mark.asyncio

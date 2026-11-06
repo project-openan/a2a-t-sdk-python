@@ -280,6 +280,14 @@ never sent and no negotiation starts.
   negotiable and still go out, so the negotiation scenarios keep working. A missing field inside
   one entry (`content.entry_field_missing`, for example a missing Rate) is an information
   negotiation, not a hard block.
+- **The OSS agent intercepts its own required fields.** After the SDK extracts the caller-schema
+  parameters, a missing required value (for example the guaranteed rate) stops the request at the
+  OSS layer: nothing is sent, and the validation card asks the operator to supply it. This is the
+  business gate of `TASK_PARAM_SCHEMA.required`, separate from the network's own Task-T
+  negotiation. Fields the caller schema does not require still reach the server and are negotiated
+  there. Curated demonstration scenarios that deliberately omit a required value (the information /
+  reject / abort scenarios) skip this gate so the server-side negotiation remains demonstrable;
+  operator-entered or edited requests always enforce it.
 - Unmapped errors block the send: the run ends `finished` with `final_state=input_invalid`, records
   a `task_validation` trace, and the page shows the issues inline.
 - A business slot-extraction failure (`slot.constraint_violated` and friends) happens before any

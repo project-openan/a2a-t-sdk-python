@@ -645,6 +645,15 @@ reaches the server and never starts a negotiation.
   the same blocked `task_validation` record and returns `input_invalid`, so the operator can edit
   the request and retry. Generation failures without failed slot parameters (an LLM outage, a
   missing template) still raise and are not misreported as input problems.
+- The OSS agent enforces its own caller schema before the request leaves. On a successful content
+  validation, `_missing_required_fields` checks `TASK_PARAM_SCHEMA.required` against the extracted
+  `FilledParamData`; a missing value (for example `guaranteedThroughputTarget`) becomes a blocked
+  `content.param_missing` validation with a business `section_label` ("Rate guarantee goal") and is
+  never sent. This is a business gate, not the network's Task-T negotiation: `entry_field_missing`
+  on a field the caller schema does not require still goes out and is negotiated by the server.
+  `ClientRuntime` enables the gate for operator-entered or edited requests and disables it for the
+  curated information / reject / abort scenarios, whose deliberate gap is the server-negotiation
+  demonstration.
 - The SDK's slot extraction prompt enforces one fragment per slot and keeps missing values null;
   duplicate `slot.constraint_violated` reports of the same `actual` value are collapsed to the most
   specific slot before the error reaches the caller.

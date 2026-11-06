@@ -236,6 +236,11 @@ A2A-T 模式下，演示页在发送前用 SDK 内容校验检查渲染后的 Ta
 - 能映射到服务端协商类型（`INFORMATION` / `TARGET` / `FEASIBILITY`）的错误是可协商的，仍然发送，
   协商演示不受影响。条目内缺字段（`content.entry_field_missing`，例如缺 Rate）属于信息协商，
   不再硬阻断。
+- **OSS agent 会拦截自己的必填项。** SDK 抽取完调用方 schema 的参数后，必填值缺失（例如保障速率）
+  会在 OSS 层停住：不发送请求，校验卡提示操作员补充。这是 `TASK_PARAM_SCHEMA.required` 的业务门，
+  与网管侧的 Task-T 协商是两回事；调用方 schema 未要求的字段仍会发给服务端，由网管协商。
+  内置的信息 / 拒绝 / 中止场景刻意省略必填值来演示服务端协商，会跳过这道门；操作员输入或编辑的
+  请求始终执行检查。
 - 映射不到的错误会阻断发送：run 以 `finished` + `final_state=input_invalid` 结束，记录
   `task_validation` trace，页面内联展示问题。
 - 业务 slot 抽取失败（`slot.constraint_violated` 等）发生在 Task-T 存在之前，也按同样方式呈现：

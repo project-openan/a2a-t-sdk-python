@@ -571,6 +571,7 @@ class ClientRuntime:
                     single_extension_per_message=(self.config.discovery == DISCOVERY_NMS),
                     forced_region=(self.config.nms_region if self.config.discovery == DISCOVERY_NMS else None),
                     validate_before_send=validate_before_send,
+                    enforce_required_fields=bool(custom_request),
                     run_mode=run_mode,
                     target_task_id=target_task_id,
                     target_context_id=target_context_id,
