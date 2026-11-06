@@ -273,6 +273,27 @@ async def test_configured_brand_is_injected_into_the_page_and_meta(
     assert meta["defaultBrand"] == "huawei"
 
 
+async def test_process_language_is_injected_before_the_copy_pass(
+    offline_config: SampleConfig,
+    tmp_path: Path,
+) -> None:
+    """The first paint knows the language, so it need not show the Chinese template to others."""
+    assert offline_config.language == "en-US"
+    app = create_app(
+        offline_config,
+        runs_dir=tmp_path,
+        finished_grace_seconds=0.0,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        page = (await http_client.get("/")).text
+
+    assert '<meta name="a2at-language" content="en-US">' in page
+    assert "__A2AT_LANGUAGE__" not in page
+    # The bootstrap hides the Chinese template until the copy pass reveals it.
+    assert 'document.documentElement.setAttribute("data-locale-pending", "")' in page
+
+
 async def test_explorer_mode_still_serves_the_run_explorer(
     offline_config: SampleConfig,
     tmp_path: Path,

@@ -5,7 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <meta name="a2at-default-brand" content="__A2AT_DEFAULT_BRAND__">
+  <meta name="a2at-language" content="__A2AT_LANGUAGE__">
   <title>A2A-T · RAN 节能</title>
+  <style>
+    /* The template ships the Chinese copy; keep it off screen until the copy pass has run. */
+    html[data-locale-pending] body { visibility: hidden; }
+  </style>
   <script>
     // Apply the brand before the stylesheet paints: query override, saved choice, process default.
     (() => {
@@ -21,6 +26,17 @@
         // Storage can be unavailable in private browsing; the process default still applies.
       }
       document.documentElement.dataset.brand = brand;
+    })();
+    // The server knows the process language, so set it before the first paint. A non-Chinese
+    // audience must not see the Chinese template while /api/meta is still in flight.
+    (() => {
+      const meta = document.querySelector('meta[name="a2at-language"]');
+      const language = meta && meta.content ? meta.content : "zh-CN";
+      document.documentElement.lang = language;
+      if (language !== "zh-CN") {
+        document.documentElement.setAttribute("data-locale-pending", "");
+        document.title = "A2A-T · RAN";
+      }
     })();
   </script>
   <link rel="stylesheet" href="/static/app.css">

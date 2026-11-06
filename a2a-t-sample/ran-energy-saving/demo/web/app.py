@@ -253,6 +253,9 @@ def create_app(
     index_html = (static_dir / "index.html").read_text(encoding="utf-8")
     if ui_mode == WEB_UI_PRESENTATION:
         index_html = index_html.replace("__A2AT_DEFAULT_BRAND__", default_brand)
+        # The page ships the Chinese template; let it hide that copy before the first paint when
+        # the process language is different. The client applies the real copy after /api/meta.
+        index_html = index_html.replace("__A2AT_LANGUAGE__", config.language)
     validate_bind_security(bind_host, config.auth_token, allow_insecure=allow_insecure_bind)
     if catalog is None:
         from demo.catalog import DemoRunCatalog

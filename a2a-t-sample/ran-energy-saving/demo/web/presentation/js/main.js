@@ -330,6 +330,15 @@ async function boot() {
   installTokenFromUrl();
   bindStaticEvents();
   try {
+    await loadStartupState();
+  } finally {
+    // Never leave a non-Chinese audience on the hidden Chinese template when boot fails.
+    revealLocalizedPage();
+  }
+}
+
+async function loadStartupState() {
+  try {
     const response = await fetch("/api/meta");
     if (response.status === 401) {
       showError(ui.copy.authRequired);
@@ -355,6 +364,11 @@ async function boot() {
   renderBottomCopy();
   subscribeMie();
   render();
+}
+
+/** Reveal the page after the server-provided language copy has been applied. */
+function revealLocalizedPage() {
+  document.documentElement.removeAttribute("data-locale-pending");
 }
 
 function bindStaticEvents() {
