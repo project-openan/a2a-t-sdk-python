@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 import subprocess
 import time
@@ -1885,3 +1886,19 @@ async def test_wire_endpoint_reports_no_capture_instead_of_inventing_one(
 
     assert response.status_code == 200
     assert response.json() == {"runId": "unknown-run", "records": [], "enabled": False}
+
+
+async def test_trace_ingestion_warns_for_an_unknown_run(
+    client: httpx.AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A stale OSS Agent posts to a run this UI instance does not own; ui.log must say so."""
+    with caplog.at_level(logging.WARNING, logger="ran_energy_saving.web"):
+        response = await client.post(
+            "/api/runs/missing/trace",
+            json=[],
+            headers={"x-a2at-trace-token": TRACE_TOKEN},
+        )
+
+    assert response.status_code == 404
+    assert "unknown run missing" in caplog.text

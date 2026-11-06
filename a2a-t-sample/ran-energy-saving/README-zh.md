@@ -359,6 +359,13 @@ A2A + `--nms` 的 OSS Agent 现在会把网管的 token、发送、轮询 span �
 OSS 启动日志会明确写出下游是 `OSS Agent downstream: NMS <base>` 还是
 `OSS Agent downstream: local RAN Agent (<url>)`；pure run 看起来没到网管时，先看 `oss.log`。
 
+OSS Agent 的 span 会发给“拥有该 run 的 UI 进程”。如果 `oss.log` 里出现
+`POST .../api/runs/<id>/trace` 返回 404 且响应体是 `unknown_run`，说明 OSS 仍配着另一个/已重启的
+UI 实例：run id 和 trace token 都属于旧 UI。用启动器重新起一对（`--stop` 后再启动），旧 OSS
+无法把 span 挂到新 UI 的 run 上。启动行 `OSS trace emitter: http://... (token configured)` 会写明
+目标 UI；被拒绝的批次现在会打印 UI 的响应体（`unknown_run` / `trace_token_invalid` /
+`span_invalid`），而不是只有状态码。
+
 ### 同一台机器并行两个实例
 
 单个实例即可在页面切换请求形态（UI 默认 `--protocol both`）。当两边需要不同的网管凭据、数据目录或

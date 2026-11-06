@@ -775,10 +775,23 @@ def _build_trace_emitter() -> HttpTraceEmitter | FileTraceEmitter | None:
     """
     base_url = os.environ.get("A2AT_SAMPLE_TRACE_URL", "").strip()
     if base_url:
-        return HttpTraceEmitter(base_url, os.environ.get("A2AT_SAMPLE_TRACE_TOKEN", "").strip())
+        token = os.environ.get("A2AT_SAMPLE_TRACE_TOKEN", "").strip()
+        # The OSS Agent reports spans to the UI instance that owns the run. Say which UI and
+        # whether the token is present: a stale pairing shows up later as a 404/403 on every
+        # batch, and this line is the first place to look.
+        if token:
+            _LOGGER.info("OSS trace emitter: %s (token configured)", base_url)
+        else:
+            _LOGGER.warning(
+                "OSS trace emitter: %s has no A2AT_SAMPLE_TRACE_TOKEN; the UI rejects every span",
+                base_url,
+            )
+        return HttpTraceEmitter(base_url, token)
     directory = os.environ.get("A2AT_SAMPLE_TRACE_DIR", "").strip()
     if directory:
+        _LOGGER.info("OSS trace emitter: file %s", directory)
         return FileTraceEmitter(Path(directory))
+    _LOGGER.info("OSS trace emitter: disabled (no A2AT_SAMPLE_TRACE_URL/TRACE_DIR)")
     return None
 
 

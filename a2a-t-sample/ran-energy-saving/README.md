@@ -420,6 +420,14 @@ At startup the OSS log names its hop — `OSS Agent downstream: NMS <base>` or
 `OSS Agent downstream: local RAN Agent (<url>)` — so `oss.log` is the first place to check when a
 pure run appears not to reach the vendor NMS.
 
+The OSS Agent reports its spans to the UI process that owns the run. If `oss.log` shows
+`POST .../api/runs/<id>/trace` returning 404 with `unknown_run`, the OSS is paired with a different
+or restarted UI instance: the run ids and the trace token belong to the previous UI. Restart the
+pair with the launcher (`--stop`, then start again); a stale OSS cannot attach to a new UI's runs.
+The startup line `OSS trace emitter: http://... (token configured)` names the target, and a
+rejected batch now logs the UI's response body (`unknown_run` / `trace_token_invalid` /
+`span_invalid`) instead of a bare status code.
+
 ### Two instances on one machine
 
 One instance can switch request forms in the page (the UI default, `--protocol both`). Running two instances is

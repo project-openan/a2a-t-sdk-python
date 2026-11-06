@@ -214,3 +214,18 @@ def test_default_trace_post_never_uses_proxy_environment(
     assert _default_trace_post("http://127.0.0.1:8080/api/x", {"spans": []}, {"a": "b"}) == 202
     assert captured["trust_env"] is False
     assert captured["url"] == "http://127.0.0.1:8080/api/x"
+
+
+def test_default_trace_post_reports_the_ui_rejection_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 404/403 carries the reason (unknown_run, trace_token_invalid) into the OSS log."""
+
+    class _Response:
+        status_code = 404
+        text = '{"error": "Unknown run.", "code": "unknown_run"}'
+
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: _Response())
+
+    with pytest.raises(RuntimeError, match="unknown_run"):
+        _default_trace_post("http://127.0.0.1:8080/api/runs/run-1/trace", [], {})

@@ -886,7 +886,14 @@ def _default_trace_post(url: str, body: object, headers: Mapping[str, str]) -> o
         timeout=DEFAULT_TRACE_TIMEOUT,
         trust_env=False,
     )
-    response.raise_for_status()
+    if response.status_code >= 400:
+        # ``raise_for_status`` drops the body, but the UI puts the rejection reason there
+        # (``unknown_run`` / ``trace_token_invalid`` / ``span_invalid``); without it a stale OSS
+        # Agent looks like a generic "receiver down".
+        excerpt = " ".join(str(getattr(response, "text", "")).split())[:300]
+        raise RuntimeError(
+            f"HTTP {response.status_code} from {url}: {excerpt or '<empty body>'}"
+        )
     return response.status_code
 
 

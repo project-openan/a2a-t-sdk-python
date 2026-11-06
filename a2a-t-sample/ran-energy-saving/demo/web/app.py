@@ -1268,6 +1268,10 @@ def create_app(
     async def ingest_trace(request: Request) -> Response:
         run = manager.get(request.path_params["run_id"])
         if run is None:
+            # A stale OSS Agent posts spans for a run that this UI instance does not own (for
+            # example after a UI restart). Keep the reason in ui.log so the operator can tell it
+            # apart from a token mismatch.
+            _LOGGER.warning("trace ingest rejected: unknown run %s", request.path_params["run_id"])
             return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
         if not _trace_token_ok(request):
             _LOGGER.warning("trace ingest rejected: invalid token")

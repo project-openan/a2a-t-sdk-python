@@ -25,7 +25,7 @@ from demo.pure_policy import build_demo_pure_policy, pure_answer_from_event
 from protocol.client_flow import ClientFlowResult
 from protocol.intent import ProcessedIntent
 from protocol.mie_agent import build_mie_app
-from protocol.oss_agent import OSSPureExecutor, a2a_request_text, build_oss_app
+from protocol.oss_agent import OSSPureExecutor, _build_trace_emitter, a2a_request_text, build_oss_app
 from shared.config import DISCOVERY_DIRECT, DISCOVERY_NMS, TRANSPORT_SSE
 from shared.run_constants import (
     FINAL_STATE_INCOMPLETE,
@@ -275,3 +275,37 @@ async def test_start_announces_the_local_downstream(
         await executor.stop()
 
     assert "OSS Agent downstream: local RAN Agent (http://127.0.0.1:8000" in caplog.text
+
+
+def test_trace_emitter_logs_the_ui_pairing(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``oss.log`` names the UI instance that receives the spans, and whether the token is set."""
+    monkeypatch.setenv("A2AT_SAMPLE_TRACE_URL", "http://127.0.0.1:8080")
+    monkeypatch.setenv("A2AT_SAMPLE_TRACE_TOKEN", "token")
+    monkeypatch.delenv("A2AT_SAMPLE_TRACE_DIR", raising=False)
+
+    with caplog.at_level(logging.INFO, logger="ran_energy_saving.oss_agent"):
+        emitter = _build_trace_emitter()
+    assert emitter is not None
+    emitter.close()
+
+    assert "OSS trace emitter: http://127.0.0.1:8080 (token configured)" in caplog.text
+
+
+def test_trace_emitter_warns_without_a_token(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Without the shared token the UI rejects every batch; say so at startup."""
+    monkeypatch.setenv("A2AT_SAMPLE_TRACE_URL", "http://127.0.0.1:8080")
+    monkeypatch.setenv("A2AT_SAMPLE_TRACE_TOKEN", "")
+    monkeypatch.delenv("A2AT_SAMPLE_TRACE_DIR", raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="ran_energy_saving.oss_agent"):
+        emitter = _build_trace_emitter()
+    assert emitter is not None
+    emitter.close()
+
+    assert "no A2AT_SAMPLE_TRACE_TOKEN" in caplog.text
