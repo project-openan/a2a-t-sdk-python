@@ -95,6 +95,7 @@ from shared.trace import (
     PHASE_TASK_MODIFY,
     PHASES,
     SCHEMA_VERSION,
+    set_global_sink,
 )
 from sse_starlette.sse import EventSourceResponse
 from starlette.applications import Starlette
@@ -244,16 +245,12 @@ def create_app(
     if ui_mode not in WEB_UI_MODES:
         raise ValueError(f"Unsupported ui mode: {ui_mode}; expected one of {WEB_UI_MODES}")
     if default_brand not in SUPPORTED_BRANDS:
-        raise ValueError(
-            f"Unsupported presentation brand: {default_brand}; expected one of {SUPPORTED_BRANDS}"
-        )
+        raise ValueError(f"Unsupported presentation brand: {default_brand}; expected one of {SUPPORTED_BRANDS}")
     static_dir = PRESENTATION_DIR if ui_mode == WEB_UI_PRESENTATION else STATIC_DIR
     index_html = (static_dir / "index.html").read_text(encoding="utf-8")
     if ui_mode == WEB_UI_PRESENTATION:
         index_html = index_html.replace("__A2AT_DEFAULT_BRAND__", default_brand)
-    validate_bind_security(
-        bind_host, config.auth_token, allow_insecure=allow_insecure_bind
-    )
+    validate_bind_security(bind_host, config.auth_token, allow_insecure=allow_insecure_bind)
     if catalog is None:
         from demo.catalog import DemoRunCatalog
 
@@ -263,9 +260,7 @@ def create_app(
     advertised_protocols = tuple(
         candidate for candidate in (protocols or (protocol,)) if candidate in DEMO_PROTOCOLS
     ) or (PROTOCOL_A2A_T,)
-    resolved_protocol = (
-        protocol if protocol in advertised_protocols else advertised_protocols[0]
-    )
+    resolved_protocol = protocol if protocol in advertised_protocols else advertised_protocols[0]
 
     def _scenarios_for(candidate: str) -> tuple[str, ...]:
         """Return the scenarios the page may offer for one advertised protocol."""
@@ -277,19 +272,13 @@ def create_app(
             names = scenario_names
         return tuple(name for name in names if name in scenario_names)
 
-    scenarios_by_protocol = {
-        candidate: _scenarios_for(candidate) for candidate in advertised_protocols
-    }
+    scenarios_by_protocol = {candidate: _scenarios_for(candidate) for candidate in advertised_protocols}
     active_scenarios = tuple(
-        name
-        for name in scenario_names
-        if any(name in names for names in scenarios_by_protocol.values())
+        name for name in scenario_names if any(name in names for names in scenarios_by_protocol.values())
     )
     if not active_scenarios:
         active_scenarios = tuple(scenario_names)
-    resolved_default_scenario = _resolve_default(
-        default_scenario, active_scenarios, active_scenarios[0], "scenario"
-    )
+    resolved_default_scenario = _resolve_default(default_scenario, active_scenarios, active_scenarios[0], "scenario")
     resolved_default_mode = _resolve_default(default_mode, UI_MODES, MODE_AUTO, "mode")
     config_transport = config.transport if config.transport in SUPPORTED_TRANSPORTS else SUPPORTED_TRANSPORTS[0]
     resolved_default_transport = _resolve_default(
@@ -304,15 +293,11 @@ def create_app(
     # One agent serves both request forms, but the deployment decides the hop: A2A-T calls the
     # vendor NMS directly (or discovers the local RAN Agent), while standard A2A always enters
     # through the OSS Agent over direct discovery.
-    resolved_nms = (
-        (config.discovery == DISCOVERY_NMS) if nms_enabled is None else nms_enabled
-    )
+    resolved_nms = (config.discovery == DISCOVERY_NMS) if nms_enabled is None else nms_enabled
     protocol_defaults: dict[str, dict[str, str]] = {
         PROTOCOL_A2A_T: {
             "discovery": DISCOVERY_NMS if resolved_nms else DISCOVERY_REGISTRY,
-            "transport": (
-                TRANSPORT_WEBHOOK if resolved_nms else resolved_default_transport
-            ),
+            "transport": (TRANSPORT_WEBHOOK if resolved_nms else resolved_default_transport),
         },
         PROTOCOL_PURE: {
             "discovery": DISCOVERY_DIRECT,
@@ -320,13 +305,9 @@ def create_app(
         },
     }
     resolved_intent_mode = (
-        config.intent_mode
-        if config.intent_mode in SUPPORTED_INTENT_MODES
-        else SUPPORTED_INTENT_MODES[0]
+        config.intent_mode if config.intent_mode in SUPPORTED_INTENT_MODES else SUPPORTED_INTENT_MODES[0]
     )
-    resolved_intent_review = (
-        ui_mode == WEB_UI_PRESENTATION if intent_review is None else intent_review
-    )
+    resolved_intent_review = ui_mode == WEB_UI_PRESENTATION if intent_review is None else intent_review
 
     async def default_factory(
         resolved_config: SampleConfig,
@@ -336,6 +317,7 @@ def create_app(
         discovery: str,
         *,
         protocol: str = PROTOCOL_A2A_T,
+        run_id: str = "",
     ) -> ClientRuntimeLike:
         """Build the real client runtime with the app's source ``.env``."""
         from demo.composition import build_demo_runtime
@@ -347,6 +329,7 @@ def create_app(
             transport,
             discovery,
             protocol=protocol,
+            run_id=run_id,
             env_path=env_path,
         )
 
@@ -361,6 +344,9 @@ def create_app(
         intent_review=resolved_intent_review,
         metrics_grace_seconds=metrics_grace_seconds,
     )
+    # Install the run-id router before any run is built. Uvicorn also runs the lifespan, but the
+    # ASGI test client may not, and an in-process server already emits on its own thread.
+    set_global_sink(manager.route_external_span)
     tester_routes, tester_batches = build_tester_routes(
         runs=manager,
         protocols=advertised_protocols,
@@ -398,14 +384,20 @@ def create_app(
         await manager.mark_interrupted()
         # Apply the decision-session retention window before the first run of this process.
         await manager.sweep_sessions()
-        yield
-        await tester_batches.shutdown()
-        await manager.shutdown()
-        # The callback receiver is process-owned, not run-owned; release its port on shutdown.
-        from protocol.shared_webhook import close_shared_webhooks
+        # Producers that emit from another thread/task (e.g. an in-process server) cannot see a
+        # run-local sink; route their spans by the run id they carry.
+        set_global_sink(manager.route_external_span)
+        try:
+            yield
+        finally:
+            set_global_sink(None)
+            await tester_batches.shutdown()
+            await manager.shutdown()
+            # The callback receiver is process-owned, not run-owned; release its port on shutdown.
+            from protocol.shared_webhook import close_shared_webhooks
 
-        await close_shared_webhooks()
-        _LOGGER.info("web ui stopped")
+            await close_shared_webhooks()
+            _LOGGER.info("web ui stopped")
 
     async def index(request: Request) -> Response:
         del request
@@ -422,15 +414,12 @@ def create_app(
                 "modelLabel": config.model_label,
                 "scenarios": list(active_scenarios),
                 "scenarioRequests": {
-                    name: _scenario_request(resolved_catalog, name, config.language)
-                    for name in active_scenarios
+                    name: _scenario_request(resolved_catalog, name, config.language) for name in active_scenarios
                 },
                 "modes": list(UI_MODES),
                 "protocol": resolved_protocol,
                 "protocols": list(advertised_protocols),
-                "scenariosByProtocol": {
-                    name: list(names) for name, names in scenarios_by_protocol.items()
-                },
+                "scenariosByProtocol": {name: list(names) for name, names in scenarios_by_protocol.items()},
                 "protocolDefaults": protocol_defaults,
                 "pureScenarios": list(PURE_PROTOCOL_SCENARIOS),
                 "plainScenarios": list(PLAIN_PROTOCOL_SCENARIOS),
@@ -524,9 +513,7 @@ def create_app(
                 {"error": "The client database is disabled.", "code": "client_db_disabled"},
                 status_code=404,
             )
-        detail = await asyncio.to_thread(
-            read_client_run_detail, path, request.path_params["run_id"]
-        )
+        detail = await asyncio.to_thread(read_client_run_detail, path, request.path_params["run_id"])
         if detail is None:
             return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
         # The wire inspector shows what the client really sent. These records are written redacted
@@ -561,9 +548,7 @@ def create_app(
                 {"error": "The client database is disabled.", "code": "client_db_disabled"},
                 status_code=404,
             )
-        detail = await asyncio.to_thread(
-            read_conversation_detail, path, request.path_params["conversation_id"]
-        )
+        detail = await asyncio.to_thread(read_conversation_detail, path, request.path_params["conversation_id"])
         if detail is None:
             return JSONResponse(
                 {"error": "Unknown conversation.", "code": "unknown_conversation"},
@@ -671,9 +656,7 @@ def create_app(
         )
         for row in rows:
             accuracy = row.get("accuracy") if isinstance(row.get("accuracy"), Mapping) else {}
-            negotiation = (
-                row.get("negotiation") if isinstance(row.get("negotiation"), Mapping) else {}
-            )
+            negotiation = row.get("negotiation") if isinstance(row.get("negotiation"), Mapping) else {}
             tokens = row.get("tokens") if isinstance(row.get("tokens"), Mapping) else {}
             latency = row.get("latency") if isinstance(row.get("latency"), Mapping) else {}
             writer.writerow(
@@ -732,16 +715,8 @@ def create_app(
         defaults = protocol_defaults.get(protocol_key, {})
         # The page sends only the protocol; the backend owns each request form's hop so a stale
         # browser value can never send standard A2A through the A2A-T discovery path.
-        transport = (
-            body.get("transport")
-            or defaults.get("transport")
-            or resolved_default_transport
-        )
-        discovery = (
-            body.get("discovery")
-            or defaults.get("discovery")
-            or resolved_default_discovery
-        )
+        transport = body.get("transport") or defaults.get("transport") or resolved_default_transport
+        discovery = body.get("discovery") or defaults.get("discovery") or resolved_default_discovery
         intent_mode = body.get("intentMode", resolved_intent_mode)
         raw_user_request = body.get("userRequest")
         if raw_user_request is not None and not isinstance(raw_user_request, str):
@@ -793,9 +768,7 @@ def create_app(
             )
         if protocol not in SUPPORTED_PROTOCOLS:
             return JSONResponse(
-                {
-                    "error": f"Unsupported protocol: {protocol}; expected one of {SUPPORTED_PROTOCOLS}"
-                },
+                {"error": f"Unsupported protocol: {protocol}; expected one of {SUPPORTED_PROTOCOLS}"},
                 status_code=400,
             )
         if transport not in SUPPORTED_TRANSPORTS:
@@ -810,12 +783,7 @@ def create_app(
             )
         if intent_mode not in SUPPORTED_INTENT_MODES:
             return JSONResponse(
-                {
-                    "error": (
-                        f"Unsupported intent mode: {intent_mode}; "
-                        f"expected one of {SUPPORTED_INTENT_MODES}"
-                    )
-                },
+                {"error": (f"Unsupported intent mode: {intent_mode}; expected one of {SUPPORTED_INTENT_MODES}")},
                 status_code=400,
             )
         try:
@@ -1027,9 +995,7 @@ def create_app(
         payload = await _json_or_empty(forwarded)
         if forwarded.status_code >= 400:
             return JSONResponse(payload, status_code=forwarded.status_code)
-        return JSONResponse(
-            {"accepted": True, "runId": run.run_id, "approved": body["approved"]}
-        )
+        return JSONResponse({"accepted": True, "runId": run.run_id, "approved": body["approved"]})
 
     async def _json_or_empty(response: httpx.Response) -> dict[str, object]:
         """Return one forwarded JSON object, or an empty mapping."""
@@ -1051,9 +1017,7 @@ def create_app(
         async def stream() -> AsyncIterator[bytes]:
             try:
                 async with httpx.AsyncClient(timeout=None, trust_env=False) as client:
-                    async with client.stream(
-                        "GET", f"{mie_url.rstrip('/')}/approvals/events"
-                    ) as response:
+                    async with client.stream("GET", f"{mie_url.rstrip('/')}/approvals/events") as response:
                         response.raise_for_status()
                         async for chunk in response.aiter_bytes():
                             yield chunk
@@ -1103,9 +1067,7 @@ def create_app(
         path = config.client_db_path
         if path is None:
             return None
-        detail = await asyncio.to_thread(
-            read_client_run_detail, path, request.path_params["run_id"]
-        )
+        detail = await asyncio.to_thread(read_client_run_detail, path, request.path_params["run_id"])
         stored = detail.get(field_name) if detail is not None else None
         if not isinstance(stored, str) or not Path(stored).is_file():
             return None
@@ -1125,11 +1087,7 @@ def create_app(
         return Response(
             text,
             media_type="application/json",
-            headers={
-                "Content-Disposition": (
-                    f'attachment; filename="{request.path_params["run_id"]}.json"'
-                )
-            },
+            headers={"Content-Disposition": (f'attachment; filename="{request.path_params["run_id"]}.json"')},
         )
 
     async def transcript_markdown(request: Request) -> Response:
@@ -1143,11 +1101,7 @@ def create_app(
         return Response(
             text,
             media_type="text/markdown",
-            headers={
-                "Content-Disposition": (
-                    f'attachment; filename="{request.path_params["run_id"]}.md"'
-                )
-            },
+            headers={"Content-Disposition": (f'attachment; filename="{request.path_params["run_id"]}.md"')},
         )
 
     async def run_span(request: Request) -> Response:
@@ -1367,11 +1321,7 @@ def _request_source(request: Request, declared: object) -> dict[str, object]:
     base: dict[str, object] = {}
     kind: object = None
     if isinstance(declared, Mapping):
-        base = {
-            str(key): value
-            for key, value in declared.items()
-            if isinstance(value, (str, int, float, bool))
-        }
+        base = {str(key): value for key, value in declared.items() if isinstance(value, (str, int, float, bool))}
         kind = base.get("kind")
     elif isinstance(declared, str):
         kind = declared
@@ -1399,9 +1349,7 @@ def _request_source(request: Request, declared: object) -> dict[str, object]:
         base["requestId"] = request_id[:_SOURCE_TEXT_LIMIT]
     base["entryPath"] = request.url.path
     normalized = normalize_run_source(base)
-    normalized.setdefault(
-        "channel", _SOURCE_CHANNELS.get(str(normalized.get("kind")), "http-api")
-    )
+    normalized.setdefault("channel", _SOURCE_CHANNELS.get(str(normalized.get("kind")), "http-api"))
     return normalized
 
 

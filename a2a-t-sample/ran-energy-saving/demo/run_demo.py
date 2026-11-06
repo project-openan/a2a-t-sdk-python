@@ -1033,6 +1033,7 @@ async def _run_client_foreground(
                 transport,
                 discovery or config.discovery,
                 protocol=protocol,
+                run_id=run_id,
                 env_path=env_path,
             )
             result = await runtime.run(

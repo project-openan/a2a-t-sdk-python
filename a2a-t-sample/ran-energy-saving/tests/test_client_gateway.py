@@ -166,8 +166,9 @@ def _manager(
         discovery: str,
         *,
         protocol: str = PROTOCOL_A2A_T,
+        run_id: str = "",
     ) -> FakeRuntime:
-        del resolved_config, scenario, mode, transport, discovery, protocol
+        del resolved_config, scenario, mode, transport, discovery, protocol, run_id
         return FakeRuntime(wait=wait)
 
     manager = RunManager(

@@ -528,6 +528,11 @@ Implementation details:
   reply is buffered and flushed on bind; a finished run's identities drop late pushes for a grace
   period. A busy port falls back to an OS-assigned one only when no
   `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` pins the external address.
+- Concurrent runs also get per-run observability. The UI binds each run's trace sink task-locally
+  (`set_task_sink`) and installs a run-id router as the process sink for spans emitted from other
+  threads/tasks. `HttpWireLog` and the NMS client keep the run's wire path in a context variable,
+  the shared ADK decision provider keeps its prompt inputs in context variables, and the OSS Agent
+  builds an `NmsSseTransport` per inbound request because its event sink is per run.
 
 `demo/nms_sim/` is the offline contract simulator. It implements the token endpoint,
 `POST /a2a/json/message:stream`, `GET /a2a/json/tasks[/{id}]` and the known cancel 503. The

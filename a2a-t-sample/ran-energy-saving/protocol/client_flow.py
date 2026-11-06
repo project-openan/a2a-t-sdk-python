@@ -84,7 +84,6 @@ from shared.trace import (
     is_report_artifact,
     trace_stage,
 )
-from shared.webhook_receiver import WebhookReceiver
 
 from protocol.decision_provider import NegotiationDecisionProvider
 from protocol.messages import (
@@ -441,21 +440,31 @@ class WebhookClientTransport:
         push_url: str,
         push_token: str,
         idle_timeout: float = float(DEFAULT_WEBHOOK_IDLE_TIMEOUT),
+        bind: Callable[[str | None, str | None], None] | None = None,
+        context_id: str = "",
     ) -> None:
         """Create one webhook transport.
 
         Args:
             client: a2a-sdk client whose ``send_message`` is an async generator.
-            queue: Queue fed by the webhook receiver.
+            queue: Queue fed by the webhook router for this run only.
             push_url: Receiver callback URL registered inline on every request.
             push_token: Push token checked by the receiver.
             idle_timeout: Backstop timeout waiting for pushed events.
+            bind: Optional callback binding ``(task_id, context_id)`` to this run's queue. The
+                router uses it to demultiplex a process-level receiver; a push that arrives before
+                the RPC reply is buffered and flushed when the bind lands.
+            context_id: Optional client-assigned A2A context id. Setting it before the first send
+                makes every pushed event routable from its ``contextId`` alone, even when the
+                server answers with a bare message instead of a Task.
         """
         self._client = client
         self._queue = queue
         self._push_url = push_url
         self._push_token = push_token
         self._idle_timeout = idle_timeout
+        self._bind = bind
+        self._context_id = context_id
         self._event_sink: Callable[[dict[str, object]], None] | None = None
 
     def set_event_sink(self, event_sink: Callable[[dict[str, object]], None] | None) -> None:
@@ -467,12 +476,27 @@ class WebhookClientTransport:
         if self._event_sink is not None:
             self._event_sink(event)
 
+    def _bind_context(self, request: SendMessageRequest) -> None:
+        """Stamp the run's A2A context on the message and bind it before the request leaves.
+
+        The server echoes the context on every pushed event, so binding before the send removes
+        the pre-reply window for the context-keyed subset. The task id is still bound from the
+        reply, which is the stronger key for status/artifact events.
+        """
+        if not self._context_id:
+            return
+        if not request.message.context_id:
+            request.message.context_id = self._context_id
+        if self._bind is not None:
+            self._bind(None, request.message.context_id)
+
     async def send(
         self,
         request: SendMessageRequest,
         call_context: ClientCallContext,
     ) -> list[dict[str, object]]:
         """Send one non-blocking message, register push inline, and collect its events."""
+        self._bind_context(request)
         request.configuration.return_immediately = True
         request.configuration.task_push_notification_config.CopyFrom(
             TaskPushNotificationConfig(url=self._push_url, token=self._push_token)
@@ -485,6 +509,13 @@ class WebhookClientTransport:
             reply_event = normalize_event(reply)
             events.append(reply_event)
             self._emit(reply_event)
+            if self._bind is not None:
+                # The router can only route this run's pushes once it knows the identities the
+                # server assigned to it; bind them before waiting on the shared receiver.
+                self._bind(
+                    _string_field(reply_event, "task_id"),
+                    _string_field(reply_event, "context_id"),
+                )
             if is_stop_event(reply_event):
                 return events
         while True:
@@ -518,30 +549,6 @@ async def _cancel_task(
     if cancel_task is None:
         raise ClientFlowError("The A2A client does not support cancelling a Task.")
     await cancel_task(CancelTaskRequest(id=task_id), context=call_context)
-
-
-def build_webhook_receiver(
-    *,
-    token: str,
-    queue: asyncio.Queue[dict[str, object]],
-    host: str = "127.0.0.1",
-    port: int = 9000,
-    public_url: str = "",
-    tls_cert: str = "",
-    tls_key: str = "",
-    auth_credentials: str = "",
-) -> WebhookReceiver:
-    """Build the embedded receiver feeding one flow event queue."""
-    return WebhookReceiver(
-        token=token,
-        on_event=queue.put_nowait,
-        host=host,
-        port=port,
-        public_url=public_url,
-        tls_cert=tls_cert,
-        tls_key=tls_key,
-        auth_credentials=auth_credentials,
-    )
 
 
 async def run_client_flow(
@@ -963,9 +970,7 @@ async def run_client_flow(
             context_id=context_id,
         ):
             decision = await provider.respond(propose, session)
-            decision = await _reask_rejected_region(
-                provider, decision, propose, session, trace_sink=trace_sink
-            )
+            decision = await _reask_rejected_region(provider, decision, propose, session, trace_sink=trace_sink)
         _LOGGER.info("decision made: action=%s round=%s", decision.action, session.round)
         # Exactly one timeline row per decision: a consumer callback (Web UI/transcript) records
         # the decision itself, so the synthetic span would be an adjacent duplicate. Without a
@@ -1383,9 +1388,7 @@ async def _reask_rejected_region(
             detail={"rejectedRegion": rejected, "candidates": list(candidates)},
         )
         trace_sink(span.to_dict())
-    corrected = propose.model_copy(
-        update={"content": _region_reask_content(propose, candidates)}
-    )
+    corrected = propose.model_copy(update={"content": _region_reask_content(propose, candidates)})
     return await provider.respond(corrected, session)
 
 

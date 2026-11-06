@@ -74,6 +74,7 @@ from shared.http_security import (
 )
 from shared.logging_setup import configure_logging, log_context
 from shared.registry_client import register_agentcard
+from shared.run_constants import PROTOCOL_A2A_T
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 
@@ -466,6 +467,9 @@ def build_gateway_service(
         mode: str,
         transport: str,
         discovery: str,
+        *,
+        protocol: str = PROTOCOL_A2A_T,
+        run_id: str = "",
     ) -> Any:
         from demo.composition import build_demo_runtime
 
@@ -475,6 +479,8 @@ def build_gateway_service(
             mode,
             transport,
             discovery,
+            protocol=protocol,
+            run_id=run_id,
             env_path=env_path,
         )
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import shutil
 from collections.abc import Awaitable, Callable, Mapping
+from contextvars import Token
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Final
@@ -54,8 +55,10 @@ from shared.sdk_env import SdkEnvFile, prepare_sdk_env
 from shared.trace import (
     PHASE_TASK_PROMPT,
     TraceRecorder,
+    TraceSink,
     current_trace,
-    set_global_sink,
+    reset_task_sink,
+    set_task_sink,
     trace_scope,
 )
 from shared.trace_propagation import inject_outgoing
@@ -92,7 +95,7 @@ from protocol.nms_client import (
 from protocol.plain_client_flow import run_plain_client_flow
 from protocol.pure_client_flow import run_pure_client_flow
 from protocol.run_spec import DEFAULT_CLIENT_POLICY, ClientPolicy, RunCatalog, RunSpec
-from protocol.shared_webhook import SharedWebhook, drain_shared_webhook, get_shared_webhook
+from protocol.shared_webhook import SharedWebhook, WebhookSubscription, get_shared_webhook
 from protocol.wire_log import HttpWireLog
 
 _LOGGER = logging.getLogger("ran_energy_saving.client_runtime")
@@ -351,6 +354,8 @@ class ClientRuntime:
     intent_processor: IntentProcessor | None = None
     wire_log: HttpWireLog | None = None
     shared_webhook: SharedWebhook | None = None
+    webhook_subscription: WebhookSubscription | None = None
+    _sink_token: Token[TraceSink | None | object] | None = None
 
     def set_recommendation_sink(
         self,
@@ -441,29 +446,18 @@ class ClientRuntime:
         if self._closed:
             raise ClientRuntimeError("The client runtime is already closed.")
         if self.nms_client is not None:
-            self.nms_client.set_wire_path(
-                Path(self.config.runs_dir) / run_id / "wire.jsonl" if run_id else None
-            )
+            self.nms_client.set_wire_path(Path(self.config.runs_dir) / run_id / "wire.jsonl" if run_id else None)
         if self.wire_log is not None:
             # The a2a-sdk HTTP transport records the real SendMessageRequest body for this run, so
             # the wire inspector never has to rebuild the envelope from a normalized event.
             self.wire_log.set_run(self.config.runs_dir, run_id)
-        if self.shared_webhook is not None:
-            # A late push from the previous run must not be mistaken for this run's first event.
-            drain_shared_webhook(self.shared_webhook)
         sink = trace_sink if trace_sink is not None else self.trace_sink
-        # A run-level sink is restored to the construction-time sink after the run; the
-        # construction-time sink stays attached until ``aclose``.
-        temporary_sink = trace_sink is not None and trace_sink is not self.trace_sink
-        if sink is not None:
-            set_global_sink(sink)
+        # The UI runs several clients on one loop. A task-local override keeps this run's spans in
+        # its own sink instead of whichever run attached a process-wide sink last.
+        sink_token = set_task_sink(sink)
         try:
             with trace_scope(run_id=run_id, role="client"):
-                custom_request = (
-                    user_request.strip()
-                    if isinstance(user_request, str) and user_request.strip()
-                    else ""
-                )
+                custom_request = user_request.strip() if isinstance(user_request, str) and user_request.strip() else ""
                 processed = self.config.intent_mode == INTENT_MODE_PROCESSED
                 raw_text = custom_request or self._scenario_raw_request()
                 if self.protocol == PROTOCOL_PURE:
@@ -549,8 +543,7 @@ class ClientRuntime:
                     validate_before_send=validate_before_send,
                 )
         finally:
-            if temporary_sink:
-                set_global_sink(self.trace_sink)
+            reset_task_sink(sink_token)
 
     async def aclose(self) -> None:
         """Close the HTTP clients and remove the temporary SDK env.
@@ -561,6 +554,19 @@ class ClientRuntime:
         if self._closed:
             return
         self._closed = True
+        if self.webhook_subscription is not None:
+            # Release this run's queue; the process-level receiver itself stays alive.
+            self.webhook_subscription.unsubscribe()
+            self.webhook_subscription = None
+        if self._sink_token is not None:
+            # The construction-time sink is task-local (one runtime per run), so clearing it here
+            # cannot silence a concurrent run.
+            try:
+                reset_task_sink(self._sink_token)
+            except ValueError:
+                # ``aclose`` ran in a different task context; the token is already unreachable.
+                pass
+            self._sink_token = None
         close_client = getattr(self.a2a_client, "close", None)
         if callable(close_client):
             await close_client()
@@ -568,8 +574,6 @@ class ClientRuntime:
             await self.nms_client.aclose()
         if self._httpx_client is not None:
             await self._httpx_client.aclose()
-        if self.trace_sink is not None:
-            set_global_sink(None)
         if self.sdk_env is not None:
             shutil.rmtree(self.sdk_env.directory, ignore_errors=True)
 
@@ -582,6 +586,7 @@ async def build_client_runtime(
     *,
     protocol: str = PROTOCOL_A2A_T,
     catalog: RunCatalog,
+    run_id: str = "",
     env_path: Path | None = None,
     trace_sink: Callable[[dict[str, object]], None] | None = None,
     offline_model_factory: Callable[[RunSpec], Any] | None = None,
@@ -599,6 +604,7 @@ async def build_client_runtime(
         transport: event transport (``sse`` / ``webhook``).
         protocol: interaction protocol (``a2a-t`` / ``plain`` / ``pure``).
         catalog: run catalog supplied by the composition root.
+        run_id: client run id; webhook runs use it as the scope of their private callback queue.
         env_path: source ``.env`` used for discovery and for the per-run SDK ``.env``.
         trace_sink: optional Run Explorer sink attached **before** the SDK and ADK clients are
             built, so their LLM/tool producers are traced from the first call.
@@ -627,11 +633,7 @@ async def build_client_runtime(
         raise ClientRuntimeError(f"Unsupported protocol: {protocol}; expected one of {SUPPORTED_PROTOCOLS}")
 
     run_spec = catalog.spec(scenario, language=config.language)
-    intent_processor = (
-        intent_processor_factory(config, run_spec)
-        if intent_processor_factory is not None
-        else None
-    )
+    intent_processor = intent_processor_factory(config, run_spec) if intent_processor_factory is not None else None
     register_traced_providers()
     if config.is_offline:
         if offline_model_factory is None:
@@ -641,8 +643,9 @@ async def build_client_runtime(
             )
         if install_offline_provider is not None:
             install_offline_provider()
-    if trace_sink is not None:
-        set_global_sink(trace_sink)
+    # Task-local: a concurrent run built on the same loop gets its own sink, and `aclose` clears
+    # only this runtime's override.
+    sink_token = set_task_sink(trace_sink) if trace_sink is not None else None
     if protocol == PROTOCOL_PURE:
         # A pure A2A client does not need the A2A-T SDK facade or its generated .env.
         sdk_env: SdkEnvFile | None = None
@@ -666,6 +669,7 @@ async def build_client_runtime(
     a2a_client: Any | None = None
     httpx_client: httpx.AsyncClient | None = None
     shared: SharedWebhook | None = None
+    webhook_subscription: WebhookSubscription | None = None
     wire_log = HttpWireLog()
     if config.discovery == DISCOVERY_NMS:
         # The vendor NMS has no AgentCard and no a2a-sdk-compatible transport. The real machine
@@ -676,15 +680,18 @@ async def build_client_runtime(
             # Process-level receiver: the callback port is fixed by the launch script and reused
             # by every run, so a slow NMS push never blocks the next start.
             shared = await get_shared_webhook(config)
-            _LOGGER.info("NMS webhook mode: push_url=%s", shared.url)
+            webhook_subscription = shared.subscribe(run_id)
+            _LOGGER.info("NMS webhook mode: push_url=%s run=%s", shared.url, webhook_subscription.scope)
             flow_transport: ClientTransport = NmsWebhookTransport(
                 nms_client,
-                queue=shared.queue,
+                queue=webhook_subscription.queue,
                 push_url=shared.url,
                 push_token=config.webhook_token,
                 push_auth_credentials=config.webhook_auth_credentials,
                 protocol=protocol,
                 idle_timeout=float(config.webhook_idle_timeout),
+                bind=webhook_subscription.bind,
+                context_id=webhook_subscription.key,
             )
         else:
             flow_transport = NmsSseTransport(
@@ -713,36 +720,50 @@ async def build_client_runtime(
         try:
             a2a_client = await create_client(discovered.agent_card, client_config=client_config)
             if transport == TRANSPORT_WEBHOOK:
-                # One receiver per process, not per user request: a run still waiting for an NMS
-                # push no longer blocks the next click on the callback port.
+                # One receiver per process, one queue per run: concurrent webhook runs share the
+                # callback port and are demultiplexed by task/context identity.
                 shared = await get_shared_webhook(config)
-                _LOGGER.info("webhook mode: push_url=%s", shared.url)
+                webhook_subscription = shared.subscribe(run_id)
+                _LOGGER.info("webhook mode: push_url=%s run=%s", shared.url, webhook_subscription.scope)
                 flow_transport = WebhookClientTransport(
                     a2a_client,
-                    queue=shared.queue,
+                    queue=webhook_subscription.queue,
                     push_url=shared.url,
                     push_token=config.webhook_token,
                     idle_timeout=float(config.webhook_idle_timeout),
+                    bind=webhook_subscription.bind,
+                    context_id=webhook_subscription.key,
                 )
             else:
                 flow_transport = SseClientTransport(a2a_client)
         except Exception:
+            if webhook_subscription is not None:
+                webhook_subscription.unsubscribe()
+            if sink_token is not None:
+                reset_task_sink(sink_token)
             await httpx_client.aclose()
             if sdk_env is not None:
                 shutil.rmtree(sdk_env.directory, ignore_errors=True)
             raise
 
-    if protocol == PROTOCOL_PURE:
-        provider: NegotiationDecisionProvider | None = None
-    else:
-        offline_model = offline_model_factory(run_spec) if offline_model_factory is not None else None
-        provider = _decision_provider(
-            config,
-            run_spec,
-            mode,
-            model=offline_model,
-            client_agent_factory=client_agent_factory,
-        )
+    try:
+        if protocol == PROTOCOL_PURE:
+            provider: NegotiationDecisionProvider | None = None
+        else:
+            offline_model = offline_model_factory(run_spec) if offline_model_factory is not None else None
+            provider = _decision_provider(
+                config,
+                run_spec,
+                mode,
+                model=offline_model,
+                client_agent_factory=client_agent_factory,
+            )
+    except BaseException:
+        if webhook_subscription is not None:
+            webhook_subscription.unsubscribe()
+        if sink_token is not None:
+            reset_task_sink(sink_token)
+        raise
     return ClientRuntime(
         config=config,
         run_spec=run_spec,
@@ -764,7 +785,9 @@ async def build_client_runtime(
         nms_client=nms_client,
         wire_log=wire_log if httpx_client is not None else None,
         shared_webhook=shared,
+        webhook_subscription=webhook_subscription,
         trace_sink=trace_sink,
+        _sink_token=sink_token,
         pure_answer=pure_answer,
         intent_processor=intent_processor,
     )

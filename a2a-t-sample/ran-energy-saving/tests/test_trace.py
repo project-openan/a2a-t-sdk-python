@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from a2a_t.core.metadata import TASK_T_EXTENSION_URI
 from shared.trace import (
     MAX_PAYLOAD_CHARS,
@@ -21,7 +23,9 @@ from shared.trace import (
     infer_event_phase,
     is_report_artifact,
     phase_for_stage,
+    reset_task_sink,
     set_global_sink,
+    set_task_sink,
     trace_scope,
     trace_stage,
 )
@@ -221,3 +225,22 @@ def test_accept_time_task_t_stages_belong_to_the_resolution_phase() -> None:
     assert phase_for_stage("task_t_server_validation") == PHASE_TASK_VALIDATION
     assert infer_decision_phase("accept") == PHASE_RESOLUTION
     assert infer_decision_phase("counter") == PHASE_NEGOTIATION
+
+
+async def test_task_sinks_are_isolated_between_concurrent_runs() -> None:
+    """Two runs on one UI loop must not receive each other's spans."""
+    first: list[dict[str, object]] = []
+    second: list[dict[str, object]] = []
+
+    async def run(sink: list[dict[str, object]], span_id: str) -> None:
+        token = set_task_sink(sink.append)
+        try:
+            await asyncio.sleep(0)
+            emit_span(Span(run_id=span_id, span_id=span_id, kind="llm"))
+        finally:
+            reset_task_sink(token)
+
+    await asyncio.gather(run(first, "run-a"), run(second, "run-b"))
+
+    assert [span["runId"] for span in first] == ["run-a"]
+    assert [span["runId"] for span in second] == ["run-b"]

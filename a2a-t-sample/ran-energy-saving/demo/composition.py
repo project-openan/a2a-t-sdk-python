@@ -59,6 +59,7 @@ async def build_demo_runtime(
     discovery: str,
     *,
     protocol: str = PROTOCOL_A2A_T,
+    run_id: str = "",
     env_path: Path | None = None,
     trace_sink: Callable[[dict[str, object]], None] | None = None,
 ) -> Any:
@@ -79,15 +80,14 @@ async def build_demo_runtime(
         # the engineer client's own discovery: in pure + NMS the UI talks to the local OSS Agent
         # while the OSS Agent talks to the real NMS.
         catalog=DemoRunCatalog.from_config(config),
+        run_id=run_id,
         env_path=env_path,
         trace_sink=trace_sink,
         offline_model_factory=offline_model_factory,
         install_offline_provider=install_offline_provider,
         client_agent_factory=build_client_agent,
         pure_answer=(
-            (lambda event: pure_answer_from_event(event, config.language))
-            if protocol == PROTOCOL_PURE
-            else None
+            (lambda event: pure_answer_from_event(event, config.language)) if protocol == PROTOCOL_PURE else None
         ),
         intent_processor_factory=build_demo_intent_processor,
     )

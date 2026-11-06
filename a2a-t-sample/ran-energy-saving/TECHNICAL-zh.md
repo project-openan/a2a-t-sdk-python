@@ -445,6 +445,11 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
   `contextId`，发送前即完成绑定；`taskId` 则在同步 RPC 应答返回时绑定。先于应答到达的推送会进入
   缓冲，绑定后立即投递；已结束 run 的标识会在宽限期内丢弃迟到的推送，避免串到下一个 run。只有在没有 `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` 固定外部地址时，端口占用才会
   回退到系统分配端口。
+- 并发 run 的可观测性也按 run 隔离：Web UI 用 `set_task_sink` 把 trace sink 绑定到当前任务，
+  并把按 run id 路由的 sink 安装为进程级 sink，接收其他线程/任务产生的 span；`HttpWireLog`
+  和网管客户端用 context variable 保存本次 run 的 wire 路径；共享的 ADK 决策 Provider 用
+  context variable 保存 prompt 输入；OSS Agent 为每个入站请求单独构建 `NmsSseTransport`，
+  因为事件 sink 属于单次 run。
 
 `demo/nms_sim/` 是离线契约仿真器，实现令牌接口、`POST /a2a/json/message:stream`、
 `GET /a2a/json/tasks[/{id}]` 和已知的 cancel 503。默认 `strict` 档 SSE 永不关闭、每 15 s

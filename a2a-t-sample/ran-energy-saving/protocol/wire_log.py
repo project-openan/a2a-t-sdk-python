@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
@@ -33,14 +34,14 @@ REDACT_KEYS: Final[frozenset[str]] = frozenset(
 
 _LOGGER = logging.getLogger("ran_energy_saving.wire_log")
 
+#: Sentinel meaning "this task did not select a run directory".
+_UNSET: Final[object] = object()
+
 
 def redact(value: object) -> object:
     """Recursively redact credentials from one wire record or payload."""
     if isinstance(value, Mapping):
-        return {
-            str(key): "***" if str(key).lower() in REDACT_KEYS else redact(item)
-            for key, item in value.items()
-        }
+        return {str(key): "***" if str(key).lower() in REDACT_KEYS else redact(item) for key, item in value.items()}
     if isinstance(value, list):
         return [redact(item) for item in value]
     return value
@@ -71,12 +72,22 @@ class HttpWireLog:
     def __init__(self, *, logger: logging.Logger | None = None) -> None:
         """Create one log that is disabled until a run directory is set."""
         self._path: Path | None = None
+        # The OSS Agent shares one log across concurrent inbound requests; the context variable
+        # keeps each request's run directory private to its own asyncio task.
+        self._path_var: ContextVar[Path | None | object] = ContextVar(f"a2at_wire_log_path_{id(self)}", default=_UNSET)
         self._logger = logger or _LOGGER
+
+    def _current_path(self) -> Path | None:
+        """Return the path selected by this task, falling back to the instance path."""
+        value = self._path_var.get()
+        if value is _UNSET:
+            return self._path
+        return value if isinstance(value, Path) else None
 
     @property
     def path(self) -> Path | None:
         """Return the current ``wire.jsonl`` path, ``None`` when capture is off."""
-        return self._path
+        return self._current_path()
 
     def set_run(
         self,
@@ -97,8 +108,10 @@ class HttpWireLog:
         """
         if not runs_dir or not run_id:
             self._path = None
+            self._path_var.set(None)
             return
         self._path = Path(runs_dir) / run_id / filename
+        self._path_var.set(self._path)
 
     async def record_request(self, request: httpx.Request) -> None:
         """Append one outbound request to the run's wire log.
@@ -106,7 +119,7 @@ class HttpWireLog:
         This is an ``httpx.AsyncClient`` request event hook: it must never raise, because an
         exception would abort the A2A call it is observing.
         """
-        path = self._path
+        path = self._current_path()
         if path is None:
             return
         try:

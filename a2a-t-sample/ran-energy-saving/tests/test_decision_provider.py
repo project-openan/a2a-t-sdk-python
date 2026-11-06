@@ -356,6 +356,25 @@ async def test_sweep_deletes_only_sessions_past_the_retention_window(tmp_path: P
     assert [session.id for session in remaining.sessions] == ["ran-client-new"]
 
 
+async def test_user_request_is_task_local_on_a_shared_provider() -> None:
+    """The OSS Agent shares one provider across concurrent inbound requests."""
+    provider = AdkDecisionProvider(agent_factory=build_client_agent, model=build_fake_model())
+    seen: dict[str, str | None] = {}
+
+    async def run_a() -> None:
+        provider.set_user_request("request-a")
+        await asyncio.sleep(0)
+        seen["a"] = provider._current_user_request()
+
+    async def run_b() -> None:
+        provider.set_user_request("request-b")
+        seen["b"] = provider._current_user_request()
+
+    await asyncio.gather(run_a(), run_b())
+
+    assert seen == {"a": "request-a", "b": "request-b"}
+
+
 async def test_sweep_skips_a_database_without_session_tables(tmp_path: Path) -> None:
     """Starting the UI must not create the ADK schema in a client database that never used it."""
     db_path = tmp_path / "client.sqlite3"

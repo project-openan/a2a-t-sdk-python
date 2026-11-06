@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass, field
@@ -185,6 +186,8 @@ class RunState:
     _user_turn_id: str | None = field(default=None, repr=False)
     _persist_tasks: set[asyncio.Task[object]] = field(default_factory=set, repr=False)
     _recorder: TraceRecorder = field(init=False, repr=False)
+    #: Guards the span/sequence stores: an in-process server may ingest spans from another thread.
+    _trace_lock: threading.RLock = field(default_factory=threading.RLock, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Create the per-run span recorder (UI ids never collide with client-flow ids)."""
@@ -241,25 +244,29 @@ class RunState:
 
     def next_seq(self) -> int:
         """Allocate the next global ``seq`` without consuming a phase step."""
-        self._seq += 1
-        return self._seq
+        with self._trace_lock:
+            self._seq += 1
+            return self._seq
 
     def allocate(self, phase: str) -> tuple[int, int]:
         """Allocate the next global ``seq`` and the next step number of one phase."""
-        seq = self.next_seq()
-        step = self._phase_steps.get(phase, 0) + 1
-        self._phase_steps[phase] = step
-        return seq, step
+        with self._trace_lock:
+            seq = self.next_seq()
+            step = self._phase_steps.get(phase, 0) + 1
+            self._phase_steps[phase] = step
+            return seq, step
 
     def broadcast(self, message: dict[str, object], *, seq: int | None = None) -> dict[str, object]:
         """Publish one SSE message with a strictly increasing ``seq``."""
-        if seq is None:
-            seq = self.next_seq()
-        else:
-            self._seq = max(self._seq, seq)
-        message["seq"] = seq
-        self.messages.append(message)
-        for queue in tuple(self.subscribers):
+        with self._trace_lock:
+            if seq is None:
+                seq = self.next_seq()
+            else:
+                self._seq = max(self._seq, seq)
+            message["seq"] = seq
+            self.messages.append(message)
+            queues = tuple(self.subscribers)
+        for queue in queues:
             queue.put_nowait(message)
         return message
 
@@ -340,25 +347,31 @@ class RunState:
         detail: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         """Create, store and broadcast one local synthetic trace span."""
-        seq, step = self.allocate(phase)
-        span = self._recorder.emit(
-            seq=seq,
-            phase_step=step,
-            kind=kind,
-            phase=phase,
-            title=title,
-            actor=actor,
-            side=side,
-            direction=direction,
-            status=status,
-            round=round_number,
-            context_id=context_id,
-            task_id=task_id,
-            detail=detail,
-        )
-        return self._store_span(span, seq=seq, record=True)
+        with self._trace_lock:
+            seq, step = self.allocate(phase)
+            span = self._recorder.emit(
+                seq=seq,
+                phase_step=step,
+                kind=kind,
+                phase=phase,
+                title=title,
+                actor=actor,
+                side=side,
+                direction=direction,
+                status=status,
+                round=round_number,
+                context_id=context_id,
+                task_id=task_id,
+                detail=detail,
+            )
+            return self._store_span(span, seq=seq, record=True)
 
     def record_trace(self, span: Mapping[str, object]) -> dict[str, object]:
+        """Thread-safe entry point of :meth:`_record_trace`."""
+        with self._trace_lock:
+            return self._record_trace(span)
+
+    def _record_trace(self, span: Mapping[str, object]) -> dict[str, object]:
         """Ingest one producer span (client flow or server HTTP transport) and broadcast it.
 
         A producer id that is empty or already taken by another span is remapped to a fresh UI id;
@@ -606,26 +619,16 @@ class RunState:
                     direction=NEGOTIATION_DIRECTION_OUTBOUND,
                     actor="human" if self.mode in (MODE_MANUAL, MODE_CONFIRM) else "client",
                     negotiation_id=(
-                        propose.negotiation_id
-                        if propose is not None
-                        else (session.id if session is not None else None)
+                        propose.negotiation_id if propose is not None else (session.id if session is not None else None)
                     ),
                     kind=propose.kind if propose is not None else None,
-                    round=(
-                        session.round
-                        if session is not None
-                        else (propose.round if propose is not None else None)
-                    ),
+                    round=(session.round if session is not None else (propose.round if propose is not None else None)),
                     performative=_performative_for_decision(decision.action),
                     content={
                         "action": decision.action,
-                        "filledParams": (
-                            dict(decision.filled_params) if decision.filled_params else None
-                        ),
+                        "filledParams": (dict(decision.filled_params) if decision.filled_params else None),
                         "counterProposal": decision.counter_proposal,
-                        "counterParams": (
-                            dict(decision.counter_params) if decision.counter_params else None
-                        ),
+                        "counterParams": (dict(decision.counter_params) if decision.counter_params else None),
                         "confirmedIntent": decision.confirmed_intent,
                         "feasibilitySummary": decision.feasibility_summary,
                     },
@@ -745,11 +748,7 @@ def _pure_detail(event: Mapping[str, object]) -> dict[str, object] | None:
     pure = metadata.get("pure")
     hop = metadata.get("hop")
     tool_name = metadata.get("toolName")
-    if (
-        not isinstance(pure, Mapping)
-        and not isinstance(hop, str)
-        and not isinstance(tool_name, str)
-    ):
+    if not isinstance(pure, Mapping) and not isinstance(hop, str) and not isinstance(tool_name, str):
         return None
     detail: dict[str, object] = {}
     if isinstance(hop, str) and hop:
@@ -769,6 +768,7 @@ def _string_value(value: object) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
 
 def _performative_for_decision(action: str) -> str:
     """Map one decision action to its Negotiation-T performative name."""

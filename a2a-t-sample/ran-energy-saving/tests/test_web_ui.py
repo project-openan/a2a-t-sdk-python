@@ -269,8 +269,9 @@ def factory(runtimes: list[FakeRuntime]) -> Callable[..., Any]:
         discovery: str,
         *,
         protocol: str = PROTOCOL_A2A_T,
+        run_id: str = "",
     ) -> FakeRuntime:
-        del config, scenario, transport, discovery, protocol
+        del config, scenario, transport, discovery, protocol, run_id
         runtime = FakeRuntime(manual=(mode in {"manual", "confirm"}))
         runtimes.append(runtime)
         return runtime
@@ -818,8 +819,9 @@ async def test_intent_review_gate_blocks_the_task_until_the_engineer_confirms(
         discovery: str,
         *,
         protocol: str = PROTOCOL_A2A_T,
+        run_id: str = "",
     ) -> FakeRuntime:
-        del config, scenario, mode, transport, discovery, protocol
+        del config, scenario, mode, transport, discovery, protocol, run_id
         return runtime
 
     app = create_app(
@@ -1595,8 +1597,9 @@ async def test_one_ui_derives_each_request_forms_hop_from_the_protocol(
         discovery: str,
         *,
         protocol: str = PROTOCOL_A2A_T,
+        run_id: str = "",
     ) -> FakeRuntime:
-        del config, scenario, mode
+        del config, scenario, mode, run_id
         calls.append((protocol, transport, discovery))
         return FakeRuntime()
 

@@ -12,6 +12,8 @@ terminal state, and document the one event-list difference the transports are kn
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from a2a.types import TaskState
 from demo.scenario import SCENARIO_INFORMATION, SCENARIO_TARGET, get_scenario
@@ -39,9 +41,7 @@ def _status_states(result: ClientFlowResult) -> list[str]:
 def _report_artifact_seen(result: ClientFlowResult) -> bool:
     """Return whether the client received the named report artifact."""
     return any(
-        event.get("kind") == "artifact"
-        and "report" in str(event.get("name") or "").lower()
-        for event in result.events
+        event.get("kind") == "artifact" and "report" in str(event.get("name") or "").lower() for event in result.events
     )
 
 
@@ -56,9 +56,7 @@ async def test_sse_and_webhook_share_the_performative_sequence(
 
     with running_server(config):
         sse_result, sse_exchange = await run_scenario_flow(config, scenario_name, TRANSPORT_SSE)
-        webhook_result, webhook_exchange = await run_scenario_flow(
-            config, scenario_name, TRANSPORT_WEBHOOK
-        )
+        webhook_result, webhook_exchange = await run_scenario_flow(config, scenario_name, TRANSPORT_WEBHOOK)
 
     assert sse_exchange.steps == list(scenario.expected_sequence)
     assert webhook_exchange.steps == sse_exchange.steps
@@ -78,3 +76,29 @@ async def test_sse_and_webhook_share_the_performative_sequence(
     assert webhook_states.count(TaskState.Name(TaskState.TASK_STATE_SUBMITTED)) == 2
     assert _report_artifact_seen(sse_result) is True
     assert _report_artifact_seen(webhook_result) is True
+
+
+async def test_two_webhook_runs_share_the_callback_port_without_cross_talk(
+    english_language: None,
+) -> None:
+    """The whole point of per-run queues: two testers at once on one callback port."""
+    del english_language
+    config = offline_direct_config(free_tcp_port())
+    information = get_scenario(SCENARIO_INFORMATION)
+    target = get_scenario(SCENARIO_TARGET)
+
+    with running_server(config):
+        (information_result, information_exchange), (target_result, target_exchange) = await asyncio.gather(
+            run_scenario_flow(config, SCENARIO_INFORMATION, TRANSPORT_WEBHOOK),
+            run_scenario_flow(config, SCENARIO_TARGET, TRANSPORT_WEBHOOK),
+        )
+
+    assert information_exchange.steps == list(information.expected_sequence)
+    assert target_exchange.steps == list(target.expected_sequence)
+    assert information_result.final_state == information.expected_final_state
+    assert target_result.final_state == target.expected_final_state
+    assert information_result.task_id
+    assert target_result.task_id
+    assert information_result.task_id != target_result.task_id
+    assert information_result.report
+    assert target_result.report

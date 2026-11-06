@@ -21,8 +21,9 @@ import logging
 import sqlite3
 import time
 from collections.abc import Callable, Sequence
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 
 from a2a_t.core.metadata import NegotiationContext
 from google.adk.apps import App
@@ -40,6 +41,16 @@ from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.trace import trace_scope
 
 _LOGGER = logging.getLogger("ran_energy_saving.decision_provider")
+
+#: Sentinel distinguishing "this task never set a value" from an explicit ``None``.
+_UNSET: Final[object] = object()
+
+#: Per-task prompt inputs of the shared decision provider. The OSS Agent serves concurrent inbound
+#: requests with one provider instance, and ``set_user_request`` used to be plain instance state, so
+#: one request could overwrite the prompt of another. Context variables give every asyncio task its
+#: own value; the instance attributes remain the fallback for callers that set them once.
+_USER_REQUEST: ContextVar[object] = ContextVar("a2at_decision_user_request", default=_UNSET)
+_CONVERSATION_CONTEXT: ContextVar[object] = ContextVar("a2at_decision_conversation_context", default=_UNSET)
 
 #: ADK application name of the client decision agent.
 CLIENT_APP_NAME = "ran_energy_client"
@@ -316,12 +327,28 @@ class AdkDecisionProvider:
         self._durable_sessions = durable
 
     def set_conversation_context(self, conversation_context: str | None) -> None:
-        """Set the recent-turn block used by the next decision prompts."""
+        """Set the recent-turn block used by the next decision prompts in this task."""
         self._conversation_context = conversation_context
+        _CONVERSATION_CONTEXT.set(conversation_context)
 
     def set_user_request(self, user_request: str | None) -> None:
-        """Set the natural-language request used by the next decision prompts."""
+        """Set the natural-language request used by the next decision prompts in this task."""
         self._user_request = user_request
+        _USER_REQUEST.set(user_request)
+
+    def _current_user_request(self) -> str | None:
+        """Return this task's request, falling back to the construction-time value."""
+        value = _USER_REQUEST.get()
+        if value is _UNSET:
+            return self._user_request
+        return value if isinstance(value, str) else None
+
+    def _current_conversation_context(self) -> str | None:
+        """Return this task's recent-turn block, falling back to the instance value."""
+        value = _CONVERSATION_CONTEXT.get()
+        if value is _UNSET:
+            return self._conversation_context
+        return value if isinstance(value, str) else None
 
     @property
     def runner(self) -> Runner:
@@ -365,8 +392,8 @@ class AdkDecisionProvider:
             build_decision_prompt(
                 propose,
                 session,
-                user_request=self._user_request,
-                conversation_context=self._conversation_context,
+                user_request=self._current_user_request(),
+                conversation_context=self._current_conversation_context(),
                 default_region=self._default_region,
             ),
         )

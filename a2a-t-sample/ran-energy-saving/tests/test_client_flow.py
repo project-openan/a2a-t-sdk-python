@@ -552,10 +552,7 @@ def test_region_reask_detects_a_rejected_region_and_offers_candidates() -> None:
         kind="information",
         round=1,
         max_rounds=3,
-        content=(
-            "Region 'Region A' is not recognized. "
-            "Served areas: A2ATestRegion; Region B."
-        ),
+        content=("Region 'Region A' is not recognized. Served areas: A2ATestRegion; Region B."),
         context_id=CONTEXT_ID,
     )
     decision = NegotiationDecision(action="accept", rationale="accept")
@@ -577,9 +574,7 @@ def test_region_reask_is_not_needed_when_the_model_changed_the_region() -> None:
         content="Region 'Old' is not recognized. Served areas: New.",
         context_id=CONTEXT_ID,
     )
-    decision = NegotiationDecision(
-        action="accept", rationale="accept", filled_params={"region": "New"}
-    )
+    decision = NegotiationDecision(action="accept", rationale="accept", filled_params={"region": "New"})
 
     assert _region_reask_needed(decision, propose) is None
 
@@ -907,6 +902,7 @@ class _FakeA2AClient:
 
     def __init__(self, responses: list[StreamResponse]) -> None:
         self._responses = responses
+        self.requests: list[SendMessageRequest] = []
 
     async def send_message(
         self,
@@ -914,7 +910,8 @@ class _FakeA2AClient:
         *,
         context: ClientCallContext,
     ) -> AsyncIterator[StreamResponse]:
-        del request, context
+        self.requests.append(request)
+        del context
         for response in self._responses:
             yield response
 
@@ -945,6 +942,46 @@ async def test_webhook_transport_returns_the_rpc_reply_without_draining_the_queu
 
     assert [event["kind"] for event in events] == ["message"]
     assert queue.qsize() == 1
+
+
+async def test_webhook_transport_stamps_and_binds_its_context_before_sending() -> None:
+    """A client-assigned context makes every push routable before the Task reply arrives."""
+    message = Message(message_id="msg-1", role=Role.ROLE_AGENT, context_id="ctx-run")
+    message.parts.add(text=END_MESSAGE_TEXT)
+    client = _FakeA2AClient([StreamResponse(message=message)])
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    bound: list[tuple[str | None, str | None]] = []
+
+    await WebhookClientTransport(
+        client,
+        queue=queue,
+        push_url="http://127.0.0.1:9000/webhook",
+        push_token="token",
+        context_id="ctx-run",
+        bind=lambda task_id, context_id: bound.append((task_id, context_id)),
+    ).send(SendMessageRequest(), ClientCallContext())
+
+    assert client.requests[0].message.context_id == "ctx-run"
+    assert bound[0] == (None, "ctx-run")
+
+
+async def test_webhook_transport_binds_the_reply_identity_for_the_router() -> None:
+    """The run's queue is only addressable once the transport reports the server identities."""
+    message = Message(message_id="msg-1", role=Role.ROLE_AGENT, context_id=CONTEXT_ID)
+    message.parts.add(text="proposal")
+    client = _FakeA2AClient([StreamResponse(message=message)])
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    bound: list[tuple[str | None, str | None]] = []
+
+    await WebhookClientTransport(
+        client,
+        queue=queue,
+        push_url="http://127.0.0.1:9000/webhook",
+        push_token="token",
+        bind=lambda task_id, context_id: bound.append((task_id, context_id)),
+    ).send(SendMessageRequest(), ClientCallContext())
+
+    assert bound == [(None, CONTEXT_ID)]
 
 
 async def test_webhook_transport_consumes_pushed_events_until_a_terminal_state() -> None:

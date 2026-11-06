@@ -20,7 +20,6 @@ from shared.config import (
     PRE_SEND_VALIDATION_ALWAYS,
     PRE_SEND_VALIDATION_ON,
     SUPPORTED_INTENT_MODES,
-    TRANSPORT_WEBHOOK,
     SampleConfig,
 )
 from shared.langfuse_tracing import LangfuseRunMetadata, create_langfuse_exporter
@@ -188,6 +187,20 @@ class RunManager:
         run = self._active_by_conversation.get(conversation_id)
         return run if run is not None and not run.finished() else None
 
+    def route_external_span(self, span: Mapping[str, object]) -> None:
+        """Route a span emitted outside a run's task to the run named on the span.
+
+        The Web UI installs this as the process sink: in-process servers and other producers emit
+        from threads/tasks that cannot see a run-local sink, and the span's ``runId`` is the only
+        reliable router. Unknown or missing run ids are dropped.
+        """
+        run_id = span.get("runId")
+        if not isinstance(run_id, str) or not run_id:
+            return
+        run = self._runs.get(run_id)
+        if run is not None:
+            run.record_trace(span)
+
     async def mark_interrupted(self) -> int:
         """Mark runs left ``running`` by a previous process as ``interrupted``."""
         if self._store is None:
@@ -247,20 +260,6 @@ class RunManager:
                 f"Conversation {resolved_conversation} already has an active run "
                 f"({active.run_id}); wait for it to finish."
             )
-        if transport == TRANSPORT_WEBHOOK:
-            # The callback receiver is process-wide (one port, one queue), so two webhook runs
-            # would consume each other's pushes. Configuration is fixed at process start; runs
-            # take turns.
-            busy = next(
-                (run for run in self._runs.values() if run.status == STATUS_RUNNING),
-                None,
-            )
-            if busy is not None:
-                raise RunConflictError(
-                    f"A webhook run is already active ({busy.run_id}); wait for it to finish or "
-                    "cancel it before starting another."
-                )
-
         resolved_key = idempotency_key.strip() if isinstance(idempotency_key, str) else ""
         if self._store is not None and resolved_key:
             existing = await self._store.find_run_by_idempotency(resolved_conversation, resolved_key)
@@ -322,11 +321,7 @@ class RunManager:
                 model_label=self._config.model_label,
             ),
         )
-        run.langfuse = (
-            run.langfuse_exporter.snapshot()
-            if run.langfuse_exporter is not None
-            else _langfuse_disabled()
-        )
+        run.langfuse = run.langfuse_exporter.snapshot() if run.langfuse_exporter is not None else _langfuse_disabled()
         run.emit_run_started(
             description=spec.description,
             user_request=raw_request or spec.user_request,
@@ -364,17 +359,13 @@ class RunManager:
         exporter = run.langfuse_exporter
         trace_tokens = set_active_trace(
             trace_id=getattr(exporter, "trace_id", "") if exporter is not None else "",
-            parent_span_id=(
-                getattr(exporter, "root_span_id", "") if exporter is not None else ""
-            ),
+            parent_span_id=(getattr(exporter, "root_span_id", "") if exporter is not None else ""),
             run_id=run.run_id,
             conversation_id=run.conversation_id,
             user_id=run.user_id,
         )
         try:
-            run.task = asyncio.create_task(
-                self._execute_in_context(run), name=f"ran-client-run-{run.run_id}"
-            )
+            run.task = asyncio.create_task(self._execute_in_context(run), name=f"ran-client-run-{run.run_id}")
         finally:
             reset_active_trace(trace_tokens)
         return run
@@ -419,9 +410,7 @@ class RunManager:
                 CLIENT_RUNS_TOTAL.inc(
                     {
                         "status": run.status,
-                        "final_state": (
-                            run.result.final_state if run.result is not None else "none"
-                        ),
+                        "final_state": (run.result.final_state if run.result is not None else "none"),
                     }
                 )
                 _LOGGER.info(
@@ -452,9 +441,7 @@ class RunManager:
     def _schedule_metrics(self, run: RunState) -> None:
         """Aggregate and persist one finished run's metrics after the trace flush window."""
         try:
-            task = asyncio.create_task(
-                self._persist_metrics(run), name=f"ran-metrics-{run.run_id}"
-            )
+            task = asyncio.create_task(self._persist_metrics(run), name=f"ran-metrics-{run.run_id}")
         except RuntimeError:
             # The event loop is already closing (a synchronous test helper or shutdown).
             return
@@ -571,11 +558,7 @@ class RunManager:
                     "phase": "negotiation",
                     # Tiny UI-support fields: the manual countdown would otherwise have to invent
                     # the provider budget, and a replay after a reload would restart it.
-                    "timeoutSeconds": (
-                        float(timeout_seconds)
-                        if isinstance(timeout_seconds, (int, float))
-                        else None
-                    ),
+                    "timeoutSeconds": (float(timeout_seconds) if isinstance(timeout_seconds, (int, float)) else None),
                     "requestedAt": now_iso(),
                 }
             )
@@ -606,11 +589,7 @@ class RunManager:
                     "maxRounds": session.max_rounds,
                     "performative": session.performative.value,
                     "phase": "negotiation",
-                    "timeoutSeconds": (
-                        float(timeout_seconds)
-                        if isinstance(timeout_seconds, (int, float))
-                        else None
-                    ),
+                    "timeoutSeconds": (float(timeout_seconds) if isinstance(timeout_seconds, (int, float)) else None),
                     "requestedAt": now_iso(),
                 }
             )
@@ -654,6 +633,7 @@ class RunManager:
                 run.transport,
                 run.discovery,
                 protocol=run.protocol,
+                run_id=run.run_id,
             )
             run.emit_trace(
                 kind="runtime_ready",
@@ -671,9 +651,7 @@ class RunManager:
             discovered = getattr(run.runtime, "discovered", None)
             card = getattr(discovered, "agent_card", None)
             if run.mode == MODE_CONFIRM:
-                set_recommendation_sink = getattr(
-                    run.runtime, "set_recommendation_sink", None
-                )
+                set_recommendation_sink = getattr(run.runtime, "set_recommendation_sink", None)
                 if callable(set_recommendation_sink):
                     set_recommendation_sink(on_decision_recommended)
             run.emit_trace(
@@ -756,9 +734,7 @@ class RunManager:
         """
         if self._store is None or run.conversation_id is None:
             return
-        request_text = run.user_request or self._catalog.spec(
-            run.scenario, language=self._config.language
-        ).user_request
+        request_text = run.user_request or self._catalog.spec(run.scenario, language=self._config.language).user_request
         await self._store.ensure_conversation(
             conversation_id=run.conversation_id,
             external_id=run.external_conversation_id or "",
@@ -810,9 +786,7 @@ class RunManager:
             server_task_id=result.task_id if result is not None else None,
             error=run.error,
             transcript_json=str(run.paths.json_path) if run.paths is not None else None,
-            transcript_markdown=(
-                str(run.paths.markdown_path) if run.paths is not None else None
-            ),
+            transcript_markdown=(str(run.paths.markdown_path) if run.paths is not None else None),
             finished_at=now_iso(),
         )
         await self._store.append_turn(
@@ -835,9 +809,7 @@ class RunManager:
     async def shutdown(self) -> None:
         """Cancel every still-running background run (app shutdown)."""
         tasks = [
-            run.task
-            for run in self._active_by_conversation.values()
-            if run.task is not None and not run.task.done()
+            run.task for run in self._active_by_conversation.values() if run.task is not None and not run.task.done()
         ]
         for task in tasks:
             task.cancel()

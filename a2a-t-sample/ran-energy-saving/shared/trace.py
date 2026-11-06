@@ -28,7 +28,7 @@ import threading
 import time
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -140,9 +140,7 @@ def _truncate_text(value: str) -> tuple[str, bool]:
         return value, False
     removed = len(value) - _TRUNCATED_HEAD_CHARS - _TRUNCATED_TAIL_CHARS
     return (
-        value[:_TRUNCATED_HEAD_CHARS]
-        + f"\n… [truncated {removed} characters] …\n"
-        + value[-_TRUNCATED_TAIL_CHARS:],
+        value[:_TRUNCATED_HEAD_CHARS] + f"\n… [truncated {removed} characters] …\n" + value[-_TRUNCATED_TAIL_CHARS:],
         True,
     )
 
@@ -561,11 +559,18 @@ def trace_stage(
 _GLOBAL_SINK: TraceSink | None = None
 _SINK_LOCK = threading.Lock()
 
+#: Sentinel meaning "this task has no sink override".
+_UNSET_SINK: Final[object] = object()
+
+#: Per-task sink override. The Web UI starts several runs on one loop; a process-wide sink would
+#: send one run's spans to whichever run attached last, so each run scopes its own sink here.
+_SINK_OVERRIDE: ContextVar[TraceSink | None | object] = ContextVar("a2at_trace_sink_override", default=_UNSET_SINK)
+
 
 def set_global_sink(sink: TraceSink | None) -> None:
     """Attach (or clear) the process-wide sink used by :func:`emit_span`.
 
-    The Web UI attaches the current run state; CLI mode leaves it unset. A sink failure never
+    The OSS/Web server attaches its trace emitter for the whole process. A sink failure never
     propagates into the producer.
     """
     global _GLOBAL_SINK
@@ -573,10 +578,28 @@ def set_global_sink(sink: TraceSink | None) -> None:
         _GLOBAL_SINK = sink
 
 
+def set_task_sink(sink: TraceSink | None) -> Token[TraceSink | None | object]:
+    """Attach a task-local sink override and return its reset token.
+
+    A concurrent run uses this so its spans never reach another run's sink. Restore the previous
+    value with :func:`reset_task_sink` in a ``finally`` block.
+    """
+    return _SINK_OVERRIDE.set(sink)
+
+
+def reset_task_sink(token: Token[TraceSink | None | object]) -> None:
+    """Drop a task-local sink override installed by :func:`set_task_sink`."""
+    _SINK_OVERRIDE.reset(token)
+
+
 def emit_span(span: Span | Mapping[str, object]) -> None:
-    """Forward one span to the global sink; no-op when no sink is attached."""
-    with _SINK_LOCK:
-        sink = _GLOBAL_SINK
+    """Forward one span to the task-local sink, else the process sink; no-op when neither is set."""
+    override = _SINK_OVERRIDE.get()
+    if override is _UNSET_SINK:
+        with _SINK_LOCK:
+            sink = _GLOBAL_SINK
+    else:
+        sink = override if override is None or callable(override) else None
     if sink is None:
         return
     payload = span.to_dict() if isinstance(span, Span) else dict(span)
@@ -1010,6 +1033,8 @@ __all__ = [
     "current_trace",
     "elapsed_ms",
     "emit_span",
+    "reset_task_sink",
+    "set_task_sink",
     "infer_decision_phase",
     "infer_event_phase",
     "is_report_artifact",

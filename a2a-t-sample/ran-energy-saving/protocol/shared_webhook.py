@@ -5,15 +5,23 @@ meant that a run still waiting for an NMS push (the idle timeout can hold it for
 the next click with ``WinError 10048`` on port 9000. Configuration is chosen by the launch script,
 so the receiver is started once for the process and every run uses it.
 
-Runs that share the receiver are serialized by the run manager: one callback queue cannot safely
-serve two interleaved task streams.
+The receiver cannot feed one queue: a push only carries the server-side task/context identity, so
+two runs sharing a queue would consume each other's events. :class:`WebhookRouter` keeps one queue
+per run and routes each push to the queue that owns its ``taskId`` / ``contextId``. A run binds its
+identities from the synchronous RPC reply; a push that beats that reply in flight is held in a small
+pending buffer and flushed on bind. Events for a finished run are dropped for a grace period instead
+of leaking into the next run. This makes webhook transport concurrent: the callback port is still
+one process resource, but the event stream is per run.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+import time
+import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 from shared.config import SampleConfig
 from shared.webhook_receiver import (
@@ -21,23 +29,275 @@ from shared.webhook_receiver import (
     start_receiver_with_fallback,
 )
 
-from protocol.client_flow import build_webhook_receiver
-
 _LOGGER = logging.getLogger("ran_energy_saving.shared_webhook")
+
+#: How long an unbound or retired task/context identity keeps matching pushes. Bounds the pending
+#: buffer when a push names a task this process no longer owns; the value covers the configured
+#: webhook idle timeout plus a margin.
+_PENDING_TTL_SECONDS = 900.0
+
+#: Hard cap per pending identity: a leaking/attacking sender must not grow the buffer without bound.
+_PENDING_LIMIT = 256
+
+#: How long the identities of a finished run keep dropping late pushes instead of falling through
+#: to whichever run is alone on the receiver afterwards.
+_RETIRED_TTL_SECONDS = 300.0
+
+
+def _text(value: object) -> str:
+    """Return a stripped string value, empty for anything else."""
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _payload_keys(payload: Mapping[str, object]) -> tuple[str, str]:
+    """Return the ``(task_id, context_id)`` identity carried by one StreamResponse JSON body.
+
+    The A2A push body uses the ``MessageToDict`` spelling: a ``task`` document carries ``id`` and
+    ``contextId``; status/artifact updates carry ``taskId`` and ``contextId``; a bare message only
+    carries ``contextId`` (the pre-task negotiation message is not pushed).
+    """
+    task = payload.get("task")
+    if isinstance(task, Mapping):
+        return _text(task.get("id")), _text(task.get("contextId") or task.get("context_id"))
+    for key in ("statusUpdate", "artifactUpdate"):
+        update = payload.get(key)
+        if isinstance(update, Mapping):
+            return (
+                _text(update.get("taskId") or update.get("task_id")),
+                _text(update.get("contextId") or update.get("context_id")),
+            )
+    message = payload.get("message")
+    if isinstance(message, Mapping):
+        return "", _text(message.get("contextId") or message.get("context_id"))
+    return "", ""
+
+
+def _identity_key(kind: str, value: str) -> str:
+    """Build the lookup key of one task/context identity."""
+    return f"{kind}:{value}"
+
+
+class WebhookRouter:
+    """Dispatch webhook pushes to per-run queues by task/context identity.
+
+    The public surface is :meth:`subscribe` for a run, :meth:`bind` once the run learns its
+    server-side identities, and :meth:`on_event` as the receiver callback. All methods run on the
+    event loop that owns the running receiver, so no locking is needed.
+    """
+
+    def __init__(
+        self,
+        *,
+        pending_ttl: float = _PENDING_TTL_SECONDS,
+        retired_ttl: float = _RETIRED_TTL_SECONDS,
+        pending_limit: int = _PENDING_LIMIT,
+    ) -> None:
+        """Create an empty router.
+
+        Args:
+            pending_ttl: seconds an unbound identity keeps buffered pushes.
+            retired_ttl: seconds a finished run's identities keep dropping late pushes.
+            pending_limit: maximum buffered pushes per unbound identity.
+        """
+        self._pending_ttl = pending_ttl
+        self._retired_ttl = retired_ttl
+        self._pending_limit = pending_limit
+        self._subscriptions: dict[str, WebhookSubscription] = {}
+        self._by_task: dict[str, str] = {}
+        self._by_context: dict[str, str] = {}
+        self._pending: dict[str, list[tuple[float, dict[str, object]]]] = {}
+        self._retired: dict[str, float] = {}
+
+    @property
+    def active_subscriptions(self) -> int:
+        """Number of runs currently subscribed."""
+        return len(self._subscriptions)
+
+    def subscribe(self, scope: str = "") -> WebhookSubscription:
+        """Create and register the queue of one run.
+
+        Every call gets a distinct subscription even when two runs report the same scope: a copied
+        run id must not silently steal another run's callback stream.
+
+        Args:
+            scope: run identifier used in logs; a random one is generated when empty.
+
+        Returns:
+            The run's subscription; the caller must :meth:`unsubscribe` it when the run ends.
+        """
+        # Dashed UUID form: the A2A-T negotiation validator accepts a UUID context id, and the
+        # subscription key doubles as the client-assigned context id of the run.
+        key = str(uuid.uuid4())
+        subscription = WebhookSubscription(scope=scope.strip() or key, key=key, router=self)
+        self._subscriptions[key] = subscription
+        return subscription
+
+    def unsubscribe(self, subscription: WebhookSubscription) -> None:
+        """Remove one run and retire its identities so late pushes cannot reach another run."""
+        if subscription.closed:
+            return
+        subscription.closed = True
+        self._subscriptions.pop(subscription.key, None)
+        expires = time.monotonic() + self._retired_ttl
+        for task_id in subscription.task_ids:
+            self._by_task.pop(task_id, None)
+            self._retired[_identity_key("task", task_id)] = expires
+            self._discard_pending(_identity_key("task", task_id))
+        for context_id in subscription.context_ids:
+            self._by_context.pop(context_id, None)
+            self._retired[_identity_key("context", context_id)] = expires
+            self._discard_pending(_identity_key("context", context_id))
+
+    def bind(
+        self,
+        subscription: WebhookSubscription,
+        *,
+        task_id: str | None = None,
+        context_id: str | None = None,
+    ) -> None:
+        """Associate a run with the task/context identities observed on its RPC reply.
+
+        Buffered pushes for those identities are delivered immediately, in arrival order.
+        """
+        if subscription.closed:
+            return
+        identities = (
+            ("task", _text(task_id), self._by_task, subscription.task_ids),
+            ("context", _text(context_id), self._by_context, subscription.context_ids),
+        )
+        for kind, value, index, owned in identities:
+            if not value or value in owned:
+                continue
+            owned.add(value)
+            previous = index.get(value)
+            if previous is not None and previous != subscription.key:
+                # A reused identity (server restart, replay) belongs to the latest run.
+                stale = self._subscriptions.get(previous)
+                if stale is not None and kind == "task":
+                    stale.task_ids.discard(value)
+                elif stale is not None:
+                    stale.context_ids.discard(value)
+            index[value] = subscription.key
+            self._retired.pop(_identity_key(kind, value), None)
+            self._flush(_identity_key(kind, value), subscription)
+
+    def on_event(self, payload: dict[str, object]) -> None:
+        """Route one authenticated push to the queue that owns its identity.
+
+        A push with an unknown identity is buffered until a run binds it. When no run is bound yet
+        and only one run is subscribed, the push is delivered directly: this preserves the
+        single-run behavior for servers that assign identities late or omit them on a message.
+        """
+        self._prune()
+        task_id, context_id = _payload_keys(payload)
+        task_key = _identity_key("task", task_id) if task_id else ""
+        context_key = _identity_key("context", context_id) if context_id else ""
+
+        for key in (task_key, context_key):
+            if not key:
+                continue
+            if key in self._retired:
+                _LOGGER.debug("webhook push for a finished run dropped: %s", key)
+                return
+            owner_key = self._by_task.get(task_id) if key == task_key else self._by_context.get(context_id)
+            owner = self._subscriptions.get(owner_key) if owner_key else None
+            if owner is not None and not owner.closed:
+                self._deliver(owner, payload)
+                return
+
+        if len(self._subscriptions) == 1:
+            owner = next(iter(self._subscriptions.values()))
+            self._deliver(owner, payload)
+            return
+
+        key = task_key or context_key
+        if not key:
+            _LOGGER.warning(
+                "webhook push carries neither taskId nor contextId while %d runs are active; dropped",
+                len(self._subscriptions),
+            )
+            return
+        self._pend(key, payload)
+
+    def _deliver(self, subscription: WebhookSubscription, payload: dict[str, object]) -> None:
+        """Put one payload on the queue of a live run."""
+        if subscription.closed:
+            return
+        subscription.queue.put_nowait(payload)
+
+    def _pend(self, key: str, payload: dict[str, object]) -> None:
+        """Buffer one unbound push until a run binds its identity."""
+        bucket = self._pending.setdefault(key, [])
+        if len(bucket) >= self._pending_limit:
+            dropped = bucket.pop(0)[1]
+            _LOGGER.warning(
+                "webhook pending buffer for %s is full; dropped the oldest push (%s)",
+                key,
+                next(iter(dropped), "?"),
+            )
+        bucket.append((time.monotonic(), payload))
+
+    def _flush(self, key: str, subscription: WebhookSubscription) -> None:
+        """Deliver every buffered push of one newly bound identity."""
+        bucket = self._pending.pop(key, [])
+        for _, payload in bucket:
+            self._deliver(subscription, payload)
+
+    def _discard_pending(self, key: str) -> None:
+        """Drop buffered pushes of a retiring identity."""
+        self._pending.pop(key, None)
+
+    def _prune(self) -> None:
+        """Expire unbound pushes and retired identities."""
+        now = time.monotonic()
+        for key, bucket in list(self._pending.items()):
+            kept = [(stamp, payload) for stamp, payload in bucket if now - stamp < self._pending_ttl]
+            if kept:
+                self._pending[key] = kept
+            else:
+                self._pending.pop(key, None)
+        for key, expires in list(self._retired.items()):
+            if expires <= now:
+                self._retired.pop(key, None)
+
+
+@dataclass
+class WebhookSubscription:
+    """One run's private event queue and the identities bound to it."""
+
+    scope: str
+    router: WebhookRouter = field(repr=False)
+    key: str = ""
+    queue: asyncio.Queue[dict[str, object]] = field(default_factory=asyncio.Queue)
+    task_ids: set[str] = field(default_factory=set)
+    context_ids: set[str] = field(default_factory=set)
+    closed: bool = False
+
+    def bind(self, task_id: str | None = None, context_id: str | None = None) -> None:
+        """Bind the task/context identities carried by this run's RPC reply."""
+        self.router.bind(self, task_id=task_id, context_id=context_id)
+
+    def unsubscribe(self) -> None:
+        """Release this subscription; late pushes for its identities are dropped."""
+        self.router.unsubscribe(self)
 
 
 @dataclass
 class SharedWebhook:
-    """One process-level receiver and the queue feeding the active run."""
+    """One process-level receiver and the router handing each run its own queue."""
 
     receiver: WebhookReceiver
-    queue: asyncio.Queue[dict[str, object]]
+    router: WebhookRouter
     loop: asyncio.AbstractEventLoop
 
     @property
     def url(self) -> str:
         """Callback URL to register in every task push config."""
         return self.receiver.url
+
+    def subscribe(self, scope: str = "") -> WebhookSubscription:
+        """Return the event queue of one run."""
+        return self.router.subscribe(scope)
 
 
 #: Receivers keyed by loop and callback settings. Keeping the loop in the key keeps test event
@@ -65,23 +325,23 @@ async def get_shared_webhook(config: SampleConfig) -> SharedWebhook:
         config: resolved sample configuration selecting the callback address and credentials.
 
     Returns:
-        The long-lived receiver and its event queue.
+        The long-lived receiver and its per-run router.
     """
     loop = asyncio.get_running_loop()
     key = (id(loop), *_signature(config))
     existing = _shared.get(key)
-    if existing is not None and not existing.loop.is_closed():
+    if existing is not None and not existing.loop.is_closed() and existing.receiver.serving:
         return existing
     if existing is not None:
         _shared.pop(key, None)
 
-    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    router = WebhookRouter()
 
     def _make_receiver(port: int) -> WebhookReceiver:
         """Build the receiver for one callback port."""
-        return build_webhook_receiver(
+        return WebhookReceiver(
             token=config.webhook_token,
-            queue=queue,
+            on_event=router.on_event,
             host=config.webhook_host,
             port=port,
             public_url=config.webhook_public_url,
@@ -95,19 +355,10 @@ async def get_shared_webhook(config: SampleConfig) -> SharedWebhook:
         port=config.webhook_port,
         public_url=config.webhook_public_url,
     )
-    shared = SharedWebhook(receiver=receiver, queue=queue, loop=loop)
+    shared = SharedWebhook(receiver=receiver, router=router, loop=loop)
     _shared[key] = shared
     _LOGGER.info("shared webhook ready: url=%s", shared.url)
     return shared
-
-
-def drain_shared_webhook(shared: SharedWebhook) -> None:
-    """Drop pushes left over from a previous run before a new one starts."""
-    while True:
-        try:
-            shared.queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return
 
 
 async def close_shared_webhooks() -> None:
@@ -123,7 +374,8 @@ async def close_shared_webhooks() -> None:
 
 __all__: list[str] = [
     "SharedWebhook",
+    "WebhookRouter",
+    "WebhookSubscription",
     "close_shared_webhooks",
-    "drain_shared_webhook",
     "get_shared_webhook",
 ]

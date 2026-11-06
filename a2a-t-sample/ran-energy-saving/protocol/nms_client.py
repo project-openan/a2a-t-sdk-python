@@ -22,7 +22,8 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +58,9 @@ from protocol.client_flow import is_stop_event, is_terminal_event
 from protocol.wire_log import redact
 
 _LOGGER = logging.getLogger("ran_energy_saving.nms_client")
+
+#: Sentinel meaning "this task did not select a run directory".
+_WIRE_UNSET: Final[object] = object()
 
 #: Task states that end a poll. The vendor spells cancellation with one ``L``.
 NMS_TERMINAL_STATES: Final[frozenset[str]] = frozenset(
@@ -204,22 +208,35 @@ class NmsClient:
         self._token_lock = asyncio.Lock()
         self._wire_root = wire_root
         self._wire_path: Path | None = None
+        # One NmsClient is shared by concurrent OSS Agent requests; the context variable keeps
+        # each request's wire file private to its own asyncio task.
+        self._wire_var: ContextVar[Path | None | object] = ContextVar(f"a2at_nms_wire_{id(self)}", default=_WIRE_UNSET)
 
     @property
     def config(self) -> NmsConfig:
         """Return the resolved settings."""
         return self._config
 
+    def _current_wire_path(self) -> Path | None:
+        """Return this task's wire path, falling back to the instance value."""
+        value = self._wire_var.get()
+        if value is _WIRE_UNSET:
+            return self._wire_path
+        return value if isinstance(value, Path) else None
+
     def set_wire_path(self, path: Path | None) -> None:
         """Set the ``wire.jsonl`` path of the current run; ``None`` disables the log."""
         self._wire_path = path
+        self._wire_var.set(path)
 
     def set_run(self, run_id: str | None) -> None:
         """Point the wire log at ``<wire_root>/<run_id>/wire.jsonl``."""
         if self._wire_root is None or not run_id:
             self._wire_path = None
+            self._wire_var.set(None)
             return
         self._wire_path = self._wire_root / run_id / "wire.jsonl"
+        self._wire_var.set(self._wire_path)
 
     async def token(self) -> str:
         """Return a valid session token, refreshing it before it expires.
@@ -444,9 +461,7 @@ class NmsClient:
                 f"HTTP {response.status_code}: {_excerpt(body)}",
                 body,
             )
-            raise NmsProtocolError(
-                f"NMS A2A request returned HTTP {response.status_code}: {_excerpt(body)}"
-            )
+            raise NmsProtocolError(f"NMS A2A request returned HTTP {response.status_code}: {_excerpt(body)}")
         try:
             body = response.json()
         except ValueError as exc:
@@ -589,14 +604,15 @@ class NmsClient:
 
     def _write_wire(self, direction: str, **fields: object) -> None:
         """Append one redacted record to the run's ``wire.jsonl``."""
-        if not self._config.wire_log or self._wire_path is None:
+        path = self._current_wire_path()
+        if not self._config.wire_log or path is None:
             return
         record: dict[str, object] = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "dir": direction,
             **fields,
         }
-        self._append_wire(self._wire_path, record)
+        self._append_wire(path, record)
 
     def record_error(
         self,
@@ -609,7 +625,8 @@ class NmsClient:
         The SDK or the raw reader may reject a frame before any ``wire.jsonl`` record is written;
         this keeps the frame that explains the failure.
         """
-        if not self._config.wire_log or self._wire_path is None:
+        path = self._current_wire_path()
+        if not self._config.wire_log or path is None:
             return
         record: dict[str, object] = {
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -618,7 +635,7 @@ class NmsClient:
         }
         if frame is not None:
             record["frame"] = frame
-        self._append_wire(self._wire_path.with_name("wire-error.jsonl"), record)
+        self._append_wire(path.with_name("wire-error.jsonl"), record)
 
     def _append_wire(self, path: Path, record: Mapping[str, object]) -> None:
         """Append one redacted record to a wire log file."""
@@ -657,9 +674,7 @@ class NmsSseTransport:
         self._client = client
         self._protocol = protocol
         self._request_timeout = client.config.request_timeout if request_timeout is None else request_timeout
-        self._read_after_send = (
-            client.config.read_after_send if read_after_send is None else read_after_send
-        )
+        self._read_after_send = client.config.read_after_send if read_after_send is None else read_after_send
         self._event_sink: Any | None = None
 
     def set_event_sink(self, event_sink: Any | None) -> None:
@@ -733,15 +748,10 @@ class NmsSseTransport:
             if is_stop_event(event):
                 break
         has_negotiation = any(
-            isinstance(event.get("metadata"), Mapping)
-            and _is_negotiation_metadata(event["metadata"])
+            isinstance(event.get("metadata"), Mapping) and _is_negotiation_metadata(event["metadata"])
             for event in events
         )
-        if (
-            task_id is not None
-            and not has_negotiation
-            and not any(is_terminal_event(event) for event in events)
-        ):
+        if task_id is not None and not has_negotiation and not any(is_terminal_event(event) for event in events):
             try:
                 task = await self._client.wait_for_terminal(task_id, timeout=self._request_timeout)
             except NmsTimeoutError:
@@ -781,18 +791,25 @@ class NmsWebhookTransport:
         push_auth_credentials: str = "",
         protocol: str = PROTOCOL_A2A_T,
         idle_timeout: float = DEFAULT_NMS_IDLE_TIMEOUT_SECONDS,
+        bind: Callable[[str | None, str | None], None] | None = None,
+        context_id: str = "",
     ) -> None:
         """Create one webhook transport.
 
         Args:
             client: raw NMS client.
-            queue: queue fed by the webhook receiver.
+            queue: queue fed by the webhook router for this run only.
             push_url: callback URL registered inline on every request.
             push_token: push token registered inline; the vendor ignores it.
             push_auth_credentials: ``user:password`` registered as the push Basic auth. The vendor
                 rejects a push config without ``id`` or ``authentication`` with 500 INTERNAL.
             protocol: interaction protocol; only ``a2a-t`` sends extension headers.
             idle_timeout: backstop when no push arrives.
+            bind: optional callback binding ``(task_id, context_id)`` to this run's queue. The
+                vendor ignores the push token, so task/context identity is the only way to route
+                its pushes on a process-level receiver.
+            context_id: optional client-assigned A2A context id stamped on the first message, so
+                every pushed event is routable from its ``contextId`` before a Task reply arrives.
         """
         self._client = client
         self._queue = queue
@@ -801,6 +818,8 @@ class NmsWebhookTransport:
         self._push_auth_credentials = push_auth_credentials
         self._protocol = protocol
         self._idle_timeout = idle_timeout
+        self._bind = bind
+        self._context_id = context_id
         self._event_sink: Any | None = None
 
     def set_event_sink(self, event_sink: Any | None) -> None:
@@ -812,12 +831,22 @@ class NmsWebhookTransport:
         if self._event_sink is not None:
             self._event_sink(event)
 
+    def _bind_context(self, request: SendMessageRequest) -> None:
+        """Stamp and bind the run's A2A context before the request leaves the process."""
+        if not self._context_id:
+            return
+        if not request.message.context_id:
+            request.message.context_id = self._context_id
+        if self._bind is not None:
+            self._bind(None, request.message.context_id)
+
     async def send(
         self,
         request: SendMessageRequest,
         call_context: ClientCallContext,
     ) -> list[dict[str, object]]:
         """Send one non-streaming message, register the webhook, and collect its events."""
+        self._bind_context(request)
         request.configuration.return_immediately = True
         config = TaskPushNotificationConfig(id=str(uuid.uuid4()), url=self._push_url, token=self._push_token)
         if self._push_auth_credentials:
@@ -834,6 +863,13 @@ class NmsWebhookTransport:
         reply_event = _reply_event(reply)
         events.append(reply_event)
         self._emit(reply_event)
+        if self._bind is not None:
+            # The vendor ignores the push token, so the task/context identity is the only way to
+            # tell this run's pushes from another concurrent run's on the shared callback port.
+            self._bind(
+                _optional_str(reply_event.get("task_id")),
+                _optional_str(reply_event.get("context_id")),
+            )
         if self._protocol == PROTOCOL_PURE and _is_input_required(reply_event):
             return events
         if _is_negotiation_event(reply_event):
@@ -858,11 +894,7 @@ class NmsWebhookTransport:
             self._emit(event)
             if self._protocol == PROTOCOL_PURE and _is_input_required(event):
                 return events
-            if (
-                is_stop_event(event)
-                or is_report_artifact(event)
-                or _is_negotiation_event(event)
-            ):
+            if is_stop_event(event) or is_report_artifact(event) or _is_negotiation_event(event):
                 return events
 
     async def cancel(self, task_id: str, call_context: ClientCallContext | None = None) -> None:
@@ -926,6 +958,13 @@ def _context_id(message: Mapping[str, object]) -> str:
         if isinstance(value, str):
             return value
     return ""
+
+
+def _optional_str(value: object) -> str | None:
+    """Return a stripped string value, ``None`` for a missing or non-string value."""
+    if not isinstance(value, str):
+        return None
+    return value.strip() or None
 
 
 def _first_str(data: Mapping[str, object], *keys: str) -> str:
@@ -1021,5 +1060,3 @@ def _nms_span(
 def _is_hex(value: str, length: int) -> bool:
     """Return whether ``value`` is exactly ``length`` lowercase hex digits."""
     return len(value) == length and all(char in "0123456789abcdef" for char in value)
-
-

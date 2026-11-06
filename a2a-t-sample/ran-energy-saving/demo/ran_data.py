@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import date
@@ -46,9 +47,7 @@ class UnknownCellError(RanDataError):
 
     def __init__(self, cell_id: str) -> None:
         self.cell_id = cell_id
-        super().__init__(
-            f"Unknown cell '{cell_id}'; known cells: {', '.join(cell.cell_id for cell in load_cells())}"
-        )
+        super().__init__(f"Unknown cell '{cell_id}'; known cells: {', '.join(cell.cell_id for cell in load_cells())}")
 
 
 class UnknownPlanError(RanDataError):
@@ -252,9 +251,12 @@ class EnergySavingPlan:
         }
 
 
-#: Process-local plan store and per-cell plan sequence counters.
+#: Process-local plan store and per-cell plan sequence counters. Several server Tasks may create
+#: or modify plans concurrently, so every mutation takes the re-entrant lock; a plain ``+=`` on the
+#: sequence or a read-then-write on the store is not atomic across threads.
 _PLANS: dict[str, EnergySavingPlan] = {}
 _PLAN_SEQUENCES: dict[str, int] = {}
+_PLAN_LOCK = threading.RLock()
 
 
 def _as_float(value: object, field: str) -> float:
@@ -436,9 +438,7 @@ def parse_window(window: str) -> tuple[str, tuple[int, ...]]:
         raise InvalidPlanError(f"Invalid window '{window}'; the end must be after the start")
     if end_minute - start_minute > HOURS_PER_DAY * 60:
         raise InvalidPlanError(f"Invalid window '{window}'; a window cannot exceed 24 hours")
-    canonical = (
-        f"{start_minute // 60:02d}:{start_minute % 60:02d}~{end_minute // 60:02d}:{end_minute % 60:02d}"
-    )
+    canonical = f"{start_minute // 60:02d}:{start_minute % 60:02d}~{end_minute // 60:02d}:{end_minute % 60:02d}"
     return canonical, tuple(range(start_minute // 60, end_minute // 60))
 
 
@@ -507,9 +507,7 @@ def evaluate_plan(cell_id: str, window: str, target_rate: str) -> PlanEvaluation
             f"available windows: {', '.join(cell.available_windows)}"
         )
     if rate > cell.max_saving_rate:
-        reasons.append(
-            f"Target rate {rate:g}% exceeds the {cell.max_saving_rate:g}% maximum of cell {cell_id}"
-        )
+        reasons.append(f"Target rate {rate:g}% exceeds the {cell.max_saving_rate:g}% maximum of cell {cell_id}")
 
     max_throughput = cell.capacity.max_throughput_mbps
     remaining_throughput = round(max_throughput * (1 - rate / 100), 2)
@@ -566,25 +564,24 @@ def apply_plan(cell_id: str, window: str, target_rate: str) -> EnergySavingPlan:
     if not evaluation.feasible:
         raise PlanInfeasibleError(evaluation)
     cell = get_cell_or_raise(cell_id)
-    sequence = _PLAN_SEQUENCES.get(cell_id, 0) + 1
-    _PLAN_SEQUENCES[cell_id] = sequence
-    plan = EnergySavingPlan(
-        plan_id=f"plan-{cell_id}-{sequence:03d}",
-        cell_id=cell.cell_id,
-        cell_name=cell.name,
-        region=cell.region,
-        date=dataset_date(),
-        window=evaluation.window,
-        target_rate=evaluation.target_rate,
-        status=PLAN_STATUS_APPLIED,
-        baseline_energy_kwh=evaluation.baseline_energy_kwh,
-        estimated_saving_kwh=evaluation.estimated_saving_kwh,
-        remaining_energy_kwh=round(
-            evaluation.baseline_energy_kwh - evaluation.estimated_saving_kwh, 2
-        ),
-        kpi_impact=dict(evaluation.kpi_impact),
-    )
-    _PLANS[plan.plan_id] = plan
+    with _PLAN_LOCK:
+        sequence = _PLAN_SEQUENCES.get(cell_id, 0) + 1
+        _PLAN_SEQUENCES[cell_id] = sequence
+        plan = EnergySavingPlan(
+            plan_id=f"plan-{cell_id}-{sequence:03d}",
+            cell_id=cell.cell_id,
+            cell_name=cell.name,
+            region=cell.region,
+            date=dataset_date(),
+            window=evaluation.window,
+            target_rate=evaluation.target_rate,
+            status=PLAN_STATUS_APPLIED,
+            baseline_energy_kwh=evaluation.baseline_energy_kwh,
+            estimated_saving_kwh=evaluation.estimated_saving_kwh,
+            remaining_energy_kwh=round(evaluation.baseline_energy_kwh - evaluation.estimated_saving_kwh, 2),
+            kpi_impact=dict(evaluation.kpi_impact),
+        )
+        _PLANS[plan.plan_id] = plan
     return plan
 
 
@@ -617,12 +614,11 @@ def modify_plan(plan_id: str, cell_id: str, window: str, target_rate: str) -> En
         status=PLAN_STATUS_MODIFIED,
         baseline_energy_kwh=evaluation.baseline_energy_kwh,
         estimated_saving_kwh=evaluation.estimated_saving_kwh,
-        remaining_energy_kwh=round(
-            evaluation.baseline_energy_kwh - evaluation.estimated_saving_kwh, 2
-        ),
+        remaining_energy_kwh=round(evaluation.baseline_energy_kwh - evaluation.estimated_saving_kwh, 2),
         kpi_impact=dict(evaluation.kpi_impact),
     )
-    _PLANS[plan.plan_id] = plan
+    with _PLAN_LOCK:
+        _PLANS[plan.plan_id] = plan
     return plan
 
 
@@ -654,9 +650,7 @@ def restore_plan(payload: Mapping[str, object]) -> EnergySavingPlan | None:
     remaining = _number(payload.get("remaining_energy_kwh"))
     baseline_value = 0.0 if baseline is None else baseline
     saved_value = 0.0 if saved is None else saved
-    remaining_value = (
-        round(baseline_value - saved_value, 2) if remaining is None else remaining
-    )
+    remaining_value = round(baseline_value - saved_value, 2) if remaining is None else remaining
     kpi = payload.get("kpi_impact")
     plan = EnergySavingPlan(
         plan_id=plan_id,
@@ -672,8 +666,9 @@ def restore_plan(payload: Mapping[str, object]) -> EnergySavingPlan | None:
         remaining_energy_kwh=remaining_value,
         kpi_impact=dict(kpi) if isinstance(kpi, Mapping) else {},
     )
-    _PLANS[plan.plan_id] = plan
-    _restore_plan_sequence(plan.cell_id, plan.plan_id)
+    with _PLAN_LOCK:
+        _PLANS[plan.plan_id] = plan
+        _restore_plan_sequence(plan.cell_id, plan.plan_id)
     return plan
 
 
@@ -724,5 +719,6 @@ def list_plan_ids() -> tuple[str, ...]:
 
 def reset() -> None:
     """Clear the plan store and the per-cell plan sequences (used by tests)."""
-    _PLANS.clear()
-    _PLAN_SEQUENCES.clear()
+    with _PLAN_LOCK:
+        _PLANS.clear()
+        _PLAN_SEQUENCES.clear()

@@ -173,9 +173,7 @@ class WebhookReceiver:
         self._public_url = public_url
         self._tls_cert = tls_cert
         self._tls_key = tls_key
-        self._auth_header = (
-            f"Basic {base64.b64encode(auth_credentials.encode()).decode()}" if auth_credentials else ""
-        )
+        self._auth_header = f"Basic {base64.b64encode(auth_credentials.encode()).decode()}" if auth_credentials else ""
         self._resolved_port = port
         self._server: uvicorn.Server | None = None
         self._serve_task: asyncio.Task[None] | None = None
@@ -185,6 +183,11 @@ class WebhookReceiver:
     def port(self) -> int:
         """The resolved port: the configured one, or the OS-assigned port once started with 0."""
         return self._resolved_port
+
+    @property
+    def serving(self) -> bool:
+        """Whether the listener task is still running (it is not after loop teardown)."""
+        return self._serve_task is not None and not self._serve_task.done()
 
     @property
     def url(self) -> str:
@@ -257,9 +260,12 @@ class WebhookReceiver:
             return
         if public_port is None or self.port <= 0 or public_port == self.port:
             return
-        allowed = os.environ.get(
-            "A2AT_SAMPLE_ALLOW_CALLBACK_PORT_MISMATCH", ""
-        ).strip().lower() in {"1", "true", "yes", "on"}
+        allowed = os.environ.get("A2AT_SAMPLE_ALLOW_CALLBACK_PORT_MISMATCH", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         if allowed:
             return
         _LOGGER.warning(
@@ -298,6 +304,11 @@ class WebhookReceiver:
         self._serve_task = None
         self._server = None
         if serve_task is None or server is None:
+            return
+        if serve_task.done():
+            # The loop teardown already cancelled/finished the listener; awaiting it would
+            # re-raise CancelledError from an unrelated context.
+            self._log("stopped", f"url={self.url}")
             return
         server.should_exit = True  # graceful: uvicorn stops accepting and drains
         try:

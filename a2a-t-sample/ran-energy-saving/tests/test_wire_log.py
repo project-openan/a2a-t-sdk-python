@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -59,6 +60,27 @@ async def test_http_hook_is_a_noop_before_a_run_is_set(tmp_path: Path) -> None:
 
     assert not (tmp_path / "wire.jsonl").exists()
     assert wire_log.path is None
+
+
+async def test_one_log_keeps_concurrent_runs_in_their_own_files(tmp_path: Path) -> None:
+    """The OSS Agent shares one log; each request must still write its own run directory."""
+    wire_log = HttpWireLog()
+
+    async def run(run_id: str) -> None:
+        wire_log.set_run(tmp_path, run_id)
+        await asyncio.sleep(0)  # let the other request select its run before this request writes
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(_handler),
+            event_hooks={"request": [wire_log.record_request]},
+        ) as client:
+            await client.post("http://agent.test/a2a/json/message:send", json={"message": {"messageId": run_id}})
+
+    await asyncio.gather(run("run-a"), run("run-b"))
+
+    for run_id in ("run-a", "run-b"):
+        lines = (tmp_path / run_id / "wire.jsonl").read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        assert json.loads(lines[0])["body"]["message"]["messageId"] == run_id
 
 
 def test_set_run_points_the_log_at_the_run_directory(tmp_path: Path) -> None:

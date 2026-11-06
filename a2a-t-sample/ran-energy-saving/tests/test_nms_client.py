@@ -258,9 +258,7 @@ class _FakeWebhookClient:
         self.payload: dict[str, object] | None = None
         self.extension_header = ""
 
-    async def send_message(
-        self, payload: Mapping[str, object], *, extension_header: str = ""
-    ) -> dict[str, object]:
+    async def send_message(self, payload: Mapping[str, object], *, extension_header: str = "") -> dict[str, object]:
         self.payload = dict(payload)
         self.extension_header = extension_header
         return dict(self.reply)
@@ -313,6 +311,70 @@ async def test_webhook_transport_registers_the_push_url_and_returns_a_negotiatio
     assert client.extension_header == TASK_T_URI
 
 
+async def test_webhook_transport_binds_the_reply_identity_for_the_router() -> None:
+    """The vendor ignores the push token; task/context identity is the routing key."""
+    reply = {
+        "task": {
+            "id": "task-1",
+            "contextId": "ctx-1",
+            "status": {"state": "TASK_STATE_WORKING"},
+        }
+    }
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    queue.put_nowait(
+        {
+            "statusUpdate": {
+                "taskId": "task-1",
+                "contextId": "ctx-1",
+                "status": {"state": "TASK_STATE_CANCELED"},
+            }
+        }
+    )
+    bound: list[tuple[str | None, str | None]] = []
+    transport = NmsWebhookTransport(
+        _FakeWebhookClient(reply),  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        idle_timeout=0.5,
+        bind=lambda task_id, context_id: bound.append((task_id, context_id)),
+    )
+
+    await transport.send(*_request())
+
+    assert bound == [("task-1", "ctx-1")]
+
+
+async def test_webhook_transport_stamps_and_binds_its_context_before_sending() -> None:
+    """The vendor ignores the push token; a client context makes early pushes routable."""
+    reply = {
+        "task": {
+            "id": "task-1",
+            "contextId": "ctx-run",
+            "status": {"state": "TASK_STATE_CANCELED"},
+        }
+    }
+    client = _FakeWebhookClient(reply)
+    bound: list[tuple[str | None, str | None]] = []
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=asyncio.Queue(),
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        idle_timeout=0.5,
+        context_id="ctx-run",
+        bind=lambda task_id, context_id: bound.append((task_id, context_id)),
+    )
+
+    await transport.send(*_request())
+
+    assert client.payload is not None
+    message = client.payload["message"]
+    assert isinstance(message, dict)
+    assert message["contextId"] == "ctx-run"
+    assert bound[0] == (None, "ctx-run")
+
+
 async def test_webhook_transport_keeps_waiting_after_a_negotiation_response_reply() -> None:
     queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
     client = _FakeWebhookClient(_propose_message("neg-1", "accepted proposal"))
@@ -346,9 +408,7 @@ async def test_webhook_transport_keeps_waiting_after_a_negotiation_response_repl
 
 async def test_webhook_transport_returns_task_events_until_terminal() -> None:
     queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
-    client = _FakeWebhookClient(
-        {"task": {"id": "task-1", "status": {"state": "TASK_STATE_SUBMITTED"}}}
-    )
+    client = _FakeWebhookClient({"task": {"id": "task-1", "status": {"state": "TASK_STATE_SUBMITTED"}}})
     transport = NmsWebhookTransport(
         client,  # ty: ignore[invalid-argument-type]
         queue=queue,
@@ -357,12 +417,8 @@ async def test_webhook_transport_returns_task_events_until_terminal() -> None:
         idle_timeout=1.0,
     )
     request, context = _request()
-    await queue.put(
-        {"statusUpdate": {"taskId": "task-1", "status": {"state": "TASK_STATE_WORKING"}}}
-    )
-    await queue.put(
-        {"statusUpdate": {"taskId": "task-1", "status": {"state": "TASK_STATE_COMPLETED"}}}
-    )
+    await queue.put({"statusUpdate": {"taskId": "task-1", "status": {"state": "TASK_STATE_WORKING"}}})
+    await queue.put({"statusUpdate": {"taskId": "task-1", "status": {"state": "TASK_STATE_COMPLETED"}}})
 
     events = await transport.send(request, context)
 
@@ -709,9 +765,7 @@ async def test_wire_log_redacts_the_credentials(tmp_path: Path) -> None:
 
 async def test_webhook_pure_returns_on_a_synchronous_input_required_reply() -> None:
     queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
-    client = _FakeWebhookClient(
-        {"task": {"id": "task-1", "status": {"state": "TASK_STATE_INPUT_REQUIRED"}}}
-    )
+    client = _FakeWebhookClient({"task": {"id": "task-1", "status": {"state": "TASK_STATE_INPUT_REQUIRED"}}})
     transport = NmsWebhookTransport(
         client,  # ty: ignore[invalid-argument-type]
         queue=queue,
@@ -729,9 +783,7 @@ async def test_webhook_pure_returns_on_a_synchronous_input_required_reply() -> N
 
 async def test_webhook_pure_returns_on_a_pushed_input_required_event() -> None:
     queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
-    client = _FakeWebhookClient(
-        {"task": {"id": "task-1", "status": {"state": "TASK_STATE_SUBMITTED"}}}
-    )
+    client = _FakeWebhookClient({"task": {"id": "task-1", "status": {"state": "TASK_STATE_SUBMITTED"}}})
     transport = NmsWebhookTransport(
         client,  # ty: ignore[invalid-argument-type]
         queue=queue,
@@ -740,9 +792,7 @@ async def test_webhook_pure_returns_on_a_pushed_input_required_event() -> None:
         protocol=PROTOCOL_PURE,
         idle_timeout=30.0,
     )
-    await queue.put(
-        {"statusUpdate": {"taskId": "task-1", "status": {"state": "TASK_STATE_INPUT_REQUIRED"}}}
-    )
+    await queue.put({"statusUpdate": {"taskId": "task-1", "status": {"state": "TASK_STATE_INPUT_REQUIRED"}}})
 
     events = await asyncio.wait_for(transport.send(*_request()), timeout=1.0)
 
@@ -845,3 +895,19 @@ async def test_a_request_outside_a_traced_run_carries_no_traceparent() -> None:
 
     assert "traceparent" not in seen
     await client.aclose()
+
+
+async def test_wire_path_is_task_local_on_a_shared_client(tmp_path: Path) -> None:
+    """Concurrent OSS requests share one NmsClient but write different wire files."""
+    client = NmsClient(_config())
+
+    async def select(name: str) -> str:
+        client.set_wire_path(tmp_path / name / "wire.jsonl")
+        await asyncio.sleep(0)
+        path = client._current_wire_path()
+        return "" if path is None else path.parent.name
+
+    try:
+        assert await asyncio.gather(select("run-a"), select("run-b")) == ["run-a", "run-b"]
+    finally:
+        await client.aclose()

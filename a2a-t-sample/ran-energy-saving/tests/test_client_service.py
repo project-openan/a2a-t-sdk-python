@@ -130,8 +130,9 @@ def _manager(
         discovery: str,
         *,
         protocol: str = PROTOCOL_A2A_T,
+        run_id: str = "",
     ) -> FakeRuntime:
-        del resolved_config, scenario, mode, transport, discovery, protocol
+        del resolved_config, scenario, mode, transport, discovery, protocol, run_id
         runtime = FakeRuntime(wait=wait, error=error)
         runtimes.append(runtime)
         return runtime
@@ -196,9 +197,7 @@ async def test_run_applies_the_decision_session_retention_window(
 ) -> None:
     db_path = tmp_path / "client.sqlite3"
     service = SqliteSessionService(str(db_path))
-    await service.create_session(
-        app_name=CLIENT_APP_NAME, user_id=CLIENT_USER_ID, session_id="ran-client-stale"
-    )
+    await service.create_session(app_name=CLIENT_APP_NAME, user_id=CLIENT_USER_ID, session_id="ran-client-stale")
     with sqlite3.connect(db_path) as connection:
         connection.execute(
             "UPDATE sessions SET update_time = ? WHERE id = ?",
@@ -226,14 +225,10 @@ async def test_conversation_memory_is_injected_into_the_next_run(
     offline_config: SampleConfig,
 ) -> None:
     manager, store, runtimes = _manager(tmp_path, offline_config, memory_turns=4)
-    first = await manager.start(
-        "information", "auto", "sse", user_request="first request", conversation_id="conv-1"
-    )
+    first = await manager.start("information", "auto", "sse", user_request="first request", conversation_id="conv-1")
     await _finish(manager, first.run_id)
 
-    second = await manager.start(
-        "information", "auto", "sse", user_request="second request", conversation_id="conv-1"
-    )
+    second = await manager.start("information", "auto", "sse", user_request="second request", conversation_id="conv-1")
     await _finish(manager, second.run_id)
 
     assert runtimes[1].conversation_context is not None
@@ -285,9 +280,7 @@ async def test_one_active_run_per_conversation_but_conversations_are_independent
 ) -> None:
     wait = asyncio.Event()
     manager, _, _ = _manager(tmp_path, offline_config, wait=wait)
-    first = await manager.start(
-        "information", "auto", "sse", user_request="first", conversation_id="conv-1"
-    )
+    first = await manager.start("information", "auto", "sse", user_request="first", conversation_id="conv-1")
     while True:
         first_run = manager.get(first.run_id)
         if first_run is not None and first_run.runtime is not None:
@@ -295,13 +288,9 @@ async def test_one_active_run_per_conversation_but_conversations_are_independent
         await asyncio.sleep(0.01)
 
     with pytest.raises(RunConflictError):
-        await manager.start(
-            "information", "auto", "sse", user_request="second", conversation_id="conv-1"
-        )
+        await manager.start("information", "auto", "sse", user_request="second", conversation_id="conv-1")
 
-    other = await manager.start(
-        "information", "auto", "sse", user_request="other", conversation_id="conv-2"
-    )
+    other = await manager.start("information", "auto", "sse", user_request="other", conversation_id="conv-2")
     assert other.run_id != first.run_id
 
     wait.set()
@@ -415,9 +404,7 @@ async def test_second_manager_cannot_start_an_active_conversation(
     wait = asyncio.Event()
     first, store, _ = _manager(tmp_path, offline_config, wait=wait)
     second, _, _ = _manager(tmp_path, offline_config)
-    run = await first.start(
-        "information", "auto", "sse", conversation_id="conv-shared"
-    )
+    run = await first.start("information", "auto", "sse", conversation_id="conv-shared")
     while run.runtime is None:
         await asyncio.sleep(0.01)
 

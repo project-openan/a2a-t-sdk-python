@@ -4,8 +4,10 @@ A batch owns the imported cases and runs them one at a time. It deliberately reu
 :class:`~protocol.client_service.RunManager` instead of re-implementing the client flow, so a
 tester case behaves exactly like a run started from the main page.
 
-Only one batch may execute at a time: the webhook receiver and its queue are process-wide, and a
-second webhook batch would consume the first batch's pushes.
+Batches may run concurrently. Webhook pushes are demultiplexed per run by
+:class:`~protocol.shared_webhook.WebhookRouter`, so two testers no longer consume each other's
+callback stream; within one batch the cases stay sequential so a workbook's results keep their
+order.
 """
 
 from __future__ import annotations
@@ -201,7 +203,6 @@ class TestBatchManager:
         self._model_label = model_label
         self._metrics_grace_seconds = max(0.0, metrics_grace_seconds)
         self._batches: dict[str, _Batch] = {}
-        self._active_batch: str | None = None
 
     def create(
         self,
@@ -287,13 +288,11 @@ class TestBatchManager:
 
         Raises:
             KeyError: when the source batch is unknown.
-            ValueError: when there is nothing to retry or another batch is running.
+            ValueError: when there is nothing to retry.
         """
         batch = self._batches.get(batch_id) or self._load(batch_id)
         if batch is None:
             raise KeyError(batch_id)
-        if self._active_batch is not None:
-            raise ValueError("已有测试批次正在执行，请等待完成或取消。")
         selected = [
             (case, result)
             for case, result in zip(batch.cases, batch.results, strict=False)
@@ -337,18 +336,15 @@ class TestBatchManager:
 
         Raises:
             KeyError: when the batch is unknown.
-            ValueError: when the batch already ran or another batch is active.
+            ValueError: when the batch already ran.
         """
         batch = self._batches.get(batch_id) or self._load(batch_id)
         if batch is None:
             raise KeyError(batch_id)
         if batch.status != BATCH_DRAFT:
             raise ValueError("该批次已经执行过。")
-        if self._active_batch is not None:
-            raise ValueError("已有测试批次正在执行，请等待完成或取消。")
         batch.status = BATCH_RUNNING
         batch.started_at = _now_iso()
-        self._active_batch = batch_id
         self._persist(batch)
         batch.task = asyncio.create_task(self._run_batch(batch), name=f"tester-{batch_id}")
         await asyncio.sleep(0)
@@ -390,7 +386,6 @@ class TestBatchManager:
             self._mark_pending_cancelled(batch)
             batch.status = BATCH_CANCELLED
             batch.finished_at = _now_iso()
-            self._active_batch = None
             raise
         else:
             if batch.cancel_requested:
@@ -400,7 +395,6 @@ class TestBatchManager:
                 pending = any(result.get("status") in (CASE_PENDING, CASE_RUNNING) for result in batch.results)
                 batch.status = BATCH_RUNNING if pending else BATCH_FINISHED
             batch.finished_at = _now_iso()
-            self._active_batch = None
         finally:
             batch.current_index = None
             self._persist(batch)

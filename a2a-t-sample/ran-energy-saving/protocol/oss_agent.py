@@ -66,15 +66,14 @@ from starlette.applications import Starlette
 
 from protocol.client_flow import (
     ClientFlowResult,
-    ClientTransport,
     SseClientTransport,
-    build_webhook_receiver,
 )
 from protocol.discovery import DISCOVERY_DIRECT, discover_agent
 from protocol.intent import IntentProcessor, OperatorRequest, ProcessedIntent
 from protocol.messages import SAMPLE_RUN_ID_METADATA_KEY, metadata_to_dict
 from protocol.nms_client import NmsClient, NmsConfig, NmsSseTransport, NmsWebhookTransport
 from protocol.pure_client_flow import run_pure_client_flow
+from protocol.shared_webhook import WebhookRouter
 from protocol.wire_log import WIRE_OSS_FILENAME, HttpWireLog
 
 #: Agent identity and skill.
@@ -140,10 +139,16 @@ class OSSPureExecutor(AgentExecutor):
         self._trace_sink = trace_sink
         # Captures the local a2a-sdk hop to the RAN Agent (NMS runs use the NmsClient log).
         self._wire_log = HttpWireLog()
-        # NMS downstream transport, created once by ``start`` and shared by every request.
+        # The HTTP/token client is shared (token refresh is locked); each inbound request gets its
+        # own transport because ``set_event_sink`` is per run.
         self._nms_client: NmsClient | None = None
-        self._nms_transport: ClientTransport | None = None
         self._webhook_receiver: WebhookReceiver | None = None
+        # Webhook mode: one process-level receiver, one router queue per inbound request, so two
+        # concurrent engineer requests do not consume each other's NMS pushes.
+        self._webhook_router: WebhookRouter | None = None
+        self._webhook_push_url = ""
+        self._webhook_push_token = ""
+        self._webhook_idle_timeout = 0.0
 
     async def start(self) -> None:
         """Create the long-lived NMS downstream transport, when NMS discovery is configured."""
@@ -152,15 +157,16 @@ class OSSPureExecutor(AgentExecutor):
         config = self._config
         self._nms_client = NmsClient(NmsConfig.from_config(config))
         if config.transport == TRANSPORT_WEBHOOK:
-            queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+            router = WebhookRouter()
+
             # The real NMS reaches the callback through the VPN gateway over https, so the bind
             # address is never the URL to register: carry the public URL, TLS and Basic auth over
             # exactly as the A2A-T client flow does.
             def _make_receiver(port: int) -> WebhookReceiver:
                 """Build the receiver for one callback port."""
-                return build_webhook_receiver(
+                return WebhookReceiver(
                     token=config.webhook_token,
-                    queue=queue,
+                    on_event=router.on_event,
                     host=config.webhook_host,
                     port=port,
                     public_url=config.webhook_public_url,
@@ -175,22 +181,12 @@ class OSSPureExecutor(AgentExecutor):
                 public_url=config.webhook_public_url,
             )
             self._webhook_receiver = receiver
+            self._webhook_router = router
+            self._webhook_push_url = receiver.url
+            self._webhook_push_token = config.webhook_token
+            self._webhook_idle_timeout = float(config.webhook_idle_timeout)
             _LOGGER.info("OSS Agent NMS webhook: push_url=%s", receiver.url)
-            self._nms_transport = NmsWebhookTransport(
-                self._nms_client,
-                queue=queue,
-                push_url=receiver.url,
-                push_token=config.webhook_token,
-                protocol=PROTOCOL_PURE,
-                idle_timeout=float(config.webhook_idle_timeout),
-            )
-        else:
-            self._nms_transport = NmsSseTransport(
-                self._nms_client,
-                protocol=PROTOCOL_PURE,
-                request_timeout=config.nms_request_timeout,
-                read_after_send=config.nms_read_after_send,
-            )
+        # SSE mode needs no process resource: the per-run transport is built in ``_run_ran``.
 
     async def stop(self) -> None:
         """Stop the webhook receiver and close the NMS client."""
@@ -198,10 +194,10 @@ class OSSPureExecutor(AgentExecutor):
         if receiver is not None:
             await receiver.stop()
             self._webhook_receiver = None
+        self._webhook_router = None
         if self._nms_client is not None:
             await self._nms_client.aclose()
             self._nms_client = None
-        self._nms_transport = None
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Create the outer Task, run the RAN hop, and publish the aggregated result."""
@@ -229,9 +225,7 @@ class OSSPureExecutor(AgentExecutor):
         )
 
         events: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
-        consumer = asyncio.create_task(
-            self._consume(events, updater), name=f"oss-ran-consumer-{task.id}"
-        )
+        consumer = asyncio.create_task(self._consume(events, updater), name=f"oss-ran-consumer-{task.id}")
         run_id = _run_id_of(message)
         raw_text = _message_text(message)
         intent = await self._process_intent(raw_text)
@@ -250,11 +244,7 @@ class OSSPureExecutor(AgentExecutor):
             _LOGGER.exception("OSS->RAN hop failed")
             events.put_nowait(None)
             await consumer
-            await updater.failed(
-                message=updater.new_agent_message(
-                    [Part(text=f"The RAN hop failed: {exc}")]
-                )
-            )
+            await updater.failed(message=updater.new_agent_message([Part(text=f"The RAN hop failed: {exc}")]))
             return
         events.put_nowait(None)
         await consumer
@@ -295,9 +285,7 @@ class OSSPureExecutor(AgentExecutor):
             )
             return
         await updater.failed(
-            message=updater.new_agent_message(
-                [Part(text=f"The RAN hop ended with state {result.final_state}.")]
-            )
+            message=updater.new_agent_message([Part(text=f"The RAN hop ended with state {result.final_state}.")])
         )
 
     def _nms_mode(self) -> bool:
@@ -342,6 +330,49 @@ class OSSPureExecutor(AgentExecutor):
             ),
         )
 
+    async def _run_ran_webhook(
+        self,
+        user_request: str,
+        run_id: str | None,
+        event_sink: Callable[[dict[str, object]], None],
+        updater: TaskUpdater,
+    ) -> ClientFlowResult:
+        """Run one inbound request against the NMS over its shared callback port.
+
+        Each inbound request gets its own router subscription: the NMS ignores push tokens, so
+        routing by the downstream task/context identity is what keeps concurrent requests from
+        consuming each other's events.
+        """
+        router = self._webhook_router
+        nms_client = self._nms_client
+        if router is None or nms_client is None:
+            raise RuntimeError("The NMS webhook transport is not started.")
+        subscription = router.subscribe(run_id or "")
+        try:
+            transport = NmsWebhookTransport(
+                nms_client,
+                queue=subscription.queue,
+                push_url=self._webhook_push_url,
+                push_token=self._webhook_push_token,
+                protocol=PROTOCOL_PURE,
+                idle_timeout=self._webhook_idle_timeout,
+                bind=subscription.bind,
+                context_id=subscription.key,
+            )
+            return await run_pure_client_flow(
+                transport=transport,
+                user_request=user_request,
+                answer=self._answer,
+                on_answer=lambda event, text: self._publish_answer(updater, event, text),
+                max_rounds=self._max_rounds,
+                call_timeout_seconds=self._timeout_seconds,
+                event_sink=event_sink,
+                trace_sink=self._trace_sink,
+                followup=self._followup,
+            )
+        finally:
+            subscription.unsubscribe()
+
     async def _run_ran(
         self,
         user_request: str,
@@ -354,9 +385,19 @@ class OSSPureExecutor(AgentExecutor):
         if callable(setter):
             setter(user_request)
         self._bind_wire_log(run_id)
-        if self._nms_transport is not None:
+        if self._webhook_router is not None:
+            return await self._run_ran_webhook(user_request, run_id, event_sink, updater)
+        config = self._config
+        if self._nms_client is not None and config is not None:
+            # One transport per inbound request: its event sink and frame state must not be shared
+            # by two concurrent engineer requests.
             return await run_pure_client_flow(
-                transport=self._nms_transport,
+                transport=NmsSseTransport(
+                    self._nms_client,
+                    protocol=PROTOCOL_PURE,
+                    request_timeout=config.nms_request_timeout,
+                    read_after_send=config.nms_read_after_send,
+                ),
                 user_request=user_request,
                 answer=self._answer,
                 on_answer=lambda event, text: self._publish_answer(updater, event, text),
@@ -393,9 +434,7 @@ class OSSPureExecutor(AgentExecutor):
                     transport=SseClientTransport(client),
                     user_request=user_request,
                     answer=self._answer,
-                    on_answer=lambda event, text: self._publish_answer(
-                        updater, event, text
-                    ),
+                    on_answer=lambda event, text: self._publish_answer(updater, event, text),
                     max_rounds=self._max_rounds,
                     call_timeout_seconds=self._timeout_seconds,
                     event_sink=event_sink,
@@ -464,9 +503,7 @@ class OSSPureExecutor(AgentExecutor):
             metadata=metadata,
         )
 
-    async def _publish(
-        self, event: dict[str, object], updater: TaskUpdater
-    ) -> None:
+    async def _publish(self, event: dict[str, object], updater: TaskUpdater) -> None:
         """Publish one RAN event on the OSS Task with its hop tag."""
         kind = event.get("kind")
         if kind == "artifact":
@@ -498,9 +535,7 @@ class OSSPureExecutor(AgentExecutor):
             metadata=metadata,
         )
 
-    async def _publish_artifact(
-        self, event: dict[str, object], updater: TaskUpdater
-    ) -> None:
+    async def _publish_artifact(self, event: dict[str, object], updater: TaskUpdater) -> None:
         """Forward one RAN artifact with a hop tag."""
         parts: list[Part] = []
         data = event.get("data")
@@ -535,9 +570,7 @@ def build_oss_agent_card(*, host: str, port: int) -> AgentCard:
         name=OSS_AGENT_NAME,
         description=OSS_AGENT_DESCRIPTION,
         version="1.0.0",
-        provider=AgentProvider(
-            organization=OSS_AGENT_ORGANIZATION, url=OSS_AGENT_PROVIDER_URL
-        ),
+        provider=AgentProvider(organization=OSS_AGENT_ORGANIZATION, url=OSS_AGENT_PROVIDER_URL),
         capabilities=AgentCapabilities(streaming=True, push_notifications=False),
         default_input_modes=["application/json", "text/plain"],
         default_output_modes=["application/json", "text/plain"],
@@ -577,10 +610,7 @@ def build_oss_app(
     """Build the OSS A2A app."""
     resolved_host = host or os.environ.get("A2AT_SAMPLE_OSS_HOST", "127.0.0.1")
     resolved_port = port or int(os.environ.get("A2AT_SAMPLE_OSS_PORT", str(DEFAULT_OSS_PORT)))
-    resolved_ran_url = (
-        ran_url
-        or os.environ.get("A2AT_SAMPLE_RAN_URL", f"http://127.0.0.1:{DEFAULT_RAN_PORT}")
-    )
+    resolved_ran_url = ran_url or os.environ.get("A2AT_SAMPLE_RAN_URL", f"http://127.0.0.1:{DEFAULT_RAN_PORT}")
     resolved_answer = answer or (lambda event: _proposal_of(event))
     card = build_oss_agent_card(host=resolved_host, port=resolved_port)
     executor = OSSPureExecutor(
