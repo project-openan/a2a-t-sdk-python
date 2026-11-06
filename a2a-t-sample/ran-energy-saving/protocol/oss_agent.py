@@ -17,6 +17,7 @@ import logging
 import os
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -26,6 +27,7 @@ from a2a.client import ClientConfig, create_client
 from a2a.helpers.proto_helpers import new_task_from_user_message
 from a2a.server.agent_execution.agent_executor import AgentExecutor
 from a2a.server.agent_execution.context import RequestContext
+from a2a.server.context import ServerCallContext
 from a2a.server.events.event_queue import EventQueue
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_rest_routes
@@ -52,7 +54,11 @@ from google.protobuf.json_format import ParseDict
 from shared.agent_card import AGENT_CARD_NAME, AGENT_CARD_ORGANIZATION
 from shared.config import (
     DEFAULT_HTTP_TIMEOUT_SECONDS,
+    DEFAULT_LONG_TASK_MODE,
+    DEFAULT_LONG_TASK_SETTLE_SECONDS,
     DISCOVERY_NMS,
+    LONG_TASK_MODE_OFF,
+    LONG_TASK_MODE_ON,
     PURE_FOLLOWUP_BOTH,
     TRANSPORT_WEBHOOK,
     SampleConfig,
@@ -81,12 +87,14 @@ from protocol.client_flow import (
     SseClientTransport,
 )
 from protocol.discovery import DISCOVERY_DIRECT, discover_agent
+from protocol.downstream_binding_store import DownstreamBinding, DownstreamBindingStore
+from protocol.downstream_pump import DownstreamPump, DownstreamPumpContext
 from protocol.gateway_push import ValidatingPushConfigStore
 from protocol.intent import IntentProcessor, OperatorRequest, ProcessedIntent
 from protocol.messages import SAMPLE_RUN_ID_METADATA_KEY, metadata_to_dict
 from protocol.nms_client import NmsClient, NmsConfig, NmsSseTransport, NmsWebhookTransport
 from protocol.pure_client_flow import run_pure_client_flow
-from protocol.shared_webhook import WebhookRouter
+from protocol.shared_webhook import WebhookRouter, WebhookSubscription
 from protocol.sqlite_push_config_store import SqlitePushNotificationConfigStore
 from protocol.sqlite_task_store import SqliteTaskStore
 from protocol.wire_log import WIRE_OSS_FILENAME, HttpWireLog
@@ -108,6 +116,25 @@ DEFAULT_RAN_PORT: Final[int] = 8000
 _LOGGER = logging.getLogger("ran_energy_saving.oss_agent")
 
 
+@dataclass(frozen=True)
+class _PumpHandoff:
+    """One downstream subscription transferred from a request to the background pump."""
+
+    subscription: WebhookSubscription
+    transport: NmsWebhookTransport
+    binding: DownstreamBinding
+    outer_context_id: str
+    call_context: ServerCallContext
+
+
+@dataclass
+class _PumpHandle:
+    """One background pump and the subscription it owns."""
+
+    task: asyncio.Task[None]
+    subscription: WebhookSubscription
+
+
 class OSSPureExecutor(AgentExecutor):
     """Forward one engineer request to RAN and aggregate the hop events."""
 
@@ -124,6 +151,11 @@ class OSSPureExecutor(AgentExecutor):
         language: str = LANGUAGE_ZH,
         followup: str = PURE_FOLLOWUP_BOTH,
         trace_sink: Callable[[dict[str, object]], None] | None = None,
+        task_store: TaskStore | None = None,
+        binding_store: DownstreamBindingStore | None = None,
+        push_sender: PushNotificationSender | None = None,
+        long_task_mode: str = DEFAULT_LONG_TASK_MODE,
+        long_task_settle_seconds: float = DEFAULT_LONG_TASK_SETTLE_SECONDS,
     ) -> None:
         """Create one OSS executor.
 
@@ -141,6 +173,14 @@ class OSSPureExecutor(AgentExecutor):
             language: process-level language used by the intent processor.
             followup: conversation fields carried by one pure follow-up (``both``/``task``/``context``).
             trace_sink: cross-process Run Explorer sink; ``None`` leaves the hop untraced.
+            task_store: outer Task store shared with the request handler; the long-task pump
+                persists late updates through it.
+            binding_store: durable outer↔downstream binding store; required for long-task mode.
+            push_sender: A2A push-notification sender used for late outer Task updates.
+            long_task_mode: ``auto`` / ``on`` / ``off``; ``auto`` enables tracking for the real NMS
+                webhook hop when a binding store is configured.
+            long_task_settle_seconds: synchronous stream window before the subscription is handed
+                to the pump; it never ends the run or cancels the downstream Task.
         """
         self._config = config
         self._ran_url = (ran_url or "").rstrip("/")
@@ -152,6 +192,16 @@ class OSSPureExecutor(AgentExecutor):
         self._language = language
         self._followup = followup
         self._trace_sink = trace_sink
+        self._task_store = task_store or InMemoryTaskStore()
+        self._binding_store = binding_store
+        self._push_sender = push_sender
+        self._long_task_mode = long_task_mode
+        self._long_task_settle_seconds = long_task_settle_seconds
+        # One background pump per handed-off outer Task id.
+        self._pumps: dict[str, _PumpHandle] = {}
+        # A handoff produced by ``_run_ran_webhook`` and started after ``execute`` has written its
+        # last synchronous outer status (avoids two writers racing on the Task store).
+        self._pending_handoffs: dict[str, _PumpHandoff] = {}
         # Captures the local a2a-sdk hop to the RAN Agent (NMS runs use the NmsClient log).
         self._wire_log = HttpWireLog()
         # The HTTP/token client is shared (token refresh is locked); each inbound request gets its
@@ -220,7 +270,8 @@ class OSSPureExecutor(AgentExecutor):
         # SSE mode needs no process resource: the per-run transport is built in ``_run_ran``.
 
     async def stop(self) -> None:
-        """Stop the webhook receiver and close the NMS client."""
+        """Stop background pumps, the webhook receiver and the NMS client."""
+        await self._stop_pumps()
         receiver = self._webhook_receiver
         if receiver is not None:
             await receiver.stop()
@@ -229,6 +280,66 @@ class OSSPureExecutor(AgentExecutor):
         if self._nms_client is not None:
             await self._nms_client.aclose()
             self._nms_client = None
+
+    def _long_task_enabled(self) -> bool:
+        """Whether this hop hands its downstream Task to the background pump."""
+        if self._long_task_mode == LONG_TASK_MODE_OFF or self._binding_store is None:
+            return False
+        if self._long_task_mode == LONG_TASK_MODE_ON:
+            return True
+        return (
+            self._config is not None
+            and self._config.discovery == DISCOVERY_NMS
+            and self._config.transport == TRANSPORT_WEBHOOK
+        )
+
+    async def _stop_pumps(self) -> None:
+        """Cancel every background pump; active bindings stay durable for a restart."""
+        handles = list(self._pumps.values())
+        self._pumps.clear()
+        self._pending_handoffs.clear()
+        for handle in handles:
+            handle.task.cancel()
+        if handles:
+            await asyncio.gather(*(handle.task for handle in handles), return_exceptions=True)
+        for handle in handles:
+            # The pump's own ``finally`` may not run when it is cancelled before its first turn.
+            handle.subscription.unsubscribe()
+
+    def _start_pending_pump(self, outer_task_id: str) -> None:
+        """Start the pump prepared by ``_run_ran_webhook`` after the last synchronous status."""
+        handoff = self._pending_handoffs.pop(outer_task_id, None)
+        if handoff is None or self._binding_store is None:
+            return
+        pump = DownstreamPump(
+            context=DownstreamPumpContext(
+                run_id=handoff.binding.run_id,
+                inner_task_id=handoff.binding.inner_task_id,
+                inner_context_id=handoff.binding.inner_context_id,
+                outer_task_id=outer_task_id,
+                outer_context_id=handoff.outer_context_id,
+                downstream_hop=self._downstream_hop(),
+                downstream_name=self._downstream_name(),
+                followup=self._followup,
+                max_rounds=self._max_rounds,
+                call_timeout_seconds=self._timeout_seconds,
+                call_context=handoff.call_context,
+            ),
+            subscription=handoff.subscription,
+            transport=handoff.transport,
+            task_store=self._task_store,
+            binding_store=self._binding_store,
+            push_sender=self._push_sender,
+            answer=self._answer,
+        )
+        task = pump.start()
+        self._pumps[outer_task_id] = _PumpHandle(task=task, subscription=handoff.subscription)
+        task.add_done_callback(lambda _: self._pumps.pop(outer_task_id, None))
+        _LOGGER.info(
+            "downstream task handed to the background pump: outer=%s inner=%s",
+            outer_task_id,
+            handoff.binding.inner_task_id,
+        )
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Create the outer Task, run the RAN hop, and publish the aggregated result."""
@@ -270,6 +381,7 @@ class OSSPureExecutor(AgentExecutor):
                     run_id,
                     events.put_nowait,
                     updater,
+                    context.call_context,
                 )
         except Exception as exc:  # noqa: BLE001 - the outer Task must reach a terminal state
             _LOGGER.exception("OSS->RAN hop failed")
@@ -342,7 +454,7 @@ class OSSPureExecutor(AgentExecutor):
                         Part(
                             text=(
                                 f"The {downstream} task is still running{task_ref}; the OSS Agent "
-                                "stopped waiting for its report."
+                                "continues tracking it in the background."
                             )
                         )
                     ],
@@ -350,6 +462,7 @@ class OSSPureExecutor(AgentExecutor):
                 ),
                 metadata=metadata,
             )
+            self._start_pending_pump(task.id)
             return
         await updater.failed(
             message=updater.new_agent_message([Part(text=f"The RAN hop ended with state {result.final_state}.")])
@@ -403,30 +516,37 @@ class OSSPureExecutor(AgentExecutor):
         run_id: str | None,
         event_sink: Callable[[dict[str, object]], None],
         updater: TaskUpdater,
+        call_context: ServerCallContext,
     ) -> ClientFlowResult:
         """Run one inbound request against the NMS over its shared callback port.
 
         Each inbound request gets its own router subscription: the NMS ignores push tokens, so
         routing by the downstream task/context identity is what keeps concurrent requests from
         consuming each other's events.
+
+        In long-task mode the synchronous flow only stays attached for the settle window. When it
+        ends with a live downstream Task, the subscription is transferred to a background pump and
+        **not** unsubscribed; the outer Task keeps updating after the request returns.
         """
         router = self._webhook_router
         nms_client = self._nms_client
         if router is None or nms_client is None:
             raise RuntimeError("The NMS webhook transport is not started.")
         subscription = router.subscribe(run_id or "")
+        handed_off = False
         try:
+            long_mode = self._long_task_enabled()
             transport = NmsWebhookTransport(
                 nms_client,
                 queue=subscription.queue,
                 push_url=self._webhook_push_url,
                 push_token=self._webhook_push_token,
                 protocol=PROTOCOL_PURE,
-                idle_timeout=self._webhook_idle_timeout,
+                idle_timeout=self._long_task_settle_seconds if long_mode else self._webhook_idle_timeout,
                 bind=subscription.bind,
                 context_id=subscription.key,
             )
-            return await run_pure_client_flow(
+            result = await run_pure_client_flow(
                 transport=transport,
                 user_request=user_request,
                 answer=self._answer,
@@ -437,8 +557,33 @@ class OSSPureExecutor(AgentExecutor):
                 trace_sink=self._trace_sink,
                 followup=self._followup,
             )
+            if (
+                long_mode
+                and self._binding_store is not None
+                and result.task_id
+                and result.final_state == FINAL_STATE_INCOMPLETE
+            ):
+                binding = DownstreamBinding(
+                    inner_task_id=result.task_id,
+                    inner_context_id=result.context_id or "",
+                    outer_task_id=updater.task_id,
+                    run_id=run_id or "",
+                    owner=call_context.user.user_name,
+                    protocol=PROTOCOL_PURE,
+                )
+                await self._binding_store.save(binding)
+                self._pending_handoffs[updater.task_id] = _PumpHandoff(
+                    subscription=subscription,
+                    transport=transport,
+                    binding=binding,
+                    outer_context_id=updater.context_id,
+                    call_context=call_context,
+                )
+                handed_off = True
+            return result
         finally:
-            subscription.unsubscribe()
+            if not handed_off:
+                subscription.unsubscribe()
 
     async def _run_ran(
         self,
@@ -446,6 +591,7 @@ class OSSPureExecutor(AgentExecutor):
         run_id: str | None,
         event_sink: Callable[[dict[str, object]], None],
         updater: TaskUpdater,
+        call_context: ServerCallContext,
     ) -> ClientFlowResult:
         """Run the standard A2A client flow against the configured downstream agent."""
         setter = getattr(self._decision_provider, "set_user_request", None)
@@ -453,7 +599,7 @@ class OSSPureExecutor(AgentExecutor):
             setter(user_request)
         self._bind_wire_log(run_id)
         if self._webhook_router is not None:
-            return await self._run_ran_webhook(user_request, run_id, event_sink, updater)
+            return await self._run_ran_webhook(user_request, run_id, event_sink, updater, call_context)
         config = self._config
         if self._nms_client is not None and config is not None:
             # One transport per inbound request: its event sink and frame state must not be shared
@@ -626,8 +772,14 @@ class OSSPureExecutor(AgentExecutor):
         )
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
-        """Cancel the outer Task."""
-        updater = TaskUpdater(event_queue, context.task_id or "", context.context_id or "")
+        """Cancel the outer Task and stop its background pump."""
+        task_id = context.task_id or ""
+        self._pending_handoffs.pop(task_id, None)
+        handle = self._pumps.pop(task_id, None)
+        if handle is not None:
+            handle.task.cancel()
+            handle.subscription.unsubscribe()
+        updater = TaskUpdater(event_queue, task_id, context.context_id or "")
         await updater.cancel()
 
 
@@ -666,8 +818,11 @@ def build_oss_app(
     answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = None,
     decision_provider: object | None = None,
     task_store: TaskStore | None = None,
+    binding_store: DownstreamBindingStore | None = None,
     push_config_store: PushNotificationConfigStore | None = None,
     push_sender: PushNotificationSender | None = None,
+    long_task_mode: str | None = None,
+    long_task_settle_seconds: float | None = None,
     host: str | None = None,
     port: int | None = None,
     timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
@@ -685,9 +840,13 @@ def build_oss_app(
         decision_provider: optional live decision provider.
         task_store: outer Task store; defaults to the in-memory store. The launcher passes the
             SQLite store so a task that runs for days survives a process restart.
+        binding_store: outer↔downstream binding store; derived from a SQLite Task store when
+            omitted, so the pump can persist and resume long-running tasks.
         push_config_store: client webhook registrations; defaults to the SDK in-memory store.
         push_sender: push-notification sender; defaults to the SDK sender over an owned httpx
             client. Tests inject one over a mock transport.
+        long_task_mode: overrides ``SampleConfig.long_task_mode`` for tests.
+        long_task_settle_seconds: overrides ``SampleConfig.long_task_settle_seconds`` for tests.
         host: advertised OSS host.
         port: advertised OSS port.
         timeout_seconds: A2A call budget of the downstream hop.
@@ -701,18 +860,11 @@ def build_oss_app(
     resolved_ran_url = ran_url or os.environ.get("A2AT_SAMPLE_RAN_URL", f"http://127.0.0.1:{DEFAULT_RAN_PORT}")
     resolved_answer = answer or (lambda event: _proposal_of(event))
     card = build_oss_agent_card(host=resolved_host, port=resolved_port)
-    executor = OSSPureExecutor(
-        config=config,
-        ran_url=resolved_ran_url,
-        answer=resolved_answer,
-        decision_provider=decision_provider,
-        timeout_seconds=timeout_seconds,
-        intent_processor=intent_processor,
-        language=language,
-        followup=followup,
-        trace_sink=trace_emitter,
-    )
     resolved_task_store = task_store or InMemoryTaskStore()
+    resolved_binding_store = binding_store
+    if resolved_binding_store is None and isinstance(resolved_task_store, SqliteTaskStore):
+        # One database for the outer Tasks, the bindings and the client webhook registrations.
+        resolved_binding_store = DownstreamBindingStore(resolved_task_store.path)
     # A caller-supplied webhook URL must not become an arbitrary outbound request target; the
     # gateway uses the same validating wrapper.
     resolved_push_store = ValidatingPushConfigStore(push_config_store or InMemoryPushNotificationConfigStore())
@@ -725,6 +877,28 @@ def build_oss_app(
         )
     else:
         resolved_push_sender = push_sender
+    executor = OSSPureExecutor(
+        config=config,
+        ran_url=resolved_ran_url,
+        answer=resolved_answer,
+        decision_provider=decision_provider,
+        timeout_seconds=timeout_seconds,
+        intent_processor=intent_processor,
+        language=language,
+        followup=followup,
+        trace_sink=trace_emitter,
+        task_store=resolved_task_store,
+        binding_store=resolved_binding_store,
+        push_sender=resolved_push_sender,
+        long_task_mode=long_task_mode if long_task_mode is not None else (
+            config.long_task_mode if config is not None else DEFAULT_LONG_TASK_MODE
+        ),
+        long_task_settle_seconds=(
+            long_task_settle_seconds
+            if long_task_settle_seconds is not None
+            else (config.long_task_settle_seconds if config is not None else DEFAULT_LONG_TASK_SETTLE_SECONDS)
+        ),
+    )
 
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
@@ -761,6 +935,7 @@ def build_oss_app(
     app.state.agent_card = card
     app.state.request_handler = request_handler
     app.state.task_store = resolved_task_store
+    app.state.binding_store = resolved_binding_store
     app.state.push_config_store = resolved_push_store
     app.state.push_sender = resolved_push_sender
     return app

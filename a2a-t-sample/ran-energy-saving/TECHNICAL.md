@@ -916,6 +916,11 @@ Engineer UI ──A2A (direct + SSE)──> OSS Agent ──A2A (nms + webhook)�
   `task_rejected` → `REJECTED`, and `incomplete` → `WORKING` with the downstream task id. `incomplete`
   means the local webhook/SSE wait window expired while the vendor task may still be running; it is
   not a vendor failure and is never reported as `FAILED` (the engineer run ends as `incomplete`).
+- In long-task mode (`A2AT_SAMPLE_LONG_TASK_MODE=auto` on the NMS webhook hop), the initial flow
+  waits only `A2AT_SAMPLE_LONG_TASK_SETTLE_SECONDS` after the NMS accepts the Task, then hands its
+  webhook subscription to a background pump. The pump keeps applying later statuses/artifacts to
+  the persisted outer Task, sends A2A push notifications and records trace spans until the
+  downstream finishes; the NMS Task is never cancelled.
 - The follow-up carries `taskId` + `contextId` by default; `A2AT_SAMPLE_PURE_FOLLOWUP` selects
   `task`, `context`, or `both`.
 
@@ -1130,6 +1135,8 @@ script can switch the model with a plain `export ADK_MODEL_NAME=...`.
 | `A2AT_SAMPLE_TRACE_SPAN_LEVEL` | default `phase` | Langfuse export detail: `phase` = key events + one per phase + final status, `minimal` = LLM/tool + result, `full` = every span. The UI timeline is unaffected. |
 | `A2AT_SAMPLE_TASK_DB` | unset = in-memory; `run_demo.py` writes `<sample>/runs/task-status.sqlite3` | Absolute SQLite path of the server's persisted A2A Task store, also read by `GET /api/tasks`. |
 | `A2AT_SAMPLE_OSS_TASK_DB` | unset = in-memory; `run_demo.py` writes `<sample>/runs/oss-task-status.sqlite3` | Absolute SQLite path of the OSS Agent Task store, its downstream bindings and the client webhook registrations. |
+| `A2AT_SAMPLE_LONG_TASK_MODE` | `auto` | OSS long-task tracking (`auto` / `on` / `off`). `auto` enables the background pump for the real NMS webhook hop when the OSS Task database is configured. |
+| `A2AT_SAMPLE_LONG_TASK_SETTLE_SECONDS` | `5` | Seconds the OSS keeps the initial synchronous stream after the NMS accepts the Task. It only changes when tracking moves to the background; the run and the Task keep tracking and the NMS Task is never cancelled. |
 | `A2AT_SAMPLE_CLIENT_DB` | unset = in-memory; `run_demo.py` writes `<sample>/runs/client-state.sqlite3` | Absolute SQLite path of the client's conversation/run/negotiation store and of the ADK decision-agent sessions. |
 | `A2AT_SAMPLE_CLIENT_MEMORY_TURNS` | default `6` (>= 0) | Number of recent conversation turns injected into the next decision prompt and Task-T generation. |
 | `A2AT_SAMPLE_ADK_SESSION_RETENTION_DAYS` | default `7` (>= 1) | Days a decision-agent session is kept as audit data before the startup/periodic sweep removes it. |

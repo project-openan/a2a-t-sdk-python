@@ -19,11 +19,13 @@ from a2a.server.agent_execution.context import RequestContext
 from a2a.server.context import ServerCallContext, UnauthenticatedUser
 from a2a.server.events import Event as A2AEvent
 from a2a.server.events.event_queue import EventQueue
+from a2a.server.tasks.task_updater import TaskUpdater
 from a2a.types import Message, Role, SendMessageRequest, TaskState, TaskStatusUpdateEvent
 from a2a_t.core.metadata import TASK_T_EXTENSION_URI
 from demo.composition import build_demo_runtime
 from demo.pure_policy import build_demo_pure_policy, pure_answer_from_event
 from protocol.client_flow import ClientFlowResult
+from protocol.downstream_binding_store import DownstreamBindingStore
 from protocol.intent import ProcessedIntent
 from protocol.mie_agent import build_mie_app
 from protocol.oss_agent import (
@@ -33,8 +35,16 @@ from protocol.oss_agent import (
     build_oss_agent_card,
     build_oss_app,
 )
+from protocol.shared_webhook import WebhookRouter
 from protocol.sqlite_task_store import SqliteTaskStore
-from shared.config import DISCOVERY_DIRECT, DISCOVERY_NMS, TRANSPORT_SSE
+from shared.config import (
+    DISCOVERY_DIRECT,
+    DISCOVERY_NMS,
+    LONG_TASK_MODE_OFF,
+    LONG_TASK_MODE_ON,
+    TRANSPORT_SSE,
+    TRANSPORT_WEBHOOK,
+)
 from shared.run_constants import (
     FINAL_STATE_INCOMPLETE,
     FINAL_STATE_TASK_COMPLETED,
@@ -204,8 +214,9 @@ def _fake_downstream(
         run_id: str | None,
         event_sink: object,
         updater: object,
+        call_context: object,
     ) -> ClientFlowResult:
-        del user_request, run_id, event_sink, updater
+        del user_request, run_id, event_sink, updater, call_context
         return ClientFlowResult(final_state=final_state, task_id="nms-task-1")
 
     monkeypatch.setattr(executor, "_run_ran", run)
@@ -344,3 +355,93 @@ def test_the_oss_app_uses_the_configured_task_and_push_stores(tmp_path: Path) ->
     assert app.state.task_store is store
     assert app.state.push_sender is sender
     assert app.state.push_config_store is not None
+    assert isinstance(app.state.binding_store, DownstreamBindingStore)
+    assert app.state.binding_store.path == store.path
+
+
+def test_long_task_mode_auto_enables_only_for_the_nms_webhook_hop(tmp_path: Path) -> None:
+    """``auto`` is the real NMS hop: webhook transport plus a persistent binding store."""
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    nms_config = replace(
+        offline_direct_config(8000),
+        discovery=DISCOVERY_NMS,
+        transport=TRANSPORT_WEBHOOK,
+    )
+
+    enabled = OSSPureExecutor(config=nms_config, answer=lambda event: "", binding_store=binding_store)
+    assert enabled._long_task_enabled() is True
+
+    sse = OSSPureExecutor(
+        config=replace(nms_config, transport=TRANSPORT_SSE),
+        answer=lambda event: "",
+        binding_store=binding_store,
+    )
+    assert sse._long_task_enabled() is False
+
+    no_store = OSSPureExecutor(config=nms_config, answer=lambda event: "")
+    assert no_store._long_task_enabled() is False
+
+    forced = OSSPureExecutor(
+        config=replace(nms_config, transport=TRANSPORT_SSE),
+        answer=lambda event: "",
+        binding_store=binding_store,
+        long_task_mode=LONG_TASK_MODE_ON,
+    )
+    assert forced._long_task_enabled() is True
+
+    off = OSSPureExecutor(
+        config=nms_config,
+        answer=lambda event: "",
+        binding_store=binding_store,
+        long_task_mode=LONG_TASK_MODE_OFF,
+    )
+    assert off._long_task_enabled() is False
+
+
+async def test_the_nms_webhook_flow_hands_the_subscription_to_the_pump(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An incomplete NMS flow transfers its callback queue instead of unsubscribing."""
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    config = replace(
+        offline_direct_config(8000),
+        discovery=DISCOVERY_NMS,
+        transport=TRANSPORT_WEBHOOK,
+    )
+    executor = OSSPureExecutor(config=config, answer=lambda event: "", binding_store=binding_store)
+    router = WebhookRouter()
+    executor._webhook_router = router
+    executor._nms_client = object()  # type: ignore[assignment]
+
+    async def fake_flow(**kwargs: object) -> ClientFlowResult:
+        del kwargs
+        return ClientFlowResult(
+            final_state=FINAL_STATE_INCOMPLETE,
+            task_id="inner-1",
+            context_id="inner-ctx",
+        )
+
+    monkeypatch.setattr("protocol.oss_agent.run_pure_client_flow", fake_flow)
+    context = _oss_context()
+    updater = TaskUpdater(_RecordingQueue(), "outer-1", "outer-ctx")
+
+    result = await executor._run_ran_webhook(
+        "request",
+        "run-1",
+        lambda event: None,
+        updater,
+        context.call_context,
+    )
+
+    assert result.final_state == FINAL_STATE_INCOMPLETE
+    binding = await binding_store.get("inner-1", "inner-ctx")
+    assert binding is not None
+    assert binding.outer_task_id == "outer-1"
+    assert "outer-1" in executor._pending_handoffs
+    assert router.active_subscriptions == 1
+
+    executor._start_pending_pump("outer-1")
+    assert "outer-1" in executor._pumps
+    await executor._stop_pumps()
+    assert router.active_subscriptions == 0

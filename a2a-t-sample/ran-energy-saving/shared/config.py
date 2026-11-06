@@ -111,6 +111,10 @@ LLM_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_LLM_TIMEOUT_SECONDS"
 LLM_MAX_ATTEMPTS_ENV_KEY = "A2AT_SAMPLE_LLM_MAX_ATTEMPTS"
 TASK_DB_ENV_KEY = "A2AT_SAMPLE_TASK_DB"
 OSS_TASK_DB_ENV_KEY = "A2AT_SAMPLE_OSS_TASK_DB"
+#: Long-running OSS task tracking: ``auto`` enables it for the real NMS webhook hop.
+LONG_TASK_MODE_ENV_KEY = "A2AT_SAMPLE_LONG_TASK_MODE"
+#: Seconds the OSS keeps the initial synchronous stream before handing the task to the pump.
+LONG_TASK_SETTLE_ENV_KEY = "A2AT_SAMPLE_LONG_TASK_SETTLE_SECONDS"
 CLIENT_DB_ENV_KEY = "A2AT_SAMPLE_CLIENT_DB"
 CLIENT_MEMORY_TURNS_ENV_KEY = "A2AT_SAMPLE_CLIENT_MEMORY_TURNS"
 ADK_SESSION_RETENTION_DAYS_ENV_KEY = "A2AT_SAMPLE_ADK_SESSION_RETENTION_DAYS"
@@ -177,6 +181,16 @@ DEFAULT_HTTP_TIMEOUT_SECONDS = 300.0
 #: Backstop idle timeout of a webhook phase; it must not end a phase before the client budget, so
 #: it follows the HTTP budget by default.
 DEFAULT_WEBHOOK_IDLE_TIMEOUT = int(DEFAULT_HTTP_TIMEOUT_SECONDS)
+
+#: Long-running task tracking of the OSS hop.
+LONG_TASK_MODE_AUTO = "auto"
+LONG_TASK_MODE_ON = "on"
+LONG_TASK_MODE_OFF = "off"
+SUPPORTED_LONG_TASK_MODES = (LONG_TASK_MODE_AUTO, LONG_TASK_MODE_ON, LONG_TASK_MODE_OFF)
+DEFAULT_LONG_TASK_MODE = LONG_TASK_MODE_AUTO
+#: A real NMS replies to ``message:send`` with a Task; after this settle window the OSS stops
+#: streaming and hands the subscription to the background pump. It is not a task lifetime.
+DEFAULT_LONG_TASK_SETTLE_SECONDS = 5.0
 
 #: Live LLM budget of one call (SDK structured calls and ADK LiteLlm turns). A local live smoke
 #: observed a 58s validation and a >90s accept validation; 120s leaves headroom for slower
@@ -430,6 +444,10 @@ class SampleConfig:
         trace_span_level: Langfuse export detail (``full`` / ``phase`` / ``minimal``); the Web UI
             timeline is unaffected.
         http_timeout_seconds: Client HTTP budget of one A2A request, in seconds.
+        long_task_mode: OSS long-task tracking (``auto`` / ``on`` / ``off``). ``auto`` enables it
+            for the real NMS webhook hop when the OSS Task database is configured.
+        long_task_settle_seconds: Seconds the OSS keeps the initial synchronous stream after the
+            NMS accepts the task before handing it to the background pump.
         llm_timeout_seconds: Live LLM budget of one call (SDK structured call or ADK turn), in seconds.
         llm_max_attempts: Live SDK LLM attempt limit per retryable step.
         task_db_path: Absolute SQLite path of the persisted A2A Task store; ``None`` keeps the
@@ -513,6 +531,8 @@ class SampleConfig:
     webhook_tls_key: str = ""
     webhook_auth_credentials: str = ""
     http_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS
+    long_task_mode: str = DEFAULT_LONG_TASK_MODE
+    long_task_settle_seconds: float = DEFAULT_LONG_TASK_SETTLE_SECONDS
     llm_timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS
     llm_max_attempts: int = DEFAULT_LLM_MAX_ATTEMPTS
     task_db_path: str | None = None
@@ -629,6 +649,13 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
             f"expected one of {SUPPORTED_PRE_SEND_VALIDATION}"
         )
 
+    long_task_mode = _env_value(values, LONG_TASK_MODE_ENV_KEY, DEFAULT_LONG_TASK_MODE).strip().lower()
+    if long_task_mode not in SUPPORTED_LONG_TASK_MODES:
+        raise ValueError(
+            f"Unsupported {LONG_TASK_MODE_ENV_KEY}: {long_task_mode}; "
+            f"expected one of {SUPPORTED_LONG_TASK_MODES}"
+        )
+
     nms_host = _env_value(values, NMS_HOST_ENV_KEY, "").strip()
     nms_scheme = _env_value(values, NMS_SCHEME_ENV_KEY, DEFAULT_NMS_SCHEME).strip().lower()
     if nms_scheme not in ("http", "https"):
@@ -712,6 +739,10 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         pre_send_validation=pre_send_validation,
         trace_span_level=trace_span_level,
         http_timeout_seconds=_positive_seconds(values, HTTP_TIMEOUT_ENV_KEY, DEFAULT_HTTP_TIMEOUT_SECONDS),
+        long_task_mode=long_task_mode,
+        long_task_settle_seconds=_positive_seconds(
+            values, LONG_TASK_SETTLE_ENV_KEY, DEFAULT_LONG_TASK_SETTLE_SECONDS
+        ),
         llm_timeout_seconds=_positive_seconds(values, LLM_TIMEOUT_ENV_KEY, DEFAULT_LLM_TIMEOUT_SECONDS),
         llm_max_attempts=_llm_max_attempts(values),
         task_db_path=_optional_absolute_path(values, TASK_DB_ENV_KEY),

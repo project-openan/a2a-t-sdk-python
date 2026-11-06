@@ -37,6 +37,8 @@ from shared.config import (
     LANGFUSE_UI_BASE_URL_ENV_KEY,
     LLM_MAX_ATTEMPTS_ENV_KEY,
     LLM_TIMEOUT_ENV_KEY,
+    LONG_TASK_MODE_ENV_KEY,
+    LONG_TASK_SETTLE_ENV_KEY,
     MODEL_MODE_LIVE,
     MODEL_MODE_OFFLINE,
     NMS_A2A_BASE_ENV_KEY,
@@ -80,6 +82,8 @@ _ENV_KEYS = (
     HTTP_TIMEOUT_ENV_KEY,
     LLM_TIMEOUT_ENV_KEY,
     LLM_MAX_ATTEMPTS_ENV_KEY,
+    LONG_TASK_MODE_ENV_KEY,
+    LONG_TASK_SETTLE_ENV_KEY,
     TASK_DB_ENV_KEY,
     OSS_TASK_DB_ENV_KEY,
     CLIENT_DB_ENV_KEY,
@@ -200,6 +204,27 @@ def test_oss_task_db_path_is_optional_and_must_be_absolute(tmp_path: Path) -> No
 
     env_file.write_text("A2AT_LANGUAGE=en-US\n", encoding="utf-8")
     assert load_config(env_path=env_file).oss_task_db_path is None
+
+
+def test_long_task_mode_defaults_and_overrides(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("A2AT_LANGUAGE=en-US\n", encoding="utf-8")
+    config = load_config(env_path=env_file)
+
+    assert config.long_task_mode == "auto"
+    assert config.long_task_settle_seconds == 5.0
+
+    env_file.write_text(
+        f"{LONG_TASK_MODE_ENV_KEY}=off\n{LONG_TASK_SETTLE_ENV_KEY}=12\n",
+        encoding="utf-8",
+    )
+    config = load_config(env_path=env_file)
+    assert config.long_task_mode == "off"
+    assert config.long_task_settle_seconds == 12.0
+
+    env_file.write_text(f"{LONG_TASK_MODE_ENV_KEY}=nope\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=LONG_TASK_MODE_ENV_KEY):
+        load_config(env_path=env_file)
 
 
 def test_client_db_gateway_and_planner_settings(tmp_path: Path) -> None:
