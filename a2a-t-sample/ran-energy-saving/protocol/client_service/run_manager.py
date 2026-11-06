@@ -292,6 +292,8 @@ class RunManager:
         if not custom_request:
             custom_request = None
         spec = self._catalog.spec(scenario, language=self._config.language)
+        if run_mode == RUN_MODE_MODIFY and spec.modify_intent is None:
+            raise ValueError(f"Scenario {scenario!r} does not define a Modify-only run.")
         raw_request = custom_request or (
             spec.intent.raw_request
             if resolved_intent_mode == INTENT_MODE_PROCESSED and spec.intent is not None

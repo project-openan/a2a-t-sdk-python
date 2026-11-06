@@ -934,6 +934,8 @@ def create_app(
             )
         except RunConflictError as exc:
             return JSONResponse({"error": str(exc), "code": "run_conflict"}, status_code=409)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc), "code": "invalid_run"}, status_code=400)
         reused = run.task is None
         return JSONResponse(
             {

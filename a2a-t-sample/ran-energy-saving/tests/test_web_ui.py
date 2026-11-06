@@ -488,6 +488,41 @@ async def test_start_run_rejects_a_target_that_is_no_longer_working(
     assert response.json()["code"] == "target_not_working"
 
 
+async def test_start_run_rejects_a_scenario_without_modify_values(
+    offline_config: SampleConfig,
+    factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def working_task(_config: SampleConfig, task_id: str) -> dict[str, object]:
+        del task_id
+        return _working_task_row()
+
+    monkeypatch.setattr("demo.web.app.read_task", working_task)
+    app = create_app(
+        _nms_config(offline_config),
+        runs_dir=tmp_path,
+        runtime_factory=factory,
+        finished_grace_seconds=0.0,
+        ui_mode="explorer",
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        response = await http_client.post(
+            "/api/runs",
+            json={
+                "scenario": "night",
+                "mode": "auto",
+                "discovery": "nms",
+                "targetTaskId": "task-9",
+                "targetContextId": "ctx-9",
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_run"
+
+
 async def test_start_run_passes_the_target_to_the_runtime(
     offline_config: SampleConfig,
     factory: Callable[..., Any],
