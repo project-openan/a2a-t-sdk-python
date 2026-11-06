@@ -54,7 +54,13 @@ from shared.config import (
 )
 from shared.logging_setup import configure_logging
 from shared.models import NegotiationProposeView
-from shared.run_constants import LANGUAGE_ZH, PROTOCOL_PURE
+from shared.run_constants import (
+    FINAL_STATE_INCOMPLETE,
+    FINAL_STATE_TASK_COMPLETED,
+    FINAL_STATE_TASK_REJECTED,
+    LANGUAGE_ZH,
+    PROTOCOL_PURE,
+)
 from shared.trace import FileTraceEmitter, HttpTraceEmitter, set_global_sink, trace_scope
 from shared.trace_propagation import (
     TracePropagationMiddleware,
@@ -249,7 +255,7 @@ class OSSPureExecutor(AgentExecutor):
         events.put_nowait(None)
         await consumer
 
-        if result.final_state == "task_completed":
+        if result.final_state == FINAL_STATE_TASK_COMPLETED:
             await updater.update_status(
                 TaskState.TASK_STATE_COMPLETED,
                 message=updater.new_agent_message(
@@ -275,13 +281,49 @@ class OSSPureExecutor(AgentExecutor):
                 },
             )
             return
-        if result.final_state == "task_rejected":
+        if result.final_state == FINAL_STATE_TASK_REJECTED:
             await updater.update_status(
                 TaskState.TASK_STATE_REJECTED,
                 message=updater.new_agent_message(
                     [Part(text="The RAN Agent rejected the request.")],
                     metadata={"pure": {"hop": "ran"}, "hop": "ran"},
                 ),
+            )
+            return
+        if result.final_state == FINAL_STATE_INCOMPLETE:
+            # The local wait window (webhook idle timeout or the SSE stream) ended before the
+            # downstream sent a terminal state. That is not a vendor failure: the NMS task may
+            # still be running. Keep the outer Task WORKING and tell the client why, instead of
+            # reporting FAILED for a state the downstream never sent.
+            downstream = self._downstream_name()
+            hop = self._downstream_hop()
+            task_ref = f" ({result.task_id})" if result.task_id else ""
+            metadata = {
+                "pure": {
+                    "hop": hop,
+                    "phase": "waiting",
+                    "downstreamTaskId": result.task_id,
+                },
+                "hop": hop,
+            }
+            _LOGGER.info(
+                "downstream still working after the local wait window: task=%s",
+                result.task_id or "-",
+            )
+            await updater.update_status(
+                TaskState.TASK_STATE_WORKING,
+                message=updater.new_agent_message(
+                    [
+                        Part(
+                            text=(
+                                f"The {downstream} task is still running{task_ref}; the OSS Agent "
+                                "stopped waiting for its report."
+                            )
+                        )
+                    ],
+                    metadata=metadata,
+                ),
+                metadata=metadata,
             )
             return
         await updater.failed(

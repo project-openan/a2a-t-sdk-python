@@ -707,6 +707,10 @@ Engineer UI ──A2A (direct + SSE)──> OSS Agent ──A2A (nms + webhook)�
 - `_pending_negotiation` 接受任意标准 `TASK_STATE_INPUT_REQUIRED`，不再要求样例私有的 `pure`
   元数据；MIE 的 `approval` 阶段仍会被 OSS Agent 忽略。
 - A2A 模式下两种 NMS 传输收到 `INPUT_REQUIRED` 立即返回，不再等 idle 兜底或轮询终态。
+- OSS executor 把下游结果映射到外层 Task：`task_completed` → `COMPLETED`、
+  `task_rejected` → `REJECTED`、`incomplete` → 带下游 task id 的 `WORKING`。`incomplete`
+  表示本地 webhook/SSE 等待窗口结束时网管任务可能仍在运行，它不是网管失败，因此不再报成
+  `FAILED`（工程师侧 run 以 `incomplete` 结束）。
 - follow-up 默认同时带 `taskId` + `contextId`；`A2AT_SAMPLE_PURE_FOLLOWUP` 可选 `task`、
   `context` 或 `both`。
 

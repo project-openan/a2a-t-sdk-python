@@ -11,15 +11,28 @@ from contextlib import contextmanager
 from dataclasses import replace
 
 import httpx
+import pytest
 import uvicorn
+from a2a.server.agent_execution.context import RequestContext
+from a2a.server.context import ServerCallContext, UnauthenticatedUser
+from a2a.server.events import Event as A2AEvent
+from a2a.server.events.event_queue import EventQueue
+from a2a.types import Message, Role, SendMessageRequest, TaskState, TaskStatusUpdateEvent
 from a2a_t.core.metadata import TASK_T_EXTENSION_URI
 from demo.composition import build_demo_runtime
 from demo.pure_policy import build_demo_pure_policy, pure_answer_from_event
+from protocol.client_flow import ClientFlowResult
 from protocol.intent import ProcessedIntent
 from protocol.mie_agent import build_mie_app
-from protocol.oss_agent import a2a_request_text, build_oss_app
+from protocol.oss_agent import OSSPureExecutor, a2a_request_text, build_oss_app
 from shared.config import DISCOVERY_DIRECT, TRANSPORT_SSE
-from shared.run_constants import FINAL_STATE_TASK_COMPLETED, LANGUAGE_EN, PROTOCOL_PURE
+from shared.run_constants import (
+    FINAL_STATE_INCOMPLETE,
+    FINAL_STATE_TASK_COMPLETED,
+    FINAL_STATE_TASK_FAILED,
+    LANGUAGE_EN,
+    PROTOCOL_PURE,
+)
 from tests.integration_helpers import (
     free_tcp_port,
     offline_direct_config,
@@ -148,3 +161,77 @@ def _running_mie(port: int, timeout_seconds: float) -> Generator[str, None, None
     finally:
         server.should_exit = True
         thread.join(timeout=5.0)
+
+
+class _RecordingQueue(EventQueue):
+    """Collect the events one OSS executor enqueues."""
+
+    def __init__(self) -> None:
+        self.events: list[object] = []
+
+    async def enqueue_event(self, event: A2AEvent) -> None:
+        self.events.append(event)
+
+
+def _oss_context(text: str = "Start energy saving in Region A.") -> RequestContext:
+    """Build one inbound OSS request."""
+    message = Message(message_id="message-1", role=Role.ROLE_USER, context_id="ctx-oss")
+    message.parts.add(text=text)
+    return RequestContext(
+        call_context=ServerCallContext(state={}, user=UnauthenticatedUser(), requested_extensions=set()),
+        request=SendMessageRequest(message=message),
+    )
+
+
+def _fake_downstream(
+    monkeypatch: pytest.MonkeyPatch,
+    executor: OSSPureExecutor,
+    final_state: str,
+) -> None:
+    """Replace the downstream hop with one fixed client-flow result."""
+
+    async def run(
+        user_request: str,
+        run_id: str | None,
+        event_sink: object,
+        updater: object,
+    ) -> ClientFlowResult:
+        del user_request, run_id, event_sink, updater
+        return ClientFlowResult(final_state=final_state, task_id="nms-task-1")
+
+    monkeypatch.setattr(executor, "_run_ran", run)
+
+
+async def test_oss_keeps_the_outer_task_working_when_the_downstream_is_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A local wait-window expiry is not a vendor failure: the outer Task stays WORKING."""
+    executor = OSSPureExecutor(answer=lambda event: "")
+    _fake_downstream(monkeypatch, executor, FINAL_STATE_INCOMPLETE)
+    queue = _RecordingQueue()
+
+    await executor.execute(_oss_context(), queue)
+
+    states = [event.status.state for event in queue.events if isinstance(event, TaskStatusUpdateEvent)]
+    assert states[-1] == TaskState.TASK_STATE_WORKING
+    assert TaskState.TASK_STATE_FAILED not in states
+    last = queue.events[-1]
+    assert isinstance(last, TaskStatusUpdateEvent)
+    assert last.status.message is not None
+    assert "still running" in last.status.message.parts[0].text
+    assert last.metadata["pure"]["phase"] == "waiting"
+    assert last.metadata["pure"]["downstreamTaskId"] == "nms-task-1"
+
+
+async def test_oss_fails_the_outer_task_when_the_downstream_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real downstream failure still reaches the client as FAILED."""
+    executor = OSSPureExecutor(answer=lambda event: "")
+    _fake_downstream(monkeypatch, executor, FINAL_STATE_TASK_FAILED)
+    queue = _RecordingQueue()
+
+    await executor.execute(_oss_context(), queue)
+
+    states = [event.status.state for event in queue.events if isinstance(event, TaskStatusUpdateEvent)]
+    assert states[-1] == TaskState.TASK_STATE_FAILED

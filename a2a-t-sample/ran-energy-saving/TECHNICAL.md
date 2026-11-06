@@ -871,6 +871,10 @@ Engineer UI ──A2A (direct + SSE)──> OSS Agent ──A2A (nms + webhook)�
   `pure` metadata; an MIE `approval` phase is still ignored by the OSS Agent.
 - Both NMS transports return immediately on `INPUT_REQUIRED` in A2A mode instead of waiting for
   the idle backstop or polling to a terminal state.
+- The OSS executor maps the downstream result onto its outer Task: `task_completed` → `COMPLETED`,
+  `task_rejected` → `REJECTED`, and `incomplete` → `WORKING` with the downstream task id. `incomplete`
+  means the local webhook/SSE wait window expired while the vendor task may still be running; it is
+  not a vendor failure and is never reported as `FAILED` (the engineer run ends as `incomplete`).
 - The follow-up carries `taskId` + `contextId` by default; `A2AT_SAMPLE_PURE_FOLLOWUP` selects
   `task`, `context`, or `both`.
 
