@@ -380,17 +380,12 @@ class PreTaskNegotiationHandler:
                     "The Task is not in a modifiable state; a Modify needs a WORKING Task.",
                 )
             )
-        finding = (
-            self._precheck(filled, self._task_schema, prompt=prompt)
-            if self._precheck is not None
-            else None
-        )
+        finding = self._precheck(filled, self._task_schema, prompt=prompt) if self._precheck is not None else None
         if finding is not None:
             return NegotiationOutcome.short(
                 build_error_message(
                     context.context_id,
-                    "The Modify Task-T is not executable: "
-                    f"{finding.detail or finding.kind.value}.",
+                    f"The Modify Task-T is not executable: {finding.detail or finding.kind.value}.",
                 )
             )
         self._rewrite_task_prompt(context, prompt)
@@ -824,12 +819,26 @@ class PreTaskNegotiationHandler:
 
 
 def _missing_slot_names(errors: Sequence[SlotValidationError]) -> tuple[str, ...]:
-    """Return the distinct non-empty slot names of a structured validation failure."""
+    """Return the distinct business labels of a structured validation failure.
+
+    ``content.entry_field_missing`` carries the missing field in ``facts.field_label`` (for example
+    "Rate"), which is what the operator must supply; the raw slot name would leak an internal
+    camelCase identifier into the negotiation proposal. ``content.param_missing`` carries the
+    section label instead. Fall back to the slot name only when neither fact is present.
+    """
     names: list[str] = []
     for error in errors:
-        slot_name = error.slot_name
-        if slot_name.strip() and slot_name not in names:
-            names.append(slot_name)
+        facts = error.facts or {}
+        label = ""
+        for key in ("field_label", "section_label"):
+            value = facts.get(key)
+            if isinstance(value, str) and value.strip():
+                label = value.strip()
+                break
+        if not label:
+            label = error.slot_name.strip()
+        if label and label not in names:
+            names.append(label)
     return tuple(names)
 
 

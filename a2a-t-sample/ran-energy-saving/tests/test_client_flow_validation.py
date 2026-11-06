@@ -10,7 +10,7 @@ import pytest
 from a2a.client.client import ClientCallContext
 from a2a.types import SendMessageRequest
 from a2a_t.core.errors.catalog import ErrorCatalog
-from a2a_t.core.errors.exceptions import ContentValidationError, SlotValidationError
+from a2a_t.core.errors.exceptions import ContentValidationError, PromptGenerationError, SlotValidationError
 from a2a_t.core.metadata import TASK_T_EXTENSION_URI, MetadataContent
 from a2a_t.core.standard_templates import ENERGY_SAVING_URI
 from protocol.client_flow import run_client_flow
@@ -28,9 +28,16 @@ class ValidatingPromptClient:
     """SDK client double that scripts one validation outcome per call."""
 
     validation_errors: list[Exception | None] = field(default_factory=list)
+    generation_errors: list[Exception | None] = field(default_factory=list)
     validation_calls: list[tuple[str, Mapping[str, object], str]] = field(default_factory=list)
+    generation_calls: list[str] = field(default_factory=list)
 
     def generate_task_prompt_from_text(self, text: str, template_uri: str) -> MetadataContent:
+        self.generation_calls.append(text)
+        if self.generation_errors:
+            error = self.generation_errors.pop(0)
+            if error is not None:
+                raise error
         return MetadataContent(
             template_uri=template_uri,
             prompt_text=f"Task-T prompt for: {text}",
@@ -218,6 +225,83 @@ async def test_a_negotiable_validation_error_still_reaches_the_server() -> None:
     assert detail["verdict"] == "negotiable"
     assert detail["blocking"] is False
     assert detail["negotiationKind"] == "information"
+
+
+@pytest.mark.asyncio
+async def test_a_missing_entry_field_is_negotiable_information() -> None:
+    """A missing Rate inside Task Context is information the operator can supply."""
+    prompt_client = ValidatingPromptClient(
+        validation_errors=[
+            _content_error(
+                ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
+                slot_errors=[_slot_error("content.entry_field_missing")],
+            )
+        ]
+    )
+    transport = RecordingTransport([_completed_task()])
+    traces: list[dict[str, object]] = []
+
+    result = await _run(prompt_client=prompt_client, transport=transport, trace_sink=traces)
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert len(transport.requests) == 1
+    detail = _validation_spans(traces)[0]["detail"]
+    assert isinstance(detail, dict)
+    assert detail["verdict"] == "negotiable"
+    assert detail["negotiationKind"] == "information"
+
+
+@pytest.mark.asyncio
+async def test_a_slot_generation_failure_blocks_with_structured_errors() -> None:
+    """A failed extraction has no Task-T to send; the operator edits the request and retries."""
+    error = PromptGenerationError(
+        ErrorCatalog.SLOT_CONSTRAINT_VIOLATED,
+        {"slot_label": "Task Target", "actual": "3G"},
+        message="The value of 'Task Target' (3G) is not within the allowed range",
+        failed_parameters=[
+            SlotValidationError(
+                slot_name="task_target",
+                code="slot.constraint_violated",
+                message="The value of 'Task Target' (3G) is not within the allowed range",
+                facts={"slot_label": "Task Target", "actual": "3G"},
+            )
+        ],
+    )
+    prompt_client = ValidatingPromptClient(generation_errors=[error])
+    transport = RecordingTransport([_completed_task()])
+    traces: list[dict[str, object]] = []
+
+    result = await _run(prompt_client=prompt_client, transport=transport, trace_sink=traces)
+
+    assert result.final_state == FINAL_STATE_INPUT_INVALID
+    assert transport.requests == []
+    assert prompt_client.validation_calls == []
+    spans = _validation_spans(traces)
+    assert len(spans) == 1
+    detail = spans[0]["detail"]
+    assert isinstance(detail, dict)
+    assert detail["verdict"] == "blocked"
+    assert detail["blocking"] is True
+    assert detail["errors"][0]["slotName"] == "task_target"
+    assert detail["errors"][0]["code"] == "slot.constraint_violated"
+    assert detail["errors"][0]["facts"]["actual"] == "3G"
+
+
+@pytest.mark.asyncio
+async def test_an_infrastructure_generation_failure_is_not_misreported_as_input() -> None:
+    """Only business slot errors become an editable blocked result."""
+    error = PromptGenerationError(
+        ErrorCatalog.LLM_INVOCATION_FAILED,
+        {"provider": "openai", "reason": "Request timed out."},
+        message="LLM invocation failed (provider openai): Request timed out.",
+    )
+    prompt_client = ValidatingPromptClient(generation_errors=[error])
+    transport = RecordingTransport([_completed_task()])
+
+    with pytest.raises(PromptGenerationError):
+        await _run(prompt_client=prompt_client, transport=transport, trace_sink=[])
+
+    assert transport.requests == []
 
 
 @pytest.mark.parametrize(

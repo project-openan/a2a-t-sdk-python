@@ -192,6 +192,7 @@ def test_information_counter_propose_at_max_rounds_aborts() -> None:
 
 def test_template_and_error_code_mapping() -> None:
     assert negotiation_kind_for_error_code("content.param_missing") is NegotiationKind.INFORMATION
+    assert negotiation_kind_for_error_code("content.entry_field_missing") is NegotiationKind.INFORMATION
     assert negotiation_kind_for_error_code("content.value_not_allowed") is NegotiationKind.TARGET
     assert negotiation_kind_for_error_code("content.semantic_conflict") is NegotiationKind.TARGET
     assert negotiation_kind_for_error_code("content.rule_violation") is NegotiationKind.FEASIBILITY

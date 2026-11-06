@@ -32,11 +32,15 @@ from typing import Final
 
 from dotenv import dotenv_values
 
-from shared.config import MODEL_MODE_OFFLINE, SampleConfig, merge_sample_process_env
+from shared.config import MODEL_MODE_OFFLINE, SAMPLE_ROOT, SampleConfig, merge_sample_process_env
 from shared.traced_llm import register_traced_providers, sdk_provider_name
 
 #: Prefix of the temporary SDK ``.env`` directories.
 DEFAULT_ENV_PREFIX: Final[str] = "a2at-ran-sdk-env-"
+
+#: Sample-owned overlay of the SDK prompt resources. Only the slot schemas the sample must refine
+#: live here; every other resource falls back to the packaged copy (``local_file`` overlay).
+SAMPLE_PROMPT_RESOURCES: Final[Path] = SAMPLE_ROOT / "prompt_resources"
 
 
 @dataclass(frozen=True)
@@ -146,6 +150,11 @@ def prepare_sdk_env(
             "A2AT_LLM_MAX_ATTEMPTS": str(config.llm_max_attempts),
         }
     )
+    if SAMPLE_PROMPT_RESOURCES.is_dir():
+        # The overlay refines the sample's own slot schema (placement rules); the SDK's packaged
+        # prompts and every other resource still win, so the generic conversion contract is intact.
+        values["A2AT_PROMPT_SOURCE_TYPE"] = "local_file"
+        values["A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR"] = str(SAMPLE_PROMPT_RESOURCES)
     temp_dir = Path(tempfile.mkdtemp(prefix=prefix))
     target = temp_dir / ".env"
     target.write_text(

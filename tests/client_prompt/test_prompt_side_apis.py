@@ -112,9 +112,11 @@ def _build_orchestrator(
     *,
     slot_extractor: Any,
     resource_access: FakePromptResourceAccess | None = None,
+    provider: str = "",
 ) -> PromptGenerationOrchestrator:
     return PromptGenerationOrchestrator(
         config=PromptRuntimeConfig(language="en-US", source_type="packaged"),
+        provider=provider,
         resource_access=resource_access
         or FakePromptResourceAccess(
             template_text="Site: {site}\nNotes: {additional_notes}",
@@ -312,6 +314,78 @@ def test_extraction_slot_errors_map_to_the_catalog_codes(reported_code: str, exp
     assert exc_info.value.failed_parameters[0].facts == {"slot_label": "site"}
     # The message is the joined rendered catalog messages, never the raw extraction message.
     assert "extraction step message" not in str(exc_info.value)
+
+
+def test_duplicate_actual_across_slots_keeps_the_most_specific_report() -> None:
+    """One offending fragment must produce one error, attributed to the specific slot."""
+    extraction = SlotExtractionResult(
+        slots={"site": "Site A", "additional_notes": None},
+        slot_errors=[
+            SlotValidationError(
+                slot_name="task_target",
+                code="slot.constraint_violated",
+                message="target",
+                facts={"slot_label": "Task Target", "actual": "approximately 1600"},
+            ),
+            SlotValidationError(
+                slot_name="task_context",
+                code="slot.constraint_violated",
+                message="context",
+                facts={"slot_label": "Carrier frequencies", "actual": "approximately 1600"},
+            ),
+        ],
+    )
+    orchestrator = _build_orchestrator(slot_extractor=RecordingSlotExtractor(extraction))
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert [error.slot_name for error in exc_info.value.failed_parameters] == ["task_context"]
+    assert "Carrier frequencies" in str(exc_info.value)
+    assert "Task Target" not in str(exc_info.value)
+
+
+def test_a_concrete_slot_wins_over_the_task_description_copy() -> None:
+    """The descriptive slot is derivative; the concrete slot owns the offending value."""
+    extraction = SlotExtractionResult(
+        slots={"site": "Site A", "additional_notes": None},
+        slot_errors=[
+            SlotValidationError(
+                slot_name="task_description",
+                code="slot.constraint_violated",
+                message="description",
+                facts={"slot_label": "Task Description", "actual": "3G"},
+            ),
+            SlotValidationError(
+                slot_name="task_context",
+                code="slot.constraint_violated",
+                message="context",
+                facts={"slot_label": "Cell RAT", "actual": "3G"},
+            ),
+        ],
+    )
+    orchestrator = _build_orchestrator(slot_extractor=RecordingSlotExtractor(extraction))
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert [error.slot_name for error in exc_info.value.failed_parameters] == ["task_context"]
+
+
+def test_llm_invocation_failure_fills_the_provider_fact() -> None:
+    """The catalog declares ``provider`` and ``reason``; both must be present in the message."""
+    orchestrator = _build_orchestrator(
+        slot_extractor=RecordingSlotExtractor(LLMRuntimeError("Request timed out.")),
+        provider="openai",
+    )
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert exc_info.value.code_str == "llm.invocation_failed"
+    assert exc_info.value.facts == {"provider": "openai", "reason": "Request timed out."}
+    assert "{provider}" not in str(exc_info.value)
+    assert "openai" in str(exc_info.value)
 
 
 def test_required_slot_missing_fails_with_not_provided_and_slot_label() -> None:

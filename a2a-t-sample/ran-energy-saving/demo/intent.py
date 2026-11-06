@@ -491,7 +491,7 @@ _EXTRACTION_SYSTEM_PROMPT: Final[str] = """\
 You extract a RAN energy-saving business intent from an operator request.
 Return one JSON object with exactly these keys:
 {
-  "operation_type": "Create or Modify",
+  "operation_type": "Create",
   "region": "region name or empty string",
   "sites": ["site names"],
   "windows": ["guaranteed throughput windows in {HH:MM~HH:MM,NMbps} form"],
@@ -502,8 +502,10 @@ Return one JSON object with exactly these keys:
   "missing_fields": ["fields the request does not provide"],
   "conflicts": ["conflicts you detect, for example overlapping windows"]
 }
-Do not invent missing values and do not repair conflicts. Keep the operator's region even when it
-looks unknown. Return JSON only, without prose or code fences.
+`operation_type` must be exactly `Create` or `Modify`; when the request is ambiguous, choose
+`Create` rather than returning both alternatives as one string. Do not invent missing values and
+do not repair conflicts. Keep the operator's region even when it looks unknown. Return JSON only,
+without prose or code fences.
 """
 
 

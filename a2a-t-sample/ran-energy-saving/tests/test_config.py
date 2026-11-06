@@ -392,9 +392,7 @@ def test_adk_output_schema_with_tools_defaults_to_auto(tmp_path: Path) -> None:
 @pytest.mark.parametrize("value", ["auto", "true", "false", "FALSE"])
 def test_adk_output_schema_with_tools_accepts_supported_values(tmp_path: Path, value: str) -> None:
     env_file = tmp_path / ".env"
-    env_file.write_text(
-        f"{ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS_ENV_KEY}={value}\n", encoding="utf-8"
-    )
+    env_file.write_text(f"{ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS_ENV_KEY}={value}\n", encoding="utf-8")
 
     config = load_config(env_path=env_file)
 
@@ -403,9 +401,7 @@ def test_adk_output_schema_with_tools_accepts_supported_values(tmp_path: Path, v
 
 def test_adk_output_schema_with_tools_rejects_an_unknown_value(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
-    env_file.write_text(
-        f"{ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS_ENV_KEY}=sometimes\n", encoding="utf-8"
-    )
+    env_file.write_text(f"{ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS_ENV_KEY}=sometimes\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match=ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS_ENV_KEY):
         load_config(env_path=env_file)
@@ -837,8 +833,7 @@ def _nms_env_file(tmp_path: Path, extra: str = "") -> Path:
         "A2AT_SAMPLE_DISCOVERY=nms\n"
         "A2AT_SAMPLE_NMS_HOST=nms.example\n"
         "A2AT_SAMPLE_NMS_TOKEN_USER=northbound\n"
-        "A2AT_SAMPLE_NMS_TOKEN_VALUE=secret\n"
-        + extra,
+        "A2AT_SAMPLE_NMS_TOKEN_VALUE=secret\n" + extra,
         encoding="utf-8",
     )
     return env_file
@@ -856,8 +851,7 @@ def test_nms_region_and_sites_can_be_overridden(tmp_path: Path) -> None:
     config = load_config(
         env_path=_nms_env_file(
             tmp_path,
-            "A2AT_SAMPLE_NMS_REGION=OtherRegion\n"
-            "A2AT_SAMPLE_NMS_SITES=SITE-A, SITE-B\n",
+            "A2AT_SAMPLE_NMS_REGION=OtherRegion\nA2AT_SAMPLE_NMS_SITES=SITE-A, SITE-B\n",
         )
     )
 
@@ -875,9 +869,7 @@ def test_the_local_demo_keeps_the_neutral_region_and_no_nms_sites(tmp_path: Path
     assert config.nms_sites == ()
 
 
-def test_the_process_environment_wins_over_the_env_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_the_process_environment_wins_over_the_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A launcher script exporting a model must override the source .env, not be shadowed by it."""
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -937,3 +929,22 @@ def test_trace_span_level_rejects_an_unknown_value(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="A2AT_SAMPLE_TRACE_SPAN_LEVEL"):
         load_config(env_path=env_file)
+
+
+def test_the_sdk_env_mounts_the_sample_slot_overlay(offline_config: SampleConfig, tmp_path: Path) -> None:
+    """The sample refines its own slot schema without changing the SDK's packaged bundle."""
+    import shutil
+
+    from dotenv import dotenv_values
+    from shared.sdk_env import SAMPLE_PROMPT_RESOURCES, prepare_sdk_env
+
+    sdk_env = prepare_sdk_env(offline_config, tmp_path / "missing.env")
+    try:
+        values = dotenv_values(sdk_env.path)
+        assert values["A2AT_PROMPT_SOURCE_TYPE"] == "local_file"
+        assert Path(str(values["A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR"])) == SAMPLE_PROMPT_RESOURCES
+        slot = SAMPLE_PROMPT_RESOURCES / "slots/Task-T/network-layer/ran-energy-saving/v1/en-US/slot.json"
+        assert slot.is_file()
+        assert "belongs in the task_context rate guarantee goal" in slot.read_text(encoding="utf-8")
+    finally:
+        shutil.rmtree(sdk_env.directory)

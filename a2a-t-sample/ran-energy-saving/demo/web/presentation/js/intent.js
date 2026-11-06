@@ -238,15 +238,40 @@ export function validationBlock(validation, copy) {
     const list = el("ul", "validation-errors");
     for (const error of errors) {
       const item = el("li");
-      const name = error.slotName || error.code || "—";
+      const facts = isObject(error.facts) ? error.facts : {};
+      const name = facts.slot_label || error.slotName || error.code || "—";
       item.append(el("b", "", name));
       if (error.message) item.append(el("span", "", error.message));
       if (error.code) item.append(el("code", "", error.code));
+      const hint = validationHint(error, labels);
+      if (hint) item.append(el("span", "validation-hint", hint));
       list.append(item);
     }
     section.append(list);
   }
   return section;
+}
+
+/** Return one actionable line for a validation error, or ``""`` when none applies.
+ *
+ * The SDK reports structural facts (the missing field, the section, the offending value); the
+ * presentation turns them into a next step without inventing a business rule.
+ */
+function validationHint(error, labels) {
+  if (!isObject(error)) return "";
+  const facts = isObject(error.facts) ? error.facts : {};
+  const field = typeof facts.field_label === "string" ? facts.field_label.trim() : "";
+  const section = typeof facts.section_label === "string" ? facts.section_label.trim() : "";
+  const code = typeof error.code === "string" ? error.code : "";
+  if (field && labels.missingField) return format(labels.missingField, { field });
+  if (section && code === "content.param_missing" && labels.sectionHint) {
+    return format(labels.sectionHint, { section });
+  }
+  if (labels.constraintHint && (code.startsWith("slot.") || code === "content.value_not_allowed")) {
+    return labels.constraintHint;
+  }
+  if (section && labels.sectionHint) return format(labels.sectionHint, { section });
+  return "";
 }
 
 /** Render the raw operator request next to the normalized business intent. */

@@ -206,12 +206,19 @@ sample 不再把操作员原文直接送进 A2A / A2A-T。默认的 `processed` 
 
 - 已知场景使用确定性的内置意图。自由文本（`--request` 或页面编辑的请求）在 live 模式下走模型抽取；
   offline 模式回退原文并记录 warning。
+- **自由文本的 Task-T 由 SDK 转换，不由样例改写。** 意图层只用于展示和审批；自由文本的 Task-T
+  由 SDK 从操作员原文抽取，因此不受我们控制的测试输入也走同一套通用 slot 管线。内置场景仍使用
+  确定性的 `normalizedText`，保证演示中刻意保留的缺失和冲突可复现。
 - 业务层**不修复**缺失或冲突。缺失的保障速率、未知区域、重叠时段都会保留在意图里，
   后续 A2A-T 协商仍然会发生。
-- 同一组业务值有两个渲染结果：`normalizedText` 是带 Task-T 段结构的文本，只用于 A2A-T；
+- 同一组业务值有两个渲染结果：`normalizedText` 是带 Task-T 段结构的文本，供内置 A2A-T 场景使用；
   `plainText` 是不含 `##` 标题的自然语言请求，用于标准 A2A。`plainText` 保留
   `{HH:MM~HH:MM,NMbps}` 速率 token，因此两个协议不会发送相同的报文。
-- 审批 1 在协议映射之前确认意图。A2A-T 再从 `normalizedText` 严格抽取 Task-T。
+- 审批 1 在协议映射之前确认意图。A2A-T 对内置场景从 `normalizedText` 严格抽取 Task-T；
+  对自由文本则从操作员原文抽取。
+- 样例通过 `A2AT_PROMPT_SOURCE_TYPE=local_file` 挂载一个很小的 `prompt_resources/` overlay，
+  只细化本场景的 slot schema（速率目标归 Task Context；缺失目标用 null，不写 "Not provided"）；
+  其余 SDK 资源仍来自打包资源。
 - A2A 把同样的处理放在 OSS Agent 内：工程师客户端发送原文，OSS Agent 规范化并发布意图，
   再把 `plainText` 转发给 RAN。
 - 展示页并列显示操作员请求、规范化文本和结构化意图；trace 记录 `intent_processed`，
@@ -227,9 +234,13 @@ A2A-T 模式下，演示页在发送前用 SDK 内容校验检查渲染后的 Ta
 - `A2ATClient.validate_task_prompt_and_data_filling` 是服务端同名方法的客户端入口，共用
   `DefaultContentValidator` 和语义校验提示词。
 - 能映射到服务端协商类型（`INFORMATION` / `TARGET` / `FEASIBILITY`）的错误是可协商的，仍然发送，
-  协商演示不受影响。
+  协商演示不受影响。条目内缺字段（`content.entry_field_missing`，例如缺 Rate）属于信息协商，
+  不再硬阻断。
 - 映射不到的错误会阻断发送：run 以 `finished` + `final_state=input_invalid` 结束，记录
   `task_validation` trace，页面内联展示问题。
+- 业务 slot 抽取失败（`slot.constraint_violated` 等）发生在 Task-T 存在之前，也按同样方式呈现：
+  一条 blocked 的 `task_validation` 记录，带结构化 slot 错误，并复用编辑重试卡片；
+  基础设施失败仍然抛出。
 - LLM/基础设施失败降级为 warning 并放行；模型故障不会中断演示。
 - 两阶段 Modify 的 Task-T 走同一道门，被阻断时先取消基线 Task。
 - 在校验卡中修改原始请求会**新建一次 run**；失败的 run 保留在历史中，并通过

@@ -297,22 +297,16 @@ async def test_initial_task_with_a_missing_required_field_opens_information_nego
 
 
 _NON_OVERLAPPING_PROMPT = (
-    "## Task Context\n\nGuaranteed throughput target: {00:00~17:30,10Mbps}, "
-    "{17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}."
+    "## Task Context\n\nGuaranteed throughput target: {00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}."
 )
 
-_OVERLAPPING_PROMPT = (
-    "## Task Context\n\nGuaranteed throughput target: {17:30~23:00,20Mbps}, "
-    "{20:00~00:00,10Mbps}."
-)
+_OVERLAPPING_PROMPT = "## Task Context\n\nGuaranteed throughput target: {17:30~23:00,20Mbps}, {20:00~00:00,10Mbps}."
 
 
 async def test_a_false_conflict_verdict_does_not_open_a_negotiation() -> None:
     """A live validator can claim an overlap the Task-T prompt does not have."""
     gate, server = _gate()
-    server.task_error = _conflict_error(
-        "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}"
-    )
+    server.task_error = _conflict_error("{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}")
     context = _make_context(_initial_message(prompt=_NON_OVERLAPPING_PROMPT))
 
     outcome = await gate.handle(context)
@@ -327,9 +321,7 @@ async def test_a_verified_conflict_still_opens_the_target_negotiation() -> None:
     gate, server = _gate()
     server.task_error = _conflict_error("{17:30~23:00,20Mbps}, {20:00~00:00,10Mbps}")
 
-    message = _assert_no_task(
-        await gate.handle(_make_context(_initial_message(prompt=_OVERLAPPING_PROMPT)))
-    )
+    message = _assert_no_task(await gate.handle(_make_context(_initial_message(prompt=_OVERLAPPING_PROMPT))))
 
     metadata = _metadata(message)
     assert metadata[TEMPLATE_URI_METADATA_KEY] == TARGET_NEGOTIATION_PROPOSE_URI
@@ -381,9 +373,7 @@ async def test_without_a_precheck_the_handler_trusts_the_sdk_verdict() -> None:
             {
                 "operationType": "Create",
                 "region": "Region A",
-                "guaranteedThroughputTarget": (
-                    "{17:30~23:00,20Mbps}, {20:00~00:00,10Mbps}"
-                ),
+                "guaranteedThroughputTarget": ("{17:30~23:00,20Mbps}, {20:00~00:00,10Mbps}"),
             },
             TARGET_NEGOTIATION_PROPOSE_URI,
         ),
@@ -391,9 +381,7 @@ async def test_without_a_precheck_the_handler_trusts_the_sdk_verdict() -> None:
             {
                 "operationType": "Create",
                 "region": "Region A",
-                "guaranteedThroughputTarget": (
-                    "{00:00~06:00,2Mbps}, {06:00~18:00,10Mbps}"
-                ),
+                "guaranteedThroughputTarget": ("{00:00~06:00,2Mbps}, {06:00~18:00,10Mbps}"),
                 "backgroundEvent": "power outage from 00:00 to 18:00",
             },
             FEASIBILITY_NEGOTIATION_PROPOSE_URI,
@@ -418,6 +406,7 @@ async def test_semantically_accepted_sample_conflicts_still_open_negotiation(
     ("code", "expected_uri", "missing_slot"),
     [
         ("content.param_missing", INFORMATION_NEGOTIATION_PROPOSE_URI, "region"),
+        ("content.entry_field_missing", INFORMATION_NEGOTIATION_PROPOSE_URI, "guaranteedThroughputTarget"),
         ("content.value_not_allowed", TARGET_NEGOTIATION_PROPOSE_URI, "guaranteedThroughputTarget"),
         ("content.semantic_conflict", TARGET_NEGOTIATION_PROPOSE_URI, "guaranteedThroughputTarget"),
         ("content.rule_violation", FEASIBILITY_NEGOTIATION_PROPOSE_URI, "guaranteedThroughputTarget"),
@@ -441,6 +430,32 @@ async def test_initial_validation_failure_emits_a_propose_without_a_task(
     assert len(server.propose_generations) == 1
     assert server.propose_generations[0][1].round == 1
     assert server.propose_generations[0][2] == expected_uri
+
+
+async def test_entry_field_missing_names_the_business_field_in_the_proposal() -> None:
+    """The proposal asks for "Rate", not the internal camelCase slot name."""
+    gate, server = _gate()
+    server.task_error = ContentValidationError(
+        ErrorCatalog.CONTENT_ENTRY_FIELD_MISSING,
+        {"section_label": "Task Context"},
+        errors=[
+            SlotValidationError(
+                slot_name="guaranteedThroughputTarget",
+                code="content.entry_field_missing",
+                message="Entry 1 of 'Task Context' is missing required field 'Rate'",
+                facts={"section_label": "Task Context", "index": 1, "field_label": "Rate"},
+            )
+        ],
+    )
+
+    message = _assert_no_task(await gate.handle(_make_context(_initial_message())))
+
+    metadata = _metadata(message)
+    assert metadata[TEMPLATE_URI_METADATA_KEY] == INFORMATION_NEGOTIATION_PROPOSE_URI
+    proposal_text = server.propose_generations[0][0]
+    assert proposal_text is not None
+    assert "Rate" in proposal_text
+    assert "guaranteedThroughputTarget" not in proposal_text
 
 
 async def test_proposal_generation_failure_returns_a_structured_message() -> None:
@@ -521,9 +536,7 @@ async def test_accept_validates_and_hands_the_agreed_task_prompt_to_the_executor
 async def test_a_false_conflict_verdict_does_not_end_a_valid_accept() -> None:
     """The same false verdict must not turn an accepted negotiation into a terminal error."""
     gate, server = _gate()
-    server.task_error = _conflict_error(
-        "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}"
-    )
+    server.task_error = _conflict_error("{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}")
     message = _negotiation_message(
         NegotiationPerformative.ACCEPT,
         round_number=1,
@@ -672,9 +685,7 @@ async def test_modify_follow_up_is_validated_and_returns_a_modify_outcome() -> N
     server.task_params = {
         "operationType": "Modify",
         "region": "Region A",
-        "guaranteedThroughputTarget": (
-            "{00:00~03:00,10Mbps}, {03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}"
-        ),
+        "guaranteedThroughputTarget": ("{00:00~03:00,10Mbps}, {03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}"),
         "siteList": "Site 1,Site 2",
         "backgroundEvent": "planned power outage tomorrow 03:00~05:00",
     }
@@ -700,9 +711,7 @@ async def test_modify_follow_up_rejects_a_completed_task() -> None:
     server.task_params = {
         "operationType": "Modify",
         "region": "Region A",
-        "guaranteedThroughputTarget": (
-            "{00:00~03:00,10Mbps}, {03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}"
-        ),
+        "guaranteedThroughputTarget": ("{00:00~03:00,10Mbps}, {03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}"),
         "siteList": "Site 1,Site 2",
         "backgroundEvent": "planned power outage tomorrow 03:00~05:00",
     }
@@ -726,11 +735,7 @@ async def test_initial_modify_task_t_is_rejected_without_an_existing_task() -> N
         "guaranteedThroughputTarget": "{00:00~03:00,10Mbps}",
     }
 
-    result = _assert_no_task(
-        await gate.handle(
-            _make_context(_initial_message("## Operation Type\n\nModify"))
-        )
-    )
+    result = _assert_no_task(await gate.handle(_make_context(_initial_message("## Operation Type\n\nModify"))))
 
     assert "Modify Task-T must continue an existing WORKING Task" in result.parts[0].text
 
@@ -768,9 +773,7 @@ async def test_real_server_opens_the_matching_negotiation(
     gate = PreTaskNegotiationHandler(real_server, precheck=RanDataTaskTPrecheck())
     context_id = str(uuid.uuid4())
 
-    result = _assert_no_task(
-        await gate.handle(_make_context(_initial_message(prompt, context_id=context_id)))
-    )
+    result = _assert_no_task(await gate.handle(_make_context(_initial_message(prompt, context_id=context_id))))
 
     assert result.context_id == context_id
     result_metadata = _metadata(result)

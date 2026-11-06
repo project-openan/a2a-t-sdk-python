@@ -503,8 +503,13 @@ OperatorRequest → IntentProcessor → ProcessedIntent → 规范化文本 / �
   `{HH:MM~HH:MM,NMbps}` 速率 token（`RegexPureTargetPolicy` 和 NMS 模拟器依赖该格式）。
   A2A-T 路径不得发送 `plainText`，A2A 路径不得发送 `normalizedText`。
 - `processed` 模式下 `ClientRuntime.run` 先发布 `intent_processed` trace，再携带意图调用审批 1。
-  A2A-T 流程拿到**规范化文本**并严格从中生成 Task-T（禁用 `initial_data` 结构化快路径）；
-  `plain` 流程拿到 `plainText`。
+  A2A-T 流程对**内置场景**拿到**规范化文本**并严格从中生成 Task-T（禁用 `initial_data` 结构化快路径）；
+  **自由文本**（非空 `userRequest`）则把操作员原文交给 SDK，意图层只用于展示/审批，不做二次改写，
+  这样不受控的测试输入也走同一套通用 slot 管线。`plain` 流程拿到 `plainText`。
+- 样例通过 `A2AT_PROMPT_SOURCE_TYPE=local_file` 挂载 `prompt_resources/`。overlay 只包含本场景
+  中英文 slot schema；模板、提示词、错误目录及其他场景仍来自打包 SDK 资源。细化后的 schema 明确
+  速率/吞吐/用户体验目标归 `task_context`，缺失目标用 null（不写 `Not provided`），并要求任务描述
+  同时格式化目标与预期输出占位符。
 - A2A 由 OSS Agent 处理原文，在外层 Task 的 `metadata.intentProcessed` 上发布意图，再把
   `plainText` 转发给 RAN；`a2a_request_text` 是该跳的唯一选择器。
 - Gateway 的入站 A2A 文本一律视为 raw，进入同一处理层。
@@ -522,10 +527,12 @@ A2A-T 模式下，客户端可以在发送前用 SDK 的内容校验检查渲染
 
 - `A2ATClient.validate_task_prompt_and_data_filling(prompt, schema, template_uri)` 是服务端同名方法的客户端对应入口，两者共用 `DefaultContentValidator` 和同一套语义校验提示词。样例通过 `asyncio.to_thread` 调用。
 - 结果使用与服务端相同的 `negotiation_kind_for_errors` 分类：
-  - 能映射到 `INFORMATION` / `TARGET` / `FEASIBILITY` 的错误是**可协商**的，仍然发送，保留协商演示；
+  - 能映射到 `INFORMATION` / `TARGET` / `FEASIBILITY` 的错误是**可协商**的，仍然发送，保留协商演示。条目内缺字段（`content.entry_field_missing`，如缺 Rate）映射为 `INFORMATION`；
   - 映射不到的错误是**阻断**：flow 返回 `finished` + `final_state=input_invalid`，不发送消息，并记录 `task_validation` trace；
   - `input.text_too_long` 和 `template.not_found` 是确定性错误，直接阻断；
   - `llm.*` / `infra.*` 失败降级为 **unavailable**：记录 warning 后继续发送，模型故障不会中断演示。
+- 业务 slot 抽取失败（`slot.constraint_violated`、`slot.not_provided` 等）发生在 Task-T 存在之前。`run_client_flow` 把 `PromptGenerationError.failed_parameters` 转成同样的 blocked `task_validation` 记录并返回 `input_invalid`，操作员可修改请求后重试。没有 failed slot 参数的生成失败（LLM 故障、模板缺失）仍然抛出，不会误报成输入问题。
+- SDK slot 抽取提示词要求一个片段只落一个 slot、缺失值保持 null；同一个 `actual` 的重复 `slot.constraint_violated` 在到达调用方前会折叠到最具体的 slot。
 - 两阶段 Modify 的 Task-T 走同一道门；Modify 被阻断时先取消基线 Task，再结束 run。
 - `A2AT_SAMPLE_PRE_SEND_VALIDATION` 控制范围：`on`（默认）只在 run 来源为演示页时启用，`always` 覆盖所有入口，`off` 关闭。
 - 演示页内联展示错误：可协商项显示在意图卡下；阻断项变成校验卡，预填原始请求，工程师修改后**新建一次 run** 重试。失败的 run 保留在历史中，并通过 `source.parentRunId` 关联。重试同时沿用被拦截 run 的 `conversationId` 和 `traceId`，因此拦截前和拦截后的两次请求属于同一个客户端会话、同一个网管 trace；已经发出、正常完成或被取消的 run 会结束这条链，下一次请求重新开会话。

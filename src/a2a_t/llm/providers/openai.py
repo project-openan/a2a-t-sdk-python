@@ -51,6 +51,11 @@ class OpenAIClient(LLMClient):
         self._call_logger = logging.getLogger("a2a_t.llm.call")
         self._client: Any | None = None
 
+    @property
+    def provider(self) -> str:
+        """Provider name configured for this client."""
+        return self._config.provider
+
     def _get_client(self) -> Any:
         if self._client is not None:
             return self._client

@@ -473,13 +473,9 @@ class ClientRuntime:
                     if self.protocol != PROTOCOL_A2A_T:
                         raise ClientRuntimeError("A Modify-only run requires the A2A-T protocol.")
                     if not target_task_id or not target_context_id:
-                        raise ClientRuntimeError(
-                            "A Modify-only run needs both the target Task id and its context id."
-                        )
+                        raise ClientRuntimeError("A Modify-only run needs both the target Task id and its context id.")
                 elif target_task_id or target_context_id:
-                    raise ClientRuntimeError(
-                        "A target Task can only be used by a Modify-only run."
-                    )
+                    raise ClientRuntimeError("A target Task can only be used by a Modify-only run.")
                 raw_text = custom_request or self._scenario_raw_request()
                 if self.protocol == PROTOCOL_PURE:
                     # Pure A2A uses standard Task states only: the OSS Agent owns the business
@@ -497,9 +493,7 @@ class ClientRuntime:
                 if modify_mode:
                     # The target Task already exists, so the intent is the scenario's Modify
                     # intent rather than a fresh reading of a Create request.
-                    intent = self.run_spec.modify_intent or await self._process_intent(
-                        raw_text, custom=False
-                    )
+                    intent = self.run_spec.modify_intent or await self._process_intent(raw_text, custom=False)
                     request_text = intent.normalized_text
                     _emit_intent_span(
                         trace_sink=sink,
@@ -509,13 +503,15 @@ class ClientRuntime:
                     )
                 elif processed:
                     intent = await self._process_intent(raw_text, custom=bool(custom_request))
-                    # A2A-T needs the canonical Task-T text; standard A2A must stay a natural
-                    # request, otherwise the protocol comparison sees the same payload twice.
-                    request_text = (
-                        intent.normalized_text
-                        if self.protocol == PROTOCOL_A2A_T
-                        else intent.plain_text or intent.raw_request or intent.normalized_text
-                    )
+                    # A free-text request is converted by the SDK itself: the business intent is a
+                    # display/approval aid, not a second lossy rewrite of the Task-T. Curated
+                    # scenarios keep their canonical text so the demo's deliberate gaps and
+                    # conflicts stay reproducible. Standard A2A must stay a natural request,
+                    # otherwise the protocol comparison sees the same payload twice.
+                    if self.protocol == PROTOCOL_A2A_T:
+                        request_text = raw_text if custom_request else intent.normalized_text
+                    else:
+                        request_text = intent.plain_text or intent.raw_request or intent.normalized_text
                     _emit_intent_span(
                         trace_sink=sink,
                         intent=intent,

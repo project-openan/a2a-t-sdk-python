@@ -39,7 +39,7 @@ from a2a.types import (
     TaskPushNotificationConfig,
     TaskState,
 )
-from a2a_t.core.errors.exceptions import ContentValidationError
+from a2a_t.core.errors.exceptions import ContentValidationError, PromptGenerationError
 from a2a_t.core.metadata import (
     NEGOTIATION_CONTEXT_METADATA_KEY,
     NEGOTIATION_T_EXTENSION_URI,
@@ -231,6 +231,28 @@ def _validation_errors(error: ContentValidationError) -> list[dict[str, object]]
         }
         for item in error.errors or []
     ]
+
+
+def _generation_task_validation(error: PromptGenerationError) -> TaskValidation | None:
+    """Turn a business slot-extraction failure into a blocked validation the operator can repair.
+
+    A ``slot.*`` failure happens before any Task-T exists, so there is nothing to send and no
+    protocol negotiation to start; the operator edits the request and retries. Infrastructure
+    failures (no failed slot parameters) keep propagating instead of being misreported as input
+    problems the operator could fix.
+    """
+    errors = [
+        {
+            "slotName": item.slot_name,
+            "code": str(item.code),
+            "message": item.message,
+            "facts": dict(item.facts or {}),
+        }
+        for item in error.failed_parameters
+    ]
+    if not errors:
+        return None
+    return TaskValidation("blocked", None, errors, str(error.code_str), 0)
 
 
 def _classify_validation_error(
@@ -771,39 +793,44 @@ async def run_client_flow(
         raise ClientFlowError(f"Unsupported run mode: {run_mode}")
     modify_only = run_mode == RUN_MODE_MODIFY
     if modify_only and (not target_task_id or not target_context_id):
-        raise ClientFlowError(
-            "A Modify-only run needs both the target Task id and its context id."
-        )
+        raise ClientFlowError("A Modify-only run needs both the target Task id and its context id.")
     if not modify_only and (target_task_id or target_context_id):
-        raise ClientFlowError(
-            "A target Task can only be used by a Modify-only run."
-        )
+        raise ClientFlowError("A target Task can only be used by a Modify-only run.")
     resolved_label = TASK_MODIFY_LABEL if modify_only else label
     follow_up = None if modify_only else policy.follow_up_data(language)
-    with trace_stage("task_t_modify_extraction" if modify_only else "task_t_slot_extraction"):
-        initial_data = (
-            policy.follow_up_data(language) if modify_only else policy.initial_data(language)
-        )
-        if modify_only and initial_data is None:
-            raise ClientFlowError(
-                "The scenario does not define the Task-T values of a Modify-only run."
-            )
-        if initial_data is not None:
-            data, data_schema = initial_data
-            validation_schema: Mapping[str, object] = data_schema
-            prompt_content = prompt_client.generate_task_prompt_from_data_with_schema(
-                data,
-                data_schema,
-                task_template_uri,
-            )
-        else:
-            validation_schema = TASK_PARAM_SCHEMA
-            prompt_content = prompt_client.generate_task_prompt_from_text(
-                _request_with_context(user_request, conversation_context),
-                task_template_uri,
-            )
-    prompt_text = _require_prompt_text(prompt_content, "the initial Task-T prompt")
     initial_phase = PHASE_TASK_MODIFY if modify_only else PHASE_TASK_PROMPT
+    validation_schema: Mapping[str, object] = TASK_PARAM_SCHEMA
+    try:
+        with trace_stage("task_t_modify_extraction" if modify_only else "task_t_slot_extraction"):
+            initial_data = policy.follow_up_data(language) if modify_only else policy.initial_data(language)
+            if modify_only and initial_data is None:
+                raise ClientFlowError("The scenario does not define the Task-T values of a Modify-only run.")
+            if initial_data is not None:
+                data, data_schema = initial_data
+                validation_schema = data_schema
+                prompt_content = prompt_client.generate_task_prompt_from_data_with_schema(
+                    data,
+                    data_schema,
+                    task_template_uri,
+                )
+            else:
+                validation_schema = TASK_PARAM_SCHEMA
+                prompt_content = prompt_client.generate_task_prompt_from_text(
+                    _request_with_context(user_request, conversation_context),
+                    task_template_uri,
+                )
+    except PromptGenerationError as error:
+        validation = _generation_task_validation(error)
+        if validation is None:
+            raise
+        # No Task-T exists, so there is nothing to send and no protocol negotiation to start.
+        # Reuse the pre-send validation surface: the operator edits the request and retries.
+        emit_validation(validation, "", task_template_uri, initial_phase)
+        blocked = ClientFlowResult()
+        blocked.final_state = FINAL_STATE_INPUT_INVALID
+        _fill_result(blocked, target_context_id if modify_only else None)
+        return blocked
+    prompt_text = _require_prompt_text(prompt_content, "the initial Task-T prompt")
     emit_trace(
         "task_prompt_rendered",
         phase=initial_phase,

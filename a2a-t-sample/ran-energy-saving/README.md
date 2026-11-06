@@ -239,16 +239,26 @@ operator request → business intent (ProcessedIntent) → normalized text / pla
 ```
 
 - Known scenarios use a deterministic built-in intent. A free-text request (`--request` or an
-  edited Web UI request) uses the live model; in offline mode it falls back to the raw text and
-  records a warning.
+  edited Web UI request) uses the live model for the business view; in offline mode it falls back
+  to the raw text and records a warning.
+- **Free text is converted by the SDK, not by the sample.** The intent layer is a display and
+  approval aid: the Task-T of a free-text request is extracted by the SDK from the original
+  operator text, so test input we do not control still goes through the generic slot pipeline.
+  Curated scenarios keep their deterministic `normalizedText` so their deliberate gaps and
+  conflicts remain reproducible.
 - The business layer never repairs a gap or conflict. A missing throughput target, an unknown
   area and overlapping windows stay in the intent, so the A2A-T negotiation still happens.
 - The intent carries two renderings of the same business values. `normalizedText` is the
-  Task-T section layout used by the A2A-T hop; `plainText` is a natural-language request used by
-  standard A2A. `plainText` keeps the `{HH:MM~HH:MM,NMbps}` target tokens but contains no `##`
-  Task-T headings, so the two protocols never send the same payload.
-- Approval 1 confirms the intent before the protocol mapping. In A2A-T the Task-T is then
-  extracted strictly from `normalizedText`.
+  Task-T section layout used by curated A2A-T scenarios; `plainText` is a natural-language request
+  used by standard A2A. `plainText` keeps the `{HH:MM~HH:MM,NMbps}` target tokens but contains no
+  `##` Task-T headings, so the two protocols never send the same payload.
+- Approval 1 confirms the intent before the protocol mapping. In A2A-T a curated scenario's
+  Task-T is extracted strictly from `normalizedText`; a free-text Task-T is extracted from the
+  operator's original request.
+- The sample mounts a small `prompt_resources/` overlay through `A2AT_PROMPT_SOURCE_TYPE=local_file`.
+  It refines this scenario's slot schema only (rate targets belong in Task Context, a missing goal
+  is null rather than a "Not provided" string); every other SDK resource still comes from the
+  packaged bundle.
 - A2A keeps the same story inside the OSS Agent: the engineer client sends the raw request,
   the OSS Agent normalizes it, publishes the intent, and forwards `plainText` to RAN.
 - The presentation page shows the operator request, the normalized text and the structured intent
@@ -267,9 +277,14 @@ never sent and no negotiation starts.
 - `A2ATClient.validate_task_prompt_and_data_filling` is the client counterpart of the server
   method and uses the same `DefaultContentValidator` and semantic validation prompt.
 - Errors that map to a server negotiation kind (`INFORMATION` / `TARGET` / `FEASIBILITY`) are
-  negotiable and still go out, so the negotiation scenarios keep working.
+  negotiable and still go out, so the negotiation scenarios keep working. A missing field inside
+  one entry (`content.entry_field_missing`, for example a missing Rate) is an information
+  negotiation, not a hard block.
 - Unmapped errors block the send: the run ends `finished` with `final_state=input_invalid`, records
   a `task_validation` trace, and the page shows the issues inline.
+- A business slot-extraction failure (`slot.constraint_violated` and friends) happens before any
+  Task-T exists, so it is surfaced the same way: a blocked `task_validation` record with the
+  structured slot errors, and the same edit-and-retry card. Infrastructure failures still raise.
 - LLM/infra failures degrade to a warning and let the request through; a model outage cannot stop
   the demo.
 - The two-phase Modify Task-T uses the same gate and cancels the baseline Task when blocked.

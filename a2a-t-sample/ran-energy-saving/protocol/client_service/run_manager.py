@@ -260,13 +260,9 @@ class RunManager:
         """
         resolved_source = normalize_run_source(source)
         resolved_target_task = target_task_id.strip() if isinstance(target_task_id, str) else ""
-        resolved_target_context = (
-            target_context_id.strip() if isinstance(target_context_id, str) else ""
-        )
+        resolved_target_context = target_context_id.strip() if isinstance(target_context_id, str) else ""
         if bool(resolved_target_task) != bool(resolved_target_context):
-            raise ValueError(
-                "target_task_id and target_context_id must be provided together."
-            )
+            raise ValueError("target_task_id and target_context_id must be provided together.")
         run_mode = RUN_MODE_MODIFY if resolved_target_task else RUN_MODE_CREATE
         if run_mode == RUN_MODE_MODIFY and protocol != PROTOCOL_A2A_T:
             raise ValueError("A Modify-only run requires the A2A-T protocol.")
@@ -908,8 +904,12 @@ def _input_invalid_summary(run: RunState) -> str:
             continue
         detail = span.get("detail")
         errors = detail.get("errors") if isinstance(detail, Mapping) else None
-        count = len(errors) if isinstance(errors, list) else 0
-        return f"Input validation failed: {count} blocking issue(s)"
+        if not isinstance(errors, list) or not errors:
+            return "Input validation failed"
+        first = errors[0]
+        message = first.get("message") if isinstance(first, Mapping) else None
+        suffix = f": {message}" if isinstance(message, str) and message.strip() else ""
+        return f"Input validation failed: {len(errors)} blocking issue(s){suffix}"
     return "Input validation failed"
 
 

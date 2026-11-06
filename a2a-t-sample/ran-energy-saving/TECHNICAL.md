@@ -595,9 +595,18 @@ OperatorRequest → IntentProcessor → ProcessedIntent → normalized text / pl
   tokens that `RegexPureTargetPolicy` and the NMS simulator parse. The A2A-T path must never send
   `plainText`, and an A2A path must never send `normalizedText`.
 - In `processed` mode `ClientRuntime.run` emits an `intent_processed` trace, then calls approval 1
-  with the intent. The A2A-T flow receives the **normalized text** and generates the Task-T
-  strictly from it (the structured `initial_data` shortcut is disabled); the `plain` flow receives
+  with the intent. The A2A-T flow of a **curated scenario** receives the **normalized text** and
+  generates the Task-T strictly from it (the structured `initial_data` shortcut is disabled). A
+  **free-text request** (a non-empty `userRequest`) is sent to the SDK as the operator's original
+  text: the intent layer is a display/approval aid there, not a second rewrite, so input the test
+  team does not control still goes through the generic slot pipeline. The `plain` flow receives
   `plainText`.
+- The sample mounts `prompt_resources/` through `A2AT_PROMPT_SOURCE_TYPE=local_file`. The overlay
+  contains only this scenario's slot schema (English and Chinese); templates, prompts, errors and
+  every other scenario still resolve from the packaged SDK bundle. The refined schema states that
+  a rate/throughput/user-experience target belongs to `task_context`, that a missing goal is null
+  (never the literal `Not provided`), and that the description formats the target and expected
+  output placeholders too.
 - A2A sends the raw request to the OSS Agent, which runs its own processor, publishes the intent on
   the outer Task (`metadata.intentProcessed`) and forwards `plainText` to RAN. `a2a_request_text`
   is the single selector of that hop.
@@ -624,12 +633,21 @@ reaches the server and never starts a negotiation.
   validation prompt. The sample calls it through `asyncio.to_thread`.
 - The result is classified with the same `negotiation_kind_for_errors` mapping the server uses:
   - a verdict that maps to `INFORMATION` / `TARGET` / `FEASIBILITY` is **negotiable** and is still
-    sent, preserving the negotiation demo;
+    sent, preserving the negotiation demo. `content.entry_field_missing` (a missing field inside
+    one entry, such as a missing Rate) maps to `INFORMATION`;
   - an unmapped error is **blocking**: the flow returns `finished` + `final_state=input_invalid`,
     sends no message and records a `task_validation` trace;
   - `input.text_too_long` and `template.not_found` are deterministic and block;
   - `llm.*` / `infra.*` failures degrade to **unavailable**: they are traced as a warning and the
     request is sent, so a model outage cannot stop a demo.
+- A business slot-extraction failure (`slot.constraint_violated`, `slot.not_provided`, ...) happens
+  before a Task-T exists. `run_client_flow` turns `PromptGenerationError.failed_parameters` into
+  the same blocked `task_validation` record and returns `input_invalid`, so the operator can edit
+  the request and retry. Generation failures without failed slot parameters (an LLM outage, a
+  missing template) still raise and are not misreported as input problems.
+- The SDK's slot extraction prompt enforces one fragment per slot and keeps missing values null;
+  duplicate `slot.constraint_violated` reports of the same `actual` value are collapsed to the most
+  specific slot before the error reaches the caller.
 - The same gate runs on the two-phase Modify Task-T. A blocked Modify cancels the baseline Task
   before ending the run.
 - `A2AT_SAMPLE_PRE_SEND_VALIDATION` selects the scope: `on` (default) enables the gate only when the

@@ -55,6 +55,9 @@ PolicyAction = Literal["propose", "abort", "execute", "end"]
 #: Sample convention mapping the first Task-T validation error code to the negotiation kind.
 NEGOTIATION_KIND_BY_ERROR_CODE: Final[dict[str, NegotiationKind]] = {
     "content.param_missing": NegotiationKind.INFORMATION,
+    # A missing field inside one entry is still missing information: the operator can supply it,
+    # so it must reach the server instead of being blocked client-side.
+    "content.entry_field_missing": NegotiationKind.INFORMATION,
     "content.value_not_allowed": NegotiationKind.TARGET,
     # A conflict in the time-segmented target is the target-negotiation case (overlapping
     # windows). Feasibility conflicts are distinguished by their facts in
