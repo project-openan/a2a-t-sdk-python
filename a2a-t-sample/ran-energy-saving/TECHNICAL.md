@@ -1137,6 +1137,7 @@ script can switch the model with a plain `export ADK_MODEL_NAME=...`.
 | `A2AT_SAMPLE_OSS_TASK_DB` | unset = in-memory; `run_demo.py` writes `<sample>/runs/oss-task-status.sqlite3` | Absolute SQLite path of the OSS Agent Task store, its downstream bindings and the client webhook registrations. |
 | `A2AT_SAMPLE_LONG_TASK_MODE` | `auto` | OSS long-task tracking (`auto` / `on` / `off`). `auto` enables the background pump for the real NMS webhook hop when the OSS Task database is configured. |
 | `A2AT_SAMPLE_LONG_TASK_SETTLE_SECONDS` | `5` | Seconds the OSS keeps the initial synchronous stream after the NMS accepts the Task. It only changes when tracking moves to the background; the run and the Task keep tracking and the NMS Task is never cancelled. |
+| `A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS` | `30` | How often the Web UI polls a remote Task that is still executing. The run stays active and finishes only on the remote terminal state/report. |
 | `A2AT_SAMPLE_CLIENT_DB` | unset = in-memory; `run_demo.py` writes `<sample>/runs/client-state.sqlite3` | Absolute SQLite path of the client's conversation/run/negotiation store and of the ADK decision-agent sessions. |
 | `A2AT_SAMPLE_CLIENT_MEMORY_TURNS` | default `6` (>= 0) | Number of recent conversation turns injected into the next decision prompt and Task-T generation. |
 | `A2AT_SAMPLE_ADK_SESSION_RETENTION_DAYS` | default `7` (>= 1) | Days a decision-agent session is kept as audit data before the startup/periodic sweep removes it. |

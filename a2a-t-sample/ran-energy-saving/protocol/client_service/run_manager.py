@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
 import uuid
 from collections.abc import Mapping
 from contextlib import suppress
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Final, cast
 
+from a2a.client.client import ClientCallContext
+from a2a.types import GetTaskRequest, TaskState
 from a2a_t.core.metadata import NegotiationContext
+from google.protobuf.json_format import MessageToDict
 from shared.config import (
+    DISCOVERY_NMS,
     DISCOVERY_REGISTRY,
     INTENT_MODE_PROCESSED,
     PRE_SEND_VALIDATION_ALWAYS,
@@ -32,8 +37,13 @@ from shared.metrics import (
 )
 from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.run_constants import (
+    FINAL_STATE_INCOMPLETE,
     FINAL_STATE_INPUT_INVALID,
+    FINAL_STATE_TASK_COMPLETED,
+    FINAL_STATE_TASK_FAILED,
+    FINAL_STATE_TASK_REJECTED,
     PROTOCOL_A2A_T,
+    PROTOCOL_PURE,
     RUN_MODE_CREATE,
     RUN_MODE_MODIFY,
 )
@@ -43,6 +53,7 @@ from shared.trace import (
 )
 from shared.trace_propagation import reset_active_trace, set_active_trace
 
+from protocol.client_flow import ClientFlowResult
 from protocol.client_runtime import MODE_CONFIRM, MODE_MANUAL
 from protocol.client_service.run_state import (
     SESSION_SWEEP_INTERVAL_SECONDS,
@@ -94,6 +105,152 @@ def _langfuse_disabled() -> dict[str, object]:
         "status": "disabled",
         "warning": None,
     }
+
+
+#: Remote Task states that end a long-running engineer run.
+_TASK_STATE_FINAL_STATES: Final[dict[str, str]] = {
+    "TASK_STATE_COMPLETED": FINAL_STATE_TASK_COMPLETED,
+    "TASK_STATE_REJECTED": FINAL_STATE_TASK_REJECTED,
+    "TASK_STATE_FAILED": FINAL_STATE_TASK_FAILED,
+    "TASK_STATE_CANCELED": FINAL_STATE_TASK_FAILED,
+}
+
+
+@dataclass(frozen=True)
+class _PolledTask:
+    """One polled remote Task rendered for the run timeline."""
+
+    state_name: str
+    context_id: str
+    events: list[dict[str, object]]
+    reports: list[dict[str, object]]
+    report: dict[str, object] | None
+
+
+def _should_watch_long_task(run: RunState, result: ClientFlowResult | None) -> bool:
+    """Whether a finished client flow really left a remote Task still executing."""
+    return (
+        result is not None
+        and result.final_state == FINAL_STATE_INCOMPLETE
+        and bool(result.task_id)
+        and run.protocol in (PROTOCOL_A2A_T, PROTOCOL_PURE)
+    )
+
+
+def _final_state_for_task_state(state_name: str) -> str | None:
+    """Map one remote A2A Task state name to a run final state."""
+    return _TASK_STATE_FINAL_STATES.get(state_name)
+
+
+def _artifact_payload(artifact: object, *, task_id: str, context_id: str) -> dict[str, object]:
+    """Render one proto or JSON artifact as a normalized Run Explorer event."""
+    if isinstance(artifact, Mapping):
+        raw = dict(artifact)
+        name = str(raw.get("name") or "")
+        artifact_id = str(raw.get("artifactId") or raw.get("artifact_id") or "")
+        parts = raw.get("parts")
+    else:
+        raw = MessageToDict(artifact)
+        name = str(raw.get("name") or "")
+        artifact_id = str(raw.get("artifactId") or "")
+        parts = raw.get("parts")
+    text_parts: list[str] = []
+    data: dict[str, object] = {}
+    if isinstance(parts, list):
+        for part in parts:
+            if not isinstance(part, Mapping):
+                continue
+            text = part.get("text")
+            if isinstance(text, str) and text:
+                text_parts.append(text)
+            payload = part.get("data")
+            if isinstance(payload, Mapping):
+                data = dict(payload)
+    return {
+        "kind": "artifact",
+        "task_id": task_id,
+        "context_id": context_id,
+        "artifact_id": artifact_id,
+        "name": name,
+        "text": " ".join(text_parts).strip() or None,
+        "data": data or None,
+    }
+
+
+def _polled_task_from_events(
+    *,
+    state_name: str,
+    task_id: str,
+    context_id: str,
+    artifacts: list[dict[str, object]],
+) -> _PolledTask:
+    """Build the timeline events and report of one polled Task."""
+    events: list[dict[str, object]] = []
+    if state_name:
+        events.append(
+            {
+                "kind": "status",
+                "task_id": task_id,
+                "context_id": context_id,
+                "state": state_name,
+                "text": f"The remote task is {state_name}.",
+            }
+        )
+    events.extend(artifacts)
+    reports = [
+        {
+            "name": event.get("name"),
+            "text": event.get("text"),
+            "data": event.get("data"),
+        }
+        for event in artifacts
+        if isinstance(event.get("name"), str) and "report" in str(event.get("name")).lower()
+    ]
+    if not reports and artifacts:
+        last = artifacts[-1]
+        reports = [{"name": last.get("name"), "text": last.get("text"), "data": last.get("data")}]
+    return _PolledTask(
+        state_name=state_name,
+        context_id=context_id,
+        events=events,
+        reports=reports,
+        report=reports[-1] if reports else None,
+    )
+
+
+def _polled_task_from_a2a(task: object, task_id: str) -> _PolledTask:
+    """Render one proto Task returned by ``Client.get_task``."""
+    context_id = str(getattr(task, "context_id", "") or "")
+    status = getattr(task, "status", None)
+    state_name = TaskState.Name(status.state) if status is not None else ""
+    artifacts = [
+        _artifact_payload(artifact, task_id=task_id, context_id=context_id)
+        for artifact in getattr(task, "artifacts", []) or []
+    ]
+    return _polled_task_from_events(
+        state_name=state_name,
+        task_id=task_id,
+        context_id=context_id,
+        artifacts=artifacts,
+    )
+
+
+def _polled_task_from_nms(task: Mapping[str, object], task_id: str) -> _PolledTask:
+    """Render one vendor Task document returned by ``NmsClient.get_task``."""
+    status = task.get("status")
+    state_name = str(status.get("state") or "") if isinstance(status, Mapping) else ""
+    context_id = str(task.get("contextId") or task.get("context_id") or "")
+    raw_artifacts = task.get("artifacts")
+    artifacts = [
+        _artifact_payload(artifact, task_id=task_id, context_id=context_id)
+        for artifact in (raw_artifacts if isinstance(raw_artifacts, list) else [])
+    ]
+    return _polled_task_from_events(
+        state_name=state_name,
+        task_id=task_id,
+        context_id=context_id,
+        artifacts=artifacts,
+    )
 
 
 class RunManager:
@@ -725,6 +882,9 @@ class RunManager:
             run.result = result
             if result.final_state == FINAL_STATE_INPUT_INVALID:
                 run.error = _input_invalid_summary(run)
+            if _should_watch_long_task(run, result):
+                result = await self._watch_long_task(run, result)
+                run.result = result
             # Decisions are normally recorded live by ``on_decision_made``; the late loop is only
             # a fallback for a runtime double that does not call the hook.
             for index, decision in enumerate(result.decisions):
@@ -772,6 +932,100 @@ class RunManager:
                     await asyncio.to_thread(exporter.finish, result=run.result, error=run.error)
                     run.langfuse = await asyncio.to_thread(exporter.snapshot, resolve_url=True)
             run.emit_finished()
+
+    async def _watch_long_task(self, run: RunState, result: ClientFlowResult) -> ClientFlowResult:
+        """Keep a run active while its remote Task executes, polling until a terminal state.
+
+        The client flow returns ``incomplete`` as soon as the request stream closes. For a real NMS
+        that is only the start of a task that may run for days, so the UI must not finish the run;
+        this watcher polls the authoritative Task and records the terminal status/report.
+        """
+        task_id = result.task_id or ""
+        interval = max(0.01, self._config.task_poll_interval_seconds)
+        run.remote_task_id = task_id
+        if self._store is not None:
+            with suppress(Exception):
+                await self._store.update_run(
+                    run.run_id,
+                    server_task_id=task_id,
+                    server_context_id=result.context_id,
+                )
+        run.emit_trace(
+            kind="task_tracking",
+            phase=PHASE_DISPATCH,
+            title="Task handed to background tracking",
+            detail={
+                "taskId": task_id,
+                "protocol": run.protocol,
+                "discovery": run.discovery,
+                "pollIntervalSeconds": interval,
+            },
+        )
+        run.broadcast(
+            {
+                "type": "task_tracking",
+                "taskId": task_id,
+                "state": "working",
+                "pollIntervalSeconds": interval,
+                "updatedAt": now_iso(),
+            }
+        )
+        last_signature: str | None = None
+        while True:
+            try:
+                polled = await self._poll_remote_task(run, task_id)
+                signature = json.dumps(
+                    {"state": polled.state_name, "events": polled.events},
+                    sort_keys=True,
+                    default=str,
+                )
+                if signature != last_signature:
+                    last_signature = signature
+                    for event in polled.events:
+                        run.record_event(event)
+                    run.broadcast(
+                        {
+                            "type": "task_tracking",
+                            "taskId": task_id,
+                            "state": polled.state_name,
+                            "pollIntervalSeconds": interval,
+                            "updatedAt": now_iso(),
+                        }
+                    )
+                final_state = _final_state_for_task_state(polled.state_name)
+                if final_state is not None:
+                    return replace(
+                        result,
+                        final_state=final_state,
+                        context_id=polled.context_id or result.context_id,
+                        reports=polled.reports,
+                        report=polled.report or result.report,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - a poll failure must not end a days-long run
+                _LOGGER.warning("task poll failed for run %s", run.run_id, exc_info=True)
+            await asyncio.sleep(interval)
+
+    async def _poll_remote_task(self, run: RunState, task_id: str) -> _PolledTask:
+        """Poll the authoritative Task of one long-running run."""
+        runtime = run.runtime
+        if runtime is None:
+            raise RuntimeError("The run has no runtime to poll.")
+        if run.protocol == PROTOCOL_A2A_T and run.discovery == DISCOVERY_NMS:
+            nms_client = getattr(runtime, "nms_client", None)
+            if nms_client is None:
+                raise RuntimeError("The run has no NMS client to poll.")
+            task = await nms_client.get_task(task_id)
+            return _polled_task_from_nms(task, task_id)
+        a2a_client = getattr(runtime, "a2a_client", None)
+        if a2a_client is None:
+            raise RuntimeError("The run has no A2A client to poll.")
+        task = await a2a_client.get_task(
+            GetTaskRequest(id=task_id, history_length=0),
+            context=ClientCallContext(timeout=self._config.http_timeout_seconds),
+        )
+        return _polled_task_from_a2a(task, task_id)
 
     async def _prepare_persistence(self, run: RunState) -> None:
         """Claim the conversation, load memory and append the user turn.

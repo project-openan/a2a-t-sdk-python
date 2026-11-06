@@ -912,6 +912,7 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_SAMPLE_OSS_TASK_DB` | 未设置 = 内存；`run_demo.py` 写入 `<sample>/runs/oss-task-status.sqlite3` | OSS Agent 的 Task 存储、下游绑定和客户端 webhook 注册的绝对 SQLite 路径。 |
 | `A2AT_SAMPLE_LONG_TASK_MODE` | `auto` | OSS 长任务跟踪（`auto` / `on` / `off`）。`auto` 在配置了 OSS Task 数据库时对真实网管 webhook 链路启用后台 pump。 |
 | `A2AT_SAMPLE_LONG_TASK_SETTLE_SECONDS` | `5` | 网管受理后 OSS 保留初始同步流的秒数。它只决定何时转后台跟踪，run 和 Task 继续更新，网管任务不会被取消。 |
+| `A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS` | `30` | Web UI 轮询仍在执行远端 Task 的间隔（秒）。run 保持活动，只有远端终态/报告到达才结束。 |
 | `A2AT_SAMPLE_CLIENT_DB` | 未设置 = 内存；`run_demo.py` 写入 `<sample>/runs/client-state.sqlite3` | 客户端会话/运行/协商存储，以及 ADK 决策智能体会话的绝对 SQLite 路径。 |
 | `A2AT_SAMPLE_CLIENT_MEMORY_TURNS` | 默认 `6`（>= 0） | 注入下一次决策提示词与 Task-T 生成的最近会话轮数。 |
 | `A2AT_SAMPLE_ADK_SESSION_RETENTION_DAYS` | 默认 `7`（>= 1） | 决策智能体会话作为审计数据保留的天数，到期由启动/定期清扫删除。 |

@@ -115,6 +115,8 @@ OSS_TASK_DB_ENV_KEY = "A2AT_SAMPLE_OSS_TASK_DB"
 LONG_TASK_MODE_ENV_KEY = "A2AT_SAMPLE_LONG_TASK_MODE"
 #: Seconds the OSS keeps the initial synchronous stream before handing the task to the pump.
 LONG_TASK_SETTLE_ENV_KEY = "A2AT_SAMPLE_LONG_TASK_SETTLE_SECONDS"
+#: UI poll interval while a long-running downstream Task is tracked.
+TASK_POLL_INTERVAL_ENV_KEY = "A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS"
 CLIENT_DB_ENV_KEY = "A2AT_SAMPLE_CLIENT_DB"
 CLIENT_MEMORY_TURNS_ENV_KEY = "A2AT_SAMPLE_CLIENT_MEMORY_TURNS"
 ADK_SESSION_RETENTION_DAYS_ENV_KEY = "A2AT_SAMPLE_ADK_SESSION_RETENTION_DAYS"
@@ -191,6 +193,8 @@ DEFAULT_LONG_TASK_MODE = LONG_TASK_MODE_AUTO
 #: A real NMS replies to ``message:send`` with a Task; after this settle window the OSS stops
 #: streaming and hands the subscription to the background pump. It is not a task lifetime.
 DEFAULT_LONG_TASK_SETTLE_SECONDS = 5.0
+#: How often the Web UI polls the remote Task while a days-long run is still executing.
+DEFAULT_TASK_POLL_INTERVAL_SECONDS = 30.0
 
 #: Live LLM budget of one call (SDK structured calls and ADK LiteLlm turns). A local live smoke
 #: observed a 58s validation and a >90s accept validation; 120s leaves headroom for slower
@@ -448,6 +452,7 @@ class SampleConfig:
             for the real NMS webhook hop when the OSS Task database is configured.
         long_task_settle_seconds: Seconds the OSS keeps the initial synchronous stream after the
             NMS accepts the task before handing it to the background pump.
+        task_poll_interval_seconds: How often the UI polls a remote Task that is still executing.
         llm_timeout_seconds: Live LLM budget of one call (SDK structured call or ADK turn), in seconds.
         llm_max_attempts: Live SDK LLM attempt limit per retryable step.
         task_db_path: Absolute SQLite path of the persisted A2A Task store; ``None`` keeps the
@@ -533,6 +538,7 @@ class SampleConfig:
     http_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS
     long_task_mode: str = DEFAULT_LONG_TASK_MODE
     long_task_settle_seconds: float = DEFAULT_LONG_TASK_SETTLE_SECONDS
+    task_poll_interval_seconds: float = DEFAULT_TASK_POLL_INTERVAL_SECONDS
     llm_timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS
     llm_max_attempts: int = DEFAULT_LLM_MAX_ATTEMPTS
     task_db_path: str | None = None
@@ -742,6 +748,9 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         long_task_mode=long_task_mode,
         long_task_settle_seconds=_positive_seconds(
             values, LONG_TASK_SETTLE_ENV_KEY, DEFAULT_LONG_TASK_SETTLE_SECONDS
+        ),
+        task_poll_interval_seconds=_positive_seconds(
+            values, TASK_POLL_INTERVAL_ENV_KEY, DEFAULT_TASK_POLL_INTERVAL_SECONDS
         ),
         llm_timeout_seconds=_positive_seconds(values, LLM_TIMEOUT_ENV_KEY, DEFAULT_LLM_TIMEOUT_SECONDS),
         llm_max_attempts=_llm_max_attempts(values),

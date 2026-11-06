@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from a2a.types import Artifact, Task, TaskState, TaskStatus
 from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
 from demo.catalog import DemoRunCatalog
 from google.adk.sessions.sqlite_session_service import SqliteSessionService
@@ -26,7 +27,12 @@ from protocol.decision_provider import CLIENT_APP_NAME, CLIENT_USER_ID
 from shared.config import SampleConfig
 from shared.metrics import render_prometheus, reset_metrics
 from shared.models import NegotiationDecision, NegotiationProposeView
-from shared.run_constants import PROTOCOL_A2A_T
+from shared.run_constants import (
+    FINAL_STATE_INCOMPLETE,
+    FINAL_STATE_TASK_COMPLETED,
+    PROTOCOL_A2A_T,
+    PROTOCOL_PURE,
+)
 
 
 class FakeRuntime:
@@ -525,3 +531,92 @@ async def test_run_publishes_langfuse_trace_state(
     assert finished["langfuse"]["url"] == "https://langfuse.example/trace-1"
     assert run.langfuse["status"] == "exported"
     assert run.snapshot()["langfuse"]["traceId"] == "trace-1"
+
+
+class _PollingA2AClient:
+    """Return a working Task first, then a completed one with a report."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def get_task(self, request: object, *, context: object = None) -> object:
+        del context
+        task_id = str(getattr(request, "id", "task-1"))
+        self.calls += 1
+        task = _task_with_state(task_id, TaskState.TASK_STATE_WORKING)
+        if self.calls >= 2:
+            task = _task_with_state(task_id, TaskState.TASK_STATE_COMPLETED)
+            artifact = Artifact(artifact_id="artifact-1", name="energy saving report")
+            artifact.parts.add(text="The plan is applied.")
+            task.artifacts.append(artifact)
+        return task
+
+
+def _task_with_state(task_id: str, state: TaskState) -> Task:
+    """Build one remote Task with a status."""
+    return Task(id=task_id, context_id="ctx-1", status=TaskStatus(state=state))
+
+
+class _LongRunningRuntime(FakeRuntime):
+    """Runtime double that leaves a remote Task executing after the client flow returns."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.a2a_client = _PollingA2AClient()
+        self.nms_client = None
+
+    async def run(self, **kwargs: object) -> ClientFlowResult:
+        del kwargs
+        self.entered.set()
+        return ClientFlowResult(
+            final_state=FINAL_STATE_INCOMPLETE,
+            task_id="task-1",
+            context_id="ctx-1",
+        )
+
+
+async def test_a_long_running_run_stays_active_until_the_remote_task_finishes(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """A remote Task that outlives the request stream must not end the engineer run."""
+    store = SqliteClientStore(tmp_path / "client.sqlite3")
+
+    async def factory(
+        resolved_config: SampleConfig,
+        scenario: str,
+        mode: str,
+        transport: str,
+        discovery: str,
+        *,
+        protocol: str = PROTOCOL_A2A_T,
+        run_id: str = "",
+    ) -> _LongRunningRuntime:
+        del resolved_config, scenario, mode, transport, discovery, protocol, run_id
+        return _LongRunningRuntime()
+
+    manager = RunManager(
+        config=replace(offline_config, task_poll_interval_seconds=0.01),
+        runtime_factory=factory,
+        catalog=DemoRunCatalog(),
+        runs_dir=tmp_path / "runs",
+        store=store,
+    )
+    run = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        protocol=PROTOCOL_PURE,
+    )
+    await _finish(manager, run.run_id)
+
+    assert run.status == "finished"
+    assert run.result is not None
+    assert run.result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert run.result.report is not None
+    assert run.remote_task_id == "task-1"
+    stored = await store.get_run(run.run_id)
+    assert stored is not None
+    assert stored.status == "finished"
+    assert stored.final_state == FINAL_STATE_TASK_COMPLETED
+    assert stored.server_task_id == "task-1"
