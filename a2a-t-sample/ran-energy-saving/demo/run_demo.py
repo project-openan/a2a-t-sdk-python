@@ -951,6 +951,7 @@ async def _run_client_foreground(
         mode=mode,
         transport=transport,
         runs_dir=Path(config.runs_dir),
+        source={"kind": "cli", "channel": "cli"},
     )
 
     def event_sink(event: dict[str, object]) -> None:

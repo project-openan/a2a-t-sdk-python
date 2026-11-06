@@ -19,25 +19,53 @@ def _readonly_connection(path: str | Path) -> sqlite3.Connection | None:
     return readonly_connection(path)
 
 
-def read_client_run_summaries(path: str | Path, limit: int = 50) -> builtins.list[dict[str, object]]:
-    """Return UI rows for the newest client runs (never creates the database)."""
+def read_client_run_summaries(
+    path: str | Path,
+    limit: int = 50,
+    *,
+    offset: int = 0,
+    protocol: str | None = None,
+    status: str | None = None,
+    source_kind: str | None = None,
+    scenario: str | None = None,
+    query: str | None = None,
+) -> builtins.list[dict[str, object]]:
+    """Return UI rows for the newest client runs (never creates the database).
+
+    The optional filters support the internal run console. ``query`` matches the request, run id
+    and conversation id as a case-insensitive substring; every other filter is an exact match.
+    """
     connection = _readonly_connection(path)
     if connection is None:
         return []
     resolved_limit = max(1, min(limit, 500))
+    resolved_offset = max(0, offset)
+    clauses, params = _run_filters(
+        protocol=protocol,
+        status=status,
+        source_kind=source_kind,
+        scenario=scenario,
+        query=query,
+    )
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     try:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
-            """
+            f"""
             SELECT r.run_id, r.conversation_id, r.scenario, r.mode, r.status, r.final_state,
-                   r.user_request, r.error, r.created_at, r.updated_at, r.finished_at,
+                   r.protocol, r.user_request, r.error, r.source_kind, r.source_json,
+                   r.created_at, r.updated_at, r.finished_at,
+                   m.duration_ms, m.total_tokens, m.prompt_tokens, m.completion_tokens,
+                   m.llm_calls, m.token_available,
                    (SELECT COUNT(*) FROM turns t WHERE t.conversation_id = r.conversation_id)
                        AS turn_count
             FROM runs r
+            LEFT JOIN run_metrics m ON m.run_id = r.run_id
+            {where}
             ORDER BY r.created_at DESC, r.run_id DESC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
-            (resolved_limit,),
+            (*params, resolved_limit, resolved_offset),
         ).fetchall()
         return [
             {
@@ -45,14 +73,23 @@ def read_client_run_summaries(path: str | Path, limit: int = 50) -> builtins.lis
                 "conversationId": row["conversation_id"],
                 "scenario": str(row["scenario"]),
                 "mode": str(row["mode"]),
+                "protocol": str(row["protocol"]),
                 "status": str(row["status"]),
                 "finalState": row["final_state"],
                 "userRequest": _truncate(str(row["user_request"])),
                 "error": row["error"],
+                "sourceKind": str(row["source_kind"] or ""),
+                "sourceChannel": _source_channel(row["source_json"]),
                 "createdAt": str(row["created_at"]),
                 "updatedAt": str(row["updated_at"]),
                 "finishedAt": row["finished_at"],
                 "turnCount": int(row["turn_count"] or 0),
+                "durationMs": row["duration_ms"],
+                "totalTokens": row["total_tokens"],
+                "promptTokens": row["prompt_tokens"],
+                "completionTokens": row["completion_tokens"],
+                "llmCalls": row["llm_calls"],
+                "tokenAvailable": bool(row["token_available"] or 0),
             }
             for row in rows
         ]
@@ -61,6 +98,80 @@ def read_client_run_summaries(path: str | Path, limit: int = 50) -> builtins.lis
         return []
     finally:
         connection.close()
+
+
+def count_client_runs(
+    path: str | Path,
+    *,
+    protocol: str | None = None,
+    status: str | None = None,
+    source_kind: str | None = None,
+    scenario: str | None = None,
+    query: str | None = None,
+) -> int:
+    """Return how many runs match the console filters (never creates the database)."""
+    connection = _readonly_connection(path)
+    if connection is None:
+        return 0
+    clauses, params = _run_filters(
+        protocol=protocol,
+        status=status,
+        source_kind=source_kind,
+        scenario=scenario,
+        query=query,
+    )
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    try:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            f"SELECT COUNT(*) AS total FROM runs r{where}",
+            tuple(params),
+        ).fetchone()
+        return int(row["total"] or 0) if row is not None else 0
+    except sqlite3.Error as exc:
+        _LOGGER.warning("client run count failed: %s", exc)
+        return 0
+    finally:
+        connection.close()
+
+
+def _run_filters(
+    *,
+    protocol: str | None,
+    status: str | None,
+    source_kind: str | None,
+    scenario: str | None,
+    query: str | None,
+) -> tuple[builtins.list[str], builtins.list[object]]:
+    """Build the WHERE clauses and parameters shared by the run list and its count."""
+    clauses: builtins.list[str] = []
+    params: builtins.list[object] = []
+    if protocol:
+        clauses.append("r.protocol=?")
+        params.append(protocol)
+    if status:
+        clauses.append("r.status=?")
+        params.append(status)
+    if source_kind:
+        clauses.append("r.source_kind=?")
+        params.append(source_kind)
+    if scenario:
+        clauses.append("r.scenario=?")
+        params.append(scenario)
+    if query:
+        needle = f"%{query}%"
+        clauses.append(
+            "(r.user_request LIKE ? OR r.run_id LIKE ? OR r.conversation_id LIKE ?)"
+        )
+        params.extend((needle, needle, needle))
+    return clauses, params
+
+
+def _source_channel(raw: object) -> str:
+    """Return the channel label of one persisted source document."""
+    source = _load_json(raw) if isinstance(raw, str) else {}
+    channel = source.get("channel")
+    return str(channel) if isinstance(channel, str) else ""
 
 
 def read_client_run_detail(path: str | Path, run_id: str) -> dict[str, object] | None:
@@ -100,6 +211,8 @@ def read_client_run_detail(path: str | Path, run_id: str) -> dict[str, object] |
             "serverTaskId": run["server_task_id"],
             "error": run["error"],
             "idempotencyKey": str(run["idempotency_key"]),
+            "sourceKind": str(run["source_kind"] or ""),
+            "source": _load_json(run["source_json"]),
             "transcriptJson": run["transcript_json"],
             "transcriptMarkdown": run["transcript_markdown"],
             "traceJson": run["trace_json"],

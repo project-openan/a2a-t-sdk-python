@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Run 控制台 · 内部</title>
+  <link rel="stylesheet" href="/runs/app.css">
+  <script>
+    // A shared ?token=… link is stored in a same-origin cookie and removed from the address bar,
+    // so the console's fetch calls authenticate without exposing the token in the URL.
+    (() => {
+      const url = new URL(window.location.href);
+      const token = url.searchParams.get("token");
+      if (!token) return;
+      const secure = url.protocol === "https:" ? "; Secure" : "";
+      document.cookie = `a2at_ui_token=${encodeURIComponent(token)}; Path=/; SameSite=Strict${secure}`;
+      url.searchParams.delete("token");
+      window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+    })();
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>Run 控制台</h1>
+      <span class="subtitle">内部诊断 · 运行列表 / 详情 / 请求来源</span>
+    </div>
+    <div class="topbar-actions">
+      <span id="db-state" class="pill">数据库：读取中…</span>
+      <label class="toggle"><input id="auto-refresh" type="checkbox" checked> 自动刷新</label>
+      <button id="refresh" class="button" type="button">刷新</button>
+      <a class="button link" href="/" target="_blank" rel="noopener">演示页</a>
+      <a class="button link" href="/tester" target="_blank" rel="noopener">测试页</a>
+    </div>
+  </header>
+
+  <div id="notice" class="notice" hidden></div>
+
+  <section class="filters" aria-label="筛选">
+    <label>协议
+      <select id="filter-protocol"><option value="">全部</option></select>
+    </label>
+    <label>状态
+      <select id="filter-status"><option value="">全部</option></select>
+    </label>
+    <label>来源
+      <select id="filter-source"><option value="">全部</option></select>
+    </label>
+    <label>场景
+      <select id="filter-scenario"><option value="">全部</option></select>
+    </label>
+    <label class="grow">搜索
+      <input id="filter-query" type="search" placeholder="请求内容 / run id / conversation id">
+    </label>
+    <label>数量
+      <select id="filter-limit">
+        <option value="50">50</option>
+        <option value="100" selected>100</option>
+        <option value="200">200</option>
+        <option value="500">500</option>
+      </select>
+    </label>
+    <span id="run-count" class="muted">—</span>
+  </section>
+
+  <main class="layout">
+    <section class="list-pane" aria-label="运行列表">
+      <div class="table-wrap">
+        <table class="runs">
+          <thead>
+            <tr>
+              <th>创建时间</th>
+              <th>状态</th>
+              <th>协议</th>
+              <th>场景</th>
+              <th>来源</th>
+              <th>耗时</th>
+              <th>Token</th>
+              <th>请求摘要</th>
+            </tr>
+          </thead>
+          <tbody id="runs-body">
+            <tr><td colspan="8" class="empty">读取中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="detail-pane" aria-label="运行详情">
+      <div id="detail-empty" class="empty-detail">
+        <h2>选择一条运行</h2>
+        <p>左侧列表来自客户端 SQLite；点击一行查看指标、时间线、协商记录、报文和请求来源。</p>
+      </div>
+      <article id="detail" hidden>
+        <header class="detail-head">
+          <div>
+            <div class="detail-title">
+              <code id="detail-run-id"></code>
+              <button id="copy-run-id" class="button small" type="button">复制</button>
+            </div>
+            <div id="detail-subtitle" class="muted"></div>
+          </div>
+          <div id="detail-links" class="detail-links"></div>
+        </header>
+        <nav id="tabs" class="tabs" aria-label="详情分区">
+          <button data-tab="overview" class="tab active" type="button">概览</button>
+          <button data-tab="metrics" class="tab" type="button">指标</button>
+          <button data-tab="timeline" class="tab" type="button">时间线</button>
+          <button data-tab="negotiation" class="tab" type="button">协商</button>
+          <button data-tab="wire" class="tab" type="button">报文</button>
+          <button data-tab="raw" class="tab" type="button">原始 JSON</button>
+        </nav>
+        <div id="tab-overview" class="tab-panel"></div>
+        <div id="tab-metrics" class="tab-panel" hidden></div>
+        <div id="tab-timeline" class="tab-panel" hidden></div>
+        <div id="tab-negotiation" class="tab-panel" hidden></div>
+        <div id="tab-wire" class="tab-panel" hidden></div>
+        <div id="tab-raw" class="tab-panel" hidden></div>
+      </article>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>数据源：客户端 SQLite + <code>runs/</code> 下的 transcript / wire / server-trace。</span>
+    <span id="meta-path" class="muted"></span>
+  </footer>
+
+  <script type="module" src="/runs/main.js"></script>
+</body>
+</html>

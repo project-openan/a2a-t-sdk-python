@@ -195,6 +195,28 @@ them; the exported workbook has **Testing results**, **Metrics** and **Summary**
 offline LLM spans are shown as unavailable instead of reporting invented token counts. Transport and
 discovery are still chosen by the backend per protocol, not by the sheet.
 
+### Internal run console
+
+`/runs` is a diagnostic page for the test team (the launcher prints its address), separate from the
+presentation page. It reads persisted client runs from SQLite instead of presentation state, so a
+run can be inspected after a page reload or a UI restart:
+
+- the list filters by protocol / status / source / scenario and searches the request, run id and
+  conversation id, showing duration, tokens and creation time;
+- the detail has Overview, Metrics, Timeline, Negotiation, Wire and Raw JSON tabs. Metrics include
+  token usage (with cached tokens and hit rate), the latency split and accuracy; the timeline comes
+  from the persisted transcript; negotiation shows protocol events, client decisions and turns; wire
+  reads `wire.jsonl` / `wire-oss.jsonl`;
+- **request origin** is recorded when the run starts: source kind (`presentation` / `explorer` /
+  `tester` / `gateway` / `api` / `cli`), channel, client address, `X-Forwarded-For`, Host, Origin,
+  Referer, User-Agent, Accept-Language, request id, entry path and receive time. Tester batches also
+  record the batch/case, and the gateway records Task / Context. A `token` query parameter in the
+  referer is removed before storage.
+- the list auto-refreshes every 5 seconds (optional), and a selected run is addressable through
+  `#run=<id>`.
+
+The page is Chinese-only, like the tester console, because it is an internal tool.
+
 ### Operator intent layer
 
 The sample no longer sends the operator's text straight to A2A or A2A-T. The default

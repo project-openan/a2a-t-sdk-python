@@ -708,6 +708,29 @@ Engineer UI ──A2A (direct + SSE)──> OSS Agent ──A2A (nms + webhook)�
 `runs/benchmarks/<timestamp>/`。`summary.csv` 含每个协议 × 场景的成功率、平均 token（含缓存 token
 和缓存命中率）、模型/总耗时、P95 和审批等待。
 
+### 4.8 内部 Run 控制台
+
+`demo/web/runs_console/` 在同一个 UI 进程中提供 `/runs` 和 `/api/run-console/*`，它只读客户端
+SQLite 和运行目录：
+
+- `GET /api/run-console/runs` 支持 `limit` / `offset` / `protocol` / `status` / `source` /
+  `scenario` / `query`，返回与 `run_metrics` 连接后的行（耗时、Token 总量、LLM 调用数）。
+  `query` 匹配请求内容、run id 和 conversation id。
+- `GET /api/run-console/runs/{id}` 组合持久化 run、`metric_json`、transcript（仅当记录的路径确实
+  位于运行目录内）、`wire.jsonl` / `wire-oss.jsonl`、服务端 trace JSONL，以及仍在内存中的 live
+  快照。
+- 控制台不会修改任何持久化文档，只读。
+
+**请求来源。** `RunManager.start` 接受经 `shared/run_source.py` 规范化的 `source` 文档。Web API
+从 `body.source`（页面声明自己的类型）和 HTTP 元数据填充：客户端地址、`X-Real-IP`、
+`X-Forwarded-For`、Host、Origin、Referer（先移除 `token`/`auth` 查询键）、User-Agent、
+Accept-Language、请求 ID、入口路径和接收时间。测试页传入批次/用例，A2A 网关传入 Task/Context，
+CLI 记录 `kind=cli`。
+
+来源写入 `runs` 表的 `source_kind` 和 `source_json`（schema 迁移 5，旧行为空），同时复制到
+transcript 的 `source`，由 live 快照和持久化详情对外提供。允许的类型为 `presentation`、
+`explorer`、`tester`、`gateway`、`api`、`cli`；未知声明回退为 `api`。
+
 ## 5. 协议参考
 
 ### 5.1 消息结构
@@ -1051,7 +1074,7 @@ python run_demo.py --scenario target --mode auto --model-mode live
 | [`shared/webhook_receiver.py`](shared/webhook_receiver.py) | 内置 webhook 推送接收器，校验 token。 |
 | [`shared/sse_event_consumer.py`](shared/sse_event_consumer.py) | 将 A2A 流事件归一化为统一事件结构。 |
 | [`demo/registry/`](demo/registry) | Mock 注册中心（AgentCard 注册/查询，端口 5001）。 |
-| [`demo/web/`](demo/web) | Starlette Web UI（`app.py`，由 `serve.py` 作为受管子进程启动）、演示前端（`presentation/`，默认）与 Run Explorer（`static/`）。演示页消费同一 SSE 流；Web UI 负责审批 1（`POST /api/runs/{id}/intent`）并把审批 2 转发给 RAN Agent。 |
+| [`demo/web/`](demo/web) | Starlette Web UI（`app.py`，由 `serve.py` 作为受管子进程启动）、演示前端（`presentation/`，默认）、Run Explorer（`static/`）、Excel 测试控制台（`tester/`）和内部 Run 控制台（`runs_console/`，`/runs`）。演示页消费同一 SSE 流；Web UI 负责审批 1（`POST /api/runs/{id}/intent`）并把审批 2 转发给 RAN Agent。 |
 | [`tests/`](tests) | 单元、集成、传输、Web UI 与八场景离线验收测试；`tests/js/` 为 pytest 驱动的 Node harness。 |
 
 ### B.2 替换清单

@@ -89,6 +89,7 @@ def build_run_metrics(
     spans: Iterable[Mapping[str, object]],
     expected: RunSpec | None,
     error: str | None = None,
+    source: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Build the metrics record of one run.
 
@@ -108,6 +109,7 @@ def build_run_metrics(
         spans: Every trace span ingested for the run (client and server).
         expected: Scenario ground truth, when the catalog provides it.
         error: Failure message of a failed run.
+        source: Request origin recorded when the run started.
 
     Returns:
         A JSON-serializable metrics document with ``tokens``, ``latency``, ``negotiation`` and
@@ -148,6 +150,10 @@ def build_run_metrics(
         "finishedAt": finished_at,
         "durationMs": latency["totalMs"],
         "error": error,
+        "source": dict(source) if isinstance(source, Mapping) else {},
+        "sourceKind": (
+            str(source.get("kind") or "") if isinstance(source, Mapping) else ""
+        ),
         "tokens": tokens,
         "latency": latency,
         "negotiation": negotiation,

@@ -204,6 +204,14 @@ class ClientGatewayExecutor(AgentExecutor):
                 conversation_id=conversation_id,
                 external_conversation_id=context.context_id or None,
                 user_id="a2a-caller",
+                source={
+                    "kind": "gateway",
+                    "channel": "a2a-gateway",
+                    "taskId": task_id,
+                    "contextId": context_id,
+                    "externalConversationId": context.context_id,
+                    "messageId": getattr(message, "message_id", None),
+                },
             )
         except RunConflictError as exc:
             _LOGGER.warning("gateway run rejected: %s", exc)

@@ -168,6 +168,24 @@ Task-T metadata）。a2a-sdk 的 HTTP 传输同样会被捕获，因此本地 A2
 **指标** 和 **汇总** 三个 sheet。离线脚本 LLM 的 Token 会明确标记为不可用，而不是编造数字。
 传输与发现方式仍由后端按协议决定，不需要在表格里填写。
 
+### 内部 Run 控制台
+
+`/runs` 是测试团队专用的诊断页面（启动器会打印地址），与演示页分离。它读取客户端 SQLite 中的
+持久化运行，而不是展示页的内存状态，因此重启后仍可回看：
+
+- 列表支持协议 / 状态 / 来源 / 场景筛选和请求、run id、conversation id 搜索，并显示耗时、
+  Token 和创建时间；
+- 详情分概览、指标、时间线、协商、报文、原始 JSON：指标含 Token（含缓存命中与命中率）、耗时拆分
+  和准确率；时间线来自持久化 transcript；协商展示协议事件、客户端决策和会话轮次；报文读取
+  `wire.jsonl` / `wire-oss.jsonl`；
+- **请求来源**在 run 创建时记录：来源类型（`presentation` / `explorer` / `tester` / `gateway` /
+  `api` / `cli`）、入口通道、客户端地址、`X-Forwarded-For`、Host、Origin、Referer、User-Agent、
+  Accept-Language、请求 ID、入口路径和接收时间；测试页批次还会记录批次/用例，网关会记录 Task /
+  Context。Referer 中的 `token` 查询参数会先被移除，不会落库。
+- 列表自动刷新（5 秒，可关闭）；选中运行后通过 URL hash `#run=<id>` 可直接分享定位。
+
+页面本身是中文，和测试页一样属于内部工具。
+
 ### 操作员意图处理层
 
 sample 不再把操作员原文直接送进 A2A / A2A-T。默认的 `processed` 模式先插入真实 OSS 会做的业务处理：

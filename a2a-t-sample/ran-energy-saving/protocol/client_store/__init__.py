@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from protocol.client_store.reader import (
+    count_client_runs,
     read_client_run_detail,
     read_client_run_summaries,
     read_conversation_detail,
@@ -57,6 +58,7 @@ __all__ = [
     "SqliteClientStore",
     "TaskSnapshotRecord",
     "TurnRecord",
+    "count_client_runs",
     "now_iso",
     "read_client_run_detail",
     "read_client_run_summaries",

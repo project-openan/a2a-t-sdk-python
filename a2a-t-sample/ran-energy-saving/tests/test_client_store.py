@@ -250,7 +250,7 @@ def test_v2_migration_dedupes_active_runs(tmp_path: Path) -> None:
     # Constructing the store applies migration 2.
     SqliteClientStore(path)
     with connect(path) as connection:
-        assert schema_version(connection) == 4
+        assert schema_version(connection) == 5
         statuses = {
             str(run_id): str(status)
             for run_id, status in connection.execute(
@@ -261,9 +261,16 @@ def test_v2_migration_dedupes_active_runs(tmp_path: Path) -> None:
             str(protocol)
             for (protocol,) in connection.execute("SELECT protocol FROM runs").fetchall()
         }
+        source_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(runs)")
+        }
+        sources = connection.execute("SELECT source_kind, source_json FROM runs").fetchall()
     assert statuses == {"older": "interrupted", "newer": "running"}
     # Rows written before the switch existed were A2A-T; the migration keeps that history.
     assert protocols == {"a2a-t"}
+    # The request-origin columns are added to an existing database; old rows read as unknown.
+    assert {"source_kind", "source_json"} <= source_columns
+    assert set(sources) == {("", "{}")}
 
     with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
         with connect(path) as connection:
@@ -401,3 +408,53 @@ async def test_read_only_helpers_and_missing_database(tmp_path: Path) -> None:
     assert isinstance(conversation_runs, list) and isinstance(conversation_runs[0], dict)
     assert conversation_turns[0]["content"] == "hello"
     assert conversation_runs[0]["runId"] == "run-1"
+
+
+async def test_run_source_round_trips_and_filters_the_console_list(tmp_path: Path) -> None:
+    """The request origin is persisted and queryable; old runs keep an empty source."""
+    path = tmp_path / "client.sqlite3"
+    store = SqliteClientStore(path)
+    await store.ensure_conversation(conversation_id="conv-1")
+    await store.create_run(
+        ClientRunRecord(
+            run_id="run-source",
+            conversation_id="conv-1",
+            scenario="night",
+            mode="auto",
+            transport="sse",
+            discovery="registry",
+            user_request="save energy",
+            source_kind="tester",
+            source={"kind": "tester", "batchId": "batch-1", "caseId": "TC-001"},
+        )
+    )
+    await store.ensure_conversation(conversation_id="conv-legacy")
+    await store.create_run(
+        ClientRunRecord(
+            run_id="run-legacy",
+            conversation_id="conv-legacy",
+            scenario="night",
+            mode="auto",
+            transport="sse",
+            discovery="registry",
+            user_request="legacy",
+        )
+    )
+
+    created = await store.get_run("run-source")
+    assert created is not None
+    assert created.source_kind == "tester"
+    assert created.source["caseId"] == "TC-001"
+
+    rows = read_client_run_summaries(path, source_kind="tester")
+    assert [row["runId"] for row in rows] == ["run-source"]
+    assert rows[0]["sourceKind"] == "tester"
+
+    detail = read_client_run_detail(path, "run-source")
+    assert detail is not None
+    assert detail["source"]["caseId"] == "TC-001"
+
+    legacy = read_client_run_detail(path, "run-legacy")
+    assert legacy is not None
+    assert legacy["sourceKind"] == ""
+    assert legacy["source"] == {}

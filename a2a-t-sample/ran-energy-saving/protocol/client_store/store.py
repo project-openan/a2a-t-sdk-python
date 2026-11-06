@@ -133,6 +133,8 @@ CREATE TABLE IF NOT EXISTS runs (
   error             TEXT,
   owner_pid         INTEGER NOT NULL DEFAULT 0,
   idempotency_key   TEXT NOT NULL DEFAULT '',
+  source_kind       TEXT NOT NULL DEFAULT '',
+  source_json       TEXT NOT NULL DEFAULT '{}',
   transcript_json   TEXT,
   transcript_markdown TEXT,
   trace_json        TEXT,
@@ -227,12 +229,30 @@ def _add_run_protocol(connection: sqlite3.Connection) -> None:
         )
 
 
+def _add_run_source(connection: sqlite3.Connection) -> None:
+    """Record where a run was requested from (page, caller, remote address).
+
+    Rows written before this migration keep the empty kind and an empty JSON document, which the
+    console shows as "unknown".
+    """
+    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)")}
+    if "source_kind" not in columns:
+        connection.execute(
+            "ALTER TABLE runs ADD COLUMN source_kind TEXT NOT NULL DEFAULT ''"
+        )
+    if "source_json" not in columns:
+        connection.execute(
+            "ALTER TABLE runs ADD COLUMN source_json TEXT NOT NULL DEFAULT '{}'"
+        )
+
+
 #: Ordered schema migrations; index ``i`` upgrades version ``i`` to ``i + 1``.
 _MIGRATIONS: Final[tuple[SchemaMigration, ...]] = (
     _create_schema,
     _enforce_one_active_run,
     _create_run_metrics,
     _add_run_protocol,
+    _add_run_source,
 )
 
 
@@ -378,6 +398,8 @@ class ClientRunRecord:
     updated_at: str = field(default_factory=now_iso)
     finished_at: str | None = None
     protocol: str = PROTOCOL_A2A_T
+    source_kind: str = ""
+    source: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -903,9 +925,9 @@ class SqliteClientStore:
                 INSERT INTO runs
                     (run_id, conversation_id, turn_id, scenario, mode, transport, discovery,
                      protocol, user_request, status, final_state, server_context_id, server_task_id,
-                     error, owner_pid, idempotency_key, transcript_json, transcript_markdown,
-                     trace_json, created_at, updated_at, finished_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     error, owner_pid, idempotency_key, source_kind, source_json, transcript_json,
+                     transcript_markdown, trace_json, created_at, updated_at, finished_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.run_id,
@@ -924,6 +946,8 @@ class SqliteClientStore:
                     record.error,
                     record.owner_pid,
                     record.idempotency_key,
+                    record.source_kind,
+                    _dump_json(record.source),
                     record.transcript_json,
                     record.transcript_markdown,
                     record.trace_json,
@@ -966,6 +990,8 @@ class SqliteClientStore:
             error=str(row["error"]) if row["error"] else None,
             owner_pid=int(row["owner_pid"] or 0),
             idempotency_key=str(row["idempotency_key"]),
+            source_kind=str(row["source_kind"] or ""),
+            source=_load_json(row["source_json"]),
             transcript_json=str(row["transcript_json"]) if row["transcript_json"] else None,
             transcript_markdown=(
                 str(row["transcript_markdown"]) if row["transcript_markdown"] else None

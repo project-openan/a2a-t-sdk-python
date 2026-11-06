@@ -435,6 +435,14 @@ class TestBatchManager:
                 conversation_id=f"tester-{batch.batch_id}-{index}",
                 user_id="tester",
                 idempotency_key=f"tester-{batch.batch_id}-{index}",
+                source={
+                    "kind": "tester",
+                    "channel": "tester-console",
+                    "batchId": batch.batch_id,
+                    "batchName": batch.source_name,
+                    "caseId": case.case_id,
+                    "caseName": case.name,
+                },
             )
             result["runId"] = run.run_id
             result["links"] = {

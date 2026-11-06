@@ -163,6 +163,7 @@ class NegotiationTranscript:
         error: Failure message of a run that raised.
         runs_dir: Directory the transcript is written to.
         intent: Business intent document produced before the protocol mapping, when observed.
+        source: Request origin (page, caller, remote address) recorded when the run started.
     """
 
     scenario: str
@@ -181,6 +182,7 @@ class NegotiationTranscript:
     error: str | None = None
     runs_dir: Path = DEFAULT_RUNS_DIR
     intent: dict[str, object] | None = None
+    source: dict[str, object] = field(default_factory=dict)
     _seq: int = field(default=0, repr=False)
 
     def _next_seq(self, seq: int | None) -> int:
@@ -423,6 +425,7 @@ class NegotiationTranscript:
             "report": self.report,
             "error": self.error,
             "intent": self.intent,
+            "source": dict(self.source),
             "events": list(self.events),
             "decisions": list(self.decisions),
             "timeline": self.timeline(),
@@ -442,6 +445,7 @@ class NegotiationTranscript:
             f"- Mode: `{self.mode}`",
             f"- Transport: `{self.transport}`",
             f"- Model mode: `{self.model_mode}`",
+            f"- Source: `{self.source.get('kind') or 'unknown'}`",
             f"- Started: `{self.started_at}`",
             f"- Finished: `{self.finished_at or 'n/a'}`",
             f"- Final state: `{self.final_state or 'n/a'}`",

@@ -31,6 +31,7 @@ from shared.metrics import (
 )
 from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.run_constants import PROTOCOL_A2A_T
+from shared.run_source import normalize_run_source
 from shared.trace import (
     PHASE_DISPATCH,
 )
@@ -205,6 +206,7 @@ class RunManager:
         user_id: str = "web-user",
         idempotency_key: str | None = None,
         intent_mode: str | None = None,
+        source: Mapping[str, object] | None = None,
     ) -> RunState:
         """Start one background run and broadcast ``run_started`` before the task is scheduled.
 
@@ -222,11 +224,14 @@ class RunManager:
             user_id: caller identity.
             idempotency_key: optional key that deduplicates a repeated request.
             intent_mode: per-run override of the process intent mode (``processed`` / ``raw``).
+            source: optional request-origin document (page/caller/remote address); normalized
+                through :func:`shared.run_source.normalize_run_source`.
 
         Raises:
             RunConflictError: when the same conversation already has an active run.
             ValueError: when ``intent_mode`` is unsupported.
         """
+        resolved_source = normalize_run_source(source)
         resolved_intent_mode = (intent_mode or self._config.intent_mode).strip()
         if resolved_intent_mode not in SUPPORTED_INTENT_MODES:
             raise ValueError(
@@ -286,6 +291,7 @@ class RunManager:
             store=self._store,
             intent_mode=resolved_intent_mode,
             raw_request=raw_request,
+            source=dict(resolved_source),
         )
         run.transcript = NegotiationTranscript(
             scenario=scenario,
@@ -294,6 +300,7 @@ class RunManager:
             mode=mode,
             transport=transport,
             runs_dir=self._runs_dir or DEFAULT_RUNS_DIR,
+            source=dict(resolved_source),
         )
         run.langfuse_exporter = create_langfuse_exporter(
             self._config,
@@ -489,6 +496,7 @@ class RunManager:
             spans=run.spans.values(),
             expected=expected,
             error=run.error,
+            source=run.source,
         )
 
     def _reuse_run(self, record: ClientRunRecord) -> RunState:
@@ -505,6 +513,7 @@ class RunManager:
             conversation_id=record.conversation_id,
             idempotency_key=record.idempotency_key,
             store=self._store,
+            source=dict(record.source),
         )
         if record.status != STATUS_RUNNING:
             run.finished_at = time.monotonic()
@@ -770,6 +779,8 @@ class RunManager:
                 status=RUN_STATUS_RUNNING,
                 owner_pid=os.getpid(),
                 idempotency_key=run.idempotency_key,
+                source_kind=str(run.source.get("kind") or ""),
+                source=dict(run.source),
             )
         )
         user_turn = await self._store.append_turn(

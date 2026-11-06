@@ -686,6 +686,7 @@ async function startRun() {
         // backend use the richer catalog prompt that the live model extracts Task-T from.
         userRequest: request && request !== defaultRequest ? request : undefined,
         protocol: ui.protocol,
+        source: "presentation",
       }),
     });
     const payload = await response.json().catch(() => ({}));

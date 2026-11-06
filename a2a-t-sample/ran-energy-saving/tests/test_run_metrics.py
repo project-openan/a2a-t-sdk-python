@@ -325,3 +325,27 @@ def test_cached_tokens_stay_none_when_no_call_reports_them() -> None:
     assert tokens["cached"] is None
     assert tokens["cachedCalls"] == 0
     assert tokens["cacheHitRate"] is None
+
+
+def test_source_is_carried_into_the_metrics_document() -> None:
+    """The request origin travels with the JSONL/metrics record, not only the run table."""
+    metrics = build_run_metrics(
+        run_id="run-1",
+        conversation_id=None,
+        protocol=PROTOCOL_A2A_T,
+        scenario="information",
+        mode="auto",
+        transport="sse",
+        language=LANGUAGE_ZH,
+        model_mode="live",
+        model_label="test",
+        status="finished",
+        transcript=_transcript(),
+        result=ClientFlowResult(final_state=FINAL_STATE_TASK_COMPLETED),
+        spans=[],
+        expected=None,
+        source={"kind": "tester", "caseId": "TC-001"},
+    )
+
+    assert metrics["sourceKind"] == "tester"
+    assert metrics["source"] == {"kind": "tester", "caseId": "TC-001"}

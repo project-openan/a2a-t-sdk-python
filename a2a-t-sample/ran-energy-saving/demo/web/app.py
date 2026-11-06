@@ -35,6 +35,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
@@ -89,6 +90,7 @@ from shared.run_constants import (
     SUPPORTED_BRANDS,
     SUPPORTED_PROTOCOLS,
 )
+from shared.run_source import normalize_run_source
 from shared.trace import (
     PHASE_TASK_MODIFY,
     PHASES,
@@ -113,7 +115,9 @@ from demo.scenario import (
     PURE_PROTOCOL_SCENARIOS,
     resolve_presentation_request,
 )
+from demo.web.runs_console import build_run_console_routes
 from demo.web.tester import build_tester_routes
+from demo.web.wire_records import read_wire_records
 
 _LOGGER = logging.getLogger("ran_energy_saving.web")
 
@@ -373,6 +377,14 @@ def create_app(
         model_label=config.model_label,
         metrics_grace_seconds=metrics_grace_seconds,
     )
+    run_console_routes = build_run_console_routes(
+        runs=manager,
+        client_db_path=Path(config.client_db_path) if config.client_db_path else None,
+        runs_dir=resolved_runs_dir,
+        protocols=advertised_protocols,
+        scenarios_by_protocol=scenarios_by_protocol,
+        language=config.language,
+    )
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncGenerator[None, None]:
@@ -501,7 +513,7 @@ def create_app(
         """Return the redacted NMS exchanges of one run, as the wire inspector shows them."""
         run_id = request.path_params["run_id"]
         root = runs_dir or Path(config.runs_dir)
-        records = await asyncio.to_thread(_read_wire_records, root, run_id)
+        records = await asyncio.to_thread(read_wire_records, root, run_id)
         return JSONResponse({"runId": run_id, "records": records, "enabled": bool(records)})
 
     async def client_run_detail(request: Request) -> Response:
@@ -520,7 +532,7 @@ def create_app(
         # The wire inspector shows what the client really sent. These records are written redacted
         # by the NMS client, so credentials arrive as "***" and need no second scrub.
         wire = await asyncio.to_thread(
-            _read_wire_records, runs_dir or Path(config.runs_dir), request.path_params["run_id"]
+            read_wire_records, runs_dir or Path(config.runs_dir), request.path_params["run_id"]
         )
         if wire:
             detail["wire"] = wire
@@ -819,6 +831,7 @@ def create_app(
                 user_id=optional_strings["userId"] or "web-user",
                 idempotency_key=optional_strings["idempotencyKey"],
                 intent_mode=str(intent_mode),
+                source=_request_source(request, body.get("source")),
             )
         except RunConflictError as exc:
             return JSONResponse({"error": str(exc), "code": "run_conflict"}, status_code=409)
@@ -1233,6 +1246,7 @@ def create_app(
             Route("/api/runs/{run_id}/trace.json", run_trace_json),
             Route("/api/runs/{run_id}/spans/{span_id}", run_span),
             *tester_routes,
+            *run_console_routes,
             Mount("/static", app=StaticFiles(directory=static_dir), name="static"),
         ],
         lifespan=lifespan,
@@ -1303,46 +1317,92 @@ def _scenario_request(catalog: RunCatalog, name: str, language: str) -> str:
 _WIRE_RECORD_LIMIT = 200
 
 
-def _read_wire_records(runs_dir: Path, run_id: str) -> list[dict[str, object]]:
-    """Return the redacted wire records of one run, bounded and in event order.
-
-    ``wire.jsonl`` holds the engineer-client hop. The pure OSS Agent writes its own
-    ``wire-oss.jsonl`` so two processes never append to one file; both are merged here. Returns an
-    empty list when the run captured nothing, which the inspector renders as "no captured
-    exchange" rather than inventing one.
-    """
-    records: list[dict[str, object]] = []
-    for name in ("wire.jsonl", "wire-oss.jsonl"):
-        records.extend(_read_wire_file(Path(runs_dir) / run_id / name))
-    records.sort(key=lambda record: str(record.get("ts") or ""))
-    return records[-_WIRE_RECORD_LIMIT:]
-
-
-def _read_wire_file(path: Path) -> list[dict[str, object]]:
-    """Read one wire log file, skipping malformed lines."""
-    if not path.is_file():
-        return []
-    records: list[dict[str, object]] = []
-    try:
-        with path.open(encoding="utf-8") as handle:
-            for line in handle:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                try:
-                    record = json.loads(stripped)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(record, dict):
-                    records.append(record)
-    except OSError:
-        return []
-    return records
-
-
 def _sse_data(message: dict[str, object]) -> dict[str, str]:
     """Render one SSE message payload."""
     return {"data": json.dumps(message, ensure_ascii=False)}
+
+
+#: Default channel label of each run source kind.
+_SOURCE_CHANNELS: Final[dict[str, str]] = {
+    "presentation": "presentation-page",
+    "explorer": "explorer-page",
+    "tester": "tester-console",
+    "gateway": "a2a-gateway",
+    "cli": "cli",
+    "api": "http-api",
+}
+
+#: Longest header value kept in a run source document.
+_SOURCE_TEXT_LIMIT: Final[int] = 1000
+
+#: Query keys stripped from a stored referer so a shared `?token=…` link never leaks.
+_SOURCE_SECRET_KEYS: Final[frozenset[str]] = frozenset({"token", "auth", "authorization"})
+
+
+def _redacted_url(value: str | None) -> str | None:
+    """Return one URL with credential-like query keys removed and a bounded length."""
+    if not value:
+        return None
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return value[:_SOURCE_TEXT_LIMIT]
+    if not parsed.query:
+        return value[:_SOURCE_TEXT_LIMIT]
+    pairs = [
+        (key, item)
+        for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+        if key.lower() not in _SOURCE_SECRET_KEYS
+    ]
+    return urlunsplit(parsed._replace(query=urlencode(pairs)))[:_SOURCE_TEXT_LIMIT]
+
+
+def _request_source(request: Request, declared: object) -> dict[str, object]:
+    """Build the run source document from the page declaration and HTTP metadata.
+
+    The page declares its kind (``presentation`` / ``explorer``); the server adds the network
+    origin so the internal console can tell a page run from a scripted API call. Header values are
+    bounded, and a referer's ``token`` query parameter is removed before storage.
+    """
+    base: dict[str, object] = {}
+    kind: object = None
+    if isinstance(declared, Mapping):
+        base = {
+            str(key): value
+            for key, value in declared.items()
+            if isinstance(value, (str, int, float, bool))
+        }
+        kind = base.get("kind")
+    elif isinstance(declared, str):
+        kind = declared
+    if kind is not None:
+        base["kind"] = str(kind)
+    headers = request.headers
+    if request.client is not None and request.client.host:
+        base["remoteAddress"] = request.client.host
+    for field, header in (
+        ("realIp", "x-real-ip"),
+        ("forwardedFor", "x-forwarded-for"),
+        ("userAgent", "user-agent"),
+        ("origin", "origin"),
+        ("acceptLanguage", "accept-language"),
+        ("host", "host"),
+    ):
+        value = headers.get(header)
+        if value:
+            base[field] = value[:_SOURCE_TEXT_LIMIT]
+    referer = _redacted_url(headers.get("referer"))
+    if referer:
+        base["referer"] = referer
+    request_id = headers.get("x-request-id") or headers.get("x-correlation-id")
+    if request_id:
+        base["requestId"] = request_id[:_SOURCE_TEXT_LIMIT]
+    base["entryPath"] = request.url.path
+    normalized = normalize_run_source(base)
+    normalized.setdefault(
+        "channel", _SOURCE_CHANNELS.get(str(normalized.get("kind")), "http-api")
+    )
+    return normalized
 
 
 def _span_seq(span: Mapping[str, object]) -> int:

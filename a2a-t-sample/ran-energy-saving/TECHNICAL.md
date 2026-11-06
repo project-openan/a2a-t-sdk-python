@@ -860,6 +860,31 @@ seconds, polls `/api/runs/{id}/metrics` until `traceFinal`, and writes a JSON/CS
 cached tokens and cache hit rate), model/total latency, P95 and approval wait per protocol ×
 scenario.
 
+### 4.8 Internal run console
+
+`demo/web/runs_console/` serves `/runs` and `/api/run-console/*` from the same UI process. It is a
+read-only view over the client SQLite store plus the run directory:
+
+- `GET /api/run-console/runs` accepts `limit` / `offset` / `protocol` / `status` / `source` /
+  `scenario` / `query` and returns rows joined with `run_metrics` (duration, token totals, LLM
+  calls). `query` matches the request, run id and conversation id.
+- `GET /api/run-console/runs/{id}` composes the persisted run, its `metric_json`, transcript (only
+  when the recorded path resolves inside the runs directory), `wire.jsonl` / `wire-oss.jsonl`, the
+  server trace JSONL and the live snapshot when the run is still in memory.
+- The complete persisted document is never mutated by the console; it only reads.
+
+**Request origin.** `RunManager.start` accepts a `source` document normalized by
+`shared/run_source.py`. The web API fills it from `body.source` (a declared kind, so the
+presentation/explorer pages can identify themselves) plus HTTP metadata: client address,
+`X-Real-IP`, `X-Forwarded-For`, Host, Origin, Referer (with `token`/`auth` query keys removed),
+User-Agent, Accept-Language, request id, entry path and receive time. The tester console passes the
+batch/case identifiers, the A2A gateway passes Task/Context, and the CLI records `kind=cli`.
+
+The record is stored in the `runs` table as `source_kind` and `source_json` (schema migration 5,
+existing rows read as empty), copied into the transcript (`source`), and exposed by both the live
+snapshot and the persisted run detail. Allowed kinds are `presentation`, `explorer`, `tester`,
+`gateway`, `api` and `cli`; an unknown declaration falls back to `api`.
+
 ## 5. Protocol reference
 
 ### 5.1 Message shape
@@ -1329,7 +1354,7 @@ The sample is deliberately a prototype. Before production:
 | [`shared/webhook_receiver.py`](shared/webhook_receiver.py) | Embedded webhook push receiver with token validation. |
 | [`shared/sse_event_consumer.py`](shared/sse_event_consumer.py) | Normalizes A2A stream events into one event shape. |
 | [`demo/registry/`](demo/registry) | Mock registry center (AgentCard register/query, port 5001). |
-| [`demo/web/`](demo/web) | Starlette Web UI (`app.py`, served as a managed child through `serve.py`), the presentation front end (`presentation/`, `--ui-mode presentation`, default) and the Run Explorer (`static/`, `--ui-mode explorer`). The presentation page consumes the same SSE stream; the Web UI resolves approval 1 (`POST /api/runs/{id}/intent`) and proxies approval 2 to the RAN Agent. |
+| [`demo/web/`](demo/web) | Starlette Web UI (`app.py`, served as a managed child through `serve.py`), the presentation front end (`presentation/`, `--ui-mode presentation`, default), the Run Explorer (`static/`, `--ui-mode explorer`), the Excel tester console (`tester/`) and the internal run console (`runs_console/`, `/runs`). The presentation page consumes the same SSE stream; the Web UI resolves approval 1 (`POST /api/runs/{id}/intent`) and proxies approval 2 to the RAN Agent. |
 | [`tests/`](tests) | Unit, integration, transport, Web UI, and eight-scenario offline acceptance tests; `tests/js/` holds the Node harnesses run by pytest. |
 
 ### B.2 Replace checklist

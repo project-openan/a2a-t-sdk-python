@@ -212,6 +212,9 @@ async def test_gateway_maps_one_message_to_one_run_and_returns_report(
     assert run.conversation_id == f"a2a-{CONTEXT_ID}"
     assert run.status == "finished"
     assert run.final_state == "task_completed"
+    assert run.source_kind == "gateway"
+    assert run.source["channel"] == "a2a-gateway"
+    assert run.source["contextId"] == CONTEXT_ID
 
 
 async def test_gateway_rejects_a_second_active_run_of_the_same_conversation(

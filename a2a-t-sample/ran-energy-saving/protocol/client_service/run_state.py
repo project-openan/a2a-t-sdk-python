@@ -133,6 +133,7 @@ class RunState:
         store: optional client persistence store.
         langfuse_exporter: optional Langfuse exporter of this run (``None`` when disabled).
         langfuse: Langfuse trace snapshot shown by the API and the presentation UI.
+        source: Request origin (page, caller, remote address) recorded at creation.
     """
 
     run_id: str
@@ -172,6 +173,7 @@ class RunState:
     finished_at: float | None = None
     langfuse_exporter: Any | None = field(default=None, repr=False)
     langfuse: dict[str, object] = field(default_factory=dict)
+    source: dict[str, object] = field(default_factory=dict)
     store: ClientStore | None = field(default=None, repr=False)
     _seq: int = field(default=0, repr=False)
     _phase_steps: dict[str, int] = field(default_factory=dict, repr=False)
@@ -728,6 +730,7 @@ class RunState:
             "seq": self._seq,
             "traceCount": len(self.traces),
             "langfuse": self.langfuse,
+            "source": dict(self.source),
             "transcript": transcript,
         }
 

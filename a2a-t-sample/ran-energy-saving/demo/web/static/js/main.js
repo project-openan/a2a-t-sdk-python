@@ -667,6 +667,7 @@ async function startRun(event) {
       transport: $("transport-select").value,
       discovery: $("discovery-select").value,
       userRequest: entered && entered !== defaultRequest ? entered : null,
+      source: "explorer",
     });
     app.runId = payload.runId;
     if (payload.deduplicated) {
