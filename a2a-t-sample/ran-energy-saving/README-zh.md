@@ -146,7 +146,7 @@ Web UI 默认打开演示视图：左侧是 16:9 的舞台，依次是网络工�
 协商轮次、**On the wire** 报文检查器，以及合并
 后的会话轨迹。On the wire 读取本次运行 `wire.jsonl` 中已脱敏的真实报文——请求行、请求头（含真实的
 `traceparent`）和 SDK 实际发送的 `SendMessageRequest` JSON body（`{"message": …}`，A2A-T 模式下含
-Task-T metadata）。a2a-sdk 的 HTTP 传输同样会被捕获，因此本地 A2A-T 和 pure A2A 运行也显示真实请求，
+Task-T metadata）。a2a-sdk 的 HTTP 传输同样会被捕获，因此本地 A2A-T 和 A2A 运行也显示真实请求，
 而不是从轨迹重建的 message 对象；没有捕获到报文时明确提示，而不是拼一份假的。在 A2A-T 模式下切换到
 **普通 A2A** 时，同一请求被写成一句自然语言，去掉扩展头和 Task-T 字段（这是同一条消息的格式视图）。点击
 会话轨迹的一行会在检查器中选中该消息。轨迹行现在带演示日（第 1 天、第 2–8 天、第 9 天、第 9 天+）和
@@ -155,7 +155,7 @@ Task-T metadata）。a2a-sdk 的 HTTP 传输同样会被捕获，因此本地 A2
 ### 测试控制台（Excel 导入）
 
 同一个 UI 进程的 `/tester` 是给测试人员的独立入口（启动器会打印该地址）：下载 `.xlsx` 模板，
-一行填一条用例，导入后即可批量执行。每行填写协议（`A2A-T` / `A2A`）和可选的用户请求；
+一行填一条用例，导入后即可批量执行。该页面是中方测试团队的内部工具，界面固定使用中文。每行填写协议（`A2A-T` / `A2A`）和可选的用户请求；
 场景列可留空，因为客户现场的真实测试通常只有一段业务请求。场景留空时，内部仍使用 `night`
 配置模板，但只校验最终状态（默认 `task_completed`）；填写场景时，空的预期单元格继承该场景的
 最终状态、协商类型和轮次。批次串行执行，逐条展示通过/失败、实际最终状态、协商类型与轮次、
@@ -182,7 +182,7 @@ sample 不再把操作员原文直接送进 A2A / A2A-T。默认的 `processed` 
   后续 A2A-T 协商仍然会发生。
 - 审批 1 确认的是**规范化文本**，发生在协议映射之前。A2A-T 再从该文本严格抽取 Task-T；
   Plain A2A 直接发送同一份文本。
-- Pure A2A 把同样的处理放在 OSS Agent 内：工程师客户端发送原文，OSS Agent 规范化并发布意图，
+- A2A 把同样的处理放在 OSS Agent 内：工程师客户端发送原文，OSS Agent 规范化并发布意图，
   再把规范化文本转发给 RAN。
 - 展示页并列显示操作员请求、规范化文本和结构化意图；trace 记录 `intent_processed`。
 - 默认 `processed`。需要旧行为时使用 `A2AT_SAMPLE_INTENT_MODE=raw`、`--intent-mode raw` 或
@@ -216,7 +216,7 @@ sample 的可选依赖；未安装或未配置 key 时导出器为空操作。
 
 sample 也可以作为真实厂商网管的 OSS 客户端。加 `--nms` 后，启动器不再启动本地 registry、RAN
 Agent 和 MIE：A2A-T 客户端从网管的令牌接口获取会话，再直接调用网管的 A2A 面。
-`--nms --protocol pure` 仍保留本地 OSS Agent（工程师 UI → OSS Agent → 网管），只去掉 RAN
+`--nms --protocol a2a` 仍保留本地 OSS Agent（工程师 UI → OSS Agent → 网管），只去掉 RAN
 Agent 和 MIE。
 
 真实 `--nms` run 使用 **`POST /a2a/json/message:send` + webhook**（网管的直连机器模式）；
@@ -282,7 +282,7 @@ NMS 模式下，`A2AT_SAMPLE_NMS_REGION` 与 `A2AT_SAMPLE_NMS_SITES` 会把整�
   HTTP 503），然后停止本地运行，因此长周期任务或反复测试时不需要重启页面。
 - 网管不发布 AgentCard，因此发现使用静态卡；真实注册中心对接是后续步骤。
 
-原始报文写入 `runs/<runId>/wire.jsonl`（pure 的 OSS Agent 写入同目录的 `wire-oss.jsonl`），
+原始报文写入 `runs/<runId>/wire.jsonl`（A2A 模式的 OSS Agent 写入同目录的 `wire-oss.jsonl`），
 失败帧写入 `wire-error.jsonl`，凭据已脱敏。发送前的
 人审用 `--ui --mode confirm`；NMS 模式没有服务端审批 2，因为执行侧由厂商网管负责。
 
@@ -292,23 +292,23 @@ webhook 任务；第二个会返回明确的冲突提示。没有配置 `A2AT_SA
 如果配置端口已被占用，会自动改用系统分配的端口；配置了 public URL（网关固定转发）时不会
 静默改端口，而是给出“端口被占用、等待/取消或改端口”的明确错误。
 
-pure + `--nms` 的 OSS Agent 现在会把网管的 token、发送、轮询 span 上报到同一次 run，
+A2A + `--nms` 的 OSS Agent 现在会把网管的 token、发送、轮询 span 上报到同一次 run，
 会话轨迹里能看到 `NMS session token acquired`、`NMS A2A stream opened` 等真实下游事件，
 状态文案也区分 `NMS` 与本地 `RAN Agent`，不再看起来像本地三跳演示。
 
 ### 同一台机器并行两个实例
 
-单个实例即可在页面切换请求形态（`--protocol both`）。当两边需要不同的网管凭据、数据目录或
+单个实例即可在页面切换请求形态（UI 默认 `--protocol both`）。当两边需要不同的网管凭据、数据目录或
 webhook 地址时，仍可并行两个实例。两个实例必须使用不同的启动状态目录、数据目录、UI 端口
 和 webhook 端口：
 
-| | A2A-T | pure A2A |
+| | A2A-T | A2A |
 |---|---|---|
 | UI | 8080 | 8081 |
 | Webhook | 9000 | 9001 |
 | OSS Agent | 不启动 | 8011 |
-| `A2AT_SAMPLE_RUN_DIR` | `%TEMP%/a2at-ran-energy-saving-adk` | `%TEMP%/a2at-ran-energy-saving-adk-pure` |
-| `A2AT_SAMPLE_RUNS_DIR` | `runs` | `runs-pure` |
+| `A2AT_SAMPLE_RUN_DIR` | `%TEMP%/a2at-ran-energy-saving-adk` | `%TEMP%/a2at-ran-energy-saving-adk-a2a` |
+| `A2AT_SAMPLE_RUNS_DIR` | `runs` | `runs-a2a` |
 
 ```bash
 # 实例 A（A2A-T）
@@ -318,20 +318,20 @@ A2AT_SAMPLE_UI_PORT=8080 \
 A2AT_SAMPLE_WEBHOOK_PORT=9000 \
 python run_demo.py --nms --ui --brand huawei
 
-# 实例 B（pure A2A：UI -> 本地 OSS Agent -> 网管）
-A2AT_SAMPLE_RUN_DIR=/tmp/a2at-adk-pure \
-A2AT_SAMPLE_RUNS_DIR=runs-pure \
+# 实例 B（A2A：UI -> 本地 OSS Agent -> 网管）
+A2AT_SAMPLE_RUN_DIR=/tmp/a2at-adk-a2a \
+A2AT_SAMPLE_RUNS_DIR=runs-a2a \
 A2AT_SAMPLE_UI_PORT=8081 \
 A2AT_SAMPLE_WEBHOOK_PORT=9001 \
-python run_demo.py --nms --protocol pure --ui --brand huawei --oss-port 8011
+python run_demo.py --nms --protocol a2a --ui --brand huawei --oss-port 8011
 ```
 
-`--stop` 只读本实例 `A2AT_SAMPLE_RUN_DIR/pids.json`，停 B 不影响 A。pure + NMS 中，UI 通过
-direct A2A/SSE 访问本地 OSS Agent；OSS Agent 通过纯 A2A 访问网管（webhook，`--nms-sim` 时用
+`--stop` 只读本实例 `A2AT_SAMPLE_RUN_DIR/pids.json`，停 B 不影响 A。A2A + NMS 中，UI 通过
+direct A2A/SSE 访问本地 OSS Agent；OSS Agent 通过标准 A2A 访问网管（webhook，`--nms-sim` 时用
 SSE）。OSS Agent 复用与 A2A-T 客户端相同的 ADK 决策 Agent 回答网管的 `INPUT_REQUIRED`，并把
 决策渲染成自然语言文本。
 
-如果网管拒绝带 `taskId` 的 pure follow-up，设置 `A2AT_SAMPLE_PURE_FOLLOWUP=context`
+如果网管拒绝带 `taskId` 的 A2A follow-up，设置 `A2AT_SAMPLE_PURE_FOLLOWUP=context`
 （或 `task` 只带 taskId）后重试；默认是 `both`。
 
 真实网管要求通过网关访问的 https 回调：把 `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` 设为该 URL，
@@ -345,10 +345,11 @@ A2A-T 是 A2A 的扩展，不是第二套协议。RAN Agent 始终支持标准 A
 同一个 Agent 先执行预任务协商，再在结果上写入 A2A-T 元数据。真机网管也是这个模型：一个服务，
 由请求本身决定是否使用扩展。
 
-`--protocol both` 启动这个单一 Agent，并在页面上提供协议切换：
+带 `--ui` 启动时，`--protocol` 默认就是 `both`：启动这个单一 Agent，并在页面上提供协议切换。
+纯 CLI 运行默认使用 A2A-T。
 
 ```bash
-uv run python -m demo.run_demo --protocol both --ui --model-mode offline
+uv run python -m demo.run_demo --ui --model-mode offline
 ```
 
 - **A2A**：标准 Task 生命周期（`INPUT_REQUIRED` 续传）。本地拓扑为三跳：UI → OSS Agent →
@@ -356,11 +357,11 @@ uv run python -m demo.run_demo --protocol both --ui --model-mode offline
 - **A2A + A2A-T**：Task-T 模板校验与预任务协商，由同一个 RAN Agent 处理。
 
 每次 run 都会记录请求形态，因此切换后 session trace、metrics 和历史仍然可区分。
-`--protocol a2a-t` 和 `--protocol pure` 继续保留，供只服务一种形态的部署或确定性 CLI 运行使用。
+`--protocol a2a-t` 和 `--protocol a2a` 继续保留，供只服务一种形态的部署或确定性 CLI 运行使用。
 
-### 纯 A2A 模式（三跳，只用标准 A2A）
+### A2A 模式（三跳，只用标准 A2A）
 
-`--protocol pure` 启动真实的三跳 A2A 链路：
+`--protocol a2a` 启动真实的三跳 A2A 链路：
 
 ```
 工程师/UI ──A2A──► OSS Agent (:8001) ──A2A──► RAN Agent (:8000) ──A2A──► MIE Agent (:8002)
@@ -376,8 +377,8 @@ uv run python -m demo.run_demo --protocol both --ui --model-mode offline
 - 旧的单轮 `plain` 路径仍保留在代码和测试中作为内部基线，但 CLI 和页面都不再暴露。
 
 ```bash
-# 纯 A2A：三跳 + MIE 人工审批
-uv run python -m demo.run_demo --protocol pure --ui --approval-gate --scenario information
+# A2A：三跳 + MIE 人工审批
+uv run python -m demo.run_demo --protocol a2a --ui --approval-gate --scenario information
 
 # 现有 A2A-T 模式（Task-T + Negotiation-T），行为不变
 uv run python -m demo.run_demo --protocol a2a-t --ui --mode confirm --approval-gate --scenario information
@@ -417,7 +418,7 @@ P95 和审批等待时间。页面读取的就是这些持久化记录。
 uv run python -m demo.benchmark --model-mode live --scenarios information,target --repeats 3
 
 # 一次快速离线 smoke（脚本模型不上报 token，因此 token 为 N/A）
-uv run python -m demo.benchmark --protocols pure --scenarios information --repeats 1
+uv run python -m demo.benchmark --protocols a2a --scenarios information --repeats 1
 ```
 
 离线模式仍可对比耗时和准确率；token 因 scripted 模型没有 usage 而显示为 `N/A`。人工审批时间单独

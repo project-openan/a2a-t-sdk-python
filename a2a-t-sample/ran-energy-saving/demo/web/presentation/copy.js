@@ -371,7 +371,7 @@ const EN = {
     plainMessageTitle: "OSS Agent → RAN Agent · plain A2A message",
     pureMessageTitle: "Engineer client → OSS Agent · A2A message",
     pureMessageNote:
-      "Standard A2A: the body is the SendMessageRequest the SDK sends. Pure mode carries no Task-T or Negotiation-T metadata.",
+      "Standard A2A: the body is the SendMessageRequest the SDK sends. A2A mode carries no Task-T or Negotiation-T metadata.",
     plainMessageNote:
       "Plain A2A: the task is this sentence. There is no extension header, no Task-T metadata and no template for the receiver to validate before it plans.",
     negotiationTitle: "RAN Agent → OSS Agent · proposal",
@@ -1083,7 +1083,7 @@ const ZH = {
     plainMessageTitle: "OSS Agent → RAN Agent · 普通 A2A 消息",
     pureMessageTitle: "工程师客户端 → OSS Agent · A2A 消息",
     pureMessageNote:
-      "标准 A2A：报文就是 SDK 实际发送的 SendMessageRequest。pure 模式不携带 Task-T / Negotiation-T metadata。",
+      "标准 A2A：报文就是 SDK 实际发送的 SendMessageRequest。A2A 模式不携带 Task-T / Negotiation-T metadata。",
     plainMessageNote:
       "普通 A2A：任务就是这句话。没有扩展头、没有 Task-T metadata，接收方在规划前也没有模板可以校验。",
     negotiationTitle: "RAN Agent → OSS Agent · 提议",

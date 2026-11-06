@@ -70,10 +70,12 @@ from shared.logging_setup import configure_logging
 from shared.registry_client import register_agentcard
 from shared.run_constants import (
     MAX_ROUNDS,
+    PROTOCOL_A2A_NAME,
     PROTOCOL_A2A_T,
     PROTOCOL_MODE_BOTH,
     PROTOCOL_PURE,
     SERVER_PROTOCOL_MODES,
+    normalize_protocol_name,
 )
 from shared.sdk_env import prepare_sdk_env
 from shared.trace import FileTraceEmitter, HttpTraceEmitter, set_global_sink
@@ -106,9 +108,7 @@ SERVER_ENV_PREFIX: Final[str] = "a2at-ran-energy-saving-env-"
 _LOGGER = logging.getLogger("ran_energy_saving.server_app")
 
 #: Routes that stay public when the server requires a bearer token.
-SERVER_PUBLIC_PATHS: Final[frozenset[str]] = frozenset(
-    {"/", "/health", "/ready", AGENT_CARD_WELL_KNOWN_PATH}
-)
+SERVER_PUBLIC_PATHS: Final[frozenset[str]] = frozenset({"/", "/health", "/ready", AGENT_CARD_WELL_KNOWN_PATH})
 
 
 @dataclass(frozen=True)
@@ -196,17 +196,11 @@ def build_agent_card(*, host: str, port: int, secured: bool = False) -> AgentCar
             )
         ],
         security_schemes=(
-            {
-                "bearer": SecurityScheme(
-                    http_auth_security_scheme=HTTPAuthSecurityScheme(scheme="bearer")
-                )
-            }
+            {"bearer": SecurityScheme(http_auth_security_scheme=HTTPAuthSecurityScheme(scheme="bearer"))}
             if secured
             else {}
         ),
-        security_requirements=(
-            [SecurityRequirement(schemes={"bearer": StringList()})] if secured else []
-        ),
+        security_requirements=([SecurityRequirement(schemes={"bearer": StringList()})] if secured else []),
     )
     card.supported_interfaces.add(
         url=f"http://{host}:{port}",
@@ -289,6 +283,7 @@ def build_rest_app(
         push_config_store=push_config_store,
         push_sender=push_sender,
     )
+
     async def approve(request: Request) -> Response:
         """Resolve one pending human approval of the change gate."""
         if approval_registry is None:
@@ -418,10 +413,11 @@ def build_server_runtime(
         ValueError: when offline mode has no deterministic provider installer, or when
             ``protocol_mode`` is unknown.
     """
+    protocol_mode = normalize_protocol_name(protocol_mode)
     if protocol_mode not in SERVER_PROTOCOL_MODES:
         raise ValueError(
-            f"Unsupported server protocol mode: {protocol_mode}; expected one of "
-            f"{', '.join(SERVER_PROTOCOL_MODES)}"
+            f"Unsupported server protocol mode: {protocol_mode}; expected "
+            f"{PROTOCOL_A2A_T}, {PROTOCOL_A2A_NAME} or {PROTOCOL_MODE_BOTH}"
         )
     resolved_logger = logger or _LOGGER
     resolved_config = config or load_config(env_path=env_path)
@@ -433,9 +429,7 @@ def build_server_runtime(
     register_traced_providers()
     if resolved_config.is_offline:
         if install_offline_provider is None:
-            raise ValueError(
-                "Offline mode needs install_offline_provider; the demo entry point supplies it."
-            )
+            raise ValueError("Offline mode needs install_offline_provider; the demo entry point supplies it.")
         install_offline_provider()
     trace_emitter = build_trace_emitter()
     if trace_emitter is not None:
@@ -466,13 +460,9 @@ def build_server_runtime(
         # standard A2A Task lifecycle, exactly like a vendor NMS that exposes both surfaces.
         pre_task_handler = ProtocolDispatchHandler(negotiation_handler, pure_handler)
     else:
-        pre_task_handler = ProtocolDispatchHandler(
-            negotiation_handler, PlainTaskHandler(logger=resolved_logger)
-        )
+        pre_task_handler = ProtocolDispatchHandler(negotiation_handler, PlainTaskHandler(logger=resolved_logger))
     if approval_gate is None:
-        approval_enabled = os.environ.get(
-            "A2AT_SAMPLE_APPROVAL_GATE", ""
-        ).strip().lower() in {
+        approval_enabled = os.environ.get("A2AT_SAMPLE_APPROVAL_GATE", "").strip().lower() in {
             "1",
             "true",
             "yes",
@@ -494,16 +484,11 @@ def build_server_runtime(
     pure_enabled = protocol_mode in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH)
     if pure_approval_gate is None:
         raw_pure_gate = os.environ.get("A2AT_SAMPLE_PURE_APPROVAL_GATE", "").strip().lower()
-        pure_gate_enabled = (
-            raw_pure_gate in {"1", "true", "yes"} if raw_pure_gate else approval_enabled
-        )
+        pure_gate_enabled = raw_pure_gate in {"1", "true", "yes"} if raw_pure_gate else approval_enabled
     else:
         pure_gate_enabled = pure_approval_gate
     if pure_enabled and pure_gate_enabled and mie_client is None:
-        resolved_mie_url = (
-            mie_url
-            or os.environ.get("A2AT_SAMPLE_MIE_URL", "http://127.0.0.1:8002")
-        ).strip()
+        resolved_mie_url = (mie_url or os.environ.get("A2AT_SAMPLE_MIE_URL", "http://127.0.0.1:8002")).strip()
         if resolved_mie_url:
             mie_client = MIEApprovalClient(
                 base_url=resolved_mie_url,
@@ -522,9 +507,7 @@ def build_server_runtime(
         mie_client=mie_client,
     )
     task_store: TaskStore = (
-        SqliteTaskStore(resolved_config.task_db_path)
-        if resolved_config.task_db_path
-        else InMemoryTaskStore()
+        SqliteTaskStore(resolved_config.task_db_path) if resolved_config.task_db_path else InMemoryTaskStore()
     )
     secured = bool(resolved_config.server_auth_token)
     agent_card = build_agent_card(
@@ -643,10 +626,7 @@ def main() -> None:
     from demo.pure_policy import build_demo_pure_policy
 
     resolved_config = load_config(env_path=resolved_env_path)
-    protocol_mode = (
-        os.environ.get("A2AT_SAMPLE_PROTOCOL_MODE", PROTOCOL_A2A_T).strip()
-        or PROTOCOL_A2A_T
-    )
+    protocol_mode = os.environ.get("A2AT_SAMPLE_PROTOCOL_MODE", PROTOCOL_A2A_T).strip() or PROTOCOL_A2A_T
     pure_policy = (
         build_demo_pure_policy(resolved_config.language)
         if protocol_mode in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH)

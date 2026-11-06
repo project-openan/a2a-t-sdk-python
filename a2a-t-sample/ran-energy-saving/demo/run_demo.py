@@ -59,9 +59,11 @@ from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from shared.config import merge_sample_process_env
 from shared.run_constants import (
     DEMO_PROTOCOLS,
+    PROTOCOL_A2A_NAME,
     PROTOCOL_A2A_T,
     PROTOCOL_MODE_BOTH,
     PROTOCOL_PURE,
+    normalize_protocol_name,
 )
 
 #: The demo lives one level below the sample directory that owns ``runs/`` and the SDK path.
@@ -70,10 +72,7 @@ SAMPLE_DIR = CASE_DIR.parent
 REPO_ROOT = SAMPLE_DIR.parent
 #: Launcher state (pids, logs, per-run .env). A second instance sets a different value so
 #: ``--stop`` only touches its own processes.
-RUN_DIR = Path(
-    os.environ.get("A2AT_SAMPLE_RUN_DIR")
-    or Path(tempfile.gettempdir()) / "a2at-ran-energy-saving-adk"
-)
+RUN_DIR = Path(os.environ.get("A2AT_SAMPLE_RUN_DIR") or Path(tempfile.gettempdir()) / "a2at-ran-energy-saving-adk")
 PID_FILE = RUN_DIR / "pids.json"
 #: Data directory (transcripts, sqlite stores, NMS wire logs, Web UI history). It defaults to the
 #: sample's ``runs/`` and is also written into the per-run .env as ``A2AT_SAMPLE_RUNS_DIR``.
@@ -400,11 +399,7 @@ def _write_run_env(
             "A2AT_SAMPLE_MODEL_MODE": model_mode,
             "A2AT_SAMPLE_DISCOVERY": client_discovery,
             "A2AT_SAMPLE_TRANSPORT": transport,
-            "A2AT_SAMPLE_WEBHOOK_HOST": (
-                webhook_host
-                or values.get("A2AT_SAMPLE_WEBHOOK_HOST")
-                or "127.0.0.1"
-            ),
+            "A2AT_SAMPLE_WEBHOOK_HOST": (webhook_host or values.get("A2AT_SAMPLE_WEBHOOK_HOST") or "127.0.0.1"),
             "A2AT_SAMPLE_WEBHOOK_PORT": str(webhook_port),
             "A2AT_SAMPLE_HOST": server_host,
             "A2AT_SAMPLE_PORT": str(server_port),
@@ -972,14 +967,8 @@ async def _run_client_foreground(
         with (
             log_context(run_id=run_id, role="client"),
             propagated_trace(
-                trace_id=(
-                    langfuse_exporter.trace_id if langfuse_exporter is not None else ""
-                ),
-                parent_span_id=(
-                    langfuse_exporter.root_span_id
-                    if langfuse_exporter is not None
-                    else ""
-                ),
+                trace_id=(langfuse_exporter.trace_id if langfuse_exporter is not None else ""),
+                parent_span_id=(langfuse_exporter.root_span_id if langfuse_exporter is not None else ""),
                 run_id=run_id,
                 conversation_id=run_id,
                 user_id="cli",
@@ -1117,12 +1106,12 @@ def _build_parser(
     )
     parser.add_argument(
         "--protocol",
-        default=_env_str(env, "A2AT_SAMPLE_PROTOCOL_MODE", PROTOCOL_A2A_T),
-        choices=[*DEMO_PROTOCOLS, PROTOCOL_MODE_BOTH],
+        default=_env_str(env, "A2AT_SAMPLE_PROTOCOL_MODE", "") or None,
+        choices=[*DEMO_PROTOCOLS, PROTOCOL_A2A_NAME, PROTOCOL_MODE_BOTH],
         help=(
-            "interaction protocol: a2a-t (Task-T + Negotiation-T, default), pure (standard A2A "
-            "Task INPUT_REQUIRED continuation, no A2A-T extension), or both (one Web UI that "
-            "switches per run; requires --ui)"
+            "interaction protocol: both (one Web UI with the A2A-T/A2A switch; default with --ui), "
+            "A2A-T (Task-T + Negotiation-T), or A2A (standard A2A Task INPUT_REQUIRED "
+            "continuation, no A2A-T extension). The CLI defaults to A2A-T"
         ),
     )
     parser.add_argument(
@@ -1246,13 +1235,13 @@ def _build_parser(
         "--oss-port",
         type=int,
         default=DEFAULT_OSS_PORT,
-        help=f"bind port of the OSS Agent in pure mode (default: {DEFAULT_OSS_PORT})",
+        help=f"bind port of the OSS Agent in A2A mode (default: {DEFAULT_OSS_PORT})",
     )
     parser.add_argument(
         "--mie-port",
         type=int,
         default=DEFAULT_MIE_PORT,
-        help=f"bind port of the MIE Agent in pure mode (default: {DEFAULT_MIE_PORT})",
+        help=f"bind port of the MIE Agent in A2A mode (default: {DEFAULT_MIE_PORT})",
     )
     parser.add_argument(
         "--gateway",
@@ -1304,6 +1293,14 @@ def main() -> int:
         env_file_default=default_env_file,
     )
     args = parser.parse_args()
+    if args.protocol:
+        # ``a2a`` is the user-facing name of the standard-A2A form; the rest of the launcher keeps
+        # the historical internal value.
+        args.protocol = normalize_protocol_name(args.protocol)
+    else:
+        # A UI launch advertises both request forms by default. A CLI run stays A2A-T, and the
+        # gateway keeps its single A2A-T form.
+        args.protocol = PROTOCOL_MODE_BOTH if args.ui and not args.gateway else PROTOCOL_A2A_T
     if args.env_file:
         source_env, env_error = _resolve_source_env(args.env_file)
         if env_error is not None:
@@ -1355,9 +1352,9 @@ def main() -> int:
         from demo.scenario import PURE_PROTOCOL_SCENARIOS
 
         if args.scenario not in PURE_PROTOCOL_SCENARIOS:
-            parser.error(f"--protocol pure supports only {', '.join(PURE_PROTOCOL_SCENARIOS)}")
+            parser.error(f"--protocol a2a supports only {', '.join(PURE_PROTOCOL_SCENARIOS)}")
         if args.gateway:
-            parser.error("--gateway is not supported with --protocol pure")
+            parser.error("--gateway is not supported with --protocol a2a")
     if args.nms_sim and not args.nms:
         parser.error("--nms-sim requires --nms")
     if args.nms_sim and args.transport == "webhook":
@@ -1661,11 +1658,7 @@ def main() -> int:
             server_trace_env = _server_trace_env(
                 ui=args.ui,
                 ui_port=args.ui_port,
-                trace_token=(
-                    oss_trace_env.get("A2AT_SAMPLE_TRACE_TOKEN")
-                    or recorded_token
-                    or None
-                ),
+                trace_token=(oss_trace_env.get("A2AT_SAMPLE_TRACE_TOKEN") or recorded_token or None),
                 approval_gate=args.approval_gate,
                 approval_timeout=args.approval_timeout,
             )
@@ -1687,9 +1680,7 @@ def main() -> int:
                     server_env["A2AT_SAMPLE_PURE_APPROVAL_GATE"] = "1"
                     if args.approval_gate:
                         server_env["A2AT_SAMPLE_APPROVAL_GATE"] = "1"
-                        server_env["A2AT_SAMPLE_APPROVAL_TIMEOUT_SECONDS"] = str(
-                            args.approval_timeout
-                        )
+                        server_env["A2AT_SAMPLE_APPROVAL_TIMEOUT_SECONDS"] = str(args.approval_timeout)
                 elif args.ui or args.approval_gate:
                     server_env["A2AT_SAMPLE_APPROVAL_GATE"] = "1"
                     server_env["A2AT_SAMPLE_APPROVAL_TIMEOUT_SECONDS"] = str(args.approval_timeout)
@@ -1773,9 +1764,7 @@ def main() -> int:
                 # The UI derives each protocol's discovery/transport default: A2A-T talks to the
                 # vendor NMS, standard A2A goes through the OSS Agent.
                 ui_args.append("--nms")
-            if not args.nms and (
-                args.approval_gate or args.protocol == PROTOCOL_PURE
-            ):
+            if not args.nms and (args.approval_gate or args.protocol == PROTOCOL_PURE):
                 # In ``both`` the pure review is driven by mieEnabled, not by the A2A-T server
                 # gate, so the page must not advertise a gate the A2A-T request form will not hold.
                 ui_args += ["--approval-gate", "--approval-timeout", str(args.approval_timeout)]

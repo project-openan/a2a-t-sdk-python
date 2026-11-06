@@ -145,7 +145,7 @@ class TestCase:
         case_id: Tester-visible identifier; unique within a sheet.
         name: Optional display title.
         enabled: Whether the row is executed; a disabled row is reported as skipped.
-        protocol: ``a2a-t`` or ``pure``.
+        protocol: ``a2a-t`` or ``a2a`` (standard A2A).
         scenario: Scenario profile used to build the runtime.
         scenario_explicit: Whether the sheet named the scenario (and therefore supplied the
             expectation defaults).
@@ -230,7 +230,7 @@ def _cell_text(value: object) -> str:
 
 
 def _normalize_protocol(value: str) -> str:
-    """Map an Excel protocol label to ``a2a-t`` / ``pure``; return ``""`` when unknown."""
+    """Map an Excel protocol label to ``a2a-t`` / ``a2a``; return ``""`` when unknown."""
     compact = re.sub(r"[\s_\-]+", "", value).lower()
     if compact in {"a2at", "a2a-t", "a2atextension"}:
         return PROTOCOL_A2A_T
@@ -588,7 +588,7 @@ def write_results(batch: Mapping[str, object]) -> bytes:
                 case.get("caseId", ""),
                 case.get("name", ""),
                 result.get("status", ""),
-                case.get("protocol", ""),
+                _protocol_label(case.get("protocol")),
                 case.get("scenario", ""),
                 case.get("userRequest", ""),
                 case.get("expectedFinalState", ""),
@@ -646,7 +646,7 @@ def write_results(batch: Mapping[str, object]) -> bytes:
         metrics_sheet.append(
             [
                 case.get("caseId", ""),
-                case.get("protocol", ""),
+                _protocol_label(case.get("protocol")),
                 case.get("scenario", ""),
                 result.get("status", ""),
                 result.get("finalState", ""),
@@ -804,6 +804,16 @@ def _batch_summary(pairs: Sequence[tuple[Mapping[str, object], Mapping[str, obje
         ("Token 总量", total_tokens if tokens_available else "不可用"),
         ("Token 统计", "可用" if tokens_available else "离线脚本或未上报"),
     ]
+
+
+def _protocol_label(value: object) -> str:
+    """Render the user-facing protocol name in reports."""
+    protocol = str(value or "")
+    if protocol == PROTOCOL_A2A_T:
+        return "A2A-T"
+    if protocol == PROTOCOL_PURE:
+        return "A2A"
+    return protocol
 
 
 def _expected_summary(case: Mapping[str, object]) -> str:

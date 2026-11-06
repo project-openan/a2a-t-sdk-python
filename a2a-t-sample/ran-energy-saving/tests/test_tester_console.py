@@ -177,6 +177,8 @@ async def test_the_tester_page_and_assets_are_served(client: httpx.AsyncClient) 
     assert meta.status_code == 200
     assert meta.json()["protocols"] == [PROTOCOL_A2A_T, PROTOCOL_PURE]
     assert meta.json()["defaultScenario"] == "night"
+    # The console is an internal Chinese-team tool even when the process language is English.
+    assert meta.json()["defaultLanguage"] == "zh"
 
 
 async def test_importing_a_workbook_creates_a_draft_batch(client: httpx.AsyncClient) -> None:

@@ -82,7 +82,9 @@ def build_tester_routes(
             {
                 "protocols": list(protocols),
                 "scenariosByProtocol": {name: list(names) for name, names in scenarios_by_protocol.items()},
-                "defaultLanguage": "zh" if default_language.startswith("zh") else "en",
+                # The tester console is an internal Chinese-team tool; its labels stay Chinese
+                # even when the process language is English.
+                "defaultLanguage": "zh",
                 "defaultScenario": "night",
                 "approvals": ["auto", "approve", "reject"],
                 "maxUploadBytes": MAX_UPLOAD_BYTES,

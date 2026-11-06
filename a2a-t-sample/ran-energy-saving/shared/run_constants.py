@@ -29,11 +29,20 @@ SUPPORTED_BRANDS: Final[tuple[str, ...]] = (BRAND_ORANGE, BRAND_HUAWEI)
 PROTOCOL_A2A_T: Final[str] = "a2a-t"
 PROTOCOL_PLAIN: Final[str] = "plain"
 PROTOCOL_PURE: Final[str] = "pure"
+#: User-facing name of the standard-A2A request form (the CLI accepts it as ``--protocol a2a``).
+#: The internal value remains :data:`PROTOCOL_PURE` for API/DB/backward compatibility.
+PROTOCOL_A2A_NAME: Final[str] = "a2a"
 SUPPORTED_PROTOCOLS: Final[tuple[str, ...]] = (
     PROTOCOL_A2A_T,
     PROTOCOL_PLAIN,
     PROTOCOL_PURE,
 )
+
+
+def normalize_protocol_name(value: str) -> str:
+    """Map the user-facing ``a2a`` protocol name to its internal value."""
+    return PROTOCOL_PURE if value == PROTOCOL_A2A_NAME else value
+
 
 #: Protocols exposed by the presentation/CLI demo entry points. ``plain`` stays supported by
 #: ``/api/runs`` and the tests as an internal single-turn baseline, but is not advertised.

@@ -260,7 +260,9 @@ async function loadMeta() {
     const response = await fetch("/api/tester/meta");
     if (!response.ok) return;
     state.meta = await response.json();
-    state.language = state.meta.defaultLanguage === "en" ? "en" : "zh";
+    // This console is an internal tool for the Chinese test team; keep it Chinese even when the
+    // process language is English.
+    state.language = "zh";
   } catch {
     state.language = "zh";
   }

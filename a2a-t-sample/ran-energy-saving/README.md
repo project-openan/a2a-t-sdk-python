@@ -163,8 +163,8 @@ the 24-hour throughput chart), the
 negotiation turns, an **On the wire** inspector, and the merged session trace. On the wire shows the
 captured redacted exchange from the run's `wire.jsonl` — request line, headers (including the real
 `traceparent`) and the exact `SendMessageRequest` JSON body the SDK sent (`{"message": …}`, with the
-Task-T metadata in A2A-T mode). The a2a-sdk HTTP transport is captured too, so local A2A-T and pure
-A2A runs show the real request instead of a message object rebuilt from the trace; when a run
+Task-T metadata in A2A-T mode). The a2a-sdk HTTP transport is captured too, so local A2A-T and A2A
+runs show the real request instead of a message object rebuilt from the trace; when a run
 captured none, the panel says so instead of inventing one. Its **Plain A2A** toggle shows the
 same request as one natural-language sentence without the extension header or Task-T fields (a
 format view of the same message). Clicking a trace row selects that message in the inspector. The
@@ -176,7 +176,8 @@ its matching span collapse to one row.
 
 Open `/tester` on the same UI process (the launcher prints the URL). It is a separate entry page
 for testers: download the `.xlsx` template, fill one row per case, import the workbook, and run
-the batch. Each row carries the protocol (`A2A-T` / `A2A`) and an optional user request; the
+the batch. The console is intentionally Chinese-only because it is an internal tool for the
+Chinese test team. Each row carries the protocol (`A2A-T` / `A2A`) and an optional user request; the
 scenario column is optional because a real customer test is usually just a business request. With
 an empty scenario the sample still uses the `night` profile internally, but asserts only the final
 state (`task_completed` by default); with an explicit scenario, blank expectation cells inherit
@@ -210,7 +211,7 @@ operator request → business intent (ProcessedIntent) → normalized text → a
   area and overlapping windows stay in the intent, so the A2A-T negotiation still happens.
 - Approval 1 confirms the **normalized text** before the protocol mapping. In A2A-T the Task-T is
   then extracted strictly from that text; Plain A2A sends the same text.
-- Pure A2A keeps the same story inside the OSS Agent: the engineer client sends the raw request,
+- A2A keeps the same story inside the OSS Agent: the engineer client sends the raw request,
   the OSS Agent normalizes it, publishes the intent, and forwards the normalized text to RAN.
 - The presentation page shows the operator request, the normalized text and the structured intent
   fields side by side; the trace records `intent_processed`.
@@ -250,7 +251,7 @@ to the same project.
 
 The sample can also act as the OSS client of a real vendor NMS. With `--nms`, the launcher starts
 no local registry, RAN Agent or MIE: the A2A-T client obtains a session token from the NMS token
-endpoint and calls its A2A surface directly. `--nms --protocol pure` keeps the local OSS Agent
+endpoint and calls its A2A surface directly. `--nms --protocol a2a` keeps the local OSS Agent
 (engineer UI → OSS Agent → NMS) and drops only the RAN Agent and MIE.
 
 A real `--nms` run uses **`POST /a2a/json/message:send` plus a webhook** (the vendor's direct
@@ -325,7 +326,7 @@ Vendor contract notes:
 - The NMS publishes no AgentCard, so discovery uses a static card; a real registry integration is
   a later step.
 
-The raw exchange is recorded in `runs/<runId>/wire.jsonl` (the pure OSS Agent writes
+The raw exchange is recorded in `runs/<runId>/wire.jsonl` (the A2A OSS Agent writes
 `wire-oss.jsonl` in the same directory) and failed frames in `wire-error.jsonl`, with credentials
 redacted.
 
@@ -336,24 +337,24 @@ webhook run runs at a time in a process and a second one gets an explicit confli
 public URL (a gateway forwards a fixed address) it never silently moves and instead explains that
 the port is in use.
 
-In pure + `--nms` the OSS Agent posts its NMS token/send/poll spans into the same run, so the session
+In A2A + `--nms` the OSS Agent posts its NMS token/send/poll spans into the same run, so the session
 trace shows `NMS session token acquired`, `NMS A2A stream opened` and the rest of the real
 downstream hop, and status text distinguishes `NMS` from the local `RAN Agent`. Use `--ui --mode confirm` for the send-time intent
 review; server-side approval 2 does not exist in NMS mode because the vendor owns execution.
 
 ### Two instances on one machine
 
-One instance can switch request forms in the page (`--protocol both`). Running two instances is
+One instance can switch request forms in the page (the UI default, `--protocol both`). Running two instances is
 still useful when each side needs its own NMS credentials, data directory or webhook endpoint. Each
 instance needs its own launcher state, data directory, UI port and webhook port:
 
-| | A2A-T | pure A2A |
+| | A2A-T | A2A |
 |---|---|---|
 | UI | 8080 | 8081 |
 | Webhook | 9000 | 9001 |
 | OSS Agent | not started | 8011 |
-| `A2AT_SAMPLE_RUN_DIR` | `%TEMP%/a2at-ran-energy-saving-adk` | `%TEMP%/a2at-ran-energy-saving-adk-pure` |
-| `A2AT_SAMPLE_RUNS_DIR` | `runs` | `runs-pure` |
+| `A2AT_SAMPLE_RUN_DIR` | `%TEMP%/a2at-ran-energy-saving-adk` | `%TEMP%/a2at-ran-energy-saving-adk-a2a` |
+| `A2AT_SAMPLE_RUNS_DIR` | `runs` | `runs-a2a` |
 
 ```bash
 # Instance A (A2A-T)
@@ -363,21 +364,21 @@ A2AT_SAMPLE_UI_PORT=8080 \
 A2AT_SAMPLE_WEBHOOK_PORT=9000 \
 python run_demo.py --nms --ui --brand huawei
 
-# Instance B (pure A2A: UI -> local OSS Agent -> NMS)
-A2AT_SAMPLE_RUN_DIR=/tmp/a2at-adk-pure \
-A2AT_SAMPLE_RUNS_DIR=runs-pure \
+# Instance B (A2A: UI -> local OSS Agent -> NMS)
+A2AT_SAMPLE_RUN_DIR=/tmp/a2at-adk-a2a \
+A2AT_SAMPLE_RUNS_DIR=runs-a2a \
 A2AT_SAMPLE_UI_PORT=8081 \
 A2AT_SAMPLE_WEBHOOK_PORT=9001 \
-python run_demo.py --nms --protocol pure --ui --brand huawei --oss-port 8011
+python run_demo.py --nms --protocol a2a --ui --brand huawei --oss-port 8011
 ```
 
 `--stop` reads only that instance's `A2AT_SAMPLE_RUN_DIR/pids.json`, so stopping B leaves A
-running. In pure + NMS the UI talks to the local OSS Agent over direct A2A/SSE; the OSS Agent talks
+running. In A2A + NMS the UI talks to the local OSS Agent over direct A2A/SSE; the OSS Agent talks
 to the NMS over plain A2A (webhook, or SSE for `--nms-sim`). The OSS Agent answers the NMS's
 `INPUT_REQUIRED` with the same ADK decision agent used by the A2A-T client and renders the decision
 as natural-language text.
 
-If the NMS rejects a pure follow-up that carries `taskId`, set
+If the NMS rejects a A2A follow-up that carries `taskId`, set
 `A2AT_SAMPLE_PURE_FOLLOWUP=context` (or `task` for `taskId` only) and retry; the default is `both`.
 
 A real NMS requires an https callback reachable through a gateway. Set
@@ -394,10 +395,11 @@ when a request declares or carries `Task-T`, the same agent runs the pre-task ne
 stamps A2A-T metadata on the result. The vendor NMS works the same way: one service, and the
 request says whether the extension is used.
 
-`--protocol both` starts that single agent and a page with a protocol switch:
+A UI launch now defaults to `--protocol both`: it starts that single agent and a page with a
+protocol switch. A CLI run defaults to A2A-T.
 
 ```bash
-uv run python -m demo.run_demo --protocol both --ui --model-mode offline
+uv run python -m demo.run_demo --ui --model-mode offline
 ```
 
 - **A2A** — standard Task lifecycle (`INPUT_REQUIRED` continuation). In the local topology the
@@ -406,12 +408,12 @@ uv run python -m demo.run_demo --protocol both --ui --model-mode offline
   Agent.
 
 Every run records its request form, so the session trace, metrics and history stay consistent when
-the page switches. `--protocol a2a-t` and `--protocol pure` remain available for a deployment that
+the page switches. `--protocol a2a-t` and `--protocol a2a` remain available for a deployment that
 serves only one form or for a deterministic CLI run.
 
-### Pure A2A mode (three hops, standard A2A only)
+### A2A mode (three hops, standard A2A only)
 
-`--protocol pure` starts a real three-hop A2A chain:
+`--protocol a2a` starts a real three-hop A2A chain:
 
 ```
 Engineer/UI ──A2A──► OSS Agent (:8001) ──A2A──► RAN Agent (:8000) ──A2A──► MIE Agent (:8002)
@@ -432,8 +434,8 @@ Engineer/UI ──A2A──► OSS Agent (:8001) ──A2A──► RAN Agent (:
   not exposed by the CLI or the page.
 
 ```bash
-# Pure A2A, three hops and human approval in MIE
-uv run python -m demo.run_demo --protocol pure --ui --approval-gate --scenario information
+# A2A, three hops and human approval in MIE
+uv run python -m demo.run_demo --protocol a2a --ui --approval-gate --scenario information
 
 # Existing A2A-T mode (Task-T + Negotiation-T), unchanged
 uv run python -m demo.run_demo --protocol a2a-t --ui --mode confirm --approval-gate --scenario information
@@ -481,7 +483,7 @@ the same scenarios, approves the human gate after a fixed delay (0.3 s by defaul
 uv run python -m demo.benchmark --model-mode live --scenarios information,target --repeats 3
 
 # One quick offline smoke (tokens are N/A because the scripted model reports no usage)
-uv run python -m demo.benchmark --protocols pure --scenarios information --repeats 1
+uv run python -m demo.benchmark --protocols a2a --scenarios information --repeats 1
 ```
 
 Offline runs still measure latency and accuracy; token fields are reported as `N/A` because the

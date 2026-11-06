@@ -512,12 +512,12 @@ Implementation details:
   `wire.jsonl` with the other headers, and the Web UI's `GET /api/runs/{id}/wire` serves those
   redacted records to the On-the-wire inspector.
 - The a2a-sdk HTTP transport writes the same record shape to `runs/<runId>/wire.jsonl`
-  (`protocol/wire_log.py`, an `httpx` request hook). Local A2A-T and pure A2A runs therefore show
+  (`protocol/wire_log.py`, an `httpx` request hook). Local A2A-T and A2A runs therefore show
   the exact `SendMessageRequest` body the SDK sent — `{"message": {...}}`, not the inner Message
   object rebuilt from a trace span. The inspector matches a captured record by A2A message id, so a
   multi-round run never renders another round's body. Without a capture it falls back to the
   documented envelope and labels the section accordingly.
-- The pure OSS Agent captures its downstream hop in `wire-oss.jsonl` (the NMS client or its own
+- The A2A OSS Agent captures its downstream hop in `wire-oss.jsonl` (the NMS client or its own
   a2a-sdk client), and posts its NMS tool spans into the same run through `HttpTraceEmitter`. The
   Web UI merges both wire files by timestamp.
 - The webhook callback is process-owned (`protocol/shared_webhook.py`): one receiver per process,
@@ -557,7 +557,7 @@ OperatorRequest → IntentProcessor → ProcessedIntent → normalized text
   with the **normalized text**. `run_client_flow` no longer receives the approval hook in processed
   mode; the Task-T is generated strictly from the normalized text (the structured `initial_data`
   shortcut is disabled).
-- Plain A2A sends the normalized text. Pure A2A sends the raw request to the OSS Agent, which runs
+- Plain A2A sends the normalized text. A2A sends the raw request to the OSS Agent, which runs
   its own processor, publishes the intent on the outer Task
   (`metadata.intentProcessed`) and forwards the normalized text to RAN.
 - The Gateway treats every inbound A2A text as raw input to the same layer.
@@ -732,9 +732,9 @@ edit an existing one.
 | the planner exceeds its step budget | the model keeps retrying | raise `A2AT_SAMPLE_PLANNER_MAX_STEPS` or tighten the prompt |
 | the UI task table is empty | `A2AT_SAMPLE_TASK_DB` is unset | set an absolute path and restart the server |
 
-### 4.6 Pure A2A three-hop mode
+### 4.6 A2A three-hop mode
 
-`--protocol pure` is a separate process topology from A2A-T:
+`--protocol a2a` is a separate process topology from A2A-T:
 
 ```
 Engineer/UI ──A2A──► OSS Agent ──A2A──► RAN Agent ──A2A──► MIE Agent
@@ -743,10 +743,10 @@ Engineer/UI ──A2A──► OSS Agent ──A2A──► RAN Agent ──A2A�
 A2A-T is an extension of A2A, so the RAN process can serve both forms. `--protocol both` builds
 `ProtocolDispatchHandler(PreTaskNegotiationHandler, PureTaskHandler)`: a request that declares or
 carries `Task-T` goes to the pre-task gate, and every other request gets the standard A2A Task
-lifecycle. The executor resolves `pure` per request (`is_plain_request`) instead of baking it at
+lifecycle. The executor resolves the request form per request (`is_plain_request`) instead of baking it at
 construction, so the final artifact metadata and the approval gate follow the request. The single
 `A2AT_SAMPLE_PROTOCOL_MODE=both` process therefore matches a vendor NMS that exposes both surfaces.
-`--protocol a2a-t` and `--protocol pure` remain as single-form builds for deployments that need
+`--protocol a2a-t` and `--protocol a2a` remain as single-form builds for deployments that need
 them.
 
 **RAN negotiation (`protocol/pure_a2a.py`).** `PureTaskHandler` inspects the inbound message:
@@ -759,7 +759,7 @@ them.
   re-proposes), and resumes the planner with the negotiated target. The budget is three rounds.
 
 The status update carries sample-local `pure` metadata (`kind`, `phase`, `round`, `proposal`,
-`plan`). It is not an A2A-T extension. Final report/status metadata is pure-aware
+`plan`). It is not an A2A-T extension. Final report/status metadata is A2A-aware
 (`_report_metadata(..., pure=True)`) and contains no `Task-T/v1`, `templateUri` or
 `negotiationContext`.
 
@@ -792,9 +792,9 @@ The legacy single-turn `plain` path (`protocol/plain_a2a.py`, `run_plain_client_
 internal baseline for tests. `POST /api/runs` still validates it, but the CLI and the page no longer
 expose it.
 
-#### 4.6.1 Pure A2A against the vendor NMS
+#### 4.6.1 A2A against the vendor NMS
 
-`--nms --protocol pure` keeps the OSS Agent and drops only the local RAN Agent and MIE:
+`--nms --protocol a2a` keeps the OSS Agent and drops only the local RAN Agent and MIE:
 
 ```text
 Engineer UI ──A2A (direct + SSE)──> OSS Agent ──A2A (nms + webhook)──> vendor NMS
@@ -812,7 +812,7 @@ Engineer UI ──A2A (direct + SSE)──> OSS Agent ──A2A (nms + webhook)�
   answer.
 - `_pending_negotiation` accepts any standard `TASK_STATE_INPUT_REQUIRED`, not only the sample's
   `pure` metadata; an MIE `approval` phase is still ignored by the OSS Agent.
-- Both NMS transports return immediately on `INPUT_REQUIRED` in pure mode instead of waiting for
+- Both NMS transports return immediately on `INPUT_REQUIRED` in A2A mode instead of waiting for
   the idle backstop or polling to a terminal state.
 - The follow-up carries `taskId` + `contextId` by default; `A2AT_SAMPLE_PURE_FOLLOWUP` selects
   `task`, `context`, or `both`.
@@ -831,7 +831,7 @@ spans, so the protocol layers do not need a second instrumentation path:
   benchmark never compares human click time with model time.
 - **Accuracy** compares the run with `RunSpec.expected_final_state`, the expected round count and
   `RunSpec.expected_negotiation_target`, plus report presence. A2A-T also compares the exact
-  performative sequence; pure A2A has no Negotiation-T performatives, so its answer rounds and final
+  performative sequence; A2A has no Negotiation-T performatives, so its answer rounds and final
   target are the comparable checks. The expected target comes from the scenario's accepted/corrected
   target in `demo/scenario.py`.
 
@@ -968,7 +968,7 @@ script can switch the model with a plain `export ADK_MODEL_NAME=...`.
 | `A2AT_SAMPLE_RUN_DIR` | unset; `%TEMP%/a2at-ran-energy-saving-adk` | Launcher state: `pids.json`, child logs and the per-run `.env`. Set a different value for a second instance so `--stop` only stops its own processes. |
 | `A2AT_SAMPLE_RUNS_DIR` | default `<sample>/runs` | Data directory: transcripts, client/task/gateway SQLite stores, each run's `wire.jsonl` and the Web UI history. Relative values resolve against the sample root. |
 | `A2AT_SAMPLE_ENV_FILE` | unset | Configuration file `run_demo.py` reads when `--env-file` is not passed. Each launch script can point at its own profile instead of relying on candidate guessing. |
-| `A2AT_SAMPLE_PURE_FOLLOWUP` | `both` (default), `task`, `context` | Conversation fields of a pure A2A follow-up. Switch to `context` when the vendor rejects a follow-up carrying `taskId`. |
+| `A2AT_SAMPLE_PURE_FOLLOWUP` | `both` (default), `task`, `context` | Conversation fields of a A2A follow-up. Switch to `context` when the vendor rejects a follow-up carrying `taskId`. |
 | `A2AT_SAMPLE_WEBHOOK_PORT` | default `9000` (`0` = ephemeral) | Embedded webhook receiver port. |
 | `A2AT_SAMPLE_WEBHOOK_TOKEN` | default `demo-webhook-token` | Static push token checked against `X-A2A-Notification-Token`; unused when `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` is set. |
 | `A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT` | default `300` (the HTTP budget) | Seconds without a push before a webhook phase ends; a phase must not end before the client gives up. |

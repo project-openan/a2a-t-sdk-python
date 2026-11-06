@@ -19,9 +19,11 @@ from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from shared.run_constants import (
     BRAND_ORANGE,
     DEMO_PROTOCOLS,
+    PROTOCOL_A2A_NAME,
     PROTOCOL_A2A_T,
     PROTOCOL_MODE_BOTH,
     SUPPORTED_BRANDS,
+    normalize_protocol_name,
 )
 
 
@@ -62,15 +64,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--server-url", default="", help="A2A server base URL used by the MIE approval")
     parser.add_argument("--approval-gate", action="store_true")
-    parser.add_argument(
-        "--approval-timeout", type=float, default=DEFAULT_APPROVAL_TIMEOUT_SECONDS
-    )
+    parser.add_argument("--approval-timeout", type=float, default=DEFAULT_APPROVAL_TIMEOUT_SECONDS)
     parser.add_argument("--allow-insecure-bind", action="store_true")
     parser.add_argument(
         "--protocol",
-        default=PROTOCOL_A2A_T,
-        choices=[*DEMO_PROTOCOLS, PROTOCOL_MODE_BOTH],
-        help="advertised interaction protocol, or both for the in-page switch",
+        default=PROTOCOL_MODE_BOTH,
+        choices=[*DEMO_PROTOCOLS, PROTOCOL_A2A_NAME, PROTOCOL_MODE_BOTH],
+        help="advertised interaction protocol (both by default; A2A-T / A2A for a single form)",
     )
     parser.add_argument(
         "--nms",
@@ -96,11 +96,12 @@ def run_ui(
     approval_gate: bool = False,
     approval_timeout: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
     allow_insecure_bind: bool = False,
-    protocol: str = PROTOCOL_A2A_T,
+    protocol: str = PROTOCOL_MODE_BOTH,
     nms: bool = False,
     mie_url: str | None = None,
 ) -> int:
     """Serve the Web UI until interrupted, returning a process exit code."""
+    protocol = normalize_protocol_name(protocol)
     import uvicorn
     from protocol.client_store import SqliteClientStore
     from shared.config import load_config
@@ -112,11 +113,7 @@ def run_ui(
 
     configure_logging()
     config = load_config(env_path=env_path)
-    client_store = (
-        SqliteClientStore(config.client_db_path)
-        if config.client_db_path is not None
-        else None
-    )
+    client_store = SqliteClientStore(config.client_db_path) if config.client_db_path is not None else None
     protocols = DEMO_PROTOCOLS if protocol == PROTOCOL_MODE_BOTH else (protocol,)
     default_protocol = PROTOCOL_A2A_T if protocol == PROTOCOL_MODE_BOTH else protocol
     try:

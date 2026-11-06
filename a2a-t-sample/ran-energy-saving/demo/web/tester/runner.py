@@ -60,7 +60,7 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def _pure_negotiation(run: RunState) -> tuple[str, int]:
+def _standard_a2a_negotiation(run: RunState) -> tuple[str, int]:
     """Return the negotiation kind and highest round observed on a standard-A2A run."""
     result = run.result
     events = result.events if result is not None else []
@@ -70,13 +70,13 @@ def _pure_negotiation(run: RunState) -> tuple[str, int]:
         metadata = event.get("metadata")
         if not isinstance(metadata, Mapping):
             continue
-        pure = metadata.get("pure")
-        if not isinstance(pure, Mapping) or pure.get("kind") != "negotiation":
+        detail = metadata.get("pure")
+        if not isinstance(detail, Mapping) or detail.get("kind") != "negotiation":
             continue
-        phase = pure.get("phase")
+        phase = detail.get("phase")
         if isinstance(phase, str) and phase:
             kinds.append(phase)
-        round_value = pure.get("round")
+        round_value = detail.get("round")
         if isinstance(round_value, int):
             rounds.append(round_value)
     return (kinds[0] if kinds else "none", max(rounds, default=0))
@@ -93,7 +93,7 @@ def _a2at_negotiation(run: RunState) -> tuple[str, int]:
 def _actual_negotiation(run: RunState) -> tuple[str, int]:
     """Return the actual negotiation kind/round of a run, whatever request form it used."""
     if run.protocol == PROTOCOL_PURE:
-        return _pure_negotiation(run)
+        return _standard_a2a_negotiation(run)
     return _a2at_negotiation(run)
 
 

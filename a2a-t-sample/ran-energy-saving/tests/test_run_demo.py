@@ -13,6 +13,12 @@ import demo.run_demo as run_demo
 import pytest
 from dotenv import dotenv_values
 from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
+from shared.run_constants import (
+    PROTOCOL_A2A_T,
+    PROTOCOL_MODE_BOTH,
+    PROTOCOL_PURE,
+    normalize_protocol_name,
+)
 
 
 def test_write_run_env_points_both_processes_at_the_task_database(
@@ -55,9 +61,7 @@ def test_write_run_env_points_both_processes_at_the_task_database(
     assert Path(str(values["A2AT_SAMPLE_RUNS_DIR"])) == run_demo.RUNS_DIR
 
 
-def test_write_run_env_keeps_nms_discovery_for_pure_nms(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_write_run_env_keeps_nms_discovery_for_pure_nms(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The OSS Agent reads the same .env; pure + NMS must keep nms discovery for it."""
     monkeypatch.setattr(run_demo, "RUN_DIR", tmp_path)
     env_path = run_demo._write_run_env(
@@ -167,6 +171,34 @@ def test_ui_host_default_reads_the_env_key(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.delenv("A2AT_SAMPLE_UI_HOST", raising=False)
     assert run_demo._ui_host_default({}) == run_demo.DEFAULT_UI_HOST
     assert run_demo._ui_host_default({"A2AT_SAMPLE_UI_HOST": "0.0.0.0"}) == "0.0.0.0"
+
+
+def test_the_user_facing_a2a_name_maps_to_the_standard_form() -> None:
+    """``a2a`` is accepted by the CLI while the internal value stays stable."""
+    assert normalize_protocol_name("a2a") == PROTOCOL_PURE
+    assert normalize_protocol_name("a2a-t") == PROTOCOL_A2A_T
+    assert normalize_protocol_name("both") == PROTOCOL_MODE_BOTH
+
+
+def test_the_web_ui_serves_both_protocols_by_default() -> None:
+    """A UI process advertises the in-page protocol switch unless one form is requested."""
+    from demo.web import serve
+
+    args = serve._build_parser().parse_args(
+        [
+            "--env-file",
+            ".env",
+            "--port",
+            "8080",
+            "--scenario",
+            "night",
+            "--mode",
+            "auto",
+            "--transport",
+            "sse",
+        ]
+    )
+    assert args.protocol == PROTOCOL_MODE_BOTH
 
 
 def test_parser_uses_the_configured_ui_port_default() -> None:
@@ -315,12 +347,10 @@ class TestServerReuseDecision:
     def test_protocol_mode_mismatch_restarts(self) -> None:
         """A pure-only server cannot serve the A2A-T switch of a ``both`` launch."""
         assert (
-            self.decide(state={**self.STATE, "protocol_mode": "pure"}, protocol_mode="a2a-t")
-            == run_demo.REUSE_RESTART
+            self.decide(state={**self.STATE, "protocol_mode": "pure"}, protocol_mode="a2a-t") == run_demo.REUSE_RESTART
         )
         assert (
-            self.decide(state={**self.STATE, "protocol_mode": "a2a-t"}, protocol_mode="both")
-            == run_demo.REUSE_RESTART
+            self.decide(state={**self.STATE, "protocol_mode": "a2a-t"}, protocol_mode="both") == run_demo.REUSE_RESTART
         )
 
     def test_legacy_record_defaults_to_a2a_t(self) -> None:
@@ -511,9 +541,7 @@ def test_write_run_env_carries_the_langfuse_keys(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(run_demo, "RUN_DIR", tmp_path)
     source = tmp_path / "source.env"
     source.write_text(
-        "LANGFUSE_PUBLIC_KEY=pk-lf-test\n"
-        "LANGFUSE_SECRET_KEY=sk-lf-test\n"
-        "LANGFUSE_BASE_URL=http://localhost:18080\n",
+        "LANGFUSE_PUBLIC_KEY=pk-lf-test\nLANGFUSE_SECRET_KEY=sk-lf-test\nLANGFUSE_BASE_URL=http://localhost:18080\n",
         encoding="utf-8",
     )
 
@@ -563,14 +591,10 @@ def test_write_run_env_lets_the_shell_override_the_webhook_callback(
         ui_port=8080,
     )
 
-    assert dotenv_values(env_path)["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] == (
-        "https://example.test:9001/webhook"
-    )
+    assert dotenv_values(env_path)["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] == ("https://example.test:9001/webhook")
 
 
-def test_write_run_env_lets_the_shell_override_the_model_keys(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_write_run_env_lets_the_shell_override_the_model_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A launcher script exporting the lab model must not be shadowed by the source .env."""
     monkeypatch.setattr(run_demo, "RUN_DIR", tmp_path)
     monkeypatch.setenv("ADK_MODEL_NAME", "openai/qwen3-32b")

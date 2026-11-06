@@ -8,7 +8,7 @@ latency and scenario accuracy per protocol and scenario.
 Usage::
 
     uv run python -m demo.benchmark --model-mode live --repeats 3
-    uv run python -m demo.benchmark --protocols pure --scenarios information --repeats 1
+    uv run python -m demo.benchmark --protocols a2a --scenarios information --repeats 1
 """
 
 from __future__ import annotations
@@ -34,9 +34,11 @@ from shared.config import SUPPORTED_MODEL_MODES
 from shared.run_constants import (
     DEMO_PROTOCOLS,
     LANGUAGE_ZH,
+    PROTOCOL_A2A_NAME,
     PROTOCOL_A2A_T,
     PROTOCOL_PURE,
     SUPPORTED_LANGUAGES,
+    normalize_protocol_name,
 )
 
 from demo.scenario import PURE_PROTOCOL_SCENARIOS, SCENARIO_INFORMATION, SCENARIO_TARGET
@@ -150,9 +152,7 @@ async def _start_stack(
     ]
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-    env["PYTHONPATH"] = str(CASE_DIR) + (
-        os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""
-    )
+    env["PYTHONPATH"] = str(CASE_DIR) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     log_handle = log_path.open("w", encoding="utf-8")
     process = subprocess.Popen(  # noqa: S603 - fixed local command, no shell
         command,
@@ -265,9 +265,7 @@ async def _run_once(
             response.raise_for_status()
             async for event in _iter_sse(response):
                 if event.get("type") == "approval_requested":
-                    task = asyncio.create_task(
-                        _approve_mie(client, str(event.get("taskId") or ""), approval_delay)
-                    )
+                    task = asyncio.create_task(_approve_mie(client, str(event.get("taskId") or ""), approval_delay))
                     approval_tasks.add(task)
                     task.add_done_callback(approval_tasks.discard)
 
@@ -321,17 +319,11 @@ async def run_benchmark(options: BenchmarkOptions) -> list[RunResult]:
     results: list[RunResult] = []
     options.out_dir.mkdir(parents=True, exist_ok=True)
     for protocol in options.protocols:
-        scenarios = [
-            name
-            for name in options.scenarios
-            if protocol != PROTOCOL_PURE or name in PURE_PROTOCOL_SCENARIOS
-        ]
+        scenarios = [name for name in options.scenarios if protocol != PROTOCOL_PURE or name in PURE_PROTOCOL_SCENARIOS]
         if not scenarios:
             continue
         log_path = options.out_dir / f"{protocol}.log"
-        process, client, _ = await _start_stack(
-            options, protocol, scenarios[0], log_path
-        )
+        process, client, _ = await _start_stack(options, protocol, scenarios[0], log_path)
         try:
             for scenario in scenarios:
                 for repeat in range(options.repeats):
@@ -348,9 +340,7 @@ async def run_benchmark(options: BenchmarkOptions) -> list[RunResult]:
                             ),
                             timeout=options.timeout + 30.0,
                         )
-                        results.append(
-                            RunResult(protocol=protocol, scenario=scenario, metrics=metrics)
-                        )
+                        results.append(RunResult(protocol=protocol, scenario=scenario, metrics=metrics))
                         print(
                             f"[benchmark] done {label}: "
                             f"passed={metrics.get('accuracy', {}).get('passed')} "
@@ -358,9 +348,7 @@ async def run_benchmark(options: BenchmarkOptions) -> list[RunResult]:
                             flush=True,
                         )
                     except Exception as exc:  # noqa: BLE001 - one failed run must not stop the matrix
-                        results.append(
-                            RunResult(protocol=protocol, scenario=scenario, error=str(exc))
-                        )
+                        results.append(RunResult(protocol=protocol, scenario=scenario, error=str(exc)))
                         print(f"[benchmark] failed {label}: {exc}", flush=True)
         finally:
             await _stop_stack(process, client)
@@ -373,9 +361,7 @@ def _write_report(options: BenchmarkOptions, results: list[RunResult]) -> Path:
     out_dir = options.out_dir / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
     rows = [result.metrics for result in results if result.metrics is not None]
-    (out_dir / "metrics.json").write_text(
-        json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    (out_dir / "metrics.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
     with (out_dir / "metrics.jsonl").open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -386,9 +372,7 @@ def _write_report(options: BenchmarkOptions, results: list[RunResult]) -> Path:
         json.dumps({"groups": summary, "protocols": protocols}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    (out_dir / "report.html").write_text(
-        _render_html(options, rows, summary, protocols, results), encoding="utf-8"
-    )
+    (out_dir / "report.html").write_text(_render_html(options, rows, summary, protocols, results), encoding="utf-8")
     return out_dir
 
 
@@ -443,6 +427,7 @@ def _render_html(
     results: list[RunResult],
 ) -> str:
     """Render one self-contained HTML report."""
+
     def cell(value: object, digits: int = 1) -> str:
         if value is None:
             return "—"
@@ -519,8 +504,7 @@ def _render_html(
         for row in rows
     ]
     failed = [
-        f"<li>{html.escape(result.protocol)}/{html.escape(result.scenario)}: "
-        f"{html.escape(result.error or '')}</li>"
+        f"<li>{html.escape(result.protocol)}/{html.escape(result.scenario)}: {html.escape(result.error or '')}</li>"
         for result in results
         if result.error
     ]
@@ -576,8 +560,12 @@ approval delay: {options.approval_delay:.1f}s</p>
 
 def _parse_args(argv: list[str] | None = None) -> BenchmarkOptions:
     """Parse the benchmark command line."""
-    parser = argparse.ArgumentParser(description="Compare the A2A-T and pure A2A modes.")
-    parser.add_argument("--protocols", default=",".join(DEMO_PROTOCOLS))
+    parser = argparse.ArgumentParser(description="Compare the A2A-T and A2A modes.")
+    parser.add_argument(
+        "--protocols",
+        default=",".join((PROTOCOL_A2A_T, PROTOCOL_A2A_NAME)),
+        help="comma-separated protocols: a2a-t, a2a",
+    )
     parser.add_argument("--scenarios", default=",".join(DEFAULT_SCENARIOS))
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--model-mode", default="offline", choices=list(SUPPORTED_MODEL_MODES))
@@ -586,10 +574,10 @@ def _parse_args(argv: list[str] | None = None) -> BenchmarkOptions:
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--out", default=str(DEFAULT_OUT_DIR))
     args = parser.parse_args(argv)
-    protocols = tuple(part.strip() for part in args.protocols.split(",") if part.strip())
+    protocols = tuple(normalize_protocol_name(part.strip()) for part in args.protocols.split(",") if part.strip())
     unknown = [name for name in protocols if name not in DEMO_PROTOCOLS]
     if unknown:
-        parser.error(f"unsupported protocols: {unknown}; expected {DEMO_PROTOCOLS}")
+        parser.error(f"unsupported protocols: {unknown}; expected {PROTOCOL_A2A_T} or {PROTOCOL_A2A_NAME}")
     scenarios = tuple(part.strip() for part in args.scenarios.split(",") if part.strip())
     if not scenarios:
         parser.error("at least one scenario is required")

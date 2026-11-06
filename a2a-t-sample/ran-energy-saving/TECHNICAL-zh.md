@@ -432,11 +432,11 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
   网管可据此把自身日志关联到一次 run；span-id 每次调用现生成。该头会和其他请求头一起写入
   `wire.jsonl`，Web UI 的 `GET /api/runs/{id}/wire` 把这些脱敏记录提供给 On-the-wire 检查器。
 - a2a-sdk 的 HTTP 传输也按同一记录格式写入 `runs/<runId>/wire.jsonl`（`protocol/wire_log.py`，
-  一个 `httpx` 请求钩子）。因此本地 A2A-T 和 pure A2A 运行显示的也是 SDK 实际发送的
+  一个 `httpx` 请求钩子）。因此本地 A2A-T 和 A2A 运行显示的也是 SDK 实际发送的
   `SendMessageRequest` body——`{"message": {...}}`，而不是从轨迹 span 重建的内部 Message 对象。
   检查器按 A2A message id 选择捕获记录，多轮运行不会把上一轮的 body 显示到当前轨迹行。没有捕获时
   回退到文档化的信封格式，并在头部区域明确标注。
-- pure 的 OSS Agent 把自己的下游 hop 写入 `wire-oss.jsonl`（网管客户端或本地 a2a-sdk 客户端），
+- A2A 模式的 OSS Agent 把自己的下游 hop 写入 `wire-oss.jsonl`（网管客户端或本地 a2a-sdk 客户端），
   并通过 `HttpTraceEmitter` 把网管 token/发送/轮询 span 上报到同一次 run；Web UI 按时间戳合并
   两个 wire 文件。
 - webhook 回调是进程级资源（`protocol/shared_webhook.py`）：每个进程启动一个接收端，由启动配置
@@ -472,7 +472,7 @@ OperatorRequest → IntentProcessor → ProcessedIntent → 规范化文本
 - `processed` 模式下 `ClientRuntime.run` 先发布 `intent_processed` trace，再用**规范化文本**调用
   审批 1；`run_client_flow` 不再接收审批钩子，Task-T 严格从规范化文本抽取（禁用
   `initial_data` 结构化快路径）。
-- Plain A2A 发送规范化文本。Pure A2A 由 OSS Agent 处理原文，在外层 Task 的
+- Plain A2A 发送规范化文本。A2A 由 OSS Agent 处理原文，在外层 Task 的
   `metadata.intentProcessed` 上发布意图，再把规范化文本转发给 RAN。
 - Gateway 的入站 A2A 文本一律视为 raw，进入同一处理层。
 - `A2AT_SAMPLE_INTENT_MODE`（`processed` / `raw`）、`--intent-mode` 和
@@ -598,9 +598,9 @@ artifact，并以 `COMPLETED` 结束。
 | planner 超过步数上限 | 模型反复试错 | 调大 `A2AT_SAMPLE_PLANNER_MAX_STEPS` 或收紧提示词 |
 | UI 任务表为空 | 未设置 `A2AT_SAMPLE_TASK_DB` | 设置绝对路径后重启服务端 |
 
-### 4.6 纯 A2A 三跳模式
+### 4.6 A2A 三跳模式
 
-`--protocol pure` 使用与 A2A-T 不同的进程拓扑：
+`--protocol a2a` 使用与 A2A-T 不同的进程拓扑：
 
 ```
 工程师/UI ──A2A──► OSS Agent ──A2A──► RAN Agent ──A2A──► MIE Agent
@@ -608,10 +608,10 @@ artifact，并以 `COMPLETED` 结束。
 
 A2A-T 是 A2A 的扩展，所以 RAN 进程可以同时服务两种形态。`--protocol both` 构建
 `ProtocolDispatchHandler(PreTaskNegotiationHandler, PureTaskHandler)`：声明或携带 `Task-T` 的请求
-进入预任务协商门，其余请求走标准 A2A Task 生命周期。执行器不再在构造时固定 `pure`，而是按请求
+进入预任务协商门，其余请求走标准 A2A Task 生命周期。执行器不再在构造时固定请求形态，而是按请求
 判定（`is_plain_request`），因此最终 artifact metadata 和审批门都跟随请求。一个
 `A2AT_SAMPLE_PROTOCOL_MODE=both` 进程即对应真机网管那种“一个服务、扩展可选”的形态。
-`--protocol a2a-t` / `--protocol pure` 仍保留为单形态构建，供只需要一种形态的部署使用。
+`--protocol a2a-t` / `--protocol a2a` 仍保留为单形态构建，供只需要一种形态的部署使用。
 
 **RAN 协商（`protocol/pure_a2a.py`）。** `PureTaskHandler` 检查入站消息：
 
@@ -649,9 +649,9 @@ A2A-T run（`A2AT_SAMPLE_PURE_APPROVAL_GATE`）。页面代理 `/api/mie/events`
 旧的单轮 `plain` 路径（`protocol/plain_a2a.py`、`run_plain_client_flow`）保留为测试内部基线。
 `POST /api/runs` 仍接受它，但 CLI 和页面不再暴露。
 
-#### 4.6.1 pure A2A 对接真实网管
+#### 4.6.1 A2A 对接真实网管
 
-`--nms --protocol pure` 保留 OSS Agent，只去掉本地 RAN Agent 和 MIE：
+`--nms --protocol a2a` 保留 OSS Agent，只去掉本地 RAN Agent 和 MIE：
 
 ```text
 Engineer UI ──A2A (direct + SSE)──> OSS Agent ──A2A (nms + webhook)──> 真实网管
@@ -667,7 +667,7 @@ Engineer UI ──A2A (direct + SSE)──> OSS Agent ──A2A (nms + webhook)�
   目标/理由。离线仿真器使用确定性回答。
 - `_pending_negotiation` 接受任意标准 `TASK_STATE_INPUT_REQUIRED`，不再要求样例私有的 `pure`
   元数据；MIE 的 `approval` 阶段仍会被 OSS Agent 忽略。
-- pure 模式下两种 NMS 传输收到 `INPUT_REQUIRED` 立即返回，不再等 idle 兜底或轮询终态。
+- A2A 模式下两种 NMS 传输收到 `INPUT_REQUIRED` 立即返回，不再等 idle 兜底或轮询终态。
 - follow-up 默认同时带 `taskId` + `contextId`；`A2AT_SAMPLE_PURE_FOLLOWUP` 可选 `task`、
   `context` 或 `both`。
 
@@ -683,7 +683,7 @@ Engineer UI ──A2A (direct + SSE)──> OSS Agent ──A2A (nms + webhook)�
 - **耗时**：把总时间拆成模型、工具、人工审批等待和其余编排时间。审批等待由
   `requested`/`approved|rejected` 两个 span 配对计算，基准不会把人工点击时间算进模型耗时。
 - **准确率**：对比 `RunSpec.expected_final_state`、期望轮次、`RunSpec.expected_negotiation_target`
-  和报告是否存在。A2A-T 还比较完整的 performative 序列；pure A2A 没有 Negotiation-T performative，
+  和报告是否存在。A2A-T 还比较完整的 performative 序列；A2A 没有 Negotiation-T performative，
   因此用协商轮次和最终目标作为可比项。期望目标来自 `demo/scenario.py` 中场景的接受/修正目标。
 
 `RunManager` 在短暂的 trace 刷写窗口后（`metrics_grace_seconds`，`run_demo.py` 中为 2 秒）持久化，
@@ -789,7 +789,7 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_SAMPLE_RUN_DIR` | 未设置；`%TEMP%/a2at-ran-energy-saving-adk` | 启动器状态目录：`pids.json`、子进程日志和每次运行的 `.env`。第二个实例设置不同值，`--stop` 只停自己的进程。 |
 | `A2AT_SAMPLE_RUNS_DIR` | 默认 `<sample>/runs` | 数据目录：transcript、client/task/gateway SQLite、每次 run 的 `wire.jsonl` 和 Web UI 历史。相对路径按 sample 根目录解析。 |
 | `A2AT_SAMPLE_ENV_FILE` | 未设置 | 未传 `--env-file` 时 `run_demo.py` 读取的配置文件。每个启动脚本可以指向自己的配置，不再依赖候选路径猜测。 |
-| `A2AT_SAMPLE_PURE_FOLLOWUP` | `both`（默认）、`task`、`context` | pure A2A follow-up 携带的会话字段。网管拒绝带 `taskId` 的 follow-up 时切到 `context`。 |
+| `A2AT_SAMPLE_PURE_FOLLOWUP` | `both`（默认）、`task`、`context` | A2A follow-up 携带的会话字段。网管拒绝带 `taskId` 的 follow-up 时切到 `context`。 |
 | `A2AT_SAMPLE_WEBHOOK_PORT` | 默认 `9000`（`0` = 临时端口） | 内置 webhook 接收器端口。 |
 | `A2AT_SAMPLE_WEBHOOK_TOKEN` | 默认 `demo-webhook-token` | 与 `X-A2A-Notification-Token` 比对的静态推送 token；设置 `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` 后不再使用。 |
 | `A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT` | 默认 `300`（与 HTTP 预算一致） | 无推送多少秒后结束 webhook 阶段；阶段不能早于客户端预算结束。 |
