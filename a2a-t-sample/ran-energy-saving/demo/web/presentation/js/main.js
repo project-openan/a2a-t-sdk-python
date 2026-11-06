@@ -18,6 +18,7 @@ import {
   continuityModel,
   createState,
   endingOf,
+  keepsAttemptChain,
   negotiationExpected,
   pendingHuman,
   stageOf,
@@ -212,6 +213,8 @@ const ui = {
   brand: document.documentElement.dataset.brand || "orange",
   selected: null,
   retryParentRunId: null,
+  //: Conversation and vendor trace of a blocked attempt; the corrected retry reuses them.
+  attempt: null,
   protocol: "a2a-t",
   compareSaved: null,
   resultRevealed: null,
@@ -680,6 +683,8 @@ function resetRunState() {
 function selectScenario(name, { start = false } = {}) {
   clearModifyTarget(true);
   ui.selected = name;
+  // A new example is a new intent, not a retry of a blocked attempt.
+  ui.attempt = null;
   renderProtocol();
   resetRunState();
   els.requestText.value = ui.meta?.scenarioRequests?.[name] || "";
@@ -692,6 +697,8 @@ function selectScenario(name, { start = false } = {}) {
 
 function resetRequest() {
   if (ui.busy) return;
+  // The reset discards the edited request, so a following Start is a fresh attempt.
+  ui.attempt = null;
   els.requestText.value = ui.targetTask
     ? ui.modifyRequest || ui.meta?.modifyRequest || ""
     : ui.meta?.scenarioRequests?.[ui.selected] || "";
@@ -866,6 +873,8 @@ function applyModifyTarget() {
   renderPresets();
   renderProtocol();
   resetRunState();
+  // A Modify is a different intent; do not inherit an intercepted attempt's session.
+  ui.attempt = null;
   ui.targetTask = task;
   ui.modifyRequest = ui.meta?.modifyRequest || "";
   els.requestText.value = ui.modifyRequest;
@@ -888,6 +897,8 @@ async function startRun() {
   const request = els.requestText.value.trim();
   const parentRunId = ui.retryParentRunId;
   ui.retryParentRunId = null;
+  // A retry of a blocked request keeps the first attempt's session and vendor trace.
+  const attempt = ui.attempt;
   hideError();
   resetRunState();
   clear(els.techLog);
@@ -914,6 +925,12 @@ async function startRun() {
         // backend use the richer catalog prompt that the live model extracts Task-T from.
         userRequest: ui.targetTask || (request && request !== defaultRequest) ? request : undefined,
         protocol: ui.protocol,
+        ...(attempt
+          ? {
+              conversationId: attempt.conversationId,
+              traceId: attempt.traceId,
+            }
+          : {}),
         ...(ui.targetTask
           ? {
               targetTaskId: ui.targetTask.taskId,
@@ -927,6 +944,12 @@ async function startRun() {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (!attempt) {
+      ui.attempt = {
+        conversationId: payload.conversationId,
+        traceId: payload.traceId || payload.runId,
+      };
+    }
     ui.view.runId = payload.runId;
     subscribe(payload.runId);
     render();
@@ -1010,6 +1033,9 @@ function subscribe(runId) {
     if (frame.type === "finished") {
       closeStream();
       setBusy(false);
+      // ``enqueueFrame`` has just applied this frame to the shadow state, so the send marker is
+      // current when deciding whether the next Start continues the blocked attempt.
+      if (!keepsAttemptChain(frame, ui.shadow)) ui.attempt = null;
     }
   };
 }

@@ -588,6 +588,21 @@ function applyTrace(state, span) {
   return state;
 }
 
+/**
+ * Whether a retry should stay in the attempt chain of a terminal frame.
+ *
+ * A request blocked before it was sent (validation gate, intent rejection or a Task-T generation
+ * failure) keeps the conversation and trace id so the corrected retry is one session and one
+ * vendor trace. A run that reached the server already owns its trace; a completed or cancelled
+ * run starts a new one next time.
+ */
+export function keepsAttemptChain(frame, state) {
+  if (!frame || frame.type !== "finished") return false;
+  const finalState = typeof frame.finalState === "string" ? frame.finalState : "";
+  if (finalState === "input_invalid" || finalState === "intent_not_confirmed") return true;
+  return frame.status === "failed" && !state?.taskTSent;
+}
+
 /** The act the page should show. */
 export function stageOf(state) {
   if (state.status === STATUS.CANCELED) return "canceled";

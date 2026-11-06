@@ -781,6 +781,7 @@ def create_app(
         for field_name in (
             "conversationId",
             "externalConversationId",
+            "traceId",
             "userId",
             "idempotencyKey",
         ):
@@ -928,6 +929,7 @@ def create_app(
                 protocol=str(protocol),
                 conversation_id=optional_strings["conversationId"],
                 external_conversation_id=optional_strings["externalConversationId"],
+                trace_id=optional_strings["traceId"],
                 user_id=optional_strings["userId"] or "web-user",
                 idempotency_key=optional_strings["idempotencyKey"],
                 intent_mode=str(intent_mode),
@@ -944,6 +946,7 @@ def create_app(
             {
                 "runId": run.run_id,
                 "conversationId": run.conversation_id,
+                "traceId": run.trace_id,
                 "deduplicated": reused,
                 "protocol": run.protocol,
                 "language": config.language,

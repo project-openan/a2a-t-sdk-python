@@ -1087,6 +1087,58 @@ async def test_second_start_is_rejected_while_a_run_is_active(
     await _wait_status(client, run_id, lambda data: data["status"] != "running")
 
 
+async def test_start_reuses_the_conversation_and_trace_id_of_a_retry(
+    client: httpx.AsyncClient,
+) -> None:
+    """A blocked attempt and its retry can share the client session and vendor trace."""
+    trace_id = "0123456789abcdef0123456789abcdef"
+    response = await client.post(
+        "/api/runs",
+        json={
+            "scenario": "information",
+            "mode": "auto",
+            "transport": "sse",
+            "conversationId": "conv-retry",
+            "traceId": trace_id,
+        },
+    )
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["conversationId"] == "conv-retry"
+    assert payload["traceId"] == trace_id
+
+    snapshot = (await client.get(f"/api/runs/{payload['runId']}")).json()
+    assert snapshot["conversationId"] == "conv-retry"
+    assert snapshot["traceId"] == trace_id
+
+
+async def test_start_defaults_the_trace_id_to_the_run_id(client: httpx.AsyncClient) -> None:
+    """The first attempt already exposes the id a blocked retry will send to the vendor."""
+    response = await client.post(
+        "/api/runs",
+        json={"scenario": "information", "mode": "auto", "transport": "sse"},
+    )
+
+    payload = response.json()
+    assert payload["traceId"] == payload["runId"]
+
+
+async def test_start_rejects_an_invalid_trace_id(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        "/api/runs",
+        json={
+            "scenario": "information",
+            "mode": "auto",
+            "transport": "sse",
+            "traceId": "not-a-trace-id",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_run"
+
+
 async def test_unknown_run_returns_404(client: httpx.AsyncClient) -> None:
     assert (await client.get("/api/runs/missing")).status_code == 404
     assert (await client.get("/api/runs/missing/events")).status_code == 404

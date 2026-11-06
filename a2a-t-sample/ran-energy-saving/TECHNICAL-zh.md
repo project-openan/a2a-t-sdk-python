@@ -440,9 +440,11 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
 - 每次交互写入 `runs/<runId>/wire.jsonl`（`A2AT_SAMPLE_NMS_WIRE_LOG` 开启时），
   `Authorization`、`X-Auth-Token`、`accessSession` 和 cookie 已脱敏；无法解析的帧写入
   `wire-error.jsonl`。
-- 每次发往网管的 A2A 调用都携带 W3C `traceparent`：trace-id 使用 run id（32 位 hex），
-  网管可据此把自身日志关联到一次 run；span-id 每次调用现生成。该头会和其他请求头一起写入
-  `wire.jsonl`，Web UI 的 `GET /api/runs/{id}/wire` 把这些脱敏记录提供给 On-the-wire 检查器。
+- 每次发往网管的 A2A 调用都携带 W3C `traceparent`：trace-id 默认使用 run id（32 位 hex），
+  网管可据此把自身日志关联到一次 run；span-id 每次调用现生成。重试可以在
+  `POST /api/runs` 上传入被拦截那次的 `traceId`，此时网管收到的原始请求与重试请求使用同一个
+  trace-id。该头会和其他请求头一起写入 `wire.jsonl`，Web UI 的 `GET /api/runs/{id}/wire`
+  把这些脱敏记录提供给 On-the-wire 检查器。
 - a2a-sdk 的 HTTP 传输也按同一记录格式写入 `runs/<runId>/wire.jsonl`（`protocol/wire_log.py`，
   一个 `httpx` 请求钩子）。因此本地 A2A-T 和 A2A 运行显示的也是 SDK 实际发送的
   `SendMessageRequest` body——`{"message": {...}}`，而不是从轨迹 span 重建的内部 Message 对象。
@@ -520,7 +522,7 @@ A2A-T 模式下，客户端可以在发送前用 SDK 的内容校验检查渲染
   - `llm.*` / `infra.*` 失败降级为 **unavailable**：记录 warning 后继续发送，模型故障不会中断演示。
 - 两阶段 Modify 的 Task-T 走同一道门；Modify 被阻断时先取消基线 Task，再结束 run。
 - `A2AT_SAMPLE_PRE_SEND_VALIDATION` 控制范围：`on`（默认）只在 run 来源为演示页时启用，`always` 覆盖所有入口，`off` 关闭。
-- 演示页内联展示错误：可协商项显示在意图卡下；阻断项变成校验卡，预填原始请求，工程师修改后**新建一次 run** 重试。失败的 run 保留在历史中，并通过 `source.parentRunId` 关联。
+- 演示页内联展示错误：可协商项显示在意图卡下；阻断项变成校验卡，预填原始请求，工程师修改后**新建一次 run** 重试。失败的 run 保留在历史中，并通过 `source.parentRunId` 关联。重试同时沿用被拦截 run 的 `conversationId` 和 `traceId`，因此拦截前和拦截后的两次请求属于同一个客户端会话、同一个网管 trace；已经发出、正常完成或被取消的 run 会结束这条链，下一次请求重新开会话。
 
 ## 4. 网管侧开发指南（操作）
 

@@ -6,10 +6,12 @@ import httpx
 import pytest
 from shared.trace_propagation import (
     CONVERSATION_ID_HEADER,
+    DOWNSTREAM_TRACE_ID_HEADER,
     RUN_ID_HEADER,
     TRACEPARENT_HEADER,
     USER_ID_HEADER,
     TracePropagationMiddleware,
+    current_downstream_trace_id,
     current_trace_id,
     extract_trace_id,
     extract_traceparent,
@@ -74,6 +76,47 @@ async def test_a_non_hex_run_id_is_hashed_into_a_valid_trace_id() -> None:
     trace_id, _ = extract_traceparent(request.headers)
     assert len(trace_id) == 32
     assert trace_id != "0" * 32
+
+
+async def test_a_downstream_trace_id_travels_on_its_own_header() -> None:
+    """The vendor-facing correlation id is independent of the local A2A trace id."""
+    request = httpx.Request("POST", "http://agent.test/a2a/json/message:send")
+    with propagated_trace(run_id="run-1", downstream_trace_id=_TRACE_ID):
+        await inject_outgoing(request)
+
+    assert request.headers[DOWNSTREAM_TRACE_ID_HEADER] == _TRACE_ID
+    # The local A2A hop still correlates on the active trace id / run id.
+    assert request.headers[TRACEPARENT_HEADER].startswith("00-")
+
+    request = httpx.Request("POST", "http://agent.test/a2a/json/message:send")
+    with propagated_trace(run_id="run-1"):
+        await inject_outgoing(request)
+
+    assert DOWNSTREAM_TRACE_ID_HEADER not in request.headers
+
+
+async def test_the_middleware_binds_the_incoming_downstream_trace_id() -> None:
+    seen: list[str] = []
+
+    async def app(scope: dict[str, object], receive: object, send: object) -> None:
+        del scope, receive, send
+        seen.append(current_downstream_trace_id())
+
+    middleware = TracePropagationMiddleware(app)
+    await middleware(
+        {
+            "type": "http",
+            "headers": [
+                (RUN_ID_HEADER.encode(), b"run-1"),
+                (DOWNSTREAM_TRACE_ID_HEADER.encode(), _TRACE_ID.encode()),
+            ],
+        },
+        object(),
+        object(),
+    )
+
+    assert seen == [_TRACE_ID]
+    assert current_downstream_trace_id() == ""
 
 
 async def test_no_run_id_means_no_traceparent() -> None:

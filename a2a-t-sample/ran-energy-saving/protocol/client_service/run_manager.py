@@ -223,6 +223,7 @@ class RunManager:
         protocol: str = PROTOCOL_A2A_T,
         conversation_id: str | None = None,
         external_conversation_id: str | None = None,
+        trace_id: str | None = None,
         user_id: str = "web-user",
         idempotency_key: str | None = None,
         intent_mode: str | None = None,
@@ -243,6 +244,8 @@ class RunManager:
             protocol: interaction protocol (``a2a-t`` / ``plain``); keyword-only.
             conversation_id: client conversation; generated when omitted.
             external_conversation_id: caller-side conversation id (Gemini Enterprise, console).
+            trace_id: stable vendor-facing trace id; defaults to the new run id. A retry of a
+                blocked run passes the blocked run's trace id so the vendor sees one trace.
             user_id: caller identity.
             idempotency_key: optional key that deduplicates a repeated request.
             intent_mode: per-run override of the process intent mode (``processed`` / ``raw``).
@@ -273,6 +276,13 @@ class RunManager:
             raise ValueError(
                 f"Unsupported intent mode: {resolved_intent_mode}; expected one of {SUPPORTED_INTENT_MODES}"
             )
+        resolved_trace_id = (trace_id or "").strip().lower()
+        if resolved_trace_id and (
+            len(resolved_trace_id) != 32
+            or resolved_trace_id == "0" * 32
+            or any(char not in "0123456789abcdef" for char in resolved_trace_id)
+        ):
+            raise ValueError("trace_id must be 32 lowercase hex digits.")
         resolved_conversation = conversation_id or f"conv-{uuid.uuid4().hex}"
         active = self.active_for_conversation(resolved_conversation)
         if active is not None:
@@ -299,8 +309,10 @@ class RunManager:
             if resolved_intent_mode == INTENT_MODE_PROCESSED and spec.intent is not None
             else None
         )
+        run_uuid = uuid.uuid4().hex
         run = RunState(
-            run_id=uuid.uuid4().hex,
+            run_id=run_uuid,
+            trace_id=resolved_trace_id or run_uuid,
             scenario=scenario,
             mode=mode,
             transport=transport,
@@ -391,6 +403,7 @@ class RunManager:
             run_id=run.run_id,
             conversation_id=run.conversation_id,
             user_id=run.user_id,
+            downstream_trace_id=run.trace_id,
         )
         try:
             run.task = asyncio.create_task(self._execute_in_context(run), name=f"ran-client-run-{run.run_id}")
@@ -524,6 +537,8 @@ class RunManager:
         """Build a read-only run view for an idempotent replay."""
         run = RunState(
             run_id=record.run_id,
+            # The store does not persist the vendor trace id; a replay falls back to the run id.
+            trace_id=record.run_id,
             scenario=record.scenario,
             mode=record.mode,
             transport=record.transport,

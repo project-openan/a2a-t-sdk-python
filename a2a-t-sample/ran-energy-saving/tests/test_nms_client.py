@@ -27,6 +27,7 @@ from protocol.nms_client import (
 )
 from shared.run_constants import PROTOCOL_PURE
 from shared.trace import trace_scope
+from shared.trace_propagation import propagated_trace
 
 TOKEN_URL = "https://nms.example:27417/rest/plat/smapp/v1/sessions"
 A2A_BASE = "https://nms.example:31127/a2a/json"
@@ -876,6 +877,30 @@ async def test_traceparent_carries_the_run_id_as_the_w3c_trace_id() -> None:
 
     version, trace_id, span_id, flags = seen[0].split("-")
     assert (version, trace_id, flags) == ("00", run_id, "01")
+    assert len(span_id) == 16 and all(char in "0123456789abcdef" for char in span_id)
+    await client.aclose()
+
+
+async def test_traceparent_prefers_the_stable_downstream_trace_id() -> None:
+    """A blocked request and its retry carry the same vendor-facing trace id."""
+    seen: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        seen.append(request.headers["traceparent"])
+        return httpx.Response(200, json={"task": {"id": "task-1"}})
+
+    client = _client(httpx.MockTransport(handle))
+    run_id = "0123456789abcdef0123456789abcdef"
+    stable_trace_id = "fedcba9876543210fedcba9876543210"
+    with trace_scope(run_id=run_id), propagated_trace(
+        run_id=run_id, downstream_trace_id=stable_trace_id
+    ):
+        await client.send_message({"message": {"messageId": "m1"}})
+
+    version, trace_id, span_id, flags = seen[0].split("-")
+    assert (version, trace_id, flags) == ("00", stable_trace_id, "01")
     assert len(span_id) == 16 and all(char in "0123456789abcdef" for char in span_id)
     await client.aclose()
 

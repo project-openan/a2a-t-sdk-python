@@ -11,8 +11,10 @@ Langfuse as unrelated traces. This module:
 * starts one lightweight bridge span carrying ``langfuse.trace.metadata.runId`` (the fallback when
   the server has its own trace instead of joining).
 
-The vendor NMS keeps its own ``traceparent`` (the run id) because it does not export to the same
-Langfuse project; only local a2a-sdk hops use this module.
+The vendor NMS keeps its own ``traceparent`` because it does not export to the same Langfuse
+project. Its trace id defaults to the run id, but a run may carry a stable downstream trace id so a
+blocked attempt and its retry reach the vendor under the same trace; only local a2a-sdk hops use the
+OTel parts of this module.
 """
 
 from __future__ import annotations
@@ -37,6 +39,9 @@ TRACEPARENT_HEADER: Final[str] = "traceparent"
 RUN_ID_HEADER: Final[str] = "x-a2at-run-id"
 CONVERSATION_ID_HEADER: Final[str] = "x-a2at-conversation-id"
 USER_ID_HEADER: Final[str] = "x-a2at-user-id"
+#: Downstream correlation id carried across local A2A hops and used for the vendor NMS
+#: ``traceparent``. Unlike the run id it can stay the same across a retry run.
+DOWNSTREAM_TRACE_ID_HEADER: Final[str] = "x-a2at-downstream-trace-id"
 
 #: Langfuse trace metadata attribute (same contract as :mod:`shared.langfuse_tracing`).
 TRACE_NAME_ATTRIBUTE: Final[str] = "langfuse.trace.name"
@@ -50,6 +55,7 @@ _PARENT_SPAN_ID: ContextVar[str] = ContextVar("a2at_active_parent_span_id", defa
 _RUN_ID: ContextVar[str] = ContextVar("a2at_active_run_id", default="")
 _CONVERSATION_ID: ContextVar[str] = ContextVar("a2at_active_conversation_id", default="")
 _USER_ID: ContextVar[str] = ContextVar("a2at_active_user_id", default="")
+_DOWNSTREAM_TRACE_ID: ContextVar[str] = ContextVar("a2at_downstream_trace_id", default="")
 
 
 def _is_hex(value: str, length: int) -> bool:
@@ -72,7 +78,8 @@ def set_active_trace(
     run_id: str | None = None,
     conversation_id: str | None = None,
     user_id: str | None = None,
-) -> tuple[Token[str], Token[str], Token[str], Token[str], Token[str]]:
+    downstream_trace_id: str | None = None,
+) -> tuple[Token[str], Token[str], Token[str], Token[str], Token[str], Token[str]]:
     """Set the correlation values used by outgoing requests; return their reset tokens."""
     return (
         _TRACE_ID.set(trace_id or ""),
@@ -80,19 +87,21 @@ def set_active_trace(
         _RUN_ID.set(run_id or ""),
         _CONVERSATION_ID.set(conversation_id or ""),
         _USER_ID.set(user_id or ""),
+        _DOWNSTREAM_TRACE_ID.set(downstream_trace_id or ""),
     )
 
 
 def reset_active_trace(
-    tokens: tuple[Token[str], Token[str], Token[str], Token[str], Token[str]],
+    tokens: tuple[Token[str], Token[str], Token[str], Token[str], Token[str], Token[str]],
 ) -> None:
     """Restore the correlation values saved by :func:`set_active_trace`."""
-    trace_token, parent_token, run_token, conversation_token, user_token = tokens
+    trace_token, parent_token, run_token, conversation_token, user_token, downstream_token = tokens
     _TRACE_ID.reset(trace_token)
     _PARENT_SPAN_ID.reset(parent_token)
     _RUN_ID.reset(run_token)
     _CONVERSATION_ID.reset(conversation_token)
     _USER_ID.reset(user_token)
+    _DOWNSTREAM_TRACE_ID.reset(downstream_token)
 
 
 @contextmanager
@@ -103,6 +112,7 @@ def propagated_trace(
     run_id: str | None = None,
     conversation_id: str | None = None,
     user_id: str | None = None,
+    downstream_trace_id: str | None = None,
 ) -> Iterator[None]:
     """Bind the correlation values for the duration of one run or request."""
     tokens = set_active_trace(
@@ -111,6 +121,7 @@ def propagated_trace(
         run_id=run_id,
         conversation_id=conversation_id,
         user_id=user_id,
+        downstream_trace_id=downstream_trace_id,
     )
     try:
         yield
@@ -126,6 +137,11 @@ def current_trace_id() -> str:
 def current_run_id() -> str:
     """Return the sample run id carried by the current request, ``""`` when absent."""
     return _RUN_ID.get().strip()
+
+
+def current_downstream_trace_id() -> str:
+    """Return the vendor-facing trace id bound to this run, ``""`` when absent."""
+    return _valid_trace_id(_DOWNSTREAM_TRACE_ID.get())
 
 
 def _fallback_trace_id() -> str:
@@ -230,6 +246,9 @@ async def inject_outgoing(request: httpx.Request) -> None:
         user_id = _USER_ID.get().strip()
         if user_id:
             request.headers[USER_ID_HEADER] = user_id
+        downstream_trace_id = current_downstream_trace_id()
+        if downstream_trace_id:
+            request.headers[DOWNSTREAM_TRACE_ID_HEADER] = downstream_trace_id
     except Exception:  # noqa: BLE001 - propagation never breaks the call
         _LOGGER.debug("traceparent injection failed", exc_info=True)
 
@@ -268,6 +287,7 @@ class TracePropagationMiddleware:
             run_id=headers.get(RUN_ID_HEADER, ""),
             conversation_id=headers.get(CONVERSATION_ID_HEADER, ""),
             user_id=headers.get(USER_ID_HEADER, ""),
+            downstream_trace_id=headers.get(DOWNSTREAM_TRACE_ID_HEADER, ""),
         )
         otel_tokens = _attach_otel_context(headers)
         try:
@@ -337,11 +357,13 @@ def _detach_otel_context(tokens: tuple[Any, Any, Any] | None) -> None:
 
 __all__ = [
     "CONVERSATION_ID_HEADER",
+    "DOWNSTREAM_TRACE_ID_HEADER",
     "RUN_ID_HEADER",
     "TRACEPARENT_HEADER",
     "TracePropagationMiddleware",
     "USER_ID_HEADER",
     "annotate_run_id",
+    "current_downstream_trace_id",
     "current_run_id",
     "current_trace_id",
     "current_traceparent",

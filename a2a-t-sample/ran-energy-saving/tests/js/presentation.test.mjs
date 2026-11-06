@@ -12,6 +12,7 @@ import {
   createState,
   endingOf,
   executionSteps,
+  keepsAttemptChain,
   negotiationExpected,
   pendingHuman,
   pushTrace,
@@ -66,6 +67,44 @@ assert.deepEqual(
 assert.deepEqual(copyFor("en-US").roles.ossSkills, ["Skill 1 · Energy saving", "Skill 2 · Planned outage"]);
 assert.deepEqual(copy.roles.ossSkills, ["技能 1 · 节能", "技能 2 · 计划停电"]);
 assert.equal(copy.roles.ossSkillTools, undefined);
+
+// A retry after a pre-send block keeps the attempt chain (conversation and trace id); a run that
+// reached the server, completed or was cancelled starts a new one.
+assert.equal(
+  keepsAttemptChain(
+    { type: "finished", status: "finished", finalState: "input_invalid" },
+    createState(),
+  ),
+  true,
+);
+assert.equal(
+  keepsAttemptChain(
+    { type: "finished", status: "failed", error: "PromptGenerationError: 'Task Target' is not provided" },
+    createState(),
+  ),
+  true,
+);
+assert.equal(
+  keepsAttemptChain(
+    { type: "finished", status: "failed", error: "negotiation failed" },
+    { ...createState(), taskTSent: true },
+  ),
+  false,
+);
+assert.equal(
+  keepsAttemptChain(
+    { type: "finished", status: "finished", finalState: "task_completed" },
+    createState(),
+  ),
+  false,
+);
+assert.equal(
+  keepsAttemptChain(
+    { type: "finished", status: "interrupted", finalState: null },
+    createState(),
+  ),
+  false,
+);
 
 function proposal(seq, round, maxRounds = 3) {
   return event({

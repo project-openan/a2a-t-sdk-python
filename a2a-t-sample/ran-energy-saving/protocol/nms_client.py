@@ -53,6 +53,7 @@ from shared.trace import (
     is_report_artifact,
     record_span,
 )
+from shared.trace_propagation import current_downstream_trace_id
 
 from protocol.client_flow import is_stop_event, is_terminal_event
 from protocol.wire_log import redact
@@ -306,11 +307,13 @@ class NmsClient:
     def _traceparent(self) -> str:
         """Return the W3C ``traceparent`` correlating this call with the sample run.
 
-        The run id is already 32 hex digits, so it is the trace-id: a vendor that keeps the header
-        can join its own logs to one run. The span-id is generated here because the sample's own
-        span ids are not 16 hex digits. Empty when the call runs outside a traced run.
+        The stable downstream trace id is preferred so a blocked run and its retry carry the same
+        vendor-facing trace. Without one, the run id (already 32 hex digits) is the trace-id: a
+        vendor that keeps the header can join its own logs to one run. The span-id is generated
+        here because the sample's own span ids are not 16 hex digits. Empty when the call runs
+        outside a traced run.
         """
-        trace_id = str(current_trace().run_id or "").strip().lower()
+        trace_id = current_downstream_trace_id() or str(current_trace().run_id or "").strip().lower()
         if not _is_hex(trace_id, 32) or trace_id == "0" * 32:
             return ""
         span_id = uuid.uuid4().hex[:16]

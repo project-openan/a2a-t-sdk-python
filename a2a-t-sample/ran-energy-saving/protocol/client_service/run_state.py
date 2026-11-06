@@ -135,6 +135,7 @@ class RunState:
         task: background task of the run.
         finished_at: monotonic time the terminal frame was broadcast, when it is known.
         conversation_id: client conversation owning this run.
+        trace_id: Stable vendor-facing trace id; a retry can inherit it from the blocked run.
         external_conversation_id: caller-side conversation id (for example Gemini Enterprise).
         user_id: caller identity.
         idempotency_key: optional caller key preventing a duplicate run.
@@ -154,6 +155,7 @@ class RunState:
     user_request: str | None = None
     status: RunStatus = STATUS_RUNNING
     conversation_id: str | None = None
+    trace_id: str = ""
     external_conversation_id: str | None = None
     user_id: str | None = None
     idempotency_key: str = ""
@@ -728,6 +730,7 @@ class RunState:
         return {
             "runId": self.run_id,
             "conversationId": self.conversation_id,
+            "traceId": self.trace_id,
             "externalConversationId": self.external_conversation_id,
             "userId": self.user_id,
             "idempotencyKey": self.idempotency_key,
