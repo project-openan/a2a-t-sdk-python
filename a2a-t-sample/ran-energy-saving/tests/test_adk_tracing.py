@@ -371,3 +371,32 @@ async def test_no_sink_never_breaks_the_model() -> None:
     assert responses
     assert SHARED_LINKER.last_llm("missing") is None
     emit_span({"spanId": "ignored"})
+
+
+def test_adk_usage_carries_the_cached_content_tokens() -> None:
+    """The provider-reported cache hits must survive the ADK usage mapping."""
+    usage = types.GenerateContentResponseUsageMetadata(
+        prompt_token_count=793,
+        candidates_token_count=2,
+        total_token_count=795,
+        cached_content_token_count=768,
+    )
+
+    tokens = adk_tracing._content_tokens(usage)
+
+    assert tokens is not None
+    assert tokens["cached"] == 768
+    assert tokens["prompt"] == 793
+
+
+def test_adk_usage_marks_an_absent_cache_as_none() -> None:
+    usage = types.GenerateContentResponseUsageMetadata(
+        prompt_token_count=11,
+        candidates_token_count=2,
+        total_token_count=13,
+    )
+
+    tokens = adk_tracing._content_tokens(usage)
+
+    assert tokens is not None
+    assert tokens["cached"] is None

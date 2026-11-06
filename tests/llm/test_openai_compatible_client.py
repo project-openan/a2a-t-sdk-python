@@ -197,6 +197,71 @@ class OpenAIClientTest(unittest.TestCase):
         self.assertEqual(response.usage["completion_tokens"], 2)
         self.assertEqual(response.usage["total_tokens"], 9)
 
+    @patch("a2a_t.llm.providers.openai.OpenAI")
+    def test_usage_carries_the_provider_cached_tokens(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(
+                prompt_tokens=793,
+                completion_tokens=2,
+                total_tokens=795,
+                prompt_tokens_details=SimpleNamespace(cached_tokens=768),
+            ),
+        )
+        openai_cls.return_value = sdk_client
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        client = OpenAIClient(build_config(base_url="https://api.example.test/v1"))
+
+        response = client.structured(messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"})
+
+        self.assertEqual(response.usage["cached"], 768)
+        self.assertEqual(response.usage["prompt_tokens"], 793)
+
+    @patch("a2a_t.llm.providers.openai.OpenAI")
+    def test_usage_omits_cached_when_the_provider_does_not_report_it(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(prompt_tokens=11, completion_tokens=2, total_tokens=13),
+        )
+        openai_cls.return_value = sdk_client
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        client = OpenAIClient(build_config(base_url="https://api.example.test/v1"))
+
+        response = client.structured(messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"})
+
+        self.assertNotIn("cached", response.usage)
+
+    @patch("a2a_t.llm.providers.openai.OpenAI")
+    def test_usage_reads_the_deepseek_native_cache_field(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="deepseek-chat",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(
+                prompt_tokens=10,
+                completion_tokens=1,
+                total_tokens=11,
+                prompt_cache_hit_tokens=8,
+            ),
+        )
+        openai_cls.return_value = sdk_client
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        client = OpenAIClient(build_config(base_url="https://api.example.test/v1"))
+
+        response = client.structured(messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"})
+
+        self.assertEqual(response.usage["cached"], 8)
+
 
 class _ListHandler(logging.Handler):
     def __init__(self) -> None:

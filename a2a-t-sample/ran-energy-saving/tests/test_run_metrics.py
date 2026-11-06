@@ -252,3 +252,76 @@ def test_pure_accuracy_uses_the_answer_and_rounds() -> None:
     assert accuracy["checks"]["rounds"]["actual"] == 2
     assert accuracy["checks"]["rounds"]["passed"] is False
     assert accuracy["checks"]["target"]["passed"] is True
+
+
+def test_cached_tokens_are_summed_only_over_reporting_calls() -> None:
+    """An unreported cache is ``None`` and must neither add to the sum nor to the rate."""
+    spans = [
+        _span(
+            spanId="hit",
+            tokens={"prompt": 793, "completion": 2, "total": 795, "cached": 768},
+        ),
+        _span(
+            spanId="no-field",
+            tokens={"prompt": 100, "completion": 1, "total": 101},
+        ),
+        _span(
+            spanId="miss",
+            side="server",
+            stage="planner",
+            tokens={"input_tokens": 200, "output_tokens": 10, "input_cached": 0},
+        ),
+    ]
+    metrics = build_run_metrics(
+        run_id="run-1",
+        conversation_id=None,
+        protocol=PROTOCOL_A2A_T,
+        scenario="information",
+        mode="auto",
+        transport="sse",
+        language=LANGUAGE_ZH,
+        model_mode="live",
+        model_label="test",
+        status="finished",
+        transcript=_transcript(),
+        result=ClientFlowResult(final_state=FINAL_STATE_TASK_COMPLETED),
+        spans=spans,
+        expected=None,
+    )
+
+    tokens = metrics["tokens"]
+    assert isinstance(tokens, dict)
+    assert tokens["cached"] == 768
+    assert tokens["cachedCalls"] == 2
+    assert tokens["cacheHitRate"] == round(768 / 993, 4)
+    by_side = tokens["bySide"]
+    assert isinstance(by_side, dict)
+    assert by_side["client"]["cachedCalls"] == 1
+    assert by_side["client"]["cacheHitRate"] == round(768 / 793, 4)
+    assert by_side["server"]["cached"] == 0
+    assert by_side["server"]["cacheHitRate"] == 0.0
+
+
+def test_cached_tokens_stay_none_when_no_call_reports_them() -> None:
+    metrics = build_run_metrics(
+        run_id="run-1",
+        conversation_id=None,
+        protocol=PROTOCOL_A2A_T,
+        scenario="information",
+        mode="auto",
+        transport="sse",
+        language=LANGUAGE_ZH,
+        model_mode="live",
+        model_label="test",
+        status="finished",
+        transcript=_transcript(),
+        result=ClientFlowResult(final_state=FINAL_STATE_TASK_COMPLETED),
+        spans=[_span(tokens={"prompt": 10, "completion": 2, "total": 12})],
+        expected=None,
+    )
+
+    tokens = metrics["tokens"]
+    assert isinstance(tokens, dict)
+    assert tokens["cached"] is None
+    assert tokens["cachedCalls"] == 0
+    assert tokens["cacheHitRate"] is None

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from a2a_t.llm.errors import LLMRuntimeError
-from a2a_t.llm.models import LLMClientConfig
+from a2a_t.llm.models import LLMClientConfig, LLMResponse
 from a2a_t.llm.providers.openai import OpenAIClient
 from demo.scripted_llm import ScriptedLLMClient
 from demo.traced_scripted import TracedScriptedClient, register_traced_scripted_provider
@@ -28,6 +28,7 @@ from shared.traced_llm import (
     TRACED_OPENAI_PROVIDER,
     TRACED_SCRIPTED_PROVIDER,
     TracedOpenAIClient,
+    _token_map,
     is_traced_provider_registered,
     register_traced_providers,
     sdk_provider_name,
@@ -227,7 +228,13 @@ def test_traced_openai_client_captures_raw_content_and_usage(
     assert span["status"] == "ok"
     assert span["phase"] == PHASE_RESOLUTION
     assert span["model"] == "test-model"
-    assert span["tokens"] == {"prompt": 120, "completion": 30, "total": 150, "estimated": False}
+    assert span["tokens"] == {
+        "prompt": 120,
+        "completion": 30,
+        "total": 150,
+        "cached": None,
+        "estimated": False,
+    }
     detail = span["detail"]
     assert isinstance(detail, dict)
     assert detail["request"]["temperature"] == 0.2
@@ -315,3 +322,73 @@ def test_producer_hook_is_a_noop_without_a_sink(spans: list[dict[str, object]]) 
     set_global_sink(None)
     emit_span({"spanId": "ignored", "kind": "llm"})
     assert spans == []
+
+
+def _llm_response(usage: dict[str, object]) -> LLMResponse:
+    """Build one provider response with the given raw usage map."""
+    return LLMResponse(
+        content="ok",
+        model="deepseek-v4.1-flash-1017",
+        usage=cast("dict[str, int]", usage),
+        metadata={},
+    )
+
+
+def test_token_map_carries_the_cached_prefix_tokens() -> None:
+    """The provider reports cache hits; dropping the field hides the saving."""
+    response = _llm_response(
+        {
+            "prompt_tokens": 793,
+            "completion_tokens": 2,
+            "total_tokens": 795,
+            "prompt_tokens_details": {"cached_tokens": 768},
+        }
+    )
+
+    tokens = _token_map(response)
+
+    assert tokens["cached"] == 768
+    assert tokens["prompt"] == 793
+
+
+def test_token_map_marks_an_unreported_cache_as_none() -> None:
+    """``None`` (not ``0``) means the provider did not report the field."""
+    response = _llm_response({"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13})
+
+    assert _token_map(response)["cached"] is None
+
+
+def test_token_map_reads_the_deepseek_native_cache_field() -> None:
+    response = _llm_response(
+        {
+            "prompt_tokens": 10,
+            "completion_tokens": 1,
+            "total_tokens": 11,
+            "prompt_cache_hit_tokens": 8,
+        }
+    )
+
+    assert _token_map(response)["cached"] == 8
+
+
+def test_scripted_tokens_never_invent_a_cache_hit() -> None:
+    response = LLMResponse(
+        content="ok",
+        model=TRACED_SCRIPTED_PROVIDER,
+        usage=cast("dict[str, int]", {}),
+        metadata={},
+    )
+
+    tokens = _token_map(response)
+
+    assert tokens["cached"] is None
+    assert tokens["scripted"] is True
+
+
+def test_token_map_reads_the_sdk_normalized_cache_key() -> None:
+    """The SDK provider preserves the cache count as a flat ``cached`` field."""
+    response = _llm_response(
+        {"prompt_tokens": 793, "completion_tokens": 2, "total_tokens": 795, "cached": 768}
+    )
+
+    assert _token_map(response)["cached"] == 768

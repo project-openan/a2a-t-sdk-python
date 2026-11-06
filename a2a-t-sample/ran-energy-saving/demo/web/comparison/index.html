@@ -171,6 +171,7 @@
             <table><thead><tr>
               <th>协议</th><th>场景</th><th>运行</th><th>成功率</th><th>准确率</th>
               <th>Prompt tokens</th><th>Completion tokens</th><th>Total tokens</th>
+              <th>Cached tokens</th><th>缓存命中率</th>
               <th>Model ms</th><th>Total ms</th><th>P95 total ms</th><th>审批等待 ms</th><th>轮次</th>
             </tr></thead><tbody>`;
           if (!rows.length) return `<div class="empty">还没有指标数据。先跑一次演示或基准测试。</div>`;
@@ -184,6 +185,8 @@
               <td>${fmt(row.tokens?.prompt?.avg, 0)}</td>
               <td>${fmt(row.tokens?.completion?.avg, 0)}</td>
               <td>${fmt(row.tokens?.total?.avg, 0)}</td>
+              <td>${fmt(row.tokens?.cached?.avg, 0)}</td>
+              <td>${pct(row.cacheHitRate)}</td>
               <td>${fmt(row.latency?.modelMs?.avg, 0)}</td>
               <td>${fmt(row.latency?.totalMs?.avg, 0)}</td>
               <td>${fmt(row.latency?.totalMs?.p95, 0)}</td>
@@ -197,6 +200,7 @@
             <table><thead><tr>
               <th>Run</th><th>协议</th><th>场景</th><th>模型</th><th>状态</th><th>准确率</th>
               <th>Prompt</th><th>Completion</th><th>Total tokens</th>
+              <th>Cached</th><th>缓存命中率</th>
               <th>LLM calls</th><th>轮次</th><th>Model ms</th><th>Total ms</th><th>审批等待 ms</th><th>结束时间</th>
             </tr></thead><tbody>`;
           if (!rows.length) return `<div class="empty">没有匹配的运行。</div>`;
@@ -211,6 +215,8 @@
               <td>${tokenValue(row, "prompt") ?? "N/A"}</td>
               <td>${tokenValue(row, "completion") ?? "N/A"}</td>
               <td>${tokenValue(row, "total") ?? "N/A"}</td>
+              <td>${tokenValue(row, "cached") ?? "—"}</td>
+              <td>${pct(tokenValue(row, "cacheHitRate"))}</td>
               <td>${tokenValue(row, "llmCalls") ?? "—"}</td>
               <td>${row.negotiation?.rounds ?? "—"}</td>
               <td>${fmt(latencyValue(row, "modelMs"), 0)}</td>

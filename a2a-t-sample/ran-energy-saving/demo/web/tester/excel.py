@@ -562,6 +562,8 @@ def write_results(batch: Mapping[str, object]) -> bytes:
         "Token 总量",
         "Prompt Token",
         "Completion Token",
+        "缓存 Token",
+        "缓存命中率",
         "LLM 调用",
         "模型耗时(ms)",
         "工具耗时(ms)",
@@ -601,6 +603,8 @@ def write_results(batch: Mapping[str, object]) -> bytes:
                 _token_metric(tokens, "total"),
                 _token_metric(tokens, "prompt"),
                 _token_metric(tokens, "completion"),
+                _cached_metric(tokens),
+                _cache_hit_rate_text(tokens),
                 tokens.get("llmCalls", ""),
                 latency.get("modelMs", ""),
                 latency.get("toolMs", ""),
@@ -613,7 +617,10 @@ def write_results(batch: Mapping[str, object]) -> bytes:
         )
     _set_widths(
         sheet,
-        (16, 24, 12, 10, 14, 52, 20, 24, 18, 18, 12, 22, 22, 12, 12, 14, 10, 14, 14, 14, 14, 38, 40, 30),
+        (
+            16, 24, 12, 10, 14, 52, 20, 24, 18, 18, 12, 22, 22, 12, 12, 14, 12, 12, 10,
+            14, 14, 14, 14, 38, 40, 30,
+        ),
     )
 
     metrics_sheet = workbook.create_sheet("指标")
@@ -629,6 +636,8 @@ def write_results(batch: Mapping[str, object]) -> bytes:
         "Prompt",
         "Completion",
         "Reasoning",
+        "Cached",
+        "缓存命中率",
         "LLM 调用",
         "客户端 Token",
         "服务端 Token",
@@ -656,6 +665,8 @@ def write_results(batch: Mapping[str, object]) -> bytes:
                 _token_metric(tokens, "prompt"),
                 _token_metric(tokens, "completion"),
                 _token_metric(tokens, "reasoning"),
+                _cached_metric(tokens),
+                _cache_hit_rate_text(tokens),
                 tokens.get("llmCalls", ""),
                 _side_tokens(tokens, "client"),
                 _side_tokens(tokens, "server"),
@@ -666,7 +677,10 @@ def write_results(batch: Mapping[str, object]) -> bytes:
                 result.get("error", ""),
             ]
         )
-    _set_widths(metrics_sheet, (16, 10, 14, 12, 20, 18, 12, 12, 12, 14, 12, 10, 14, 14, 14, 14, 14, 12, 40))
+    _set_widths(
+        metrics_sheet,
+        (16, 10, 14, 12, 20, 18, 12, 12, 12, 14, 12, 12, 12, 10, 14, 14, 14, 14, 14, 12, 40),
+    )
 
     summary_sheet = workbook.create_sheet("汇总")
     summary_sheet.append(["指标", "值"])
@@ -723,6 +737,26 @@ def _token_metric(tokens: Mapping[str, object], field: str) -> object:
     return tokens.get(field, "")
 
 
+def _cached_metric(tokens: Mapping[str, object]) -> object:
+    """Return the cached prefix tokens, ``""`` when the provider did not report them."""
+    if tokens.get("available") is not True:
+        return ""
+    value = tokens.get("cached")
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return ""
+
+
+def _cache_hit_rate_text(tokens: Mapping[str, object]) -> str:
+    """Render the cached share of prompt tokens as a percentage, ``""`` when unreported."""
+    if tokens.get("available") is not True:
+        return ""
+    rate = tokens.get("cacheHitRate")
+    if isinstance(rate, bool) or not isinstance(rate, (int, float)):
+        return ""
+    return f"{rate * 100:.1f}%"
+
+
 def _side_tokens(tokens: Mapping[str, object], side: str) -> object:
     """Return the reported total of one side (client/server), when available."""
     if tokens.get("available") is not True:
@@ -754,11 +788,14 @@ def _batch_summary(pairs: Sequence[tuple[Mapping[str, object], Mapping[str, obje
     counts: dict[str, int] = {}
     total_duration = 0
     total_tokens = 0
+    total_cached = 0
+    cached_prompt_total = 0
     total_llm_calls = 0
     model_ms = 0.0
     tool_ms = 0.0
     approval_ms = 0.0
     tokens_available = False
+    cache_available = False
     for _, result in pairs:
         status = str(result.get("status") or "")
         counts[status] = counts.get(status, 0) + 1
@@ -788,6 +825,18 @@ def _batch_summary(pairs: Sequence[tuple[Mapping[str, object], Mapping[str, obje
             value = tokens.get("total")
             if isinstance(value, int):
                 total_tokens += value
+            cached = tokens.get("cached")
+            if isinstance(cached, int) and not isinstance(cached, bool):
+                cache_available = True
+                total_cached += cached
+                prompt = tokens.get("prompt")
+                if isinstance(prompt, int):
+                    cached_prompt_total += prompt
+    cache_rate = (
+        f"{total_cached / cached_prompt_total * 100:.1f}%"
+        if cache_available and cached_prompt_total
+        else "不可用"
+    )
     return [
         ("用例总数", len(pairs)),
         ("通过", counts.get("passed", 0)),
@@ -802,6 +851,8 @@ def _batch_summary(pairs: Sequence[tuple[Mapping[str, object], Mapping[str, obje
         ("总审批等待(ms)", round(approval_ms, 3)),
         ("LLM 调用次数", total_llm_calls),
         ("Token 总量", total_tokens if tokens_available else "不可用"),
+        ("Token 缓存命中", total_cached if cache_available else "不可用"),
+        ("缓存命中率", cache_rate),
         ("Token 统计", "可用" if tokens_available else "离线脚本或未上报"),
     ]
 

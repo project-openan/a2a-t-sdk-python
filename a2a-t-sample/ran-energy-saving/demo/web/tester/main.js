@@ -43,6 +43,8 @@ const COPY = {
     thRun: "Run",
     tokenOffline: "离线脚本",
     tokenMissing: "—",
+    tokenCached: "缓存",
+    tokenCacheHit: "缓存命中",
     defaultScenario: "（默认）",
     scenarioRequest: "使用场景自带请求",
     reading: "正在解析 Excel…",
@@ -116,6 +118,8 @@ const COPY = {
     thRun: "Run",
     tokenOffline: "Offline scripted",
     tokenMissing: "—",
+    tokenCached: "Cached",
+    tokenCacheHit: "Cache hit",
     defaultScenario: " (default)",
     scenarioRequest: "Uses the scenario's request",
     reading: "Reading the workbook…",
@@ -373,6 +377,14 @@ function tokenCell(result) {
       `completion ${tokens.completion ?? t("empty")}`,
       `LLM ${tokens.llmCalls ?? 0}`,
     ];
+    if (typeof tokens.cached === "number") {
+      const rate = typeof tokens.cacheHitRate === "number"
+        ? ` (${(tokens.cacheHitRate * 100).toFixed(1)}%)`
+        : "";
+      const line = `${t("tokenCached")} ${tokens.cached.toLocaleString()}${rate}`;
+      cell.textContent = `${total.toLocaleString()} · ${line}`;
+      parts.push(line);
+    }
     const latency = result.metrics?.latency || {};
     if (typeof latency.modelMs === "number") parts.push(`model ${formatDuration(latency.modelMs)}`);
     cell.title = parts.join(" · ");

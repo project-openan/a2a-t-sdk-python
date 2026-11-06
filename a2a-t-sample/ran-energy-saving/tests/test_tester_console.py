@@ -421,6 +421,8 @@ async def test_the_results_workbook_contains_the_verdicts(client: httpx.AsyncCli
 
     assert rows[0][2] == "执行状态"
     assert "Token 总量" in rows[0]
+    assert "缓存 Token" in rows[0]
+    assert "缓存命中率" in rows[0]
     assert {row[2] for row in rows[1:]} == {"passed"}
     assert {row[0] for row in rows[1:]} == {"TC-001", "TC-002", "TC-003"}
     assert metric_rows[0][0] == "用例编号"

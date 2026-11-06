@@ -223,11 +223,13 @@ def _content_tokens(usage: types.GenerateContentResponseUsageMetadata | None) ->
     total = usage.total_token_count
     if total is None and isinstance(prompt, int) and isinstance(completion, int):
         total = prompt + completion
+    cached = getattr(usage, "cached_content_token_count", None)
     return {
         "prompt": prompt,
         "completion": completion,
         "total": total,
         "reasoning": usage.thoughts_token_count,
+        "cached": cached if isinstance(cached, int) and not isinstance(cached, bool) else None,
         "estimated": False,
     }
 

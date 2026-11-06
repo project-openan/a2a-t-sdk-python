@@ -680,6 +680,11 @@ Engineer UI ──A2A (direct + SSE)──> OSS Agent ──A2A (nms + webhook)�
   planner 的 `input_tokens/output_tokens/total_tokens`），并按 side 和 `stage` 分组（例如
   `client:negotiation_accept_extraction`、`server:server_planner`）。脚本模式标记为
   `available=false, scripted=true`。
+- **缓存命中**：从供应商 usage 中读取缓存字段（OpenAI 兼容网关的
+  `prompt_tokens_details.cached_tokens`、DeepSeek 原生的 `prompt_cache_hit_tokens`、ADK/GenAI 的
+  `cached_content_token_count`），记录 `cached`、`cachedCalls` 和 `cacheHitRate`。没有上报该字段的
+  调用按 `None` 处理并排除在命中率分母之外；明确上报 0 表示未命中。Langfuse 侧映射为
+  `input_cached`。
 - **耗时**：把总时间拆成模型、工具、人工审批等待和其余编排时间。审批等待由
   `requested`/`approved|rejected` 两个 span 配对计算，基准不会把人工点击时间算进模型耗时。
 - **准确率**：对比 `RunSpec.expected_final_state`、期望轮次、`RunSpec.expected_negotiation_target`
@@ -700,8 +705,8 @@ Engineer UI ──A2A (direct + SSE)──> OSS Agent ──A2A (nms + webhook)�
 `demo/benchmark.py` 是进程级矩阵 runner：每种协议启动一套 demo，通过 Web UI API 跑
 `scenario × repeats`，在 `--approval-delay` 秒后自动通过审批 gate，轮询
 `/api/runs/{id}/metrics` 直到 `traceFinal`，最后把 JSON/CSV/HTML 报告写到
-`runs/benchmarks/<timestamp>/`。`summary.csv` 含每个协议 × 场景的成功率、平均 token、模型/总耗时、
-P95 和审批等待。
+`runs/benchmarks/<timestamp>/`。`summary.csv` 含每个协议 × 场景的成功率、平均 token（含缓存 token
+和缓存命中率）、模型/总耗时、P95 和审批等待。
 
 ## 5. 协议参考
 

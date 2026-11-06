@@ -12,8 +12,8 @@ import math
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 
-#: Token fields summarized per group.
-TOKEN_FIELDS: tuple[str, ...] = ("prompt", "completion", "total")
+#: Token fields summarized per group. ``cached`` is ``None`` for providers that never report it.
+TOKEN_FIELDS: tuple[str, ...] = ("prompt", "completion", "total", "cached")
 
 
 def summarize_metrics(
@@ -79,6 +79,7 @@ def _group_summary(rows: list[Mapping[str, object]]) -> dict[str, object]:
         "successRate": round(passed / total, 4) if total else None,
         "accuracy": round(sum(scores) / len(scores), 4) if scores else None,
         "tokenAvailableRuns": token_available,
+        "cacheHitRate": _avg(_cache_hit_rates(rows)),
         "tokens": {
             field: {
                 "avg": _avg(values),
@@ -141,6 +142,19 @@ def _token_values(rows: Iterable[Mapping[str, object]], field: str) -> list[floa
         if tokens.get("available") is not True:
             continue
         value = _number(tokens.get(field))
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def _cache_hit_rates(rows: Iterable[Mapping[str, object]]) -> list[float]:
+    """Return the reported cache hit rate of every run that has one."""
+    values: list[float] = []
+    for row in rows:
+        tokens = _tokens(row)
+        if tokens.get("available") is not True:
+            continue
+        value = _number(tokens.get("cacheHitRate"))
         if value is not None:
             values.append(value)
     return values

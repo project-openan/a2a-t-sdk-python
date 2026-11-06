@@ -391,6 +391,8 @@ def _write_summary_csv(path: Path, summary: list[dict[str, object]]) -> None:
                 "avgPromptTokens",
                 "avgCompletionTokens",
                 "avgTotalTokens",
+                "avgCachedTokens",
+                "cacheHitRate",
                 "avgModelMs",
                 "avgTotalMs",
                 "p95TotalMs",
@@ -411,6 +413,8 @@ def _write_summary_csv(path: Path, summary: list[dict[str, object]]) -> None:
                     (tokens.get("prompt") or {}).get("avg"),
                     (tokens.get("completion") or {}).get("avg"),
                     (tokens.get("total") or {}).get("avg"),
+                    (tokens.get("cached") or {}).get("avg"),
+                    row.get("cacheHitRate"),
                     (latency.get("modelMs") or {}).get("avg"),
                     (latency.get("totalMs") or {}).get("avg"),
                     (latency.get("totalMs") or {}).get("p95"),
@@ -435,6 +439,11 @@ def _render_html(
             return f"{value:.{digits}f}"
         return html.escape(str(value))
 
+    def rate(value: object) -> str:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return "—"
+        return f"{value * 100:.1f}%"
+
     def table(headers: list[str], body: list[str]) -> str:
         return (
             "<table><thead><tr>"
@@ -458,6 +467,8 @@ def _render_html(
                 (row.get("tokens") or {}).get("prompt", {}).get("avg"),
                 (row.get("tokens") or {}).get("completion", {}).get("avg"),
                 (row.get("tokens") or {}).get("total", {}).get("avg"),
+                (row.get("tokens") or {}).get("cached", {}).get("avg"),
+                rate(row.get("cacheHitRate")),
                 (row.get("latency") or {}).get("modelMs", {}).get("avg"),
                 (row.get("latency") or {}).get("totalMs", {}).get("avg"),
                 (row.get("latency") or {}).get("totalMs", {}).get("p95"),
@@ -477,6 +488,7 @@ def _render_html(
                 row.get("successRate"),
                 row.get("accuracy"),
                 (row.get("tokens") or {}).get("total", {}).get("avg"),
+                rate(row.get("cacheHitRate")),
                 (row.get("latency") or {}).get("modelMs", {}).get("avg"),
                 (row.get("latency") or {}).get("totalMs", {}).get("avg"),
             )
@@ -495,6 +507,8 @@ def _render_html(
                 row.get("finalState"),
                 (row.get("accuracy") or {}).get("score"),
                 (row.get("tokens") or {}).get("total"),
+                (row.get("tokens") or {}).get("cached"),
+                rate((row.get("tokens") or {}).get("cacheHitRate")),
                 (row.get("latency") or {}).get("modelMs"),
                 (row.get("latency") or {}).get("totalMs"),
                 (row.get("negotiation") or {}).get("rounds"),
@@ -509,7 +523,16 @@ def _render_html(
         if result.error
     ]
     overview_table = table(
-        ["Protocol", "Runs", "Success", "Accuracy", "Avg total tokens", "Avg model ms", "Avg total ms"],
+        [
+            "Protocol",
+            "Runs",
+            "Success",
+            "Accuracy",
+            "Avg total tokens",
+            "Cache hit",
+            "Avg model ms",
+            "Avg total ms",
+        ],
         protocol_rows,
     )
     group_table = table(
@@ -523,6 +546,8 @@ def _render_html(
             "Prompt",
             "Completion",
             "Total",
+            "Cached",
+            "Cache hit",
             "Model ms",
             "Total ms",
             "P95 ms",
@@ -531,7 +556,19 @@ def _render_html(
         group_rows,
     )
     runs_table = table(
-        ["Run", "Protocol", "Scenario", "Final state", "Accuracy", "Tokens", "Model ms", "Total ms", "Rounds"],
+        [
+            "Run",
+            "Protocol",
+            "Scenario",
+            "Final state",
+            "Accuracy",
+            "Tokens",
+            "Cached",
+            "Cache hit",
+            "Model ms",
+            "Total ms",
+            "Rounds",
+        ],
         run_rows,
     )
     return f"""<!doctype html>

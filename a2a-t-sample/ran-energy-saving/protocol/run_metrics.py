@@ -36,6 +36,14 @@ TOKEN_KEYS_COMPLETION: Final[tuple[str, ...]] = (
 )
 TOKEN_KEYS_TOTAL: Final[tuple[str, ...]] = ("total", "total_tokens")
 TOKEN_KEYS_REASONING: Final[tuple[str, ...]] = ("reasoning", "reasoning_tokens")
+#: Cached-prefix counters. ``cached`` is the sample's normalized key; the others are raw provider
+#: spellings that may appear on spans produced outside the traced clients.
+TOKEN_KEYS_CACHED: Final[tuple[str, ...]] = (
+    "cached",
+    "cached_tokens",
+    "input_cached",
+    "prompt_cache_hit_tokens",
+)
 
 #: Approval span states that start and close one human wait.
 APPROVAL_OPEN: Final[str] = "requested"
@@ -153,6 +161,9 @@ def _tokens(spans: list[dict[str, object]], *, model_mode: str) -> dict[str, obj
     by_side: dict[str, dict[str, object]] = {}
     by_component: dict[str, dict[str, object]] = {}
     totals = {"prompt": 0, "completion": 0, "total": 0, "reasoning": 0}
+    cached_total = 0
+    cached_prompt_total = 0
+    cached_calls = 0
     calls = 0
     known = 0
     estimated = False
@@ -171,11 +182,21 @@ def _tokens(spans: list[dict[str, object]], *, model_mode: str) -> dict[str, obj
             value = usage.get(key)
             if isinstance(value, int):
                 totals[key] += value
+        cached = usage.get("cached")
+        if isinstance(cached, int):
+            cached_calls += 1
+            cached_total += cached
+            prompt = usage.get("prompt")
+            if isinstance(prompt, int):
+                cached_prompt_total += prompt
         side = str(span.get("side") or "unknown")
         component = _component_key(span)
         _add_usage(by_side.setdefault(side, _empty_usage()), usage)
         _add_usage(by_component.setdefault(component, _empty_usage()), usage)
     available = known > 0 and not scripted
+    cache_reported = available and cached_calls > 0
+    _finalize_cache_buckets(by_side)
+    _finalize_cache_buckets(by_component)
     return {
         "available": available,
         "scripted": scripted,
@@ -187,6 +208,14 @@ def _tokens(spans: list[dict[str, object]], *, model_mode: str) -> dict[str, obj
         "completion": totals["completion"] if available else None,
         "total": totals["total"] if available else None,
         "reasoning": totals["reasoning"] if available else None,
+        # ``None`` means "the provider never reported cache hits"; ``0`` means "reported, no hits".
+        "cached": cached_total if cache_reported else None,
+        "cachedCalls": cached_calls,
+        "cacheHitRate": (
+            round(cached_total / cached_prompt_total, 4)
+            if cache_reported and cached_prompt_total
+            else None
+        ),
         "bySide": by_side,
         "byComponent": by_component,
     }
@@ -216,6 +245,9 @@ def _normalize_usage(raw: object) -> dict[str, object] | None:
     completion = _first_int(raw, TOKEN_KEYS_COMPLETION)
     total = _first_int(raw, TOKEN_KEYS_TOTAL)
     reasoning = _first_int(raw, TOKEN_KEYS_REASONING)
+    cached = _first_int(raw, TOKEN_KEYS_CACHED)
+    if cached is None:
+        cached = _nested_cached_tokens(raw)
     if total is None and (prompt is not None or completion is not None):
         total = (prompt or 0) + (completion or 0)
     if prompt is None and completion is None and total is None:
@@ -225,9 +257,18 @@ def _normalize_usage(raw: object) -> dict[str, object] | None:
         "completion": completion,
         "total": total,
         "reasoning": reasoning,
+        "cached": cached,
         "estimated": bool(raw.get("estimated")),
         "scripted": bool(raw.get("scripted")),
     }
+
+
+def _nested_cached_tokens(raw: Mapping[str, object]) -> int | None:
+    """Read ``prompt_tokens_details.cached_tokens`` from one raw OpenAI-style usage map."""
+    details = raw.get("prompt_tokens_details")
+    if not isinstance(details, Mapping):
+        return None
+    return _first_int(details, ("cached_tokens",))
 
 
 def _component_key(span: Mapping[str, object]) -> str:
@@ -242,7 +283,16 @@ def _component_key(span: Mapping[str, object]) -> str:
 
 def _empty_usage() -> dict[str, object]:
     """Return one zeroed usage bucket."""
-    return {"prompt": 0, "completion": 0, "total": 0, "reasoning": 0, "calls": 0}
+    return {
+        "prompt": 0,
+        "completion": 0,
+        "total": 0,
+        "reasoning": 0,
+        "cached": 0,
+        "cachedCalls": 0,
+        "cachedPrompt": 0,
+        "calls": 0,
+    }
 
 
 def _add_usage(bucket: dict[str, object], usage: Mapping[str, object]) -> None:
@@ -252,6 +302,24 @@ def _add_usage(bucket: dict[str, object], usage: Mapping[str, object]) -> None:
         value = usage.get(key)
         if isinstance(value, int):
             bucket[key] = int(bucket.get(key, 0)) + value
+    cached = usage.get("cached")
+    if isinstance(cached, int):
+        bucket["cached"] = int(bucket.get("cached", 0)) + cached
+        bucket["cachedCalls"] = int(bucket.get("cachedCalls", 0)) + 1
+        prompt = usage.get("prompt")
+        if isinstance(prompt, int):
+            bucket["cachedPrompt"] = int(bucket.get("cachedPrompt", 0)) + prompt
+
+
+def _finalize_cache_buckets(buckets: Mapping[str, dict[str, object]]) -> None:
+    """Add the per-bucket hit rate and drop the internal prompt accumulator."""
+    for bucket in buckets.values():
+        prompt_total = int(bucket.pop("cachedPrompt", 0))
+        cached = int(bucket.get("cached", 0))
+        reported = int(bucket.get("cachedCalls", 0))
+        bucket["cacheHitRate"] = (
+            round(cached / prompt_total, 4) if reported and prompt_total else None
+        )
 
 
 def _latency(

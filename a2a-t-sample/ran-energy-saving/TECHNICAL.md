@@ -826,6 +826,11 @@ spans, so the protocol layers do not need a second instrumentation path:
   the A2A-T SDK, `input_tokens/output_tokens/total_tokens` from the LangGraph planner) and grouped by
   side and by `stage` (for example `client:negotiation_accept_extraction` and
   `server:server_planner`). Scripted runs are marked `available=false, scripted=true`.
+- **Cache hits** are carried from the provider usage (`prompt_tokens_details.cached_tokens` for
+  OpenAI-compatible gateways, `prompt_cache_hit_tokens` for DeepSeek native, and
+  `cached_content_token_count` for ADK/GenAI). The record sets `cached`, `cachedCalls` and
+  `cacheHitRate`; a call that reports no field contributes `None` and is excluded from the rate,
+  while a reported miss contributes `0`. Langfuse receives the same value as `input_cached`.
 - **Latency** splits total wall time into model, tool, human approval wait and the remaining
   orchestration time. Approval wait is paired from the `requested`/`approved|rejected` spans, so the
   benchmark never compares human click time with model time.
@@ -851,8 +856,9 @@ The comparison surface is `GET /comparison` plus:
 `demo/benchmark.py` is a process-level matrix runner. It starts one demo stack per protocol, drives
 `scenario × repeats` through the Web UI API, auto-approves the gate after `--approval-delay`
 seconds, polls `/api/runs/{id}/metrics` until `traceFinal`, and writes a JSON/CSV/HTML report under
-`runs/benchmarks/<timestamp>/`. `summary.csv` contains success rate, token averages, model/total
-latency, P95 and approval wait per protocol × scenario.
+`runs/benchmarks/<timestamp>/`. `summary.csv` contains success rate, token averages (including
+cached tokens and cache hit rate), model/total latency, P95 and approval wait per protocol ×
+scenario.
 
 ## 5. Protocol reference
 

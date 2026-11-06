@@ -512,7 +512,12 @@ def _usage_details(tokens: object) -> dict[str, int] | None:
     if not isinstance(tokens, Mapping):
         return None
     usage: dict[str, int] = {}
-    for source, target in (("prompt", "input"), ("completion", "output"), ("total", "total")):
+    for source, target in (
+        ("prompt", "input"),
+        ("cached", "input_cached"),
+        ("completion", "output"),
+        ("total", "total"),
+    ):
         value = tokens.get(source)
         if isinstance(value, int) and not isinstance(value, bool):
             usage[target] = value

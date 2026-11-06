@@ -289,6 +289,11 @@ def test_flush_failure_is_reported(offline_config: SampleConfig) -> None:
     ("tokens", "expected"),
     [
         ({"prompt": 1, "completion": 2}, {"input": 1, "output": 2}),
+        (
+            {"prompt": 793, "cached": 768, "completion": 2, "total": 795},
+            {"input": 793, "input_cached": 768, "output": 2, "total": 795},
+        ),
+        ({"prompt": 11, "cached": None, "completion": 2}, {"input": 11, "output": 2}),
         ({"prompt": None, "completion": None, "total": 3}, {"total": 3}),
         ({"estimated": True, "label": "n/a (scripted)"}, None),
     ],

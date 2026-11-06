@@ -189,10 +189,11 @@ rejection path and `auto` leaves the gate to a human or the timeout. Batches are
 `runs/tester`, so reloading the page reopens the latest one; **Retry failed** rebuilds a draft from
 the failed, errored or cancelled rows. On a real-NMS deployment the page shows a warning and asks
 for confirmation before starting. Each case records its wall-clock duration, model/tool/approval
-latency, LLM call count and token usage (prompt/completion/total, split by client and server); the
-exported workbook has **Testing results**, **Metrics** and **Summary** sheets. Scripted offline LLM
-spans are shown as unavailable instead of reporting invented token counts. Transport and discovery
-are still chosen by the backend per protocol, not by the sheet.
+latency, LLM call count and token usage (prompt/completion/total, split by client and server),
+including the provider-reported cached-prefix tokens and cache hit rate when the endpoint returns
+them; the exported workbook has **Testing results**, **Metrics** and **Summary** sheets. Scripted
+offline LLM spans are shown as unavailable instead of reporting invented token counts. Transport and
+discovery are still chosen by the backend per protocol, not by the sheet.
 
 ### Operator intent layer
 
@@ -465,13 +466,17 @@ reference are in the [technical guide](TECHNICAL.md).
 
 Every run writes one metrics record: token usage, a latency split (model / tool / human approval /
 other) and accuracy against the scenario's ground truth (terminal state, negotiation rounds, agreed
-throughput target and report presence). The record is stored in the client SQLite database
+throughput target and report presence). When the LLM endpoint reports prefix-cache hits
+(`prompt_tokens_details.cached_tokens`, or DeepSeek's `prompt_cache_hit_tokens`), the record carries
+`tokens.cached`, `tokens.cachedCalls` and `tokens.cacheHitRate`; `None` means the provider did not
+report the field, while `0` means it reported a miss. The record is stored in the client SQLite database
 (`run_metrics`) and appended to `runs/metrics/run-metrics.jsonl`; the Web UI also serves
 `/api/metrics/runs`, `/api/metrics/summary`, `/api/runs/{runId}/metrics` and
 `/api/metrics/export.csv`.
 
 Open `http://127.0.0.1:8080/comparison` to compare protocols and scenarios: success rate, token
-averages, model/total latency, P95 and approval wait. The page reads the same persisted records.
+averages (including cached tokens and cache hit rate), model/total latency, P95 and approval wait.
+The page reads the same persisted records.
 
 Because the protocol is process-level, the benchmark starts one demo stack per protocol. It drives
 the same scenarios, approves the human gate after a fixed delay (0.3 s by default), and writes

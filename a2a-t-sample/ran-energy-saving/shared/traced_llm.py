@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Mapping
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any, Final
@@ -115,6 +116,7 @@ def _token_map(response: LLMResponse) -> dict[str, object]:
             "prompt": None,
             "completion": None,
             "total": None,
+            "cached": None,
             "estimated": True,
             "scripted": True,
             "label": SCRIPTED_TOKENS_LABEL,
@@ -129,8 +131,31 @@ def _token_map(response: LLMResponse) -> dict[str, object]:
         "prompt": prompt,
         "completion": completion,
         "total": total,
+        "cached": _cached_tokens(usage),
         "estimated": False,
     }
+
+
+def _cached_tokens(usage: Mapping[str, object]) -> int | None:
+    """Return the cached prefix tokens of one OpenAI-compatible usage, ``None`` when absent.
+
+    The field is optional: the SDK normalizes it to ``cached``, cloud providers report
+    ``prompt_tokens_details.cached_tokens``, some gateways use ``prompt_cache_hit_tokens``
+    (DeepSeek native), others omit it entirely. ``None`` (not ``0``) marks "the provider did not
+    report it" so averages skip it.
+    """
+    normalized = usage.get("cached")
+    if isinstance(normalized, int) and not isinstance(normalized, bool):
+        return normalized
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, Mapping):
+        cached = details.get("cached_tokens")
+        if isinstance(cached, int) and not isinstance(cached, bool):
+            return cached
+    hit = usage.get("prompt_cache_hit_tokens")
+    if isinstance(hit, int) and not isinstance(hit, bool):
+        return hit
+    return None
 
 
 def _llm_span_prefix(provider_label: str) -> str:

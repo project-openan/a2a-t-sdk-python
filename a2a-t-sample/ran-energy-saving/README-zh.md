@@ -163,9 +163,10 @@ Task-T metadata）。a2a-sdk 的 HTTP 传输同样会被捕获，因此本地 A2
 `approve`，无人值守批次不会卡在审批窗口；`reject` 测试拒绝路径；`auto` 交给人工或超时。
 批次持久化在 `runs/tester` 下，刷新页面会自动打开最近一批；**重跑失败** 会用失败、错误或
 取消的行新建一个草稿批次。连接真实网管时页面会显示警示并在开始前二次确认。每条用例记录墙钟耗时、
-模型/工具/审批延迟、LLM 调用次数和 Token 用量（prompt/completion/total，并按客户端/服务端拆分）；
-导出的工作簿包含 **测试结果**、**指标** 和 **汇总** 三个 sheet。离线脚本 LLM 的 Token 会明确标记为
-不可用，而不是编造数字。传输与发现方式仍由后端按协议决定，不需要在表格里填写。
+模型/工具/审批延迟、LLM 调用次数和 Token 用量（prompt/completion/total，并按客户端/服务端拆分），
+端点返回缓存字段时还会记录缓存命中的前缀 Token 和缓存命中率；导出的工作簿包含 **测试结果**、
+**指标** 和 **汇总** 三个 sheet。离线脚本 LLM 的 Token 会明确标记为不可用，而不是编造数字。
+传输与发现方式仍由后端按协议决定，不需要在表格里填写。
 
 ### 操作员意图处理层
 
@@ -401,13 +402,16 @@ uv run python -m demo.run_demo --protocol a2a-t --ui --mode confirm --approval-g
 ### 指标与协议对比
 
 每次 run 都会生成一条指标记录：token 消耗、耗时拆分（模型 / 工具 / 人工审批 / 其他）以及
-相对场景 ground truth 的准确率（终态、协商轮次、达成目标的吞吐目标、报告是否存在）。记录写入
-客户端 SQLite 的 `run_metrics` 表，并追加到 `runs/metrics/run-metrics.jsonl`；Web UI 同时提供
+相对场景 ground truth 的准确率（终态、协商轮次、达成目标的吞吐目标、报告是否存在）。当模型端点
+返回前缀缓存命中（`prompt_tokens_details.cached_tokens`，或 DeepSeek 的
+`prompt_cache_hit_tokens`）时，记录中会带上 `tokens.cached`、`tokens.cachedCalls` 和
+`tokens.cacheHitRate`；`None` 表示供应商没有上报该字段，`0` 表示明确没有命中。记录写入客户端
+SQLite 的 `run_metrics` 表，并追加到 `runs/metrics/run-metrics.jsonl`；Web UI 同时提供
 `/api/metrics/runs`、`/api/metrics/summary`、`/api/runs/{runId}/metrics` 和
 `/api/metrics/export.csv`。
 
-打开 `http://127.0.0.1:8080/comparison` 可按协议 / 场景查看成功率、平均 token、模型与总耗时、
-P95 和审批等待时间。页面读取的就是这些持久化记录。
+打开 `http://127.0.0.1:8080/comparison` 可按协议 / 场景查看成功率、平均 token（含缓存 token
+和缓存命中率）、模型与总耗时、P95 和审批等待时间。页面读取的就是这些持久化记录。
 
 协议是进程级选择，因此基准脚本会为每种协议分别拉起一套 demo，跑同一组场景，在固定延迟
 （默认 0.3 秒）后自动通过人工审批 gate，最后把 `metrics.json`、`metrics.jsonl`、`summary.csv`、
