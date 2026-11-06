@@ -25,6 +25,7 @@ from typing import Final
 import httpx
 from protocol.client_runtime import MODE_AUTO
 from protocol.client_service import STATUS_FAILED, RunManager, RunState
+from protocol.run_metrics import build_run_metrics
 from shared.run_constants import PROTOCOL_A2A_T, PROTOCOL_PURE
 
 from demo.web.tester.excel import APPROVAL_APPROVE, APPROVAL_AUTO, TestCase
@@ -168,6 +169,11 @@ class TestBatchManager:
         mie_url: MIE Agent base URL, used to answer the standard-A2A approval gate.
         runs_dir: transcript directory; tester batches are persisted below ``runs/tester`` so a
             page reload or a UI restart can still show the last results.
+        language: process-level language recorded in the per-case metrics.
+        model_mode: ``live`` or ``offline``; offline runs report scripted token usage.
+        model_label: display label of the configured model.
+        metrics_grace_seconds: wait after a run finishes so the last batched server spans can
+            arrive before the per-case token and latency figures are built.
     """
 
     def __init__(
@@ -179,6 +185,10 @@ class TestBatchManager:
         server_auth_token: str | None,
         mie_url: str | None,
         runs_dir: Path | None = None,
+        language: str = "",
+        model_mode: str = "",
+        model_label: str = "",
+        metrics_grace_seconds: float = 0.0,
     ) -> None:
         self._runs = runs
         self._protocol_defaults = protocol_defaults
@@ -186,6 +196,10 @@ class TestBatchManager:
         self._server_auth_token = server_auth_token
         self._mie_url = (mie_url or "").rstrip("/")
         self._history_dir = (Path(runs_dir) / "tester") if runs_dir is not None else None
+        self._language = language
+        self._model_mode = model_mode
+        self._model_label = model_label
+        self._metrics_grace_seconds = max(0.0, metrics_grace_seconds)
         self._batches: dict[str, _Batch] = {}
         self._active_batch: str | None = None
 
@@ -455,7 +469,45 @@ class TestBatchManager:
                 await asyncio.gather(approval_task, return_exceptions=True)
             result["durationMs"] = int(round((time.monotonic() - started) * 1000))
             result["finishedAt"] = _now_iso()
+            if run is not None and not batch.cancel_requested:
+                await self._collect_metrics(result, run)
             self._persist(batch)
+
+    async def _collect_metrics(self, result: dict[str, object], run: RunState) -> None:
+        """Attach the run's token usage and latency breakdown to one case result."""
+        if self._metrics_grace_seconds > 0:
+            # The server trace emitter batches spans; wait briefly so its final LLM spans are
+            # included in the token totals.
+            await asyncio.sleep(self._metrics_grace_seconds)
+        try:
+            metrics = build_run_metrics(
+                run_id=run.run_id,
+                conversation_id=run.conversation_id,
+                protocol=run.protocol,
+                scenario=run.scenario,
+                mode=run.mode,
+                transport=run.transport,
+                language=self._language,
+                model_mode=self._model_mode,
+                model_label=self._model_label or None,
+                status=run.status,
+                transcript=run.transcript,
+                result=run.result,
+                spans=run.traces,
+                expected=None,
+                error=run.error,
+            )
+        except Exception:  # noqa: BLE001 - report data must never fail the case
+            _LOGGER.warning("tester metrics failed for run %s", run.run_id, exc_info=True)
+            return
+        tokens = metrics.get("tokens")
+        latency = metrics.get("latency")
+        result["metrics"] = {
+            "tokens": dict(tokens) if isinstance(tokens, Mapping) else {},
+            "latency": dict(latency) if isinstance(latency, Mapping) else {},
+            "modelMode": self._model_mode,
+            "modelLabel": self._model_label,
+        }
 
     async def _wait_for_run(self, run: RunState, timeout_seconds: float) -> bool:
         """Wait until a run finishes; return whether the budget expired."""
@@ -701,10 +753,26 @@ def _summary(
         "error": 0,
         "cancelled": 0,
     }
+    duration_ms = 0
+    tokens_total = 0
+    tokens_available = False
     for result in results:
         status = str(result.get("status") or "")
         if status in counts:
             counts[status] += 1
+        duration = result.get("durationMs")
+        if isinstance(duration, (int, float)):
+            duration_ms += int(duration)
+        metrics = result.get("metrics")
+        tokens = metrics.get("tokens") if isinstance(metrics, Mapping) else None
+        if isinstance(tokens, Mapping) and tokens.get("available") is True:
+            tokens_available = True
+            total = tokens.get("total")
+            if isinstance(total, int):
+                tokens_total += total
+    counts["durationMs"] = duration_ms
+    counts["tokens"] = tokens_total if tokens_available else 0
+    counts["tokensAvailable"] = 1 if tokens_available else 0
     return counts
 
 

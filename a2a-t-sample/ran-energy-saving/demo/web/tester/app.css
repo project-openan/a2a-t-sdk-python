@@ -239,6 +239,12 @@ table.grid th {
 table.grid tbody tr:hover { background: #fcfcfc; }
 table.grid td.num,
 table.grid th.num { width: 40px; color: var(--g500); text-align: right; }
+table.grid td.metric {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: nowrap;
+  color: var(--g700);
+}
 table.grid td.request {
   max-width: 420px;
   word-break: break-word;

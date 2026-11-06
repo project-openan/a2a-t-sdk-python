@@ -368,6 +368,10 @@ def create_app(
         mie_url=mie_url,
         runs_dir=resolved_runs_dir,
         nms_enabled=resolved_nms,
+        language=config.language,
+        model_mode=config.model_mode,
+        model_label=config.model_label,
+        metrics_grace_seconds=metrics_grace_seconds,
     )
 
     @asynccontextmanager

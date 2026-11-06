@@ -41,6 +41,10 @@ def build_tester_routes(
     mie_url: str | None,
     runs_dir: Path | None = None,
     nms_enabled: bool = False,
+    language: str = "",
+    model_mode: str = "",
+    model_label: str = "",
+    metrics_grace_seconds: float = 0.0,
 ) -> tuple[list[Route], TestBatchManager]:
     """Build the tester routes and the process-level batch manager."""
     batches = TestBatchManager(
@@ -50,6 +54,10 @@ def build_tester_routes(
         server_auth_token=server_auth_token,
         mie_url=mie_url,
         runs_dir=runs_dir,
+        language=language,
+        model_mode=model_mode,
+        model_label=model_label,
+        metrics_grace_seconds=metrics_grace_seconds,
     )
 
     async def page(request: Request) -> Response:

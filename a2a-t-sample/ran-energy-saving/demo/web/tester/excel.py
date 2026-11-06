@@ -21,6 +21,7 @@ from typing import Final
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.worksheet import Worksheet
 from shared.run_constants import (
     FINAL_STATE_INCOMPLETE,
     FINAL_STATE_INTENT_NOT_CONFIRMED,
@@ -535,7 +536,12 @@ def write_template() -> bytes:
 
 
 def write_results(batch: Mapping[str, object]) -> bytes:
-    """Build the result workbook of one finished or running batch."""
+    """Build the result workbook of one finished or running batch.
+
+    The workbook has three sheets: the case verdicts, the per-case metrics (duration, tokens and
+    latency) and a batch-level summary. Scripted offline LLM spans report tokens as unavailable
+    instead of inventing numbers.
+    """
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "测试结果"
@@ -551,49 +557,253 @@ def write_results(batch: Mapping[str, object]) -> bytes:
         "预期协商",
         "实际协商",
         "耗时(ms)",
+        "开始时间",
+        "结束时间",
+        "Token 总量",
+        "Prompt Token",
+        "Completion Token",
+        "LLM 调用",
+        "模型耗时(ms)",
+        "工具耗时(ms)",
+        "审批等待(ms)",
+        "Token 状态",
         "Run ID",
         "错误信息",
         "备注",
     )
     sheet.append(list(headers))
+    _style_header(sheet)
+    cases = batch.get("cases", [])
+    results = batch.get("results", [])
+    pairs: list[tuple[Mapping[str, object], Mapping[str, object]]] = []
+    if isinstance(cases, list) and isinstance(results, list):
+        for case, result in zip(cases, results, strict=False):
+            if isinstance(case, Mapping) and isinstance(result, Mapping):
+                pairs.append((case, result))
+    for case, result in pairs:
+        tokens = _tokens_of(result)
+        latency = _latency_of(result)
+        sheet.append(
+            [
+                case.get("caseId", ""),
+                case.get("name", ""),
+                result.get("status", ""),
+                case.get("protocol", ""),
+                case.get("scenario", ""),
+                case.get("userRequest", ""),
+                case.get("expectedFinalState", ""),
+                result.get("finalState", ""),
+                _expected_summary(case),
+                _actual_summary(result),
+                result.get("durationMs", ""),
+                result.get("startedAt", ""),
+                result.get("finishedAt", ""),
+                _token_metric(tokens, "total"),
+                _token_metric(tokens, "prompt"),
+                _token_metric(tokens, "completion"),
+                tokens.get("llmCalls", ""),
+                latency.get("modelMs", ""),
+                latency.get("toolMs", ""),
+                latency.get("approvalWaitMs", ""),
+                _token_status(tokens),
+                result.get("runId", ""),
+                result.get("error", ""),
+                case.get("note", ""),
+            ]
+        )
+    _set_widths(
+        sheet,
+        (16, 24, 12, 10, 14, 52, 20, 24, 18, 18, 12, 22, 22, 12, 12, 14, 10, 14, 14, 14, 14, 38, 40, 30),
+    )
+
+    metrics_sheet = workbook.create_sheet("指标")
+    metrics_headers = (
+        "用例编号",
+        "协议",
+        "场景",
+        "状态",
+        "实际最终状态",
+        "实际协商",
+        "耗时(ms)",
+        "Token 总量",
+        "Prompt",
+        "Completion",
+        "Reasoning",
+        "LLM 调用",
+        "客户端 Token",
+        "服务端 Token",
+        "模型耗时(ms)",
+        "工具耗时(ms)",
+        "审批等待(ms)",
+        "Token 状态",
+        "错误信息",
+    )
+    metrics_sheet.append(list(metrics_headers))
+    _style_header(metrics_sheet)
+    for case, result in pairs:
+        tokens = _tokens_of(result)
+        latency = _latency_of(result)
+        metrics_sheet.append(
+            [
+                case.get("caseId", ""),
+                case.get("protocol", ""),
+                case.get("scenario", ""),
+                result.get("status", ""),
+                result.get("finalState", ""),
+                _actual_summary(result),
+                result.get("durationMs", ""),
+                _token_metric(tokens, "total"),
+                _token_metric(tokens, "prompt"),
+                _token_metric(tokens, "completion"),
+                _token_metric(tokens, "reasoning"),
+                tokens.get("llmCalls", ""),
+                _side_tokens(tokens, "client"),
+                _side_tokens(tokens, "server"),
+                latency.get("modelMs", ""),
+                latency.get("toolMs", ""),
+                latency.get("approvalWaitMs", ""),
+                _token_status(tokens),
+                result.get("error", ""),
+            ]
+        )
+    _set_widths(metrics_sheet, (16, 10, 14, 12, 20, 18, 12, 12, 12, 14, 12, 10, 14, 14, 14, 14, 14, 12, 40))
+
+    summary_sheet = workbook.create_sheet("汇总")
+    summary_sheet.append(["指标", "值"])
+    _style_header(summary_sheet)
+    for label, value in _batch_summary(pairs):
+        summary_sheet.append([label, value])
+    _set_widths(summary_sheet, (28, 24))
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def _style_header(sheet: Worksheet) -> None:
+    """Apply the shared header fill to the first row of one sheet."""
     for cell in sheet[1]:
         cell.font = Font(bold=True)
         cell.fill = PatternFill("solid", fgColor="FFF1E4")
-    cases = batch.get("cases", [])
-    results = batch.get("results", [])
-    if isinstance(cases, list) and isinstance(results, list):
-        for case, result in zip(cases, results, strict=False):
-            if not isinstance(case, Mapping) or not isinstance(result, Mapping):
-                continue
-            expected = _expected_summary(case)
-            actual = _actual_summary(result)
-            sheet.append(
-                [
-                    case.get("caseId", ""),
-                    case.get("name", ""),
-                    result.get("status", ""),
-                    case.get("protocol", ""),
-                    case.get("scenario", ""),
-                    case.get("userRequest", ""),
-                    case.get("expectedFinalState", ""),
-                    result.get("finalState", ""),
-                    expected,
-                    actual,
-                    result.get("durationMs", ""),
-                    result.get("runId", ""),
-                    result.get("error", ""),
-                    case.get("note", ""),
-                ]
-            )
-    widths = (16, 24, 12, 10, 14, 52, 20, 24, 18, 18, 12, 38, 40, 30)
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+    sheet.freeze_panes = "A2"
+
+
+def _set_widths(sheet: Worksheet, widths: Sequence[int]) -> None:
+    """Set column widths and wrap the body cells of one sheet."""
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = width
     for row in sheet.iter_rows(min_row=2):
         for cell in row:
             cell.alignment = Alignment(vertical="top", wrap_text=True)
-    buffer = BytesIO()
-    workbook.save(buffer)
-    return buffer.getvalue()
+
+
+def _tokens_of(result: Mapping[str, object]) -> Mapping[str, object]:
+    """Return the token section of one case result."""
+    metrics = result.get("metrics")
+    if not isinstance(metrics, Mapping):
+        return {}
+    tokens = metrics.get("tokens")
+    return tokens if isinstance(tokens, Mapping) else {}
+
+
+def _latency_of(result: Mapping[str, object]) -> Mapping[str, object]:
+    """Return the latency section of one case result."""
+    metrics = result.get("metrics")
+    if not isinstance(metrics, Mapping):
+        return {}
+    latency = metrics.get("latency")
+    return latency if isinstance(latency, Mapping) else {}
+
+
+def _token_metric(tokens: Mapping[str, object], field: str) -> object:
+    """Return one token count only when the provider actually reported usage."""
+    if tokens.get("available") is not True:
+        return ""
+    return tokens.get(field, "")
+
+
+def _side_tokens(tokens: Mapping[str, object], side: str) -> object:
+    """Return the reported total of one side (client/server), when available."""
+    if tokens.get("available") is not True:
+        return ""
+    by_side = tokens.get("bySide")
+    if not isinstance(by_side, Mapping):
+        return ""
+    bucket = by_side.get(side)
+    if not isinstance(bucket, Mapping):
+        return ""
+    return bucket.get("total", "")
+
+
+def _token_status(tokens: Mapping[str, object]) -> str:
+    """Explain why token counts are missing or how they were obtained."""
+    if not tokens:
+        return "无数据"
+    if tokens.get("available") is True:
+        return "可用"
+    if tokens.get("scripted") is True:
+        return "离线脚本（无真实用量）"
+    if tokens.get("estimated") is True:
+        return "估算"
+    return "不可用"
+
+
+def _batch_summary(pairs: Sequence[tuple[Mapping[str, object], Mapping[str, object]]]) -> list[tuple[str, object]]:
+    """Build the aggregate sheet of one batch."""
+    counts: dict[str, int] = {}
+    total_duration = 0
+    total_tokens = 0
+    total_llm_calls = 0
+    model_ms = 0.0
+    tool_ms = 0.0
+    approval_ms = 0.0
+    tokens_available = False
+    for _, result in pairs:
+        status = str(result.get("status") or "")
+        counts[status] = counts.get(status, 0) + 1
+        duration = result.get("durationMs")
+        if isinstance(duration, (int, float)):
+            total_duration += int(duration)
+        tokens = _tokens_of(result)
+        latency = _latency_of(result)
+        calls = tokens.get("llmCalls")
+        if isinstance(calls, int):
+            total_llm_calls += calls
+        for latency_field, target in (
+            ("modelMs", "model"),
+            ("toolMs", "tool"),
+            ("approvalWaitMs", "approval"),
+        ):
+            value = latency.get(latency_field)
+            if isinstance(value, (int, float)):
+                if target == "model":
+                    model_ms += float(value)
+                elif target == "tool":
+                    tool_ms += float(value)
+                else:
+                    approval_ms += float(value)
+        if tokens.get("available") is True:
+            tokens_available = True
+            value = tokens.get("total")
+            if isinstance(value, int):
+                total_tokens += value
+    return [
+        ("用例总数", len(pairs)),
+        ("通过", counts.get("passed", 0)),
+        ("失败", counts.get("failed", 0)),
+        ("错误", counts.get("error", 0)),
+        ("取消", counts.get("cancelled", 0)),
+        ("跳过", counts.get("skipped", 0)),
+        ("无效", counts.get("invalid", 0)),
+        ("总耗时(ms)", total_duration),
+        ("总模型耗时(ms)", round(model_ms, 3)),
+        ("总工具耗时(ms)", round(tool_ms, 3)),
+        ("总审批等待(ms)", round(approval_ms, 3)),
+        ("LLM 调用次数", total_llm_calls),
+        ("Token 总量", total_tokens if tokens_available else "不可用"),
+        ("Token 统计", "可用" if tokens_available else "离线脚本或未上报"),
+    ]
 
 
 def _expected_summary(case: Mapping[str, object]) -> str:

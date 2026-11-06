@@ -187,8 +187,11 @@ shows the verdict, actual final state, negotiation kind/rounds, duration and the
 rejection path and `auto` leaves the gate to a human or the timeout. Batches are persisted under
 `runs/tester`, so reloading the page reopens the latest one; **Retry failed** rebuilds a draft from
 the failed, errored or cancelled rows. On a real-NMS deployment the page shows a warning and asks
-for confirmation before starting. Transport and discovery are still chosen by the backend per
-protocol, not by the sheet.
+for confirmation before starting. Each case records its wall-clock duration, model/tool/approval
+latency, LLM call count and token usage (prompt/completion/total, split by client and server); the
+exported workbook has **Testing results**, **Metrics** and **Summary** sheets. Scripted offline LLM
+spans are shown as unavailable instead of reporting invented token counts. Transport and discovery
+are still chosen by the backend per protocol, not by the sheet.
 
 ### Operator intent layer
 

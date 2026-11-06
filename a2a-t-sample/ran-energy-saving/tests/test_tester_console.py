@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,7 @@ from demo.web.app import create_app
 from demo.web.tester.excel import parse_test_cases, write_template
 from openpyxl import Workbook, load_workbook
 from protocol.client_flow import ClientFlowResult
-from shared.config import SampleConfig
+from shared.config import MODEL_MODE_LIVE, SampleConfig
 from shared.run_constants import (
     FINAL_STATE_TASK_COMPLETED,
     PROTOCOL_A2A_T,
@@ -27,8 +28,9 @@ from shared.run_constants import (
 class _PassRuntime:
     """Runtime double that completes every request without a negotiation."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, emit_tokens: bool = False) -> None:
         self.user_request: str | None = None
+        self.emit_tokens = emit_tokens
 
     async def run(
         self,
@@ -42,9 +44,19 @@ class _PassRuntime:
         on_decision_made: Callable[..., None] | None = None,
         on_intent_ready: Callable[[str], Awaitable[bool]] | None = None,
     ) -> ClientFlowResult:
-        del trace_sink, run_id, conversation_context
+        del run_id, conversation_context
         del on_decision_requested, on_decision_made, on_intent_ready
         self.user_request = user_request
+        if self.emit_tokens and trace_sink is not None:
+            trace_sink(
+                {
+                    "kind": "llm",
+                    "side": "client",
+                    "phase": "decision",
+                    "title": "Decision model call",
+                    "tokens": {"prompt": 100, "completion": 50, "total": 150},
+                }
+            )
         if event_sink is not None:
             event_sink(
                 {
@@ -223,6 +235,13 @@ async def test_a_batch_runs_every_case_and_reports_the_verdicts(
     assert all(result["runId"] for result in finished["results"])
     assert all(result["finalState"] == FINAL_STATE_TASK_COMPLETED for result in finished["results"])
     assert all(result["actualKind"] == "none" for result in finished["results"])
+    for result in finished["results"]:
+        assert isinstance(result["durationMs"], int)
+        assert "tokens" in result["metrics"]
+        assert "latency" in result["metrics"]
+        assert result["metrics"]["tokens"]["scripted"] is True
+        assert result["metrics"]["latency"]["totalMs"] is not None
+    assert finished["summary"]["durationMs"] > 0
 
 
 async def test_invalid_rows_are_listed_but_not_executed(client: httpx.AsyncClient) -> None:
@@ -324,6 +343,65 @@ async def test_nms_mode_is_exposed_to_the_page(
     assert meta.json()["nmsEnabled"] is True
 
 
+async def test_live_token_usage_is_collected_per_case(
+    offline_config: SampleConfig,
+    tmp_path: Path,
+) -> None:
+    live_config = replace(offline_config, model_mode=MODEL_MODE_LIVE)
+
+    async def build(*args: object, **kwargs: object) -> _PassRuntime:
+        del args, kwargs
+        return _PassRuntime(emit_tokens=True)
+
+    app = create_app(
+        live_config,
+        runs_dir=tmp_path,
+        runtime_factory=build,
+        finished_grace_seconds=0.0,
+        protocols=(PROTOCOL_A2A_T,),
+        nms_enabled=False,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        data = _workbook_bytes(
+            [
+                [
+                    "TC-TOKENS",
+                    "tokens",
+                    "Y",
+                    "A2A-T",
+                    "night",
+                    "zh",
+                    "",
+                    "task_completed",
+                    "none",
+                    0,
+                    "approve",
+                    300,
+                    "",
+                ]
+            ]
+        )
+        imported = await client.post("/api/tester/import", content=data)
+        batch = imported.json()
+        await client.post(f"/api/tester/batches/{batch['batchId']}/start")
+        finished = await _wait_batch(client, batch["batchId"])
+
+        tokens = finished["results"][0]["metrics"]["tokens"]
+        assert tokens["available"] is True
+        assert tokens["prompt"] == 100
+        assert tokens["completion"] == 50
+        assert tokens["total"] == 150
+        assert tokens["llmCalls"] == 1
+        assert finished["summary"]["tokens"] == 150
+
+        export = await client.get(f"/api/tester/batches/{batch['batchId']}/export.xlsx")
+        workbook = load_workbook(BytesIO(export.content), read_only=True)
+        summary_rows = list(workbook["汇总"].iter_rows(values_only=True))
+        workbook.close()
+    assert ("Token 总量", 150) in summary_rows
+
+
 async def test_the_results_workbook_contains_the_verdicts(client: httpx.AsyncClient) -> None:
     imported = await client.post("/api/tester/import", content=write_template())
     batch = imported.json()
@@ -333,9 +411,17 @@ async def test_the_results_workbook_contains_the_verdicts(client: httpx.AsyncCli
     response = await client.get(f"/api/tester/batches/{batch['batchId']}/export.xlsx")
     assert response.status_code == 200
     workbook = load_workbook(BytesIO(response.content), read_only=True)
+    assert workbook.sheetnames == ["测试结果", "指标", "汇总"]
     rows = list(workbook["测试结果"].iter_rows(values_only=True))
+    metric_rows = list(workbook["指标"].iter_rows(values_only=True))
+    summary_rows = list(workbook["汇总"].iter_rows(values_only=True))
     workbook.close()
 
     assert rows[0][2] == "执行状态"
+    assert "Token 总量" in rows[0]
     assert {row[2] for row in rows[1:]} == {"passed"}
     assert {row[0] for row in rows[1:]} == {"TC-001", "TC-002", "TC-003"}
+    assert metric_rows[0][0] == "用例编号"
+    assert {row[0] for row in metric_rows[1:]} == {"TC-001", "TC-002", "TC-003"}
+    assert summary_rows[0] == ("指标", "值")
+    assert ("Token 统计", "离线脚本或未上报") in summary_rows

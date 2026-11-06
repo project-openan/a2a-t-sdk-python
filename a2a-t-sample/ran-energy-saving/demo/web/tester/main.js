@@ -37,8 +37,12 @@ const COPY = {
     thRequest: "用户请求",
     thExpect: "预期",
     thStatus: "状态",
+    thDuration: "耗时",
+    thTokens: "Token",
     thResult: "结果 / 错误",
     thRun: "Run",
+    tokenOffline: "离线脚本",
+    tokenMissing: "—",
     defaultScenario: "（默认）",
     scenarioRequest: "使用场景自带请求",
     reading: "正在解析 Excel…",
@@ -106,8 +110,12 @@ const COPY = {
     thRequest: "User request",
     thExpect: "Expected",
     thStatus: "Status",
+    thDuration: "Duration",
+    thTokens: "Tokens",
     thResult: "Result / error",
     thRun: "Run",
+    tokenOffline: "Offline scripted",
+    tokenMissing: "—",
     defaultScenario: " (default)",
     scenarioRequest: "Uses the scenario's request",
     reading: "Reading the workbook…",
@@ -190,6 +198,8 @@ const dom = {
     request: document.getElementById("th-request"),
     expect: document.getElementById("th-expect"),
     status: document.getElementById("th-status"),
+    duration: document.getElementById("th-duration"),
+    tokens: document.getElementById("th-tokens"),
     result: document.getElementById("th-result"),
     run: document.getElementById("th-run"),
   },
@@ -239,6 +249,8 @@ function applyCopy() {
   dom.headers.request.textContent = t("thRequest");
   dom.headers.expect.textContent = t("thExpect");
   dom.headers.status.textContent = t("thStatus");
+  dom.headers.duration.textContent = t("thDuration");
+  dom.headers.tokens.textContent = t("thTokens");
   dom.headers.result.textContent = t("thResult");
   dom.headers.run.textContent = t("thRun");
 }
@@ -322,6 +334,56 @@ function badge(status) {
   span.className = `badge ${status}`;
   span.textContent = statusLabel(status);
   return span;
+}
+
+function formatDuration(ms) {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) return t("empty");
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 2 : 1)} s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${Math.round(seconds % 60)}s`;
+}
+
+function durationCell(result) {
+  const cell = document.createElement("td");
+  cell.className = "metric";
+  cell.textContent = formatDuration(result.durationMs);
+  if (result.startedAt || result.finishedAt) {
+    cell.title = `${result.startedAt || t("empty")} → ${result.finishedAt || t("empty")}`;
+  }
+  return cell;
+}
+
+function tokenCell(result) {
+  const cell = document.createElement("td");
+  cell.className = "metric";
+  const tokens = result.metrics?.tokens;
+  if (!tokens) {
+    cell.textContent = t("tokenMissing");
+    return cell;
+  }
+  if (tokens.available === true) {
+    const total = typeof tokens.total === "number" ? tokens.total : 0;
+    cell.textContent = total.toLocaleString();
+    const parts = [
+      `prompt ${tokens.prompt ?? t("empty")}`,
+      `completion ${tokens.completion ?? t("empty")}`,
+      `LLM ${tokens.llmCalls ?? 0}`,
+    ];
+    const latency = result.metrics?.latency || {};
+    if (typeof latency.modelMs === "number") parts.push(`model ${formatDuration(latency.modelMs)}`);
+    cell.title = parts.join(" · ");
+    return cell;
+  }
+  if (tokens.scripted === true) {
+    cell.textContent = t("tokenOffline");
+    cell.title = `${tokens.reportedCalls ?? 0}/${tokens.llmCalls ?? 0} scripted LLM calls`;
+    return cell;
+  }
+  cell.textContent = t("tokenMissing");
+  cell.title = "The provider did not report token usage.";
+  return cell;
 }
 
 function expectedText(testCase) {
@@ -417,18 +479,36 @@ function renderBatch() {
     outcome.className = `result ${result.status === "passed" ? "pass" : result.status === "failed" || result.status === "error" || result.status === "invalid" ? "fail" : ""}`;
     outcome.textContent = resultText(testCase, result);
 
-    row.append(number, id, name, protocol, scenario, request, expect, status, outcome, runCell(result));
+    row.append(
+      number,
+      id,
+      name,
+      protocol,
+      scenario,
+      request,
+      expect,
+      status,
+      durationCell(result),
+      tokenCell(result),
+      outcome,
+      runCell(result),
+    );
     dom.casesBody.append(row);
   });
 
   const summary = batch.summary || {};
-  dom.caseSummary.textContent = format(t("summary"), {
+  let summaryText = format(t("summary"), {
     n: summary.total || cases.length,
     r: summary.runnable || 0,
     p: summary.passed || 0,
     f: summary.failed || 0,
     e: summary.error || 0,
   });
+  if (summary.durationMs) summaryText += ` · ${formatDuration(summary.durationMs)}`;
+  if (summary.tokensAvailable) {
+    summaryText += ` · ${Number(summary.tokens || 0).toLocaleString()} tokens`;
+  }
+  dom.caseSummary.textContent = summaryText;
 
   const running = batch.status === "running";
   const draft = batch.status === "draft";
