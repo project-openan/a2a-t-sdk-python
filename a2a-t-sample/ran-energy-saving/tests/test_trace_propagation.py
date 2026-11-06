@@ -199,3 +199,38 @@ async def test_the_middleware_starts_a_bridge_span_with_the_run_metadata(
     assert isinstance(attributes, dict)
     assert attributes["langfuse.trace.metadata.runId"] == '"run-1"'
     assert captured["ended"] is True
+
+
+async def test_a_traceparent_uses_the_current_otel_span_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A server hop forwards its bridge span, not the span that called it (W3C semantics)."""
+    import opentelemetry.trace as trace_module
+
+    class _SpanContext:
+        is_valid = True
+        span_id = 0x0123456789ABCDEF
+
+    class _Span:
+        def get_span_context(self) -> _SpanContext:
+            return _SpanContext()
+
+    monkeypatch.setattr(trace_module, "get_current_span", lambda: _Span())
+    request = httpx.Request("POST", "http://agent.test/a2a/json/message:send")
+    with propagated_trace(
+        trace_id=_TRACE_ID,
+        parent_span_id="fedcba9876543210",
+        run_id="run-1",
+    ):
+        await inject_outgoing(request)
+
+    assert request.headers[TRACEPARENT_HEADER] == f"00-{_TRACE_ID}-0123456789abcdef-01"
+
+
+def test_current_parent_span_id_normalizes_the_bound_parent() -> None:
+    from shared.trace_propagation import current_parent_span_id
+
+    with propagated_trace(parent_span_id="FEDCBA9876543210"):
+        assert current_parent_span_id() == "fedcba9876543210"
+    with propagated_trace(parent_span_id="not-hex"):
+        assert current_parent_span_id() == ""

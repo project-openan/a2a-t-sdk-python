@@ -238,6 +238,9 @@ class Span:
     seq: int = 0
     span_id: str = ""
     parent_span_id: str | None = None
+    trace_id: str = ""
+    otel_span_id: str = ""
+    otel_parent_id: str = ""
     context_id: str | None = None
     task_id: str | None = None
     phase: str = PHASE_DISPATCH
@@ -267,6 +270,9 @@ class Span:
             "seq": self.seq,
             "spanId": self.span_id,
             "parentSpanId": self.parent_span_id,
+            "traceId": self.trace_id,
+            "otelSpanId": self.otel_span_id,
+            "otelParentId": self.otel_parent_id,
             "contextId": self.context_id,
             "taskId": self.task_id,
             "phase": self.phase,
@@ -300,6 +306,9 @@ class Span:
             seq=_as_int(data.get("seq")),
             span_id=_as_str(data.get("spanId")),
             parent_span_id=_as_optional_str(data.get("parentSpanId")),
+            trace_id=_as_str(data.get("traceId")),
+            otel_span_id=_as_str(data.get("otelSpanId")),
+            otel_parent_id=_as_str(data.get("otelParentId")),
             context_id=_as_optional_str(data.get("contextId")),
             task_id=_as_optional_str(data.get("taskId")),
             phase=_as_str(data.get("phase"), PHASE_DISPATCH) or PHASE_DISPATCH,
@@ -325,6 +334,34 @@ class Span:
 
 #: Backwards-friendly alias: the brief calls the same envelope ``TraceEvent``.
 TraceEvent = Span
+
+
+def _otel_envelope_ids() -> tuple[str, str, str]:
+    """Return ``(traceId, otelSpanId, otelParentId)`` for one Run Explorer envelope.
+
+    The local A2A middleware binds the caller's trace/parent ids; the span producers copy them so
+    an exporter in another process can join the same trace. Without a bound context (or without
+    OpenTelemetry) the fields stay empty and the envelope keeps its old behavior.
+    """
+    trace_id = ""
+    parent_id = ""
+    try:
+        from shared.trace_propagation import current_parent_span_id, current_trace_id
+
+        trace_id = current_trace_id()
+        parent_id = current_parent_span_id()
+    except Exception:  # noqa: BLE001 - tracing must not break the observed flow
+        pass
+    span_id = ""
+    try:
+        from opentelemetry import trace as otel_trace
+
+        context = otel_trace.get_current_span().get_span_context()
+        if context is not None and context.is_valid:
+            span_id = f"{context.span_id:016x}"
+    except Exception:  # noqa: BLE001 - tracing must not break the observed flow
+        pass
+    return trace_id, span_id, parent_id
 
 
 class TraceRecorder:
@@ -424,6 +461,7 @@ class TraceRecorder:
         """
         sanitized_detail, _ = sanitize_payload(detail)
         safe_tokens = dict(tokens) if tokens is not None else None
+        envelope_trace_id, envelope_span_id, envelope_parent_id = _otel_envelope_ids()
         with self._lock:
             if seq is None:
                 self._seq += 1
@@ -444,6 +482,9 @@ class TraceRecorder:
                 seq=resolved_seq,
                 span_id=resolved_span_id,
                 parent_span_id=parent_span_id,
+                trace_id=envelope_trace_id,
+                otel_span_id=envelope_span_id,
+                otel_parent_id=envelope_parent_id,
                 context_id=context_id,
                 task_id=task_id,
                 phase=phase,
@@ -770,11 +811,15 @@ def record_span(
     """
     trace = current_trace()
     sanitized, _ = sanitize_payload(detail)
+    envelope_trace_id, envelope_span_id, envelope_parent_id = _otel_envelope_ids()
     span = Span(
         run_id=trace.run_id or "",
         seq=0,
         span_id=producer_span_id(prefix),
         parent_span_id=parent_span_id,
+        trace_id=envelope_trace_id,
+        otel_span_id=envelope_span_id,
+        otel_parent_id=envelope_parent_id,
         context_id=trace.context_id,
         task_id=trace.task_id,
         phase=phase,

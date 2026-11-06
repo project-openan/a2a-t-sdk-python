@@ -340,3 +340,23 @@ def test_the_trace_url_uses_the_browser_facing_ui_base(offline_config: SampleCon
     assert snapshot["url"] == (
         f"https://langfuse-ui.example/relay/project/p1/traces/{snapshot['traceId']}"
     )
+
+
+def test_exporter_joins_the_current_otel_parent(offline_config: SampleConfig) -> None:
+    """An incoming traceparent on the UI request makes the run join the caller's trace."""
+    from opentelemetry import context as otel_context
+    from opentelemetry import trace as otel_trace
+    from opentelemetry.sdk.trace import TracerProvider
+
+    parent_provider = TracerProvider()
+    parent = parent_provider.get_tracer("external-caller").start_span("external request")
+    token = otel_context.attach(otel_trace.set_span_in_context(parent))
+    try:
+        exporter, runtime = _exporter(offline_config)
+        exporter.finish()
+    finally:
+        otel_context.detach(token)
+        parent.end()
+
+    root = _by_name(runtime)["run · night · a2a-t"]
+    assert f"{root.context.trace_id:032x}" == f"{parent.get_span_context().trace_id:032x}"

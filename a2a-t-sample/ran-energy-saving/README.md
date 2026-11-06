@@ -306,6 +306,13 @@ point the SDK's OTLP exporter at Langfuse (`OTEL_EXPORTER_OTLP_ENDPOINT` and
 the child processes. The vendor NMS keeps the run id as its `traceparent` because it does not report
 to the same project.
 
+`POST /api/runs` also accepts an incoming W3C `traceparent`. When an instrumented caller starts a
+run, the UI exporter adopts that parent, so the UI, OSS and downstream hops join the caller's trace
+instead of opening an unrelated one. Each Run Explorer envelope carries `traceId`, `otelSpanId` and
+`otelParentId`, so an OSS span can be inspected (or re-exported) outside the UI. An outbound local
+A2A call uses the sender's current span id as the `parent-id` — on a server hop that is the bridge
+span created for the request, never the span that called it.
+
 ### Real vendor NMS mode
 
 The sample can also act as the OSS client of a real vendor NMS. With `--nms`, the launcher starts

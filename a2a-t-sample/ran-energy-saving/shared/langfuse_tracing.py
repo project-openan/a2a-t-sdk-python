@@ -193,6 +193,24 @@ def create_langfuse_exporter(
         return None
 
 
+def _current_parent_context() -> Any:
+    """Return the current OTel context when it carries a valid span, else an empty context.
+
+    The UI adopts an incoming ``traceparent`` (see ``TracePropagationMiddleware`` on the Web UI),
+    so a run started by an instrumented caller joins that caller's trace instead of opening an
+    unrelated one. A browser request has no parent and keeps the historical behavior.
+    """
+    try:
+        from opentelemetry import trace
+
+        span = trace.get_current_span()
+        if span is not None and span.get_span_context().is_valid:
+            return trace.set_span_in_context(span)
+    except Exception:  # noqa: BLE001 - observability must never break the run
+        _LOGGER.debug("current OTel parent lookup failed", exc_info=True)
+    return Context()
+
+
 class LangfuseSpanExporter:
     """Translate the Run Explorer span stream of one run into Langfuse observations."""
 
@@ -214,7 +232,7 @@ class LangfuseSpanExporter:
         started = _now_ns()
         self._root = runtime.tracer.start_span(
             _run_span_name(metadata),
-            context=Context(),
+            context=_current_parent_context(),
             start_time=started,
             attributes=_root_attributes(metadata),
         )

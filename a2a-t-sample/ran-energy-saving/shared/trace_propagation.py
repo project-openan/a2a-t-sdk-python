@@ -144,6 +144,29 @@ def current_downstream_trace_id() -> str:
     return _valid_trace_id(_DOWNSTREAM_TRACE_ID.get())
 
 
+def current_parent_span_id() -> str:
+    """Return the active parent span id (16 hex), ``""`` when absent.
+
+    The local A2A middleware binds the incoming ``traceparent`` parent id here. Span producers
+    copy it into the Run Explorer envelope so a UI exporter can join the caller's trace.
+    """
+    parent = _PARENT_SPAN_ID.get().strip().lower()
+    return parent if _is_hex(parent, 16) and parent != "0" * 16 else ""
+
+
+def _current_otel_span_id() -> str:
+    """Return the current OTel span id (16 hex), ``""`` without an active valid span."""
+    try:
+        from opentelemetry import trace
+
+        context = trace.get_current_span().get_span_context()
+        if context is not None and context.is_valid:
+            return f"{context.span_id:016x}"
+    except Exception:  # noqa: BLE001 - propagation must never break the request
+        _LOGGER.debug("current OTel span lookup failed", exc_info=True)
+    return ""
+
+
 def _fallback_trace_id() -> str:
     """Derive a stable 32-hex trace id from the run id when Langfuse owns no trace.
 
@@ -162,15 +185,18 @@ def _fallback_trace_id() -> str:
 def current_traceparent() -> str:
     """Return a W3C ``traceparent`` for one outgoing call, ``""`` without a run.
 
-    The client's Langfuse root span id is the parent, so the server spans hang directly under the
-    run root. When the exporter is disabled, the run id (or a hash of it) is the trace id, matching
-    the vendor-NMS path; the span id is generated per request.
+    The ``parent-id`` field must be the sender's current span, not the span that called it. The
+    server middleware starts a bridge span for each inbound request, so an OSS hop forwards that
+    span id; a client without a current span keeps the run root id (the server spans then hang
+    directly under the run root). When the exporter is disabled, the run id (or a hash of it) is
+    the trace id, matching the vendor-NMS path.
     """
     trace_id = current_trace_id() or _fallback_trace_id()
     if not trace_id:
         return ""
     parent = _PARENT_SPAN_ID.get().strip().lower()
-    span_id = parent if _is_hex(parent, 16) and parent != "0" * 16 else uuid.uuid4().hex[:16]
+    root_parent = parent if _is_hex(parent, 16) and parent != "0" * 16 else ""
+    span_id = _current_otel_span_id() or root_parent or uuid.uuid4().hex[:16]
     return f"00-{trace_id}-{span_id}-01"
 
 
@@ -364,6 +390,7 @@ __all__ = [
     "USER_ID_HEADER",
     "annotate_run_id",
     "current_downstream_trace_id",
+    "current_parent_span_id",
     "current_run_id",
     "current_trace_id",
     "current_traceparent",

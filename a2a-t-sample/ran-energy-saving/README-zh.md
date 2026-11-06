@@ -260,6 +260,12 @@ sample 的可选依赖；未安装或未配置 key 时导出器为空操作。
 `OTEL_EXPORTER_OTLP_HEADERS`）；所选 `.env` 中的 `OTEL_*`/`LANGFUSE_*` 会被导出给子进程。厂商网管
 不使用同一条 trace，因此发往网管的 `traceparent` 仍使用 run id。
 
+`POST /api/runs` 也接受调用方传入的 W3C `traceparent`：带链路追踪的调用方启动 run 时，UI 导出器
+会采用该父上下文，UI、OSS 和下游跳都进入调用方的 trace，而不是另开一条。每条 Run Explorer
+信封都会带 `traceId`、`otelSpanId`、`otelParentId`，因此 OSS span 可以在 UI 之外检查或再导出。
+出站本地 A2A 调用的 `parent-id` 使用发送方当前的 span id（服务端跳即该请求的桥接 span），
+不会复用调用它的那个 span。
+
 ### 真实厂商网管模式
 
 sample 也可以作为真实厂商网管的 OSS 客户端。加 `--nms` 后，启动器不再启动本地 registry、RAN

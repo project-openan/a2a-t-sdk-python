@@ -23,6 +23,7 @@ from shared.trace import (
     infer_event_phase,
     is_report_artifact,
     phase_for_stage,
+    record_span,
     reset_task_sink,
     set_global_sink,
     set_task_sink,
@@ -244,3 +245,25 @@ async def test_task_sinks_are_isolated_between_concurrent_runs() -> None:
 
     assert [span["runId"] for span in first] == ["run-a"]
     assert [span["runId"] for span in second] == ["run-b"]
+
+
+def test_record_span_copies_the_active_otel_context() -> None:
+    """The envelope carries the trace ids so another process can join the same trace."""
+    from shared.trace_propagation import propagated_trace
+
+    captured: list[dict[str, object]] = []
+    token = set_task_sink(captured.append)
+    try:
+        with propagated_trace(
+            trace_id="0123456789abcdef0123456789abcdef",
+            parent_span_id="fedcba9876543210",
+            run_id="run-1",
+        ):
+            record_span(kind="llm", phase=PHASE_EXECUTION, title="LLM call", prefix="probe")
+    finally:
+        reset_task_sink(token)
+
+    assert captured
+    assert captured[0]["traceId"] == "0123456789abcdef0123456789abcdef"
+    assert captured[0]["otelParentId"] == "fedcba9876543210"
+    assert Span.from_dict(captured[0]).trace_id == "0123456789abcdef0123456789abcdef"

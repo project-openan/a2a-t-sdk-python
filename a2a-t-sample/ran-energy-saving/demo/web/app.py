@@ -98,6 +98,7 @@ from shared.trace import (
     SCHEMA_VERSION,
     set_global_sink,
 )
+from shared.trace_propagation import TracePropagationMiddleware
 from sse_starlette.sse import EventSourceResponse
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -1364,7 +1365,13 @@ def create_app(
             ]
             if config.auth_token
             else []
-        ),
+        )
+        + [
+            # An external caller that starts a run with a W3C ``traceparent`` makes that context
+            # current, so ``create_langfuse_exporter`` joins the caller's trace instead of opening
+            # an unrelated one. Browser requests carry no traceparent and are unaffected.
+            Middleware(TracePropagationMiddleware)
+        ],
     )
     install_health_routes(
         app,
