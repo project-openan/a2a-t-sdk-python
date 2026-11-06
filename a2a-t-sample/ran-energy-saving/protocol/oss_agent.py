@@ -29,7 +29,13 @@ from a2a.server.agent_execution.context import RequestContext
 from a2a.server.events.event_queue import EventQueue
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_rest_routes
+from a2a.server.tasks.base_push_notification_sender import BasePushNotificationSender
+from a2a.server.tasks.inmemory_push_notification_config_store import (
+    InMemoryPushNotificationConfigStore,
+)
 from a2a.server.tasks.inmemory_task_store import InMemoryTaskStore
+from a2a.server.tasks.push_notification_config_store import PushNotificationConfigStore
+from a2a.server.tasks.push_notification_sender import PushNotificationSender
 from a2a.server.tasks.task_store import TaskStore
 from a2a.server.tasks.task_updater import TaskUpdater
 from a2a.types import (
@@ -75,11 +81,14 @@ from protocol.client_flow import (
     SseClientTransport,
 )
 from protocol.discovery import DISCOVERY_DIRECT, discover_agent
+from protocol.gateway_push import ValidatingPushConfigStore
 from protocol.intent import IntentProcessor, OperatorRequest, ProcessedIntent
 from protocol.messages import SAMPLE_RUN_ID_METADATA_KEY, metadata_to_dict
 from protocol.nms_client import NmsClient, NmsConfig, NmsSseTransport, NmsWebhookTransport
 from protocol.pure_client_flow import run_pure_client_flow
 from protocol.shared_webhook import WebhookRouter
+from protocol.sqlite_push_config_store import SqlitePushNotificationConfigStore
+from protocol.sqlite_task_store import SqliteTaskStore
 from protocol.wire_log import WIRE_OSS_FILENAME, HttpWireLog
 
 #: Agent identity and skill.
@@ -629,7 +638,7 @@ def build_oss_agent_card(*, host: str, port: int) -> AgentCard:
         description=OSS_AGENT_DESCRIPTION,
         version="1.0.0",
         provider=AgentProvider(organization=OSS_AGENT_ORGANIZATION, url=OSS_AGENT_PROVIDER_URL),
-        capabilities=AgentCapabilities(streaming=True, push_notifications=False),
+        capabilities=AgentCapabilities(streaming=True, push_notifications=True),
         default_input_modes=["application/json", "text/plain"],
         default_output_modes=["application/json", "text/plain"],
         skills=[
@@ -657,6 +666,8 @@ def build_oss_app(
     answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = None,
     decision_provider: object | None = None,
     task_store: TaskStore | None = None,
+    push_config_store: PushNotificationConfigStore | None = None,
+    push_sender: PushNotificationSender | None = None,
     host: str | None = None,
     port: int | None = None,
     timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
@@ -665,7 +676,26 @@ def build_oss_app(
     followup: str = PURE_FOLLOWUP_BOTH,
     trace_emitter: HttpTraceEmitter | FileTraceEmitter | None = None,
 ) -> Starlette:
-    """Build the OSS A2A app."""
+    """Build the OSS A2A app.
+
+    Args:
+        config: sample configuration; selects the downstream hop.
+        ran_url: local RAN Agent base URL (direct topology).
+        answer: decision callback for a downstream ``INPUT_REQUIRED``.
+        decision_provider: optional live decision provider.
+        task_store: outer Task store; defaults to the in-memory store. The launcher passes the
+            SQLite store so a task that runs for days survives a process restart.
+        push_config_store: client webhook registrations; defaults to the SDK in-memory store.
+        push_sender: push-notification sender; defaults to the SDK sender over an owned httpx
+            client. Tests inject one over a mock transport.
+        host: advertised OSS host.
+        port: advertised OSS port.
+        timeout_seconds: A2A call budget of the downstream hop.
+        intent_processor: business intent layer run before the downstream hop.
+        language: process-level language used by the intent processor.
+        followup: conversation fields carried by one pure follow-up.
+        trace_emitter: cross-process Run Explorer sink.
+    """
     resolved_host = host or os.environ.get("A2AT_SAMPLE_OSS_HOST", "127.0.0.1")
     resolved_port = port or int(os.environ.get("A2AT_SAMPLE_OSS_PORT", str(DEFAULT_OSS_PORT)))
     resolved_ran_url = ran_url or os.environ.get("A2AT_SAMPLE_RAN_URL", f"http://127.0.0.1:{DEFAULT_RAN_PORT}")
@@ -682,6 +712,19 @@ def build_oss_app(
         followup=followup,
         trace_sink=trace_emitter,
     )
+    resolved_task_store = task_store or InMemoryTaskStore()
+    # A caller-supplied webhook URL must not become an arbitrary outbound request target; the
+    # gateway uses the same validating wrapper.
+    resolved_push_store = ValidatingPushConfigStore(push_config_store or InMemoryPushNotificationConfigStore())
+    owned_push_client: httpx.AsyncClient | None = None
+    if push_sender is None:
+        owned_push_client = httpx.AsyncClient(trust_env=False)
+        resolved_push_sender: PushNotificationSender = BasePushNotificationSender(
+            owned_push_client,
+            resolved_push_store,
+        )
+    else:
+        resolved_push_sender = push_sender
 
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
@@ -697,11 +740,15 @@ def build_oss_app(
             set_global_sink(None)
             if trace_emitter is not None:
                 trace_emitter.close()
+            if owned_push_client is not None:
+                await owned_push_client.aclose()
 
     request_handler = DefaultRequestHandler(
         agent_executor=executor,
-        task_store=task_store or InMemoryTaskStore(),
+        task_store=resolved_task_store,
         agent_card=card,
+        push_config_store=resolved_push_store,
+        push_sender=resolved_push_sender,
     )
     app = Starlette(
         routes=[
@@ -713,6 +760,9 @@ def build_oss_app(
     app.add_middleware(TracePropagationMiddleware)
     app.state.agent_card = card
     app.state.request_handler = request_handler
+    app.state.task_store = resolved_task_store
+    app.state.push_config_store = resolved_push_store
+    app.state.push_sender = resolved_push_sender
     return app
 
 
@@ -752,12 +802,23 @@ def main() -> None:
         def answer(event: dict[str, object]) -> str:
             return pure_answer_from_event(event, config.language)
 
+    task_store: TaskStore | None = None
+    push_config_store: PushNotificationConfigStore | None = None
+    if config.oss_task_db_path:
+        # One database owns the outer Tasks, the client webhook registrations and the downstream
+        # bindings, so a task that runs for days survives an OSS restart.
+        task_store = SqliteTaskStore(config.oss_task_db_path)
+        push_config_store = SqlitePushNotificationConfigStore(config.oss_task_db_path)
+        _LOGGER.info("OSS task persistence: %s", config.oss_task_db_path)
+
     app = build_oss_app(
         config=config,
         host=host,
         port=port,
         answer=answer,
         decision_provider=decision_provider,
+        task_store=task_store,
+        push_config_store=push_config_store,
         intent_processor=build_demo_intent_processor(config),
         language=config.language,
         followup=config.pure_followup,

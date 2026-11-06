@@ -10,6 +10,7 @@ import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import replace
+from pathlib import Path
 
 import httpx
 import pytest
@@ -25,7 +26,14 @@ from demo.pure_policy import build_demo_pure_policy, pure_answer_from_event
 from protocol.client_flow import ClientFlowResult
 from protocol.intent import ProcessedIntent
 from protocol.mie_agent import build_mie_app
-from protocol.oss_agent import OSSPureExecutor, _build_trace_emitter, a2a_request_text, build_oss_app
+from protocol.oss_agent import (
+    OSSPureExecutor,
+    _build_trace_emitter,
+    a2a_request_text,
+    build_oss_agent_card,
+    build_oss_app,
+)
+from protocol.sqlite_task_store import SqliteTaskStore
 from shared.config import DISCOVERY_DIRECT, DISCOVERY_NMS, TRANSPORT_SSE
 from shared.run_constants import (
     FINAL_STATE_INCOMPLETE,
@@ -309,3 +317,30 @@ def test_trace_emitter_warns_without_a_token(
     emitter.close()
 
     assert "no A2AT_SAMPLE_TRACE_TOKEN" in caplog.text
+
+
+def test_the_oss_card_advertises_push_notifications() -> None:
+    """A long-running OSS Task needs the A2A push-notification capability."""
+    card = build_oss_agent_card(host="127.0.0.1", port=8011)
+
+    assert card.capabilities.push_notifications is True
+
+
+def test_the_oss_app_uses_the_configured_task_and_push_stores(tmp_path: Path) -> None:
+    """The launcher passes SQLite stores so a task that runs for days survives a restart."""
+
+    class _PushSender:
+        async def send_notification(self, task_id: str, event: object) -> None:
+            del task_id, event
+
+    store = SqliteTaskStore(tmp_path / "oss-tasks.sqlite3")
+    sender = _PushSender()
+    app = build_oss_app(
+        answer=lambda event: "",
+        task_store=store,
+        push_sender=sender,
+    )
+
+    assert app.state.task_store is store
+    assert app.state.push_sender is sender
+    assert app.state.push_config_store is not None

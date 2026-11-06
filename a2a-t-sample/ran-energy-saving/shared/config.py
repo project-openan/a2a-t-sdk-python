@@ -110,6 +110,7 @@ HTTP_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS"
 LLM_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_LLM_TIMEOUT_SECONDS"
 LLM_MAX_ATTEMPTS_ENV_KEY = "A2AT_SAMPLE_LLM_MAX_ATTEMPTS"
 TASK_DB_ENV_KEY = "A2AT_SAMPLE_TASK_DB"
+OSS_TASK_DB_ENV_KEY = "A2AT_SAMPLE_OSS_TASK_DB"
 CLIENT_DB_ENV_KEY = "A2AT_SAMPLE_CLIENT_DB"
 CLIENT_MEMORY_TURNS_ENV_KEY = "A2AT_SAMPLE_CLIENT_MEMORY_TURNS"
 ADK_SESSION_RETENTION_DAYS_ENV_KEY = "A2AT_SAMPLE_ADK_SESSION_RETENTION_DAYS"
@@ -433,6 +434,8 @@ class SampleConfig:
         llm_max_attempts: Live SDK LLM attempt limit per retryable step.
         task_db_path: Absolute SQLite path of the persisted A2A Task store; ``None`` keeps the
             in-memory store (tests and ephemeral runs).
+        oss_task_db_path: Absolute SQLite path of the OSS Agent Task store and its downstream
+            bindings; ``None`` keeps the OSS Task state in memory.
         client_db_path: Absolute SQLite path of the client conversation/run store; ``None`` keeps
             the client state in memory only.
         client_memory_turns: Recent conversation turns injected into the next run's prompts.
@@ -513,6 +516,7 @@ class SampleConfig:
     llm_timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS
     llm_max_attempts: int = DEFAULT_LLM_MAX_ATTEMPTS
     task_db_path: str | None = None
+    oss_task_db_path: str | None = None
     client_db_path: str | None = None
     client_memory_turns: int = DEFAULT_CLIENT_MEMORY_TURNS
     adk_session_retention_days: int = DEFAULT_ADK_SESSION_RETENTION_DAYS
@@ -711,6 +715,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         llm_timeout_seconds=_positive_seconds(values, LLM_TIMEOUT_ENV_KEY, DEFAULT_LLM_TIMEOUT_SECONDS),
         llm_max_attempts=_llm_max_attempts(values),
         task_db_path=_optional_absolute_path(values, TASK_DB_ENV_KEY),
+        oss_task_db_path=_optional_absolute_path(values, OSS_TASK_DB_ENV_KEY),
         client_db_path=_optional_absolute_path(values, CLIENT_DB_ENV_KEY),
         client_memory_turns=_non_negative_int(values, CLIENT_MEMORY_TURNS_ENV_KEY, DEFAULT_CLIENT_MEMORY_TURNS),
         adk_session_retention_days=_positive_int(

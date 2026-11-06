@@ -79,6 +79,7 @@ PID_FILE = RUN_DIR / "pids.json"
 #: sample's ``runs/`` and is also written into the per-run .env as ``A2AT_SAMPLE_RUNS_DIR``.
 RUNS_DIR = Path(os.environ.get("A2AT_SAMPLE_RUNS_DIR") or CASE_DIR / "runs")
 TASK_DB_PATH = RUNS_DIR / "task-status.sqlite3"
+OSS_TASK_DB_PATH = RUNS_DIR / "oss-task-status.sqlite3"
 CLIENT_DB_PATH = RUNS_DIR / "client-state.sqlite3"
 GATEWAY_TASK_DB_PATH = RUNS_DIR / "gateway-task-status.sqlite3"
 
@@ -459,6 +460,7 @@ def _write_run_env(
             "A2AT_SAMPLE_MIE_PORT": str(mie_port),
             "A2AT_SAMPLE_RUNS_DIR": str(RUNS_DIR),
             "A2AT_SAMPLE_TASK_DB": str(TASK_DB_PATH),
+            "A2AT_SAMPLE_OSS_TASK_DB": str(OSS_TASK_DB_PATH),
             "A2AT_SAMPLE_CLIENT_DB": str(CLIENT_DB_PATH),
             "A2AT_SAMPLE_GATEWAY_TASK_DB": str(GATEWAY_TASK_DB_PATH),
             "A2AT_SAMPLE_GATEWAY_HOST": server_host,

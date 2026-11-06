@@ -82,12 +82,43 @@ def _add_push_configs(connection: sqlite3.Connection) -> None:
     connection.executescript(_PUSH_CONFIG_SCHEMA)
 
 
+#: Downstream binding of one outer A2A Task to the vendor/NMS Task it tracks. The OSS agent and the
+#: Web UI use it to route a push that can arrive days after the creating request has ended.
+_BINDING_SCHEMA: Final[str] = """
+CREATE TABLE IF NOT EXISTS downstream_bindings (
+  inner_task_id     TEXT NOT NULL,
+  inner_context_id  TEXT NOT NULL DEFAULT '',
+  outer_task_id     TEXT NOT NULL,
+  run_id            TEXT NOT NULL DEFAULT '',
+  owner             TEXT NOT NULL DEFAULT '',
+  protocol          TEXT NOT NULL DEFAULT '',
+  state             TEXT NOT NULL DEFAULT 'working',
+  created_at        REAL NOT NULL DEFAULT 0,
+  updated_at        REAL NOT NULL DEFAULT 0,
+  terminal_at       REAL,
+  last_event_hash   TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (inner_task_id, inner_context_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bindings_outer ON downstream_bindings(outer_task_id);
+CREATE INDEX IF NOT EXISTS idx_bindings_state ON downstream_bindings(state, updated_at);
+"""
+
+
+def _add_downstream_bindings(connection: sqlite3.Connection) -> None:
+    """Create the version-3 downstream-binding table."""
+    connection.executescript(_BINDING_SCHEMA)
+
+
 #: Ordered schema migrations; index ``i`` upgrades version ``i`` to ``i + 1``.
-_MIGRATIONS: Final[tuple[SchemaMigration, ...]] = (_create_schema, _add_push_configs)
+_MIGRATIONS: Final[tuple[SchemaMigration, ...]] = (
+    _create_schema,
+    _add_push_configs,
+    _add_downstream_bindings,
+)
 
 
 def ensure_task_db(path: str | Path) -> None:
-    """Create or upgrade the Task database, including the push-notification table."""
+    """Create or upgrade the Task database, including the push and downstream-binding tables."""
     with connect(path) as connection:
         apply_migrations(connection, _MIGRATIONS)
 

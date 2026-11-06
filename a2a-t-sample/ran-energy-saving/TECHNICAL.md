@@ -1127,6 +1127,7 @@ script can switch the model with a plain `export ADK_MODEL_NAME=...`.
 | `A2AT_SAMPLE_LANGFUSE_ENVIRONMENT` | default `demo` | Langfuse environment label. |
 | `A2AT_SAMPLE_TRACE_SPAN_LEVEL` | default `phase` | Langfuse export detail: `phase` = key events + one per phase + final status, `minimal` = LLM/tool + result, `full` = every span. The UI timeline is unaffected. |
 | `A2AT_SAMPLE_TASK_DB` | unset = in-memory; `run_demo.py` writes `<sample>/runs/task-status.sqlite3` | Absolute SQLite path of the server's persisted A2A Task store, also read by `GET /api/tasks`. |
+| `A2AT_SAMPLE_OSS_TASK_DB` | unset = in-memory; `run_demo.py` writes `<sample>/runs/oss-task-status.sqlite3` | Absolute SQLite path of the OSS Agent Task store, its downstream bindings and the client webhook registrations. |
 | `A2AT_SAMPLE_CLIENT_DB` | unset = in-memory; `run_demo.py` writes `<sample>/runs/client-state.sqlite3` | Absolute SQLite path of the client's conversation/run/negotiation store and of the ADK decision-agent sessions. |
 | `A2AT_SAMPLE_CLIENT_MEMORY_TURNS` | default `6` (>= 0) | Number of recent conversation turns injected into the next decision prompt and Task-T generation. |
 | `A2AT_SAMPLE_ADK_SESSION_RETENTION_DAYS` | default `7` (>= 1) | Days a decision-agent session is kept as audit data before the startup/periodic sweep removes it. |

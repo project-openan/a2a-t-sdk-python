@@ -55,6 +55,10 @@ def test_write_run_env_points_both_processes_at_the_task_database(
     assert client_db.is_absolute()
     assert client_db == run_demo.CLIENT_DB_PATH
     assert client_db.name == "client-state.sqlite3"
+    oss_db = Path(str(values["A2AT_SAMPLE_OSS_TASK_DB"]))
+    assert oss_db.is_absolute()
+    assert oss_db == run_demo.OSS_TASK_DB_PATH
+    assert oss_db.name == "oss-task-status.sqlite3"
     gateway_db = Path(str(values["A2AT_SAMPLE_GATEWAY_TASK_DB"]))
     assert gateway_db.is_absolute()
     assert gateway_db == run_demo.GATEWAY_TASK_DB_PATH

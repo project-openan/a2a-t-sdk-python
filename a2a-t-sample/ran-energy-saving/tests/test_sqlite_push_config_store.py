@@ -84,16 +84,16 @@ async def test_upsert_and_delete(tmp_path: Path) -> None:
     assert len(await store.get_info("task-2", context)) == 1
 
 
-def test_the_gateway_database_is_at_schema_version_two(tmp_path: Path) -> None:
+def test_the_gateway_database_is_at_schema_version_three(tmp_path: Path) -> None:
     path = tmp_path / "gateway.sqlite3"
     SqlitePushNotificationConfigStore(path)
 
     with connect(path) as connection:
-        assert schema_version(connection) == 2
+        assert schema_version(connection) == 3
         tables = {
             str(row[0])
             for row in connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-    assert {"tasks", "push_notification_configs"} <= tables
+    assert {"tasks", "push_notification_configs", "downstream_bindings"} <= tables

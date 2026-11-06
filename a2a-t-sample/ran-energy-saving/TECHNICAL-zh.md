@@ -904,6 +904,7 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_SAMPLE_LANGFUSE_ENVIRONMENT` | 默认 `demo` | Langfuse environment 标签。 |
 | `A2AT_SAMPLE_TRACE_SPAN_LEVEL` | 默认 `phase` | Langfuse 导出粒度：`phase` = 关键事件 + 每 phase 一条 + 最终状态，`minimal` = LLM/tool + 结果，`full` = 全部 span。UI 时间线不受影响。 |
 | `A2AT_SAMPLE_TASK_DB` | 未设置 = 内存；`run_demo.py` 写入 `<sample>/runs/task-status.sqlite3` | 服务端持久化 A2A Task 存储的绝对 SQLite 路径，也由 `GET /api/tasks` 读取。 |
+| `A2AT_SAMPLE_OSS_TASK_DB` | 未设置 = 内存；`run_demo.py` 写入 `<sample>/runs/oss-task-status.sqlite3` | OSS Agent 的 Task 存储、下游绑定和客户端 webhook 注册的绝对 SQLite 路径。 |
 | `A2AT_SAMPLE_CLIENT_DB` | 未设置 = 内存；`run_demo.py` 写入 `<sample>/runs/client-state.sqlite3` | 客户端会话/运行/协商存储，以及 ADK 决策智能体会话的绝对 SQLite 路径。 |
 | `A2AT_SAMPLE_CLIENT_MEMORY_TURNS` | 默认 `6`（>= 0） | 注入下一次决策提示词与 Task-T 生成的最近会话轮数。 |
 | `A2AT_SAMPLE_ADK_SESSION_RETENTION_DAYS` | 默认 `7`（>= 1） | 决策智能体会话作为审计数据保留的天数，到期由启动/定期清扫删除。 |
