@@ -204,6 +204,7 @@ const els = {
   legendCfg: byId("legend-cfg"),
   legendData: byId("legend-data"),
   splitter: byId("splitter"),
+  intentSplitter: byId("intent-splitter"),
   traceSplitter: byId("trace-splitter"),
 };
 
@@ -456,6 +457,7 @@ function bindStaticEvents() {
     els.rowsHidden = open;
   });
   bindSplitter();
+  bindIntentSplitter();
   bindTraceSplitter();
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && els.modifyDialog && !els.modifyDialog.hidden) {
@@ -2236,6 +2238,99 @@ function bindSplitter() {
   });
 }
 
+/** Resize the understood-intent panel so a long wire message can borrow its height.
+ *
+ * The panel is content-sized by default (capped at 38 %); a drag pins it to a pixel height and the
+ * negotiation panel below takes the rest. Double-click returns to the content-driven default.
+ */
+function bindIntentSplitter() {
+  const splitter = els.intentSplitter;
+  const panel = document.querySelector("#p-intent");
+  const nego = document.querySelector("#p-nego");
+  const right = document.querySelector(".right");
+  if (!splitter || !panel || !nego || !right) return;
+  const key = "a2at-presentation-intent-px";
+  const MIN = 96;
+  const NEGO_MIN = 180;
+  /** Everything in the rail that is neither panel: gaps, both splitters and the session trace. */
+  const otherHeight = () => {
+    const height = right.getBoundingClientRect().height;
+    return Math.max(
+      0,
+      height - panel.getBoundingClientRect().height - nego.getBoundingClientRect().height,
+    );
+  };
+  const maxHeight = () =>
+    Math.max(MIN, right.getBoundingClientRect().height - otherHeight() - NEGO_MIN);
+  const setHeight = (px, save) => {
+    const value = Math.max(MIN, Math.min(maxHeight(), px));
+    right.classList.add("has-intent-h");
+    right.style.setProperty("--intent-h", `${value.toFixed(0)}px`);
+    if (save) {
+      try {
+        localStorage.setItem(key, String(value));
+      } catch {
+        /* storage is optional */
+      }
+    }
+  };
+  try {
+    const saved = Number(localStorage.getItem(key));
+    if (Number.isFinite(saved) && saved >= MIN) setHeight(saved, false);
+  } catch {
+    /* storage is optional */
+  }
+  let dragging = false;
+  let startY = 0;
+  let startHeight = 0;
+  splitter.addEventListener("pointerdown", (event) => {
+    dragging = true;
+    startY = event.clientY;
+    startHeight = panel.getBoundingClientRect().height;
+    try {
+      splitter.setPointerCapture(event.pointerId);
+    } catch {
+      /* pointer capture is best effort */
+    }
+    splitter.classList.add("drag");
+    document.body.classList.add("resizing-y");
+    event.preventDefault();
+  });
+  splitter.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    setHeight(startHeight + (event.clientY - startY), false);
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    splitter.classList.remove("drag");
+    document.body.classList.remove("resizing-y");
+    setHeight(panel.getBoundingClientRect().height, true);
+  };
+  splitter.addEventListener("pointerup", end);
+  splitter.addEventListener("pointercancel", end);
+  splitter.addEventListener("dblclick", () => {
+    right.classList.remove("has-intent-h");
+    right.style.removeProperty("--intent-h");
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* storage is optional */
+    }
+  });
+  splitter.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    const delta = event.key === "ArrowUp" ? 24 : -24;
+    setHeight(panel.getBoundingClientRect().height + delta, true);
+  });
+  window.addEventListener("resize", () => {
+    if (!right.classList.contains("has-intent-h")) return;
+    const current = panel.getBoundingClientRect().height;
+    if (current > maxHeight()) setHeight(maxHeight(), false);
+  });
+}
+
 /** Resize the session-trace panel; the right column itself no longer scrolls as a whole. */
 function bindTraceSplitter() {
   const splitter = els.traceSplitter;
@@ -2244,7 +2339,21 @@ function bindTraceSplitter() {
   if (!splitter || !panel || !right) return;
   const key = "a2at-presentation-trace-px";
   const MIN = 140;
-  const maxHeight = () => Math.max(MIN, right.getBoundingClientRect().height * 0.62);
+  // A pinned intent height is not negotiable here, so the trace may not grow past what is left.
+  const pinnedLimit = () => {
+    const intent = document.querySelector("#p-intent");
+    const nego = document.querySelector("#p-nego");
+    if (!right.classList.contains("has-intent-h") || !intent || !nego) return Infinity;
+    const height = right.getBoundingClientRect().height;
+    const others =
+      height -
+      intent.getBoundingClientRect().height -
+      nego.getBoundingClientRect().height -
+      panel.getBoundingClientRect().height;
+    return height - intent.getBoundingClientRect().height - others - 180;
+  };
+  const maxHeight = () =>
+    Math.max(MIN, Math.min(right.getBoundingClientRect().height * 0.62, pinnedLimit()));
   const setHeight = (px, save) => {
     const value = Math.max(MIN, Math.min(maxHeight(), px));
     right.style.setProperty("--trace-h", `${value.toFixed(0)}px`);

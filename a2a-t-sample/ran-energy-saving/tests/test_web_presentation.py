@@ -99,6 +99,7 @@ async def test_root_serves_the_presentation_shell(client: httpx.AsyncClient) -> 
         'id="booth-title"',
         'id="footer"',
         'id="trace-rows"',
+        'id="intent-splitter"',
         'id="trace-splitter"',
         'id="continuity"',
         'id="continuity-badge"',
@@ -190,6 +191,28 @@ async def test_pure_meta_exposes_its_scenarios_and_mie(
     assert 'id="protocol-switch"' in page
 
 
+def test_intent_panel_is_resizable_and_the_normalized_request_collapses() -> None:
+    """The wire viewer borrows height from the intent panel, whose long text can fold away."""
+    page = (PRESENTATION_DIR / "index.html").read_text(encoding="utf-8")
+    css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")
+    main = (PRESENTATION_DIR / "js" / "main.js").read_text(encoding="utf-8")
+    intent = (PRESENTATION_DIR / "js" / "intent.js").read_text(encoding="utf-8")
+
+    # The splitter sits between the understood-intent and the negotiation panels.
+    splitter_at = page.index('id="intent-splitter"')
+    assert page.index('id="p-intent"') < splitter_at < page.index('id="p-nego"')
+    assert 'aria-orientation="horizontal"' in page[splitter_at : splitter_at + 300]
+    assert ".right.has-intent-h #p-intent" in css
+    assert "bindIntentSplitter" in main
+    assert "a2at-presentation-intent-px" in main
+
+    # The normalized request is a disclosure that survives the per-event re-render.
+    assert 'el("details", "business-text business-collapsible")' in intent
+    assert 'el("summary", "", copy.intent.normalized)' in intent
+    assert "normalizedOpen" in intent
+    assert ".business-text > summary" in css
+
+
 def test_phone_breakpoint_wraps_the_header_meta() -> None:
     """The brand row must not widen the document on a phone (390 px audit)."""
     css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")
@@ -204,11 +227,7 @@ def test_huawei_theme_has_no_pointer_hover_effects() -> None:
     css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")
 
     assert re.search(r'\[data-brand="huawei"\][^{]*:hover', css) is None
-    unscoped = [
-        line
-        for line in css.splitlines()
-        if ":hover" in line and '[data-brand="orange"]' not in line
-    ]
+    unscoped = [line for line in css.splitlines() if ":hover" in line and '[data-brand="orange"]' not in line]
     assert unscoped == []
     # The stage adjacency focus was a pointer-driven dimming effect; it must not come back.
     stage = (PRESENTATION_DIR / "js" / "stage.js").read_text(encoding="utf-8")

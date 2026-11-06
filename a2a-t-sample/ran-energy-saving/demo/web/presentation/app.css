@@ -224,7 +224,7 @@ button { cursor: pointer; }
 [data-brand="orange"] .splitter:hover::after, .splitter.drag::after, .splitter:focus-visible::after { border-color: var(--orange); background: var(--orange); }
 body.resizing { cursor: col-resize; user-select: none; }
 
-.trace-splitter {
+.trace-splitter, .panel-splitter {
   flex: none;
   height: 12px;
   cursor: row-resize;
@@ -232,18 +232,20 @@ body.resizing { cursor: col-resize; user-select: none; }
   touch-action: none;
   outline-offset: -2px;
 }
-.trace-splitter::before {
+.trace-splitter::before, .panel-splitter::before {
   content: ""; position: absolute; left: 0; right: 0; top: 50%;
   height: 2px; transform: translateY(-50%); background: var(--g200); transition: background .15s;
 }
-.trace-splitter::after {
+.trace-splitter::after, .panel-splitter::after {
   content: ""; position: absolute; top: 50%; left: 50%;
   width: 48px; height: 8px; transform: translate(-50%, -50%);
   background: var(--white); border: 2px solid var(--g300);
   transition: border-color .15s, background .15s;
 }
-[data-brand="orange"] .trace-splitter:hover::before, .trace-splitter.drag::before, .trace-splitter:focus-visible::before { background: var(--orange); }
-[data-brand="orange"] .trace-splitter:hover::after, .trace-splitter.drag::after, .trace-splitter:focus-visible::after { border-color: var(--orange); background: var(--orange); }
+[data-brand="orange"] .trace-splitter:hover::before, .trace-splitter.drag::before, .trace-splitter:focus-visible::before,
+[data-brand="orange"] .panel-splitter:hover::before, .panel-splitter.drag::before, .panel-splitter:focus-visible::before { background: var(--orange); }
+[data-brand="orange"] .trace-splitter:hover::after, .trace-splitter.drag::after, .trace-splitter:focus-visible::after,
+[data-brand="orange"] .panel-splitter:hover::after, .panel-splitter.drag::after, .panel-splitter:focus-visible::after { border-color: var(--orange); background: var(--orange); }
 body.resizing-y { cursor: row-resize; user-select: none; }
 
 /* ---------- toolbar + presets + request drawer ---------- */
@@ -922,6 +924,8 @@ body.resizing-y { cursor: row-resize; user-select: none; }
 #p-nego > header { border-bottom-color: var(--orange); }
 .panel .body { padding: 9px 11px; display: flex; flex-direction: column; gap: 7px; min-width: 0; min-height: 0; overflow: auto; }
 #p-intent { flex: 0 1 auto; min-height: 0; max-height: 38%; }
+/* A dragged height wins over the content-driven default and the 38% cap. */
+.right.has-intent-h #p-intent { flex: 0 0 var(--intent-h, 180px); max-height: none; }
 #p-nego { flex: 1 1 0; min-height: 180px; }
 #p-trace { flex: 0 0 var(--trace-h, 260px); min-height: 140px; max-height: 62%; }
 #p-trace .body { padding: 0; }
@@ -1041,6 +1045,15 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 .business-intent { border: 1px solid var(--g200); border-left: 3px solid var(--accent); padding: 6px 8px; margin-bottom: 6px; display: flex; flex-direction: column; gap: 5px; }
 .business-intent .business-text span { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--g700); }
 .business-intent .business-text p { margin: 1px 0 0; font-size: 12px; line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
+/* The normalized request is long; the summary row toggles it so the facts stay in view. */
+.business-intent .business-text > summary {
+  font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--g700); cursor: pointer; list-style: none;
+}
+.business-intent .business-text > summary::-webkit-details-marker { display: none; }
+.business-intent .business-text > summary::before { content: "▸ "; }
+.business-intent .business-text[open] > summary::before { content: "▾ "; }
+[data-brand="orange"] .business-intent .business-text > summary:hover { color: var(--black); }
 .business-intent .facts { border-top: 1px solid var(--g200); }
 .business-warning { margin: 0; font-size: 11px; color: var(--red); }
 .validation-block { border-top: 1px solid var(--g200); padding-top: 5px; display: flex; flex-direction: column; gap: 4px; }
@@ -1192,9 +1205,11 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 }
 @media (max-width: 1099px) {
   .main { grid-template-columns: minmax(0, 1fr); row-gap: 14px; }
-  .splitter, .trace-splitter { display: none; }
+  .splitter, .trace-splitter, .panel-splitter { display: none; }
   .left, .right { overflow: visible; }
   #p-intent { max-height: none; }
+  /* Stacked layout: a panel is as tall as its content, never a dragged pixel height. */
+  .right.has-intent-h #p-intent { flex: 0 0 auto; }
   #p-nego { min-height: 0; }
   #p-trace { flex: 0 0 auto; min-height: 0; max-height: none; }
   .turns, .wire-code { max-height: 340px; }

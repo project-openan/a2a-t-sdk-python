@@ -160,7 +160,9 @@ area only fills the region, so the requested throughput windows are kept. After 
 accepted the RAN Agent reports `SUBMITTED`, strategy working, strategy ready and task started before
 data collection begins. The right column keeps the evidence: what the OSS Agent understood (with
 the 24-hour throughput chart), the
-negotiation turns, an **On the wire** inspector, and the merged session trace. On the wire shows the
+negotiation turns, an **On the wire** inspector, and the merged session trace. The normalized
+request folds away behind its heading, and the grip above the negotiation panel trades height with
+the intent panel so a long message fits in the inspector. On the wire shows the
 captured redacted exchange from the run's `wire.jsonl` — request line, headers (including the real
 `traceparent`) and the exact `SendMessageRequest` JSON body the SDK sent (`{"message": …}`, with the
 Task-T metadata in A2A-T mode). The a2a-sdk HTTP transport is captured too, so local A2A-T and A2A

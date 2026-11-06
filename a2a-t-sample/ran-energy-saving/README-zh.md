@@ -144,7 +144,7 @@ Web UI 默认打开演示视图：左侧是 16:9 的舞台，依次是网络工�
 选择只填充区域，原保障速率时段保持不变。Task-T 被接受后，RAN Agent 依次上报 `SUBMITTED`、策略生成中、
 策略就绪、任务已启动，然后才开始数据采集。右侧保留证据层：OSS Agent 理解到的任务（含 24 小时保障速率图）、
 协商轮次、**On the wire** 报文检查器，以及合并
-后的会话轨迹。On the wire 读取本次运行 `wire.jsonl` 中已脱敏的真实报文——请求行、请求头（含真实的
+后的会话轨迹。规范化文本可以折叠收起；协商面板上方的把手可与意图面板交换高度，长报文一次看全。On the wire 读取本次运行 `wire.jsonl` 中已脱敏的真实报文——请求行、请求头（含真实的
 `traceparent`）和 SDK 实际发送的 `SendMessageRequest` JSON body（`{"message": …}`，A2A-T 模式下含
 Task-T metadata）。a2a-sdk 的 HTTP 传输同样会被捕获，因此本地 A2A-T 和 A2A 运行也显示真实请求，
 而不是从轨迹重建的 message 对象；没有捕获到报文时明确提示，而不是拼一份假的。在 A2A-T 模式下切换到

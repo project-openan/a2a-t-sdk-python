@@ -276,6 +276,9 @@ function validationHint(error, labels) {
   return "";
 }
 
+/** Whether the normalized-request disclosure is open; the panel is rebuilt on every event. */
+let normalizedOpen = false;
+
 /** Render the raw operator request next to the normalized business intent. */
 function businessBlock(
   copy,
@@ -289,8 +292,13 @@ function businessBlock(
     section.append(raw);
   }
   if (normalizedText) {
-    const normalized = el("div", "business-text");
-    normalized.append(el("span", "", copy.intent.normalized), el("p", "", normalizedText));
+    // The panel re-renders on every event, so remember the disclosure state outside the DOM.
+    const normalized = el("details", "business-text business-collapsible");
+    normalized.open = normalizedOpen;
+    normalized.addEventListener("toggle", () => {
+      normalizedOpen = normalized.open;
+    });
+    normalized.append(el("summary", "", copy.intent.normalized), el("p", "", normalizedText));
     section.append(normalized);
   }
   const meta = [];
