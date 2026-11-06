@@ -256,6 +256,26 @@ PRESENTATION_REQUESTS: dict[str, dict[str, str]] = {
     },
 }
 
+#: Request the presentation puts in the editor after the operator selects a running Task. It is a
+#: Modify-only request: unlike :data:`PRESENTATION_REQUESTS` for ``outage`` it never asks for a
+#: baseline Create, because the baseline Task already exists on the NMS.
+MODIFY_REQUEST: dict[str, str] = {
+    LANGUAGE_EN: (
+        "Modify the running energy-saving task for tomorrow's 03:00–05:00 planned outage: "
+        "keep 2 Mbps during the outage and 10 Mbps otherwise."
+    ),
+    LANGUAGE_ZH: (
+        "修改运行中的节能任务以应对明天 03:00–05:00 的计划停电："
+        "停电期间保障 2 Mbps，其余时间 10 Mbps。"
+    ),
+}
+
+
+def resolve_modify_request(language: str) -> str:
+    """Return the Modify-only request shown in the presentation for one language."""
+    return MODIFY_REQUEST.get(language, MODIFY_REQUEST[LANGUAGE_ZH])
+
+
 #: Task-T parameters the client refills on accept, per language. The base set is the complete,
 #: non-overlapping request; the information kind uses it to supply the throughput target it omitted
 #: on purpose, while the target and feasibility kinds override the guaranteed-throughput target with

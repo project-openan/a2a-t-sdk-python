@@ -377,7 +377,7 @@ export function createStage(els) {
       });
       return;
     }
-    if (key === "modify-send") {
+    if (key === "modify-send" || key === "modify-start") {
       setActors({
         ...base,
         eng: { cls: "ok", text: copy.states.engApproved },

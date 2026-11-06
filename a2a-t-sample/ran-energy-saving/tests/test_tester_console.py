@@ -44,8 +44,12 @@ class _PassRuntime:
         on_decision_made: Callable[..., None] | None = None,
         on_intent_ready: Callable[[str], Awaitable[bool]] | None = None,
         validate_before_send: bool = False,
+        run_mode: str = "create",
+        target_task_id: str | None = None,
+        target_context_id: str | None = None,
     ) -> ClientFlowResult:
         del run_id, conversation_context, validate_before_send
+        del run_mode, target_task_id, target_context_id
         del on_decision_requested, on_decision_made, on_intent_ready
         self.user_request = user_request
         if self.emit_tokens and trace_sink is not None:

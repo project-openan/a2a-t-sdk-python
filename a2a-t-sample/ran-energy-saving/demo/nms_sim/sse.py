@@ -62,6 +62,7 @@ async def task_stream(
     report: dict[str, object],
     artifact: dict[str, object],
     config: SimConfig,
+    hold: bool = False,
 ) -> AsyncIterator[str]:
     """Stream one Task from ``SUBMITTED`` to ``COMPLETED``.
 
@@ -80,6 +81,15 @@ async def task_stream(
         yield chunk
     task.artifacts.append(artifact)
     yield _data(task.artifact_frame())
+    if hold:
+        # Local rehearsal aid: the report is published but the Task stays WORKING, so the
+        # presentation's Modify picker can select it. Continuing the Task completes it.
+        task.state = TASK_WORKING
+        task.message = "Task is running; ready to be modified."
+        yield _data(task.status_frame())
+        # Close the stream even in strict mode: the creating run ends as incomplete instead of
+        # hanging, while the Task stays WORKING for the Modify picker.
+        return
     task.state = TASK_COMPLETED
     task.message = "Task completed."
     yield _data(task.status_frame())

@@ -49,6 +49,8 @@ from shared.run_constants import (
     PROTOCOL_A2A_T,
     PROTOCOL_PLAIN,
     PROTOCOL_PURE,
+    RUN_MODE_CREATE,
+    RUN_MODE_MODIFY,
     SUPPORTED_PROTOCOLS,
 )
 from shared.sdk_env import SdkEnvFile, prepare_sdk_env
@@ -417,6 +419,9 @@ class ClientRuntime:
         user_request: str | None = None,
         conversation_context: str | None = None,
         validate_before_send: bool = False,
+        run_mode: str = RUN_MODE_CREATE,
+        target_task_id: str | None = None,
+        target_context_id: str | None = None,
     ) -> ClientFlowResult:
         """Run the full client flow of the configured scenario.
 
@@ -439,6 +444,10 @@ class ClientRuntime:
                 and Task-T generation so a follow-up can refer to an earlier run.
             validate_before_send: Validate the rendered Task-T with the SDK content pipeline
                 before sending it; only the A2A-T flow implements the gate.
+            run_mode: ``create`` starts a new A2A Task; ``modify`` sends the scenario's Modify
+                Task-T against an existing running Task.
+            target_task_id: Task a Modify-only run continues.
+            target_context_id: Context of the Task a Modify-only run continues.
 
         Returns:
             The collected events, decisions and terminal state.
@@ -459,6 +468,18 @@ class ClientRuntime:
             with trace_scope(run_id=run_id, role="client"):
                 custom_request = user_request.strip() if isinstance(user_request, str) and user_request.strip() else ""
                 processed = self.config.intent_mode == INTENT_MODE_PROCESSED
+                modify_mode = run_mode == RUN_MODE_MODIFY
+                if modify_mode:
+                    if self.protocol != PROTOCOL_A2A_T:
+                        raise ClientRuntimeError("A Modify-only run requires the A2A-T protocol.")
+                    if not target_task_id or not target_context_id:
+                        raise ClientRuntimeError(
+                            "A Modify-only run needs both the target Task id and its context id."
+                        )
+                elif target_task_id or target_context_id:
+                    raise ClientRuntimeError(
+                        "A target Task can only be used by a Modify-only run."
+                    )
                 raw_text = custom_request or self._scenario_raw_request()
                 if self.protocol == PROTOCOL_PURE:
                     # Pure A2A uses standard Task states only: the OSS Agent owns the business
@@ -473,7 +494,20 @@ class ClientRuntime:
                         trace_sink=sink,
                     )
                 intent: ProcessedIntent | None = None
-                if processed:
+                if modify_mode:
+                    # The target Task already exists, so the intent is the scenario's Modify
+                    # intent rather than a fresh reading of a Create request.
+                    intent = self.run_spec.modify_intent or await self._process_intent(
+                        raw_text, custom=False
+                    )
+                    request_text = intent.normalized_text
+                    _emit_intent_span(
+                        trace_sink=sink,
+                        intent=intent,
+                        mode=self.config.intent_mode,
+                        scenario=self.run_spec.name,
+                    )
+                elif processed:
                     intent = await self._process_intent(raw_text, custom=bool(custom_request))
                     # A2A-T needs the canonical Task-T text; standard A2A must stay a natural
                     # request, otherwise the protocol comparison sees the same payload twice.
@@ -541,6 +575,9 @@ class ClientRuntime:
                     single_extension_per_message=(self.config.discovery == DISCOVERY_NMS),
                     forced_region=(self.config.nms_region if self.config.discovery == DISCOVERY_NMS else None),
                     validate_before_send=validate_before_send,
+                    run_mode=run_mode,
+                    target_task_id=target_task_id,
+                    target_context_id=target_context_id,
                 )
         finally:
             reset_task_sink(sink_token)

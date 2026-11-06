@@ -66,9 +66,19 @@
         <button class="tbtn" id="edit-request" type="button" aria-expanded="false" aria-controls="drawer">
           ✎ <span id="edit-label">编辑请求</span>
         </button>
+        <button class="tbtn" id="modify-task" type="button" hidden>
+          ⇄ <span id="modify-label">修改运行中的任务</span>
+        </button>
         <button class="tbtn danger" id="cancel-run" type="button" disabled>
           ✕ <span id="cancel-label">取消任务</span>
         </button>
+      </div>
+      <div class="target-card" id="target-card" hidden>
+        <span class="micro-label" id="target-label">目标 A2A 任务</span>
+        <code id="target-task-id"></code>
+        <span class="target-context" id="target-context"></span>
+        <span class="target-region" id="target-region"></span>
+        <button class="target-clear" id="target-clear" type="button" aria-label="取消选择">✕</button>
       </div>
       <p class="scenario-desc" id="scenario-desc"></p>
       <div class="continuity" id="continuity" role="status" aria-live="polite" hidden>
@@ -315,5 +325,22 @@
     <p class="below-note" id="below-note"></p>
   </section>
   <footer class="footer" id="footer"></footer>
+
+  <div class="modal-backdrop" id="modify-dialog" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modify-title">
+      <header class="modal-head">
+        <h2 id="modify-title">选择要修改的任务</h2>
+        <button class="modal-close" id="modify-close" type="button" aria-label="关闭">✕</button>
+      </header>
+      <p class="modal-hint" id="modify-hint"></p>
+      <p class="error" id="modify-error" role="alert" hidden></p>
+      <div class="modal-list" id="modify-list" role="listbox" aria-labelledby="modify-title"></div>
+      <footer class="modal-foot">
+        <span class="modal-status" id="modify-status"></span>
+        <button class="btn" id="modify-cancel" type="button">取消</button>
+        <button class="btn primary" id="modify-confirm" type="button" disabled>使用该任务</button>
+      </footer>
+    </div>
+  </div>
 </body>
 </html>

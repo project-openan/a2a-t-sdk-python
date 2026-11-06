@@ -1501,6 +1501,22 @@ const secondSendFrame = {
 };
 assert.equal(sceneFor(secondSendFrame, twoPhase).key, "modify-send");
 assert.equal(sceneFor(secondSendFrame, twoPhase).step, 8);
+
+// A Modify-only run has no baseline: its first Task-T is the Modify and uses the send step.
+const modifyOnly = createState();
+applyFrame(modifyOnly, {
+  type: "run_started",
+  runId: "m1",
+  scenario: "outage",
+  runMode: "modify",
+  targetTaskId: "task-9",
+  targetContextId: "ctx-9",
+});
+assert.equal(modifyOnly.phaseKey, "modify");
+assert.equal(modifyOnly.modifyPhaseStarted, true);
+assert.equal(modifyOnly.twoPhase, false);
+assert.equal(sceneFor(secondSendFrame, modifyOnly).key, "modify-start");
+assert.equal(sceneFor(secondSendFrame, modifyOnly).step, 3);
 const firstSendFrame = {
   type: "trace",
   event: {

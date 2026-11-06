@@ -31,7 +31,12 @@ from shared.metrics import (
     NEGOTIATION_ROUNDS_TOTAL,
 )
 from shared.models import NegotiationDecision, NegotiationProposeView
-from shared.run_constants import FINAL_STATE_INPUT_INVALID, PROTOCOL_A2A_T
+from shared.run_constants import (
+    FINAL_STATE_INPUT_INVALID,
+    PROTOCOL_A2A_T,
+    RUN_MODE_CREATE,
+    RUN_MODE_MODIFY,
+)
 from shared.run_source import normalize_run_source
 from shared.trace import (
     PHASE_DISPATCH,
@@ -222,6 +227,8 @@ class RunManager:
         idempotency_key: str | None = None,
         intent_mode: str | None = None,
         source: Mapping[str, object] | None = None,
+        target_task_id: str | None = None,
+        target_context_id: str | None = None,
     ) -> RunState:
         """Start one background run and broadcast ``run_started`` before the task is scheduled.
 
@@ -241,12 +248,25 @@ class RunManager:
             intent_mode: per-run override of the process intent mode (``processed`` / ``raw``).
             source: optional request-origin document (page/caller/remote address); normalized
                 through :func:`shared.run_source.normalize_run_source`.
+            target_task_id: existing running Task a Modify-only run continues.
+            target_context_id: context of the Task a Modify-only run continues.
 
         Raises:
             RunConflictError: when the same conversation already has an active run.
             ValueError: when ``intent_mode`` is unsupported.
         """
         resolved_source = normalize_run_source(source)
+        resolved_target_task = target_task_id.strip() if isinstance(target_task_id, str) else ""
+        resolved_target_context = (
+            target_context_id.strip() if isinstance(target_context_id, str) else ""
+        )
+        if bool(resolved_target_task) != bool(resolved_target_context):
+            raise ValueError(
+                "target_task_id and target_context_id must be provided together."
+            )
+        run_mode = RUN_MODE_MODIFY if resolved_target_task else RUN_MODE_CREATE
+        if run_mode == RUN_MODE_MODIFY and protocol != PROTOCOL_A2A_T:
+            raise ValueError("A Modify-only run requires the A2A-T protocol.")
         validate_before_send = _should_validate_before_send(self._config, resolved_source)
         resolved_intent_mode = (intent_mode or self._config.intent_mode).strip()
         if resolved_intent_mode not in SUPPORTED_INTENT_MODES:
@@ -294,6 +314,9 @@ class RunManager:
             validate_before_send=validate_before_send,
             raw_request=raw_request,
             source=dict(resolved_source),
+            run_mode=run_mode,
+            target_task_id=resolved_target_task or None,
+            target_context_id=resolved_target_context or None,
         )
         run.transcript = NegotiationTranscript(
             scenario=scenario,
@@ -303,6 +326,9 @@ class RunManager:
             transport=transport,
             runs_dir=self._runs_dir or DEFAULT_RUNS_DIR,
             source=dict(resolved_source),
+            run_mode=run_mode,
+            target_task_id=resolved_target_task or None,
+            target_context_id=resolved_target_context or None,
         )
         run.langfuse_exporter = create_langfuse_exporter(
             self._config,
@@ -487,6 +513,9 @@ class RunManager:
             expected=expected,
             error=run.error,
             source=run.source,
+            run_mode=run.run_mode,
+            target_task_id=run.target_task_id,
+            target_context_id=run.target_context_id,
         )
 
     def _reuse_run(self, record: ClientRunRecord) -> RunState:
@@ -674,6 +703,9 @@ class RunManager:
                 user_request=run.user_request,
                 conversation_context=run.conversation_context,
                 validate_before_send=run.validate_before_send,
+                run_mode=run.run_mode,
+                target_task_id=run.target_task_id,
+                target_context_id=run.target_context_id,
             )
             run.result = result
             if result.final_state == FINAL_STATE_INPUT_INVALID:

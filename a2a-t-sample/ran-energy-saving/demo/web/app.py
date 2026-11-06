@@ -59,6 +59,7 @@ from protocol.client_store import (
     read_run_metrics_rows,
 )
 from protocol.metrics_summary import summarize_metrics, summarize_protocols
+from protocol.nms_client import NmsConfigError, NmsError
 from protocol.run_spec import RunCatalog
 from protocol.sqlite_task_store import read_task_summaries
 from shared.config import (
@@ -114,8 +115,10 @@ from starlette.staticfiles import StaticFiles
 from demo.scenario import (
     PLAIN_PROTOCOL_SCENARIOS,
     PURE_PROTOCOL_SCENARIOS,
+    resolve_modify_request,
     resolve_presentation_request,
 )
+from demo.web.nms_tasks import NMS_WORKING_STATE, list_working_tasks, read_task
 from demo.web.runs_console import build_run_console_routes
 from demo.web.tester import build_tester_routes
 from demo.web.wire_records import read_wire_records
@@ -416,6 +419,10 @@ def create_app(
                 "scenarioRequests": {
                     name: _scenario_request(resolved_catalog, name, config.language) for name in active_scenarios
                 },
+                # The presentation can list running Tasks only when the client talks to the real
+                # NMS; the local registry/direct server has no vendor task list endpoint.
+                "nmsTasksEnabled": config.discovery == DISCOVERY_NMS,
+                "modifyRequest": resolve_modify_request(config.language),
                 "modes": list(UI_MODES),
                 "protocol": resolved_protocol,
                 "protocols": list(advertised_protocols),
@@ -468,6 +475,48 @@ def create_app(
             return JSONResponse({"enabled": False, "tasks": []})
         rows = await asyncio.to_thread(read_task_summaries, path, limit)
         return JSONResponse({"enabled": True, "tasks": rows})
+
+    async def nms_tasks(request: Request) -> Response:
+        """Return the running Tasks the Modify picker may select.
+
+        The list comes from the vendor NMS itself, not the local A2A task store: a Task can be
+        modified only while the NMS still holds it in ``TASK_STATE_WORKING``.
+        """
+        if config.discovery != DISCOVERY_NMS:
+            return JSONResponse(
+                {
+                    "enabled": False,
+                    "tasks": [],
+                    "reason": "The task picker needs the real NMS discovery mode.",
+                }
+            )
+        state = request.query_params.get("state", "working").strip().lower()
+        if state not in ("", "working"):
+            return JSONResponse(
+                {
+                    "error": "state must be 'working'.",
+                    "code": "unsupported_task_state",
+                },
+                status_code=400,
+            )
+        try:
+            rows = await list_working_tasks(config)
+        except NmsConfigError as exc:
+            return JSONResponse(
+                {"error": str(exc), "code": "nms_not_configured"}, status_code=503
+            )
+        except NmsError as exc:
+            return JSONResponse(
+                {"error": f"The NMS task list could not be read: {exc}", "code": "nms_unavailable"},
+                status_code=502,
+            )
+        return JSONResponse(
+            {
+                "enabled": True,
+                "state": NMS_WORKING_STATE,
+                "tasks": rows,
+            }
+        )
 
     def query_limit(request: Request) -> int | Response:
         """Parse and validate the ``limit`` query parameter."""
@@ -741,6 +790,86 @@ def create_app(
             optional_strings[field_name] = (
                 raw_value.strip() if isinstance(raw_value, str) and raw_value.strip() else None
             )
+        target_task_id = body.get("targetTaskId")
+        target_context_id = body.get("targetContextId")
+        for field_name, value in (
+            ("targetTaskId", target_task_id),
+            ("targetContextId", target_context_id),
+        ):
+            if value is not None and not isinstance(value, str):
+                return JSONResponse(
+                    {"error": f"The {field_name} field must be a string."},
+                    status_code=400,
+                )
+        resolved_target_task = target_task_id.strip() if isinstance(target_task_id, str) else ""
+        resolved_target_context = (
+            target_context_id.strip() if isinstance(target_context_id, str) else ""
+        )
+        if bool(resolved_target_task) != bool(resolved_target_context):
+            return JSONResponse(
+                {
+                    "error": "targetTaskId and targetContextId must be provided together.",
+                    "code": "target_pair_required",
+                },
+                status_code=400,
+            )
+        if resolved_target_task:
+            if protocol != PROTOCOL_A2A_T:
+                return JSONResponse(
+                    {
+                        "error": "A Modify-only run requires the A2A-T protocol.",
+                        "code": "target_protocol_unsupported",
+                    },
+                    status_code=400,
+                )
+            if discovery != DISCOVERY_NMS:
+                return JSONResponse(
+                    {
+                        "error": "The task picker is available only with NMS discovery.",
+                        "code": "target_discovery_unsupported",
+                    },
+                    status_code=400,
+                )
+            try:
+                task = await read_task(config, resolved_target_task)
+            except NmsConfigError as exc:
+                return JSONResponse(
+                    {"error": str(exc), "code": "nms_not_configured"}, status_code=503
+                )
+            except NmsError as exc:
+                return JSONResponse(
+                    {
+                        "error": f"The target Task could not be read: {exc}",
+                        "code": "nms_unavailable",
+                    },
+                    status_code=502,
+                )
+            if task is None:
+                return JSONResponse(
+                    {"error": "The target Task does not exist on the NMS.", "code": "target_missing"},
+                    status_code=409,
+                )
+            if task.get("state") != NMS_WORKING_STATE:
+                return JSONResponse(
+                    {
+                        "error": (
+                            "The target Task is no longer running; refresh the task list and "
+                            "choose another one."
+                        ),
+                        "code": "target_not_working",
+                        "state": task.get("state"),
+                    },
+                    status_code=409,
+                )
+            task_context = task.get("contextId")
+            if isinstance(task_context, str) and task_context and task_context != resolved_target_context:
+                return JSONResponse(
+                    {
+                        "error": "The target Task context does not match the NMS Task.",
+                        "code": "target_context_mismatch",
+                    },
+                    status_code=409,
+                )
         requested_scenarios = scenarios_by_protocol.get(
             protocol_key,
             (
@@ -800,6 +929,8 @@ def create_app(
                 idempotency_key=optional_strings["idempotencyKey"],
                 intent_mode=str(intent_mode),
                 source=_request_source(request, body.get("source")),
+                target_task_id=resolved_target_task or None,
+                target_context_id=resolved_target_context or None,
             )
         except RunConflictError as exc:
             return JSONResponse({"error": str(exc), "code": "run_conflict"}, status_code=409)
@@ -1175,6 +1306,7 @@ def create_app(
             Route("/", index),
             Route("/api/meta", meta),
             Route("/api/tasks", tasks),
+            Route("/api/nms/tasks", nms_tasks),
             Route("/api/client/runs", client_runs),
             Route("/api/client/runs/{run_id}", client_run_detail),
             Route("/api/client/conversations", client_conversations),

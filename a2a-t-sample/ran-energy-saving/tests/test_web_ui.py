@@ -44,7 +44,7 @@ from protocol.client_store import (
 )
 from protocol.decision_provider import ManualDecisionProvider
 from protocol.sqlite_task_store import SqliteTaskStore
-from shared.config import SampleConfig
+from shared.config import DISCOVERY_NMS, SampleConfig
 from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.run_constants import FINAL_STATE_INTENT_NOT_CONFIRMED, PROTOCOL_A2A_T
 from shared.trace import PHASES
@@ -167,6 +167,9 @@ class FakeRuntime:
         self.run_id: str | None = None
         self.user_request: str | None = None
         self.conversation_context: str | None = None
+        self.run_mode = "create"
+        self.target_task_id: str | None = None
+        self.target_context_id: str | None = None
 
     def set_recommendation_sink(self, sink: Callable[..., None] | None) -> None:
         """Accept the confirmation recommendation callback."""
@@ -187,11 +190,17 @@ class FakeRuntime:
         user_request: str | None = None,
         conversation_context: str | None = None,
         validate_before_send: bool = False,
+        run_mode: str = "create",
+        target_task_id: str | None = None,
+        target_context_id: str | None = None,
     ) -> ClientFlowResult:
         del validate_before_send
         self.run_id = run_id
         self.user_request = user_request
         self.conversation_context = conversation_context
+        self.run_mode = run_mode
+        self.target_task_id = target_task_id
+        self.target_context_id = target_context_id
         if on_intent_ready is not None and self.intent_gate:
             if not await on_intent_ready("## Operation Type\nCreate"):
                 return ClientFlowResult(final_state=FINAL_STATE_INTENT_NOT_CONFIRMED)
@@ -359,6 +368,164 @@ async def test_meta_exposes_the_read_only_process_language(client: httpx.AsyncCl
     # The UI's stream grace is served by the backend, never hard-coded client-side. This fixture
     # disables the grace so streaming tests finish immediately.
     assert meta["finishedGraceMs"] == 0
+
+
+def _nms_config(base: SampleConfig) -> SampleConfig:
+    """Return a configuration whose client talks to the vendor NMS."""
+    return replace(
+        base,
+        discovery=DISCOVERY_NMS,
+        nms_a2a_base="http://nms.example/a2a/json",
+        nms_token_url="http://nms.example/sessions",
+        nms_token_user="user",
+        nms_token_value="secret",
+    )
+
+
+def _working_task_row(task_id: str = "task-9", context_id: str = "ctx-9") -> dict[str, object]:
+    return {
+        "taskId": task_id,
+        "contextId": context_id,
+        "state": "TASK_STATE_WORKING",
+        "summary": "Task is executing the energy-saving plan.",
+        "region": "Region A",
+        "sites": ["Site 1"],
+        "target": "{00:00~24:00,10Mbps}",
+    }
+
+
+async def test_nms_task_list_is_disabled_outside_nms(client: httpx.AsyncClient) -> None:
+    response = await client.get("/api/nms/tasks")
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
+    assert response.json()["tasks"] == []
+
+
+async def test_nms_task_list_returns_the_working_tasks(
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def fake_list(_config: SampleConfig) -> list[dict[str, object]]:
+        return [_working_task_row()]
+
+    monkeypatch.setattr("demo.web.app.list_working_tasks", fake_list)
+    app = create_app(_nms_config(offline_config), runs_dir=tmp_path, finished_grace_seconds=0.0)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        response = await http_client.get("/api/nms/tasks?state=working")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["enabled"] is True
+    assert payload["state"] == "TASK_STATE_WORKING"
+    assert payload["tasks"][0]["taskId"] == "task-9"
+
+
+async def test_nms_task_list_reports_an_nms_failure(
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from protocol.nms_client import NmsProtocolError
+
+    async def failing_list(_config: SampleConfig) -> list[dict[str, object]]:
+        raise NmsProtocolError("NMS task list returned HTTP 500")
+
+    monkeypatch.setattr("demo.web.app.list_working_tasks", failing_list)
+    app = create_app(_nms_config(offline_config), runs_dir=tmp_path, finished_grace_seconds=0.0)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        response = await http_client.get("/api/nms/tasks")
+
+    assert response.status_code == 502
+    assert response.json()["code"] == "nms_unavailable"
+
+
+async def test_start_run_requires_both_target_ids(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        "/api/runs",
+        json={"scenario": "outage", "mode": "auto", "targetTaskId": "task-9"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "target_pair_required"
+
+
+async def test_start_run_rejects_a_target_that_is_no_longer_working(
+    offline_config: SampleConfig,
+    factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def completed_task(_config: SampleConfig, task_id: str) -> dict[str, object]:
+        del task_id
+        return {**_working_task_row(), "state": "TASK_STATE_COMPLETED"}
+
+    monkeypatch.setattr("demo.web.app.read_task", completed_task)
+    app = create_app(
+        _nms_config(offline_config),
+        runs_dir=tmp_path,
+        runtime_factory=factory,
+        finished_grace_seconds=0.0,
+        ui_mode="explorer",
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        response = await http_client.post(
+            "/api/runs",
+            json={
+                "scenario": "outage",
+                "mode": "auto",
+                "discovery": "nms",
+                "targetTaskId": "task-9",
+                "targetContextId": "ctx-9",
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "target_not_working"
+
+
+async def test_start_run_passes_the_target_to_the_runtime(
+    offline_config: SampleConfig,
+    factory: Callable[..., Any],
+    runtimes: list[FakeRuntime],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def working_task(_config: SampleConfig, task_id: str) -> dict[str, object]:
+        del task_id
+        return _working_task_row()
+
+    monkeypatch.setattr("demo.web.app.read_task", working_task)
+    app = create_app(
+        _nms_config(offline_config),
+        runs_dir=tmp_path,
+        runtime_factory=factory,
+        finished_grace_seconds=0.0,
+        ui_mode="explorer",
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        response = await http_client.post(
+            "/api/runs",
+            json={
+                "scenario": "outage",
+                "mode": "auto",
+                "discovery": "nms",
+                "targetTaskId": "task-9",
+                "targetContextId": "ctx-9",
+            },
+        )
+        assert response.status_code == 202
+        run_id = response.json()["runId"]
+        await _wait_status(http_client, run_id, lambda data: data["status"] == "finished")
+
+    assert runtimes[0].run_mode == "modify"
+    assert runtimes[0].target_task_id == "task-9"
+    assert runtimes[0].target_context_id == "ctx-9"
 
 
 async def test_client_run_endpoints_return_persisted_runs_and_conversations(

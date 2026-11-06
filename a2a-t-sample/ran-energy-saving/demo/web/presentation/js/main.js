@@ -90,6 +90,23 @@ const els = {
   requestCardText: byId("request-card-text"),
   editRequest: byId("edit-request"),
   editLabel: byId("edit-label"),
+  modifyTask: byId("modify-task"),
+  modifyLabel: byId("modify-label"),
+  targetCard: byId("target-card"),
+  targetLabel: byId("target-label"),
+  targetTaskId: byId("target-task-id"),
+  targetContext: byId("target-context"),
+  targetRegion: byId("target-region"),
+  targetClear: byId("target-clear"),
+  modifyDialog: byId("modify-dialog"),
+  modifyTitle: byId("modify-title"),
+  modifyHint: byId("modify-hint"),
+  modifyError: byId("modify-error"),
+  modifyList: byId("modify-list"),
+  modifyStatus: byId("modify-status"),
+  modifyClose: byId("modify-close"),
+  modifyCancel: byId("modify-cancel"),
+  modifyConfirm: byId("modify-confirm"),
   cancelRun: byId("cancel-run"),
   cancelLabel: byId("cancel-label"),
   drawer: byId("drawer"),
@@ -230,6 +247,13 @@ const ui = {
   rendering: false,
   looping: false,
   renderingIntent: false,
+  //: NMS Task the next run modifies; cleared when the operator changes the request source.
+  targetTask: null,
+  //: Candidate Tasks of the open picker and the one the operator highlighted.
+  modifyTasks: [],
+  modifySelected: null,
+  modifyLoading: false,
+  modifyRequest: "",
 };
 
 const stage = createStage(els);
@@ -341,6 +365,16 @@ function bindStaticEvents() {
   if (els.startQuick) els.startQuick.addEventListener("click", () => startRun());
   if (els.themeToggle) els.themeToggle.addEventListener("click", toggleBrand);
   els.reset.addEventListener("click", resetRequest);
+  if (els.modifyTask) els.modifyTask.addEventListener("click", () => openModifyPicker());
+  if (els.targetClear) els.targetClear.addEventListener("click", () => clearModifyTarget(false));
+  if (els.modifyClose) els.modifyClose.addEventListener("click", () => closeModifyPicker());
+  if (els.modifyCancel) els.modifyCancel.addEventListener("click", () => closeModifyPicker());
+  if (els.modifyConfirm) els.modifyConfirm.addEventListener("click", () => applyModifyTarget());
+  if (els.modifyDialog) {
+    els.modifyDialog.addEventListener("click", (event) => {
+      if (event.target === els.modifyDialog) closeModifyPicker();
+    });
+  }
   els.editRequest.addEventListener("click", () => {
     const open = els.drawer.hidden;
     els.drawer.hidden = !open;
@@ -407,6 +441,10 @@ function bindStaticEvents() {
   bindSplitter();
   bindTraceSplitter();
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && els.modifyDialog && !els.modifyDialog.hidden) {
+      closeModifyPicker();
+      return;
+    }
     if (event.target.closest && event.target.closest("textarea,select,input")) return;
     if (event.key === "ArrowRight" && !els.next.disabled && !els.next.hidden) {
       event.preventDefault();
@@ -484,6 +522,8 @@ function applyStaticCopy() {
     ui.meta?.modelMode === "offline" ? copy.runPillOffline : copy.runPillLive;
   els.scenariosLabel.textContent = copy.scenarioLabel;
   els.editLabel.textContent = copy.editRequest;
+  renderModifyButton();
+  renderTargetCard();
   if (els.cancelLabel) {
     els.cancelLabel.textContent = ui.cancelling ? copy.cancelling : copy.cancelRequest;
   }
@@ -591,57 +631,12 @@ function renderPresets() {
 
 function renderScenarioDescription() {
   if (!els.scenarioDesc) return;
-  els.scenarioDesc.textContent = scenarioStory(ui.copy, ui.selected);
+  els.scenarioDesc.textContent = ui.targetTask
+    ? ui.copy.modify.scenarioDesc
+    : scenarioStory(ui.copy, ui.selected);
 }
 
-function selectScenario(name, { start = false } = {}) {
-  closeStream();
-  player.reset();
-  ui.selected = name;
-  renderProtocol();
-  ui.view = createState();
-  ui.shadow = createState();
-  ui.frameLog = [];
-  ui.seenFrames = new Set();
-  ui.lastScene = null;
-  ui.lastQueuedScene = null;
-  ui.maxStep = 0;
-  ui.terminalApplied = null;
-  ui.tab = "business";
-  ui.selectedTurn = -1;
-  ui.wireEntry = null;
-  ui.wireFormat = "t";
-  ui.wirePinned = false;
-  ui.counterOpen = false;
-  ui.selectedRegion = "";
-  ui.looping = false;
-  els.requestText.value = ui.meta?.scenarioRequests?.[name] || "";
-  stage.reset();
-  trace.reset();
-  hideError();
-  if (els.scenarioSelect) els.scenarioSelect.value = name;
-  renderScenarioDescription();
-  render();
-  if (start) startRun();
-}
-
-function resetRequest() {
-  if (ui.busy) return;
-  els.requestText.value = ui.meta?.scenarioRequests?.[ui.selected] || "";
-  hideError();
-  renderIntentPanel();
-  renderRequest();
-}
-
-async function startRun() {
-  if (ui.busy) {
-    showError(ui.copy.running);
-    return;
-  }
-  const request = els.requestText.value.trim();
-  const parentRunId = ui.retryParentRunId;
-  ui.retryParentRunId = null;
-  hideError();
+function resetRunState() {
   closeStream();
   player.reset();
   ui.view = createState();
@@ -666,6 +661,221 @@ async function startRun() {
   ui.looping = false;
   stage.reset();
   trace.reset();
+}
+
+function selectScenario(name, { start = false } = {}) {
+  clearModifyTarget(true);
+  ui.selected = name;
+  renderProtocol();
+  resetRunState();
+  els.requestText.value = ui.meta?.scenarioRequests?.[name] || "";
+  hideError();
+  if (els.scenarioSelect) els.scenarioSelect.value = name;
+  renderScenarioDescription();
+  render();
+  if (start) startRun();
+}
+
+function resetRequest() {
+  if (ui.busy) return;
+  els.requestText.value = ui.targetTask
+    ? ui.modifyRequest || ui.meta?.modifyRequest || ""
+    : ui.meta?.scenarioRequests?.[ui.selected] || "";
+  hideError();
+  renderIntentPanel();
+  renderRequest();
+}
+
+/** Show the Modify entry only when the client talks to the NMS. */
+function renderModifyButton() {
+  if (!els.modifyTask) return;
+  // A Modify Task-T is an A2A-T operation: standard A2A has no task template to modify.
+  const protocols = ui.meta?.protocols || ["a2a-t"];
+  els.modifyTask.hidden =
+    !ui.meta?.nmsTasksEnabled || ui.protocol !== "a2a-t" || !protocols.includes("a2a-t");
+  els.modifyTask.disabled = Boolean(ui.busy);
+  if (els.modifyLabel) els.modifyLabel.textContent = ui.copy.modifyTask;
+  els.modifyTask.title = ui.copy.modifyTask;
+}
+
+/** Render the Task the next run modifies, when the operator selected one. */
+function renderTargetCard() {
+  if (!els.targetCard) return;
+  const task = ui.targetTask;
+  els.targetCard.hidden = task === null;
+  if (task === null) return;
+  els.targetLabel.textContent = ui.copy.modify.targetLabel;
+  els.targetTaskId.textContent = task.taskId || "";
+  els.targetContext.textContent = task.contextId
+    ? `context ${task.contextId}`
+    : ui.copy.modify.noContext;
+  const area = [task.region, ...(Array.isArray(task.sites) ? task.sites : [])]
+    .filter(Boolean)
+    .join(" · ");
+  els.targetRegion.textContent = area;
+  els.targetClear.setAttribute("aria-label", ui.copy.modify.clear);
+}
+
+/** Drop the selected NMS Task and restore the scenario request. */
+function clearModifyTarget(silent = false) {
+  if (!ui.targetTask) {
+    renderTargetCard();
+    return;
+  }
+  ui.targetTask = null;
+  renderTargetCard();
+  if (!silent) {
+    els.requestText.value = ui.meta?.scenarioRequests?.[ui.selected] || "";
+    hideError();
+    renderIntentPanel();
+    renderRequest();
+  }
+  renderScenarioDescription();
+}
+
+function openModifyPicker() {
+  if (ui.busy || !ui.meta?.nmsTasksEnabled || !els.modifyDialog) return;
+  ui.modifyRequest = ui.meta?.modifyRequest || "";
+  ui.modifySelected = null;
+  els.modifyDialog.hidden = false;
+  els.modifyError.hidden = true;
+  els.modifyError.textContent = "";
+  els.modifyConfirm.disabled = true;
+  els.modifyStatus.textContent = "";
+  els.modifyTitle.textContent = ui.copy.modify.title;
+  els.modifyHint.textContent = ui.copy.modify.hint;
+  els.modifyCancel.textContent = ui.copy.modify.cancel;
+  els.modifyConfirm.textContent = ui.copy.modify.confirm;
+  loadModifyTasks();
+}
+
+function closeModifyPicker() {
+  if (!els.modifyDialog) return;
+  els.modifyDialog.hidden = true;
+  ui.modifySelected = null;
+  ui.modifyLoading = false;
+}
+
+async function loadModifyTasks() {
+  ui.modifyLoading = true;
+  ui.modifyTasks = [];
+  els.modifyConfirm.disabled = true;
+  renderModifyList(ui.copy.modify.loading, true);
+  try {
+    const response = await fetch("/api/nms/tasks?state=working", {
+      headers: { accept: "application/json" },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (payload.enabled === false) {
+      throw new Error(payload.reason || ui.copy.modify.error);
+    }
+    ui.modifyTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+    ui.modifyLoading = false;
+    renderModifyList();
+  } catch (error) {
+    ui.modifyLoading = false;
+    renderModifyList(ui.copy.modify.error, false, error);
+  }
+}
+
+function renderModifyList(message = null, loading = false, error = null) {
+  if (!els.modifyList) return;
+  clear(els.modifyList);
+  els.modifyError.hidden = true;
+  if (loading) {
+    els.modifyList.append(el("p", "modal-empty", message));
+    return;
+  }
+  if (error) {
+    els.modifyError.textContent = `${message} ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+    els.modifyError.hidden = false;
+    const retry = el("button", "btn", ui.copy.modify.retry);
+    retry.type = "button";
+    retry.addEventListener("click", () => loadModifyTasks());
+    els.modifyList.append(retry);
+    return;
+  }
+  if (ui.modifyTasks.length === 0) {
+    els.modifyList.append(el("p", "modal-empty", ui.copy.modify.empty));
+    return;
+  }
+  for (const task of ui.modifyTasks) {
+    const row = el("button", "modal-row");
+    row.type = "button";
+    row.dataset.taskId = String(task.taskId || "");
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", "false");
+    const main = el("span", "modal-row-main");
+    main.append(el("span", "modal-row-id", String(task.taskId || "")));
+    const meta = [
+      task.contextId ? `context ${task.contextId}` : ui.copy.modify.noContext,
+      Array.isArray(task.sites) && task.sites.length > 0 ? task.sites.join(", ") : "",
+      task.region || "",
+    ].filter(Boolean);
+    if (meta.length > 0) main.append(el("span", "modal-row-meta", meta.join(" · ")));
+    if (task.summary) main.append(el("span", "modal-row-summary", String(task.summary)));
+    row.append(main, el("span", "modal-row-state", ui.copy.modify.stillWorking));
+    row.addEventListener("click", () => selectModifyRow(task));
+    els.modifyList.append(row);
+  }
+}
+
+function selectModifyRow(task) {
+  ui.modifySelected = task;
+  for (const row of els.modifyList.querySelectorAll(".modal-row")) {
+    row.setAttribute("aria-selected", String(row.dataset.taskId === task.taskId));
+  }
+  els.modifyConfirm.disabled = false;
+  els.modifyStatus.textContent = `${ui.copy.modify.selected}: ${task.taskId}`;
+}
+
+/** Load the selected Task into the page and wait for the operator to press Start. */
+function applyModifyTarget() {
+  const task = ui.modifySelected;
+  if (task === null || !task.taskId) return;
+  if (!task.contextId) {
+    els.modifyError.textContent = ui.copy.modify.confirmFailed;
+    els.modifyError.hidden = false;
+    return;
+  }
+  closeModifyPicker();
+  ui.targetTask = null;
+  renderTargetCard();
+  // The Modify reuses the planned-outage values; the visible example changes with the request.
+  ui.selected = "outage";
+  if (ui.protocol !== "a2a-t" && (ui.meta?.protocols || []).includes("a2a-t")) {
+    ui.protocol = "a2a-t";
+  }
+  renderPresets();
+  renderProtocol();
+  resetRunState();
+  ui.targetTask = task;
+  ui.modifyRequest = ui.meta?.modifyRequest || "";
+  els.requestText.value = ui.modifyRequest;
+  hideError();
+  renderScenarioDescription();
+  renderTargetCard();
+  if (els.drawer.hidden) {
+    els.drawer.hidden = false;
+    els.editRequest.setAttribute("aria-expanded", "true");
+  }
+  els.requestText.focus();
+  render();
+}
+
+async function startRun() {
+  if (ui.busy) {
+    showError(ui.copy.running);
+    return;
+  }
+  const request = els.requestText.value.trim();
+  const parentRunId = ui.retryParentRunId;
+  ui.retryParentRunId = null;
+  hideError();
+  resetRunState();
   clear(els.techLog);
   setBusy(true);
   // Show the engineer writing immediately. Starting a run can take a few seconds (session claim
@@ -688,8 +898,14 @@ async function startRun() {
         scenario: ui.selected,
         // The textarea shows the concise presentation wording. While it is unchanged, let the
         // backend use the richer catalog prompt that the live model extracts Task-T from.
-        userRequest: request && request !== defaultRequest ? request : undefined,
+        userRequest: ui.targetTask || (request && request !== defaultRequest) ? request : undefined,
         protocol: ui.protocol,
+        ...(ui.targetTask
+          ? {
+              targetTaskId: ui.targetTask.taskId,
+              targetContextId: ui.targetTask.contextId,
+            }
+          : {}),
         source: parentRunId
           ? { kind: "presentation", parentRunId }
           : "presentation",
@@ -964,6 +1180,7 @@ function setBusy(busy) {
   if (els.cancelRun) {
     els.cancelRun.disabled = !busy || ui.cancelling || !ui.view.runId;
   }
+  renderModifyButton();
   renderProtocol();
   renderControls();
 }
@@ -1781,6 +1998,7 @@ function renderProtocol() {
     setText("approval-org", ui.copy.roles.approvalOrg);
     setText("nms-note", ui.copy.roles.nmsNote);
   }
+  renderModifyButton();
 }
 
 function copyRemaining(card) {

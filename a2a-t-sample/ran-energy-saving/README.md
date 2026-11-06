@@ -172,6 +172,16 @@ trace labels each row with its demo day (Day 1, Days 2–8, Day 9, Day 9+) and m
 (OSS → RAN, RAN → OSS, MIE ⇄ Engineer); late server spans are merged by event time and a status and
 its matching span collapse to one row.
 
+When the client talks to the real NMS (`--nms`), the toolbar also offers **Modify a running task**.
+It reads `GET /api/nms/tasks`, backed by the NMS `/tasks` endpoint, and lists only WORKING Tasks.
+Selecting one records its task id and context, switches the example to the planned-outage
+modification, fills the editor with a Modify-only request, and waits: nothing is sent on selection.
+Pressing Start posts the target ids; the run has no baseline phase, and its first Task-T is the real
+Modify continuation of the selected Task. A Task that leaves WORKING before the send is rejected
+with a clear message. The entry supports A2A-T only. For local rehearsal against the simulator,
+`A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1` keeps a newly created Task WORKING so the picker has a target;
+continuing it completes it normally.
+
 ### Tester console (Excel import)
 
 Open `/tester` on the same UI process (the launcher prints the URL). It is a separate entry page

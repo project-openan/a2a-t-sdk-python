@@ -94,6 +94,22 @@ Create baseline followed by a real Modify continuation on the same Task). The pr
 the step bar on Apply & report for the Modify phase, shows each Task-T's own payload in the wire
 inspector, and renders the modified report as the final card.
 
+When the client talks to the real NMS, the toolbar also offers **Modify a running task**. The page
+calls `GET /api/nms/tasks?state=working`, which reads the NMS `/tasks` endpoint through
+`NmsClient.list_tasks`, keeps only `TASK_STATE_WORKING`, and returns the compact row the picker
+shows (task id, context id, region, sites, current target, last message). Selecting a row does not
+send anything: it resets the stage, records the target task id/context, switches the example to the
+planned-outage modification, fills the editor with `MODIFY_REQUEST`, and waits for the operator.
+Pressing Start then posts `targetTaskId`/`targetContextId`; the backend re-reads the Task and rejects
+a Task that left `WORKING` (409) before starting. The run has `runMode=modify`: `ClientRuntime`
+uses `RunSpec.modify_intent`, `run_client_flow` skips the baseline and sends the Modify Task-T as
+its first message with `message.task_id`/`context_id`, and the presentation reducer starts in the
+single Modify phase (the step bar marks the Create send as not applicable). The run record,
+transcript, metrics document and live snapshot carry the run mode and target ids. Only A2A-T is
+supported. For local rehearsal against the simulator, `A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1` leaves a
+newly created Task in `WORKING` (closing its stream so the creating run ends as `incomplete`);
+continuing that Task completes it normally.
+
 The presentation supports two brand palettes. `--brand orange|huawei` (or
 `A2AT_SAMPLE_UI_BRAND`) sets the start-up default; the top-bar button switches at runtime and stores
 the choice in `localStorage`; `?brand=` overrides both for one page load. The CSS keeps a semantic

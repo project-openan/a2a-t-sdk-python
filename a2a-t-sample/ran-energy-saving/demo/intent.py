@@ -39,7 +39,9 @@ from demo.scenario import (
     SCENARIO_UNKNOWN_AREA,
     SUPPORTED_SCENARIO_NAMES,
     complete_initial_params,
+    follow_up_initial_params,
     get_scenario,
+    resolve_modify_request,
 )
 
 _LOGGER = logging.getLogger("ran_energy_saving.intent")
@@ -198,6 +200,49 @@ def build_scenario_intent(
             background=background,
             language=language,
         ),
+    )
+    return _with_forced_context(intent, region, sites, language)
+
+
+def build_modify_intent(
+    language: str = LANGUAGE_ZH,
+    *,
+    region: str = "",
+    sites: tuple[str, ...] = (),
+) -> ProcessedIntent:
+    """Build the deterministic intent of a Modify-only run against an existing Task.
+
+    The target Task already exists on the NMS, so the request has no Create phase. The business
+    values are the planned-outage Modify values of the ``outage`` scenario.
+    """
+    params = follow_up_initial_params(SCENARIO_OUTAGE, language) or {}
+    windows = _split_windows(params.get("guaranteedThroughputTarget"))
+    resolved_sites = _split_sites(params.get("siteList"))
+    background = _text_or_none(params.get("backgroundEvent"))
+    normalized = render_normalized_text(
+        operation="Modify",
+        region=str(params.get("region") or ""),
+        sites=resolved_sites,
+        windows=windows,
+        goal=str(params.get("energySavingGoal") or ""),
+        description=str(params.get("task_description") or ""),
+        expected=str(params.get("expectedOutput") or ""),
+        background=background,
+        language=language,
+    )
+    intent = ProcessedIntent(
+        raw_request=resolve_modify_request(language),
+        normalized_text=normalized,
+        plain_text=resolve_modify_request(language),
+        operation_type="Modify",
+        region=str(params.get("region") or ""),
+        sites=resolved_sites,
+        windows=windows,
+        energy_saving_goal=str(params.get("energySavingGoal") or ""),
+        task_description=str(params.get("task_description") or ""),
+        expected_output=str(params.get("expectedOutput") or ""),
+        background_event=background,
+        source=INTENT_SOURCE_SCENARIO,
     )
     return _with_forced_context(intent, region, sites, language)
 
@@ -744,6 +789,7 @@ __all__ = [
     "apply_region_profile_text",
     "build_all_scenario_intents",
     "build_demo_intent_processor",
+    "build_modify_intent",
     "build_scenario_intent",
     "render_normalized_text",
     "render_plain_text",

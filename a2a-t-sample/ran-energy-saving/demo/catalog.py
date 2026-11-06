@@ -12,7 +12,7 @@ from protocol.run_spec import ClientPolicy, ExpectedStep, RunSpec
 from shared.config import DISCOVERY_NMS, SampleConfig
 from shared.run_constants import LANGUAGE_ZH
 
-from demo.intent import apply_region_profile_text, build_scenario_intent
+from demo.intent import apply_region_profile_text, build_modify_intent, build_scenario_intent
 from demo.scenario import (
     SCENARIO_UNKNOWN_AREA,
     SUPPORTED_SCENARIO_NAMES,
@@ -99,6 +99,11 @@ def to_run_spec(
         expected_final_state=scenario.expected_final_state,
         expected_negotiation_target=expected_negotiation_target(scenario, language),
         intent=intent,
+        modify_intent=(
+            build_modify_intent(language, region=region, sites=sites)
+            if follow_up is not None
+            else None
+        ),
     )
 
 

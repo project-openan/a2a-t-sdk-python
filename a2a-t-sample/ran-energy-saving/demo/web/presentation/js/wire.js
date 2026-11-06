@@ -239,13 +239,13 @@ export function buildWireModel(entry, state, format, copy) {
   if (entry.entryType === "event" && entry.kind === "status") {
     const task = taskPayload(entry);
     if (task !== null) {
-      // The first status is the Task object the RAN Agent created. Its history carries the
-      // Task-T that was accepted, so the creation parameters are visible without re-reading the
-      // request.
+      // The first status is the Task object the RAN Agent created, or the running Task a
+      // Modify-only run continued. Its history carries the accepted Task-T either way.
+      const modified = state.runMode === "modify";
       return {
-        title: copy.wire.taskCreatedTitle,
+        title: modified ? copy.wire.taskModifiedTitle : copy.wire.taskCreatedTitle,
         alternate: false,
-        note: copy.wire.taskCreatedNote,
+        note: modified ? copy.wire.taskModifiedNote : copy.wire.taskCreatedNote,
         nodes: jsonNodes({ task }, 0),
       };
     }

@@ -92,7 +92,13 @@ def build_routes(
             status_code=200,
         )
 
-    def _completed_response(task: SimTask, intent: ParsedIntent, config: SimConfig) -> Response:
+    def _completed_response(
+        task: SimTask,
+        intent: ParsedIntent,
+        config: SimConfig,
+        *,
+        hold: bool = False,
+    ) -> Response:
         """Stream one parsed request from execution to its completed report."""
         output = structured_output(intent)
         task.message = f"Task creation succeeded{_json_compact(output)}"
@@ -106,7 +112,7 @@ def build_routes(
             )
         artifact = report_artifact(task.task_id, report)
         return StreamingResponse(
-            task_stream(task, report=report, artifact=artifact, config=config),
+            task_stream(task, report=report, artifact=artifact, config=config, hold=hold),
             media_type=EVENT_STREAM,
             headers={"Cache-Control": "no-cache"},
         )
@@ -196,6 +202,7 @@ def build_routes(
         message_map = message if isinstance(message, Mapping) else {}
         requested_task_id = message_map.get("taskId") or message_map.get("task_id")
         task = resolved_store.get(str(requested_task_id)) if isinstance(requested_task_id, str) else None
+        is_new = task is None
         if task is None:
             task = resolved_store.create(
                 context_id=_context_id(body) or str(uuid.uuid4()),
@@ -203,7 +210,9 @@ def build_routes(
             )
         else:
             resolved_store.update(task.task_id, state=TASK_SUBMITTED, message="Task creation succeeded")
-        return _completed_response(task, intent, config)
+        # The hold mode keeps a newly created Task open for the Modify picker; a continuation
+        # (the Modify itself) completes normally.
+        return _completed_response(task, intent, config, hold=config.hold_working and is_new)
 
     async def list_tasks(request: Request) -> Response:
         """List the latest Tasks."""

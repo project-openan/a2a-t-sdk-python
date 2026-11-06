@@ -34,6 +34,10 @@ export function createState() {
     scenario: null,
     mode: null,
     protocol: "a2a-t",
+    //: ``create`` starts a new Task; ``modify`` continues the selected running Task.
+    runMode: "create",
+    targetTaskId: null,
+    targetContextId: null,
     userRequest: null,
     rawRequest: null,
     normalizedRequest: null,
@@ -141,6 +145,19 @@ export function applyFrame(state, frame) {
       if (frame.protocol === "plain") state.protocol = "plain";
       else if (frame.protocol === "pure") state.protocol = "pure";
       else if (frame.protocol === "a2a-t") state.protocol = "a2a-t";
+      state.runMode = frame.runMode === "modify" ? "modify" : "create";
+      if (typeof frame.targetTaskId === "string" && frame.targetTaskId) {
+        state.targetTaskId = frame.targetTaskId;
+      }
+      if (typeof frame.targetContextId === "string" && frame.targetContextId) {
+        state.targetContextId = frame.targetContextId;
+      }
+      if (state.runMode === "modify") {
+        // A Modify-only run has no baseline: its first Task-T already continues the target Task.
+        state.phaseKey = "modify";
+        state.phaseIndex = 0;
+        state.modifyPhaseStarted = true;
+      }
       // The page starts with the engineer's concise request. The backend `run_started` frame may
       // carry the richer catalog prompt used for Task-T generation; keep the visible request as
       // the engineer wrote it.
@@ -482,7 +499,10 @@ function applyTrace(state, span) {
   if (kind === "message_sent" && detail && detail.performative === "TASK_T") {
     state.taskTSent = true;
     if (typeof detail.taskId === "string" && detail.taskId) state.taskId = detail.taskId;
-    if (detail.samplePhase === "baseline" || detail.samplePhase === "modify") {
+    if (
+      detail.samplePhase === "baseline" ||
+      (detail.samplePhase === "modify" && state.runMode !== "modify")
+    ) {
       state.twoPhase = true;
     }
   }

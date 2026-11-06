@@ -232,6 +232,7 @@ function traceScene(span, state, frame) {
     const detail = isObject(span.detail) ? span.detail : {};
     const performative = typeof detail.performative === "string" ? detail.performative : "";
     if (performative === "TASK_T") {
+      if (state.runMode === "modify") return scene("modify-start", 1800, frame);
       return state.taskTSent ? scene("modify-send", 1800, frame) : scene("send", 1800, frame);
     }
     return scene("negotiate-send", 500, frame);
@@ -279,6 +280,9 @@ function stepOf(key) {
     case "intent-review":
       return "intent";
     case "send":
+      return "send";
+    case "modify-start":
+      // A Modify-only run sends its Modify Task-T as the send step; there is no baseline.
       return "send";
     case "modify-send":
       // The Modify happens after the baseline report. Reusing the apply step keeps the step bar

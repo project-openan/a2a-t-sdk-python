@@ -32,8 +32,12 @@ class _PassRuntime:
         on_decision_made: Callable[..., None] | None = None,
         on_intent_ready: Callable[[str], Awaitable[bool]] | None = None,
         validate_before_send: bool = False,
+        run_mode: str = "create",
+        target_task_id: str | None = None,
+        target_context_id: str | None = None,
     ) -> ClientFlowResult:
         del trace_sink, run_id, user_request, conversation_context, validate_before_send
+        del run_mode, target_task_id, target_context_id
         del on_decision_requested, on_decision_made, on_intent_ready
         if event_sink is not None:
             event_sink({"kind": "status", "task_id": "task-1", "context_id": "ctx-1"})

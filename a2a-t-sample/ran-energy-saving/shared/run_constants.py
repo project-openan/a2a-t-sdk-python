@@ -12,6 +12,11 @@ from typing import Final, Literal
 #: Round budget of one pre-task negotiation (design D11).
 MAX_ROUNDS: Final[int] = 3
 
+#: Whether a client run creates a new A2A Task or continues a running one with a Modify Task-T.
+RUN_MODE_CREATE: Final[str] = "create"
+RUN_MODE_MODIFY: Final[str] = "modify"
+SUPPORTED_RUN_MODES: Final[tuple[str, ...]] = (RUN_MODE_CREATE, RUN_MODE_MODIFY)
+
 #: Supported process-level languages.
 LANGUAGE_EN: Final[str] = "en-US"
 LANGUAGE_ZH: Final[str] = "zh-CN"

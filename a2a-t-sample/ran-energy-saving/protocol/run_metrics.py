@@ -90,6 +90,9 @@ def build_run_metrics(
     expected: RunSpec | None,
     error: str | None = None,
     source: Mapping[str, object] | None = None,
+    run_mode: str = "create",
+    target_task_id: str | None = None,
+    target_context_id: str | None = None,
 ) -> dict[str, object]:
     """Build the metrics record of one run.
 
@@ -110,6 +113,9 @@ def build_run_metrics(
         expected: Scenario ground truth, when the catalog provides it.
         error: Failure message of a failed run.
         source: Request origin recorded when the run started.
+        run_mode: ``create`` or ``modify`` (Modify-only continuation).
+        target_task_id: Task a Modify-only run continued, when observed.
+        target_context_id: Context of that Task, when observed.
 
     Returns:
         A JSON-serializable metrics document with ``tokens``, ``latency``, ``negotiation`` and
@@ -154,6 +160,9 @@ def build_run_metrics(
         "sourceKind": (
             str(source.get("kind") or "") if isinstance(source, Mapping) else ""
         ),
+        "runMode": run_mode,
+        "targetTaskId": target_task_id,
+        "targetContextId": target_context_id,
         "tokens": tokens,
         "latency": latency,
         "negotiation": negotiation,

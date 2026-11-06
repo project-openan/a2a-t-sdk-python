@@ -345,7 +345,13 @@ def test_source_is_carried_into_the_metrics_document() -> None:
         spans=[],
         expected=None,
         source={"kind": "tester", "caseId": "TC-001"},
+        run_mode="modify",
+        target_task_id="task-9",
+        target_context_id="ctx-9",
     )
 
     assert metrics["sourceKind"] == "tester"
     assert metrics["source"] == {"kind": "tester", "caseId": "TC-001"}
+    assert metrics["runMode"] == "modify"
+    assert metrics["targetTaskId"] == "task-9"
+    assert metrics["targetContextId"] == "ctx-9"

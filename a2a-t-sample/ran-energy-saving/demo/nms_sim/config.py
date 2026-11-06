@@ -15,6 +15,9 @@ SUPPORTED_FIDELITIES: Final[tuple[str, ...]] = (FIDELITY_STRICT, FIDELITY_FAST)
 FIDELITY_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_FIDELITY"
 HOST_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_HOST"
 PORT_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_PORT"
+#: Local rehearsal aid: a newly created Task stays WORKING instead of completing, so the
+#: presentation's Modify picker has a target. Continuing that Task completes it normally.
+HOLD_WORKING_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_HOLD_WORKING"
 
 #: Test region the real 910 environment accepts.
 DEFAULT_REGION: Final[str] = "A2ATestRegion"
@@ -45,6 +48,8 @@ class SimConfig:
         token_user: Accepted northbound user.
         token_value: Accepted password.
         task_limit: Number of tasks kept in the list.
+        hold_working: Keep a newly created Task WORKING so a Modify can target it. Continuing
+            an existing Task still completes it.
     """
 
     fidelity: str = FIDELITY_STRICT
@@ -58,6 +63,7 @@ class SimConfig:
     token_user: str = DEFAULT_TOKEN_USER
     token_value: str = DEFAULT_TOKEN_VALUE
     task_limit: int = DEFAULT_TASK_LIMIT
+    hold_working: bool = False
 
     @property
     def strict(self) -> bool:
@@ -74,7 +80,13 @@ class SimConfig:
         fidelity = os.environ.get(FIDELITY_ENV_KEY, FIDELITY_STRICT).strip().lower()
         if fidelity not in SUPPORTED_FIDELITIES:
             raise ValueError(f"Unsupported {FIDELITY_ENV_KEY}: {fidelity}; expected one of {SUPPORTED_FIDELITIES}")
-        profile = cls(fidelity=fidelity)
+        hold_working = os.environ.get(HOLD_WORKING_ENV_KEY, "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        profile = cls(fidelity=fidelity, hold_working=hold_working)
         if profile.strict:
             return profile
         # The fast profile keeps the wire contract but removes the wall-clock delays.
@@ -83,4 +95,5 @@ class SimConfig:
             heartbeat_seconds=0.0,
             working_delay=0.0,
             completion_delay=0.0,
+            hold_working=hold_working,
         )

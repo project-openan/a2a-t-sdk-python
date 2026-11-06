@@ -24,7 +24,7 @@ from typing import Any, Final, Literal, Protocol
 from a2a_t.core.metadata import NegotiationContext
 from shared.config import DISCOVERY_REGISTRY
 from shared.models import NegotiationDecision, NegotiationProposeView
-from shared.run_constants import PROTOCOL_A2A_T
+from shared.run_constants import PROTOCOL_A2A_T, RUN_MODE_CREATE
 from shared.trace import (
     PHASE_DISPATCH,
     PHASE_DONE,
@@ -66,6 +66,10 @@ class ClientRuntimeLike(Protocol):
         run_id: str | None = None,
         user_request: str | None = None,
         conversation_context: str | None = None,
+        validate_before_send: bool = False,
+        run_mode: str = RUN_MODE_CREATE,
+        target_task_id: str | None = None,
+        target_context_id: str | None = None,
     ) -> ClientFlowResult: ...
 
     async def aclose(self) -> None: ...
@@ -118,6 +122,9 @@ class RunState:
         remote_task_id: last Task id observed on the remote side (cancel target).
         intent_mode: ``processed`` or ``raw`` for this run.
         validate_before_send: whether the client validates the rendered Task-T before sending it.
+        run_mode: ``create`` or ``modify`` (Modify-only against an existing Task).
+        target_task_id: existing Task a Modify-only run continues.
+        target_context_id: context of the Task a Modify-only run continues.
         raw_request: operator request before the business intent layer.
         normalized_request: canonical text produced by the business intent layer.
         processed_intent: structured intent document, once the layer has run.
@@ -166,6 +173,10 @@ class RunState:
     remote_task_id: str | None = None
     intent_mode: str = ""
     validate_before_send: bool = False
+    #: ``create`` for a new A2A Task, ``modify`` for a Modify-only run against an existing one.
+    run_mode: str = RUN_MODE_CREATE
+    target_task_id: str | None = None
+    target_context_id: str | None = None
     raw_request: str | None = None
     normalized_request: str | None = None
     processed_intent: dict[str, object] | None = None
@@ -292,6 +303,9 @@ class RunState:
             "transport": self.transport,
             "discovery": self.discovery,
             "intentMode": self.intent_mode,
+            "runMode": self.run_mode,
+            "targetTaskId": self.target_task_id,
+            "targetContextId": self.target_context_id,
             "modelMode": model_mode,
             "modelLabel": model_label,
             "expectedSequence": expected_sequence,
@@ -320,6 +334,9 @@ class RunState:
             "transport": self.transport,
             "discovery": self.discovery,
             "intentMode": self.intent_mode,
+            "runMode": self.run_mode,
+            "targetTaskId": self.target_task_id,
+            "targetContextId": self.target_context_id,
             "modelMode": model_mode,
             "modelLabel": model_label,
             "expectedSequence": expected_sequence,
@@ -720,6 +737,9 @@ class RunState:
             "transport": self.transport,
             "discovery": self.discovery,
             "intentMode": self.intent_mode,
+            "runMode": self.run_mode,
+            "targetTaskId": self.target_task_id,
+            "targetContextId": self.target_context_id,
             "rawRequest": self.raw_request,
             "normalizedRequest": self.normalized_request,
             "intent": self.processed_intent,

@@ -101,6 +101,8 @@ class RunSpec:
             when the scenario ends with a completed task.
         intent: built-in business intent of the scenario, used when the operator did not override
             the canned request.
+        modify_intent: built-in intent of a Modify-only run against an existing Task, when the
+            scenario supports being applied as a modification.
     """
 
     name: str
@@ -112,6 +114,7 @@ class RunSpec:
     expected_final_state: str | None = None
     expected_negotiation_target: str | None = None
     intent: ProcessedIntent | None = None
+    modify_intent: ProcessedIntent | None = None
 
 
 @runtime_checkable

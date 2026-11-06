@@ -69,6 +69,8 @@ from shared.run_constants import (
     FINAL_STATE_NEGOTIATION_ENDED,
     FINAL_STATE_TASK_COMPLETED,
     LANGUAGE_ZH,
+    RUN_MODE_CREATE,
+    RUN_MODE_MODIFY,
 )
 from shared.sse_event_consumer import normalize_event
 from shared.task_schema import TASK_PARAM_SCHEMA
@@ -572,6 +574,9 @@ async def run_client_flow(
     single_extension_per_message: bool = False,
     forced_region: str | None = None,
     validate_before_send: bool = False,
+    run_mode: str = RUN_MODE_CREATE,
+    target_task_id: str | None = None,
+    target_context_id: str | None = None,
 ) -> ClientFlowResult:
     """Run one complete client flow: initial Task-T, multi-round negotiation, task or end.
 
@@ -615,6 +620,10 @@ async def run_client_flow(
         validate_before_send: Validate each rendered Task-T with the SDK content pipeline before
             sending it. Negotiable errors still go to the server for negotiation; unmapped errors
             end the flow with ``input_invalid`` and no message is sent.
+        run_mode: ``create`` starts a new A2A Task; ``modify`` sends the scenario's Modify Task-T
+            as the first message so an existing running Task is continued.
+        target_task_id: Task the Modify-only run continues; required by ``run_mode="modify"``.
+        target_context_id: Context of the target Task; required by ``run_mode="modify"``.
 
     Returns:
         The collected events, provider decisions and terminal state.
@@ -758,9 +767,27 @@ async def run_client_flow(
             detail=detail,
         )
 
-    follow_up = policy.follow_up_data(language)
-    with trace_stage("task_t_slot_extraction"):
-        initial_data = policy.initial_data(language)
+    if run_mode not in (RUN_MODE_CREATE, RUN_MODE_MODIFY):
+        raise ClientFlowError(f"Unsupported run mode: {run_mode}")
+    modify_only = run_mode == RUN_MODE_MODIFY
+    if modify_only and (not target_task_id or not target_context_id):
+        raise ClientFlowError(
+            "A Modify-only run needs both the target Task id and its context id."
+        )
+    if not modify_only and (target_task_id or target_context_id):
+        raise ClientFlowError(
+            "A target Task can only be used by a Modify-only run."
+        )
+    resolved_label = TASK_MODIFY_LABEL if modify_only else label
+    follow_up = None if modify_only else policy.follow_up_data(language)
+    with trace_stage("task_t_modify_extraction" if modify_only else "task_t_slot_extraction"):
+        initial_data = (
+            policy.follow_up_data(language) if modify_only else policy.initial_data(language)
+        )
+        if modify_only and initial_data is None:
+            raise ClientFlowError(
+                "The scenario does not define the Task-T values of a Modify-only run."
+            )
         if initial_data is not None:
             data, data_schema = initial_data
             validation_schema: Mapping[str, object] = data_schema
@@ -776,19 +803,21 @@ async def run_client_flow(
                 task_template_uri,
             )
     prompt_text = _require_prompt_text(prompt_content, "the initial Task-T prompt")
+    initial_phase = PHASE_TASK_MODIFY if modify_only else PHASE_TASK_PROMPT
     emit_trace(
         "task_prompt_rendered",
-        phase=PHASE_TASK_PROMPT,
-        title="Task-T prompt rendered",
+        phase=initial_phase,
+        title="Modify Task-T prompt rendered" if modify_only else "Task-T prompt rendered",
         detail={
             "promptText": prompt_text,
             "templateUri": prompt_content.template_uri or task_template_uri,
             "length": len(prompt_text),
+            **({"samplePhase": SAMPLE_PHASE_MODIFY} if modify_only else {}),
         },
     )
     if validate_before_send:
         validation = await _validate_task_prompt(prompt_client, prompt_text, validation_schema, task_template_uri)
-        emit_validation(validation, prompt_text, task_template_uri, PHASE_TASK_PROMPT)
+        emit_validation(validation, prompt_text, task_template_uri, initial_phase)
         if validation.verdict == "blocked":
             # Nothing is sent and no negotiation starts: the operator repairs the request first.
             blocked = ClientFlowResult()
@@ -807,11 +836,18 @@ async def run_client_flow(
         prompt_content.extension_uri or TASK_T_EXTENSION_URI: prompt_text,
         TEMPLATE_URI_METADATA_KEY: prompt_content.template_uri or task_template_uri,
     }
-    if follow_up is not None:
+    if modify_only:
+        initial_metadata[SAMPLE_PHASE_METADATA_KEY] = SAMPLE_PHASE_MODIFY
+    elif follow_up is not None:
         # A two-phase run leaves the baseline Task WORKING so the Modify follow-up can continue
         # it. The marker is sample-only and does not change the Task-T extension payload.
         initial_metadata[SAMPLE_PHASE_METADATA_KEY] = SAMPLE_PHASE_BASELINE
-    initial_request = _build_message_request(metadata=initial_metadata, label=label)
+    initial_request = _build_message_request(
+        metadata=initial_metadata,
+        label=resolved_label,
+        context_id=target_context_id if modify_only else None,
+        task_id=target_task_id if modify_only else None,
+    )
     # Declare Negotiation-T alongside Task-T: the vendor NMS only returns a structured negotiation
     # (Negotiation-T metadata plus negotiationContext) when the negotiation extension is declared.
     # Declaring Task-T alone makes it answer with a bare Message whose empty metadata the client
@@ -823,11 +859,11 @@ async def run_client_flow(
     exchanges = 0
     emit_message_sent(
         initial_request,
-        phase=PHASE_TASK_VALIDATION,
-        title="Task-T sent",
+        phase=PHASE_TASK_MODIFY if modify_only else PHASE_TASK_VALIDATION,
+        title="Modify Task-T sent" if modify_only else "Task-T sent",
         performative="TASK_T",
         round_number=None,
-        context_id=None,
+        context_id=target_context_id if modify_only else None,
     )
     _LOGGER.info("client flow started: transport=%s", type(transport).__name__)
     batch = await transport.send(initial_request, initial_context)
@@ -1006,13 +1042,14 @@ async def run_client_flow(
                 kind=kind,
                 session=session,
                 context_id=context_id,
-                label=label,
+                label=resolved_label,
                 task_template_uri=task_template_uri,
                 language=language,
                 policy=policy,
                 call_timeout_seconds=call_timeout_seconds,
                 single_extension_per_message=single_extension_per_message,
                 forced_region=forced_region,
+                task_id=target_task_id if modify_only else None,
             )
             send_phase = PHASE_RESOLUTION
             send_performative = NegotiationPerformative.ACCEPT.value
@@ -1024,8 +1061,9 @@ async def run_client_flow(
                 kind=kind,
                 session=session,
                 context_id=context_id,
-                label=label,
+                label=resolved_label,
                 call_timeout_seconds=call_timeout_seconds,
+                task_id=target_task_id if modify_only else None,
             )
             send_phase = PHASE_NEGOTIATION
             send_performative = NegotiationPerformative.PROPOSE.value
@@ -1040,10 +1078,11 @@ async def run_client_flow(
                 kind=kind,
                 session=session,
                 context_id=context_id,
-                label=label,
+                label=resolved_label,
                 propose_content=propose.content,
                 performative=performative,
                 call_timeout_seconds=call_timeout_seconds,
+                task_id=target_task_id if modify_only else None,
             )
             send_phase = PHASE_RESOLUTION
             send_performative = performative.value
@@ -1123,6 +1162,7 @@ def _negotiation_request(
     session: NegotiationContext,
     call_timeout_seconds: float,
     extra_metadata: Mapping[str, object] | None = None,
+    task_id: str | None = None,
 ) -> tuple[SendMessageRequest, ClientCallContext]:
     """Build one negotiation response request from generated protocol content."""
     metadata = {key: value for key, value in content.build_metadata_content().items() if value is not None}
@@ -1140,7 +1180,12 @@ def _negotiation_request(
     )
     if extra_metadata:
         metadata.update(extra_metadata)
-    request = _build_message_request(metadata=metadata, label=label, context_id=context_id)
+    request = _build_message_request(
+        metadata=metadata,
+        label=label,
+        context_id=context_id,
+        task_id=task_id,
+    )
     return request, _call_context((TASK_T_EXTENSION_URI, NEGOTIATION_T_EXTENSION_URI), call_timeout_seconds)
 
 
@@ -1233,6 +1278,7 @@ def _build_accept_request(
     call_timeout_seconds: float,
     single_extension_per_message: bool,
     forced_region: str | None = None,
+    task_id: str | None = None,
 ) -> tuple[SendMessageRequest, ClientCallContext]:
     """Refill the Task-T prompt and generate the Negotiation-T accept of the proposal type."""
     filled = _accept_filled_values(kind, decision, language, policy, forced_region=forced_region)
@@ -1267,6 +1313,7 @@ def _build_accept_request(
         session=accept_context,
         call_timeout_seconds=call_timeout_seconds,
         extra_metadata=metadata,
+        task_id=task_id,
     )
 
 
@@ -1401,6 +1448,7 @@ def _build_counter_request(
     context_id: str,
     label: str,
     call_timeout_seconds: float,
+    task_id: str | None = None,
 ) -> tuple[SendMessageRequest, ClientCallContext]:
     """Generate a counter proposal that keeps the inbound round (same-round ``Propose``)."""
     text = decision.counter_proposal or decision.rationale
@@ -1422,6 +1470,7 @@ def _build_counter_request(
         session=propose_context,
         call_timeout_seconds=call_timeout_seconds,
         extra_metadata=extra or None,
+        task_id=task_id,
     )
 
 
@@ -1436,8 +1485,9 @@ def _build_terminal_request(
     propose_content: str,
     performative: NegotiationPerformative,
     call_timeout_seconds: float,
+    task_id: str | None = None,
 ) -> tuple[SendMessageRequest, ClientCallContext]:
-    """Generate a terminal reject or abort message (no Task is created)."""
+    """Generate a terminal reject or abort message (no new Task is created)."""
     terminal_context = session.with_performative(performative)
     if performative is NegotiationPerformative.REJECT:
         text = _reject_text(kind, propose_content, decision)
@@ -1458,6 +1508,7 @@ def _build_terminal_request(
         context_id=context_id,
         session=terminal_context,
         call_timeout_seconds=call_timeout_seconds,
+        task_id=task_id,
     )
 
 

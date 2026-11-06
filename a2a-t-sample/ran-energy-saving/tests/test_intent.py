@@ -6,6 +6,7 @@ import pytest
 from demo.intent import (
     DemoIntentProcessor,
     build_all_scenario_intents,
+    build_modify_intent,
     build_scenario_intent,
     render_normalized_text,
     render_plain_text,
@@ -285,3 +286,40 @@ async def test_the_nms_sites_do_not_turn_a_region_task_into_a_site_task() -> Non
     assert intent.region == "A2ATestRegion"
     assert intent.sites == ()
     assert "NRES_XCS_6102937" not in intent.normalized_text
+
+
+def test_modify_intent_carries_the_modify_operation_and_outage_values() -> None:
+    """A Modify-only run never reintroduces the baseline Create operation."""
+    intent = build_modify_intent("en-US")
+
+    assert intent.operation_type == "Modify"
+    assert intent.source == "scenario"
+    assert "Modify" in intent.normalized_text
+    assert "Create" not in intent.normalized_text
+    assert intent.background_event is not None and "03:00~05:00" in intent.background_event
+    assert any("03:00~05:00" in window for window in intent.windows)
+    assert intent.sites == ("Site 1", "Site 2")
+
+
+def test_modify_intent_follows_the_vendor_profile() -> None:
+    intent = build_modify_intent(
+        "en-US",
+        region="A2ATestRegion",
+        sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
+    )
+
+    assert intent.region == "A2ATestRegion"
+    assert intent.sites == ("NRES_XCS_6102937", "LTE_26441_LNR_OCL")
+    assert "A2ATestRegion" in intent.normalized_text
+
+
+def test_only_the_outage_spec_carries_a_modify_intent() -> None:
+    from demo.catalog import DemoRunCatalog
+
+    catalog = DemoRunCatalog()
+    outage = catalog.spec("outage", language="en-US")
+    night = catalog.spec("night", language="en-US")
+
+    assert outage.modify_intent is not None
+    assert outage.modify_intent.operation_type == "Modify"
+    assert night.modify_intent is None

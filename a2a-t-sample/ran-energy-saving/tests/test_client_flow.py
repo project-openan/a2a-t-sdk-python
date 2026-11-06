@@ -245,11 +245,16 @@ def artifact_event() -> dict[str, object]:
     }
 
 
-def status_event(state: str) -> dict[str, object]:
+def status_event(
+    state: str,
+    *,
+    task_id: str = "task-1",
+    context_id: str = CONTEXT_ID,
+) -> dict[str, object]:
     return {
         "kind": "status",
-        "task_id": "task-1",
-        "context_id": CONTEXT_ID,
+        "task_id": task_id,
+        "context_id": context_id,
         "state": state,
     }
 
@@ -404,6 +409,76 @@ async def test_two_phase_run_sends_a_modify_task_t_on_the_same_task() -> None:
     assert result.task_id == "task-1"
     assert [report["target_rate"] for report in result.reports] == [10, 20]
     assert result.report == result.reports[-1]
+
+
+async def test_modify_only_run_continues_the_selected_task() -> None:
+    """A Modify-only run sends one Modify Task-T to the selected Task, with no baseline."""
+    spans: list[dict[str, object]] = []
+    prompt_client = FakePromptClient()
+    policy = replace(
+        DEMO_CLIENT_POLICY,
+        follow_up_data=lambda _language: (
+            {"operationType": "Modify", "region": "Region A"},
+            {"operationType": "operation type: Create or Modify"},
+        ),
+    )
+    modify_batch = [
+        {
+            "kind": "artifact",
+            "task_id": "task-9",
+            "context_id": "ctx-9",
+            "artifact_id": "artifact-1",
+            "name": "energy saving intent report",
+            "data": {"summary": "Plan modified", "target_rate": 20},
+        },
+        status_event("TASK_STATE_COMPLETED", task_id="task-9", context_id="ctx-9"),
+    ]
+    transport = ScriptedTransport([modify_batch])
+
+    result = await run_client_flow(
+        prompt_client=prompt_client,
+        transport=transport,
+        user_request="Modify the running task",
+        provider=ScriptedDecisionProvider(()),
+        language="en-US",
+        policy=policy,
+        trace_sink=spans.append,
+        run_mode="modify",
+        target_task_id="task-9",
+        target_context_id="ctx-9",
+    )
+
+    assert len(transport.requests) == 1
+    request = transport.requests[0]
+    assert request.message.task_id == "task-9"
+    assert request.message.context_id == "ctx-9"
+    assert request.message.parts[0].text == "modify ran energy saving task"
+    metadata = MessageToDict(request.message.metadata)
+    assert metadata[SAMPLE_PHASE_METADATA_KEY] == SAMPLE_PHASE_MODIFY
+    assert '"operationType": "Modify"' in str(metadata[TASK_T_EXTENSION_URI])
+
+    sent = [span for span in spans if span["kind"] == "message_sent"]
+    assert [span["phase"] for span in sent] == [PHASE_TASK_MODIFY]
+    assert [span["title"] for span in sent] == ["Modify Task-T sent"]
+    assert result.task_id == "task-9"
+    assert result.report is not None and result.report["target_rate"] == 20
+
+
+async def test_modify_only_run_requires_a_target_task() -> None:
+    """Without both target ids the flow rejects the run before any message is sent."""
+    transport = ScriptedTransport([])
+    with pytest.raises(Exception, match="target Task id"):
+        await run_client_flow(
+            prompt_client=FakePromptClient(),
+            transport=transport,
+            user_request="Modify the running task",
+            provider=ScriptedDecisionProvider(()),
+            language="en-US",
+            policy=DEMO_CLIENT_POLICY,
+            run_mode="modify",
+            target_task_id="task-9",
+        )
+    assert transport.requests == []
 
 
 class FailingModifyTransport(ScriptedTransport):

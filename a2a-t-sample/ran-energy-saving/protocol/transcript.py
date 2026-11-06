@@ -164,6 +164,9 @@ class NegotiationTranscript:
         runs_dir: Directory the transcript is written to.
         intent: Business intent document produced before the protocol mapping, when observed.
         source: Request origin (page, caller, remote address) recorded when the run started.
+        run_mode: ``create`` for a new A2A Task or ``modify`` for a Modify-only continuation.
+        target_task_id: Task a Modify-only run continued, when observed.
+        target_context_id: Context of the Task a Modify-only run continued, when observed.
     """
 
     scenario: str
@@ -183,6 +186,9 @@ class NegotiationTranscript:
     runs_dir: Path = DEFAULT_RUNS_DIR
     intent: dict[str, object] | None = None
     source: dict[str, object] = field(default_factory=dict)
+    run_mode: str = "create"
+    target_task_id: str | None = None
+    target_context_id: str | None = None
     _seq: int = field(default=0, repr=False)
 
     def _next_seq(self, seq: int | None) -> int:
@@ -426,6 +432,9 @@ class NegotiationTranscript:
             "error": self.error,
             "intent": self.intent,
             "source": dict(self.source),
+            "runMode": self.run_mode,
+            "targetTaskId": self.target_task_id,
+            "targetContextId": self.target_context_id,
             "events": list(self.events),
             "decisions": list(self.decisions),
             "timeline": self.timeline(),
@@ -446,6 +455,15 @@ class NegotiationTranscript:
             f"- Transport: `{self.transport}`",
             f"- Model mode: `{self.model_mode}`",
             f"- Source: `{self.source.get('kind') or 'unknown'}`",
+            f"- Run mode: `{self.run_mode}`",
+            *(
+                [
+                    f"- Target task id: `{self.target_task_id or 'n/a'}`",
+                    f"- Target context id: `{self.target_context_id or 'n/a'}`",
+                ]
+                if self.run_mode == "modify"
+                else []
+            ),
             f"- Started: `{self.started_at}`",
             f"- Finished: `{self.finished_at or 'n/a'}`",
             f"- Final state: `{self.final_state or 'n/a'}`",

@@ -409,3 +409,15 @@ async def test_pure_missing_target_asks_then_resumes_to_completed() -> None:
             for frame in resumed
         )
         assert any(frame.get("artifactUpdate") for frame in resumed)
+
+
+def test_sim_config_reads_the_hold_working_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Modify picker's local rehearsal switch is opt-in."""
+    from demo.nms_sim.config import FIDELITY_ENV_KEY, HOLD_WORKING_ENV_KEY
+
+    monkeypatch.setenv(FIDELITY_ENV_KEY, FIDELITY_FAST)
+    monkeypatch.delenv(HOLD_WORKING_ENV_KEY, raising=False)
+    assert SimConfig.from_env().hold_working is False
+
+    monkeypatch.setenv(HOLD_WORKING_ENV_KEY, "1")
+    assert SimConfig.from_env().hold_working is True
