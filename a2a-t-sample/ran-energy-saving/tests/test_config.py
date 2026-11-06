@@ -913,3 +913,27 @@ def test_the_langfuse_ui_base_is_separate_from_the_reporting_endpoint(tmp_path: 
 
     assert config.langfuse_base_url == "http://langfuse-proxy.internal:8080"
     assert config.langfuse_ui_base_url == "https://us.cloud.langfuse.com"
+
+
+def test_trace_span_level_defaults_to_minimal(tmp_path: Path) -> None:
+    config = load_config(env_path=tmp_path / "missing.env")
+
+    assert config.trace_span_level == "minimal"
+
+
+@pytest.mark.parametrize("value", ["full", "phase", "minimal", "MINIMAL"])
+def test_trace_span_level_accepts_supported_values(tmp_path: Path, value: str) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"A2AT_SAMPLE_TRACE_SPAN_LEVEL={value}\n", encoding="utf-8")
+
+    config = load_config(env_path=env_file)
+
+    assert config.trace_span_level == value.lower()
+
+
+def test_trace_span_level_rejects_an_unknown_value(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("A2AT_SAMPLE_TRACE_SPAN_LEVEL=verbose\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="A2AT_SAMPLE_TRACE_SPAN_LEVEL"):
+        load_config(env_path=env_file)

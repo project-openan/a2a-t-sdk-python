@@ -313,6 +313,12 @@ instead of opening an unrelated one. Each Run Explorer envelope carries `traceId
 A2A call uses the sender's current span id as the `parent-id` — on a server hop that is the bridge
 span created for the request, never the span that called it.
 
+`A2AT_SAMPLE_TRACE_SPAN_LEVEL` controls how much of the Run Explorer stream reaches Langfuse.
+`minimal` (default) keeps only LLM/tool calls and the run result — about a third of the previous
+volume; `phase` also keeps `run_started`, `message_sent`, one representative per phase and the
+final status; `full` exports every span. The Web UI timeline always keeps every span, so diagnosis
+is unaffected. Retries that reuse the run `traceId` also reuse the Langfuse trace.
+
 ### Real vendor NMS mode
 
 The sample can also act as the OSS client of a real vendor NMS. With `--nms`, the launcher starts

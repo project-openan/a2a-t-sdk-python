@@ -64,7 +64,13 @@ def _metadata() -> LangfuseRunMetadata:
     )
 
 
-def _exporter(offline_config: SampleConfig, *, capture: bool = True) -> tuple[LangfuseSpanExporter, _Runtime]:
+def _exporter(
+    offline_config: SampleConfig,
+    *,
+    capture: bool = True,
+    span_level: str = "full",
+    parent_trace_id: str | None = None,
+) -> tuple[LangfuseSpanExporter, _Runtime]:
     runtime = _Runtime()
     config = replace(
         offline_config,
@@ -72,8 +78,17 @@ def _exporter(offline_config: SampleConfig, *, capture: bool = True) -> tuple[La
         langfuse_public_key="pk",
         langfuse_secret_key="sk",
         langfuse_capture_content=capture,
+        trace_span_level=span_level,
     )
-    return LangfuseSpanExporter(runtime=runtime, config=config, metadata=_metadata()), runtime
+    return (
+        LangfuseSpanExporter(
+            runtime=runtime,
+            config=config,
+            metadata=_metadata(),
+            parent_trace_id=parent_trace_id,
+        ),
+        runtime,
+    )
 
 
 def _llm_span(**overrides: object) -> dict[str, object]:
@@ -360,3 +375,88 @@ def test_exporter_joins_the_current_otel_parent(offline_config: SampleConfig) ->
 
     root = _by_name(runtime)["run · night · a2a-t"]
     assert f"{root.context.trace_id:032x}" == f"{parent.get_span_context().trace_id:032x}"
+
+
+def _reduced_run_spans() -> list[dict[str, object]]:
+    """A small run with the status noise the reduced levels are meant to remove."""
+    return [
+        {"kind": "run_started", "phase": "dispatch", "title": "Run started", "detail": {}},
+        {"kind": "runtime_ready", "phase": "dispatch", "title": "Client runtime ready", "detail": {}},
+        {"kind": "message_sent", "phase": "task_prompt", "title": "Pure A2A message sent", "detail": {}},
+        {
+            "kind": "status",
+            "phase": "execution",
+            "title": "WORKING",
+            "detail": {"event": {"kind": "status", "state": "TASK_STATE_WORKING"}},
+        },
+        {"kind": "tool", "phase": "execution", "title": "NMS token", "detail": {}},
+        {
+            "kind": "status",
+            "phase": "execution",
+            "title": "COMPLETED",
+            "detail": {"event": {"kind": "status", "state": "TASK_STATE_COMPLETED"}},
+        },
+        {"kind": "finished", "phase": "done", "title": "Run finished", "detail": {}},
+    ]
+
+
+def _exported_names(offline_config: SampleConfig, level: str) -> list[str]:
+    exporter, runtime = _exporter(offline_config, span_level=level)
+    for span in _reduced_run_spans():
+        exporter(span)
+    exporter.finish()
+    return [span.name for span in runtime.spans.get_finished_spans()]
+
+
+def test_full_span_level_keeps_every_observation(offline_config: SampleConfig) -> None:
+    names = _exported_names(offline_config, "full")
+
+    assert "Client runtime ready" in names
+    assert "WORKING" in names
+    assert "phase · execution" in names
+
+
+def test_phase_span_level_drops_status_noise(offline_config: SampleConfig) -> None:
+    names = _exported_names(offline_config, "phase")
+
+    assert "Run started" in names
+    assert "Pure A2A message sent" in names
+    assert "NMS token" in names
+    assert "Run finished" in names
+    assert "COMPLETED" in names
+    assert "Client runtime ready" not in names
+    assert "WORKING" not in names
+    assert not any(name.startswith("phase ·") for name in names)
+
+
+def test_minimal_span_level_keeps_only_llm_tool_and_result(offline_config: SampleConfig) -> None:
+    names = _exported_names(offline_config, "minimal")
+
+    assert "NMS token" in names
+    assert "Run finished" in names
+    assert "Run started" not in names
+    assert "COMPLETED" not in names
+
+
+def test_exporter_uses_the_explicit_run_trace_id(offline_config: SampleConfig) -> None:
+    trace_id = "c" * 32
+    exporter, runtime = _exporter(offline_config, parent_trace_id=trace_id)
+
+    exporter.finish()
+
+    root = _by_name(runtime)["run · night · a2a-t"]
+    assert f"{root.context.trace_id:032x}" == trace_id
+
+
+def test_retries_with_the_same_trace_id_share_one_langfuse_trace(
+    offline_config: SampleConfig,
+) -> None:
+    trace_id = "d" * 32
+    first, first_runtime = _exporter(offline_config, parent_trace_id=trace_id)
+    second, second_runtime = _exporter(offline_config, parent_trace_id=trace_id)
+    first.finish()
+    second.finish()
+
+    first_root = _by_name(first_runtime)["run · night · a2a-t"]
+    second_root = _by_name(second_runtime)["run · night · a2a-t"]
+    assert first_root.context.trace_id == second_root.context.trace_id

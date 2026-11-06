@@ -360,6 +360,8 @@ class RunManager:
                 model_mode=self._config.model_mode,
                 model_label=self._config.model_label,
             ),
+            # A retry reuses the explicit vendor trace id; give it the same Langfuse trace too.
+            parent_trace_id=resolved_trace_id or None,
         )
         run.langfuse = run.langfuse_exporter.snapshot() if run.langfuse_exporter is not None else _langfuse_disabled()
         run.emit_run_started(

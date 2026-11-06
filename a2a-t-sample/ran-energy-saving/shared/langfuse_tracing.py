@@ -25,13 +25,18 @@ import json
 import logging
 import threading
 import time
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final
 from urllib.parse import urlsplit
 
-from shared.config import SampleConfig
+from shared.config import (
+    TRACE_SPAN_LEVEL_FULL,
+    TRACE_SPAN_LEVEL_MINIMAL,
+    SampleConfig,
+)
 
 _LOGGER = logging.getLogger("ran_energy_saving.langfuse")
 
@@ -48,6 +53,16 @@ OBSERVATION_TYPE_ATTRIBUTE: Final[str] = "langfuse.observation.type"
 OBSERVATION_INPUT_ATTRIBUTE: Final[str] = "langfuse.observation.input"
 OBSERVATION_OUTPUT_ATTRIBUTE: Final[str] = "langfuse.observation.output"
 OBSERVATION_METADATA_PREFIX: Final[str] = "langfuse.observation.metadata."
+
+#: Task states that end a run; a reduced export keeps only the final status, not every WORKING push.
+_TERMINAL_STATUS_STATES: Final[frozenset[str]] = frozenset(
+    {
+        "TASK_STATE_COMPLETED",
+        "TASK_STATE_FAILED",
+        "TASK_STATE_REJECTED",
+        "TASK_STATE_CANCELED",
+    }
+)
 OBSERVATION_LEVEL_ATTRIBUTE: Final[str] = "langfuse.observation.level"
 OBSERVATION_STATUS_MESSAGE_ATTRIBUTE: Final[str] = "langfuse.observation.status_message"
 OBSERVATION_MODEL_ATTRIBUTE: Final[str] = "langfuse.observation.model.name"
@@ -169,11 +184,17 @@ def _get_runtime(config: SampleConfig) -> _LangfuseRuntime | None:
 def create_langfuse_exporter(
     config: SampleConfig,
     metadata: LangfuseRunMetadata,
+    *,
+    parent_trace_id: str | None = None,
 ) -> "LangfuseSpanExporter | None":
     """Build the exporter of one run, or ``None`` when Langfuse is disabled.
 
     Langfuse is active when both keys are configured and the run is live. Offline runs use the
     deterministic model whose token usage is not real, so they stay out of the dashboard.
+
+    ``parent_trace_id`` is the run's explicit (vendor-facing) trace id: a retry that reuses it
+    also reuses the Langfuse trace. Without it the exporter adopts the current OTel parent (an
+    incoming ``traceparent``) or opens a new trace.
     """
     if not config.langfuse_configured:
         return None
@@ -187,7 +208,12 @@ def create_langfuse_exporter(
         runtime = _get_runtime(config)
         if runtime is None:
             return None
-        return LangfuseSpanExporter(runtime=runtime, config=config, metadata=metadata)
+        return LangfuseSpanExporter(
+            runtime=runtime,
+            config=config,
+            metadata=metadata,
+            parent_trace_id=parent_trace_id,
+        )
     except Exception as exc:  # noqa: BLE001 - observability must never break the run
         _LOGGER.warning("Langfuse initialization failed: %s: %s", type(exc).__name__, exc)
         return None
@@ -211,10 +237,44 @@ def _current_parent_context() -> Any:
     return Context()
 
 
+def _root_context(parent_trace_id: str | None) -> Any:
+    """Return the root context: an explicit run trace id, else the current OTel parent."""
+    explicit = (parent_trace_id or "").strip().lower()
+    if len(explicit) == 32 and explicit != "0" * 32 and all(
+        character in "0123456789abcdef" for character in explicit
+    ):
+        return _synthetic_parent_context(explicit)
+    return _current_parent_context()
+
+
+def _synthetic_parent_context(trace_id: str) -> Any:
+    """Return a context whose remote parent carries ``trace_id`` and a fresh span id."""
+    try:
+        from opentelemetry import trace
+
+        context = trace.SpanContext(
+            trace_id=int(trace_id, 16),
+            span_id=int(uuid.uuid4().hex[:16], 16),
+            is_remote=True,
+            trace_flags=trace.TraceFlags(trace.TraceFlags.SAMPLED),
+        )
+        return trace.set_span_in_context(trace.NonRecordingSpan(context))
+    except Exception:  # noqa: BLE001 - observability must never break the run
+        _LOGGER.debug("synthetic parent context failed", exc_info=True)
+        return Context()
+
+
 class LangfuseSpanExporter:
     """Translate the Run Explorer span stream of one run into Langfuse observations."""
 
-    def __init__(self, *, runtime: _LangfuseRuntime, config: SampleConfig, metadata: LangfuseRunMetadata) -> None:
+    def __init__(
+        self,
+        *,
+        runtime: _LangfuseRuntime,
+        config: SampleConfig,
+        metadata: LangfuseRunMetadata,
+        parent_trace_id: str | None = None,
+    ) -> None:
         """Create the run root span and remember the trace id."""
         self._runtime = runtime
         self._config = config
@@ -229,10 +289,14 @@ class LangfuseSpanExporter:
         self._round_spans: dict[int, Any] = {}
         self._span_map: dict[str, Any] = {}
         self._trace_url: str | None = None
+        self._span_level = (config.trace_span_level or TRACE_SPAN_LEVEL_FULL).strip().lower()
+        self._phase_seen: set[str] = set()
+        self._last_status_span: Mapping[str, object] | None = None
+        self._last_status_exported = False
         started = _now_ns()
         self._root = runtime.tracer.start_span(
             _run_span_name(metadata),
-            context=_current_parent_context(),
+            context=_root_context(parent_trace_id),
             start_time=started,
             attributes=_root_attributes(metadata),
         )
@@ -275,16 +339,67 @@ class LangfuseSpanExporter:
             return
         try:
             with self._lock:
-                self._export(span)
+                if self._should_export(span):
+                    self._export(span)
         except Exception as exc:  # noqa: BLE001 - observability must never break the run
             self._warning = f"{type(exc).__name__}: {exc}"
             _LOGGER.warning("Langfuse span export failed: %s", exc)
+
+    def _should_export(self, span: Mapping[str, object]) -> bool:
+        """Return whether one recorded span becomes a Langfuse observation.
+
+        The Web UI timeline always keeps every span; this filter only controls the dashboard.
+        ``phase`` drops the per-event status noise and keeps one representative per phase,
+        ``minimal`` keeps only the LLM/tool calls and the run result.
+        """
+        if self._span_level == TRACE_SPAN_LEVEL_FULL:
+            return True
+        kind = _as_str(span.get("kind"))
+        phase = _as_str(span.get("phase")) or "dispatch"
+        if kind in ("llm", "tool"):
+            self._phase_seen.add(phase)
+            return True
+        if kind == "finished":
+            return True
+        if self._span_level == TRACE_SPAN_LEVEL_MINIMAL:
+            return False
+        if kind == "status":
+            state = _status_state(span)
+            if state in _TERMINAL_STATUS_STATES:
+                self._last_status_span = span
+                self._last_status_exported = True
+                self._phase_seen.add(phase)
+                return True
+            self._last_status_span = span
+            self._last_status_exported = False
+            return False
+        if kind in ("run_started", "message_sent"):
+            self._phase_seen.add(phase)
+            return True
+        if phase in self._phase_seen:
+            return False
+        # First non-status span of a phase: it represents the phase in the reduced view.
+        self._phase_seen.add(phase)
+        return True
 
     def finish(self, *, result: Any | None = None, error: str | None = None) -> None:
         """Close every open phase/round span, write the run result and flush the client."""
         with self._lock:
             if self._closed or self._finished:
                 return
+            if (
+                self._span_level != TRACE_SPAN_LEVEL_FULL
+                and self._last_status_span is not None
+                and not self._last_status_exported
+            ):
+                # A reduced export keeps one status: the last one observed, even when the run
+                # never reached a terminal state (incomplete / interrupted).
+                try:
+                    self._export(self._last_status_span)
+                except Exception as exc:  # noqa: BLE001 - observability must never break the run
+                    self._warning = f"{type(exc).__name__}: {exc}"
+                    _LOGGER.warning("Langfuse final status export failed: %s", exc)
+            self._last_status_span = None
             ended = _now_ns()
             for span in self._round_spans.values():
                 span.end(end_time=ended)
@@ -344,6 +459,10 @@ class LangfuseSpanExporter:
 
     def _parent_context(self, span: Mapping[str, object], phase: str, started: int) -> Any:
         """Attach one span to its recorded parent, its negotiation round, or its phase."""
+        if self._span_level != TRACE_SPAN_LEVEL_FULL:
+            # Reduced levels stay flat: phase/round grouping spans would double the observation
+            # count, and the phase is still recorded as metadata on every observation.
+            return set_span_in_context(self._root)
         parent_id = span.get("parentSpanId")
         if isinstance(parent_id, str) and parent_id in self._span_map:
             return set_span_in_context(self._span_map[parent_id])
@@ -446,6 +565,18 @@ def _observation_name(span: Mapping[str, object]) -> str:
         return title
     kind = _as_str(span.get("kind"))
     return kind or "event"
+
+
+def _status_state(span: Mapping[str, object]) -> str:
+    """Return the A2A state carried by one status span, ``""`` when absent."""
+    detail = span.get("detail")
+    if isinstance(detail, Mapping):
+        event = detail.get("event")
+        if isinstance(event, Mapping):
+            state = event.get("state")
+            if isinstance(state, str):
+                return state
+    return ""
 
 
 def _observation_type(kind: str) -> str:

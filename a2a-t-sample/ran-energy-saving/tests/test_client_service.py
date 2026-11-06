@@ -511,7 +511,7 @@ async def test_run_publishes_langfuse_trace_state(
 
     monkeypatch.setattr(
         "protocol.client_service.run_manager.create_langfuse_exporter",
-        lambda config, metadata: _Exporter(),
+        lambda config, metadata, **_: _Exporter(),
     )
     manager, _store, _runtimes = _manager(tmp_path, offline_config)
 

@@ -168,6 +168,14 @@ session/user from the start; the long-lived root closes at run end. Spans that a
 local demo's batched server trace) are still exported, and the Langfuse atexit handler flushes them.
 Every failure is a warning on the run snapshot, never a run failure.
 
+`A2AT_SAMPLE_TRACE_SPAN_LEVEL` controls export volume without changing the UI timeline. `full`
+exports every recorded span; `phase` keeps `run_started`/`message_sent`, LLM/tool calls, one
+representative per phase and the final status; `minimal` (default) keeps only LLM/tool calls and
+the run result. The reduced levels export flat observations (no phase/round grouping spans) and
+still record the phase in the observation metadata. A run started with an explicit `traceId` uses
+that id as the Langfuse trace id, so a retry stays in the same trace; without one, the exporter
+adopts an incoming `traceparent` or opens a new trace.
+
 Two human approvals can be enabled at startup:
 
 - `--mode confirm`: approval 1 holds the Task-T before it leaves the OSS Agent; the engineer confirms
@@ -1090,6 +1098,7 @@ script can switch the model with a plain `export ADK_MODEL_NAME=...`.
 | `A2AT_SAMPLE_LANGFUSE_ENABLED` | unset = auto | `0` forces the export off even with keys; `1` keeps the key-based enable. |
 | `A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT` | default `1` | `0` sends only model, token, status and timing metadata (no prompt/response text). |
 | `A2AT_SAMPLE_LANGFUSE_ENVIRONMENT` | default `demo` | Langfuse environment label. |
+| `A2AT_SAMPLE_TRACE_SPAN_LEVEL` | default `minimal` | Langfuse export detail: `minimal` = LLM/tool + result, `phase` = key events + one per phase + final status, `full` = every span. The UI timeline is unaffected. |
 | `A2AT_SAMPLE_TASK_DB` | unset = in-memory; `run_demo.py` writes `<sample>/runs/task-status.sqlite3` | Absolute SQLite path of the server's persisted A2A Task store, also read by `GET /api/tasks`. |
 | `A2AT_SAMPLE_CLIENT_DB` | unset = in-memory; `run_demo.py` writes `<sample>/runs/client-state.sqlite3` | Absolute SQLite path of the client's conversation/run/negotiation store and of the ADK decision-agent sessions. |
 | `A2AT_SAMPLE_CLIENT_MEMORY_TURNS` | default `6` (>= 0) | Number of recent conversation turns injected into the next decision prompt and Task-T generation. |
