@@ -375,15 +375,17 @@ body.resizing-y { cursor: row-resize; user-select: none; }
 }
 .drawer textarea {
   width: 100%;
-  min-height: 84px;
+  min-height: 96px;
   resize: vertical;
   border: 2px solid var(--black);
   background: var(--white);
-  padding: 8px 10px;
-  font-size: 14.5px;
+  padding: 9px 11px;
+  font-size: 15px;
+  line-height: 1.5;
 }
+.drawer .micro-label { font-size: 12.5px; }
 .drawer-row { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
-.drawer .hint { font-size: 11.5px; color: var(--g700); }
+.drawer .hint { font-size: 12.5px; color: var(--g700); }
 .btn { border: 2px solid var(--black); background: var(--white); padding: 6px 13px; font-weight: 700; }
 .btn.primary { background: var(--orange); border-color: var(--orange); color: var(--black); }
 [data-brand="orange"] .btn:hover { background: var(--black); border-color: var(--black); color: var(--white); }
@@ -801,9 +803,60 @@ body.resizing-y { cursor: row-resize; user-select: none; }
 .say-detail b { color: var(--white); }
 .say-detail .reason { display: block; margin-top: 3px; }
 .say.ask { background: var(--orange); color: var(--black); position: sticky; bottom: 0; z-index: 8; }
-.say.ask .say-text small { color: var(--black); }
-.say.ask .say-detail { color: rgba(0, 0, 0, .78); }
+/* The narrator's small type was tuned for a dark ground. Confirm mode turns the strip orange,
+   where grey #595959 is only ~2.7:1 and 11–12 px free text is unreadable. Everything the
+   engineer must read or edit in the confirm strip scales up and switches to ink. */
+.say.ask .say-text small { font-size: 12.5px; color: var(--black); }
+.say.ask .say-detail {
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgba(0, 0, 0, .88);
+}
 .say.ask .say-detail b { color: var(--black); }
+.say.ask .micro-label {
+  font-size: 12.5px;
+  color: var(--black);
+}
+.say.ask .policy,
+.say.ask .mml-label {
+  font-size: 12.5px;
+  color: var(--black);
+}
+.say.ask .mml-inline code { font-size: 13px; }
+.say.ask .card-error { font-size: 13px; }
+.say.ask .validation-block { border-top-color: rgba(0, 0, 0, .28); }
+.say.ask .validation-note { font-size: 13px; line-height: 1.45; }
+.say.ask .validation-errors li { font-size: 13px; }
+.say.ask .validation-errors span:not(.validation-hint),
+.say.ask .validation-errors code { font-size: 12px; color: rgba(0, 0, 0, .82); }
+/* Red #cd3c14 is only ~1.9:1 on orange: keep the error semantics but put the text on ink. */
+.say.ask .validation-block.blocked .validation-note,
+.say.ask .validation-errors .validation-hint { color: var(--black); font-weight: 700; }
+.say.ask .say-detail .error,
+.say.ask .manual-error {
+  background: var(--white);
+  border-left: 4px solid var(--red);
+  color: var(--red);
+  padding: 2px 7px;
+  font-weight: 700;
+}
+.say.ask .region-label { font-size: 13px; opacity: 1; }
+.say.ask textarea {
+  min-height: 84px;
+  border: 2px solid var(--black);
+  color: var(--black);
+  font-size: 15px;
+  line-height: 1.5;
+}
+.say.ask .counter-editor textarea { min-height: 72px; }
+.say.ask .manual-answer { border-top-color: rgba(0, 0, 0, .28); }
+.say.ask .manual-preview {
+  border-color: rgba(0, 0, 0, .35);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.say.ask .manual-preview b { min-width: 128px; }
+.say.ask .manual-error { font-size: 13px; }
 .choices { display: flex; flex-wrap: wrap; gap: 7px; }
 .choices button {
   border: 2px solid var(--black);

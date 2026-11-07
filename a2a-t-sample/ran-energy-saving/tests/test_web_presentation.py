@@ -240,6 +240,22 @@ def test_phone_breakpoint_wraps_the_header_meta() -> None:
     assert ".top-meta { flex: 1 1 100%; flex-wrap: wrap; }" in block.group(1)
 
 
+def test_confirm_strip_scales_its_type_for_the_orange_ground() -> None:
+    """Confirm-mode inputs sit on orange: the dark narrator's 11–12 px grey is unreadable.
+
+    Grey ``#595959`` on ``#ff7900`` is roughly 2.7:1, and the confirm strip is the one place the
+    engineer must read and edit free text (request edit, Task-T repair, manual negotiation).
+    """
+    css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")
+
+    assert re.search(r"\.say\.ask textarea \{[^}]*font-size: 15px", css, re.S)
+    assert re.search(r"\.say\.ask \.say-detail \{[^}]*font-size: 14px", css, re.S)
+    assert re.search(r"\.say\.ask \.micro-label \{[^}]*color: var\(--black\)", css, re.S)
+    assert re.search(r"\.say\.ask \.manual-preview \{[^}]*font-size: 13\.5px", css, re.S)
+    assert re.search(r"\.say\.ask \.validation-errors li \{[^}]*font-size: 13px", css, re.S)
+    assert re.search(r"\.say\.ask \.manual-answer \{[^}]*rgba\(0, 0, 0, \.28\)", css, re.S)
+
+
 def test_huawei_theme_has_no_pointer_hover_effects() -> None:
     """The Huawei skin stays static on pointer hover; only explicit states may change."""
     css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")
