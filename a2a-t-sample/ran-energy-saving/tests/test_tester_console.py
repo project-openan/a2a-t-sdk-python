@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from pathlib import Path
@@ -371,3 +372,19 @@ def test_pure_answers_replay_the_p_column() -> None:
     answers = pure_answers(CASES[1])
     assert len(answers) == 1
     assert "Set the guaranteed throughput targets" in answers[0]
+
+
+def test_the_tester_stylesheet_hides_hidden_elements() -> None:
+    """The page hides panels with the ``hidden`` attribute, but their own ``display`` wins.
+
+    ``.drawer { display: flex }`` (author sheet) overrides the UA ``[hidden] { display: none }``
+    rule, so the stage-difference drawer was open on load and the Close button could not hide it.
+    The same applies to the warning banner, the history picker and the progress bar.
+    """
+    tester = Path(__file__).resolve().parent.parent / "demo" / "web" / "tester"
+    css = (tester / "app.css").read_text(encoding="utf-8")
+    page = (tester / "index.html").read_text(encoding="utf-8")
+
+    assert re.search(r"\[hidden\]\s*\{\s*display:\s*none\s*!important;?\s*\}", css)
+    for element_id in ("drawer", "drawer-backdrop", "nms-warning", "history-wrap", "progress"):
+        assert re.search(rf'id="{element_id}"[^>]*\bhidden\b', page), element_id

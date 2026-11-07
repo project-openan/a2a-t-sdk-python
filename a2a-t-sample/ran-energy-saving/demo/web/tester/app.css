@@ -28,6 +28,9 @@
 }
 
 * { box-sizing: border-box; }
+/* Author display rules (.drawer, .warning, .progress, .history) beat the UA [hidden] rule,
+   so the attribute alone would leave the diff drawer open and unable to close. */
+[hidden] { display: none !important; }
 
 html, body {
   margin: 0;
