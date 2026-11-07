@@ -159,6 +159,37 @@ class DownstreamPump:
         """Whether the downstream Task already reached a terminal state."""
         return self._terminal
 
+    async def reconcile(self, task: Mapping[str, object]) -> None:
+        """Apply one polled vendor Task document before the push stream resumes.
+
+        A restart can miss terminal pushes. The authoritative Task is polled once at startup; a
+        terminal state (and its report artifact) is applied through the normal outer-Task path, so
+        the client sees the same events it would have received from a push.
+        """
+        if self._terminal:
+            return
+        status = task.get("status")
+        state_name = str(status.get("state") or "") if isinstance(status, Mapping) else ""
+        context_id = _text(task.get("contextId") or task.get("context_id"))
+        task_id = self._context.inner_task_id
+        artifacts = task.get("artifacts")
+        if state_name == "TASK_STATE_COMPLETED" and isinstance(artifacts, list):
+            for raw in artifacts:
+                event = _artifact_event_from_document(raw, task_id=task_id, context_id=context_id)
+                if event is not None:
+                    await self._apply(event)
+        if self._terminal or not state_name:
+            return
+        await self._apply(
+            {
+                "kind": "status",
+                "task_id": task_id,
+                "context_id": context_id,
+                "state": state_name,
+                "text": _status_text(status),
+            }
+        )
+
     def start(self) -> asyncio.Task[None]:
         """Start the pump as one background task."""
         return asyncio.create_task(self._run(), name=f"oss-downstream-pump-{self._context.outer_task_id}")
@@ -403,6 +434,48 @@ def _map_status(state: str) -> tuple[TaskState, str, str]:
 def _text(value: object) -> str | None:
     """Return a non-empty string value, or ``None``."""
     return value if isinstance(value, str) and value else None
+
+
+def _status_text(status: Mapping[str, object]) -> str:
+    """Return the first text part of a Task status message."""
+    message = status.get("message")
+    if not isinstance(message, Mapping):
+        return ""
+    parts = message.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return ""
+    first = parts[0]
+    if isinstance(first, Mapping):
+        text = first.get("text")
+        if isinstance(text, str):
+            return text
+    return ""
+
+
+def _artifact_event_from_document(
+    raw: object,
+    *,
+    task_id: str,
+    context_id: str | None,
+) -> dict[str, object] | None:
+    """Render one Task-document artifact as a normalized downstream event."""
+    if not isinstance(raw, Mapping):
+        return None
+    event: dict[str, object] = {
+        "kind": "artifact",
+        "task_id": task_id,
+        "context_id": context_id or "",
+        "artifact_id": str(raw.get("artifactId") or raw.get("artifact_id") or ""),
+        "name": str(raw.get("name") or ""),
+    }
+    parts = raw.get("parts")
+    if isinstance(parts, list) and parts and isinstance(parts[0], Mapping):
+        first = parts[0]
+        if isinstance(first.get("data"), Mapping):
+            event["data"] = dict(first["data"])
+        elif isinstance(first.get("text"), str):
+            event["text"] = first["text"]
+    return event
 
 
 async def _answer_for(

@@ -193,6 +193,93 @@ async def test_the_pump_updates_the_outer_task_and_pushes_late_events(tmp_path: 
     assert subscription.unsubscribed is True
 
 
+async def test_reconcile_applies_a_terminal_task_polled_after_restart(tmp_path: Path) -> None:
+    """A terminal push may be missed while the process is down; the startup poll recovers it."""
+    store = InMemoryTaskStore()
+    await store.save(
+        Task(id="outer-1", context_id="outer-ctx", status=TaskStatus(state=TaskState.TASK_STATE_WORKING)),
+        _context(),
+    )
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    await binding_store.save(
+        DownstreamBinding(
+            inner_task_id="inner-1",
+            inner_context_id="inner-ctx",
+            outer_task_id="outer-1",
+            run_id="run-1",
+            protocol="pure",
+        )
+    )
+    subscription = _Subscription()
+    push_sender = _PushSender()
+    pump = _pump(
+        store=store,
+        binding_store=binding_store,
+        subscription=subscription,
+        transport=_Transport(),
+        push_sender=push_sender,
+    )
+
+    await pump.reconcile(
+        {
+            "id": "inner-1",
+            "contextId": "inner-ctx",
+            "status": {"state": "TASK_STATE_COMPLETED"},
+            "artifacts": [
+                {
+                    "artifactId": "artifact-1",
+                    "name": "energy saving report",
+                    "parts": [{"text": "Done after restart."}],
+                }
+            ],
+        }
+    )
+
+    outer = await store.get("outer-1", _context())
+    assert outer is not None
+    assert outer.status.state == TaskState.TASK_STATE_COMPLETED
+    assert outer.artifacts[0].parts[0].text == "Done after restart."
+    binding = await binding_store.get("inner-1", "inner-ctx")
+    assert binding is not None
+    assert binding.terminal is True
+    assert pump.terminal is True
+
+
+async def test_reconcile_keeps_a_working_task_active(tmp_path: Path) -> None:
+    """A non-terminal poll only refreshes the outer Task; the pump stays available for pushes."""
+    store = InMemoryTaskStore()
+    await store.save(
+        Task(id="outer-1", context_id="outer-ctx", status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED)),
+        _context(),
+    )
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    await binding_store.save(
+        DownstreamBinding(
+            inner_task_id="inner-1",
+            inner_context_id="inner-ctx",
+            outer_task_id="outer-1",
+            run_id="run-1",
+            protocol="pure",
+        )
+    )
+    pump = _pump(
+        store=store,
+        binding_store=binding_store,
+        subscription=_Subscription(),
+        transport=_Transport(),
+        push_sender=_PushSender(),
+    )
+
+    await pump.reconcile(
+        {"id": "inner-1", "contextId": "inner-ctx", "status": {"state": "TASK_STATE_WORKING"}}
+    )
+
+    outer = await store.get("outer-1", _context())
+    assert outer is not None
+    assert outer.status.state == TaskState.TASK_STATE_WORKING
+    assert pump.terminal is False
+
+
 async def test_the_pump_answers_a_delayed_input_required(tmp_path: Path) -> None:
     store = InMemoryTaskStore()
     await store.save(

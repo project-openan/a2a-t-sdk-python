@@ -20,12 +20,20 @@ from a2a.server.context import ServerCallContext, UnauthenticatedUser
 from a2a.server.events import Event as A2AEvent
 from a2a.server.events.event_queue import EventQueue
 from a2a.server.tasks.task_updater import TaskUpdater
-from a2a.types import Message, Role, SendMessageRequest, TaskState, TaskStatusUpdateEvent
+from a2a.types import (
+    Message,
+    Role,
+    SendMessageRequest,
+    Task,
+    TaskState,
+    TaskStatus,
+    TaskStatusUpdateEvent,
+)
 from a2a_t.core.metadata import TASK_T_EXTENSION_URI
 from demo.composition import build_demo_runtime
 from demo.pure_policy import build_demo_pure_policy, pure_answer_from_event
 from protocol.client_flow import ClientFlowResult
-from protocol.downstream_binding_store import DownstreamBindingStore
+from protocol.downstream_binding_store import DownstreamBinding, DownstreamBindingStore
 from protocol.intent import ProcessedIntent
 from protocol.mie_agent import build_mie_app
 from protocol.oss_agent import (
@@ -329,6 +337,130 @@ def test_trace_emitter_warns_without_a_token(
     emitter.close()
 
     assert "no A2AT_SAMPLE_TRACE_TOKEN" in caplog.text
+
+
+class _FakeNmsClient:
+    """Minimal NMS client exposing the Task poll used by restart recovery."""
+
+    def __init__(self, document: dict[str, object]) -> None:
+        self.document = document
+        self.calls: list[str] = []
+
+    async def get_task(self, task_id: str) -> dict[str, object]:
+        """Return the configured Task document."""
+        self.calls.append(task_id)
+        return dict(self.document)
+
+
+async def _restart_fixture(
+    tmp_path: Path,
+    *,
+    outer_state: TaskState,
+    document: dict[str, object],
+) -> tuple[OSSPureExecutor, SqliteTaskStore, DownstreamBindingStore, _FakeNmsClient]:
+    """Build an OSS executor whose durable state looks like a restarted process."""
+    store = SqliteTaskStore(tmp_path / "oss-task-status.sqlite3")
+    context = ServerCallContext(user=UnauthenticatedUser())
+    await store.save(
+        Task(id="outer-1", context_id="outer-ctx", status=TaskStatus(state=outer_state)),
+        context,
+    )
+    binding_store = DownstreamBindingStore(store.path)
+    await binding_store.save(
+        DownstreamBinding(
+            inner_task_id="inner-1",
+            inner_context_id="inner-ctx",
+            outer_task_id="outer-1",
+            run_id="run-1",
+            protocol="pure",
+        )
+    )
+    config = replace(
+        offline_direct_config(8000),
+        discovery=DISCOVERY_NMS,
+        transport=TRANSPORT_WEBHOOK,
+    )
+    executor = OSSPureExecutor(
+        config=config,
+        answer=lambda event: "",
+        task_store=store,
+        binding_store=binding_store,
+    )
+    executor._webhook_router = WebhookRouter()
+    nms_client = _FakeNmsClient(document)
+    executor._nms_client = nms_client  # type: ignore[assignment]
+    executor._webhook_push_url = "http://127.0.0.1:9000/webhook"
+    executor._webhook_push_token = "token"
+    return executor, store, binding_store, nms_client
+
+
+async def test_restart_resumes_a_working_binding_and_keeps_tracking(tmp_path: Path) -> None:
+    """A persisted working binding recreates its pump and binds the callback identity."""
+    executor, _store, binding_store, nms_client = await _restart_fixture(
+        tmp_path,
+        outer_state=TaskState.TASK_STATE_WORKING,
+        document={"id": "inner-1", "contextId": "inner-ctx", "status": {"state": "TASK_STATE_WORKING"}},
+    )
+
+    await executor._resume_active_bindings()
+
+    assert nms_client.calls == ["inner-1"]
+    assert "outer-1" in executor._pumps
+    assert executor._webhook_router is not None
+    assert executor._webhook_router.active_subscriptions == 1
+    binding = await binding_store.get("inner-1", "inner-ctx")
+    assert binding is not None
+    assert binding.terminal is False
+    await executor._stop_pumps()
+
+
+async def test_restart_reconciles_a_terminal_task_and_releases_the_pump(tmp_path: Path) -> None:
+    """A Task that finished while the OSS was down is applied at startup, without a pump."""
+    executor, store, binding_store, _nms_client = await _restart_fixture(
+        tmp_path,
+        outer_state=TaskState.TASK_STATE_WORKING,
+        document={
+            "id": "inner-1",
+            "contextId": "inner-ctx",
+            "status": {"state": "TASK_STATE_COMPLETED"},
+            "artifacts": [
+                {
+                    "artifactId": "artifact-1",
+                    "name": "energy saving report",
+                    "parts": [{"text": "Done while the OSS was down."}],
+                }
+            ],
+        },
+    )
+
+    await executor._resume_active_bindings()
+
+    outer = await store.get("outer-1", ServerCallContext(user=UnauthenticatedUser()))
+    assert outer is not None
+    assert outer.status.state == TaskState.TASK_STATE_COMPLETED
+    assert outer.artifacts[0].parts[0].text == "Done while the OSS was down."
+    binding = await binding_store.get("inner-1", "inner-ctx")
+    assert binding is not None
+    assert binding.terminal is True
+    assert "outer-1" not in executor._pumps
+
+
+async def test_restart_drops_a_binding_whose_outer_task_is_gone(tmp_path: Path) -> None:
+    """A binding without its outer Task cannot publish anything; retire it instead of polling."""
+    executor, store, binding_store, nms_client = await _restart_fixture(
+        tmp_path,
+        outer_state=TaskState.TASK_STATE_WORKING,
+        document={"id": "inner-1", "status": {"state": "TASK_STATE_WORKING"}},
+    )
+    await store.delete("outer-1", ServerCallContext(user=UnauthenticatedUser()))
+
+    await executor._resume_active_bindings()
+
+    assert nms_client.calls == []
+    binding = await binding_store.get("inner-1", "inner-ctx")
+    assert binding is not None
+    assert binding.terminal is True
+    assert "outer-1" not in executor._pumps
 
 
 def test_trace_emitter_prefers_the_resolved_config(

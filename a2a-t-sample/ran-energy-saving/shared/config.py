@@ -150,6 +150,8 @@ MIE_PORT_ENV_KEY = "A2AT_SAMPLE_MIE_PORT"
 MIE_URL_ENV_KEY = "A2AT_SAMPLE_MIE_URL"
 #: Local RAN Agent endpoint used by the OSS hop in the three-hop topology.
 RAN_URL_ENV_KEY = "A2AT_SAMPLE_RAN_URL"
+#: Days a terminal downstream binding (and its outer Task) is kept before cleanup.
+TASK_RETENTION_DAYS_ENV_KEY = "A2AT_SAMPLE_TASK_RETENTION_DAYS"
 
 #: Langfuse observability of the client run (see :mod:`shared.langfuse_tracing`).
 LANGFUSE_PUBLIC_KEY_ENV_KEY = "LANGFUSE_PUBLIC_KEY"
@@ -202,6 +204,8 @@ DEFAULT_RAN_URL = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
 #: Default approval wait. Mirrors ``protocol.approval_gate.DEFAULT_APPROVAL_TIMEOUT_SECONDS``;
 #: shared config cannot import a protocol module.
 DEFAULT_APPROVAL_TIMEOUT_SECONDS = 86_400.0
+#: Terminal long-task bindings are kept this long for post-mortem and then deleted.
+DEFAULT_TASK_RETENTION_DAYS = 7
 DEFAULT_WEBHOOK_PORT = 9000
 DEFAULT_WEBHOOK_TOKEN = "demo-webhook-token"
 
@@ -533,6 +537,7 @@ class SampleConfig:
         mie_port: bind/advertised port of the MIE approval agent.
         mie_url: base URL the RAN server uses to reach the MIE approval agent.
         ran_url: local RAN Agent base URL used by the OSS hop in the three-hop topology.
+        task_retention_days: days a terminal downstream binding is kept before cleanup.
         nms_a2a_base: full A2A surface URL of a vendor NMS (``.../a2a/json``); required by the
             ``nms`` discovery mode and used as the static AgentCard interface.
         nms_token_url: session/token endpoint of the vendor NMS.
@@ -627,6 +632,7 @@ class SampleConfig:
     mie_port: int = DEFAULT_MIE_PORT
     mie_url: str = DEFAULT_MIE_URL
     ran_url: str = DEFAULT_RAN_URL
+    task_retention_days: int = DEFAULT_TASK_RETENTION_DAYS
     nms_a2a_base: str = ""
     nms_token_url: str = ""
     nms_token_user: str = ""
@@ -870,6 +876,9 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         mie_port=_env_int(values, MIE_PORT_ENV_KEY, DEFAULT_MIE_PORT),
         mie_url=_env_value(values, MIE_URL_ENV_KEY, DEFAULT_MIE_URL).strip(),
         ran_url=_env_value(values, RAN_URL_ENV_KEY, DEFAULT_RAN_URL).strip(),
+        task_retention_days=_positive_int(
+            values, TASK_RETENTION_DAYS_ENV_KEY, DEFAULT_TASK_RETENTION_DAYS
+        ),
         nms_a2a_base=nms_a2a_base.rstrip("/"),
         nms_token_url=nms_token_url,
         nms_token_user=nms_token_user,

@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -23,11 +24,12 @@ from typing import Final
 
 import httpx
 import uvicorn
+from a2a.auth.user import User
 from a2a.client import ClientConfig, create_client
 from a2a.helpers.proto_helpers import new_task_from_user_message
 from a2a.server.agent_execution.agent_executor import AgentExecutor
 from a2a.server.agent_execution.context import RequestContext
-from a2a.server.context import ServerCallContext
+from a2a.server.context import ServerCallContext, UnauthenticatedUser
 from a2a.server.events.event_queue import EventQueue
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_rest_routes
@@ -115,6 +117,16 @@ DEFAULT_RAN_PORT: Final[int] = 8000
 
 _LOGGER = logging.getLogger("ran_energy_saving.oss_agent")
 
+#: Outer Task states that need no background tracking after a restart.
+_TERMINAL_TASK_STATES: Final[frozenset[TaskState]] = frozenset(
+    {
+        TaskState.TASK_STATE_COMPLETED,
+        TaskState.TASK_STATE_REJECTED,
+        TaskState.TASK_STATE_FAILED,
+        TaskState.TASK_STATE_CANCELED,
+    }
+)
+
 
 @dataclass(frozen=True)
 class _PumpHandoff:
@@ -133,6 +145,23 @@ class _PumpHandle:
 
     task: asyncio.Task[None]
     subscription: WebhookSubscription
+
+
+@dataclass(frozen=True)
+class _StoredUser(User):
+    """A user reconstructed from a persisted binding owner."""
+
+    name: str
+
+    @property
+    def is_authenticated(self) -> bool:
+        """The persisted owner was authenticated when the binding was written."""
+        return bool(self.name)
+
+    @property
+    def user_name(self) -> str:
+        """Return the persisted owner name."""
+        return self.name
 
 
 class OSSPureExecutor(AgentExecutor):
@@ -267,6 +296,8 @@ class OSSPureExecutor(AgentExecutor):
             self._webhook_push_token = config.webhook_token
             self._webhook_idle_timeout = float(config.webhook_idle_timeout)
             _LOGGER.info("OSS Agent NMS webhook: push_url=%s", receiver.url)
+            if self._long_task_enabled():
+                await self._resume_active_bindings()
         # SSE mode needs no process resource: the per-run transport is built in ``_run_ran``.
 
     async def stop(self) -> None:
@@ -309,14 +340,27 @@ class OSSPureExecutor(AgentExecutor):
     def _start_pending_pump(self, outer_task_id: str) -> None:
         """Start the pump prepared by ``_run_ran_webhook`` after the last synchronous status."""
         handoff = self._pending_handoffs.pop(outer_task_id, None)
-        if handoff is None or self._binding_store is None:
+        if handoff is None:
             return
-        pump = DownstreamPump(
+        pump = self._build_pump(handoff)
+        if pump is not None:
+            self._register_pump(handoff, pump)
+            _LOGGER.info(
+                "downstream task handed to the background pump: outer=%s inner=%s",
+                outer_task_id,
+                handoff.binding.inner_task_id,
+            )
+
+    def _build_pump(self, handoff: _PumpHandoff) -> DownstreamPump | None:
+        """Build one background pump from a handoff; ``None`` without a binding store."""
+        if self._binding_store is None:
+            return None
+        return DownstreamPump(
             context=DownstreamPumpContext(
                 run_id=handoff.binding.run_id,
                 inner_task_id=handoff.binding.inner_task_id,
                 inner_context_id=handoff.binding.inner_context_id,
-                outer_task_id=outer_task_id,
+                outer_task_id=handoff.binding.outer_task_id,
                 outer_context_id=handoff.outer_context_id,
                 downstream_hop=self._downstream_hop(),
                 downstream_name=self._downstream_name(),
@@ -332,13 +376,112 @@ class OSSPureExecutor(AgentExecutor):
             push_sender=self._push_sender,
             answer=self._answer,
         )
+
+    def _register_pump(self, handoff: _PumpHandoff, pump: DownstreamPump) -> None:
+        """Start one pump and own its subscription for the rest of the process lifetime."""
+        outer_task_id = handoff.binding.outer_task_id
         task = pump.start()
         self._pumps[outer_task_id] = _PumpHandle(task=task, subscription=handoff.subscription)
         task.add_done_callback(lambda _: self._pumps.pop(outer_task_id, None))
+
+    async def _resume_active_bindings(self) -> None:
+        """Recreate the pumps of a previous process from the durable bindings.
+
+        The binding store is written when a synchronous request hands its Task to the pump. A
+        restart used to lose every pump: the outer Task stayed ``WORKING`` and later pushes had no
+        owner. Resume each active binding, poll the authoritative Task once (terminal pushes can be
+        missed while the process is down), and expire old terminal bindings.
+        """
+        if self._binding_store is None or self._webhook_router is None or self._nms_client is None:
+            return
+        retention_days = self._config.task_retention_days if self._config is not None else 7
+        try:
+            removed = await self._binding_store.delete_expired(
+                before=time.time() - retention_days * 86_400.0
+            )
+            if removed:
+                _LOGGER.info("expired %d terminal downstream binding(s)", removed)
+        except Exception:  # noqa: BLE001 - cleanup must not stop recovery
+            _LOGGER.warning("downstream binding cleanup failed", exc_info=True)
+        bindings = await self._binding_store.list_active()
+        if not bindings:
+            return
+        _LOGGER.info("resuming %d active downstream binding(s)", len(bindings))
+        for binding in bindings:
+            try:
+                await self._resume_binding(binding)
+            except Exception:  # noqa: BLE001 - one bad binding must not stop the others
+                _LOGGER.exception(
+                    "failed to resume downstream binding inner=%s outer=%s",
+                    binding.inner_task_id,
+                    binding.outer_task_id,
+                )
+
+    async def _resume_binding(self, binding: DownstreamBinding) -> None:
+        """Resume one persisted outer ↔ downstream Task binding."""
+        router = self._webhook_router
+        nms_client = self._nms_client
+        if router is None or nms_client is None:
+            return
+        call_context = ServerCallContext(
+            user=UnauthenticatedUser() if not binding.owner else _StoredUser(binding.owner)
+        )
+        outer_task = await self._task_store.get(binding.outer_task_id, call_context)
+        if outer_task is None:
+            _LOGGER.warning(
+                "dropping downstream binding without an outer Task: outer=%s inner=%s",
+                binding.outer_task_id,
+                binding.inner_task_id,
+            )
+            await self._binding_store.mark_terminal(binding.inner_task_id, binding.inner_context_id)
+            return
+        if outer_task.status.state in _TERMINAL_TASK_STATES:
+            await self._binding_store.mark_terminal(binding.inner_task_id, binding.inner_context_id)
+            return
+
+        subscription = router.subscribe(binding.run_id)
+        subscription.bind(task_id=binding.inner_task_id, context_id=binding.inner_context_id)
+        transport = NmsWebhookTransport(
+            nms_client,
+            queue=subscription.queue,
+            push_url=self._webhook_push_url,
+            push_token=self._webhook_push_token,
+            push_auth_credentials=(
+                self._config.webhook_auth_credentials if self._config is not None else ""
+            ),
+            protocol=PROTOCOL_PURE,
+            idle_timeout=self._long_task_settle_seconds,
+            bind=subscription.bind,
+            context_id=subscription.key,
+        )
+        handoff = _PumpHandoff(
+            subscription=subscription,
+            transport=transport,
+            binding=binding,
+            outer_context_id=outer_task.context_id,
+            call_context=call_context,
+        )
+        pump = self._build_pump(handoff)
+        if pump is None:
+            subscription.unsubscribe()
+            return
+        try:
+            document = await nms_client.get_task(binding.inner_task_id)
+        except Exception:  # noqa: BLE001 - pushes remain the live path; polling is a hint
+            _LOGGER.warning(
+                "could not reconcile resumed downstream Task %s", binding.inner_task_id, exc_info=True
+            )
+        else:
+            await pump.reconcile(document)
+        if pump.terminal:
+            subscription.unsubscribe()
+            return
+        self._register_pump(handoff, pump)
         _LOGGER.info(
-            "downstream task handed to the background pump: outer=%s inner=%s",
-            outer_task_id,
-            handoff.binding.inner_task_id,
+            "resumed downstream task: outer=%s inner=%s run=%s",
+            binding.outer_task_id,
+            binding.inner_task_id,
+            binding.run_id or "-",
         )
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
@@ -541,6 +684,9 @@ class OSSPureExecutor(AgentExecutor):
                 queue=subscription.queue,
                 push_url=self._webhook_push_url,
                 push_token=self._webhook_push_token,
+                push_auth_credentials=(
+                    self._config.webhook_auth_credentials if self._config is not None else ""
+                ),
                 protocol=PROTOCOL_PURE,
                 idle_timeout=self._long_task_settle_seconds if long_mode else self._webhook_idle_timeout,
                 bind=subscription.bind,
