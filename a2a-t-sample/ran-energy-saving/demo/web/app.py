@@ -118,8 +118,8 @@ from starlette.staticfiles import StaticFiles
 from demo.scenario import (
     PLAIN_PROTOCOL_SCENARIOS,
     PURE_PROTOCOL_SCENARIOS,
+    resolve_example_request,
     resolve_modify_request,
-    resolve_presentation_request,
 )
 from demo.web.nms_tasks import (
     MODIFIABLE_STATES,
@@ -438,7 +438,7 @@ def create_app(
                 # The presentation can list running Tasks only when the client talks to the real
                 # NMS; the local registry/direct server has no vendor task list endpoint.
                 "nmsTasksEnabled": config.discovery == DISCOVERY_NMS,
-                "modifyRequest": resolve_modify_request(config.language),
+                "modifyRequest": _modify_request(config, config.language),
                 "modes": list(UI_MODES),
                 "protocol": resolved_protocol,
                 "protocols": list(advertised_protocols),
@@ -1481,31 +1481,30 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def _scenario_request(catalog: RunCatalog, name: str, language: str) -> str:
-    """Return the default request shown for one scenario.
+def _modify_request(config: SampleConfig, language: str) -> str:
+    """Return the Modify request shown for a selected running Task, vendor-profiled."""
+    from demo.catalog import profile_request_text
 
-    The catalog carries the vendor profile, so a real-NMS page pre-fills the request with the
-    region and sites that the Task-T will use. Without it the stage would show the neutral demo
-    name while the wire shows ``A2ATestRegion``.
-    """
-    from demo.intent import apply_region_profile_text, build_scenario_intent
-
-    text = resolve_presentation_request(name, language)
-    try:
-        spec = catalog.spec(name, language=language)
-        neutral = build_scenario_intent(name, language)
-    except KeyError:
-        return text
-    if spec.intent is None:
-        return text
-    return apply_region_profile_text(
-        text,
-        old_region=neutral.region,
-        region=spec.intent.region,
-        old_sites=neutral.sites,
-        sites=spec.intent.sites,
+    region = config.nms_region if config.discovery == DISCOVERY_NMS else ""
+    sites = config.nms_sites if config.discovery == DISCOVERY_NMS else ()
+    return profile_request_text(
+        resolve_modify_request(language),
         language=language,
+        region=region,
+        sites=sites,
     )
+
+
+def _scenario_request(catalog: RunCatalog, name: str, language: str) -> str:
+    """Return the request shown for one scenario.
+
+    The catalog carries the vendor profile, so the page pre-fills exactly the text the client will
+    send. The page never shows a neutral name that the wire later replaces.
+    """
+    try:
+        return catalog.spec(name, language=language).user_request
+    except KeyError:
+        return resolve_example_request(name, language)
 
 
 #: Cap on the wire records returned to the detail view; a long run appends one per exchange.

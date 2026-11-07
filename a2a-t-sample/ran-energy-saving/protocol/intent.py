@@ -24,7 +24,6 @@ SUPPORTED_INTENT_MODES: Final[tuple[str, ...]] = (INTENT_MODE_PROCESSED, INTENT_
 DEFAULT_INTENT_MODE: Final[str] = INTENT_MODE_PROCESSED
 
 #: Source labels recorded on a processed intent.
-INTENT_SOURCE_SCENARIO: Final[str] = "scenario"
 INTENT_SOURCE_MODEL: Final[str] = "model"
 INTENT_SOURCE_RAW: Final[str] = "raw_fallback"
 
@@ -54,10 +53,8 @@ class ProcessedIntent:
 
     Attributes:
         raw_request: Text the operator supplied.
-        normalized_text: Canonical Task-T text sent to A2A-T after approval.
-        plain_text: Natural-language text sent on a standard A2A hop. It carries the same
-            business values as ``normalized_text`` but no Task-T section headings, so an A2A
-            run does not look like an A2A-T prompt.
+        normalized_text: The operator's text; the intent layer never rewrites what is sent.
+        plain_text: The operator's text, kept for the display/export surfaces.
         operation_type: ``Create`` or ``Modify``.
         region: Target region, preserved even when it is not served.
         sites: Optional site list.
@@ -68,7 +65,7 @@ class ProcessedIntent:
         background_event: Optional context such as a planned outage.
         missing_fields: Fields the request does not provide; never auto-filled.
         conflicts: Conflicts the business system detected; never auto-corrected.
-        source: ``scenario`` / ``model`` / ``raw_fallback``.
+        source: ``model`` / ``raw_fallback``.
         warnings: Human-readable processing warnings.
     """
 
@@ -144,7 +141,6 @@ __all__ = [
     "INTENT_MODE_RAW",
     "INTENT_SOURCE_MODEL",
     "INTENT_SOURCE_RAW",
-    "INTENT_SOURCE_SCENARIO",
     "SUPPORTED_INTENT_MODES",
     "IntentProcessor",
     "OperatorRequest",

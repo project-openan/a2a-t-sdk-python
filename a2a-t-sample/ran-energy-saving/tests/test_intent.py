@@ -1,325 +1,134 @@
-"""Tests of the protocol-neutral intent layer and the demo's built-in intents."""
+"""Tests of the intent layer: an ADK/LLM reading that never rewrites the operator's text."""
 
 from __future__ import annotations
 
 import pytest
+from demo.agents.intent_agent import BusinessIntent
 from demo.intent import (
     DemoIntentProcessor,
-    build_all_scenario_intents,
-    build_modify_intent,
-    build_scenario_intent,
-    render_normalized_text,
-    render_plain_text,
+    IntentExtractionError,
+    _processed_intent,
+    apply_region_profile_text,
 )
-from demo.scenario import (
-    NATURAL_LANGUAGE_PROMPT_INPUT_EN,
-    NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_EN,
-)
-from protocol.intent import OperatorRequest, ProcessedIntent
+from protocol.intent import INTENT_SOURCE_MODEL, INTENT_SOURCE_RAW, OperatorRequest, ProcessedIntent
+
+_TEXT = "Start energy saving in Region A with 00:00–17:30 at 10 Mbps."
 
 
-@pytest.mark.parametrize(
-    ("scenario", "missing", "conflict"),
-    (
-        ("information", ("guaranteedThroughputTarget",), ()),
-        ("reject", ("guaranteedThroughputTarget",), ()),
-        ("target", (), ("overlapping throughput windows",)),
-        ("abort", (), ("overlapping throughput windows",)),
-    ),
-)
-def test_built_in_intent_preserves_gaps_and_conflicts(
-    scenario: str,
-    missing: tuple[str, ...],
-    conflict: tuple[str, ...],
-) -> None:
-    """The intent layer must not repair what the negotiation is meant to surface."""
-    intent = build_scenario_intent(scenario, "en-US")
+class _FakeExtractor:
+    """Intent extractor double returning one fixed business reading."""
 
-    assert intent.missing_fields == missing
-    assert intent.conflicts == conflict
-    assert intent.source == "scenario"
+    def __init__(self, intent: BusinessIntent | None = None, error: Exception | None = None) -> None:
+        self.intent = intent
+        self.error = error
+        self.texts: list[str] = []
+
+    async def extract(self, request: OperatorRequest) -> ProcessedIntent:
+        self.texts.append(request.text)
+        if self.error is not None:
+            raise self.error
+        assert self.intent is not None
+        return _processed_intent(request.text, self.intent)
 
 
-def test_built_in_intent_keeps_an_unknown_region() -> None:
-    intent = build_scenario_intent("unknown_area", "en-US")
-
-    assert intent.region == "Region Z"
-    assert "Region Z" in intent.normalized_text
-    assert intent.missing_fields == ()
-
-
-def test_built_in_intent_renders_the_outage_baseline_not_the_modify_request() -> None:
-    """The initial Task-T of the two-phase run is a Create baseline."""
-    intent = build_scenario_intent("outage", "en-US")
-
-    assert intent.operation_type == "Create"
-    assert "00:00~24:00,10Mbps" in intent.normalized_text
-    assert intent.normalized_text.startswith("## Operation Type\nCreate")
-
-
-async def test_processor_uses_the_built_in_intent_for_a_canned_request() -> None:
+async def test_without_a_model_the_request_stays_raw() -> None:
     processor = DemoIntentProcessor(language="en-US")
-    built_in = build_scenario_intent("night", "en-US")
 
-    intent = await processor.process(
-        OperatorRequest(
-            text=built_in.raw_request,
-            language="en-US",
-            scenario="night",
-        )
-    )
+    intent = await processor.process(OperatorRequest(text=_TEXT, language="en-US"))
 
-    assert intent == built_in
-
-
-async def test_offline_processor_falls_back_to_raw_for_free_text() -> None:
-    processor = DemoIntentProcessor(language="en-US")
-    text = "Please save energy in a place I have not described."
-
-    intent = await processor.process(OperatorRequest(text=text, language="en-US", source="ui", custom=True))
-
-    assert intent == ProcessedIntent.raw(
-        text,
-        reason="No live model is configured for free-text intent extraction.",
-    )
-    assert intent.source == "raw_fallback"
+    assert intent.source == INTENT_SOURCE_RAW
+    assert intent.raw_request == _TEXT
+    assert intent.normalized_text == _TEXT
+    assert intent.plain_text == _TEXT
     assert intent.warnings
 
 
-def test_all_scenarios_have_a_raw_and_normalized_request() -> None:
-    intents = build_all_scenario_intents("en-US")
+async def test_the_parsed_intent_keeps_the_operator_text_verbatim() -> None:
+    extractor = _FakeExtractor(
+        BusinessIntent(
+            operation_type="Create",
+            region="Region A",
+            windows=["{00:00~17:30,10Mbps}"],
+            energy_saving_goal="Maximize energy saving.",
+        )
+    )
+    processor = DemoIntentProcessor(language="en-US", extractor=extractor)
 
-    assert set(intents) == {
-        "night",
-        "information",
-        "unknown_area",
-        "target",
-        "feasibility",
-        "reject",
-        "abort",
-        "outage",
-    }
-    for intent in intents.values():
-        assert intent.raw_request
-        assert intent.normalized_text
-        assert intent.raw_request != "" and intent.normalized_text != ""
+    intent = await processor.process(OperatorRequest(text=_TEXT, language="en-US"))
 
-
-def test_every_built_in_intent_has_a_plain_a2a_request() -> None:
-    """Every scenario can be sent over standard A2A without the Task-T section layout."""
-    intents = build_all_scenario_intents("en-US")
-
-    for intent in intents.values():
-        assert intent.plain_text
-        assert "\n## " not in f"\n{intent.plain_text}"
-        assert intent.to_dict()["plainText"] == intent.plain_text
+    assert extractor.texts == [_TEXT]
+    assert intent.source == INTENT_SOURCE_MODEL
+    assert intent.region == "Region A"
+    assert intent.windows == ("{00:00~17:30,10Mbps}",)
+    # The intent is a reading, not a rewrite: every text surface is the operator's own text.
+    assert intent.raw_request == _TEXT
+    assert intent.normalized_text == _TEXT
+    assert intent.plain_text == _TEXT
 
 
-def test_the_plain_request_keeps_the_target_tokens_the_a2a_policy_parses() -> None:
-    """A2A keeps the ``{HH:MM~HH:MM,NMbps}`` form; it only loses the Task-T headings."""
-    intent = build_scenario_intent("night", "en-US")
+async def test_an_extraction_failure_falls_back_to_the_raw_text() -> None:
+    extractor = _FakeExtractor(error=IntentExtractionError("no parseable intent"))
+    processor = DemoIntentProcessor(language="en-US", extractor=extractor)
 
-    assert "Create a RAN energy saving task in Region A." in intent.plain_text
-    assert "{00:00~17:30,10Mbps}" in intent.plain_text
-    assert intent.plain_text.startswith("Create a RAN energy saving task")
+    intent = await processor.process(OperatorRequest(text=_TEXT, language="en-US"))
+
+    assert intent.source == INTENT_SOURCE_RAW
+    assert intent.normalized_text == _TEXT
+    assert any("no parseable intent" in warning for warning in intent.warnings)
 
 
-def test_the_plain_modify_request_stays_natural_language() -> None:
-    text = render_plain_text(
-        operation="Modify",
-        region="A2ATestRegion",
-        sites=(),
-        windows=("{00:00~06:00,10Mbps}",),
-        goal="",
-        expected="",
-        background="planned power outage tomorrow 03:00~05:00",
-        language="en-US",
+def test_processed_intent_maps_every_business_field() -> None:
+    intent = _processed_intent(
+        _TEXT,
+        BusinessIntent(
+            operation_type="Modify",
+            region="Region A",
+            sites=["Site 1", "Site 2"],
+            windows=["{00:00~03:00,10Mbps}", "{03:00~05:00,2Mbps}"],
+            energy_saving_goal="Maximize energy saving.",
+            task_description="Update the running task.",
+            expected_output="Intent report.",
+            background_event="planned outage 03:00~05:00",
+            missing_fields=["siteList"],
+            conflicts=["overlapping windows"],
+        ),
     )
 
-    assert text.startswith("Modify the running RAN energy saving task in A2ATestRegion.")
-    assert "{00:00~06:00,10Mbps}" in text
-    assert "##" not in text
+    assert intent.operation_type == "Modify"
+    assert intent.sites == ("Site 1", "Site 2")
+    assert intent.windows == ("{00:00~03:00,10Mbps}", "{03:00~05:00,2Mbps}")
+    assert intent.background_event == "planned outage 03:00~05:00"
+    assert intent.missing_fields == ("siteList",)
+    assert intent.conflicts == ("overlapping windows",)
 
 
-def _render_without_goal(language: str) -> str:
-    return render_normalized_text(
-        operation="Create",
-        region="Region A",
-        sites=(),
-        windows=("00:00~06:00,30Mbps",),
-        goal="",
-        description="",
-        expected="",
-        background=None,
+@pytest.mark.parametrize(
+    ("language", "expected_region", "expected_sites"),
+    [
+        ("en-US", "A2ATestRegion", ("NRES_XCS_6102937", "LTE_26441_LNR_OCL")),
+        ("zh-CN", "A2ATestRegion", ("NRES_XCS_6102937", "LTE_26441_LNR_OCL")),
+    ],
+)
+def test_the_vendor_profile_rewrites_the_example_request_once(
+    language: str,
+    expected_region: str,
+    expected_sites: tuple[str, ...],
+) -> None:
+    from demo.scenario import EXAMPLE_REQUESTS, SCENARIO_FEASIBILITY
+
+    neutral = EXAMPLE_REQUESTS[SCENARIO_FEASIBILITY][language]
+    old_region = "Region A" if language == "en-US" else "区域 A"
+    old_sites = ("Site 1", "Site 2") if language == "en-US" else ("站点 1", "站点 2")
+
+    profiled = apply_region_profile_text(
+        neutral,
+        old_region=old_region,
+        region=expected_region,
+        old_sites=old_sites,
+        sites=expected_sites,
         language=language,
     )
 
-
-def test_an_unstated_goal_renders_a_neutral_placeholder() -> None:
-    """No goal must not become an invented "maximize energy saving" policy at the NMS."""
-    text = _render_without_goal("en-US")
-
-    assert "## Task Target\nNot provided." in text
-    assert "Maximize energy saving" not in text
-
-
-def test_an_unstated_goal_renders_a_neutral_placeholder_in_chinese() -> None:
-    text = _render_without_goal("zh-CN")
-
-    assert "## 任务目标(Task Target)\n未提供。" in text
-    assert "最大化节能" not in text
-
-
-def test_a_stated_goal_is_rendered_verbatim() -> None:
-    text = render_normalized_text(
-        operation="Create",
-        region="Region A",
-        sites=(),
-        windows=(),
-        goal="Reduce energy consumption by 10%.",
-        description="",
-        expected="",
-        background=None,
-        language="en-US",
-    )
-
-    assert "## Task Target\nReduce energy consumption by 10%." in text
-
-
-async def test_the_nms_context_replaces_the_neutral_region_and_sites() -> None:
-    """A real-NMS run must send only the region and sites the vendor serves."""
-    processor = DemoIntentProcessor(
-        language="en-US",
-        forced_region="A2ATestRegion",
-        forced_sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
-    )
-
-    intent = await processor.process(
-        OperatorRequest(
-            text=NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_EN,
-            language="en-US",
-            scenario="feasibility",
-        )
-    )
-
-    assert intent.region == "A2ATestRegion"
-    assert intent.sites == ("NRES_XCS_6102937", "LTE_26441_LNR_OCL")
-    assert "NRES_XCS_6102937" in intent.normalized_text
-    assert "LTE_26441_LNR_OCL" in intent.normalized_text
-    assert "Station 1" not in intent.normalized_text
-    assert "Station 2" not in intent.normalized_text
-    assert "A2ATestRegion" in intent.plain_text
-    assert "NRES_XCS_6102937" in intent.plain_text
-    assert "LTE_26441_LNR_OCL" in intent.plain_text
-    assert "Region A" not in intent.plain_text
-    assert "Station 1" not in intent.plain_text
-
-
-def test_the_nms_profile_rewrites_the_raw_request_too() -> None:
-    """The request shown on the stage and the Task-T on the wire name the same region."""
-    intent = build_scenario_intent(
-        "night",
-        "en-US",
-        region="A2ATestRegion",
-        sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
-    )
-
-    assert intent.raw_request == "Start energy saving in A2ATestRegion."
-    assert intent.region == "A2ATestRegion"
-    assert "Region A" not in intent.raw_request
-    assert "Region A" not in intent.normalized_text
-
-
-async def test_a_profiled_request_still_matches_the_built_in() -> None:
-    """The OSS Agent receives the profiled request, so matching must see the same text."""
-    processor = DemoIntentProcessor(
-        language="en-US",
-        forced_region="A2ATestRegion",
-        forced_sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
-    )
-    profiled = build_scenario_intent(
-        "information",
-        "en-US",
-        region="A2ATestRegion",
-        sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
-    )
-
-    intent = await processor.process(
-        OperatorRequest(text=profiled.raw_request, language="en-US", scenario="information")
-    )
-
-    assert intent.source == "scenario"
-    assert intent.region == "A2ATestRegion"
-    assert intent.raw_request == profiled.raw_request
-    assert intent.missing_fields == ("guaranteedThroughputTarget",)
-
-
-def test_the_run_catalog_serves_the_profiled_request() -> None:
-    """The page's default request, the intent and the Task-T agree in a vendor-profile run."""
-    from demo.catalog import DemoRunCatalog
-
-    spec = DemoRunCatalog(
-        region="A2ATestRegion",
-        sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
-    ).spec("information", language="en-US")
-
-    assert spec.intent is not None
-    assert spec.intent.raw_request == "Start energy saving in A2ATestRegion."
-    assert "Region A" not in spec.user_request
-
-
-async def test_the_nms_sites_do_not_turn_a_region_task_into_a_site_task() -> None:
-    processor = DemoIntentProcessor(
-        language="en-US",
-        forced_region="A2ATestRegion",
-        forced_sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
-    )
-
-    intent = await processor.process(
-        OperatorRequest(
-            text=NATURAL_LANGUAGE_PROMPT_INPUT_EN,
-            language="en-US",
-            scenario="night",
-        )
-    )
-
-    assert intent.region == "A2ATestRegion"
-    assert intent.sites == ()
-    assert "NRES_XCS_6102937" not in intent.normalized_text
-
-
-def test_modify_intent_carries_the_modify_operation_and_outage_values() -> None:
-    """A Modify-only run never reintroduces the baseline Create operation."""
-    intent = build_modify_intent("en-US")
-
-    assert intent.operation_type == "Modify"
-    assert intent.source == "scenario"
-    assert "Modify" in intent.normalized_text
-    assert "Create" not in intent.normalized_text
-    assert intent.background_event is not None and "03:00~05:00" in intent.background_event
-    assert any("03:00~05:00" in window for window in intent.windows)
-    assert intent.sites == ("Site 1", "Site 2")
-
-
-def test_modify_intent_follows_the_vendor_profile() -> None:
-    intent = build_modify_intent(
-        "en-US",
-        region="A2ATestRegion",
-        sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
-    )
-
-    assert intent.region == "A2ATestRegion"
-    assert intent.sites == ("NRES_XCS_6102937", "LTE_26441_LNR_OCL")
-    assert "A2ATestRegion" in intent.normalized_text
-
-
-def test_only_the_outage_spec_carries_a_modify_intent() -> None:
-    from demo.catalog import DemoRunCatalog
-
-    catalog = DemoRunCatalog()
-    outage = catalog.spec("outage", language="en-US")
-    night = catalog.spec("night", language="en-US")
-
-    assert outage.modify_intent is not None
-    assert outage.modify_intent.operation_type == "Modify"
-    assert night.modify_intent is None
+    assert expected_region in profiled
+    for old in (old_region, *old_sites):
+        assert old not in profiled

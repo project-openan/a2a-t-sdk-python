@@ -29,18 +29,14 @@ from dotenv import dotenv_values
 from shared.run_constants import LANGUAGE_ZH, MAX_ROUNDS
 
 from demo.scenario import (
-    NATURAL_LANGUAGE_PROMPT_INPUT_EN,
-    NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_EN,
-    NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_ZH,
-    NATURAL_LANGUAGE_PROMPT_INPUT_MISSING_EN,
-    NATURAL_LANGUAGE_PROMPT_INPUT_MISSING_ZH,
-    NATURAL_LANGUAGE_PROMPT_INPUT_OUTAGE_EN,
-    NATURAL_LANGUAGE_PROMPT_INPUT_OUTAGE_ZH,
-    NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_EN,
-    NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_ZH,
-    NATURAL_LANGUAGE_PROMPT_INPUT_UNKNOWN_EN,
-    NATURAL_LANGUAGE_PROMPT_INPUT_UNKNOWN_ZH,
-    NATURAL_LANGUAGE_PROMPT_INPUT_ZH,
+    EXAMPLE_REQUESTS,
+    MODIFY_REQUEST,
+    SCENARIO_FEASIBILITY,
+    SCENARIO_INFORMATION,
+    SCENARIO_NIGHT,
+    SCENARIO_OUTAGE,
+    SCENARIO_TARGET,
+    SCENARIO_UNKNOWN_AREA,
 )
 from demo.served_areas import (
     REGION_STRINGS,
@@ -120,34 +116,25 @@ _STAGE_FILES: dict[str, str] = {
 
 #: Complete scenario inputs; checked before every other variant so a complete request never falls
 #: through to a negotiation variant.
-_COMPLETE_SCENARIO_INPUTS = (NATURAL_LANGUAGE_PROMPT_INPUT_EN, NATURAL_LANGUAGE_PROMPT_INPUT_ZH)
+_COMPLETE_SCENARIO_INPUTS = tuple(EXAMPLE_REQUESTS[SCENARIO_NIGHT].values())
 
-#: Planned-outage inputs of use case 2. They are complete requests too, but carry the site list and
-#: the background event, so they need their own canned slot extraction and validation.
-_OUTAGE_SCENARIO_INPUTS = (
-    NATURAL_LANGUAGE_PROMPT_INPUT_OUTAGE_EN,
-    NATURAL_LANGUAGE_PROMPT_INPUT_OUTAGE_ZH,
-)
+#: Planned-outage baseline request: a site-level Create with no background event, so it needs its
+#: own create-shaped canned slot extraction.
+_OUTAGE_BASELINE_SCENARIO_INPUTS = tuple(EXAMPLE_REQUESTS[SCENARIO_OUTAGE].values())
+
+#: Planned-outage Modify request: the selected Task is continued with a Modify Task-T.
+_OUTAGE_SCENARIO_INPUTS = tuple(MODIFY_REQUEST.values())
 
 #: Target / feasibility negotiation inputs: complete inputs served by their own slot-extraction
 #: variants, whose canned slots preserve the distinguishing values the rendered prompt needs. They
 #: are checked before the missing inputs so the shared region/goal wording of an ambiguous or
 #: infeasible request is never mistaken for the intentionally incomplete information request.
-_TARGET_SCENARIO_INPUTS = (NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_EN, NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_ZH)
-_FEASIBILITY_SCENARIO_INPUTS = (
-    NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_EN,
-    NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_ZH,
-)
-_UNKNOWN_SCENARIO_INPUTS = (
-    NATURAL_LANGUAGE_PROMPT_INPUT_UNKNOWN_EN,
-    NATURAL_LANGUAGE_PROMPT_INPUT_UNKNOWN_ZH,
-)
+_TARGET_SCENARIO_INPUTS = tuple(EXAMPLE_REQUESTS[SCENARIO_TARGET].values())
+_FEASIBILITY_SCENARIO_INPUTS = tuple(EXAMPLE_REQUESTS[SCENARIO_FEASIBILITY].values())
+_UNKNOWN_SCENARIO_INPUTS = tuple(EXAMPLE_REQUESTS[SCENARIO_UNKNOWN_AREA].values())
 
 #: Missing-throughput scenario inputs that flip the slot-extraction routing to the missing variant.
-_MISSING_SCENARIO_INPUTS = (
-    NATURAL_LANGUAGE_PROMPT_INPUT_MISSING_EN,
-    NATURAL_LANGUAGE_PROMPT_INPUT_MISSING_ZH,
-)
+_MISSING_SCENARIO_INPUTS = tuple(EXAMPLE_REQUESTS[SCENARIO_INFORMATION].values())
 
 #: Distinguishing values the target/feasibility rendered prompts carry, so the content-validation
 #: routing also fires on real rendered-prompt heads and not only on the scenario natural-language
@@ -534,6 +521,8 @@ def route_structured_call(
             return STAGE_SLOT_EXTRACTION_OUTAGE
         if any(marker in user_content for marker in _OUTAGE_BASELINE_VALIDATION_MARKERS):
             return STAGE_SLOT_EXTRACTION_OUTAGE_BASELINE
+        if any(scenario_input in user_content for scenario_input in _OUTAGE_BASELINE_SCENARIO_INPUTS):
+            return STAGE_SLOT_EXTRACTION_OUTAGE_BASELINE
         if any(scenario_input in user_content for scenario_input in _OUTAGE_SCENARIO_INPUTS):
             return STAGE_SLOT_EXTRACTION_OUTAGE
         if any(scenario_input in user_content for scenario_input in _COMPLETE_SCENARIO_INPUTS):
@@ -589,6 +578,42 @@ def route_structured_call(
     raise ValueError(f"The scripted LLM cannot route this structured call: {sorted(property_names)}")
 
 
+#: Canonical Task-T task description the model may derive from the operation type.
+_TASK_DESCRIPTIONS: dict[bool, dict[str, str]] = {
+    False: {
+        "Create": (
+            "Based on <Task Object> and <Task Context>, output a wireless network energy saving plan "
+            "that achieves the wireless network energy saving goal defined in <Task Target>, and "
+            "return the wireless network energy saving result in the format defined in <Expected Output>."
+        ),
+        "Modify": (
+            "Based on <Task Object> and <Task Context>, output a wireless network energy saving plan "
+            "that achieves the wireless network energy saving goal defined in <Task Target>."
+        ),
+    },
+    True: {
+        "Create": (
+            "基于<任务对象>和<任务上下文>，输出无线网络节能方案，达成<任务目标>中定义的无线网络节能目标，"
+            "并按照<预期输出>中定义的格式返回无线网络节能结果。"
+        ),
+        "Modify": "基于<任务对象>和<任务上下文>，输出无线网络节能方案，达成<任务目标>中定义的无线网络节能目标。",
+    },
+}
+
+
+def _task_description(value: object, operation: str, zh: bool) -> str:
+    """Return the data map's description, or the canonical one for its operation type.
+
+    A refill data map only carries the negotiated values; the Task-T template still requires a
+    description, and the deterministic provider renders the same canonical text a model derives
+    from the template's value constraint.
+    """
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    descriptions = _TASK_DESCRIPTIONS[zh]
+    return descriptions.get(operation, descriptions["Create"])
+
+
 def data_slot_extraction_response(user_content: str, language: str) -> str | None:
     """Echo the explicit ``[input]`` values of a data-based slot extraction.
 
@@ -633,11 +658,12 @@ def data_slot_extraction_response(user_content: str, language: str) -> str | Non
     if isinstance(background, str) and background.strip():
         context += f" 背景事件为{background}。" if zh else f" Background event: {background}."
     operation = str(data.get("operationType") or "Create")
+    description = _task_description(data.get("task_description"), operation, zh)
     if zh:
         operation = {"Create": "创建", "Modify": "修改"}.get(operation, operation)
         slots = {
             "操作类型": operation,
-            "任务描述": data.get("task_description") or "",
+            "任务描述": description,
             "任务对象": task_object,
             "任务目标": data.get("energySavingGoal") or "",
             "任务上下文": context,
@@ -646,7 +672,7 @@ def data_slot_extraction_response(user_content: str, language: str) -> str | Non
     else:
         slots = {
             "operation_type": operation,
-            "task_description": data.get("task_description") or "",
+            "task_description": description,
             "task_object": task_object,
             "task_target": data.get("energySavingGoal") or "",
             "task_context": context,

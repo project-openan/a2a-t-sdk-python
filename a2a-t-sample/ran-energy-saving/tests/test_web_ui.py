@@ -26,7 +26,6 @@ from a2a_t.core.metadata import (
 from demo.scenario import (
     FINAL_STATE_TASK_COMPLETED,
     get_scenario,
-    resolve_presentation_request,
     resolve_user_request,
 )
 from demo.web.app import create_app
@@ -561,12 +560,13 @@ async def test_start_run_accepts_a_submitted_target(
     assert response.json()["runId"]
 
 
-async def test_start_run_rejects_a_scenario_without_modify_values(
+async def test_start_run_accepts_a_modify_on_a_selected_task_for_any_scenario(
     offline_config: SampleConfig,
     factory: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Any A2A-T scenario can be modified: the operator's Modify text is the Task-T input."""
     async def working_task(_config: SampleConfig, task_id: str) -> dict[str, object]:
         del task_id
         return _working_task_row()
@@ -592,8 +592,8 @@ async def test_start_run_rejects_a_scenario_without_modify_values(
             },
         )
 
-    assert response.status_code == 400
-    assert response.json()["code"] == "invalid_run"
+    assert response.status_code == 202
+    assert response.json()["runId"]
 
 
 async def test_start_run_passes_the_target_to_the_runtime(
@@ -1316,7 +1316,7 @@ async def test_meta_exposes_the_default_request_per_scenario(client: httpx.Async
     meta = (await client.get("/api/meta")).json()
 
     for scenario in meta["scenarios"]:
-        assert meta["scenarioRequests"][scenario] == resolve_presentation_request(scenario, "en-US")
+        assert meta["scenarioRequests"][scenario] == resolve_user_request(get_scenario(scenario), "en-US")
 
 
 def test_the_profiled_catalog_pre_fills_the_vendor_region() -> None:

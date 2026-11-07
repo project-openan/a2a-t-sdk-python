@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -34,7 +34,6 @@ from a2a_t.core.standard_templates import (
     NEGOTIATION_ABORT_URI,
     TARGET_NEGOTIATION_PROPOSE_URI,
 )
-from demo.catalog import DEMO_CLIENT_POLICY
 from demo.scenario import (
     FINAL_STATE_NEGOTIATION_ABORTED,
     FINAL_STATE_NEGOTIATION_ENDED,
@@ -64,7 +63,6 @@ from protocol.decision_provider import ScriptedDecisionProvider
 from protocol.messages import (
     END_MESSAGE_TEXT,
     SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
-    SAMPLE_PHASE_BASELINE,
     SAMPLE_PHASE_METADATA_KEY,
     SAMPLE_PHASE_MODIFY,
     SAMPLE_PROPOSAL_METADATA_KEY,
@@ -82,6 +80,9 @@ from shared.trace import (
 )
 
 CONTEXT_ID = "ctx-client-flow"
+
+#: Business values the runtime would have parsed from these English requests.
+_INTENT_FIELDS: dict[str, object] = {"operationType": "Create", "region": "Region A"}
 
 _PROPOSE_URIS: dict[str, str] = {
     "information": INFORMATION_NEGOTIATION_PROPOSE_URI,
@@ -303,7 +304,7 @@ async def _run(
         user_request=user_request,
         provider=ScriptedDecisionProvider(decisions),
         language="en-US",
-        policy=DEMO_CLIENT_POLICY,
+        intent_fields=_INTENT_FIELDS,
         single_extension_per_message=single_extension_per_message,
         forced_region=forced_region,
     )
@@ -355,82 +356,10 @@ async def test_accept_span_carries_the_refilled_task_t_and_the_negotiation_paylo
     assert str(accept["negotiationUri"]).endswith("/Negotiation-T/v1")
 
 
-async def test_two_phase_run_sends_a_modify_task_t_on_the_same_task() -> None:
-    """The baseline report leaves the Task open and the follow-up continues it with Modify."""
-    spans: list[dict[str, object]] = []
-    prompt_client = FakePromptClient()
-    policy = replace(
-        DEMO_CLIENT_POLICY,
-        follow_up_data=lambda _language: (
-            {"operationType": "Modify", "region": "Region A"},
-            {"operationType": "operation type: Create or Modify"},
-        ),
-    )
-    baseline_batch = [
-        status_event("TASK_STATE_SUBMITTED"),
-        {
-            "kind": "artifact",
-            "task_id": "task-1",
-            "context_id": CONTEXT_ID,
-            "artifact_id": "artifact-1",
-            "name": "energy saving intent report",
-            "data": {"summary": "Baseline plan applied", "target_rate": 10},
-        },
-        status_event("TASK_STATE_WORKING"),
-    ]
-    modify_batch = [
-        {
-            "kind": "artifact",
-            "task_id": "task-1",
-            "context_id": CONTEXT_ID,
-            "artifact_id": "artifact-1",
-            "name": "energy saving intent report",
-            "data": {"summary": "Plan modified", "target_rate": 20},
-        },
-        status_event("TASK_STATE_COMPLETED"),
-    ]
-    transport = ScriptedTransport([baseline_batch, modify_batch])
-
-    result = await run_client_flow(
-        prompt_client=prompt_client,
-        transport=transport,
-        user_request="Baseline then modify",
-        provider=ScriptedDecisionProvider(()),
-        language="en-US",
-        policy=policy,
-        trace_sink=spans.append,
-    )
-
-    assert len(transport.requests) == 2
-    baseline, modify = transport.requests
-    baseline_metadata = MessageToDict(baseline.message.metadata)
-    modify_metadata = MessageToDict(modify.message.metadata)
-    assert not baseline.message.task_id
-    assert baseline_metadata[SAMPLE_PHASE_METADATA_KEY] == SAMPLE_PHASE_BASELINE
-    assert modify.message.task_id == "task-1"
-    assert modify.message.context_id == CONTEXT_ID
-    assert modify.message.parts[0].text == "modify ran energy saving task"
-    assert modify_metadata[SAMPLE_PHASE_METADATA_KEY] == SAMPLE_PHASE_MODIFY
-    assert '"operationType": "Modify"' in str(modify_metadata[TASK_T_EXTENSION_URI])
-
-    sent = [span for span in spans if span["kind"] == "message_sent"]
-    assert [span["phase"] for span in sent] == [PHASE_TASK_VALIDATION, PHASE_TASK_MODIFY]
-    assert result.task_id == "task-1"
-    assert [report["target_rate"] for report in result.reports] == [10, 20]
-    assert result.report == result.reports[-1]
-
-
 async def test_modify_only_run_continues_the_selected_task() -> None:
     """A Modify-only run sends one Modify Task-T to the selected Task, with no baseline."""
     spans: list[dict[str, object]] = []
     prompt_client = FakePromptClient()
-    policy = replace(
-        DEMO_CLIENT_POLICY,
-        follow_up_data=lambda _language: (
-            {"operationType": "Modify", "region": "Region A"},
-            {"operationType": "operation type: Create or Modify"},
-        ),
-    )
     modify_batch = [
         {
             "kind": "artifact",
@@ -450,7 +379,6 @@ async def test_modify_only_run_continues_the_selected_task() -> None:
         user_request="Modify the running task",
         provider=ScriptedDecisionProvider(()),
         language="en-US",
-        policy=policy,
         trace_sink=spans.append,
         run_mode="modify",
         target_task_id="task-9",
@@ -464,7 +392,8 @@ async def test_modify_only_run_continues_the_selected_task() -> None:
     assert request.message.parts[0].text == "modify ran energy saving task"
     metadata = MessageToDict(request.message.metadata)
     assert metadata[SAMPLE_PHASE_METADATA_KEY] == SAMPLE_PHASE_MODIFY
-    assert '"operationType": "Modify"' in str(metadata[TASK_T_EXTENSION_URI])
+    # The Modify Task-T is extracted from the operator's own text, not a canned data map.
+    assert prompt_client.task_prompts == ["Modify the running task"]
 
     sent = [span for span in spans if span["kind"] == "message_sent"]
     assert [span["phase"] for span in sent] == [PHASE_TASK_MODIFY]
@@ -483,54 +412,10 @@ async def test_modify_only_run_requires_a_target_task() -> None:
             user_request="Modify the running task",
             provider=ScriptedDecisionProvider(()),
             language="en-US",
-            policy=DEMO_CLIENT_POLICY,
             run_mode="modify",
             target_task_id="task-9",
         )
     assert transport.requests == []
-
-
-class FailingModifyTransport(ScriptedTransport):
-    """Baseline send succeeds, the Modify send raises, and the cancel is recorded."""
-
-    def __init__(self, batches: list[list[dict[str, object]]]) -> None:
-        super().__init__(batches)
-        self.cancelled: list[tuple[str, ClientCallContext | None]] = []
-
-    async def send(
-        self,
-        request: SendMessageRequest,
-        call_context: ClientCallContext,
-    ) -> list[dict[str, object]]:
-        if self.requests:
-            raise RuntimeError("modify send failed")
-        return await super().send(request, call_context)
-
-    async def cancel(self, task_id: str, call_context: ClientCallContext | None = None) -> None:
-        self.cancelled.append((task_id, call_context))
-
-
-async def test_failed_modify_send_cancels_the_baseline_task() -> None:
-    policy = replace(
-        DEMO_CLIENT_POLICY,
-        follow_up_data=lambda _language: (
-            {"operationType": "Modify", "region": "Region A"},
-            {"operationType": "operation type: Create or Modify"},
-        ),
-    )
-    transport = FailingModifyTransport([_task_completed_batch()])
-
-    with pytest.raises(RuntimeError, match="modify send failed"):
-        await run_client_flow(
-            prompt_client=FakePromptClient(),
-            transport=transport,
-            user_request="Baseline then modify",
-            provider=ScriptedDecisionProvider(()),
-            language="en-US",
-            policy=policy,
-        )
-
-    assert [task_id for task_id, _ in transport.cancelled] == ["task-1"]
 
 
 async def test_intent_gate_can_stop_the_run_before_any_task_t_is_sent() -> None:
@@ -714,7 +599,11 @@ async def test_information_accept_uses_the_selected_served_area() -> None:
 
 
 async def test_information_accept_discards_an_invalid_model_filled_target() -> None:
-    """A live model must not replace the required segmented target with per-cell SLA floors."""
+    """A live model must not put per-cell SLA floors into the agreed segmented target.
+
+    Nothing is fabricated in its place: the intent layer never invents a missing value, so the
+    refill simply carries no target and the server can ask for it again.
+    """
     decision = NegotiationDecision(
         action="accept",
         rationale="The dataset SLA floors supply the value.",
@@ -730,9 +619,7 @@ async def test_information_accept_discards_an_invalid_model_filled_target() -> N
     )
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
-    assert prompt_client.refill_data[0]["guaranteedThroughputTarget"] == (
-        "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}"
-    )
+    assert "guaranteedThroughputTarget" not in prompt_client.refill_data[0]
     assert "unit" not in prompt_client.refill_data[0]
 
 
@@ -768,7 +655,7 @@ async def test_accept_rewrites_a_refill_that_dropped_the_agreed_target() -> None
         user_request=SCENARIO_INFORMATION_SPEC.user_request["en-US"],
         provider=ScriptedDecisionProvider(SCENARIO_INFORMATION_SPEC.scripted_client_decisions),
         language="en-US",
-        policy=DEMO_CLIENT_POLICY,
+        intent_fields=_INTENT_FIELDS,
     )
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
@@ -865,7 +752,7 @@ async def test_counter_carries_the_sample_proposal() -> None:
         user_request="request",
         provider=ScriptedDecisionProvider([decision]),
         language="en-US",
-        policy=DEMO_CLIENT_POLICY,
+        intent_fields=_INTENT_FIELDS,
     )
 
     counter_metadata = MessageToDict(transport.requests[1].message.metadata)
@@ -916,7 +803,7 @@ async def test_every_send_carries_the_configured_call_timeout() -> None:
         user_request=SCENARIO_TARGET_SPEC.user_request["en-US"],
         provider=ScriptedDecisionProvider(SCENARIO_TARGET_SPEC.scripted_client_decisions),
         language="en-US",
-        policy=DEMO_CLIENT_POLICY,
+        intent_fields=_INTENT_FIELDS,
         call_timeout_seconds=123.0,
     )
 
@@ -958,7 +845,7 @@ async def test_call_timeout_defaults_to_the_documented_budget() -> None:
         user_request=SCENARIO_INFORMATION_SPEC.user_request["en-US"],
         provider=ScriptedDecisionProvider(SCENARIO_INFORMATION_SPEC.scripted_client_decisions),
         language="en-US",
-        policy=DEMO_CLIENT_POLICY,
+        intent_fields=_INTENT_FIELDS,
     )
 
     assert all(context.timeout == DEFAULT_CALL_TIMEOUT_SECONDS for context in transport.call_contexts)

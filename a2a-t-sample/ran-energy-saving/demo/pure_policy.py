@@ -15,7 +15,19 @@ from protocol.pure_a2a import RegexPureTargetPolicy
 from shared.models import NegotiationDecision
 from shared.run_constants import LANGUAGE_EN, LANGUAGE_ZH
 
-from demo.scenario import KIND_INFORMATION, KIND_TARGET, accept_filled_params
+from demo.scenario import KIND_INFORMATION, KIND_TARGET
+
+#: Complete target the information scenario supplies, per language.
+_BASE_TARGETS: Final[dict[str, str]] = {
+    LANGUAGE_EN: "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}",
+    LANGUAGE_ZH: "{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~23:59,10Mbps}",
+}
+
+#: Corrected target the target scenario agrees on, per language.
+_CORRECTED_TARGETS: Final[dict[str, str]] = {
+    LANGUAGE_EN: "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}",
+    LANGUAGE_ZH: "{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~23:59,10Mbps}",
+}
 
 #: Alternative non-overlapping target used as the first counter-proposal of the target scenario.
 _ALTERNATIVE_TARGETS: Final[dict[str, str]] = {
@@ -26,9 +38,9 @@ _ALTERNATIVE_TARGETS: Final[dict[str, str]] = {
 
 def _target_for(kind: str, language: str) -> str:
     """Return one accepted target of ``kind`` for ``language``."""
-    params = accept_filled_params(kind, language)
-    value = params.get("guaranteedThroughputTarget")
-    return value if isinstance(value, str) else ""
+    if kind == KIND_TARGET:
+        return _CORRECTED_TARGETS.get(language, _CORRECTED_TARGETS[LANGUAGE_EN])
+    return _BASE_TARGETS.get(language, _BASE_TARGETS[LANGUAGE_EN])
 
 
 def pure_base_target(language: str = LANGUAGE_EN) -> str:

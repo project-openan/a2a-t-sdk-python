@@ -998,7 +998,6 @@ async function startRun() {
   setBusy(true);
   // Show the engineer writing immediately. Starting a run can take a few seconds (session claim
   // in live mode); waiting for the first SSE frame made the page look dead.
-  const defaultRequest = ui.meta?.scenarioRequests?.[ui.selected] || "";
   ui.view.userRequest = request;
   ui.view.intentText = request;
   ui.view.started = true;
@@ -1014,9 +1013,8 @@ async function startRun() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         scenario: ui.selected,
-        // The textarea shows the concise presentation wording. While it is unchanged, let the
-        // backend use the richer catalog prompt that the live model extracts Task-T from.
-        userRequest: ui.targetTask || (request && request !== defaultRequest) ? request : undefined,
+        // What you see is what you send: the textarea text is the request, unchanged.
+        userRequest: request,
         protocol: ui.protocol,
         ...(attempt
           ? {

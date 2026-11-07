@@ -26,7 +26,6 @@ import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Final, Protocol
 
@@ -91,7 +90,6 @@ from protocol.decision_provider import NegotiationDecisionProvider
 from protocol.messages import (
     END_MESSAGE_TEXT,
     SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
-    SAMPLE_PHASE_BASELINE,
     SAMPLE_PHASE_METADATA_KEY,
     SAMPLE_PHASE_MODIFY,
     SAMPLE_PROPOSAL_METADATA_KEY,
@@ -106,7 +104,6 @@ from protocol.negotiation_policy import (
     negotiation_kind_for_errors,
     negotiation_kind_for_template_uri,
 )
-from protocol.run_spec import DEFAULT_CLIENT_POLICY, ClientPolicy
 
 _LOGGER = logging.getLogger("ran_energy_saving.client_flow")
 
@@ -663,7 +660,7 @@ async def run_client_flow(
     label: str = TASK_REQUEST_LABEL,
     task_template_uri: str = TASK_TEMPLATE_URI,
     language: str = LANGUAGE_ZH,
-    policy: ClientPolicy = DEFAULT_CLIENT_POLICY,
+    intent_fields: Mapping[str, object] | None = None,
     max_exchanges: int = DEFAULT_MAX_EXCHANGES,
     call_timeout_seconds: float = DEFAULT_CALL_TIMEOUT_SECONDS,
     event_sink: Callable[[dict[str, object]], None] | None = None,
@@ -690,6 +687,9 @@ async def run_client_flow(
         label: Short text part of every message.
         task_template_uri: Task-T template the initial and accept prompts address.
         language: Process-level language of the refilled Task-T values.
+        intent_fields: Business values parsed from the request by the intent layer, keyed by their
+            Task-T parameter name. They are the base of an accept refill; a decision's
+            ``filled_params`` overrides them. ``None`` means the run has no intent layer.
         max_exchanges: Backstop on the number of client sends.
         call_timeout_seconds: HTTP budget of every send, carried in ``ClientCallContext.timeout``.
             It must outlast a live-mode server gate that performs several LLM calls before it
@@ -881,28 +881,16 @@ async def run_client_flow(
     if not modify_only and (target_task_id or target_context_id):
         raise ClientFlowError("A target Task can only be used by a Modify-only run.")
     resolved_label = TASK_MODIFY_LABEL if modify_only else label
-    follow_up = None if modify_only else policy.follow_up_data(language)
     initial_phase = PHASE_TASK_MODIFY if modify_only else PHASE_TASK_PROMPT
     validation_schema: Mapping[str, object] = TASK_PARAM_SCHEMA
     try:
         with trace_stage("task_t_modify_extraction" if modify_only else "task_t_slot_extraction"):
-            initial_data = policy.follow_up_data(language) if modify_only else policy.initial_data(language)
-            if modify_only and initial_data is None:
-                raise ClientFlowError("The scenario does not define the Task-T values of a Modify-only run.")
-            if initial_data is not None:
-                data, data_schema = initial_data
-                validation_schema = data_schema
-                prompt_content = prompt_client.generate_task_prompt_from_data_with_schema(
-                    data,
-                    data_schema,
-                    task_template_uri,
-                )
-            else:
-                validation_schema = TASK_PARAM_SCHEMA
-                prompt_content = prompt_client.generate_task_prompt_from_text(
-                    _request_with_context(user_request, conversation_context),
-                    task_template_uri,
-                )
+            # Every run, Create and Modify alike, extracts its Task-T from the operator's text.
+            # There is no structured shortcut: the text is the only source of business values.
+            prompt_content = prompt_client.generate_task_prompt_from_text(
+                _request_with_context(user_request, conversation_context),
+                task_template_uri,
+            )
     except PromptGenerationError as error:
         validation = _generation_task_validation(error)
         if validation is None:
@@ -956,10 +944,6 @@ async def run_client_flow(
     }
     if modify_only:
         initial_metadata[SAMPLE_PHASE_METADATA_KEY] = SAMPLE_PHASE_MODIFY
-    elif follow_up is not None:
-        # A two-phase run leaves the baseline Task WORKING so the Modify follow-up can continue
-        # it. The marker is sample-only and does not change the Task-T extension payload.
-        initial_metadata[SAMPLE_PHASE_METADATA_KEY] = SAMPLE_PHASE_BASELINE
     initial_request = _build_message_request(
         metadata=initial_metadata,
         label=resolved_label,
@@ -988,83 +972,6 @@ async def run_client_flow(
     exchanges += 1
     collect(batch)
     context_id = context_id or _context_id_of(batch)
-
-    if follow_up is not None:
-        follow_task_id = _task_id_of(batch)
-        if not follow_task_id:
-            raise ClientFlowError("The baseline Task did not expose a task id for the Modify follow-up.")
-        try:
-            follow_data, follow_schema = follow_up
-            with trace_stage("task_t_modify_extraction"):
-                follow_content = prompt_client.generate_task_prompt_from_data_with_schema(
-                    follow_data,
-                    follow_schema,
-                    task_template_uri,
-                )
-            follow_text = _require_prompt_text(follow_content, "the Modify Task-T prompt")
-            emit_trace(
-                "task_prompt_rendered",
-                phase=PHASE_TASK_MODIFY,
-                title="Modify Task-T prompt rendered",
-                detail={
-                    "promptText": follow_text,
-                    "templateUri": follow_content.template_uri or task_template_uri,
-                    "length": len(follow_text),
-                    "samplePhase": SAMPLE_PHASE_MODIFY,
-                },
-            )
-            if validate_before_send:
-                validation = await _validate_task_prompt(
-                    prompt_client,
-                    follow_text,
-                    follow_schema,
-                    task_template_uri,
-                    language=language,
-                    enforce_required_fields=enforce_required_fields,
-                )
-                emit_validation(validation, follow_text, task_template_uri, PHASE_TASK_MODIFY)
-                if validation.verdict == "blocked":
-                    # The baseline Task is still WORKING; cancel it instead of leaving a half-open
-                    # Task behind, then end the run without sending the Modify.
-                    cancel = getattr(transport, "cancel", None)
-                    if callable(cancel):
-                        with suppress(Exception):
-                            await cancel(follow_task_id, initial_context)
-                    blocked = ClientFlowResult()
-                    blocked.final_state = FINAL_STATE_INPUT_INVALID
-                    _fill_result(blocked, context_id)
-                    return blocked
-            follow_metadata: dict[str, object] = {
-                follow_content.extension_uri or TASK_T_EXTENSION_URI: follow_text,
-                TEMPLATE_URI_METADATA_KEY: follow_content.template_uri or task_template_uri,
-                SAMPLE_PHASE_METADATA_KEY: SAMPLE_PHASE_MODIFY,
-            }
-            follow_request = _build_message_request(
-                metadata=follow_metadata,
-                label=TASK_MODIFY_LABEL,
-                context_id=context_id,
-                task_id=follow_task_id,
-            )
-            emit_message_sent(
-                follow_request,
-                phase=PHASE_TASK_MODIFY,
-                title="Modify Task-T sent",
-                performative="TASK_T",
-                round_number=None,
-                context_id=context_id,
-            )
-            batch = await transport.send(follow_request, initial_context)
-        except Exception:
-            # The baseline Task is WORKING. If the Modify cannot be generated or sent, cancel it
-            # instead of leaving a half-open Task behind for a presenter to discover later.
-            cancel = getattr(transport, "cancel", None)
-            if callable(cancel):
-                with suppress(Exception):
-                    await cancel(follow_task_id, initial_context)
-            raise
-        exchanges += 1
-        collect(batch)
-        context_id = context_id or _context_id_of(batch)
 
     def finish(state: str) -> ClientFlowResult:
         """Record the terminal state, fill the result and log the outcome."""
@@ -1169,8 +1076,7 @@ async def run_client_flow(
                 context_id=context_id,
                 label=resolved_label,
                 task_template_uri=task_template_uri,
-                language=language,
-                policy=policy,
+                intent_fields=intent_fields,
                 call_timeout_seconds=call_timeout_seconds,
                 single_extension_per_message=single_extension_per_message,
                 forced_region=forced_region,
@@ -1317,32 +1223,29 @@ def _negotiation_request(
 def _accept_filled_values(
     kind: NegotiationKind,
     decision: NegotiationDecision,
-    language: str,
-    policy: ClientPolicy,
+    intent_fields: Mapping[str, object] | None,
     *,
     forced_region: str | None = None,
 ) -> dict[str, object]:
-    """Merge model-filled values into the policy's agreed Task-T parameters safely.
+    """Merge the parsed intent and the ADK decision into the agreed Task-T parameters.
 
-    Live models sometimes fill an information request with per-cell SLA floors instead of the
-    required time-segmented target. Only whitelisted Task-T keys are accepted, and the throughput
-    target must have the ``{HH:MM~HH:MM,<rate>Mbps}`` shape; otherwise the policy's agreed value
-    wins. For target/feasibility accepts, the negotiated target is authoritative.
+    The intent layer supplies the base values (operation type, region, windows, sites) and the
+    decision agent is authoritative for what it fills. Live models sometimes put per-cell SLA
+    floors into the target: only whitelisted Task-T keys are accepted, and the throughput target
+    must have the ``{HH:MM~HH:MM,<rate>Mbps}`` shape.
     """
-    filled = dict(policy.filled_params(kind.value, language))
-    if kind is NegotiationKind.INFORMATION and decision.filled_params:
-        allowed = TASK_PARAM_SCHEMA.get("properties")
-        if isinstance(allowed, Mapping):
-            for key, value in decision.filled_params.items():
-                if key not in allowed or value is None:
-                    continue
-                if isinstance(value, (str, int, float)) and str(value).strip():
-                    filled[key] = value
-        target = filled.get("guaranteedThroughputTarget")
-        if not isinstance(target, str) or not _TIME_SEGMENTED_TARGET_PATTERN.search(target):
-            filled["guaranteedThroughputTarget"] = policy.filled_params(kind.value, language).get(
-                "guaranteedThroughputTarget"
-            )
+    del kind
+    filled = dict(intent_fields or {})
+    allowed = TASK_PARAM_SCHEMA.get("properties")
+    if isinstance(allowed, Mapping):
+        for key, value in (decision.filled_params or {}).items():
+            if key not in allowed or value is None:
+                continue
+            if isinstance(value, (str, int, float)) and str(value).strip():
+                filled[key] = value
+    target = filled.get("guaranteedThroughputTarget")
+    if not isinstance(target, str) or not _TIME_SEGMENTED_TARGET_PATTERN.search(target):
+        filled.pop("guaranteedThroughputTarget", None)
     if forced_region:
         # The operator configured the region the vendor serves; a decision model must not replace
         # it with the demo region.
@@ -1398,15 +1301,14 @@ def _build_accept_request(
     context_id: str,
     label: str,
     task_template_uri: str,
-    language: str,
-    policy: ClientPolicy,
+    intent_fields: Mapping[str, object] | None,
     call_timeout_seconds: float,
     single_extension_per_message: bool,
     forced_region: str | None = None,
     task_id: str | None = None,
 ) -> tuple[SendMessageRequest, ClientCallContext]:
     """Refill the Task-T prompt and generate the Negotiation-T accept of the proposal type."""
-    filled = _accept_filled_values(kind, decision, language, policy, forced_region=forced_region)
+    filled = _accept_filled_values(kind, decision, intent_fields, forced_region=forced_region)
     with trace_stage("task_t_slot_extraction_refill"):
         task_content = prompt_client.generate_task_prompt_from_data_with_schema(
             filled, TASK_PARAM_SCHEMA, task_template_uri
@@ -1417,8 +1319,6 @@ def _build_accept_request(
         kind,
         filled,
         decision,
-        language,
-        policy,
         forced_region=forced_region,
     )
     accept_context = session.with_performative(NegotiationPerformative.ACCEPT)
@@ -1752,8 +1652,6 @@ def _accept_text(
     kind: NegotiationKind,
     filled: Mapping[str, object],
     decision: NegotiationDecision,
-    language: str,
-    policy: ClientPolicy,
     *,
     forced_region: str | None = None,
 ) -> str:
@@ -1774,7 +1672,7 @@ def _accept_text(
         items = " ".join(f"{name}: {filled.get(name, '')}." for name in requested)
         return f"Accept. {items}"
     confirmation = decision.confirmed_intent if kind is NegotiationKind.TARGET else decision.feasibility_summary
-    return f"Accept. {confirmation or policy.accept_text(kind.value, language) or decision.rationale}"
+    return f"Accept. {confirmation or decision.rationale}"
 
 
 def _reject_text(kind: NegotiationKind, propose_content: str, decision: NegotiationDecision) -> str:

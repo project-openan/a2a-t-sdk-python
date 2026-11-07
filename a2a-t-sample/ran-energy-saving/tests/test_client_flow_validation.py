@@ -16,10 +16,8 @@ from a2a_t.core.standard_templates import ENERGY_SAVING_URI
 from a2a_t.core.validation_pipeline import FilledParamData
 from protocol.client_flow import run_client_flow
 from protocol.decision_provider import ScriptedDecisionProvider
-from protocol.run_spec import ClientPolicy
 from shared.run_constants import FINAL_STATE_INPUT_INVALID, FINAL_STATE_TASK_COMPLETED
-from shared.task_schema import TASK_PARAM_SCHEMA
-from shared.trace import PHASE_TASK_MODIFY, PHASE_TASK_PROMPT
+from shared.trace import PHASE_TASK_PROMPT
 
 _CONTEXT_ID = "ctx-validation"
 
@@ -161,7 +159,6 @@ async def _run(
     trace_sink: list[dict[str, object]],
     validate: bool = True,
     enforce_required_fields: bool = True,
-    policy: ClientPolicy | None = None,
 ):
     return await run_client_flow(
         prompt_client=prompt_client,
@@ -174,7 +171,6 @@ async def _run(
         single_extension_per_message=False,
         validate_before_send=validate,
         enforce_required_fields=enforce_required_fields,
-        policy=policy or ClientPolicy(),
     )
 
 
@@ -433,50 +429,3 @@ async def test_disabled_validation_never_calls_the_sdk() -> None:
     assert len(transport.requests) == 1
 
 
-@pytest.mark.asyncio
-async def test_a_blocked_modify_cancels_the_baseline_task() -> None:
-    policy = ClientPolicy(
-        initial_data=lambda language: (
-            {
-                "operationType": "Create",
-                "region": "Region A",
-                "guaranteedThroughputTarget": "{00:00~07:00,2Mbps}",
-            },
-            TASK_PARAM_SCHEMA,
-        ),
-        follow_up_data=lambda language: (
-            {
-                "operationType": "Modify",
-                "region": "Region A",
-                "guaranteedThroughputTarget": "{00:00~07:00,10Mbps}",
-            },
-            TASK_PARAM_SCHEMA,
-        ),
-    )
-    prompt_client = ValidatingPromptClient(
-        validation_errors=[
-            None,
-            _content_error(
-                ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
-                slot_errors=[_slot_error("content.format_error")],
-            ),
-        ]
-    )
-    transport = RecordingTransport([_working_task()])
-    traces: list[dict[str, object]] = []
-
-    result = await _run(
-        prompt_client=prompt_client,
-        transport=transport,
-        trace_sink=traces,
-        policy=policy,
-    )
-
-    assert result.final_state == FINAL_STATE_INPUT_INVALID
-    assert len(transport.requests) == 1  # the baseline only; the Modify never leaves
-    assert transport.cancelled == ["task-1"]
-    spans = _validation_spans(traces)
-    assert [span["phase"] for span in spans] == [PHASE_TASK_PROMPT, PHASE_TASK_MODIFY]
-    modify_detail = spans[1]["detail"]
-    assert isinstance(modify_detail, dict)
-    assert modify_detail["verdict"] == "blocked"

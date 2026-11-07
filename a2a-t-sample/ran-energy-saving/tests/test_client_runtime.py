@@ -423,34 +423,6 @@ def test_importing_the_client_runtime_does_not_build_a_server_model() -> None:
     assert "client-import-ok" in result.stdout
 
 
-def test_nms_policy_uses_the_operator_request_text(offline_config: SampleConfig) -> None:
-    from dataclasses import replace
-
-    from protocol.client_runtime import _effective_policy
-    from protocol.run_spec import ClientPolicy
-
-    policy = ClientPolicy(initial_data=lambda _language: ({"region": "canned"}, {}))
-    nms_config = replace(offline_config, discovery="nms")
-    region_config = replace(nms_config, nms_region="A2ATestRegion")
-
-    assert _effective_policy(policy, nms_config, "A2ATestRegion", "en-US").initial_data("en-US") is None
-    assert _effective_policy(policy, nms_config, "", "en-US").initial_data("en-US") == (
-        {"region": "canned"},
-        {},
-    )
-    assert _effective_policy(policy, offline_config, "A2ATestRegion", "en-US").initial_data("en-US") == (
-        {"region": "canned"},
-        {},
-    )
-    region_policy = _effective_policy(policy, region_config, "anything", "en-US")
-    assert region_policy.initial_data("en-US") == (
-        {"region": "A2ATestRegion"},
-        {},
-    )
-    assert region_policy.filled_params("information", "en-US") == {"region": "A2ATestRegion"}
-    assert _effective_policy(policy, region_config, "use A2ATestRegion here", "en-US").initial_data("en-US") is None
-
-
 async def test_nms_runtime_uses_the_raw_transport_and_skips_the_a2a_sdk_client(
     offline_config: SampleConfig,
     monkeypatch: pytest.MonkeyPatch,
@@ -495,43 +467,6 @@ async def test_nms_runtime_uses_the_raw_transport_and_skips_the_a2a_sdk_client(
     await runtime.aclose()
 
 
-def test_nms_policy_replaces_the_demo_sites(offline_config: SampleConfig) -> None:
-    """A site-level Task-T must carry the sites the vendor serves, not the demo placeholders."""
-    from dataclasses import replace
-
-    from protocol.client_runtime import _effective_policy
-    from protocol.run_spec import ClientPolicy
-
-    values = {"region": "Region A", "siteList": "Site 1,Site 2"}
-    policy = ClientPolicy(
-        filled_params=lambda _kind, _language: dict(values),
-        initial_data=lambda _language: (dict(values), {}),
-        follow_up_data=lambda _language: (dict(values), {}),
-    )
-    config = replace(
-        offline_config,
-        discovery="nms",
-        nms_region="A2ATestRegion",
-        nms_sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
-    )
-
-    applied = _effective_policy(policy, config, "anything", "en-US")
-
-    assert applied.filled_params("feasibility", "en-US") == {
-        "region": "A2ATestRegion",
-        "siteList": "NRES_XCS_6102937,LTE_26441_LNR_OCL",
-    }
-    initial = applied.initial_data("en-US")
-    assert initial is not None
-    assert initial[0]["siteList"] == "NRES_XCS_6102937,LTE_26441_LNR_OCL"
-    follow_up = applied.follow_up_data("en-US")
-    assert follow_up is not None
-    assert follow_up[0]["siteList"] == "NRES_XCS_6102937,LTE_26441_LNR_OCL"
-
-    region_only = ClientPolicy(initial_data=lambda _language: ({"region": "Region A"}, {}))
-    untouched = _effective_policy(region_only, config, "anything", "en-US").initial_data("en-US")
-    assert untouched is not None
-    assert "siteList" not in untouched[0]
 
 
 def test_sdk_env_follows_a_shell_adk_model_over_the_source_sdk_keys(

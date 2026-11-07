@@ -105,7 +105,7 @@ sequenceDiagram
 # 用显式配置文件启动：不同启动脚本指向不同 .env，不再依赖启动器猜测
 python run_demo.py --env-file configs/yellow-zone.env --nms --ui
 # 等价写法：A2AT_SAMPLE_ENV_FILE=configs/yellow-zone.env python run_demo.py ...
-# 命令行（离线、确定性，无需 key）：计划停电，先创建基线再 Modify，无协商
+# 命令行（离线、确定性，无需 key）：计划停电基线 Create，无协商
 python run_demo.py --scenario outage --mode auto --model-mode offline
 # Web UI（演示视图；默认打开完整的用例 1）
 python run_demo.py --ui --model-mode offline
@@ -141,11 +141,11 @@ A2AT_SAMPLE_AUTH_TOKEN=<token> python run_demo.py --ui --ui-host 0.0.0.0 --model
 Web UI 默认打开演示视图：左侧是 16:9 的舞台，依次是网络工程师、OSS Agent、RAN Agent、MIE 与
 无线站点，中间是 A2A-T 通道。演示视图支持两套品牌主题：**Orange**（原 Demo 风格，默认）和
 **Huawei**（暖灰画布、描边节点、低噪声的 ICT 风格）。顶栏按钮可实时切换并记忆选择；
-`--brand huawei` 或 `?brand=huawei` 可指定启动默认值。八个示例覆盖用例 1（夜间节能，含协商与无协商）和用例 2（计划停电）；计划停电是同一 Task 上的两阶段：先 Create 基线，再发送真正的 Modify Task-T。Modify 阶段步骤条保持在“Apply & report”，wire 面板分别展示两条 Task-T 的 payload。
+`--brand huawei` 或 `?brand=huawei` 可指定启动默认值。八个示例覆盖用例 1（夜间节能，含协商与无协商）和用例 2（计划停电）；计划停电示例创建站点级基线，运行中的 Task 通过独立的 **修改运行中的任务** 入口下发真正的 Modify Task-T。
 舞台按人的节奏跟随真实运行，共九步：请求、结构化 Task-T、审批 1（意图）、下发 Task-T、需要时协商、
 策略与任务启动、数据采集（第 2–8 天，时间压缩）、审批 2（MIE 中的 MML）、下发与报告。请求框展示网络
-工程师会直接输入的自然表述，例如“在区域 A 开启节能，保障速率为：…”。OSS Agent 先把请求解析成自己系统所需的
-结构化意图，只有下发步骤才把意图映射成 Task-T。**未知区域**示例会列出模糊匹配后的可用区域，请工程师选择；
+工程师会直接输入的自然表述，例如“在区域 A 创建节能任务，保障速率为：…”。这段文本就是 OSS 客户端实际下发的
+内容；OSS Agent 把它解析成自己的结构化意图，仅用于展示与审批。**未知区域**示例会列出模糊匹配后的可用区域，请工程师选择；
 选择只填充区域，原保障速率时段保持不变。Task-T 被接受后，RAN Agent 依次上报 `SUBMITTED`、策略生成中、
 策略就绪、任务已启动，然后才开始数据采集。右侧保留证据层：OSS Agent 理解到的任务（含 24 小时保障速率图）、
 协商轮次、**On the wire** 报文检查器，以及合并
@@ -204,34 +204,31 @@ SUBMITTED。发送前任务若已进入终态，后端会明确拒绝。该入�
 
 ### 操作员意图处理层
 
-sample 不再把操作员原文直接送进 A2A / A2A-T。默认的 `processed` 模式先插入真实 OSS 会做的业务处理：
+操作员原文是唯一来源。默认的 `processed` 模式插入真实 OSS 会做的业务解读，但**不改写请求**：
 
 ```text
-操作员请求 → 业务意图（ProcessedIntent） → 规范化文本 / 自然语言文本 → 审批 1
-           → A2A-T Task-T / 标准 A2A 消息
+操作员请求 → ADK 意图 agent（ProcessedIntent，仅展示/审批） → 审批 1
+           → 从同一段文本抽取 Task-T
 ```
 
-- 已知场景使用确定性的内置意图。自由文本（`--request` 或页面编辑的请求）在 live 模式下走模型抽取；
-  offline 模式回退原文并记录 warning。
-- **自由文本的 Task-T 由 SDK 转换，不由样例改写。** 意图层只用于展示和审批；自由文本的 Task-T
-  由 SDK 从操作员原文抽取，因此不受我们控制的测试输入也走同一套通用 slot 管线。内置场景仍使用
-  确定性的 `normalizedText`，保证演示中刻意保留的缺失和冲突可复现。
-- 业务层**不修复**缺失或冲突。缺失的保障速率、未知区域、重叠时段都会保留在意图里，
+- 已知场景就是普通示例请求。样例没有内置意图表，也没有“文本 → 内置意图”的匹配：ADK 意图 agent
+  读取页面展示、操作员实际发送的那段文本。live 模式使用配置的模型；offline 模式下确定性 fake model
+  无法回答意图 schema，意图回退为原文并记录 warning。
+- 请求文本所见即所得：页面原样发送编辑框文本，A2A-T 也从同一段文本抽取 Task-T。`normalizedText` /
+  `plainText` 就是操作员原文；结构化字段是 agent 的解析结果。
+- 业务层**不修复**缺失或冲突。缺失的保障速率、未知区域、重叠时段都会保留在文本里，
   后续 A2A-T 协商仍然会发生。
-- 同一组业务值有两个渲染结果：`normalizedText` 是带 Task-T 段结构的文本，供内置 A2A-T 场景使用；
-  `plainText` 是不含 `##` 标题的自然语言请求，用于标准 A2A。`plainText` 保留
-  `{HH:MM~HH:MM,NMbps}` 速率 token，因此两个协议不会发送相同的报文。
-- 审批 1 在协议映射之前确认意图。A2A-T 对内置场景从 `normalizedText` 严格抽取 Task-T；
-  对自由文本则从操作员原文抽取。
+- 协商 accept 由解析出的意图加上 ADK 决策 agent 的 `filled_params` 组成；以决策为准，模型漏填时
+  样例不编造业务值。
 - 样例通过 `A2AT_PROMPT_SOURCE_TYPE=local_file` 挂载一个很小的 `prompt_resources/` overlay，
   只细化本场景的 slot schema（速率目标归 Task Context；缺失目标用 null，不写 "Not provided"）；
   其余 SDK 资源仍来自打包资源。
-- A2A 把同样的处理放在 OSS Agent 内：工程师客户端发送原文，OSS Agent 规范化并发布意图，
-  再把 `plainText` 转发给 RAN。
-- 展示页并列显示操作员请求、规范化文本和结构化意图；trace 记录 `intent_processed`，
-  意图文档同时携带两种渲染结果。
-- 默认 `processed`。需要旧行为时使用 `A2AT_SAMPLE_INTENT_MODE=raw`、`--intent-mode raw` 或
-  `POST /api/runs {"intentMode":"raw"}`。Gateway 入站文本一律按 raw 处理。
+- A2A 把同样的处理放在 OSS Agent 内：工程师客户端发送原文，OSS Agent 解析并发布意图，
+  再把同一段文本转发给 RAN。
+- 展示页并列显示操作员请求和结构化意图；trace 记录 `intent_processed`。
+- 默认 `processed`。使用 `A2AT_SAMPLE_INTENT_MODE=raw`、`--intent-mode raw` 或
+  `POST /api/runs {"intentMode":"raw"}` 可跳过意图解析；发送的仍然是原文。Gateway 入站文本
+  一律按 raw 处理。
 
 ### 发送前 Task-T 校验
 
@@ -254,7 +251,7 @@ A2A-T 模式下，演示页在发送前用 SDK 内容校验检查渲染后的 Ta
   一条 blocked 的 `task_validation` 记录，带结构化 slot 错误，并复用编辑重试卡片；
   基础设施失败仍然抛出。
 - LLM/基础设施失败降级为 warning 并放行；模型故障不会中断演示。
-- 两阶段 Modify 的 Task-T 走同一道门，被阻断时先取消基线 Task。
+- 选中任务的 Modify Task-T 走同一道门；被阻断时不发送任何内容。
 - 在校验卡中修改原始请求会**新建一次 run**；失败的 run 保留在历史中，并通过
   `source.parentRunId` 关联。
 - `A2AT_SAMPLE_PRE_SEND_VALIDATION=on|always|off` 控制范围；默认 `on`，只覆盖演示页。
@@ -342,7 +339,7 @@ A2AT_SAMPLE_NMS_WIRE_LOG=1
 
 NMS 模式下，`A2AT_SAMPLE_NMS_REGION` 与 `A2AT_SAMPLE_NMS_SITES` 会把整个运行的各层统一替换为
 网管实际服务的区域和站点：页面预填、工程师看到的请求、意图结果（`rawRequest`、`region`、
-`normalizedText`），以及每个发往网管的 Task-T（初始提示词、accept 重填、Modify follow-up）。
+`normalizedText`），以及每个发往网管的 Task-T（初始提示词、accept 重填、选中任务的 Modify）。
 二者默认是 `A2ATestRegion` 和上表中的两个 910 站点；其他区域和激活时段会被拒绝。页面与报文之间
 不会再出现“左侧中性名、轨迹真机名”的静默替换。本地三跳演示保持中性名称，不受影响。
 例如：“在 A2ATestRegion 区域创建无线网络节能任务；激活时段 00:00-06:00，每小区保证 30 Mbps。”

@@ -109,7 +109,7 @@ The other two outcomes are simple conclusions:
 # One explicit configuration file per launch script; the launcher no longer guesses
 python run_demo.py --env-file configs/yellow-zone.env --nms --ui
 # equivalent: A2AT_SAMPLE_ENV_FILE=configs/yellow-zone.env python run_demo.py ...
-# CLI (offline, deterministic, no key): planned outage, Create baseline then Modify, no negotiation
+# CLI (offline, deterministic, no key): planned-outage baseline Create, no negotiation
 python run_demo.py --scenario outage --mode auto --model-mode offline
 # Web UI (presentation view; opens on the complete use case 1)
 python run_demo.py --ui --model-mode offline
@@ -151,15 +151,15 @@ two brand palettes: **Orange** (the reference demo, default) and **Huawei** (the
 outlined-node ICT style). The top-bar button switches them at runtime and remembers the choice;
 `--brand huawei` or `?brand=huawei` selects the start-up default. Eight examples cover use
 case 1 (night-time energy saving, with and without negotiation) and use case 2 (planned power
-outage). The outage run is two-phase on one Task: a Create baseline, then a real Modify Task-T on
-the same Task; the presentation keeps the step bar at Apply & report for the Modify phase and
-shows each Task-T's own wire payload. The stage follows the live run at a human pace through nine
+outage). The outage example creates a site-level baseline; a running Task is modified through the
+separate **Modify a running task** entry, which sends a real Modify Task-T on the selected Task.
+The stage follows the live run at a human pace through nine
 steps: request, structured
 Task-T, approval 1 (intent), Task-T sent, negotiation when needed, strategy and task start, data
 collection (days 2 to 8, compressed), approval 2 (MML in MIE) and apply and report. The request box
-shows the concise wording a network engineer would type, for example “Start energy saving in
-Region A with these guaranteed throughputs: …”; the OSS Agent first turns it into its own
-structured intent, and only the send step maps that intent onto the Task-T. The **Unknown area**
+shows the exact text a network engineer would type, for example “Create an energy saving task for
+Region A with these guaranteed throughputs: …”; that text is what the OSS client sends, and the
+OSS Agent reads it into its own structured intent for display and approval. The **Unknown area**
 example lists the served areas after a fuzzy match and lets the engineer choose one; selecting an
 area only fills the region, so the requested throughput windows are kept. After the Task-T is
 accepted the RAN Agent reports `SUBMITTED`, strategy working, strategy ready and task started before
@@ -240,43 +240,37 @@ The page is Chinese-only, like the tester console, because it is an internal too
 
 ### Operator intent layer
 
-The sample no longer sends the operator's text straight to A2A or A2A-T. The default
-`processed` mode inserts the business step a real OSS performs first:
+The operator's text is the source of truth. The default `processed` mode inserts the business read
+a real OSS performs, but it never rewrites the request:
 
 ```text
-operator request → business intent (ProcessedIntent) → normalized text / plain text
-                 → approval 1 → A2A-T Task-T / standard A2A message
+operator request → ADK intent agent (ProcessedIntent: display / approval only)
+                 → approval 1 → Task-T extracted from the same operator text
 ```
 
-- Known scenarios use a deterministic built-in intent. A free-text request (`--request` or an
-  edited Web UI request) uses the live model for the business view; in offline mode it falls back
-  to the raw text and records a warning.
-- **Free text is converted by the SDK, not by the sample.** The intent layer is a display and
-  approval aid: the Task-T of a free-text request is extracted by the SDK from the original
-  operator text, so test input we do not control still goes through the generic slot pipeline.
-  Curated scenarios keep their deterministic `normalizedText` so their deliberate gaps and
-  conflicts remain reproducible.
+- Known scenarios are ordinary example requests. There is no built-in intent table and no
+  text-to-intent matching: the ADK intent agent reads whatever text the page shows and the operator
+  sends. In live mode it uses the configured model; in offline mode the deterministic fake model
+  cannot answer the intent schema, so the intent falls back to the raw text with a warning.
+- The request text is WYSIWYG. The page sends the editor text verbatim and A2A-T extracts its
+  Task-T from it. `normalizedText` / `plainText` are the operator's own text; the structured
+  fields are what the agent read.
 - The business layer never repairs a gap or conflict. A missing throughput target, an unknown
-  area and overlapping windows stay in the intent, so the A2A-T negotiation still happens.
-- The intent carries two renderings of the same business values. `normalizedText` is the
-  Task-T section layout used by curated A2A-T scenarios; `plainText` is a natural-language request
-  used by standard A2A. `plainText` keeps the `{HH:MM~HH:MM,NMbps}` target tokens but contains no
-  `##` Task-T headings, so the two protocols never send the same payload.
-- Approval 1 confirms the intent before the protocol mapping. In A2A-T a curated scenario's
-  Task-T is extracted strictly from `normalizedText`; a free-text Task-T is extracted from the
-  operator's original request.
+  area and overlapping windows stay in the text, so the A2A-T negotiation still happens.
+- The negotiation accept is built from the parsed intent plus what the ADK decision agent puts in
+  `filled_params`; the decision is authoritative and the sample fabricates no business value when
+  the model omits one.
 - The sample mounts a small `prompt_resources/` overlay through `A2AT_PROMPT_SOURCE_TYPE=local_file`.
   It refines this scenario's slot schema only (rate targets belong in Task Context, a missing goal
   is null rather than a "Not provided" string); every other SDK resource still comes from the
   packaged bundle.
 - A2A keeps the same story inside the OSS Agent: the engineer client sends the raw request,
-  the OSS Agent normalizes it, publishes the intent, and forwards `plainText` to RAN.
-- The presentation page shows the operator request, the normalized text and the structured intent
-  fields side by side; the trace records `intent_processed` and the intent document carries both
-  renderings.
+  the OSS Agent reads it into an intent, publishes it, and forwards the same text to RAN.
+- The presentation page shows the operator request and the structured intent fields side by side;
+  the trace records `intent_processed`.
 - `processed` is the default. Use `A2AT_SAMPLE_INTENT_MODE=raw`, `--intent-mode raw` or
-  `POST /api/runs {"intentMode":"raw"}` for the old direct-text behavior. Gateway input is always
-  treated as raw.
+  `POST /api/runs {"intentMode":"raw"}` to skip the intent reading; the text is still what gets
+  sent. Gateway input is always treated as raw.
 
 ### Pre-send Task-T validation
 
@@ -305,7 +299,7 @@ never sent and no negotiation starts.
   structured slot errors, and the same edit-and-retry card. Infrastructure failures still raise.
 - LLM/infra failures degrade to a warning and let the request through; a model outage cannot stop
   the demo.
-- The two-phase Modify Task-T uses the same gate and cancels the baseline Task when blocked.
+- The selected-Task Modify Task-T uses the same gate; a blocked Modify sends nothing.
 - Edit the original request in the validation card to start a **new** run; the failed run stays in
   the history and is linked with `source.parentRunId`.
 - `A2AT_SAMPLE_PRE_SEND_VALIDATION=on|always|off` selects the scope; `on` is the default and
@@ -402,7 +396,8 @@ headers (`Authorization: Bearer` and `X-Auth-Token`) and both extension-header s
 In NMS mode `A2AT_SAMPLE_NMS_REGION` and `A2AT_SAMPLE_NMS_SITES` replace the neutral demo region
 (`Region A` / `Region B`) and the scenario site list in every layer of the run: the request the page
 pre-fills and the operator sees, the captured intent (`rawRequest`, `region`, `normalizedText`), and
-every Task-T sent to the vendor — the initial prompt, the accept refill and the Modify follow-up.
+every Task-T sent to the vendor — the initial prompt, the accept refill and the selected-Task
+Modify.
 They default to `A2ATestRegion` and the two 910 sites above; other regions and activation windows are
 rejected. Nothing silently swaps the region between the stage and the wire. The local three-hop demo
 keeps the neutral names and is unaffected. For example: “Create a RAN energy saving task in the

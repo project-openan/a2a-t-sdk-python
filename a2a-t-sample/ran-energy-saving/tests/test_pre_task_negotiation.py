@@ -33,9 +33,10 @@ from a2a_t.core.validation_pipeline import FilledParamData
 from a2a_t.server.a2at_server import A2ATServer
 from demo.composition import install_offline_provider
 from demo.scenario import (
-    NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_EN,
-    NATURAL_LANGUAGE_PROMPT_INPUT_MISSING_EN,
-    NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_EN,
+    EXAMPLE_REQUESTS,
+    SCENARIO_FEASIBILITY,
+    SCENARIO_INFORMATION,
+    SCENARIO_TARGET,
 )
 from demo.task_t_precheck import RanDataTaskTPrecheck
 from google.protobuf.json_format import MessageToDict
@@ -762,9 +763,9 @@ def real_server(offline_config: SampleConfig) -> A2ATServer:
 @pytest.mark.parametrize(
     ("prompt", "expected_uri"),
     [
-        (NATURAL_LANGUAGE_PROMPT_INPUT_MISSING_EN, INFORMATION_NEGOTIATION_PROPOSE_URI),
-        (NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_EN, TARGET_NEGOTIATION_PROPOSE_URI),
-        (NATURAL_LANGUAGE_PROMPT_INPUT_FEASIBILITY_EN, FEASIBILITY_NEGOTIATION_PROPOSE_URI),
+        (EXAMPLE_REQUESTS[SCENARIO_INFORMATION]["en-US"], INFORMATION_NEGOTIATION_PROPOSE_URI),
+        (EXAMPLE_REQUESTS[SCENARIO_TARGET]["en-US"], TARGET_NEGOTIATION_PROPOSE_URI),
+        (EXAMPLE_REQUESTS[SCENARIO_FEASIBILITY]["en-US"], FEASIBILITY_NEGOTIATION_PROPOSE_URI),
     ],
 )
 async def test_real_server_opens_the_matching_negotiation(

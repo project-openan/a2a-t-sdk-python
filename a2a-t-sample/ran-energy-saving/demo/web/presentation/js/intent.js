@@ -291,7 +291,9 @@ function businessBlock(
     raw.append(el("span", "", copy.intent.raw), el("p", "", rawRequest));
     section.append(raw);
   }
-  if (normalizedText) {
+  // WYSIWYG: the intent never rewrites the request, so only show the normalization when it is
+  // actually a different text (a deployment that supplies one).
+  if (normalizedText && normalizedText !== rawRequest) {
     // The panel re-renders on every event, so remember the disclosure state outside the DOM.
     const normalized = el("details", "business-text business-collapsible");
     normalized.open = normalizedOpen;

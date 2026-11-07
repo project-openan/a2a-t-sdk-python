@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import logging
 import shutil
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from contextvars import Token
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
@@ -96,7 +96,7 @@ from protocol.nms_client import (
 )
 from protocol.plain_client_flow import run_plain_client_flow
 from protocol.pure_client_flow import run_pure_client_flow
-from protocol.run_spec import DEFAULT_CLIENT_POLICY, ClientPolicy, RunCatalog, RunSpec
+from protocol.run_spec import RunCatalog, RunSpec
 from protocol.shared_webhook import SharedWebhook, WebhookSubscription, get_shared_webhook
 from protocol.wire_log import HttpWireLog
 
@@ -164,78 +164,25 @@ def _server_auth_headers(config: SampleConfig) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
-def _effective_policy(
-    policy: ClientPolicy,
-    config: SampleConfig,
-    request_text: str,
-    language: str,
-) -> ClientPolicy:
-    """Return the policy a run uses on the vendor NMS.
+def _intent_fields(intent: ProcessedIntent | None) -> dict[str, object]:
+    """Map one parsed intent to the Task-T parameter names used by the accept refill.
 
-    The vendor serves exactly one region and a fixed set of sites, so the neutral demo values must
-    never reach it: every structured value the policy produces — accept refill, complete initial
-    data, Modify follow-up — gets the configured region and, where the value has one, the configured
-    site list. An operator's request text still chooses windows, rates and whether a free-text
-    extraction runs. Other discovery modes keep the scenario policy unchanged.
+    The values come from the intent agent, so the refill has an LLM-derived base even when the
+    decision model only supplies the negotiated item.
     """
-    if config.discovery != DISCOVERY_NMS:
-        return policy
-    region = config.nms_region.strip()
-    sites = config.nms_sites
-
-    def apply_nms(values: Mapping[str, object]) -> dict[str, object]:
-        updated = dict(values)
-        if region:
-            updated["region"] = region
-        if sites and "siteList" in updated:
-            updated["siteList"] = ",".join(sites)
-        return updated
-
-    base_filled = policy.filled_params
-
-    def filled_params(
-        kind: str,
-        language_code: str,
-        *,
-        base: Callable[[str, str], dict[str, object]] = base_filled,
-    ) -> dict[str, object]:
-        return apply_nms(base(kind, language_code))
-
-    base_initial = policy.initial_data
-
-    def initial_data(
-        language_code: str,
-        *,
-        base: Callable[[str], tuple[Mapping[str, object], Mapping[str, object]] | None] = base_initial,
-    ) -> tuple[Mapping[str, object], Mapping[str, object]] | None:
-        data = base(language_code)
-        return None if data is None else (apply_nms(data[0]), data[1])
-
-    base_follow_up = policy.follow_up_data
-
-    def follow_up_data(
-        language_code: str,
-        *,
-        base: Callable[[str], tuple[Mapping[str, object], Mapping[str, object]] | None] = base_follow_up,
-    ) -> tuple[Mapping[str, object], Mapping[str, object]] | None:
-        data = base(language_code)
-        return None if data is None else (apply_nms(data[0]), data[1])
-
-    if region or sites:
-        policy = replace(
-            policy,
-            filled_params=filled_params,
-            initial_data=initial_data,
-            follow_up_data=follow_up_data,
-        )
-        if region and region.lower() not in request_text.lower():
-            # The request does not name the served region: keep the structured shortcut, with the
-            # vendor's region and sites, instead of relying on free-text extraction.
-            return policy
-    if request_text.strip():
-        # The operator's text drives Task-T extraction; the structured shortcut is not used.
-        return replace(policy, initial_data=DEFAULT_CLIENT_POLICY.initial_data)
-    return policy
+    if intent is None:
+        return {}
+    fields: dict[str, object] = {
+        "operationType": intent.operation_type,
+        "region": intent.region,
+        "siteList": ",".join(intent.sites),
+        "guaranteedThroughputTarget": ", ".join(intent.windows),
+        "energySavingGoal": intent.energy_saving_goal,
+        "task_description": intent.task_description,
+        "expectedOutput": intent.expected_output,
+        "backgroundEvent": intent.background_event,
+    }
+    return {key: value for key, value in fields.items() if value}
 
 
 def _emit_intent_span(
@@ -392,9 +339,7 @@ class ClientRuntime:
             setter(sink)
 
     def _scenario_raw_request(self) -> str:
-        """Return the operator-facing request of the scenario, when one is defined."""
-        if self.run_spec.intent is not None:
-            return self.run_spec.intent.raw_request
+        """Return the request of the scenario; it is the text the client sends."""
         return self.run_spec.user_request
 
     def _raw_mode_request(self, custom_request: str) -> str:
@@ -414,8 +359,6 @@ class ClientRuntime:
                     custom=custom,
                 )
             )
-        if not custom and self.run_spec.intent is not None:
-            return self.run_spec.intent
         return await RawIntentProcessor().process(
             OperatorRequest(
                 text=raw_text,
@@ -509,36 +452,18 @@ class ClientRuntime:
                         trace_sink=sink,
                     )
                 intent: ProcessedIntent | None = None
-                if modify_mode:
-                    # The target Task already exists, so the intent is the scenario's Modify
-                    # intent rather than a fresh reading of a Create request.
-                    intent = self.run_spec.modify_intent or await self._process_intent(raw_text, custom=False)
-                    request_text = intent.normalized_text
-                    _emit_intent_span(
-                        trace_sink=sink,
-                        intent=intent,
-                        mode=self.config.intent_mode,
-                        scenario=self.run_spec.name,
-                    )
-                elif processed:
+                if processed or modify_mode:
+                    # The intent is an ADK/LLM reading of the request for the intent panel and the
+                    # approval step. It never rewrites the request: what the operator wrote is what
+                    # the client sends.
                     intent = await self._process_intent(raw_text, custom=bool(custom_request))
-                    # A free-text request is converted by the SDK itself: the business intent is a
-                    # display/approval aid, not a second lossy rewrite of the Task-T. Curated
-                    # scenarios keep their canonical text so the demo's deliberate gaps and
-                    # conflicts stay reproducible. Standard A2A must stay a natural request,
-                    # otherwise the protocol comparison sees the same payload twice.
-                    if self.protocol == PROTOCOL_A2A_T:
-                        request_text = raw_text if custom_request else intent.normalized_text
-                    else:
-                        request_text = intent.plain_text or intent.raw_request or intent.normalized_text
                     _emit_intent_span(
                         trace_sink=sink,
                         intent=intent,
                         mode=self.config.intent_mode,
                         scenario=self.run_spec.name,
                     )
-                else:
-                    request_text = self._raw_mode_request(custom_request)
+                request_text = raw_text
                 if self.protocol == PROTOCOL_PLAIN:
                     # Plain A2A has no Task-T, no intent gate and no negotiation: one message in,
                     # task events out.
@@ -565,16 +490,6 @@ class ClientRuntime:
                     set_structurer_request = getattr(structurer, "set_user_request", None)
                     if callable(set_structurer_request):
                         set_structurer_request(request_text)
-                policy = _effective_policy(
-                    self.run_spec.policy,
-                    self.config,
-                    request_text,
-                    self.config.language,
-                )
-                if processed:
-                    # The intent layer already contains every business value. Task-T must now be
-                    # extracted from the normalized text, not rendered from a structured shortcut.
-                    policy = replace(policy, initial_data=DEFAULT_CLIENT_POLICY.initial_data)
                 flow_on_intent_ready = on_intent_ready
                 if processed and on_intent_ready is not None:
                     # Approval 1 belongs to the business intent, before the protocol mapping.
@@ -583,13 +498,19 @@ class ClientRuntime:
                         blocked.final_state = FINAL_STATE_INTENT_NOT_CONFIRMED
                         return blocked
                     flow_on_intent_ready = None
+                prompt_client = self.prompt_client
+                provider = self.provider
+                if prompt_client is None or provider is None:
+                    raise ClientRuntimeError(
+                        "The A2A-T client flow needs a prompt client and a decision provider."
+                    )
                 return await run_client_flow(
-                    prompt_client=self.prompt_client,
+                    prompt_client=prompt_client,
                     transport=self.transport,
                     user_request=request_text,
-                    provider=self.provider,
+                    provider=provider,
                     language=self.config.language,
-                    policy=policy,
+                    intent_fields=_intent_fields(intent),
                     event_sink=event_sink,
                     on_decision_requested=on_decision_requested,
                     on_decision_made=on_decision_made,
@@ -656,7 +577,7 @@ async def build_client_runtime(
     install_offline_provider: Callable[[], None] | None = None,
     client_agent_factory: Callable[[Any], Any] | None = None,
     pure_answer: Callable[[dict[str, object]], str] | None = None,
-    intent_processor_factory: Callable[[SampleConfig, RunSpec], IntentProcessor] | None = None,
+    intent_processor_factory: Callable[[SampleConfig], IntentProcessor] | None = None,
 ) -> ClientRuntime:
     """Assemble the client runtime of one run.
 
@@ -677,7 +598,7 @@ async def build_client_runtime(
         pure_answer: callback answering one pure ``INPUT_REQUIRED`` event. Pure mode skips the
             A2A-T SDK facade and the negotiation decision provider entirely.
         intent_processor_factory: optional builder of the business intent layer; when omitted,
-            processed mode falls back to the run's built-in intent or raw text.
+            processed mode falls back to the raw text.
 
     Returns:
         The assembled runtime; the caller owns it and must call :meth:`ClientRuntime.aclose`.
@@ -696,7 +617,7 @@ async def build_client_runtime(
         raise ClientRuntimeError(f"Unsupported protocol: {protocol}; expected one of {SUPPORTED_PROTOCOLS}")
 
     run_spec = catalog.spec(scenario, language=config.language)
-    intent_processor = intent_processor_factory(config, run_spec) if intent_processor_factory is not None else None
+    intent_processor = intent_processor_factory(config) if intent_processor_factory is not None else None
     register_traced_providers()
     if config.is_offline:
         if offline_model_factory is None:

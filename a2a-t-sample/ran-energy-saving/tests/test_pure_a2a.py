@@ -14,10 +14,11 @@ from demo.pure_policy import (
     render_pure_answer,
 )
 from demo.scenario import (
+    EXAMPLE_REQUESTS,
     KIND_TARGET,
-    NATURAL_LANGUAGE_PROMPT_INPUT_EN,
-    NATURAL_LANGUAGE_PROMPT_INPUT_MISSING_EN,
-    NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_EN,
+    SCENARIO_INFORMATION,
+    SCENARIO_NIGHT,
+    SCENARIO_TARGET,
 )
 from protocol.pure_a2a import PureTaskHandler
 from protocol.server_executor import _report_metadata
@@ -65,7 +66,7 @@ def _handler() -> PureTaskHandler:
 
 async def test_a_complete_request_is_handed_to_the_executor() -> None:
     handler = _handler()
-    context = _context(NATURAL_LANGUAGE_PROMPT_INPUT_EN)
+    context = _context(EXAMPLE_REQUESTS[SCENARIO_NIGHT]["en-US"])
 
     outcome = await handler.handle(context)
 
@@ -77,7 +78,7 @@ async def test_a_complete_request_is_handed_to_the_executor() -> None:
 async def test_a_missing_target_opens_an_input_required_task() -> None:
     handler = _handler()
 
-    outcome = await handler.handle(_context(NATURAL_LANGUAGE_PROMPT_INPUT_MISSING_EN))
+    outcome = await handler.handle(_context(EXAMPLE_REQUESTS[SCENARIO_INFORMATION]["en-US"]))
 
     task = outcome.input_required_task
     assert task is not None
@@ -93,7 +94,7 @@ async def test_a_missing_target_opens_an_input_required_task() -> None:
 
 async def test_an_information_answer_resumes_with_the_negotiated_target() -> None:
     handler = _handler()
-    first = await handler.handle(_context(NATURAL_LANGUAGE_PROMPT_INPUT_MISSING_EN))
+    first = await handler.handle(_context(EXAMPLE_REQUESTS[SCENARIO_INFORMATION]["en-US"]))
     task = first.input_required_task
     assert task is not None
 
@@ -116,7 +117,7 @@ async def test_an_information_answer_resumes_with_the_negotiated_target() -> Non
 async def test_an_overlapping_target_opens_a_target_negotiation() -> None:
     handler = _handler()
 
-    outcome = await handler.handle(_context(NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_EN))
+    outcome = await handler.handle(_context(EXAMPLE_REQUESTS[SCENARIO_TARGET]["en-US"]))
 
     task = outcome.input_required_task
     assert task is not None
@@ -129,7 +130,7 @@ async def test_an_overlapping_target_opens_a_target_negotiation() -> None:
 
 async def test_a_counter_proposal_gets_a_second_proposal_then_resolves() -> None:
     handler = _handler()
-    first = await handler.handle(_context(NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_EN))
+    first = await handler.handle(_context(EXAMPLE_REQUESTS[SCENARIO_TARGET]["en-US"]))
     task = first.input_required_task
     assert task is not None
 
@@ -160,7 +161,7 @@ async def test_a_counter_proposal_gets_a_second_proposal_then_resolves() -> None
 
 async def test_the_round_budget_rejects_a_non_converging_negotiation() -> None:
     handler = _handler()
-    first = await handler.handle(_context(NATURAL_LANGUAGE_PROMPT_INPUT_TARGET_EN))
+    first = await handler.handle(_context(EXAMPLE_REQUESTS[SCENARIO_TARGET]["en-US"]))
     task = first.input_required_task
     assert task is not None
 
@@ -181,7 +182,7 @@ async def test_the_round_budget_rejects_a_non_converging_negotiation() -> None:
 
 def test_pure_report_metadata_carries_no_a2a_t_keys() -> None:
     metadata = _report_metadata(
-        _context(NATURAL_LANGUAGE_PROMPT_INPUT_EN),
+        _context(EXAMPLE_REQUESTS[SCENARIO_NIGHT]["en-US"]),
         "summary",
         None,
         pure=True,

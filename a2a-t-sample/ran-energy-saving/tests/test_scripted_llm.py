@@ -43,7 +43,7 @@ from demo.scripted_llm import (
     STAGE_SLOT_EXTRACTION,
     STAGE_SLOT_EXTRACTION_FEASIBILITY,
     STAGE_SLOT_EXTRACTION_MISSING,
-    STAGE_SLOT_EXTRACTION_OUTAGE,
+    STAGE_SLOT_EXTRACTION_OUTAGE_BASELINE,
     STAGE_SLOT_EXTRACTION_TARGET,
     STAGE_SLOT_EXTRACTION_UNKNOWN,
     ScriptedLLMClient,
@@ -88,7 +88,7 @@ _EXPECTED_STAGES: dict[str, tuple[str, str]] = {
     "feasibility": (STAGE_SLOT_EXTRACTION_FEASIBILITY, STAGE_CONTENT_VALIDATION_FEASIBILITY),
     "reject": (STAGE_SLOT_EXTRACTION_MISSING, STAGE_CONTENT_VALIDATION_MISSING),
     "abort": (STAGE_SLOT_EXTRACTION_MISSING, STAGE_CONTENT_VALIDATION_MISSING),
-    "outage": (STAGE_SLOT_EXTRACTION_OUTAGE, STAGE_CONTENT_VALIDATION_OUTAGE),
+    "outage": (STAGE_SLOT_EXTRACTION_OUTAGE_BASELINE, STAGE_CONTENT_VALIDATION_OUTAGE_BASELINE),
 }
 
 #: Marker of the two-site baseline Task-T (phase 1 of the planned-outage run).
@@ -109,8 +109,10 @@ def client() -> ScriptedLLMClient:
 
 
 def test_outage_content_validation_extracts_modify(client: ScriptedLLMClient) -> None:
+    from demo.scenario import MODIFY_REQUEST
+
     response = client.structured(
-        messages=_messages(SCENARIOS["outage"].user_request["en-US"]),
+        messages=_messages(MODIFY_REQUEST["en-US"]),
         json_schema=VALIDATION_SCHEMA,
     )
 
@@ -181,9 +183,9 @@ def test_content_validation_routes_by_scenario(
 
 
 def test_complete_input_routes_to_default_slot_extraction() -> None:
-    from demo.scenario import NATURAL_LANGUAGE_PROMPT_INPUT_EN
+    from demo.scenario import EXAMPLE_REQUESTS, SCENARIO_NIGHT
 
-    stage = route_structured_call(_messages(NATURAL_LANGUAGE_PROMPT_INPUT_EN), SLOT_SCHEMA, language="en-US")
+    stage = route_structured_call(_messages(EXAMPLE_REQUESTS[SCENARIO_NIGHT]["en-US"]), SLOT_SCHEMA, language="en-US")
 
     assert stage == STAGE_SLOT_EXTRACTION
 

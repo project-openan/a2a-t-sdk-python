@@ -1,38 +1,68 @@
-"""Scenario catalog and client policy of the demonstration.
+"""Scenario catalog of the demonstration.
 
 The core only knows :class:`protocol.run_spec.RunSpec`; this module resolves one of the sample
-scenarios to it, including the business values filled into an accepted Task-T.
+scenarios to it. The example request is the single source of business values: this module only
+applies the configured vendor profile to the text the page shows and the client sends.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
+from typing import Final
 
-from protocol.run_spec import ClientPolicy, ExpectedStep, RunSpec
+from protocol.run_spec import ExpectedStep, RunSpec
 from shared.config import DISCOVERY_NMS, SampleConfig
-from shared.run_constants import LANGUAGE_ZH
+from shared.run_constants import LANGUAGE_EN, LANGUAGE_ZH
 
-from demo.intent import apply_region_profile_text, build_modify_intent, build_scenario_intent
+from demo.intent import apply_region_profile_text
 from demo.scenario import (
     SCENARIO_UNKNOWN_AREA,
     SUPPORTED_SCENARIO_NAMES,
     Scenario,
-    accept_confirmation_text,
-    accept_filled_params,
-    complete_initial_params,
     expected_negotiation_target,
-    follow_up_initial_params,
     get_scenario,
     resolve_user_request,
-    task_t_data_schema,
-    unknown_area_accept_params,
 )
 
-#: Business values of the sample OSS: the negotiated Task-T parameters and its accept text.
-DEMO_CLIENT_POLICY: ClientPolicy = ClientPolicy(
-    filled_params=accept_filled_params,
-    accept_text=accept_confirmation_text,
-)
+#: Neutral region each scenario's example request names, per language.
+_DEFAULT_NEUTRAL_REGION: Final[dict[str, str]] = {
+    LANGUAGE_EN: "Region A",
+    LANGUAGE_ZH: "区域 A",
+}
+_NEUTRAL_REGIONS: Final[dict[str, dict[str, str]]] = {
+    SCENARIO_UNKNOWN_AREA: {LANGUAGE_EN: "Region Z", LANGUAGE_ZH: "未知区域"},
+}
+
+#: Neutral site names the site-level example requests use.
+_NEUTRAL_SITES: Final[dict[str, tuple[str, ...]]] = {
+    LANGUAGE_EN: ("Site 1", "Site 2"),
+    LANGUAGE_ZH: ("站点 1", "站点 2"),
+}
+
+
+def profile_request_text(
+    text: str,
+    *,
+    language: str,
+    region: str = "",
+    sites: tuple[str, ...] = (),
+    neutral_region: str = "",
+) -> str:
+    """Apply the vendor profile to one example request.
+
+    The page serves the profiled text and the client sends exactly that text, so a real-NMS run
+    never shows the neutral demo names next to a vendor Task-T.
+    """
+    if not neutral_region:
+        neutral_region = _DEFAULT_NEUTRAL_REGION.get(language, "")
+    return apply_region_profile_text(
+        text,
+        old_region=neutral_region,
+        region=region,
+        old_sites=_NEUTRAL_SITES.get(language, ()),
+        sites=sites,
+        language=language,
+    )
 
 
 def to_run_spec(
@@ -44,47 +74,15 @@ def to_run_spec(
 ) -> RunSpec:
     """Convert one demonstration scenario into the core run specification.
 
-    ``region``/``sites`` apply the vendor profile to the scenario's request and intent. The Web UI
-    serves the same profiled request, so the sentence on the stage, the captured intent and the
-    Task-T sent to the NMS all name the same region.
+    ``region``/``sites`` apply the vendor profile to the example request. The Web UI serves the
+    same profiled text, and the client sends exactly that text, so the page and the wire agree.
     """
-    initial = complete_initial_params(scenario.name, language)
-    policy = DEMO_CLIENT_POLICY
-    if initial is not None:
-        # A complete request must never open a negotiation. Generate its Task-T from explicit
-        # values (still through the SDK's LLM extraction) instead of free-text slot extraction,
-        # which a live model can leave incomplete.
-        schema = task_t_data_schema(language)
-        values = dict(initial)
-        policy = replace(DEMO_CLIENT_POLICY, initial_data=lambda _language: (values, schema))
-    follow_up = follow_up_initial_params(scenario.name, language)
-    if follow_up is not None:
-        # The planned-outage scenario is a real two-phase A2A run: the first Task-T creates a
-        # baseline Task and the follow-up Modify Task-T continues the same Task.
-        schema = task_t_data_schema(language)
-        follow_up_values = dict(follow_up)
-        policy = replace(
-            policy,
-            follow_up_data=lambda _language: (follow_up_values, schema),
-        )
-    if scenario.name == SCENARIO_UNKNOWN_AREA:
-        # Only the area was wrong. The accept confirms a served area and keeps the requested
-        # throughput windows instead of replacing them with the generic base target.
-        policy = replace(
-            policy,
-            filled_params=lambda _kind, language: unknown_area_accept_params(language),
-        )
-    neutral_intent = build_scenario_intent(scenario.name, language)
-    intent = build_scenario_intent(
-        scenario.name, language, region=region, sites=sites
-    )
-    user_request = apply_region_profile_text(
+    user_request = profile_request_text(
         resolve_user_request(scenario, language),
-        old_region=neutral_intent.region,
-        region=intent.region,
-        old_sites=neutral_intent.sites,
-        sites=intent.sites,
         language=language,
+        region=region,
+        sites=sites,
+        neutral_region=_NEUTRAL_REGIONS.get(scenario.name, _DEFAULT_NEUTRAL_REGION).get(language, ""),
     )
     return RunSpec(
         name=scenario.name,
@@ -95,25 +93,18 @@ def to_run_spec(
             ExpectedStep(actor=step.actor, performative=step.performative, round=step.round)
             for step in scenario.expected_sequence
         ),
-        policy=policy,
         expected_final_state=scenario.expected_final_state,
         expected_negotiation_target=expected_negotiation_target(scenario, language),
-        intent=intent,
-        modify_intent=(
-            build_modify_intent(language, region=region, sites=sites)
-            if follow_up is not None
-            else None
-        ),
     )
 
 
 @dataclass(frozen=True)
 class DemoRunCatalog:
-    """Catalog over the five canned scenarios of :mod:`demo.scenario`.
+    """Catalog over the canned scenarios of :mod:`demo.scenario`.
 
     Attributes:
-        region: vendor region applied to every scenario request and intent; empty keeps the
-            neutral demo names.
+        region: vendor region applied to every scenario request; empty keeps the neutral demo
+            name.
         sites: vendor sites applied when the scenario carries a site list.
     """
 

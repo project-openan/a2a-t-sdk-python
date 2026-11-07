@@ -240,7 +240,9 @@ def build_decision_prompt(
         f"{propose.content}\n\n"
         f"{tool_rule}"
         "If the proposal lists Required Information Items, answer every item in filled_params "
-        "using the exact Task-T parameter name; do not omit one.\n"
+        "using the exact Task-T parameter name; do not omit one. On any accept, filled_params is "
+        "authoritative for the client's refilled Task-T: put the negotiated values there, at "
+        "least guaranteedThroughputTarget for a target or feasibility accept.\n"
         "Return exactly one NegotiationDecision JSON object and nothing else: no reasoning, "
         "markdown, or prose outside the JSON."
     )

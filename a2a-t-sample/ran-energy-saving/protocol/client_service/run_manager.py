@@ -21,7 +21,6 @@ from google.protobuf.json_format import MessageToDict
 from shared.config import (
     DISCOVERY_NMS,
     DISCOVERY_REGISTRY,
-    INTENT_MODE_PROCESSED,
     PRE_SEND_VALIDATION_ALWAYS,
     PRE_SEND_VALIDATION_ON,
     SUPPORTED_INTENT_MODES,
@@ -588,13 +587,9 @@ class RunManager:
         if not custom_request:
             custom_request = None
         spec = self._catalog.spec(scenario, language=self._config.language)
-        if run_mode == RUN_MODE_MODIFY and spec.modify_intent is None:
-            raise ValueError(f"Scenario {scenario!r} does not define a Modify-only run.")
-        raw_request = custom_request or (
-            spec.intent.raw_request
-            if resolved_intent_mode == INTENT_MODE_PROCESSED and spec.intent is not None
-            else None
-        )
+        # The scenario request is the text the client sends; a Modify-only run sends the operator's
+        # Modify text, so any A2A-T scenario can target an existing Task.
+        raw_request = custom_request or spec.user_request
         run_uuid = uuid.uuid4().hex
         run = RunState(
             run_id=run_uuid,

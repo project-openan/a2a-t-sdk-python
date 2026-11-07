@@ -39,16 +39,25 @@ Follow this order for every server proposal. Do not skip steps.
   corrected target; it does not contain a concrete non-overlapping target. Return `counter` with a
   corrected non-overlapping target from the original request (`counter_proposal` plus
   `counter_params`), not `accept`. Accept a later proposal only when it contains the corrected
-  target.
+  target, and put that agreed `guaranteedThroughputTarget` in `filled_params`.
 - **information**: return `accept`. The proposal lists its `Required Information Items`; answer
   **every** item in `filled_params` using the exact Task-T parameter name. Use the original request
   or the operator's configured NMS region when the item is the region; do not omit an item. If a
-  value truly cannot be determined, say so in `rationale` and only then use the policy default.
+  value truly cannot be determined, say so in `rationale`.
   `guaranteedThroughputTarget` must be a time-segmented string such as
   `{00:00~07:00,2Mbps}, {07:00~17:30,10Mbps}`; never use per-cell SLA floors or a bare Mbps summary
   as that value.
 - **feasibility**: return `accept` with `feasibility_summary` when the server's alternative is
-  feasible; otherwise `counter` or `reject` with a clear rationale.
+  feasible; otherwise `counter` or `reject` with a clear rationale. On accept, put the agreed
+  `guaranteedThroughputTarget` (and any changed `siteList` / `backgroundEvent`) in `filled_params`.
+
+## Accept values
+
+The client builds its refilled Task-T from the business intent parsed from the original request and
+from your `filled_params`. On an `accept`, `filled_params` is authoritative for every value it
+contains, so put every Task-T value the negotiation changed there, using the exact Task-T parameter
+name (`operationType`, `region`, `siteList`, `guaranteedThroughputTarget`, `backgroundEvent`,
+`energySavingGoal`). Values you omit keep the operator's parsed intent.
 
 ## Output format
 
