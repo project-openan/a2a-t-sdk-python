@@ -130,6 +130,8 @@ class RunState:
         raw_request: operator request before the business intent layer.
         normalized_request: canonical text produced by the business intent layer.
         processed_intent: structured intent document, once the layer has run.
+        scripted_decisions: per-run A2A-T decision script used by ``MODE_SCRIPTED``.
+        pure_answers: per-run answers for the pure A2A ``INPUT_REQUIRED`` rounds.
         proposals: inbound proposals in order.
         discovery: discovery mode of the run.
         traces: every trace span produced/ingested for the run.
@@ -190,6 +192,10 @@ class RunState:
     raw_request: str | None = None
     normalized_request: str | None = None
     processed_intent: dict[str, object] | None = None
+    #: Per-run A2A-T decision script (``MODE_SCRIPTED``); empty uses the catalog script.
+    scripted_decisions: tuple[NegotiationDecision, ...] = ()
+    #: Per-run answers for the pure A2A ``INPUT_REQUIRED`` rounds, consumed in order.
+    pure_answers: tuple[str, ...] = ()
     proposals: list[NegotiationProposeView] = field(default_factory=list)
     traces: list[dict[str, object]] = field(default_factory=list)
     spans: dict[str, dict[str, object]] = field(default_factory=dict)

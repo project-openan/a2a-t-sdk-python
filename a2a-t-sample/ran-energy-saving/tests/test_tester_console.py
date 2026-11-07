@@ -1,36 +1,32 @@
-"""Contract tests of the Excel-driven tester console."""
+"""Contract tests of the catalog-driven tester console."""
 
 from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import replace
-from io import BytesIO
+from collections.abc import AsyncIterator, Callable, Mapping
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
-from demo.scenario import PURE_PROTOCOL_SCENARIOS, SUPPORTED_SCENARIO_NAMES
 from demo.web.app import create_app
-from demo.web.tester.excel import parse_test_cases, write_template
-from openpyxl import Workbook, load_workbook
+from demo.web.tester.decisions import a2at_decisions, pure_answers
+from eval.osp.intent_schema import OSP_INTENT_SCHEMA
+from eval.osp.runner import load_cases
 from protocol.client_flow import ClientFlowResult
-from shared.config import MODEL_MODE_LIVE, SampleConfig
+from shared.config import SampleConfig
 from shared.run_constants import (
     FINAL_STATE_TASK_COMPLETED,
     PROTOCOL_A2A_T,
     PROTOCOL_PURE,
 )
+from shared.trace import TraceRecorder
 
 
 class _PassRuntime:
-    """Runtime double that completes every request without a negotiation."""
-
-    def __init__(self, *, emit_tokens: bool = False) -> None:
-        self.user_request: str | None = None
-        self.emit_tokens = emit_tokens
+    """Runtime double that completes every request and emits one sent message."""
 
     async def run(
         self,
@@ -42,26 +38,24 @@ class _PassRuntime:
         conversation_context: str | None = None,
         on_decision_requested: Callable[..., None] | None = None,
         on_decision_made: Callable[..., None] | None = None,
-        on_intent_ready: Callable[[str], Awaitable[bool]] | None = None,
+        on_intent_ready: Callable[..., None] | None = None,
         validate_before_send: bool = False,
         run_mode: str = "create",
         target_task_id: str | None = None,
         target_context_id: str | None = None,
     ) -> ClientFlowResult:
-        del run_id, conversation_context, validate_before_send
-        del run_mode, target_task_id, target_context_id
-        del on_decision_requested, on_decision_made, on_intent_ready
-        self.user_request = user_request
-        if self.emit_tokens and trace_sink is not None:
-            trace_sink(
-                {
-                    "kind": "llm",
-                    "side": "client",
-                    "phase": "decision",
-                    "title": "Decision model call",
-                    "tokens": {"prompt": 100, "completion": 50, "total": 150},
-                }
-            )
+        del (
+            run_id,
+            user_request,
+            conversation_context,
+            on_decision_requested,
+            on_decision_made,
+            on_intent_ready,
+            validate_before_send,
+            run_mode,
+            target_task_id,
+            target_context_id,
+        )
         if event_sink is not None:
             event_sink(
                 {
@@ -71,15 +65,62 @@ class _PassRuntime:
                     "state": "TASK_STATE_COMPLETED",
                 }
             )
-        return ClientFlowResult(final_state=FINAL_STATE_TASK_COMPLETED)
+        if trace_sink is not None:
+            recorder = TraceRecorder("test", id_prefix="fake")
+            span = recorder.emit(
+                kind="message_sent",
+                phase="task_prompt",
+                title="message sent",
+                actor="client",
+                side="client",
+            )
+            trace_sink(span.to_dict())
+        return ClientFlowResult(
+            final_state=FINAL_STATE_TASK_COMPLETED,
+            context_id="ctx-1",
+            task_id="task-1",
+        )
 
     async def aclose(self) -> None:
         """Release the runtime."""
 
 
+CASES: dict[int, dict[str, Any]] = {case["id"]: case for case in load_cases()}
+
+
+class FakePromptClient:
+    """SDK double returning the expected Task-T and intent of each case."""
+
+    def __init__(self, *, fail_ids: frozenset[int] = frozenset()) -> None:
+        self._by_text = {case["user_input"]: case for case in CASES.values()}
+        self._fail_ids = fail_ids
+        self._last_id: int | None = None
+
+    def generate_task_prompt_from_text(self, text: str, template_uri: str) -> object:
+        case = self._by_text[text]
+        self._last_id = int(case["id"])
+        task_t = str(case["expect"]["protocols"]["a2a-t"]["task_t"])
+        if self._last_id in self._fail_ids:
+            task_t = task_t.replace("A2ATestRegion", "WrongRegion", 1)
+        return SimpleNamespace(prompt_text=task_t, template_uri=template_uri)
+
+    def validate_task_prompt_and_data_filling(
+        self,
+        prompt: str,
+        schema: Mapping[str, object],
+        template_uri: str,
+    ) -> object:
+        del prompt, template_uri
+        assert self._last_id is not None
+        case = CASES[self._last_id]
+        if schema is OSP_INTENT_SCHEMA:
+            return SimpleNamespace(data=dict(case["expect"]["intent"]))
+        return SimpleNamespace(data={})
+
+
 @pytest.fixture
 def runtime_factory() -> Callable[..., Any]:
-    """Build a pass-through runtime factory and keep the created runtimes."""
+    """Build a pass-through runtime factory."""
 
     async def build(*args: object, **kwargs: object) -> _PassRuntime:
         del args, kwargs
@@ -102,210 +143,164 @@ async def client(
         finished_grace_seconds=0.0,
         protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
         nms_enabled=False,
+        tester_prompt_client=FakePromptClient(),
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
         yield http_client
 
 
-def _workbook_bytes(rows: list[list[object]]) -> bytes:
-    """Build a minimal workbook with the template header."""
-    template = load_workbook(BytesIO(write_template()), read_only=True)
-    headers = [cell.value for cell in next(template["测试用例"].iter_rows(max_row=1))]
-    template.close()
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.append(headers)
-    for row in rows:
-        sheet.append(row)
-    buffer = BytesIO()
-    workbook.save(buffer)
-    return buffer.getvalue()
+async def _wait_batch(
+    client: httpx.AsyncClient, batch_id: str, timeout: float = 30.0
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        response = await client.get(f"/api/tester/batches/{batch_id}")
+        payload = response.json()
+        if payload.get("status") not in {"draft", "running"}:
+            return payload
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"batch {batch_id} did not finish")
 
 
-def test_the_template_parses_and_keeps_the_scenario_optional() -> None:
-    cases = parse_test_cases(
-        write_template(),
-        protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
-        scenarios_by_protocol={
-            PROTOCOL_A2A_T: SUPPORTED_SCENARIO_NAMES,
-            PROTOCOL_PURE: PURE_PROTOCOL_SCENARIOS,
-        },
-        default_language="zh-CN",
-    )
-
-    assert [case.case_id for case in cases] == ["TC-001", "TC-002", "TC-003"]
-    assert cases[0].scenario_explicit is True
-    assert cases[0].expected_kind == "none"
-    assert cases[0].expected_rounds == 0
-    assert cases[2].scenario_explicit is False
-    assert cases[2].expected_kind == ""
-    assert cases[2].expected_rounds is None
-    assert cases[2].user_request
-    assert all(case.approval == "approve" for case in cases)
-    assert all(not case.errors for case in cases)
+async def test_the_catalog_lists_the_51_osp_cases(client: httpx.AsyncClient) -> None:
+    response = await client.get("/api/tester/catalog")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 51
+    first = payload["cases"][0]
+    assert first["id"] == 1
+    assert first["validate"] == "pass"
+    assert first["protocols"] == ["a2a-t", "a2a"]
 
 
-def test_an_unknown_protocol_is_reported_per_row() -> None:
-    data = _workbook_bytes(
-        [
-            ["TC-BAD", "bad", "Y", "SMTP", "night", "zh", "", "task_completed", "", "", "auto", 300, ""],
-            ["TC-OK", "ok", "Y", "A2A-T", "night", "zh", "", "task_completed", "none", 0, "auto", 300, ""],
-        ]
-    )
-
-    cases = parse_test_cases(
-        data,
-        protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
-        scenarios_by_protocol={
-            PROTOCOL_A2A_T: SUPPORTED_SCENARIO_NAMES,
-            PROTOCOL_PURE: PURE_PROTOCOL_SCENARIOS,
-        },
-        default_language="zh-CN",
-    )
-
-    assert cases[0].errors
-    assert cases[0].runnable is False
-    assert cases[1].runnable is True
+async def test_the_meta_lists_the_stage_chain(client: httpx.AsyncClient) -> None:
+    response = await client.get("/api/tester/meta")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["protocols"] == ["a2a-t", "a2a"]
+    assert payload["stopAfter"] == [
+        "intent",
+        "task_t",
+        "validate",
+        "send",
+        "negotiate",
+        "final",
+    ]
+    assert payload["catalogCount"] == 51
 
 
-async def test_the_tester_page_and_assets_are_served(client: httpx.AsyncClient) -> None:
-    page = await client.get("/tester")
-    assert page.status_code == 200
-    assert 'id="dropzone"' in page.text
-    assert "/tester/main.js" in page.text
-
-    assert (await client.get("/tester/app.css")).status_code == 200
-    assert (await client.get("/tester/main.js")).status_code == 200
-
-    meta = await client.get("/api/tester/meta")
-    assert meta.status_code == 200
-    assert meta.json()["protocols"] == [PROTOCOL_A2A_T, PROTOCOL_PURE]
-    assert meta.json()["defaultScenario"] == "night"
-    # The console is an internal Chinese-team tool even when the process language is English.
-    assert meta.json()["defaultLanguage"] == "zh"
-
-
-async def test_importing_a_workbook_creates_a_draft_batch(client: httpx.AsyncClient) -> None:
+async def test_creating_a_batch_expands_each_case_by_protocol(client: httpx.AsyncClient) -> None:
     response = await client.post(
-        "/api/tester/import",
-        content=write_template(),
-        headers={"X-File-Name": "night%20cases.xlsx"},
+        "/api/tester/batches",
+        json={
+            "caseIds": [1, 2],
+            "protocols": ["a2a-t", "a2a"],
+            "stopAfter": "final",
+            "approval": "approve",
+            "timeoutSeconds": 60,
+        },
     )
-
     assert response.status_code == 201
     batch = response.json()
     assert batch["status"] == "draft"
-    assert batch["sourceName"] == "night cases.xlsx"
-    assert batch["summary"]["total"] == 3
-    assert batch["summary"]["runnable"] == 3
-    assert [case["caseId"] for case in batch["cases"]] == ["TC-001", "TC-002", "TC-003"]
+    assert len(batch["items"]) == 4
+    assert [item["protocol"] for item in batch["items"]] == ["a2a-t", "a2a", "a2a-t", "a2a"]
 
 
-async def test_an_invalid_upload_is_rejected(client: httpx.AsyncClient) -> None:
-    response = await client.post("/api/tester/import", content=b"not a workbook")
-
+async def test_an_empty_selection_is_rejected(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        "/api/tester/batches",
+        json={"caseIds": [], "protocols": ["a2a-t"], "stopAfter": "validate"},
+    )
     assert response.status_code == 400
-    assert response.json()["code"] == "workbook_invalid"
 
 
-async def _wait_batch(
-    client: httpx.AsyncClient,
-    batch_id: str,
-    *,
-    timeout: float = 5.0,
-) -> dict[str, Any]:
-    deadline = time.monotonic() + timeout
-    latest: dict[str, Any] = {}
-    while time.monotonic() < deadline:
-        response = await client.get(f"/api/tester/batches/{batch_id}")
-        assert response.status_code == 200
-        latest = response.json()
-        if latest["status"] != "running":
-            return latest
-        await asyncio.sleep(0.02)
-    raise AssertionError(f"batch did not finish: {latest}")
-
-
-async def test_a_batch_runs_every_case_and_reports_the_verdicts(
-    client: httpx.AsyncClient,
-) -> None:
-    imported = await client.post("/api/tester/import", content=write_template())
-    batch = imported.json()
-
-    started = await client.post(f"/api/tester/batches/{batch['batchId']}/start")
-    assert started.status_code == 200
-
-    finished = await _wait_batch(client, batch["batchId"])
-    assert finished["status"] == "finished"
-    assert finished["summary"]["passed"] == 3
-    assert all(result["runId"] for result in finished["results"])
-    assert all(result["finalState"] == FINAL_STATE_TASK_COMPLETED for result in finished["results"])
-    assert all(result["actualKind"] == "none" for result in finished["results"])
-    for result in finished["results"]:
-        assert isinstance(result["durationMs"], int)
-        assert "tokens" in result["metrics"]
-        assert "latency" in result["metrics"]
-        assert result["metrics"]["tokens"]["scripted"] is True
-        assert result["metrics"]["latency"]["totalMs"] is not None
-    assert finished["summary"]["durationMs"] > 0
-
-
-async def test_invalid_rows_are_listed_but_not_executed(client: httpx.AsyncClient) -> None:
-    data = _workbook_bytes(
-        [
-            ["TC-BAD", "bad", "Y", "SMTP", "night", "zh", "", "task_completed", "", "", "auto", 300, ""],
-            ["TC-OK", "ok", "Y", "A2A-T", "night", "zh", "", "task_completed", "none", 0, "auto", 300, ""],
-        ]
+async def test_the_sdk_stage_batch_passes_with_the_fake_client(client: httpx.AsyncClient) -> None:
+    created = await client.post(
+        "/api/tester/batches",
+        json={
+            "caseIds": [1],
+            "protocols": ["a2a-t"],
+            "stopAfter": "validate",
+            "approval": "approve",
+            "timeoutSeconds": 60,
+        },
     )
-    imported = await client.post("/api/tester/import", content=data)
-    batch = imported.json()
-    assert batch["summary"]["invalid"] == 1
-    assert batch["summary"]["runnable"] == 1
-
-    await client.post(f"/api/tester/batches/{batch['batchId']}/start")
-    finished = await _wait_batch(client, batch["batchId"])
-
-    assert finished["results"][0]["status"] == "invalid"
-    assert finished["results"][1]["status"] == "passed"
-    assert finished["summary"]["invalid"] == 1
+    batch_id = created.json()["batchId"]
+    await client.post(f"/api/tester/batches/{batch_id}/start")
+    finished = await _wait_batch(client, batch_id)
     assert finished["summary"]["passed"] == 1
+    item = finished["items"][0]
+    assert item["status"] == "passed"
+    assert item["stages"]["intent"]["status"] == "passed"
+    assert item["stages"]["task_t"]["status"] == "passed"
+    assert item["stages"]["validate"]["status"] == "passed"
 
 
-async def test_retry_rebuilds_only_the_failed_cases(client: httpx.AsyncClient) -> None:
-    data = _workbook_bytes(
-        [
-            ["TC-FAIL", "fail", "Y", "A2A-T", "night", "zh", "", "task_rejected", "none", 0, "approve", 300, ""],
-            ["TC-PASS", "pass", "Y", "A2A-T", "night", "zh", "", "task_completed", "none", 0, "approve", 300, ""],
-        ]
+async def test_the_full_flow_asserts_send_negotiate_and_final(client: httpx.AsyncClient) -> None:
+    created = await client.post(
+        "/api/tester/batches",
+        json={
+            "caseIds": [1],
+            "protocols": ["a2a-t"],
+            "stopAfter": "final",
+            "approval": "approve",
+            "timeoutSeconds": 60,
+        },
     )
-    imported = await client.post("/api/tester/import", content=data)
-    batch = imported.json()
-    await client.post(f"/api/tester/batches/{batch['batchId']}/start")
-    finished = await _wait_batch(client, batch["batchId"])
-    assert finished["summary"]["failed"] == 1
-    assert finished["summary"]["passed"] == 1
-
-    retried = await client.post(f"/api/tester/batches/{batch['batchId']}/retry")
-    assert retried.status_code == 201
-    retry_batch = retried.json()
-    assert retry_batch["status"] == "draft"
-    assert [case["caseId"] for case in retry_batch["cases"]] == ["TC-FAIL"]
-
-    await client.post(f"/api/tester/batches/{retry_batch['batchId']}/start")
-    rerun = await _wait_batch(client, retry_batch["batchId"])
-    assert rerun["summary"]["failed"] == 1
+    batch_id = created.json()["batchId"]
+    await client.post(f"/api/tester/batches/{batch_id}/start")
+    finished = await _wait_batch(client, batch_id)
+    item = finished["items"][0]
+    assert item["status"] == "passed", item
+    assert item["stages"]["send"]["status"] == "passed"
+    assert item["stages"]["negotiate"]["status"] == "passed"
+    assert item["stages"]["final"]["status"] == "passed"
 
 
-async def test_a_batch_is_still_listed_after_a_ui_restart(
-    client: httpx.AsyncClient,
+async def test_a2a_rejects_a_sdk_only_stop_stage(client: httpx.AsyncClient) -> None:
+    created = await client.post(
+        "/api/tester/batches",
+        json={
+            "caseIds": [1],
+            "protocols": ["a2a"],
+            "stopAfter": "validate",
+            "approval": "approve",
+            "timeoutSeconds": 60,
+        },
+    )
+    batch_id = created.json()["batchId"]
+    await client.post(f"/api/tester/batches/{batch_id}/start")
+    finished = await _wait_batch(client, batch_id)
+    assert finished["items"][0]["status"] == "error"
+    assert "SDK 阶段" in finished["items"][0]["error"]
+
+
+async def test_a_scratch_request_runs_without_expectations(client: httpx.AsyncClient) -> None:
+    created = await client.post(
+        "/api/tester/scratch",
+        json={
+            "userInput": "Create an energy saving task for A2ATestRegion.",
+            "protocol": "a2a-t",
+            "approval": "approve",
+            "timeoutSeconds": 60,
+        },
+    )
+    assert created.status_code == 201
+    batch_id = created.json()["batchId"]
+    await client.post(f"/api/tester/batches/{batch_id}/start")
+    finished = await _wait_batch(client, batch_id)
+    item = finished["items"][0]
+    assert item["caseId"] == 0
+    assert item["stages"]["final"]["status"] == "recorded"
+
+
+async def test_retry_rebuilds_only_the_failed_items(
     offline_config: SampleConfig,
     runtime_factory: Callable[..., Any],
     tmp_path: Path,
 ) -> None:
-    imported = await client.post("/api/tester/import", content=write_template())
-    batch = imported.json()
-
     app = create_app(
         offline_config,
         runs_dir=tmp_path,
@@ -313,124 +308,64 @@ async def test_a_batch_is_still_listed_after_a_ui_restart(
         finished_grace_seconds=0.0,
         protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
         nms_enabled=False,
+        tester_prompt_client=FakePromptClient(fail_ids=frozenset({1})),
     )
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as other:
-        restored = await other.get(f"/api/tester/batches/{batch['batchId']}")
-        assert restored.status_code == 200
-        assert restored.json()["status"] == "draft"
-        assert [case["caseId"] for case in restored.json()["cases"]] == [
-            "TC-001",
-            "TC-002",
-            "TC-003",
-        ]
-
-        listing = await other.get("/api/tester/batches")
-        assert listing.status_code == 200
-        assert batch["batchId"] in [item["batchId"] for item in listing.json()["batches"]]
-
-
-async def test_nms_mode_is_exposed_to_the_page(
-    offline_config: SampleConfig,
-    runtime_factory: Callable[..., Any],
-    tmp_path: Path,
-) -> None:
-    app = create_app(
-        offline_config,
-        runs_dir=tmp_path,
-        runtime_factory=runtime_factory,
-        finished_grace_seconds=0.0,
-        protocols=(PROTOCOL_A2A_T,),
-        nms_enabled=True,
-    )
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        meta = await client.get("/api/tester/meta")
-    assert meta.status_code == 200
-    assert meta.json()["nmsEnabled"] is True
-
-
-async def test_live_token_usage_is_collected_per_case(
-    offline_config: SampleConfig,
-    tmp_path: Path,
-) -> None:
-    live_config = replace(offline_config, model_mode=MODEL_MODE_LIVE)
-
-    async def build(*args: object, **kwargs: object) -> _PassRuntime:
-        del args, kwargs
-        return _PassRuntime(emit_tokens=True)
-
-    app = create_app(
-        live_config,
-        runs_dir=tmp_path,
-        runtime_factory=build,
-        finished_grace_seconds=0.0,
-        protocols=(PROTOCOL_A2A_T,),
-        nms_enabled=False,
-    )
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        data = _workbook_bytes(
-            [
-                [
-                    "TC-TOKENS",
-                    "tokens",
-                    "Y",
-                    "A2A-T",
-                    "night",
-                    "zh",
-                    "",
-                    "task_completed",
-                    "none",
-                    0,
-                    "approve",
-                    300,
-                    "",
-                ]
-            ]
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
+        created = await http.post(
+            "/api/tester/batches",
+            json={
+                "caseIds": [1, 2],
+                "protocols": ["a2a-t"],
+                "stopAfter": "validate",
+                "approval": "approve",
+                "timeoutSeconds": 60,
+            },
         )
-        imported = await client.post("/api/tester/import", content=data)
-        batch = imported.json()
-        await client.post(f"/api/tester/batches/{batch['batchId']}/start")
-        finished = await _wait_batch(client, batch["batchId"])
-
-        tokens = finished["results"][0]["metrics"]["tokens"]
-        assert tokens["available"] is True
-        assert tokens["prompt"] == 100
-        assert tokens["completion"] == 50
-        assert tokens["total"] == 150
-        assert tokens["llmCalls"] == 1
-        assert finished["summary"]["tokens"] == 150
-
-        export = await client.get(f"/api/tester/batches/{batch['batchId']}/export.xlsx")
-        workbook = load_workbook(BytesIO(export.content), read_only=True)
-        summary_rows = list(workbook["汇总"].iter_rows(values_only=True))
-        workbook.close()
-    assert ("Token 总量", 150) in summary_rows
+        batch_id = created.json()["batchId"]
+        await http.post(f"/api/tester/batches/{batch_id}/start")
+        finished = await _wait_batch(http, batch_id)
+        assert finished["summary"]["failed"] == 1
+        assert finished["summary"]["passed"] == 1
+        retried = await http.post(f"/api/tester/batches/{batch_id}/retry")
+        assert retried.status_code == 201
+        assert [item["caseId"] for item in retried.json()["items"]] == [1]
 
 
-async def test_the_results_workbook_contains_the_verdicts(client: httpx.AsyncClient) -> None:
-    imported = await client.post("/api/tester/import", content=write_template())
-    batch = imported.json()
-    await client.post(f"/api/tester/batches/{batch['batchId']}/start")
-    await _wait_batch(client, batch["batchId"])
+async def test_the_batch_exports_json_and_xlsx(client: httpx.AsyncClient) -> None:
+    created = await client.post(
+        "/api/tester/batches",
+        json={
+            "caseIds": [1],
+            "protocols": ["a2a-t"],
+            "stopAfter": "validate",
+            "approval": "approve",
+            "timeoutSeconds": 60,
+        },
+    )
+    batch_id = created.json()["batchId"]
+    exported = await client.get(f"/api/tester/batches/{batch_id}/export.json")
+    assert exported.status_code == 200
+    assert exported.json()["batchId"] == batch_id
+    workbook = await client.get(f"/api/tester/batches/{batch_id}/export.xlsx")
+    assert workbook.status_code == 200
+    assert workbook.content.startswith(b"PK")
 
-    response = await client.get(f"/api/tester/batches/{batch['batchId']}/export.xlsx")
-    assert response.status_code == 200
-    workbook = load_workbook(BytesIO(response.content), read_only=True)
-    assert workbook.sheetnames == ["测试结果", "指标", "汇总"]
-    rows = list(workbook["测试结果"].iter_rows(values_only=True))
-    metric_rows = list(workbook["指标"].iter_rows(values_only=True))
-    summary_rows = list(workbook["汇总"].iter_rows(values_only=True))
-    workbook.close()
 
-    assert rows[0][2] == "执行状态"
-    assert "Token 总量" in rows[0]
-    assert "缓存 Token" in rows[0]
-    assert "缓存命中率" in rows[0]
-    assert {row[2] for row in rows[1:]} == {"passed"}
-    assert {row[0] for row in rows[1:]} == {"TC-001", "TC-002", "TC-003"}
-    assert metric_rows[0][0] == "用例编号"
-    assert {row[0] for row in metric_rows[1:]} == {"TC-001", "TC-002", "TC-003"}
-    assert summary_rows[0] == ("指标", "值")
-    assert ("Token 统计", "离线脚本或未上报") in summary_rows
+def test_a2at_decision_parser_keeps_target_and_feasibility_order() -> None:
+    decisions = a2at_decisions(CASES[34])
+    assert len(decisions) == 2
+    assert "10Mbps" in str(decisions[0].confirmed_intent)
+    assert decisions[1].feasibility_summary
+
+
+def test_a2at_decision_parser_reads_a_feasibility_reply() -> None:
+    decisions = a2at_decisions(CASES[32])
+    assert len(decisions) == 1
+    assert "Reduce throughput target" in str(decisions[0].feasibility_summary)
+
+
+def test_pure_answers_replay_the_p_column() -> None:
+    answers = pure_answers(CASES[1])
+    assert len(answers) == 1
+    assert "Set the guaranteed throughput targets" in answers[0]

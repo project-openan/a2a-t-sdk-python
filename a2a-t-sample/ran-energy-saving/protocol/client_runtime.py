@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import shutil
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextvars import Token
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,7 +42,7 @@ from shared.config import (
     merge_sample_process_env,
 )
 from shared.model_factory import build_traced_adk_model
-from shared.models import NegotiationProposeView
+from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.run_constants import (
     FINAL_STATE_INTENT_NOT_CONFIRMED,
     MAX_ROUNDS,
@@ -225,12 +225,14 @@ def _decision_provider(
     *,
     model: Any | None = None,
     client_agent_factory: Callable[[Any], Any] | None = None,
+    scripted_decisions: Sequence[NegotiationDecision] | None = None,
 ) -> NegotiationDecisionProvider:
     """Build the decision provider of one client mode.
 
     The offline model is supplied by the composition root; a scripted provider replays the run
-    spec's decisions. In offline ``auto`` mode the model serves the same scripted decisions, so the
-    ADK runner stays in the loop and still produces counter/reject/abort decisions.
+    spec's decisions, or the per-run override when one is supplied. In offline ``auto`` mode the
+    model serves the same scripted decisions, so the ADK runner stays in the loop and still
+    produces counter/reject/abort decisions.
 
     Raises:
         ClientRuntimeError: when the mode is not supported.
@@ -238,7 +240,8 @@ def _decision_provider(
     if mode == MODE_MANUAL:
         return ManualDecisionProvider()
     if mode == MODE_SCRIPTED:
-        return ScriptedDecisionProvider(run_spec.scripted_decisions)
+        decisions = scripted_decisions if scripted_decisions is not None else run_spec.scripted_decisions
+        return ScriptedDecisionProvider(decisions)
     if mode in (MODE_AUTO, MODE_CONFIRM):
         provider = _build_adk_decision_provider(
             config,
@@ -577,6 +580,7 @@ async def build_client_runtime(
     install_offline_provider: Callable[[], None] | None = None,
     client_agent_factory: Callable[[Any], Any] | None = None,
     pure_answer: Callable[[dict[str, object]], str] | None = None,
+    scripted_decisions: Sequence[NegotiationDecision] | None = None,
     intent_processor_factory: Callable[[SampleConfig], IntentProcessor] | None = None,
 ) -> ClientRuntime:
     """Assemble the client runtime of one run.
@@ -597,6 +601,8 @@ async def build_client_runtime(
         client_agent_factory: optional builder of the ADK decision agent from its model.
         pure_answer: callback answering one pure ``INPUT_REQUIRED`` event. Pure mode skips the
             A2A-T SDK facade and the negotiation decision provider entirely.
+        scripted_decisions: per-run A2A-T decision script used by ``MODE_SCRIPTED``; ``None``
+            replays the scenario's catalog script.
         intent_processor_factory: optional builder of the business intent layer; when omitted,
             processed mode falls back to the raw text.
 
@@ -742,6 +748,7 @@ async def build_client_runtime(
                 mode,
                 model=offline_model,
                 client_agent_factory=client_agent_factory,
+                scripted_decisions=scripted_decisions,
             )
             if isinstance(provider, ConfirmingDecisionProvider):
                 # The confirmation mode already builds an ADK provider for its recommendation;

@@ -8,7 +8,7 @@ import logging
 import os
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -522,6 +522,9 @@ class RunManager:
         source: Mapping[str, object] | None = None,
         target_task_id: str | None = None,
         target_context_id: str | None = None,
+        scripted_decisions: Sequence[NegotiationDecision] | None = None,
+        pure_answers: Sequence[str] | None = None,
+        validate_before_send: bool | None = None,
     ) -> RunState:
         """Start one background run and broadcast ``run_started`` before the task is scheduled.
 
@@ -545,6 +548,12 @@ class RunManager:
                 through :func:`shared.run_source.normalize_run_source`.
             target_task_id: existing running Task a Modify-only run continues.
             target_context_id: context of the Task a Modify-only run continues.
+            scripted_decisions: per-run A2A-T decision script used by ``MODE_SCRIPTED``; ``None``
+                keeps the scenario's catalog script.
+            pure_answers: per-run answers for the pure A2A ``INPUT_REQUIRED`` rounds, consumed in
+                order; ``None`` keeps the process-level pure policy.
+            validate_before_send: force the pre-send Task-T validation on or off; ``None`` uses the
+                process setting and the source kind.
 
         Raises:
             RunConflictError: when the same conversation already has an active run.
@@ -558,7 +567,11 @@ class RunManager:
         run_mode = RUN_MODE_MODIFY if resolved_target_task else RUN_MODE_CREATE
         if run_mode == RUN_MODE_MODIFY and protocol != PROTOCOL_A2A_T:
             raise ValueError("A Modify-only run requires the A2A-T protocol.")
-        validate_before_send = _should_validate_before_send(self._config, resolved_source)
+        resolved_validate_before_send = (
+            _should_validate_before_send(self._config, resolved_source)
+            if validate_before_send is None
+            else validate_before_send
+        )
         resolved_intent_mode = (intent_mode or self._config.intent_mode).strip()
         if resolved_intent_mode not in SUPPORTED_INTENT_MODES:
             raise ValueError(
@@ -609,12 +622,14 @@ class RunManager:
             idempotency_key=resolved_key,
             store=self._store,
             intent_mode=resolved_intent_mode,
-            validate_before_send=validate_before_send,
+            validate_before_send=resolved_validate_before_send,
             raw_request=raw_request,
             source=dict(resolved_source),
             run_mode=run_mode,
             target_task_id=resolved_target_task or None,
             target_context_id=resolved_target_context or None,
+            scripted_decisions=tuple(scripted_decisions or ()),
+            pure_answers=tuple(pure_answers or ()),
         )
         run.transcript = NegotiationTranscript(
             scenario=scenario,
@@ -970,6 +985,11 @@ class RunManager:
             run.record_trace(span)
 
         try:
+            runtime_kwargs: dict[str, object] = {}
+            if run.scripted_decisions:
+                runtime_kwargs["scripted_decisions"] = run.scripted_decisions
+            if run.pure_answers:
+                runtime_kwargs["pure_answers"] = run.pure_answers
             run.runtime = await self._runtime_factory(
                 # This manager keeps an incomplete remote Task active in the background, so the
                 # NMS transport may hand the task over after a short silence instead of waiting
@@ -981,6 +1001,7 @@ class RunManager:
                 run.discovery,
                 protocol=run.protocol,
                 run_id=run.run_id,
+                **runtime_kwargs,
             )
             run.emit_trace(
                 kind="runtime_ready",

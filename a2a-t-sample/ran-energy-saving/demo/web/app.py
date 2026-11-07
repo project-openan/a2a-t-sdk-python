@@ -30,7 +30,7 @@ import logging
 import os
 import re
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -204,6 +204,7 @@ def create_app(
     protocols: tuple[str, ...] | None = None,
     nms_enabled: bool | None = None,
     mie_url: str | None = None,
+    tester_prompt_client: Any | None = None,
 ) -> Starlette:
     """Build the Starlette application of the Web UI.
 
@@ -247,6 +248,8 @@ def create_app(
             discovery mode decides. It selects each protocol's default hop (A2A-T direct to the
             NMS, standard A2A through the OSS Agent).
         mie_url: MIE Agent base URL; when set, the UI proxies its approval SSE/POST routes.
+        tester_prompt_client: optional SDK prompt client injected into the tester's SDK stages
+            (tests use a fake; production builds the real client lazily).
 
     Returns:
         The assembled Starlette application.
@@ -336,6 +339,8 @@ def create_app(
         *,
         protocol: str = PROTOCOL_A2A_T,
         run_id: str = "",
+        scripted_decisions: Sequence[NegotiationDecision] | None = None,
+        pure_answers: Sequence[str] | None = None,
     ) -> ClientRuntimeLike:
         """Build the real client runtime with the app's source ``.env``."""
         from demo.composition import build_demo_runtime
@@ -349,6 +354,8 @@ def create_app(
             protocol=protocol,
             run_id=run_id,
             env_path=env_path,
+            scripted_decisions=scripted_decisions,
+            pure_answers=pure_answers,
         )
 
     resolved_runs_dir = runs_dir or Path(config.runs_dir)
@@ -380,6 +387,7 @@ def create_app(
         model_mode=config.model_mode,
         model_label=config.model_label,
         metrics_grace_seconds=metrics_grace_seconds,
+        prompt_client=tester_prompt_client,
     )
     run_console_routes = build_run_console_routes(
         runs=manager,

@@ -1,4 +1,4 @@
-"""Excel-driven tester console of the RAN energy-saving sample."""
+"""Catalog-driven tester console of the RAN energy-saving sample."""
 
 from __future__ import annotations
 

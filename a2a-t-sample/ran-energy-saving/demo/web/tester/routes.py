@@ -1,29 +1,27 @@
-"""HTTP routes of the tester console.
+"""HTTP routes of the redesigned tester console.
 
-The page is separate from the presentation and Run Explorer pages but shares the same process,
-run manager and client store. It only adds Excel import, batch execution and result export.
+The console is now catalog-driven: it lists the OSP YAML cases, starts one batch item per
+``(case, protocol)`` and runs the requested stage chain. Excel is an export format only.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Final
-from urllib.parse import unquote
+from typing import Any, Final
 
+from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog
 from protocol.client_service import RunManager
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
-from demo.web.tester.excel import parse_test_cases, write_results, write_template
-from demo.web.tester.runner import TestBatchManager
+from demo.web.tester.report import write_report
+from demo.web.tester.service import ALL_STAGES, EvalBatchManager
 
 #: Directory of the tester page assets.
 TESTER_DIR: Final[Path] = Path(__file__).resolve().parent
-
-#: Largest workbook accepted by the import endpoint (10 MB).
-MAX_UPLOAD_BYTES: Final[int] = 10 * 1024 * 1024
 
 #: Media type of an ``.xlsx`` workbook.
 XLSX_MEDIA_TYPE: Final[str] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -33,9 +31,7 @@ def build_tester_routes(
     *,
     runs: RunManager,
     protocols: Sequence[str],
-    scenarios_by_protocol: Mapping[str, Sequence[str]],
     protocol_defaults: Mapping[str, Mapping[str, str]],
-    default_language: str,
     server_url: str | None,
     server_auth_token: str | None,
     mie_url: str | None,
@@ -45,10 +41,17 @@ def build_tester_routes(
     model_mode: str = "",
     model_label: str = "",
     metrics_grace_seconds: float = 0.0,
-) -> tuple[list[Route], TestBatchManager]:
+    catalog: CaseCatalog | None = None,
+    prompt_client: Any | None = None,
+    scenarios_by_protocol: Mapping[str, Sequence[str]] | None = None,
+    default_language: str = "",
+) -> tuple[list[Route], EvalBatchManager]:
     """Build the tester routes and the process-level batch manager."""
-    batches = TestBatchManager(
+    del scenarios_by_protocol, default_language
+    resolved_catalog = catalog or CaseCatalog()
+    batches = EvalBatchManager(
         runs=runs,
+        catalog=resolved_catalog,
         protocol_defaults=protocol_defaults,
         server_url=server_url,
         server_auth_token=server_auth_token,
@@ -58,6 +61,7 @@ def build_tester_routes(
         model_mode=model_mode,
         model_label=model_label,
         metrics_grace_seconds=metrics_grace_seconds,
+        prompt_client=prompt_client,
     )
 
     async def page(request: Request) -> Response:
@@ -80,57 +84,53 @@ def build_tester_routes(
         del request
         return JSONResponse(
             {
-                "protocols": list(protocols),
-                "scenariosByProtocol": {name: list(names) for name, names in scenarios_by_protocol.items()},
-                # The tester console is an internal Chinese-team tool; its labels stay Chinese
-                # even when the process language is English.
-                "defaultLanguage": "zh",
-                "defaultScenario": "night",
-                "approvals": ["auto", "approve", "reject"],
-                "maxUploadBytes": MAX_UPLOAD_BYTES,
+                "protocols": [PROTOCOL_A2A_T, PROTOCOL_A2A],
+                "stopAfter": list(ALL_STAGES),
+                "approvals": ["approve", "reject", "auto"],
+                "defaults": {
+                    "stopAfter": "final",
+                    "approval": "approve",
+                    "timeoutSeconds": 300,
+                },
+                "catalogCount": resolved_catalog.count,
                 "nmsEnabled": nms_enabled,
+                "advertisedProtocols": list(protocols),
             }
         )
 
-    async def template(request: Request) -> Response:
-        """Download the import template."""
+    async def catalog_rows(request: Request) -> Response:
+        """Return the whole case catalog; the page filters it client-side."""
         del request
-        return Response(
-            write_template(),
-            media_type=XLSX_MEDIA_TYPE,
-            headers={"Content-Disposition": 'attachment; filename="a2a-test-cases.xlsx"'},
-        )
+        return JSONResponse({"cases": batches.catalog(), "count": resolved_catalog.count})
 
-    async def import_workbook(request: Request) -> Response:
-        """Parse one uploaded workbook and register its cases as a draft batch."""
-        data = await request.body()
-        if not data:
-            return JSONResponse(
-                {"error": "请上传 .xlsx 测试用例文件。", "code": "file_empty"},
-                status_code=400,
-            )
-        if len(data) > MAX_UPLOAD_BYTES:
-            return JSONResponse(
-                {"error": "文件超过 10 MB 上限。", "code": "file_too_large"},
-                status_code=413,
-            )
+    async def create_batch(request: Request) -> Response:
+        """Create a draft batch from selected cases and protocols."""
         try:
-            cases = parse_test_cases(
-                data,
-                protocols=protocols,
-                scenarios_by_protocol=scenarios_by_protocol,
-                default_language=default_language,
+            body = await _json_body(request)
+            snapshot = batches.create(
+                case_ids=_int_list(body.get("caseIds"), "caseIds"),
+                protocols=_str_list(body.get("protocols"), "protocols"),
+                stop_after=str(body.get("stopAfter") or "final"),
+                approval=str(body.get("approval") or "approve"),
+                timeout_seconds=float(body.get("timeoutSeconds") or 300.0),
             )
-        except ValueError as exc:
-            return JSONResponse(
-                {"error": str(exc), "code": "workbook_invalid"},
-                status_code=400,
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc), "code": "invalid_request"}, status_code=400)
+        return JSONResponse(snapshot, status_code=201)
+
+    async def create_scratch(request: Request) -> Response:
+        """Create a one-item ad-hoc batch."""
+        try:
+            body = await _json_body(request)
+            snapshot = batches.create_scratch(
+                user_input=str(body.get("userInput") or ""),
+                protocol=str(body.get("protocol") or PROTOCOL_A2A_T),
+                approval=str(body.get("approval") or "approve"),
+                timeout_seconds=float(body.get("timeoutSeconds") or 300.0),
             )
-        source_name = unquote(request.headers.get("x-file-name", "")).strip()[:200]
-        return JSONResponse(
-            batches.create(cases, source_name=source_name),
-            status_code=201,
-        )
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc), "code": "invalid_request"}, status_code=400)
+        return JSONResponse(snapshot, status_code=201)
 
     async def list_batches(request: Request) -> Response:
         """List recent persisted batches (newest first)."""
@@ -138,32 +138,13 @@ def build_tester_routes(
             limit = int(request.query_params.get("limit", "20"))
         except ValueError:
             limit = 20
-        return JSONResponse({"batches": batches.list(limit=max(1, min(limit, 100)))})
-
-    async def retry_batch(request: Request) -> Response:
-        """Create a draft batch from the failed/errored/cancelled cases of one batch."""
-        try:
-            snapshot = batches.retry(request.path_params["batch_id"])
-        except KeyError:
-            return JSONResponse(
-                {"error": "未知测试批次。", "code": "unknown_batch"},
-                status_code=404,
-            )
-        except ValueError as exc:
-            return JSONResponse(
-                {"error": str(exc), "code": "batch_not_retryable"},
-                status_code=409,
-            )
-        return JSONResponse(snapshot, status_code=201)
+        return JSONResponse({"batches": batches.list_batches(limit=max(1, min(limit, 100)))})
 
     async def get_batch(request: Request) -> Response:
         """Return the live state of one batch."""
         snapshot = batches.get(request.path_params["batch_id"])
         if snapshot is None:
-            return JSONResponse(
-                {"error": "未知测试批次。", "code": "unknown_batch"},
-                status_code=404,
-            )
+            return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
         return JSONResponse(snapshot)
 
     async def start_batch(request: Request) -> Response:
@@ -171,46 +152,55 @@ def build_tester_routes(
         try:
             snapshot = await batches.start(request.path_params["batch_id"])
         except KeyError:
-            return JSONResponse(
-                {"error": "未知测试批次。", "code": "unknown_batch"},
-                status_code=404,
-            )
+            return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
         except ValueError as exc:
-            return JSONResponse(
-                {"error": str(exc), "code": "batch_not_startable"},
-                status_code=409,
-            )
+            return JSONResponse({"error": str(exc), "code": "batch_not_startable"}, status_code=409)
         return JSONResponse(snapshot)
 
     async def cancel_batch(request: Request) -> Response:
         """Cancel a running batch."""
         batch_id = request.path_params["batch_id"]
         if batches.get(batch_id) is None:
-            return JSONResponse(
-                {"error": "未知测试批次。", "code": "unknown_batch"},
-                status_code=404,
-            )
+            return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
         cancelled = await batches.cancel(batch_id)
         if not cancelled:
             return JSONResponse(
-                {"error": "该批次不在执行中。", "code": "batch_not_running"},
-                status_code=409,
+                {"error": "该批次不在执行中。", "code": "batch_not_running"}, status_code=409
             )
         return JSONResponse({"accepted": True, "batchId": batch_id})
 
-    async def export_results(request: Request) -> Response:
-        """Download the current results as an ``.xlsx`` workbook."""
+    async def retry_batch(request: Request) -> Response:
+        """Create a draft batch from the failed/errored/cancelled items."""
+        try:
+            snapshot = batches.retry(request.path_params["batch_id"])
+        except KeyError:
+            return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc), "code": "batch_not_retryable"}, status_code=409)
+        return JSONResponse(snapshot, status_code=201)
+
+    async def export_json(request: Request) -> Response:
+        """Download the batch as JSON."""
         batch_id = request.path_params["batch_id"]
         snapshot = batches.get(batch_id)
         if snapshot is None:
-            return JSONResponse(
-                {"error": "未知测试批次。", "code": "unknown_batch"},
-                status_code=404,
-            )
+            return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
         return Response(
-            write_results(snapshot),
+            json.dumps(snapshot, ensure_ascii=False, indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="osp-tester-{batch_id}.json"'},
+        )
+
+    async def export_xlsx(request: Request) -> Response:
+        """Download the batch as an XLSX report."""
+        batch_id = request.path_params["batch_id"]
+        snapshot = batches.get(batch_id)
+        if snapshot is None:
+            return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
+        return Response(
+            write_report(snapshot),
             media_type=XLSX_MEDIA_TYPE,
-            headers={"Content-Disposition": (f'attachment; filename="a2a-test-results-{batch_id}.xlsx"')},
+            headers={"Content-Disposition": f'attachment; filename="osp-tester-{batch_id}.xlsx"'},
         )
 
     routes = [
@@ -218,16 +208,50 @@ def build_tester_routes(
         Route("/tester/app.css", stylesheet),
         Route("/tester/main.js", script),
         Route("/api/tester/meta", meta),
-        Route("/api/tester/template.xlsx", template),
-        Route("/api/tester/import", import_workbook, methods=["POST"]),
+        Route("/api/tester/catalog", catalog_rows),
         Route("/api/tester/batches", list_batches),
+        Route("/api/tester/batches", create_batch, methods=["POST"]),
+        Route("/api/tester/scratch", create_scratch, methods=["POST"]),
         Route("/api/tester/batches/{batch_id}", get_batch),
         Route("/api/tester/batches/{batch_id}/start", start_batch, methods=["POST"]),
         Route("/api/tester/batches/{batch_id}/cancel", cancel_batch, methods=["POST"]),
         Route("/api/tester/batches/{batch_id}/retry", retry_batch, methods=["POST"]),
-        Route("/api/tester/batches/{batch_id}/export.xlsx", export_results),
+        Route("/api/tester/batches/{batch_id}/export.json", export_json),
+        Route("/api/tester/batches/{batch_id}/export.xlsx", export_xlsx),
     ]
     return routes, batches
 
 
-__all__ = ["MAX_UPLOAD_BYTES", "TESTER_DIR", "build_tester_routes"]
+async def _json_body(request: Request) -> Mapping[str, Any]:
+    try:
+        payload = json.loads((await request.body()) or b"{}")
+    except ValueError as exc:
+        raise ValueError("请求体不是合法 JSON。") from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError("请求体必须是 JSON 对象。")
+    return payload
+
+
+def _int_list(value: object, name: str) -> list[int]:
+    if not isinstance(value, list):
+        raise ValueError(f"{name} 必须是数组。")
+    result: list[int] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int):
+            raise ValueError(f"{name} 只能包含整数。")
+        result.append(item)
+    if not result:
+        raise ValueError(f"{name} 不能为空。")
+    return result
+
+
+def _str_list(value: object, name: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{name} 必须是数组。")
+    result = [str(item) for item in value if isinstance(item, str)]
+    if not result:
+        raise ValueError(f"{name} 不能为空。")
+    return result
+
+
+__all__ = ["TESTER_DIR", "build_tester_routes"]

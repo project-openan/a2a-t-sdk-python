@@ -121,4 +121,5 @@ source:
   file: OSP-Unified Evaluation Set_v.01.xlsx
   sheet: A2A-T_原始数据
   row: 8
-known_issue: null
+known_issue: |-
+  H 列把“Power Savings Ratio 10%”放在 Task Context，Task Target 留空；但 slot 约束要求定量 gain target 放在 Task Target。SDK 实际输出放在 Task Target，因此 task_t 阶段会报 Task Target 差异。待业务确认以 H 列还是 slot 约束为准；确认前保留断言，让差异可见。

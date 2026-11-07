@@ -187,6 +187,7 @@ A2A-T 只有 6 条需要协商（32/34/35/36/37/38），其余 45 条断言 0 �
 | 40 | 输入无区域，I 列预期拦截；J/H 却填了 `A2ATestRegion` | `assert.intent: false`、`assert.a2a-t.task_t: false`；validate 仍判拦截 |
 | 46 | 输入 `green energy-saving mode`，I 列预期拦截；J/H 写成 `Aggressive` | 同上 |
 | 49–51 | I 列"预期SDK校验结果"为空 | `assert.a2a-t.validate/send/final_state: false`；意图与 Task-T 仍判定 |
+| 7 | H 列把 gain target 放在 Task Context、Task Target 留空；slot 约束要求定量 gain target 放在 Task Target | 保留断言，`known_issue` 说明差异，待业务确认 |
 | 20 / 21 / 28 / 34 | A2A 与 A2A-T 的预期行为差异，见 `known_issue` | 只加说明，不关断言 |
 
 这些用例都标了 `tags: [needs-confirmation]`，业务确认后把对应 `assert` 打开即可。
@@ -202,13 +203,61 @@ python docs-local/osp-eval-cases/generate_osp_cases.py --check
 
 `--check` 会逐文件比较生成的 YAML 与已提交文件，有漂移时返回非零。
 
-## 8. 已知限制
+## 8. 离线 runner
+
+`eval/osp/runner.py` 只跑 SDK 拥有的三个阶段，不启动 Web UI、不发送到网管：
+
+```bash
+PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --all
+PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1,40,46,49 --verbose
+PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-after intent --model-mode live
+```
+
+| 阶段 | runner 做什么 |
+|---|---|
+| `intent` | 生成 Task-T，再用 `OSP_INTENT_SCHEMA` 提取 11 键意图，与 `expect.intent` 逐字段比 |
+| `task_t` | 分段比实际 Task-T 与 `expect.protocols.a2a-t.task_t`；Operation Type / Task Type / Task Object / Task Target 精确比，Task Context 按速率/时段/站点/RAT/模式做结构化比较，其余仅记录 |
+| `validate` | 调用样例的 Task-T 内容校验，映射为 `blocked` / `pass`；`slot.*` 生成失败视为拦截 |
+
+`send / negotiate / final` 需要完整运行时，不在这个 runner 内。
+
+- `--model-mode live` 用 sample `.env` 里的真实模型；`offline` 用 demo 的脚本模型。脚本模型不支持 11-key schema，提取结果会为空，只适合链路自检。
+- `--out` 写 JSON 报告；默认写到 `runs/osp-eval/<timestamp>.json`。
+
+### 8.1 判定细节
+
+- `assert.intent: false` 的用例（40/46）和 `assert.a2a-t.task_t: false` 的用例只记录，不参与 pass/fail。
+- `assert.a2a-t.validate: false` 的用例（49–51）只记录。
+- 6 条协商用例（32/34/35/36/37/38）的 `expect.intent` 是协商后的最终意图；离线 runner 只看到初始请求，所以 `intent` 阶段标 `recorded`，不判失败。
+- `slot.*` 生成失败（缺区域、缺速率、非法制式等）发生在 Task-T 之前；如果该用例预期 `validate: blocked`，runner 把 validate 判为通过，intent/task_t 标 `recorded`。
+- Task Context 是自由文本，runner 先抽取速率、时段、站点、RAT、模式再比较；两边都只有时段时才退回分词比较。有疑问时看报告里的 `expected` / `actual` 原文。
+
+## 9. 评测控制台 `/tester`
+
+`/tester` 已改为 **catalog 驱动**，不再导入 Excel：
+
+- 左侧列出 `eval/osp/cases` 的 51 条用例，可按 id/名称、维度、操作、校验结果、标签筛选，勾选后批量执行。
+- 一条用例 × 一个协议 = 一个运行项；协议可选 A2A-T / A2A。
+- 运行配置：`执行到`（intent / task_t / validate / send / negotiate / final）、审批、超时。
+- 前三阶段走 SDK-only runner；后三阶段走 `RunManager` 完整运行时。
+- 协商脚本化：A2A-T 用 Q 列答复生成 `NegotiationDecision`，A2A 用 P 列答复作为 `INPUT_REQUIRED` 答案。
+- 结果表按阶段显示 `passed / failed / recorded / error`，点“差异”看逐字段/逐段 expected/actual。
+- 临时请求 tab：手输文本直接跑一次，不做预期断言。
+- 报告导出 JSON / XLSX；Excel 只作为导出格式，不再是输入。
+
+### 9.1 Modify 的限制
+
+Modify 用例会先跑一个基线 Create，拿到 `taskId` / `contextId` 后再以 modify 模式续传。但**本地 RAN Agent 会立即把任务置为终态**，随后服务端拒绝 Modify（`Task ... is in terminal state`）。
+
+要在本地验证 19 条 Modify 用例，请用支持长任务的 NMS 模拟器（`--nms --nms-sim` + `A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1`），或直接连真实 NMS。控制台会把基线 run id、Task id 和失败原因写进结果，便于判断是 seed 问题还是服务端拒绝。
+
+## 10. 已知限制
 
 - **A2A 最终状态不判定**：原表只给意图与协商答复。
 - **术语上下文是软断言**：没有独立可观测点。
 - **SDK 校验与样例业务门分开**：样例 OSS 还有一层必填字段 gate（`_missing_required_fields`）。
   要判定"预期SDK校验结果"，`intent` / `task_t` / `validate` 三个阶段应只跑 SDK 管线，
   不要把样例 gate 的 `blocked` 当成 SDK 的 `blocked`。
-- **tester 入口默认不做校验**：`A2AT_SAMPLE_PRE_SEND_VALIDATION=on` 只覆盖
-  `source.kind=presentation`；用 `/tester` 跑这些用例时必须显式设 `always`（见 `runner`）。
+- **控制台显式开启校验**：`/tester` 启动运行项时传 `validate_before_send=True`，不依赖
+  `A2AT_SAMPLE_PRE_SEND_VALIDATION=on` 的 `presentation` 限定。
 - **`scenario: night` 只是运行时配置**：它不提供任何预期值，预期全部来自本文件。

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>A2A / A2A-T · 协议测试控制台</title>
+  <title>A2A / A2A-T · 评测控制台</title>
   <link rel="stylesheet" href="/tester/app.css">
   <script type="module" src="/tester/main.js"></script>
 </head>
@@ -14,88 +14,177 @@
       <span class="mark" aria-hidden="true">A2A-T</span>
       <div class="brand-text">
         <small id="kicker">RAN 节能 · A2A / A2A-T</small>
-        <h1 id="title">协议测试控制台</h1>
+        <h1 id="title">评测控制台</h1>
       </div>
     </div>
     <nav class="top-nav">
-      <a class="ghost" href="/" id="presentation-link">演示页面</a>
-      <a class="ghost" href="/runs" id="runs-link">Run 控制台</a>
-      <a class="ghost" href="/comparison" id="comparison-link">协议对比</a>
+      <a class="ghost" href="/">演示页面</a>
+      <a class="ghost" href="/runs">Run 控制台</a>
+      <a class="ghost" href="/comparison">协议对比</a>
     </nav>
   </header>
 
   <main class="main">
     <div class="warning" id="nms-warning" role="alert" hidden>
-      <strong id="nms-warning-title">当前连接真实网管</strong>
-      <span id="nms-warning-text">执行用例会向真实网络下发任务，请确认用例内容后再开始。</span>
+      <strong>当前连接真实网管</strong>
+      <span>执行用例会向真实网络下发任务，请确认用例内容后再开始。</span>
     </div>
 
-    <section class="card">
-      <div class="card-head">
-        <h2 id="import-title">1. 导入测试用例</h2>
-        <a class="link" id="template-link" href="/api/tester/template.xlsx" download>下载 Excel 模板</a>
-      </div>
-      <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-labelledby="dropzone-title">
-        <input id="file-input" type="file" accept=".xlsx" hidden>
-        <strong id="dropzone-title">拖拽 Excel 到这里，或点击选择文件</strong>
-        <span id="dropzone-hint">仅支持 .xlsx，一行一条用例；场景列可留空。</span>
-      </div>
-      <p class="status-line" id="import-status" role="status"></p>
-      <details class="help">
-        <summary id="help-summary">填写说明</summary>
-        <ul id="help-list">
-          <li>用户请求是业务输入；场景列可留空，留空时只按用户请求执行，不校验协商类型。</li>
-          <li>填写场景时，未填写的预期值取该场景的默认值。</li>
-          <li>审批结果：auto 不自动审批；approve / reject 会自动响应暂停中的审批门。</li>
-          <li>传输与发现方式由后端按协议决定，不需要在 Excel 中填写。</li>
-        </ul>
-      </details>
-    </section>
+    <div class="tabbar" role="tablist">
+      <button class="tab active" id="tab-catalog" type="button" role="tab">评测用例</button>
+      <button class="tab" id="tab-scratch" type="button" role="tab">临时请求</button>
+      <span class="summary" id="catalog-count"></span>
+    </div>
 
-    <section class="card" id="cases-card" hidden>
-      <div class="card-head">
-        <h2 id="cases-title">2. 用例预览</h2>
-        <div class="head-tools">
-          <label class="history" id="history-wrap" for="history-select" hidden>
-            <span id="history-label">最近批次</span>
-            <select id="history-select"></select>
-          </label>
-          <span class="summary" id="case-summary"></span>
+    <section id="catalog-panel">
+      <div class="layout">
+        <aside class="card sidebar">
+          <div class="card-head">
+            <h2>用例目录</h2>
+            <span class="summary" id="filter-count"></span>
+          </div>
+          <div class="filters">
+            <input id="filter-query" type="search" placeholder="搜索编号或名称">
+            <select id="filter-dimension"><option value="">全部维度</option></select>
+            <select id="filter-operation">
+              <option value="">全部操作</option>
+              <option value="Create">Create</option>
+              <option value="Modify">Modify</option>
+            </select>
+            <select id="filter-validate">
+              <option value="">全部校验</option>
+              <option value="blocked">拦截</option>
+              <option value="pass">不拦截</option>
+              <option value="pass_with_terminology">不拦截 + 术语</option>
+              <option value="unfilled">未填写</option>
+            </select>
+            <select id="filter-tag"><option value="">全部标签</option></select>
+          </div>
+          <div class="catalog-list" id="catalog-list"></div>
+          <div class="actions">
+            <button class="secondary" id="select-all" type="button">全选当前</button>
+            <button class="secondary" id="select-none" type="button">清空选择</button>
+          </div>
+        </aside>
+
+        <div class="content">
+          <section class="card">
+            <div class="card-head">
+              <h2>运行配置</h2>
+              <span class="summary" id="selection-summary">未选择用例</span>
+            </div>
+            <div class="config-grid">
+              <label>协议
+                <span class="check-row">
+                  <label class="check"><input id="protocol-a2at" type="checkbox" checked> A2A-T</label>
+                  <label class="check"><input id="protocol-a2a" type="checkbox"> A2A</label>
+                </span>
+              </label>
+              <label>执行到
+                <select id="config-stop-after"></select>
+              </label>
+              <label>审批
+                <select id="config-approval">
+                  <option value="approve">approve（自动通过）</option>
+                  <option value="reject">reject（自动拒绝）</option>
+                  <option value="auto">auto（等待人工/超时）</option>
+                </select>
+              </label>
+              <label>超时（秒）
+                <input id="config-timeout" type="number" min="1" step="1" value="300">
+              </label>
+            </div>
+            <div class="actions">
+              <button class="primary" id="start-button" type="button">开始执行</button>
+              <button class="secondary" id="cancel-button" type="button" hidden>取消执行</button>
+              <button class="secondary" id="retry-button" type="button" hidden>重跑失败</button>
+              <button class="secondary" id="export-json" type="button" disabled>导出 JSON</button>
+              <button class="secondary" id="export-xlsx" type="button" disabled>导出 XLSX</button>
+              <span class="progress" id="progress" hidden>
+                <span class="progress-track"><span class="progress-bar" id="progress-bar"></span></span>
+                <span id="progress-text"></span>
+              </span>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <h2>执行结果</h2>
+              <div class="head-tools">
+                <label class="history" id="history-wrap" hidden>
+                  <span>最近批次</span>
+                  <select id="history-select"></select>
+                </label>
+                <span class="summary" id="result-summary"></span>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="grid" id="results-table">
+                <thead>
+                  <tr>
+                    <th class="num">#</th>
+                    <th>编号</th>
+                    <th>名称</th>
+                    <th>协议</th>
+                    <th>阶段</th>
+                    <th>状态</th>
+                    <th>耗时</th>
+                    <th>Token</th>
+                    <th>结果 / 错误</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="results-body"></tbody>
+              </table>
+            </div>
+            <p class="status-line" id="empty-state">选择用例并开始执行。</p>
+          </section>
         </div>
       </div>
-      <div class="table-wrap">
-        <table class="grid" id="cases-table">
-          <thead>
-            <tr>
-              <th class="num">#</th>
-              <th id="th-id">用例编号</th>
-              <th id="th-name">名称</th>
-              <th id="th-protocol">协议</th>
-              <th id="th-scenario">场景</th>
-              <th id="th-request">用户请求</th>
-              <th id="th-expect">预期</th>
-              <th id="th-status">状态</th>
-              <th id="th-duration">耗时</th>
-              <th id="th-tokens">Token</th>
-              <th id="th-result">结果 / 错误</th>
-              <th id="th-run">Run</th>
-            </tr>
-          </thead>
-          <tbody id="cases-body"></tbody>
-        </table>
-      </div>
-      <div class="actions">
-        <button class="primary" id="start-button" type="button">开始执行</button>
-        <button class="secondary" id="cancel-button" type="button" hidden>取消执行</button>
-        <button class="secondary" id="retry-button" type="button" hidden>重跑失败</button>
-        <button class="secondary" id="export-button" type="button" disabled>导出结果</button>
-        <span class="progress" id="progress" hidden>
-          <span class="progress-track"><span class="progress-bar" id="progress-bar"></span></span>
-          <span id="progress-text"></span>
-        </span>
-      </div>
+    </section>
+
+    <section id="scratch-panel" hidden>
+      <section class="card">
+        <div class="card-head">
+          <h2>临时请求</h2>
+          <span class="summary">不保存用例，只跑一次；不参与预期断言，只记录结果。</span>
+        </div>
+        <textarea class="scratch-box" id="scratch-input" rows="7"
+          placeholder="输入一段自然语言请求，例如：Implement energy-saving in A2ATestRegion region ..."></textarea>
+        <div class="config-grid">
+          <label>协议
+            <select id="scratch-protocol">
+              <option value="a2a-t">A2A-T</option>
+              <option value="a2a">A2A</option>
+            </select>
+          </label>
+          <label>审批
+            <select id="scratch-approval">
+              <option value="approve">approve（自动通过）</option>
+              <option value="reject">reject（自动拒绝）</option>
+              <option value="auto">auto（等待人工/超时）</option>
+            </select>
+          </label>
+          <label>超时（秒）
+            <input id="scratch-timeout" type="number" min="1" step="1" value="300">
+          </label>
+        </div>
+        <div class="actions">
+          <button class="primary" id="scratch-run" type="button">运行临时请求</button>
+          <span class="status-line" id="scratch-status"></span>
+        </div>
+      </section>
     </section>
   </main>
+
+  <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+  <aside class="drawer" id="drawer" hidden aria-modal="true" role="dialog">
+    <div class="drawer-head">
+      <h2 id="drawer-title">阶段差异</h2>
+      <button class="secondary" id="drawer-close" type="button">关闭</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
 
   <div class="toast" id="toast" role="alert" hidden></div>
 </body>
