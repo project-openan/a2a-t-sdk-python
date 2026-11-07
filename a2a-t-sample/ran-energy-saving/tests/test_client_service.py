@@ -623,32 +623,35 @@ class _LongRunningRuntime(FakeRuntime):
         )
 
 
-class _NeverFinishingA2AClient:
-    """A remote Task that stays WORKING forever; only the viewer can stop the tracker."""
+class _SwitchableA2AClient:
+    """A remote Task that stays WORKING until the test switches it to COMPLETED."""
 
-    calls = 0
+    def __init__(self) -> None:
+        self.state = TaskState.TASK_STATE_WORKING
+        self.calls = 0
 
     async def get_task(self, request: object, *, context: object = None) -> object:
         del context
-        type(self).calls += 1
-        return _task_with_state(str(getattr(request, "id", "task-1")), TaskState.TASK_STATE_WORKING)
+        self.calls += 1
+        return _task_with_state(str(getattr(request, "id", "task-1")), self.state)
 
 
-class _NeverFinishingRuntime(_LongRunningRuntime):
+class _SwitchableRuntime(_LongRunningRuntime):
     def __init__(self) -> None:
         super().__init__()
-        self.a2a_client = _NeverFinishingA2AClient()
+        self.a2a_client = _SwitchableA2AClient()
 
 
-async def test_a_presentation_run_stops_tracking_without_a_viewer(
+async def test_a_presentation_run_keeps_tracking_without_a_viewer(
     tmp_path: Path,
     offline_config: SampleConfig,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The run manager follows the page: no subscriber for the grace window ends the run."""
+    """A closed page switches to the background cadence; the run continues until the Task ends."""
     import protocol.client_service.run_manager as run_manager_module
 
     monkeypatch.setattr(run_manager_module, "_DETACHED_TRACKING_GRACE_SECONDS", 0.05)
+    runtime = _SwitchableRuntime()
 
     async def factory(
         resolved_config: SampleConfig,
@@ -659,9 +662,9 @@ async def test_a_presentation_run_stops_tracking_without_a_viewer(
         *,
         protocol: str = PROTOCOL_A2A_T,
         run_id: str = "",
-    ) -> _NeverFinishingRuntime:
+    ) -> _SwitchableRuntime:
         del resolved_config, scenario, mode, transport, discovery, protocol, run_id
-        return _NeverFinishingRuntime()
+        return runtime
 
     manager = RunManager(
         config=replace(
@@ -680,11 +683,22 @@ async def test_a_presentation_run_stops_tracking_without_a_viewer(
         protocol=PROTOCOL_PURE,
         source={"kind": "presentation"},
     )
+
+    deadline = asyncio.get_running_loop().time() + 3.0
+    while not run.detached and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.01)
+
+    assert run.detached is True
+    assert run.status == "running"
+    assert run.result is not None
+    assert run.result.final_state == FINAL_STATE_INCOMPLETE
+
+    runtime.a2a_client.state = TaskState.TASK_STATE_COMPLETED
     await _finish(manager, run.run_id)
 
     assert run.status == "finished"
     assert run.result is not None
-    assert run.result.final_state == FINAL_STATE_INCOMPLETE
+    assert run.result.final_state == FINAL_STATE_TASK_COMPLETED
 
 
 async def test_a_long_running_run_stays_active_until_the_remote_task_finishes(

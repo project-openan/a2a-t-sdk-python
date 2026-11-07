@@ -212,6 +212,9 @@ const els = {
   traceSplitter: byId("trace-splitter"),
 };
 
+/** Session-scoped run id so a page reload can reattach to the still-running server run. */
+const ACTIVE_RUN_KEY = "a2at-ran-active-run";
+
 const ui = {
   meta: null,
   copy: copyFor("zh-CN"),
@@ -378,6 +381,39 @@ async function loadStartupState() {
   renderPresets();
   renderBottomCopy();
   subscribeMie();
+  render();
+  await restoreActiveRun();
+}
+
+/** Reattach to a run that was still executing when the page was reloaded. */
+async function restoreActiveRun() {
+  const runId = sessionStorage.getItem(ACTIVE_RUN_KEY);
+  if (!runId) return;
+  let snapshot;
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
+    if (!response.ok) {
+      sessionStorage.removeItem(ACTIVE_RUN_KEY);
+      return;
+    }
+    snapshot = await response.json();
+  } catch {
+    return;
+  }
+  if (!snapshot || snapshot.status !== "running") {
+    sessionStorage.removeItem(ACTIVE_RUN_KEY);
+    return;
+  }
+  resetRunState();
+  ui.selected = snapshot.scenario || ui.selected;
+  ui.protocol = snapshot.protocol || ui.protocol;
+  ui.view.runId = runId;
+  ui.view.started = true;
+  ui.view.status = "running";
+  ui.view.userRequest = snapshot.rawRequest || "";
+  ui.view.intentText = ui.view.userRequest;
+  setBusy(true);
+  subscribe(runId);
   render();
 }
 
@@ -1008,6 +1044,7 @@ async function startRun() {
       };
     }
     ui.view.runId = payload.runId;
+    sessionStorage.setItem(ACTIVE_RUN_KEY, payload.runId);
     subscribe(payload.runId);
     render();
   } catch (error) {
@@ -1089,6 +1126,7 @@ function subscribe(runId) {
     enqueueFrame(frame);
     if (frame.type === "finished") {
       closeStream();
+      sessionStorage.removeItem(ACTIVE_RUN_KEY);
       setBusy(false);
       // ``enqueueFrame`` has just applied this frame to the shadow state, so the send marker is
       // current when deciding whether the next Start continues the blocked attempt.

@@ -969,8 +969,9 @@ class RunManager:
         background_interval = max(0.01, self._config.task_poll_interval_seconds)
         watched_interval = max(0.01, self._config.nms_state_poll_interval)
         # Only the engineer page is a viewer. A gateway run has a caller waiting for the result
-        # and keeps its background cadence; a closed page stops the local tracker after a short
-        # grace so the process does not accumulate days-long polls nobody reads.
+        # and keeps its background cadence; a closed page switches a presentation run to the
+        # background cadence but does not end it: the remote Task may still run for days, and the
+        # page must be able to reattach.
         is_presentation = run.source.get("kind") == "presentation"
         interval = watched_interval if is_presentation else background_interval
         last_watched = time.monotonic()
@@ -1006,23 +1007,48 @@ class RunManager:
         while True:
             if is_presentation:
                 if run.subscribers:
+                    if run.detached:
+                        run.detached = False
+                        _LOGGER.info("run %s has a viewer again; resuming fast tracking", run.run_id)
+                        run.broadcast(
+                            {
+                                "type": "task_tracking",
+                                "taskId": task_id,
+                                "state": "watching",
+                                "pollIntervalSeconds": watched_interval,
+                                "updatedAt": now_iso(),
+                            }
+                        )
                     last_watched = time.monotonic()
-                elif time.monotonic() - last_watched >= _DETACHED_TRACKING_GRACE_SECONDS:
+                elif (
+                    not run.detached
+                    and time.monotonic() - last_watched >= _DETACHED_TRACKING_GRACE_SECONDS
+                ):
+                    run.detached = True
                     _LOGGER.info(
-                        "run %s has no viewer; stopping remote task tracking for %s",
+                        "run %s has no viewer; continuing remote task tracking for %s in the background",
                         run.run_id,
                         task_id,
                     )
                     run.emit_trace(
                         kind="task_tracking",
                         phase=PHASE_DISPATCH,
-                        title="Task tracking stopped: no viewer",
+                        title="Task tracking continues without a viewer",
                         detail={
                             "taskId": task_id,
                             "graceSeconds": _DETACHED_TRACKING_GRACE_SECONDS,
+                            "pollIntervalSeconds": background_interval,
                         },
                     )
-                    return result
+                    run.broadcast(
+                        {
+                            "type": "task_tracking",
+                            "taskId": task_id,
+                            "state": "detached",
+                            "pollIntervalSeconds": background_interval,
+                            "updatedAt": now_iso(),
+                        }
+                    )
                 interval = watched_interval if run.subscribers else background_interval
             try:
                 polled = await self._poll_remote_task(run, task_id)
@@ -1061,10 +1087,11 @@ class RunManager:
             # window instead of after a full background poll interval.
             deadline = time.monotonic() + interval
             while time.monotonic() < deadline:
-                if is_presentation:
-                    if run.subscribers:
-                        last_watched = time.monotonic()
-                    elif time.monotonic() - last_watched >= _DETACHED_TRACKING_GRACE_SECONDS:
+                if is_presentation and run.subscribers:
+                    # A reattached page resumes the fast cadence immediately; the next outer
+                    # iteration clears ``detached`` and broadcasts the change.
+                    last_watched = time.monotonic()
+                    if run.detached:
                         break
                 await asyncio.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
 

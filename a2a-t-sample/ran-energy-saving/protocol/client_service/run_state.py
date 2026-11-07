@@ -107,6 +107,8 @@ class RunState:
         user_request: optional natural-language request supplied by the UI; ``None`` uses the
             scenario default.
         status: ``running`` / ``finished`` / ``failed``.
+        detached: whether the page stopped watching while the remote Task still runs; tracking
+            continues at the background cadence and the run does not end.
         messages: every SSE message broadcast so far (replayed to late subscribers).
         subscribers: live SSE queues.
         transcript: transcript recorded while the run executes.
@@ -154,6 +156,7 @@ class RunState:
     discovery: str = DISCOVERY_REGISTRY
     user_request: str | None = None
     status: RunStatus = STATUS_RUNNING
+    detached: bool = False
     conversation_id: str | None = None
     trace_id: str = ""
     external_conversation_id: str | None = None
@@ -752,6 +755,7 @@ class RunState:
             "normalizedRequest": self.normalized_request,
             "intent": self.processed_intent,
             "status": self.status,
+            "detached": self.detached,
             "pendingDecision": self.pending_decision,
             "pendingIntent": self.pending_intent,
             "finalState": self.result.final_state if self.result is not None else None,
