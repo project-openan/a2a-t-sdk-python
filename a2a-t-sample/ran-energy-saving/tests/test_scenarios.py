@@ -92,6 +92,37 @@ def _completed_status_seen(result: ClientFlowResult) -> bool:
     )
 
 
+@pytest.mark.parametrize(
+    ("language", "unknown_area", "expected_region"),
+    (
+        ("en-US", "Region Z", "A2ATestRegion"),
+        ("zh-CN", "未知区域", "A2ATestRegion"),
+    ),
+)
+def test_the_unknown_area_request_keeps_its_unserved_region(
+    language: str,
+    unknown_area: str,
+    expected_region: str,
+) -> None:
+    """The vendor profile must not turn the deliberate unknown area into a served one."""
+    unknown_spec = to_run_spec(
+        get_scenario("unknown_area"),
+        language=language,
+        region=expected_region,
+        sites=("NRES_XCS_6102937",),
+    )
+    assert unknown_area in unknown_spec.user_request
+    assert expected_region not in unknown_spec.user_request
+
+    night_spec = to_run_spec(
+        get_scenario("night"),
+        language=language,
+        region=expected_region,
+        sites=("NRES_XCS_6102937",),
+    )
+    assert expected_region in night_spec.user_request
+
+
 @pytest.mark.parametrize("scenario_name", SUPPORTED_SCENARIO_NAMES)
 async def test_scenario_matches_the_design_sequence(
     scenario_name: str,

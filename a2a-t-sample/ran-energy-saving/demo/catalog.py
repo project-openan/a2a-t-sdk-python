@@ -80,7 +80,10 @@ def to_run_spec(
     user_request = profile_request_text(
         resolve_user_request(scenario, language),
         language=language,
-        region=region,
+        # The unknown-area case deliberately names an area the network does not serve; profiling
+        # that placeholder to the vendor region would turn the negotiation case into a valid
+        # request. Every other scenario keeps the vendor region.
+        region="" if scenario.name == SCENARIO_UNKNOWN_AREA else region,
         sites=sites,
         neutral_region=_NEUTRAL_REGIONS.get(scenario.name, _DEFAULT_NEUTRAL_REGION).get(language, ""),
     )
