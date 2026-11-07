@@ -33,11 +33,9 @@ import { createWire } from "./wire.js";
 import { renderIntent, validationBlock } from "./intent.js";
 import {
   approvalCard,
-  clock,
   decisionCard,
   decisionPayload,
   intentCard,
-  remainingSeconds,
   validationCard,
 } from "./decisions.js";
 import { clear, el } from "./dom.js";
@@ -258,8 +256,6 @@ const ui = {
   selectedRegion: "",
   cardKey: null,
   cardError: "",
-  deadline: null,
-  countdownTimer: null,
   rendering: false,
   looping: false,
   renderingIntent: false,
@@ -735,7 +731,6 @@ function resetRunState() {
   ui.selectedRegion = "";
   ui.submitting = false;
   ui.cancelling = false;
-  ui.deadline = null;
   ui.looping = false;
   stage.reset();
   trace.reset();
@@ -1539,25 +1534,12 @@ function renderNarrator() {
     }
     if (card.policy) els.sayDetail.append(el("span", "policy", card.policy));
     if (ui.cardError) els.sayDetail.append(el("p", "card-error", ui.cardError));
-    if (card.remaining !== null) {
-      const line = el("span", "reason");
-      line.append(el("span", "", `${copyRemaining(card)} `));
-      const value = el("b");
-      value.dataset.countdown = "true";
-      value.textContent = clock(card.remaining);
-      line.append(value);
-      els.sayDetail.append(line);
-      startCountdown(card.remaining);
-    } else {
-      stopCountdown();
-    }
     renderChoices(card);
     revealCard(card);
     return;
   }
 
   ui.cardKey = null;
-  stopCountdown();
   els.say.classList.remove("ask");
   els.choices.hidden = true;
   clear(els.choices);
@@ -2353,35 +2335,6 @@ function renderProtocol() {
     setText("nms-note", ui.copy.roles.nmsNote);
   }
   renderModifyButton();
-}
-
-function copyRemaining(card) {
-  if (card.type === "intent") return ui.copy.intentReview.remaining;
-  return card.type === "approval" ? ui.copy.approval.remaining : ui.copy.decision.remaining;
-}
-
-function startCountdown(remaining) {
-  stopCountdown();
-  ui.deadline = Date.now() + remaining * 1000;
-  ui.countdownTimer = window.setInterval(() => {
-    const node = els.sayDetail.querySelector("[data-countdown]");
-    if (!node) return;
-    const left = Math.max(0, Math.round((ui.deadline - Date.now()) / 1000));
-    node.textContent = clock(left);
-    if (left === 0) {
-      const card = pendingCard();
-      if (card) node.textContent = clock(0);
-      stopCountdown();
-    }
-  }, 1000);
-}
-
-function stopCountdown() {
-  if (ui.countdownTimer !== null) {
-    window.clearInterval(ui.countdownTimer);
-    ui.countdownTimer = null;
-  }
-  ui.deadline = null;
 }
 
 function handleLoop(scene) {

@@ -32,7 +32,6 @@ import {
   decisionCard,
   decisionPayload,
   intentCard,
-  remainingSeconds,
   validationCard,
 } from "../../demo/web/presentation/js/decisions.js";
 import { copyFor } from "../../demo/web/presentation/copy.js";
@@ -1097,12 +1096,6 @@ const createdRow = createdState.trace.find((row) => row.title === "Task created"
 assert.ok(createdRow);
 assert.ok(createdRow.sub.includes("Region A"));
 assert.ok(createdRow.sub.includes("00:00–17:30 10Mbps +2"));
-
-// --- Remaining time -----------------------------------------------------
-
-const requestedAt = new Date(Date.now() - 10_000).toISOString();
-const left = remainingSeconds(requestedAt, 120);
-assert.ok(left !== null && left <= 111 && left >= 109, left);
 
 // --- Trace rows are all viewable ----------------------------------------
 

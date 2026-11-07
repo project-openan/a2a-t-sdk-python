@@ -13,7 +13,6 @@ export function intentCard(state, copy) {
     text: copy.intentReview.text,
     detail: copy.intentReview.detail,
     validation: state.validation,
-    remaining: remainingSeconds(review.requestedAt, review.timeoutSeconds),
     options: [
       { action: "approve", label: copy.intentReview.confirm, primary: true },
       { action: "edit", label: copy.intentReview.edit },
@@ -90,7 +89,6 @@ export function decisionCard(state, copy) {
     regionOptions,
     requestedRegion: decision.proposal?.options?.requested || "",
     options,
-    remaining: remainingSeconds(decision.requestedAt, decision.timeoutSeconds),
   };
 }
 
@@ -119,7 +117,6 @@ export function approvalCard(state, copy) {
       detail: copy.pure?.mieWait || copy.approval.waiting,
       mml: null,
       policy: copy.pure?.mieNote || copy.approval.note,
-      remaining: remainingSeconds(approval.requestedAt, approval.timeoutSeconds),
       options: [
         { action: "approve", label: copy.approval.approve, primary: true },
         { action: "reject", label: copy.approval.reject, danger: true },
@@ -149,7 +146,6 @@ export function approvalCard(state, copy) {
       text: copy.approval.mml(cell, window, String(rate).replace("%", "")),
     },
     policy: null,
-    remaining: remainingSeconds(approval.requestedAt, approval.timeoutSeconds),
     options: [
       { action: "approve", label: copy.approval.approve, primary: true },
       { action: "reject", label: copy.approval.reject, danger: true },
@@ -193,22 +189,6 @@ export function decisionPayload(card, action, copy, counterText, selectedArea) {
     rationale: copy.decision.acceptRationale,
     filled_params: areaParams,
   });
-}
-
-/** Seconds left in a human window, or ``null`` when the backend did not send a budget. */
-export function remainingSeconds(requestedAt, timeoutSeconds) {
-  const timeout = Number(timeoutSeconds);
-  if (!Number.isFinite(timeout) || timeout <= 0) return null;
-  const start = Date.parse(requestedAt || "");
-  if (!Number.isFinite(start)) return Math.round(timeout);
-  return Math.max(0, Math.round(timeout - (Date.now() - start) / 1000));
-}
-
-/** Format seconds as ``m:ss``. */
-export function clock(seconds) {
-  if (seconds === null || seconds === undefined) return "";
-  const value = Math.max(0, Math.round(seconds));
-  return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, "0")}`;
 }
 
 function firstLine(content) {
