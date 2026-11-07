@@ -25,7 +25,15 @@ from demo.nms_sim.intent import (
     parse_message_request,
 )
 from demo.nms_sim.sse import message_stream, status_stream, task_stream
-from demo.nms_sim.tasks import TASK_INPUT_REQUIRED, TASK_REJECTED, TASK_SUBMITTED, SimTask, TaskStore
+from demo.nms_sim.tasks import (
+    TASK_CANCELED,
+    TASK_INPUT_REQUIRED,
+    TASK_REJECTED,
+    TASK_SUBMITTED,
+    TERMINAL_STATES,
+    SimTask,
+    TaskStore,
+)
 from demo.nms_sim.token import TokenStore
 
 _LOGGER = logging.getLogger("ran_energy_saving.nms_sim")
@@ -230,14 +238,25 @@ def build_routes(
         return JSONResponse({"task": task.to_dict()}, status_code=200)
 
     async def cancel_task(request: Request) -> Response:
-        """Reproduce the vendor's known cancel failure."""
+        """Cancel one non-terminal Task.
+
+        ``cancel_supported=False`` reproduces the vendor's older HTTP 503 answer; otherwise a
+        terminal Task is returned unchanged so a repeated cancel stays idempotent.
+        """
         if not authorized(request):
             return unauthorized()
-        del request
-        return JSONResponse(
-            {"error": {"code": 503, "message": "Task cancellation is unavailable"}},
-            status_code=503,
-        )
+        if not config.cancel_supported:
+            return JSONResponse(
+                {"error": {"code": 503, "message": "Task cancellation is unavailable"}},
+                status_code=503,
+            )
+        task_id = str(request.path_params["task_id"])
+        task = resolved_store.get(task_id)
+        if task is None:
+            return JSONResponse({"error": "Task not found"}, status_code=404)
+        if task.state not in TERMINAL_STATES:
+            resolved_store.update(task_id, state=TASK_CANCELED, message="Task canceled.")
+        return JSONResponse({"task": task.to_dict()}, status_code=200)
 
     routes: list[BaseRoute] = [
         Route("/rest/plat/smapp/v1/sessions", sessions, methods=["PUT"]),

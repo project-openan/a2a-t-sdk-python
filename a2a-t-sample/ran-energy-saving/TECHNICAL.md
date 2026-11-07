@@ -94,21 +94,32 @@ Create baseline followed by a real Modify continuation on the same Task). The pr
 the step bar on Apply & report for the Modify phase, shows each Task-T's own payload in the wire
 inspector, and renders the modified report as the final card.
 
-When the client talks to the real NMS, the toolbar also offers **Modify a running task**. The page
-calls `GET /api/nms/tasks?state=modifiable`, which reads the NMS `/tasks` endpoint through
-`NmsClient.list_tasks`, keeps `TASK_STATE_SUBMITTED` and `TASK_STATE_WORKING`, and returns the
-compact row the picker shows (task id, context id, state, region, sites, current target, last
-message). The picker refreshes every five seconds while open so a SUBMITTED Task's transition is
-visible without reopening it. Selecting a row does not send anything: it resets the stage, records
-the target task id/context, switches the example to the planned-outage modification, fills the editor
-with `MODIFY_REQUEST`, and waits for the operator. Pressing Start then posts
-`targetTaskId`/`targetContextId`; the backend re-reads the Task and rejects a Task that is no longer
-SUBMITTED or WORKING (409 `target_not_modifiable`) before starting. The Modify is sent immediately
-even while the Task is still SUBMITTED. The run has `runMode=modify`: `ClientRuntime` uses
-`RunSpec.modify_intent`, `run_client_flow` skips the baseline and sends the Modify Task-T as its
-first message with `message.task_id`/`context_id`, and the presentation reducer starts in the single
-Modify phase (the step bar marks the Create send as not applicable). The run record, transcript,
-metrics document and live snapshot carry the run mode and target ids. Only A2A-T is supported.
+When the client talks to the real NMS, the toolbar offers **Running tasks**. The page calls
+`GET /api/nms/tasks?state=active`, which reads the NMS `/tasks` endpoint through
+`NmsClient.list_tasks`, keeps `TASK_STATE_SUBMITTED`, `TASK_STATE_WORKING` and
+`TASK_STATE_INPUT_REQUIRED`, and returns the compact row the picker shows (task id, context id,
+state, region, sites, current target, last message). The picker refreshes every five seconds while
+open so a SUBMITTED Task's transition is visible without reopening it. A selected row enables two
+actions and nothing is sent until one is pressed:
+
+* **Modify this task** (SUBMITTED/WORKING, A2A-T only): it resets the stage, records the target task
+  id/context, switches the example to the planned-outage modification, fills the editor with
+  `MODIFY_REQUEST`, and waits for the operator. Pressing Start posts `targetTaskId`/
+  `targetContextId`; the backend re-reads the Task and rejects a Task that is no longer SUBMITTED or
+  WORKING (409 `target_not_modifiable`) before starting. The Modify is sent immediately even while
+  the Task is still SUBMITTED. The run has `runMode=modify`: `run_client_flow` skips the baseline
+  and sends the Modify Task-T as its first message with `message.task_id`/`context_id`, and the
+  presentation reducer starts in the single Modify phase (the step bar marks the Create send as not
+  applicable). The run record, transcript, metrics document and live snapshot carry the run mode and
+  target ids.
+* **Cancel this task** (any listed state, any protocol): the destructive action is armed by the
+  first click and sent by the second one within five seconds. `POST /api/nms/tasks/{id}/cancel`
+  calls `NmsClient.cancel_task` (body `{"id": taskId}`, the form the real NMS requires); on success
+  it stops every in-process run whose `remote_task_id` or `target_task_id` is that Task through
+  `RunManager.cancel(..., remote=False)`, so the Task is not cancelled twice. The vendor's known
+  HTTP 503 is reported as `cancelled:false`/`supported:false`; the row stays in the list and the
+  page warns instead of reporting success. The picker stays usable while a run is active, but
+  Modify is disabled then.
 
 When the NMS stream goes quiet before a terminal state, the run manager owns the Task: the direct
 NMS transport hands it over after `A2AT_SAMPLE_NMS_POLL_AFTER_SECONDS` (15s) instead of waiting for
@@ -119,7 +130,9 @@ subscribes to the run keeps the tracker alive indefinitely and polls at
 its tracker and ends as `finished` + `finalState=incomplete`; the NMS Task keeps running untouched.
 For local rehearsal against the simulator, `A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1` leaves a newly
 created Task in `WORKING` (closing its stream so the creating run ends as `incomplete`); continuing
-that Task completes it normally.
+that Task completes it normally. The simulator's `:cancel` moves a non-terminal Task to
+`TASK_STATE_CANCELED` and makes an open stream stop at that state; any later frame never overwrites
+it. `A2AT_SAMPLE_NMS_SIM_CANCEL_UNSUPPORTED=1` reproduces the older HTTP 503 answer.
 
 The presentation supports two brand palettes. `--brand orange|huawei` (or
 `A2AT_SAMPLE_UI_BRAND`) sets the start-up default; the top-bar button switches at runtime and stores

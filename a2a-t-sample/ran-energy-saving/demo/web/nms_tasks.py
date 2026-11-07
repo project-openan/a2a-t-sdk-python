@@ -1,10 +1,10 @@
-"""Read the vendor NMS task list for the presentation's Modify picker.
+"""Read and cancel vendor NMS Tasks for the presentation's Running-tasks picker.
 
-The picker may offer only Tasks the NMS can still modify. A2A refuses to append a message to a
-terminal Task, so the list keeps the two non-terminal states a Modify can continue: ``SUBMITTED``
-(the NMS accepted the Task but has not started executing it yet) and ``WORKING``. The mapping is
-deliberately tolerant: the vendor and the local simulator expose the same Task envelope but may
-fill different optional fields.
+Two state sets matter. A2A refuses to append a message to a terminal Task, so a Modify can
+continue only ``SUBMITTED`` (accepted, not started yet) and ``WORKING``. A Task waiting for input
+(``INPUT_REQUIRED``) cannot be modified by this sample but still holds NMS quota, so the picker can
+also list and cancel it. The mapping is deliberately tolerant: the vendor and the local simulator
+expose the same Task envelope but may fill different optional fields.
 """
 
 from __future__ import annotations
@@ -19,7 +19,11 @@ from shared.config import SampleConfig
 #: Non-terminal states a Modify can continue (the vendor spelling).
 NMS_WORKING_STATE: Final[str] = "TASK_STATE_WORKING"
 NMS_SUBMITTED_STATE: Final[str] = "TASK_STATE_SUBMITTED"
+#: A Task waiting for input is not modifiable by this sample but still holds NMS quota.
+NMS_INPUT_REQUIRED_STATE: Final[str] = "TASK_STATE_INPUT_REQUIRED"
 MODIFIABLE_STATES: Final[frozenset[str]] = frozenset({NMS_SUBMITTED_STATE, NMS_WORKING_STATE})
+#: States that keep a Task alive on the NMS; all of them can be cancelled.
+ACTIVE_STATES: Final[frozenset[str]] = MODIFIABLE_STATES | {NMS_INPUT_REQUIRED_STATE}
 
 _EXCERPT_LENGTH: Final[int] = 180
 _REGION_RE: Final[re.Pattern[str]] = re.compile(
@@ -40,6 +44,24 @@ async def list_modifiable_tasks(config: SampleConfig) -> list[dict[str, object]]
         protocol.nms_client.NmsError: when the NMS is unreachable or rejects the request.
         protocol.nms_client.NmsConfigError: when the NMS settings are incomplete.
     """
+    return await _list_tasks(config, MODIFIABLE_STATES)
+
+
+async def list_active_tasks(config: SampleConfig) -> list[dict[str, object]]:
+    """Return every NMS Task that still holds quota, newest first.
+
+    ``INPUT_REQUIRED`` Tasks are listed so the operator can cancel them; the picker keeps
+    Modify disabled for those rows.
+
+    Raises:
+        protocol.nms_client.NmsError: when the NMS is unreachable or rejects the request.
+        protocol.nms_client.NmsConfigError: when the NMS settings are incomplete.
+    """
+    return await _list_tasks(config, ACTIVE_STATES)
+
+
+async def _list_tasks(config: SampleConfig, states: frozenset[str]) -> list[dict[str, object]]:
+    """Return the NMS Tasks whose state is in ``states``, newest first."""
     client = NmsClient(NmsConfig.from_config(config))
     try:
         document = await client.list_tasks()
@@ -51,9 +73,27 @@ async def list_modifiable_tasks(config: SampleConfig) -> list[dict[str, object]]
     rows: list[dict[str, object]] = []
     for task in tasks:
         row = _task_row(task)
-        if row is not None and row["state"] in MODIFIABLE_STATES:
+        if row is not None and row["state"] in states:
             rows.append(row)
     return rows
+
+
+async def cancel_nms_task(config: SampleConfig, task_id: str) -> bool:
+    """Cancel one NMS Task.
+
+    Returns:
+        ``True`` when the NMS accepted the cancellation, ``False`` when it answered the known
+        HTTP 503 (cancellation unsupported).
+
+    Raises:
+        protocol.nms_client.NmsError: when the NMS is unreachable or rejects the request.
+        protocol.nms_client.NmsConfigError: when the NMS settings are incomplete.
+    """
+    client = NmsClient(NmsConfig.from_config(config))
+    try:
+        return await client.cancel_task(task_id)
+    finally:
+        await client.aclose()
 
 
 async def read_task(config: SampleConfig, task_id: str) -> dict[str, object] | None:
@@ -178,9 +218,13 @@ def _excerpt(text: str) -> str:
 
 
 __all__ = [
+    "ACTIVE_STATES",
     "MODIFIABLE_STATES",
+    "NMS_INPUT_REQUIRED_STATE",
     "NMS_SUBMITTED_STATE",
     "NMS_WORKING_STATE",
+    "cancel_nms_task",
+    "list_active_tasks",
     "list_modifiable_tasks",
     "read_task",
 ]

@@ -302,7 +302,7 @@ class RunManager:
         """Return one run by id, ``None`` when unknown."""
         return self._runs.get(run_id)
 
-    async def cancel(self, run_id: str) -> bool:
+    async def cancel(self, run_id: str, *, remote: bool = True) -> bool:
         """Cancel one active run, asking the remote side to cancel its Task first.
 
         The remote cancel is best effort: the vendor NMS may answer HTTP 503, and the local run
@@ -310,6 +310,8 @@ class RunManager:
 
         Args:
             run_id: run to cancel.
+            remote: also ask the transport to cancel its Task. The Running-tasks picker already
+                cancelled the NMS Task and passes ``False`` to avoid a second ``:cancel``.
 
         Returns:
             ``True`` when a running run was cancelled, ``False`` for an unknown or finished run.
@@ -318,7 +320,8 @@ class RunManager:
         if run is None or run.finished():
             return False
         run.cancel_requested = True
-        await self._cancel_remote_task(run)
+        if remote:
+            await self._cancel_remote_task(run)
         task = run.task
         if task is not None and not task.done():
             task.cancel()
@@ -347,6 +350,20 @@ class RunManager:
             _LOGGER.warning("remote cancel timed out for task %s", run.remote_task_id)
         except Exception:  # noqa: BLE001 - cancel must never block the local stop
             _LOGGER.warning("remote cancel failed for task %s", run.remote_task_id, exc_info=True)
+
+    def active_runs_for_task(self, task_id: str) -> list[RunState]:
+        """Return the live runs whose remote or target Task is ``task_id``.
+
+        The Running-tasks picker cancels an NMS Task, then stops every local run that still
+        tracks it. Only exact ids match: a Task id is never inferred from another run.
+        """
+        if not task_id:
+            return []
+        return [
+            run
+            for run in self._runs.values()
+            if not run.finished() and (run.remote_task_id == task_id or run.target_task_id == task_id)
+        ]
 
     def active_for_conversation(self, conversation_id: str) -> RunState | None:
         """Return the active run of one conversation, when there is one."""

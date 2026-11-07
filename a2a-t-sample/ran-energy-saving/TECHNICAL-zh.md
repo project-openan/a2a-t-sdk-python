@@ -85,18 +85,24 @@ python run_demo.py --ui --scenario information --model-mode offline
 页面默认打开演示视图：左侧是 16:9 舞台（网络工程师、OSS Agent、RAN Agent、MIE 与无线站点，中间是
 A2A-T 通道），右侧是三块证据面板。八个示例覆盖用例 1（夜间节能，含协商与无协商）和用例 2（计划停电，同一 Task 上先 Create 基线再执行真正的 Modify 续接）。Modify 阶段演示视图保持步骤条在“Apply & report”，wire 面板分别展示两条 Task-T 的 payload，最终卡片展示修改后的报告。
 
-连接真实网管时，工具栏还会出现 **修改运行中的任务**。页面调用
-`GET /api/nms/tasks?state=modifiable`，后端通过 `NmsClient.list_tasks` 读取网管 `/tasks` 接口，保留
-`TASK_STATE_SUBMITTED` 和 `TASK_STATE_WORKING`，并返回选择器需要的精简行（task id、context id、状态、区域、
-站点、当前目标、最后一条消息）。选择器打开期间每 5 秒自动刷新，SUBMITTED 任务的状态变化无需重新打开就能看到。
-选中一行不会发送任何消息：页面重置舞台、记录目标 task id/context、把示例切到计划停电的修改场景、把
-`MODIFY_REQUEST` 填入输入框，然后等待工程师操作。点击开始后才会提交 `targetTaskId` / `targetContextId`；
-后端会重新读取该任务，如果它已不在 `SUBMITTED` / `WORKING` 状态则在启动前返回 409
-`target_not_modifiable`。即使任务仍处于 SUBMITTED，Modify 也会立即发送。这样的 run 使用 `runMode=modify`：
-`ClientRuntime` 使用 `RunSpec.modify_intent`，`run_client_flow` 跳过 baseline，把 Modify Task-T 作为第一条
-消息发送并携带 `message.task_id` / `context_id`，演示 reducer 从一开始就处于单 Modify 阶段（步骤条把 Create
-下发标为不适用）。run 记录、transcript、metrics 文档和 live 快照都会带上 run mode 与目标 id。该入口只支持
-A2A-T。
+连接真实网管时，工具栏会出现 **运行中的任务**。页面调用
+`GET /api/nms/tasks?state=active`，后端通过 `NmsClient.list_tasks` 读取网管 `/tasks` 接口，保留
+`TASK_STATE_SUBMITTED`、`TASK_STATE_WORKING` 和 `TASK_STATE_INPUT_REQUIRED`，并返回选择器需要的精简行
+（task id、context id、状态、区域、站点、当前目标、最后一条消息）。选择器打开期间每 5 秒自动刷新，
+SUBMITTED 任务的状态变化无需重新打开就能看到。选中一行后有两个动作，未点击前不会发送任何内容：
+
+* **修改该任务**（SUBMITTED / WORKING，仅 A2A-T）：页面重置舞台、记录目标 task id/context、把示例切到
+  计划停电的修改场景、把 `MODIFY_REQUEST` 填入输入框，然后等待工程师操作。点击开始后才会提交
+  `targetTaskId` / `targetContextId`；后端会重新读取该任务，如果它已不在 `SUBMITTED` / `WORKING` 状态
+  则在启动前返回 409 `target_not_modifiable`。即使任务仍处于 SUBMITTED，Modify 也会立即发送。这样的 run
+  使用 `runMode=modify`：`run_client_flow` 跳过 baseline，把 Modify Task-T 作为第一条消息发送并携带
+  `message.task_id` / `context_id`，演示 reducer 从一开始就处于单 Modify 阶段（步骤条把 Create 下发标为
+  不适用）。run 记录、transcript、metrics 文档和 live 快照都会带上 run mode 与目标 id。
+* **取消该任务**（列表内任意状态、任意协议）：第一次点击进入待确认态，5 秒内第二次点击才真正下发。
+  `POST /api/nms/tasks/{id}/cancel` 调用 `NmsClient.cancel_task`（body `{"id": taskId}`，真机要求的形式）；
+  成功后通过 `RunManager.cancel(..., remote=False)` 停止本进程内 `remote_task_id` 或 `target_task_id`
+  等于该 Task 的 run，避免重复取消。网管已知的 HTTP 503 会以 `cancelled:false` / `supported:false` 返回，
+  该行保留、页面给出警告，不会假装成功。run 运行期间选择器仍可打开，但「修改该任务」禁用。
 
 网管流在到达终态前安静时，任务改由 run manager 接管：直连 NMS 的传输在
 `A2AT_SAMPLE_NMS_POLL_AFTER_SECONDS`（15s）没有状态事件后交出任务，不再等满 HTTP 预算；
@@ -105,7 +111,9 @@ A2A-T。
 `A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS`（30s）。演示来源的 run 连续 30s 没有订阅者时停止跟踪，以
 `finished` + `finalState=incomplete` 结束，网管任务本身不受影响。本地对模拟器排练时可设置
 `A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1`：新建任务会停留在 `WORKING`（流会关闭，创建它的 run 以 `incomplete`
-结束）；再次对该任务发起请求会正常完成。
+结束）；再次对该任务发起请求会正常完成。模拟器的 `:cancel` 会把非终态任务置为 `TASK_STATE_CANCELED`，
+并让已打开的流在该状态停止，后续帧不会覆盖；`A2AT_SAMPLE_NMS_SIM_CANCEL_UNSUPPORTED=1` 可复现旧的
+HTTP 503 应答。
 
 演示视图支持两套品牌主题。`--brand orange|huawei`（或 `A2AT_SAMPLE_UI_BRAND`）决定启动默认值；
 顶栏按钮可实时切换并把选择写入 `localStorage`；`?brand=` 对单次页面加载覆盖前两者。CSS 使用语义

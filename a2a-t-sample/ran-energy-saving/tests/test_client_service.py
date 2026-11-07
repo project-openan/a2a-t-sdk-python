@@ -865,3 +865,48 @@ async def test_a_long_running_run_stays_active_until_the_remote_task_finishes(
     assert stored.status == "finished"
     assert stored.final_state == FINAL_STATE_TASK_COMPLETED
     assert stored.server_task_id == "task-1"
+
+
+async def test_cancel_without_remote_skips_the_transport(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """The Running-tasks picker already cancelled the NMS Task; do not cancel it twice."""
+    wait = asyncio.Event()
+    manager, _, runtimes = _manager(tmp_path, offline_config, wait=wait)
+    run = await manager.start("information", "auto", "sse", user_request="slow")
+    while not runtimes or not runtimes[0].entered.is_set():
+        await asyncio.sleep(0.01)
+
+    canceled: list[str] = []
+
+    async def cancel_remote(task_id: str) -> None:
+        canceled.append(task_id)
+
+    runtime = run.runtime
+    assert runtime is not None
+    runtime.transport = SimpleNamespace(cancel=cancel_remote)  # type: ignore[attr-defined]
+    run.remote_task_id = "task-1"
+
+    assert await manager.cancel(run.run_id, remote=False) is True
+
+    assert canceled == []
+    assert run.status == "interrupted"
+
+
+async def test_active_runs_for_task_matches_the_nms_task(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    wait = asyncio.Event()
+    manager, _, runtimes = _manager(tmp_path, offline_config, wait=wait)
+    run = await manager.start("information", "auto", "sse", user_request="slow")
+    while not runtimes or not runtimes[0].entered.is_set():
+        await asyncio.sleep(0.01)
+    run.remote_task_id = "nms-1"
+
+    assert manager.active_runs_for_task("nms-1") == [run]
+    assert manager.active_runs_for_task("other") == []
+
+    run.target_task_id = "nms-2"
+    assert manager.active_runs_for_task("nms-2") == [run]

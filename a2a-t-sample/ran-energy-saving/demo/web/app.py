@@ -122,9 +122,12 @@ from demo.scenario import (
     resolve_modify_request,
 )
 from demo.web.nms_tasks import (
+    ACTIVE_STATES,
     MODIFIABLE_STATES,
     NMS_SUBMITTED_STATE,
     NMS_WORKING_STATE,
+    cancel_nms_task,
+    list_active_tasks,
     list_modifiable_tasks,
     read_task,
 )
@@ -512,12 +515,13 @@ def create_app(
         return JSONResponse({"enabled": True, "tasks": rows})
 
     async def nms_tasks(request: Request) -> Response:
-        """Return the Tasks the Modify picker may select.
+        """Return the Tasks the Running-tasks picker may select.
 
         The list comes from the vendor NMS itself, not the local A2A task store: a Task can be
-        modified while the NMS holds it in ``TASK_STATE_SUBMITTED`` or ``TASK_STATE_WORKING``.
-        ``state=working`` is kept for older callers; ``state=submitted`` returns only the newly
-        accepted Tasks.
+        modified while the NMS holds it in ``TASK_STATE_SUBMITTED`` or ``TASK_STATE_WORKING``,
+        and any non-terminal Task, including ``TASK_STATE_INPUT_REQUIRED``, can be cancelled.
+        ``state=active`` returns all three; ``state=working`` is kept for older callers and
+        ``state=submitted`` returns only the newly accepted Tasks.
         """
         if config.discovery != DISCOVERY_NMS:
             return JSONResponse(
@@ -528,16 +532,16 @@ def create_app(
                 }
             )
         state = request.query_params.get("state", "modifiable").strip().lower()
-        if state not in ("", "modifiable", "working", "submitted"):
+        if state not in ("", "active", "modifiable", "working", "submitted"):
             return JSONResponse(
                 {
-                    "error": "state must be 'modifiable', 'working' or 'submitted'.",
+                    "error": "state must be 'active', 'modifiable', 'working' or 'submitted'.",
                     "code": "unsupported_task_state",
                 },
                 status_code=400,
             )
         try:
-            rows = await list_modifiable_tasks(config)
+            rows = await (list_active_tasks(config) if state == "active" else list_modifiable_tasks(config))
         except NmsConfigError as exc:
             return JSONResponse({"error": str(exc), "code": "nms_not_configured"}, status_code=503)
         except NmsError as exc:
@@ -552,8 +556,61 @@ def create_app(
         return JSONResponse(
             {
                 "enabled": True,
-                "states": sorted(MODIFIABLE_STATES),
+                "states": sorted(ACTIVE_STATES if state == "active" else MODIFIABLE_STATES),
                 "tasks": rows,
+            }
+        )
+
+    async def cancel_nms_task_route(request: Request) -> Response:
+        """Cancel one NMS Task and stop the local runs that track it.
+
+        The NMS cancel comes first: when the vendor answers the known HTTP 503, the Task keeps
+        running and no local run is stopped (the operator still sees the warning). A successful
+        cancel then stops every in-process run whose remote or target Task is this one.
+        """
+        if config.discovery != DISCOVERY_NMS:
+            return JSONResponse(
+                {
+                    "error": "Cancelling an NMS Task needs the real NMS discovery mode.",
+                    "code": "nms_discovery_required",
+                },
+                status_code=400,
+            )
+        task_id = request.path_params["task_id"]
+        try:
+            cancelled = await cancel_nms_task(config, task_id)
+        except NmsConfigError as exc:
+            return JSONResponse({"error": str(exc), "code": "nms_not_configured"}, status_code=503)
+        except NmsError as exc:
+            if "HTTP 404" in str(exc):
+                return JSONResponse(
+                    {"error": "The Task does not exist on the NMS.", "code": "task_missing"},
+                    status_code=404,
+                )
+            return JSONResponse(
+                {"error": f"The Task could not be cancelled: {exc}", "code": "nms_unavailable"},
+                status_code=502,
+            )
+        if not cancelled:
+            return JSONResponse(
+                {
+                    "taskId": task_id,
+                    "cancelled": False,
+                    "supported": False,
+                    "reason": "nms_cancel_unsupported",
+                    "stoppedRuns": [],
+                }
+            )
+        stopped: list[str] = []
+        for run in manager.active_runs_for_task(task_id):
+            if await manager.cancel(run.run_id, remote=False):
+                stopped.append(run.run_id)
+        return JSONResponse(
+            {
+                "taskId": task_id,
+                "cancelled": True,
+                "supported": True,
+                "stoppedRuns": stopped,
             }
         )
 
@@ -1430,6 +1487,7 @@ def create_app(
             Route("/api/meta", meta),
             Route("/api/tasks", tasks),
             Route("/api/nms/tasks", nms_tasks),
+            Route("/api/nms/tasks/{task_id}/cancel", cancel_nms_task_route, methods=["POST"]),
             Route("/api/client/runs", client_runs),
             Route("/api/client/runs/{run_id}", client_run_detail),
             Route("/api/client/conversations", client_conversations),

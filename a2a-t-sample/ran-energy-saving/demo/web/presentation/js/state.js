@@ -606,11 +606,17 @@ export function keepsAttemptChain(frame, state) {
   return frame.status === "failed" && !state?.taskTSent;
 }
 
-/** The localized label of one NMS Task state shown by the Modify picker. */
+/** The localized label of one NMS Task state shown by the Running-tasks picker. */
 export function modifyStateLabel(copy, stateName) {
   if (stateName === "TASK_STATE_SUBMITTED") return copy.modify.stateSubmitted;
   if (stateName === "TASK_STATE_WORKING") return copy.modify.stateWorking;
+  if (stateName === "TASK_STATE_INPUT_REQUIRED") return copy.modify.stateInputRequired;
   return String(stateName || "");
+}
+
+/** Whether the Running-tasks picker can send a Modify Task-T on this Task. */
+export function isModifiableTaskState(stateName) {
+  return stateName === "TASK_STATE_SUBMITTED" || stateName === "TASK_STATE_WORKING";
 }
 
 /** The act the page should show. */

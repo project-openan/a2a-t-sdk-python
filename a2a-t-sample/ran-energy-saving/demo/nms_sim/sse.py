@@ -20,6 +20,7 @@ from a2a_t.core.metadata import (
 
 from demo.nms_sim.config import SimConfig
 from demo.nms_sim.tasks import (
+    TASK_CANCELED,
     TASK_COMPLETED,
     TASK_WORKING,
     SimTask,
@@ -34,6 +35,9 @@ async def status_stream(task: SimTask, *, config: SimConfig) -> AsyncIterator[st
         while True:
             yield ": heartbeat\n\n"
             await asyncio.sleep(config.heartbeat_seconds or 15.0)
+            if task.state == TASK_CANCELED:
+                yield _data(task.status_frame())
+                return
 
 
 def _data(payload: dict[str, object]) -> str:
@@ -73,12 +77,19 @@ async def task_stream(
 
     async for chunk in _pause(config.working_delay, config.heartbeat_seconds):
         yield chunk
+    if task.state == TASK_CANCELED:
+        # The cancel route runs while this generator sleeps; never overwrite the terminal state.
+        yield _data(task.status_frame())
+        return
     task.state = TASK_WORKING
     task.message = "Task is executing the energy-saving plan."
     yield _data(task.status_frame())
 
     async for chunk in _pause(config.completion_delay, config.heartbeat_seconds):
         yield chunk
+    if task.state == TASK_CANCELED:
+        yield _data(task.status_frame())
+        return
     task.artifacts.append(artifact)
     yield _data(task.artifact_frame())
     if hold:

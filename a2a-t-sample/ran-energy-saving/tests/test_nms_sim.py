@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 
@@ -267,7 +268,7 @@ async def test_rate_above_the_cell_maximum_is_rejected() -> None:
         assert "35%" in text
 
 
-async def test_task_endpoints_and_the_known_cancel_503() -> None:
+async def test_task_endpoints_and_an_idempotent_cancel_of_a_terminal_task() -> None:
     async for client in _client():
         token = await _token(client)
         frames = await _frames(client, _body(_prompt()), _headers(token))
@@ -283,7 +284,8 @@ async def test_task_endpoints_and_the_known_cancel_503() -> None:
         assert listing.json()["tasks"][0]["id"] == task_id
 
         cancel = await client.post(f"/a2a/json/tasks/{task_id}:cancel", headers={"X-Auth-Token": token})
-        assert cancel.status_code == 503
+        assert cancel.status_code == 200
+        assert cancel.json()["task"]["status"]["state"] == "TASK_STATE_COMPLETED"
 
 
 async def test_requests_without_a_token_are_401() -> None:
@@ -421,3 +423,86 @@ def test_sim_config_reads_the_hold_working_switch(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setenv(HOLD_WORKING_ENV_KEY, "1")
     assert SimConfig.from_env().hold_working is True
+
+
+def test_sim_config_can_reproduce_the_unsupported_cancel(monkeypatch: pytest.MonkeyPatch) -> None:
+    from demo.nms_sim.config import CANCEL_UNSUPPORTED_ENV_KEY, FIDELITY_ENV_KEY
+
+    monkeypatch.setenv(FIDELITY_ENV_KEY, FIDELITY_FAST)
+    monkeypatch.delenv(CANCEL_UNSUPPORTED_ENV_KEY, raising=False)
+    assert SimConfig.from_env().cancel_supported is True
+
+    monkeypatch.setenv(CANCEL_UNSUPPORTED_ENV_KEY, "1")
+    assert SimConfig.from_env().cancel_supported is False
+
+
+async def test_cancel_marks_the_task_canceled_and_removes_it_from_the_active_list() -> None:
+    config = SimConfig(fidelity=FIDELITY_FAST, hold_working=True)
+    async for client in _client(config):
+        token = await _token(client)
+        frames = await _frames(client, _body(_prompt()), _headers(token))
+        task_id = frames[0]["task"]["id"]
+        assert frames[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_WORKING"
+
+        cancel = await client.post(f"/a2a/json/tasks/{task_id}:cancel", headers={"X-Auth-Token": token})
+        task = await client.get(f"/a2a/json/tasks/{task_id}", headers={"X-Auth-Token": token})
+
+        assert cancel.status_code == 200
+        assert task.json()["task"]["status"]["state"] == "TASK_STATE_CANCELED"
+
+
+async def test_cancel_unsupported_still_answers_503() -> None:
+    config = SimConfig(fidelity=FIDELITY_FAST, cancel_supported=False)
+    async for client in _client(config):
+        token = await _token(client)
+        frames = await _frames(client, _body(_prompt()), _headers(token))
+        task_id = frames[0]["task"]["id"]
+
+        cancel = await client.post(f"/a2a/json/tasks/{task_id}:cancel", headers={"X-Auth-Token": token})
+
+        assert cancel.status_code == 503
+
+
+async def test_cancel_unknown_task_is_404() -> None:
+    async for client in _client():
+        token = await _token(client)
+        cancel = await client.post("/a2a/json/tasks/missing:cancel", headers={"X-Auth-Token": token})
+        assert cancel.status_code == 404
+
+
+async def test_task_stream_stops_when_the_task_is_canceled() -> None:
+    from demo.nms_sim.tasks import TASK_CANCELED
+
+    task = SimTask(task_id="task-cancel", context_id="ctx-cancel")
+    config = SimConfig(
+        fidelity=FIDELITY_STRICT,
+        heartbeat_seconds=0.0,
+        working_delay=0.02,
+        completion_delay=0.02,
+    )
+    stream = task_stream(
+        task,
+        report={"summary": "plan"},
+        artifact={"artifactId": "a1"},
+        config=config,
+    )
+
+    first = await anext(stream)
+    task.state = TASK_CANCELED
+    rest: list[str] = []
+    try:
+        async with asyncio.timeout(1.0):
+            async for frame in stream:
+                rest.append(frame)
+    except TimeoutError:
+        pytest.fail("the canceled Task stream kept emitting frames")
+
+    assert "task" in json.loads(first.removeprefix("data: ").strip())
+    states = [
+        json.loads(frame.removeprefix("data: ").strip())["statusUpdate"]["status"]["state"]
+        for frame in rest
+        if frame.startswith("data: ")
+    ]
+    assert states[-1] == TASK_CANCELED
+    assert "TASK_STATE_COMPLETED" not in states
+    assert not any("artifactUpdate" in frame for frame in rest)

@@ -18,6 +18,8 @@ PORT_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_PORT"
 #: Local rehearsal aid: a newly created Task stays WORKING instead of completing, so the
 #: presentation's Modify picker has a target. Continuing that Task completes it normally.
 HOLD_WORKING_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_HOLD_WORKING"
+#: Reproduce the vendor's old cancel defect: ``:cancel`` always answers HTTP 503.
+CANCEL_UNSUPPORTED_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_CANCEL_UNSUPPORTED"
 
 #: Test region the real 910 environment accepts.
 DEFAULT_REGION: Final[str] = "A2ATestRegion"
@@ -50,6 +52,8 @@ class SimConfig:
         task_limit: Number of tasks kept in the list.
         hold_working: Keep a newly created Task WORKING so a Modify can target it. Continuing
             an existing Task still completes it.
+        cancel_supported: Accept ``:cancel`` and move the Task to ``TASK_STATE_CANCELED``.
+            ``False`` reproduces the vendor's older HTTP 503 answer.
     """
 
     fidelity: str = FIDELITY_STRICT
@@ -64,6 +68,7 @@ class SimConfig:
     token_value: str = DEFAULT_TOKEN_VALUE
     task_limit: int = DEFAULT_TASK_LIMIT
     hold_working: bool = False
+    cancel_supported: bool = True
 
     @property
     def strict(self) -> bool:
@@ -86,7 +91,17 @@ class SimConfig:
             "yes",
             "on",
         }
-        profile = cls(fidelity=fidelity, hold_working=hold_working)
+        cancel_unsupported = os.environ.get(CANCEL_UNSUPPORTED_ENV_KEY, "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        profile = cls(
+            fidelity=fidelity,
+            hold_working=hold_working,
+            cancel_supported=not cancel_unsupported,
+        )
         if profile.strict:
             return profile
         # The fast profile keeps the wire contract but removes the wall-clock delays.
@@ -96,4 +111,5 @@ class SimConfig:
             working_delay=0.0,
             completion_delay=0.0,
             hold_working=hold_working,
+            cancel_supported=not cancel_unsupported,
         )

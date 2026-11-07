@@ -152,7 +152,7 @@ outlined-node ICT style). The top-bar button switches them at runtime and rememb
 `--brand huawei` or `?brand=huawei` selects the start-up default. Eight examples cover use
 case 1 (night-time energy saving, with and without negotiation) and use case 2 (planned power
 outage). The outage example creates a site-level baseline; a running Task is modified through the
-separate **Modify a running task** entry, which sends a real Modify Task-T on the selected Task.
+separate **Running tasks** entry, which sends a real Modify Task-T on the selected Task.
 The stage follows the live run at a human pace through nine
 steps: request, structured
 Task-T, approval 1 (intent), Task-T sent, negotiation when needed, strategy and task start, data
@@ -179,18 +179,30 @@ trace labels each row with its demo day (Day 1, Days 2–8, Day 9, Day 9+) and m
 (OSS → RAN, RAN → OSS, MIE ⇄ Engineer); late server spans are merged by event time and a status and
 its matching span collapse to one row.
 
-When the client talks to the real NMS (`--nms`), the toolbar also offers **Modify a running task**.
-It reads `GET /api/nms/tasks`, backed by the NMS `/tasks` endpoint, and lists SUBMITTED and WORKING
-Tasks (with their real state); the picker refreshes every five seconds while it is open. Selecting
-one records its task id and context, switches the example to the planned-outage modification, fills
-the editor with a Modify-only request, and waits: nothing is sent on selection. Pressing Start posts
-the target ids; the run has no baseline phase, and its first Task-T is the real Modify continuation
-of the selected Task, even while it is still SUBMITTED. A Task that reaches a terminal state before
-the send is rejected with a clear message. The entry supports A2A-T only. When the NMS stream goes
-quiet, the run keeps tracking the Task through a background poll (a page that stays subscribed keeps
-the poll alive; closing it stops the tracker after 30 seconds). For local rehearsal against the
-simulator, `A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1` keeps a newly created Task WORKING so the picker has
-a target; continuing it completes it normally.
+When the client talks to the real NMS (`--nms`), the toolbar also offers **Running tasks**. It reads
+`GET /api/nms/tasks?state=active`, backed by the NMS `/tasks` endpoint, and lists every Task that
+still holds NMS quota — SUBMITTED, WORKING and INPUT_REQUIRED — with its real state; the picker
+refreshes every five seconds while it is open. Selecting a Task enables two actions, and nothing is
+sent until the operator presses one:
+
+* **Modify this task** — available for SUBMITTED or WORKING Tasks under A2A-T. It records the task
+  id and context, switches the example to the planned-outage modification and fills the editor with
+  a Modify-only request. Pressing Start posts the target ids; the run has no baseline phase, and its
+  first Task-T is the real Modify continuation of the selected Task, even while it is still
+  SUBMITTED. A Task that reaches a terminal state before the send is rejected with a clear message.
+* **Cancel this task** — available for any listed Task and protocol, useful when repeated tests
+  exhaust the Task quota. It needs a second click ("Confirm cancel?") within five seconds, then
+  calls `POST /api/nms/tasks/{id}/cancel`; the backend sends the vendor `:cancel` request and stops
+  every in-process run that tracks that Task. The known HTTP 503 means the NMS did not cancel it: the
+  row stays and the picker shows a warning instead of reporting success.
+
+The picker can be opened while a run is active; Modify is disabled then (cancelling the Task under
+test is still allowed). When the NMS stream goes quiet, the run keeps tracking the Task through a
+background poll (a page that stays subscribed keeps the poll alive; closing it stops the tracker
+after 30 seconds). For local rehearsal against the simulator,
+`A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1` keeps a newly created Task WORKING so the picker has a target
+(continuing it completes it normally), and `A2AT_SAMPLE_NMS_SIM_CANCEL_UNSUPPORTED=1` reproduces the
+old HTTP 503 cancel answer.
 
 ### Tester console (Excel import)
 

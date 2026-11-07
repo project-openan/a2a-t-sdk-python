@@ -2114,3 +2114,168 @@ async def test_trace_ingestion_warns_for_an_unknown_run(
 
     assert response.status_code == 404
     assert "unknown run missing" in caplog.text
+
+
+class _FakeCancelNmsClient:
+    """NMS double for the Running-tasks picker; no network."""
+
+    tasks: list[dict[str, object]] = []
+    cancel_result: bool = True
+    cancel_error: Exception | None = None
+    cancelled: list[str] = []
+
+    def __init__(self, config: object) -> None:
+        del config
+
+    async def list_tasks(self) -> dict[str, object]:
+        return {"tasks": list(type(self).tasks)}
+
+    async def cancel_task(self, task_id: str) -> bool:
+        if type(self).cancel_error is not None:
+            raise type(self).cancel_error  # type: ignore[misc]
+        type(self).cancelled.append(task_id)
+        return type(self).cancel_result
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _nms_config(config: SampleConfig) -> SampleConfig:
+    return replace(
+        config,
+        discovery=DISCOVERY_NMS,
+        nms_a2a_base="http://nms.example/a2a/json",
+        nms_token_url="http://nms.example/sessions",
+        nms_token_user="user",
+        nms_token_value="secret",
+    )
+
+
+def _nms_app(
+    config: SampleConfig,
+    tmp_path: Path,
+    factory: Callable[..., Any],
+) -> tuple[Any, Any]:
+    app = create_app(
+        _nms_config(config),
+        runs_dir=tmp_path,
+        runtime_factory=factory,
+        finished_grace_seconds=0.0,
+        ui_mode="explorer",
+    )
+    return app, app.state.run_manager
+
+
+@pytest.fixture(autouse=True)
+def _fake_cancel_client(monkeypatch: pytest.MonkeyPatch) -> type[_FakeCancelNmsClient]:
+    from demo.web import nms_tasks as nms_tasks_module
+
+    monkeypatch.setattr(nms_tasks_module, "NmsClient", _FakeCancelNmsClient)
+    _FakeCancelNmsClient.tasks = []
+    _FakeCancelNmsClient.cancel_result = True
+    _FakeCancelNmsClient.cancel_error = None
+    _FakeCancelNmsClient.cancelled = []
+    return _FakeCancelNmsClient
+
+
+async def test_nms_task_list_active_state_includes_input_required(
+    offline_config: SampleConfig,
+    factory: Callable[..., Any],
+    tmp_path: Path,
+    _fake_cancel_client: type[_FakeCancelNmsClient],
+) -> None:
+    _fake_cancel_client.tasks = [
+        {"id": "task-working", "contextId": "c1", "status": {"state": "TASK_STATE_WORKING"}},
+        {"id": "task-waiting", "contextId": "c2", "status": {"state": "TASK_STATE_INPUT_REQUIRED"}},
+        {"id": "task-done", "contextId": "c3", "status": {"state": "TASK_STATE_COMPLETED"}},
+    ]
+    app, _ = _nms_app(offline_config, tmp_path, factory)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        active = await client.get("/api/nms/tasks?state=active")
+        modifiable = await client.get("/api/nms/tasks?state=modifiable")
+
+    assert [row["taskId"] for row in active.json()["tasks"]] == ["task-working", "task-waiting"]
+    assert [row["taskId"] for row in modifiable.json()["tasks"]] == ["task-working"]
+
+
+async def test_cancel_nms_task_endpoint_stops_the_matching_local_run(
+    offline_config: SampleConfig,
+    factory: Callable[..., Any],
+    tmp_path: Path,
+    _fake_cancel_client: type[_FakeCancelNmsClient],
+) -> None:
+    app, manager = _nms_app(offline_config, tmp_path, factory)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        start = await client.post(
+            "/api/runs",
+            json={"scenario": "information", "mode": "manual", "transport": "sse"},
+        )
+        run_id = start.json()["runId"]
+        await _wait_status(client, run_id, lambda data: data["pendingDecision"] is True)
+        run = manager.get(run_id)
+        assert run is not None
+        run.remote_task_id = "task-9"
+
+        response = await client.post("/api/nms/tasks/task-9/cancel")
+        finished = await _wait_status(client, run_id, lambda data: data["status"] != "running")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "taskId": "task-9",
+        "cancelled": True,
+        "supported": True,
+        "stoppedRuns": [run_id],
+    }
+    assert _fake_cancel_client.cancelled == ["task-9"]
+    assert finished["status"] == "interrupted"
+
+
+async def test_cancel_nms_task_endpoint_reports_the_known_503(
+    offline_config: SampleConfig,
+    factory: Callable[..., Any],
+    tmp_path: Path,
+    _fake_cancel_client: type[_FakeCancelNmsClient],
+) -> None:
+    _fake_cancel_client.cancel_result = False
+    app, _ = _nms_app(offline_config, tmp_path, factory)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/nms/tasks/task-9/cancel")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "taskId": "task-9",
+        "cancelled": False,
+        "supported": False,
+        "reason": "nms_cancel_unsupported",
+        "stoppedRuns": [],
+    }
+
+
+async def test_cancel_nms_task_endpoint_reports_a_missing_task(
+    offline_config: SampleConfig,
+    factory: Callable[..., Any],
+    tmp_path: Path,
+    _fake_cancel_client: type[_FakeCancelNmsClient],
+) -> None:
+    from protocol.nms_client import NmsProtocolError
+
+    _fake_cancel_client.cancel_error = NmsProtocolError("NMS cancel returned HTTP 404: gone")
+    app, _ = _nms_app(offline_config, tmp_path, factory)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/nms/tasks/task-9/cancel")
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "task_missing"
+
+
+async def test_cancel_nms_task_endpoint_requires_nms_discovery(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post("/api/nms/tasks/task-9/cancel")
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "nms_discovery_required"

@@ -10,9 +10,12 @@ from demo.web import nms_tasks
 from demo.web.nms_tasks import (
     NMS_SUBMITTED_STATE,
     NMS_WORKING_STATE,
+    cancel_nms_task,
+    list_active_tasks,
     list_modifiable_tasks,
     read_task,
 )
+from protocol.nms_client import NmsProtocolError
 from shared.config import DISCOVERY_NMS, SampleConfig
 
 
@@ -55,6 +58,9 @@ class FakeNmsClient:
 
     tasks: list[dict[str, object]] = []
     task: dict[str, object] | None = None
+    cancelled: list[str] = []
+    cancel_result: bool = True
+    cancel_error: Exception | None = None
     closed = False
 
     def __init__(self, config: object) -> None:
@@ -70,6 +76,12 @@ class FakeNmsClient:
             raise AssertionError("no task configured")
         return type(self).task  # type: ignore[return-value]
 
+    async def cancel_task(self, task_id: str) -> bool:
+        if type(self).cancel_error is not None:
+            raise type(self).cancel_error  # type: ignore[misc]
+        type(self).cancelled.append(task_id)
+        return type(self).cancel_result
+
     async def aclose(self) -> None:
         type(self).closed = True
 
@@ -79,6 +91,9 @@ def fake_client(monkeypatch: pytest.MonkeyPatch) -> type[FakeNmsClient]:
     monkeypatch.setattr(nms_tasks, "NmsClient", FakeNmsClient)
     FakeNmsClient.tasks = []
     FakeNmsClient.task = None
+    FakeNmsClient.cancelled = []
+    FakeNmsClient.cancel_result = True
+    FakeNmsClient.cancel_error = None
     return FakeNmsClient
 
 
@@ -129,3 +144,52 @@ async def test_list_modifiable_tasks_ignores_a_malformed_document(
     FakeNmsClient.tasks = ["not-a-task", {}]  # type: ignore[list-item]
 
     assert await list_modifiable_tasks(_config(offline_config)) == []
+
+
+async def test_list_active_tasks_keeps_input_required_for_cancel_only(
+    offline_config: SampleConfig,
+) -> None:
+    """A Task waiting for input still holds NMS quota, so the picker must list it."""
+    FakeNmsClient.tasks = [
+        _working_task(),
+        {
+            "id": "task-waiting",
+            "contextId": "ctx-waiting",
+            "status": {"state": "TASK_STATE_INPUT_REQUIRED"},
+        },
+        {
+            "id": "done-1",
+            "contextId": "ctx-done",
+            "status": {"state": "TASK_STATE_COMPLETED"},
+        },
+    ]
+
+    rows = await list_active_tasks(_config(offline_config))
+
+    assert [row["taskId"] for row in rows] == ["task-9", "task-waiting"]
+    assert rows[1]["state"] == "TASK_STATE_INPUT_REQUIRED"
+
+
+async def test_cancel_nms_task_reports_success(offline_config: SampleConfig) -> None:
+    FakeNmsClient.cancelled = []
+
+    assert await cancel_nms_task(_config(offline_config), "task-9") is True
+    assert FakeNmsClient.cancelled == ["task-9"]
+    assert FakeNmsClient.closed is True
+
+
+async def test_cancel_nms_task_reports_the_known_503_as_unsupported(
+    offline_config: SampleConfig,
+) -> None:
+    FakeNmsClient.cancel_result = False
+
+    assert await cancel_nms_task(_config(offline_config), "task-9") is False
+
+
+async def test_cancel_nms_task_propagates_other_failures(
+    offline_config: SampleConfig,
+) -> None:
+    FakeNmsClient.cancel_error = NmsProtocolError("NMS cancel returned HTTP 500: boom")
+
+    with pytest.raises(NmsProtocolError):
+        await cancel_nms_task(_config(offline_config), "task-9")

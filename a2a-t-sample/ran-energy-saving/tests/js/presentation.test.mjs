@@ -12,6 +12,7 @@ import {
   createState,
   endingOf,
   executionSteps,
+  isModifiableTaskState,
   keepsAttemptChain,
   modifyStateLabel,
   negotiationExpected,
@@ -71,6 +72,11 @@ assert.equal(modifyStateLabel(copy, "TASK_STATE_SUBMITTED"), "已提交");
 assert.equal(modifyStateLabel(copyFor("en-US"), "TASK_STATE_SUBMITTED"), "SUBMITTED");
 assert.equal(modifyStateLabel(copy, "TASK_STATE_WORKING"), "运行中");
 assert.equal(modifyStateLabel(copy, "TASK_STATE_COMPLETED"), "TASK_STATE_COMPLETED");
+assert.equal(modifyStateLabel(copy, "TASK_STATE_INPUT_REQUIRED"), "等待输入");
+assert.equal(modifyStateLabel(copyFor("en-US"), "TASK_STATE_INPUT_REQUIRED"), "INPUT_REQUIRED");
+assert.equal(isModifiableTaskState("TASK_STATE_SUBMITTED"), true);
+assert.equal(isModifiableTaskState("TASK_STATE_WORKING"), true);
+assert.equal(isModifiableTaskState("TASK_STATE_INPUT_REQUIRED"), false);
 
 // A retry after a pre-send block keeps the attempt chain (conversation and trace id); a run that
 // reached the server, completed or was cancelled starts a new one.

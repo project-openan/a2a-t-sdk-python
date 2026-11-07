@@ -18,6 +18,7 @@ import {
   continuityModel,
   createState,
   endingOf,
+  isModifiableTaskState,
   keepsAttemptChain,
   modifyStateLabel,
   negotiationExpected,
@@ -44,8 +45,10 @@ const byId = (id) => document.getElementById(id);
 
 //: Evidence rows are applied one at a time so a batch of server spans does not flash the panels.
 const EVIDENCE_MS = 60;
-//: The Modify picker refreshes while open so a SUBMITTED task's state stays current.
+//: The Running-tasks picker refreshes while open so a SUBMITTED task's state stays current.
 const MODIFY_REFRESH_MS = 5000;
+//: How long the destructive action stays armed after the first click.
+const MODIFY_CANCEL_CONFIRM_MS = 5000;
 
 //: Story beats that should animate once; a repeat is evidence only.
 const REPEATED_SILENT = new Set([
@@ -112,7 +115,7 @@ const els = {
   modifyStatus: byId("modify-status"),
   modifyClose: byId("modify-close"),
   modifyRefresh: byId("modify-refresh"),
-  modifyCancel: byId("modify-cancel"),
+  modifyCancelTask: byId("modify-cancel-task"),
   modifyConfirm: byId("modify-confirm"),
   cancelRun: byId("cancel-run"),
   cancelLabel: byId("cancel-label"),
@@ -274,6 +277,11 @@ const ui = {
   modifyRequest: "",
   //: Auto-refresh handle while the picker is open; SUBMITTED tasks become WORKING over time.
   modifyTimer: null,
+  //: True while the cancel request is in flight; the two action buttons stay disabled.
+  modifyCancelling: false,
+  //: The destructive action needs a second click; any selection or refresh change disarms it.
+  modifyCancelArmed: false,
+  modifyCancelTimer: null,
 };
 
 const stage = createStage(els);
@@ -492,7 +500,9 @@ function bindStaticEvents() {
   if (els.targetClear) els.targetClear.addEventListener("click", () => clearModifyTarget(false));
   if (els.modifyClose) els.modifyClose.addEventListener("click", () => closeModifyPicker());
   if (els.modifyRefresh) els.modifyRefresh.addEventListener("click", () => loadModifyTasks());
-  if (els.modifyCancel) els.modifyCancel.addEventListener("click", () => closeModifyPicker());
+  if (els.modifyCancelTask) {
+    els.modifyCancelTask.addEventListener("click", () => requestCancelSelectedTask());
+  }
   if (els.modifyConfirm) els.modifyConfirm.addEventListener("click", () => applyModifyTarget());
   if (els.modifyDialog) {
     els.modifyDialog.addEventListener("click", (event) => {
@@ -648,6 +658,7 @@ function applyStaticCopy() {
   els.scenariosLabel.textContent = copy.scenarioLabel;
   els.editLabel.textContent = copy.editRequest;
   renderModifyButton();
+  renderModifyActions();
   renderTargetCard();
   if (els.cancelLabel) {
     els.cancelLabel.textContent = ui.cancelling ? copy.cancelling : copy.cancelRequest;
@@ -819,14 +830,12 @@ function resetRequest() {
   renderRequest();
 }
 
-/** Show the Modify entry only when the client talks to the NMS. */
+/** Show the Running-tasks entry whenever the client talks to the NMS. */
 function renderModifyButton() {
   if (!els.modifyTask) return;
-  // A Modify Task-T is an A2A-T operation: standard A2A has no task template to modify.
-  const protocols = ui.meta?.protocols || ["a2a-t"];
-  els.modifyTask.hidden =
-    !ui.meta?.nmsTasksEnabled || ui.protocol !== "a2a-t" || !protocols.includes("a2a-t");
-  els.modifyTask.disabled = Boolean(ui.busy);
+  // Cancel is protocol-independent, and a pure-A2A test also leaves Tasks that hold quota. The
+  // Modify action inside the picker keeps its own A2A-T / state checks.
+  els.modifyTask.hidden = !ui.meta?.nmsTasksEnabled;
   if (els.modifyLabel) els.modifyLabel.textContent = ui.copy.modifyTask;
   els.modifyTask.title = ui.copy.modifyTask;
 }
@@ -867,19 +876,19 @@ function clearModifyTarget(silent = false) {
 }
 
 function openModifyPicker() {
-  if (ui.busy || !ui.meta?.nmsTasksEnabled || !els.modifyDialog) return;
+  if (!ui.meta?.nmsTasksEnabled || !els.modifyDialog) return;
   ui.modifyRequest = ui.meta?.modifyRequest || "";
   ui.modifySelected = null;
+  ui.modifyCancelling = false;
+  resetModifyCancelConfirm();
   els.modifyDialog.hidden = false;
   els.modifyError.hidden = true;
   els.modifyError.textContent = "";
-  els.modifyConfirm.disabled = true;
-  els.modifyStatus.textContent = "";
   els.modifyTitle.textContent = ui.copy.modify.title;
   els.modifyHint.textContent = ui.copy.modify.hint;
   if (els.modifyRefresh) els.modifyRefresh.textContent = ui.copy.modify.refresh;
-  els.modifyCancel.textContent = ui.copy.modify.cancel;
-  els.modifyConfirm.textContent = ui.copy.modify.confirm;
+  els.modifyStatus.textContent = "";
+  renderModifyActions();
   loadModifyTasks();
   startModifyRefresh();
 }
@@ -887,6 +896,7 @@ function openModifyPicker() {
 function closeModifyPicker() {
   if (!els.modifyDialog) return;
   stopModifyRefresh();
+  resetModifyCancelConfirm();
   els.modifyDialog.hidden = true;
   ui.modifySelected = null;
   ui.modifyLoading = false;
@@ -905,16 +915,18 @@ function stopModifyRefresh() {
 
 /** Read the NMS task list; the automatic refresh updates in place without a loading flash. */
 async function loadModifyTasks({ quiet = false } = {}) {
-  if (quiet && ui.modifyLoading) return;
+  if ((quiet && ui.modifyLoading) || ui.modifyCancelling) return;
+  if (quiet) resetModifyCancelConfirm();
   ui.modifyLoading = true;
   if (!quiet) {
     ui.modifyTasks = [];
-    els.modifyConfirm.disabled = true;
     renderModifyList(ui.copy.modify.loading, true);
+    renderModifyActions();
     if (els.modifyRefresh) els.modifyRefresh.disabled = true;
   }
   try {
-    const response = await fetch("/api/nms/tasks?state=modifiable", {
+    // "active" also lists INPUT_REQUIRED: those Tasks cannot be modified but still hold quota.
+    const response = await fetch("/api/nms/tasks?state=active", {
       headers: { accept: "application/json" },
     });
     const payload = await response.json().catch(() => ({}));
@@ -926,14 +938,11 @@ async function loadModifyTasks({ quiet = false } = {}) {
     ui.modifyTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
     ui.modifyLoading = false;
     if (selectedId !== null) {
-      ui.modifySelected =
-        ui.modifyTasks.find((task) => task.taskId === selectedId) || null;
-      els.modifyConfirm.disabled = ui.modifySelected === null;
-      els.modifyStatus.textContent = ui.modifySelected
-        ? `${ui.copy.modify.selected}: ${ui.modifySelected.taskId}`
-        : "";
+      ui.modifySelected = ui.modifyTasks.find((task) => task.taskId === selectedId) || null;
     }
     renderModifyList();
+    renderModifyActions();
+    renderModifyStatus();
     if (ui.modifySelected !== null) {
       reselectModifyRow(ui.modifySelected.taskId);
     }
@@ -941,6 +950,7 @@ async function loadModifyTasks({ quiet = false } = {}) {
     ui.modifyLoading = false;
     // A failed automatic refresh keeps the last good list; only an explicit read shows the error.
     if (!quiet) renderModifyList(ui.copy.modify.error, false, error);
+    renderModifyActions();
   } finally {
     if (els.modifyRefresh) els.modifyRefresh.disabled = false;
   }
@@ -992,9 +1002,114 @@ function renderModifyList(message = null, loading = false, error = null) {
 
 function selectModifyRow(task) {
   ui.modifySelected = task;
+  resetModifyCancelConfirm();
   reselectModifyRow(task.taskId);
-  els.modifyConfirm.disabled = false;
-  els.modifyStatus.textContent = `${ui.copy.modify.selected}: ${task.taskId}`;
+  renderModifyActions();
+  renderModifyStatus();
+}
+
+/** Enable each action for the selected Task; a Modify needs SUBMITTED or WORKING. */
+function renderModifyActions() {
+  const task = ui.modifySelected;
+  const cancelling = ui.modifyCancelling;
+  if (els.modifyCancelTask) {
+    els.modifyCancelTask.disabled = task === null || cancelling;
+    els.modifyCancelTask.textContent = cancelling
+      ? ui.copy.modify.cancellingTask
+      : ui.modifyCancelArmed
+        ? ui.copy.modify.confirmCancel
+        : ui.copy.modify.cancelTask;
+  }
+  if (els.modifyConfirm) {
+    const modifiable = task !== null && isModifiableTaskState(task.state);
+    const a2aT = (ui.meta?.protocols || ["a2a-t"]).includes("a2a-t");
+    els.modifyConfirm.disabled = !modifiable || !a2aT || Boolean(ui.busy) || cancelling;
+    els.modifyConfirm.textContent = ui.copy.modify.confirm;
+    els.modifyConfirm.title = modifiable ? "" : ui.copy.modify.modifyNotAllowed;
+  }
+}
+
+/** Show the selected Task, or how many active Tasks hold NMS quota. */
+function renderModifyStatus() {
+  if (!els.modifyStatus) return;
+  if (ui.modifySelected !== null) {
+    els.modifyStatus.textContent = `${ui.copy.modify.selected}: ${ui.modifySelected.taskId}`;
+    return;
+  }
+  els.modifyStatus.textContent = ui.copy.modify.activeCount.replace(
+    "{count}",
+    String(ui.modifyTasks.length),
+  );
+}
+
+/** Leave the armed state; the timer bounds how long one accidental click can linger. */
+function resetModifyCancelConfirm() {
+  ui.modifyCancelArmed = false;
+  if (ui.modifyCancelTimer !== null) {
+    window.clearTimeout(ui.modifyCancelTimer);
+    ui.modifyCancelTimer = null;
+  }
+  if (els.modifyCancelTask) els.modifyCancelTask.textContent = ui.copy.modify.cancelTask;
+}
+
+/** First click arms the destructive action, the second one sends it. */
+function requestCancelSelectedTask() {
+  const task = ui.modifySelected;
+  if (task === null || !task.taskId || ui.modifyCancelling) return;
+  if (!ui.modifyCancelArmed) {
+    ui.modifyCancelArmed = true;
+    renderModifyActions();
+    ui.modifyCancelTimer = window.setTimeout(resetModifyCancelConfirm, MODIFY_CANCEL_CONFIRM_MS);
+    return;
+  }
+  cancelSelectedTask(task);
+}
+
+async function cancelSelectedTask(task) {
+  resetModifyCancelConfirm();
+  ui.modifyCancelling = true;
+  els.modifyError.hidden = true;
+  els.modifyError.textContent = "";
+  renderModifyActions();
+  if (els.modifyStatus) els.modifyStatus.textContent = ui.copy.modify.cancellingTask;
+  try {
+    const response = await fetch(`/api/nms/tasks/${encodeURIComponent(task.taskId)}/cancel`, {
+      method: "POST",
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (payload.cancelled === false) {
+      // The known HTTP 503: the Task is untouched, so keep it in the list and say so.
+      ui.modifyCancelling = false;
+      renderModifyActions();
+      els.modifyError.textContent = ui.copy.modify.cancelUnsupported;
+      els.modifyError.hidden = false;
+      renderModifyStatus();
+      return;
+    }
+    ui.modifyCancelling = false;
+    ui.modifySelected = null;
+    ui.modifyTasks = ui.modifyTasks.filter((row) => row.taskId !== task.taskId);
+    renderModifyList();
+    renderModifyActions();
+    const stopped = Array.isArray(payload.stoppedRuns) ? payload.stoppedRuns : [];
+    if (els.modifyStatus) {
+      els.modifyStatus.textContent =
+        stopped.length > 0
+          ? `${ui.copy.modify.cancelledTask} ${ui.copy.modify.stoppedRuns.replace(
+              "{ids}",
+              stopped.join(", "),
+            )}`
+          : ui.copy.modify.cancelledTask;
+    }
+  } catch (error) {
+    ui.modifyCancelling = false;
+    renderModifyActions();
+    renderModifyStatus();
+    const detail = error instanceof Error && error.message ? ` (${error.message})` : "";
+    els.modifyError.textContent = `${ui.copy.modify.cancelFailedTask}${detail}`;
+    els.modifyError.hidden = false;
+  }
 }
 
 function reselectModifyRow(taskId) {
@@ -1007,6 +1122,11 @@ function reselectModifyRow(taskId) {
 function applyModifyTarget() {
   const task = ui.modifySelected;
   if (task === null || !task.taskId) return;
+  if (!isModifiableTaskState(task.state)) {
+    els.modifyError.textContent = ui.copy.modify.modifyNotAllowed;
+    els.modifyError.hidden = false;
+    return;
+  }
   if (!task.contextId) {
     els.modifyError.textContent = ui.copy.modify.confirmFailed;
     els.modifyError.hidden = false;
@@ -1385,6 +1505,8 @@ function setBusy(busy) {
     els.cancelRun.disabled = !busy || ui.cancelling || !ui.view.runId;
   }
   renderModifyButton();
+  // A run starting or finishing changes whether a Modify may be sent; Cancel stays available.
+  renderModifyActions();
   renderProtocol();
   renderControls();
 }
