@@ -36,6 +36,9 @@ import {
 import { t } from "./i18n/index.js";
 import { PHASE_INDEX, finalStateLabel, phaseLabel, phaseShort } from "./store.js";
 
+/** Longest string a JSON tree renders in full; the recorded payload cap (256K) bounds the rest. */
+const JSON_STRING_DISPLAY_LIMIT = 200_000;
+
 /** Tabs of the inspector, in keyboard order. */
 export const INSPECTOR_TABS = [
   { key: "summary" },
@@ -1000,7 +1003,12 @@ export class Inspector {
     if (typeof value === "boolean") return el("span", "json-boolean", String(value));
     if (typeof value === "number") return el("span", "json-number", formatNumber(value));
     if (typeof value === "string") {
-      const text = value.length > 4000 ? `${value.slice(0, 4000)}… [${value.length - 4000} chars]` : value;
+      const text =
+        value.length > JSON_STRING_DISPLAY_LIMIT
+          ? `${value.slice(0, JSON_STRING_DISPLAY_LIMIT)}… [${
+              value.length - JSON_STRING_DISPLAY_LIMIT
+            } chars]`
+          : value;
       return el("span", "json-string", text);
     }
     if (Array.isArray(value)) {
