@@ -39,6 +39,7 @@ from a2a_t.core.metadata import (
 from google.protobuf.json_format import MessageToDict, ParseDict, ParseError
 from shared.config import (
     DEFAULT_NMS_IDLE_TIMEOUT_SECONDS,
+    DEFAULT_NMS_POLL_AFTER_SECONDS,
     DEFAULT_NMS_POLL_INTERVAL_SECONDS,
     DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS,
     SampleConfig,
@@ -131,6 +132,8 @@ class NmsConfig:
         idle_timeout: Seconds without a ``data:`` frame before switching to polling.
         request_timeout: Per-request budget.
         poll_interval: Seconds between task polls.
+        poll_after_silence: Silence before a non-terminal Task is handed to background tracking.
+        defer_to_tracker: Whether the process owns a background tracker for the Task.
         token_refresh_skew: Refresh the token this many seconds before it expires.
         wire_log: Whether the raw exchange is written to ``wire.jsonl``.
     """
@@ -144,6 +147,8 @@ class NmsConfig:
     read_after_send: bool = True
     request_timeout: float = DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS
     poll_interval: float = DEFAULT_NMS_POLL_INTERVAL_SECONDS
+    poll_after_silence: float = DEFAULT_NMS_POLL_AFTER_SECONDS
+    defer_to_tracker: bool = False
     token_refresh_skew: float = 60.0
     wire_log: bool = True
 
@@ -176,6 +181,8 @@ class NmsConfig:
             read_after_send=config.nms_read_after_send,
             request_timeout=config.nms_request_timeout,
             poll_interval=config.nms_poll_interval,
+            poll_after_silence=config.nms_poll_after_silence,
+            defer_to_tracker=config.defer_to_tracker,
             wire_log=config.nms_wire_log,
         )
 
@@ -357,20 +364,23 @@ class NmsClient:
                 # The NMS emits ``: heartbeat`` every 15 s forever, so an idle window measured
                 # between *any* two lines never expires: the stream hung for minutes after the
                 # Task went to WORKING and never reached polling. Only a ``data:`` frame proves
-                # progress; heartbeats are skipped without moving ``idle_deadline``.
-                idle_deadline = time.monotonic() + self._config.idle_timeout
+                # progress; heartbeats are skipped without moving ``idle_deadline``. Once a Task
+                # is known, a process with a background tracker leaves the stream sooner and
+                # hands that Task over; a negotiation without a Task keeps the normal window.
+                idle_timeout = self._config.idle_timeout
+                idle_deadline = time.monotonic() + idle_timeout
                 while True:
                     remaining = idle_deadline - time.monotonic()
                     if remaining <= 0:
                         self._write_wire(
                             "in",
-                            line=f": idle {self._config.idle_timeout:g}s without a data frame; polling",
+                            line=f": idle {idle_timeout:g}s without a data frame; polling",
                         )
                         _nms_span(
                             phase=PHASE_EXECUTION,
                             title="NMS stream idle; polling the task",
                             title_key="nmsIdle",
-                            detail={"idleSeconds": self._config.idle_timeout},
+                            detail={"idleSeconds": idle_timeout},
                         )
                         break
                     try:
@@ -387,7 +397,7 @@ class NmsClient:
                     raw = line[5:].strip()
                     if not raw:
                         continue
-                    idle_deadline = time.monotonic() + self._config.idle_timeout
+                    idle_deadline = time.monotonic() + idle_timeout
                     try:
                         frame = json.loads(raw)
                     except json.JSONDecodeError as exc:
@@ -414,6 +424,13 @@ class NmsClient:
                             detail={"message": message[:1000]},
                         )
                         raise NmsProtocolError(message)
+                    if self._config.defer_to_tracker and "task" in frame:
+                        task = frame.get("task")
+                        if isinstance(task, Mapping) and isinstance(task.get("id"), str):
+                            # The Task is now known: a process-owned tracker can take over after
+                            # the shorter silence instead of occupying this stream for the budget.
+                            idle_timeout = self._config.poll_after_silence
+                            idle_deadline = time.monotonic() + idle_timeout
                     yield frame
         except httpx.HTTPError as exc:
             raise NmsProtocolError(f"NMS A2A request failed: {exc}") from exc
@@ -754,7 +771,12 @@ class NmsSseTransport:
             isinstance(event.get("metadata"), Mapping) and _is_negotiation_metadata(event["metadata"])
             for event in events
         )
-        if task_id is not None and not has_negotiation and not any(is_terminal_event(event) for event in events):
+        if (
+            task_id is not None
+            and not has_negotiation
+            and not any(is_terminal_event(event) for event in events)
+            and not self._client.config.defer_to_tracker
+        ):
             try:
                 task = await self._client.wait_for_terminal(task_id, timeout=self._request_timeout)
             except NmsTimeoutError:
@@ -866,11 +888,12 @@ class NmsWebhookTransport:
         reply_event = _reply_event(reply)
         events.append(reply_event)
         self._emit(reply_event)
+        task_id = _optional_str(reply_event.get("task_id"))
         if self._bind is not None:
             # The vendor ignores the push token, so the task/context identity is the only way to
             # tell this run's pushes from another concurrent run's on the shared callback port.
             self._bind(
-                _optional_str(reply_event.get("task_id")),
+                task_id,
                 _optional_str(reply_event.get("context_id")),
             )
         if self._protocol == PROTOCOL_PURE and _is_input_required(reply_event):
@@ -884,17 +907,27 @@ class NmsWebhookTransport:
         elif is_stop_event(reply_event):
             return events
         while True:
+            # A process-owned run manager keeps polling the Task itself, so it does not need to
+            # hold this callback quiet for the whole HTTP budget; it takes over after the shorter
+            # silence window. Without a tracker the phase keeps the original idle backstop.
+            timeout = (
+                self._client.config.poll_after_silence
+                if self._client.config.defer_to_tracker and task_id
+                else self._idle_timeout
+            )
             try:
-                pushed = await asyncio.wait_for(self._queue.get(), timeout=self._idle_timeout)
+                pushed = await asyncio.wait_for(self._queue.get(), timeout=timeout)
             except asyncio.TimeoutError:
                 _LOGGER.info(
-                    "NMS webhook phase idle for %.0fs; returning the events received",
-                    self._idle_timeout,
+                    "NMS webhook phase idle for %.0fs; returning the events received%s",
+                    timeout,
+                    " (handing the task to background tracking)" if timeout != self._idle_timeout else "",
                 )
                 return events
             event = _frame_to_event(pushed)
             events.append(event)
             self._emit(event)
+            task_id = _optional_str(event.get("task_id")) or task_id
             if self._protocol == PROTOCOL_PURE and _is_input_required(event):
                 return events
             if is_stop_event(event) or is_report_artifact(event) or _is_negotiation_event(event):

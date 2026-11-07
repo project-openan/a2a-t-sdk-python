@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 
@@ -376,6 +377,36 @@ async def test_webhook_transport_stamps_and_binds_its_context_before_sending() -
     assert bound[0] == (None, "ctx-run")
 
 
+async def test_webhook_transport_hands_a_long_task_to_the_tracker_after_the_silence() -> None:
+    """A tracked webhook run returns quickly instead of occupying the callback for the budget."""
+    reply = {
+        "task": {
+            "id": "task-1",
+            "contextId": "ctx-1",
+            "status": {"state": "TASK_STATE_SUBMITTED"},
+        }
+    }
+    client = _FakeWebhookClient(reply)
+    client.config = _config(
+        defer_to_tracker=True,
+        poll_after_silence=0.05,
+        idle_timeout=10.0,
+    )
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=asyncio.Queue(),
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        idle_timeout=10.0,
+    )
+
+    started = time.monotonic()
+    events = await asyncio.wait_for(transport.send(*_request()), timeout=2.0)
+
+    assert events[-1]["state"] == "TASK_STATE_SUBMITTED"
+    assert time.monotonic() - started < 1.5
+
+
 async def test_webhook_transport_keeps_waiting_after_a_negotiation_response_reply() -> None:
     queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
     client = _FakeWebhookClient(_propose_message("neg-1", "accepted proposal"))
@@ -481,6 +512,39 @@ async def test_a_stream_of_heartbeats_does_not_postpone_the_idle_window() -> Non
     frames = [frame async for frame in client.stream_message({"message": {}})]
 
     assert frames == []
+    await client.aclose()
+
+
+async def test_a_tracked_stream_hands_over_after_the_short_silence() -> None:
+    """A run manager owns background tracking, so it need not wait the full HTTP budget."""
+
+    class _HeartbeatStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b'data: {"task": {"id": "task-1", "status": {"state": "TASK_STATE_SUBMITTED"}}}\n\n'
+            while True:
+                await asyncio.sleep(0.02)
+                yield b": heartbeat\n\n"
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_HeartbeatStream(),
+        )
+
+    client = _client(
+        httpx.MockTransport(handle),
+        idle_timeout=10.0,
+        poll_after_silence=0.05,
+        defer_to_tracker=True,
+    )
+    started = time.monotonic()
+    frames = [frame async for frame in client.stream_message({"message": {}})]
+
+    assert len(frames) == 1
+    assert time.monotonic() - started < 2.0
     await client.aclose()
 
 

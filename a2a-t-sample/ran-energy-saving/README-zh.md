@@ -153,12 +153,14 @@ Task-T metadata）。a2a-sdk 的 HTTP 传输同样会被捕获，因此本地 A2
 消息流向（OSS → RAN、RAN → OSS、MIE ⇄ 工程师）；晚到的服务端 span 按事件时间合并，状态与对应 span 只保留一行。
 
 连接真实网管（`--nms`）时，工具栏还会出现 **修改运行中的任务**。它读取
-`GET /api/nms/tasks`（后端调用网管 `/tasks`），只列出 WORKING 任务。选中后会记录该任务的 task id 和
-context，把示例切到计划停电的修改场景，把“只修改”的请求填入输入框，然后等待；仅选中不会发送任何消息。
-点击开始才提交目标 id；这样发起的 run 没有 baseline 阶段，第一条 Task-T 就是对所选任务的真实 Modify
-续接。发送前任务若已离开 WORKING，后端会明确拒绝。该入口只支持 A2A-T。本地对模拟器排练时可设置
-`A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1`，让模拟器新建的任务停留在 WORKING，供选择器使用；再次对该任务
-发起请求会正常完成。
+`GET /api/nms/tasks`（后端调用网管 `/tasks`），列出 SUBMITTED 和 WORKING 任务并显示真实状态；
+选择器打开期间每 5 秒自动刷新。选中后会记录该任务的 task id 和 context，把示例切到计划停电的修改
+场景，把“只修改”的请求填入输入框，然后等待；仅选中不会发送任何消息。点击开始才提交目标 id；这样
+发起的 run 没有 baseline 阶段，第一条 Task-T 就是对所选任务的真实 Modify 续接，即使任务仍处于
+SUBMITTED。发送前任务若已进入终态，后端会明确拒绝。该入口只支持 A2A-T。网管流安静后，run 会转为
+后台轮询继续跟踪任务；页面仍订阅该 run 时一直保留轮询，关闭页面 30 秒后停止跟踪。本地对模拟器排练
+时可设置 `A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1`，让模拟器新建的任务停留在 WORKING，供选择器使用；
+再次对该任务发起请求会正常完成。
 
 ### 测试控制台（Excel 导入）
 

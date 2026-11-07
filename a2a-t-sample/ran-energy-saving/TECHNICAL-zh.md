@@ -86,16 +86,26 @@ python run_demo.py --ui --scenario information --model-mode offline
 A2A-T 通道），右侧是三块证据面板。八个示例覆盖用例 1（夜间节能，含协商与无协商）和用例 2（计划停电，同一 Task 上先 Create 基线再执行真正的 Modify 续接）。Modify 阶段演示视图保持步骤条在“Apply & report”，wire 面板分别展示两条 Task-T 的 payload，最终卡片展示修改后的报告。
 
 连接真实网管时，工具栏还会出现 **修改运行中的任务**。页面调用
-`GET /api/nms/tasks?state=working`，后端通过 `NmsClient.list_tasks` 读取网管 `/tasks` 接口，只保留
-`TASK_STATE_WORKING`，并返回选择器需要的精简行（task id、context id、区域、站点、当前目标、最后一条消息）。
+`GET /api/nms/tasks?state=modifiable`，后端通过 `NmsClient.list_tasks` 读取网管 `/tasks` 接口，保留
+`TASK_STATE_SUBMITTED` 和 `TASK_STATE_WORKING`，并返回选择器需要的精简行（task id、context id、状态、区域、
+站点、当前目标、最后一条消息）。选择器打开期间每 5 秒自动刷新，SUBMITTED 任务的状态变化无需重新打开就能看到。
 选中一行不会发送任何消息：页面重置舞台、记录目标 task id/context、把示例切到计划停电的修改场景、把
 `MODIFY_REQUEST` 填入输入框，然后等待工程师操作。点击开始后才会提交 `targetTaskId` / `targetContextId`；
-后端会重新读取该任务，如果它已离开 `WORKING` 则在启动前返回 409。这样的 run 使用 `runMode=modify`：
+后端会重新读取该任务，如果它已不在 `SUBMITTED` / `WORKING` 状态则在启动前返回 409
+`target_not_modifiable`。即使任务仍处于 SUBMITTED，Modify 也会立即发送。这样的 run 使用 `runMode=modify`：
 `ClientRuntime` 使用 `RunSpec.modify_intent`，`run_client_flow` 跳过 baseline，把 Modify Task-T 作为第一条
 消息发送并携带 `message.task_id` / `context_id`，演示 reducer 从一开始就处于单 Modify 阶段（步骤条把 Create
 下发标为不适用）。run 记录、transcript、metrics 文档和 live 快照都会带上 run mode 与目标 id。该入口只支持
-A2A-T。本地对模拟器排练时可设置 `A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1`：新建任务会停留在 `WORKING`（流会关闭，
-创建它的 run 以 `incomplete` 结束）；再次对该任务发起请求会正常完成。
+A2A-T。
+
+网管流在到达终态前安静时，任务改由 run manager 接管：直连 NMS 的传输在
+`A2AT_SAMPLE_NMS_POLL_AFTER_SECONDS`（15s）没有状态事件后交出任务，不再等满 HTTP 预算；
+`RunManager._watch_long_task` 会轮询 `GET /tasks/{id}`。页面仍订阅该 run 时，跟踪器一直运行并按
+`A2AT_SAMPLE_NMS_STATE_POLL_SECONDS`（5s）轮询；无订阅时的后台间隔为
+`A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS`（30s）。演示来源的 run 连续 30s 没有订阅者时停止跟踪，以
+`finished` + `finalState=incomplete` 结束，网管任务本身不受影响。本地对模拟器排练时可设置
+`A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1`：新建任务会停留在 `WORKING`（流会关闭，创建它的 run 以 `incomplete`
+结束）；再次对该任务发起请求会正常完成。
 
 演示视图支持两套品牌主题。`--brand orange|huawei`（或 `A2AT_SAMPLE_UI_BRAND`）决定启动默认值；
 顶栏按钮可实时切换并把选择写入 `localStorage`；`?brand=` 对单次页面加载覆盖前两者。CSS 使用语义
@@ -913,6 +923,8 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_SAMPLE_LONG_TASK_MODE` | `auto` | OSS 长任务跟踪（`auto` / `on` / `off`）。`auto` 在配置了 OSS Task 数据库时对真实网管 webhook 链路启用后台 pump。 |
 | `A2AT_SAMPLE_LONG_TASK_SETTLE_SECONDS` | `5` | 网管受理后 OSS 保留初始同步流的秒数。它只决定何时转后台跟踪，run 和 Task 继续更新，网管任务不会被取消。 |
 | `A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS` | `30` | Web UI 轮询仍在执行远端 Task 的间隔（秒）。run 保持活动，只有远端终态/报告到达才结束。 |
+| `A2AT_SAMPLE_NMS_POLL_AFTER_SECONDS` | `15` | 直连 NMS 的传输在多少秒没有状态事件后，把未终态任务交给 `RunManager` 的后台跟踪。 |
+| `A2AT_SAMPLE_NMS_STATE_POLL_SECONDS` | `5` | 演示页面仍订阅该 run 时，后台跟踪器的轮询间隔；无订阅时使用 `A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS`。 |
 | `A2AT_SAMPLE_CLIENT_DB` | 未设置 = 内存；`run_demo.py` 写入 `<sample>/runs/client-state.sqlite3` | 客户端会话/运行/协商存储，以及 ADK 决策智能体会话的绝对 SQLite 路径。 |
 | `A2AT_SAMPLE_CLIENT_MEMORY_TURNS` | 默认 `6`（>= 0） | 注入下一次决策提示词与 Task-T 生成的最近会话轮数。 |
 | `A2AT_SAMPLE_ADK_SESSION_RETENTION_DAYS` | 默认 `7`（>= 1） | 决策智能体会话作为审计数据保留的天数，到期由启动/定期清扫删除。 |

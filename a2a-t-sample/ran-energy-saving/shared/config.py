@@ -117,6 +117,10 @@ LONG_TASK_MODE_ENV_KEY = "A2AT_SAMPLE_LONG_TASK_MODE"
 LONG_TASK_SETTLE_ENV_KEY = "A2AT_SAMPLE_LONG_TASK_SETTLE_SECONDS"
 #: UI poll interval while a long-running downstream Task is tracked.
 TASK_POLL_INTERVAL_ENV_KEY = "A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS"
+#: Silence after which the NMS transport hands a non-terminal Task to background tracking.
+NMS_POLL_AFTER_ENV_KEY = "A2AT_SAMPLE_NMS_POLL_AFTER_SECONDS"
+#: Faster poll interval while the engineer page still watches the run.
+NMS_STATE_POLL_ENV_KEY = "A2AT_SAMPLE_NMS_STATE_POLL_SECONDS"
 CLIENT_DB_ENV_KEY = "A2AT_SAMPLE_CLIENT_DB"
 CLIENT_MEMORY_TURNS_ENV_KEY = "A2AT_SAMPLE_CLIENT_MEMORY_TURNS"
 ADK_SESSION_RETENTION_DAYS_ENV_KEY = "A2AT_SAMPLE_ADK_SESSION_RETENTION_DAYS"
@@ -195,6 +199,10 @@ DEFAULT_LONG_TASK_MODE = LONG_TASK_MODE_AUTO
 DEFAULT_LONG_TASK_SETTLE_SECONDS = 5.0
 #: How often the Web UI polls the remote Task while a days-long run is still executing.
 DEFAULT_TASK_POLL_INTERVAL_SECONDS = 30.0
+#: Seconds without an NMS status event before the transport hands the Task to background tracking.
+DEFAULT_NMS_POLL_AFTER_SECONDS = 15.0
+#: Faster poll interval while the engineer page is still subscribed to the run.
+DEFAULT_NMS_STATE_POLL_SECONDS = 5.0
 
 #: Live LLM budget of one call (SDK structured calls and ADK LiteLlm turns). A local live smoke
 #: observed a 58s validation and a >90s accept validation; 120s leaves headroom for slower
@@ -453,6 +461,13 @@ class SampleConfig:
         long_task_settle_seconds: Seconds the OSS keeps the initial synchronous stream after the
             NMS accepts the task before handing it to the background pump.
         task_poll_interval_seconds: How often the UI polls a remote Task that is still executing.
+        nms_poll_after_silence: Seconds without an NMS status event before the transport hands a
+            non-terminal Task to background tracking instead of waiting for its stream.
+        nms_state_poll_interval: Faster poll interval while an engineer page is subscribed to the
+            run; the detached tracker uses ``task_poll_interval_seconds``.
+        defer_to_tracker: Whether a process-owned run manager keeps the Task in the background.
+            Set by ``RunManager``; the CLI leaves it off so its flow still waits for the terminal
+            state.
         llm_timeout_seconds: Live LLM budget of one call (SDK structured call or ADK turn), in seconds.
         llm_max_attempts: Live SDK LLM attempt limit per retryable step.
         task_db_path: Absolute SQLite path of the persisted A2A Task store; ``None`` keeps the
@@ -539,6 +554,9 @@ class SampleConfig:
     long_task_mode: str = DEFAULT_LONG_TASK_MODE
     long_task_settle_seconds: float = DEFAULT_LONG_TASK_SETTLE_SECONDS
     task_poll_interval_seconds: float = DEFAULT_TASK_POLL_INTERVAL_SECONDS
+    nms_poll_after_silence: float = DEFAULT_NMS_POLL_AFTER_SECONDS
+    nms_state_poll_interval: float = DEFAULT_NMS_STATE_POLL_SECONDS
+    defer_to_tracker: bool = False
     llm_timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS
     llm_max_attempts: int = DEFAULT_LLM_MAX_ATTEMPTS
     task_db_path: str | None = None
@@ -751,6 +769,12 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         ),
         task_poll_interval_seconds=_positive_seconds(
             values, TASK_POLL_INTERVAL_ENV_KEY, DEFAULT_TASK_POLL_INTERVAL_SECONDS
+        ),
+        nms_poll_after_silence=_positive_seconds(
+            values, NMS_POLL_AFTER_ENV_KEY, DEFAULT_NMS_POLL_AFTER_SECONDS
+        ),
+        nms_state_poll_interval=_positive_seconds(
+            values, NMS_STATE_POLL_ENV_KEY, DEFAULT_NMS_STATE_POLL_SECONDS
         ),
         llm_timeout_seconds=_positive_seconds(values, LLM_TIMEOUT_ENV_KEY, DEFAULT_LLM_TIMEOUT_SECONDS),
         llm_max_attempts=_llm_max_attempts(values),

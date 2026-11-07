@@ -119,7 +119,13 @@ from demo.scenario import (
     resolve_modify_request,
     resolve_presentation_request,
 )
-from demo.web.nms_tasks import NMS_WORKING_STATE, list_working_tasks, read_task
+from demo.web.nms_tasks import (
+    MODIFIABLE_STATES,
+    NMS_SUBMITTED_STATE,
+    NMS_WORKING_STATE,
+    list_modifiable_tasks,
+    read_task,
+)
 from demo.web.runs_console import build_run_console_routes
 from demo.web.tester import build_tester_routes
 from demo.web.wire_records import read_wire_records
@@ -481,10 +487,12 @@ def create_app(
         return JSONResponse({"enabled": True, "tasks": rows})
 
     async def nms_tasks(request: Request) -> Response:
-        """Return the running Tasks the Modify picker may select.
+        """Return the Tasks the Modify picker may select.
 
         The list comes from the vendor NMS itself, not the local A2A task store: a Task can be
-        modified only while the NMS still holds it in ``TASK_STATE_WORKING``.
+        modified while the NMS holds it in ``TASK_STATE_SUBMITTED`` or ``TASK_STATE_WORKING``.
+        ``state=working`` is kept for older callers; ``state=submitted`` returns only the newly
+        accepted Tasks.
         """
         if config.discovery != DISCOVERY_NMS:
             return JSONResponse(
@@ -494,30 +502,32 @@ def create_app(
                     "reason": "The task picker needs the real NMS discovery mode.",
                 }
             )
-        state = request.query_params.get("state", "working").strip().lower()
-        if state not in ("", "working"):
+        state = request.query_params.get("state", "modifiable").strip().lower()
+        if state not in ("", "modifiable", "working", "submitted"):
             return JSONResponse(
                 {
-                    "error": "state must be 'working'.",
+                    "error": "state must be 'modifiable', 'working' or 'submitted'.",
                     "code": "unsupported_task_state",
                 },
                 status_code=400,
             )
         try:
-            rows = await list_working_tasks(config)
+            rows = await list_modifiable_tasks(config)
         except NmsConfigError as exc:
-            return JSONResponse(
-                {"error": str(exc), "code": "nms_not_configured"}, status_code=503
-            )
+            return JSONResponse({"error": str(exc), "code": "nms_not_configured"}, status_code=503)
         except NmsError as exc:
             return JSONResponse(
                 {"error": f"The NMS task list could not be read: {exc}", "code": "nms_unavailable"},
                 status_code=502,
             )
+        if state == "working":
+            rows = [row for row in rows if row.get("state") == NMS_WORKING_STATE]
+        elif state == "submitted":
+            rows = [row for row in rows if row.get("state") == NMS_SUBMITTED_STATE]
         return JSONResponse(
             {
                 "enabled": True,
-                "state": NMS_WORKING_STATE,
+                "states": sorted(MODIFIABLE_STATES),
                 "tasks": rows,
             }
         )
@@ -807,9 +817,7 @@ def create_app(
                     status_code=400,
                 )
         resolved_target_task = target_task_id.strip() if isinstance(target_task_id, str) else ""
-        resolved_target_context = (
-            target_context_id.strip() if isinstance(target_context_id, str) else ""
-        )
+        resolved_target_context = target_context_id.strip() if isinstance(target_context_id, str) else ""
         if bool(resolved_target_task) != bool(resolved_target_context):
             return JSONResponse(
                 {
@@ -838,9 +846,7 @@ def create_app(
             try:
                 task = await read_task(config, resolved_target_task)
             except NmsConfigError as exc:
-                return JSONResponse(
-                    {"error": str(exc), "code": "nms_not_configured"}, status_code=503
-                )
+                return JSONResponse({"error": str(exc), "code": "nms_not_configured"}, status_code=503)
             except NmsError as exc:
                 return JSONResponse(
                     {
@@ -854,14 +860,14 @@ def create_app(
                     {"error": "The target Task does not exist on the NMS.", "code": "target_missing"},
                     status_code=409,
                 )
-            if task.get("state") != NMS_WORKING_STATE:
+            if task.get("state") not in MODIFIABLE_STATES:
                 return JSONResponse(
                     {
                         "error": (
-                            "The target Task is no longer running; refresh the task list and "
-                            "choose another one."
+                            "The target Task is not in a modifiable state (SUBMITTED or WORKING); "
+                            "refresh the task list and choose another one."
                         ),
-                        "code": "target_not_working",
+                        "code": "target_not_modifiable",
                         "state": task.get("state"),
                     },
                     status_code=409,

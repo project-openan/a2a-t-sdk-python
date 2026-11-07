@@ -13,6 +13,7 @@ import {
   endingOf,
   executionSteps,
   keepsAttemptChain,
+  modifyStateLabel,
   negotiationExpected,
   pendingHuman,
   pushTrace,
@@ -67,6 +68,10 @@ assert.deepEqual(
 assert.deepEqual(copyFor("en-US").roles.ossSkills, ["Skill 1 · Energy saving", "Skill 2 · Planned outage"]);
 assert.deepEqual(copy.roles.ossSkills, ["技能 1 · 节能", "技能 2 · 计划停电"]);
 assert.equal(copy.roles.ossSkillTools, undefined);
+assert.equal(modifyStateLabel(copy, "TASK_STATE_SUBMITTED"), "已提交");
+assert.equal(modifyStateLabel(copyFor("en-US"), "TASK_STATE_SUBMITTED"), "SUBMITTED");
+assert.equal(modifyStateLabel(copy, "TASK_STATE_WORKING"), "运行中");
+assert.equal(modifyStateLabel(copy, "TASK_STATE_COMPLETED"), "TASK_STATE_COMPLETED");
 
 // A retry after a pre-send block keeps the attempt chain (conversation and trace id); a run that
 // reached the server, completed or was cancelled starts a new one.

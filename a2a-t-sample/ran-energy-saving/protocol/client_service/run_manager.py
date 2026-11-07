@@ -107,6 +107,9 @@ def _langfuse_disabled() -> dict[str, object]:
     }
 
 
+#: How long a presentation run may stay unwatched before its remote tracker stops.
+_DETACHED_TRACKING_GRACE_SECONDS: Final[float] = 30.0
+
 #: Remote Task states that end a long-running engineer run.
 _TASK_STATE_FINAL_STATES: Final[dict[str, str]] = {
     "TASK_STATE_COMPLETED": FINAL_STATE_TASK_COMPLETED,
@@ -828,7 +831,10 @@ class RunManager:
 
         try:
             run.runtime = await self._runtime_factory(
-                replace(self._config, intent_mode=run.intent_mode),
+                # This manager keeps an incomplete remote Task active in the background, so the
+                # NMS transport may hand the task over after a short silence instead of waiting
+                # for the full HTTP budget.
+                replace(self._config, intent_mode=run.intent_mode, defer_to_tracker=True),
                 run.scenario,
                 run.mode,
                 run.transport,
@@ -941,7 +947,24 @@ class RunManager:
         this watcher polls the authoritative Task and records the terminal status/report.
         """
         task_id = result.task_id or ""
-        interval = max(0.01, self._config.task_poll_interval_seconds)
+        # The tracker polls the authoritative Task, so the process-owned webhook subscription is
+        # no longer needed. Releasing it stops pushes queueing for a run that may stay active for
+        # days; the runtime's aclose() later sees the cleared field and does nothing.
+        runtime = run.runtime
+        subscription = getattr(runtime, "webhook_subscription", None) if runtime is not None else None
+        if subscription is not None:
+            with suppress(Exception):
+                subscription.unsubscribe()
+            with suppress(Exception):
+                runtime.webhook_subscription = None
+        background_interval = max(0.01, self._config.task_poll_interval_seconds)
+        watched_interval = max(0.01, self._config.nms_state_poll_interval)
+        # Only the engineer page is a viewer. A gateway run has a caller waiting for the result
+        # and keeps its background cadence; a closed page stops the local tracker after a short
+        # grace so the process does not accumulate days-long polls nobody reads.
+        is_presentation = run.source.get("kind") == "presentation"
+        interval = watched_interval if is_presentation else background_interval
+        last_watched = time.monotonic()
         run.remote_task_id = task_id
         if self._store is not None:
             with suppress(Exception):
@@ -972,6 +995,26 @@ class RunManager:
         )
         last_signature: str | None = None
         while True:
+            if is_presentation:
+                if run.subscribers:
+                    last_watched = time.monotonic()
+                elif time.monotonic() - last_watched >= _DETACHED_TRACKING_GRACE_SECONDS:
+                    _LOGGER.info(
+                        "run %s has no viewer; stopping remote task tracking for %s",
+                        run.run_id,
+                        task_id,
+                    )
+                    run.emit_trace(
+                        kind="task_tracking",
+                        phase=PHASE_DISPATCH,
+                        title="Task tracking stopped: no viewer",
+                        detail={
+                            "taskId": task_id,
+                            "graceSeconds": _DETACHED_TRACKING_GRACE_SECONDS,
+                        },
+                    )
+                    return result
+                interval = watched_interval if run.subscribers else background_interval
             try:
                 polled = await self._poll_remote_task(run, task_id)
                 signature = json.dumps(
@@ -1005,7 +1048,16 @@ class RunManager:
                 raise
             except Exception:  # noqa: BLE001 - a poll failure must not end a days-long run
                 _LOGGER.warning("task poll failed for run %s", run.run_id, exc_info=True)
-            await asyncio.sleep(interval)
+            # Sleep in one-second slices so a disappearing viewer is noticed within the grace
+            # window instead of after a full background poll interval.
+            deadline = time.monotonic() + interval
+            while time.monotonic() < deadline:
+                if is_presentation:
+                    if run.subscribers:
+                        last_watched = time.monotonic()
+                    elif time.monotonic() - last_watched >= _DETACHED_TRACKING_GRACE_SECONDS:
+                        break
+                await asyncio.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
 
     async def _poll_remote_task(self, run: RunState, task_id: str) -> _PolledTask:
         """Poll the authoritative Task of one long-running run."""

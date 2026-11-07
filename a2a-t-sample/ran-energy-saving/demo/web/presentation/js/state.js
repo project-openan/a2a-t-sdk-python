@@ -603,6 +603,13 @@ export function keepsAttemptChain(frame, state) {
   return frame.status === "failed" && !state?.taskTSent;
 }
 
+/** The localized label of one NMS Task state shown by the Modify picker. */
+export function modifyStateLabel(copy, stateName) {
+  if (stateName === "TASK_STATE_SUBMITTED") return copy.modify.stateSubmitted;
+  if (stateName === "TASK_STATE_WORKING") return copy.modify.stateWorking;
+  return String(stateName || "");
+}
+
 /** The act the page should show. */
 export function stageOf(state) {
   if (state.status === STATUS.CANCELED) return "canceled";

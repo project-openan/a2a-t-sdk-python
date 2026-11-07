@@ -575,6 +575,70 @@ class _LongRunningRuntime(FakeRuntime):
         )
 
 
+class _NeverFinishingA2AClient:
+    """A remote Task that stays WORKING forever; only the viewer can stop the tracker."""
+
+    calls = 0
+
+    async def get_task(self, request: object, *, context: object = None) -> object:
+        del context
+        type(self).calls += 1
+        return _task_with_state(str(getattr(request, "id", "task-1")), TaskState.TASK_STATE_WORKING)
+
+
+class _NeverFinishingRuntime(_LongRunningRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.a2a_client = _NeverFinishingA2AClient()
+
+
+async def test_a_presentation_run_stops_tracking_without_a_viewer(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The run manager follows the page: no subscriber for the grace window ends the run."""
+    import protocol.client_service.run_manager as run_manager_module
+
+    monkeypatch.setattr(run_manager_module, "_DETACHED_TRACKING_GRACE_SECONDS", 0.05)
+
+    async def factory(
+        resolved_config: SampleConfig,
+        scenario: str,
+        mode: str,
+        transport: str,
+        discovery: str,
+        *,
+        protocol: str = PROTOCOL_A2A_T,
+        run_id: str = "",
+    ) -> _NeverFinishingRuntime:
+        del resolved_config, scenario, mode, transport, discovery, protocol, run_id
+        return _NeverFinishingRuntime()
+
+    manager = RunManager(
+        config=replace(
+            offline_config,
+            task_poll_interval_seconds=0.01,
+            nms_state_poll_interval=0.01,
+        ),
+        runtime_factory=factory,
+        catalog=DemoRunCatalog(),
+        runs_dir=tmp_path / "runs",
+    )
+    run = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        protocol=PROTOCOL_PURE,
+        source={"kind": "presentation"},
+    )
+    await _finish(manager, run.run_id)
+
+    assert run.status == "finished"
+    assert run.result is not None
+    assert run.result.final_state == FINAL_STATE_INCOMPLETE
+
+
 async def test_a_long_running_run_stays_active_until_the_remote_task_finishes(
     tmp_path: Path,
     offline_config: SampleConfig,

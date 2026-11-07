@@ -19,6 +19,7 @@ import {
   createState,
   endingOf,
   keepsAttemptChain,
+  modifyStateLabel,
   negotiationExpected,
   pendingHuman,
   stageOf,
@@ -45,6 +46,8 @@ const byId = (id) => document.getElementById(id);
 
 //: Evidence rows are applied one at a time so a batch of server spans does not flash the panels.
 const EVIDENCE_MS = 60;
+//: The Modify picker refreshes while open so a SUBMITTED task's state stays current.
+const MODIFY_REFRESH_MS = 5000;
 
 //: Story beats that should animate once; a repeat is evidence only.
 const REPEATED_SILENT = new Set([
@@ -106,6 +109,7 @@ const els = {
   modifyList: byId("modify-list"),
   modifyStatus: byId("modify-status"),
   modifyClose: byId("modify-close"),
+  modifyRefresh: byId("modify-refresh"),
   modifyCancel: byId("modify-cancel"),
   modifyConfirm: byId("modify-confirm"),
   cancelRun: byId("cancel-run"),
@@ -258,6 +262,8 @@ const ui = {
   modifySelected: null,
   modifyLoading: false,
   modifyRequest: "",
+  //: Auto-refresh handle while the picker is open; SUBMITTED tasks become WORKING over time.
+  modifyTimer: null,
 };
 
 const stage = createStage(els);
@@ -386,6 +392,7 @@ function bindStaticEvents() {
   if (els.modifyTask) els.modifyTask.addEventListener("click", () => openModifyPicker());
   if (els.targetClear) els.targetClear.addEventListener("click", () => clearModifyTarget(false));
   if (els.modifyClose) els.modifyClose.addEventListener("click", () => closeModifyPicker());
+  if (els.modifyRefresh) els.modifyRefresh.addEventListener("click", () => loadModifyTasks());
   if (els.modifyCancel) els.modifyCancel.addEventListener("click", () => closeModifyPicker());
   if (els.modifyConfirm) els.modifyConfirm.addEventListener("click", () => applyModifyTarget());
   if (els.modifyDialog) {
@@ -767,25 +774,44 @@ function openModifyPicker() {
   els.modifyStatus.textContent = "";
   els.modifyTitle.textContent = ui.copy.modify.title;
   els.modifyHint.textContent = ui.copy.modify.hint;
+  if (els.modifyRefresh) els.modifyRefresh.textContent = ui.copy.modify.refresh;
   els.modifyCancel.textContent = ui.copy.modify.cancel;
   els.modifyConfirm.textContent = ui.copy.modify.confirm;
   loadModifyTasks();
+  startModifyRefresh();
 }
 
 function closeModifyPicker() {
   if (!els.modifyDialog) return;
+  stopModifyRefresh();
   els.modifyDialog.hidden = true;
   ui.modifySelected = null;
   ui.modifyLoading = false;
 }
 
-async function loadModifyTasks() {
+function startModifyRefresh() {
+  stopModifyRefresh();
+  ui.modifyTimer = window.setInterval(() => loadModifyTasks({ quiet: true }), MODIFY_REFRESH_MS);
+}
+
+function stopModifyRefresh() {
+  if (ui.modifyTimer === null) return;
+  window.clearInterval(ui.modifyTimer);
+  ui.modifyTimer = null;
+}
+
+/** Read the NMS task list; the automatic refresh updates in place without a loading flash. */
+async function loadModifyTasks({ quiet = false } = {}) {
+  if (quiet && ui.modifyLoading) return;
   ui.modifyLoading = true;
-  ui.modifyTasks = [];
-  els.modifyConfirm.disabled = true;
-  renderModifyList(ui.copy.modify.loading, true);
+  if (!quiet) {
+    ui.modifyTasks = [];
+    els.modifyConfirm.disabled = true;
+    renderModifyList(ui.copy.modify.loading, true);
+    if (els.modifyRefresh) els.modifyRefresh.disabled = true;
+  }
   try {
-    const response = await fetch("/api/nms/tasks?state=working", {
+    const response = await fetch("/api/nms/tasks?state=modifiable", {
       headers: { accept: "application/json" },
     });
     const payload = await response.json().catch(() => ({}));
@@ -793,12 +819,27 @@ async function loadModifyTasks() {
     if (payload.enabled === false) {
       throw new Error(payload.reason || ui.copy.modify.error);
     }
+    const selectedId = ui.modifySelected?.taskId || null;
     ui.modifyTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
     ui.modifyLoading = false;
+    if (selectedId !== null) {
+      ui.modifySelected =
+        ui.modifyTasks.find((task) => task.taskId === selectedId) || null;
+      els.modifyConfirm.disabled = ui.modifySelected === null;
+      els.modifyStatus.textContent = ui.modifySelected
+        ? `${ui.copy.modify.selected}: ${ui.modifySelected.taskId}`
+        : "";
+    }
     renderModifyList();
+    if (ui.modifySelected !== null) {
+      reselectModifyRow(ui.modifySelected.taskId);
+    }
   } catch (error) {
     ui.modifyLoading = false;
-    renderModifyList(ui.copy.modify.error, false, error);
+    // A failed automatic refresh keeps the last good list; only an explicit read shows the error.
+    if (!quiet) renderModifyList(ui.copy.modify.error, false, error);
+  } finally {
+    if (els.modifyRefresh) els.modifyRefresh.disabled = false;
   }
 }
 
@@ -840,7 +881,7 @@ function renderModifyList(message = null, loading = false, error = null) {
     ].filter(Boolean);
     if (meta.length > 0) main.append(el("span", "modal-row-meta", meta.join(" · ")));
     if (task.summary) main.append(el("span", "modal-row-summary", String(task.summary)));
-    row.append(main, el("span", "modal-row-state", ui.copy.modify.stillWorking));
+    row.append(main, el("span", "modal-row-state", modifyStateLabel(ui.copy, task.state)));
     row.addEventListener("click", () => selectModifyRow(task));
     els.modifyList.append(row);
   }
@@ -848,11 +889,15 @@ function renderModifyList(message = null, loading = false, error = null) {
 
 function selectModifyRow(task) {
   ui.modifySelected = task;
-  for (const row of els.modifyList.querySelectorAll(".modal-row")) {
-    row.setAttribute("aria-selected", String(row.dataset.taskId === task.taskId));
-  }
+  reselectModifyRow(task.taskId);
   els.modifyConfirm.disabled = false;
   els.modifyStatus.textContent = `${ui.copy.modify.selected}: ${task.taskId}`;
+}
+
+function reselectModifyRow(taskId) {
+  for (const row of els.modifyList.querySelectorAll(".modal-row")) {
+    row.setAttribute("aria-selected", String(row.dataset.taskId === taskId));
+  }
 }
 
 /** Load the selected Task into the page and wait for the operator to press Start. */

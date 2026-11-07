@@ -175,14 +175,17 @@ trace labels each row with its demo day (Day 1, Days 2–8, Day 9, Day 9+) and m
 its matching span collapse to one row.
 
 When the client talks to the real NMS (`--nms`), the toolbar also offers **Modify a running task**.
-It reads `GET /api/nms/tasks`, backed by the NMS `/tasks` endpoint, and lists only WORKING Tasks.
-Selecting one records its task id and context, switches the example to the planned-outage
-modification, fills the editor with a Modify-only request, and waits: nothing is sent on selection.
-Pressing Start posts the target ids; the run has no baseline phase, and its first Task-T is the real
-Modify continuation of the selected Task. A Task that leaves WORKING before the send is rejected
-with a clear message. The entry supports A2A-T only. For local rehearsal against the simulator,
-`A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1` keeps a newly created Task WORKING so the picker has a target;
-continuing it completes it normally.
+It reads `GET /api/nms/tasks`, backed by the NMS `/tasks` endpoint, and lists SUBMITTED and WORKING
+Tasks (with their real state); the picker refreshes every five seconds while it is open. Selecting
+one records its task id and context, switches the example to the planned-outage modification, fills
+the editor with a Modify-only request, and waits: nothing is sent on selection. Pressing Start posts
+the target ids; the run has no baseline phase, and its first Task-T is the real Modify continuation
+of the selected Task, even while it is still SUBMITTED. A Task that reaches a terminal state before
+the send is rejected with a clear message. The entry supports A2A-T only. When the NMS stream goes
+quiet, the run keeps tracking the Task through a background poll (a page that stays subscribed keeps
+the poll alive; closing it stops the tracker after 30 seconds). For local rehearsal against the
+simulator, `A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1` keeps a newly created Task WORKING so the picker has
+a target; continuing it completes it normally.
 
 ### Tester console (Excel import)
 

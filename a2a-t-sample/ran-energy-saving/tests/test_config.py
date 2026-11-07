@@ -45,11 +45,13 @@ from shared.config import (
     NMS_A2A_PORT_ENV_KEY,
     NMS_HOST_ENV_KEY,
     NMS_IDLE_TIMEOUT_ENV_KEY,
+    NMS_POLL_AFTER_ENV_KEY,
     NMS_READ_AFTER_SEND_ENV_KEY,
     NMS_REGION_ENV_KEY,
     NMS_REQUEST_TIMEOUT_ENV_KEY,
     NMS_SCHEME_ENV_KEY,
     NMS_SITES_ENV_KEY,
+    NMS_STATE_POLL_ENV_KEY,
     NMS_TOKEN_PORT_ENV_KEY,
     NMS_TOKEN_URL_ENV_KEY,
     NMS_TOKEN_USER_ENV_KEY,
@@ -86,6 +88,8 @@ _ENV_KEYS = (
     LONG_TASK_MODE_ENV_KEY,
     LONG_TASK_SETTLE_ENV_KEY,
     TASK_POLL_INTERVAL_ENV_KEY,
+    NMS_POLL_AFTER_ENV_KEY,
+    NMS_STATE_POLL_ENV_KEY,
     TASK_DB_ENV_KEY,
     OSS_TASK_DB_ENV_KEY,
     CLIENT_DB_ENV_KEY,
@@ -216,16 +220,22 @@ def test_long_task_mode_defaults_and_overrides(tmp_path: Path) -> None:
     assert config.long_task_mode == "auto"
     assert config.long_task_settle_seconds == 5.0
     assert config.task_poll_interval_seconds == 30.0
+    assert config.nms_poll_after_silence == 15.0
+    assert config.nms_state_poll_interval == 5.0
+    assert config.defer_to_tracker is False
 
     env_file.write_text(
         f"{LONG_TASK_MODE_ENV_KEY}=off\n{LONG_TASK_SETTLE_ENV_KEY}=12\n"
-        f"{TASK_POLL_INTERVAL_ENV_KEY}=7\n",
+        f"{TASK_POLL_INTERVAL_ENV_KEY}=7\n{NMS_POLL_AFTER_ENV_KEY}=9\n"
+        f"{NMS_STATE_POLL_ENV_KEY}=2\n",
         encoding="utf-8",
     )
     config = load_config(env_path=env_file)
     assert config.long_task_mode == "off"
     assert config.long_task_settle_seconds == 12.0
     assert config.task_poll_interval_seconds == 7.0
+    assert config.nms_poll_after_silence == 9.0
+    assert config.nms_state_poll_interval == 2.0
 
     env_file.write_text(f"{LONG_TASK_MODE_ENV_KEY}=nope\n", encoding="utf-8")
     with pytest.raises(ValueError, match=LONG_TASK_MODE_ENV_KEY):

@@ -1,9 +1,10 @@
 """Read the vendor NMS task list for the presentation's Modify picker.
 
 The picker may offer only Tasks the NMS can still modify. A2A refuses to append a message to a
-terminal Task, and the sample server additionally requires ``TASK_STATE_WORKING``, so the list is
-filtered here rather than in the browser. The mapping is deliberately tolerant: the vendor and the
-local simulator expose the same Task envelope but may fill different optional fields.
+terminal Task, so the list keeps the two non-terminal states a Modify can continue: ``SUBMITTED``
+(the NMS accepted the Task but has not started executing it yet) and ``WORKING``. The mapping is
+deliberately tolerant: the vendor and the local simulator expose the same Task envelope but may
+fill different optional fields.
 """
 
 from __future__ import annotations
@@ -15,8 +16,10 @@ from typing import Final
 from protocol.nms_client import NmsClient, NmsConfig, NmsProtocolError
 from shared.config import SampleConfig
 
-#: State a Modify can continue (the vendor spelling).
+#: Non-terminal states a Modify can continue (the vendor spelling).
 NMS_WORKING_STATE: Final[str] = "TASK_STATE_WORKING"
+NMS_SUBMITTED_STATE: Final[str] = "TASK_STATE_SUBMITTED"
+MODIFIABLE_STATES: Final[frozenset[str]] = frozenset({NMS_SUBMITTED_STATE, NMS_WORKING_STATE})
 
 _EXCERPT_LENGTH: Final[int] = 180
 _REGION_RE: Final[re.Pattern[str]] = re.compile(
@@ -30,7 +33,7 @@ _SITE_RE: Final[re.Pattern[str]] = re.compile(
 _TARGET_RE: Final[re.Pattern[str]] = re.compile(r"\{[^}]+\}")
 
 
-async def list_working_tasks(config: SampleConfig) -> list[dict[str, object]]:
+async def list_modifiable_tasks(config: SampleConfig) -> list[dict[str, object]]:
     """Return the NMS Tasks a Modify can continue, newest first.
 
     Raises:
@@ -48,7 +51,7 @@ async def list_working_tasks(config: SampleConfig) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for task in tasks:
         row = _task_row(task)
-        if row is not None and row["state"] == NMS_WORKING_STATE:
+        if row is not None and row["state"] in MODIFIABLE_STATES:
             rows.append(row)
     return rows
 
@@ -174,4 +177,10 @@ def _excerpt(text: str) -> str:
     return f"{collapsed[:_EXCERPT_LENGTH - 1]}…"
 
 
-__all__ = ["NMS_WORKING_STATE", "list_working_tasks", "read_task"]
+__all__ = [
+    "MODIFIABLE_STATES",
+    "NMS_SUBMITTED_STATE",
+    "NMS_WORKING_STATE",
+    "list_modifiable_tasks",
+    "read_task",
+]

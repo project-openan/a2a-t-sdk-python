@@ -403,7 +403,7 @@ async def test_nms_task_list_is_disabled_outside_nms(client: httpx.AsyncClient) 
     assert response.json()["tasks"] == []
 
 
-async def test_nms_task_list_returns_the_working_tasks(
+async def test_nms_task_list_returns_modifiable_tasks(
     offline_config: SampleConfig,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -411,17 +411,38 @@ async def test_nms_task_list_returns_the_working_tasks(
     async def fake_list(_config: SampleConfig) -> list[dict[str, object]]:
         return [_working_task_row()]
 
-    monkeypatch.setattr("demo.web.app.list_working_tasks", fake_list)
+    monkeypatch.setattr("demo.web.app.list_modifiable_tasks", fake_list)
+    app = create_app(_nms_config(offline_config), runs_dir=tmp_path, finished_grace_seconds=0.0)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        response = await http_client.get("/api/nms/tasks?state=modifiable")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["enabled"] is True
+    assert payload["states"] == ["TASK_STATE_SUBMITTED", "TASK_STATE_WORKING"]
+    assert payload["tasks"][0]["taskId"] == "task-9"
+
+
+async def test_nms_task_list_keeps_the_working_filter_for_older_callers(
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def fake_list(_config: SampleConfig) -> list[dict[str, object]]:
+        return [
+            _working_task_row(),
+            {**_working_task_row(task_id="task-8", context_id="ctx-8"), "state": "TASK_STATE_SUBMITTED"},
+        ]
+
+    monkeypatch.setattr("demo.web.app.list_modifiable_tasks", fake_list)
     app = create_app(_nms_config(offline_config), runs_dir=tmp_path, finished_grace_seconds=0.0)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
         response = await http_client.get("/api/nms/tasks?state=working")
 
     assert response.status_code == 200
-    payload = response.json()
-    assert payload["enabled"] is True
-    assert payload["state"] == "TASK_STATE_WORKING"
-    assert payload["tasks"][0]["taskId"] == "task-9"
+    assert [row["taskId"] for row in response.json()["tasks"]] == ["task-9"]
 
 
 async def test_nms_task_list_reports_an_nms_failure(
@@ -434,7 +455,7 @@ async def test_nms_task_list_reports_an_nms_failure(
     async def failing_list(_config: SampleConfig) -> list[dict[str, object]]:
         raise NmsProtocolError("NMS task list returned HTTP 500")
 
-    monkeypatch.setattr("demo.web.app.list_working_tasks", failing_list)
+    monkeypatch.setattr("demo.web.app.list_modifiable_tasks", failing_list)
     app = create_app(_nms_config(offline_config), runs_dir=tmp_path, finished_grace_seconds=0.0)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
@@ -454,7 +475,7 @@ async def test_start_run_requires_both_target_ids(client: httpx.AsyncClient) -> 
     assert response.json()["code"] == "target_pair_required"
 
 
-async def test_start_run_rejects_a_target_that_is_no_longer_working(
+async def test_start_run_rejects_a_target_that_is_not_modifiable(
     offline_config: SampleConfig,
     factory: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
@@ -486,7 +507,42 @@ async def test_start_run_rejects_a_target_that_is_no_longer_working(
         )
 
     assert response.status_code == 409
-    assert response.json()["code"] == "target_not_working"
+    assert response.json()["code"] == "target_not_modifiable"
+
+
+async def test_start_run_accepts_a_submitted_target(
+    offline_config: SampleConfig,
+    factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def submitted_task(_config: SampleConfig, task_id: str) -> dict[str, object]:
+        del task_id
+        return {**_working_task_row(), "state": "TASK_STATE_SUBMITTED"}
+
+    monkeypatch.setattr("demo.web.app.read_task", submitted_task)
+    app = create_app(
+        _nms_config(offline_config),
+        runs_dir=tmp_path,
+        runtime_factory=factory,
+        finished_grace_seconds=0.0,
+        ui_mode="explorer",
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        response = await http_client.post(
+            "/api/runs",
+            json={
+                "scenario": "outage",
+                "mode": "auto",
+                "discovery": "nms",
+                "targetTaskId": "task-9",
+                "targetContextId": "ctx-9",
+            },
+        )
+
+    assert response.status_code == 202
+    assert response.json()["runId"]
 
 
 async def test_start_run_rejects_a_scenario_without_modify_values(
@@ -599,9 +655,7 @@ async def test_client_run_endpoints_return_persisted_runs_and_conversations(
         )
     )
     await store.save_task_snapshot(
-        TaskSnapshotRecord(
-            run_id="run-1", task_id="task-1", context_id="ctx-1", state="TASK_STATE_COMPLETED"
-        )
+        TaskSnapshotRecord(run_id="run-1", task_id="task-1", context_id="ctx-1", state="TASK_STATE_COMPLETED")
     )
     config = replace(offline_config, client_db_path=str(db_path))
     app = create_app(config, runs_dir=tmp_path, client_store=store, finished_grace_seconds=0.0)
@@ -633,9 +687,7 @@ async def test_client_run_endpoints_return_persisted_runs_and_conversations(
         assert (await http_client.get("/api/client/runs/missing")).status_code == 404
 
 
-async def test_tasks_endpoint_returns_persisted_task_summaries(
-    offline_config: SampleConfig, tmp_path: Path
-) -> None:
+async def test_tasks_endpoint_returns_persisted_task_summaries(offline_config: SampleConfig, tmp_path: Path) -> None:
     db_path = tmp_path / "tasks.sqlite3"
     store = SqliteTaskStore(db_path)
     task = Task(
@@ -964,9 +1016,7 @@ async def test_manual_run_publishes_a_manual_decision_request(
     )
     assert response.status_code == 200
     events = await asyncio.wait_for(events_task, timeout=5)
-    requests = [
-        payload for payload in _sse_payloads(events.text) if payload["type"] == "decision_requested"
-    ]
+    requests = [payload for payload in _sse_payloads(events.text) if payload["type"] == "decision_requested"]
     assert len(requests) == 1
     assert requests[0]["mode"] == "manual"
     # The manual countdown reads the provider budget and the request time from the frame.
@@ -997,9 +1047,7 @@ async def test_confirm_run_publishes_the_recommendation_with_the_decision(
     )
     assert response.status_code == 200
     events = await asyncio.wait_for(events_task, timeout=5)
-    requests = [
-        payload for payload in _sse_payloads(events.text) if payload["type"] == "decision_requested"
-    ]
+    requests = [payload for payload in _sse_payloads(events.text) if payload["type"] == "decision_requested"]
     assert len(requests) == 1
     assert requests[0]["mode"] == "confirm"
     assert requests[0]["recommendation"]["action"] == "accept"
@@ -1185,9 +1233,7 @@ async def test_transcript_downloads(client: httpx.AsyncClient) -> None:
     document = json_response.json()
     assert document["finalState"] == FINAL_STATE_TASK_COMPLETED
     assert document["scenario"] == "information"
-    assert [entry["seq"] for entry in document["timeline"]] == sorted(
-        entry["seq"] for entry in document["timeline"]
-    )
+    assert [entry["seq"] for entry in document["timeline"]] == sorted(entry["seq"] for entry in document["timeline"])
     assert markdown_response.status_code == 200
     assert "text/markdown" in markdown_response.headers["content-type"]
     assert "RAN energy-saving negotiation transcript" in markdown_response.text
@@ -1290,8 +1336,7 @@ async def test_run_started_is_the_first_replayable_frame(client: httpx.AsyncClie
     assert first["modelMode"] == "offline"
     assert first["modelLabel"] == "offline (scripted)"
     assert first["expectedSequence"] == [
-        {"actor": step.actor, "performative": step.performative, "round": step.round}
-        for step in spec.expected_sequence
+        {"actor": step.actor, "performative": step.performative, "round": step.round} for step in spec.expected_sequence
     ]
     assert first["phase"] == "dispatch"
     assert first["spanId"]
@@ -1303,17 +1348,13 @@ async def test_run_started_is_the_first_replayable_frame(client: httpx.AsyncClie
 
 
 async def test_live_decision_is_recorded_before_the_task_events(client: httpx.AsyncClient) -> None:
-    start = await client.post(
-        "/api/runs", json={"scenario": "information", "mode": "auto", "transport": "sse"}
-    )
+    start = await client.post("/api/runs", json={"scenario": "information", "mode": "auto", "transport": "sse"})
     run_id = start.json()["runId"]
     await _wait_status(client, run_id, lambda data: data["status"] == "finished")
 
     payloads = _sse_payloads((await client.get(f"/api/runs/{run_id}/events")).text)
     entries = [payload["event"] for payload in payloads if payload["type"] == "event"]
-    decision_index = next(
-        index for index, entry in enumerate(entries) if entry["eventKind"] == "decision"
-    )
+    decision_index = next(index for index, entry in enumerate(entries) if entry["eventKind"] == "decision")
     task_index = next(index for index, entry in enumerate(entries) if entry["eventKind"] == "status")
     assert decision_index < task_index
     assert entries[decision_index]["action"] == "accept"
@@ -1361,9 +1402,7 @@ async def test_trace_ingestion_stays_reachable_when_api_auth_is_enabled(
 
 
 async def test_trace_json_span_lookup_and_ingestion(client: httpx.AsyncClient) -> None:
-    start = await client.post(
-        "/api/runs", json={"scenario": "information", "mode": "auto", "transport": "sse"}
-    )
+    start = await client.post("/api/runs", json={"scenario": "information", "mode": "auto", "transport": "sse"})
     run_id = start.json()["runId"]
     await _wait_status(client, run_id, lambda data: data["status"] == "finished")
 
@@ -1411,9 +1450,7 @@ async def test_trace_json_span_lookup_and_ingestion(client: httpx.AsyncClient) -
 
     replay = _sse_payloads((await client.get(f"/api/runs/{run_id}/events")).text)
     ingested = [
-        payload
-        for payload in replay
-        if payload["type"] == "trace" and payload["event"]["spanId"] == "server-span-1"
+        payload for payload in replay if payload["type"] == "trace" and payload["event"]["spanId"] == "server-span-1"
     ]
     assert len(ingested) == 1
     assert ingested[0]["seq"] == stored["seq"]
@@ -1455,9 +1492,7 @@ async def test_late_span_batch_is_recoverable_from_trace_json(
     This is the contract behind the finalize merge: the client re-reads the trace document and
     merges by ``seq``/``spanId`` instead of assuming the SSE stream carried every server span.
     """
-    start = await client.post(
-        "/api/runs", json={"scenario": "information", "mode": "auto", "transport": "sse"}
-    )
+    start = await client.post("/api/runs", json={"scenario": "information", "mode": "auto", "transport": "sse"})
     run_id = start.json()["runId"]
     await _wait_status(client, run_id, lambda data: data["status"] == "finished")
 
@@ -1534,9 +1569,7 @@ async def test_events_stream_keeps_forwarding_spans_posted_after_finished(
 
 
 async def test_trace_ingestion_validates_the_run_and_payload(client: httpx.AsyncClient) -> None:
-    start = await client.post(
-        "/api/runs", json={"scenario": "information", "mode": "auto", "transport": "sse"}
-    )
+    start = await client.post("/api/runs", json={"scenario": "information", "mode": "auto", "transport": "sse"})
     run_id = start.json()["runId"]
     await _wait_status(client, run_id, lambda data: data["status"] == "finished")
 
@@ -1626,13 +1659,9 @@ async def test_real_offline_information_run_has_unique_spans_and_all_phases(
             assert payloads[-1]["finalState"] == FINAL_STATE_TASK_COMPLETED
 
             # The decision is recorded when the provider returns, before the task events it causes.
-            event_entries = [
-                payload["event"] for payload in payloads if payload["type"] == "event"
-            ]
+            event_entries = [payload["event"] for payload in payloads if payload["type"] == "event"]
             decision_index = next(
-                index
-                for index, entry in enumerate(event_entries)
-                if entry.get("eventKind") == "decision"
+                index for index, entry in enumerate(event_entries) if entry.get("eventKind") == "decision"
             )
             later_task_index = next(
                 index
@@ -1643,9 +1672,7 @@ async def test_real_offline_information_run_has_unique_spans_and_all_phases(
             assert event_entries[decision_index]["action"] == "accept"
             assert event_entries[decision_index]["spanId"]
 
-            looked_up = await http_client.get(
-                f"/api/runs/{run_id}/spans/{run_started['spanId']}"
-            )
+            looked_up = await http_client.get(f"/api/runs/{run_id}/spans/{run_started['spanId']}")
             assert looked_up.status_code == 200
             assert looked_up.json()["kind"] == "run_started"
 
@@ -1790,9 +1817,7 @@ async def test_real_offline_manual_run_waits_then_records_a_human_decision(
             payloads = _sse_payloads((await http_client.get(f"/api/runs/{run_id}/events")).text)
             assert payloads[0]["type"] == "run_started"
             _assert_seq_order(payloads)
-            requests = [
-                payload for payload in payloads if payload["type"] == "decision_requested"
-            ]
+            requests = [payload for payload in payloads if payload["type"] == "decision_requested"]
             assert len(requests) == 1
             assert requests[0]["mode"] == "manual"
             assert requests[0]["timeoutSeconds"] == 300.0
@@ -1822,18 +1847,14 @@ async def test_start_accepts_discovery_and_rejects_unknown_values(client: httpx.
 async def test_start_accepts_the_plain_protocol_and_rejects_unknown_values(
     client: httpx.AsyncClient,
 ) -> None:
-    accepted = await client.post(
-        "/api/runs", json={"scenario": "information", "mode": "auto", "protocol": "plain"}
-    )
+    accepted = await client.post("/api/runs", json={"scenario": "information", "mode": "auto", "protocol": "plain"})
     assert accepted.status_code == 202
     assert accepted.json()["protocol"] == "plain"
     run_id = accepted.json()["runId"]
     status = await _wait_status(client, run_id, lambda data: data["status"] == "finished")
     assert status["protocol"] == "plain"
 
-    rejected = await client.post(
-        "/api/runs", json={"scenario": "information", "mode": "auto", "protocol": "nope"}
-    )
+    rejected = await client.post("/api/runs", json={"scenario": "information", "mode": "auto", "protocol": "nope"})
     assert rejected.status_code == 400
 
 
@@ -1884,21 +1905,15 @@ async def test_one_ui_derives_each_request_forms_hop_from_the_protocol(
         }
         assert meta["mieEnabled"] is True
 
-        extension = await http_client.post(
-            "/api/runs", json={"scenario": "night", "mode": "auto", "protocol": "a2a-t"}
-        )
+        extension = await http_client.post("/api/runs", json={"scenario": "night", "mode": "auto", "protocol": "a2a-t"})
         assert extension.status_code == 202
-        await _wait_status(
-            http_client, extension.json()["runId"], lambda data: data["status"] == "finished"
-        )
+        await _wait_status(http_client, extension.json()["runId"], lambda data: data["status"] == "finished")
 
         standard = await http_client.post(
             "/api/runs", json={"scenario": "information", "mode": "auto", "protocol": "pure"}
         )
         assert standard.status_code == 202
-        await _wait_status(
-            http_client, standard.json()["runId"], lambda data: data["status"] == "finished"
-        )
+        await _wait_status(http_client, standard.json()["runId"], lambda data: data["status"] == "finished")
 
     assert calls == [
         ("a2a-t", "sse", "registry"),
@@ -1906,9 +1921,7 @@ async def test_one_ui_derives_each_request_forms_hop_from_the_protocol(
     ]
 
 
-async def test_wire_endpoint_returns_the_captured_exchange(
-    client: httpx.AsyncClient, tmp_path: Path
-) -> None:
+async def test_wire_endpoint_returns_the_captured_exchange(client: httpx.AsyncClient, tmp_path: Path) -> None:
     """The inspector renders the request from the wire log, never from a reconstructed one."""
     run_dir = tmp_path / "run-wire"
     run_dir.mkdir()
@@ -1919,9 +1932,7 @@ async def test_wire_endpoint_returns_the_captured_exchange(
         "headers": {"Accept": "application/json", "Authorization": "***"},
         "body": {"message": {"parts": [{"text": "create ran energy saving task"}]}},
     }
-    (run_dir / "wire.jsonl").write_text(
-        json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
+    (run_dir / "wire.jsonl").write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
 
     response = await client.get("/api/runs/run-wire/wire")
 

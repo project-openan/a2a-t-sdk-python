@@ -95,20 +95,31 @@ the step bar on Apply & report for the Modify phase, shows each Task-T's own pay
 inspector, and renders the modified report as the final card.
 
 When the client talks to the real NMS, the toolbar also offers **Modify a running task**. The page
-calls `GET /api/nms/tasks?state=working`, which reads the NMS `/tasks` endpoint through
-`NmsClient.list_tasks`, keeps only `TASK_STATE_WORKING`, and returns the compact row the picker
-shows (task id, context id, region, sites, current target, last message). Selecting a row does not
-send anything: it resets the stage, records the target task id/context, switches the example to the
-planned-outage modification, fills the editor with `MODIFY_REQUEST`, and waits for the operator.
-Pressing Start then posts `targetTaskId`/`targetContextId`; the backend re-reads the Task and rejects
-a Task that left `WORKING` (409) before starting. The run has `runMode=modify`: `ClientRuntime`
-uses `RunSpec.modify_intent`, `run_client_flow` skips the baseline and sends the Modify Task-T as
-its first message with `message.task_id`/`context_id`, and the presentation reducer starts in the
-single Modify phase (the step bar marks the Create send as not applicable). The run record,
-transcript, metrics document and live snapshot carry the run mode and target ids. Only A2A-T is
-supported. For local rehearsal against the simulator, `A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1` leaves a
-newly created Task in `WORKING` (closing its stream so the creating run ends as `incomplete`);
-continuing that Task completes it normally.
+calls `GET /api/nms/tasks?state=modifiable`, which reads the NMS `/tasks` endpoint through
+`NmsClient.list_tasks`, keeps `TASK_STATE_SUBMITTED` and `TASK_STATE_WORKING`, and returns the
+compact row the picker shows (task id, context id, state, region, sites, current target, last
+message). The picker refreshes every five seconds while open so a SUBMITTED Task's transition is
+visible without reopening it. Selecting a row does not send anything: it resets the stage, records
+the target task id/context, switches the example to the planned-outage modification, fills the editor
+with `MODIFY_REQUEST`, and waits for the operator. Pressing Start then posts
+`targetTaskId`/`targetContextId`; the backend re-reads the Task and rejects a Task that is no longer
+SUBMITTED or WORKING (409 `target_not_modifiable`) before starting. The Modify is sent immediately
+even while the Task is still SUBMITTED. The run has `runMode=modify`: `ClientRuntime` uses
+`RunSpec.modify_intent`, `run_client_flow` skips the baseline and sends the Modify Task-T as its
+first message with `message.task_id`/`context_id`, and the presentation reducer starts in the single
+Modify phase (the step bar marks the Create send as not applicable). The run record, transcript,
+metrics document and live snapshot carry the run mode and target ids. Only A2A-T is supported.
+
+When the NMS stream goes quiet before a terminal state, the run manager owns the Task: the direct
+NMS transport hands it over after `A2AT_SAMPLE_NMS_POLL_AFTER_SECONDS` (15s) instead of waiting for
+the full HTTP budget, and `RunManager._watch_long_task` polls `GET /tasks/{id}`. A page that still
+subscribes to the run keeps the tracker alive indefinitely and polls at
+`A2AT_SAMPLE_NMS_STATE_POLL_SECONDS` (5s); the detached cadence stays at
+`A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS` (30s). A presentation run with no subscriber for 30s stops
+its tracker and ends as `finished` + `finalState=incomplete`; the NMS Task keeps running untouched.
+For local rehearsal against the simulator, `A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1` leaves a newly
+created Task in `WORKING` (closing its stream so the creating run ends as `incomplete`); continuing
+that Task completes it normally.
 
 The presentation supports two brand palettes. `--brand orange|huawei` (or
 `A2AT_SAMPLE_UI_BRAND`) sets the start-up default; the top-bar button switches at runtime and stores
@@ -1138,6 +1149,8 @@ script can switch the model with a plain `export ADK_MODEL_NAME=...`.
 | `A2AT_SAMPLE_LONG_TASK_MODE` | `auto` | OSS long-task tracking (`auto` / `on` / `off`). `auto` enables the background pump for the real NMS webhook hop when the OSS Task database is configured. |
 | `A2AT_SAMPLE_LONG_TASK_SETTLE_SECONDS` | `5` | Seconds the OSS keeps the initial synchronous stream after the NMS accepts the Task. It only changes when tracking moves to the background; the run and the Task keep tracking and the NMS Task is never cancelled. |
 | `A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS` | `30` | How often the Web UI polls a remote Task that is still executing. The run stays active and finishes only on the remote terminal state/report. |
+| `A2AT_SAMPLE_NMS_POLL_AFTER_SECONDS` | `15` | Silence without an NMS status event before the direct NMS transport hands a non-terminal Task to `RunManager`'s background tracker. |
+| `A2AT_SAMPLE_NMS_STATE_POLL_SECONDS` | `5` | Tracker poll interval while a presentation page is still subscribed to the run. The detached tracker uses `A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS`. |
 | `A2AT_SAMPLE_CLIENT_DB` | unset = in-memory; `run_demo.py` writes `<sample>/runs/client-state.sqlite3` | Absolute SQLite path of the client's conversation/run/negotiation store and of the ADK decision-agent sessions. |
 | `A2AT_SAMPLE_CLIENT_MEMORY_TURNS` | default `6` (>= 0) | Number of recent conversation turns injected into the next decision prompt and Task-T generation. |
 | `A2AT_SAMPLE_ADK_SESSION_RETENTION_DAYS` | default `7` (>= 1) | Days a decision-agent session is kept as audit data before the startup/periodic sweep removes it. |
