@@ -422,6 +422,12 @@ function revealLocalizedPage() {
   document.documentElement.removeAttribute("data-locale-pending");
 }
 
+/** Collapse the request editor; the stage becomes the focus once a request is sent. */
+function closeRequestDrawer() {
+  els.drawer.hidden = true;
+  els.editRequest.setAttribute("aria-expanded", "false");
+}
+
 function bindStaticEvents() {
   for (const button of els.protocolOptions || []) {
     button.addEventListener("click", () => selectProtocol(button.dataset.protocol));
@@ -987,6 +993,8 @@ async function startRun() {
     showError(ui.copy.running);
     return;
   }
+  // The request is sent; the editor window has done its job and gives the stage back.
+  closeRequestDrawer();
   const request = els.requestText.value.trim();
   const parentRunId = ui.retryParentRunId;
   ui.retryParentRunId = null;
