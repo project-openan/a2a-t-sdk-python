@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import shutil
+import socket
 import subprocess
 import time
 from collections.abc import Awaitable, Callable
@@ -44,10 +45,11 @@ from protocol.client_store import (
 )
 from protocol.decision_provider import ManualDecisionProvider
 from protocol.sqlite_task_store import SqliteTaskStore
-from shared.config import DISCOVERY_NMS, SampleConfig
+from shared.config import DISCOVERY_NMS, TRANSPORT_WEBHOOK, SampleConfig
 from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.run_constants import FINAL_STATE_INTENT_NOT_CONFIRMED, PROTOCOL_A2A_T
 from shared.trace import PHASES
+from shared.webhook_receiver import WebhookPortInUseError, WebhookReceiver
 
 CONTEXT_ID = "ctx-web"
 
@@ -408,6 +410,54 @@ def _working_task_row(task_id: str = "task-9", context_id: str = "ctx-9") -> dic
         "sites": ["Site 1"],
         "target": "{00:00~24:00,10Mbps}",
     }
+
+
+async def test_nms_webhook_lifespan_binds_the_callback_receiver_before_any_run(
+    offline_config: SampleConfig,
+    tmp_path: Path,
+) -> None:
+    """A callback port pinned by a public URL must be claimed at startup, not after approval."""
+    port = free_tcp_port()
+    config = replace(
+        _nms_config(offline_config),
+        transport=TRANSPORT_WEBHOOK,
+        webhook_host="127.0.0.1",
+        webhook_port=port,
+        webhook_public_url="",
+    )
+    app = create_app(config, runs_dir=tmp_path, finished_grace_seconds=0.0)
+
+    async with app.router.lifespan_context(app):
+        # Nothing else in this process listens on the port: a successful connect proves the
+        # lifespan already bound the process-level receiver.
+        with socket.create_connection(("127.0.0.1", port), timeout=1.0):
+            pass
+
+
+async def test_nms_webhook_lifespan_reports_a_busy_callback_port(
+    offline_config: SampleConfig,
+    tmp_path: Path,
+) -> None:
+    """A busy pinned port fails the startup instead of the first run."""
+    events: list[dict[str, object]] = []
+    holder = WebhookReceiver(token="t", on_event=events.append, host="127.0.0.1", port=0)
+    await holder.start()
+    try:
+        config = replace(
+            _nms_config(offline_config),
+            transport=TRANSPORT_WEBHOOK,
+            webhook_host="127.0.0.1",
+            webhook_port=holder.port,
+            webhook_public_url=f"http://127.0.0.1:{holder.port}/webhook",
+            webhook_token="t",
+        )
+        app = create_app(config, runs_dir=tmp_path, finished_grace_seconds=0.0)
+
+        with pytest.raises(WebhookPortInUseError):
+            async with app.router.lifespan_context(app):
+                pytest.fail("the lifespan must not start with a busy callback port")
+    finally:
+        await holder.stop()
 
 
 async def test_nms_task_list_is_disabled_outside_nms(client: httpx.AsyncClient) -> None:

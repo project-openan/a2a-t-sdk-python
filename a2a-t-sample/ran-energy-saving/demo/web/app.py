@@ -72,6 +72,7 @@ from shared.config import (
     SUPPORTED_INTENT_MODES,
     SUPPORTED_TRANSPORTS,
     TRANSPORT_SSE,
+    TRANSPORT_WEBHOOK,
     SampleConfig,
 )
 from shared.http_security import (
@@ -405,6 +406,14 @@ def create_app(
             _LOGGER.info("recovered %d long-running run(s)", recovered)
         # Apply the decision-session retention window before the first run of this process.
         await manager.sweep_sessions()
+        if config.discovery == DISCOVERY_NMS and config.transport == TRANSPORT_WEBHOOK:
+            # Bind the process-level callback receiver now. A public URL pins the port, so a
+            # collision can only fail; discovering it here reports it at startup instead of after
+            # the operator has already approved a run. Later runs reuse this same instance.
+            from protocol.shared_webhook import get_shared_webhook
+
+            shared_webhook = await get_shared_webhook(config)
+            _LOGGER.info("webhook receiver ready: push_url=%s", shared_webhook.url)
         # Producers that emit from another thread/task (e.g. an in-process server) cannot see a
         # run-local sink; route their spans by the run id they carry.
         set_global_sink(manager.route_external_span)
