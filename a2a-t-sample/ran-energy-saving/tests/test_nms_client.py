@@ -313,6 +313,29 @@ async def test_webhook_transport_registers_the_push_url_and_returns_a_negotiatio
     assert client.extension_header == TASK_T_URI
 
 
+async def test_webhook_transport_does_not_reregister_push_on_a_task_continuation() -> None:
+    """A Modify send continues the existing Task, whose webhook is already registered."""
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _FakeWebhookClient(_propose_message("neg-1", "modify proposal"))
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        idle_timeout=0.05,
+    )
+    request, context = _request()
+    request.message.task_id = "task-1"
+    request.message.metadata[NEGOTIATION_T_EXTENSION_URI] = "modify task prompt"
+
+    await transport.send(request, context)
+
+    assert client.payload is not None
+    configuration = client.payload["configuration"]
+    assert isinstance(configuration, dict)
+    assert "taskPushNotificationConfig" not in configuration
+
+
 async def test_webhook_transport_binds_the_reply_identity_for_the_router() -> None:
     """The vendor ignores the push token; task/context identity is the routing key."""
     reply = {
