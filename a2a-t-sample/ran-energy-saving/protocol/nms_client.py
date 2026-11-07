@@ -324,7 +324,11 @@ class NmsClient:
         if not _is_hex(trace_id, 32) or trace_id == "0" * 32:
             return ""
         span_id = uuid.uuid4().hex[:16]
-        return f"00-{trace_id}-{span_id}-01"
+        injected = f"00-{trace_id}-{span_id}-01"
+        # Print the id the vendor actually receives: this log can belong to another process
+        # (UI vs OSS), and without it the Langfuse trace id cannot be matched to a hop.
+        _LOGGER.info("NMS call traceparent=%s", injected)
+        return injected
 
     async def stream_message(
         self,
