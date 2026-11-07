@@ -75,6 +75,7 @@ class PromptGenerationOrchestrator:
         renderer: TaskPromptRenderer | None = None,
         input_limit: InputLimitConfig | None = None,
         logger: Any | None = None,
+        provider: str = "",
     ) -> None:
         if not isinstance(config, PromptRuntimeConfig):
             raise TypeError("config must be a PromptRuntimeConfig instance.")
@@ -86,6 +87,7 @@ class PromptGenerationOrchestrator:
         self._renderer = renderer or TaskPromptRenderer()
         self._input_limit = input_limit if input_limit is not None else InputLimitConfig()
         self._logger = logger if logger is not None else _LOGGER
+        self._provider = provider
 
     def generate(self, user_input: str | dict[str, object]) -> PromptGenerationResult:
         """Run prompt generation from input normalization through prompt rendering."""
@@ -432,7 +434,7 @@ class PromptGenerationOrchestrator:
             language=language,
             data_schema=data_schema,
         )
-        extraction_errors = self._map_slot_errors(extraction_result.slot_errors, language)
+        extraction_errors = _dedupe_slot_errors(self._map_slot_errors(extraction_result.slot_errors, language))
         if extraction_errors:
             raise self._slot_errors_exception(extraction_errors)
         slots = extraction_result.slots
@@ -675,7 +677,7 @@ class PromptGenerationOrchestrator:
             )
         return self._generation_exception(
             ErrorCatalog.LLM_INVOCATION_FAILED,
-            {"reason": str(error)},
+            {"provider": self._provider or "unknown", "reason": str(error)},
             cause=error,
         )
 
@@ -848,6 +850,47 @@ class _PromptGenerationResourceError(Exception):
         self.entry = entry
         self.facts = dict(facts)
         self.stage = stage
+
+
+def _dedupe_slot_errors(errors: list[SlotValidationError]) -> list[SlotValidationError]:
+    """Keep one error per offending input value when the extractor copied it across slots.
+
+    A live model sometimes places the same fragment in several slots (for example a frequency
+    value in both ``task_target`` and ``task_context``) and reports a constraint violation for
+    each. The operator only has one value to fix, so duplicate reports are collapsed. The most
+    specific report wins: a concrete slot beats the descriptive ``task_description`` slot, and a
+    longer ``slot_label`` (a sub-item such as "Carrier frequencies") beats a generic section
+    label. Errors without an ``actual`` fact are independent and are always kept.
+    """
+    grouped: dict[str, list[tuple[int, SlotValidationError]]] = {}
+    for index, error in enumerate(errors):
+        facts = error.facts or {}
+        actual = str(facts.get("actual", "")).strip()
+        if not actual:
+            continue
+        grouped.setdefault(actual, []).append((index, error))
+    if not grouped:
+        return errors
+
+    kept: set[int] = set()
+    for group in grouped.values():
+        if len(group) == 1:
+            kept.add(group[0][0])
+            continue
+        candidates = [item for item in group if item[1].slot_name != "task_description"] or group
+        best = max(
+            candidates,
+            key=lambda item: (
+                len(str((item[1].facts or {}).get("slot_label", ""))),
+                -item[0],
+            ),
+        )
+        kept.add(best[0])
+    return [
+        error
+        for index, error in enumerate(errors)
+        if str((error.facts or {}).get("actual", "")).strip() == "" or index in kept
+    ]
 
 
 def _template_uri_of(template_uri: str | TemplateUri | None) -> TemplateUri:

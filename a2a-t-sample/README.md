@@ -15,4 +15,4 @@ See the repository root [`README.md`](../README.md) for setup and how to run.
 | [fault-management/](fault-management/) | Event subscription sample — stream Incident notifications |
 | [negotiation/](negotiation/) | Negotiation closed-loop sample — offline propose → accept round trips |
 | [observability-sample/](observability-sample/) | Observability sample — traces, metrics and logs for every scenario, with an optional Langfuse backend |
-| [ran-energy-saving/](ran-energy-saving/) | RAN energy saving sample — run a RAN energy-saving task, including Negotiation-T negotiations in three kinds (information / target / feasibility) |
+| [ran-energy-saving/](ran-energy-saving/) | RAN energy saving sample — ADK client and server agents over A2A-T Task-T + Negotiation-T, five negotiation scenarios (information / target / feasibility / reject / abort), offline and live modes, CLI and Web UI |

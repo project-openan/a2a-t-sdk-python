@@ -23,6 +23,23 @@ _JSON_MODE_INSTRUCTION_DEFAULT = (
 )
 
 
+def _cached_tokens(usage: Any) -> int | None:
+    """Return the provider-reported cached prefix tokens, ``None`` when absent.
+
+    OpenAI-compatible gateways report ``usage.prompt_tokens_details.cached_tokens``; DeepSeek's
+    native API reports a top-level ``prompt_cache_hit_tokens``. The value is optional, and ``None``
+    is kept distinct from ``0`` (reported miss) so downstream averages can skip unreported calls.
+    """
+    details = getattr(usage, "prompt_tokens_details", None)
+    cached = getattr(details, "cached_tokens", None) if details is not None else None
+    if isinstance(cached, int) and not isinstance(cached, bool):
+        return cached
+    hit = getattr(usage, "prompt_cache_hit_tokens", None)
+    if isinstance(hit, int) and not isinstance(hit, bool):
+        return hit
+    return None
+
+
 class OpenAIClient(LLMClient):
     """LLM client for providers exposing an OpenAI-compatible chat API."""
 
@@ -33,6 +50,11 @@ class OpenAIClient(LLMClient):
         self._logger = logger if logger is not None else logging.getLogger(__name__)
         self._call_logger = logging.getLogger("a2a_t.llm.call")
         self._client: Any | None = None
+
+    @property
+    def provider(self) -> str:
+        """Provider name configured for this client."""
+        return self._config.provider
 
     def _get_client(self) -> Any:
         if self._client is not None:
@@ -131,14 +153,18 @@ class OpenAIClient(LLMClient):
         prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
         completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
         total_tokens = int(getattr(usage, "total_tokens", 0) or 0) or (prompt_tokens + completion_tokens)
+        token_usage: dict[str, int] = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+        cached_tokens = _cached_tokens(usage)
+        if cached_tokens is not None:
+            token_usage["cached"] = cached_tokens
         return LLMResponse(
             content=self._extract_json_object_string(response),
             model=str(getattr(response, "model", self._config.model)),
-            usage={
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": total_tokens,
-            },
+            usage=token_usage,
             metadata={"response": response},
         )
 

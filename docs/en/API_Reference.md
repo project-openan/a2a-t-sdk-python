@@ -22,7 +22,7 @@ The A2A-T SDK exposes only two entry points: the client entry `A2ATClient` (prom
 | Negotiation-T | `validate_abort_prompt_and_data_filling` | A2A-T Client / A2A-T Server | Validates a negotiation abort message for compliance and extracts parameters per a Schema | Yes |
 | Task-T | `generate_task_prompt_from_text` | A2A-T Client | Generates a task prompt from natural-language text with a specified Task-T template (skipping scenario recognition) | Yes |
 | Task-T | `generate_task_prompt_from_data_with_schema` | A2A-T Client | Generates a task prompt from structured data + a semantic Schema with a specified Task-T template | Yes |
-| Task-T | `validate_task_prompt_and_data_filling` | A2A-T Server | Validates a Task-T task prompt for compliance and extracts parameters per a Schema | Yes |
+| Task-T | `validate_task_prompt_and_data_filling` | A2A-T Client / A2A-T Server | Validates a Task-T task prompt for compliance and extracts parameters per a Schema | Yes |
 | Notification-T | `generate_notification_prompt_from_text` | A2A-T Client | Generates a notification subscription prompt from natural-language text with a specified Notification-T template | Yes |
 | Notification-T | `generate_notification_prompt_from_data_with_schema` | A2A-T Client | Generates a notification subscription prompt from structured data + a semantic Schema with a specified Notification-T template | Yes |
 | Notification-T | `validate_notification_prompt_and_data_filling` | A2A-T Server | Validates a Notification-T prompt for compliance and extracts parameters per a Schema | Yes |
@@ -1193,9 +1193,9 @@ def validate_task_prompt_and_data_filling(
 ) -> FilledParamData
 ```
 
-**Typical scenario**: the entry point for parameter validation and extraction after the server Agent receives a Task-T message and before entering business execution; also the decision point of "missing-slot detection" in the negotiation flow — when required parameters are missing, the caller decides whether to initiate negotiation for parameter filling.
+**Typical scenario**: the entry point for parameter validation and extraction after the server Agent receives a Task-T message and before entering business execution; also the decision point of "missing-slot detection" in the negotiation flow — when required parameters are missing, the caller decides whether to initiate negotiation for parameter filling. The client facade exposes the same method, so a client can run the identical check before sending a rendered Task-T.
 
-**Function description**: validates whether a Task-T task prompt message matches the template and slot constraints, and extracts parameters per the caller-provided JSON Schema. Pipeline order: input gate → rule gate → template loading → one retryable LLM semantic validation (which also extracts the parameters) → deterministic parameter merging.
+**Function description**: validates whether a Task-T task prompt message matches the template and slot constraints, and extracts parameters per the caller-provided JSON Schema. Pipeline order: input gate → rule gate → template loading → one retryable LLM semantic validation (which also extracts the parameters) → deterministic parameter merging. Both `A2ATClient` and `A2ATServer` delegate to the same `DefaultContentValidator` pipeline.
 
 **Input description**
 

@@ -1,8 +1,8 @@
 {
   "items": [
     {
-      "name": "region",
-      "value": "Please provide region: Coverage region (task object) of the energy-saving task; a concrete physical area name.."
+      "name": "guaranteedThroughputTarget",
+      "value": "请提供 guaranteedThroughputTarget：分时段保障速率目标（任务上下文），例如 {00:00~07:00,2Mbps}、{07:00~17:30,10Mbps}。"
     }
   ],
   "relationship": null

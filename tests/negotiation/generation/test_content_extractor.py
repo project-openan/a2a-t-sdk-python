@@ -755,13 +755,14 @@ def test_maps_missing_required_fields_to_the_field_missing_code(
     assert expected_field in str(exc_info.value)
 
 
-def test_rejects_empty_information_propose_items_before_template_rendering() -> None:
+def test_empty_information_propose_items_are_a_retryable_extraction_miss() -> None:
+    """An empty extraction of the inbound items is a retryable miss, not a client field omission."""
     with pytest.raises(NegotiationGenerationError) as exc_info:
         extractor(ScriptedExtractionClient('{"items":[]}')).extract(
             "请补充缺失信息。", reference(NegotiationType.INFORMATION, NegotiationPerformative.PROPOSE)
         )
 
-    assert exc_info.value.code_str == ErrorCatalog.NEGOTIATION_FIELD_MISSING.value
+    assert exc_info.value.code_str == ErrorCatalog.NEGOTIATION_CONTENT_EXTRACT_FAILED.value
     assert "requested items" in str(exc_info.value)
 
 

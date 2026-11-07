@@ -118,3 +118,9 @@ warn_unused_configs = true
 module = "opentelemetry.exporter.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+# openpyxl does not ship type information; the tester console only uses its
+# workbook read/write surface.
+module = ["openpyxl", "openpyxl.*"]
+ignore_missing_imports = true
+

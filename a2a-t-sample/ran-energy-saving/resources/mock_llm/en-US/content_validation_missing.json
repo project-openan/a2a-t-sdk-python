@@ -2,17 +2,17 @@
   "semantic_verdict": false,
   "errors": [
     {
-      "slot_name": "region",
+      "slot_name": "guaranteedThroughputTarget",
       "code": "content.param_missing",
       "facts": {
-        "section_label": "task_object"
+        "section_label": "task_context"
       }
     }
   ],
   "params": {
     "operationType": "create",
-    "region": null,
+    "region": "Region A",
     "energySavingGoal": "Maximize energy saving under the condition that the task context is met.",
-    "guaranteedThroughputTarget": "{00:00~07:00,2Mbps}, {07:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,2Mbps}"
+    "guaranteedThroughputTarget": null
   }
 }

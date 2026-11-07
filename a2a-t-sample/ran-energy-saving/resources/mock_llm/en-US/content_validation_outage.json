@@ -1,0 +1,12 @@
+{
+  "semantic_verdict": true,
+  "errors": [],
+  "params": {
+    "operationType": "modify",
+    "region": "Region A",
+    "energySavingGoal": "Maximize energy saving under the condition that the task context is met.",
+    "guaranteedThroughputTarget": "{00:00~03:00,10Mbps}, {03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}",
+    "siteList": "Site 1,Site 2",
+    "backgroundEvent": "power outage from 03:00 to 05:00"
+  }
+}

@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Protocol comparison · RAN energy saving</title>
+    <style>
+      :root {
+        --bg: #f6f6f4;
+        --panel: #ffffff;
+        --ink: #1d1d1f;
+        --muted: #6b6b70;
+        --line: #dfdfdc;
+        --accent: #c8102e;
+        --ok: #1f7a4d;
+        --bad: #b42318;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 14px/1.5 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      }
+      header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 22px 32px 14px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+      }
+      h1 { font-size: 20px; margin: 0; }
+      h2 { font-size: 15px; margin: 0 0 10px; }
+      a { color: var(--accent); }
+      main { padding: 20px 32px 48px; display: grid; gap: 18px; }
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: end;
+        gap: 14px;
+      }
+      .toolbar label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+      select, button {
+        font: inherit;
+        padding: 6px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+        color: var(--ink);
+      }
+      button { cursor: pointer; }
+      button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 16px 18px;
+        overflow: auto;
+      }
+      table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+      th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+      th { font-size: 12px; color: var(--muted); font-weight: 600; }
+      tbody tr:hover { background: #fafaf8; }
+      .muted { color: var(--muted); }
+      .ok { color: var(--ok); font-weight: 600; }
+      .bad { color: var(--bad); font-weight: 600; }
+      .empty { color: var(--muted); padding: 20px 2px; }
+      .bar { height: 6px; border-radius: 3px; background: #eceae6; overflow: hidden; min-width: 80px; }
+      .bar > i { display: block; height: 100%; background: var(--accent); }
+      .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+      .chip { padding: 3px 9px; border-radius: 999px; background: #f1f0ed; font-size: 12px; }
+      .status { margin-left: 8px; font-size: 12px; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>协议对比 · Pure A2A vs A2A-T</h1>
+        <div class="muted">Token、耗时与场景准确率，来自每次 run 的持久化指标。</div>
+      </div>
+      <div class="chips">
+        <span class="chip" id="run-count">0 runs</span>
+        <a href="/api/metrics/export.csv">导出 CSV</a>
+        <a href="/">返回演示</a>
+      </div>
+    </header>
+    <main>
+      <section class="card">
+        <div class="toolbar">
+          <label>协议
+            <select id="protocol-filter"><option value="">全部</option></select>
+          </label>
+          <label>场景
+            <select id="scenario-filter"><option value="">全部</option></select>
+          </label>
+          <button id="refresh" class="primary" type="button">刷新</button>
+          <span class="status" id="status"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>协议总览</h2>
+        <div id="protocol-table"></div>
+      </section>
+
+      <section class="card">
+        <h2>协议 × 场景</h2>
+        <div id="group-table"></div>
+      </section>
+
+      <section class="card">
+        <h2>每次运行</h2>
+        <div id="run-table"></div>
+      </section>
+    </main>
+    <script>
+      (() => {
+        const params = new URLSearchParams(window.location.search);
+        const token = params.get("token");
+        if (token) {
+          const name = "a2at_ui_token";
+          const secure = window.location.protocol === "https:" ? "; Secure" : "";
+          document.cookie = `${name}=${encodeURIComponent(token)}; Path=/; SameSite=Strict${secure}`;
+          params.delete("token");
+          const query = params.toString();
+          window.history.replaceState({}, "", `/comparison${query ? `?${query}` : ""}`);
+        }
+
+        const $ = (id) => document.getElementById(id);
+        const fmt = (value, digits = 1) => {
+          if (value === null || value === undefined || value === "") return "—";
+          const number = Number(value);
+          return Number.isFinite(number) ? number.toFixed(digits) : String(value);
+        };
+        const pct = (value) => (value === null || value === undefined ? "—" : `${(Number(value) * 100).toFixed(1)}%`);
+        const tokenValue = (row, field) => row?.tokens?.[field] ?? null;
+        const latencyValue = (row, field) => row?.latency?.[field] ?? null;
+
+        let allRuns = [];
+        let groups = [];
+        let protocolGroups = [];
+
+        function options(select, values) {
+          const current = select.value;
+          const seen = new Set();
+          select.replaceChildren(new Option("全部", ""));
+          for (const value of values) {
+            if (!value || seen.has(value)) continue;
+            seen.add(value);
+            select.append(new Option(value, value));
+          }
+          select.value = seen.has(current) ? current : "";
+        }
+
+        function passesFilters(row) {
+          const protocol = $("protocol-filter").value;
+          const scenario = $("scenario-filter").value;
+          return (!protocol || row.protocol === protocol) && (!scenario || row.scenario === scenario);
+        }
+
+        function renderStat(row, field) {
+          const value = row[field];
+          if (value === null || value === undefined) return "—";
+          return field === "successRate" || field === "accuracy" ? pct(value) : fmt(value, 0);
+        }
+
+        function renderGroup(rows) {
+          const header = `
+            <table><thead><tr>
+              <th>协议</th><th>场景</th><th>运行</th><th>成功率</th><th>准确率</th>
+              <th>Prompt tokens</th><th>Completion tokens</th><th>Total tokens</th>
+              <th>Cached tokens</th><th>缓存命中率</th>
+              <th>Model ms</th><th>Total ms</th><th>P95 total ms</th><th>审批等待 ms</th><th>轮次</th>
+            </tr></thead><tbody>`;
+          if (!rows.length) return `<div class="empty">还没有指标数据。先跑一次演示或基准测试。</div>`;
+          return header + rows.map((row) => `
+            <tr>
+              <td>${row.protocol || "—"}</td>
+              <td>${row.scenario || "—"}</td>
+              <td>${row.runs}</td>
+              <td class="${row.successRate === 1 ? "ok" : row.successRate === 0 ? "bad" : ""}">${pct(row.successRate)}</td>
+              <td>${pct(row.accuracy)}</td>
+              <td>${fmt(row.tokens?.prompt?.avg, 0)}</td>
+              <td>${fmt(row.tokens?.completion?.avg, 0)}</td>
+              <td>${fmt(row.tokens?.total?.avg, 0)}</td>
+              <td>${fmt(row.tokens?.cached?.avg, 0)}</td>
+              <td>${pct(row.cacheHitRate)}</td>
+              <td>${fmt(row.latency?.modelMs?.avg, 0)}</td>
+              <td>${fmt(row.latency?.totalMs?.avg, 0)}</td>
+              <td>${fmt(row.latency?.totalMs?.p95, 0)}</td>
+              <td>${fmt(row.latency?.approvalWaitMs?.avg, 0)}</td>
+              <td>${fmt(row.avgRounds, 1)}</td>
+            </tr>`).join("") + `</tbody></table>`;
+        }
+
+        function renderRuns(rows) {
+          const header = `
+            <table><thead><tr>
+              <th>Run</th><th>协议</th><th>场景</th><th>模型</th><th>状态</th><th>准确率</th>
+              <th>Prompt</th><th>Completion</th><th>Total tokens</th>
+              <th>Cached</th><th>缓存命中率</th>
+              <th>LLM calls</th><th>轮次</th><th>Model ms</th><th>Total ms</th><th>审批等待 ms</th><th>结束时间</th>
+            </tr></thead><tbody>`;
+          if (!rows.length) return `<div class="empty">没有匹配的运行。</div>`;
+          return header + rows.map((row) => `
+            <tr>
+              <td title="${row.runId || ""}">${(row.runId || "").slice(0, 8)}</td>
+              <td>${row.protocol || "—"}</td>
+              <td>${row.scenario || "—"}</td>
+              <td>${row.modelMode || "—"}</td>
+              <td>${row.finalState || row.status || "—"}</td>
+              <td class="${row.accuracy?.passed ? "ok" : "bad"}">${pct(row.accuracy?.score)}</td>
+              <td>${tokenValue(row, "prompt") ?? "N/A"}</td>
+              <td>${tokenValue(row, "completion") ?? "N/A"}</td>
+              <td>${tokenValue(row, "total") ?? "N/A"}</td>
+              <td>${tokenValue(row, "cached") ?? "—"}</td>
+              <td>${pct(tokenValue(row, "cacheHitRate"))}</td>
+              <td>${tokenValue(row, "llmCalls") ?? "—"}</td>
+              <td>${row.negotiation?.rounds ?? "—"}</td>
+              <td>${fmt(latencyValue(row, "modelMs"), 0)}</td>
+              <td>${fmt(latencyValue(row, "totalMs"), 0)}</td>
+              <td>${fmt(latencyValue(row, "approvalWaitMs"), 0)}</td>
+              <td>${(row.finishedAt || "").replace("T", " ").slice(0, 19)}</td>
+            </tr>`).join("") + `</tbody></table>`;
+        }
+
+        function render() {
+          const rows = allRuns.filter(passesFilters);
+          const filteredGroups = groups.filter((row) =>
+            passesFilters({ protocol: row.protocol, scenario: row.scenario })
+          );
+          const protocol = $("protocol-filter").value;
+          $("run-count").textContent = `${rows.length} runs`;
+          $("protocol-table").innerHTML = renderGroup(
+            protocolGroups.filter((row) => !protocol || row.protocol === protocol)
+          );
+          $("group-table").innerHTML = renderGroup(filteredGroups);
+          $("run-table").innerHTML = renderRuns(rows);
+        }
+
+        async function load() {
+          $("status").textContent = "加载中…";
+          try {
+            const summaryResponse = await fetch("/api/metrics/summary");
+            const summary = await summaryResponse.json();
+            if (!summaryResponse.ok) throw new Error(summary.error || `HTTP ${summaryResponse.status}`);
+            const rowsResponse = await fetch("/api/metrics/runs?limit=2000");
+            const runPayload = await rowsResponse.json();
+            if (!rowsResponse.ok) throw new Error(runPayload.error || `HTTP ${rowsResponse.status}`);
+            allRuns = runPayload.runs || [];
+            groups = summary.groups || [];
+            protocolGroups = summary.protocols || [];
+            options($("protocol-filter"), allRuns.map((row) => row.protocol));
+            options($("scenario-filter"), allRuns.map((row) => row.scenario));
+            $("status").textContent = summary.enabled === false
+              ? "客户端数据库未启用，指标不可用。"
+              : `${allRuns.length} 次运行，${summary.groups?.length || 0} 个分组`;
+            render();
+          } catch (error) {
+            $("status").textContent = `加载失败：${error.message}`;
+          }
+        }
+
+        $("refresh").addEventListener("click", load);
+        $("protocol-filter").addEventListener("change", render);
+        $("scenario-filter").addEventListener("change", render);
+        load();
+      })();
+    </script>
+  </body>
+</html>

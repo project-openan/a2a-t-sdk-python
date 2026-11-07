@@ -2,17 +2,17 @@
   "semantic_verdict": false,
   "errors": [
     {
-      "slot_name": "region",
+      "slot_name": "guaranteedThroughputTarget",
       "code": "content.param_missing",
       "facts": {
-        "section_label": "任务对象"
+        "section_label": "任务上下文"
       }
     }
   ],
   "params": {
     "operationType": "create",
-    "region": null,
+    "region": "区域 A",
     "energySavingGoal": "在满足任务上下文的前提下最大化节能。",
-    "guaranteedThroughputTarget": "{00:00~07:00,2Mbps}、{07:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~24:00,2Mbps}"
+    "guaranteedThroughputTarget": null
   }
 }

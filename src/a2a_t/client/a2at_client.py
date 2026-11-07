@@ -82,6 +82,9 @@ class A2ATClient:
     - **Template-directed prompt generation** — the six ``generate_{task,auth,notification}_prompt``
       methods, each bypassing scenario recognition for one template addressed by its URI, from free
       text or from structured input with a data schema.
+    - **Task content validation** — :meth:`validate_task_prompt_and_data_filling` runs the same
+      content-validation pipeline as the server facade, so a client can check a rendered Task-T
+      before sending it.
     - **Negotiation content** — the twelve Negotiation-T methods: eight message-generation methods
       (``generate_negotiation_{propose,accept,reject,abort}_prompt_from_{data,text}``) and four
       message-validation methods (``validate_{...}_prompt_and_data_filling``).
@@ -131,11 +134,12 @@ class A2ATClient:
             llm_client=self._llm_client,
             logger=logger,
         )
-        # Lazily assembled negotiation content service and template query service: both capture
-        # resource snapshots at first use, so constructing the facade stays side-effect free for
-        # the prompt-only flows. Tests may inject either seam before the first call.
+        # Lazily assembled negotiation content service, template query service and Task-T content
+        # validator: all capture resource snapshots at first use, so constructing the facade stays
+        # side-effect free for the prompt-only flows. Tests may inject a seam before the first call.
         self._negotiation_content_service: NegotiationContentService | None = None
         self._template_query_service: TemplateQueryService | None = None
+        self._task_content_validator: Any | None = None
 
     def generate_task_prompt(self, user_input: str | dict[str, object]) -> PromptGenerationResult:
         """Generate a processed task prompt from user input through scenario recognition.
@@ -352,6 +356,65 @@ class A2ATClient:
         return self._prompt_generation_orchestrator.generate_notification_prompt_from_data_with_schema(
             data, schema, _parse_template_uri(template_uri)
         )
+
+    # ------------------------------------------------------------------
+    # Task content validation (Task-T / Notification-T / Authorization-T)
+    # ------------------------------------------------------------------
+
+    def validate_task_prompt_and_data_filling(
+        self,
+        prompt: str,
+        schema: Mapping[str, object],
+        template_uri: str | TemplateUri,
+    ) -> FilledParamData:
+        """Validate a task prompt and extract its parameters.
+
+        The client counterpart of
+        :meth:`~a2a_t.server.a2at_server.A2ATServer.validate_task_prompt_and_data_filling`: both
+        facades delegate to the same content-validation pipeline. It is useful before sending a
+        Task-T, so a client can reject or repair malformed content without a round trip.
+
+        The pipeline parses the template URI fail-fast, rejects an oversized prompt with
+        ``input.text_too_long`` before any LLM call, gates the URI on the ``Task-T`` extension
+        prefix and the default template version, loads the addressed template body and runs the
+        shared validation pipeline: one retryable semantic validation LLM call that also extracts
+        the parameters, then the deterministic parameter merge.
+
+        Args:
+            prompt: rendered task prompt text to validate.
+            schema: caller-provided parameter JSON schema describing the parameters to extract.
+            template_uri: template URI string declaring the expected task template; its prefix
+                segment must be ``Task-T``.
+
+        Returns:
+            filled parameter data carrying the merged parameters.
+
+        Raises:
+            TypeError: when the template URI is ``None``.
+            ValueError: when the template URI is blank or malformed.
+            ContentValidationError: with the code ``negotiation.invalid_input`` when the prompt is
+                blank, the schema is ``None``, or the template URI addresses another extension or
+                carries an unsupported version, ``negotiation.semantic_rejected`` when the semantic
+                validation rejects the content, ``llm.invocation_failed`` or
+                ``llm.response_invalid`` when the semantic step fails after exhausting its retries,
+                ``template.not_found`` when the template or the validation prompt resources are
+                missing, or ``input.text_too_long`` when the prompt exceeds the configured maximum
+                length.
+        """
+        return self._task_validator().validate(prompt, schema, _parse_template_uri(template_uri))
+
+    def _task_validator(self) -> Any:
+        """Return the lazily assembled Task-T content validator of this facade."""
+        if self._task_content_validator is None:
+            from a2a_t.core.standard_templates import TASK_EXTENSION_NAME
+            from a2a_t.server.prompt_compliance.content_validator import build_content_validator
+
+            self._task_content_validator = build_content_validator(
+                extension_name=TASK_EXTENSION_NAME,
+                config=self._config,
+                llm_client=self._llm_client,
+            )
+        return self._task_content_validator
 
     # ------------------------------------------------------------------
     # Negotiation content generation (from data: deterministic, zero LLM)
