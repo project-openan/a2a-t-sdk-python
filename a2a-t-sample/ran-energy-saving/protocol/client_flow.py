@@ -106,6 +106,7 @@ from protocol.messages import (
 from protocol.negotiation_policy import (
     NegotiationKind,
     negotiation_kind_for_errors,
+    negotiation_kind_for_propose_content,
     negotiation_kind_for_template_uri,
 )
 
@@ -790,6 +791,7 @@ async def run_client_flow(
     trace_sink: Callable[[dict[str, object]], None] | None = None,
     conversation_context: str | None = None,
     single_extension_per_message: bool = False,
+    infer_missing_negotiation_kind: bool = False,
     tools_authoritative: bool = False,
     validate_before_send: bool = False,
     enforce_required_fields: bool = False,
@@ -836,6 +838,11 @@ async def run_client_flow(
             Negotiation-T key because that server rejects a message with more than one ``-T``
             extension key. The local demo server instead requires the agreed Task-T on the accept,
             so it keeps the default ``False``.
+        infer_missing_negotiation_kind: When true (the real NMS), a propose that carries no
+            ``templateUri`` is typed from the opening heading of its body. The vendor omits the
+            field on the proposal that continues a negotiation; without this the run fails hard.
+            A body without a known heading still fails, because guessing the kind would pick the
+            wrong decision prompt and reply template.
         tools_authoritative: When true, a deterministic client tool result may ground an accept
             value. Only the local demo server shares the demo dataset; NMS and NMS simulator runs
             must answer from the operator's request or the server proposal instead.
@@ -1172,10 +1179,9 @@ async def run_client_flow(
         if session.performative is not NegotiationPerformative.PROPOSE:
             raise ClientFlowError(_ERROR_NO_PROPOSE)
 
-        template_uri = _template_uri(metadata)
-        kind = negotiation_kind_for_template_uri(template_uri)
-        if kind is None:
-            raise ClientFlowError(f"{_ERROR_UNKNOWN_KIND} templateUri={template_uri}")
+        template_uri, kind, inferred_kind = _resolve_propose_template(
+            metadata, infer_missing_template_uri=infer_missing_negotiation_kind
+        )
         propose = _propose_view(event, metadata, session, kind, template_uri, context_id)
         emit_trace(
             "decision_requested",
@@ -1189,6 +1195,8 @@ async def run_client_flow(
                 "maxRounds": session.max_rounds,
                 "templateUri": template_uri,
                 "content": propose.content,
+                # Only the inferred case is flagged; a conformant propose keeps its frame unchanged.
+                **({"templateUriInferred": True} if inferred_kind else {}),
             },
         )
         _LOGGER.info(
@@ -1819,12 +1827,51 @@ def _find_negotiation_message(
     return None
 
 
-def _template_uri(metadata: Mapping[str, object]) -> str:
-    """Return the ``templateUri`` of one negotiation metadata map."""
+def _resolve_propose_template(
+    metadata: Mapping[str, object],
+    *,
+    infer_missing_template_uri: bool,
+) -> tuple[str, NegotiationKind, bool]:
+    """Return one inbound propose's template URI, negotiation kind and whether it was inferred.
+
+    A conformant propose carries ``templateUri``. The vendor NMS omits it on the proposal that
+    continues a negotiation, so with ``infer_missing_template_uri`` on, the opening heading of the
+    rendered body supplies the kind and the canonical propose URI of that kind stands in for the
+    missing value. An unreadable body still fails: guessing the kind would select the wrong decision
+    prompt and the wrong reply template.
+
+    Args:
+        metadata: A2A metadata map of the inbound propose.
+        infer_missing_template_uri: whether a missing ``templateUri`` may be recovered from the
+            propose body. Only the real-NMS client path turns this on.
+
+    Returns:
+        The template URI to report, the negotiation kind, and whether the URI was inferred.
+
+    Raises:
+        ClientFlowError: when the propose carries no template URI and its kind is not readable from
+            the body, or when the URI names no sample negotiation template.
+    """
     value = metadata.get(TEMPLATE_URI_METADATA_KEY)
-    if not isinstance(value, str) or not value.strip():
-        raise ClientFlowError(_ERROR_NO_TEMPLATE_URI)
-    return value
+    if isinstance(value, str) and value.strip():
+        kind = negotiation_kind_for_template_uri(value)
+        if kind is None:
+            raise ClientFlowError(f"{_ERROR_UNKNOWN_KIND} templateUri={value}")
+        return value, kind, False
+    if infer_missing_template_uri:
+        content = metadata.get(NEGOTIATION_T_EXTENSION_URI)
+        kind = negotiation_kind_for_propose_content(content if isinstance(content, str) else None)
+        if kind is not None:
+            _LOGGER.warning(
+                "the negotiation propose carries no template URI; inferred kind=%s from its heading",
+                kind.value,
+            )
+            return _PROPOSE_TEMPLATE_URI_BY_KIND[kind.value], kind, True
+    _LOGGER.warning(
+        "the negotiation propose carries no template URI (metadata keys: %s)",
+        ", ".join(sorted(str(key) for key in metadata)),
+    )
+    raise ClientFlowError(_ERROR_NO_TEMPLATE_URI)
 
 
 def _propose_view(

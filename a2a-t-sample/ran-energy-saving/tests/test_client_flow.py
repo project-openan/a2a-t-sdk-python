@@ -54,6 +54,7 @@ from google.protobuf.json_format import MessageToDict
 from protocol.client_flow import (
     DEFAULT_CALL_TIMEOUT_SECONDS,
     TASK_REQUEST_LABEL,
+    ClientFlowError,
     ClientFlowResult,
     SseClientTransport,
     WebhookClientTransport,
@@ -1436,3 +1437,78 @@ async def test_an_ungrounded_auto_accept_is_replaced_by_an_abort() -> None:
     assert _client_negotiation_steps(transport.requests) == [("ABORT", 1)]
     assert result.error is not None
     assert "region" in result.error
+
+
+def _propose_without_template_uri(kind: str, *, content: str) -> dict[str, object]:
+    """Build the vendor's continuation propose: negotiation metadata without ``templateUri``."""
+    event = propose_event(kind, 1, content=content)
+    metadata = event["metadata"]
+    assert isinstance(metadata, dict)
+    metadata.pop(TEMPLATE_URI_METADATA_KEY)
+    assert NEGOTIATION_CONTEXT_METADATA_KEY in metadata
+    return event
+
+
+@pytest.mark.parametrize(
+    ("kind", "heading"),
+    [
+        ("information", "## Information Negotiation\nPlease supplement the relevant content."),
+        ("target", "## Target Negotiation\nPlease confirm the clarified target."),
+        ("feasibility", "## Feasibility Negotiation\nPlease assess whether the goal is achievable."),
+        ("information", "## 信息协商\n请补充相关内容。"),
+        ("target", "## 目标协商\n请确认目标。"),
+        ("feasibility", "## 可行性协商\n请评估目标是否可达。"),
+    ],
+)
+async def test_a_propose_without_template_uri_is_typed_from_its_heading(
+    kind: str, heading: str
+) -> None:
+    """The vendor omits ``templateUri`` on the proposal that continues the negotiation."""
+    requested: list[tuple[str, str | None]] = []
+    result = await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=ScriptedTransport(
+            [[_propose_without_template_uri(kind, content=heading)], [end_event()]]
+        ),
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+        language="en-US",
+        on_decision_requested=lambda propose, session: requested.append(
+            (propose.kind, propose.template_uri)
+        ),
+        infer_missing_negotiation_kind=True,
+    )
+
+    assert requested == [(kind, _PROPOSE_URIS[kind])]
+    assert result.decisions[0].action == "reject"
+
+
+async def test_a_propose_without_template_uri_and_without_a_heading_still_fails() -> None:
+    transport = ScriptedTransport(
+        [[_propose_without_template_uri("information", content="Please provide the region.")]]
+    )
+
+    with pytest.raises(ClientFlowError, match="carries no template URI"):
+        await run_client_flow(
+            prompt_client=FakePromptClient(),
+            transport=transport,
+            user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+            provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+            language="en-US",
+            infer_missing_negotiation_kind=True,
+        )
+
+
+async def test_a_propose_without_template_uri_fails_when_inference_is_off() -> None:
+    transport = ScriptedTransport(
+        [[_propose_without_template_uri("information", content="## Information Negotiation")]]
+    )
+
+    with pytest.raises(ClientFlowError, match="carries no template URI"):
+        await run_client_flow(
+            prompt_client=FakePromptClient(),
+            transport=transport,
+            user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+            provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+            language="en-US",
+        )

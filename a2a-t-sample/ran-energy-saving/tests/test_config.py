@@ -50,6 +50,7 @@ from shared.config import (
     NMS_A2A_PORT_ENV_KEY,
     NMS_HOST_ENV_KEY,
     NMS_IDLE_TIMEOUT_ENV_KEY,
+    NMS_INFER_NEGOTIATION_KIND_ENV_KEY,
     NMS_POLL_AFTER_ENV_KEY,
     NMS_READ_AFTER_SEND_ENV_KEY,
     NMS_REGION_ENV_KEY,
@@ -750,6 +751,30 @@ def test_nms_read_after_send_can_be_disabled(tmp_path: Path) -> None:
 
     assert config.nms_read_after_send is False
     assert config.nms_idle_timeout == 60.0
+
+
+def test_nms_infers_a_missing_negotiation_template_uri_by_default(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_DISCOVERY=nms",
+                f"{NMS_HOST_ENV_KEY}=127.0.0.1",
+                f"{NMS_TOKEN_USER_ENV_KEY}=user",
+                f"{NMS_TOKEN_VALUE_ENV_KEY}=value",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_config(env_path=env_file).nms_infer_negotiation_kind is True
+
+
+def test_nms_negotiation_kind_inference_can_be_disabled(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{NMS_INFER_NEGOTIATION_KIND_ENV_KEY}=0\n", encoding="utf-8")
+
+    assert load_config(env_path=env_file).nms_infer_negotiation_kind is False
 
 
 def test_nms_wire_log_defaults_to_on(tmp_path: Path) -> None:

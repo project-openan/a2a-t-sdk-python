@@ -24,6 +24,7 @@ through the preset revision sequence.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -309,6 +310,50 @@ def negotiation_kind_for_template_uri(template_uri: str | None) -> NegotiationKi
     if len(parts) < 3 or parts[0] != "Negotiation-T":
         return None
     return _KIND_BY_URI_SEGMENT.get(parts[1])
+
+
+#: Heading title of each propose template, in both languages the sample renders. The vendor NMS
+#: omits ``templateUri`` on the proposal that continues a negotiation, so the body heading is the
+#: only typed signal left.
+_PROPOSE_HEADING_KIND_BY_MARKER: Final[tuple[tuple[str, NegotiationKind], ...]] = (
+    ("information negotiation", NegotiationKind.INFORMATION),
+    ("信息协商", NegotiationKind.INFORMATION),
+    ("target negotiation", NegotiationKind.TARGET),
+    ("目标协商", NegotiationKind.TARGET),
+    ("feasibility negotiation", NegotiationKind.FEASIBILITY),
+    ("可行性协商", NegotiationKind.FEASIBILITY),
+)
+
+#: The markdown heading that opens one propose body.
+_PROPOSE_HEADING_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^\s{0,3}#{1,6}\s*(?P<title>[^\n#]+?)\s*$", re.MULTILINE
+)
+
+
+def negotiation_kind_for_propose_content(content: str | None) -> NegotiationKind | None:
+    """Recover the negotiation kind from the heading that opens one propose body.
+
+    A conformant A2A-T propose carries ``templateUri``; the vendor NMS omits it on the proposal
+    that continues a negotiation, leaving the rendered body as the only kind signal. Every propose
+    template opens with one typed heading (``## Information Negotiation`` / ``## 信息协商``, ...).
+
+    Args:
+        content: rendered Negotiation-T body of an inbound propose, or ``None``.
+
+    Returns:
+        The kind named by the opening heading, or ``None`` when the body carries no heading of a
+        known negotiation type. ``None`` means "do not guess": the caller keeps failing loudly.
+    """
+    if not isinstance(content, str):
+        return None
+    heading = _PROPOSE_HEADING_PATTERN.search(content)
+    if heading is None:
+        return None
+    title = heading.group("title").strip().lower()
+    for marker, kind in _PROPOSE_HEADING_KIND_BY_MARKER:
+        if marker in title:
+            return kind
+    return None
 
 
 def decide(

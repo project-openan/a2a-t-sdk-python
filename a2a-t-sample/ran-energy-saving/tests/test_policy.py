@@ -24,6 +24,7 @@ from protocol.negotiation_policy import (
     SampleProposal,
     negotiation_kind_for_error_code,
     negotiation_kind_for_errors,
+    negotiation_kind_for_propose_content,
     negotiation_kind_for_template_uri,
 )
 from protocol.negotiation_policy import (
@@ -271,3 +272,29 @@ def test_default_plan_matches_the_dataset_contract() -> None:
     assert DEFAULT_PLAN.cell_id == "cell-001"
     assert DEFAULT_PLAN.window == "00:00~06:00"
     assert DEFAULT_PLAN.target_rate == "30"
+
+
+@pytest.mark.parametrize(
+    ("heading", "expected"),
+    [
+        ("## Information Negotiation", NegotiationKind.INFORMATION),
+        ("## Target Negotiation", NegotiationKind.TARGET),
+        ("## Feasibility Negotiation", NegotiationKind.FEASIBILITY),
+        ("## 信息协商", NegotiationKind.INFORMATION),
+        ("## 目标协商", NegotiationKind.TARGET),
+        ("## 可行性协商", NegotiationKind.FEASIBILITY),
+    ],
+)
+def test_propose_content_names_its_kind_from_the_opening_heading(
+    heading: str, expected: NegotiationKind
+) -> None:
+    content = f"{heading}\nPlease supplement the relevant content.\n\n## Required Information Items\n1. region"
+
+    assert negotiation_kind_for_propose_content(content) is expected
+
+
+def test_propose_content_without_a_kind_heading_is_not_guessed() -> None:
+    assert negotiation_kind_for_propose_content("Please provide the correct region name.") is None
+    assert negotiation_kind_for_propose_content("## Required Information Items\n1. region") is None
+    assert negotiation_kind_for_propose_content("") is None
+    assert negotiation_kind_for_propose_content(None) is None

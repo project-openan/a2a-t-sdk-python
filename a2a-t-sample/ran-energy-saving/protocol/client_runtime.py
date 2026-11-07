@@ -525,6 +525,10 @@ class ClientRuntime:
                     call_timeout_seconds=self.config.http_timeout_seconds,
                     conversation_context=conversation_context,
                     single_extension_per_message=(self.config.discovery == DISCOVERY_NMS),
+                    infer_missing_negotiation_kind=(
+                        self.config.discovery == DISCOVERY_NMS
+                        and self.config.nms_infer_negotiation_kind
+                    ),
                     tools_authoritative=(self.config.discovery != DISCOVERY_NMS),
                     validate_before_send=validate_before_send,
                     enforce_required_fields=enforce_required_fields,

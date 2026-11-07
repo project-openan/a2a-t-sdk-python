@@ -178,6 +178,9 @@ NMS_TOKEN_VALUE_ENV_KEY = "A2AT_SAMPLE_NMS_TOKEN_VALUE"
 NMS_VERIFY_TLS_ENV_KEY = "A2AT_SAMPLE_NMS_VERIFY_TLS"
 NMS_IDLE_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS"
 NMS_READ_AFTER_SEND_ENV_KEY = "A2AT_SAMPLE_NMS_READ_AFTER_SEND"
+#: Whether a real-NMS propose without ``templateUri`` is typed from its body heading. The vendor
+#: omits the field on the proposal that continues a negotiation; without this the run fails hard.
+NMS_INFER_NEGOTIATION_KIND_ENV_KEY = "A2AT_SAMPLE_NMS_INFER_NEGOTIATION_KIND"
 NMS_REQUEST_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_NMS_REQUEST_TIMEOUT_SECONDS"
 #: Region the vendor NMS serves. When set, ``--nms`` overrides the scenario region with it.
 NMS_REGION_ENV_KEY = "A2AT_SAMPLE_NMS_REGION"
@@ -548,6 +551,9 @@ class SampleConfig:
             and polls the task instead. Heartbeats do not reset this window.
         nms_read_after_send: whether a negotiation response keeps reading its stream for the next
             proposal (the vendor opens a new negotiation id on the same context id).
+        nms_infer_negotiation_kind: whether a real-NMS propose without ``templateUri`` is typed
+            from the opening heading of its body (the vendor omits the field on a continuation
+            proposal). A body without a known heading still fails.
         nms_request_timeout: per-request budget of one NMS A2A call.
         nms_poll_interval: seconds between task polls while waiting for a terminal state.
         nms_region: region the vendor NMS serves; when set, ``--nms`` overrides the scenario
@@ -639,6 +645,7 @@ class SampleConfig:
     nms_verify_tls: bool = False
     nms_idle_timeout: float = DEFAULT_NMS_IDLE_TIMEOUT_SECONDS
     nms_read_after_send: bool = True
+    nms_infer_negotiation_kind: bool = True
     nms_request_timeout: float = DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS
     nms_poll_interval: float = DEFAULT_NMS_POLL_INTERVAL_SECONDS
     nms_region: str = ""
@@ -885,6 +892,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         nms_verify_tls=_env_bool(values, NMS_VERIFY_TLS_ENV_KEY, False),
         nms_idle_timeout=_positive_seconds(values, NMS_IDLE_TIMEOUT_ENV_KEY, DEFAULT_NMS_IDLE_TIMEOUT_SECONDS),
         nms_read_after_send=_env_bool(values, NMS_READ_AFTER_SEND_ENV_KEY, True),
+        nms_infer_negotiation_kind=_env_bool(values, NMS_INFER_NEGOTIATION_KIND_ENV_KEY, True),
         nms_request_timeout=_positive_seconds(values, NMS_REQUEST_TIMEOUT_ENV_KEY, DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS),
         nms_region=_env_value(values, NMS_REGION_ENV_KEY, "").strip(),
         nms_sites=_nms_sites(values, ()),
