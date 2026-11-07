@@ -177,8 +177,10 @@ instrumentation scope，因此 `should_export_span` 只放行 `ran_energy_saving
 体现在 run snapshot 的 warning 上，不会让 run 失败。
 
 `A2AT_SAMPLE_TRACE_SPAN_LEVEL` 控制导出量，不影响 UI 时间线。`full` 导出全部 span；`phase`（默认）
-保留 `run_started`/`message_sent`、LLM/tool 调用、每个 phase 的一条代表和最终状态；`minimal`
-只保留 LLM/tool 调用和最终结果。精简级别导出扁平 observation（不再创建 phase/round 分组 span），
+保留 LLM/tool 调用、run 结果和 OSP 时间点载体（每跳/每轮 `message_sent`、`propose`、decision，
+Task-T rendered，Task created，业务意图，校验结论，审批对）；`minimal` 只保留 LLM/tool 调用和
+最终结果。NMS 原始报文为 `kind=transport`，只有 `full` 导出。精简级别导出扁平 observation
+（不再创建 phase/round 分组 span），
 phase 仍记录在 observation 元数据里。带显式 `traceId` 启动的 run 会用它作为 Langfuse trace id，
 因此重试落在同一条 trace；没有显式 id 时，导出器采用传入的 `traceparent` 或新开一条。
 
@@ -927,7 +929,7 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_SAMPLE_LANGFUSE_ENABLED` | 未设置 = 自动 | 即使有 key，`0` 也强制关闭；`1` 保持按 key 自动启用。 |
 | `A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT` | 默认 `1` | `0` 时只上报模型、token、状态和耗时元数据，不上报 prompt/response 文本。 |
 | `A2AT_SAMPLE_LANGFUSE_ENVIRONMENT` | 默认 `demo` | Langfuse environment 标签。 |
-| `A2AT_SAMPLE_TRACE_SPAN_LEVEL` | 默认 `phase` | Langfuse 导出粒度：`phase` = 关键事件 + 每 phase 一条 + 最终状态，`minimal` = LLM/tool + 结果，`full` = 全部 span。UI 时间线不受影响。 |
+| `A2AT_SAMPLE_TRACE_SPAN_LEVEL` | 默认 `phase` | Langfuse 导出粒度：`phase` = LLM/tool + OSP 时间点载体 + run 结果，`minimal` = LLM/tool + 结果，`full` = 全部 span（含 `transport`）。UI 时间线不受影响。 |
 | `A2AT_SAMPLE_TASK_DB` | 未设置 = 内存；`run_demo.py` 写入 `<sample>/runs/task-status.sqlite3` | 服务端持久化 A2A Task 存储的绝对 SQLite 路径，也由 `GET /api/tasks` 读取。 |
 | `A2AT_SAMPLE_OSS_TASK_DB` | 未设置 = 内存；`run_demo.py` 写入 `<sample>/runs/oss-task-status.sqlite3` | OSS Agent 的 Task 存储、下游绑定和客户端 webhook 注册的绝对 SQLite 路径。 |
 | `A2AT_SAMPLE_LONG_TASK_MODE` | `auto` | OSS 长任务跟踪（`auto` / `on` / `off`）。`auto` 在配置了 OSS Task 数据库时对真实网管 webhook 链路启用后台 pump。 |

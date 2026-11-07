@@ -12,6 +12,11 @@ from typing import Final, Literal
 #: Round budget of one pre-task negotiation (design D11).
 MAX_ROUNDS: Final[int] = 3
 
+#: A2A Task state that proves the Task was accepted (Create) or updated (Modify). It is the
+#: machine-readable task-success signal; business text such as "Task creation succeeded" is
+#: localized copy and must not be parsed.
+TASK_STATE_SUBMITTED: Final[str] = "TASK_STATE_SUBMITTED"
+
 #: Whether a client run creates a new A2A Task or continues a running one with a Modify Task-T.
 RUN_MODE_CREATE: Final[str] = "create"
 RUN_MODE_MODIFY: Final[str] = "modify"

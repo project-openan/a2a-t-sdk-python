@@ -346,9 +346,12 @@ A2A call uses the sender's current span id as the `parent-id` — on a server ho
 span created for the request, never the span that called it.
 
 `A2AT_SAMPLE_TRACE_SPAN_LEVEL` controls how much of the Run Explorer stream reaches Langfuse.
-`phase` (default) keeps `run_started`, `message_sent`, LLM/tool calls, one representative per phase
-and the final status, and drops the per-event status noise; `minimal` keeps only LLM/tool calls and
-the run result (about a third of the previous volume); `full` exports every span. The Web UI
+`phase` (default) keeps LLM/tool calls, the run result and the OSP time-point carriers — every
+`message_sent`/`propose`/decision round, Task-T rendered, Task created, the business intent, the
+validation verdict and the approval pair — and drops status noise, phase representatives and
+debug-only rows. NMS wire evidence uses `kind=transport` and only `full` exports it. `minimal`
+keeps only LLM/tool calls and the run result (about a third of the previous volume); `full`
+exports every span. The Web UI
 timeline always keeps every span, so diagnosis is unaffected. Retries that reuse the run `traceId`
 also reuse the Langfuse trace.
 

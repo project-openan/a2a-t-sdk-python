@@ -1091,11 +1091,16 @@ def _nms_span(
     title_key: str,
     detail: Mapping[str, object] | None = None,
 ) -> None:
-    """Emit one developer-evidence span of the raw NMS exchange."""
+    """Emit one developer-evidence span of the raw NMS exchange.
+
+    The kind is ``transport``, not ``tool``: these rows are wire evidence (token acquisition,
+    stream opens, every poll), not model tool calls. Only the ``full`` trace level exports them,
+    so a real-NMS long task does not add one ``tool`` observation per poll.
+    """
     payload = dict(detail or {})
     payload["titleKey"] = title_key
     record_span(
-        kind="tool",
+        kind="transport",
         phase=phase,
         title=title,
         prefix="nms",

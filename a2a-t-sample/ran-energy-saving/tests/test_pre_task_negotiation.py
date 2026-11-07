@@ -49,6 +49,7 @@ from protocol.messages import (
 from protocol.pre_task_negotiation import NegotiationOutcome, PreTaskNegotiationHandler
 from protocol.server_app import prepare_sdk_env_path
 from shared.config import SampleConfig
+from shared.trace import set_global_sink
 
 CONTEXT_ID = "ctx-negotiation"
 TASK_PROMPT = "Create a RAN energy saving task in Region A."
@@ -295,6 +296,29 @@ async def test_initial_task_with_a_missing_required_field_opens_information_nego
     proposal_text = server.propose_generations[0][0]
     assert isinstance(proposal_text, str)
     assert "guaranteedThroughputTarget" in proposal_text
+
+
+async def test_a_proposal_emits_the_server_negotiation_started_span() -> None:
+    """OSP `AT`: the server's own understanding start must be observable, not only the arrival."""
+    spans: list[dict[str, object]] = []
+    set_global_sink(spans.append)
+    try:
+        gate, server = _gate()
+        server.task_params = {
+            "operationType": "Create",
+            "region": "Region A",
+            "guaranteedThroughputTarget": None,
+        }
+
+        await gate.handle(_make_context(_initial_message()))
+    finally:
+        set_global_sink(None)
+
+    started = [span for span in spans if span.get("kind") == "negotiation_started"]
+    assert len(started) == 1
+    assert started[0]["round"] == 1
+    assert started[0]["detail"]["negotiationKind"] == "information"
+    assert started[0]["startedAt"] <= started[0]["endedAt"]
 
 
 _NON_OVERLAPPING_PROMPT = (

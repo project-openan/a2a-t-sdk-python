@@ -19,15 +19,23 @@ import threading
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, Final, Literal, Protocol
 
 from a2a_t.core.metadata import NegotiationContext
 from shared.config import DISCOVERY_REGISTRY
 from shared.models import NegotiationDecision, NegotiationProposeView
-from shared.run_constants import PROTOCOL_A2A_T, RUN_MODE_CREATE
+from shared.run_constants import (
+    PROTOCOL_A2A_T,
+    RUN_MODE_CREATE,
+    RUN_MODE_MODIFY,
+    TASK_STATE_SUBMITTED,
+)
 from shared.trace import (
     PHASE_DISPATCH,
     PHASE_DONE,
+    PHASE_EXECUTION,
+    PHASE_TASK_PROMPT,
     Span,
     TraceRecorder,
     infer_decision_phase,
@@ -211,6 +219,12 @@ class RunState:
     _producer_spans: dict[str, str] = field(default_factory=dict, repr=False)
     _nego_seq: int = field(default=0, repr=False)
     _user_turn_id: str | None = field(default=None, repr=False)
+    #: The first Task creation/modification success is recorded once per run (OSP `AN`).
+    _task_created_emitted: bool = field(default=False, repr=False)
+    #: The business intent is promoted to its own span once per run (A2A-T or pure hop).
+    _intent_span_emitted: bool = field(default=False, repr=False)
+    #: Wall-clock and monotonic time the engineer answered a negotiation (OSP `AQ`).
+    _decision_answered_at: tuple[str, float] | None = field(default=None, repr=False)
     _persist_tasks: set[asyncio.Task[object]] = field(default_factory=set, repr=False)
     _recorder: TraceRecorder = field(init=False, repr=False)
     #: Guards the span/sequence stores: an in-process server may ingest spans from another thread.
@@ -273,6 +287,14 @@ class RunState:
             return False
         future.set_result(approved)
         return True
+
+    def mark_decision_answered(self) -> None:
+        """Record the engineer's answer time before the decision is structured and grounded.
+
+        The decision span is written after the manual structurer and the grounding pass, so its
+        own timestamp is later than the click. OSP's negotiation latency uses the answer moment.
+        """
+        self._decision_answered_at = (_now_iso(), time.perf_counter())
 
     def next_seq(self) -> int:
         """Allocate the next global ``seq`` without consuming a phase step."""
@@ -427,6 +449,7 @@ class RunState:
             if existing_span_id is not None:
                 return self.spans.get(existing_span_id, {})
         if candidate.kind == "intent_processed" and isinstance(candidate.detail, Mapping):
+            self._intent_span_emitted = True
             self.record_intent(candidate.detail)
         phase = candidate.phase
         seq, step = self.allocate(phase)
@@ -501,8 +524,9 @@ class RunState:
         seq, step = self.allocate(phase)
         detail = _pure_detail(event)
         self._note_downstream(detail)
-        if isinstance(detail, Mapping) and isinstance(detail.get("intentProcessed"), Mapping):
-            self.record_intent(detail["intentProcessed"])
+        intent_payload = detail.get("intentProcessed") if isinstance(detail, Mapping) else None
+        if isinstance(intent_payload, Mapping):
+            self.record_intent(intent_payload)
         entry = self.transcript.record_event(
             event,
             phase=phase,
@@ -529,11 +553,69 @@ class RunState:
         entry["spanId"] = span.span_id
         self._store_span(span, seq=seq, record=False, broadcast_frame=False)
         self.broadcast({"type": "event", "event": entry}, seq=seq)
+        if isinstance(intent_payload, Mapping):
+            self._promote_intent_span(intent_payload)
+        self._maybe_emit_task_created(event)
         task_id = _string_value(event.get("task_id"))
         if task_id is not None:
             self.remote_task_id = task_id
         self._persist_task_snapshot(event)
         return entry
+
+    def _promote_intent_span(self, intent: Mapping[str, object]) -> None:
+        """Give the pure-A2A business intent its own span.
+
+        The OSS Agent attaches the structured intent to a WORKING status row, and the reduced
+        Langfuse export drops status rows. Promoting it keeps one stable ``Intent processed``
+        observation for both protocols (A2A-T already emits it in the client runtime).
+        """
+        if self._intent_span_emitted:
+            return
+        payload = dict(intent)
+        self.emit_trace(
+            kind="intent_processed",
+            phase=PHASE_TASK_PROMPT,
+            title="Intent processed",
+            actor="server",
+            side="server",
+            detail={
+                "mode": "oss",
+                "source": payload.get("source") or "oss",
+                "rawRequest": payload.get("rawRequest"),
+                "normalizedText": payload.get("normalizedText"),
+                "intent": payload,
+                "missingFields": payload.get("missingFields"),
+                "conflicts": payload.get("conflicts"),
+                "warnings": payload.get("warnings"),
+            },
+        )
+        self._intent_span_emitted = True
+
+    def _maybe_emit_task_created(self, event: Mapping[str, object]) -> None:
+        """Record the first Task creation/modification success (OSP ``AN``).
+
+        ``TASK_STATE_SUBMITTED`` is the A2A-defined success signal and works for Create and
+        Modify alike; the business text is locale-dependent.
+        """
+        if self._task_created_emitted:
+            return
+        if _string_value(event.get("kind")) != "status":
+            return
+        if _string_value(event.get("state")) != TASK_STATE_SUBMITTED:
+            return
+        operation = self.run_mode if self.run_mode == RUN_MODE_MODIFY else RUN_MODE_CREATE
+        self.emit_trace(
+            kind="task_created",
+            phase=PHASE_EXECUTION,
+            title="Task modified" if operation == RUN_MODE_MODIFY else "Task created",
+            actor="server",
+            side="server",
+            direction="server->client",
+            context_id=_string_value(event.get("context_id")),
+            task_id=_string_value(event.get("task_id")),
+            detail={"operation": operation, "state": TASK_STATE_SUBMITTED, "source": "a2a-status"},
+        )
+        self._task_created_emitted = True
 
     def record_intent(self, detail: Mapping[str, object]) -> None:
         """Capture the business intent carried by one ``intent_processed`` trace row."""
@@ -612,6 +694,12 @@ class RunState:
             phase_step=step,
             seq=seq,
         )
+        # OSP `AQ`: use the engineer's answer time as the span start (the span is written after
+        # the manual structurer and the grounding pass). Automatic decisions keep the default.
+        answered = self._decision_answered_at
+        self._decision_answered_at = None
+        started_at = answered[0] if answered is not None else None
+        duration_ms = round((time.perf_counter() - answered[1]) * 1000, 3) if answered is not None else None
         span = self._recorder.emit(
             seq=seq,
             phase_step=step,
@@ -624,6 +712,8 @@ class RunState:
             status="ok",
             round=session.round if session is not None else (propose.round if propose is not None else None),
             context_id=propose.context_id if propose is not None else None,
+            started_at=started_at,
+            duration_ms=duration_ms,
             detail={
                 "action": decision.action,
                 "rationale": decision.rationale,
@@ -813,6 +903,11 @@ class RunState:
             "source": dict(self.source),
             "transcript": transcript,
         }
+
+
+def _now_iso() -> str:
+    """Return the current UTC time in ISO 8601 form."""
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _pure_detail(event: Mapping[str, object]) -> dict[str, object] | None:

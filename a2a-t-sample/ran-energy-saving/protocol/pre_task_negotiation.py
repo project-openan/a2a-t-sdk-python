@@ -25,6 +25,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Final, Protocol, TypeVar
 
@@ -41,8 +42,16 @@ from a2a_t.core.metadata import (
 from a2a_t.core.validation_pipeline import FilledParamData
 from shared.logging_setup import log_context
 from shared.run_constants import MAX_ROUNDS
+from shared.run_source import now_iso
 from shared.task_schema import TASK_PARAM_SCHEMA
-from shared.trace import trace_stage
+from shared.trace import (
+    PHASE_NEGOTIATION,
+    Span,
+    current_trace,
+    emit_span,
+    producer_span_id,
+    trace_stage,
+)
 
 from protocol.messages import (
     ABORT_MESSAGE_TEXT,
@@ -84,6 +93,13 @@ from protocol.negotiation_policy import (
 NEGOTIATION_PARAM_SCHEMA: Final[dict[str, object]] = {"type": "object", "properties": {}}
 
 _LOGGER = logging.getLogger("ran_energy_saving.pre_task_negotiation")
+
+#: When the current request started being understood (OSP ``AT``). Set per request in
+#: :meth:`PreTaskNegotiationHandler.handle`; a proposal span uses it as its start so the server's
+#: own thinking time is included in the negotiation latency.
+_NEGOTIATION_STARTED_AT: ContextVar[str | None] = ContextVar(
+    "a2at_pre_task_negotiation_started_at", default=None
+)
 
 _ResultT = TypeVar("_ResultT")
 
@@ -299,23 +315,27 @@ class PreTaskNegotiationHandler:
         Returns:
             Either a short-circuit message (no Task) or the request to hand to the deterministic executor.
         """
-        with log_context(
-            task_id=context.task_id,
-            context_id=context.context_id,
-            role="server",
-        ):
-            if context.current_task is not None:
-                return await self._handle_follow_up(context)
+        started = _NEGOTIATION_STARTED_AT.set(now_iso())
+        try:
+            with log_context(
+                task_id=context.task_id,
+                context_id=context.context_id,
+                role="server",
+            ):
+                if context.current_task is not None:
+                    return await self._handle_follow_up(context)
 
-            message = context.message
-            if message is None:
-                return NegotiationOutcome.short(
-                    build_error_message(context.context_id, "The request carries no A2A message.")
-                )
-            metadata = metadata_to_dict(message.metadata)
-            if is_negotiation_message(metadata):
-                return await self._handle_negotiation(context, metadata)
-            return await self._handle_initial_task(context, metadata)
+                message = context.message
+                if message is None:
+                    return NegotiationOutcome.short(
+                        build_error_message(context.context_id, "The request carries no A2A message.")
+                    )
+                metadata = metadata_to_dict(message.metadata)
+                if is_negotiation_message(metadata):
+                    return await self._handle_negotiation(context, metadata)
+                return await self._handle_initial_task(context, metadata)
+        finally:
+            _NEGOTIATION_STARTED_AT.reset(started)
 
     # ------------------------------------------------------------------
     # Initial Task-T
@@ -687,6 +707,37 @@ class PreTaskNegotiationHandler:
             history=[message] if message is not None else [],
         )
 
+    def _emit_negotiation_started(self, context_id: str | None, content: ProposalContent) -> None:
+        """Record the server-side moment the model starts negotiating (OSP ``AT``).
+
+        The client can only see the proposal arrive; without this span the negotiation latency
+        would miss the server's own understanding time. It is a no-op when no sink is attached.
+        """
+        trace = current_trace()
+        emit_span(
+            Span(
+                run_id=trace.run_id or "",
+                span_id=producer_span_id("negsrv"),
+                context_id=context_id or trace.context_id,
+                task_id=trace.task_id,
+                phase=PHASE_NEGOTIATION,
+                actor="server",
+                side="server",
+                kind="negotiation_started",
+                round=content.round,
+                title="Negotiation started",
+                purpose="The server understood the request and decided to negotiate.",
+                started_at=_NEGOTIATION_STARTED_AT.get() or now_iso(),
+                ended_at=now_iso(),
+                detail={
+                    "negotiationKind": content.kind.value,
+                    "round": content.round,
+                    "templateUri": content.template_uri,
+                    "source": "server",
+                },
+            )
+        )
+
     async def _emit_policy_decision(self, context_id: str | None, decision: PolicyDecision) -> NegotiationOutcome:
         """Turn one policy decision into a standalone negotiation message or an execution request."""
         content = decision.content
@@ -699,6 +750,7 @@ class PreTaskNegotiationHandler:
                 max_rounds=self._max_rounds,
                 performative=NegotiationPerformative.PROPOSE,
             )
+            self._emit_negotiation_started(context_id, content)
             try:
                 generated = await self._call(
                     self._prompt_server.generate_negotiation_propose_prompt_from_text,

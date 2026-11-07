@@ -659,6 +659,13 @@ class RunManager:
                 intent_mode=run.intent_mode,
                 model_mode=self._config.model_mode,
                 model_label=self._config.model_label,
+                run_mode=run.run_mode,
+                source_kind=str(resolved_source.get("kind") or ""),
+                case_id=str(resolved_source.get("caseId") or ""),
+                case_name=str(resolved_source.get("caseName") or ""),
+                batch_id=str(resolved_source.get("batchId") or ""),
+                received_at=str(resolved_source.get("receivedAt") or ""),
+                user_request=raw_request or spec.user_request,
             ),
             # Give the run its own trace id as the Langfuse trace id: a UI-started run is then
             # findable by run id, and a retry that reuses the id shares one trace. The run trace id

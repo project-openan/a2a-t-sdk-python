@@ -6,6 +6,7 @@ from pathlib import Path
 
 from protocol.client_service.run_state import RunState
 from protocol.transcript import NegotiationTranscript
+from shared.models import NegotiationDecision
 
 
 def _run(tmp_path: Path) -> RunState:
@@ -77,3 +78,96 @@ def test_events_without_a_downstream_identity_leave_the_fields_unset(tmp_path: P
     snapshot = run.snapshot()
     assert snapshot["downstreamTaskId"] is None
     assert snapshot["downstreamContextId"] is None
+
+
+def _submitted_event() -> dict[str, object]:
+    """The A2A status that proves the Task was accepted (OSP `AN`)."""
+    return {
+        "kind": "status",
+        "state": "TASK_STATE_SUBMITTED",
+        "task_id": "task-1",
+        "context_id": "ctx-1",
+    }
+
+
+def test_first_submitted_status_emits_one_task_created_span(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+
+    run.record_event(_submitted_event())
+    run.record_event(_submitted_event())
+
+    created = [span for span in run.traces if span.get("kind") == "task_created"]
+    assert len(created) == 1
+    assert created[0]["title"] == "Task created"
+    assert created[0]["taskId"] == "task-1"
+    assert created[0]["detail"]["operation"] == "create"
+
+
+def test_a_modify_run_marks_the_task_modified(tmp_path: Path) -> None:
+    run = RunState(
+        run_id="run-modify",
+        scenario="night",
+        mode="auto",
+        transport="webhook",
+        run_mode="modify",
+        target_task_id="task-0",
+        target_context_id="ctx-0",
+    )
+    run.transcript = NegotiationTranscript(
+        scenario="night",
+        language="en-US",
+        model_mode="offline",
+        mode="auto",
+        transport="webhook",
+        runs_dir=tmp_path,
+    )
+
+    run.record_event(_submitted_event())
+
+    created = [span for span in run.traces if span.get("kind") == "task_created"]
+    assert len(created) == 1
+    assert created[0]["title"] == "Task modified"
+    assert created[0]["detail"]["operation"] == "modify"
+
+
+def test_pure_intent_is_promoted_to_one_intent_span(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+
+    for _ in range(2):
+        run.record_event(
+            {
+                "kind": "status",
+                "state": "TASK_STATE_WORKING",
+                "task_id": "task-1",
+                "context_id": "ctx-1",
+                "metadata": {
+                    "pure": {"hop": "oss", "phase": "intent"},
+                    "intentProcessed": {"rawRequest": "save energy", "normalizedText": "save energy now"},
+                },
+            }
+        )
+
+    promoted = [span for span in run.traces if span.get("kind") == "intent_processed"]
+    assert len(promoted) == 1
+    assert promoted[0]["detail"]["rawRequest"] == "save energy"
+
+
+def test_the_decision_span_starts_at_the_engineer_answer(tmp_path: Path) -> None:
+    run = RunState(run_id="run-manual", scenario="night", mode="manual", transport="sse")
+    run.transcript = NegotiationTranscript(
+        scenario="night",
+        language="en-US",
+        model_mode="live",
+        mode="manual",
+        transport="sse",
+        runs_dir=tmp_path,
+    )
+
+    run.mark_decision_answered()
+    answered_at = run._decision_answered_at[0]
+    run.record_decision(NegotiationDecision(action="accept", rationale="ok"), None)
+
+    decision = next(span for span in run.traces if span.get("kind") == "accept")
+    assert decision["startedAt"] == answered_at
+    assert decision["durationMs"] >= 0
+    assert run._decision_answered_at is None

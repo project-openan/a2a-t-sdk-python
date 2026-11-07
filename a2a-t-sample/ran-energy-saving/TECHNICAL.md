@@ -182,9 +182,11 @@ local demo's batched server trace) are still exported, and the Langfuse atexit h
 Every failure is a warning on the run snapshot, never a run failure.
 
 `A2AT_SAMPLE_TRACE_SPAN_LEVEL` controls export volume without changing the UI timeline. `full`
-exports every recorded span; `phase` (default) keeps `run_started`/`message_sent`, LLM/tool calls,
-one representative per phase and the final status; `minimal` keeps only LLM/tool calls and the run
-result. The reduced levels export flat observations (no phase/round grouping spans) and
+exports every recorded span; `phase` (default) keeps LLM/tool calls, the run result and the OSP
+time-point carriers (every hop/round `message_sent`, `propose` and decision, Task-T rendered, Task
+created, the business intent, the validation verdict, the approval pair); `minimal` keeps only
+LLM/tool calls and the run result. NMS wire evidence is `kind=transport` and is exported only by
+`full`. The reduced levels export flat observations (no phase/round grouping spans) and
 still record the phase in the observation metadata. A run started with an explicit `traceId` uses
 that id as the Langfuse trace id, so a retry stays in the same trace; without one, the exporter
 adopts an incoming `traceparent` or opens a new trace.
@@ -1166,7 +1168,7 @@ script can switch the model with a plain `export ADK_MODEL_NAME=...`.
 | `A2AT_SAMPLE_LANGFUSE_ENABLED` | unset = auto | `0` forces the export off even with keys; `1` keeps the key-based enable. |
 | `A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT` | default `1` | `0` sends only model, token, status and timing metadata (no prompt/response text). |
 | `A2AT_SAMPLE_LANGFUSE_ENVIRONMENT` | default `demo` | Langfuse environment label. |
-| `A2AT_SAMPLE_TRACE_SPAN_LEVEL` | default `phase` | Langfuse export detail: `phase` = key events + one per phase + final status, `minimal` = LLM/tool + result, `full` = every span. The UI timeline is unaffected. |
+| `A2AT_SAMPLE_TRACE_SPAN_LEVEL` | default `phase` | Langfuse export detail: `phase` = LLM/tool + OSP time-point carriers + run result, `minimal` = LLM/tool + result, `full` = every span (including `transport`). The UI timeline is unaffected. |
 | `A2AT_SAMPLE_TASK_DB` | unset = in-memory; `run_demo.py` writes `<sample>/runs/task-status.sqlite3` | Absolute SQLite path of the server's persisted A2A Task store, also read by `GET /api/tasks`. |
 | `A2AT_SAMPLE_OSS_TASK_DB` | unset = in-memory; `run_demo.py` writes `<sample>/runs/oss-task-status.sqlite3` | Absolute SQLite path of the OSS Agent Task store, its downstream bindings and the client webhook registrations. |
 | `A2AT_SAMPLE_LONG_TASK_MODE` | `auto` | OSS long-task tracking (`auto` / `on` / `off`). `auto` enables the background pump for the real NMS webhook hop when the OSS Task database is configured. |

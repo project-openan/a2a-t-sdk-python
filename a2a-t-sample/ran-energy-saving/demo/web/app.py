@@ -1081,6 +1081,8 @@ def create_app(
                 status_code=409,
             )
         run.pending_decision = False
+        # OSP `AQ`: the answer moment is here, not when the grounded decision is recorded later.
+        run.mark_decision_answered()
         provider.submit(decision)
         return JSONResponse({"accepted": True, "runId": run.run_id})
 

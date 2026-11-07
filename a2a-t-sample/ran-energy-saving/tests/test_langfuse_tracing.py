@@ -310,6 +310,18 @@ def test_flush_failure_is_reported(offline_config: SampleConfig) -> None:
         ),
         ({"prompt": 11, "cached": None, "completion": 2}, {"input": 11, "output": 2}),
         ({"prompt": None, "completion": None, "total": 3}, {"total": 3}),
+        # LangGraph planner shape: without normalization Langfuse would keep only ``total``.
+        (
+            {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14},
+            {"input": 10, "output": 4, "total": 14},
+        ),
+        # DeepSeek native cache counter.
+        ({"prompt": 10, "prompt_cache_hit_tokens": 6, "completion": 2}, {"input": 10, "input_cached": 6, "output": 2}),
+        # LangChain nested cache counter.
+        (
+            {"input_tokens": 10, "input_token_details": {"cache_read": 7}, "output_tokens": 1},
+            {"input": 10, "input_cached": 7, "output": 1},
+        ),
         ({"estimated": True, "label": "n/a (scripted)"}, None),
     ],
 )
@@ -416,17 +428,68 @@ def test_full_span_level_keeps_every_observation(offline_config: SampleConfig) -
     assert "phase · execution" in names
 
 
-def test_phase_span_level_drops_status_noise(offline_config: SampleConfig) -> None:
+def test_phase_span_level_keeps_only_the_osp_carriers(offline_config: SampleConfig) -> None:
     names = _exported_names(offline_config, "phase")
 
-    assert "Run started" in names
     assert "Pure A2A message sent" in names
     assert "NMS token" in names
     assert "Run finished" in names
-    assert "COMPLETED" in names
+    assert "Run started" not in names
+    assert "COMPLETED" not in names
     assert "Client runtime ready" not in names
     assert "WORKING" not in names
     assert not any(name.startswith("phase ·") for name in names)
+
+
+def test_phase_level_keeps_every_round_and_hides_transport(offline_config: SampleConfig) -> None:
+    exporter, runtime = _exporter(offline_config, span_level="phase")
+    for round_number in (1, 2):
+        exporter(
+            {
+                "kind": "propose",
+                "phase": "negotiation",
+                "title": "## Information Negotiation Please supplement ...",
+                "round": round_number,
+                "detail": {"negotiationType": "information"},
+            }
+        )
+        exporter({"kind": "counter", "phase": "negotiation", "title": "counter", "round": round_number})
+        exporter(
+            {
+                "kind": "message_sent",
+                "phase": "negotiation",
+                "title": f"Counter proposal sent · R{round_number}",
+                "round": round_number,
+            }
+        )
+    exporter({"kind": "transport", "phase": "execution", "title": "NMS task polled"})
+    exporter({"kind": "approval", "phase": "execution", "title": "Approval requested"})
+    exporter.finish()
+
+    names = [span.name for span in runtime.spans.get_finished_spans()]
+    assert "Propose · information · R1" in names
+    assert "Propose · information · R2" in names
+    assert "Decision · counter · R1" in names
+    assert "Decision · counter · R2" in names
+    assert "Approval requested" in names
+    assert "NMS task polled" not in names
+
+
+def test_phase_level_backfills_the_last_status_without_a_terminal_state(
+    offline_config: SampleConfig,
+) -> None:
+    exporter, runtime = _exporter(offline_config, span_level="phase")
+    exporter(
+        {
+            "kind": "status",
+            "phase": "execution",
+            "title": "WORKING",
+            "detail": {"event": {"state": "TASK_STATE_WORKING"}},
+        }
+    )
+    exporter.finish()
+
+    assert "WORKING" in [span.name for span in runtime.spans.get_finished_spans()]
 
 
 def test_minimal_span_level_keeps_only_llm_tool_and_result(offline_config: SampleConfig) -> None:
@@ -436,6 +499,41 @@ def test_minimal_span_level_keeps_only_llm_tool_and_result(offline_config: Sampl
     assert "Run finished" in names
     assert "Run started" not in names
     assert "COMPLETED" not in names
+
+
+def test_trace_metadata_carries_the_osp_case_and_the_round_count(
+    offline_config: SampleConfig,
+) -> None:
+    runtime = _Runtime()
+    config = replace(
+        offline_config,
+        model_mode=MODEL_MODE_LIVE,
+        langfuse_public_key="pk",
+        langfuse_secret_key="sk",
+        trace_span_level="phase",
+    )
+    exporter = LangfuseSpanExporter(
+        runtime=runtime,
+        config=config,
+        metadata=replace(
+            _metadata(),
+            source_kind="tester",
+            case_id="32",
+            case_name="10Mbps",
+            batch_id="batch-1",
+            received_at="2026-11-07T00:00:00.000Z",
+            user_request="reduce the throughput target",
+        ),
+    )
+    exporter({"kind": "propose", "phase": "negotiation", "title": "x", "round": 2, "detail": {}})
+    exporter.finish()
+
+    root = next(span for span in runtime.spans.get_finished_spans() if span.name.startswith("run ·"))
+    assert root.attributes["langfuse.trace.metadata.caseId"] == "32"
+    assert root.attributes["langfuse.trace.metadata.sourceKind"] == "tester"
+    assert root.attributes["langfuse.trace.metadata.receivedAt"] == "2026-11-07T00:00:00.000Z"
+    assert root.attributes["langfuse.trace.metadata.rounds"] == "2"
+    assert root.attributes["langfuse.trace.metadata.negotiated"] == "true"
 
 
 def test_exporter_uses_the_explicit_run_trace_id(offline_config: SampleConfig) -> None:

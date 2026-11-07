@@ -72,6 +72,7 @@ from shared.run_constants import (
     RUN_MODE_CREATE,
     RUN_MODE_MODIFY,
 )
+from shared.run_source import now_iso
 from shared.sse_event_consumer import normalize_event
 from shared.task_schema import TASK_PARAM_SCHEMA
 from shared.trace import (
@@ -82,6 +83,7 @@ from shared.trace import (
     PHASE_TASK_VALIDATION,
     TraceRecorder,
     current_trace,
+    elapsed_ms,
     infer_decision_phase,
     is_report_artifact,
     trace_stage,
@@ -881,6 +883,9 @@ async def run_client_flow(
         round_number: int | None = None,
         context_id: str | None = None,
         detail: Mapping[str, object] | None = None,
+        started_at: str | None = None,
+        ended_at: str | None = None,
+        duration_ms: float | None = None,
     ) -> None:
         """Build one synthetic span and forward it to the optional trace sink."""
         if trace_sink is None:
@@ -895,6 +900,9 @@ async def run_client_flow(
             round=round_number,
             context_id=context_id,
             detail=detail,
+            started_at=started_at,
+            ended_at=ended_at,
+            duration_ms=duration_ms,
         )
         trace_sink(span.to_dict())
 
@@ -1001,6 +1009,10 @@ async def run_client_flow(
     resolved_label = TASK_MODIFY_LABEL if modify_only else label
     initial_phase = PHASE_TASK_MODIFY if modify_only else PHASE_TASK_PROMPT
     validation_schema: Mapping[str, object] = TASK_PARAM_SCHEMA
+    # OSP `AL`: the moment OSS calls the A2A-T SDK. The span is written after the Task-T exists,
+    # so the SDK call's own start/end is carried on it (the LLM spans inside are separate).
+    sdk_started = time.perf_counter()
+    sdk_started_at = now_iso()
     try:
         with trace_stage("task_t_modify_extraction" if modify_only else "task_t_slot_extraction"):
             # Every run, Create and Modify alike, extracts its Task-T from the operator's text.
@@ -1025,6 +1037,9 @@ async def run_client_flow(
         "task_prompt_rendered",
         phase=initial_phase,
         title="Modify Task-T prompt rendered" if modify_only else "Task-T prompt rendered",
+        started_at=sdk_started_at,
+        ended_at=now_iso(),
+        duration_ms=elapsed_ms(sdk_started),
         detail={
             "promptText": prompt_text,
             "templateUri": prompt_content.template_uri or task_template_uri,

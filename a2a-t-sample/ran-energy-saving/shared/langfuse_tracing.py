@@ -80,6 +80,31 @@ _PAYLOAD_KINDS: Final[frozenset[str]] = frozenset({"llm", "tool"})
 #: Decision span kinds recorded by ``RunState.record_decision``.
 _DECISION_KINDS: Final[frozenset[str]] = frozenset({"accept", "counter", "reject", "abort"})
 
+#: Kinds exported by every level: the model/tool work (token and latency metrics) and the run end.
+_ALWAYS_EXPORT_KINDS: Final[frozenset[str]] = frozenset({"llm", "tool", "finished"})
+
+#: Kinds exported at ``phase`` (and above) on every occurrence -- one per hop/round. They are the
+#: OSP time-point carriers (AL/AM/AS, AO/AP, AQ, AN, AT) plus the business intent, the Task-T
+#: validation verdict and the approval wait.
+_PHASE_EXPORT_KINDS: Final[frozenset[str]] = (
+    frozenset(
+        {
+            "message_sent",
+            "propose",
+            "negotiation_started",
+            "task_created",
+            "intent_processed",
+            "task_prompt_rendered",
+            "task_validation",
+            "approval",
+        }
+    )
+    | _DECISION_KINDS
+)
+
+#: Everything else (``transport``, ``run_started``, artifacts, execution, plain status rows, ...)
+#: is full-level evidence: it duplicates the rows above or is too granular for the dashboard.
+
 #: Fields copied into the structural observation metadata.
 _STRUCTURAL_FIELDS: Final[tuple[str, ...]] = (
     "kind",
@@ -134,6 +159,16 @@ class LangfuseRunMetadata:
     intent_mode: str = ""
     model_mode: str = ""
     model_label: str = ""
+    run_mode: str = ""
+    source_kind: str = ""
+    #: OSP tester identity, when the run was started by the tester console.
+    case_id: str = ""
+    case_name: str = ""
+    batch_id: str = ""
+    #: When the inbound adapter received the request (before the run existed).
+    received_at: str = ""
+    #: The operator's original text (the OSP "user input").
+    user_request: str = ""
 
 
 @dataclass
@@ -296,9 +331,9 @@ class LangfuseSpanExporter:
         self._span_map: dict[str, Any] = {}
         self._trace_url: str | None = None
         self._span_level = (config.trace_span_level or TRACE_SPAN_LEVEL_FULL).strip().lower()
-        self._phase_seen: set[str] = set()
         self._last_status_span: Mapping[str, object] | None = None
-        self._last_status_exported = False
+        self._saw_terminal_status = False
+        self._max_round = 0
         started = _now_ns()
         self._root = runtime.tracer.start_span(
             _run_span_name(metadata),
@@ -345,48 +380,51 @@ class LangfuseSpanExporter:
             return
         try:
             with self._lock:
+                self._observe(span)
                 if self._should_export(span):
                     self._export(span)
         except Exception as exc:  # noqa: BLE001 - observability must never break the run
             self._warning = f"{type(exc).__name__}: {exc}"
             _LOGGER.warning("Langfuse span export failed: %s", exc)
 
+    def _observe(self, span: Mapping[str, object]) -> None:
+        """Track run-wide facts from every span, even the ones the level does not export."""
+        if _as_str(span.get("kind")) == "status" and _status_state(span) in _TERMINAL_STATUS_STATES:
+            self._saw_terminal_status = True
+        round_number = span.get("round")
+        if isinstance(round_number, int) and not isinstance(round_number, bool):
+            self._max_round = max(self._max_round, round_number)
+
     def _should_export(self, span: Mapping[str, object]) -> bool:
         """Return whether one recorded span becomes a Langfuse observation.
 
-        The Web UI timeline always keeps every span; this filter only controls the dashboard.
-        ``phase`` drops the per-event status noise and keeps one representative per phase,
-        ``minimal`` keeps only the LLM/tool calls and the run result.
+        The Web UI timeline always keeps every span; this filter only controls the dashboard. The
+        reduced levels are an explicit allow-list instead of "first span of every phase": a phase
+        representative was arbitrary (an artifact row could win over the decision it belongs to)
+        and it hid rounds 2+ proposals and counter decisions.
+
+        * ``full`` exports everything, including the NMS ``transport`` evidence rows;
+        * ``phase`` (default) keeps the model/tool work, the run end and the OSP time-point
+          carriers: every hop/round ``message_sent``, ``propose`` and decision, plus
+          ``task_created`` / ``intent_processed`` / ``task_validation`` / ``approval``;
+        * ``minimal`` keeps only the model/tool work and the run result.
+
+        Non-terminal status rows never export; the last status is written at :meth:`finish` only
+        when the run never reached a terminal state (interrupted/recovered).
         """
         if self._span_level == TRACE_SPAN_LEVEL_FULL:
             return True
         kind = _as_str(span.get("kind"))
-        phase = _as_str(span.get("phase")) or "dispatch"
-        if kind in ("llm", "tool"):
-            self._phase_seen.add(phase)
-            return True
-        if kind == "finished":
+        if kind == "status":
+            self._last_status_span = span
+            return False
+        if kind in _ALWAYS_EXPORT_KINDS:
             return True
         if self._span_level == TRACE_SPAN_LEVEL_MINIMAL:
             return False
-        if kind == "status":
-            state = _status_state(span)
-            if state in _TERMINAL_STATUS_STATES:
-                self._last_status_span = span
-                self._last_status_exported = True
-                self._phase_seen.add(phase)
-                return True
-            self._last_status_span = span
-            self._last_status_exported = False
-            return False
-        if kind in ("run_started", "message_sent"):
-            self._phase_seen.add(phase)
+        if kind in _PHASE_EXPORT_KINDS:
             return True
-        if phase in self._phase_seen:
-            return False
-        # First non-status span of a phase: it represents the phase in the reduced view.
-        self._phase_seen.add(phase)
-        return True
+        return False
 
     def finish(self, *, result: Any | None = None, error: str | None = None) -> None:
         """Close every open phase/round span, write the run result and flush the client."""
@@ -396,10 +434,11 @@ class LangfuseSpanExporter:
             if (
                 self._span_level != TRACE_SPAN_LEVEL_FULL
                 and self._last_status_span is not None
-                and not self._last_status_exported
+                and not self._saw_terminal_status
             ):
                 # A reduced export keeps one status: the last one observed, even when the run
-                # never reached a terminal state (incomplete / interrupted).
+                # never reached a terminal state (incomplete / interrupted). A terminal run is
+                # represented by its ``finished`` span instead.
                 try:
                     self._export(self._last_status_span)
                 except Exception as exc:  # noqa: BLE001 - observability must never break the run
@@ -414,6 +453,13 @@ class LangfuseSpanExporter:
             payload = _final_payload(result, error)
             if payload:
                 self._root.set_attribute(OBSERVATION_OUTPUT_ATTRIBUTE, _json_value(payload))
+            if self._span_level != TRACE_SPAN_LEVEL_FULL:
+                # The OSP export columns AW/BB: the trace states its own round count.
+                self._root.set_attribute(f"{TRACE_METADATA_PREFIX}rounds", _json_value(self._max_round))
+                self._root.set_attribute(
+                    f"{TRACE_METADATA_PREFIX}negotiated",
+                    _json_value(self._max_round > 0),
+                )
             if error:
                 self._root.set_attribute(OBSERVATION_LEVEL_ATTRIBUTE, "ERROR")
                 self._root.set_attribute(OBSERVATION_STATUS_MESSAGE_ATTRIBUTE, error[:2048])
@@ -557,6 +603,14 @@ def _root_attributes(metadata: LangfuseRunMetadata) -> dict[str, Any]:
         "intentMode": metadata.intent_mode,
         "modelMode": metadata.model_mode,
         "modelLabel": metadata.model_label,
+        "runMode": metadata.run_mode,
+        "sourceKind": metadata.source_kind,
+        # OSP tester identity: scenario alone is not enough to group the 51 evaluation cases.
+        "caseId": metadata.case_id,
+        "caseName": metadata.case_name,
+        "batchId": metadata.batch_id,
+        "receivedAt": metadata.received_at,
+        "userRequest": metadata.user_request[:4096],
     }
     for key, value in trace_metadata.items():
         if value:
@@ -565,12 +619,34 @@ def _root_attributes(metadata: LangfuseRunMetadata) -> dict[str, Any]:
 
 
 def _observation_name(span: Mapping[str, object]) -> str:
-    """Return the observation name of one span (its timeline title when present)."""
+    """Return the observation name of one span.
+
+    A proposal's timeline title is the whole negotiation body, which makes a poor observation
+    name and cannot be grouped in Langfuse. Negotiation rows therefore use a stable
+    ``Propose · {kind} · R{n}`` / ``Decision · {action} · R{n}`` name; the body stays in
+    input/output.
+    """
+    kind = _as_str(span.get("kind"))
+    round_label = _round_label(span)
+    if kind in _DECISION_KINDS:
+        return f"Decision · {kind}{round_label}"
+    if kind in ("propose", "negotiation_started"):
+        detail = span.get("detail")
+        negotiation_type = _as_str(detail.get("negotiationType")) if isinstance(detail, Mapping) else ""
+        label = "Negotiation started" if kind == "negotiation_started" else "Propose"
+        return f"{label} · {negotiation_type or 'negotiation'}{round_label}"
     title = _as_str(span.get("title"))
     if title:
         return title
-    kind = _as_str(span.get("kind"))
     return kind or "event"
+
+
+def _round_label(span: Mapping[str, object]) -> str:
+    """Return the `` · R{round}`` suffix of one observation name, empty without a round."""
+    round_number = span.get("round")
+    if isinstance(round_number, int) and not isinstance(round_number, bool):
+        return f" · R{round_number}"
+    return ""
 
 
 def _status_state(span: Mapping[str, object]) -> str:
@@ -663,20 +739,55 @@ def _observation_metadata(
 
 
 def _usage_details(tokens: object) -> dict[str, int] | None:
-    """Map the sample token map to Langfuse usage details."""
+    """Map one producer token map to Langfuse usage details.
+
+    Three shapes reach the exporter: the sample's normalized ``prompt/completion/cached`` keys
+    (ADK and A2A-T SDK spans) and LangChain's ``input_tokens/output_tokens/total_tokens`` (the
+    LangGraph planner). Without normalizing the latter, Langfuse drops the planner's input/output
+    tokens -- which is most of a pure A2A run's usage.
+    """
     if not isinstance(tokens, Mapping):
         return None
     usage: dict[str, int] = {}
-    for source, target in (
-        ("prompt", "input"),
-        ("cached", "input_cached"),
-        ("completion", "output"),
-        ("total", "total"),
+    for sources, target in (
+        (("prompt", "prompt_tokens", "input_tokens"), "input"),
+        (("cached", "cached_tokens", "input_cached", "prompt_cache_hit_tokens"), "input_cached"),
+        (("completion", "completion_tokens", "output_tokens"), "output"),
+        (("total", "total_tokens"), "total"),
     ):
-        value = tokens.get(source)
-        if isinstance(value, int) and not isinstance(value, bool):
+        value = _first_int(tokens, sources)
+        if value is not None:
             usage[target] = value
+    if "input_cached" not in usage:
+        cached = _nested_cached_tokens(tokens)
+        if cached is not None:
+            usage["input_cached"] = cached
     return usage or None
+
+
+def _nested_cached_tokens(tokens: Mapping[str, object]) -> int | None:
+    """Read the cached-prefix count from the OpenAI/DeepSeek/LangChain nested usage shapes."""
+    for key, nested_key in (
+        ("prompt_tokens_details", "cached_tokens"),
+        ("input_token_details", "cache_read"),
+    ):
+        details = tokens.get(key)
+        if isinstance(details, Mapping):
+            value = _first_int(details, (nested_key,))
+            if value is not None:
+                return value
+    return None
+
+
+def _first_int(values: Mapping[str, object], keys: tuple[str, ...]) -> int | None:
+    """Return the first integer value among ``keys`` (booleans are not numbers)."""
+    for key in keys:
+        value = values.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+    return None
 
 
 def _ui_trace_url(url: str | None, ui_base_url: str) -> str | None:
