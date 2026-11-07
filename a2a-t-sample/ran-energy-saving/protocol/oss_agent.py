@@ -855,9 +855,15 @@ def build_oss_app(
         followup: conversation fields carried by one pure follow-up.
         trace_emitter: cross-process Run Explorer sink.
     """
-    resolved_host = host or os.environ.get("A2AT_SAMPLE_OSS_HOST", "127.0.0.1")
-    resolved_port = port or int(os.environ.get("A2AT_SAMPLE_OSS_PORT", str(DEFAULT_OSS_PORT)))
-    resolved_ran_url = ran_url or os.environ.get("A2AT_SAMPLE_RAN_URL", f"http://127.0.0.1:{DEFAULT_RAN_PORT}")
+    resolved_host = host or (
+        config.oss_host if config is not None else os.environ.get("A2AT_SAMPLE_OSS_HOST", "127.0.0.1")
+    )
+    resolved_port = port or (
+        config.oss_port if config is not None else int(os.environ.get("A2AT_SAMPLE_OSS_PORT", str(DEFAULT_OSS_PORT)))
+    )
+    resolved_ran_url = ran_url or (
+        config.ran_url if config is not None else os.environ.get("A2AT_SAMPLE_RAN_URL", f"http://127.0.0.1:{DEFAULT_RAN_PORT}")
+    )
     resolved_answer = answer or (lambda event: _proposal_of(event))
     card = build_oss_agent_card(host=resolved_host, port=resolved_port)
     resolved_task_store = task_store or InMemoryTaskStore()
@@ -946,8 +952,10 @@ def main() -> None:
     configure_logging()
     env_path = Path.cwd() / ".env"
     config = load_config(env_path=env_path if env_path.exists() else None)
-    host = os.environ.get("A2AT_SAMPLE_OSS_HOST", "127.0.0.1")
-    port = int(os.environ.get("A2AT_SAMPLE_OSS_PORT", str(DEFAULT_OSS_PORT)))
+    # The launcher writes these keys into the per-run ``.env``; a manual start must read the same
+    # file instead of falling back to ``os.environ`` and binding the default port.
+    host = config.oss_host
+    port = config.oss_port
     from demo.intent import build_demo_intent_processor
 
     decision_provider: object | None = None
@@ -997,21 +1005,26 @@ def main() -> None:
         intent_processor=build_demo_intent_processor(config),
         language=config.language,
         followup=config.pure_followup,
-        trace_emitter=_build_trace_emitter(),
+        trace_emitter=_build_trace_emitter(config),
     )
     _LOGGER.info("starting OSS Agent on %s:%s", host, port)
     uvicorn.run(app, host=host, port=port)
 
 
-def _build_trace_emitter() -> HttpTraceEmitter | FileTraceEmitter | None:
-    """Build the OSS trace emitter configured by the process environment.
+def _build_trace_emitter(config: SampleConfig | None = None) -> HttpTraceEmitter | FileTraceEmitter | None:
+    """Build the OSS trace emitter from the resolved configuration.
 
     ``A2AT_SAMPLE_TRACE_URL`` selects the Web UI endpoint (with ``A2AT_SAMPLE_TRACE_TOKEN``);
     ``A2AT_SAMPLE_TRACE_DIR`` selects the CLI JSONL file. Without either key the hop is untraced.
+    A caller without a resolved config keeps the process-environment fallback (tests, embedding).
     """
-    base_url = os.environ.get("A2AT_SAMPLE_TRACE_URL", "").strip()
+    base_url = (config.trace_url if config is not None else "") or os.environ.get(
+        "A2AT_SAMPLE_TRACE_URL", ""
+    ).strip()
     if base_url:
-        token = os.environ.get("A2AT_SAMPLE_TRACE_TOKEN", "").strip()
+        token = (config.trace_token if config is not None else "") or os.environ.get(
+            "A2AT_SAMPLE_TRACE_TOKEN", ""
+        ).strip()
         # The OSS Agent reports spans to the UI instance that owns the run. Say which UI and
         # whether the token is present: a stale pairing shows up later as a 404/403 on every
         # batch, and this line is the first place to look.
@@ -1023,7 +1036,9 @@ def _build_trace_emitter() -> HttpTraceEmitter | FileTraceEmitter | None:
                 base_url,
             )
         return HttpTraceEmitter(base_url, token)
-    directory = os.environ.get("A2AT_SAMPLE_TRACE_DIR", "").strip()
+    directory = (config.trace_dir if config is not None else "") or os.environ.get(
+        "A2AT_SAMPLE_TRACE_DIR", ""
+    ).strip()
     if directory:
         _LOGGER.info("OSS trace emitter: file %s", directory)
         return FileTraceEmitter(Path(directory))

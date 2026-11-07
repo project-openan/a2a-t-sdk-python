@@ -14,6 +14,8 @@ from shared.config import (
     ADK_OUTPUT_SCHEMA_WITH_TOOLS_FALSE,
     ADK_OUTPUT_SCHEMA_WITH_TOOLS_TRUE,
     ADK_SESSION_RETENTION_DAYS_ENV_KEY,
+    APPROVAL_GATE_ENV_KEY,
+    APPROVAL_TIMEOUT_ENV_KEY,
     CLIENT_DB_ENV_KEY,
     CLIENT_MEMORY_TURNS_ENV_KEY,
     DEFAULT_ADK_SESSION_RETENTION_DAYS,
@@ -39,6 +41,9 @@ from shared.config import (
     LLM_TIMEOUT_ENV_KEY,
     LONG_TASK_MODE_ENV_KEY,
     LONG_TASK_SETTLE_ENV_KEY,
+    MIE_HOST_ENV_KEY,
+    MIE_PORT_ENV_KEY,
+    MIE_URL_ENV_KEY,
     MODEL_MODE_LIVE,
     MODEL_MODE_OFFLINE,
     NMS_A2A_BASE_ENV_KEY,
@@ -58,15 +63,23 @@ from shared.config import (
     NMS_TOKEN_VALUE_ENV_KEY,
     NMS_VERIFY_TLS_ENV_KEY,
     NMS_WIRE_LOG_ENV_KEY,
+    OSS_HOST_ENV_KEY,
+    OSS_PORT_ENV_KEY,
     OSS_TASK_DB_ENV_KEY,
     PLANNER_MAX_STEPS_ENV_KEY,
     PLANNER_MODEL_ENV_KEY,
     PLANNER_TIMEOUT_ENV_KEY,
+    PROTOCOL_MODE_ENV_KEY,
+    PURE_APPROVAL_GATE_ENV_KEY,
     PURE_FOLLOWUP_ENV_KEY,
+    RAN_URL_ENV_KEY,
     RUNS_DIR_ENV_KEY,
     SERVER_AUTH_TOKEN_ENV_KEY,
     TASK_DB_ENV_KEY,
     TASK_POLL_INTERVAL_ENV_KEY,
+    TRACE_DIR_ENV_KEY,
+    TRACE_TOKEN_ENV_KEY,
+    TRACE_URL_ENV_KEY,
     WEBHOOK_AUTH_CREDENTIALS_ENV_KEY,
     WEBHOOK_PUBLIC_URL_ENV_KEY,
     WEBHOOK_TLS_CERT_ENV_KEY,
@@ -100,6 +113,19 @@ _ENV_KEYS = (
     GATEWAY_SCENARIO_ENV_KEY,
     GATEWAY_TASK_DB_ENV_KEY,
     SERVER_AUTH_TOKEN_ENV_KEY,
+    PROTOCOL_MODE_ENV_KEY,
+    OSS_HOST_ENV_KEY,
+    OSS_PORT_ENV_KEY,
+    TRACE_URL_ENV_KEY,
+    TRACE_TOKEN_ENV_KEY,
+    TRACE_DIR_ENV_KEY,
+    APPROVAL_GATE_ENV_KEY,
+    APPROVAL_TIMEOUT_ENV_KEY,
+    PURE_APPROVAL_GATE_ENV_KEY,
+    MIE_HOST_ENV_KEY,
+    MIE_PORT_ENV_KEY,
+    MIE_URL_ENV_KEY,
+    RAN_URL_ENV_KEY,
     WEBHOOK_PUBLIC_URL_ENV_KEY,
     WEBHOOK_TLS_CERT_ENV_KEY,
     WEBHOOK_TLS_KEY_ENV_KEY,
@@ -178,6 +204,61 @@ def test_offline_config_loads_from_env_file(tmp_path: Path) -> None:
     assert config.webhook_idle_timeout == 15
     assert config.discovery == "direct"
     assert config.transport == "webhook"
+
+
+def test_topology_and_trace_keys_load_from_the_env_file(tmp_path: Path) -> None:
+    """A manual start must read the per-run ``.env``, not only the process environment.
+
+    The launcher writes these keys into the per-run file. The server/OSS entry points used to read
+    raw ``os.environ``, so a manually started process silently used the default protocol mode,
+    callback host/port, MIE URL and no trace emitter.
+    """
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_MODEL_MODE=offline",
+                f"{PROTOCOL_MODE_ENV_KEY}=both",
+                f"{OSS_HOST_ENV_KEY}=0.0.0.0",
+                f"{OSS_PORT_ENV_KEY}=8011",
+                f"{TRACE_URL_ENV_KEY}=http://127.0.0.1:8080",
+                f"{TRACE_TOKEN_ENV_KEY}=trace-token",
+                f"{TRACE_DIR_ENV_KEY}={tmp_path / 'traces'}",
+                f"{APPROVAL_TIMEOUT_ENV_KEY}=120",
+                f"{MIE_HOST_ENV_KEY}=127.0.0.1",
+                f"{MIE_PORT_ENV_KEY}=8002",
+                f"{MIE_URL_ENV_KEY}=http://127.0.0.1:8002",
+                f"{RAN_URL_ENV_KEY}=http://127.0.0.1:8000",
+                f"{APPROVAL_GATE_ENV_KEY}=1",
+                f"{PURE_APPROVAL_GATE_ENV_KEY}=0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert config.protocol_mode == "both"
+    assert config.oss_host == "0.0.0.0"
+    assert config.oss_port == 8011
+    assert config.trace_url == "http://127.0.0.1:8080"
+    assert config.trace_token == "trace-token"
+    assert config.trace_dir == str(tmp_path / "traces")
+    assert config.approval_timeout_seconds == 120.0
+    assert config.mie_host == "127.0.0.1"
+    assert config.mie_port == 8002
+    assert config.mie_url == "http://127.0.0.1:8002"
+    assert config.ran_url == "http://127.0.0.1:8000"
+    assert config.approval_gate is True
+    assert config.pure_approval_gate is False
+
+
+def test_an_unsupported_protocol_mode_fails_loudly(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{PROTOCOL_MODE_ENV_KEY}=both-and-more\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=PROTOCOL_MODE_ENV_KEY):
+        load_config(env_path=env_file)
 
 
 def test_task_db_path_is_optional_and_must_be_absolute(tmp_path: Path) -> None:

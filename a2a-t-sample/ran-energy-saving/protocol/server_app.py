@@ -87,7 +87,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS, ApprovalRegistry
+from protocol.approval_gate import ApprovalRegistry
 from protocol.mie_client import MIEApprovalClient
 from protocol.negotiation_policy import NegotiationState, PolicyDecision
 from protocol.plain_a2a import PlainTaskHandler, ProtocolDispatchHandler, is_plain_request
@@ -136,17 +136,25 @@ class ServerRuntime:
     trace_emitter: HttpTraceEmitter | FileTraceEmitter | None = None
 
 
-def build_trace_emitter() -> HttpTraceEmitter | FileTraceEmitter | None:
-    """Build the server trace emitter configured by the process environment.
+def build_trace_emitter(config: SampleConfig | None = None) -> HttpTraceEmitter | FileTraceEmitter | None:
+    """Build the server trace emitter from the resolved configuration.
 
     ``A2AT_SAMPLE_TRACE_URL`` selects the cross-process HTTP transport to the Web UI (with
     ``A2AT_SAMPLE_TRACE_TOKEN``); otherwise ``A2AT_SAMPLE_TRACE_DIR`` selects the CLI JSONL file
-    ``<dir>/<runId>/server-trace.jsonl``. Without either key the server emits no trace.
+    ``<dir>/<runId>/server-trace.jsonl``. Without either key the server emits no trace. A caller
+    without a resolved config keeps the process-environment fallback (tests, embedding).
     """
-    base_url = os.environ.get("A2AT_SAMPLE_TRACE_URL", "").strip()
+    base_url = (config.trace_url if config is not None else "") or os.environ.get(
+        "A2AT_SAMPLE_TRACE_URL", ""
+    ).strip()
     if base_url:
-        return HttpTraceEmitter(base_url, os.environ.get("A2AT_SAMPLE_TRACE_TOKEN", "").strip())
-    directory = os.environ.get("A2AT_SAMPLE_TRACE_DIR", "").strip()
+        token = (config.trace_token if config is not None else "") or os.environ.get(
+            "A2AT_SAMPLE_TRACE_TOKEN", ""
+        ).strip()
+        return HttpTraceEmitter(base_url, token)
+    directory = (config.trace_dir if config is not None else "") or os.environ.get(
+        "A2AT_SAMPLE_TRACE_DIR", ""
+    ).strip()
     if directory:
         return FileTraceEmitter(Path(directory))
     return None
@@ -431,7 +439,7 @@ def build_server_runtime(
         if install_offline_provider is None:
             raise ValueError("Offline mode needs install_offline_provider; the demo entry point supplies it.")
         install_offline_provider()
-    trace_emitter = build_trace_emitter()
+    trace_emitter = build_trace_emitter(resolved_config)
     if trace_emitter is not None:
         set_global_sink(trace_emitter)
     sdk_env_path = prepare_sdk_env_path(resolved_config, env_path)
@@ -462,33 +470,23 @@ def build_server_runtime(
     else:
         pre_task_handler = ProtocolDispatchHandler(negotiation_handler, PlainTaskHandler(logger=resolved_logger))
     if approval_gate is None:
-        approval_enabled = os.environ.get("A2AT_SAMPLE_APPROVAL_GATE", "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-        }
+        approval_enabled = resolved_config.approval_gate
     else:
         approval_enabled = approval_gate
     approval_timeout = (
         approval_timeout_seconds
         if approval_timeout_seconds is not None
-        else float(
-            os.environ.get(
-                "A2AT_SAMPLE_APPROVAL_TIMEOUT_SECONDS",
-                str(DEFAULT_APPROVAL_TIMEOUT_SECONDS),
-            )
-            or str(DEFAULT_APPROVAL_TIMEOUT_SECONDS)
-        )
+        else resolved_config.approval_timeout_seconds
     )
     approval_registry = ApprovalRegistry() if approval_enabled else None
     pure_enabled = protocol_mode in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH)
     if pure_approval_gate is None:
-        raw_pure_gate = os.environ.get("A2AT_SAMPLE_PURE_APPROVAL_GATE", "").strip().lower()
-        pure_gate_enabled = raw_pure_gate in {"1", "true", "yes"} if raw_pure_gate else approval_enabled
+        configured_pure_gate = resolved_config.pure_approval_gate
+        pure_gate_enabled = configured_pure_gate if configured_pure_gate is not None else approval_enabled
     else:
         pure_gate_enabled = pure_approval_gate
     if pure_enabled and pure_gate_enabled and mie_client is None:
-        resolved_mie_url = (mie_url or os.environ.get("A2AT_SAMPLE_MIE_URL", "http://127.0.0.1:8002")).strip()
+        resolved_mie_url = (mie_url or resolved_config.mie_url).strip()
         if resolved_mie_url:
             mie_client = MIEApprovalClient(
                 base_url=resolved_mie_url,
@@ -626,7 +624,10 @@ def main() -> None:
     from demo.pure_policy import build_demo_pure_policy
 
     resolved_config = load_config(env_path=resolved_env_path)
-    protocol_mode = os.environ.get("A2AT_SAMPLE_PROTOCOL_MODE", PROTOCOL_A2A_T).strip() or PROTOCOL_A2A_T
+    # Read the mode through the same resolver as every other setting: a manual start with the key
+    # only in the per-run ``.env`` must serve the configured protocol, not silently fall back to
+    # A2A-T.
+    protocol_mode = resolved_config.protocol_mode
     pure_policy = (
         build_demo_pure_policy(resolved_config.language)
         if protocol_mode in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH)

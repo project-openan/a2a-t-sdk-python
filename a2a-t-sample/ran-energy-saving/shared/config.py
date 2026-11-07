@@ -18,7 +18,7 @@ from typing import Literal
 
 from dotenv import dotenv_values
 
-from shared.run_constants import LANGUAGE_ZH, SUPPORTED_LANGUAGES
+from shared.run_constants import LANGUAGE_ZH, PROTOCOL_A2A_T, SERVER_PROTOCOL_MODES, SUPPORTED_LANGUAGES
 
 #: Model modes.
 MODEL_MODE_LIVE = "live"
@@ -131,6 +131,25 @@ GATEWAY_SCENARIO_ENV_KEY = "A2AT_SAMPLE_GATEWAY_SCENARIO"
 GATEWAY_TASK_DB_ENV_KEY = "A2AT_SAMPLE_GATEWAY_TASK_DB"
 AUTH_TOKEN_ENV_KEY = "A2AT_SAMPLE_AUTH_TOKEN"
 SERVER_AUTH_TOKEN_ENV_KEY = "A2AT_SAMPLE_SERVER_AUTH_TOKEN"
+#: Server-side protocol mode (``a2a-t`` / ``a2a`` / ``both``). The launcher also writes it into the
+#: per-run ``.env``; manual starts must read the same file instead of only ``os.environ``.
+PROTOCOL_MODE_ENV_KEY = "A2AT_SAMPLE_PROTOCOL_MODE"
+#: OSS Agent bind/advertised address.
+OSS_HOST_ENV_KEY = "A2AT_SAMPLE_OSS_HOST"
+OSS_PORT_ENV_KEY = "A2AT_SAMPLE_OSS_PORT"
+#: Cross-process trace emitter of the server/OSS hops. The launcher owns these values per run.
+TRACE_URL_ENV_KEY = "A2AT_SAMPLE_TRACE_URL"
+TRACE_TOKEN_ENV_KEY = "A2AT_SAMPLE_TRACE_TOKEN"
+TRACE_DIR_ENV_KEY = "A2AT_SAMPLE_TRACE_DIR"
+#: Approval gate switches and the MIE endpoint.
+APPROVAL_GATE_ENV_KEY = "A2AT_SAMPLE_APPROVAL_GATE"
+PURE_APPROVAL_GATE_ENV_KEY = "A2AT_SAMPLE_PURE_APPROVAL_GATE"
+APPROVAL_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_APPROVAL_TIMEOUT_SECONDS"
+MIE_HOST_ENV_KEY = "A2AT_SAMPLE_MIE_HOST"
+MIE_PORT_ENV_KEY = "A2AT_SAMPLE_MIE_PORT"
+MIE_URL_ENV_KEY = "A2AT_SAMPLE_MIE_URL"
+#: Local RAN Agent endpoint used by the OSS hop in the three-hop topology.
+RAN_URL_ENV_KEY = "A2AT_SAMPLE_RAN_URL"
 
 #: Langfuse observability of the client run (see :mod:`shared.langfuse_tracing`).
 LANGFUSE_PUBLIC_KEY_ENV_KEY = "LANGFUSE_PUBLIC_KEY"
@@ -175,6 +194,14 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 DEFAULT_REGISTRY_HOST = "127.0.0.1"
 DEFAULT_REGISTRY_PORT = 5001
+DEFAULT_OSS_PORT = 8001
+DEFAULT_MIE_HOST = "127.0.0.1"
+DEFAULT_MIE_PORT = 8002
+DEFAULT_MIE_URL = f"http://{DEFAULT_MIE_HOST}:{DEFAULT_MIE_PORT}"
+DEFAULT_RAN_URL = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
+#: Default approval wait. Mirrors ``protocol.approval_gate.DEFAULT_APPROVAL_TIMEOUT_SECONDS``;
+#: shared config cannot import a protocol module.
+DEFAULT_APPROVAL_TIMEOUT_SECONDS = 86_400.0
 DEFAULT_WEBHOOK_PORT = 9000
 DEFAULT_WEBHOOK_TOKEN = "demo-webhook-token"
 
@@ -492,6 +519,20 @@ class SampleConfig:
         server_auth_token: bearer token the client presents to the A2A server and the server
             requires on every route except its AgentCard and health endpoints; empty keeps the
             server open (loopback-only deployments).
+        protocol_mode: server-side mode of the single-agent server (``a2a-t`` / ``a2a`` / ``both``).
+        oss_host: bind/advertised host of the OSS Agent.
+        oss_port: bind/advertised port of the OSS Agent.
+        trace_url: cross-process trace endpoint of the server/OSS hop; empty disables HTTP tracing.
+        trace_token: token the UI trace endpoint validates; empty disables authenticated tracing.
+        trace_dir: CLI fallback: write ``<dir>/<runId>/server-trace.jsonl`` instead of HTTP.
+        approval_gate: whether the A2A-T extension waits for the MIE approval by default.
+        pure_approval_gate: whether a standard A2A request waits for the MIE approval by default;
+            ``None`` follows ``approval_gate``.
+        approval_timeout_seconds: how long one approval waits before it times out.
+        mie_host: bind/advertised host of the MIE approval agent.
+        mie_port: bind/advertised port of the MIE approval agent.
+        mie_url: base URL the RAN server uses to reach the MIE approval agent.
+        ran_url: local RAN Agent base URL used by the OSS hop in the three-hop topology.
         nms_a2a_base: full A2A surface URL of a vendor NMS (``.../a2a/json``); required by the
             ``nms`` discovery mode and used as the static AgentCard interface.
         nms_token_url: session/token endpoint of the vendor NMS.
@@ -573,6 +614,19 @@ class SampleConfig:
     gateway_task_db_path: str | None = None
     auth_token: str = ""
     server_auth_token: str = ""
+    protocol_mode: str = PROTOCOL_A2A_T
+    oss_host: str = DEFAULT_HOST
+    oss_port: int = DEFAULT_OSS_PORT
+    trace_url: str = ""
+    trace_token: str = ""
+    trace_dir: str = ""
+    approval_gate: bool = False
+    pure_approval_gate: bool | None = None
+    approval_timeout_seconds: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS
+    mie_host: str = DEFAULT_MIE_HOST
+    mie_port: int = DEFAULT_MIE_PORT
+    mie_url: str = DEFAULT_MIE_URL
+    ran_url: str = DEFAULT_RAN_URL
     nms_a2a_base: str = ""
     nms_token_url: str = ""
     nms_token_user: str = ""
@@ -626,8 +680,8 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
     Raises:
         ValueError: when ``A2AT_SAMPLE_MODEL_MODE``, ``A2AT_LANGUAGE``,
             ``ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS``, a port, a timeout, the LLM attempt limit, a
-            discovery / transport / intent-mode key, or ``A2AT_SAMPLE_TASK_DB`` carries an
-            unsupported value.
+            discovery / transport / intent-mode / protocol-mode key, or ``A2AT_SAMPLE_TASK_DB``
+            carries an unsupported value.
     """
     resolved = env_path or Path.cwd() / ".env"
     values: dict[str, str | None] = dict(dotenv_values(resolved)) if resolved.exists() else {}
@@ -647,6 +701,13 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
     transport = _env_value(values, TRANSPORT_ENV_KEY, TRANSPORT_SSE)
     if transport not in SUPPORTED_TRANSPORTS:
         raise ValueError(f"Unsupported {TRANSPORT_ENV_KEY}: {transport}; expected one of {SUPPORTED_TRANSPORTS}")
+
+    protocol_mode = _env_value(values, PROTOCOL_MODE_ENV_KEY, PROTOCOL_A2A_T).strip().lower()
+    if protocol_mode not in SERVER_PROTOCOL_MODES:
+        raise ValueError(
+            f"Unsupported {PROTOCOL_MODE_ENV_KEY}: {protocol_mode}; "
+            f"expected one of {SERVER_PROTOCOL_MODES}"
+        )
 
     intent_mode = _env_value(values, INTENT_MODE_ENV_KEY, INTENT_MODE_PROCESSED)
     if intent_mode not in SUPPORTED_INTENT_MODES:
@@ -794,6 +855,21 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         gateway_task_db_path=_optional_absolute_path(values, GATEWAY_TASK_DB_ENV_KEY),
         auth_token=_env_value(values, AUTH_TOKEN_ENV_KEY, "").strip(),
         server_auth_token=_env_value(values, SERVER_AUTH_TOKEN_ENV_KEY, "").strip(),
+        protocol_mode=protocol_mode,
+        oss_host=_env_value(values, OSS_HOST_ENV_KEY, DEFAULT_HOST),
+        oss_port=_env_int(values, OSS_PORT_ENV_KEY, DEFAULT_OSS_PORT),
+        trace_url=_env_value(values, TRACE_URL_ENV_KEY, "").strip(),
+        trace_token=_env_value(values, TRACE_TOKEN_ENV_KEY, "").strip(),
+        trace_dir=_env_value(values, TRACE_DIR_ENV_KEY, "").strip(),
+        approval_gate=_env_bool(values, APPROVAL_GATE_ENV_KEY, False),
+        pure_approval_gate=_env_optional_bool(values, PURE_APPROVAL_GATE_ENV_KEY),
+        approval_timeout_seconds=_positive_seconds(
+            values, APPROVAL_TIMEOUT_ENV_KEY, DEFAULT_APPROVAL_TIMEOUT_SECONDS
+        ),
+        mie_host=_env_value(values, MIE_HOST_ENV_KEY, DEFAULT_MIE_HOST),
+        mie_port=_env_int(values, MIE_PORT_ENV_KEY, DEFAULT_MIE_PORT),
+        mie_url=_env_value(values, MIE_URL_ENV_KEY, DEFAULT_MIE_URL).strip(),
+        ran_url=_env_value(values, RAN_URL_ENV_KEY, DEFAULT_RAN_URL).strip(),
         nms_a2a_base=nms_a2a_base.rstrip("/"),
         nms_token_url=nms_token_url,
         nms_token_user=nms_token_user,

@@ -44,6 +44,7 @@ from shared.config import (
     LONG_TASK_MODE_ON,
     TRANSPORT_SSE,
     TRANSPORT_WEBHOOK,
+    SampleConfig,
 )
 from shared.run_constants import (
     FINAL_STATE_INCOMPLETE,
@@ -328,6 +329,28 @@ def test_trace_emitter_warns_without_a_token(
     emitter.close()
 
     assert "no A2AT_SAMPLE_TRACE_TOKEN" in caplog.text
+
+
+def test_trace_emitter_prefers_the_resolved_config(
+    monkeypatch: pytest.MonkeyPatch,
+    offline_config: SampleConfig,
+) -> None:
+    """A manual OSS start must use ``.env`` values even when the process env is empty."""
+    monkeypatch.delenv("A2AT_SAMPLE_TRACE_URL", raising=False)
+    monkeypatch.delenv("A2AT_SAMPLE_TRACE_TOKEN", raising=False)
+    monkeypatch.delenv("A2AT_SAMPLE_TRACE_DIR", raising=False)
+    config = replace(
+        offline_config,
+        trace_url="http://127.0.0.1:18080",
+        trace_token="config-token",
+        trace_dir="",
+    )
+
+    emitter = _build_trace_emitter(config)
+
+    assert emitter is not None
+    assert emitter.base_url == "http://127.0.0.1:18080"
+    emitter.close()
 
 
 def test_the_oss_card_advertises_push_notifications() -> None:
