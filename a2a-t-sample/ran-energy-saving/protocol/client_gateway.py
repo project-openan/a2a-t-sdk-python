@@ -392,7 +392,10 @@ def build_gateway_app(
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncGenerator[None, None]:
         del app
-        await service.mark_interrupted()
+        # The gateway owns only its inbound Tasks; a UI-hosted run stays with the UI process.
+        recovered = await service.recover_runs(kinds={"gateway"})
+        if recovered:
+            _LOGGER.info("gateway recovered %d long-running run(s)", recovered)
         # Apply the decision-session retention window before the first run of this process.
         await service.sweep_sessions()
         yield

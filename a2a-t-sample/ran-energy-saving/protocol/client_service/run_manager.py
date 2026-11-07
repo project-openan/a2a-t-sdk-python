@@ -54,7 +54,7 @@ from shared.trace import (
 from shared.trace_propagation import reset_active_trace, set_active_trace
 
 from protocol.client_flow import ClientFlowResult
-from protocol.client_runtime import MODE_CONFIRM, MODE_MANUAL
+from protocol.client_runtime import MODE_CONFIRM, MODE_MANUAL, build_poll_runtime
 from protocol.client_service.run_state import (
     SESSION_SWEEP_INTERVAL_SECONDS,
     STATUS_FAILED,
@@ -75,6 +75,7 @@ from protocol.client_store import (
     RunAlreadyActiveError,
     now_iso,
 )
+from protocol.client_store.store import _pid_alive
 from protocol.decision_provider import sweep_stale_sessions
 from protocol.run_metrics import append_metrics_jsonl, build_run_metrics
 from protocol.run_spec import RunCatalog
@@ -371,6 +372,135 @@ class RunManager:
         if self._store is None:
             return 0
         return await self._store.mark_running_interrupted()
+
+    async def recover_runs(self, *, kinds: set[str] | None = None) -> int:
+        """Resume the runs that still own a remote Task after a process restart.
+
+        A run whose process died with a ``server_task_id`` is not a lost run: the Task may keep
+        executing for days. Rehydrate it from the client store, rebuild a poll-only runtime, and
+        keep tracking it. Runs without a remote Task (or with a still-live owner) are left to the
+        previous behavior.
+
+        Args:
+            kinds: source kinds this process owns (``{"gateway"}`` for the gateway). ``None``
+                means every non-gateway run, so the UI never steals an inbound gateway Task.
+        """
+        if self._store is None:
+            return 0
+        recovered = 0
+        for record in await self._store.list_running_runs():
+            source_kind = str(record.source.get("kind") or "")
+            if kinds is None:
+                if source_kind == "gateway":
+                    continue
+            elif source_kind not in kinds:
+                continue
+            if record.owner_pid and _pid_alive(record.owner_pid):
+                # Another live client process (UI + gateway, two UIs) owns this run.
+                continue
+            if not record.server_task_id:
+                await self._store.mark_run_interrupted(record.run_id)
+                continue
+            try:
+                run = await self._rehydrate_run(record)
+            except Exception:  # noqa: BLE001 - one bad run must not block the others
+                _LOGGER.exception("failed to recover run %s", record.run_id)
+                await self._store.mark_run_interrupted(record.run_id)
+                continue
+            await self._store.update_run(run.run_id, owner_pid=os.getpid())
+            self._runs[run.run_id] = run
+            if run.conversation_id:
+                self._active_by_conversation[run.conversation_id] = run
+            run.task = asyncio.create_task(
+                self._resume_run(run), name=f"ran-client-resume-{run.run_id}"
+            )
+            recovered += 1
+            _LOGGER.info(
+                "recovered run %s: task=%s conversation=%s",
+                run.run_id,
+                record.server_task_id,
+                run.conversation_id or "-",
+            )
+        return recovered
+
+    async def _rehydrate_run(self, record: ClientRunRecord) -> RunState:
+        """Rebuild the in-memory view of one persisted running run."""
+        run = RunState(
+            run_id=record.run_id,
+            # The store does not persist the vendor trace id; the run id is the fallback.
+            trace_id=record.run_id,
+            scenario=record.scenario,
+            mode=record.mode,
+            transport=record.transport,
+            protocol=record.protocol,
+            discovery=record.discovery,
+            user_request=record.user_request,
+            status=STATUS_RUNNING,
+            detached=True,
+            conversation_id=record.conversation_id,
+            idempotency_key=record.idempotency_key,
+            store=self._store,
+            source=dict(record.source),
+        )
+        run.transcript = NegotiationTranscript(
+            scenario=record.scenario,
+            language=self._config.language,
+            model_mode=self._config.model_mode,
+            mode=record.mode,
+            transport=record.transport,
+            runs_dir=self._runs_dir or DEFAULT_RUNS_DIR,
+            source=dict(record.source),
+        )
+        run.result = ClientFlowResult(
+            final_state=FINAL_STATE_INCOMPLETE,
+            task_id=record.server_task_id,
+            context_id=record.server_context_id or "",
+        )
+        run.runtime = await build_poll_runtime(self._config, discovery=record.discovery)
+        run.emit_trace(
+            kind="task_tracking",
+            phase=PHASE_DISPATCH,
+            title="Run recovered after a UI restart",
+            detail={"taskId": record.server_task_id, "protocol": record.protocol},
+        )
+        return run
+
+    async def _resume_run(self, run: RunState) -> None:
+        """Poll a recovered run until its remote Task reaches a terminal state."""
+        transcript = run.transcript
+        assert transcript is not None
+        try:
+            result = await self._watch_long_task(run, run.result or ClientFlowResult())
+            run.result = result
+            transcript.record_final(result)
+            run.status = STATUS_FINISHED
+        except asyncio.CancelledError:
+            run.status = STATUS_INTERRUPTED
+            run.error = CANCELED_BY_OPERATOR if run.cancel_requested else CANCELED_BY_SHUTDOWN
+            transcript.record_error(run.error)
+            raise
+        except Exception as exc:  # noqa: BLE001 - a failed recovery must reach the UI
+            _LOGGER.exception("recovered run %s failed", run.run_id)
+            run.status = STATUS_FAILED
+            run.error = f"{type(exc).__name__}: {exc}"
+            transcript.record_error(run.error)
+        finally:
+            run.pending_decision = False
+            run.pending_intent = False
+            run.intent_future = None
+            if run.runtime is not None:
+                with suppress(asyncio.CancelledError, Exception):
+                    await run.runtime.aclose()
+                run.runtime = None
+            transcript.intent = run.processed_intent
+            try:
+                run.paths = transcript.write(self._runs_dir)
+            except OSError as exc:
+                run.transcript_error = f"{type(exc).__name__}: {exc}"
+            await run.drain_persistence()
+            await self._finalize_persistence(run)
+            self._active_by_conversation.pop(run.conversation_id or "", None)
+            run.emit_finished()
 
     async def start(
         self,

@@ -340,6 +340,56 @@ async def test_mark_running_interrupted_keeps_live_process_runs(tmp_path: Path) 
     assert dead is not None and dead.status == "interrupted"
 
 
+async def test_mark_running_interrupted_keeps_runs_with_a_remote_task(tmp_path: Path) -> None:
+    """A running row with ``server_task_id`` is recoverable, not interrupted."""
+    store = SqliteClientStore(tmp_path / "client.sqlite3")
+    for run_id, task_id in (("long", "task-1"), ("lost", None)):
+        await store.ensure_conversation(conversation_id=f"conv-{run_id}")
+        await store.create_run(
+            ClientRunRecord(
+                run_id=run_id,
+                conversation_id=f"conv-{run_id}",
+                scenario="information",
+                mode="auto",
+                transport="sse",
+                discovery="nms",
+                user_request="request",
+                server_task_id=task_id,
+            )
+        )
+
+    assert await store.mark_running_interrupted() == 1
+
+    long_run = await store.get_run("long")
+    lost = await store.get_run("lost")
+    assert long_run is not None and long_run.status == "running"
+    assert lost is not None and lost.status == "interrupted"
+
+
+async def test_list_running_runs_and_mark_one_interrupted(tmp_path: Path) -> None:
+    store = SqliteClientStore(tmp_path / "client.sqlite3")
+    for run_id in ("run-1", "run-2"):
+        await store.ensure_conversation(conversation_id=f"conv-{run_id}")
+        await store.create_run(
+            ClientRunRecord(
+                run_id=run_id,
+                conversation_id=f"conv-{run_id}",
+                scenario="information",
+                mode="auto",
+                transport="sse",
+                discovery="direct",
+                user_request="request",
+            )
+        )
+
+    running = await store.list_running_runs()
+    assert [record.run_id for record in running] == ["run-1", "run-2"]
+
+    await store.mark_run_interrupted("run-1")
+    running = await store.list_running_runs()
+    assert [record.run_id for record in running] == ["run-2"]
+
+
 async def test_read_only_helpers_and_missing_database(tmp_path: Path) -> None:
     missing = tmp_path / "missing.sqlite3"
     assert read_client_run_summaries(missing) == []

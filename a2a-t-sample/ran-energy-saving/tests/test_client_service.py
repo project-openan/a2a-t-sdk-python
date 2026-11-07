@@ -701,6 +701,123 @@ async def test_a_presentation_run_keeps_tracking_without_a_viewer(
     assert run.result.final_state == FINAL_STATE_TASK_COMPLETED
 
 
+class _PollRuntime:
+    """Runtime double holding only the client used to poll a recovered Task."""
+
+    def __init__(self, client: _SwitchableA2AClient) -> None:
+        self.a2a_client = client
+        self.nms_client = None
+        self.manual_provider = None
+        self.closed = False
+
+    async def aclose(self) -> None:
+        """Record the release."""
+        self.closed = True
+
+
+async def test_a_restart_recovers_a_run_that_still_has_a_remote_task(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A persisted running row with ``server_task_id`` is rehydrated, not interrupted."""
+    store = SqliteClientStore(tmp_path / "client.sqlite3")
+    await store.ensure_conversation(conversation_id="conv-1")
+    await store.create_run(
+        ClientRunRecord(
+            run_id="run-1",
+            conversation_id="conv-1",
+            scenario="information",
+            mode="auto",
+            transport="sse",
+            discovery="direct",
+            user_request="request",
+            server_task_id="task-1",
+            server_context_id="ctx-1",
+            owner_pid=2**31 - 1,
+            source={"kind": "presentation"},
+        )
+    )
+    await store.ensure_conversation(conversation_id="conv-2")
+    await store.create_run(
+        ClientRunRecord(
+            run_id="lost",
+            conversation_id="conv-2",
+            scenario="information",
+            mode="auto",
+            transport="sse",
+            discovery="direct",
+            user_request="request",
+            owner_pid=2**31 - 1,
+            source={"kind": "presentation"},
+        )
+    )
+    await store.ensure_conversation(conversation_id="conv-gateway")
+    await store.create_run(
+        ClientRunRecord(
+            run_id="gateway-1",
+            conversation_id="conv-gateway",
+            scenario="information",
+            mode="auto",
+            transport="sse",
+            discovery="direct",
+            user_request="request",
+            server_task_id="task-gateway",
+            owner_pid=2**31 - 1,
+            source={"kind": "gateway"},
+        )
+    )
+    client = _SwitchableA2AClient()
+    poll_runtime = _PollRuntime(client)
+
+    async def fake_build_poll_runtime(
+        config: SampleConfig,
+        *,
+        discovery: str,
+    ) -> _PollRuntime:
+        del config, discovery
+        return poll_runtime
+
+    monkeypatch.setattr(
+        "protocol.client_service.run_manager.build_poll_runtime",
+        fake_build_poll_runtime,
+    )
+    manager = RunManager(
+        config=replace(
+            offline_config,
+            task_poll_interval_seconds=0.01,
+            nms_state_poll_interval=0.01,
+        ),
+        runtime_factory=lambda *args, **kwargs: None,  # type: ignore[arg-type,return-value]
+        catalog=DemoRunCatalog(),
+        runs_dir=tmp_path / "runs",
+        store=store,
+    )
+
+    assert await manager.recover_runs() == 1
+
+    run = manager.get("run-1")
+    assert run is not None
+    assert run.status == "running"
+    assert run.detached is True
+    assert run.runtime is poll_runtime
+    assert manager.get("gateway-1") is None
+    lost = await store.get_run("lost")
+    assert lost is not None and lost.status == "interrupted"
+
+    client.state = TaskState.TASK_STATE_COMPLETED
+    await _finish(manager, "run-1")
+
+    assert run.status == "finished"
+    assert run.result is not None
+    assert run.result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert poll_runtime.closed is True
+    stored = await store.get_run("run-1")
+    assert stored is not None
+    assert stored.status == "finished"
+    assert stored.server_task_id == "task-1"
+
+
 async def test_a_long_running_run_stays_active_until_the_remote_task_finishes(
     tmp_path: Path,
     offline_config: SampleConfig,

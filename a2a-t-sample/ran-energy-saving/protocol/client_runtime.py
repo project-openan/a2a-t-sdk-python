@@ -874,3 +874,68 @@ async def build_client_runtime(
         pure_answer=pure_answer,
         intent_processor=intent_processor,
     )
+
+
+@dataclass
+class PollRuntime:
+    """Minimal runtime that only polls an already-created remote Task.
+
+    A UI restart rehydrates a run from SQLite; replaying the client flow would send a second
+    request. This runtime exposes the same ``a2a_client`` / ``nms_client`` surface that
+    :meth:`RunManager._poll_remote_task` reads, and nothing else.
+    """
+
+    a2a_client: Any | None = None
+    nms_client: NmsClient | None = None
+    httpx_client: httpx.AsyncClient | None = None
+    manual_provider: Any | None = None
+
+    async def run(self, **kwargs: object) -> ClientFlowResult:
+        """Refuse to replay a recovered run."""
+        del kwargs
+        raise RuntimeError("A recovered run can only poll its existing remote Task.")
+
+    async def aclose(self) -> None:
+        """Close the polling HTTP client."""
+        if self.httpx_client is not None:
+            await self.httpx_client.aclose()
+
+
+async def build_poll_runtime(
+    config: SampleConfig,
+    *,
+    discovery: str,
+    env_path: Path | None = None,
+) -> PollRuntime:
+    """Build the client used to poll a remote Task after a UI restart."""
+    if discovery == DISCOVERY_NMS:
+        return PollRuntime(nms_client=NmsClient(NmsConfig.from_config(config)))
+    discovered = await discover_agent(
+        discovery=discovery,
+        organization=AGENT_CARD_ORGANIZATION,
+        name=AGENT_CARD_NAME,
+        registry_center_url=config.registry_url,
+        direct_base_url=_direct_base_url(config, env_path),
+        nms_a2a_base=config.nms_a2a_base,
+        env_path=env_path,
+    )
+    httpx_client = httpx.AsyncClient(
+        timeout=config.http_timeout_seconds,
+        trust_env=False,
+        headers=_server_auth_headers(config),
+        event_hooks={"request": [inject_outgoing]},
+    )
+    try:
+        a2a_client = await create_client(
+            discovered.agent_card,
+            client_config=ClientConfig(
+                streaming=False,
+                httpx_client=httpx_client,
+                supported_protocol_bindings=[TransportProtocol.HTTP_JSON],
+                use_client_preference=True,
+            ),
+        )
+    except Exception:
+        await httpx_client.aclose()
+        raise
+    return PollRuntime(a2a_client=a2a_client, httpx_client=httpx_client)

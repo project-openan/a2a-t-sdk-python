@@ -396,7 +396,11 @@ def create_app(
             config.model_mode,
             config.client_db_path or "memory",
         )
-        await manager.mark_interrupted()
+        # A run whose remote Task is still executing survives the restart; only runs without one
+        # are marked interrupted. This must be the first store operation of the process.
+        recovered = await manager.recover_runs()
+        if recovered:
+            _LOGGER.info("recovered %d long-running run(s)", recovered)
         # Apply the decision-session retention window before the first run of this process.
         await manager.sweep_sessions()
         # Producers that emit from another thread/task (e.g. an in-process server) cannot see a

@@ -265,6 +265,7 @@ _RUN_UPDATE_FIELDS: Final[frozenset[str]] = frozenset(
         "final_state",
         "server_context_id",
         "server_task_id",
+        "owner_pid",
         "error",
         "transcript_json",
         "transcript_markdown",
@@ -537,6 +538,10 @@ class ClientStore(Protocol):
         """Upsert the per-run comparison metrics of one run."""
         ...
 
+    async def list_running_runs(self) -> builtins.list[ClientRunRecord]: ...
+
+    async def mark_run_interrupted(self, run_id: str) -> None: ...
+
     async def mark_running_interrupted(self) -> int: ...
 
 
@@ -776,6 +781,21 @@ class SqliteClientStore:
             await asyncio.to_thread(self._save_run_metrics, metrics)
         except sqlite3.Error as exc:
             _LOGGER.warning("run metrics persistence failed for %s: %s", metrics.get("runId"), exc)
+
+    async def list_running_runs(self) -> builtins.list[ClientRunRecord]:
+        """Return every run still marked ``running`` (oldest first)."""
+        try:
+            return await asyncio.to_thread(self._list_running_runs)
+        except sqlite3.Error as exc:
+            _LOGGER.warning("running-run list failed: %s", exc)
+            return []
+
+    async def mark_run_interrupted(self, run_id: str) -> None:
+        """Mark one run interrupted (a recovery attempt failed or it has no remote Task)."""
+        try:
+            await asyncio.to_thread(self._mark_run_interrupted, run_id)
+        except sqlite3.Error as exc:
+            _LOGGER.warning("interrupted-run update failed for %s: %s", run_id, exc)
 
     async def mark_running_interrupted(self) -> int:
         """Mark every run left ``running`` by a previous process as ``interrupted``."""
@@ -1206,6 +1226,25 @@ class SqliteClientStore:
             payload=_load_json(row["payload_json"]),
         )
 
+    def _list_running_runs(self) -> builtins.list[ClientRunRecord]:
+        """Synchronous running-run read used by :meth:`list_running_runs`."""
+        with self._connection() as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                "SELECT * FROM runs WHERE status=? ORDER BY created_at, run_id",
+                (RUN_STATUS_RUNNING,),
+            ).fetchall()
+        return [self._row_to_run(row) for row in rows]
+
+    def _mark_run_interrupted(self, run_id: str) -> None:
+        """Synchronous single-run interruption used by :meth:`mark_run_interrupted`."""
+        stamp = now_iso()
+        with self._connection() as connection:
+            connection.execute(
+                "UPDATE runs SET status=?, updated_at=?, finished_at=? WHERE run_id=?",
+                (RUN_STATUS_INTERRUPTED, stamp, stamp, run_id),
+            )
+
     def _mark_running_interrupted(self) -> int:
         """Mark runs whose owning process is gone as ``interrupted``.
 
@@ -1215,7 +1254,8 @@ class SqliteClientStore:
         stamp = now_iso()
         with self._connection() as connection:
             rows = connection.execute(
-                "SELECT run_id, owner_pid FROM runs WHERE status=?",
+                "SELECT run_id, owner_pid FROM runs WHERE status=? "
+                "AND (server_task_id IS NULL OR server_task_id='')",
                 (RUN_STATUS_RUNNING,),
             ).fetchall()
             stale = [
