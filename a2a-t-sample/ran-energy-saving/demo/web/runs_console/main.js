@@ -90,6 +90,12 @@ function tableHead(table, headRow) {
   table.appendChild(thead);
 }
 
+/** Short form of one id for a dense cell; the full value stays in the row title. */
+function shortId(value) {
+  const text = String(value || "");
+  return text.length > 13 ? `${text.slice(0, 8)}…` : text;
+}
+
 function valueText(value) {
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "object") return JSON.stringify(value);
@@ -198,6 +204,31 @@ function sourceBadge(kind, channel) {
   return badge;
 }
 
+/** Human name of the far side this run's server forwarded the task to. */
+function targetName(run) {
+  const hop = run.downstreamHop || (run.discovery === "nms" ? "nms" : "ran");
+  return hop === "ran" ? "RAN Agent" : "NMS";
+}
+
+/** Label the contexts by the hop each one belongs to.
+ *
+ * A2A-T and the gateway talk to the RAN/NMS directly, so their server context is the target's.
+ * A pure client run talks to the OSS Agent first; its server context belongs to that hop and the
+ * downstream fields carry the NMS/RAN Task the OSS continued on its own side.
+ */
+function contextLabels(run) {
+  const target = targetName(run);
+  if (run.protocol === "a2a-t" || run.sourceKind === "gateway") {
+    return { server: `${target} Context`, serverTask: `${target} Task`, downstream: null };
+  }
+  return {
+    server: "OSS Context",
+    serverTask: "OSS Task",
+    downstream: `${target} Context`,
+    downstreamTask: `${target} Task`,
+  };
+}
+
 function statusNode(value) {
   const status = el("span", `status ${value || ""}`, statusLabel(value));
   status.title = value || "";
@@ -210,7 +241,7 @@ function renderRows() {
   if (!state.runs.length) {
     const row = el("tr");
     const cell = el("td", "empty", "没有匹配的运行。");
-    cell.colSpan = 8;
+    cell.colSpan = 9;
     append(row, cell);
     body.appendChild(row);
     return;
@@ -235,6 +266,15 @@ function renderRows() {
       row,
       el("td", "num", run.tokenAvailable ? formatNumber(run.totalTokens) : "—"),
     );
+    const downstreamCell = el(
+      "td",
+      "mono",
+      run.downstreamContextId ? shortId(run.downstreamContextId) : "—",
+    );
+    if (run.downstreamContextId) {
+      downstreamCell.title = `${contextLabels(run).downstream} ${run.downstreamContextId}`;
+    }
+    append(row, downstreamCell);
     const requestCell = el("td", "request");
     const request = el("div", "request-text", run.userRequest || "—");
     request.title = run.userRequest || "";
@@ -375,13 +415,26 @@ function renderOverview(detail) {
     ]),
     kvCard("请求", [
       ["用户请求", detail.userRequest, false],
-      ["服务端 Context", detail.serverContextId, true],
-      ["服务端 Task", detail.serverTaskId, true],
+      ...contextRows(detail),
       ["Task 快照状态", task.state, false],
       ["Task 快照更新", formatTime(task.updatedAt), false],
     ]),
     kvCard("请求来源", sourcePairs),
   );
+}
+
+/** Context/Task rows of one run, labelled by hop so two A2A contexts are never conflated. */
+function contextRows(detail) {
+  const labels = contextLabels(detail);
+  const rows = [
+    [labels.server, detail.serverContextId, true],
+    [labels.serverTask, detail.serverTaskId, true],
+  ];
+  if (labels.downstream) {
+    rows.push([labels.downstream, detail.downstreamContextId, true]);
+    rows.push([labels.downstreamTask, detail.downstreamTaskId, true]);
+  }
+  return rows;
 }
 
 function renderTokens(tokens) {

@@ -250,7 +250,7 @@ def test_v2_migration_dedupes_active_runs(tmp_path: Path) -> None:
     # Constructing the store applies migration 2.
     SqliteClientStore(path)
     with connect(path) as connection:
-        assert schema_version(connection) == 5
+        assert schema_version(connection) == 6
         statuses = {
             str(run_id): str(status)
             for run_id, status in connection.execute(
@@ -265,12 +265,18 @@ def test_v2_migration_dedupes_active_runs(tmp_path: Path) -> None:
             str(row[1]) for row in connection.execute("PRAGMA table_info(runs)")
         }
         sources = connection.execute("SELECT source_kind, source_json FROM runs").fetchall()
+        downstream = connection.execute(
+            "SELECT downstream_task_id, downstream_context_id, downstream_hop FROM runs"
+        ).fetchall()
     assert statuses == {"older": "interrupted", "newer": "running"}
     # Rows written before the switch existed were A2A-T; the migration keeps that history.
     assert protocols == {"a2a-t"}
     # The request-origin columns are added to an existing database; old rows read as unknown.
     assert {"source_kind", "source_json"} <= source_columns
     assert set(sources) == {("", "{}")}
+    # The downstream identity columns exist too, and old rows carry no far-side Task.
+    assert {"downstream_task_id", "downstream_context_id", "downstream_hop"} <= source_columns
+    assert set(downstream) == {(None, None, "")}
 
     with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
         with connect(path) as connection:
@@ -508,3 +514,53 @@ async def test_run_source_round_trips_and_filters_the_console_list(tmp_path: Pat
     assert legacy is not None
     assert legacy["sourceKind"] == ""
     assert legacy["source"] == {}
+
+
+async def test_downstream_identity_round_trips_and_is_searchable(tmp_path: Path) -> None:
+    """The far-side Task lives beside the server one and is reachable from the console search."""
+    path = tmp_path / "client.sqlite3"
+    store = SqliteClientStore(path)
+    await store.ensure_conversation(conversation_id="conv-1")
+    await store.create_run(
+        ClientRunRecord(
+            run_id="run-1",
+            conversation_id="conv-1",
+            scenario="night",
+            mode="auto",
+            transport="webhook",
+            discovery="nms",
+            user_request="save energy",
+            protocol="pure",
+            server_task_id="outer-task",
+            server_context_id="outer-ctx",
+        )
+    )
+    await store.update_run(
+        "run-1",
+        status="finished",
+        downstream_task_id="nms-task",
+        downstream_context_id="nms-ctx",
+        downstream_hop="nms",
+    )
+
+    run = await store.get_run("run-1")
+    assert run is not None
+    # The server identity is never replaced by the downstream one.
+    assert run.server_task_id == "outer-task"
+    assert run.server_context_id == "outer-ctx"
+    assert run.downstream_task_id == "nms-task"
+    assert run.downstream_context_id == "nms-ctx"
+    assert run.downstream_hop == "nms"
+
+    for needle in ("nms-ctx", "nms-task", "outer-ctx", "outer-task"):
+        rows = read_client_run_summaries(path, query=needle)
+        assert [row["runId"] for row in rows] == ["run-1"], needle
+        assert rows[0]["downstreamContextId"] == "nms-ctx"
+        assert rows[0]["downstreamHop"] == "nms"
+
+    detail = read_client_run_detail(path, "run-1")
+    assert detail is not None
+    assert detail["serverContextId"] == "outer-ctx"
+    assert detail["downstreamTaskId"] == "nms-task"
+    assert detail["downstreamContextId"] == "nms-ctx"
+    assert detail["downstreamHop"] == "nms"

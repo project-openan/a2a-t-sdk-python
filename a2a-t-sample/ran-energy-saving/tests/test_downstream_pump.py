@@ -187,6 +187,10 @@ async def test_the_pump_updates_the_outer_task_and_pushes_late_events(tmp_path: 
     last_event = push_sender.events[-1][1]
     assert isinstance(last_event, TaskStatusUpdateEvent)
     assert last_event.status.state == TaskState.TASK_STATE_COMPLETED
+    # Every late outer event still names the far-side Task, so the client can query the NMS.
+    assert last_event.metadata["pure"]["downstreamTaskId"] == "inner-1"
+    assert last_event.metadata["pure"]["downstreamContextId"] == "inner-ctx"
+    assert last_event.metadata["pure"]["downstreamHop"] == "nms"
     binding = await binding_store.get("inner-1", "inner-ctx")
     assert binding is not None
     assert binding.terminal is True

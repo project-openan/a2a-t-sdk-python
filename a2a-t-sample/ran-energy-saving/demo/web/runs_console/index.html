@@ -50,7 +50,8 @@
       <select id="filter-scenario"><option value="">全部</option></select>
     </label>
     <label class="grow">搜索
-      <input id="filter-query" type="search" placeholder="请求内容 / run id / conversation id">
+      <input id="filter-query" type="search"
+             placeholder="请求内容 / run id / conversation id / 服务端或下游 task、context id">
     </label>
     <label>数量
       <select id="filter-limit">
@@ -76,11 +77,12 @@
               <th>来源</th>
               <th>耗时</th>
               <th>Token</th>
+              <th title="服务端继续到下游（NMS / RAN Agent）时的 Task Context">下游 Context</th>
               <th>请求摘要</th>
             </tr>
           </thead>
           <tbody id="runs-body">
-            <tr><td colspan="8" class="empty">读取中…</td></tr>
+            <tr><td colspan="9" class="empty">读取中…</td></tr>
           </tbody>
         </table>
       </div>

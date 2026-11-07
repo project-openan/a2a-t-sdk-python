@@ -536,29 +536,23 @@ class OSSPureExecutor(AgentExecutor):
         await consumer
 
         if result.final_state == FINAL_STATE_TASK_COMPLETED:
+            metrics = {
+                "hop": "oss",
+                "rounds": _rounds(result.events),
+                "messages": len(result.events),
+                "hops": self._hop_count(),
+            }
+            identity = self._downstream_identity(result)
             await updater.update_status(
                 TaskState.TASK_STATE_COMPLETED,
                 message=updater.new_agent_message(
                     [Part(text="OSS Agent completed the request.")],
                     metadata={
-                        "pure": {
-                            "hop": "oss",
-                            "phase": "report",
-                            "rounds": _rounds(result.events),
-                            "messages": len(result.events),
-                            "hops": self._hop_count(),
-                        },
+                        "pure": {**metrics, "phase": "report", **identity},
                         "hop": "oss",
                     },
                 ),
-                metadata={
-                    "pure": {
-                        "hop": "oss",
-                        "rounds": _rounds(result.events),
-                        "messages": len(result.events),
-                        "hops": self._hop_count(),
-                    }
-                },
+                metadata={"pure": {**metrics, **identity}},
             )
             return
         if result.final_state == FINAL_STATE_TASK_REJECTED:
@@ -566,7 +560,7 @@ class OSSPureExecutor(AgentExecutor):
                 TaskState.TASK_STATE_REJECTED,
                 message=updater.new_agent_message(
                     [Part(text="The RAN Agent rejected the request.")],
-                    metadata={"pure": {"hop": "ran"}, "hop": "ran"},
+                    metadata={"pure": {"hop": "ran", **self._downstream_identity(result)}, "hop": "ran"},
                 ),
             )
             return
@@ -579,11 +573,7 @@ class OSSPureExecutor(AgentExecutor):
             hop = self._downstream_hop()
             task_ref = f" ({result.task_id})" if result.task_id else ""
             metadata = {
-                "pure": {
-                    "hop": hop,
-                    "phase": "waiting",
-                    "downstreamTaskId": result.task_id,
-                },
+                "pure": {"hop": hop, "phase": "waiting", **self._downstream_identity(result)},
                 "hop": hop,
             }
             _LOGGER.info(
@@ -608,7 +598,10 @@ class OSSPureExecutor(AgentExecutor):
             self._start_pending_pump(task.id)
             return
         await updater.failed(
-            message=updater.new_agent_message([Part(text=f"The RAN hop ended with state {result.final_state}.")])
+            message=updater.new_agent_message(
+                [Part(text=f"The RAN hop ended with state {result.final_state}.")],
+                metadata={"pure": self._downstream_identity(result)},
+            )
         )
 
     def _nms_mode(self) -> bool:
@@ -622,6 +615,20 @@ class OSSPureExecutor(AgentExecutor):
     def _downstream_hop(self) -> str:
         """Hop tag of downstream events: ``nms`` in a vendor run, ``ran`` in the local topology."""
         return "nms" if self._nms_mode() else "ran"
+
+    def _downstream_identity(self, result: ClientFlowResult) -> dict[str, object]:
+        """Return the far-side Task identity written on every event after the downstream hop.
+
+        The client owns the outer A2A Task, and ``result.task_id``/``context_id`` belong to the
+        downstream server, not to that outer Task. Publishing them under ``downstream*`` keeps both
+        identities and lets a client query the NMS/RAN Agent with the values it actually knows.
+        """
+        identity: dict[str, object] = {"downstreamHop": self._downstream_hop()}
+        if result.task_id:
+            identity["downstreamTaskId"] = result.task_id
+        if result.context_id:
+            identity["downstreamContextId"] = result.context_id
+        return identity
 
     def _hop_count(self) -> int:
         """Engineer → OSS → downstream: two hops against the NMS, three in the local topology."""

@@ -213,6 +213,24 @@ def test_intent_panel_is_resizable_and_the_normalized_request_collapses() -> Non
     assert ".business-text > summary" in css
 
 
+def test_the_result_card_names_each_hop_context() -> None:
+    """A pure run has two A2A contexts; the ending card must label which hop each one is."""
+    main = (PRESENTATION_DIR / "js" / "main.js").read_text(encoding="utf-8")
+    state = (PRESENTATION_DIR / "js" / "state.js").read_text(encoding="utf-8")
+    copy = (PRESENTATION_DIR / "copy.js").read_text(encoding="utf-8")
+
+    assert "function runIdentities()" in main
+    assert "downstream.downstreamContextId" in main
+    assert "downstream.downstreamTaskId" in main
+    assert "identityBlock(identities)" in main
+    # The run records the context of the hop it owns (events carry it), not the far-side one.
+    assert "state.contextId = entry.contextId" in state
+    assert 'contextOss: "OSS context"' in copy
+    assert 'contextNms: "NMS context"' in copy
+    assert 'contextRan: "RAN Agent context"' in copy
+    assert 'contextOss: "OSS Context"' in copy
+
+
 def test_phone_breakpoint_wraps_the_header_meta() -> None:
     """The brand row must not widen the document on a phone (390 px audit)."""
     css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")

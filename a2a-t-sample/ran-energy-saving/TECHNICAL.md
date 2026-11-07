@@ -995,7 +995,8 @@ read-only view over the client SQLite store plus the run directory:
 
 - `GET /api/run-console/runs` accepts `limit` / `offset` / `protocol` / `status` / `source` /
   `scenario` / `query` and returns rows joined with `run_metrics` (duration, token totals, LLM
-  calls). `query` matches the request, run id and conversation id.
+  calls). `query` matches the request, run id, conversation id, and the server or downstream
+  Task/context id.
 - `GET /api/run-console/runs/{id}` composes the persisted run, its `metric_json`, transcript (only
   when the recorded path resolves inside the runs directory), `wire.jsonl` / `wire-oss.jsonl`, the
   server trace JSONL and the live snapshot when the run is still in memory.
@@ -1012,6 +1013,18 @@ The record is stored in the `runs` table as `source_kind` and `source_json` (sch
 existing rows read as empty), copied into the transcript (`source`), and exposed by both the live
 snapshot and the persisted run detail. Allowed kinds are `presentation`, `explorer`, `tester`,
 `gateway`, `api` and `cli`; an unknown declaration falls back to `api`.
+
+**Cross-hop identity.** A pure run has two A2A conversations: the one this client owns (the OSS
+Agent) and the one the OSS Agent continues on its far side (the NMS or the local RAN Agent). They
+are different contexts by design, and the client never overwrites its own `taskId`/`contextId`
+with the far-side one. After the downstream hop the OSS Agent publishes
+`metadata.pure.downstreamTaskId` / `downstreamContextId` / `downstreamHop` on every event it
+emits; the long-task pump adds the same fields to every late outer event, and the inbound gateway
+adds them to its final artifact and status. The run persists them in `runs.downstream_task_id` /
+`downstream_context_id` / `downstream_hop` (schema migration 6; older rows read as empty), the
+console labels each context by hop (`OSS Context` versus `NMS Context` / `RAN Agent Context`), and
+the presentation result card shows the same rows. An A2A-T run talks to the RAN side directly, so
+its one context is the target's and no downstream fields are written.
 
 ## 5. Protocol reference
 

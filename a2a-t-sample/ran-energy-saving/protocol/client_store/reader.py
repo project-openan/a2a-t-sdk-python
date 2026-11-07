@@ -54,6 +54,7 @@ def read_client_run_summaries(
             f"""
             SELECT r.run_id, r.conversation_id, r.scenario, r.mode, r.status, r.final_state,
                    r.protocol, r.user_request, r.error, r.source_kind, r.source_json,
+                   r.downstream_task_id, r.downstream_context_id, r.downstream_hop,
                    r.created_at, r.updated_at, r.finished_at,
                    m.duration_ms, m.total_tokens, m.prompt_tokens, m.completion_tokens,
                    m.llm_calls, m.token_available,
@@ -80,6 +81,9 @@ def read_client_run_summaries(
                 "error": row["error"],
                 "sourceKind": str(row["source_kind"] or ""),
                 "sourceChannel": _source_channel(row["source_json"]),
+                "downstreamTaskId": row["downstream_task_id"],
+                "downstreamContextId": row["downstream_context_id"],
+                "downstreamHop": str(row["downstream_hop"] or ""),
                 "createdAt": str(row["created_at"]),
                 "updatedAt": str(row["updated_at"]),
                 "finishedAt": row["finished_at"],
@@ -161,9 +165,11 @@ def _run_filters(
     if query:
         needle = f"%{query}%"
         clauses.append(
-            "(r.user_request LIKE ? OR r.run_id LIKE ? OR r.conversation_id LIKE ?)"
+            "(r.user_request LIKE ? OR r.run_id LIKE ? OR r.conversation_id LIKE ?"
+            " OR r.server_task_id LIKE ? OR r.server_context_id LIKE ?"
+            " OR r.downstream_task_id LIKE ? OR r.downstream_context_id LIKE ?)"
         )
-        params.extend((needle, needle, needle))
+        params.extend((needle, needle, needle, needle, needle, needle, needle))
     return clauses, params
 
 
@@ -204,11 +210,15 @@ def read_client_run_detail(path: str | Path, run_id: str) -> dict[str, object] |
             "mode": str(run["mode"]),
             "transport": str(run["transport"]),
             "discovery": str(run["discovery"]),
+            "protocol": str(run["protocol"]),
             "userRequest": str(run["user_request"]),
             "status": str(run["status"]),
             "finalState": run["final_state"],
             "serverContextId": run["server_context_id"],
             "serverTaskId": run["server_task_id"],
+            "downstreamTaskId": run["downstream_task_id"],
+            "downstreamContextId": run["downstream_context_id"],
+            "downstreamHop": str(run["downstream_hop"] or ""),
             "error": run["error"],
             "idempotencyKey": str(run["idempotency_key"]),
             "sourceKind": str(run["source_kind"] or ""),

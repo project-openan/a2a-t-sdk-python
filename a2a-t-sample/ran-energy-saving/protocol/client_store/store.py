@@ -130,6 +130,9 @@ CREATE TABLE IF NOT EXISTS runs (
   final_state       TEXT,
   server_context_id TEXT,
   server_task_id    TEXT,
+  downstream_task_id TEXT,
+  downstream_context_id TEXT,
+  downstream_hop    TEXT NOT NULL DEFAULT '',
   error             TEXT,
   owner_pid         INTEGER NOT NULL DEFAULT 0,
   idempotency_key   TEXT NOT NULL DEFAULT '',
@@ -246,6 +249,25 @@ def _add_run_source(connection: sqlite3.Connection) -> None:
         )
 
 
+def _add_run_downstream(connection: sqlite3.Connection) -> None:
+    """Record the downstream Task one run continued on the far side of an intermediate hop.
+
+    The client talks to its own server; when that server forwards the work again (OSS Agent to
+    NMS/RAN Agent, gateway to NMS), the downstream Task/context belong to another hop and must not
+    overwrite ``server_*``. Rows written before this migration keep the empty values and the
+    console shows "—".
+    """
+    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)")}
+    if "downstream_task_id" not in columns:
+        connection.execute("ALTER TABLE runs ADD COLUMN downstream_task_id TEXT")
+    if "downstream_context_id" not in columns:
+        connection.execute("ALTER TABLE runs ADD COLUMN downstream_context_id TEXT")
+    if "downstream_hop" not in columns:
+        connection.execute(
+            "ALTER TABLE runs ADD COLUMN downstream_hop TEXT NOT NULL DEFAULT ''"
+        )
+
+
 #: Ordered schema migrations; index ``i`` upgrades version ``i`` to ``i + 1``.
 _MIGRATIONS: Final[tuple[SchemaMigration, ...]] = (
     _create_schema,
@@ -253,6 +275,7 @@ _MIGRATIONS: Final[tuple[SchemaMigration, ...]] = (
     _create_run_metrics,
     _add_run_protocol,
     _add_run_source,
+    _add_run_downstream,
 )
 
 
@@ -265,6 +288,9 @@ _RUN_UPDATE_FIELDS: Final[frozenset[str]] = frozenset(
         "final_state",
         "server_context_id",
         "server_task_id",
+        "downstream_task_id",
+        "downstream_context_id",
+        "downstream_hop",
         "owner_pid",
         "error",
         "transcript_json",
@@ -389,6 +415,9 @@ class ClientRunRecord:
     final_state: str | None = None
     server_context_id: str | None = None
     server_task_id: str | None = None
+    downstream_task_id: str | None = None
+    downstream_context_id: str | None = None
+    downstream_hop: str = ""
     error: str | None = None
     owner_pid: int = 0
     idempotency_key: str = ""
@@ -945,9 +974,10 @@ class SqliteClientStore:
                 INSERT INTO runs
                     (run_id, conversation_id, turn_id, scenario, mode, transport, discovery,
                      protocol, user_request, status, final_state, server_context_id, server_task_id,
+                     downstream_task_id, downstream_context_id, downstream_hop,
                      error, owner_pid, idempotency_key, source_kind, source_json, transcript_json,
                      transcript_markdown, trace_json, created_at, updated_at, finished_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.run_id,
@@ -963,6 +993,9 @@ class SqliteClientStore:
                     record.final_state,
                     record.server_context_id,
                     record.server_task_id,
+                    record.downstream_task_id,
+                    record.downstream_context_id,
+                    record.downstream_hop,
                     record.error,
                     record.owner_pid,
                     record.idempotency_key,
@@ -1007,6 +1040,13 @@ class SqliteClientStore:
                 str(row["server_context_id"]) if row["server_context_id"] else None
             ),
             server_task_id=str(row["server_task_id"]) if row["server_task_id"] else None,
+            downstream_task_id=(
+                str(row["downstream_task_id"]) if row["downstream_task_id"] else None
+            ),
+            downstream_context_id=(
+                str(row["downstream_context_id"]) if row["downstream_context_id"] else None
+            ),
+            downstream_hop=str(row["downstream_hop"] or ""),
             error=str(row["error"]) if row["error"] else None,
             owner_pid=int(row["owner_pid"] or 0),
             idempotency_key=str(row["idempotency_key"]),

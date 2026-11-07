@@ -348,13 +348,22 @@ class DownstreamPump:
         )
 
     def _metadata(self, event: Mapping[str, object] | None, phase: str) -> dict[str, object]:
-        """Build the sample's hop/pure metadata of one outer event."""
+        """Build the sample's hop/pure metadata of one outer event.
+
+        Every outer event carries the far-side Task identity, so a client that only sees the outer
+        Task can still query the NMS/RAN Agent by its own task id and context id.
+        """
         pure: dict[str, object] = {}
         if event is not None:
             raw = event.get("metadata")
             if isinstance(raw, Mapping) and isinstance(raw.get("pure"), Mapping):
                 pure.update(dict(raw["pure"]))
         pure.update({"hop": self._context.downstream_hop, "phase": phase})
+        if self._context.inner_task_id:
+            pure["downstreamTaskId"] = self._context.inner_task_id
+        if self._context.inner_context_id:
+            pure["downstreamContextId"] = self._context.inner_context_id
+        pure["downstreamHop"] = self._context.downstream_hop
         return {"pure": pure, "hop": self._context.downstream_hop}
 
     async def _persist(self, event: TaskStatusUpdateEvent | TaskArtifactUpdateEvent) -> None:

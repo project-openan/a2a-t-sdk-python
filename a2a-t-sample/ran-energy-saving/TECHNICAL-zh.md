@@ -791,7 +791,7 @@ SQLite 和运行目录：
 
 - `GET /api/run-console/runs` 支持 `limit` / `offset` / `protocol` / `status` / `source` /
   `scenario` / `query`，返回与 `run_metrics` 连接后的行（耗时、Token 总量、LLM 调用数）。
-  `query` 匹配请求内容、run id 和 conversation id。
+  `query` 匹配请求内容、run id、conversation id，以及服务端或下游的 Task/Context id。
 - `GET /api/run-console/runs/{id}` 组合持久化 run、`metric_json`、transcript（仅当记录的路径确实
   位于运行目录内）、`wire.jsonl` / `wire-oss.jsonl`、服务端 trace JSONL，以及仍在内存中的 live
   快照。
@@ -806,6 +806,15 @@ CLI 记录 `kind=cli`。
 来源写入 `runs` 表的 `source_kind` 和 `source_json`（schema 迁移 5，旧行为空），同时复制到
 transcript 的 `source`，由 live 快照和持久化详情对外提供。允许的类型为 `presentation`、
 `explorer`、`tester`、`gateway`、`api`、`cli`；未知声明回退为 `api`。
+
+**跨跳身份。** pure 运行有**两段** A2A 会话：本客户端拥有的那段（OSS Agent），以及 OSS Agent
+在自己远端继续的那段（NMS 或本地 RAN Agent）。两者本就是不同的 context，客户端绝不用下游值覆盖
+自己的 `taskId`/`contextId`。下游这一跳之后，OSS Agent 在它发出的**每个**事件上写入
+`metadata.pure.downstreamTaskId` / `downstreamContextId` / `downstreamHop`；长任务 pump 给每个
+迟到的外层事件补同样的字段，入站 gateway 也写进最终 artifact 和状态。run 持久化到
+`runs.downstream_task_id` / `downstream_context_id` / `downstream_hop`（schema 迁移 6，旧行为空），
+控制台按跳标注两个 context（`OSS Context` 与 `NMS Context` / `RAN Agent Context`），presentation
+结果卡片也显示同样的行。A2A-T 运行直接面向 RAN 侧，只有一个 context，不写下游字段。
 
 ## 5. 协议参考
 

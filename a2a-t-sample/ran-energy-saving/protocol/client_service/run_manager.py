@@ -438,6 +438,9 @@ class RunManager:
             detached=True,
             conversation_id=record.conversation_id,
             idempotency_key=record.idempotency_key,
+            downstream_task_id=record.downstream_task_id,
+            downstream_context_id=record.downstream_context_id,
+            downstream_hop=record.downstream_hop,
             store=self._store,
             source=dict(record.source),
         )
@@ -840,6 +843,9 @@ class RunManager:
             status=cast(RunStatus, record.status),
             conversation_id=record.conversation_id,
             idempotency_key=record.idempotency_key,
+            downstream_task_id=record.downstream_task_id,
+            downstream_context_id=record.downstream_context_id,
+            downstream_hop=record.downstream_hop,
             store=self._store,
             source=dict(record.source),
         )
@@ -1107,6 +1113,9 @@ class RunManager:
                     run.run_id,
                     server_task_id=task_id,
                     server_context_id=result.context_id,
+                    downstream_task_id=run.downstream_task_id,
+                    downstream_context_id=run.downstream_context_id,
+                    downstream_hop=run.downstream_hop,
                 )
         run.emit_trace(
             kind="task_tracking",
@@ -1298,6 +1307,9 @@ class RunManager:
             final_state=result.final_state if result is not None else None,
             server_context_id=result.context_id if result is not None else None,
             server_task_id=result.task_id if result is not None else None,
+            downstream_task_id=run.downstream_task_id,
+            downstream_context_id=run.downstream_context_id,
+            downstream_hop=run.downstream_hop,
             error=run.error,
             transcript_json=str(run.paths.json_path) if run.paths is not None else None,
             transcript_markdown=(str(run.paths.markdown_path) if run.paths is not None else None),

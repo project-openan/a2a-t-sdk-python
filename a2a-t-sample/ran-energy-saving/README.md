@@ -222,8 +222,9 @@ discovery are still chosen by the backend per protocol, not by the sheet.
 presentation page. It reads persisted client runs from SQLite instead of presentation state, so a
 run can be inspected after a page reload or a UI restart:
 
-- the list filters by protocol / status / source / scenario and searches the request, run id and
-  conversation id, showing duration, tokens and creation time;
+- the list filters by protocol / status / source / scenario and searches the request, run id,
+  conversation id and the server/downstream task and context ids, showing duration, tokens and
+  creation time;
 - the detail has Overview, Metrics, Timeline, Negotiation, Wire and Raw JSON tabs. Metrics include
   token usage (with cached tokens and hit rate), the latency split and accuracy; the timeline comes
   from the persisted transcript; negotiation shows protocol events, client decisions and turns; wire
@@ -233,6 +234,10 @@ run can be inspected after a page reload or a UI restart:
   Referer, User-Agent, Accept-Language, request id, entry path and receive time. Tester batches also
   record the batch/case, and the gateway records Task / Context. A `token` query parameter in the
   referer is removed before storage.
+- **cross-hop identity** is shown for two-hop runs: a pure run exposes `OSS Context` for the hop it
+  owns and `NMS Context` / `RAN Agent Context` for the Task the OSS Agent continued on its far
+  side (with the matching task ids). The NMS context is what identifies the task on the vendor
+  side; the OSS context never does. An A2A-T run talks to the RAN side directly, so it has one.
 - the list auto-refreshes every 5 seconds (optional), and a selected run is addressable through
   `#run=<id>`.
 

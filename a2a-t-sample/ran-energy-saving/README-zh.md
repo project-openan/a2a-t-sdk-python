@@ -189,8 +189,8 @@ SUBMITTED。发送前任务若已进入终态，后端会明确拒绝。该入�
 `/runs` 是测试团队专用的诊断页面（启动器会打印地址），与演示页分离。它读取客户端 SQLite 中的
 持久化运行，而不是展示页的内存状态，因此重启后仍可回看：
 
-- 列表支持协议 / 状态 / 来源 / 场景筛选和请求、run id、conversation id 搜索，并显示耗时、
-  Token 和创建时间；
+- 列表支持协议 / 状态 / 来源 / 场景筛选和请求、run id、conversation id、服务端/下游 task 与
+  context id 搜索，并显示耗时、Token 和创建时间；
 - 详情分概览、指标、时间线、协商、报文、原始 JSON：指标含 Token（含缓存命中与命中率）、耗时拆分
   和准确率；时间线来自持久化 transcript；协商展示协议事件、客户端决策和会话轮次；报文读取
   `wire.jsonl` / `wire-oss.jsonl`；
@@ -198,6 +198,9 @@ SUBMITTED。发送前任务若已进入终态，后端会明确拒绝。该入�
   `api` / `cli`）、入口通道、客户端地址、`X-Forwarded-For`、Host、Origin、Referer、User-Agent、
   Accept-Language、请求 ID、入口路径和接收时间；测试页批次还会记录批次/用例，网关会记录 Task /
   Context。Referer 中的 `token` 查询参数会先被移除，不会落库。
+- **跨跳身份**：两跳的 pure 运行会并列显示本客户端这一跳的 `OSS Context`，以及 OSS Agent 在远端
+  继续的 `NMS Context` / `RAN Agent Context`（连同对应的 task id）。在网管侧查任务要用后者，
+  前者查不到。A2A-T 运行直连 RAN 侧，只有一个 context。
 - 列表自动刷新（5 秒，可关闭）；选中运行后通过 URL hash `#run=<id>` 可直接分享定位。
 
 页面本身是中文，和测试页一样属于内部工具。

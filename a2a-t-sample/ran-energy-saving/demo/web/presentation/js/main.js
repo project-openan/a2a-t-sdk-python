@@ -2078,6 +2078,8 @@ function buildResultCard() {
     const metrics = ui.view.pureMetrics || pureMetricsFromLog();
     if (metrics) card.append(pureMetricsBlock(metrics, ui.copy));
   }
+  const identities = runIdentities();
+  if (identities.length > 0) card.append(identityBlock(identities));
   const langfuse = ui.view.langfuse;
   if (langfuse && langfuse.enabled && typeof langfuse.traceId === "string") {
     if (typeof langfuse.url === "string" && langfuse.url) {
@@ -2108,6 +2110,47 @@ function pureMetricsFromLog() {
     }
   }
   return null;
+}
+
+/** The Task and context of each hop this run touched, labelled by owner.
+ *
+ * A pure run has two contexts: the one this page owns (the OSS Agent) and the one the OSS Agent
+ * continued on its own far side (the NMS or RAN Agent). They are different A2A conversations, so
+ * the card must never show one under the other's name.
+ */
+function runIdentities() {
+  const view = ui.view;
+  const labels = ui.copy.result;
+  const nms = Boolean(ui.meta?.nmsTasksEnabled);
+  const rows = [];
+  if (view.protocol === "pure") {
+    if (view.contextId) rows.push([labels.contextOss, view.contextId]);
+    const downstream = view.pure || {};
+    const ran = downstream.downstreamHop === "ran";
+    if (downstream.downstreamTaskId) {
+      rows.push([ran ? labels.taskRan : labels.taskNms, downstream.downstreamTaskId]);
+    }
+    if (downstream.downstreamContextId) {
+      rows.push([ran ? labels.contextRan : labels.contextNms, downstream.downstreamContextId]);
+    }
+    return rows;
+  }
+  // A2A-T talks to the RAN side directly, so this run's own Task is the one that side owns.
+  if (view.taskId) rows.push([nms ? labels.taskNms : labels.taskRan, view.taskId]);
+  if (view.contextId) rows.push([nms ? labels.contextNms : labels.contextRan, view.contextId]);
+  return rows;
+}
+
+/** Compact block of the A2A identities, one row per value. */
+function identityBlock(rows) {
+  const block = el("section", "pure-metrics run-identity");
+  block.append(el("h4", "pure-metrics-title", ui.copy.result.identities));
+  for (const [label, value] of rows) {
+    const row = el("div", "pure-metric");
+    row.append(el("span", "", label), el("b", "", value));
+    block.append(row);
+  }
+  return block;
 }
 
 /** Compact metrics block of one pure A2A run. */

@@ -156,6 +156,19 @@ async def test_the_three_hop_chain_completes_and_tags_every_hop() -> None:
     assert "oss" in hops
     assert "ran" in hops or "ran->mie" in hops
 
+    # The report event names the far-side Task: the client owns the OSS Task, never this one.
+    reports = [
+        event["metadata"]["pure"]
+        for event in result.events
+        if isinstance(event.get("metadata"), dict)
+        and isinstance(event["metadata"].get("pure"), dict)
+        and event["metadata"]["pure"].get("phase") == "report"
+    ]
+    assert reports, "the OSS Agent publishes a report event"
+    assert reports[-1]["downstreamHop"] == "ran"
+    assert reports[-1]["downstreamTaskId"]
+    assert reports[-1]["downstreamContextId"]
+
     assert any(
         isinstance(event.get("metadata"), dict)
         and isinstance(event["metadata"].get("pure"), dict)
@@ -250,6 +263,7 @@ async def test_oss_keeps_the_outer_task_working_when_the_downstream_is_incomplet
     assert "still running" in last.status.message.parts[0].text
     assert last.metadata["pure"]["phase"] == "waiting"
     assert last.metadata["pure"]["downstreamTaskId"] == "nms-task-1"
+    assert last.metadata["pure"]["downstreamHop"] == "ran"
 
 
 async def test_oss_fails_the_outer_task_when_the_downstream_failed(

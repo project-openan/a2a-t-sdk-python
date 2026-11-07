@@ -176,6 +176,11 @@ class RunState:
     intent_future: asyncio.Future[bool] | None = None
     cancel_requested: bool = False
     remote_task_id: str | None = None
+    #: Downstream Task the server continued on its own far side (NMS / RAN Agent), when it reports
+    #: one. These never replace ``result.task_id``/``context_id``: those belong to this run's hop.
+    downstream_task_id: str | None = None
+    downstream_context_id: str | None = None
+    downstream_hop: str = ""
     intent_mode: str = ""
     validate_before_send: bool = False
     #: ``create`` for a new A2A Task, ``modify`` for a Modify-only run against an existing one.
@@ -489,6 +494,7 @@ class RunState:
         phase = infer_event_phase(event)
         seq, step = self.allocate(phase)
         detail = _pure_detail(event)
+        self._note_downstream(detail)
         if isinstance(detail, Mapping) and isinstance(detail.get("intentProcessed"), Mapping):
             self.record_intent(detail["intentProcessed"])
         entry = self.transcript.record_event(
@@ -732,6 +738,28 @@ class RunState:
             "langfuse": self.langfuse,
         }
 
+    def _note_downstream(self, detail: Mapping[str, object] | None) -> None:
+        """Remember the downstream Task identity the server reports for this run.
+
+        The OSS Agent and the gateway both forward one request to another A2A server. That far-side
+        Task/context is a different hop from the one this run owns, so it is recorded next to
+        ``result.task_id``/``context_id`` instead of replacing them.
+        """
+        if not isinstance(detail, Mapping):
+            return
+        pure = detail.get("pure")
+        if not isinstance(pure, Mapping):
+            return
+        task_id = _string_value(pure.get("downstreamTaskId"))
+        context_id = _string_value(pure.get("downstreamContextId"))
+        hop = _string_value(pure.get("downstreamHop"))
+        if task_id:
+            self.downstream_task_id = task_id
+        if context_id:
+            self.downstream_context_id = context_id
+        if hop:
+            self.downstream_hop = hop
+
     def snapshot(self) -> dict[str, object]:
         """Return the JSON status/result/transcript document of this run."""
         transcript = self.transcript.to_dict() if self.transcript is not None else None
@@ -767,6 +795,9 @@ class RunState:
             ),
             "contextId": self.result.context_id if self.result is not None else None,
             "taskId": self.result.task_id if self.result is not None else None,
+            "downstreamTaskId": self.downstream_task_id,
+            "downstreamContextId": self.downstream_context_id,
+            "downstreamHop": self.downstream_hop,
             "report": self.result.report if self.result is not None else None,
             "error": self.error,
             "transcriptError": self.transcript_error,

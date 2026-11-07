@@ -52,6 +52,8 @@ export function createState() {
     taskState: null,
     taskCompleted: false,
     taskId: null,
+    //: Context of the hop this run talks to (the OSS Agent in a pure run, the RAN/NMS otherwise).
+    contextId: null,
     //: Report of the baseline phase, kept when the Modify phase starts.
     baselineReport: null,
     //: 0 for the baseline Create phase, 1 for the Modify continuation.
@@ -302,6 +304,7 @@ function applyEvent(state, entry) {
   if (isObject(entry.task) && typeof entry.task.id === "string" && entry.task.id) {
     state.taskId = entry.task.id;
   }
+  if (typeof entry.contextId === "string" && entry.contextId) state.contextId = entry.contextId;
   if (intentProcessed !== null) applyBusinessIntent(state, intentProcessed);
 
   if (pure !== null || hop !== null) {

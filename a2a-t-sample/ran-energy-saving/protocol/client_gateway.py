@@ -64,7 +64,7 @@ from a2a.types import (
 from a2a.utils.constants import TransportProtocol
 from google.protobuf.json_format import MessageToDict, ParseDict
 from shared.agent_card import AGENT_CARD_ORGANIZATION, AGENT_CARD_PROVIDER_URL
-from shared.config import GATEWAY_SCENARIO_ENV_KEY, SampleConfig, load_config
+from shared.config import DISCOVERY_NMS, GATEWAY_SCENARIO_ENV_KEY, SampleConfig, load_config
 from shared.http_security import (
     BearerAuthMiddleware,
     install_health_routes,
@@ -78,6 +78,7 @@ from shared.run_constants import PROTOCOL_A2A_T
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 
+from protocol.client_flow import ClientFlowResult
 from protocol.client_runtime import MODE_AUTO
 from protocol.client_service import RunConflictError, RunManager, RunState
 from protocol.client_store import SqliteClientStore
@@ -266,12 +267,16 @@ class ClientGatewayExecutor(AgentExecutor):
                     "clientRunId": run.run_id,
                     "clientConversationId": run.conversation_id,
                     "finalState": result.final_state,
+                    "pure": self._downstream_identity(result),
                 },
                 last_chunk=True,
             )
             await updater.update_status(
                 TaskState.TASK_STATE_COMPLETED,
-                message=updater.new_agent_message([Part(text=GATEWAY_FINAL_TEXT)]),
+                message=updater.new_agent_message(
+                    [Part(text=GATEWAY_FINAL_TEXT)],
+                    metadata={"phase": "report", **self._downstream_identity(result)},
+                ),
             )
             return
 
@@ -279,6 +284,24 @@ class ClientGatewayExecutor(AgentExecutor):
         await updater.failed(
             message=updater.new_agent_message([Part(text=f"The request failed: {reason}")])
         )
+
+    def _downstream_identity(self, result: ClientFlowResult | None) -> dict[str, object]:
+        """Return the far-side Task identity of one finished gateway run.
+
+        The caller owns the gateway Task; ``result.task_id``/``context_id`` are the Task and
+        context of the RAN server the gateway called. Publishing them under ``downstream*`` lets
+        the caller query that server instead of the gateway.
+        """
+        identity: dict[str, object] = {
+            "downstreamHop": "nms" if self._config.discovery == DISCOVERY_NMS else "ran"
+        }
+        task_id = getattr(result, "task_id", None)
+        context_id = getattr(result, "context_id", None)
+        if isinstance(task_id, str) and task_id:
+            identity["downstreamTaskId"] = task_id
+        if isinstance(context_id, str) and context_id:
+            identity["downstreamContextId"] = context_id
+        return identity
 
     async def _publish_progress(
         self,

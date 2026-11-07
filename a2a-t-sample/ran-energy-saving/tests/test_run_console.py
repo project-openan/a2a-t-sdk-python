@@ -12,9 +12,9 @@ import httpx
 import pytest
 from demo.web.app import create_app
 from protocol.client_flow import ClientFlowResult
-from protocol.client_store import SqliteClientStore
+from protocol.client_store import ClientRunRecord, SqliteClientStore
 from shared.config import SampleConfig
-from shared.run_constants import FINAL_STATE_TASK_COMPLETED, PROTOCOL_A2A_T
+from shared.run_constants import FINAL_STATE_TASK_COMPLETED, PROTOCOL_A2A_T, PROTOCOL_PURE
 
 
 class _PassRuntime:
@@ -203,3 +203,46 @@ async def test_the_console_searches_the_request_and_run_id(
     missing = await client.get("/api/run-console/runs?query=no-such-request")
     assert missing.json()["runs"] == []
     assert missing.json()["total"] == 0
+
+
+async def test_the_console_exposes_the_downstream_task_of_a_two_hop_run(
+    console_client: tuple[httpx.AsyncClient, SqliteClientStore],
+) -> None:
+    """A tester can find the run by the NMS context, not only by the OSS one."""
+    client, store = console_client
+    await store.ensure_conversation(conversation_id="conv-down")
+    await store.create_run(
+        ClientRunRecord(
+            run_id="run-down",
+            conversation_id="conv-down",
+            scenario="night",
+            mode="auto",
+            transport="webhook",
+            discovery="nms",
+            protocol=PROTOCOL_PURE,
+            user_request="save energy",
+            status="running",
+            server_task_id="outer-task",
+            server_context_id="outer-ctx",
+        )
+    )
+    await store.update_run(
+        "run-down",
+        status="finished",
+        downstream_task_id="nms-task",
+        downstream_context_id="nms-ctx",
+        downstream_hop="nms",
+    )
+
+    listing = await client.get("/api/run-console/runs?query=nms-ctx")
+    rows = listing.json()["runs"]
+    assert [row["runId"] for row in rows] == ["run-down"]
+    assert rows[0]["downstreamTaskId"] == "nms-task"
+    assert rows[0]["downstreamContextId"] == "nms-ctx"
+    assert rows[0]["downstreamHop"] == "nms"
+
+    detail = (await client.get("/api/run-console/runs/run-down")).json()
+    assert detail["protocol"] == PROTOCOL_PURE
+    assert detail["serverContextId"] == "outer-ctx"
+    assert detail["downstreamContextId"] == "nms-ctx"
+    assert detail["downstreamTaskId"] == "nms-task"
