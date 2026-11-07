@@ -69,8 +69,32 @@ class OpenAIClient(LLMClient):
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        import os
+        max_attempts = 1
+        raw = os.environ.get("A2AT_LLM_MAX_ATTEMPTS", "")
+        if raw:
+            try:
+                max_attempts = max(1, int(raw))
+            except ValueError:
+                pass
+        last_exc: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return self._call_structured(payload, debug_enabled=self._call_logger.isEnabledFor(logging.DEBUG))
+            except LLMRuntimeError as exc:
+                last_exc = exc
+                if attempt < max_attempts:
+                    wait = min(2 ** attempt, 10)
+                    self._logger.warning(
+                        "%s structured call attempt %s/%s failed, retrying in %ss: %s",
+                        self._config.provider, attempt, max_attempts, wait, exc,
+                    )
+                    time.sleep(wait)
+        raise last_exc  # type: ignore[misc]
+
+    def _call_structured(self, payload: dict[str, Any], *, debug_enabled: bool) -> LLMResponse:
+        """Execute one structured LLM call and parse the response."""
         started = time.perf_counter()
-        debug_enabled = self._call_logger.isEnabledFor(logging.DEBUG)
         if debug_enabled:
             self._log_request(payload)
         try:

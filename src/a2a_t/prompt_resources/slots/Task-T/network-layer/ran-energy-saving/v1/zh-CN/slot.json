@@ -33,7 +33,7 @@
       "examples": [
         "能耗目标：30%"
       ],
-      "x-a2at-value-constraint": "1. 量化目标 能耗目标：节能的增益目标，目标值格式必须为百分比，如总功耗降低的百分比。 2. 定性目标 在满足任务上下文的条件下进行最大化节能。 量化增益目标必须是单个具体百分比（如30%），不能是“20%-30%”这类区间；区间必须上报 slot.constraint_violated。定性节能模式只能是：激进节能（也称“最大化节能”或较高的 GS 值）、保守节能（也称“最大化用户体验保障”或“最大化KPI保障”）、体验无损节能、体验有损节能；其它模式值（如“green”）必须上报 slot.constraint_violated。定性模式仅描述节能激进程度；带数值的吞吐/速率/用户体验目标（如“User Experience Target to 10”、“user experience for 1080p video”）是速率保障目标，不是模式，不应判为模式越界。"
+      "x-a2at-value-constraint": "1. 量化目标：节能增益目标，为单个百分比（如30%）。区间（如“20%-30%”）上报 slot.constraint_violated。 2. 定性目标：在任务上下文条件下最大化节能。模式必须是下列之一：激进、保守、体验无损、体验有损（同义词见下方[terminology]术语段）；其它值（如“green”）上报 slot.constraint_violated。带数值的吐吐/速率/用户体验目标是速率保障目标，不是模式，不应判为模式越界。"
     },
     "任务上下文": {
       "type": "string",
@@ -41,7 +41,7 @@
       "examples": [
         "节能的小区制式：NR；需要节能的时间范围：起始时间“08:00:00”，结束时间“12:00:00”；分时段速率保障目标：{00:00~06:00,2Mbps}、{06:00~18:00,10Mbps}。"
       ],
-      "x-a2at-value-constraint": "1. 节能的小区制式(LTE/4G/E-UTRAN、NR/5G/NG-RAN、LNR、全部) 2. 跨任务引用：当输入通过引用历史/前置任务来继承上下文参数（如“same as the previous task”、“the previous one”）时，引用必须明确无歧义。若输入中提到多个历史任务且引用未指明继承自哪一个，属于歧义引用，必须上报 slot.constraint_violated，slot_label 用“任务引用”，actual 写指代不清的原因（如“提到两个历史任务但\"previous task\"未指明是哪一个”）。不得静默选择其中一个候选任务的值进行填充；值必须置为 null。示例：输入提到两个历史任务（一个覆盖 A2ATestRegionA，NR，00:00:00–06:00:00，5 Mbps 下限；另一个覆盖 A2ATestRegionB，NR，00:00:00–06:00:00，2 Mbps 下限），然后说“same as the previous task”——引用歧义，上报 slot.constraint_violated；不得选择第二个任务的 2 Mbps 下限。 3. 需要执行节能的时间段区间范围，以天为周期循环执行，缺省则进行全时段节能，仅在节能开启时间范围内保障速率目标 4. 可在节能时关闭载波的频点 5. 速率保障目标：需要保障的下行吞吐率目标最小值及生效时间段（区域级支持分时段/全时段，未设置速率保障目标的时间段默认采取用户体验无损方式节能；站点级需提供站点列表、分时段速率保障目标、选填背景事件与持续时间）。分时段速率保障目标中的时间段不允许存在重叠，且必须落在执行节能的时间段区间内；若时间段存在重叠，视为结构违规，必须上报 slot.constraint_violated，slot_label 用“节能时段”，actual 写重叠时段描述与原因，如“17:30–23:00 at 20Mbps 与 22:00–24:00 at 2Mbps 时间重叠”。停电/修改场景下，受影响的站点列表（具体站点名，不能是“sites in this area”/“10 sites”这类模糊表达）和停电起止时间（具体时间，不能只有“tomorrow”/“five-hour”）为必填，任一缺失或模糊时上报 slot.not_provided，slot_label 用业务友好词描述缺失项、actual 写缺失原因——缺停电时间用 slot_label“停电起止时间”；缺站点用 slot_label“站点列表”。速率描述模糊（如“尽量最大化速率”而无具体数值）时必须上报 slot.not_provided，slot_label 用“保障速率”，actual 写模糊原因。当速率/吞吐变更被绑定到具体时间段（如“将速率从 08:00 调整到 18:00”）却未给出速率数值时，必须上报 slot.not_provided，slot_label 用“保障速率”，actual 写缺失内容；仅泛泛说“修改吞吐目标”且未给出该变更的具体时间段时，可接受不报错。请求关断载波时，具体频点为必填，缺失时上报 slot.not_provided，slot_label 用“关断频点”，actual 写缺失内容。 6. 节能的小区制式必须是 NR / 5G / NG-RAN / LTE / 4G / E-UTRAN / LNR / 全部；非法值（如“3G”）必须上报 slot.constraint_violated。停电时长必须是单个具体数值（如3小时），不能是“2 or 3 hours”这类区间；区间必须上报 slot.constraint_violated。频点必须是具体数值（如1600），不能是“approximately 1600”这类约数；约数必须上报 slot.constraint_violated。分时段速率保障目标的时间段必须是具体明确的起止区间（如08:00-12:00）；busy/idle/regular这类模糊时段描述必须上报 slot.constraint_violated。"
+      "x-a2at-value-constraint": "1. 小区制式：LTE、NR、LNR、全部（同义词见下方[terminology]术语段）。非法值（如“3G”）上报 slot.constraint_violated。 2. 跨任务引用：输入通过引用历史任务继承参数（如“same as the previous task”）但存在多个历史任务且引用未指明继承自哪一个时，上报 slot.constraint_violated，slot_label 用“任务引用”。不得静默选择候选任务的值；值置为 null。 3. 节能时间段，以天为周期循环执行，缺省则全时段节能，仅在节能时间范围内保障速率目标。 4. 可关闭载波的频点。请求关断载波但具体频点缺失时上报 slot.not_provided，slot_label 用“关断频点”。频点须为具体数值（如1600），约数（如“approximately 1600”）上报 slot.constraint_violated。 5. 速率保障目标：下行吐吐率目标最小值及生效时间段（区域级支持分时段/全时段；站点级需站点列表、分时段速率目标、选填背景事件与持续时间）。分时段时间段不允许重叠且须落在节能时间段内；重叠上报 slot.constraint_violated，slot_label 用“节能时段”。模糊时段（busy/idle/peak/off-peak）上报 slot.constraint_violated。速率模糊（如“尽量最大化速率”无具体数值）上报 slot.not_provided，slot_label 用“保障速率”。速率变更绑定具体时间段但未给速率值时上报 slot.not_provided，slot_label 用“保障速率”；仅泛泛说“修改吐吐目标”且未给具体时间段时可接受不报错。 6. 停电/修改场景下，受影响站点列表（具体站点名，不能是“sites in this area”/“10 sites”）和停电起止时间（具体时间，不能只有“tomorrow”/“five-hour”）为必填。缺停电时间上报 slot.not_provided，slot_label 用“停电起止时间”；缺站点上报 slot.not_provided，slot_label 用“站点列表”。停电时长须为单个具体数值（如3小时），区间（如“2 or 3 hours”）上报 slot.constraint_violated。"
     },
     "预期输出": {
       "type": "string",
@@ -52,5 +52,9 @@
       "x-a2at-value-constraint": "意图的执行结果基本信息：区域、意图目标达成情况。意图的执行结果详情：节能增益达成情况（当前节能增益目标、实际节能增益百分比、目标调整建议）、速率目标达成情况（当前速率目标、实际速率、目标调整建议）。"
     }
   },
-  "required": ["操作类型", "任务对象", "任务描述"]
+  "required": [
+    "操作类型",
+    "任务对象",
+    "任务描述"
+  ]
 }

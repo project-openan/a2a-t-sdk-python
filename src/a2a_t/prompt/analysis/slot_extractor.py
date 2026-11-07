@@ -68,6 +68,7 @@ class SlotExtractor:
             slot_schema=slot_schema,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            template_text=template_text,
             data_schema=data_schema,
         )
         response = self._llm_client.structured(
