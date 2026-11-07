@@ -758,7 +758,13 @@ class RunState:
             "detached": self.detached,
             "pendingDecision": self.pending_decision,
             "pendingIntent": self.pending_intent,
-            "finalState": self.result.final_state if self.result is not None else None,
+            # A recovered long-running run carries a synthetic incomplete seed result; only a
+            # finished run exposes a final state to the page and the API.
+            "finalState": (
+                self.result.final_state
+                if self.result is not None and self.status != STATUS_RUNNING
+                else None
+            ),
             "contextId": self.result.context_id if self.result is not None else None,
             "taskId": self.result.task_id if self.result is not None else None,
             "report": self.result.report if self.result is not None else None,

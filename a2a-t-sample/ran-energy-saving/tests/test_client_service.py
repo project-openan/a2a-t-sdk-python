@@ -801,6 +801,7 @@ async def test_a_restart_recovers_a_run_that_still_has_a_remote_task(
     assert run.status == "running"
     assert run.detached is True
     assert run.runtime is poll_runtime
+    assert run.snapshot()["finalState"] is None
     assert manager.get("gateway-1") is None
     lost = await store.get_run("lost")
     assert lost is not None and lost.status == "interrupted"

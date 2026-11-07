@@ -614,6 +614,61 @@ def _task_description(value: object, operation: str, zh: bool) -> str:
     return descriptions.get(operation, descriptions["Create"])
 
 
+#: Vendor region token in a free-text request (``A2ATestRegion``, ``RegionZ``, ...).
+_REQUESTED_REGION_PATTERN = re.compile(r"\b([A-Za-z][A-Za-z0-9_-]*Region[A-Za-z0-9_-]*)\b")
+_REQUESTED_WINDOW_PATTERN = re.compile(
+    r"\{\s*(\d{1,2}:\d{2})\s*~\s*(\d{1,2}:\d{2})\s*,\s*(\d+(?:\.\d+)?)\s*Mbps\s*\}"
+)
+
+
+def _operator_input(user_content: str) -> str:
+    """Return the ``[input]`` section of one slot-extraction prompt.
+
+    The SDK prompt also carries the slot schema, whose examples mention ``A2ATestRegion``. Looking
+    for a region in the whole prompt would pick that example instead of the operator's request.
+    """
+    marker = user_content.find("[input]")
+    if marker < 0:
+        return user_content
+    end = user_content.find("[slots]", marker)
+    return user_content[marker:end] if end >= 0 else user_content[marker:]
+
+
+def _apply_requested_profile(content: str, user_content: str, language: str) -> str:
+    """Align a canned slot response with the region and windows of the operator's free text."""
+    operator_input = _operator_input(user_content)
+    match = _REQUESTED_REGION_PATTERN.search(operator_input)
+    if match is not None:
+        region = match.group(1)
+        if region not in {"Region", "RegionA", "RegionZ"}:
+            # Only the neutral placeholder is rewritten; the unknown-area scenario keeps ``Region Z``.
+            content = content.replace("Region A", region).replace("区域 A", region)
+    windows = _REQUESTED_WINDOW_PATTERN.findall(operator_input)
+    if not windows:
+        return content
+    lowered = operator_input.lower()
+    if any(marker in lowered for marker in ("outage", "power", "停电", "背景事件")):
+        # The feasibility canned response carries the background event after the target; keep it
+        # instead of flattening the Task Context to the window list.
+        return content
+    target = ", ".join(f"{{{start}~{end},{rate}Mbps}}" for start, end, rate in windows)
+    context = (
+        f"分时段保障速率目标：{target}。"
+        if language == LANGUAGE_ZH
+        else f"Time-segment-based guaranteed throughput target: {target}."
+    )
+    try:
+        document = json.loads(content)
+    except ValueError:
+        return content
+    slots = document.get("slots")
+    if not isinstance(slots, dict):
+        return content
+    key = "任务上下文" if language == LANGUAGE_ZH else "task_context"
+    slots[key] = context
+    return json.dumps(document, ensure_ascii=False)
+
+
 def data_slot_extraction_response(user_content: str, language: str) -> str | None:
     """Echo the explicit ``[input]`` values of a data-based slot extraction.
 
@@ -745,6 +800,11 @@ class ScriptedLLMClient:
                 )
         if content is None:
             content = self._script[stage]
+        if stage.startswith("slot_extraction"):
+            # Free-text requests now carry the vendor region (for example ``A2ATestRegion``); the
+            # canned slot responses were written for the neutral ``Region A`` example. Reconcile
+            # them so the offline simulator sees the same Task Object as the page.
+            content = _apply_requested_profile(content, user_content, self.language)
         if stage == STAGE_NEGOTIATION_PROPOSE_EXTRACTION and _PROPOSE_RELATIONSHIP_MARKER in user_content:
             extracted = json.loads(content)
             extracted["relationship"] = _PROPOSE_RELATIONSHIP_MARKER

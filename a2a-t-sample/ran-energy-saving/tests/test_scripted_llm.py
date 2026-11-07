@@ -182,6 +182,51 @@ def test_content_validation_routes_by_scenario(
     assert json.loads(response.content)
 
 
+def test_a_free_text_vendor_region_replaces_the_neutral_slot_placeholder(
+    client: ScriptedLLMClient,
+) -> None:
+    """The processed path sends free text; the canned response must echo the vendor region."""
+    request = (
+        "Create an energy saving task for A2ATestRegion with these guaranteed throughputs: "
+        "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}. "
+        "Output the wireless network energy saving plan and return the intent report."
+    )
+
+    response = client.structured(messages=_messages(request), json_schema=SLOT_SCHEMA)
+
+    slots = json.loads(response.content)["slots"]
+    assert "A2ATestRegion" in slots["task_object"]
+    assert "Region A" not in slots["task_object"]
+
+
+def test_a_free_text_window_replaces_the_canned_task_context(
+    client: ScriptedLLMClient,
+) -> None:
+    """A custom simulator-compatible window must reach the canned slot response."""
+    request = (
+        "Create an energy saving task for A2ATestRegion with these guaranteed throughputs: "
+        "{00:00~06:00,30Mbps}. Output the wireless network energy saving plan and return the "
+        "intent report."
+    )
+
+    response = client.structured(messages=_messages(request), json_schema=SLOT_SCHEMA)
+
+    slots = json.loads(response.content)["slots"]
+    assert "{00:00~06:00,30Mbps}" in slots["task_context"]
+    assert "17:30" not in slots["task_context"]
+
+
+def test_the_unknown_area_region_is_not_rewritten(client: ScriptedLLMClient) -> None:
+    """The deliberate Region Z gap must survive the vendor-region rewrite."""
+    response = client.structured(
+        messages=_messages(SCENARIOS["unknown_area"].user_request["en-US"]),
+        json_schema=SLOT_SCHEMA,
+    )
+
+    slots = json.loads(response.content)["slots"]
+    assert "Region Z" in slots["task_object"]
+
+
 def test_complete_input_routes_to_default_slot_extraction() -> None:
     from demo.scenario import EXAMPLE_REQUESTS, SCENARIO_NIGHT
 

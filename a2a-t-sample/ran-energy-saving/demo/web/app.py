@@ -72,7 +72,6 @@ from shared.config import (
     SUPPORTED_INTENT_MODES,
     SUPPORTED_TRANSPORTS,
     TRANSPORT_SSE,
-    TRANSPORT_WEBHOOK,
     SampleConfig,
 )
 from shared.http_security import (
@@ -312,7 +311,10 @@ def create_app(
     protocol_defaults: dict[str, dict[str, str]] = {
         PROTOCOL_A2A_T: {
             "discovery": DISCOVERY_NMS if resolved_nms else DISCOVERY_REGISTRY,
-            "transport": (TRANSPORT_WEBHOOK if resolved_nms else resolved_default_transport),
+            # The launcher pins the NMS transport: the real vendor needs webhook, the local
+            # simulator uses SSE. Taking it from the resolved default keeps `--nms-sim --ui`
+            # from sending `message:send` to a simulator that only serves `message:stream`.
+            "transport": resolved_default_transport,
         },
         PROTOCOL_PURE: {
             "discovery": DISCOVERY_DIRECT,

@@ -1977,6 +1977,7 @@ async def test_one_ui_derives_each_request_forms_hop_from_the_protocol(
         }
         assert meta["mieEnabled"] is True
 
+
         extension = await http_client.post("/api/runs", json={"scenario": "night", "mode": "auto", "protocol": "a2a-t"})
         assert extension.status_code == 202
         await _wait_status(http_client, extension.json()["runId"], lambda data: data["status"] == "finished")
@@ -1991,6 +1992,31 @@ async def test_one_ui_derives_each_request_forms_hop_from_the_protocol(
         ("a2a-t", "sse", "registry"),
         ("pure", "sse", "direct"),
     ]
+
+
+async def test_nms_simulator_keeps_the_sse_transport_in_the_meta_defaults(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """`--nms-sim` serves SSE only; the page must not default A2A-T to webhook."""
+    app = create_app(
+        replace(offline_config, discovery=DISCOVERY_NMS, transport="sse"),
+        runs_dir=tmp_path,
+        runtime_factory=lambda *args, **kwargs: FakeRuntime(),  # type: ignore[arg-type,return-value]
+        protocol=PROTOCOL_A2A_T,
+        protocols=(PROTOCOL_A2A_T,),
+        nms_enabled=True,
+        default_transport="sse",
+        finished_grace_seconds=0.0,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        meta = (await http_client.get("/api/meta")).json()
+
+    assert meta["protocolDefaults"]["a2a-t"] == {
+        "discovery": "nms",
+        "transport": "sse",
+    }
 
 
 async def test_wire_endpoint_returns_the_captured_exchange(client: httpx.AsyncClient, tmp_path: Path) -> None:
