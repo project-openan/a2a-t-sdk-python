@@ -346,9 +346,16 @@ def _otel_envelope_ids() -> tuple[str, str, str]:
     trace_id = ""
     parent_id = ""
     try:
-        from shared.trace_propagation import current_parent_span_id, current_trace_id
+        from shared.trace_propagation import (
+            current_downstream_trace_id,
+            current_parent_span_id,
+            current_trace_id,
+        )
 
-        trace_id = current_trace_id()
+        # Without a bound Langfuse trace (the UI/OSS process has no OTel context of its own, and
+        # the exporter ran in another process) fall back to the run trace id: every envelope then
+        # names the trace its span belongs to instead of carrying empty ids.
+        trace_id = current_trace_id() or current_downstream_trace_id()
         parent_id = current_parent_span_id()
     except Exception:  # noqa: BLE001 - tracing must not break the observed flow
         pass

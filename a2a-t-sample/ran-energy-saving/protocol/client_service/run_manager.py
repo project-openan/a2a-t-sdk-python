@@ -516,8 +516,11 @@ class RunManager:
                 model_mode=self._config.model_mode,
                 model_label=self._config.model_label,
             ),
-            # A retry reuses the explicit vendor trace id; give it the same Langfuse trace too.
-            parent_trace_id=resolved_trace_id or None,
+            # Give the run its own trace id as the Langfuse trace id: a UI-started run is then
+            # findable by run id, and a retry that reuses the id shares one trace. The run trace id
+            # is derived from the caller's traceparent when one is present, so a caller-joined
+            # trace keeps working (it wins inside the exporter; the OTel parent does not).
+            parent_trace_id=run.trace_id,
         )
         run.langfuse = run.langfuse_exporter.snapshot() if run.langfuse_exporter is not None else _langfuse_disabled()
         run.emit_run_started(
@@ -552,21 +555,7 @@ class RunManager:
 
         self._runs[run.run_id] = run
         self._active_by_conversation[resolved_conversation] = run
-        # The task copies the current context at creation: bind the Langfuse trace id here so
-        # every outgoing local A2A call carries it as traceparent for the server-side spans.
-        exporter = run.langfuse_exporter
-        trace_tokens = set_active_trace(
-            trace_id=getattr(exporter, "trace_id", "") if exporter is not None else "",
-            parent_span_id=(getattr(exporter, "root_span_id", "") if exporter is not None else ""),
-            run_id=run.run_id,
-            conversation_id=run.conversation_id,
-            user_id=run.user_id,
-            downstream_trace_id=run.trace_id,
-        )
-        try:
-            run.task = asyncio.create_task(self._execute_in_context(run), name=f"ran-client-run-{run.run_id}")
-        finally:
-            reset_active_trace(trace_tokens)
+        run.task = asyncio.create_task(self._execute_in_context(run), name=f"ran-client-run-{run.run_id}")
         return run
 
     async def _reuse_idempotent_run(
@@ -587,6 +576,26 @@ class RunManager:
 
     async def _execute_in_context(self, run: RunState) -> None:
         """Run one client run with its correlation fields bound for every log record."""
+        exporter = run.langfuse_exporter
+        # Bind inside the task so the run owns the correlation for its whole life. A binding
+        # around ``asyncio.create_task`` would leak into the caller's context and tie the run to
+        # whatever snapshot the caller happened to hold at creation. Every coroutine of the run
+        # inherits this binding, including the local A2A calls that carry it as traceparent.
+        trace_tokens = set_active_trace(
+            trace_id=getattr(exporter, "trace_id", "") if exporter is not None else "",
+            parent_span_id=(getattr(exporter, "root_span_id", "") if exporter is not None else ""),
+            run_id=run.run_id,
+            conversation_id=run.conversation_id,
+            user_id=run.user_id,
+            downstream_trace_id=run.trace_id,
+        )
+        try:
+            await self._run_with_log_context(run)
+        finally:
+            reset_active_trace(trace_tokens)
+
+    async def _run_with_log_context(self, run: RunState) -> None:
+        """Run the flow under the run's log correlation context."""
         with log_context(
             run_id=run.run_id,
             conversation_id=run.conversation_id,

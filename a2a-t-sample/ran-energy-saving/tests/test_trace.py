@@ -267,3 +267,19 @@ def test_record_span_copies_the_active_otel_context() -> None:
     assert captured[0]["traceId"] == "0123456789abcdef0123456789abcdef"
     assert captured[0]["otelParentId"] == "fedcba9876543210"
     assert Span.from_dict(captured[0]).trace_id == "0123456789abcdef0123456789abcdef"
+
+
+def test_record_span_without_a_langfuse_trace_uses_the_run_trace_id() -> None:
+    """The envelope always names its trace: the UI/OSS process has no OTel context of its own."""
+    from shared.trace_propagation import propagated_trace
+
+    captured: list[dict[str, object]] = []
+    token = set_task_sink(captured.append)
+    try:
+        with propagated_trace(run_id="b" * 32, downstream_trace_id="b" * 32):
+            record_span(kind="llm", phase=PHASE_EXECUTION, title="LLM call", prefix="probe")
+    finally:
+        reset_task_sink(token)
+
+    assert captured
+    assert captured[0]["traceId"] == "b" * 32

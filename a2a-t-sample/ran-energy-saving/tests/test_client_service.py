@@ -33,6 +33,7 @@ from shared.run_constants import (
     PROTOCOL_A2A_T,
     PROTOCOL_PURE,
 )
+from shared.trace_propagation import current_downstream_trace_id, current_trace_id
 
 
 class FakeRuntime:
@@ -52,6 +53,8 @@ class FakeRuntime:
         self.user_request: str | None = None
         self.closed = False
         self.entered = asyncio.Event()
+        self.trace_id = ""
+        self.downstream_trace_id = ""
 
     async def run(
         self,
@@ -72,6 +75,9 @@ class FakeRuntime:
     ) -> ClientFlowResult:
         del on_intent_ready, trace_sink, run_id, validate_before_send
         del run_mode, target_task_id, target_context_id
+        # Observed from inside the run task: a binding placed outside ``create_task`` is gone here.
+        self.trace_id = current_trace_id()
+        self.downstream_trace_id = current_downstream_trace_id()
         self.conversation_context = conversation_context
         self.user_request = user_request
         self.entered.set()
@@ -531,6 +537,48 @@ async def test_run_publishes_langfuse_trace_state(
     assert finished["langfuse"]["url"] == "https://langfuse.example/trace-1"
     assert run.langfuse["status"] == "exported"
     assert run.snapshot()["langfuse"]["traceId"] == "trace-1"
+
+
+async def test_the_run_task_binds_the_langfuse_trace(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The binding lives inside the run task, so the run itself can observe it."""
+
+    class _Exporter:
+        trace_id = "e" * 32
+        root_span_id = "1" * 16
+
+        def __call__(self, span: dict[str, object]) -> None:
+            del span
+
+        def finish(self, *, result: object | None = None, error: str | None = None) -> None:
+            del result, error
+
+        def snapshot(self, *, resolve_url: bool = False) -> dict[str, object]:
+            del resolve_url
+            return {
+                "enabled": True,
+                "traceId": self.trace_id,
+                "url": None,
+                "status": "exporting",
+                "warning": None,
+            }
+
+    monkeypatch.setattr(
+        "protocol.client_service.run_manager.create_langfuse_exporter",
+        lambda config, metadata, **_: _Exporter(),
+    )
+    manager, _store, runtimes = _manager(tmp_path, offline_config)
+
+    run = await manager.start("information", "auto", "sse", trace_id="f" * 32)
+    await _finish(manager, run.run_id)
+
+    # Observed inside the run: the Langfuse trace id comes from the exporter and the vendor-facing
+    # trace id is the run's own (the caller-supplied one), not the generated run uuid.
+    assert runtimes[0].trace_id == "e" * 32
+    assert runtimes[0].downstream_trace_id == "f" * 32
 
 
 class _PollingA2AClient:

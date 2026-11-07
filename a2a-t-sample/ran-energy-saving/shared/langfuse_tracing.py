@@ -238,7 +238,13 @@ def _current_parent_context() -> Any:
 
 
 def _root_context(parent_trace_id: str | None) -> Any:
-    """Return the root context: an explicit run trace id, else the current OTel parent."""
+    """Return the root context: the explicit run trace id, else the current OTel parent.
+
+    The run trace id is authoritative because it is derived from the caller's ``traceparent``
+    when one is present (``x-a2at-downstream-trace-id``): a retry and a follow-up turn then stay
+    in one Langfuse trace instead of each opening its own. Only a run without one (plain span
+    ingestion) falls back to whatever OTel context is current.
+    """
     explicit = (parent_trace_id or "").strip().lower()
     if len(explicit) == 32 and explicit != "0" * 32 and all(
         character in "0123456789abcdef" for character in explicit

@@ -448,6 +448,24 @@ def test_exporter_uses_the_explicit_run_trace_id(offline_config: SampleConfig) -
     assert f"{root.context.trace_id:032x}" == trace_id
 
 
+def test_the_run_trace_id_wins_over_a_stale_current_otel_parent(offline_config: SampleConfig) -> None:
+    """Another request's span being current must not steal the run's Langfuse trace."""
+    from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, use_span
+
+    stale = SpanContext(
+        trace_id=int("f" * 32, 16),
+        span_id=int("1" * 16, 16),
+        is_remote=False,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+    )
+    with use_span(NonRecordingSpan(stale)):
+        exporter, runtime = _exporter(offline_config, parent_trace_id="c" * 32)
+        exporter.finish()
+
+    root = _by_name(runtime)["run · night · a2a-t"]
+    assert f"{root.context.trace_id:032x}" == "c" * 32
+
+
 def test_retries_with_the_same_trace_id_share_one_langfuse_trace(
     offline_config: SampleConfig,
 ) -> None:
