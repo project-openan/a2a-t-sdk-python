@@ -208,11 +208,12 @@ class FakeRuntime:
         user_request: str | None = None,
         conversation_context: str | None = None,
         validate_before_send: bool = False,
+        enforce_required_fields: bool = False,
         run_mode: str = "create",
         target_task_id: str | None = None,
         target_context_id: str | None = None,
     ) -> ClientFlowResult:
-        del validate_before_send
+        del validate_before_send, enforce_required_fields
         self.run_id = run_id
         self.user_request = user_request
         self.conversation_context = conversation_context

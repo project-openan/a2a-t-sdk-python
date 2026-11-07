@@ -1129,7 +1129,6 @@ def main() -> None:
             decision_provider = AdkDecisionProvider(
                 agent_factory=build_client_agent,
                 offline=False,
-                default_region=config.nms_region or None,
             )
             answer = build_live_pure_answer(decision_provider)
     else:

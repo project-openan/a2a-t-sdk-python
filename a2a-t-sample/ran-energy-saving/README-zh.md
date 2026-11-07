@@ -319,7 +319,7 @@ python run_demo.py --nms --nms-sim --ui --brand huawei
 A2AT_SAMPLE_NMS_HOST=<nms-host>
 A2AT_SAMPLE_NMS_TOKEN_USER=<northbound-user>
 A2AT_SAMPLE_NMS_TOKEN_VALUE=<password>
-# NMS 模式默认值；其他部署可覆盖
+# 真机运行必须显式配置；sample 不再提供内置区域/站点默认值
 A2AT_SAMPLE_NMS_REGION=A2ATestRegion
 A2AT_SAMPLE_NMS_SITES=NRES_XCS_6102937,LTE_26441_LNR_OCL
 A2AT_SAMPLE_NMS_VERIFY_TLS=false
@@ -340,11 +340,10 @@ A2AT_SAMPLE_NMS_WIRE_LOG=1
 `A2AT_SAMPLE_NMS_VERIFY_TLS=true`。客户端同时发送两种被接受的认证头（`Authorization: Bearer`
 和 `X-Auth-Token`）以及两种扩展头拼写（`A2A-Extensions` 和 `X-A2A-Extensions`）。
 
-NMS 模式下，`A2AT_SAMPLE_NMS_REGION` 与 `A2AT_SAMPLE_NMS_SITES` 会把整个运行的各层统一替换为
-网管实际服务的区域和站点：页面预填、工程师看到的请求、意图结果（`rawRequest`、`region`、
-`normalizedText`），以及每个发往网管的 Task-T（初始提示词、accept 重填、选中任务的 Modify）。
-二者默认是 `A2ATestRegion` 和上表中的两个 910 站点；其他区域和激活时段会被拒绝。页面与报文之间
-不会再出现“左侧中性名、轨迹真机名”的静默替换。本地三跳演示保持中性名称，不受影响。
+NMS 模式下，`A2AT_SAMPLE_NMS_REGION` 与 `A2AT_SAMPLE_NMS_SITES` 只用于预填页面上的可见示例请求，
+以及配置本地模拟器。它们不会改写操作员的 Task-T：客户端发送操作员的原文，发送前校验必填字段，
+并拒绝接受任何不是来自操作员、服务端 proposal 或权威工具的协商值。真机运行必须显式配置区域；
+sample 不再提供内置默认值。页面与报文之间不会出现“左侧中性名、轨迹真机名”的静默替换。
 例如：“在 A2ATestRegion 区域创建无线网络节能任务；激活时段 00:00-06:00，每小区保证 30 Mbps。”
 
 厂商契约说明：

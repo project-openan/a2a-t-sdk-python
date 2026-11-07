@@ -29,6 +29,7 @@ const FINAL_STATE_LABELS = {
   task_completed: "任务完成",
   task_failed: "任务失败",
   input_invalid: "输入校验未通过",
+  decision_ungrounded: "决策值无确定性来源",
   negotiation_aborted: "协商中止",
   negotiation_rejected: "协商拒绝",
   input_required: "等待输入",

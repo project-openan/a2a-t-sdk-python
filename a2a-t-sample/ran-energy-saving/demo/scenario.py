@@ -8,7 +8,9 @@ The request text is the single source of business values: the page shows it, the
 and the intent/Task-T layers parse it. There is no built-in intent or parameter table. The
 scenario-specific flaws are therefore visible in the text itself:
 
-* the information/reject requests omit the time-segmented guaranteed throughput target;
+* the information request omits the time-segmented guaranteed throughput target, so the client
+  blocks it before sending (the demo shows the local required-field gate);
+* the reject and abort requests name an area the vendor does not serve and carry a complete target;
 * the target request carries overlapping windows;
 * the feasibility request asks for a rate through an 18-hour outage;
 * the unknown-area request names an area the vendor does not serve.
@@ -26,6 +28,7 @@ from typing import Final, Literal
 
 from shared.models import NegotiationDecision
 from shared.run_constants import (
+    FINAL_STATE_INPUT_INVALID,
     FINAL_STATE_NEGOTIATION_ABORTED,
     FINAL_STATE_NEGOTIATION_ENDED,
     FINAL_STATE_TASK_COMPLETED,
@@ -154,9 +157,6 @@ def resolve_modify_request(language: str) -> str:
     return MODIFY_REQUEST.get(language, MODIFY_REQUEST[LANGUAGE_ZH])
 
 
-#: Guaranteed-throughput target the information negotiation supplies when the request omits it.
-INFORMATION_TARGET: Final[str] = "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
-
 #: Corrected target the target negotiation agrees on.
 TARGET_TARGET: Final[str] = "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
 
@@ -243,23 +243,14 @@ SCENARIO_INFORMATION_SPEC = Scenario(
     name=SCENARIO_INFORMATION,
     expected_kind=KIND_INFORMATION,
     user_request=EXAMPLE_REQUESTS[SCENARIO_INFORMATION],
-    expected_sequence=(
-        ExpectedStep(actor="server", performative="PROPOSE", round=1),
-        ExpectedStep(actor="client", performative="ACCEPT", round=1),
-    ),
-    expected_final_state=FINAL_STATE_TASK_COMPLETED,
-    scripted_client_decisions=(
-        NegotiationDecision(
-            action="accept",
-            rationale=(
-                "The missing time-segmented guaranteed throughput target is supplied, so the "
-                "energy-saving task can run."
-            ),
-            filled_params={"guaranteedThroughputTarget": INFORMATION_TARGET},
-        ),
-    ),
+    # The request omits a required Task-T field. The client now catches that locally, so the demo
+    # shows the pre-send gate instead of a server negotiation; no scripted decision is consumed.
+    expected_sequence=(),
+    expected_final_state=FINAL_STATE_INPUT_INVALID,
+    scripted_client_decisions=(),
     description=(
-        "Task-T misses the guaranteed throughput target; the client accepts the server's missing-parameter proposal."
+        "Task-T misses the guaranteed throughput target; the client blocks the request before "
+        "sending it and asks the operator to edit it."
     ),
 )
 
@@ -340,7 +331,9 @@ SCENARIO_FEASIBILITY_SPEC = Scenario(
 SCENARIO_REJECT_SPEC = Scenario(
     name=SCENARIO_REJECT,
     expected_kind=KIND_INFORMATION,
-    user_request=EXAMPLE_REQUESTS[SCENARIO_REJECT],
+    # A complete Task-T that names an area the vendor does not serve. The server asks for a served
+    # area; the client refuses to confirm one, so the negotiation ends without a task.
+    user_request=EXAMPLE_REQUESTS[SCENARIO_UNKNOWN_AREA],
     expected_sequence=(
         ExpectedStep(actor="server", performative="PROPOSE", round=1),
         ExpectedStep(actor="client", performative="REJECT", round=1),
@@ -350,21 +343,19 @@ SCENARIO_REJECT_SPEC = Scenario(
     scripted_client_decisions=(
         NegotiationDecision(
             action="reject",
-            rationale="The requested guaranteed throughput target is not available from the client side.",
+            rationale="The client cannot confirm a served area for the requested region.",
         ),
     ),
-    description=("The client cannot provide the missing throughput target; the negotiation ends without a task."),
+    description=("The client cannot confirm a served area; the negotiation ends without a task."),
 )
 
 SCENARIO_ABORT_SPEC = Scenario(
     name=SCENARIO_ABORT,
-    # The real NMS opens an information negotiation for the unresolved region before it ever
-    # reaches the target check. The abort exercise therefore counters inside that information
-    # negotiation: it keeps repeating the requested region instead of supplying the missing
-    # throughput target, and the server aborts at maxRounds. This matches the real NMS behavior
-    # better than forcing a target negotiation the vendor does not open.
+    # A complete Task-T with an unserved area. The server opens an information negotiation; the
+    # client keeps countering with the same region instead of confirming a served one, and the
+    # server aborts at maxRounds. This matches the real NMS behavior.
     expected_kind=KIND_INFORMATION,
-    user_request=EXAMPLE_REQUESTS[SCENARIO_ABORT],
+    user_request=EXAMPLE_REQUESTS[SCENARIO_UNKNOWN_AREA],
     expected_sequence=(
         ExpectedStep(actor="server", performative="PROPOSE", round=1),
         ExpectedStep(actor="client", performative="PROPOSE", round=1),
@@ -378,18 +369,18 @@ SCENARIO_ABORT_SPEC = Scenario(
     scripted_client_decisions=(
         NegotiationDecision(
             action="counter",
-            rationale="The client repeats the requested region instead of supplying the missing target.",
-            counter_proposal="region: Region A",
+            rationale="The client repeats the requested region instead of confirming a served one.",
+            counter_proposal="region: Region Z",
         ),
         NegotiationDecision(
             action="counter",
-            rationale="The client still cannot supply the missing target and repeats its region.",
-            counter_proposal="region: Region A",
+            rationale="The client still cannot confirm a served area and repeats its region.",
+            counter_proposal="region: Region Z",
         ),
         NegotiationDecision(
             action="counter",
             rationale="No further information is available; the client repeats its position.",
-            counter_proposal="region: Region A",
+            counter_proposal="region: Region Z",
         ),
     ),
     description=(

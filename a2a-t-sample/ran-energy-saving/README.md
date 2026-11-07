@@ -376,7 +376,7 @@ Required `.env` keys:
 A2AT_SAMPLE_NMS_HOST=<nms-host>
 A2AT_SAMPLE_NMS_TOKEN_USER=<northbound-user>
 A2AT_SAMPLE_NMS_TOKEN_VALUE=<password>
-# NMS-mode defaults; override them for another deployment.
+# Required for a real NMS run; the sample has no built-in region or site default.
 A2AT_SAMPLE_NMS_REGION=A2ATestRegion
 A2AT_SAMPLE_NMS_SITES=NRES_XCS_6102937,LTE_26441_LNR_OCL
 A2AT_SAMPLE_NMS_VERIFY_TLS=false
@@ -398,14 +398,13 @@ The test environment uses a self-signed certificate, so TLS verification is off 
 headers (`Authorization: Bearer` and `X-Auth-Token`) and both extension-header spellings
 (`A2A-Extensions` and `X-A2A-Extensions`).
 
-In NMS mode `A2AT_SAMPLE_NMS_REGION` and `A2AT_SAMPLE_NMS_SITES` replace the neutral demo region
-(`Region A` / `Region B`) and the scenario site list in every layer of the run: the request the page
-pre-fills and the operator sees, the captured intent (`rawRequest`, `region`, `normalizedText`), and
-every Task-T sent to the vendor — the initial prompt, the accept refill and the selected-Task
-Modify.
-They default to `A2ATestRegion` and the two 910 sites above; other regions and activation windows are
-rejected. Nothing silently swaps the region between the stage and the wire. The local three-hop demo
-keeps the neutral names and is unaffected. For example: “Create a RAN energy saving task in the
+In NMS mode `A2AT_SAMPLE_NMS_REGION` and `A2AT_SAMPLE_NMS_SITES` only prefill the visible example
+request and configure the local simulator. They never rewrite the operator's Task-T: the client
+sends the operator's text, validates its required fields before sending, and refuses to accept a
+negotiated value that the operator, the server proposal, or an authoritative tool did not supply.
+A real-NMS run must set the region explicitly; the sample has no built-in default.
+Nothing silently swaps the region between the stage and the wire. The local three-hop demo keeps
+the neutral names and is unaffected. For example: “Create a RAN energy saving task in the
 A2ATestRegion region; activation 00:00-06:00 with 30 Mbps for each cell.”
 
 Vendor contract notes:

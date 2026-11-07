@@ -16,6 +16,8 @@ from shared.run_constants import LANGUAGE_EN, LANGUAGE_ZH
 
 from demo.intent import apply_region_profile_text
 from demo.scenario import (
+    SCENARIO_ABORT,
+    SCENARIO_REJECT,
     SCENARIO_UNKNOWN_AREA,
     SUPPORTED_SCENARIO_NAMES,
     Scenario,
@@ -77,13 +79,14 @@ def to_run_spec(
     ``region``/``sites`` apply the vendor profile to the example request. The Web UI serves the
     same profiled text, and the client sends exactly that text, so the page and the wire agree.
     """
+    # These scenarios deliberately name an area the network does not serve; profiling that
+    # placeholder to the vendor region would turn the negotiation case into a valid request.
+    # Every other scenario keeps the vendor region.
+    unknown_region_scenarios = {SCENARIO_UNKNOWN_AREA, SCENARIO_REJECT, SCENARIO_ABORT}
     user_request = profile_request_text(
         resolve_user_request(scenario, language),
         language=language,
-        # The unknown-area case deliberately names an area the network does not serve; profiling
-        # that placeholder to the vendor region would turn the negotiation case into a valid
-        # request. Every other scenario keeps the vendor region.
-        region="" if scenario.name == SCENARIO_UNKNOWN_AREA else region,
+        region="" if scenario.name in unknown_region_scenarios else region,
         sites=sites,
         neutral_region=_NEUTRAL_REGIONS.get(scenario.name, _DEFAULT_NEUTRAL_REGION).get(language, ""),
     )

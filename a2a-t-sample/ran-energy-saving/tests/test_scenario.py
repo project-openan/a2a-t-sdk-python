@@ -12,7 +12,7 @@ from demo.scenario import (
     ExpectedStep,
     resolve_user_request,
 )
-from shared.run_constants import MAX_ROUNDS, SUPPORTED_LANGUAGES
+from shared.run_constants import FINAL_STATE_INPUT_INVALID, MAX_ROUNDS, SUPPORTED_LANGUAGES
 
 
 def _sequence(name: str) -> tuple[tuple[str, str, int | None], ...]:
@@ -61,15 +61,12 @@ def test_requests_state_concrete_values_instead_of_relative_dates() -> None:
         assert "03:00" in text and "05:00" in text
 
 
-def test_information_sequence() -> None:
+def test_information_sequence_blocks_the_missing_required_field() -> None:
     scenario = SCENARIOS["information"]
 
     assert scenario.expected_kind == "information"
-    assert _sequence("information") == (
-        ("server", "PROPOSE", 1),
-        ("client", "ACCEPT", 1),
-    )
-    assert scenario.expected_final_state == FINAL_STATE_TASK_COMPLETED
+    assert _sequence("information") == ()
+    assert scenario.expected_final_state == FINAL_STATE_INPUT_INVALID
 
 
 def test_target_sequence_keeps_counter_propose_in_round_one() -> None:

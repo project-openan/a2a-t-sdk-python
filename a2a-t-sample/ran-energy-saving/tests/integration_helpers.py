@@ -340,7 +340,8 @@ async def run_scenario_flow(
     recorder = RecordingTransport(client.transport)
     client.transport = recorder
     try:
-        result = await client.run()
+        # The CLI is one of the entry points that enforces the business-required-field gate.
+        result = await client.run(enforce_required_fields=True)
     finally:
         await client.aclose()
     return result, recorder.exchange()

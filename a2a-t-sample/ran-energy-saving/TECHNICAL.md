@@ -518,16 +518,16 @@ Implementation details:
 - One message may carry only one `-T` metadata key. In NMS mode the accept carries Negotiation-T
   only; the local demo server keeps the refilled Task-T. The flow parameter is
   `single_extension_per_message`.
-- `A2AT_SAMPLE_NMS_REGION` and `A2AT_SAMPLE_NMS_SITES` override the neutral demo region and the
-  scenario site list in every Task-T sent to the vendor — the initial prompt (through the intent
-  layer), the accept refill and the Modify follow-up. They default to `A2ATestRegion` and
-  `NRES_XCS_6102937,LTE_26441_LNR_OCL` for an `nms` run; the local three-hop demo keeps the neutral
-  names.
-- The profile is applied once, at the scenario catalog (`DemoRunCatalog.from_config`): the
-  pre-filled page request, the intent's `rawRequest` / `region` / `normalizedText` and the Task-T
-  all carry the same vendor values. `DemoIntentProcessor` keeps both the neutral and the profiled
-  built-in so it matches either surface, and never rewrites only the normalized text while leaving
-  the raw request neutral.
+- `A2AT_SAMPLE_NMS_REGION` and `A2AT_SAMPLE_NMS_SITES` only prefill the visible example request and
+  configure the local simulator. They never rewrite a Task-T: the client sends the operator's text,
+  applies the business-required-field gate before sending, and refuses an accept value that the
+  operator, the current server proposal, or an authoritative tool did not ground. A real-NMS run
+  must set the region explicitly; there is no built-in default. The local three-hop demo keeps the
+  neutral names.
+- The profile is applied once, at the scenario catalog (`DemoRunCatalog.from_config`), and only to
+  the text the page shows and the operator sends. The intent's `rawRequest` / `region` /
+  `normalizedText` and the Task-T all derive from that visible text; nothing replaces a value after
+  the operator has seen it.
 - The SSE reader skips `: heartbeat` comments and leaves the stream after
   `A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS` (default 45 s) without a `data:` frame. Heartbeats do not
   reset that window. It then polls `GET <base>/tasks/{id}` to a terminal state; a send timeout is
@@ -592,8 +592,8 @@ business result.
 Tests: `tests/test_nms_client.py` (token, headers, heartbeat, idle, negotiation, wire redaction),
 `tests/test_nms_sim.py` (422 pairing, static region/window/rate rules, task lifecycle, strict
 stream), and the raw-client integration test against the simulator. A real lab run requires the
-910 network; the NMS defaults are `A2AT_SAMPLE_NMS_REGION=A2ATestRegion` and
-`A2AT_SAMPLE_NMS_SITES=NRES_XCS_6102937,LTE_26441_LNR_OCL`.
+910 network; the 910 run must set `A2AT_SAMPLE_NMS_REGION=A2ATestRegion` and
+`A2AT_SAMPLE_NMS_SITES=NRES_XCS_6102937,LTE_26441_LNR_OCL` explicitly (the sample has no default).
 
 ### 3.7 Operator intent layer
 

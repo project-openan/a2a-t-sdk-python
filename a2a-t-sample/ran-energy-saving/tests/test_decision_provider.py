@@ -82,12 +82,12 @@ def test_build_decision_prompt_requires_answering_required_items() -> None:
     prompt = build_decision_prompt(
         _view(content="## Required Information Items\n1. Energy saving region"),
         _session(1),
-        default_region="A2ATestRegion",
     )
 
     assert "Required Information Items" in prompt
     assert "answer every item in filled_params" in prompt
-    assert "Configured NMS region: A2ATestRegion" in prompt
+    assert "Only put a value in" in prompt
+    assert "Configured NMS region" not in prompt
 
 
 def test_build_decision_prompt_carries_the_conversation_context() -> None:

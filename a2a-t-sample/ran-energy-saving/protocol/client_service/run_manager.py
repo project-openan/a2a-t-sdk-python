@@ -36,6 +36,7 @@ from shared.metrics import (
 )
 from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.run_constants import (
+    FINAL_STATE_DECISION_UNGROUNDED,
     FINAL_STATE_INCOMPLETE,
     FINAL_STATE_INPUT_INVALID,
     FINAL_STATE_TASK_COMPLETED,
@@ -1042,6 +1043,7 @@ class RunManager:
                 user_request=run.user_request,
                 conversation_context=run.conversation_context,
                 validate_before_send=run.validate_before_send,
+                enforce_required_fields=_should_enforce_required_fields(run.source),
                 run_mode=run.run_mode,
                 target_task_id=run.target_task_id,
                 target_context_id=run.target_context_id,
@@ -1049,6 +1051,8 @@ class RunManager:
             run.result = result
             if result.final_state == FINAL_STATE_INPUT_INVALID:
                 run.error = _input_invalid_summary(run)
+            elif result.final_state == FINAL_STATE_DECISION_UNGROUNDED:
+                run.error = result.error or "The client decision had no grounded value."
             if _should_watch_long_task(run, result):
                 result = await self._watch_long_task(run, result)
                 run.result = result
@@ -1386,6 +1390,14 @@ def _format_conversation_context(turns: list[Any]) -> str:
     return "\n".join(lines)
 
 
+#: Entry points whose requests must satisfy the caller schema's required fields. A gateway or API
+#: caller keeps its previous behavior this iteration; the interactive entry points do not send an
+#: incomplete Task-T to the network.
+_REQUIRED_FIELD_SOURCE_KINDS: Final[frozenset[str]] = frozenset(
+    {"presentation", "tester", "explorer", "cli"}
+)
+
+
 def _should_validate_before_send(
     config: SampleConfig,
     source: Mapping[str, object],
@@ -1395,6 +1407,11 @@ def _should_validate_before_send(
     return setting == PRE_SEND_VALIDATION_ALWAYS or (
         setting == PRE_SEND_VALIDATION_ON and source.get("kind") == "presentation"
     )
+
+
+def _should_enforce_required_fields(source: Mapping[str, object]) -> bool:
+    """Return whether this run must satisfy the caller schema's required fields."""
+    return str(source.get("kind") or "") in _REQUIRED_FIELD_SOURCE_KINDS
 
 
 def _input_invalid_summary(run: RunState) -> str:

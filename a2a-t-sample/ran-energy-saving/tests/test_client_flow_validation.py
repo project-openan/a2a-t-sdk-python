@@ -158,7 +158,7 @@ async def _run(
     transport: RecordingTransport,
     trace_sink: list[dict[str, object]],
     validate: bool = True,
-    enforce_required_fields: bool = True,
+    enforce_required_fields: bool = False,
 ):
     return await run_client_flow(
         prompt_client=prompt_client,
@@ -267,7 +267,12 @@ async def test_the_oss_agent_intercepts_a_missing_required_field() -> None:
     transport = RecordingTransport([_completed_task()])
     traces: list[dict[str, object]] = []
 
-    result = await _run(prompt_client=prompt_client, transport=transport, trace_sink=traces)
+    result = await _run(
+        prompt_client=prompt_client,
+        transport=transport,
+        trace_sink=traces,
+        enforce_required_fields=True,
+    )
 
     assert result.final_state == FINAL_STATE_INPUT_INVALID
     assert transport.requests == []
@@ -280,8 +285,8 @@ async def test_the_oss_agent_intercepts_a_missing_required_field() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_curated_request_can_skip_the_oss_required_gate() -> None:
-    """The information-negotiation demo deliberately omits a required value."""
+async def test_a_caller_can_disable_the_required_gate() -> None:
+    """A direct caller may still opt out; the sample's entry points do not."""
     prompt_client = ValidatingPromptClient(
         filled_data={
             "operationType": "Create",

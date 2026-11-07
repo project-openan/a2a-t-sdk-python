@@ -44,6 +44,7 @@ from protocol.client_runtime import build_client_runtime
 from protocol.messages import metadata_to_dict, parse_negotiation_context
 from protocol.run_spec import RunSpec
 from shared.models import NegotiationDecision
+from shared.run_constants import FINAL_STATE_INPUT_INVALID
 
 #: Client decision action matching one expected performative.
 _ACTION_BY_PERFORMATIVE: dict[str, str] = {
@@ -138,6 +139,13 @@ async def test_scenario_matches_the_design_sequence(
     assert exchange.steps == list(scenario.expected_sequence)
     assert [decision.action for decision in result.decisions] == _expected_actions(scenario)
     assert result.final_state == scenario.expected_final_state
+
+    if scenario.expected_final_state == FINAL_STATE_INPUT_INVALID:
+        # The client caught the missing required field before sending anything.
+        assert exchange.steps == []
+        assert result.decisions == []
+        assert result.task_id is None
+        return
 
     if scenario.expected_final_state == FINAL_STATE_TASK_COMPLETED:
         assert result.task_id
@@ -235,7 +243,7 @@ async def test_unknown_area_can_use_the_second_served_area(english_language: Non
     assert result.report.get("cell_id") == "cell-003"
 
 
-@pytest.mark.parametrize("scenario_name", ("information", "target", "feasibility"))
+@pytest.mark.parametrize("scenario_name", ("target", "feasibility"))
 async def test_accept_scenarios_complete_in_chinese(
     scenario_name: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -284,19 +292,18 @@ async def test_no_task_scenarios_end_with_the_plain_end_or_abort(
     assert exchange.events[-1].get("kind") == "message"
 
 
-async def test_information_propose_names_the_missing_throughput_target(
+async def test_information_scenario_is_blocked_before_any_send(
     english_language: None,
 ) -> None:
-    """The information propose itemizes the server-required throughput target, not the region."""
+    """The missing required target is caught by the client, so the server never sees a proposal."""
     config = offline_direct_config(free_tcp_port())
 
     with running_server(config):
-        result, _ = await run_scenario_flow(config, "information", "sse")
+        result, exchange = await run_scenario_flow(config, "information", "sse")
 
-    proposals = _negotiation_contents(result.events, "PROPOSE")
-    assert len(proposals) == 1
-    assert "guaranteedThroughputTarget" in proposals[0][1]
-    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert exchange.steps == []
+    assert _negotiation_contents(result.events, "PROPOSE") == []
+    assert result.final_state == FINAL_STATE_INPUT_INVALID
 
 
 async def test_target_round_two_content_is_revised(english_language: None) -> None:
@@ -333,7 +340,7 @@ async def test_server_abort_reason_names_the_server_and_the_round_limit(
     assert "client aborted" not in reason.lower()
 
 
-async def test_a_secured_server_completes_the_information_scenario(
+async def test_a_secured_server_completes_the_night_scenario(
     english_language: None,
 ) -> None:
     """The real SDK client presents the service token on every A2A call."""
@@ -348,6 +355,6 @@ async def test_a_secured_server_completes_the_information_scenario(
     )
 
     with running_server(server_config):
-        result, _ = await run_scenario_flow(client_config, "information", "sse")
+        result, _ = await run_scenario_flow(client_config, "night", "sse")
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED

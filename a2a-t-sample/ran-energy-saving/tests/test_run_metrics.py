@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from demo.catalog import DemoRunCatalog
+from demo.scenario import ExpectedStep
 from protocol.client_flow import ClientFlowResult
 from protocol.run_metrics import build_run_metrics
+from protocol.run_spec import RunSpec
 from protocol.transcript import NegotiationTranscript
 from shared.run_constants import (
     FINAL_STATE_TASK_COMPLETED,
@@ -16,6 +17,23 @@ from shared.trace import Span
 
 START = "2026-01-01T00:00:00.000Z"
 END = "2026-01-01T00:00:10.000Z"
+
+_EXPECTED_TARGET = "{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~24:00,10Mbps}"
+
+
+def _complete_negotiation_spec() -> RunSpec:
+    """Expected shape of one complete INFORMATION negotiation (the metrics test fixture)."""
+    return RunSpec(
+        name="information",
+        description="test",
+        user_request="",
+        expected_sequence=(
+            ExpectedStep(actor="server", performative="PROPOSE", round=1),
+            ExpectedStep(actor="client", performative="ACCEPT", round=1),
+        ),
+        expected_final_state=FINAL_STATE_TASK_COMPLETED,
+        expected_negotiation_target=_EXPECTED_TARGET,
+    )
 
 
 def _transcript() -> NegotiationTranscript:
@@ -73,7 +91,7 @@ def test_tokens_are_normalized_across_producer_shapes() -> None:
         transcript=_transcript(),
         result=ClientFlowResult(final_state=FINAL_STATE_TASK_COMPLETED),
         spans=spans,
-        expected=DemoRunCatalog().spec("information", language=LANGUAGE_ZH),
+        expected=_complete_negotiation_spec(),
     )
 
     tokens = metrics["tokens"]
@@ -197,7 +215,7 @@ def test_a2a_t_accuracy_passes_against_the_scenario_truth() -> None:
             report={"cell_id": "cell-001", "target_rate": 30},
         ),
         spans=[],
-        expected=DemoRunCatalog().spec("information", language=LANGUAGE_ZH),
+        expected=_complete_negotiation_spec(),
     )
     accuracy = metrics["accuracy"]
     assert isinstance(accuracy, dict)
@@ -244,7 +262,7 @@ def test_pure_accuracy_uses_the_answer_and_rounds() -> None:
         transcript=_transcript(),
         result=result,
         spans=[],
-        expected=DemoRunCatalog().spec("information", language=LANGUAGE_ZH),
+        expected=_complete_negotiation_spec(),
     )
     accuracy = metrics["accuracy"]
     assert isinstance(accuracy, dict)

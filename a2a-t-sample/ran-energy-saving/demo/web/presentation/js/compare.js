@@ -62,6 +62,7 @@ export function outcomeText(copy, record) {
   if (record.finalState === "task_rejected") return copy.compare.outcomeRejected;
   if (record.finalState === "intent_not_confirmed") return copy.compare.outcomeIntentNotConfirmed;
   if (record.finalState === "input_invalid") return copy.compare.outcomeInputInvalid;
+  if (record.finalState === "decision_ungrounded") return copy.compare.outcomeUngrounded;
   if (record.finalState === "no_task_negotiation_ended") return copy.compare.outcomeNegotiationEnded;
   if (record.finalState === "no_task_negotiation_aborted") return copy.compare.outcomeNegotiationAborted;
   if (record.finalState === "task_failed") return copy.compare.outcomeFailed;

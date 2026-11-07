@@ -212,6 +212,7 @@ export const EN = {
     no_task_negotiation_ended: "Negotiation ended",
     no_task_negotiation_aborted: "Negotiation aborted",
     task_rejected: "Task rejected",
+    decision_ungrounded: "Decision not grounded",
     failed: "Failed",
   },
 

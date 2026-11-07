@@ -978,12 +978,12 @@ def _nms_env_file(tmp_path: Path, extra: str = "") -> Path:
     return env_file
 
 
-def test_nms_discovery_defaults_to_the_910_region_and_sites(tmp_path: Path) -> None:
-    """A real-NMS run must never send the neutral demo region or site names."""
+def test_nms_discovery_has_no_implicit_region_or_sites(tmp_path: Path) -> None:
+    """A real-NMS run must configure its region explicitly; the sample has no built-in value."""
     config = load_config(env_path=_nms_env_file(tmp_path))
 
-    assert config.nms_region == "A2ATestRegion"
-    assert config.nms_sites == ("NRES_XCS_6102937", "LTE_26441_LNR_OCL")
+    assert config.nms_region == ""
+    assert config.nms_sites == ()
 
 
 def test_nms_region_and_sites_can_be_overridden(tmp_path: Path) -> None:

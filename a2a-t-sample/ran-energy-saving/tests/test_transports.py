@@ -16,7 +16,7 @@ import asyncio
 
 import pytest
 from a2a.types import TaskState
-from demo.scenario import SCENARIO_INFORMATION, SCENARIO_TARGET, get_scenario
+from demo.scenario import SCENARIO_FEASIBILITY, SCENARIO_INFORMATION, SCENARIO_TARGET, get_scenario
 from integration_helpers import (
     free_tcp_port,
     offline_direct_config,
@@ -62,6 +62,11 @@ async def test_sse_and_webhook_share_the_performative_sequence(
     assert webhook_exchange.steps == sse_exchange.steps
     assert sse_result.final_state == scenario.expected_final_state
     assert webhook_result.final_state == scenario.expected_final_state
+    if scenario.expected_final_state == "input_invalid":
+        assert sse_exchange.steps == []
+        assert sse_result.task_id is None
+        assert webhook_result.task_id is None
+        return
     assert sse_result.task_id
     assert webhook_result.task_id
     assert sse_result.report
@@ -84,21 +89,21 @@ async def test_two_webhook_runs_share_the_callback_port_without_cross_talk(
     """The whole point of per-run queues: two testers at once on one callback port."""
     del english_language
     config = offline_direct_config(free_tcp_port())
-    information = get_scenario(SCENARIO_INFORMATION)
+    feasibility = get_scenario(SCENARIO_FEASIBILITY)
     target = get_scenario(SCENARIO_TARGET)
 
     with running_server(config):
-        (information_result, information_exchange), (target_result, target_exchange) = await asyncio.gather(
-            run_scenario_flow(config, SCENARIO_INFORMATION, TRANSPORT_WEBHOOK),
+        (feasibility_result, feasibility_exchange), (target_result, target_exchange) = await asyncio.gather(
+            run_scenario_flow(config, SCENARIO_FEASIBILITY, TRANSPORT_WEBHOOK),
             run_scenario_flow(config, SCENARIO_TARGET, TRANSPORT_WEBHOOK),
         )
 
-    assert information_exchange.steps == list(information.expected_sequence)
+    assert feasibility_exchange.steps == list(feasibility.expected_sequence)
     assert target_exchange.steps == list(target.expected_sequence)
-    assert information_result.final_state == information.expected_final_state
+    assert feasibility_result.final_state == feasibility.expected_final_state
     assert target_result.final_state == target.expected_final_state
-    assert information_result.task_id
+    assert feasibility_result.task_id
     assert target_result.task_id
-    assert information_result.task_id != target_result.task_id
-    assert information_result.report
+    assert feasibility_result.task_id != target_result.task_id
+    assert feasibility_result.report
     assert target_result.report

@@ -264,10 +264,9 @@ DEFAULT_NMS_IDLE_TIMEOUT_SECONDS = 45.0
 DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS = 120.0
 DEFAULT_NMS_POLL_INTERVAL_SECONDS = 1.0
 
-#: Region and sites of the 910 test environment. They are the defaults of an ``nms`` run so the
-#: sample never sends the neutral demo region to the vendor; the two keys override them.
-DEFAULT_NMS_REGION = "A2ATestRegion"
-DEFAULT_NMS_SITES: tuple[str, ...] = ("NRES_XCS_6102937", "LTE_26441_LNR_OCL")
+#: Region and sites of the 910 test environment are intentionally not defaults. A real-NMS run
+#: must configure them explicitly; the launcher pins them only for the local simulator. This keeps
+#: the sample from hiding a wrong or missing region behind a built-in value.
 
 #: Standard vendor NMS surface, used to derive both URLs from ``A2AT_SAMPLE_NMS_HOST``.
 DEFAULT_NMS_SCHEME = "https"
@@ -887,12 +886,8 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         nms_idle_timeout=_positive_seconds(values, NMS_IDLE_TIMEOUT_ENV_KEY, DEFAULT_NMS_IDLE_TIMEOUT_SECONDS),
         nms_read_after_send=_env_bool(values, NMS_READ_AFTER_SEND_ENV_KEY, True),
         nms_request_timeout=_positive_seconds(values, NMS_REQUEST_TIMEOUT_ENV_KEY, DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS),
-        nms_region=_env_value(
-            values,
-            NMS_REGION_ENV_KEY,
-            DEFAULT_NMS_REGION if discovery == DISCOVERY_NMS else "",
-        ).strip(),
-        nms_sites=_nms_sites(values, DEFAULT_NMS_SITES if discovery == DISCOVERY_NMS else ()),
+        nms_region=_env_value(values, NMS_REGION_ENV_KEY, "").strip(),
+        nms_sites=_nms_sites(values, ()),
         nms_wire_log=_env_bool(values, NMS_WIRE_LOG_ENV_KEY, True),
         planner_model=_env_value(values, PLANNER_MODEL_ENV_KEY, planner_model_default),
         planner_api_base=_env_value(values, PLANNER_API_BASE_ENV_KEY, adk_model_api_base),

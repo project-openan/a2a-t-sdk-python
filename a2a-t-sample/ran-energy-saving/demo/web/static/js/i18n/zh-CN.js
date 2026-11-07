@@ -211,6 +211,7 @@ export const ZH_CN = {
     no_task_negotiation_ended: "协商已结束",
     no_task_negotiation_aborted: "协商已中止",
     task_rejected: "任务被拒绝",
+    decision_ungrounded: "决策值无确定性来源",
     failed: "失败",
   },
 

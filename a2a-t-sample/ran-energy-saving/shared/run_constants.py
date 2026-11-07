@@ -72,6 +72,7 @@ FinalState = Literal[
     "no_task_negotiation_aborted",
     "intent_not_confirmed",
     "input_invalid",
+    "decision_ungrounded",
     "task_rejected",
     "task_failed",
     "incomplete",
@@ -83,6 +84,9 @@ FINAL_STATE_NEGOTIATION_ABORTED: Final[FinalState] = "no_task_negotiation_aborte
 FINAL_STATE_INTENT_NOT_CONFIRMED: Final[FinalState] = "intent_not_confirmed"
 #: The client-side Task-T validation blocked the send before any negotiation or network call.
 FINAL_STATE_INPUT_INVALID: Final[FinalState] = "input_invalid"
+#: The automatic decision carried a value that no operator, server proposal or authoritative tool
+#: result grounds. The client refuses to send the ACCEPT and closes the negotiation with an ABORT.
+FINAL_STATE_DECISION_UNGROUNDED: Final[FinalState] = "decision_ungrounded"
 FINAL_STATE_TASK_REJECTED: Final[FinalState] = "task_rejected"
 FINAL_STATE_TASK_FAILED: Final[FinalState] = "task_failed"
 FINAL_STATE_INCOMPLETE: Final[FinalState] = "incomplete"

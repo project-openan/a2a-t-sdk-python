@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
@@ -40,12 +40,15 @@ from demo.scenario import (
     FINAL_STATE_TASK_COMPLETED,
     SCENARIO_ABORT_SPEC,
     SCENARIO_FEASIBILITY_SPEC,
-    SCENARIO_INFORMATION_SPEC,
     SCENARIO_REJECT_SPEC,
     SCENARIO_TARGET_SPEC,
     SUPPORTED_SCENARIO_NAMES,
+    ExpectedStep,
     Scenario,
     get_scenario,
+)
+from demo.scenario import (
+    SCENARIO_INFORMATION_SPEC as _INFORMATION_SPEC_BASE,
 )
 from google.protobuf.json_format import MessageToDict
 from protocol.client_flow import (
@@ -54,8 +57,6 @@ from protocol.client_flow import (
     ClientFlowResult,
     SseClientTransport,
     WebhookClientTransport,
-    _region_reask_content,
-    _region_reask_needed,
     normalize_webhook_payload,
     run_client_flow,
 )
@@ -83,6 +84,28 @@ CONTEXT_ID = "ctx-client-flow"
 
 #: Business values the runtime would have parsed from these English requests.
 _INTENT_FIELDS: dict[str, object] = {"operationType": "Create", "region": "Region A"}
+
+#: A complete INFORMATION negotiation fixture. The demo ``information`` scenario now blocks the
+#: missing target locally, so the flow tests use their own complete request and scripted accept.
+INFORMATION_NEGOTIATION_SPEC = replace(
+    _INFORMATION_SPEC_BASE,
+    expected_sequence=(
+        ExpectedStep(actor="server", performative="PROPOSE", round=1),
+        ExpectedStep(actor="client", performative="ACCEPT", round=1),
+    ),
+    expected_final_state=FINAL_STATE_TASK_COMPLETED,
+    scripted_client_decisions=(
+        NegotiationDecision(
+            action="accept",
+            rationale="The missing time-segmented throughput target is supplied.",
+            filled_params={
+                "guaranteedThroughputTarget": (
+                    "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
+                )
+            },
+        ),
+    ),
+)
 
 _PROPOSE_URIS: dict[str, str] = {
     "information": INFORMATION_NEGOTIATION_PROPOSE_URI,
@@ -293,7 +316,6 @@ async def _run(
     decisions: tuple[NegotiationDecision, ...],
     *,
     single_extension_per_message: bool = False,
-    forced_region: str | None = None,
 ) -> tuple[ClientFlowResult, ScriptedTransport, FakePromptClient]:
     prompt_client = FakePromptClient()
     transport = ScriptedTransport(batches)
@@ -306,7 +328,6 @@ async def _run(
         language="en-US",
         intent_fields=_INTENT_FIELDS,
         single_extension_per_message=single_extension_per_message,
-        forced_region=forced_region,
     )
     return result, transport, prompt_client
 
@@ -318,7 +339,7 @@ async def test_message_sent_span_carries_the_wire_fields() -> None:
     await run_client_flow(
         prompt_client=prompt_client,
         transport=ScriptedTransport([_task_completed_batch()]),
-        user_request=SCENARIO_INFORMATION_SPEC.user_request["en-US"],
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
         provider=ScriptedDecisionProvider(()),
         language="en-US",
         trace_sink=spans.append,
@@ -340,8 +361,8 @@ async def test_accept_span_carries_the_refilled_task_t_and_the_negotiation_paylo
     await run_client_flow(
         prompt_client=FakePromptClient(),
         transport=ScriptedTransport([[propose_event("information", 1)], _task_completed_batch()]),
-        user_request=SCENARIO_INFORMATION_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider((SCENARIO_INFORMATION_SPEC.scripted_client_decisions[0],)),
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions[0],)),
         language="en-US",
         trace_sink=spans.append,
     )
@@ -430,7 +451,7 @@ async def test_intent_gate_can_stop_the_run_before_any_task_t_is_sent() -> None:
     result = await run_client_flow(
         prompt_client=prompt_client,
         transport=transport,
-        user_request=SCENARIO_INFORMATION_SPEC.user_request["en-US"],
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
         provider=ScriptedDecisionProvider(()),
         language="en-US",
         on_intent_ready=reject_intent,
@@ -451,7 +472,7 @@ async def test_conversation_context_is_prepended_to_task_t_generation() -> None:
         prompt_client=prompt_client,
         transport=transport,
         user_request="current request",
-        provider=ScriptedDecisionProvider(SCENARIO_INFORMATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
         language="en-US",
         conversation_context="user: earlier request\nassistant: earlier result",
     )
@@ -463,9 +484,9 @@ async def test_conversation_context_is_prepended_to_task_t_generation() -> None:
 
 async def test_information_scenario_accepts_and_completes_a_task() -> None:
     result, transport, prompt_client = await _run(
-        SCENARIO_INFORMATION_SPEC,
+        INFORMATION_NEGOTIATION_SPEC,
         [[propose_event("information", 1)], _task_completed_batch()],
-        SCENARIO_INFORMATION_SPEC.scripted_client_decisions,
+        INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions,
     )
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
@@ -484,9 +505,9 @@ async def test_information_scenario_accepts_and_completes_a_task() -> None:
 async def test_accept_carries_the_proposal_negotiation_id_not_the_context_id() -> None:
     """The vendor rejects a reply whose negotiationContext.id is the A2A context id."""
     result, transport, _prompt_client = await _run(
-        SCENARIO_INFORMATION_SPEC,
+        INFORMATION_NEGOTIATION_SPEC,
         [[propose_event("information", 1, negotiation_id="negotiation-1")], _task_completed_batch()],
-        SCENARIO_INFORMATION_SPEC.scripted_client_decisions,
+        INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions,
     )
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
@@ -498,7 +519,7 @@ async def test_accept_continues_when_the_response_stream_carries_a_new_negotiati
     """After ACCEPT the vendor may open a new negotiation id on the same context id."""
     completion = NegotiationDecision(action="accept", rationale="accept")
     result, transport, _prompt_client = await _run(
-        SCENARIO_INFORMATION_SPEC,
+        INFORMATION_NEGOTIATION_SPEC,
         [
             [propose_event("information", 1, negotiation_id="negotiation-1")],
             [propose_event("information", 2, negotiation_id="negotiation-2")],
@@ -515,45 +536,12 @@ async def test_accept_continues_when_the_response_stream_carries_a_new_negotiati
     assert second_accept[NEGOTIATION_CONTEXT_METADATA_KEY]["id"] == "negotiation-2"
 
 
-def test_region_reask_detects_a_rejected_region_and_offers_candidates() -> None:
-    propose = NegotiationProposeView(
-        negotiation_id="negotiation-1",
-        kind="information",
-        round=1,
-        max_rounds=3,
-        content=("Region 'Region A' is not recognized. Served areas: A2ATestRegion; Region B."),
-        context_id=CONTEXT_ID,
-    )
-    decision = NegotiationDecision(action="accept", rationale="accept")
-
-    reask = _region_reask_needed(decision, propose)
-
-    assert reask is not None
-    assert reask[0] == "Region A"
-    assert reask[1] == ("A2ATestRegion", "Region B")
-    assert "A2ATestRegion" in _region_reask_content(propose, reask[1])
-
-
-def test_region_reask_is_not_needed_when_the_model_changed_the_region() -> None:
-    propose = NegotiationProposeView(
-        negotiation_id="negotiation-1",
-        kind="information",
-        round=1,
-        max_rounds=3,
-        content="Region 'Old' is not recognized. Served areas: New.",
-        context_id=CONTEXT_ID,
-    )
-    decision = NegotiationDecision(action="accept", rationale="accept", filled_params={"region": "New"})
-
-    assert _region_reask_needed(decision, propose) is None
-
-
 async def test_nms_accept_carries_only_the_negotiation_extension_key() -> None:
     """The vendor rejects an accept whose metadata has more than one ``-T`` key."""
     result, transport, _prompt_client = await _run(
-        SCENARIO_INFORMATION_SPEC,
+        INFORMATION_NEGOTIATION_SPEC,
         [[propose_event("information", 1)], _task_completed_batch()],
-        SCENARIO_INFORMATION_SPEC.scripted_client_decisions,
+        INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions,
         single_extension_per_message=True,
     )
 
@@ -564,24 +552,6 @@ async def test_nms_accept_carries_only_the_negotiation_extension_key() -> None:
     assert NEGOTIATION_CONTEXT_METADATA_KEY in accept_metadata
 
 
-async def test_forced_region_wins_over_a_decision_model_value() -> None:
-    decision = NegotiationDecision(
-        action="accept",
-        rationale="accept",
-        filled_params={"region": "Region A"},
-    )
-    result, _transport, prompt_client = await _run(
-        SCENARIO_INFORMATION_SPEC,
-        [[propose_event("information", 1)], _task_completed_batch()],
-        (decision,),
-        forced_region="A2ATestRegion",
-    )
-
-    assert result.final_state == FINAL_STATE_TASK_COMPLETED
-    assert prompt_client.refill_data[0]["region"] == "A2ATestRegion"
-    assert "region: A2ATestRegion" in prompt_client.accept_texts[0]
-
-
 async def test_information_accept_uses_the_selected_served_area() -> None:
     decision = NegotiationDecision(
         action="accept",
@@ -589,7 +559,7 @@ async def test_information_accept_uses_the_selected_served_area() -> None:
         filled_params={"region": "Region B"},
     )
     result, _transport, prompt_client = await _run(
-        SCENARIO_INFORMATION_SPEC,
+        INFORMATION_NEGOTIATION_SPEC,
         [[propose_event("information", 1)], _task_completed_batch()],
         (decision,),
     )
@@ -613,7 +583,7 @@ async def test_information_accept_discards_an_invalid_model_filled_target() -> N
         },
     )
     result, _transport, prompt_client = await _run(
-        SCENARIO_INFORMATION_SPEC,
+        INFORMATION_NEGOTIATION_SPEC,
         [[propose_event("information", 1)], _task_completed_batch()],
         (decision,),
     )
@@ -652,8 +622,8 @@ async def test_accept_rewrites_a_refill_that_dropped_the_agreed_target() -> None
     result = await run_client_flow(
         prompt_client=prompt_client,
         transport=transport,
-        user_request=SCENARIO_INFORMATION_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider(SCENARIO_INFORMATION_SPEC.scripted_client_decisions),
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
         language="en-US",
         intent_fields=_INTENT_FIELDS,
     )
@@ -767,9 +737,9 @@ async def test_counter_carries_the_sample_proposal() -> None:
 
 async def test_initial_request_matches_the_old_message_shape() -> None:
     _, transport, _ = await _run(
-        SCENARIO_INFORMATION_SPEC,
+        INFORMATION_NEGOTIATION_SPEC,
         [[propose_event("information", 1)], _task_completed_batch()],
-        SCENARIO_INFORMATION_SPEC.scripted_client_decisions,
+        INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions,
     )
 
     request = transport.requests[0]
@@ -825,7 +795,7 @@ async def test_terminal_sends_carry_the_configured_call_timeout(terminal: str) -
     result = await run_client_flow(
         prompt_client=FakePromptClient(),
         transport=transport,
-        user_request=SCENARIO_INFORMATION_SPEC.user_request["en-US"],
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
         provider=ScriptedDecisionProvider(decisions),
         language="en-US",
         call_timeout_seconds=77.0,
@@ -842,8 +812,8 @@ async def test_call_timeout_defaults_to_the_documented_budget() -> None:
     await run_client_flow(
         prompt_client=FakePromptClient(),
         transport=transport,
-        user_request=SCENARIO_INFORMATION_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider(SCENARIO_INFORMATION_SPEC.scripted_client_decisions),
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
         language="en-US",
         intent_fields=_INTENT_FIELDS,
     )
@@ -1065,8 +1035,8 @@ async def test_webhook_mode_accept_reports_task_completed_after_the_artifact() -
     result = await run_client_flow(
         prompt_client=FakePromptClient(),
         transport=transport,
-        user_request=SCENARIO_INFORMATION_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider(SCENARIO_INFORMATION_SPEC.scripted_client_decisions),
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
         language="en-US",
     )
 
@@ -1132,8 +1102,8 @@ async def test_real_sdk_client_runs_the_information_flow_offline(
     result = await run_client_flow(
         prompt_client=prompt_client,
         transport=transport,
-        user_request=SCENARIO_INFORMATION_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider(SCENARIO_INFORMATION_SPEC.scripted_client_decisions),
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
         language="en-US",
     )
 
@@ -1153,7 +1123,7 @@ async def test_event_sink_sees_every_event_and_the_decision_hook_the_proposal() 
         prompt_client=FakePromptClient(),
         transport=ScriptedTransport([[propose_event("information", 1)], _task_completed_batch()]),
         user_request="request",
-        provider=ScriptedDecisionProvider(SCENARIO_INFORMATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
         language="en-US",
         event_sink=seen.append,
         on_decision_requested=lambda propose, session: requested.append((propose.kind, session.round)),
@@ -1185,7 +1155,7 @@ async def test_proposal_view_carries_the_sample_area_options() -> None:
         prompt_client=FakePromptClient(),
         transport=ScriptedTransport([[event], _task_completed_batch()]),
         user_request="request",
-        provider=ScriptedDecisionProvider(SCENARIO_INFORMATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
         language="en-US",
         on_decision_requested=lambda propose, session: requested.append(propose),
     )
@@ -1227,7 +1197,7 @@ async def test_decision_hook_fires_before_the_response_is_sent() -> None:
         prompt_client=FakePromptClient(),
         transport=RecordingTransport([[propose_event("information", 1)], _task_completed_batch()]),
         user_request="request",
-        provider=ScriptedDecisionProvider(SCENARIO_INFORMATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
         language="en-US",
         on_decision_made=on_decision_made,
         trace_sink=spans.append,
@@ -1261,7 +1231,7 @@ async def test_decision_span_is_emitted_only_without_a_consumer_callback() -> No
         prompt_client=FakePromptClient(),
         transport=ScriptedTransport([[propose_event("information", 1)], _task_completed_batch()]),
         user_request="request",
-        provider=ScriptedDecisionProvider(SCENARIO_INFORMATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
         language="en-US",
         on_decision_made=lambda decision, propose, session: decisions.append(decision),
         trace_sink=spans.append,
@@ -1275,7 +1245,7 @@ async def test_decision_span_is_emitted_only_without_a_consumer_callback() -> No
         prompt_client=FakePromptClient(),
         transport=ScriptedTransport([[propose_event("information", 1)], _task_completed_batch()]),
         user_request="request",
-        provider=ScriptedDecisionProvider(SCENARIO_INFORMATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
         language="en-US",
         trace_sink=cli_spans.append,
     )
@@ -1335,6 +1305,7 @@ async def test_trace_phases_and_steps_for_every_scenario(scenario_name: str) -> 
         user_request=scenario.user_request["en-US"],
         provider=ScriptedDecisionProvider(scenario.scripted_client_decisions),
         language="en-US",
+        enforce_required_fields=(scenario_name == "information"),
         trace_sink=spans.append,
     )
 
@@ -1346,7 +1317,9 @@ async def test_trace_phases_and_steps_for_every_scenario(scenario_name: str) -> 
     assert len(span_ids) == len(set(span_ids))
     assert all(str(span_id).startswith("flow_") for span_id in span_ids)
 
-    expected_phases = {PHASE_TASK_PROMPT, PHASE_TASK_VALIDATION}
+    expected_phases = {PHASE_TASK_PROMPT}
+    if scenario.expected_final_state != "input_invalid":
+        expected_phases.add(PHASE_TASK_VALIDATION)
     if scenario.expected_sequence:
         expected_phases.add(PHASE_NEGOTIATION)
     if scenario_name != "abort" and scenario.expected_sequence:
@@ -1409,7 +1382,7 @@ async def test_sse_transport_forwards_events_to_its_sink_as_they_arrive() -> Non
         prompt_client=FakePromptClient(),
         transport=transport,
         user_request="request",
-        provider=ScriptedDecisionProvider(SCENARIO_INFORMATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
         language="en-US",
         event_sink=seen.append,
     )
@@ -1417,3 +1390,49 @@ async def test_sse_transport_forwards_events_to_its_sink_as_they_arrive() -> Non
     assert seen == result.events
     assert [event["kind"] for event in seen] == ["message", "message"]
     assert result.final_state == FINAL_STATE_NEGOTIATION_ENDED
+
+
+class _UngroundedProvider:
+    """Test double that marks itself as a live automatic decision source."""
+
+    requires_grounding = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def respond(self, propose: NegotiationProposeView, session: NegotiationContext) -> NegotiationDecision:
+        del propose, session
+        self.calls += 1
+        return NegotiationDecision(
+            action="accept",
+            rationale="accept",
+            filled_params={
+                "region": "A2ATestRegion",
+                "guaranteedThroughputTarget": "{00:00~07:00,2Mbps}",
+            },
+        )
+
+
+async def test_an_ungrounded_auto_accept_is_replaced_by_an_abort() -> None:
+    """The reported bug: the server rejected the operator's region and offered nothing."""
+    provider = _UngroundedProvider()
+    transport = ScriptedTransport([[propose_event("information", 1)], [end_event()]])
+
+    result = await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=transport,
+        user_request="The area is the Songshanhu Administration Committee. {00:00~07:00,2Mbps}",
+        provider=provider,
+        language="en-US",
+        intent_fields={
+            "operationType": "Create",
+            "region": "Songshanhu Administration Committee",
+            "guaranteedThroughputTarget": "{00:00~07:00,2Mbps}",
+        },
+    )
+
+    assert result.final_state == "decision_ungrounded"
+    assert provider.calls == 2
+    assert _client_negotiation_steps(transport.requests) == [("ABORT", 1)]
+    assert result.error is not None
+    assert "region" in result.error

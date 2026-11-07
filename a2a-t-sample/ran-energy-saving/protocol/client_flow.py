@@ -25,7 +25,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final, Protocol
 
@@ -62,6 +62,7 @@ from shared.config import DEFAULT_HTTP_TIMEOUT_SECONDS, DEFAULT_WEBHOOK_IDLE_TIM
 from shared.logging_setup import log_context
 from shared.models import NegotiationDecision, NegotiationOptions, NegotiationProposeView
 from shared.run_constants import (
+    FINAL_STATE_DECISION_UNGROUNDED,
     FINAL_STATE_INPUT_INVALID,
     FINAL_STATE_INTENT_NOT_CONFIRMED,
     FINAL_STATE_NEGOTIATION_ABORTED,
@@ -86,7 +87,8 @@ from shared.trace import (
     trace_stage,
 )
 
-from protocol.decision_provider import NegotiationDecisionProvider
+from protocol.decision_provider import AdkDecisionProvider, NegotiationDecisionProvider, ScriptedDecisionProvider
+from protocol.grounding import ToolCall, UngroundedValue, find_ungrounded, grounding_reask_text, normalize
 from protocol.messages import (
     END_MESSAGE_TEXT,
     SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
@@ -203,13 +205,19 @@ _VALIDATION_BLOCKING_CODES: Final[frozenset[str]] = frozenset(
 
 @dataclass(frozen=True)
 class TaskValidation:
-    """Outcome of one pre-send Task-T validation call."""
+    """Outcome of one pre-send Task-T validation call.
+
+    ``filled`` carries the parameters the SDK extracted from the prompt. The accept refill uses
+    them as its baseline, so a raw-intent run keeps the operator's values instead of falling back
+    to a hardcoded default.
+    """
 
     verdict: str
     negotiation_kind: NegotiationKind | None
     errors: list[dict[str, object]]
     reason: str | None
     duration_ms: int
+    filled: Mapping[str, object] = field(default_factory=dict)
 
 
 def _elapsed_ms(started: float) -> int:
@@ -284,7 +292,7 @@ _REQUIRED_FIELD_LABELS_ZH: Final[dict[str, str]] = {
 
 
 def _missing_required_fields(
-    filled: object,
+    data: Mapping[str, object],
     schema: Mapping[str, object],
     language: str,
 ) -> list[dict[str, object]]:
@@ -299,9 +307,6 @@ def _missing_required_fields(
     """
     required = schema.get("required")
     if not isinstance(required, list):
-        return []
-    data = getattr(filled, "data", None)
-    if not isinstance(data, Mapping):
         return []
     labels = _REQUIRED_FIELD_LABELS_ZH if language == LANGUAGE_ZH else _REQUIRED_FIELD_LABELS
     errors: list[dict[str, object]] = []
@@ -328,6 +333,29 @@ def _missing_required_fields(
     return errors
 
 
+def _validation_names_a_missing_required(
+    error: ContentValidationError,
+    schema: Mapping[str, object],
+) -> bool:
+    """Return whether a failed validation reports a required value as missing.
+
+    A semantic conflict (for example overlapping target windows) nulls the affected slot too, but
+    that value is negotiable and must still reach the server. A structured error on a caller-
+    required slot triggers the local business gate; the gate itself then decides whether the value
+    is actually absent.
+    """
+    required = schema.get("required")
+    if isinstance(required, list):
+        required_names = {name for name in required if isinstance(name, str)}
+        for item in error.errors or ():
+            if item.slot_name in required_names and str(item.code) in {
+                "content.param_missing",
+                "content.entry_field_missing",
+            }:
+                return True
+    return str(error.code_str) in {"content.param_missing", "content.entry_field_missing"}
+
+
 async def _validate_task_prompt(
     prompt_client: PromptClient,
     prompt: str,
@@ -337,7 +365,11 @@ async def _validate_task_prompt(
     language: str,
     enforce_required_fields: bool = True,
 ) -> TaskValidation:
-    """Run the SDK content validation without blocking the event loop."""
+    """Run the SDK content validation without blocking the event loop.
+
+    The extracted parameters are always returned, even when semantic validation fails, because the
+    accept refill and the required-field gate both need the operator-derived baseline.
+    """
     started = time.monotonic()
     try:
         filled = await asyncio.to_thread(
@@ -347,19 +379,103 @@ async def _validate_task_prompt(
             template_uri,
         )
     except ContentValidationError as error:
+        params = error.params if isinstance(error.params, Mapping) else {}
+        if enforce_required_fields and _validation_names_a_missing_required(error, schema):
+            missing = _missing_required_fields(params, schema, language)
+            if missing:
+                return TaskValidation(
+                    "blocked",
+                    None,
+                    missing,
+                    "content.param_missing",
+                    _elapsed_ms(started),
+                    params,
+                )
         verdict, kind = _classify_validation_error(error)
-        return TaskValidation(verdict, kind, _validation_errors(error), error.code_str, _elapsed_ms(started))
+        return TaskValidation(
+            verdict,
+            kind,
+            _validation_errors(error),
+            error.code_str,
+            _elapsed_ms(started),
+            params,
+        )
     except Exception as error:  # noqa: BLE001 - validation must never break the send path
         _LOGGER.warning("Task-T validation unavailable: %s", error)
         reason = f"{type(error).__name__}: {error}"
-        return TaskValidation("unavailable", None, [], reason, _elapsed_ms(started))
+        return TaskValidation("unavailable", None, [], reason, _elapsed_ms(started), {})
+    extracted = getattr(filled, "data", filled)
+    data = dict(extracted) if isinstance(extracted, Mapping) else {}
     if enforce_required_fields:
-        missing = _missing_required_fields(filled, schema, language)
+        missing = _missing_required_fields(data, schema, language)
         if missing:
             # The OSS agent owns the business-required fields: do not send an incomplete Task-T
             # and rely on the network's negotiation for a value the operator can supply here.
-            return TaskValidation("blocked", None, missing, "content.param_missing", _elapsed_ms(started))
-    return TaskValidation("passed", None, [], None, _elapsed_ms(started))
+            return TaskValidation(
+                "blocked",
+                None,
+                missing,
+                "content.param_missing",
+                _elapsed_ms(started),
+                data,
+            )
+    return TaskValidation("passed", None, [], None, _elapsed_ms(started), data)
+
+
+def _merge_initial_filled(
+    validation: TaskValidation | None,
+    intent_fields: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Return the operator-derived baseline of an accept refill.
+
+    The SDK extraction is authoritative; the intent layer fills the values the extraction could
+    not provide (a raw-intent run has no intent, so the extraction is the only source).
+    """
+    merged = dict(intent_fields or {})
+    if validation is not None:
+        for key, value in validation.filled.items():
+            if value is not None and not (isinstance(value, str) and not value.strip()):
+                merged[key] = value
+    return merged
+
+
+def _region_consistency_errors(
+    extracted: Mapping[str, object],
+    intent_fields: Mapping[str, object] | None,
+    language: str,
+) -> list[dict[str, object]]:
+    """Return one error when the extracted region disagrees with the intent's verbatim region.
+
+    The intent agent is instructed to keep the region verbatim. A disagreement means the Task-T
+    extraction was polluted (for example by a schema example), so the request must not be sent.
+    """
+    extracted_region = extracted.get("region")
+    intent_region = (intent_fields or {}).get("region")
+    if not (isinstance(extracted_region, str) and extracted_region.strip()):
+        return []
+    if not (isinstance(intent_region, str) and intent_region.strip()):
+        return []
+    if normalize(extracted_region) == normalize(intent_region):
+        return []
+    label = "区域" if language == LANGUAGE_ZH else "Area"
+    if language == LANGUAGE_ZH:
+        message = (
+            f"提取出的区域「{extracted_region}」与操作员原文「{intent_region}」不一致；"
+            "请修改请求后重试"
+        )
+    else:
+        message = (
+            f"The extracted region '{extracted_region}' does not match the operator's text "
+            f"'{intent_region}'; edit the request and retry."
+        )
+    return [
+        {
+            "slotName": "region",
+            "code": "content.value_mismatch",
+            "message": message,
+            "facts": {"section_label": label},
+        }
+    ]
 
 
 class PromptClient(Protocol):
@@ -437,6 +553,7 @@ class ClientFlowResult:
         report: Last report artifact payload/text of a completed task, when observed.
         reports: Report artifact payloads in arrival order (a two-phase run has a baseline report
             and the modified report).
+        error: Operator-facing reason of a terminal state that is not a task outcome.
     """
 
     events: list[dict[str, object]] = field(default_factory=list)
@@ -446,6 +563,7 @@ class ClientFlowResult:
     task_id: str | None = None
     report: dict[str, object] | None = None
     reports: list[dict[str, object]] = field(default_factory=list)
+    error: str | None = None
 
 
 def is_terminal_event(event: Mapping[str, object]) -> bool:
@@ -670,9 +788,9 @@ async def run_client_flow(
     trace_sink: Callable[[dict[str, object]], None] | None = None,
     conversation_context: str | None = None,
     single_extension_per_message: bool = False,
-    forced_region: str | None = None,
+    tools_authoritative: bool = False,
     validate_before_send: bool = False,
-    enforce_required_fields: bool = True,
+    enforce_required_fields: bool = False,
     run_mode: str = RUN_MODE_CREATE,
     target_task_id: str | None = None,
     target_context_id: str | None = None,
@@ -716,16 +834,16 @@ async def run_client_flow(
             Negotiation-T key because that server rejects a message with more than one ``-T``
             extension key. The local demo server instead requires the agreed Task-T on the accept,
             so it keeps the default ``False``.
-        forced_region: Region the vendor NMS serves. When set, it replaces the region a decision
-            model fills on an accept, so the operator's configured region wins over a model that
-            repeats the demo region.
+        tools_authoritative: When true, a deterministic client tool result may ground an accept
+            value. Only the local demo server shares the demo dataset; NMS and NMS simulator runs
+            must answer from the operator's request or the server proposal instead.
         validate_before_send: Validate each rendered Task-T with the SDK content pipeline before
             sending it. Negotiable errors still go to the server for negotiation; unmapped errors
             end the flow with ``input_invalid`` and no message is sent.
-        enforce_required_fields: After a successful content validation, check the caller schema's
-            required parameters against the extracted data and stop before sending when one is
-            empty. Callers may disable this for a curated demonstration request whose deliberate
-            gap is meant to exercise the server's negotiation.
+        enforce_required_fields: Check the caller schema's required parameters against the
+            extracted data and stop before sending when one is empty. The SDK extraction runs even
+            when ``validate_before_send`` is false, so the gate does not depend on the semantic
+            validation switch.
         run_mode: ``create`` starts a new A2A Task; ``modify`` sends the scenario's Modify Task-T
             as the first message so an existing running Task is continued.
         target_task_id: Task the Modify-only run continues; required by ``run_mode="modify"``.
@@ -914,7 +1032,9 @@ async def run_client_flow(
             **({"samplePhase": SAMPLE_PHASE_MODIFY} if modify_only else {}),
         },
     )
-    if validate_before_send:
+    initial_filled: dict[str, object] = _merge_initial_filled(None, intent_fields)
+    validation: TaskValidation | None = None
+    if validate_before_send or enforce_required_fields:
         validation = await _validate_task_prompt(
             prompt_client,
             prompt_text,
@@ -923,9 +1043,39 @@ async def run_client_flow(
             language=language,
             enforce_required_fields=enforce_required_fields,
         )
-        emit_validation(validation, prompt_text, task_template_uri, initial_phase)
-        if validation.verdict == "blocked":
-            # Nothing is sent and no negotiation starts: the operator repairs the request first.
+        initial_filled = _merge_initial_filled(validation, intent_fields)
+        if enforce_required_fields and validation.verdict == "unavailable":
+            # The semantic pipeline is unavailable (for example a transient model outage). The
+            # business gate still has the intent fallback; only block when neither source has the
+            # required values.
+            missing = _missing_required_fields(initial_filled, validation_schema, language)
+            if missing:
+                validation = TaskValidation(
+                    "blocked", None, missing, "content.param_missing", 0, initial_filled
+                )
+        if enforce_required_fields and validation.filled:
+            mismatch = _region_consistency_errors(validation.filled, intent_fields, language)
+            if mismatch:
+                validation = TaskValidation(
+                    "blocked",
+                    None,
+                    mismatch,
+                    "content.value_mismatch",
+                    validation.duration_ms,
+                    initial_filled,
+                )
+        if validate_before_send:
+            emit_validation(validation, prompt_text, task_template_uri, initial_phase)
+            if validation.verdict == "blocked":
+                # Nothing is sent and no negotiation starts: the operator repairs the request first.
+                blocked = ClientFlowResult()
+                blocked.final_state = FINAL_STATE_INPUT_INVALID
+                _fill_result(blocked, None)
+                return blocked
+        elif validation.reason in {"content.param_missing", "content.value_mismatch"}:
+            # Only the business gate runs when semantic validation is off; negotiable content
+            # still goes to the server.
+            emit_validation(validation, prompt_text, task_template_uri, initial_phase)
             blocked = ClientFlowResult()
             blocked.final_state = FINAL_STATE_INPUT_INVALID
             _fill_result(blocked, None)
@@ -959,6 +1109,8 @@ async def run_client_flow(
     result = ClientFlowResult()
     context_id: str | None = None
     exchanges = 0
+    # One grounded decision turn per negotiation round; a second ungrounded accept is terminal.
+    reasked_rounds: set[tuple[str, int]] = set()
     emit_message_sent(
         initial_request,
         phase=PHASE_TASK_MODIFY if modify_only else PHASE_TASK_VALIDATION,
@@ -1038,7 +1190,62 @@ async def run_client_flow(
             context_id=context_id,
         ):
             decision = await provider.respond(propose, session)
-            decision = await _reask_rejected_region(provider, decision, propose, session, trace_sink=trace_sink)
+            decision, ungrounded = await _ensure_grounded_decision(
+                provider,
+                decision,
+                propose,
+                session,
+                kind=kind,
+                baseline=initial_filled,
+                intent_fields=intent_fields,
+                tools_authoritative=tools_authoritative,
+                reasked=reasked_rounds,
+                trace_sink=trace_sink,
+            )
+        if decision is None:
+            fields = ", ".join(f"{item.field}={item.value or '<missing>'}" for item in ungrounded)
+            reason = f"The automatic decision for round {session.round} has no grounded value: {fields}."
+            emit_trace(
+                "decision_ungrounded",
+                phase=PHASE_NEGOTIATION,
+                title="Decision ungrounded",
+                round_number=session.round,
+                context_id=context_id,
+                detail={
+                    "fields": [item.field for item in ungrounded],
+                    "values": {item.field: item.value for item in ungrounded},
+                    "reason": reason,
+                },
+            )
+            abort_decision = NegotiationDecision(action="abort", rationale=reason)
+            request, call_context = _build_terminal_request(
+                prompt_client=prompt_client,
+                decision=abort_decision,
+                kind=kind,
+                session=session,
+                context_id=context_id,
+                label=resolved_label,
+                propose_content=propose.content,
+                performative=NegotiationPerformative.ABORT,
+                call_timeout_seconds=call_timeout_seconds,
+                task_id=target_task_id if modify_only else None,
+            )
+            if on_decision_made is not None:
+                on_decision_made(abort_decision, propose, session)
+            result.decisions.append(abort_decision)
+            emit_message_sent(
+                request,
+                phase=PHASE_RESOLUTION,
+                title="Abort sent",
+                performative=NegotiationPerformative.ABORT.value,
+                round_number=session.round,
+                context_id=context_id,
+            )
+            batch = await transport.send(request, call_context)
+            exchanges += 1
+            collect(batch)
+            result.error = reason
+            return finish(FINAL_STATE_DECISION_UNGROUNDED)
         _LOGGER.info("decision made: action=%s round=%s", decision.action, session.round)
         # Exactly one timeline row per decision: a consumer callback (Web UI/transcript) records
         # the decision itself, so the synthetic span would be an adjacent duplicate. Without a
@@ -1076,10 +1283,10 @@ async def run_client_flow(
                 context_id=context_id,
                 label=resolved_label,
                 task_template_uri=task_template_uri,
+                baseline=initial_filled,
                 intent_fields=intent_fields,
                 call_timeout_seconds=call_timeout_seconds,
                 single_extension_per_message=single_extension_per_message,
-                forced_region=forced_region,
                 task_id=target_task_id if modify_only else None,
             )
             send_phase = PHASE_RESOLUTION
@@ -1223,36 +1430,153 @@ def _negotiation_request(
 def _accept_filled_values(
     kind: NegotiationKind,
     decision: NegotiationDecision,
+    baseline: Mapping[str, object] | None,
     intent_fields: Mapping[str, object] | None,
-    *,
-    forced_region: str | None = None,
 ) -> dict[str, object]:
-    """Merge the parsed intent and the ADK decision into the agreed Task-T parameters.
+    """Merge the operator-derived baseline and the decision into the agreed Task-T parameters.
 
-    The intent layer supplies the base values (operation type, region, windows, sites) and the
-    decision agent is authoritative for what it fills. Live models sometimes put per-cell SLA
-    floors into the target: only whitelisted Task-T keys are accepted, and the throughput target
-    must have the ``{HH:MM~HH:MM,<rate>Mbps}`` shape.
+    The baseline is the initial Task-T extraction; the intent layer fills what the extraction did
+    not provide. The decision may add or change a value, but the grounding verifier decides
+    whether that change is allowed. There is no configured fallback and no default operation type:
+    an absent value stays absent and the verifier blocks the ACCEPT.
     """
     del kind
-    filled = dict(intent_fields or {})
+    filled: dict[str, object] = {}
+    for source in (intent_fields or {}, baseline or {}):
+        for key, value in source.items():
+            if value is not None and not (isinstance(value, str) and not value.strip()):
+                filled[key] = value
     allowed = TASK_PARAM_SCHEMA.get("properties")
     if isinstance(allowed, Mapping):
         for key, value in (decision.filled_params or {}).items():
             if key not in allowed or value is None:
                 continue
-            if isinstance(value, (str, int, float)) and str(value).strip():
-                filled[key] = value
+            if not (isinstance(value, (str, int, float)) and str(value).strip()):
+                continue
+            if key == "guaranteedThroughputTarget" and not _TIME_SEGMENTED_TARGET_PATTERN.search(str(value)):
+                continue
+            filled[key] = value
     target = filled.get("guaranteedThroughputTarget")
     if not isinstance(target, str) or not _TIME_SEGMENTED_TARGET_PATTERN.search(target):
         filled.pop("guaranteedThroughputTarget", None)
-    if forced_region:
-        # The operator configured the region the vendor serves; a decision model must not replace
-        # it with the demo region.
-        filled["region"] = forced_region
-    if filled.get("operationType") not in {"Create", "Modify"}:
-        filled["operationType"] = "Create"
     return filled
+
+
+def _requires_grounding(provider: NegotiationDecisionProvider) -> bool:
+    """Return whether this provider's ACCEPT must pass the deterministic grounding verifier.
+
+    A scripted provider is a recorded operator answer. An offline ADK provider is the
+    deterministic fake model used by the demo/tests. Manual and confirm providers return the
+    operator's submitted decision. Only a live automatic ADK decision needs verification.
+    """
+    if isinstance(provider, ScriptedDecisionProvider):
+        return False
+    if isinstance(provider, AdkDecisionProvider):
+        return not provider.is_offline
+    return getattr(provider, "requires_grounding", False) is True
+
+
+async def _ensure_grounded_decision(
+    provider: NegotiationDecisionProvider,
+    decision: NegotiationDecision,
+    propose: NegotiationProposeView,
+    session: NegotiationContext,
+    *,
+    kind: NegotiationKind,
+    baseline: Mapping[str, object],
+    intent_fields: Mapping[str, object] | None,
+    tools_authoritative: bool,
+    reasked: set[tuple[str, int]],
+    trace_sink: Callable[[dict[str, object]], None] | None,
+) -> tuple[NegotiationDecision | None, list[UngroundedValue]]:
+    """Return a grounded decision, or ``None`` and the values that could not be grounded.
+
+    One corrective decision turn per negotiation round is allowed. The corrective turn shows the
+    model the server proposal and its options again and states the grounding rule; if the model
+    still returns an ungrounded ACCEPT, the flow refuses to send it.
+    """
+    if decision.action != "accept" or not _requires_grounding(provider):
+        return decision, []
+    if propose.kind == "information" and not decision.filled_params:
+        return None, [
+            UngroundedValue("information", "", "accept does not answer the requested items")
+        ]
+    filled = _accept_filled_values(kind, decision, baseline, intent_fields)
+    tool_calls: tuple[ToolCall, ...] = tuple(getattr(provider, "last_tool_calls", ()))
+    ungrounded = _ungrounded_values(
+        filled,
+        baseline=baseline,
+        intent_fields=intent_fields,
+        propose=propose,
+        tool_calls=tool_calls,
+        tools_authoritative=tools_authoritative,
+    )
+    if not ungrounded:
+        return decision, []
+    key = (propose.negotiation_id, session.round)
+    if key in reasked:
+        return None, ungrounded
+    reasked.add(key)
+    if trace_sink is not None:
+        recorder = TraceRecorder(current_trace().run_id or "", id_prefix="grounding")
+        span = recorder.emit(
+            kind="decision_reask",
+            phase=PHASE_NEGOTIATION,
+            title="Decision ungrounded; asking the model again",
+            actor="client",
+            side="client",
+            direction="internal",
+            round=session.round,
+            context_id=propose.context_id,
+            detail={
+                "fields": [item.field for item in ungrounded],
+                "values": {item.field: item.value for item in ungrounded},
+            },
+        )
+        trace_sink(span.to_dict())
+    corrected = propose.model_copy(update={"content": grounding_reask_text(propose, ungrounded)})
+    corrected_decision = await provider.respond(corrected, session)
+    if corrected_decision.action != "accept":
+        return corrected_decision, []
+    if propose.kind == "information" and not corrected_decision.filled_params:
+        return None, [
+            UngroundedValue("information", "", "accept does not answer the requested items")
+        ]
+    filled = _accept_filled_values(kind, corrected_decision, baseline, intent_fields)
+    tool_calls: tuple[ToolCall, ...] = tuple(getattr(provider, "last_tool_calls", ()))
+    still_ungrounded = _ungrounded_values(
+        filled,
+        baseline=baseline,
+        intent_fields=intent_fields,
+        # Verify against the real server proposal, not our corrective instruction: the reask text
+        # repeats the ungrounded value and must never become its own grounding source.
+        propose=propose,
+        tool_calls=tool_calls,
+        tools_authoritative=tools_authoritative,
+    )
+    if still_ungrounded:
+        return None, still_ungrounded
+    return corrected_decision, []
+
+
+def _ungrounded_values(
+    filled: Mapping[str, object],
+    *,
+    baseline: Mapping[str, object],
+    intent_fields: Mapping[str, object] | None,
+    propose: NegotiationProposeView,
+    tool_calls: Sequence[ToolCall],
+    tools_authoritative: bool,
+) -> list[UngroundedValue]:
+    """Run the grounding verifier with the flow's value shapes."""
+    return find_ungrounded(
+        filled,
+        baseline=baseline,
+        intent=intent_fields or {},
+        propose=propose,
+        tool_calls=tool_calls,
+        tools_authoritative=tools_authoritative,
+    )
 
 
 def _ensure_agreed_target(task_text: str, filled: Mapping[str, object]) -> str:
@@ -1301,26 +1625,21 @@ def _build_accept_request(
     context_id: str,
     label: str,
     task_template_uri: str,
+    baseline: Mapping[str, object] | None,
     intent_fields: Mapping[str, object] | None,
     call_timeout_seconds: float,
     single_extension_per_message: bool,
-    forced_region: str | None = None,
     task_id: str | None = None,
 ) -> tuple[SendMessageRequest, ClientCallContext]:
     """Refill the Task-T prompt and generate the Negotiation-T accept of the proposal type."""
-    filled = _accept_filled_values(kind, decision, intent_fields, forced_region=forced_region)
+    filled = _accept_filled_values(kind, decision, baseline, intent_fields)
     with trace_stage("task_t_slot_extraction_refill"):
         task_content = prompt_client.generate_task_prompt_from_data_with_schema(
             filled, TASK_PARAM_SCHEMA, task_template_uri
         )
     task_text = _ensure_agreed_target(_require_prompt_text(task_content, "the refilled Task-T prompt"), filled)
 
-    accept_text = _accept_text(
-        kind,
-        filled,
-        decision,
-        forced_region=forced_region,
-    )
+    accept_text = _accept_text(kind, filled, decision)
     accept_context = session.with_performative(NegotiationPerformative.ACCEPT)
     with trace_stage("negotiation_accept_extraction"):
         content = prompt_client.generate_negotiation_accept_prompt_from_text(
@@ -1340,128 +1659,6 @@ def _build_accept_request(
         extra_metadata=metadata,
         task_id=task_id,
     )
-
-
-#: Markers of an information proposal that rejected the requested region.
-_REGION_REJECTION_MARKERS: Final[tuple[str, ...]] = (
-    "not recognized",
-    "not served",
-    "does not serve",
-    "unrecognized",
-    "不识别",
-    "无法识别",
-    "不支持",
-    "未识别",
-)
-
-#: Candidate-list labels the vendor uses in an information proposal.
-_REGION_CANDIDATE_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
-    re.compile(r"(?:Served areas|Available areas)\s*:\s*([^.\n]+)", re.IGNORECASE),
-    re.compile(r"(?:可用区域|受服务区域)\s*[：:]\s*([^。\n]+)"),
-)
-
-#: Quoted region in an information proposal.
-_REGION_QUOTED_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
-    re.compile(r"(?:Region|area)\s+['\"“]([^'\"”]+)['\"”]", re.IGNORECASE),
-    re.compile(r"(?:区域|地区)\s*[“\"]([^”\"]+)[”\"]"),
-)
-
-
-def _rejected_region(propose: NegotiationProposeView) -> str | None:
-    """Return the region an information proposal rejected, or ``None`` when it did not."""
-    content = propose.content or ""
-    lowered = content.lower()
-    if not any(marker.lower() in lowered for marker in _REGION_REJECTION_MARKERS):
-        return None
-    for pattern in _REGION_QUOTED_PATTERNS:
-        match = pattern.search(content)
-        if match is not None and match.group(1).strip():
-            return match.group(1).strip()
-    return ""
-
-
-def _region_candidates(propose: NegotiationProposeView) -> tuple[str, ...]:
-    """Return the served regions an information proposal offers, best first."""
-    options = propose.options
-    if options is not None and options.options:
-        return tuple(option.value for option in options.options if option.value)
-    for pattern in _REGION_CANDIDATE_PATTERNS:
-        match = pattern.search(propose.content or "")
-        if match is None:
-            continue
-        values = [part.strip(" .;，；") for part in re.split(r"[;；,，、]", match.group(1))]
-        candidates = tuple(value for value in values if value)
-        if candidates:
-            return candidates
-    return ()
-
-
-def _region_reask_needed(
-    decision: NegotiationDecision,
-    propose: NegotiationProposeView,
-) -> tuple[str, tuple[str, ...]] | None:
-    """Return the rejected region and candidates when the accept should be re-asked."""
-    if decision.action != "accept" or propose.kind != "information":
-        return None
-    rejected = _rejected_region(propose)
-    if rejected is None:
-        return None
-    candidates = _region_candidates(propose)
-    if not candidates:
-        return None
-    current = (decision.filled_params or {}).get("region")
-    if isinstance(current, str) and current.strip() and current.strip() != rejected:
-        return None
-    return rejected, candidates
-
-
-def _region_reask_content(propose: NegotiationProposeView, candidates: tuple[str, ...]) -> str:
-    """Append the candidate regions to a proposal for one corrective model turn."""
-    joined = "; ".join(candidates)
-    return (
-        f"{propose.content}\n\n"
-        "## Region Correction\n"
-        "The previous ACCEPT used a region the server rejected. Return one corrected ACCEPT and "
-        f"set `filled_params.region` to one of these served regions: {joined}. Keep every other "
-        "value unchanged. Return only the NegotiationDecision JSON object."
-    )
-
-
-async def _reask_rejected_region(
-    provider: NegotiationDecisionProvider,
-    decision: NegotiationDecision,
-    propose: NegotiationProposeView,
-    session: NegotiationContext,
-    *,
-    trace_sink: Callable[[dict[str, object]], None] | None = None,
-) -> NegotiationDecision:
-    """Ask the ADK decision agent once more when it repeated a rejected region."""
-    reask = _region_reask_needed(decision, propose)
-    if reask is None:
-        return decision
-    # Only the ADK provider can take a corrective model turn. Manual and scripted providers keep
-    # their existing behavior; the human can choose the region in the approval card.
-    from protocol.decision_provider import AdkDecisionProvider
-
-    if not isinstance(provider, AdkDecisionProvider):
-        return decision
-    rejected, candidates = reask
-    if trace_sink is not None:
-        recorder = TraceRecorder(current_trace().run_id or "", id_prefix="flow")
-        span = recorder.emit(
-            kind="region_reask",
-            phase=PHASE_NEGOTIATION,
-            title="Region rejected; asking the decision model again",
-            actor="client",
-            side="client",
-            direction="internal",
-            round=session.round,
-            context_id=propose.context_id,
-            detail={"rejectedRegion": rejected, "candidates": list(candidates)},
-        )
-        trace_sink(span.to_dict())
-    corrected = propose.model_copy(update={"content": _region_reask_content(propose, candidates)})
-    return await provider.respond(corrected, session)
 
 
 def _build_counter_request(
@@ -1652,25 +1849,19 @@ def _accept_text(
     kind: NegotiationKind,
     filled: Mapping[str, object],
     decision: NegotiationDecision,
-    *,
-    forced_region: str | None = None,
 ) -> str:
     """Render the natural-language input of an accept for the proposal type."""
     if kind is NegotiationKind.INFORMATION:
         # The information accept result must answer the requested item only. Repeating every base
         # Task-T field (region, description, ...) makes the Negotiation-T validator treat unrelated
-        # text as result content and, on live models, reject the accept. The configured NMS region
-        # is the exception: the operator selected it, so an accept always states it.
+        # text as result content and, on live models, reject the accept. The decision only answers
+        # the items it actually filled; nothing is appended from configuration.
         allowed = TASK_PARAM_SCHEMA.get("properties")
         requested = [
             name for name in (decision.filled_params or {}) if isinstance(allowed, Mapping) and name in allowed
         ]
-        if forced_region and "region" not in requested:
-            requested.insert(0, "region")
-        if not requested:
-            requested = ["guaranteedThroughputTarget"]
         items = " ".join(f"{name}: {filled.get(name, '')}." for name in requested)
-        return f"Accept. {items}"
+        return f"Accept. {items}".strip()
     confirmation = decision.confirmed_intent if kind is NegotiationKind.TARGET else decision.feasibility_summary
     return f"Accept. {confirmation or decision.rationale}"
 

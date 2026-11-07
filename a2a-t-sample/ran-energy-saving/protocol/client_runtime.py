@@ -276,7 +276,6 @@ def _build_adk_decision_provider(
         user_request=run_spec.user_request,
         session_db_path=config.client_db_path,
         agent_factory=client_agent_factory,
-        default_region=(config.nms_region if config.discovery == DISCOVERY_NMS else None),
     )
 
 
@@ -384,6 +383,7 @@ class ClientRuntime:
         user_request: str | None = None,
         conversation_context: str | None = None,
         validate_before_send: bool = False,
+        enforce_required_fields: bool = False,
         run_mode: str = RUN_MODE_CREATE,
         target_task_id: str | None = None,
         target_context_id: str | None = None,
@@ -409,6 +409,9 @@ class ClientRuntime:
                 and Task-T generation so a follow-up can refer to an earlier run.
             validate_before_send: Validate the rendered Task-T with the SDK content pipeline
                 before sending it; only the A2A-T flow implements the gate.
+            enforce_required_fields: Run the business-required-field gate before sending an
+                operator request. The caller decides the entry points; curated scenarios no longer
+                get an exemption.
             run_mode: ``create`` starts a new A2A Task; ``modify`` sends the scenario's Modify
                 Task-T against an existing running Task.
             target_task_id: Task a Modify-only run continues.
@@ -522,9 +525,9 @@ class ClientRuntime:
                     call_timeout_seconds=self.config.http_timeout_seconds,
                     conversation_context=conversation_context,
                     single_extension_per_message=(self.config.discovery == DISCOVERY_NMS),
-                    forced_region=(self.config.nms_region if self.config.discovery == DISCOVERY_NMS else None),
+                    tools_authoritative=(self.config.discovery != DISCOVERY_NMS),
                     validate_before_send=validate_before_send,
-                    enforce_required_fields=bool(custom_request),
+                    enforce_required_fields=enforce_required_fields,
                     run_mode=run_mode,
                     target_task_id=target_task_id,
                     target_context_id=target_context_id,

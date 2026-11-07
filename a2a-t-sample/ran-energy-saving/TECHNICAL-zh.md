@@ -431,14 +431,13 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
   （Negotiation-T metadata + `negotiationContext`）；只声明 Task-T 会得到空 metadata。
 - 一条消息只能带一个 `-T` metadata 键。NMS 模式的 ACCEPT 只带 Negotiation-T；本地 demo
   server 保留回填的 Task-T。对应参数是 `single_extension_per_message`。
-- `A2AT_SAMPLE_NMS_REGION` 与 `A2AT_SAMPLE_NMS_SITES` 会把每个发往网管的 Task-T（经意图层的
-  初始提示词、accept 重填、Modify follow-up）中的中性示例区域和 scenario 站点列表替换为网管值。
-  `nms` 运行默认是 `A2ATestRegion` 和 `NRES_XCS_6102937,LTE_26441_LNR_OCL`；本地三跳演示保持
-  中性名称。
-- 替换只在一处发生：scenario catalog（`DemoRunCatalog.from_config`）。页面预填请求、intent 的
-  `rawRequest` / `region` / `normalizedText` 和 Task-T 因此使用同一组真机值。
-  `DemoIntentProcessor` 同时保留中性和真机两份内置意图，两种文本都能匹配，不会再出现只改
-  normalizedText、rawRequest 仍是中性名的半替换状态。
+- `A2AT_SAMPLE_NMS_REGION` 与 `A2AT_SAMPLE_NMS_SITES` 只用于预填页面可见示例请求，以及配置本地
+  模拟器；它们不会改写任何 Task-T。客户端发送操作员原文，发送前执行业务必填门，并拒绝接受不是
+  来自操作员、当前服务端 proposal 或权威工具的 accept 值。真机运行必须显式配置区域；sample
+  不再提供内置默认值。本地三跳演示保持中性名称。
+- 预填只在一处发生：scenario catalog（`DemoRunCatalog.from_config`），且只作用于页面展示、操作员
+  发送的文本。intent 的 `rawRequest` / `region` / `normalizedText` 和 Task-T 都从这段可见文本
+  派生；操作员看到之后，不会再有任何层替换它的值。
 - `negotiationContext.id` 是网管的协商句柄，不是 A2A 的 `contextId`。应答使用 `session.id`
   （只有服务端没给时才回退到 context id）。`build_negotiation_metadata()` 采用同一规则；本地
   server 用 context id 作为协商 id，因此行为不变。
@@ -490,9 +489,9 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
 
 测试：`tests/test_nms_client.py`（令牌、请求头、心跳、空闲、协商、wire 脱敏）、
 `tests/test_nms_sim.py`（422 配对、静态区域/时段/速率规则、任务生命周期、strict 流），以及
-原始客户端对仿真器的集成测试。真实联调需要 910 网络，并设置
-910 网络；NMS 默认值是 `A2AT_SAMPLE_NMS_REGION=A2ATestRegion` 和
-`A2AT_SAMPLE_NMS_SITES=NRES_XCS_6102937,LTE_26441_LNR_OCL`。
+原始客户端对仿真器的集成测试。真实联调需要 910 网络，并显式设置
+`A2AT_SAMPLE_NMS_REGION=A2ATestRegion` 和
+`A2AT_SAMPLE_NMS_SITES=NRES_XCS_6102937,LTE_26441_LNR_OCL`（sample 不再提供默认值）。
 
 ### 3.7 操作员意图处理层
 

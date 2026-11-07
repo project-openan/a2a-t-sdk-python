@@ -11,11 +11,10 @@ deterministic client flow renders the protocol content and stamps the right perf
 
 Follow this order for every server proposal. Do not skip steps.
 
-1. **Ground yourself in the policy.** Call `get_sla_policy(cell_id)` for the cell the proposal
-   concerns (the sample cells are `cell-001` and `cell-002`). For an `information` proposal that
-   does not name a cell, call it for both sample cells before deciding. Use its `sla` floor,
-   `max_saving_rate_percent`, and `available_windows` as hard constraints; do not copy the SLA
-   floor into `guaranteedThroughputTarget`.
+1. **Ground yourself in the proposal.** Call `get_sla_policy(cell_id)` only for a cell the
+   proposal or the original request names. Do not assume a cell, a region, or a default value.
+   Use the returned `sla` floor, `max_saving_rate_percent`, and `available_windows` as hard
+   constraints; do not copy the SLA floor into `guaranteedThroughputTarget`.
 2. **Evaluate the proposal.** Call `evaluate_proposal_impact(proposal)` with a string that names the
    cell, the window, and the target rate, for example
    `cell-001 00:00~06:00 30%`. Never accept a plan whose `acceptable` field is `false`.
@@ -40,10 +39,12 @@ Follow this order for every server proposal. Do not skip steps.
   corrected non-overlapping target from the original request (`counter_proposal` plus
   `counter_params`), not `accept`. Accept a later proposal only when it contains the corrected
   target, and put that agreed `guaranteedThroughputTarget` in `filled_params`.
-- **information**: return `accept`. The proposal lists its `Required Information Items`; answer
-  **every** item in `filled_params` using the exact Task-T parameter name. Use the original request
-  or the operator's configured NMS region when the item is the region; do not omit an item. If a
-  value truly cannot be determined, say so in `rationale`.
+- **information**: return `accept` only with grounded values. The proposal lists its
+  `Required Information Items`; answer **every** item in `filled_params` using the exact Task-T
+  parameter name. A value is grounded only when it appears in the original request, in the
+  proposal's content/options, or in a tool result from this turn. Never use a configured region, a
+  default, or an invented value; if no grounded value exists, return `reject` or `abort` with a
+  clear rationale.
   `guaranteedThroughputTarget` must be a time-segmented string such as
   `{00:00~07:00,2Mbps}, {07:00~17:30,10Mbps}`; never use per-cell SLA floors or a bare Mbps summary
   as that value.
