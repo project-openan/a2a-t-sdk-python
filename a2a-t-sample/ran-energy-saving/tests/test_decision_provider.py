@@ -32,6 +32,7 @@ from protocol.decision_provider import (
     NegotiationDecisionProvider,
     ScriptedDecisionProvider,
     build_decision_prompt,
+    build_manual_answer_prompt,
     sweep_stale_sessions,
 )
 from shared.models import NegotiationDecision, NegotiationProposeView
@@ -232,6 +233,78 @@ def _scripted_model(*texts: str) -> FakeLlm:
             ),
         )
     )
+
+
+def test_build_manual_answer_prompt_contains_the_answer_and_parsed_items() -> None:
+    prompt = build_manual_answer_prompt(
+        _view(content="Please provide the following missing items: Rate, Region."),
+        _session(2),
+        "The guaranteed rate is 10Mbps in Region A.",
+        user_request="save energy",
+    )
+
+    assert "Engineer's manual answer:" in prompt
+    assert "10Mbps" in prompt
+    assert "filled_params" in prompt
+    assert "Parsed required items:" in prompt
+    assert "- Rate" in prompt
+    assert "- Region" in prompt
+    assert "Original user request:" in prompt
+
+
+async def test_adk_provider_structures_a_manual_information_answer() -> None:
+    payload = json.dumps(
+        {
+            "action": "accept",
+            "rationale": "The engineer supplied the missing rate.",
+            "filled_params": {"guaranteedThroughputTarget": "{00:00~22:00,10Mbps}"},
+        }
+    )
+    provider = AdkDecisionProvider(agent_factory=build_client_agent, model=_scripted_model(payload))
+
+    decision = await provider.structure_answer(
+        _view(content="Please provide the following missing items: Rate."),
+        _session(),
+        "The guaranteed rate is 10Mbps from 00:00 to 22:00.",
+    )
+
+    assert decision is not None
+    assert decision.action == "accept"
+    assert decision.filled_params == {"guaranteedThroughputTarget": "{00:00~22:00,10Mbps}"}
+
+
+async def test_adk_provider_rejects_an_information_accept_without_values() -> None:
+    payload = json.dumps({"action": "accept", "rationale": "ok"})
+    provider = AdkDecisionProvider(agent_factory=build_client_agent, model=_scripted_model(payload))
+
+    decision = await provider.structure_answer(_view(), _session(), "Yes.")
+
+    assert decision is None
+
+
+async def test_adk_provider_structures_a_target_counter_plan() -> None:
+    payload = json.dumps(
+        {
+            "action": "counter",
+            "rationale": "Use a lower rate in the outage window.",
+            "counter_params": {"cellId": "cell-001", "window": "00:00~06:00", "targetRate": "2Mbps"},
+        }
+    )
+    provider = AdkDecisionProvider(agent_factory=build_client_agent, model=_scripted_model(payload))
+
+    decision = await provider.structure_answer(
+        _view("target", content="The target overlaps the outage."),
+        _session(),
+        "Use 2Mbps for cell-001 from 00:00 to 06:00.",
+    )
+
+    assert decision is not None
+    assert decision.action == "counter"
+    assert decision.counter_params == {
+        "cellId": "cell-001",
+        "window": "00:00~06:00",
+        "targetRate": "2Mbps",
+    }
 
 
 async def test_adk_provider_extracts_a_decision_from_prose_and_fences() -> None:

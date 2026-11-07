@@ -150,6 +150,23 @@ def _trace_span(
     }
 
 
+class FakeManualStructurer:
+    """Structure one manual answer into a fixed decision for the Web API test."""
+
+    async def structure_answer(
+        self,
+        propose: NegotiationProposeView,
+        session: NegotiationContext,
+        answer: str,
+    ) -> NegotiationDecision:
+        del propose, session
+        return NegotiationDecision(
+            action="accept",
+            rationale=f"structured: {answer}",
+            filled_params={"region": "Region A"},
+        )
+
+
 class FakeRuntime:
     """Deterministic runtime double: one proposal, an optional manual wait, then completion."""
 
@@ -161,6 +178,7 @@ class FakeRuntime:
         intent_gate: bool = False,
     ) -> None:
         self.manual_provider = ManualDecisionProvider(timeout_seconds=5.0) if manual else None
+        self.manual_structurer = FakeManualStructurer() if manual else None
         self.recommendation_sink = None
         self.fail = fail
         self.intent_gate = intent_gate
@@ -181,9 +199,7 @@ class FakeRuntime:
         *,
         event_sink: Callable[[dict[str, object]], None] | None = None,
         on_decision_requested: Callable[[NegotiationProposeView, NegotiationContext], None] | None = None,
-        on_decision_made: Callable[
-            [NegotiationDecision, NegotiationProposeView, NegotiationContext], None
-        ]
+        on_decision_made: Callable[[NegotiationDecision, NegotiationProposeView, NegotiationContext], None]
         | None = None,
         on_intent_ready: Callable[[str], Awaitable[bool]] | None = None,
         trace_sink: Callable[[dict[str, object]], None] | None = None,
@@ -880,6 +896,62 @@ async def test_manual_decision_submission_advances_the_run(
     assert finished["transcript"]["decisions"][0]["action"] == "accept"
     assert finished["transcript"]["decisions"][0]["rationale"] == decision["rationale"]
     assert runtimes[0].closed is True
+
+
+async def test_manual_answer_parse_returns_a_preview_without_submitting(
+    client: httpx.AsyncClient,
+    runtimes: list[FakeRuntime],
+) -> None:
+    start = await client.post(
+        "/api/runs",
+        json={"scenario": "information", "mode": "manual", "transport": "sse"},
+    )
+    assert start.status_code == 202
+    run_id = start.json()["runId"]
+    await _wait_status(client, run_id, lambda data: data["pendingDecision"] is True)
+
+    response = await client.post(
+        f"/api/runs/{run_id}/decisions/parse",
+        json={"text": "The served region is Region A."},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["decision"]["action"] == "accept"
+    assert payload["decision"]["filled_params"] == {"region": "Region A"}
+    assert payload["missingItems"] == ["region"]
+    # Parsing is a preview only: the run is still waiting for the confirmed decision.
+    status = await client.get(f"/api/runs/{run_id}")
+    assert status.json()["pendingDecision"] is True
+
+    submitted = await client.post(
+        f"/api/runs/{run_id}/decisions",
+        json=payload["decision"],
+    )
+    assert submitted.status_code == 200
+    finished = await _wait_status(client, run_id, lambda data: data["status"] != "running")
+    assert finished["finalState"] == FINAL_STATE_TASK_COMPLETED
+
+
+async def test_manual_answer_parse_rejects_a_run_without_a_structurer(
+    client: httpx.AsyncClient,
+    runtimes: list[FakeRuntime],
+) -> None:
+    start = await client.post(
+        "/api/runs",
+        json={"scenario": "information", "mode": "manual", "transport": "sse"},
+    )
+    run_id = start.json()["runId"]
+    await _wait_status(client, run_id, lambda data: data["pendingDecision"] is True)
+    runtimes[0].manual_structurer = None
+
+    response = await client.post(
+        f"/api/runs/{run_id}/decisions/parse",
+        json={"text": "Region A"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "manual_parse_unavailable"
 
 
 async def test_cancel_endpoint_stops_a_running_run(

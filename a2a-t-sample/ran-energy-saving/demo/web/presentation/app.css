@@ -837,6 +837,41 @@ body.resizing-y { cursor: row-resize; user-select: none; }
   border-color: var(--orange);
   color: var(--black);
 }
+.manual-answer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  border-top: 1px solid var(--g200);
+  padding-top: 6px;
+}
+.manual-answer textarea {
+  width: 100%;
+  min-height: 62px;
+  resize: vertical;
+  border: 1px solid var(--g300);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.manual-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid var(--g300);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  background: var(--white);
+}
+.manual-preview p { margin: 0; }
+.manual-preview ul { margin: 0; padding-left: 16px; }
+.manual-preview li { display: flex; gap: 6px; }
+.manual-preview b { min-width: 120px; }
+.manual-error { margin: 0; color: var(--red); font-size: 11px; }
+
 .counter-editor { display: flex; flex-direction: column; gap: 6px; }
 .counter-editor textarea {
   width: 100%;

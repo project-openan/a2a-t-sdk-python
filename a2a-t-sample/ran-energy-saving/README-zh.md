@@ -124,6 +124,11 @@ A2AT_SAMPLE_AUTH_TOKEN=<token> python run_demo.py --ui --ui-host 0.0.0.0 --model
 # 同事打开 http://<你的局域网 IP>:8080/?token=<token>
 ```
 
+`--mode manual` / `--mode confirm` 下，决策卡还提供一个自由文本输入框。live 模型下点
+**由 OSS Agent 解析**，会把工程师的回答结构化成 `filled_params`（信息协商）或
+`counter_params`（目标/可行性协商），先展示预览，确认后才发送。离线运行没有解析器；
+快捷的接受/拒绝按钮和可用区域选择仍然可用。
+
 `--ui-host 0.0.0.0` 只暴露 Web UI；注册中心与网管服务仍在回环地址。未配置
 `A2AT_SAMPLE_AUTH_TOKEN` 时，启动器默认拒绝非回环绑定；只有显式加 `--allow-insecure-bind`
 才允许。该模式下能访问端口的人都能发起运行，请只在可信网络使用。配置了 token 时，分享

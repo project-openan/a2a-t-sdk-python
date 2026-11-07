@@ -128,6 +128,11 @@ A2AT_SAMPLE_AUTH_TOKEN=<token> python run_demo.py --ui --ui-host 0.0.0.0 --model
 # colleagues open http://<your-lan-ip>:8080/?token=<token>
 ```
 
+In `--mode manual` / `--mode confirm`, the decision card also has a free-text box. With a live
+model, **Parse with the OSS Agent** turns the engineer's answer into `filled_params` (information)
+or `counter_params` (target/feasibility) and shows a preview before anything is sent. Offline runs
+have no answer parser; the quick Accept/Reject buttons and the served-area selector still work.
+
 `--ui-host 0.0.0.0` exposes only the Web UI; the registry and the NMS server stay on loopback.
 Without `A2AT_SAMPLE_AUTH_TOKEN` the launcher refuses a non-loopback bind unless
 `--allow-insecure-bind` is passed explicitly; in that mode anyone who can reach the port can start

@@ -38,6 +38,7 @@ from typing import Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
+from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
 from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from protocol.client_runtime import MODE_AUTO
 from protocol.client_service import (
@@ -58,6 +59,7 @@ from protocol.client_store import (
     read_run_metrics,
     read_run_metrics_rows,
 )
+from protocol.manual_answer import missing_item_labels
 from protocol.metrics_summary import summarize_metrics, summarize_protocols
 from protocol.nms_client import NmsConfigError, NmsError
 from protocol.run_spec import RunCatalog
@@ -1059,6 +1061,83 @@ def create_app(
         provider.submit(decision)
         return JSONResponse({"accepted": True, "runId": run.run_id})
 
+    async def parse_decision(request: Request) -> Response:
+        """Structure one engineer's manual answer into a decision preview.
+
+        The preview is not submitted: the page shows it and the engineer confirms through the
+        normal decision endpoint. This keeps a model misread from silently changing the
+        negotiation.
+        """
+        run = manager.get(request.path_params["run_id"])
+        if run is None:
+            return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
+        try:
+            body = await request.json()
+        except (ValueError, TypeError):
+            return JSONResponse(
+                {"error": "The body must be a JSON object.", "code": "body_not_object"},
+                status_code=400,
+            )
+        text = body.get("text") if isinstance(body, dict) else None
+        if not isinstance(text, str) or not text.strip():
+            return JSONResponse(
+                {"error": "The text field must be a non-empty string.", "code": "manual_text_invalid"},
+                status_code=400,
+            )
+        if run.status != STATUS_RUNNING or not run.pending_decision or run.manual_provider is None:
+            return JSONResponse(
+                {"error": "No manual decision is pending for this run."},
+                status_code=409,
+            )
+        structurer = run.manual_structurer
+        if structurer is None:
+            return JSONResponse(
+                {
+                    "error": "Structuring a manual answer requires a live decision model.",
+                    "code": "manual_parse_unavailable",
+                },
+                status_code=422,
+            )
+        propose = run.proposals[-1] if run.proposals else None
+        if propose is None:
+            return JSONResponse(
+                {"error": "No inbound proposal is available for this decision."},
+                status_code=409,
+            )
+        session = NegotiationContext(
+            id=propose.negotiation_id,
+            round=propose.round,
+            max_rounds=propose.max_rounds,
+            performative=NegotiationPerformative(propose.performative),
+        )
+        try:
+            decision = await structurer.structure_answer(propose, session, text.strip())
+        except Exception as exc:  # noqa: BLE001 - a model failure must become a readable 422
+            return JSONResponse(
+                {
+                    "error": f"Manual answer parsing failed: {type(exc).__name__}: {exc}",
+                    "code": "manual_parse_failed",
+                },
+                status_code=422,
+            )
+        if decision is None:
+            return JSONResponse(
+                {
+                    "error": (
+                        "The answer could not be structured into a decision for this proposal; "
+                        "rephrase it or send it as a free-text counter-proposal."
+                    ),
+                    "code": "manual_parse_failed",
+                },
+                status_code=422,
+            )
+        return JSONResponse(
+            {
+                "decision": decision.model_dump(),
+                "missingItems": list(missing_item_labels(propose.content)),
+            }
+        )
+
     async def submit_intent(request: Request) -> Response:
         """Resolve approval 1: the engineer confirms or rejects the structured intent."""
         run = manager.get(request.path_params["run_id"])
@@ -1341,6 +1420,7 @@ def create_app(
             Route("/api/runs/{run_id}/cancel", cancel_run, methods=["POST"]),
             Route("/api/runs/{run_id}/events", run_events),
             Route("/api/runs/{run_id}/decisions", submit_decision, methods=["POST"]),
+            Route("/api/runs/{run_id}/decisions/parse", parse_decision, methods=["POST"]),
             Route("/api/runs/{run_id}/intent", submit_intent, methods=["POST"]),
             Route("/api/runs/{run_id}/approvals", submit_approval, methods=["POST"]),
             Route("/api/mie/events", mie_events),

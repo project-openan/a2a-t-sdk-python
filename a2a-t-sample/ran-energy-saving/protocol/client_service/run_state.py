@@ -247,6 +247,11 @@ class RunState:
         """The manual provider of the runtime, when the run uses one."""
         return self.runtime.manual_provider if self.runtime is not None else None
 
+    @property
+    def manual_structurer(self) -> Any | None:
+        """The live decision model that structures a manual answer, when the run has one."""
+        return getattr(self.runtime, "manual_structurer", None) if self.runtime is not None else None
+
     def resolve_intent(self, approved: bool) -> bool:
         """Resolve the pending intent review, returning whether one was waiting."""
         future = self.intent_future

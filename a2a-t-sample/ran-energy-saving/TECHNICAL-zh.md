@@ -329,6 +329,8 @@ class NegotiationDecisionProvider(Protocol):
 
 **审批 1 不是决策 Provider。** confirm 模式下，`run_client_flow` 在 `task_prompt_rendered` 之后、首条 Task-T 发出之前调用异步 `on_intent_ready(prompt_text)` 钩子。Web UI 的 `POST /api/runs/{id}/intent` 负责解除等待；返回 `False` 时以 `intent_not_confirmed` 终态结束，不发送任何消息，也不创建 Task。
 
+**协商中的手动回答。** 演示页决策卡在快捷按钮之外始终提供一个自由文本输入框。`POST /api/runs/{id}/decisions/parse` 把工程师的文本交给 `AdkDecisionProvider.structure_answer`，用同一个决策 Agent 结合提议、解析出的缺失项（`protocol/manual_answer.py`）和回答做结构化：INFORMATION 必须变成带 `filled_params` 的 Accept；TARGET / FEASIBILITY 变成带 `counter_params` 的 counter。页面展示解析结果，工程师确认后才通过普通决策接口提交。这里**刻意没有确定性兜底**：离线 manual 模式没有 live 模型时解析返回 422，工程师改走编辑原始请求。
+
 `AdkDecisionProvider` 需要决策 agent：可以直接传 `agent=`，或传 `agent_factory=`（演示组合根传 `demo.agents.client_agent.agent.build_client_agent`）。Provider 本身不再导入样例 agent，部署方可以接自己的 ADK 图。
 
 **ADK 会话存在哪。** `AdkDecisionProvider` 为每次协商保留一个 ADK 会话，让智能体看到前面几轮的提议。设置 `A2AT_SAMPLE_CLIENT_DB` 时，这些会话落在同一个 SQLite 文件里，进程重启后仍在；未设置（单元测试、临时运行）则留在内存。落盘的会话就是这次协商的审计记录——模型收到的提示词、给出的回答与看到的工具结果——按 `A2AT_SAMPLE_ADK_SESSION_RETENTION_DAYS`（默认 7 天）保留。清扫在客户端启动时执行，之后在每次运行前最多每小时执行一次，长驻进程不会无限增长。数据库打不开时记一条警告并降级为内存：决策不依赖审计存储。

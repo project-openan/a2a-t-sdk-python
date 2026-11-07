@@ -293,25 +293,41 @@ def _decision_provider(
     if mode == MODE_SCRIPTED:
         return ScriptedDecisionProvider(run_spec.scripted_decisions)
     if mode in (MODE_AUTO, MODE_CONFIRM):
-        # The traced wrapper keeps the ADK decision turns visible in the Run Explorer. The original
-        # request is carried into every decision prompt: target/feasibility proposals describe the
-        # conflict but not the concrete throughput target, so the model cannot resolve them alone.
-        provider = AdkDecisionProvider(
-            model=build_traced_adk_model(config, model=model),
-            # The demo supplies a scripted decision model whose script covers the run's expected
-            # proposals. An unexpected proposal (for example a live validator that opens the wrong
-            # negotiation kind) has no scripted answer; falling back to accept keeps the run alive
-            # instead of failing it with an unparseable decision.
-            offline=config.is_offline or model is not None,
-            user_request=run_spec.user_request,
-            session_db_path=config.client_db_path,
-            agent_factory=client_agent_factory,
-            default_region=(config.nms_region if config.discovery == DISCOVERY_NMS else None),
+        provider = _build_adk_decision_provider(
+            config,
+            run_spec,
+            model=model,
+            client_agent_factory=client_agent_factory,
         )
         if mode == MODE_CONFIRM:
             return ConfirmingDecisionProvider(provider)
         return provider
     raise ClientRuntimeError(f"Unsupported client mode: {mode}; expected one of {SUPPORTED_MODES}")
+
+
+def _build_adk_decision_provider(
+    config: SampleConfig,
+    run_spec: RunSpec,
+    *,
+    model: Any | None,
+    client_agent_factory: Callable[[Any], Any] | None,
+) -> AdkDecisionProvider:
+    """Build one ADK decision provider for automatic decisions or manual-answer structuring."""
+    # The traced wrapper keeps the ADK decision turns visible in the Run Explorer. The original
+    # request is carried into every decision prompt: target/feasibility proposals describe the
+    # conflict but not the concrete throughput target, so the model cannot resolve them alone.
+    return AdkDecisionProvider(
+        model=build_traced_adk_model(config, model=model),
+        # The demo supplies a scripted decision model whose script covers the run's expected
+        # proposals. An unexpected proposal (for example a live validator that opens the wrong
+        # negotiation kind) has no scripted answer; falling back to accept keeps the run alive
+        # instead of failing it with an unparseable decision.
+        offline=config.is_offline or model is not None,
+        user_request=run_spec.user_request,
+        session_db_path=config.client_db_path,
+        agent_factory=client_agent_factory,
+        default_region=(config.nms_region if config.discovery == DISCOVERY_NMS else None),
+    )
 
 
 @dataclass
@@ -331,6 +347,8 @@ class ClientRuntime:
         discovered: discovered server endpoint.
         sdk_env: generated SDK ``.env`` owned by this runtime; ``None`` in pure mode.
         manual_provider: manual provider when ``mode == "manual"``, else ``None``.
+        manual_structurer: ADK provider that structures a manual answer into a decision; ``None``
+            when the mode has no live decision model.
         nms_client: raw vendor NMS client; ``None`` outside NMS mode.
         pure_answer: callback answering one pure ``INPUT_REQUIRED`` event.
         intent_processor: business intent understanding step; ``None`` falls back to raw text.
@@ -349,6 +367,7 @@ class ClientRuntime:
     sdk_env: SdkEnvFile | None
     manual_provider: Any | None
     _httpx_client: httpx.AsyncClient | None
+    manual_structurer: Any | None = None
     nms_client: NmsClient | None = None
     _closed: bool = False
     trace_sink: Callable[[dict[str, object]], None] | None = None
@@ -536,6 +555,16 @@ class ClientRuntime:
                 set_request = getattr(self.provider, "set_user_request", None)
                 if callable(set_request):
                     set_request(request_text)
+                # The manual-answer structurer is a separate provider (manual mode builds one only
+                # for the preview); it needs the same request and conversation context.
+                structurer = self.manual_structurer
+                if structurer is not None:
+                    set_structurer_context = getattr(structurer, "set_conversation_context", None)
+                    if callable(set_structurer_context):
+                        set_structurer_context(conversation_context)
+                    set_structurer_request = getattr(structurer, "set_user_request", None)
+                    if callable(set_structurer_request):
+                        set_structurer_request(request_text)
                 policy = _effective_policy(
                     self.run_spec.policy,
                     self.config,
@@ -781,6 +810,7 @@ async def build_client_runtime(
             raise
 
     try:
+        manual_structurer: Any | None = None
         if protocol == PROTOCOL_PURE:
             provider: NegotiationDecisionProvider | None = None
         else:
@@ -792,6 +822,24 @@ async def build_client_runtime(
                 model=offline_model,
                 client_agent_factory=client_agent_factory,
             )
+            if isinstance(provider, ConfirmingDecisionProvider):
+                # The confirmation mode already builds an ADK provider for its recommendation;
+                # reuse it for the manual-answer preview.
+                manual_structurer = provider.structurer
+            elif isinstance(provider, ManualDecisionProvider) and not config.is_offline:
+                # Manual mode has no automatic decision agent; build one only to structure the
+                # engineer's free-text answer. Offline mode requires a live model for this step.
+                # A model misconfiguration must not stop the run: the quick decision buttons still
+                # work, and the parse endpoint reports that structuring is unavailable.
+                try:
+                    manual_structurer = _build_adk_decision_provider(
+                        config,
+                        run_spec,
+                        model=offline_model,
+                        client_agent_factory=client_agent_factory,
+                    )
+                except Exception as exc:  # noqa: BLE001 - optional preview capability
+                    _LOGGER.warning("manual answer parsing unavailable: %s", exc)
     except BaseException:
         if webhook_subscription is not None:
             webhook_subscription.unsubscribe()
@@ -815,6 +863,7 @@ async def build_client_runtime(
             if protocol == PROTOCOL_A2A_T and isinstance(provider, (ManualDecisionProvider, ConfirmingDecisionProvider))
             else None
         ),
+        manual_structurer=manual_structurer,
         _httpx_client=httpx_client,
         nms_client=nms_client,
         wire_log=wire_log if httpx_client is not None else None,

@@ -40,6 +40,8 @@ from shared.model_factory import build_traced_adk_model
 from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.trace import trace_scope
 
+from protocol.manual_answer import missing_item_labels
+
 _LOGGER = logging.getLogger("ran_energy_saving.decision_provider")
 
 #: Sentinel distinguishing "this task never set a value" from an explicit ``None``.
@@ -244,6 +246,75 @@ def build_decision_prompt(
     )
 
 
+def build_manual_answer_prompt(
+    propose: NegotiationProposeView,
+    session: NegotiationContext,
+    answer: str,
+    *,
+    user_request: str | None = None,
+    conversation_context: str | None = None,
+    default_region: str | None = None,
+) -> str:
+    """Build the prompt that structures one engineer's manual answer into a decision.
+
+    The engineer's words are the source of truth; the model only maps them onto the proposal's
+    negotiation shape. For an information proposal it must put every supplied value into
+    ``filled_params`` under the exact Task-T parameter name (the client flow merges them into the
+    agreed Task-T on Accept). For target/feasibility it must put a revised plan into
+    ``counter_params`` as ``{cellId, window, targetRate}`` so the server policy can evaluate it.
+    """
+    original = f"Original user request:\n{user_request}\n\n" if user_request else ""
+    history = (
+        f"Conversation context (earlier turns):\n{conversation_context.strip()}\n\n"
+        if conversation_context and conversation_context.strip()
+        else ""
+    )
+    configured_region = f"Configured NMS region: {default_region}\n\n" if default_region else ""
+    required_items = missing_item_labels(propose.content)
+    items_block = (
+        "Parsed required items:\n" + "\n".join(f"- {item}" for item in required_items) + "\n\n"
+        if required_items
+        else ""
+    )
+    if propose.kind == "information":
+        action_rule = (
+            "The engineer is supplying missing information: use action=accept and put every value "
+            "the engineer supplied into filled_params, keyed by the exact Task-T parameter name "
+            "(for example guaranteedThroughputTarget). Write guaranteedThroughputTarget in the "
+            "Task-T form {HH:MM~HH:MM,NMbps}; a full-period rate becomes {00:00~24:00,NMbps}. If "
+            "the engineer explicitly refuses, use action=reject. Do not use action=counter for an "
+            "information proposal."
+        )
+    else:
+        action_rule = (
+            "The engineer is answering a target/feasibility proposal. If the answer accepts the "
+            "proposal, use action=accept. If it proposes a revised plan, use action=counter. The "
+            "sample plan convention is counter_params={cellId, window, targetRate}, where "
+            'targetRate is the energy-saving target percentage as a string (for example "30" for '
+            "30%). If the engineer gives a throughput rate instead of a percentage, keep it in "
+            "counter_proposal and do not invent a targetRate. Keep the engineer's wording in "
+            "counter_proposal. If the engineer refuses, use action=reject."
+        )
+    return (
+        "Structure the engineer's manual answer to an A2A-T negotiation proposal.\n"
+        f"Negotiation type: {propose.kind}\n"
+        f"Round: {session.round} of {session.max_rounds}\n"
+        f"Proposal template: {propose.template_uri or 'unknown'}\n"
+        f"{original}"
+        f"{history}"
+        f"{configured_region}"
+        "Proposal content:\n"
+        f"{propose.content}\n\n"
+        f"{items_block}"
+        "Engineer's manual answer:\n"
+        f"{answer.strip()}\n\n"
+        f"{action_rule}\n"
+        "Use only values the engineer actually supplied; never invent a missing value. "
+        "Return exactly one NegotiationDecision JSON object and nothing else: no reasoning, "
+        "markdown, or prose outside the JSON."
+    )
+
+
 class AdkDecisionProvider:
     """Decision provider backed by the ``agents.client_agent`` ADK agent.
 
@@ -417,6 +488,56 @@ class AdkDecisionProvider:
             _log_unparseable_decision("decision retry", retry_event)
         return self._fallback_or_raise("The ADK agent produced no parseable NegotiationDecision.")
 
+    async def structure_answer(
+        self,
+        propose: NegotiationProposeView,
+        session: NegotiationContext,
+        answer: str,
+    ) -> NegotiationDecision | None:
+        """Structure one engineer's manual answer into a ``NegotiationDecision``.
+
+        Returns ``None`` when the model cannot produce a usable decision. The caller shows the
+        result as a preview; this method never submits anything on its own.
+        """
+        if not isinstance(answer, str) or not answer.strip():
+            return None
+        with trace_scope(
+            role="client",
+            context_id=propose.context_id or propose.negotiation_id,
+            stage="client_manual_answer",
+        ):
+            return await self._structure_answer(propose, session, answer)
+
+    async def _structure_answer(
+        self,
+        propose: NegotiationProposeView,
+        session: NegotiationContext,
+        answer: str,
+    ) -> NegotiationDecision | None:
+        """Run the decision agent over the proposal plus the engineer's manual answer."""
+        # A separate session keeps the manual-answer turn from being replayed as an automatic
+        # decision turn on the next proposal; the negotiation id still scopes the audit trace.
+        session_id = f"{self._session_id(propose.negotiation_id)}-manual-answer-{session.round}"
+        final_event = await self._run_turn(
+            session_id,
+            build_manual_answer_prompt(
+                propose,
+                session,
+                answer,
+                user_request=self._current_user_request(),
+                conversation_context=self._current_conversation_context(),
+                default_region=self._default_region,
+            ),
+        )
+        if final_event is None:
+            return None
+        decision = _decision_from_event(final_event)
+        if decision is None:
+            retry_event = await self._run_turn(session_id, DECISION_RETRY_PROMPT)
+            if retry_event is not None:
+                decision = _decision_from_event(retry_event)
+        return _validated_manual_decision(propose.kind, decision)
+
     async def _run_turn(self, session_id: str, text: str) -> AdkEvent | None:
         """Run one user turn in an existing session and return its final event."""
         final_event: AdkEvent | None = None
@@ -453,6 +574,29 @@ def _event_text(event: AdkEvent) -> str:
     if content is None:
         return ""
     return " ".join(part.text for part in content.parts or () if part.text).strip()
+
+
+def _validated_manual_decision(
+    kind: str,
+    decision: NegotiationDecision | None,
+) -> NegotiationDecision | None:
+    """Return the structured decision only when it can actually answer the proposal kind.
+
+    An information answer must become an Accept carrying the supplied values; a counter text is
+    not merged by the sample server, so returning it would loop the negotiation. A target or
+    feasibility counter must carry a concrete plan (or at least the engineer's proposal text).
+    """
+    if decision is None:
+        return None
+    if kind == "information":
+        if decision.action == "counter":
+            return None
+        if decision.action == "accept" and not decision.filled_params:
+            return None
+    elif kind in {"target", "feasibility"}:
+        if decision.action == "counter" and not (decision.counter_params or decision.counter_proposal):
+            return None
+    return decision
 
 
 def _decision_from_event(event: AdkEvent) -> NegotiationDecision | None:
@@ -555,6 +699,11 @@ class ConfirmingDecisionProvider:
     def pending(self) -> bool:
         """Whether a confirmation is expected or already submitted."""
         return self._manual.pending
+
+    @property
+    def structurer(self) -> AdkDecisionProvider | None:
+        """The inner ADK provider when this confirmation wraps one, else ``None``."""
+        return self._inner if isinstance(self._inner, AdkDecisionProvider) else None
 
     def set_recommendation_sink(
         self,

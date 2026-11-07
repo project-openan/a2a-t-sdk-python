@@ -385,6 +385,16 @@ Every provider implements `respond(propose, session) -> NegotiationDecision`. Pr
 sent. The Web UI's `POST /api/runs/{id}/intent` resolves the hook; `False` returns the terminal
 `intent_not_confirmed` state without sending any message or creating a Task.
 
+**Manual answer structuring.** The presentation decision card always offers a free-text box in
+addition to the quick Accept/Reject/Confirm buttons. `POST /api/runs/{id}/decisions/parse` sends the
+engineer's text to `AdkDecisionProvider.structure_answer`, which prompts the same decision agent
+with the proposal, the parsed required items (`protocol/manual_answer.py`) and the answer. An
+information answer must become an Accept with `filled_params`; a target/feasibility answer becomes
+a counter with `counter_params`. The page shows the parsed decision, and only the engineer's
+confirmation submits it through the normal decision endpoint. There is deliberately no
+deterministic fallback: without a live model (offline manual mode) parsing returns 422 and the
+engineer edits the original request instead.
+
 `AdkDecisionProvider` needs the decision agent: pass `agent=` directly, or `agent_factory=` (the
 demo composition passes `demo.agents.client_agent.agent.build_client_agent`). The provider no longer
 imports the sample agent itself, so a deployment can plug its own ADK graph.

@@ -247,6 +247,11 @@ const ui = {
   submitting: false,
   counterOpen: false,
   counterText: "",
+  manualText: "",
+  manualPreview: null,
+  manualMissing: [],
+  manualError: "",
+  manualParsing: false,
   selectedRegion: "",
   cardKey: null,
   cardError: "",
@@ -680,6 +685,11 @@ function resetRunState() {
   ui.wirePinned = false;
   ui.counterOpen = false;
   ui.counterText = "";
+  ui.manualText = "";
+  ui.manualPreview = null;
+  ui.manualMissing = [];
+  ui.manualError = "";
+  ui.manualParsing = false;
   ui.selectedRegion = "";
   ui.submitting = false;
   ui.cancelling = false;
@@ -1199,7 +1209,14 @@ function enqueueFrame(frame) {
   ) {
     ui.wireEntry = frame.event;
   }
-  if (frame.type === "decision_requested") ui.selectedRegion = "";
+  if (frame.type === "decision_requested") {
+    ui.selectedRegion = "";
+    ui.manualText = "";
+    ui.manualPreview = null;
+    ui.manualMissing = [];
+    ui.manualError = "";
+    ui.manualParsing = false;
+  }
   applyFrame(ui.shadow, frame);
   ui.frameLog.push(frame);
   player.enqueue(scene);
@@ -1653,6 +1670,155 @@ function renderChoices(card) {
       submitDecision(option.action);
     });
     els.choices.append(button);
+  }
+  if (card.type === "decision") renderManualAnswer();
+}
+
+/** Render the free-text manual-answer box and its parsed preview.
+ *
+ * The box is always available for a decision, whether the OSS Agent recommended an action or the
+ * run is in pure manual mode. Parsing is explicit: the engineer sees the structured decision and
+ * confirms it before anything is submitted.
+ */
+function renderManualAnswer() {
+  const labels = ui.copy.decision;
+  const section = el("div", "manual-answer");
+  section.append(el("span", "micro-label", labels.manualLabel));
+  if (ui.manualPreview === null) {
+    const area = el("textarea");
+    area.value = ui.manualText;
+    area.placeholder = labels.manualPlaceholder;
+    area.setAttribute("aria-label", labels.manualLabel);
+    area.disabled = ui.manualParsing || ui.submitting;
+    area.addEventListener("input", () => {
+      ui.manualText = area.value;
+    });
+    const row = el("div", "choices");
+    const parse = el(
+      "button",
+      "primary",
+      ui.manualParsing ? labels.manualParsing : labels.manualParse,
+    );
+    parse.type = "button";
+    parse.disabled = ui.manualParsing || ui.submitting;
+    parse.addEventListener("click", () => parseManualAnswer());
+    row.append(parse);
+    section.append(area, row);
+    if (ui.manualError) section.append(el("p", "manual-error", ui.manualError));
+  } else {
+    section.append(el("span", "micro-label", labels.manualPreview));
+    section.append(manualPreview(ui.manualPreview, ui.manualMissing, labels));
+    const row = el("div", "choices");
+    const confirm = el("button", "primary", labels.manualConfirm);
+    confirm.type = "button";
+    confirm.disabled = ui.submitting;
+    confirm.addEventListener("click", () => submitParsedDecision(ui.manualPreview));
+    const back = el("button", "", labels.manualBack);
+    back.type = "button";
+    back.disabled = ui.submitting;
+    back.addEventListener("click", () => {
+      ui.manualPreview = null;
+      ui.manualError = "";
+      renderNarrator();
+    });
+    row.append(confirm, back);
+    section.append(row);
+  }
+  els.choices.append(section);
+}
+
+/** Render the structured decision returned by the parse endpoint. */
+function manualPreview(decision, missing, labels) {
+  const box = el("div", "manual-preview");
+  if (decision.action) {
+    box.append(el("p", "", `${labels.manualAction}: ${decision.action}`));
+  }
+  if (Array.isArray(missing) && missing.length > 0) {
+    const asked = el("p", "", `${labels.manualMissing}: ${missing.join(", ")}`);
+    box.append(asked);
+  }
+  const filled =
+    decision.filled_params && Object.keys(decision.filled_params).length > 0
+      ? decision.filled_params
+      : null;
+  const counter =
+    decision.counter_params && Object.keys(decision.counter_params).length > 0
+      ? decision.counter_params
+      : null;
+  const fields = filled || counter;
+  if (fields !== null) {
+    box.append(el("p", "", labels.manualFields));
+    const list = el("ul");
+    for (const [key, value] of Object.entries(fields)) {
+      const item = el("li");
+      item.append(el("b", "", key), el("span", "", String(value)));
+      list.append(item);
+    }
+    box.append(list);
+  }
+  if (decision.rationale) box.append(el("p", "", decision.rationale));
+  return box;
+}
+
+async function parseManualAnswer() {
+  const text = ui.manualText.trim();
+  if (text === "" || ui.manualParsing || ui.submitting) return;
+  ui.manualParsing = true;
+  ui.manualError = "";
+  renderNarrator();
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(ui.view.runId)}/decisions/parse`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+    if (!payload.decision) throw new Error(ui.copy.decision.manualParseFailed);
+    ui.manualPreview = payload.decision;
+    ui.manualMissing = Array.isArray(payload.missingItems) ? payload.missingItems : [];
+  } catch (error) {
+    ui.manualError = `${ui.copy.decision.manualParseFailed} ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+  } finally {
+    ui.manualParsing = false;
+    renderNarrator();
+  }
+}
+
+async function submitParsedDecision(decision) {
+  if (decision === null || ui.submitting) return;
+  ui.submitting = true;
+  ui.manualError = "";
+  renderNarrator();
+  const payload = { ...decision };
+  if (ui.selectedRegion) {
+    payload.filled_params = { ...(payload.filled_params || {}), region: ui.selectedRegion };
+  }
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(ui.view.runId)}/decisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+    ui.manualText = "";
+    ui.manualPreview = null;
+    ui.manualMissing = [];
+    if (ui.view.decision !== null) ui.view.decision.resolved = true;
+    ui.submitting = false;
+    player.release();
+    render();
+  } catch (error) {
+    ui.submitting = false;
+    ui.manualError = error instanceof Error ? error.message : String(error);
+    renderNarrator();
   }
 }
 
