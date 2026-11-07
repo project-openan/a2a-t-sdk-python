@@ -4,13 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
 from a2a.client.client import ClientCallContext
-from a2a.types import Message, Role, SendMessageRequest, StreamResponse
+from a2a.types import (
+    Message,
+    Role,
+    SendMessageRequest,
+    StreamResponse,
+    Task,
+    TaskState,
+    TaskStatus,
+)
 from a2a_t.core.metadata import (
     NEGOTIATION_CONTEXT_METADATA_KEY,
     NEGOTIATION_T_EXTENSION_URI,
@@ -1076,6 +1085,53 @@ async def test_webhook_transport_consumes_pushed_events_until_a_terminal_state()
     assert [event["kind"] for event in events] == ["status", "artifact"]
     assert events[0]["state"] == "TASK_STATE_WORKING"
     assert queue.qsize() == 1  # the terminal event after the report artifact is not consumed
+
+
+async def test_webhook_transport_idle_backstop_starts_at_the_last_event() -> None:
+    """The send duration is not charged as silence, and a push does not restart the clock."""
+
+    class _SlowA2AClient:
+        async def send_message(
+            self,
+            request: SendMessageRequest,
+            *,
+            context: ClientCallContext,
+        ) -> AsyncIterator[StreamResponse]:
+            del request, context
+            await asyncio.sleep(0.45)
+            yield StreamResponse(
+                task=Task(
+                    id="task-1",
+                    context_id=CONTEXT_ID,
+                    status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
+                )
+            )
+
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    transport = WebhookClientTransport(
+        _SlowA2AClient(),
+        queue=queue,
+        push_url="http://127.0.0.1:9000/webhook",
+        push_token="token",
+        idle_timeout=0.6,
+    )
+
+    async def push_after_the_reply() -> None:
+        await asyncio.sleep(0.75)  # 0.45 s send + 0.3 s of silence after the reply
+        queue.put_nowait(_to_webhook_payload(status_event("TASK_STATE_WORKING")))
+
+    pusher = asyncio.create_task(push_after_the_reply())
+    started = time.monotonic()
+    events = await asyncio.wait_for(
+        transport.send(SendMessageRequest(), ClientCallContext()),
+        timeout=3.0,
+    )
+    elapsed = time.monotonic() - started
+    await pusher
+
+    assert [event.get("state") for event in events] == ["TASK_STATE_SUBMITTED", "TASK_STATE_WORKING"]
+    # Reply + one budget = 1.05 s; a clock restarted by the 0.3 s-later push ends at 1.35 s.
+    assert elapsed < 1.2
 
 
 class _PerSendFakeA2AClient:

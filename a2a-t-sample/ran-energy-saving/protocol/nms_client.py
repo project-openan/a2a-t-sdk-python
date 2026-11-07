@@ -910,22 +910,26 @@ class NmsWebhookTransport:
                 return events
         elif is_stop_event(reply_event):
             return events
+        # A process-owned run manager keeps polling the Task itself, so it does not need to
+        # hold this callback quiet for the whole HTTP budget; it takes over after the shorter
+        # silence window. Without a tracker the phase keeps the original idle backstop.
+        budget = (
+            self._client.config.poll_after_silence
+            if self._client.config.defer_to_tracker and task_id
+            else self._idle_timeout
+        )
+        # One budget per phase, counted from the reply: a vendor that keeps pushing (every 15 s
+        # forever) must not restart the clock, or the phase and its caller never end.
+        deadline = asyncio.get_running_loop().time() + budget
         while True:
-            # A process-owned run manager keeps polling the Task itself, so it does not need to
-            # hold this callback quiet for the whole HTTP budget; it takes over after the shorter
-            # silence window. Without a tracker the phase keeps the original idle backstop.
-            timeout = (
-                self._client.config.poll_after_silence
-                if self._client.config.defer_to_tracker and task_id
-                else self._idle_timeout
-            )
+            remaining = max(deadline - asyncio.get_running_loop().time(), 0.0)
             try:
-                pushed = await asyncio.wait_for(self._queue.get(), timeout=timeout)
+                pushed = await asyncio.wait_for(self._queue.get(), timeout=remaining)
             except asyncio.TimeoutError:
                 _LOGGER.info(
                     "NMS webhook phase idle for %.0fs; returning the events received%s",
-                    timeout,
-                    " (handing the task to background tracking)" if timeout != self._idle_timeout else "",
+                    budget,
+                    " (handing the task to background tracking)" if budget != self._idle_timeout else "",
                 )
                 return events
             event = _frame_to_event(pushed)

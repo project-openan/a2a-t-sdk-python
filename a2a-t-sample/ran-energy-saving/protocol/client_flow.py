@@ -596,8 +596,14 @@ class WebhookClientTransport:
         )
         events: list[dict[str, object]] = []
         reply: StreamResponse | None = None
+        loop = asyncio.get_running_loop()
+        send_started = loop.time()
         async for stream_response in self._client.send_message(request, context=call_context):
             reply = stream_response
+        # The reply is the last event of the phase, so the backstop starts when it lands and the
+        # send duration is not charged as silence. Without a reply the send itself is the only
+        # reference point.
+        phase_started = loop.time() if reply is not None else send_started
         if reply is not None:
             reply_event = normalize_event(reply)
             events.append(reply_event)
@@ -611,9 +617,13 @@ class WebhookClientTransport:
                 )
             if is_stop_event(reply_event):
                 return events
+        # One budget per phase, counted from the reply: a server that keeps pushing must not
+        # restart the clock, or the phase (and the caller waiting on it) never ends.
+        deadline = phase_started + self._idle_timeout
         while True:
+            remaining = max(deadline - asyncio.get_running_loop().time(), 0.0)
             try:
-                payload = await asyncio.wait_for(self._queue.get(), timeout=self._idle_timeout)
+                payload = await asyncio.wait_for(self._queue.get(), timeout=remaining)
             except TimeoutError:
                 _LOGGER.info("webhook phase idle for %gs; treating it as complete", self._idle_timeout)
                 return events

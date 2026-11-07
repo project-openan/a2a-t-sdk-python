@@ -438,6 +438,36 @@ async def test_webhook_transport_keeps_waiting_after_a_negotiation_response_repl
     ]
 
 
+async def test_webhook_idle_backstop_starts_at_the_last_event() -> None:
+    """One budget per phase: a push part-way through is consumed but does not restart the clock.
+
+    A vendor that keeps pushing must not keep the phase (and the caller) alive forever.
+    """
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _FakeWebhookClient({"task": {"id": "task-1", "status": {"state": "TASK_STATE_SUBMITTED"}}})
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        idle_timeout=0.6,
+    )
+
+    async def push_after_the_reply() -> None:
+        await asyncio.sleep(0.3)
+        await queue.put({"statusUpdate": {"taskId": "task-1", "status": {"state": "TASK_STATE_WORKING"}}})
+
+    pusher = asyncio.create_task(push_after_the_reply())
+    started = time.monotonic()
+    events = await asyncio.wait_for(transport.send(*_request()), timeout=2.0)
+    elapsed = time.monotonic() - started
+    await pusher
+
+    assert [event.get("state") for event in events] == ["TASK_STATE_SUBMITTED", "TASK_STATE_WORKING"]
+    # 0.6 s (the phase budget); restarting the clock on the 0.3 s push ends at 0.9 s.
+    assert elapsed < 0.75
+
+
 async def test_webhook_transport_returns_task_events_until_terminal() -> None:
     queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
     client = _FakeWebhookClient({"task": {"id": "task-1", "status": {"state": "TASK_STATE_SUBMITTED"}}})
