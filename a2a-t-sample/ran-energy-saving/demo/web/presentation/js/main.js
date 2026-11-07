@@ -70,6 +70,10 @@ const REPEATED_SILENT = new Set([
 const els = {
   banner: byId("connection-banner"),
   bannerText: byId("connection-text"),
+  resumeBanner: byId("resume-banner"),
+  resumeText: byId("resume-text"),
+  resumeRun: byId("resume-run"),
+  resumeDismiss: byId("resume-dismiss"),
   brandKicker: byId("brand-kicker"),
   title: byId("title"),
   badge: byId("badge"),
@@ -235,6 +239,8 @@ const ui = {
   //: Highest story step reached in the current playhead; prevents a late phase from rewinding it.
   maxStep: 0,
   terminalApplied: null,
+  //: Run left behind by a page reload; only an explicit click reattaches to it.
+  resumableRunId: null,
   source: null,
   mieSource: null,
   mieEnabled: false,
@@ -371,6 +377,10 @@ async function loadStartupState() {
   const bootScenarios = scenariosForProtocol(ui.protocol);
   if (!bootScenarios.includes(ui.selected)) ui.selected = bootScenarios[0] || null;
   ui.mieEnabled = Boolean(ui.meta.mieEnabled);
+  // Browsers restore a checked checkbox across reloads. A restored Loop would auto-start the next
+  // scenario as soon as a run finishes, which reads as "the page sent a request by itself"; every
+  // reload therefore starts with Loop off and the operator opts in again.
+  els.loop.checked = false;
   els.requestText.value = ui.meta.scenarioRequests?.[ui.selected] || "";
   applyStaticCopy();
   renderProtocol();
@@ -378,12 +388,45 @@ async function loadStartupState() {
   renderBottomCopy();
   subscribeMie();
   render();
-  await restoreActiveRun();
+  await offerActiveRunRestore();
+}
+
+/**
+ * Offer the run a page reload left behind, instead of reattaching automatically.
+ *
+ * Reattaching on load replays the whole run from its first frame, so the audience sees the request
+ * being typed and sent again; nothing was actually sent, but it looks like it was. The operator
+ * resumes from the banner only when they ask for it.
+ */
+async function offerActiveRunRestore() {
+  const runId = sessionStorage.getItem(ACTIVE_RUN_KEY);
+  if (!runId) return;
+  let snapshot;
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
+    if (!response.ok) {
+      sessionStorage.removeItem(ACTIVE_RUN_KEY);
+      return;
+    }
+    snapshot = await response.json();
+  } catch {
+    return;
+  }
+  if (!snapshot || snapshot.status !== "running") {
+    sessionStorage.removeItem(ACTIVE_RUN_KEY);
+    return;
+  }
+  ui.resumableRunId = runId;
+  els.resumeText.textContent = ui.copy.resumeRunText;
+  els.resumeRun.textContent = ui.copy.resumeRunAction;
+  els.resumeDismiss.textContent = ui.copy.resumeRunDismiss;
+  els.resumeBanner.hidden = false;
 }
 
 /** Reattach to a run that was still executing when the page was reloaded. */
-async function restoreActiveRun() {
-  const runId = sessionStorage.getItem(ACTIVE_RUN_KEY);
+async function restoreActiveRun(runId) {
+  els.resumeBanner.hidden = true;
+  ui.resumableRunId = null;
   if (!runId) return;
   let snapshot;
   try {
@@ -430,6 +473,19 @@ function bindStaticEvents() {
   }
   els.start.addEventListener("click", () => startRun());
   if (els.startQuick) els.startQuick.addEventListener("click", () => startRun());
+  if (els.resumeRun) {
+    els.resumeRun.addEventListener("click", () => {
+      const runId = ui.resumableRunId;
+      if (runId) restoreActiveRun(runId);
+    });
+  }
+  if (els.resumeDismiss) {
+    els.resumeDismiss.addEventListener("click", () => {
+      els.resumeBanner.hidden = true;
+      ui.resumableRunId = null;
+      sessionStorage.removeItem(ACTIVE_RUN_KEY);
+    });
+  }
   if (els.themeToggle) els.themeToggle.addEventListener("click", toggleBrand);
   els.reset.addEventListener("click", resetRequest);
   if (els.modifyTask) els.modifyTask.addEventListener("click", () => openModifyPicker());
@@ -1046,6 +1102,9 @@ async function startRun() {
     }
     ui.view.runId = payload.runId;
     sessionStorage.setItem(ACTIVE_RUN_KEY, payload.runId);
+    // A fresh run replaces whatever reload remnant the resume banner still offers.
+    els.resumeBanner.hidden = true;
+    ui.resumableRunId = null;
     subscribe(payload.runId);
     render();
   } catch (error) {
@@ -1128,6 +1187,8 @@ function subscribe(runId) {
     if (frame.type === "finished") {
       closeStream();
       sessionStorage.removeItem(ACTIVE_RUN_KEY);
+      els.resumeBanner.hidden = true;
+      ui.resumableRunId = null;
       setBusy(false);
       // ``enqueueFrame`` has just applied this frame to the shadow state, so the send marker is
       // current when deciding whether the next Start continues the blocked attempt.

@@ -1236,6 +1236,19 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
   font-size: 12.5px;
 }
 
+.resume-banner {
+  background: var(--blue-soft);
+  color: var(--black);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.resume-banner .btn {
+  padding: 2px 10px;
+}
+
 @media (max-width: 1180px) {
   .presets { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
