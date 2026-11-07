@@ -82,8 +82,7 @@ SCHEMA: Final[str] = "osp-tester/v1"
 #: Scenario used to seed a Modify target task; it is a complete request that creates a task.
 BASELINE_SCENARIO: Final[str] = "night"
 
-#: Complete baseline request (the scenario's own request still ends at 23:59, which the live
-#: server now negotiates because 24:00 is the end of the day).
+#: Complete baseline request used to seed a Modify target task.
 BASELINE_REQUEST: Final[str] = (
     "Create an energy saving task for Region A with these guaranteed throughputs: "
     "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}."

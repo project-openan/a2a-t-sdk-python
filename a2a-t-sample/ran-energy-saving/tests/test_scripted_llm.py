@@ -188,7 +188,7 @@ def test_a_free_text_vendor_region_replaces_the_neutral_slot_placeholder(
     """The processed path sends free text; the canned response must echo the vendor region."""
     request = (
         "Create an energy saving task for A2ATestRegion with these guaranteed throughputs: "
-        "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}. "
+        "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}. "
         "Output the wireless network energy saving plan and return the intent report."
     )
 

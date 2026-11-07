@@ -298,7 +298,7 @@ async def test_initial_task_with_a_missing_required_field_opens_information_nego
 
 
 _NON_OVERLAPPING_PROMPT = (
-    "## Task Context\n\nGuaranteed throughput target: {00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}."
+    "## Task Context\n\nGuaranteed throughput target: {00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}."
 )
 
 _OVERLAPPING_PROMPT = "## Task Context\n\nGuaranteed throughput target: {17:30~23:00,20Mbps}, {20:00~00:00,10Mbps}."
@@ -307,7 +307,7 @@ _OVERLAPPING_PROMPT = "## Task Context\n\nGuaranteed throughput target: {17:30~2
 async def test_a_false_conflict_verdict_does_not_open_a_negotiation() -> None:
     """A live validator can claim an overlap the Task-T prompt does not have."""
     gate, server = _gate()
-    server.task_error = _conflict_error("{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}")
+    server.task_error = _conflict_error("{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}")
     context = _make_context(_initial_message(prompt=_NON_OVERLAPPING_PROMPT))
 
     outcome = await gate.handle(context)
@@ -537,7 +537,7 @@ async def test_accept_validates_and_hands_the_agreed_task_prompt_to_the_executor
 async def test_a_false_conflict_verdict_does_not_end_a_valid_accept() -> None:
     """The same false verdict must not turn an accepted negotiation into a terminal error."""
     gate, server = _gate()
-    server.task_error = _conflict_error("{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}")
+    server.task_error = _conflict_error("{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}")
     message = _negotiation_message(
         NegotiationPerformative.ACCEPT,
         round_number=1,

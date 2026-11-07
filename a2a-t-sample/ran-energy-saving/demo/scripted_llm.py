@@ -188,7 +188,7 @@ def _requested_area(user_content: str) -> str | None:
 #: (``在00:00~18:00停电``). Content validation reads the rendered Task-T, so it needs the second
 #: spelling; the failing input still routes to its own feasibility stage first through the
 #: ``06:00~18:00,10Mbps`` marker.
-_TARGET_REFILL_MARKERS = ("23:00~23:59,10Mbps",)
+_TARGET_REFILL_MARKERS = ("23:00~24:00,10Mbps",)
 _FEASIBILITY_REFILL_MARKERS = (
     "power outage from 00:00 to 18:00",
     "00:00~18:00 停电",

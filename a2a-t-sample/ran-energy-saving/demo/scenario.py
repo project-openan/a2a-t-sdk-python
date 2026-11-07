@@ -56,12 +56,12 @@ EXAMPLE_REQUESTS: dict[str, dict[str, str]] = {
     SCENARIO_NIGHT: {
         LANGUAGE_EN: (
             "Create an energy saving task for Region A with these guaranteed throughputs: "
-            "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}. "
+            "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}. "
             "Output the wireless network energy saving plan and return the intent report."
         ),
         LANGUAGE_ZH: (
             "在区域 A 创建节能任务，保障速率为：{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、"
-            "{23:00~23:59,10Mbps}。输出无线网络节能方案并返回意图报告。"
+            "{23:00~24:00,10Mbps}。输出无线网络节能方案并返回意图报告。"
         ),
     },
     SCENARIO_INFORMATION: {
@@ -155,10 +155,10 @@ def resolve_modify_request(language: str) -> str:
 
 
 #: Guaranteed-throughput target the information negotiation supplies when the request omits it.
-INFORMATION_TARGET: Final[str] = "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}"
+INFORMATION_TARGET: Final[str] = "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
 
 #: Corrected target the target negotiation agrees on.
-TARGET_TARGET: Final[str] = "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}"
+TARGET_TARGET: Final[str] = "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
 
 #: Agreed target of the feasibility negotiation (the outage window is lowered to 2 Mbps).
 FEASIBILITY_TARGET: Final[str] = "{00:00~06:00,2Mbps}, {06:00~18:00,2Mbps}"

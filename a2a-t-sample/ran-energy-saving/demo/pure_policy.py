@@ -19,14 +19,14 @@ from demo.scenario import KIND_INFORMATION, KIND_TARGET
 
 #: Complete target the information scenario supplies, per language.
 _BASE_TARGETS: Final[dict[str, str]] = {
-    LANGUAGE_EN: "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}",
-    LANGUAGE_ZH: "{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~23:59,10Mbps}",
+    LANGUAGE_EN: "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}",
+    LANGUAGE_ZH: "{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~24:00,10Mbps}",
 }
 
 #: Corrected target the target scenario agrees on, per language.
 _CORRECTED_TARGETS: Final[dict[str, str]] = {
-    LANGUAGE_EN: "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}",
-    LANGUAGE_ZH: "{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~23:59,10Mbps}",
+    LANGUAGE_EN: "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}",
+    LANGUAGE_ZH: "{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~24:00,10Mbps}",
 }
 
 #: Alternative non-overlapping target used as the first counter-proposal of the target scenario.

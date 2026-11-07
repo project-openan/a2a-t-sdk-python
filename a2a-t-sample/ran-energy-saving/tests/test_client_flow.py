@@ -474,7 +474,7 @@ async def test_information_scenario_accepts_and_completes_a_task() -> None:
     assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1)]
     assert prompt_client.refill_data[0]["region"] == "Region A"
     assert prompt_client.refill_data[0]["guaranteedThroughputTarget"] == (
-        "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}"
+        "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
     )
     accept_metadata = MessageToDict(transport.requests[1].message.metadata)
     assert accept_metadata[TASK_T_EXTENSION_URI].startswith("Refilled Task-T prompt:")
@@ -663,7 +663,7 @@ async def test_accept_rewrites_a_refill_that_dropped_the_agreed_target() -> None
     task_text = accept_metadata[TASK_T_EXTENSION_URI]
     assert "{00:00~17:30,10Mbps}" in task_text
     assert "{17:30~23:00,20Mbps}" in task_text
-    assert "{23:00~23:59,10Mbps}" in task_text
+    assert "{23:00~24:00,10Mbps}" in task_text
 
 
 async def test_target_scenario_counters_in_round_one_then_accepts_round_two() -> None:

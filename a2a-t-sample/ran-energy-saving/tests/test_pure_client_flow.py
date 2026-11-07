@@ -97,7 +97,7 @@ async def test_the_messages_carry_no_sample_or_extension_metadata() -> None:
 
 
 async def test_the_default_answer_uses_the_server_proposal() -> None:
-    proposal = "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}"
+    proposal = "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
     event = _input_required()
     event["metadata"] = {"pure": {"kind": "negotiation", "phase": "target", "proposal": proposal}}
     transport = _FakeTransport([[event], [_completed()]])

@@ -7,7 +7,7 @@
     },
     {
       "name": "guaranteedThroughputTarget",
-      "value": "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,10Mbps}"
+      "value": "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
     }
   ]
 }

@@ -175,7 +175,7 @@ def test_a2a_t_accuracy_passes_against_the_scenario_truth() -> None:
             "round": 1,
             "filledParams": {
                 "guaranteedThroughputTarget": (
-                    "{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~23:59,10Mbps}"
+                    "{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~24:00,10Mbps}"
                 )
             },
         }
@@ -224,7 +224,7 @@ def test_pure_accuracy_uses_the_answer_and_rounds() -> None:
             {
                 "kind": "status",
                 "state": "TASK_STATE_WORKING",
-                "text": "{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~23:59,10Mbps}",
+                "text": "{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{23:00~24:00,10Mbps}",
                 "metadata": {"pure": {"kind": "answer", "phase": "target", "round": 2}},
             },
         ],

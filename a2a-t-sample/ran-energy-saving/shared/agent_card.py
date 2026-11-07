@@ -31,5 +31,5 @@ AGENT_CARD_SKILL_ID: Final[str] = "energy-saving"
 AGENT_CARD_EXAMPLE: Final[str] = (
     "Create a RAN energy-saving task for XX Region to maximize energy savings. The "
     "time-segment-based guaranteed throughput target is {00:00~07:00,2Mbps}, "
-    "{07:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~23:59,2Mbps}."
+    "{07:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,2Mbps}."
 )
