@@ -184,9 +184,10 @@ class WebhookRouter:
     def on_event(self, payload: dict[str, object]) -> None:
         """Route one authenticated push to the queue that owns its identity.
 
-        A push with an unknown identity is buffered until a run binds it. When no run is bound yet
-        and only one run is subscribed, the push is delivered directly: this preserves the
-        single-run behavior for servers that assign identities late or omit them on a message.
+        A push with an unknown identity is buffered until a run binds it. Only a push that carries
+        no identity at all may use the single-subscription fallback: an identity-bearing push is
+        never guessed into the one active run, because a late push from a previous Task would
+        otherwise cross into an unrelated run.
         """
         self._prune()
         task_id, context_id = _payload_keys(payload)
@@ -205,13 +206,12 @@ class WebhookRouter:
                 self._deliver(owner, payload)
                 return
 
-        if len(self._subscriptions) == 1:
-            owner = next(iter(self._subscriptions.values()))
-            self._deliver(owner, payload)
-            return
-
         key = task_key or context_key
         if not key:
+            if len(self._subscriptions) == 1:
+                owner = next(iter(self._subscriptions.values()))
+                self._deliver(owner, payload)
+                return
             _LOGGER.warning(
                 "webhook push carries neither taskId nor contextId while %d runs are active; dropped",
                 len(self._subscriptions),

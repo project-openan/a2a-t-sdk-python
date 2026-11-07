@@ -129,6 +129,27 @@ async def test_a_finished_runs_late_push_is_dropped_not_delivered_to_the_next_ru
     assert events[0]["statusUpdate"]["taskId"] == "new-task"  # type: ignore[index]
 
 
+async def test_an_unknown_identity_is_not_guessed_into_the_sole_run() -> None:
+    """An identity-bearing push must wait for its owner, even when only one run is active.
+
+    The old fallback delivered any unmatched push to the sole subscription. A late push from a
+    previous Task would then enter an unrelated run and corrupt its timeline.
+    """
+    router = WebhookRouter()
+    current = router.subscribe("run-1")
+    current.bind(task_id="task-1", context_id="ctx-1")
+
+    router.on_event(_status("old-task", "old-ctx"))
+
+    assert current.queue.empty()
+
+    late_owner = router.subscribe("run-2")
+    late_owner.bind(task_id="old-task", context_id="old-ctx")
+
+    assert current.queue.empty()
+    assert len(_drain(late_owner)) == 1
+
+
 async def test_an_unkeyed_push_is_delivered_only_when_one_run_is_alone() -> None:
     """A server event without task/context is ambiguous once two runs share the receiver."""
     router = WebhookRouter()
