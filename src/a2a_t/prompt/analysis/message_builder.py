@@ -50,6 +50,7 @@ class AnalysisMessageBuilder:
         slot_schema: SlotSchema,
         system_prompt: str,
         user_prompt: str,
+        template_text: str | None = None,
         data_schema: Mapping[str, object] | None = None,
     ) -> list[dict[str, str]]:
         """Build the structured message list used for slot extraction.
@@ -57,6 +58,11 @@ class AnalysisMessageBuilder:
         The optional ``data_schema`` (field name to description) appends one ``[data_schema]``
         section describing the meaning of each structured input field — the schema-guided
         extraction variant of the Java ``DefaultStructuredPromptSlotValueExtractor``.
+
+        The optional ``template_text`` carries the scenario template body; its
+        ``## Terminology Explanation`` section is extracted and appended as a
+        ``[terminology]`` section so the model can resolve synonyms without bloating
+        each slot's ``value_constraint``.
         """
         slot_lines = [
             (
@@ -75,6 +81,10 @@ class AnalysisMessageBuilder:
             f"[input]\n{normalized_input}",
             "[slots]\n" + "\n".join(slot_lines),
         ]
+        if template_text:
+            terminology = self._extract_terminology(template_text)
+            if terminology:
+                sections.append(f"[terminology]\n{terminology}")
         if data_schema:
             sections.append(f"[data_schema]\n{json.dumps(dict(data_schema), ensure_ascii=False)}")
         content = "\n\n".join(sections)
@@ -82,3 +92,20 @@ class AnalysisMessageBuilder:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": content},
         ]
+
+    @staticmethod
+    def _extract_terminology(template_text: str) -> str:
+        """Extract the Terminology Explanation section from the template body.
+
+        Returns the raw section text (header included) or an empty string when
+        the section is absent.
+        """
+        marker = "## Terminology Explanation"
+        start = template_text.find(marker)
+        if start == -1:
+            return ""
+        rest = template_text[start:]
+        next_header = rest.find("\n## ", 1)
+        if next_header != -1:
+            rest = rest[:next_header]
+        return rest.strip()
