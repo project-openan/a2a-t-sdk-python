@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -354,6 +355,133 @@ async def test_the_batch_exports_json_and_xlsx(client: httpx.AsyncClient) -> Non
     workbook = await client.get(f"/api/tester/batches/{batch_id}/export.xlsx")
     assert workbook.status_code == 200
     assert workbook.content.startswith(b"PK")
+
+
+#: Cookie the tester page uses to keep each browser's batches apart.
+CLIENT_COOKIE = "a2at_tester_client"
+
+
+async def _create_tester_batch(
+    client: httpx.AsyncClient,
+    *,
+    case_ids: tuple[int, ...] = (1,),
+    protocols: tuple[str, ...] = ("a2a-t",),
+    stop_after: str = "validate",
+) -> dict[str, Any]:
+    response = await client.post(
+        "/api/tester/batches",
+        json={
+            "caseIds": list(case_ids),
+            "protocols": list(protocols),
+            "stopAfter": stop_after,
+            "approval": "approve",
+            "timeoutSeconds": 60,
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def test_the_tester_page_issues_a_browser_identity_cookie(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get("/tester")
+    assert response.status_code == 200
+    assert CLIENT_COOKIE in response.headers.get("set-cookie", "")
+    assert client.cookies.get(CLIENT_COOKIE)
+
+
+async def test_batches_are_listed_only_for_the_browser_that_created_them(
+    client: httpx.AsyncClient,
+) -> None:
+    await client.get("/tester")
+    created = await _create_tester_batch(client)
+    batch_id = created["batchId"]
+
+    listed = await client.get("/api/tester/batches")
+    assert batch_id in [batch["batchId"] for batch in listed.json()["batches"]]
+
+    client.cookies.set(CLIENT_COOKIE, "another-browser")
+    listed = await client.get("/api/tester/batches")
+    assert batch_id not in [batch["batchId"] for batch in listed.json()["batches"]]
+
+
+async def test_another_browser_cannot_open_start_retry_or_export_a_batch(
+    client: httpx.AsyncClient,
+) -> None:
+    await client.get("/tester")
+    batch_id = (await _create_tester_batch(client))["batchId"]
+    client.cookies.set(CLIENT_COOKIE, "another-browser")
+
+    assert (await client.get(f"/api/tester/batches/{batch_id}")).status_code == 404
+    assert (await client.post(f"/api/tester/batches/{batch_id}/start")).status_code == 404
+    assert (await client.post(f"/api/tester/batches/{batch_id}/cancel")).status_code == 404
+    assert (await client.post(f"/api/tester/batches/{batch_id}/retry")).status_code == 404
+    assert (
+        await client.get(f"/api/tester/batches/{batch_id}/export.json")
+    ).status_code == 404
+    assert (
+        await client.get(f"/api/tester/batches/{batch_id}/export.xlsx")
+    ).status_code == 404
+
+
+async def test_a_scratch_batch_belongs_to_the_browser_that_created_it(
+    client: httpx.AsyncClient,
+) -> None:
+    client.cookies.set(CLIENT_COOKIE, "browser-a")
+    created = await client.post(
+        "/api/tester/scratch",
+        json={
+            "userInput": "Create an energy saving task for A2ATestRegion.",
+            "protocol": "a2a-t",
+            "approval": "approve",
+            "timeoutSeconds": 60,
+        },
+    )
+    assert created.status_code == 201
+    batch_id = created.json()["batchId"]
+
+    client.cookies.set(CLIENT_COOKIE, "browser-b")
+    listed = await client.get("/api/tester/batches")
+    assert batch_id not in [batch["batchId"] for batch in listed.json()["batches"]]
+
+
+async def test_a_legacy_batch_without_an_owner_is_hidden_from_browsers(
+    client: httpx.AsyncClient,
+    tmp_path: Path,
+) -> None:
+    history = tmp_path / "tester"
+    history.mkdir()
+    (history / "batch-legacy.json").write_text(
+        json.dumps(
+            {
+                "schema": "osp-tester/v1",
+                "batchId": "batch-legacy",
+                "status": "finished",
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "items": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    client.cookies.set(CLIENT_COOKIE, "browser-a")
+
+    listed = await client.get("/api/tester/batches")
+    assert "batch-legacy" not in [batch["batchId"] for batch in listed.json()["batches"]]
+    assert (await client.get("/api/tester/batches/batch-legacy")).status_code == 404
+
+
+def test_the_start_button_stays_available_after_a_batch_finished() -> None:
+    """Opening yesterday's results must not trap the page on that batch.
+
+    The results pane used to show the start button only for a ``draft`` batch, so a browser that
+    reopened its last finished batch could not start a new run without clearing server state.
+    """
+    tester = Path(__file__).resolve().parent.parent / "demo" / "web" / "tester"
+    js = (tester / "main.js").read_text(encoding="utf-8")
+
+    assert re.search(r'\$\("start-button"\)\.hidden\s*=\s*running', js)
+    assert not re.search(r'\$\("start-button"\)\.hidden\s*=\s*!draft', js)
 
 
 def test_a2at_decision_parser_keeps_target_and_feasibility_order() -> None:

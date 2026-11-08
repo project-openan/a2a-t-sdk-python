@@ -7,6 +7,7 @@ The console is now catalog-driven: it lists the OSP YAML cases, starts one batch
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final
@@ -25,6 +26,12 @@ TESTER_DIR: Final[Path] = Path(__file__).resolve().parent
 
 #: Media type of an ``.xlsx`` workbook.
 XLSX_MEDIA_TYPE: Final[str] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+#: Anonymous cookie that keeps each browser's batches apart; set when the page is served.
+CLIENT_COOKIE: Final[str] = "a2at_tester_client"
+
+#: Lifetime of the browser identity cookie, in seconds.
+CLIENT_COOKIE_MAX_AGE: Final[int] = 365 * 24 * 60 * 60
 
 
 def build_tester_routes(
@@ -65,9 +72,18 @@ def build_tester_routes(
     )
 
     async def page(request: Request) -> Response:
-        """Serve the tester console shell."""
-        del request
-        return FileResponse(TESTER_DIR / "index.html")
+        """Serve the tester console shell and remember this browser's anonymous identity."""
+        response = FileResponse(TESTER_DIR / "index.html")
+        if not _client_id(request):
+            response.set_cookie(
+                CLIENT_COOKIE,
+                uuid.uuid4().hex,
+                max_age=CLIENT_COOKIE_MAX_AGE,
+                path="/",
+                httponly=True,
+                samesite="lax",
+            )
+        return response
 
     async def stylesheet(request: Request) -> Response:
         """Serve the tester stylesheet."""
@@ -113,6 +129,7 @@ def build_tester_routes(
                 stop_after=str(body.get("stopAfter") or "final"),
                 approval=str(body.get("approval") or "approve"),
                 timeout_seconds=float(body.get("timeoutSeconds") or 300.0),
+                owner=_client_id(request),
             )
         except (TypeError, ValueError) as exc:
             return JSONResponse({"error": str(exc), "code": "invalid_request"}, status_code=400)
@@ -127,6 +144,7 @@ def build_tester_routes(
                 protocol=str(body.get("protocol") or PROTOCOL_A2A_T),
                 approval=str(body.get("approval") or "approve"),
                 timeout_seconds=float(body.get("timeoutSeconds") or 300.0),
+                owner=_client_id(request),
             )
         except (TypeError, ValueError) as exc:
             return JSONResponse({"error": str(exc), "code": "invalid_request"}, status_code=400)
@@ -138,11 +156,19 @@ def build_tester_routes(
             limit = int(request.query_params.get("limit", "20"))
         except ValueError:
             limit = 20
-        return JSONResponse({"batches": batches.list_batches(limit=max(1, min(limit, 100)))})
+        return JSONResponse(
+            {
+                "batches": batches.list_batches(
+                    owner=_client_id(request), limit=max(1, min(limit, 100))
+                )
+            }
+        )
 
     async def get_batch(request: Request) -> Response:
         """Return the live state of one batch."""
-        snapshot = batches.get(request.path_params["batch_id"])
+        snapshot = batches.get(
+            request.path_params["batch_id"], owner=_client_id(request)
+        )
         if snapshot is None:
             return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
         return JSONResponse(snapshot)
@@ -150,7 +176,9 @@ def build_tester_routes(
     async def start_batch(request: Request) -> Response:
         """Start a draft batch."""
         try:
-            snapshot = await batches.start(request.path_params["batch_id"])
+            snapshot = await batches.start(
+                request.path_params["batch_id"], owner=_client_id(request)
+            )
         except KeyError:
             return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
         except ValueError as exc:
@@ -160,9 +188,10 @@ def build_tester_routes(
     async def cancel_batch(request: Request) -> Response:
         """Cancel a running batch."""
         batch_id = request.path_params["batch_id"]
-        if batches.get(batch_id) is None:
+        owner = _client_id(request)
+        if batches.get(batch_id, owner=owner) is None:
             return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
-        cancelled = await batches.cancel(batch_id)
+        cancelled = await batches.cancel(batch_id, owner=owner)
         if not cancelled:
             return JSONResponse(
                 {"error": "该批次不在执行中。", "code": "batch_not_running"}, status_code=409
@@ -172,7 +201,9 @@ def build_tester_routes(
     async def retry_batch(request: Request) -> Response:
         """Create a draft batch from the failed/errored/cancelled items."""
         try:
-            snapshot = batches.retry(request.path_params["batch_id"])
+            snapshot = batches.retry(
+                request.path_params["batch_id"], owner=_client_id(request)
+            )
         except KeyError:
             return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
         except ValueError as exc:
@@ -182,7 +213,7 @@ def build_tester_routes(
     async def export_json(request: Request) -> Response:
         """Download the batch as JSON."""
         batch_id = request.path_params["batch_id"]
-        snapshot = batches.get(batch_id)
+        snapshot = batches.get(batch_id, owner=_client_id(request))
         if snapshot is None:
             return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
         return Response(
@@ -194,7 +225,7 @@ def build_tester_routes(
     async def export_xlsx(request: Request) -> Response:
         """Download the batch as an XLSX report."""
         batch_id = request.path_params["batch_id"]
-        snapshot = batches.get(batch_id)
+        snapshot = batches.get(batch_id, owner=_client_id(request))
         if snapshot is None:
             return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
         return Response(
@@ -220,6 +251,11 @@ def build_tester_routes(
         Route("/api/tester/batches/{batch_id}/export.xlsx", export_xlsx),
     ]
     return routes, batches
+
+
+def _client_id(request: Request) -> str:
+    """Return the anonymous browser identity carried by the tester cookie."""
+    return (request.cookies.get(CLIENT_COOKIE) or "").strip()
 
 
 async def _json_body(request: Request) -> Mapping[str, Any]:

@@ -169,6 +169,7 @@ class _Batch:
     approval: str
     timeout_seconds: float
     items: list[CaseItem]
+    owner_id: str = ""
     status: str = BATCH_DRAFT
     created_at: str = field(default_factory=_now_iso)
     started_at: str | None = None
@@ -230,6 +231,7 @@ class EvalBatchManager:
         stop_after: str,
         approval: str,
         timeout_seconds: float,
+        owner: str = "",
     ) -> dict[str, object]:
         """Register one draft batch from the selected cases and protocols."""
         if stop_after not in ALL_STAGES:
@@ -256,6 +258,7 @@ class EvalBatchManager:
             approval=approval,
             timeout_seconds=max(1.0, float(timeout_seconds)),
             items=items,
+            owner_id=owner,
         )
         self._batches[batch.batch_id] = batch
         self._persist(batch)
@@ -268,6 +271,7 @@ class EvalBatchManager:
         protocol: str,
         approval: str = "approve",
         timeout_seconds: float = 300.0,
+        owner: str = "",
     ) -> dict[str, object]:
         """Create a one-item batch for an ad-hoc request (full flow only)."""
         text = user_input.strip()
@@ -284,19 +288,20 @@ class EvalBatchManager:
             approval=approval,
             timeout_seconds=max(1.0, float(timeout_seconds)),
             items=[item],
+            owner_id=owner,
         )
         self._batches[batch.batch_id] = batch
         self._persist(batch)
         return self._snapshot(batch)
 
-    def get(self, batch_id: str) -> dict[str, object] | None:
-        """Return one batch snapshot, or ``None`` when unknown."""
-        batch = self._batches.get(batch_id) or self._load(batch_id)
+    def get(self, batch_id: str, *, owner: str = "") -> dict[str, object] | None:
+        """Return one batch snapshot, or ``None`` when unknown or owned by someone else."""
+        batch = self._owned(batch_id, owner)
         return None if batch is None else self._snapshot(batch)
 
-    async def start(self, batch_id: str) -> dict[str, object]:
+    async def start(self, batch_id: str, *, owner: str = "") -> dict[str, object]:
         """Start one draft batch."""
-        batch = self._batches.get(batch_id) or self._load(batch_id)
+        batch = self._owned(batch_id, owner)
         if batch is None:
             raise KeyError(batch_id)
         if batch.status != BATCH_DRAFT:
@@ -308,9 +313,12 @@ class EvalBatchManager:
         await asyncio.sleep(0)
         return self._snapshot(batch)
 
-    async def cancel(self, batch_id: str) -> bool:
-        """Cancel one running batch and its active run."""
-        batch = self._batches.get(batch_id) or self._load(batch_id)
+    async def cancel(self, batch_id: str, *, owner: str | None = None) -> bool:
+        """Cancel one running batch and its active run.
+
+        ``owner=None`` is the internal shutdown path; HTTP callers pass their browser identity.
+        """
+        batch = self._owned(batch_id, owner)
         if batch is None or batch.status != BATCH_RUNNING:
             return False
         batch.cancel_requested = True
@@ -329,9 +337,21 @@ class EvalBatchManager:
             if batch.status == BATCH_RUNNING:
                 await self.cancel(batch_id)
 
-    def retry(self, batch_id: str) -> dict[str, object]:
-        """Create a new draft batch from the failed, errored or cancelled items."""
+    def _owned(self, batch_id: str, owner: str | None) -> _Batch | None:
+        """Return one batch, or ``None`` when it belongs to a different browser.
+
+        ``owner=None`` bypasses the check for in-process callers such as ``shutdown``.
+        """
         batch = self._batches.get(batch_id) or self._load(batch_id)
+        if batch is None:
+            return None
+        if owner is not None and batch.owner_id != owner:
+            return None
+        return batch
+
+    def retry(self, batch_id: str, *, owner: str = "") -> dict[str, object]:
+        """Create a new draft batch from the failed, errored or cancelled items."""
+        batch = self._owned(batch_id, owner)
         if batch is None:
             raise KeyError(batch_id)
         selected = [
@@ -357,31 +377,35 @@ class EvalBatchManager:
                 )
                 for item in selected
             ],
+            owner_id=batch.owner_id,
         )
         self._batches[retried.batch_id] = retried
         self._persist(retried)
         return self._snapshot(retried)
 
-    def list_batches(self, *, limit: int = 20) -> list[dict[str, object]]:
-        """Return the most recent persisted batches, newest first."""
+    def list_batches(self, *, owner: str = "", limit: int = 20) -> list[dict[str, object]]:
+        """Return the most recent batches of one browser identity, newest first."""
         if self._history_dir is None or not self._history_dir.is_dir():
             return [
                 self._snapshot(batch)
                 for batch in sorted(
                     self._batches.values(), key=lambda item: item.created_at, reverse=True
                 )
+                if batch.owner_id == owner
             ][:limit]
         summaries: list[dict[str, object]] = []
         for path in sorted(
             self._history_dir.glob("*.json"),
             key=lambda candidate: candidate.stat().st_mtime,
             reverse=True,
-        )[:limit]:
+        ):
             try:
                 document = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
             if not isinstance(document, Mapping) or document.get("schema") != SCHEMA:
+                continue
+            if str(document.get("ownerId") or "") != owner:
                 continue
             summaries.append(
                 {
@@ -394,6 +418,8 @@ class EvalBatchManager:
                     "stopAfter": document.get("stopAfter"),
                 }
             )
+            if len(summaries) >= limit:
+                break
         return summaries
 
     # ------------------------------------------------------------------
@@ -934,6 +960,7 @@ class EvalBatchManager:
             approval=str(document.get("approval") or "approve"),
             timeout_seconds=float(document.get("timeoutSeconds") or 300.0),
             items=items,
+            owner_id=str(document.get("ownerId") or ""),
             status=str(document.get("status") or BATCH_DRAFT),
             created_at=str(document.get("createdAt") or _now_iso()),
             started_at=document.get("startedAt") if isinstance(document.get("startedAt"), str) else None,
@@ -960,6 +987,7 @@ class EvalBatchManager:
             "stopAfter": batch.stop_after,
             "approval": batch.approval,
             "timeoutSeconds": batch.timeout_seconds,
+            "ownerId": batch.owner_id,
             "createdAt": batch.created_at,
             "startedAt": batch.started_at,
             "finishedAt": batch.finished_at,

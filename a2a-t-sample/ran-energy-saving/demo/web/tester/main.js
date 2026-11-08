@@ -455,10 +455,9 @@ function renderResults() {
   const summary = batch.summary || {};
   $("result-summary").textContent = `${summary.total || 0} 项 · 通过 ${summary.passed || 0} · 失败 ${summary.failed || 0} · 错误 ${summary.error || 0} · 仅记录 ${summary.stageRecorded || 0}`;
   const running = batch.status === "running";
-  const draft = batch.status === "draft";
   const retryable = (summary.failed || 0) + (summary.error || 0) + (summary.cancelled || 0) > 0;
-  $("start-button").hidden = !draft;
-  $("start-button").disabled = !draft;
+  $("start-button").hidden = running;
+  $("start-button").disabled = running;
   $("cancel-button").hidden = !running;
   $("retry-button").hidden = running || !retryable;
   $("export-json").disabled = false;
