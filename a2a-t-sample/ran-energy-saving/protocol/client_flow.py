@@ -72,6 +72,7 @@ from shared.run_constants import (
     LANGUAGE_ZH,
     RUN_MODE_CREATE,
     RUN_MODE_MODIFY,
+    reports_failed_completion,
 )
 from shared.run_source import now_iso
 from shared.sse_event_consumer import normalize_event
@@ -2129,8 +2130,13 @@ def _final_state(batch: list[dict[str, object]]) -> str:
     prior round's ``Propose`` look like the end message after a webhook phase stops at the report
     artifact. A plain non-negotiation message (or the explicit end text) is the negotiation-end
     signal; a negotiation message is not.
+
+    A downstream ``COMPLETED`` is not automatically a success: the vendor NMS reports a refused
+    request with ``TASK_STATE_COMPLETED`` plus an error sentence (W-PURE-3). Such an artifact-less
+    completion is classified ``task_failed`` so the outer Task and the UI never claim success.
     """
     report_seen = False
+    artifact_seen = any(event.get("kind") == "artifact" for event in batch)
     for event in reversed(batch):
         if event.get("kind") == "artifact":
             report_seen = True
@@ -2147,12 +2153,27 @@ def _final_state(batch: list[dict[str, object]]) -> str:
             continue
         state = event.get("state")
         if state == TaskState.Name(TaskState.TASK_STATE_COMPLETED):
+            if _reports_failed_completion(event, artifact_seen=artifact_seen):
+                return FINAL_STATE_TASK_FAILED
             return FINAL_STATE_TASK_COMPLETED
         if state == TaskState.Name(TaskState.TASK_STATE_REJECTED):
             return FINAL_STATE_TASK_REJECTED
         if state in _TERMINAL_STATE_NAMES:
             return FINAL_STATE_TASK_FAILED
     return FINAL_STATE_INCOMPLETE if not report_seen else FINAL_STATE_TASK_COMPLETED
+
+
+def _reports_failed_completion(event: Mapping[str, object], *, artifact_seen: bool) -> bool:
+    """Whether one ``COMPLETED`` status actually reports a refused request.
+
+    The vendor NMS expresses "I cannot do this" with ``TASK_STATE_COMPLETED`` and an error sentence
+    rather than ``FAILED``. A completed Task that published an artifact produced a result, so only
+    an artifact-less completion whose status text carries a refusal phrase is downgraded. Everything
+    else keeps the protocol state the downstream sent.
+    """
+    if artifact_seen:
+        return False
+    return reports_failed_completion(event.get("text"))
 
 
 def _fill_result(result: ClientFlowResult, context_id: str | None) -> None:

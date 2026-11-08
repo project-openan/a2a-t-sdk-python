@@ -323,6 +323,14 @@ applyFrame(failed, finished("incomplete", null, "server unavailable"));
 assert.equal(stageOf(failed), "failed");
 assert.equal(failed.error, "server unavailable");
 
+// --- A downstream Task failure is a failure, not a neutral ending ---------
+
+const downstreamFailed = createState();
+applyFrame(downstreamFailed, { type: "run_started", runId: "r4f", scenario: "night", mode: "confirm" });
+applyFrame(downstreamFailed, finished("task_failed", null, ""));
+assert.equal(downstreamFailed.status, STATUS.FINISHED);
+assert.equal(stageOf(downstreamFailed), "failed");
+
 // --- A cancelled run reports its own ending ------------------------------
 
 const canceled = createState();

@@ -99,49 +99,108 @@ def pure_answer_from_event(
     return pure_answer_for(kind, round_number, language)
 
 
-def _filled_answer_text(filled: Mapping[str, object] | None) -> str:
-    """Render the values of one decision as a plain-text answer.
+#: One deterministic sentence per Task-T parameter, in reading order. The wording follows the
+#: answers the OSP evaluation set records for the vendor's plain-A2A dialogue ("The region is X.",
+#: "Set the guaranteed throughput targets: ..."), so the vendor can parse the value it asked for.
+_ANSWER_TEMPLATES: Final[tuple[tuple[str, str], ...]] = (
+    ("region", "The region is {value}."),
+    ("operationType", "The operation type is {value}."),
+    ("energySavingGoal", "The energy saving goal is {value}."),
+    ("guaranteedThroughputTarget", "Set the guaranteed throughput targets: {value}."),
+    ("siteList", "The sites are {value}."),
+    ("backgroundEvent", "Background event: {value}."),
+)
 
-    The pure hop may ask for any task parameter, not only the throughput target: a vendor question
-    such as "provide a real region" is answered with the region value. Prefer the free-text-ish
-    fields, then join whatever else the decision supplied.
+
+def _answer_value(value: object) -> str:
+    """Render one filled value as text; supported shapes only, empty otherwise."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, tuple)):
+        items = [
+            str(item).strip()
+            for item in value
+            if isinstance(item, (str, int, float)) and not isinstance(item, bool)
+        ]
+        return ", ".join(item for item in items if item)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    return ""
+
+
+def _filled_answer_text(filled: Mapping[str, object] | None) -> str:
+    """Render every supplied value as one plain-text answer.
+
+    The pure hop has no structured ``filledParams`` channel: the only way to answer more than one
+    required item is a single message, so every non-empty value must be rendered. A first-match
+    helper silently dropped the second supplied value -- the reported field bug where the answer
+    carried the throughput target but not the region the vendor had asked for.
+
+    Known Task-T parameters get a natural-language sentence (the vendor parses the value it asked
+    for); any other parameter is still rendered as ``name: value`` rather than dropped.
     """
     if not filled:
         return ""
-    for key in ("guaranteedThroughputTarget", "region"):
-        value = filled.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    values = [
-        str(value).strip()
-        for value in filled.values()
-        if isinstance(value, str) and value.strip()
-    ]
-    return ", ".join(values)
+    sentences: list[str] = []
+    rendered: set[str] = set()
+    for key, template in _ANSWER_TEMPLATES:
+        value = _answer_value(filled.get(key))
+        if value:
+            sentences.append(template.format(value=value))
+            rendered.add(key)
+    for key in sorted(filled):
+        if key in rendered:
+            continue
+        value = _answer_value(filled[key])
+        if value:
+            sentences.append(f"{key}: {value}.")
+    return " ".join(sentences)
 
 
 def render_pure_answer(decision: NegotiationDecision) -> str:
     """Render one decision as the natural-language answer a pure A2A server expects.
 
-    A counter/accept decision carries the negotiated target or the values the operator supplied;
-    fall back to the rationale so the vendor still receives a meaningful reply when the model chose
-    a different action.
+    An accept carries the values the operator supplied; every one of them is rendered, because the
+    vendor only sees this one text and cannot recover a dropped value. A counter carries its own
+    prose (falling back to its structured target). A reject/abort carries the rationale so the
+    vendor still receives a meaningful reply.
     """
     if decision.action == "counter":
         if decision.counter_proposal:
             return decision.counter_proposal
-        target = (decision.counter_params or {}).get("guaranteedThroughputTarget")
-        if isinstance(target, str) and target:
+        target = _answer_value((decision.counter_params or {}).get("guaranteedThroughputTarget"))
+        if target:
             return target
         filled = _filled_answer_text(decision.filled_params)
         return filled or decision.rationale
     if decision.action == "accept":
-        target = (decision.filled_params or {}).get("guaranteedThroughputTarget")
-        if isinstance(target, str) and target:
-            return target
         filled = _filled_answer_text(decision.filled_params)
         return filled or decision.rationale or "Accepted. Please proceed."
     return decision.rationale or ("Rejected." if decision.action == "reject" else "Aborted.")
+
+
+def recommendation_decision(value: object) -> NegotiationDecision | None:
+    """Build the advisory decision from one OSS recommendation payload.
+
+    The OSS Agent sends a structured recommendation (action plus ``filledParams``); older/scripted
+    relays may send a plain string. A reject/abort recommendation is not an answer, so it returns
+    ``None`` and the operator decides without advice.
+    """
+    if isinstance(value, Mapping):
+        action = str(value.get("action") or "accept")
+        if action not in ("accept", "counter"):
+            return None
+        filled = value.get("filledParams")
+        counter = value.get("counterProposal")
+        return NegotiationDecision(
+            action=action,
+            rationale=str(value.get("rationale") or ""),
+            filled_params=dict(filled) if isinstance(filled, Mapping) else None,
+            counter_proposal=counter if isinstance(counter, str) else None,
+        )
+    if isinstance(value, str) and value.strip():
+        return NegotiationDecision(action="accept", rationale=value.strip())
+    return None
 
 
 def pure_answer_from_recommendation(
@@ -151,8 +210,10 @@ def pure_answer_from_recommendation(
     """Answer one OSS-relayed question with its AI recommendation.
 
     The OSS Agent asks its decision model for a draft before relaying the downstream question, so
-    automatic mode can answer without a second model turn. A structured local negotiation has no
-    recommendation and keeps the deterministic policy answer.
+    automatic mode can answer without a second model turn. The live OSS tags the recommendation as
+    a structured dict; it must be rendered here through the same deterministic renderer, otherwise
+    automatic mode falls back to the scenario default and silently drops the operator's values. A
+    structured local negotiation has no recommendation and keeps the deterministic policy answer.
     """
     metadata = event.get("metadata")
     if isinstance(metadata, Mapping):
@@ -161,6 +222,12 @@ def pure_answer_from_recommendation(
             recommendation = raw.get("recommendation")
             if isinstance(recommendation, str) and recommendation.strip():
                 return recommendation.strip()
+            if isinstance(recommendation, Mapping):
+                decision = recommendation_decision(recommendation)
+                if decision is None:
+                    # A reject/abort recommendation is not an answer: do not invent one.
+                    return ""
+                return render_pure_answer(decision)
     return pure_answer_from_event(event, language)
 
 
@@ -171,5 +238,6 @@ __all__ = [
     "pure_answer_from_recommendation",
     "pure_base_target",
     "pure_corrected_target",
+    "recommendation_decision",
     "render_pure_answer",
 ]

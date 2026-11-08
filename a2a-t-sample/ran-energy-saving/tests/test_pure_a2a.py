@@ -206,7 +206,7 @@ def test_an_accept_decision_renders_the_negotiated_target() -> None:
         filled_params={"guaranteedThroughputTarget": "{00:00~06:00,30Mbps}"},
     )
 
-    assert render_pure_answer(decision) == "{00:00~06:00,30Mbps}"
+    assert render_pure_answer(decision) == "Set the guaranteed throughput targets: {00:00~06:00,30Mbps}."
 
 
 def test_a_reject_decision_renders_its_rationale() -> None:

@@ -501,6 +501,46 @@ async def test_oss_fails_the_outer_task_when_the_downstream_failed(
     assert states[-1] == TaskState.TASK_STATE_FAILED
 
 
+async def test_oss_failure_message_carries_the_downstream_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The outer FAILED message must say why the downstream refused, not a generic state name."""
+    executor = OSSPureExecutor(answer=lambda event: "")
+
+    async def run(
+        user_request: str,
+        run_id: str | None,
+        event_sink: object,
+        updater: object,
+        call_context: object,
+    ) -> ClientFlowResult:
+        del user_request, run_id, event_sink, updater, call_context
+        return ClientFlowResult(
+            final_state=FINAL_STATE_TASK_FAILED,
+            task_id="nms-task-1",
+            events=[
+                {
+                    "kind": "status",
+                    "state": "TASK_STATE_COMPLETED",
+                    "text": 'The region name "TestRegion" is not recognized.',
+                }
+            ],
+        )
+
+    monkeypatch.setattr(executor, "_run_ran", run)
+    queue = _RecordingQueue()
+
+    await executor.execute(_oss_context(), queue)
+
+    failed = [
+        event
+        for event in queue.events
+        if isinstance(event, TaskStatusUpdateEvent)
+        and event.status.state == TaskState.TASK_STATE_FAILED
+    ][-1]
+    assert 'The region name "TestRegion" is not recognized.' in failed.status.message.parts[0].text
+
+
 async def test_start_announces_the_nms_downstream(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

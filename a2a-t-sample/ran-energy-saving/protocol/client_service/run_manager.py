@@ -47,6 +47,7 @@ from shared.run_constants import (
     PROTOCOL_PURE,
     RUN_MODE_CREATE,
     RUN_MODE_MODIFY,
+    reports_failed_completion,
 )
 from shared.run_source import normalize_run_source
 from shared.trace import (
@@ -152,8 +153,21 @@ def _should_watch_long_task(run: RunState, result: ClientFlowResult | None) -> b
     )
 
 
-def _final_state_for_task_state(state_name: str) -> str | None:
-    """Map one remote A2A Task state name to a run final state."""
+def _final_state_for_task_state(
+    state_name: str,
+    text: object = "",
+    *,
+    has_report: bool = False,
+) -> str | None:
+    """Map one remote A2A Task state name to a run final state.
+
+    The vendor NMS reports a refused request as ``COMPLETED`` plus an error sentence, so a polling
+    watcher must apply the same rule as the streamed flow: an artifact-less completion whose status
+    text carries a refusal phrase is a failure, not a success.
+    """
+    if state_name == "TASK_STATE_COMPLETED" and not has_report:
+        if reports_failed_completion(text):
+            return FINAL_STATE_TASK_FAILED
     return _TASK_STATE_FINAL_STATES.get(state_name)
 
 
@@ -1424,7 +1438,11 @@ class RunManager:
                     if key not in answered_questions:
                         answered_questions.add(key)
                         await self._answer_remote_question(run, task_id, polled)
-                final_state = _final_state_for_task_state(polled.state_name)
+                final_state = _final_state_for_task_state(
+                    polled.state_name,
+                    polled.text,
+                    has_report=bool(polled.reports),
+                )
                 if final_state is not None:
                     publish_wait_state(polled.state_name or last_state or "", status="done")
                     return replace(

@@ -28,16 +28,21 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import BaseRoute, Route
 
 from demo import ran_data
-from demo.nms_sim.config import CARRIER_TASK, SimConfig
+from demo.nms_sim.config import (
+    CARRIER_TASK,
+    PURE_FAILURE_COMPLETED,
+    PURE_FAILURE_REJECTED,
+    SimConfig,
+)
 from demo.nms_sim.executor import apply_intent, report_artifact, structured_output
 from demo.nms_sim.intent import (
     ExtractedContent,
     ParsedIntent,
-    SimNegotiationRequiredError,
     SimRequestError,
     accepted_intent,
     declares_negotiation,
     extension_header_value,
+    extract_content,
     message_text,
     parse_message_request,
     read_message_request,
@@ -624,6 +629,16 @@ def build_routes(
 
     # ---------------------------------------------------------------- plain A2A
 
+    def _pure_task_response(task: SimTask, *, stream: bool) -> Response:
+        """Return one terminal plain-A2A Task; a stream always closes at a terminal state."""
+        if stream:
+            return StreamingResponse(
+                status_stream(task, config=config, keep_open=False),
+                media_type=EVENT_STREAM,
+                headers={"Cache-Control": "no-cache"},
+            )
+        return JSONResponse({"task": task.to_dict(embedded=True)}, status_code=200)
+
     def _pure_request(
         body: Mapping[str, object],
         request: Request,
@@ -647,10 +662,12 @@ def build_routes(
         if task is None:
             task = resolved_store.create(context_id=context_id)
             task.pure_text = text
+            task.pure_baseline_text = text
         else:
             task.pure_text = f"{task.pure_text}\n{text}".strip()
             task.pure_round += 1
             resolved_store.update(task.task_id, state=TASK_SUBMITTED, message="Task creation succeeded")
+        task.pure_max_rounds = config.max_rounds
         try:
             push = _push_config_for(
                 task,
@@ -660,54 +677,76 @@ def build_routes(
             )
         except PushConfigExistsError as exc:
             return _register_config_error(exc)
-        synthetic = {"message": {"parts": [{"text": task.pure_text}], "metadata": {}}}
-        try:
-            intent = parse_message_request(synthetic, {}, config)
-        except SimNegotiationRequiredError as exc:
-            if task.pure_round >= task.pure_max_rounds:
-                resolved_store.update(
-                    task.task_id,
-                    state=TASK_REJECTED,
-                    message=f"Negotiation did not converge: {exc.text}",
-                )
-                if stream:
-                    return StreamingResponse(
-                        status_stream(task, config=config),
-                        media_type=EVENT_STREAM,
-                        headers={"Cache-Control": "no-cache"},
-                    )
-                return JSONResponse({"task": task.to_dict(embedded=True)}, status_code=200)
-            resolved_store.update(task.task_id, state=TASK_INPUT_REQUIRED, message=exc.text)
-            # The real NMS asks a plain-A2A question as a standalone agent Message with no
-            # negotiation metadata. Returning a Task status here would make the OSS answer it
-            # itself instead of relaying the question to the caller.
-            task.pure_text = task.pure_text or text
-            if stream:
-                return StreamingResponse(
-                    message_stream(
-                        exc.text,
-                        context_id=task.context_id,
-                        config=config,
-                        structured=False,
-                    ),
-                    media_type=EVENT_STREAM,
-                    headers={"Cache-Control": "no-cache"},
-                )
-            return JSONResponse(
-                {
-                    "message": negotiation_message(
-                        context_id=task.context_id,
-                        body=exc.text,
-                        metadata={},
-                    )
-                },
-                status_code=200,
-            )
-        except SimRequestError as exc:
-            return JSONResponse(exc.payload, status_code=exc.status_code)
+        # Only the latest reply is judged; the original request supplies the fields it did not
+        # repeat. Concatenating and parsing the whole conversation would let the first mention of a
+        # field win, so a corrected region/rate in the answer would be ignored.
+        baseline = extract_content(task.pure_baseline_text)
+        content = extract_content(text).merged_with(baseline) if not is_new else baseline
+        issue = select_issue(content, config)
+        if issue is not None:
+            return _pure_issue(task, issue, content, stream=stream, is_new=is_new)
+        intent = accepted_intent(content, None, config)
         if stream:
             return _stream_completion(task, intent)
         return _json_completion(task, intent, hold=config.hold_working and is_new, push=push)
+
+    def _pure_issue(
+        task: SimTask,
+        issue: NegotiationIssue,
+        content: ExtractedContent,
+        *,
+        stream: bool,
+        is_new: bool,
+    ) -> Response:
+        """Answer a plain-A2A request that cannot be executed yet.
+
+        The initial request gets a vendor text question. A follow-up that still cannot be served
+        follows the configured ``pure_failure`` policy: the vendor answers ``TASK_STATE_COMPLETED``
+        with an error sentence and no artifact -- a refusal that must not be reported as success;
+        ``retry`` asks again until the round budget; ``rejected`` ends the Task.
+        """
+        if not is_new and config.pure_failure == PURE_FAILURE_COMPLETED:
+            resolved_store.update(
+                task.task_id,
+                state=TASK_COMPLETED,
+                message=_pure_failure_text(issue, content),
+            )
+            return _pure_task_response(task, stream=stream)
+        if not is_new and config.pure_failure == PURE_FAILURE_REJECTED:
+            resolved_store.update(task.task_id, state=TASK_REJECTED, message=issue.body())
+            return _pure_task_response(task, stream=stream)
+        if task.pure_round >= task.pure_max_rounds:
+            resolved_store.update(
+                task.task_id,
+                state=TASK_REJECTED,
+                message=f"Negotiation did not converge: {issue.body()}",
+            )
+            return _pure_task_response(task, stream=stream)
+        resolved_store.update(task.task_id, state=TASK_INPUT_REQUIRED, message=issue.body())
+        # The real NMS asks a plain-A2A question as a standalone agent Message with no
+        # negotiation metadata. Returning a Task status here would make the OSS answer it
+        # itself instead of relaying the question to the caller.
+        if stream:
+            return StreamingResponse(
+                message_stream(
+                    issue.body(),
+                    context_id=task.context_id,
+                    config=config,
+                    structured=False,
+                ),
+                media_type=EVENT_STREAM,
+                headers={"Cache-Control": "no-cache"},
+            )
+        return JSONResponse(
+            {
+                "message": negotiation_message(
+                    context_id=task.context_id,
+                    body=issue.body(),
+                    metadata={},
+                )
+            },
+            status_code=200,
+        )
 
     def _is_pure_request(body: Mapping[str, object], request: Request) -> bool:
         """Return whether the message is plain A2A (no Task-T / Negotiation-T extension)."""
@@ -794,6 +833,21 @@ def build_routes(
 async def _single_message_stream(message: Mapping[str, object]) -> AsyncIterator[str]:
     """Yield one ``message`` SSE frame and close."""
     yield f"data: {json.dumps({'message': dict(message)}, ensure_ascii=False)}\n\n"
+
+
+def _pure_failure_text(issue: NegotiationIssue, content: ExtractedContent) -> str:
+    """Render the vendor-style failure sentence of one unservable plain-A2A request."""
+    if "Energy saving region" in issue.items:
+        if content.region:
+            return (
+                f'The region name "{content.region}" is not recognized. '
+                "Please provide the correct region name."
+            )
+        return (
+            "The energy saving region is not recognized. "
+            "Please provide the correct region name."
+        )
+    return issue.detail or issue.body()
 
 
 def _context_id(body: Mapping[str, object]) -> str | None:

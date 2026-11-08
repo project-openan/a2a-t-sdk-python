@@ -671,10 +671,21 @@ class OSSPureExecutor(AgentExecutor):
                 metadata=metadata,
             )
             return
+        downstream = self._downstream_name()
+        hop = self._downstream_hop()
+        detail = _last_status_text(result.events)
+        text = (
+            f"The {downstream} could not complete the request: {detail}"
+            if detail
+            else f"The {downstream} hop ended with state {result.final_state}."
+        )
         await updater.failed(
             message=updater.new_agent_message(
-                [Part(text=f"The RAN hop ended with state {result.final_state}.")],
-                metadata={"pure": self._downstream_identity(result)},
+                [Part(text=text)],
+                metadata={
+                    "pure": {"hop": hop, "phase": "resolution", **self._downstream_identity(result)},
+                    "hop": hop,
+                },
             )
         )
 
@@ -1724,6 +1735,17 @@ def _message_text(message: object) -> str:
     """Return the first non-empty text part of one A2A message."""
     for part in getattr(message, "parts", ()) or ():
         text = getattr(part, "text", None)
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    return ""
+
+
+def _last_status_text(events: list[dict[str, object]]) -> str:
+    """Return the last non-empty status message of one finished downstream flow."""
+    for event in reversed(events):
+        if event.get("kind") != "status":
+            continue
+        text = event.get("text")
         if isinstance(text, str) and text.strip():
             return text.strip()
     return ""

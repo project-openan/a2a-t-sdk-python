@@ -10,13 +10,14 @@ reported to the client.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
 from a2a_t.core.metadata import NEGOTIATION_T_EXTENSION_URI, TASK_T_EXTENSION_URI
 
-from demo.nms_sim.config import SimConfig
+from demo.nms_sim.config import WINDOW_POLICY_EXACT, SimConfig
 from demo.nms_sim.negotiation import (
     KIND_FEASIBILITY,
     KIND_INFORMATION,
@@ -49,9 +50,30 @@ _SAVING_RATE_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 _REGION_PREFIXES: Final[tuple[str, ...]] = (
     "the area is",
+    "the region is",
     "region:",
     "区域：",
     "区域:",
+)
+#: Plain-text answers that name the region: "The region is X.", "region: X", "the area is X".
+_REGION_IS_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?:the\s+)?(?:energy[-\s]*saving\s+)?(?:region|area|zone)(?:\s+name)?\s*(?:is|=|:)\s*"
+    r"([^\n,;.。；]+)",
+    re.IGNORECASE,
+)
+#: "in the A2ATestRegion area" / "in A2ATestRegion region".
+_REGION_IN_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"\bin\s+(?:the\s+)?([A-Za-z0-9_\-]+)\s+(?:region|area|zone)\b",
+    re.IGNORECASE,
+)
+#: "an energy saving task for TestRegion with ...".
+_REGION_FOR_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"\bfor\s+(?:the\s+)?([A-Za-z][A-Za-z0-9_\-]*)\s+(?:with|region|area)\b",
+    re.IGNORECASE,
+)
+#: Words that describe a region instead of naming it; removed before equality comparison.
+_REGION_GENERIC_WORDS: Final[frozenset[str]] = frozenset(
+    {"the", "area", "region", "zone", "of", "in", "at"}
 )
 
 
@@ -194,11 +216,12 @@ def validate_content(content: ExtractedContent, config: SimConfig) -> Negotiatio
             ("Energy saving region",),
             "The energy-saving region is missing. Please specify the region explicitly.",
         )
-    if config.region.lower() not in content.region.lower():
+    if normalize_region(content.region) != normalize_region(config.region):
         return NegotiationIssue(
             KIND_INFORMATION,
             ("Energy saving region",),
-            f"The region '{content.region}' is not served. Available test region: {config.region}.",
+            f'The region name "{content.region}" is not recognized. '
+            f"Available test region: {config.region}.",
         )
     if not content.windows:
         return NegotiationIssue(
@@ -207,7 +230,7 @@ def validate_content(content: ExtractedContent, config: SimConfig) -> Negotiatio
             "The energy-saving activation time is missing. Please provide an explicit time "
             f"range such as {config.window}.",
         )
-    if config.window not in content.windows:
+    if config.window_policy == WINDOW_POLICY_EXACT and config.window not in content.windows:
         return NegotiationIssue(
             KIND_FEASIBILITY,
             ("Energy saving time",),
@@ -353,17 +376,43 @@ def _operation(text: str) -> str | None:
     return None
 
 
+def normalize_region(value: str) -> str:
+    """Normalize one region name for equality comparison.
+
+    Case, punctuation and descriptive words are removed, so ``"A2ATestRegion area"`` equals
+    ``"A2ATestRegion"`` while ``"A2ATestRegion2"`` does not. Substring matching would accept the
+    latter, which is exactly the region mistake the vendor rejects.
+    """
+    text = unicodedata.normalize("NFKC", value).casefold()
+    text = re.sub(r"[^\w]+", " ", text)
+    return " ".join(
+        word for word in text.split() if word and word not in _REGION_GENERIC_WORDS
+    )
+
+
 def _region(text: str) -> str:
-    """Extract the region name from the Task Object or a ``Region:`` line."""
+    """Return the region the text names, preferring the latest explicit answer.
+
+    A pure-A2A conversation accumulates the original request and every follow-up, so the last
+    explicit answer wins. A Task-T prompt still reads its ``## Task Object`` section first; plain
+    requests fall back to the vendor phrasings ("The region is X.", "in X area", "for X with") and
+    finally to the configured region literal.
+    """
     section = _section(text, "Task Object", "任务对象")
-    candidate = section
-    if not candidate:
-        match = re.search(r"(?:区域|region)\s*[:：]\s*([^\n]+)", text, re.IGNORECASE)
-        candidate = match.group(1) if match else ""
-    if not candidate:
-        match = re.search(r"\bA2ATestRegion\b", text)
-        candidate = match.group(0) if match else ""
-    line = next((item.strip() for item in candidate.splitlines() if item.strip()), "")
+    if section:
+        line = next((item.strip() for item in section.splitlines() if item.strip()), "")
+        return _strip_region_line(line)
+    for pattern in (_REGION_IS_PATTERN, _REGION_IN_PATTERN, _REGION_FOR_PATTERN):
+        matches = pattern.findall(text)
+        if matches:
+            return _strip_region_line(matches[-1])
+    match = re.search(r"\bA2ATestRegion\b", text)
+    return _strip_region_line(match.group(0)) if match else ""
+
+
+def _strip_region_line(line: str) -> str:
+    """Strip a leading region prefix and trailing sentence punctuation."""
+    line = line.strip()
     lowered = line.lower()
     for prefix in _REGION_PREFIXES:
         if lowered.startswith(prefix):

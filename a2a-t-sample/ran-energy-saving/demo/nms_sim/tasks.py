@@ -61,8 +61,10 @@ class SimTask:
     history: list[dict[str, object]] = field(default_factory=list)
     timestamp_ms: int = field(default_factory=now_ms)
     shape: str = "standard"
-    #: Pure A2A negotiation state: the accumulated request text and the round counter.
+    #: Pure A2A negotiation state: the accumulated conversation, the original request (which keeps
+    #: reply precedence intact), and the round counter.
     pure_text: str = ""
+    pure_baseline_text: str = ""
     pure_round: int = 0
     pure_max_rounds: int = 3
 

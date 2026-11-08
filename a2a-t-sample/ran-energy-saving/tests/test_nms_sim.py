@@ -24,7 +24,9 @@ from demo.nms_sim.config import (
     CARRIER_TASK,
     FIDELITY_FAST,
     FIDELITY_STRICT,
+    PURE_FAILURE_RETRY,
     TASK_SHAPE_TOPLEVEL,
+    WINDOW_POLICY_ANY,
     SimConfig,
 )
 from demo.nms_sim.sse import task_stream
@@ -213,7 +215,7 @@ async def test_unknown_region_is_rejected_with_the_available_test_region() -> No
         )
 
         text = _message_text(frames[0])
-        assert "not served" in text
+        assert "not recognized" in text
         assert "A2ATestRegion" in text
 
 
@@ -228,7 +230,7 @@ async def test_negotiation_metadata_requires_declaring_the_negotiation_extension
         )
         message = unstructured[0]["message"]
         assert message["metadata"] == {}
-        assert "not served" in message["parts"][0]["text"]
+        assert "not recognized" in message["parts"][0]["text"]
 
         structured = await _frames(
             client,
@@ -424,6 +426,146 @@ async def test_pure_missing_target_asks_then_resumes_to_completed() -> None:
         assert any(frame.get("artifactUpdate") for frame in resumed)
 
 
+def _pure_message(text: str, *, context_id: str | None = None) -> dict[str, object]:
+    """Build one plain-A2A user message (no extension metadata)."""
+    message: dict[str, object] = {
+        "messageId": str(uuid.uuid4()),
+        "role": "ROLE_USER",
+        "parts": [{"text": text}],
+    }
+    if context_id is not None:
+        message["contextId"] = context_id
+    return {"message": message}
+
+
+async def test_pure_region_answer_in_the_vendor_phrasing_resolves_the_task() -> None:
+    """The vendor asks for a region in plain text and accepts "The region is X." as the answer."""
+    async for client in _client():
+        token = await _token(client)
+        headers = {"Authorization": f"Bearer {token}"}
+        frames = await _frames(
+            client,
+            _pure_message(
+                "Create a RAN energy saving task. Energy saving time is 00:00~06:00 at 30 Mbps."
+            ),
+            headers,
+        )
+        assert "message" in frames[0]
+        context_id = str(frames[0]["message"]["contextId"])
+        assert "Energy saving region" in json.dumps(frames[0])
+
+        resumed = await _frames(
+            client,
+            _pure_message("The region is A2ATestRegion.", context_id=context_id),
+            headers,
+        )
+
+        assert any(frame.get("artifactUpdate") for frame in resumed)
+        assert any(
+            frame.get("statusUpdate", {}).get("status", {}).get("state")
+            == "TASK_STATE_COMPLETED"
+            for frame in resumed
+        )
+
+
+async def test_pure_region_must_match_the_served_name_exactly() -> None:
+    """A suffix must not be accepted by substring: A2ATestRegion111 is not A2ATestRegion."""
+    async for client in _client():
+        token = await _token(client)
+        frames = await _frames(
+            client,
+            _pure_message(
+                "Create a RAN energy saving task in the A2ATestRegion111 area. "
+                "Energy saving time is 00:00~06:00 at 30 Mbps."
+            ),
+            {"Authorization": f"Bearer {token}"},
+        )
+
+        assert "message" in frames[0]
+        assert "not recognized" in json.dumps(frames[0])
+
+
+async def test_pure_unservable_follow_up_completes_with_a_refusal() -> None:
+    """The vendor signals a refusal as COMPLETED plus an error sentence and no artifact."""
+    async for client in _client():
+        token = await _token(client)
+        headers = {"Authorization": f"Bearer {token}"}
+        frames = await _frames(
+            client,
+            _pure_message(
+                "Create an energy saving task for TestRegion with "
+                "Energy saving time 00:00~06:00 at 30 Mbps."
+            ),
+            headers,
+        )
+        assert "message" in frames[0]
+        context_id = str(frames[0]["message"]["contextId"])
+
+        resumed = await _frames(
+            client,
+            _pure_message("{00:00~06:00,30Mbps}", context_id=context_id),
+            headers,
+        )
+
+        statuses = [
+            frame["statusUpdate"]["status"]
+            for frame in resumed
+            if isinstance(frame.get("statusUpdate"), dict)
+        ]
+        assert statuses[-1]["state"] == "TASK_STATE_COMPLETED"
+        assert 'The region name "TestRegion" is not recognized.' in statuses[-1]["message"]["parts"][0]["text"]
+        assert not any(frame.get("artifactUpdate") for frame in resumed)
+
+
+async def test_pure_failure_retry_asks_the_same_question_again() -> None:
+    """``retry`` keeps the polite local dialogue instead of the vendor's COMPLETED refusal."""
+    config = SimConfig(
+        fidelity=FIDELITY_FAST,
+        negotiation_carrier=CARRIER_MESSAGE,
+        pure_failure=PURE_FAILURE_RETRY,
+    )
+    async for client in _client(config):
+        token = await _token(client)
+        headers = {"Authorization": f"Bearer {token}"}
+        frames = await _frames(
+            client,
+            _pure_message("Create an energy saving task for TestRegion with 00:00~06:00 at 30 Mbps."),
+            headers,
+        )
+        context_id = str(frames[0]["message"]["contextId"])
+
+        resumed = await _frames(
+            client,
+            _pure_message("{00:00~06:00,30Mbps}", context_id=context_id),
+            headers,
+        )
+
+        assert "message" in resumed[0]
+        assert "Energy saving region" in json.dumps(resumed[0])
+
+
+async def test_window_policy_any_accepts_an_osp_activation_window() -> None:
+    """``any`` accepts the windows the OSP cases use instead of asking for a feasibility change."""
+    config = SimConfig(
+        fidelity=FIDELITY_FAST,
+        negotiation_carrier=CARRIER_MESSAGE,
+        window_policy=WINDOW_POLICY_ANY,
+    )
+    async for client in _client(config):
+        token = await _token(client)
+        frames = await _frames(
+            client,
+            _pure_message(
+                "Create an energy saving task in the A2ATestRegion area. "
+                "Guaranteed throughput: 00:00-08:00 at 2Mbps, 08:00-24:00 at 10Mbps."
+            ),
+            {"Authorization": f"Bearer {token}"},
+        )
+
+        assert "task" in frames[0]
+        assert any(frame.get("artifactUpdate") for frame in frames)
+
+
 def test_sim_config_reads_the_hold_working_switch(monkeypatch: pytest.MonkeyPatch) -> None:
     """The Modify picker's local rehearsal switch is opt-in."""
     from demo.nms_sim.config import FIDELITY_ENV_KEY, HOLD_WORKING_ENV_KEY
@@ -434,6 +576,33 @@ def test_sim_config_reads_the_hold_working_switch(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setenv(HOLD_WORKING_ENV_KEY, "1")
     assert SimConfig.from_env().hold_working is True
+
+
+def test_sim_config_reads_the_pure_failure_and_window_policies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from demo.nms_sim.config import (
+        FIDELITY_ENV_KEY,
+        PURE_FAILURE_ENV_KEY,
+        WINDOW_POLICY_ENV_KEY,
+    )
+
+    monkeypatch.setenv(FIDELITY_ENV_KEY, FIDELITY_FAST)
+    monkeypatch.delenv(PURE_FAILURE_ENV_KEY, raising=False)
+    monkeypatch.delenv(WINDOW_POLICY_ENV_KEY, raising=False)
+    default = SimConfig.from_env()
+    assert default.pure_failure == "completed"
+    assert default.window_policy == "exact"
+
+    monkeypatch.setenv(PURE_FAILURE_ENV_KEY, "retry")
+    monkeypatch.setenv(WINDOW_POLICY_ENV_KEY, "any")
+    configured = SimConfig.from_env()
+    assert configured.pure_failure == "retry"
+    assert configured.window_policy == "any"
+
+    monkeypatch.setenv(PURE_FAILURE_ENV_KEY, "unknown")
+    with pytest.raises(ValueError):
+        SimConfig.from_env()
 
 
 def test_sim_config_can_reproduce_the_unsupported_cancel(monkeypatch: pytest.MonkeyPatch) -> None:

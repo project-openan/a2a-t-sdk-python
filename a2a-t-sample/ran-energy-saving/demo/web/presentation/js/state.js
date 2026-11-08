@@ -750,6 +750,9 @@ export function stageOf(state) {
     if (state.finalState === "intent_not_confirmed" || state.finalState === "input_invalid") {
       return "notSent";
     }
+    // The downstream Task failed even though the run itself ended cleanly: do not present the
+    // ending as a neutral "ended" (W-PURE-3).
+    if (state.finalState === "task_failed") return "failed";
     if (state.finalState === "task_rejected" && state.protocol === "plain") return "plainRejected";
     if (state.finalState === "task_rejected" || state.approvalState === APPROVAL.REJECTED) {
       return "notApplied";

@@ -55,11 +55,13 @@ from google.protobuf.json_format import MessageToDict
 from protocol.client_flow import (
     DEFAULT_CALL_TIMEOUT_SECONDS,
     FINAL_STATE_INCOMPLETE,
+    FINAL_STATE_TASK_FAILED,
     TASK_REQUEST_LABEL,
     ClientFlowError,
     ClientFlowResult,
     SseClientTransport,
     WebhookClientTransport,
+    _final_state,
     normalize_webhook_payload,
     run_client_flow,
 )
@@ -355,13 +357,17 @@ def status_event(
     *,
     task_id: str = "task-1",
     context_id: str = CONTEXT_ID,
+    text: str | None = None,
 ) -> dict[str, object]:
-    return {
+    event: dict[str, object] = {
         "kind": "status",
         "task_id": task_id,
         "context_id": context_id,
         "state": state,
     }
+    if text is not None:
+        event["text"] = text
+    return event
 
 
 def _task_completed_batch() -> list[dict[str, object]]:
@@ -370,6 +376,36 @@ def _task_completed_batch() -> list[dict[str, object]]:
         artifact_event(),
         status_event("TASK_STATE_COMPLETED"),
     ]
+
+
+def test_completed_with_a_refusal_text_is_a_failed_task() -> None:
+    """The vendor reports "I could not do it" as COMPLETED plus an error sentence (W-PURE-3)."""
+    batch = [
+        status_event("TASK_STATE_WORKING"),
+        status_event(
+            "TASK_STATE_COMPLETED",
+            text='The region name "TestRegion" is not recognized. Please provide the correct region name.',
+        ),
+    ]
+
+    assert _final_state(batch) == FINAL_STATE_TASK_FAILED
+
+
+def test_completed_with_a_report_keeps_its_success_state() -> None:
+    """An artifact is the machine-readable result; refusal wording in a report is not a failure."""
+    batch = [
+        status_event("TASK_STATE_WORKING"),
+        artifact_event(),
+        status_event("TASK_STATE_COMPLETED", text="The region is not recognized in one cell."),
+    ]
+
+    assert _final_state(batch) == FINAL_STATE_TASK_COMPLETED
+
+
+def test_benign_completion_text_keeps_its_success_state() -> None:
+    batch = [status_event("TASK_STATE_COMPLETED", text="RAN energy-saving task completed.")]
+
+    assert _final_state(batch) == FINAL_STATE_TASK_COMPLETED
 
 
 def _client_negotiation_steps(requests: list[SendMessageRequest]) -> list[tuple[str, int]]:

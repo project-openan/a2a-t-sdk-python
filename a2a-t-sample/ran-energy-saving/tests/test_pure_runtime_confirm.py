@@ -117,5 +117,5 @@ async def test_confirm_mode_answers_the_relayed_question(offline_config: SampleC
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
     assert len(transport.requests) == 2
-    assert transport.requests[1].message.parts[0].text == "Region A"
+    assert transport.requests[1].message.parts[0].text == "The region is Region A."
     assert transport.requests[1].message.context_id == "ctx-1"

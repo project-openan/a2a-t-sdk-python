@@ -7,6 +7,7 @@ core modules import them without depending on the scenario catalog.
 
 from __future__ import annotations
 
+import re
 from typing import Final, Literal
 
 #: Round budget of one pre-task negotiation (design D11).
@@ -95,3 +96,42 @@ FINAL_STATE_DECISION_UNGROUNDED: Final[FinalState] = "decision_ungrounded"
 FINAL_STATE_TASK_REJECTED: Final[FinalState] = "task_rejected"
 FINAL_STATE_TASK_FAILED: Final[FinalState] = "task_failed"
 FINAL_STATE_INCOMPLETE: Final[FinalState] = "incomplete"
+
+#: Phrases with which a downstream refuses a request while still reporting
+#: ``TASK_STATE_COMPLETED``. The vendor NMS does this instead of sending ``FAILED``; treating it as
+#: success is the W-PURE-3 field bug. The match is deliberately narrow and word-bounded so benign
+#: completion copy ("task completed", "report arrived") never trips it.
+_FAILED_COMPLETION_PHRASES: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:"
+    r"not\s+recogni[sz]ed|not\s+supported|not\s+available|does\s+not\s+exist|"
+    r"unable\s+to|cannot\s+be|could\s+not\s+be|failed\s+to|is\s+invalid|"
+    r"validation\s+failed|unsuccessful"
+    r")\b",
+    re.IGNORECASE,
+)
+
+#: The same refusal markers in the sample's Chinese copy (no word boundaries: CJK runs are words).
+_FAILED_COMPLETION_MARKERS_ZH: Final[tuple[str, ...]] = (
+    "无法",
+    "不支持",
+    "不存在",
+    "未识别",
+    "无效",
+)
+
+
+def reports_failed_completion(text: object) -> bool:
+    """Return whether one terminal status message reports a refused request.
+
+    The A2A Task state is the machine-readable success signal (see :data:`TASK_STATE_SUBMITTED`),
+    and business copy must not normally be parsed. The vendor NMS breaks that contract: it answers a
+    request it could not fulfil with ``TASK_STATE_COMPLETED`` and an error sentence, so this narrow
+    exception exists to stop the client from reporting success. Callers must still require that no
+    report artifact arrived; a completed Task that produced a report is a success regardless of its
+    prose.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return False
+    if _FAILED_COMPLETION_PHRASES.search(text) is not None:
+        return True
+    return any(marker in text for marker in _FAILED_COMPLETION_MARKERS_ZH)

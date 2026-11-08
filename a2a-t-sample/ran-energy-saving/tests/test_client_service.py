@@ -30,6 +30,7 @@ from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.run_constants import (
     FINAL_STATE_INCOMPLETE,
     FINAL_STATE_TASK_COMPLETED,
+    FINAL_STATE_TASK_FAILED,
     PROTOCOL_A2A_T,
     PROTOCOL_PURE,
 )
@@ -1394,3 +1395,28 @@ async def test_a_polled_question_accepts_a_sync_pure_answer(
     await manager._answer_remote_question(run, "outer-1", polled)
 
     assert sent[0].message.parts[0].text == "Region A"
+
+
+def test_polled_completed_with_a_refusal_text_is_a_failed_run() -> None:
+    """A polling watcher applies the same COMPLETED-with-refusal rule as the streamed flow."""
+    from protocol.client_service.run_manager import _final_state_for_task_state
+
+    assert (
+        _final_state_for_task_state(
+            "TASK_STATE_COMPLETED",
+            'The region name "TestRegion" is not recognized.',
+        )
+        == FINAL_STATE_TASK_FAILED
+    )
+    assert (
+        _final_state_for_task_state("TASK_STATE_COMPLETED", "Task completed.")
+        == FINAL_STATE_TASK_COMPLETED
+    )
+    assert (
+        _final_state_for_task_state(
+            "TASK_STATE_COMPLETED",
+            "The region is not recognized.",
+            has_report=True,
+        )
+        == FINAL_STATE_TASK_COMPLETED
+    )

@@ -457,3 +457,25 @@ async def test_the_pump_answers_a_delayed_input_required(tmp_path: Path) -> None
     assert outer is not None
     assert outer.status.state == TaskState.TASK_STATE_COMPLETED
     assert subscription.unsubscribed is True
+
+
+def test_completed_with_a_refusal_text_maps_to_failed() -> None:
+    """The pump must not relay the vendor's COMPLETED-with-error as an outer success."""
+    from protocol.downstream_pump import _map_status
+
+    state, _text, phase = _map_status(
+        "TASK_STATE_COMPLETED",
+        'The region name "TestRegion" is not recognized.',
+    )
+
+    assert state == TaskState.TASK_STATE_FAILED
+    assert phase == "resolution"
+
+
+def test_benign_completed_text_maps_to_completed() -> None:
+    from protocol.downstream_pump import _map_status
+
+    state, _text, phase = _map_status("TASK_STATE_COMPLETED", "Task completed.")
+
+    assert state == TaskState.TASK_STATE_COMPLETED
+    assert phase == "report"

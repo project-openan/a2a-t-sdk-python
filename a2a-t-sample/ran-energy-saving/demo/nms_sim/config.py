@@ -21,6 +21,21 @@ TASK_SHAPE_STANDARD: Final[str] = "standard"
 TASK_SHAPE_TOPLEVEL: Final[str] = "toplevel"
 SUPPORTED_TASK_SHAPES: Final[tuple[str, ...]] = (TASK_SHAPE_STANDARD, TASK_SHAPE_TOPLEVEL)
 
+#: Plain-A2A failure policies.
+PURE_FAILURE_COMPLETED: Final[str] = "completed"
+PURE_FAILURE_RETRY: Final[str] = "retry"
+PURE_FAILURE_REJECTED: Final[str] = "rejected"
+SUPPORTED_PURE_FAILURES: Final[tuple[str, ...]] = (
+    PURE_FAILURE_COMPLETED,
+    PURE_FAILURE_RETRY,
+    PURE_FAILURE_REJECTED,
+)
+
+#: Window acceptance policies.
+WINDOW_POLICY_EXACT: Final[str] = "exact"
+WINDOW_POLICY_ANY: Final[str] = "any"
+SUPPORTED_WINDOW_POLICIES: Final[tuple[str, ...]] = (WINDOW_POLICY_EXACT, WINDOW_POLICY_ANY)
+
 #: Environment keys read by the standalone simulator entry point.
 FIDELITY_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_FIDELITY"
 HOST_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_HOST"
@@ -42,6 +57,12 @@ NEGOTIATION_KINDS_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_NEGOTIATION_KINDS"
 MAX_ROUNDS_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_MAX_ROUNDS"
 #: ``standard`` keeps the vendor's nested shape; ``toplevel`` adds top-level state/timestamp.
 TASK_SHAPE_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_TASK_SHAPE"
+#: What a plain-A2A request does when a follow-up still cannot be served. The vendor answers
+#: ``completed`` (a refusal dressed as success); ``retry`` asks again; ``rejected`` ends the Task.
+PURE_FAILURE_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_PURE_FAILURE"
+#: ``exact`` accepts only the configured ``window`` (the historical demo constraint); ``any``
+#: accepts every parsed window, which is what the vendor does and what the OSP cases need.
+WINDOW_POLICY_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_WINDOW_POLICY"
 
 #: Test region the real 910 environment accepts.
 DEFAULT_REGION: Final[str] = "A2ATestRegion"
@@ -84,6 +105,9 @@ class SimConfig:
         negotiation_kinds: Negotiation kinds the simulator may propose.
         max_rounds: Round budget before the simulator answers ``ABORT``.
         task_shape: ``toplevel`` adds top-level ``state``/``timestamp`` to Task documents.
+        pure_failure: What a plain-A2A follow-up does when it still cannot be served:
+            ``completed`` (vendor refusal dressed as success), ``retry`` or ``rejected``.
+        window_policy: ``exact`` accepts only ``window``; ``any`` accepts every parsed window.
     """
 
     fidelity: str = FIDELITY_STRICT
@@ -104,6 +128,8 @@ class SimConfig:
     negotiation_kinds: tuple[str, ...] = ("information", "target", "feasibility")
     max_rounds: int = DEFAULT_MAX_ROUNDS
     task_shape: str = TASK_SHAPE_STANDARD
+    pure_failure: str = PURE_FAILURE_COMPLETED
+    window_policy: str = WINDOW_POLICY_EXACT
 
     @property
     def strict(self) -> bool:
@@ -130,6 +156,18 @@ class SimConfig:
         if task_shape not in SUPPORTED_TASK_SHAPES:
             raise ValueError(
                 f"Unsupported {TASK_SHAPE_ENV_KEY}: {task_shape}; expected one of {SUPPORTED_TASK_SHAPES}"
+            )
+        pure_failure = os.environ.get(PURE_FAILURE_ENV_KEY, PURE_FAILURE_COMPLETED).strip().lower()
+        if pure_failure not in SUPPORTED_PURE_FAILURES:
+            raise ValueError(
+                f"Unsupported {PURE_FAILURE_ENV_KEY}: {pure_failure}; "
+                f"expected one of {SUPPORTED_PURE_FAILURES}"
+            )
+        window_policy = os.environ.get(WINDOW_POLICY_ENV_KEY, WINDOW_POLICY_EXACT).strip().lower()
+        if window_policy not in SUPPORTED_WINDOW_POLICIES:
+            raise ValueError(
+                f"Unsupported {WINDOW_POLICY_ENV_KEY}: {window_policy}; "
+                f"expected one of {SUPPORTED_WINDOW_POLICIES}"
             )
         kinds = _parse_kinds(os.environ.get(NEGOTIATION_KINDS_ENV_KEY, ""))
         try:
@@ -158,6 +196,8 @@ class SimConfig:
             negotiation_kinds=kinds,
             max_rounds=max_rounds,
             task_shape=task_shape,
+            pure_failure=pure_failure,
+            window_policy=window_policy,
         )
         # The fast profile keeps the wire contract but removes the wall-clock delays.
         if profile.strict:

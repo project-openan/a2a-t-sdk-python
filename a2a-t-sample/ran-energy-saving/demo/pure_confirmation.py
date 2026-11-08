@@ -17,7 +17,7 @@ from protocol.client_runtime import MODE_CONFIRM
 from protocol.decision_provider import DEFAULT_MANUAL_TIMEOUT_SECONDS, ManualDecisionProvider
 from shared.models import NegotiationDecision, NegotiationProposeView
 
-from demo.pure_policy import render_pure_answer
+from demo.pure_policy import recommendation_decision, render_pure_answer
 
 ProposalSink = Callable[[NegotiationProposeView, NegotiationContext], None]
 RecommendationSink = Callable[
@@ -47,30 +47,6 @@ def _int_value(value: object, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
-
-
-def _recommendation_decision(value: object) -> NegotiationDecision | None:
-    """Build the advisory decision from the OSS Agent's recommendation payload.
-
-    The OSS sends a structured recommendation (action + rendered text) when its model produced a
-    usable answer. Older/scripted relays may send a plain string; an empty recommendation means the
-    model had no answer and the operator decides without advice.
-    """
-    if isinstance(value, Mapping):
-        action = str(value.get("action") or "accept")
-        if action not in ("accept", "counter"):
-            return None
-        filled = value.get("filledParams")
-        counter = value.get("counterProposal")
-        return NegotiationDecision(
-            action=action,
-            rationale=str(value.get("rationale") or ""),
-            filled_params=dict(filled) if isinstance(filled, Mapping) else None,
-            counter_proposal=counter if isinstance(counter, str) else None,
-        )
-    if isinstance(value, str) and value.strip():
-        return NegotiationDecision(action="accept", rationale=value.strip())
-    return None
 
 
 class PureConfirmationAnswer:
@@ -151,7 +127,7 @@ class PureConfirmationAnswer:
             self._proposal_sink(propose, session)
         if self._mode == MODE_CONFIRM and self._recommendation_sink is not None:
             self._recommendation_sink(
-                _recommendation_decision(pure.get("recommendation")),
+                recommendation_decision(pure.get("recommendation")),
                 propose,
                 session,
             )

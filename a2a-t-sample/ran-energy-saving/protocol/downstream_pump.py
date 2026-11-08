@@ -43,6 +43,7 @@ from a2a.types import (
     TaskStatusUpdateEvent,
 )
 from google.protobuf.json_format import ParseDict
+from shared.run_constants import reports_failed_completion
 from shared.trace import infer_event_phase, record_span, trace_scope
 
 from protocol.client_flow import is_report_artifact, normalize_webhook_payload
@@ -348,8 +349,9 @@ class DownstreamPump:
         state: str,
     ) -> TaskStatusUpdateEvent:
         """Map one downstream status to an outer status event."""
-        outer_state, default_text, phase = _map_status(state)
-        text = _text(event.get("text")) or default_text.format(name=self._context.downstream_name)
+        downstream_text = _text(event.get("text")) or ""
+        outer_state, default_text, phase = _map_status(state, downstream_text)
+        text = downstream_text or default_text.format(name=self._context.downstream_name)
         metadata = self._metadata(event, phase)
         return self._status_message(outer_state, text, phase, metadata)
 
@@ -484,9 +486,16 @@ class DownstreamPump:
         return False
 
 
-def _map_status(state: str) -> tuple[TaskState, str, str]:
-    """Map one downstream Task state to the outer state, default text and phase."""
+def _map_status(state: str, text: str = "") -> tuple[TaskState, str, str]:
+    """Map one downstream Task state to the outer state, default text and phase.
+
+    A report artifact already terminated the pump before a status can arrive here, so a
+    ``COMPLETED`` that carries a refusal sentence is the vendor's non-standard failure signal and
+    must not be relayed as an outer success (W-PURE-3).
+    """
     if state == "TASK_STATE_COMPLETED":
+        if reports_failed_completion(text):
+            return TaskState.TASK_STATE_FAILED, "The {name} could not complete the request.", "resolution"
         return TaskState.TASK_STATE_COMPLETED, "The {name} task completed.", "report"
     if state == "TASK_STATE_REJECTED":
         return TaskState.TASK_STATE_REJECTED, "The {name} rejected the request.", "resolution"

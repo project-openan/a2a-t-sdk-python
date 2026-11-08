@@ -236,6 +236,12 @@ def _nms_sim_settings(values: dict[str, str], port: int) -> dict[str, str]:
         ),
         "A2AT_SAMPLE_NMS_SIM_MAX_ROUNDS": _env_str(values, "A2AT_SAMPLE_NMS_SIM_MAX_ROUNDS", "5"),
         "A2AT_SAMPLE_NMS_SIM_TASK_SHAPE": _env_str(values, "A2AT_SAMPLE_NMS_SIM_TASK_SHAPE", "standard"),
+        "A2AT_SAMPLE_NMS_SIM_PURE_FAILURE": _env_str(
+            values, "A2AT_SAMPLE_NMS_SIM_PURE_FAILURE", "completed"
+        ),
+        "A2AT_SAMPLE_NMS_SIM_WINDOW_POLICY": _env_str(
+            values, "A2AT_SAMPLE_NMS_SIM_WINDOW_POLICY", "exact"
+        ),
     }
 
 

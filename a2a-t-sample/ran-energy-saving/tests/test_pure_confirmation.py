@@ -11,7 +11,7 @@ from protocol.client_runtime import MODE_CONFIRM, MODE_MANUAL
 from shared.models import NegotiationDecision
 
 
-def _question(*, recommendation: str | None = "Region A") -> dict[str, object]:
+def _question(*, recommendation: object = "Region A") -> dict[str, object]:
     pure: dict[str, object] = {
         "kind": "negotiation",
         "phase": "question",
@@ -33,21 +33,61 @@ def _question(*, recommendation: str | None = "Region A") -> dict[str, object]:
 def test_render_pure_answer_uses_the_supplied_values() -> None:
     decision = NegotiationDecision(action="accept", rationale="Region A", filled_params={"region": "Region A"})
 
-    assert render_pure_answer(decision) == "Region A"
+    assert render_pure_answer(decision) == "The region is Region A."
 
 
-def test_render_pure_answer_keeps_the_throughput_target_first() -> None:
+def test_render_pure_answer_renders_every_supplied_value() -> None:
     decision = NegotiationDecision(
         action="accept",
         rationale="Keep the agreed target.",
         filled_params={"region": "Region A", "guaranteedThroughputTarget": "{00:00~06:00,2Mbps}"},
     )
 
-    assert render_pure_answer(decision) == "{00:00~06:00,2Mbps}"
+    text = render_pure_answer(decision)
+
+    # The pure hop carries one text and no structured channel: dropping a supplied value means the
+    # vendor never sees it (the W-PURE-2 field bug).
+    assert "The region is Region A." in text
+    assert "Set the guaranteed throughput targets: {00:00~06:00,2Mbps}." in text
+
+
+def test_render_pure_answer_keeps_unknown_parameters() -> None:
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="Keep the agreed target.",
+        filled_params={"region": "Region A", "customField": "value"},
+    )
+
+    assert "customField: value." in render_pure_answer(decision)
 
 
 def test_automatic_mode_answers_with_the_relayed_recommendation() -> None:
     assert pure_answer_from_recommendation(_question()) == "Region A"
+
+
+def test_automatic_mode_renders_a_structured_recommendation() -> None:
+    recommendation = {
+        "action": "accept",
+        "rationale": "Confirm Region A and keep the windows.",
+        "text": "Region A",
+        "filledParams": {
+            "region": "Region A",
+            "guaranteedThroughputTarget": "{00:00~06:00,2Mbps}",
+        },
+    }
+
+    text = pure_answer_from_recommendation(_question(recommendation=recommendation))
+
+    # The live OSS tags the recommendation as a dict. Auto mode must render it instead of falling
+    # back to the scenario default, which dropped every operator value.
+    assert "The region is Region A." in text
+    assert "Set the guaranteed throughput targets: {00:00~06:00,2Mbps}." in text
+
+
+def test_automatic_mode_does_not_answer_a_reject_recommendation() -> None:
+    recommendation = {"action": "reject", "rationale": "No served area."}
+
+    assert pure_answer_from_recommendation(_question(recommendation=recommendation)) == ""
 
 
 def test_automatic_mode_falls_back_to_the_structured_policy() -> None:
@@ -79,7 +119,7 @@ async def test_confirm_mode_publishes_the_recommendation_and_sends_the_answer() 
     answer.submit(NegotiationDecision(action="accept", rationale="Region A", filled_params={"region": "Region A"}))
     text = await pending
 
-    assert text == "Region A"
+    assert text == "The region is Region A."
     assert proposals[0].content == "Please provide a real region."  # type: ignore[union-attr]
     assert recommendations and recommendations[0] is not None
     assert recommendations[0].rationale == "Region A"
