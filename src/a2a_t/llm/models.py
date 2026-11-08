@@ -32,6 +32,11 @@ class LLMClientConfig:
             Summary logs (timestamp, token usage, elapsed time) are recorded at DEBUG level on the
             dedicated logger ``a2a_t.llm.call`` independently of this flag. Java
             ``LLMClientConfig.detailLogEnabled``.
+        extra_body: optional provider-specific request fields forwarded verbatim as the OpenAI SDK
+            ``extra_body`` argument (for example ``{"chat_template_kwargs": {"enable_thinking":
+            false}}``). ``None`` sends nothing, so non-reasoning providers are unaffected.
+        timeout_retries: how many extra attempts one structured call makes after the transport
+            timeout (``0`` keeps the original single-attempt behavior).
     """
 
     provider: str
@@ -47,3 +52,5 @@ class LLMClientConfig:
     reasoning_effort: str | None = None
     ssl_verify: bool = True
     detail_log_enabled: bool = False
+    extra_body: dict[str, Any] | None = None
+    timeout_retries: int = 0

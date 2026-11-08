@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from openai import OpenAI
+from openai import APITimeoutError, OpenAI
 
 from a2a_t.llm.errors import LLMConfigError, LLMRuntimeError
 from a2a_t.llm.models import LLMClientConfig, LLMResponse
@@ -124,14 +124,35 @@ class OpenAIClient(LLMClient):
         debug_enabled = self._call_logger.isEnabledFor(logging.DEBUG)
         if debug_enabled:
             self._log_request(payload)
-        try:
-            raw_response = self._get_client().chat.completions.create(**payload)
-        except LLMConfigError:
-            raise
-        except Exception as exc:  # pragma: no cover - provider failure path
-            if debug_enabled:
-                self._log_error(started, exc)
-            raise LLMRuntimeError(f"{self._config.provider} invocation failed: {exc}") from exc
+        attempts = max(1, self._config.timeout_retries + 1)
+        for attempt in range(1, attempts + 1):
+            try:
+                raw_response = self._get_client().chat.completions.create(**payload)
+                break
+            except LLMConfigError:
+                raise
+            except APITimeoutError as exc:
+                # A timeout is the one transport error worth retrying: a client-side timeout may
+                # leave the server-side prefix computation warm, making the second identical
+                # request much cheaper. Other failures are never retried here.
+                if attempt >= attempts:
+                    if debug_enabled:
+                        self._log_error(started, exc)
+                    raise LLMRuntimeError(
+                        f"{self._config.provider} invocation timed out after {attempts} attempt(s): {exc}"
+                    ) from exc
+                self._logger.warning(
+                    "%s invocation timed out (attempt %s/%s); retrying",
+                    self._config.provider,
+                    attempt,
+                    attempts,
+                )
+            except Exception as exc:  # pragma: no cover - provider failure path
+                if debug_enabled:
+                    self._log_error(started, exc)
+                raise LLMRuntimeError(f"{self._config.provider} invocation failed: {exc}") from exc
+        else:  # pragma: no cover - the loop always breaks or raises
+            raise RuntimeError("unreachable")
         try:
             response = self._parse_response(raw_response)
         except LLMRuntimeError as exc:
@@ -155,14 +176,25 @@ class OpenAIClient(LLMClient):
             "messages": self._build_structured_messages(messages, json_schema),
             "response_format": {"type": "json_object"},
         }
-        if temperature is not None:
-            payload["temperature"] = temperature
+        # A call-site value wins; otherwise the configured default applies. Many call sites pass
+        # neither, so without this fallback ``A2AT_LLM_TEMPERATURE`` would be silently ignored.
+        resolved_temperature = temperature if temperature is not None else self._config.temperature
+        if resolved_temperature is not None:
+            payload["temperature"] = resolved_temperature
+        # ``A2AT_LLM_MAX_TOKENS`` is deliberately not applied here: a structured call must be able
+        # to emit the whole JSON object, and a low cap turns a reasoning model's long output into
+        # truncated, invalid JSON. Callers that need a hard cap pass ``max_tokens`` explicitly.
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         # Java parity: the reasoning effort is only forwarded when configured with a non-blank
         # value, so non-reasoning models never receive the parameter.
         if self._config.reasoning_effort:
             payload["reasoning_effort"] = self._config.reasoning_effort
+        if self._config.extra_body:
+            # The OpenAI SDK merges ``extra_body`` into the JSON request body, so a gateway
+            # extension (``chat_template_kwargs`` and the like) reaches the endpoint without a
+            # provider-specific branch in this client.
+            payload["extra_body"] = dict(self._config.extra_body)
         return payload
 
     def _build_structured_messages(
@@ -174,17 +206,23 @@ class OpenAIClient(LLMClient):
 
     def _parse_response(self, response: Any) -> LLMResponse:
         usage = getattr(response, "usage", None)
-        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-        total_tokens = int(getattr(usage, "total_tokens", 0) or 0) or (prompt_tokens + completion_tokens)
-        token_usage: dict[str, int] = {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
-        }
-        cached_tokens = _cached_tokens(usage)
-        if cached_tokens is not None:
-            token_usage["cached"] = cached_tokens
+        # An omitted ``usage`` is unreported, not a reported zero. Fabricating 0/0/0 would make a
+        # downstream token average count a call that never supplied a count.
+        token_usage: dict[str, int] = {}
+        if usage is not None:
+            prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+            completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+            total_tokens = int(getattr(usage, "total_tokens", 0) or 0) or (
+                prompt_tokens + completion_tokens
+            )
+            token_usage = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+            }
+            cached_tokens = _cached_tokens(usage)
+            if cached_tokens is not None:
+                token_usage["cached"] = cached_tokens
         return LLMResponse(
             content=self._extract_json_object_string(response),
             model=str(getattr(response, "model", self._config.model)),

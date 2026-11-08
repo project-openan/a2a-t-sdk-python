@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 from a2a_t.config.errors import ConfigFileNotFoundError
 from a2a_t.config.source import DotEnvConfigSource
@@ -12,6 +14,9 @@ from a2a_t.llm.models import LLMClientConfig
 _MAX_HISTORY_WINDOW = 100
 _MAX_SESSION_MAX_TOTAL = 3000
 _MAX_SESSION_MAX_PER_PROVIDER = 1000
+#: Upper bound of ``A2AT_LLM_TIMEOUT_RETRIES``; a larger retry budget only multiplies one
+#: caller's timeout budget and hides a broken endpoint.
+_MAX_TIMEOUT_RETRIES = 5
 
 #: Accepted reasoning-effort values (Java ``LLMClientConfig.VALID_REASONING_EFFORTS``).
 _VALID_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
@@ -82,6 +87,37 @@ def coerce_boolean(value: str | None, key: str, *, default: bool) -> bool:
     raise LLMConfigError(f"{key} must be a boolean value (true/false)")
 
 
+def coerce_extra_body(value: str | None, key: str) -> dict[str, Any] | None:
+    """Parse the optional provider-specific ``extra_body`` JSON object.
+
+    A blank value stays unset. Any non-blank value must decode to a JSON object; arrays, scalars
+    and malformed JSON are configuration errors, never silently dropped.
+    """
+    if value is None or not value.strip():
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise LLMConfigError(f"{key} must be a JSON object") from exc
+    if not isinstance(parsed, dict):
+        raise LLMConfigError(f"{key} must be a JSON object")
+    return parsed
+
+
+def coerce_timeout_retries(value: str | None, key: str) -> int:
+    """Parse the optional timeout-retry budget and bound it.
+
+    A blank value means no retry (the historical single-attempt behavior). Negative values and
+    values above :data:`_MAX_TIMEOUT_RETRIES` are configuration errors.
+    """
+    parsed = coerce_optional_int(value, key)
+    if parsed is None:
+        return 0
+    if parsed < 0 or parsed > _MAX_TIMEOUT_RETRIES:
+        raise LLMConfigError(f"{key} must be between 0 and {_MAX_TIMEOUT_RETRIES}")
+    return parsed
+
+
 def coerce_bounded_int(value: int | str, key: str, *, max_value: int) -> int:
     """Parse an integer config value and enforce a positive upper bound."""
     try:
@@ -149,6 +185,10 @@ class LLMConfigLoader:
             session_max_total=session_max_total,
             session_max_per_provider=session_max_per_provider,
             reasoning_effort=coerce_reasoning_effort(values.get("A2AT_LLM_REASONING_EFFORT")),
+            extra_body=coerce_extra_body(values.get("A2AT_LLM_EXTRA_BODY"), "A2AT_LLM_EXTRA_BODY"),
+            timeout_retries=coerce_timeout_retries(
+                values.get("A2AT_LLM_TIMEOUT_RETRIES"), "A2AT_LLM_TIMEOUT_RETRIES"
+            ),
             ssl_verify=coerce_boolean(values.get("A2AT_LLM_SSL_VERIFY"), "A2AT_LLM_SSL_VERIFY", default=True),
             detail_log_enabled=coerce_boolean(
                 values.get("A2AT_LLM_DETAIL_LOG_ENABLED"),

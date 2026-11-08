@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 import unittest
+from dataclasses import replace
 from json import dumps
 from pathlib import Path
 from types import SimpleNamespace
@@ -318,6 +319,148 @@ class OpenAIClientTest(unittest.TestCase):
         response = client.structured(messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"})
 
         self.assertEqual(response.usage["cached"], 8)
+
+    @patch("a2a_t.llm.providers.openai.OpenAI")
+    def test_usage_is_empty_when_the_provider_does_not_report_it(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=None,
+        )
+        openai_cls.return_value = sdk_client
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        client = OpenAIClient(build_config(base_url="https://api.example.test/v1"))
+
+        response = client.structured(messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"})
+
+        # A gateway that omits ``usage`` is unreported, not a reported zero: fabricating 0/0/0
+        # would make the run metrics average a call that never supplied a count.
+        self.assertEqual(response.usage, {})
+
+    @patch("a2a_t.llm.providers.openai.OpenAI")
+    def test_structured_uses_the_configured_temperature_when_the_caller_omits_it(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(prompt_tokens=7, completion_tokens=2),
+        )
+        openai_cls.return_value = sdk_client
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        client = OpenAIClient(replace(build_config(base_url="https://api.example.test/v1"), temperature=0.0))
+
+        client.structured(messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"})
+
+        payload = sdk_client.chat.completions.create.call_args.kwargs
+        self.assertEqual(payload["temperature"], 0.0)
+
+    @patch("a2a_t.llm.providers.openai.OpenAI")
+    def test_structured_call_temperature_overrides_the_configured_default(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(prompt_tokens=7, completion_tokens=2),
+        )
+        openai_cls.return_value = sdk_client
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        client = OpenAIClient(replace(build_config(base_url="https://api.example.test/v1"), temperature=0.0))
+
+        client.structured(
+            messages=[{"role": "user", "content": "extract"}],
+            json_schema={"type": "object"},
+            temperature=0.2,
+        )
+
+        payload = sdk_client.chat.completions.create.call_args.kwargs
+        self.assertEqual(payload["temperature"], 0.2)
+
+    @patch("a2a_t.llm.providers.openai.OpenAI")
+    def test_structured_forwards_the_configured_extra_body(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(prompt_tokens=7, completion_tokens=2),
+        )
+        openai_cls.return_value = sdk_client
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+        client = OpenAIClient(replace(build_config(base_url="https://api.example.test/v1"), extra_body=extra_body))
+
+        client.structured(messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"})
+
+        payload = sdk_client.chat.completions.create.call_args.kwargs
+        self.assertEqual(payload["extra_body"], extra_body)
+
+    @patch("a2a_t.llm.providers.openai.OpenAI")
+    def test_structured_retries_a_timeout_when_configured(self, openai_cls: Mock) -> None:
+        import httpx
+        from openai import APITimeoutError
+
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.side_effect = [
+            APITimeoutError(request=httpx.Request("POST", "http://example.test/v1")),
+            SimpleNamespace(
+                model="gpt-4o-mini",
+                choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+                usage=SimpleNamespace(prompt_tokens=7, completion_tokens=2),
+            ),
+        ]
+        openai_cls.return_value = sdk_client
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        client = OpenAIClient(replace(build_config(base_url="https://api.example.test/v1"), timeout_retries=1))
+
+        response = client.structured(messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"})
+
+        self.assertEqual(response.usage["prompt_tokens"], 7)
+        self.assertEqual(sdk_client.chat.completions.create.call_count, 2)
+
+    @patch("a2a_t.llm.providers.openai.OpenAI")
+    def test_structured_does_not_retry_a_timeout_by_default(self, openai_cls: Mock) -> None:
+        import httpx
+        from openai import APITimeoutError
+
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.side_effect = APITimeoutError(
+            request=httpx.Request("POST", "http://example.test/v1")
+        )
+        openai_cls.return_value = sdk_client
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        client = OpenAIClient(build_config(base_url="https://api.example.test/v1"))
+
+        with self.assertRaisesRegex(LLMRuntimeError, "timed out after 1 attempt"):
+            client.structured(messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"})
+
+        self.assertEqual(sdk_client.chat.completions.create.call_count, 1)
+
+    @patch("a2a_t.llm.providers.openai.OpenAI")
+    def test_structured_does_not_retry_a_non_timeout_failure(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.side_effect = ValueError("boom")
+        openai_cls.return_value = sdk_client
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        client = OpenAIClient(replace(build_config(base_url="https://api.example.test/v1"), timeout_retries=2))
+
+        with self.assertRaisesRegex(LLMRuntimeError, "invocation failed"):
+            client.structured(messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"})
+
+        self.assertEqual(sdk_client.chat.completions.create.call_count, 1)
 
 
 class _ListHandler(logging.Handler):
