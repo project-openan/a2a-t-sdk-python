@@ -746,6 +746,14 @@ class NmsSseTransport:
                         if not read_after_send:
                             return events
                         continue
+                    if self._protocol == PROTOCOL_PURE:
+                        # A pure request declares no Negotiation-T extension, so the vendor
+                        # answers with a plain agent message. It is the turn boundary for the
+                        # pure flow, exactly like the webhook transport already treats it.
+                        event = _frame_to_event(frame)
+                        events.append(event)
+                        self._emit(event)
+                        return events
                     context_id = _context_id(message)
                     text = _message_text(message)
                     self._client.record_error("NmsNegotiationRequiredError", text, frame)
@@ -822,6 +830,7 @@ class NmsWebhookTransport:
         idle_timeout: float = DEFAULT_NMS_IDLE_TIMEOUT_SECONDS,
         bind: Callable[[str | None, str | None], None] | None = None,
         context_id: str = "",
+        register_push_config: bool = True,
     ) -> None:
         """Create one webhook transport.
 
@@ -839,6 +848,9 @@ class NmsWebhookTransport:
                 its pushes on a process-level receiver.
             context_id: optional client-assigned A2A context id stamped on the first message, so
                 every pushed event is routable from its ``contextId`` before a Task reply arrives.
+            register_push_config: whether a message that names no Task registers the webhook
+                inline. A follow-up that answers a vendor question keeps the registration made by
+                the original request; registering again is rejected by the real NMS.
         """
         self._client = client
         self._queue = queue
@@ -849,6 +861,7 @@ class NmsWebhookTransport:
         self._idle_timeout = idle_timeout
         self._bind = bind
         self._context_id = context_id
+        self._register_push_config = register_push_config
         self._event_sink: Any | None = None
 
     def set_event_sink(self, event_sink: Any | None) -> None:
@@ -877,7 +890,7 @@ class NmsWebhookTransport:
         """Send one non-streaming message, register the webhook, and collect its events."""
         self._bind_context(request)
         request.configuration.return_immediately = True
-        if not request.message.task_id:
+        if not request.message.task_id and self._register_push_config:
             # Register the webhook only on the message that creates the Task. A Modify send
             # continues an existing Task whose registration is still in force, and the vendor
             # answers a second registration for that Task with "config already exists".

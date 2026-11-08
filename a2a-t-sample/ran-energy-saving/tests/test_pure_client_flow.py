@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from a2a.client.client import ClientCallContext
 from a2a.types import SendMessageRequest
-from protocol.pure_client_flow import run_pure_client_flow
-from shared.run_constants import FINAL_STATE_TASK_COMPLETED
+from protocol.pure_client_flow import continue_pure_client_flow, run_pure_client_flow
+from shared.run_constants import (
+    FINAL_STATE_NEGOTIATION_ENDED,
+    FINAL_STATE_TASK_COMPLETED,
+)
 
 
 class _FakeTransport:
@@ -184,6 +187,70 @@ async def test_followup_can_carry_only_the_task_id() -> None:
     follow_up = transport.requests[1][0]
     assert follow_up.message.task_id == "task-1"
     assert follow_up.message.context_id == ""
+
+
+def _plain_question() -> dict[str, object]:
+    """The vendor NMS answers a pure request with a plain text question, not a Task."""
+    return {
+        "kind": "message",
+        "message_id": "question-1",
+        "context_id": "ctx-1",
+        "text": (
+            "## Information Negotiation\nPlease supplement the relevant content.\n\n"
+            "## Required Information Items\n1. Energy saving region: not recognized."
+        ),
+    }
+
+
+async def test_a_plain_text_question_is_answered_when_enabled() -> None:
+    transport = _FakeTransport([[_plain_question()], [_completed()]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "Region A",
+        plain_questions=True,
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert len(transport.requests) == 2
+    follow_up, _ = transport.requests[1]
+    assert follow_up.message.parts[0].text == "Region A"
+    # The question carried no task id, so the answer continues the context only.
+    assert follow_up.message.task_id == ""
+    assert follow_up.message.context_id == "ctx-1"
+
+
+async def test_a_plain_text_question_is_terminal_when_not_enabled() -> None:
+    transport = _FakeTransport([[_plain_question()]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "Region A",
+    )
+
+    assert result.final_state == FINAL_STATE_NEGOTIATION_ENDED
+    assert len(transport.requests) == 1
+
+
+async def test_continuing_a_context_sends_the_operator_text_first() -> None:
+    transport = _FakeTransport([[_completed()]])
+
+    result = await continue_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        text="Region A",
+        task_id=None,
+        context_id="ctx-1",
+        plain_questions=True,
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert len(transport.requests) == 1
+    follow_up, _ = transport.requests[0]
+    assert follow_up.message.parts[0].text == "Region A"
+    assert follow_up.message.task_id == ""
+    assert follow_up.message.context_id == "ctx-1"
 
 
 async def test_an_approval_input_required_is_not_answered() -> None:

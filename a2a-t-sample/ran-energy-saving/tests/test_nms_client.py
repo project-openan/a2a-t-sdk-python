@@ -741,6 +741,29 @@ async def test_transport_reports_a_message_without_a_task_as_negotiation_require
     assert client.extension_header == TASK_T_URI
 
 
+async def test_pure_sse_transport_returns_a_plain_agent_message() -> None:
+    """A pure request gets a text answer, not a structured negotiation; do not fail the phase."""
+    client = _FakeStreamClient(
+        [
+            {
+                "message": {
+                    "messageId": "m2",
+                    "contextId": "ctx-1",
+                    "role": "ROLE_AGENT",
+                    "parts": [{"text": "## Information Negotiation\nEnergy saving region is missing."}],
+                }
+            }
+        ]
+    )
+    transport = NmsSseTransport(client, protocol=PROTOCOL_PURE)  # ty: ignore[invalid-argument-type]
+    request, context = _request()
+
+    events = await transport.send(request, context)
+
+    assert [event["kind"] for event in events] == ["message"]
+    assert "Energy saving region is missing" in events[0]["text"]
+
+
 async def test_transport_returns_a_structured_negotiation_message() -> None:
     client = _FakeStreamClient(
         [

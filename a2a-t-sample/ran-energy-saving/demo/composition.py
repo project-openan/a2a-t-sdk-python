@@ -5,12 +5,12 @@ Only this module (and the entry points that import it) may combine ``protocol`` 
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from protocol.client_runtime import build_client_runtime
+from protocol.client_runtime import MODE_CONFIRM, MODE_MANUAL, build_client_runtime
 from protocol.pre_task_negotiation import TaskTPrecheck
 from protocol.run_spec import RunSpec
 from shared.config import INTENT_MODE_PROCESSED, SampleConfig
@@ -83,15 +83,25 @@ async def build_demo_runtime(
     from demo.agents.client_agent.agent import build_client_agent
     from demo.catalog import DemoRunCatalog
     from demo.intent import build_demo_intent_processor
-    from demo.pure_policy import pure_answer_from_event
 
     if pure_answers is not None:
-        pure_answer: Callable[[dict[str, object]], str] | None = _scripted_pure_answer(pure_answers)
+        pure_answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = _scripted_pure_answer(
+            pure_answers
+        )
     elif protocol == PROTOCOL_PURE:
-        def pure_answer_from_policy(event: dict[str, object]) -> str:
-            return pure_answer_from_event(event, config.language)
+        if mode in (MODE_CONFIRM, MODE_MANUAL):
+            # The pure hop has no protocol negotiation: the OSS Agent relays the downstream text
+            # question and the operator confirms the answer in the same card the A2A-T form uses.
+            from demo.pure_confirmation import PureConfirmationAnswer
 
-        pure_answer = pure_answer_from_policy
+            pure_answer = PureConfirmationAnswer(mode=mode)
+        else:
+            from demo.pure_policy import pure_answer_from_recommendation
+
+            def pure_answer_from_policy(event: dict[str, object]) -> str:
+                return pure_answer_from_recommendation(event, config.language)
+
+            pure_answer = pure_answer_from_policy
     else:
         pure_answer = None
 

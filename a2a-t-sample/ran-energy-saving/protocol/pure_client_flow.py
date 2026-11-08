@@ -29,6 +29,7 @@ from protocol.client_flow import (
     _fill_result,
     _final_state,
 )
+from protocol.messages import is_negotiation_message, metadata_to_dict
 
 _LOGGER = logging.getLogger("ran_energy_saving.pure_client_flow")
 
@@ -47,6 +48,7 @@ async def run_pure_client_flow(
     event_sink: Callable[[dict[str, object]], None] | None = None,
     trace_sink: Callable[[dict[str, object]], None] | None = None,
     followup: str = PURE_FOLLOWUP_BOTH,
+    plain_questions: bool = False,
 ) -> ClientFlowResult:
     """Send one pure A2A request and answer its ``INPUT_REQUIRED`` rounds.
 
@@ -61,6 +63,9 @@ async def run_pure_client_flow(
         event_sink: Optional live observer of normalized events.
         trace_sink: Optional observer of synthetic ``message_sent`` spans.
         followup: Conversation fields of the follow-up message (``both``/``task``/``context``).
+        plain_questions: Whether a plain agent message without negotiation metadata asks the
+            client for information. The real vendor NMS answers a pure request this way; the
+            local demo server never does, so the default stays false.
 
     The downstream correlation travels on the ``X-A2AT-Run-Id``/``traceparent`` headers (the
     propagation context), so the message itself carries no sample-local metadata.
@@ -68,25 +73,122 @@ async def run_pure_client_flow(
     Returns:
         The collected events, task id and report.
     """
-    transport_emits_events = False
-    if event_sink is not None:
-        set_event_sink = getattr(transport, "set_event_sink", None)
-        if callable(set_event_sink):
-            set_event_sink(event_sink)
-            transport_emits_events = True
-
+    transport_emits_events = _attach_event_sink(transport, event_sink)
     result = ClientFlowResult()
     request = _pure_request(user_request)
     _emit_message_sent(request, user_request, trace_sink)
     batch = await transport.send(request, _call_context(call_timeout_seconds))
+    _collect(result, batch, event_sink, transport_emits_events)
+    return await _drive_negotiation(
+        transport=transport,
+        result=result,
+        batch=batch,
+        answer=answer,
+        on_answer=on_answer,
+        max_rounds=max_rounds,
+        call_timeout_seconds=call_timeout_seconds,
+        event_sink=event_sink,
+        trace_sink=trace_sink,
+        followup=followup,
+        plain_questions=plain_questions,
+        transport_emits_events=transport_emits_events,
+    )
+
+
+async def continue_pure_client_flow(
+    *,
+    transport: ClientTransport,
+    text: str,
+    task_id: str | None,
+    context_id: str | None,
+    answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = None,
+    on_answer: Callable[[dict[str, object], str], Awaitable[None]] | None = None,
+    max_rounds: int = 3,
+    call_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
+    event_sink: Callable[[dict[str, object]], None] | None = None,
+    trace_sink: Callable[[dict[str, object]], None] | None = None,
+    followup: str = PURE_FOLLOWUP_BOTH,
+    plain_questions: bool = False,
+) -> ClientFlowResult:
+    """Answer a question the downstream asked after the original request phase ended.
+
+    The OSS Agent relays a downstream text question to its caller, then resumes the same
+    downstream context with the operator's answer. This function owns that second phase; it
+    shares the negotiation loop with :func:`run_pure_client_flow`.
+    """
+    transport_emits_events = _attach_event_sink(transport, event_sink)
+    result = ClientFlowResult()
+    request = _follow_up_request(
+        text,
+        task_id=task_id,
+        context_id=context_id,
+        followup=followup,
+    )
+    _emit_message_sent(request, text, trace_sink)
+    batch = await transport.send(request, _call_context(call_timeout_seconds))
+    _collect(result, batch, event_sink, transport_emits_events)
+    return await _drive_negotiation(
+        transport=transport,
+        result=result,
+        batch=batch,
+        answer=answer,
+        on_answer=on_answer,
+        max_rounds=max_rounds,
+        call_timeout_seconds=call_timeout_seconds,
+        event_sink=event_sink,
+        trace_sink=trace_sink,
+        followup=followup,
+        plain_questions=plain_questions,
+        transport_emits_events=transport_emits_events,
+    )
+
+
+def _attach_event_sink(
+    transport: ClientTransport,
+    event_sink: Callable[[dict[str, object]], None] | None,
+) -> bool:
+    """Attach the live event sink when the transport supports it."""
+    if event_sink is None:
+        return False
+    set_event_sink = getattr(transport, "set_event_sink", None)
+    if callable(set_event_sink):
+        set_event_sink(event_sink)
+        return True
+    return False
+
+
+def _collect(
+    result: ClientFlowResult,
+    batch: list[dict[str, object]],
+    event_sink: Callable[[dict[str, object]], None] | None,
+    transport_emits_events: bool,
+) -> None:
+    """Store one send phase's events and forward them when the transport does not."""
     result.events.extend(batch)
     if event_sink is not None and not transport_emits_events:
         for event in batch:
             event_sink(event)
 
+
+async def _drive_negotiation(
+    *,
+    transport: ClientTransport,
+    result: ClientFlowResult,
+    batch: list[dict[str, object]],
+    answer: Callable[[dict[str, object]], str | Awaitable[str]] | None,
+    on_answer: Callable[[dict[str, object], str], Awaitable[None]] | None,
+    max_rounds: int,
+    call_timeout_seconds: float,
+    event_sink: Callable[[dict[str, object]], None] | None,
+    trace_sink: Callable[[dict[str, object]], None] | None,
+    followup: str,
+    plain_questions: bool,
+    transport_emits_events: bool,
+) -> ClientFlowResult:
+    """Answer the negotiated rounds of one already-sent pure request."""
     rounds = 0
     while rounds < max_rounds:
-        pending = _pending_negotiation(batch)
+        pending = _pending_negotiation(batch, allow_plain_question=plain_questions)
         if pending is None:
             break
         text = await _answer_for(pending, answer)
@@ -102,10 +204,7 @@ async def run_pure_client_flow(
         )
         _emit_message_sent(follow, text, trace_sink)
         batch = await transport.send(follow, _call_context(call_timeout_seconds))
-        result.events.extend(batch)
-        if event_sink is not None and not transport_emits_events:
-            for event in batch:
-                event_sink(event)
+        _collect(result, batch, event_sink, transport_emits_events)
         rounds += 1
 
     result.final_state = _final_state(result.events)
@@ -163,24 +262,42 @@ def _call_context(timeout: float) -> ClientCallContext:
 
 def _pending_negotiation(
     events: list[dict[str, object]],
+    *,
+    allow_plain_question: bool = False,
 ) -> dict[str, object] | None:
-    """Return the newest ``INPUT_REQUIRED`` status the client must answer.
+    """Return the newest event the client must answer.
 
     The local sample tags a negotiation with its ``pure`` metadata; a real NMS returns a standard
     A2A status without that tag. An MIE ``approval`` phase belongs to the RAN Agent and is not
     answered by the OSS Agent.
+
+    A vendor that does not negotiate at the protocol level answers a pure request with a plain
+    agent ``message`` (no Task, no negotiation metadata). ``allow_plain_question`` makes that
+    text an answerable question; a message that belongs to a Task is still an observation.
     """
     for event in reversed(events):
-        if event.get("kind") != "status":
-            continue
-        if event.get("state") != "TASK_STATE_INPUT_REQUIRED":
-            continue
-        pure = pure_metadata(event)
-        if pure.get("kind") == "approval":
-            continue
-        if pure and pure.get("kind") not in (None, "negotiation"):
-            continue
-        return event
+        kind = event.get("kind")
+        if kind == "status":
+            if event.get("state") != "TASK_STATE_INPUT_REQUIRED":
+                continue
+            pure = pure_metadata(event)
+            if pure.get("kind") == "approval":
+                continue
+            if pure and pure.get("kind") not in (None, "negotiation"):
+                continue
+            return event
+        if kind == "message" and allow_plain_question:
+            text = event.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            metadata = event.get("metadata")
+            if isinstance(metadata, Mapping) and is_negotiation_message(metadata_to_dict(metadata)):
+                continue
+            if event.get("task_id"):
+                # A plain message on an existing Task is an observation; the Task state carries
+                # the protocol meaning.
+                continue
+            return event
     return None
 
 
@@ -257,4 +374,9 @@ def _text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-__all__ = ["DEFAULT_PURE_LABEL", "pure_metadata", "run_pure_client_flow"]
+__all__ = [
+    "DEFAULT_PURE_LABEL",
+    "continue_pure_client_flow",
+    "pure_metadata",
+    "run_pure_client_flow",
+]

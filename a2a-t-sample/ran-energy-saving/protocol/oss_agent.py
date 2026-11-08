@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
 import os
 import time
@@ -20,7 +21,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, Protocol
 
 import httpx
 import uvicorn
@@ -67,7 +68,7 @@ from shared.config import (
     load_config,
 )
 from shared.logging_setup import configure_logging
-from shared.models import NegotiationProposeView
+from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.run_constants import (
     FINAL_STATE_INCOMPLETE,
     FINAL_STATE_TASK_COMPLETED,
@@ -95,7 +96,7 @@ from protocol.gateway_push import ValidatingPushConfigStore
 from protocol.intent import IntentProcessor, OperatorRequest, ProcessedIntent
 from protocol.messages import SAMPLE_RUN_ID_METADATA_KEY, metadata_to_dict
 from protocol.nms_client import NmsClient, NmsConfig, NmsSseTransport, NmsWebhookTransport
-from protocol.pure_client_flow import run_pure_client_flow
+from protocol.pure_client_flow import continue_pure_client_flow, run_pure_client_flow
 from protocol.shared_webhook import WebhookRouter, WebhookSubscription
 from protocol.sqlite_push_config_store import SqlitePushNotificationConfigStore
 from protocol.sqlite_task_store import SqliteTaskStore
@@ -117,6 +118,20 @@ DEFAULT_RAN_PORT: Final[int] = 8000
 
 _LOGGER = logging.getLogger("ran_energy_saving.oss_agent")
 
+#: Builder of the advisory answer attached to one relayed downstream question.
+RecommendationBuilder = Callable[[dict[str, object]], Awaitable[dict[str, object] | None]]
+
+
+class _PureDecisionProvider(Protocol):
+    """Decision agent answering one pure downstream question."""
+
+    async def respond(
+        self,
+        propose: NegotiationProposeView,
+        session: NegotiationContext,
+    ) -> NegotiationDecision:
+        """Return one structured decision for the proposal."""
+
 #: Outer Task states that need no background tracking after a restart.
 _TERMINAL_TASK_STATES: Final[frozenset[TaskState]] = frozenset(
     {
@@ -126,6 +141,27 @@ _TERMINAL_TASK_STATES: Final[frozenset[TaskState]] = frozenset(
         TaskState.TASK_STATE_CANCELED,
     }
 )
+
+
+class _QuestionPendingError(Exception):
+    """The downstream asked for information and the outer caller must answer it."""
+
+    def __init__(self, event: dict[str, object]) -> None:
+        """Carry the inbound question event."""
+        super().__init__("The downstream requested information")
+        self.event = event
+
+
+@dataclass(frozen=True)
+class _PendingQuestion:
+    """One downstream question relayed to the outer caller and awaiting its answer."""
+
+    outer_task_id: str
+    outer_context_id: str
+    run_id: str
+    inner_task_id: str
+    inner_context_id: str
+    round_number: int
 
 
 @dataclass(frozen=True)
@@ -173,6 +209,7 @@ class OSSPureExecutor(AgentExecutor):
         config: SampleConfig | None = None,
         ran_url: str | None = None,
         answer: Callable[[dict[str, object]], str | Awaitable[str]],
+        recommendation: RecommendationBuilder | None = None,
         decision_provider: object | None = None,
         max_rounds: int = 3,
         timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
@@ -214,6 +251,7 @@ class OSSPureExecutor(AgentExecutor):
         self._config = config
         self._ran_url = (ran_url or "").rstrip("/")
         self._answer = answer
+        self._recommendation = recommendation
         self._decision_provider = decision_provider
         self._max_rounds = max_rounds
         self._timeout_seconds = timeout_seconds
@@ -228,6 +266,8 @@ class OSSPureExecutor(AgentExecutor):
         self._long_task_settle_seconds = long_task_settle_seconds
         # One background pump per handed-off outer Task id.
         self._pumps: dict[str, _PumpHandle] = {}
+        # Downstream questions relayed to the outer caller: outer Task id → pending answer.
+        self._pending_questions: dict[str, _PendingQuestion] = {}
         # A handoff produced by ``_run_ran_webhook`` and started after ``execute`` has written its
         # last synchronous outer status (avoids two writers racing on the Task store).
         self._pending_handoffs: dict[str, _PumpHandoff] = {}
@@ -302,6 +342,7 @@ class OSSPureExecutor(AgentExecutor):
 
     async def stop(self) -> None:
         """Stop background pumps, the webhook receiver and the NMS client."""
+        self._pending_questions.clear()
         await self._stop_pumps()
         receiver = self._webhook_receiver
         if receiver is not None:
@@ -337,11 +378,11 @@ class OSSPureExecutor(AgentExecutor):
             # The pump's own ``finally`` may not run when it is cancelled before its first turn.
             handle.subscription.unsubscribe()
 
-    def _start_pending_pump(self, outer_task_id: str) -> None:
+    def _start_pending_pump(self, outer_task_id: str) -> bool:
         """Start the pump prepared by ``_run_ran_webhook`` after the last synchronous status."""
         handoff = self._pending_handoffs.pop(outer_task_id, None)
         if handoff is None:
-            return
+            return False
         pump = self._build_pump(handoff)
         if pump is not None:
             self._register_pump(handoff, pump)
@@ -350,6 +391,8 @@ class OSSPureExecutor(AgentExecutor):
                 outer_task_id,
                 handoff.binding.inner_task_id,
             )
+            return True
+        return False
 
     def _build_pump(self, handoff: _PumpHandoff) -> DownstreamPump | None:
         """Build one background pump from a handoff; ``None`` without a binding store."""
@@ -487,6 +530,10 @@ class OSSPureExecutor(AgentExecutor):
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Create the outer Task, run the RAN hop, and publish the aggregated result."""
         if context.current_task is not None:
+            pending = self._pending_questions.pop(context.task_id or "", None)
+            if pending is not None:
+                await self._resume_question(context, event_queue, pending)
+                return
             await event_queue.enqueue_event(context.current_task)
             return
         message = context.message
@@ -526,6 +573,18 @@ class OSSPureExecutor(AgentExecutor):
                     updater,
                     context.call_context,
                 )
+        except _QuestionPendingError as question:
+            events.put_nowait(None)
+            await consumer
+            await self._relay_question(
+                updater,
+                outer_task_id=task.id,
+                outer_context_id=task.context_id,
+                run_id=run_id or "",
+                event=question.event,
+                round_number=1,
+            )
+            return
         except Exception as exc:  # noqa: BLE001 - the outer Task must reach a terminal state
             _LOGGER.exception("OSS->RAN hop failed")
             events.put_nowait(None)
@@ -534,7 +593,10 @@ class OSSPureExecutor(AgentExecutor):
             return
         events.put_nowait(None)
         await consumer
+        await self._publish_result(updater, result)
 
+    async def _publish_result(self, updater: TaskUpdater, result: ClientFlowResult) -> None:
+        """Map one finished downstream flow onto the outer Task."""
         if result.final_state == FINAL_STATE_TASK_COMPLETED:
             metrics = {
                 "hop": "oss",
@@ -580,14 +642,19 @@ class OSSPureExecutor(AgentExecutor):
                 "downstream still working after the local wait window: task=%s",
                 result.task_id or "-",
             )
+            tracked = self._start_pending_pump(updater.task_id)
+            suffix = (
+                "the OSS Agent continues tracking it in the background."
+                if tracked
+                else "the OSS Agent will report the next downstream update when one arrives."
+            )
             await updater.update_status(
                 TaskState.TASK_STATE_WORKING,
                 message=updater.new_agent_message(
                     [
                         Part(
                             text=(
-                                f"The {downstream} task is still running{task_ref}; the OSS Agent "
-                                "continues tracking it in the background."
+                                f"The {downstream} task is still running{task_ref}; {suffix}"
                             )
                         )
                     ],
@@ -595,7 +662,6 @@ class OSSPureExecutor(AgentExecutor):
                 ),
                 metadata=metadata,
             )
-            self._start_pending_pump(task.id)
             return
         await updater.failed(
             message=updater.new_agent_message(
@@ -702,13 +768,14 @@ class OSSPureExecutor(AgentExecutor):
             result = await run_pure_client_flow(
                 transport=transport,
                 user_request=user_request,
-                answer=self._answer,
+                answer=self._answer_or_relay,
                 on_answer=lambda event, text: self._publish_answer(updater, event, text),
                 max_rounds=self._max_rounds,
                 call_timeout_seconds=self._timeout_seconds,
                 event_sink=event_sink,
                 trace_sink=self._trace_sink,
                 followup=self._followup,
+                plain_questions=True,
             )
             if (
                 long_mode
@@ -765,13 +832,14 @@ class OSSPureExecutor(AgentExecutor):
                     read_after_send=config.nms_read_after_send,
                 ),
                 user_request=user_request,
-                answer=self._answer,
+                answer=self._answer_or_relay,
                 on_answer=lambda event, text: self._publish_answer(updater, event, text),
                 max_rounds=self._max_rounds,
                 call_timeout_seconds=self._timeout_seconds,
                 event_sink=event_sink,
                 trace_sink=self._trace_sink,
                 followup=self._followup,
+                plain_questions=True,
             )
         discovered = await discover_agent(
             discovery=DISCOVERY_DIRECT,
@@ -813,6 +881,225 @@ class OSSPureExecutor(AgentExecutor):
                     await close()
         finally:
             await httpx_client.aclose()
+
+    def _answer_or_relay(self, event: dict[str, object]) -> str | Awaitable[str]:
+        """Answer a structured negotiation, but relay a plain vendor question to the caller.
+
+        The real NMS negotiates a pure request in text: a plain agent message with no
+        ``negotiationContext``. The OSS Agent does not own the business answer; it publishes the
+        question on its own Task and resumes the downstream context with the caller's reply.
+        """
+        if event.get("kind") == "message" and self._nms_mode():
+            raise _QuestionPendingError(event)
+        return self._answer(event)
+
+    async def _draft_answer(
+        self,
+        event: Mapping[str, object],
+    ) -> dict[str, object] | str | None:
+        """Ask the decision callback for a suggested answer; an agent failure is not fatal."""
+        try:
+            if self._recommendation is not None:
+                return await self._recommendation(dict(event))
+            value = self._answer(dict(event))
+            if inspect.isawaitable(value):
+                value = await value
+        except Exception:  # noqa: BLE001 - the operator can still answer manually
+            _LOGGER.warning("could not draft an answer to the downstream question", exc_info=True)
+            return None
+        return value if isinstance(value, str) and value.strip() else None
+
+    async def _relay_question(
+        self,
+        updater: TaskUpdater,
+        *,
+        outer_task_id: str,
+        outer_context_id: str,
+        run_id: str,
+        event: Mapping[str, object],
+        round_number: int,
+    ) -> None:
+        """Publish one downstream text question as an outer ``INPUT_REQUIRED`` status."""
+        text = str(event.get("text") or "").strip() or (
+            "The downstream requested additional information."
+        )
+        recommendation = await self._draft_answer(event)
+        inner_context_id = str(event.get("context_id") or "")
+        inner_task_id = str(event.get("task_id") or "")
+        hop = self._downstream_hop()
+        metadata = {
+            "pure": {
+                "hop": hop,
+                "phase": "question",
+                "kind": "negotiation",
+                "round": round_number,
+                "maxRounds": self._max_rounds,
+                "recommendation": recommendation or None,
+                "downstreamTaskId": inner_task_id or None,
+                "downstreamContextId": inner_context_id or None,
+            },
+            "hop": hop,
+        }
+        await updater.update_status(
+            TaskState.TASK_STATE_INPUT_REQUIRED,
+            message=updater.new_agent_message([Part(text=text)], metadata=metadata),
+            metadata=metadata,
+        )
+        self._pending_questions[outer_task_id] = _PendingQuestion(
+            outer_task_id=outer_task_id,
+            outer_context_id=outer_context_id,
+            run_id=run_id,
+            inner_task_id=inner_task_id,
+            inner_context_id=inner_context_id,
+            round_number=round_number,
+        )
+        _LOGGER.info(
+            "relayed downstream question: outer=%s inner_context=%s round=%s",
+            outer_task_id,
+            inner_context_id or "-",
+            round_number,
+        )
+
+    async def _resume_question(
+        self,
+        context: RequestContext,
+        event_queue: EventQueue,
+        pending: _PendingQuestion,
+    ) -> None:
+        """Forward the caller's answer to the downstream and continue the run."""
+        updater = TaskUpdater(event_queue, pending.outer_task_id, pending.outer_context_id)
+        answer_text = _message_text(context.message) if context.message is not None else ""
+        if not answer_text.strip():
+            # Keep the turn with the caller instead of ending it: the question is still open.
+            await updater.update_status(
+                TaskState.TASK_STATE_INPUT_REQUIRED,
+                message=updater.new_agent_message(
+                    [Part(text="The answer was empty; the OSS Agent is still waiting for it.")],
+                    metadata={"pure": {"hop": "oss", "phase": "question"}, "hop": "oss"},
+                ),
+            )
+            self._pending_questions[pending.outer_task_id] = pending
+            return
+        hop = self._downstream_hop()
+        await updater.update_status(
+            TaskState.TASK_STATE_WORKING,
+            message=updater.new_agent_message(
+                [Part(text=f"OSS Agent answered the {self._downstream_name()}: {answer_text}")],
+                metadata={"pure": {"hop": "oss", "phase": "answer"}, "hop": "oss"},
+            ),
+            metadata={"pure": {"hop": "oss", "phase": "answer"}},
+        )
+        events: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
+        consumer = asyncio.create_task(
+            self._consume(events, updater),
+            name=f"oss-question-consumer-{pending.outer_task_id}",
+        )
+        try:
+            result = await self._run_question_continuation(
+                pending,
+                answer_text,
+                events.put_nowait,
+                updater,
+            )
+        except _QuestionPendingError as question:
+            events.put_nowait(None)
+            await consumer
+            await self._relay_question(
+                updater,
+                outer_task_id=pending.outer_task_id,
+                outer_context_id=pending.outer_context_id,
+                run_id=pending.run_id,
+                event=question.event,
+                round_number=pending.round_number + 1,
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - the outer Task must reach a terminal state
+            _LOGGER.exception("OSS->RAN question continuation failed")
+            events.put_nowait(None)
+            await consumer
+            await updater.failed(
+                message=updater.new_agent_message([Part(text=f"The {hop} hop failed: {exc}")])
+            )
+            return
+        events.put_nowait(None)
+        await consumer
+        await self._publish_result(updater, result)
+
+    async def _run_question_continuation(
+        self,
+        pending: _PendingQuestion,
+        answer_text: str,
+        event_sink: Callable[[dict[str, object]], None],
+        updater: TaskUpdater,
+    ) -> ClientFlowResult:
+        """Send the caller's answer on the downstream context and consume the next phase."""
+        if self._webhook_router is not None and self._nms_client is not None:
+            subscription = self._webhook_router.subscribe(pending.run_id)
+            if pending.inner_context_id and pending.inner_task_id:
+                subscription.bind(
+                    task_id=pending.inner_task_id,
+                    context_id=pending.inner_context_id,
+                )
+            elif pending.inner_context_id:
+                subscription.bind(None, pending.inner_context_id)
+            try:
+                transport = NmsWebhookTransport(
+                    self._nms_client,
+                    queue=subscription.queue,
+                    push_url=self._webhook_push_url,
+                    push_token=self._webhook_push_token,
+                    push_auth_credentials=(
+                        self._config.webhook_auth_credentials if self._config is not None else ""
+                    ),
+                    protocol=PROTOCOL_PURE,
+                    idle_timeout=(
+                        self._long_task_settle_seconds
+                        if self._long_task_enabled()
+                        else self._webhook_idle_timeout
+                    ),
+                    bind=subscription.bind,
+                    context_id=pending.inner_context_id,
+                    # The original request already registered the callback for this context; a
+                    # second registration is rejected by the real NMS.
+                    register_push_config=False,
+                )
+                return await continue_pure_client_flow(
+                    transport=transport,
+                    text=answer_text,
+                    task_id=pending.inner_task_id or None,
+                    context_id=pending.inner_context_id or None,
+                    answer=self._answer_or_relay,
+                    on_answer=lambda event, text: self._publish_answer(updater, event, text),
+                    max_rounds=self._max_rounds,
+                    call_timeout_seconds=self._timeout_seconds,
+                    event_sink=event_sink,
+                    trace_sink=self._trace_sink,
+                    followup=self._followup,
+                    plain_questions=True,
+                )
+            finally:
+                subscription.unsubscribe()
+        if self._nms_client is not None and self._config is not None:
+            return await continue_pure_client_flow(
+                transport=NmsSseTransport(
+                    self._nms_client,
+                    protocol=PROTOCOL_PURE,
+                    request_timeout=self._config.nms_request_timeout,
+                    read_after_send=self._config.nms_read_after_send,
+                ),
+                text=answer_text,
+                task_id=pending.inner_task_id or None,
+                context_id=pending.inner_context_id or None,
+                answer=self._answer_or_relay,
+                on_answer=lambda event, text: self._publish_answer(updater, event, text),
+                max_rounds=self._max_rounds,
+                call_timeout_seconds=self._timeout_seconds,
+                event_sink=event_sink,
+                trace_sink=self._trace_sink,
+                followup=self._followup,
+                plain_questions=True,
+            )
+        raise RuntimeError("The NMS downstream is not started.")
 
     def _bind_wire_log(self, run_id: str | None) -> None:
         """Point both downstream captures at this run's ``wire-oss.jsonl``.
@@ -928,6 +1215,7 @@ class OSSPureExecutor(AgentExecutor):
         """Cancel the outer Task and stop its background pump."""
         task_id = context.task_id or ""
         self._pending_handoffs.pop(task_id, None)
+        self._pending_questions.pop(task_id, None)
         handle = self._pumps.pop(task_id, None)
         if handle is not None:
             handle.task.cancel()
@@ -969,6 +1257,7 @@ def build_oss_app(
     config: SampleConfig | None = None,
     ran_url: str | None = None,
     answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = None,
+    recommendation: RecommendationBuilder | None = None,
     decision_provider: object | None = None,
     task_store: TaskStore | None = None,
     binding_store: DownstreamBindingStore | None = None,
@@ -1040,6 +1329,7 @@ def build_oss_app(
         config=config,
         ran_url=resolved_ran_url,
         answer=resolved_answer,
+        recommendation=recommendation,
         decision_provider=decision_provider,
         timeout_seconds=timeout_seconds,
         intent_processor=intent_processor,
@@ -1112,6 +1402,7 @@ def main() -> None:
     from demo.intent import build_demo_intent_processor
 
     decision_provider: object | None = None
+    recommendation: RecommendationBuilder | None = None
     if config.discovery == DISCOVERY_NMS:
         if config.is_offline:
             # The simulator runs offline with the deterministic fake model; a scripted answer
@@ -1131,6 +1422,7 @@ def main() -> None:
                 offline=False,
             )
             answer = build_live_pure_answer(decision_provider)
+            recommendation = build_live_pure_recommendation(decision_provider)
     else:
         from demo.pure_policy import pure_answer_from_event
 
@@ -1151,6 +1443,7 @@ def main() -> None:
         host=host,
         port=port,
         answer=answer,
+        recommendation=recommendation,
         decision_provider=decision_provider,
         task_store=task_store,
         push_config_store=push_config_store,
@@ -1198,8 +1491,58 @@ def _build_trace_emitter(config: SampleConfig | None = None) -> HttpTraceEmitter
     return None
 
 
+def _pure_proposal(event: Mapping[str, object]) -> tuple[NegotiationProposeView, NegotiationContext]:
+    """Build the provider-facing proposal of one pure downstream question."""
+    text = str(event.get("text") or "").strip()
+    pure = _pure_metadata(event)
+    raw_metadata = event.get("metadata")
+    metadata = raw_metadata if isinstance(raw_metadata, Mapping) else {}
+    negotiation_context = metadata.get("negotiationContext")
+    nested = negotiation_context if isinstance(negotiation_context, Mapping) else {}
+
+    def _int(value: object, default: int) -> int:
+        try:
+            parsed = int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return default
+        return parsed if parsed > 0 else default
+
+    round_number = _int(pure.get("round", nested.get("round")), 1)
+    max_rounds = _int(pure.get("maxRounds", nested.get("maxRounds")), 3)
+    template_uri = metadata.get("templateUri")
+    kind = "information"
+    if isinstance(template_uri, str) and template_uri:
+        from protocol.negotiation_policy import (
+            negotiation_kind_for_propose_content,
+            negotiation_kind_for_template_uri,
+        )
+
+        resolved = negotiation_kind_for_template_uri(template_uri)
+        if resolved is None:
+            resolved = negotiation_kind_for_propose_content(text)
+        if resolved is not None:
+            kind = resolved.value
+    context_id = str(event.get("context_id") or event.get("task_id") or "pure-negotiation")
+    propose = NegotiationProposeView(
+        negotiation_id=context_id,
+        kind=kind,
+        round=round_number,
+        max_rounds=max_rounds,
+        content=text or "The NMS requested additional information.",
+        template_uri=template_uri if isinstance(template_uri, str) else None,
+        context_id=context_id,
+    )
+    session = NegotiationContext(
+        id=context_id,
+        round=round_number,
+        max_rounds=max_rounds,
+        performative=NegotiationPerformative.PROPOSE,
+    )
+    return propose, session
+
+
 def build_live_pure_answer(
-    provider: object,
+    provider: _PureDecisionProvider,
 ) -> Callable[[dict[str, object]], Awaitable[str]]:
     """Build the live pure-A2A answer callback around an ADK decision provider.
 
@@ -1211,33 +1554,38 @@ def build_live_pure_answer(
     from demo.pure_policy import render_pure_answer
 
     async def answer(event: dict[str, object]) -> str:
-        text = str(event.get("text") or "").strip()
-        pure = _pure_metadata(event)
-        round_value = pure.get("round", 1)
-        try:
-            round_number = max(1, int(round_value or 1))
-        except (TypeError, ValueError):
-            round_number = 1
-        context_id = str(event.get("context_id") or event.get("task_id") or "pure-negotiation")
-        propose = NegotiationProposeView(
-            negotiation_id=context_id,
-            kind="information",
-            round=round_number,
-            max_rounds=3,
-            content=text or "The NMS requested additional information.",
-            template_uri=None,
-            context_id=context_id,
-        )
-        session = NegotiationContext(
-            id=context_id,
-            round=round_number,
-            max_rounds=3,
-            performative=NegotiationPerformative.PROPOSE,
-        )
-        decision = await provider.respond(propose, session)  # type: ignore[attr-defined]
+        propose, session = _pure_proposal(event)
+        decision = await provider.respond(propose, session)
         return render_pure_answer(decision)
 
     return answer
+
+
+def build_live_pure_recommendation(
+    provider: _PureDecisionProvider,
+) -> Callable[[dict[str, object]], Awaitable[dict[str, object] | None]]:
+    """Build the recommendation callback used when the OSS relays a downstream question.
+
+    It returns a structured recommendation so the confirmation card can show the model's action
+    (accept/counter) instead of flattening every answer into approval. A rejection or abort is not
+    an answer: the operator gets no recommendation and supplies the text manually.
+    """
+    from demo.pure_policy import render_pure_answer
+
+    async def recommend(event: dict[str, object]) -> dict[str, object] | None:
+        propose, session = _pure_proposal(event)
+        decision = await provider.respond(propose, session)
+        if decision.action not in ("accept", "counter"):
+            return None
+        return {
+            "action": decision.action,
+            "rationale": decision.rationale,
+            "text": render_pure_answer(decision),
+            "filledParams": dict(decision.filled_params or {}),
+            "counterProposal": decision.counter_proposal,
+        }
+
+    return recommend
 
 
 def a2a_request_text(intent: ProcessedIntent) -> str:

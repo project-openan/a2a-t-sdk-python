@@ -325,7 +325,7 @@ class ClientRuntime:
     trace_sink: Callable[[dict[str, object]], None] | None = None
     #: Liveness sink of this runtime (``None`` when the caller does not show wait states).
     activity_sink: ActivitySink | None = None
-    pure_answer: Callable[[dict[str, object]], str] | None = None
+    pure_answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = None
     intent_processor: IntentProcessor | None = None
     wire_log: HttpWireLog | None = None
     shared_webhook: SharedWebhook | None = None
@@ -343,7 +343,10 @@ class ClientRuntime:
                 decision is ``None`` when the recommendation agent failed (the engineer still
                 decides).
         """
-        setter = getattr(self.provider, "set_recommendation_sink", None)
+        # A pure run has no negotiation decision provider: its confirmation answer owns the human
+        # moment and receives the same sink.
+        target = self.provider if self.provider is not None else self.pure_answer
+        setter = getattr(target, "set_recommendation_sink", None)
         if callable(setter):
             setter(sink)
 
@@ -461,6 +464,15 @@ class ClientRuntime:
                 if self.protocol == PROTOCOL_PURE:
                     # Pure A2A uses standard Task states only: the OSS Agent owns the business
                     # intent layer, so the engineer client sends the raw request to it.
+                    # A confirmation answer owns the human moment; hand it the same hooks the
+                    # A2A-T decision provider receives.
+                    for setter_name, hook in (
+                        ("set_proposal_sink", on_decision_requested),
+                        ("set_decision_sink", on_decision_made),
+                    ):
+                        setter = getattr(self.pure_answer, setter_name, None)
+                        if callable(setter):
+                            setter(hook)
                     return await run_pure_client_flow(
                         transport=self.transport,
                         user_request=raw_text if processed else self._raw_mode_request(custom_request),
@@ -601,7 +613,7 @@ async def build_client_runtime(
     offline_model_factory: Callable[[RunSpec], Any] | None = None,
     install_offline_provider: Callable[[], None] | None = None,
     client_agent_factory: Callable[[Any], Any] | None = None,
-    pure_answer: Callable[[dict[str, object]], str] | None = None,
+    pure_answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = None,
     scripted_decisions: Sequence[NegotiationDecision] | None = None,
     intent_processor_factory: Callable[[SampleConfig], IntentProcessor] | None = None,
 ) -> ClientRuntime:
@@ -762,6 +774,18 @@ async def build_client_runtime(
         manual_structurer: Any | None = None
         if protocol == PROTOCOL_PURE:
             provider: NegotiationDecisionProvider | None = None
+            if mode in (MODE_CONFIRM, MODE_MANUAL) and not config.is_offline:
+                # The pure form has no decision provider; the confirmation answer still offers the
+                # free-text box, so build the same structurer the A2A-T manual mode uses.
+                try:
+                    manual_structurer = _build_adk_decision_provider(
+                        config,
+                        run_spec,
+                        model=None,
+                        client_agent_factory=client_agent_factory,
+                    )
+                except Exception as exc:  # noqa: BLE001 - optional preview capability
+                    _LOGGER.warning("manual answer parsing unavailable: %s", exc)
         else:
             # Only offline mode runs the deterministic decision model. Passing it in live mode
             # made every negotiation decision (and every manual-answer parse) run the fake model,
@@ -817,7 +841,10 @@ async def build_client_runtime(
         sdk_env=sdk_env,
         manual_provider=(
             provider
-            if protocol == PROTOCOL_A2A_T and isinstance(provider, (ManualDecisionProvider, ConfirmingDecisionProvider))
+            if protocol == PROTOCOL_A2A_T
+            and isinstance(provider, (ManualDecisionProvider, ConfirmingDecisionProvider))
+            else pure_answer
+            if pure_answer is not None and callable(getattr(pure_answer, "submit", None))
             else None
         ),
         manual_structurer=manual_structurer,

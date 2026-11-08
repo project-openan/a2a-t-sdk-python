@@ -99,11 +99,33 @@ def pure_answer_from_event(
     return pure_answer_for(kind, round_number, language)
 
 
+def _filled_answer_text(filled: Mapping[str, object] | None) -> str:
+    """Render the values of one decision as a plain-text answer.
+
+    The pure hop may ask for any task parameter, not only the throughput target: a vendor question
+    such as "provide a real region" is answered with the region value. Prefer the free-text-ish
+    fields, then join whatever else the decision supplied.
+    """
+    if not filled:
+        return ""
+    for key in ("guaranteedThroughputTarget", "region"):
+        value = filled.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    values = [
+        str(value).strip()
+        for value in filled.values()
+        if isinstance(value, str) and value.strip()
+    ]
+    return ", ".join(values)
+
+
 def render_pure_answer(decision: NegotiationDecision) -> str:
     """Render one decision as the natural-language answer a pure A2A server expects.
 
-    A counter/accept decision carries the negotiated target; fall back to the rationale so the
-    vendor still receives a meaningful reply when the model chose a different action.
+    A counter/accept decision carries the negotiated target or the values the operator supplied;
+    fall back to the rationale so the vendor still receives a meaningful reply when the model chose
+    a different action.
     """
     if decision.action == "counter":
         if decision.counter_proposal:
@@ -111,19 +133,42 @@ def render_pure_answer(decision: NegotiationDecision) -> str:
         target = (decision.counter_params or {}).get("guaranteedThroughputTarget")
         if isinstance(target, str) and target:
             return target
-        return decision.rationale
+        filled = _filled_answer_text(decision.filled_params)
+        return filled or decision.rationale
     if decision.action == "accept":
         target = (decision.filled_params or {}).get("guaranteedThroughputTarget")
         if isinstance(target, str) and target:
             return target
-        return decision.rationale or "Accepted. Please proceed."
+        filled = _filled_answer_text(decision.filled_params)
+        return filled or decision.rationale or "Accepted. Please proceed."
     return decision.rationale or ("Rejected." if decision.action == "reject" else "Aborted.")
+
+
+def pure_answer_from_recommendation(
+    event: Mapping[str, object],
+    language: str = LANGUAGE_EN,
+) -> str:
+    """Answer one OSS-relayed question with its AI recommendation.
+
+    The OSS Agent asks its decision model for a draft before relaying the downstream question, so
+    automatic mode can answer without a second model turn. A structured local negotiation has no
+    recommendation and keeps the deterministic policy answer.
+    """
+    metadata = event.get("metadata")
+    if isinstance(metadata, Mapping):
+        raw = metadata.get("pure")
+        if isinstance(raw, Mapping):
+            recommendation = raw.get("recommendation")
+            if isinstance(recommendation, str) and recommendation.strip():
+                return recommendation.strip()
+    return pure_answer_from_event(event, language)
 
 
 __all__ = [
     "build_demo_pure_policy",
     "pure_answer_for",
     "pure_answer_from_event",
+    "pure_answer_from_recommendation",
     "pure_base_target",
     "pure_corrected_target",
     "render_pure_answer",

@@ -39,6 +39,8 @@ from protocol.mie_agent import build_mie_app
 from protocol.oss_agent import (
     OSSPureExecutor,
     _build_trace_emitter,
+    _PendingQuestion,
+    _QuestionPendingError,
     a2a_request_text,
     build_oss_agent_card,
     build_oss_app,
@@ -242,6 +244,107 @@ def _fake_downstream(
         return ClientFlowResult(final_state=final_state, task_id="nms-task-1")
 
     monkeypatch.setattr(executor, "_run_ran", run)
+
+
+def _task_context(text: str, *, task_id: str = "outer-1") -> RequestContext:
+    """Build one inbound request that continues an existing outer Task."""
+    message = Message(message_id="message-2", role=Role.ROLE_USER, context_id="outer-ctx")
+    message.parts.add(text=text)
+    return RequestContext(
+        call_context=ServerCallContext(state={}, user=UnauthenticatedUser(), requested_extensions=set()),
+        request=SendMessageRequest(message=message),
+        task_id=task_id,
+        context_id="outer-ctx",
+        task=Task(
+            id=task_id,
+            context_id="outer-ctx",
+            status=TaskStatus(state=TaskState.TASK_STATE_INPUT_REQUIRED),
+        ),
+    )
+
+
+async def test_a_plain_downstream_question_becomes_an_outer_input_required() -> None:
+    """The OSS relays a vendor text question and remembers the downstream context."""
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "Region A",
+    )
+
+    question = {
+        "kind": "message",
+        "message_id": "question-1",
+        "context_id": "inner-ctx",
+        "text": "## Information Negotiation\nPlease provide a real region.",
+    }
+
+    async def run_ran(*args: object, **kwargs: object) -> ClientFlowResult:
+        del args, kwargs
+        raise _QuestionPendingError(question)
+
+    executor._run_ran = run_ran  # type: ignore[method-assign]
+    queue = _RecordingQueue()
+    message = Message(message_id="message-1", role=Role.ROLE_USER, context_id="ctx-oss")
+    message.parts.add(text="Start energy saving in Region A.")
+    context = RequestContext(
+        call_context=ServerCallContext(state={}, user=UnauthenticatedUser(), requested_extensions=set()),
+        request=SendMessageRequest(message=message),
+        task_id="outer-1",
+        context_id="outer-ctx",
+    )
+
+    await executor.execute(context, queue)
+
+    states = [event.status.state for event in queue.events if isinstance(event, TaskStatusUpdateEvent)]
+    assert TaskState.TASK_STATE_INPUT_REQUIRED in states
+    status = next(
+        event
+        for event in queue.events
+        if isinstance(event, TaskStatusUpdateEvent)
+        and event.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+    )
+    pure = status.metadata["pure"]
+    assert pure["kind"] == "negotiation"
+    assert pure["recommendation"] == "Region A"
+    assert pure["downstreamContextId"] == "inner-ctx"
+    pending = executor._pending_questions["outer-1"]
+    assert pending.inner_context_id == "inner-ctx"
+    assert pending.run_id == ""
+
+
+async def test_the_operator_answer_resumes_the_downstream_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The follow-up text is forwarded to the downstream and the outer Task completes."""
+    executor = OSSPureExecutor(answer=lambda event: "")
+    captured: dict[str, str] = {}
+
+    async def fake_continuation(
+        pending: _PendingQuestion,
+        answer_text: str,
+        event_sink: object,
+        updater: TaskUpdater,
+    ) -> ClientFlowResult:
+        del pending, event_sink, updater
+        captured["text"] = answer_text
+        return ClientFlowResult(final_state=FINAL_STATE_TASK_COMPLETED, context_id="inner-ctx")
+
+    monkeypatch.setattr(executor, "_run_question_continuation", fake_continuation)
+    executor._pending_questions["outer-1"] = _PendingQuestion(
+        outer_task_id="outer-1",
+        outer_context_id="outer-ctx",
+        run_id="run-1",
+        inner_task_id="",
+        inner_context_id="inner-ctx",
+        round_number=1,
+    )
+    queue = _RecordingQueue()
+
+    await executor.execute(_task_context("Region A"), queue)
+
+    assert captured["text"] == "Region A"
+    assert "outer-1" not in executor._pending_questions
+    states = [event.status.state for event in queue.events if isinstance(event, TaskStatusUpdateEvent)]
+    assert TaskState.TASK_STATE_COMPLETED in states
 
 
 async def test_oss_keeps_the_outer_task_working_when_the_downstream_is_incomplete(
