@@ -37,4 +37,4 @@ def test_the_slot_rule_defines_24_00_as_the_end_of_the_day() -> None:
 def test_the_slot_rule_keeps_the_overlap_violation() -> None:
     """The overlap rule itself must survive edits to the day-boundary clarification."""
     assert "MUST NOT overlap" in _task_context_constraint("en-US")
-    assert "不允许存在重叠" in _task_context_constraint("zh-CN")
+    assert "不允许重叠" in _task_context_constraint("zh-CN")
