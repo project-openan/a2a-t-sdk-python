@@ -57,7 +57,7 @@ def jsonize(value, pretty=True):
     if value is None:
         return ""
     if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
+        return value
     return json.dumps(value, ensure_ascii=False, indent=2 if pretty else None)
 
 
