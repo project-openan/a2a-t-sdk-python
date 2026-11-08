@@ -185,8 +185,12 @@ async def test_confirming_provider_publishes_the_recommendation_then_waits() -> 
     )
     submitted = NegotiationDecision(action="accept", rationale="engineer confirmed")
     provider = ConfirmingDecisionProvider(ScriptedDecisionProvider([recommendation]))
-    seen: list[str] = []
-    provider.set_recommendation_sink(lambda decision, propose, session: seen.append(decision.action))
+    seen: list[str | None] = []
+    provider.set_recommendation_sink(
+        lambda decision, propose, session: seen.append(
+            decision.action if decision is not None else None
+        )
+    )
 
     async def submit_later() -> None:
         await asyncio.sleep(0.01)
@@ -197,6 +201,39 @@ async def test_confirming_provider_publishes_the_recommendation_then_waits() -> 
     await task
 
     assert seen == ["counter"]
+    assert decision is submitted
+
+
+async def test_confirming_provider_degrades_when_the_recommendation_fails() -> None:
+    """A failed recommendation must not take the human decision away."""
+
+    class FailingProvider:
+        async def respond(
+            self,
+            propose: NegotiationProposeView,
+            session: NegotiationContext,
+        ) -> NegotiationDecision:
+            del propose, session
+            raise DecisionProviderError("the live decision model is unavailable")
+
+    submitted = NegotiationDecision(action="accept", rationale="engineer decided")
+    provider = ConfirmingDecisionProvider(FailingProvider())
+    seen: list[NegotiationDecision | None] = []
+    provider.set_recommendation_sink(
+        lambda decision, propose, session: seen.append(decision)
+    )
+
+    async def submit_later() -> None:
+        await asyncio.sleep(0.01)
+        provider.submit(submitted)
+
+    task = asyncio.create_task(submit_later())
+    decision = await provider.respond(_view("target"), _session())
+    await task
+
+    assert seen == [None]
+    assert provider.last_recommendation_error is not None
+    assert "unavailable" in provider.last_recommendation_error
     assert decision is submitted
 
 

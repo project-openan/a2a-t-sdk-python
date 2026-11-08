@@ -893,6 +893,21 @@ body.resizing-y { cursor: row-resize; user-select: none; }
   border-top: 1px solid var(--g200);
   padding-top: 6px;
 }
+.manual-example {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--g700);
+  user-select: text;
+}
+.manual-example code {
+  font-family: var(--mono);
+  font-size: 11px;
+  user-select: text;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.manual-example-label { color: var(--g500); }
 .manual-answer textarea {
   width: 100%;
   min-height: 62px;

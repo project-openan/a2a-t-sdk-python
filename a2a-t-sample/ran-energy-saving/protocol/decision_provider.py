@@ -729,9 +729,14 @@ class ConfirmingDecisionProvider:
     published to the Web UI, which then submits the engineer's confirmed or overridden decision
     through :meth:`submit`. The decision that finally leaves the client is always the submitted one.
 
+    A failed recommendation must not lock the engineer out: the recommendation is advisory, so an
+    inner-provider error is reported through the sink (``decision=None``) and the provider still
+    waits for the manual decision.
+
     Attributes:
         timeout_seconds: Confirmation budget, forwarded to the manual provider.
         pending: Whether a confirmation is expected or already submitted.
+        last_recommendation_error: Reason the last recommendation failed, ``None`` when it worked.
     """
 
     def __init__(
@@ -743,7 +748,13 @@ class ConfirmingDecisionProvider:
         """Create one confirming provider around the agent provider."""
         self._inner = inner
         self._manual = ManualDecisionProvider(timeout_seconds=timeout_seconds)
-        self._sink: Callable[[NegotiationDecision, NegotiationProposeView, Any], None] | None = None
+        self._sink: Callable[[NegotiationDecision | None, NegotiationProposeView, Any], None] | None = None
+        self._last_recommendation_error: str | None = None
+
+    @property
+    def last_recommendation_error(self) -> str | None:
+        """Reason the last recommendation failed, ``None`` when it produced a decision."""
+        return self._last_recommendation_error
 
     @property
     def timeout_seconds(self) -> float:
@@ -768,9 +779,13 @@ class ConfirmingDecisionProvider:
 
     def set_recommendation_sink(
         self,
-        sink: Callable[[NegotiationDecision, NegotiationProposeView, Any], None] | None,
+        sink: Callable[[NegotiationDecision | None, NegotiationProposeView, Any], None] | None,
     ) -> None:
-        """Install the callback invoked with the agent recommendation, before the human wait."""
+        """Install the callback invoked before the human wait.
+
+        The callback receives the agent recommendation, or ``None`` when the recommendation failed;
+        :attr:`last_recommendation_error` carries the reason in that case.
+        """
         self._sink = sink
 
     def set_conversation_context(self, conversation_context: str | None) -> None:
@@ -794,8 +809,23 @@ class ConfirmingDecisionProvider:
         propose: NegotiationProposeView,
         session: NegotiationContext,
     ) -> NegotiationDecision:
-        """Ask the agent for a recommendation, publish it, then wait for the engineer."""
-        recommendation = await self._inner.respond(propose, session)
+        """Ask the agent for a recommendation, publish it, then wait for the engineer.
+
+        A recommendation failure is advisory, not fatal: the sink receives ``None`` with the error
+        attached to :attr:`last_recommendation_error`, and the engineer still decides.
+        """
+        self._last_recommendation_error = None
+        recommendation: NegotiationDecision | None
+        try:
+            recommendation = await self._inner.respond(propose, session)
+        except Exception as exc:  # noqa: BLE001 - the engineer is the authority, not the model
+            _LOGGER.warning(
+                "decision recommendation unavailable: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            self._last_recommendation_error = f"{type(exc).__name__}: {exc}"
+            recommendation = None
         if self._sink is not None:
             self._sink(recommendation, propose, session)
         return await self._manual.respond(propose, session)

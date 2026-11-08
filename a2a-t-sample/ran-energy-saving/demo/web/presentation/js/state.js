@@ -208,6 +208,9 @@ export function applyFrame(state, frame) {
         timeoutSeconds: numberOrNull(frame.timeoutSeconds),
         requestedAt: typeof frame.requestedAt === "string" ? frame.requestedAt : null,
         recommendation: isObject(frame.recommendation) ? frame.recommendation : null,
+        recommendationUnavailable: frame.recommendationUnavailable === true,
+        recommendationError:
+          typeof frame.recommendationError === "string" ? frame.recommendationError : "",
         resolved: false,
       };
       pushTrace(state, {

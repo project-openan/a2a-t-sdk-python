@@ -334,7 +334,9 @@ class ClientRuntime:
         """Install the confirmation recommendation sink when the provider supports one.
 
         Args:
-            sink: callback receiving ``(decision, propose, session)`` before the human wait.
+            sink: callback receiving ``(decision, propose, session)`` before the human wait; the
+                decision is ``None`` when the recommendation agent failed (the engineer still
+                decides).
         """
         setter = getattr(self.provider, "set_recommendation_sink", None)
         if callable(setter):

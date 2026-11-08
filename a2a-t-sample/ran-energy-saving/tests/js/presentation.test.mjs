@@ -374,6 +374,45 @@ applyFrame(thinking, {
 });
 assert.equal(decisionCard(thinking, copy), null);
 
+// A failed recommendation is published as unavailable: the engineer still decides.
+const unavailable = createState();
+applyFrame(unavailable, { type: "run_started", runId: "r7", scenario: "target", mode: "confirm" });
+applyFrame(unavailable, {
+  type: "decision_requested",
+  round: 1,
+  maxRounds: 3,
+  proposal: { kind: "target", round: 1 },
+  recommendationUnavailable: true,
+  recommendationError: "DecisionProviderError: no parseable decision",
+  timeoutSeconds: 300,
+  requestedAt: new Date().toISOString(),
+});
+assert.equal(unavailable.decision.recommendationUnavailable, true);
+const unavailableCard = decisionCard(unavailable, copy);
+assert.ok(unavailableCard);
+assert.ok(unavailableCard.options.some((option) => option.action === "accept"));
+assert.ok(unavailableCard.options.some((option) => option.action === "counter"));
+assert.match(unavailableCard.detail, /OSS Agent/);
+assert.equal(decisionPayload(unavailableCard, "accept", copy).action, "accept");
+assert.equal(decisionPayload(unavailableCard, "counter", copy, "new text").counter_proposal, "new text");
+
+// An information proposal has no counter action; its answer goes through the free-text box.
+const unavailableInfo = createState();
+applyFrame(unavailableInfo, { type: "run_started", runId: "r8", scenario: "information", mode: "confirm" });
+applyFrame(unavailableInfo, {
+  type: "decision_requested",
+  round: 1,
+  maxRounds: 3,
+  proposal: { kind: "information", round: 1 },
+  recommendationUnavailable: true,
+  requestedAt: new Date().toISOString(),
+});
+const unavailableInfoCard = decisionCard(unavailableInfo, copy);
+assert.ok(unavailableInfoCard);
+assert.ok(!unavailableInfoCard.options.some((option) => option.action === "counter"));
+assert.ok(copy.decision.manualExample);
+assert.ok(copy.decision.manualUseExample);
+
 applyFrame(confirming, decision(2, "counter", 1));
 assert.equal(pendingHuman(confirming), null);
 

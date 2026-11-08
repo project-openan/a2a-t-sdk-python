@@ -49,6 +49,7 @@ from shared.run_constants import (
 from shared.run_source import normalize_run_source
 from shared.trace import (
     PHASE_DISPATCH,
+    PHASE_NEGOTIATION,
 )
 from shared.trace_propagation import reset_active_trace, set_active_trace
 
@@ -246,6 +247,43 @@ def _polled_task_from_nms(task: Mapping[str, object], task_id: str) -> _PolledTa
         context_id=context_id,
         artifacts=artifacts,
     )
+
+
+def _recommendation_frame(
+    *,
+    mode: str,
+    propose: NegotiationProposeView,
+    session: NegotiationContext,
+    recommendation: NegotiationDecision | None,
+    recommendation_error: str | None,
+    timeout_seconds: float | None,
+    requested_at: str,
+) -> dict[str, object]:
+    """Build the confirm-mode ``decision_requested`` frame.
+
+    A failed recommendation is published as ``recommendationUnavailable`` instead of a decision:
+    the proposal still opens the page's manual controls, so an agent failure never takes the
+    engineer's decision away.
+    """
+    frame: dict[str, object] = {
+        "type": "decision_requested",
+        "mode": mode,
+        "proposal": propose.model_dump(),
+        "round": session.round,
+        "maxRounds": session.max_rounds,
+        "performative": session.performative.value,
+        "phase": "negotiation",
+        "timeoutSeconds": timeout_seconds,
+        "requestedAt": requested_at,
+    }
+    if recommendation is not None:
+        frame["recommendation"] = recommendation.model_dump()
+    else:
+        frame["recommendationUnavailable"] = True
+        frame["recommendationError"] = (
+            recommendation_error or "The OSS Agent produced no recommendation for this proposal."
+        )
+    return frame
 
 
 class RunManager:
@@ -1001,27 +1039,38 @@ class RunManager:
             NEGOTIATION_ROUNDS_TOTAL.inc({"role": "client", "round": session.round})
 
         def on_decision_recommended(
-            decision: NegotiationDecision,
+            decision: NegotiationDecision | None,
             propose: NegotiationProposeView,
             session: NegotiationContext,
         ) -> None:
-            """Publish the recommendation and let the engineer confirm it."""
+            """Publish the recommendation, or an unavailable notice, and let the engineer decide."""
             run.pending_decision = True
             timeout_seconds = getattr(run.manual_provider, "timeout_seconds", None)
-            run.broadcast(
-                {
-                    "type": "decision_requested",
-                    "mode": run.mode,
-                    "proposal": propose.model_dump(),
-                    "recommendation": decision.model_dump(),
-                    "round": session.round,
-                    "maxRounds": session.max_rounds,
-                    "performative": session.performative.value,
-                    "phase": "negotiation",
-                    "timeoutSeconds": (float(timeout_seconds) if isinstance(timeout_seconds, (int, float)) else None),
-                    "requestedAt": now_iso(),
-                }
+            provider = getattr(run.runtime, "provider", None)
+            error = getattr(provider, "last_recommendation_error", None)
+            frame = _recommendation_frame(
+                mode=run.mode,
+                propose=propose,
+                session=session,
+                recommendation=decision,
+                recommendation_error=error if isinstance(error, str) and error else None,
+                timeout_seconds=(
+                    float(timeout_seconds) if isinstance(timeout_seconds, (int, float)) else None
+                ),
+                requested_at=now_iso(),
             )
+            if decision is None:
+                run.emit_trace(
+                    kind="decision_recommendation_unavailable",
+                    phase=PHASE_NEGOTIATION,
+                    title="Decision recommendation unavailable",
+                    round_number=session.round,
+                    detail={
+                        "reason": frame["recommendationError"],
+                        "negotiationKind": propose.kind,
+                    },
+                )
+            run.broadcast(frame)
 
         async def on_intent_ready(prompt_text: str) -> bool:
             """Ask the engineer to confirm the structured intent before the Task-T is sent."""

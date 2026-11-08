@@ -1009,3 +1009,69 @@ def test_a_polled_task_extracts_its_report_without_synthesizing_events() -> None
         "text": "done",
         "data": None,
     }
+
+
+def test_recommendation_frame_reports_an_unavailable_agent() -> None:
+    """A failed recommendation still opens the page's manual decision controls."""
+    from protocol.client_service.run_manager import _recommendation_frame
+
+    frame = _recommendation_frame(
+        mode="confirm",
+        propose=NegotiationProposeView(
+            negotiation_id="neg-1",
+            kind="target",
+            round=1,
+            max_rounds=3,
+            content="the target overlaps",
+            performative="PROPOSE",
+        ),
+        session=NegotiationContext(
+            id="neg-1",
+            round=1,
+            max_rounds=3,
+            performative=NegotiationPerformative.PROPOSE,
+        ),
+        recommendation=None,
+        recommendation_error="DecisionProviderError: no parseable decision",
+        timeout_seconds=300.0,
+        requested_at="2026-11-08T03:44:09.538Z",
+    )
+
+    assert frame["recommendationUnavailable"] is True
+    assert frame["recommendationError"] == "DecisionProviderError: no parseable decision"
+    assert "recommendation" not in frame
+
+
+def test_recommendation_frame_carries_the_agent_decision() -> None:
+    """A successful recommendation keeps the frame shape the page already renders."""
+    from protocol.client_service.run_manager import _recommendation_frame
+
+    decision = NegotiationDecision(
+        action="counter",
+        rationale="overlap",
+        counter_proposal="keep 17:30~20:00",
+    )
+    frame = _recommendation_frame(
+        mode="confirm",
+        propose=NegotiationProposeView(
+            negotiation_id="neg-1",
+            kind="target",
+            round=1,
+            max_rounds=3,
+            content="the target overlaps",
+            performative="PROPOSE",
+        ),
+        session=NegotiationContext(
+            id="neg-1",
+            round=1,
+            max_rounds=3,
+            performative=NegotiationPerformative.PROPOSE,
+        ),
+        recommendation=decision,
+        recommendation_error=None,
+        timeout_seconds=300.0,
+        requested_at="2026-11-08T03:44:09.538Z",
+    )
+
+    assert frame["recommendation"] == decision.model_dump()
+    assert "recommendationUnavailable" not in frame

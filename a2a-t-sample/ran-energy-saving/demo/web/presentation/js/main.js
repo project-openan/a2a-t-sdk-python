@@ -1945,6 +1945,16 @@ function renderManualAnswer() {
   const section = el("div", "manual-answer");
   section.append(el("span", "micro-label", labels.manualLabel));
   if (ui.manualPreview === null) {
+    // The example is a selectable hint, not a textarea placeholder: placeholder text cannot be
+    // selected or copied. The button also fills it in for the engineer.
+    if (labels.manualExample) {
+      const example = el("p", "manual-example");
+      example.append(
+        el("span", "manual-example-label", `${labels.manualExampleLabel || "Example"}: `),
+        el("code", "", labels.manualExample),
+      );
+      section.append(example);
+    }
     const area = el("textarea");
     area.value = ui.manualText;
     area.placeholder = labels.manualPlaceholder;
@@ -1963,6 +1973,18 @@ function renderManualAnswer() {
     parse.disabled = ui.manualParsing || ui.submitting;
     parse.addEventListener("click", () => parseManualAnswer());
     row.append(parse);
+    if (labels.manualExample && labels.manualUseExample) {
+      const useExample = el("button", "", labels.manualUseExample);
+      useExample.type = "button";
+      useExample.disabled = ui.manualParsing || ui.submitting;
+      useExample.addEventListener("click", () => {
+        ui.manualText = labels.manualExample;
+        area.value = labels.manualExample;
+        area.focus();
+        area.setSelectionRange(area.value.length, area.value.length);
+      });
+      row.append(useExample);
+    }
     section.append(area, row);
     if (ui.manualError) section.append(el("p", "manual-error", ui.manualError));
   } else {

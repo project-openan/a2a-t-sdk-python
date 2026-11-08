@@ -52,7 +52,10 @@ export function decisionCard(state, copy) {
   const recommendedAction = recommendation?.action || null;
   // In confirm mode the OSS Agent is still thinking: do not offer a decision before its
   // recommendation arrives, otherwise the engineer could answer without the agent's input.
-  if (state.mode === "confirm" && !recommendation) return null;
+  // A failed recommendation is published as unavailable; the engineer must still be able to
+  // decide, so that frame opens the same card without a recommended action.
+  const recommendationUnavailable = decision.recommendationUnavailable === true;
+  if (state.mode === "confirm" && !recommendation && !recommendationUnavailable) return null;
   const regionOptions = areaOptions(decision.proposal?.options, copy);
   const proposalText =
     proposalItemText(decision.proposal?.content, "region") ||
@@ -69,19 +72,29 @@ export function decisionCard(state, copy) {
   if (recommendedAction && recommendedAction !== "accept") {
     options.push({ action: "accept", label: copy.decision.acceptNms });
     options.push({ action: "counter", label: copy.decision.editCounter });
+  } else if (!recommendedAction && (kind === "target" || kind === "feasibility")) {
+    // Without a recommendation the engineer still needs the counter action of a target or
+    // feasibility proposal; an information answer goes through the free-text box instead.
+    options.push({ action: "counter", label: copy.decision.editCounter });
   }
   options.push({ action: "reject", label: copy.decision.reject, danger: true });
+
+  const detail = recommendation
+    ? `${format(copy.decision.recommendation, {
+        action: actionLabel(copy, recommendedAction),
+      })}${recommendation.rationale ? ` — ${recommendation.rationale}` : ""}`
+    : recommendationUnavailable
+      ? `${copy.decision.recommendationUnavailable}${
+          decision.recommendationError ? ` — ${decision.recommendationError}` : ""
+        }`
+      : copy.decision.question;
 
   return {
     type: "decision",
     kicker: copy.decision.kicker,
     title: format(copy.decision.title, { round, maxRounds }),
     text: proposalText,
-    detail: recommendation
-      ? `${format(copy.decision.recommendation, {
-          action: actionLabel(copy, recommendedAction),
-        })}${recommendation.rationale ? ` — ${recommendation.rationale}` : ""}`
-      : copy.decision.question,
+    detail,
     kind,
     recommendedAction,
     recommendation,
