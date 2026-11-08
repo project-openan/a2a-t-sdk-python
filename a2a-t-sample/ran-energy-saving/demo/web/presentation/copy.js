@@ -228,7 +228,7 @@ const EN = {
   off: "not reached",
   roles: {
     eng: "Network engineer",
-    engOrg: "PineApple operations",
+    engOrg: "Network operations",
     engSkill: "writes the request",
     oss: "OSS Agent",
     ossOrg: "ADK on GCP",
@@ -239,9 +239,9 @@ const EN = {
     approval: "MIE",
     approvalOrg: "Huawei · MML review",
     cells: "Radio sites",
-    cellsRegion: "PineApple",
+    cellsRegion: "Region A",
     cellsSub: "test cluster",
-    cellsOrg: "PineApple · test cluster · 6 sites (2 dataset)",
+    cellsOrg: "test cluster · 6 sites (2 dataset)",
   },
   states: {
     idle: "Not started",
@@ -711,7 +711,7 @@ const EN = {
     ],
   },
   map: {
-    zones: ["IT environment · OSS side", "Network environment · PineApple"],
+    zones: ["IT environment · OSS side", "Network environment · RAN side"],
     channel: "A2A-T",
     channelSub1: "A2A message + Task-T extension",
     channelSub2: "Negotiation-T · status updates",
@@ -1068,7 +1068,7 @@ const ZH = {
   off: "未到达",
   roles: {
     eng: "网络工程师",
-    engOrg: "PineApple 运营",
+    engOrg: "网络运营",
     engSkill: "提出请求",
     oss: "OSS Agent",
     ossOrg: "ADK on GCP",
@@ -1079,9 +1079,9 @@ const ZH = {
     approval: "MIE",
     approvalOrg: "华为 · MML 审核",
     cells: "无线站点",
-    cellsRegion: "PineApple",
+    cellsRegion: "区域 A",
     cellsSub: "测试集群",
-    cellsOrg: "PineApple · 测试集群 · 6 站点（2 个数据集）",
+    cellsOrg: "测试集群 · 6 站点（2 个数据集）",
   },
   states: {
     idle: "待发起",
@@ -1543,7 +1543,7 @@ const ZH = {
     ],
   },
   map: {
-    zones: ["IT 环境 · OSS 侧", "网络环境 · PineApple"],
+    zones: ["IT 环境 · OSS 侧", "网络环境 · RAN 侧"],
     channel: "A2A-T",
     channelSub1: "A2A 消息 + Task-T 扩展",
     channelSub2: "Negotiation-T · 状态更新",
