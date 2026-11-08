@@ -21,6 +21,7 @@ terminal Task state. Reject and abort never create a Task.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -108,6 +109,7 @@ from protocol.messages import (
 from protocol.negotiation_policy import (
     NegotiationKind,
     negotiation_kind_for_errors,
+    negotiation_kind_for_negotiation_type,
     negotiation_kind_for_propose_content,
     negotiation_kind_for_template_uri,
 )
@@ -1099,7 +1101,10 @@ async def run_client_flow(
         with trace_stage("task_t_modify_extraction" if modify_only else "task_t_slot_extraction"):
             # Every run, Create and Modify alike, extracts its Task-T from the operator's text.
             # There is no structured shortcut: the text is the only source of business values.
-            prompt_content = prompt_client.generate_task_prompt_from_text(
+            # The SDK call is synchronous and can take minutes on a slow endpoint; run it off the
+            # event loop so the page keeps receiving activity frames while it waits.
+            prompt_content = await asyncio.to_thread(
+                prompt_client.generate_task_prompt_from_text,
                 _request_with_context(user_request, conversation_context),
                 task_template_uri,
             )
@@ -1330,7 +1335,7 @@ async def run_client_flow(
                 },
             )
             abort_decision = NegotiationDecision(action="abort", rationale=reason)
-            request, call_context = _build_terminal_request(
+            request, call_context = await _build_terminal_request(
                 prompt_client=prompt_client,
                 decision=abort_decision,
                 kind=kind,
@@ -1389,7 +1394,7 @@ async def run_client_flow(
             raise ClientFlowError(f"The client flow exceeded {max_exchanges} exchanges.")
 
         if decision.action == "accept":
-            request, call_context = _build_accept_request(
+            request, call_context = await _build_accept_request(
                 prompt_client=prompt_client,
                 decision=decision,
                 kind=kind,
@@ -1407,7 +1412,7 @@ async def run_client_flow(
             send_performative = NegotiationPerformative.ACCEPT.value
             send_title = "Accept sent"
         elif decision.action == "counter":
-            request, call_context = _build_counter_request(
+            request, call_context = await _build_counter_request(
                 prompt_client=prompt_client,
                 decision=decision,
                 kind=kind,
@@ -1424,7 +1429,7 @@ async def run_client_flow(
             performative = (
                 NegotiationPerformative.REJECT if decision.action == "reject" else NegotiationPerformative.ABORT
             )
-            request, call_context = _build_terminal_request(
+            request, call_context = await _build_terminal_request(
                 prompt_client=prompt_client,
                 decision=decision,
                 kind=kind,
@@ -1732,7 +1737,7 @@ def _ensure_agreed_target(task_text: str, filled: Mapping[str, object]) -> str:
     return f"{task_text[:start]}{body}{task_text[end:]}"
 
 
-def _build_accept_request(
+async def _build_accept_request(
     *,
     prompt_client: PromptClient,
     decision: NegotiationDecision,
@@ -1750,16 +1755,22 @@ def _build_accept_request(
     """Refill the Task-T prompt and generate the Negotiation-T accept of the proposal type."""
     filled = _accept_filled_values(kind, decision, baseline, intent_fields)
     with trace_stage("task_t_slot_extraction_refill"):
-        task_content = prompt_client.generate_task_prompt_from_data_with_schema(
-            filled, TASK_PARAM_SCHEMA, task_template_uri
+        task_content = await asyncio.to_thread(
+            prompt_client.generate_task_prompt_from_data_with_schema,
+            filled,
+            TASK_PARAM_SCHEMA,
+            task_template_uri,
         )
     task_text = _ensure_agreed_target(_require_prompt_text(task_content, "the refilled Task-T prompt"), filled)
 
     accept_text = _accept_text(kind, filled, decision)
     accept_context = session.with_performative(NegotiationPerformative.ACCEPT)
     with trace_stage("negotiation_accept_extraction"):
-        content = prompt_client.generate_negotiation_accept_prompt_from_text(
-            accept_text, accept_context, _ACCEPT_REJECT_TEMPLATE_URI_BY_KIND[kind.value]
+        content = await asyncio.to_thread(
+            prompt_client.generate_negotiation_accept_prompt_from_text,
+            accept_text,
+            accept_context,
+            _ACCEPT_REJECT_TEMPLATE_URI_BY_KIND[kind.value],
         )
     # The real NMS rejects a message whose metadata holds more than one ``-T`` extension key, so
     # the NMS path sends the accept with the negotiation key only; the local demo server reads the
@@ -1777,7 +1788,7 @@ def _build_accept_request(
     )
 
 
-def _build_counter_request(
+async def _build_counter_request(
     *,
     prompt_client: PromptClient,
     decision: NegotiationDecision,
@@ -1794,8 +1805,11 @@ def _build_counter_request(
         raise ClientFlowError("A counter decision carries neither a counter proposal nor a rationale.")
     propose_context = session.with_performative(NegotiationPerformative.PROPOSE)
     with trace_stage("negotiation_propose_extraction"):
-        content = prompt_client.generate_negotiation_propose_prompt_from_text(
-            text, propose_context, _PROPOSE_TEMPLATE_URI_BY_KIND[kind.value]
+        content = await asyncio.to_thread(
+            prompt_client.generate_negotiation_propose_prompt_from_text,
+            text,
+            propose_context,
+            _PROPOSE_TEMPLATE_URI_BY_KIND[kind.value],
         )
     extra: dict[str, object] = {}
     if decision.counter_params:
@@ -1812,7 +1826,7 @@ def _build_counter_request(
     )
 
 
-def _build_terminal_request(
+async def _build_terminal_request(
     *,
     prompt_client: PromptClient,
     decision: NegotiationDecision,
@@ -1830,14 +1844,20 @@ def _build_terminal_request(
     if performative is NegotiationPerformative.REJECT:
         text = _reject_text(kind, propose_content, decision)
         with trace_stage("negotiation_reject_extraction"):
-            content = prompt_client.generate_negotiation_reject_prompt_from_text(
-                text, terminal_context, _ACCEPT_REJECT_TEMPLATE_URI_BY_KIND[kind.value]
+            content = await asyncio.to_thread(
+                prompt_client.generate_negotiation_reject_prompt_from_text,
+                text,
+                terminal_context,
+                _ACCEPT_REJECT_TEMPLATE_URI_BY_KIND[kind.value],
             )
     else:
         text = decision.rationale or "The client aborted the negotiation."
         with trace_stage("negotiation_abort_extraction"):
-            content = prompt_client.generate_negotiation_abort_prompt_from_text(
-                text, terminal_context, NEGOTIATION_ABORT_URI
+            content = await asyncio.to_thread(
+                prompt_client.generate_negotiation_abort_prompt_from_text,
+                text,
+                terminal_context,
+                NEGOTIATION_ABORT_URI,
             )
     return _negotiation_request(
         prompt_client=prompt_client,
@@ -1930,6 +1950,63 @@ def _find_negotiation_message(
     return None
 
 
+#: Key of the vendor's nested typed metadata inside a Negotiation-T JSON body.
+_RESPONSE_METADATA_KEY: Final[str] = "responseMetadata"
+
+
+def _vendor_response_metadata(content: object) -> Mapping[str, object] | None:
+    """Return the nested ``responseMetadata`` of one vendor Negotiation-T JSON body.
+
+    The vendor NMS sends the extension value as a JSON string, not rendered markdown:
+    ``{"message": [{"metadata": {"responseMetadata": {...}}}]}``. Anything else (a local server's
+    markdown body, an unparsable string) yields ``None`` so the caller keeps its other paths.
+    """
+    if not isinstance(content, str):
+        return None
+    try:
+        parsed = json.loads(content)
+    except ValueError:
+        return None
+    message = parsed.get("message") if isinstance(parsed, Mapping) else None
+    if not isinstance(message, list):
+        return None
+    for entry in message:
+        if not isinstance(entry, Mapping):
+            continue
+        metadata = entry.get("metadata")
+        if not isinstance(metadata, Mapping):
+            continue
+        response_metadata = metadata.get(_RESPONSE_METADATA_KEY)
+        if isinstance(response_metadata, Mapping):
+            return response_metadata
+    return None
+
+
+def _vendor_propose_kind(content: object) -> NegotiationKind | None:
+    """Return the kind named by a vendor propose's nested typed metadata, if any.
+
+    ``negotiationType`` is the vendor's own typed field and outranks ``templateUri``, whose path
+    does not follow the sample's template naming. A disagreement is logged, never silently
+    resolved.
+    """
+    response_metadata = _vendor_response_metadata(content)
+    if response_metadata is None:
+        return None
+    kind = negotiation_kind_for_negotiation_type(response_metadata.get("negotiationType"))
+    nested_uri = response_metadata.get("templateUri")
+    uri_kind = negotiation_kind_for_template_uri(nested_uri if isinstance(nested_uri, str) else None)
+    if kind is not None:
+        if uri_kind is not None and uri_kind is not kind:
+            _LOGGER.warning(
+                "vendor propose negotiationType=%s disagrees with its templateUri kind=%s; "
+                "keeping negotiationType",
+                response_metadata.get("negotiationType"),
+                uri_kind.value,
+            )
+        return kind
+    return uri_kind
+
+
 def _resolve_propose_template(
     metadata: Mapping[str, object],
     *,
@@ -1963,10 +2040,13 @@ def _resolve_propose_template(
         return value, kind, False
     if infer_missing_template_uri:
         content = metadata.get(NEGOTIATION_T_EXTENSION_URI)
-        kind = negotiation_kind_for_propose_content(content if isinstance(content, str) else None)
+        kind = _vendor_propose_kind(content) or negotiation_kind_for_propose_content(
+            content if isinstance(content, str) else None
+        )
         if kind is not None:
             _LOGGER.warning(
-                "the negotiation propose carries no template URI; inferred kind=%s from its heading",
+                "the negotiation propose carries no outer template URI; inferred kind=%s "
+                "from its responseMetadata or heading",
                 kind.value,
             )
             return _PROPOSE_TEMPLATE_URI_BY_KIND[kind.value], kind, True

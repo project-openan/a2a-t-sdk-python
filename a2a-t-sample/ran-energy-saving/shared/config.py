@@ -241,9 +241,10 @@ DEFAULT_NMS_POLL_AFTER_SECONDS = 120.0
 DEFAULT_NMS_STATE_POLL_SECONDS = 5.0
 
 #: Live LLM budget of one call (SDK structured calls and ADK LiteLlm turns). A local live smoke
-#: observed a 58s validation and a >90s accept validation; 120s leaves headroom for slower
-#: endpoints while the 300s client budget still covers the gate plus ADK agent turns.
-DEFAULT_LLM_TIMEOUT_SECONDS = 120.0
+#: observed a 58s validation and a >90s accept validation; the yellow zone then saw one
+#: ``task_t_slot_extraction`` take 116.7s of the old 120s budget, so 180s keeps headroom for the
+#: long tail while the 300s client budget still covers the gate plus ADK agent turns.
+DEFAULT_LLM_TIMEOUT_SECONDS = 180.0
 
 #: Live SDK LLM attempt limit per retryable step (the SDK accepts 1..10).
 DEFAULT_LLM_MAX_ATTEMPTS = 1

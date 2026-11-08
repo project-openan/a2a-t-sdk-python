@@ -29,8 +29,9 @@ Raising the timeout alone does not fix it.
 
 ## 3. Timeout budget
 
-- `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` (default **120 s**): one LLM call. It always overrides the
-  source `A2AT_LLM_TIMEOUT_SECONDS`.
+- `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` (default **180 s**): one LLM call. It always overrides the
+  source `A2AT_LLM_TIMEOUT_SECONDS`. The default was raised from 120 s after the yellow-zone
+  endpoint spent 116.7 s in one `task_t_slot_extraction` call.
 - `A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS` (default **300 s**): the whole A2A request.
 - With retries enabled:
 
@@ -38,7 +39,8 @@ Raising the timeout alone does not fix it.
   A2AT_SAMPLE_LLM_TIMEOUT_SECONDS x (A2AT_LLM_TIMEOUT_RETRIES + 1) < A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS
   ```
 
-  Otherwise the HTTP request times out first. 120 s x 2 = 240 s fits; 300 s x 2 = 600 s does not.
+  Otherwise the HTTP request times out first. 180 s x 2 = 360 s does not fit the 300 s HTTP
+  budget, so keep retries off (the sample default) or raise `A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS`.
   This bounds **one call**; one A2A request may still run slot extraction, validation and other
   structured calls in series, so their sum must also fit the HTTP budget.
 - Retry is a **temporary mitigation**, not the fix. The second request may hit the server-side
@@ -103,7 +105,7 @@ Now:
   verified. Nothing was sent." and lists the missing required fields as secondary context.
 - `llm.response_invalid` is retried **once** on the sample side
   (`client_flow.py::_SEMANTIC_VALIDATION_RETRIES`); the UI shows "Validation was attempted N times".
-  Timeouts (`llm.invocation_failed`) are **not** retried: a second 120 s wait would exhaust the HTTP
+  Timeouts (`llm.invocation_failed`) are **not** retried: a second 180 s wait would exhaust the HTTP
   budget.
 - To reduce schema echo at the model, try `A2AT_LLM_RESPONSE_FORMAT=json_schema` (confirm oneapi
   supports it first).

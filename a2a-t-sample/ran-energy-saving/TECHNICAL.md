@@ -1172,7 +1172,7 @@ script can switch the model with a plain `export ADK_MODEL_NAME=...`.
 | `A2AT_SAMPLE_WEBHOOK_TLS_CERT` / `A2AT_SAMPLE_WEBHOOK_TLS_KEY` | unset; plain `http` | PEM certificate and matching key of the receiver's TLS listener. The launcher resolves relative paths against the sample root in the per-run `.env`. |
 | `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` | unset; push token | `user:password` registered as the push config's Basic auth and the only credential the receiver accepts while set. Keep it in `.env` only. |
 | `A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS` | default `300` (> 0) | Client HTTP budget of one A2A request: the `httpx` client timeout and `ClientCallContext.timeout` of every send. |
-| `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` | default `120` (> 0) | Live LLM budget of one call (SDK structured call or ADK `LiteLlm` turn), written into the per-run SDK `.env`. |
+| `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` | default `180` (> 0) | Live LLM budget of one call (SDK structured call or ADK `LiteLlm` turn), written into the per-run SDK `.env`. Raised from 120 after a yellow-zone `task_t_slot_extraction` took 116.7 s. |
 | `A2AT_SAMPLE_LLM_MAX_ATTEMPTS` | default `1` (`1`..`10`) | Live SDK protocol retry limit per retryable step, written into the per-run SDK `.env`; OpenAI transport retries are disabled separately. |
 | `A2AT_SAMPLE_UI_HOST` | default `127.0.0.1` | Default bind host of the Web UI; read by `run_demo.py` as the default of `--ui-host`. Use `0.0.0.0` to expose it on all interfaces (trusted networks only). |
 | `A2AT_SAMPLE_UI_PORT` | default `8080` | Default bind port of the Web UI; read by `run_demo.py` as the default of `--ui-port`. |
@@ -1250,9 +1250,9 @@ children). Live output depends on the model's extraction, semantic validation an
 (300s default) in `ClientCallContext.timeout`, and the `httpx` client uses the same budget. In live
 mode the server pre-task handler performs several LLM calls before it emits any event, so the client budget must
 outlast that worst case; the old fixed 60s made the client give up while the server was still
-working (`A2AClientTimeoutError`). Live LLM calls have a **120s per-call budget** (shared by SDK
+working (`A2AClientTimeoutError`). Live LLM calls have a **180s per-call budget** (shared by SDK
 structured calls and client ADK `LiteLlm` turns; raise it for slower endpoints). The per-run SDK `.env`
-carries `A2AT_LLM_TIMEOUT_SECONDS=120` and `A2AT_LLM_MAX_ATTEMPTS=1`. The OpenAI SDK's own transport
+carries `A2AT_LLM_TIMEOUT_SECONDS=180` and `A2AT_LLM_MAX_ATTEMPTS=1`. The OpenAI SDK's own transport
 retries are disabled by the traced provider, and LiteLLM is built with `num_retries=0`, so one call
 cannot silently become three attempts; a stuck call fails within the configured budget and the pre-task handler
 answers with a structured protocol error message the client can display. Offline mode is unaffected
@@ -1261,7 +1261,7 @@ defaults to the 300s HTTP budget, so it cannot end a phase while the client is s
 
 Existing `.env` files that set `A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT=30` or `A2AT_LLM_TIMEOUT_SECONDS=60`
 should be updated or removed: the new sample keys are `A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS=300`,
-`A2AT_SAMPLE_LLM_TIMEOUT_SECONDS=120`, and `A2AT_SAMPLE_LLM_MAX_ATTEMPTS=1`.
+`A2AT_SAMPLE_LLM_TIMEOUT_SECONDS=180`, and `A2AT_SAMPLE_LLM_MAX_ATTEMPTS=1`.
 
 **Ports.** Defaults are server `8000`, registry `5001`, webhook `9000`, Web UI `8080` and the
 optional A2A gateway `8001`, all on `127.0.0.1`. `run_demo.py` writes these into the per-run `.env`

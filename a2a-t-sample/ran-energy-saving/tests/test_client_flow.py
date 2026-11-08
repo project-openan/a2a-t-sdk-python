@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -173,6 +174,50 @@ class FakePromptClient:
     ) -> MetadataContent:
         self.propose_texts.append(text or "")
         return _negotiation_content(f"Propose: {text}", context, template_uri)
+
+
+@dataclass(frozen=True)
+class SlowPromptClient(FakePromptClient):
+    """Fake client that spends wall-clock time in the initial Task-T extraction."""
+
+    delay_seconds: float = 0.3
+
+    def generate_task_prompt_from_text(self, text: str, template_uri: str) -> MetadataContent:
+        time.sleep(self.delay_seconds)
+        return super().generate_task_prompt_from_text(text, template_uri)
+
+
+@dataclass(frozen=True)
+class SlowAcceptPromptClient(FakePromptClient):
+    """Fake client that spends wall-clock time in the accept extraction."""
+
+    delay_seconds: float = 0.3
+
+    def generate_negotiation_accept_prompt_from_text(
+        self, text: str | None, context: NegotiationContext, template_uri: str
+    ) -> MetadataContent:
+        time.sleep(self.delay_seconds)
+        return super().generate_negotiation_accept_prompt_from_text(text, context, template_uri)
+
+
+async def _ticks_while(awaitable: Awaitable[object]) -> int:
+    """Count event-loop turns while ``awaitable`` runs (0 when the call blocks the loop)."""
+    ticks = 0
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    task = asyncio.create_task(ticker())
+    try:
+        await awaitable
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    return ticks
 
 
 def _negotiation_content(text: str, context: NegotiationContext, template_uri: str) -> MetadataContent:
@@ -400,6 +445,37 @@ async def test_waiting_for_the_server_publishes_a_peer_activity() -> None:
     peer = [item for item in activities if item["detail"]["activityKind"] == "peer"]
     assert [item["detail"]["status"] for item in peer] == ["running", "done"]
     assert peer[0]["detail"]["labelKey"] == "waitingPeer"
+
+
+async def test_the_initial_task_t_extraction_does_not_block_the_event_loop() -> None:
+    """The yellow zone waited 116.7 s after confirming; a sync SDK call must not freeze the UI."""
+    ticks = await _ticks_while(
+        run_client_flow(
+            prompt_client=SlowPromptClient(),
+            transport=ScriptedTransport([_task_completed_batch()]),
+            user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+            provider=ScriptedDecisionProvider(()),
+            language="en-US",
+        )
+    )
+
+    # A blocking call would leave the ticker at 0 for the whole extraction.
+    assert ticks >= 10
+
+
+async def test_the_accept_extraction_does_not_block_the_event_loop() -> None:
+    """Every prompt-generation call of the flow hands the loop back, not only the first one."""
+    ticks = await _ticks_while(
+        run_client_flow(
+            prompt_client=SlowAcceptPromptClient(),
+            transport=ScriptedTransport([[propose_event("information", 1)], _task_completed_batch()]),
+            user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+            provider=ScriptedDecisionProvider((INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions[0],)),
+            language="en-US",
+        )
+    )
+
+    assert ticks >= 10
 
 
 async def test_accept_span_carries_the_refilled_task_t_and_the_negotiation_payload() -> None:
@@ -1584,4 +1660,91 @@ async def test_a_propose_without_template_uri_fails_when_inference_is_off() -> N
             user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
             provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
             language="en-US",
+        )
+
+
+def _vendor_propose_content(
+    *,
+    negotiation_type: str | None = "INFORMATION",
+    template_uri: str = "Negotiation-T/network-layer/ran-energy-saving/v1/region-negotiation/propose/v1",
+) -> str:
+    """Build the vendor's Negotiation-T body: one JSON string with a nested ``responseMetadata``."""
+    response_metadata: dict[str, object] = {
+        "performative": "PROPOSE",
+        "templateUri": template_uri,
+    }
+    if negotiation_type is not None:
+        response_metadata["negotiationType"] = negotiation_type
+    return json.dumps(
+        {
+            "message": [
+                {
+                    "text": "Region 'Region Z' is not recognized. Please provide the correct region name.",
+                    "metadata": {"responseMetadata": response_metadata},
+                }
+            ],
+            "messageType": "ASK_USER",
+        }
+    )
+
+
+async def _requested_propose(content: str) -> list[tuple[str, str | None]]:
+    """Run one round against ``content`` and return what the decision provider was shown."""
+    requested: list[tuple[str, str | None]] = []
+    await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=ScriptedTransport(
+            [[_propose_without_template_uri("information", content=content)], [end_event()]]
+        ),
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+        language="en-US",
+        on_decision_requested=lambda propose, session: requested.append(
+            (propose.kind, propose.template_uri)
+        ),
+        infer_missing_negotiation_kind=True,
+    )
+    return requested
+
+
+async def test_a_vendor_propose_is_typed_from_its_nested_negotiation_type() -> None:
+    """The yellow-zone vendor sends ``negotiationType`` inside the Negotiation-T JSON string."""
+    requested = await _requested_propose(_vendor_propose_content())
+
+    assert requested == [("information", INFORMATION_NEGOTIATION_PROPOSE_URI)]
+
+
+async def test_a_vendor_propose_falls_back_to_its_nested_template_uri() -> None:
+    """Without ``negotiationType``, a recognised nested ``templateUri`` still names the kind."""
+    requested = await _requested_propose(
+        _vendor_propose_content(negotiation_type=None, template_uri="Negotiation-T/info-negotiation/propose/v1")
+    )
+
+    assert requested == [("information", INFORMATION_NEGOTIATION_PROPOSE_URI)]
+
+
+async def test_an_unknown_vendor_propose_still_fails_loudly() -> None:
+    """No typed signal means no guess: the wrong decision prompt is worse than a hard failure."""
+    transport = ScriptedTransport(
+        [
+            [
+                _propose_without_template_uri(
+                    "information",
+                    content=_vendor_propose_content(
+                        negotiation_type=None,
+                        template_uri="Negotiation-T/network-layer/ran-energy-saving/v1/region-negotiation/propose/v1",
+                    ),
+                )
+            ]
+        ]
+    )
+
+    with pytest.raises(ClientFlowError, match="carries no template URI"):
+        await run_client_flow(
+            prompt_client=FakePromptClient(),
+            transport=transport,
+            user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+            provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+            language="en-US",
+            infer_missing_negotiation_kind=True,
         )

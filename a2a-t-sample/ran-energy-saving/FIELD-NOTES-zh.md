@@ -27,8 +27,9 @@
 
 ## 3. 超时预算怎么算
 
-- `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS`（默认 **120s**）：单次 LLM 调用预算，总是覆盖源 `.env`
-  里的 `A2AT_LLM_TIMEOUT_SECONDS`。
+- `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS`（默认 **180s**）：单次 LLM 调用预算，总是覆盖源 `.env`
+  里的 `A2AT_LLM_TIMEOUT_SECONDS`。黄区实测一次 `task_t_slot_extraction` 用了 116.7s，
+  距旧的 120s 预算只剩 3.3s，因此默认值提高到 180s。
 - `A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS`（默认 **300s**）：整条 A2A 请求预算。
 - 开启重试时必须满足：
 
@@ -36,7 +37,8 @@
   A2AT_SAMPLE_LLM_TIMEOUT_SECONDS × (A2AT_LLM_TIMEOUT_RETRIES + 1) < A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS
   ```
 
-  否则 HTTP 会先超时。例如 120s × (1+1) = 240s < 300s 可用；300s × 2 = 600s 不可用。
+  否则 HTTP 会先超时。例如 180s × (1+1) = 360s > 300s 不可用，因此应保持重试关闭
+  （样例默认）或调高 `A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS`。
   注意这是**单次调用**的上界；一条 A2A 请求里还可能串行发生槽位抽取、校验等多次 structured
   调用，总和也要留在 HTTP 预算内。
 - 重试是**临时兜底**，不是根治。第二次请求可能命中服务端前缀缓存（实测 156s → 5.9s），
@@ -92,7 +94,7 @@
 - 校验器失败（`llm.response_invalid` / `llm.invocation_failed`）会**保留真实原因**：
   UI 显示“校验模型返回了非法响应，无法确认必填项；本次没有发送”，缺失的必填项作为次要信息列出。
 - `llm.response_invalid` 在样例侧**额外重试 1 次**（`client_flow.py::_SEMANTIC_VALIDATION_RETRIES`）；
-  UI 会显示“校验共尝试 N 次”。超时（`llm.invocation_failed`）**不重试**，避免第二次 120s 挤爆 HTTP 预算。
+  UI 会显示“校验共尝试 N 次”。超时（`llm.invocation_failed`）**不重试**，避免第二次 180s 挤爆 HTTP 预算。
 - 想从模型侧减少 schema 回显，可试 `A2AT_LLM_RESPONSE_FORMAT=json_schema`（先确认 oneapi 支持）。
 - 必填项标签现在来自 `TASK_PARAM_SCHEMA` 的 `title` / `x-title-zh-CN`，新增必填字段不会再漏出
   camelCase 字段名。
@@ -100,4 +102,4 @@
 ## 8. 回滚
 
 删除 `A2AT_LLM_EXTRA_BODY` / `A2AT_LLM_TIMEOUT_RETRIES`，把
-`A2AT_SAMPLE_INTENT_MODE=processed` 加回来，`A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` 恢复 120 即可。
+`A2AT_SAMPLE_INTENT_MODE=processed` 加回来，`A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` 恢复 180 即可。

@@ -240,6 +240,8 @@ class RunState:
     _recorder: TraceRecorder = field(init=False, repr=False)
     #: Guards the span/sequence stores: an in-process server may ingest spans from another thread.
     _trace_lock: threading.RLock = field(default_factory=threading.RLock, repr=False, compare=False)
+    #: Loop that owns the subscriber queues; worker threads marshal frames to it.
+    _loop: asyncio.AbstractEventLoop | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Create the per-run span recorder (UI ids never collide with client-flow ids)."""
@@ -331,16 +333,49 @@ class RunState:
             message["seq"] = seq
             self.messages.append(message)
             queues = tuple(self.subscribers)
-        for queue in queues:
-            queue.put_nowait(message)
+
+        def deliver() -> None:
+            for queue in queues:
+                queue.put_nowait(message)
+
+        self._deliver(deliver)
         return message
 
     def broadcast_ephemeral(self, message: dict[str, object]) -> None:
         """Publish one message to live subscribers only; it is never replayed."""
         with self._trace_lock:
             queues = tuple(self.subscribers)
-        for queue in queues:
-            queue.put_nowait(message)
+
+        def deliver() -> None:
+            for queue in queues:
+                queue.put_nowait(message)
+
+        self._deliver(deliver)
+
+    def _deliver(self, deliver: Callable[[], None]) -> None:
+        """Run ``deliver`` on the loop that owns the subscriber queues.
+
+        A2A-T SDK calls run in worker threads (``asyncio.to_thread``), so their trace and activity
+        sinks are invoked off the loop. Feeding an ``asyncio.Queue`` from another thread is not
+        supported, and the frame would stay invisible until the next loop turn. On a worker thread
+        the delivery is marshalled with ``call_soon_threadsafe``; on the loop it runs inline, which
+        keeps the replay order of same-thread broadcasts. With no loop yet there is no subscriber
+        waiting either, so the frame has nowhere to go.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            self._loop = loop
+            deliver()
+            return
+        target = self._loop
+        if target is not None and not target.is_closed():
+            target.call_soon_threadsafe(deliver)
+            return
+        # No loop was ever bound (a synchronous caller or a test): deliver inline.
+        deliver()
 
     def record_activity(self, detail: Mapping[str, object]) -> dict[str, object] | None:
         """Publish one wait-state update without touching the trace timeline or replay buffer.
@@ -905,6 +940,10 @@ class RunState:
 
     def subscribe(self) -> tuple[list[dict[str, object]], asyncio.Queue[dict[str, object]]]:
         """Return the replay snapshot and the live queue of one new subscriber atomically."""
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass  # A synchronous caller has no loop; the first on-loop broadcast binds one.
         snapshot = list(self.messages)
         if self.activity is not None:
             # Wait-state frames are not in the replay buffer; hand the current one to the late

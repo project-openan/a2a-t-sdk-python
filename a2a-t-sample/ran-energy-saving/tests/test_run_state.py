@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from pathlib import Path
 
 from protocol.client_service.run_state import RunState
@@ -53,6 +55,56 @@ def _waiting_event() -> dict[str, object]:
             },
         },
     }
+
+
+class _RecordingQueue(asyncio.Queue[dict[str, object]]):
+    """Subscriber queue that remembers which thread fed it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fed_on: list[int] = []
+
+    def put_nowait(self, item: dict[str, object]) -> None:
+        self.fed_on.append(threading.get_ident())
+        super().put_nowait(item)
+
+
+def _subscribe_with(run: RunState) -> _RecordingQueue:
+    """Attach one recording subscriber instead of the plain queue ``subscribe`` builds."""
+    run.subscribe()
+    queue = _RecordingQueue()
+    run.subscribers.clear()
+    run.subscribers.add(queue)
+    return queue
+
+
+async def test_a_worker_thread_hands_its_activity_frame_to_the_event_loop(tmp_path: Path) -> None:
+    """The SDK call moved to a worker thread; its wait-state frame must still reach SSE."""
+    run = _run(tmp_path)
+    queue = _subscribe_with(run)
+    loop_thread = threading.get_ident()
+
+    await asyncio.to_thread(run.record_activity, _activity("running"))
+    frame = await asyncio.wait_for(queue.get(), timeout=1.0)
+
+    assert frame["type"] == "activity"
+    assert queue.fed_on == [loop_thread]
+
+
+async def test_a_worker_thread_hands_its_trace_span_to_the_event_loop(tmp_path: Path) -> None:
+    """Same rule for trace spans: an asyncio.Queue is only safe from its own loop thread."""
+    run = _run(tmp_path)
+    queue = _subscribe_with(run)
+    loop_thread = threading.get_ident()
+
+    await asyncio.to_thread(
+        run.record_trace,
+        {"spanId": "llm_client_test_0001", "kind": "llm", "phase": "dispatch", "title": "LLM call"},
+    )
+    frame = await asyncio.wait_for(queue.get(), timeout=1.0)
+
+    assert frame["type"] == "trace"
+    assert queue.fed_on == [loop_thread]
 
 
 def test_an_activity_is_broadcast_but_not_replayed_as_a_timeline_message(tmp_path: Path) -> None:

@@ -19,6 +19,7 @@ calls report ``n/a (scripted)`` tokens instead of fabricating a zero usage.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Mapping
 from contextvars import ContextVar
@@ -39,8 +40,14 @@ from shared.trace import (
     record_span,
 )
 
+_LOGGER = logging.getLogger("ran_energy_saving.traced_llm")
+
 #: Provider name of the traced OpenAI client (live mode).
 TRACED_OPENAI_PROVIDER: Final[str] = "openai_traced"
+
+#: Share of its own timeout budget above which one call is a long tail worth a log line.
+#: The yellow zone saw a single extraction take 116.7 s of a 120 s budget with no other signal.
+SLOW_CALL_WARNING_RATIO: Final[float] = 0.5
 
 #: Provider name of the traced scripted client (offline mode).
 TRACED_SCRIPTED_PROVIDER: Final[str] = "scripted_traced"
@@ -267,6 +274,8 @@ class TracedStructuredMixin:
             response_detail["responseId"] = capture["responseId"]
         if capture.get("finishReason") is not None:
             response_detail["finishReason"] = capture["finishReason"]
+        duration_ms = elapsed_ms(started)
+        _warn_if_slow(self, stage, duration_ms, response, capture)
         record_span(
             kind="llm",
             phase=phase_for_stage(stage),
@@ -284,10 +293,41 @@ class TracedStructuredMixin:
             },
             started_at=started_at,
             ended_at=_now_iso(),
-            duration_ms=elapsed_ms(started),
+            duration_ms=duration_ms,
         )
         _emit_activity(activity_id, stage=stage, status="done")
         return response
+
+
+def _warn_if_slow(
+    client: object,
+    stage: str | None,
+    duration_ms: float,
+    response: LLMResponse,
+    capture: Mapping[str, object],
+) -> None:
+    """Log one structured call that used more than :data:`SLOW_CALL_WARNING_RATIO` of its budget.
+
+    The span only exists after the call returns, so a long tail is otherwise invisible until the
+    run ends. The line names the stage and the provider's own response id, which is what the
+    gateway needs to trace the request on its side.
+    """
+    timeout_seconds = getattr(getattr(client, "_config", None), "timeout_seconds", None)
+    if not isinstance(timeout_seconds, (int, float)) or timeout_seconds <= 0:
+        return
+    if duration_ms < float(timeout_seconds) * SLOW_CALL_WARNING_RATIO * 1000:
+        return
+    usage = response.usage or {}
+    _LOGGER.warning(
+        "slow LLM call stage=%s durationMs=%.0f timeoutSeconds=%s promptTokens=%s "
+        "completionTokens=%s responseId=%s",
+        stage or "unknown",
+        duration_ms,
+        timeout_seconds,
+        usage.get("prompt_tokens"),
+        usage.get("completion_tokens"),
+        capture.get("responseId"),
+    )
 
 
 def _emit_activity(activity_id: str, *, stage: str | None, status: str) -> None:

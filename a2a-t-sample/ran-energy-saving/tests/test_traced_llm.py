@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -175,6 +178,52 @@ def test_a_structured_call_publishes_its_wait_state_before_and_after_the_call(
     assert len({item["detail"]["activityId"] for item in activities}) == 1
     assert activities[0]["runId"] == "run-1"
     assert activities[0]["stage"] == "negotiation_propose_validation"
+
+
+def test_a_slow_structured_call_is_logged_as_a_warning(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    english_language: None,
+) -> None:
+    """A single call held 116.7 s in the yellow zone; the log must name the stage next time."""
+    del english_language
+    client = TracedScriptedClient(replace(_client_config(), timeout_seconds=0.02))
+    original = client._call_structured
+
+    def slow_call(**kwargs: Any) -> LLMResponse:
+        time.sleep(0.05)
+        return original(**kwargs)
+
+    monkeypatch.setattr(client, "_call_structured", slow_call)
+
+    with (
+        caplog.at_level(logging.WARNING),
+        trace_scope(run_id="run-1", role="client"),
+        trace_stage("task_t_slot_extraction"),
+    ):
+        client.structured(messages=_valid_messages(), json_schema=_VALIDATION_SCHEMA)
+
+    assert "slow LLM call" in caplog.text
+    assert "task_t_slot_extraction" in caplog.text
+
+
+def test_a_call_under_the_warning_threshold_stays_silent(
+    caplog: pytest.LogCaptureFixture,
+    english_language: None,
+) -> None:
+    """The warning must not fire on every ordinary call."""
+    del english_language
+
+    with (
+        caplog.at_level(logging.WARNING),
+        trace_scope(run_id="run-1", role="client"),
+        trace_stage("task_t_slot_extraction"),
+    ):
+        TracedScriptedClient(_client_config()).structured(
+            messages=_valid_messages(), json_schema=_VALIDATION_SCHEMA
+        )
+
+    assert "slow LLM call" not in caplog.text
 
 
 def test_stage_falls_back_to_the_scripted_metadata_without_trace_stage(

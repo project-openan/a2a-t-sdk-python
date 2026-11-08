@@ -408,7 +408,7 @@ def test_missing_env_file_uses_offline_defaults(tmp_path: Path) -> None:
     assert config.model_mode == MODEL_MODE_OFFLINE
     assert config.registry_url == "http://127.0.0.1:5001"
     assert config.http_timeout_seconds == DEFAULT_HTTP_TIMEOUT_SECONDS == 300.0
-    assert config.llm_timeout_seconds == DEFAULT_LLM_TIMEOUT_SECONDS == 120.0
+    assert config.llm_timeout_seconds == DEFAULT_LLM_TIMEOUT_SECONDS == 180.0
     assert config.llm_max_attempts == DEFAULT_LLM_MAX_ATTEMPTS == 1
     assert config.webhook_idle_timeout == DEFAULT_WEBHOOK_IDLE_TIMEOUT == 300
     assert DEFAULT_WEBHOOK_IDLE_TIMEOUT == int(DEFAULT_HTTP_TIMEOUT_SECONDS)

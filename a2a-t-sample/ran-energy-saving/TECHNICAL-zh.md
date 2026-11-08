@@ -924,7 +924,7 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_SAMPLE_WEBHOOK_TLS_CERT` / `A2AT_SAMPLE_WEBHOOK_TLS_KEY` | 未设置时使用明文 `http` | 接收器 TLS 监听的 PEM 证书与私钥。启动器会在每次运行的 `.env` 中把相对路径解析到样例根目录。 |
 | `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` | 未设置时校验推送 token | `user:password`，注册为 push config 的 Basic 鉴权，也是设置后接收器唯一接受的凭据。只放在 `.env`。 |
 | `A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS` | 默认 `300`（> 0） | 单次 A2A 请求的客户端 HTTP 预算：`httpx` 客户端超时与每次发送的 `ClientCallContext.timeout`。 |
-| `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` | 默认 `120`（> 0） | 在线单次 LLM 调用预算（SDK 结构化调用或 ADK `LiteLlm` turn），写入每次运行的 SDK `.env`。 |
+| `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` | 默认 `180`（> 0） | 在线单次 LLM 调用预算（SDK 结构化调用或 ADK `LiteLlm` turn），写入每次运行的 SDK `.env`。因黄区一次 `task_t_slot_extraction` 用了 116.7s，从 120 提高到 180。 |
 | `A2AT_SAMPLE_LLM_MAX_ATTEMPTS` | 默认 `1`（`1`..`10`） | 在线 SDK 每个可重试步骤的协议级尝试次数，写入每次运行的 SDK `.env`；OpenAI 传输层重试另行关闭。 |
 | `A2AT_SAMPLE_UI_HOST` | 默认 `127.0.0.1` | Web UI 的默认绑定主机；`run_demo.py` 将其作为 `--ui-host` 的默认值读取。设为 `0.0.0.0` 可监听所有网卡（仅限可信网络）。 |
 | `A2AT_SAMPLE_UI_PORT` | 默认 `8080` | Web UI 的默认绑定端口；`run_demo.py` 将其作为 `--ui-port` 的默认值读取。 |
@@ -981,9 +981,9 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 
 **在线模式。** 两侧 SDK、客户端 ADK agent 与服务端 LangGraph planner 使用配置端点。工具保持确定性并受顺序约束；只有 planner 的工具选择与参数由模型驱动。Windows 下保持 `PYTHONUTF8=1`（`run_demo.py` 会为子进程设置）。在线输出依赖模型的抽取、语义校验与规划，见 §1.1。
 
-**超时预算。** 客户端每次 A2A 请求都通过 `ClientCallContext.timeout` 携带 `A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS`（默认 300s），`httpx` 客户端使用同一预算。在线模式下服务端任务前协商处理器在发出任何事件前会执行多次 LLM 调用，因此客户端预算必须长于该最坏情况；原先固定的 60s 会让客户端在服务端仍在工作时提前放弃（`A2AClientTimeoutError`）。在线 LLM 调用拥有 **120s 单次调用预算**（SDK 结构化调用与客户端 ADK `LiteLlm` turn 共用；更慢的端点可继续调高）。每次运行的 SDK `.env` 写入 `A2AT_LLM_TIMEOUT_SECONDS=120` 与 `A2AT_LLM_MAX_ATTEMPTS=1`。traced Provider 关闭了 OpenAI SDK 自身的传输层重试，LiteLLM 也以 `num_retries=0` 构建，因此一次调用不会悄悄变成三次尝试；卡住的调用会在配置预算内失败，处理器随后返回结构化的协议错误消息供客户端展示。离线模式不受影响（脚本化 Provider 不发起网络调用）。webhook 空闲兜底遵循同一原则，默认等于 300s 的 HTTP 预算，客户端仍在等待时不会提前结束阶段。
+**超时预算。** 客户端每次 A2A 请求都通过 `ClientCallContext.timeout` 携带 `A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS`（默认 300s），`httpx` 客户端使用同一预算。在线模式下服务端任务前协商处理器在发出任何事件前会执行多次 LLM 调用，因此客户端预算必须长于该最坏情况；原先固定的 60s 会让客户端在服务端仍在工作时提前放弃（`A2AClientTimeoutError`）。在线 LLM 调用拥有 **180s 单次调用预算**（SDK 结构化调用与客户端 ADK `LiteLlm` turn 共用；更慢的端点可继续调高）。每次运行的 SDK `.env` 写入 `A2AT_LLM_TIMEOUT_SECONDS=180` 与 `A2AT_LLM_MAX_ATTEMPTS=1`。traced Provider 关闭了 OpenAI SDK 自身的传输层重试，LiteLLM 也以 `num_retries=0` 构建，因此一次调用不会悄悄变成三次尝试；卡住的调用会在配置预算内失败，处理器随后返回结构化的协议错误消息供客户端展示。离线模式不受影响（脚本化 Provider 不发起网络调用）。webhook 空闲兜底遵循同一原则，默认等于 300s 的 HTTP 预算，客户端仍在等待时不会提前结束阶段。
 
-已有的 `.env` 若设置了 `A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT=30` 或 `A2AT_LLM_TIMEOUT_SECONDS=60`，应更新或删除：新的样例键为 `A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS=300`、`A2AT_SAMPLE_LLM_TIMEOUT_SECONDS=120`、`A2AT_SAMPLE_LLM_MAX_ATTEMPTS=1`。
+已有的 `.env` 若设置了 `A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT=30` 或 `A2AT_LLM_TIMEOUT_SECONDS=60`，应更新或删除：新的样例键为 `A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS=300`、`A2AT_SAMPLE_LLM_TIMEOUT_SECONDS=180`、`A2AT_SAMPLE_LLM_MAX_ATTEMPTS=1`。
 
 **端口。** 默认服务端 `8000`、注册中心 `5001`、webhook `9000`、Web UI `8080`、可选 A2A Gateway `8001`（均绑定 `127.0.0.1`）。`run_demo.py` 会把这些值写入交给子进程的每次运行 `.env`。Web UI 默认只监听回环地址；`--ui-host 0.0.0.0`（或 `A2AT_SAMPLE_UI_HOST=0.0.0.0`）可监听所有网卡。服务端向 UI 发送 trace 时仍使用 `127.0.0.1`，在 UI 与服务端同机运行时这是正确的。UI、Gateway 与服务端只在回环地址上开放；绑定非回环地址必须配置对应 token（`A2AT_SAMPLE_AUTH_TOKEN` 或 `A2AT_SAMPLE_SERVER_AUTH_TOKEN`）。Web UI 有一个显式例外 `--allow-insecure-bind`，仅用于可信局域网免 token 演示，绝不适用于 A2A 服务端。带 token 的 UI 可以分享 `http://<lan-ip>:<port>/?token=…`；页面把 token 写入同源 `a2at_ui_token` cookie（`SameSite=Strict`），并从地址栏移除，fetch 与 `EventSource` 都能认证。
 

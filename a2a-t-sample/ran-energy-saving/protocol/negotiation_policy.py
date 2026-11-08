@@ -312,6 +312,33 @@ def negotiation_kind_for_template_uri(template_uri: str | None) -> NegotiationKi
     return _KIND_BY_URI_SEGMENT.get(parts[1])
 
 
+#: Wire spelling of the type in a vendor ``responseMetadata.negotiationType``.
+_KIND_BY_NEGOTIATION_TYPE: Final[dict[str, NegotiationKind]] = {
+    "information": NegotiationKind.INFORMATION,
+    "target": NegotiationKind.TARGET,
+    "feasibility": NegotiationKind.FEASIBILITY,
+}
+
+
+def negotiation_kind_for_negotiation_type(value: object) -> NegotiationKind | None:
+    """Return the kind named by a vendor ``responseMetadata.negotiationType``.
+
+    The vendor NMS renders its Negotiation-T body as a JSON string whose nested
+    ``responseMetadata`` names the negotiation type directly. That field outranks any inference
+    from a body heading or from a template path the client does not share.
+
+    Args:
+        value: the raw ``negotiationType`` field of the vendor metadata.
+
+    Returns:
+        The kind it names, or ``None`` when the field is absent or unknown. ``None`` means
+        "do not guess"; the caller keeps failing loudly.
+    """
+    if not isinstance(value, str):
+        return None
+    return _KIND_BY_NEGOTIATION_TYPE.get(value.strip().lower())
+
+
 #: Heading title of each propose template, in both languages the sample renders. The vendor NMS
 #: omits ``templateUri`` on the proposal that continues a negotiation, so the body heading is the
 #: only typed signal left.
