@@ -182,11 +182,33 @@ def test_live_transcript_export_replay_request_mirrors_the_openai_client_payload
 
     from a2a_t.llm.providers.openai import _JSON_MODE_INSTRUCTION_DEFAULT
 
-    assert replay["messages"][0] == {"role": "system", "content": _JSON_MODE_INSTRUCTION_DEFAULT}
-    assert replay["messages"][1]["content"].startswith("Return JSON that conforms to this JSON schema: ")
+    assert [message["role"] for message in replay["messages"]] == ["system", "user"]
+    system_content = replay["messages"][0]["content"]
+    assert system_content.startswith(_JSON_MODE_INSTRUCTION_DEFAULT)
+    assert "Return JSON that conforms to this JSON schema: " in system_content
+    assert replay["messages"][1] == {"role": "user", "content": "投诉文本"}
     assert replay["response_format"] == {"type": "json_object"}
     assert replay["temperature"] == 0.0
     assert replay["model"] == "qwen3-27b"
+
+
+def test_live_transcript_export_merges_a_recorded_system_message_into_the_single_system_message() -> None:
+    """A recorded leading system prompt joins the same merged system message the client sends."""
+    replay = live_transcript_export.build_replay_request(
+        {
+            "model": "qwen3-27b",
+            "messages": [
+                {"role": "system", "content": "SYS"},
+                {"role": "user", "content": "USER"},
+            ],
+            "jsonSchema": {"type": "object"},
+        }
+    )
+
+    assert [message["role"] for message in replay["messages"]] == ["system", "user"]
+    assert "SYS" in replay["messages"][0]["content"]
+    assert "Return JSON that conforms to this JSON schema: " in replay["messages"][0]["content"]
+    assert replay["messages"][1] == {"role": "user", "content": "USER"}
 
 
 def test_live_transcript_export_accepts_a_transcript_file(tmp_path: Path) -> None:

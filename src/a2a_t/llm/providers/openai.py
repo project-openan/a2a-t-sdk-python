@@ -22,6 +22,35 @@ _JSON_MODE_INSTRUCTION_DEFAULT = (
     "Do not include any explanation outside the JSON object."
 )
 
+_STRUCTURED_SCHEMA_INSTRUCTION_PREFIX = "Return JSON that conforms to this JSON schema: "
+
+_SYSTEM_MESSAGE_JOINER = "\n\n"
+
+
+def build_structured_messages(
+    messages: list[dict[str, str]],
+    json_schema: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Build the chat messages of one structured call with a single leading system message.
+
+    Strict OpenAI-compatible gateways (oneapi + qwen3.x, and any implementation reading "system
+    message must be at the beginning" literally) accept exactly one system message and reject a
+    second one with HTTP 400. The JSON-mode instruction, the schema instruction and the caller's
+    leading system prompt are therefore joined into one message instead of being sent separately.
+    System messages the caller places elsewhere in the list are left in place: reordering caller
+    messages is not this layer's business.
+    """
+    system_parts = [
+        _JSON_MODE_INSTRUCTION_DEFAULT,
+        f"{_STRUCTURED_SCHEMA_INSTRUCTION_PREFIX}{json.dumps(json_schema, ensure_ascii=False)}",
+    ]
+    remaining = list(messages)
+    if remaining and remaining[0].get("role") == "system":
+        caller_system = remaining.pop(0).get("content")
+        if isinstance(caller_system, str) and caller_system.strip():
+            system_parts.append(caller_system)
+    return [{"role": "system", "content": _SYSTEM_MESSAGE_JOINER.join(system_parts)}, *remaining]
+
 
 def _cached_tokens(usage: Any) -> int | None:
     """Return the provider-reported cached prefix tokens, ``None`` when absent.
@@ -141,12 +170,7 @@ class OpenAIClient(LLMClient):
         messages: list[dict[str, str]],
         json_schema: dict[str, Any],
     ) -> list[dict[str, str]]:
-        schema_text = json.dumps(json_schema, ensure_ascii=False)
-        return [
-            {"role": "system", "content": _JSON_MODE_INSTRUCTION_DEFAULT},
-            {"role": "system", "content": f"Return JSON that conforms to this JSON schema: {schema_text}"},
-            *messages,
-        ]
+        return build_structured_messages(messages, json_schema)
 
     def _parse_response(self, response: Any) -> LLMResponse:
         usage = getattr(response, "usage", None)

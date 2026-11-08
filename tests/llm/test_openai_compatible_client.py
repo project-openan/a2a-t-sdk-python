@@ -110,10 +110,67 @@ class OpenAIClientTest(unittest.TestCase):
         self.assertEqual(payload["temperature"], 0.2)
         self.assertEqual(payload["max_tokens"], 9)
         self.assertEqual(payload["response_format"], {"type": "json_object"})
-        self.assertEqual(payload["messages"][0]["role"], "system")
+        roles = [message["role"] for message in payload["messages"]]
+        self.assertEqual(roles, ["system", "user"], "strict gateways reject a second system message")
         self.assertIn("JSON", payload["messages"][0]["content"])
-        self.assertIn(dumps(json_schema, ensure_ascii=False), payload["messages"][1]["content"])
-        self.assertEqual(payload["messages"][2], {"role": "user", "content": "extract router"})
+        self.assertIn(dumps(json_schema, ensure_ascii=False), payload["messages"][0]["content"])
+        self.assertEqual(payload["messages"][1], {"role": "user", "content": "extract router"})
+
+    @patch("a2a_t.llm.providers.openai.OpenAI")
+    def test_structured_merges_a_callers_system_message_into_the_single_system_message(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+        openai_cls.return_value = sdk_client
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        client = OpenAIClient(build_config(base_url="https://custom.example/v1"))
+
+        client.structured(
+            messages=[
+                {"role": "system", "content": "You extract slots."},
+                {"role": "user", "content": "extract router"},
+            ],
+            json_schema={"type": "object"},
+        )
+
+        messages = sdk_client.chat.completions.create.call_args.kwargs["messages"]
+        self.assertEqual([message["role"] for message in messages], ["system", "user"])
+        system_content = messages[0]["content"]
+        self.assertIn("JSON", system_content)
+        self.assertIn("Return JSON that conforms to this JSON schema: ", system_content)
+        self.assertIn("You extract slots.", system_content)
+        self.assertEqual(messages[1], {"role": "user", "content": "extract router"})
+
+    @patch("a2a_t.llm.providers.openai.OpenAI")
+    def test_structured_keeps_a_non_leading_system_message_in_place(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+        openai_cls.return_value = sdk_client
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        client = OpenAIClient(build_config(base_url="https://custom.example/v1"))
+
+        client.structured(
+            messages=[
+                {"role": "user", "content": "extract router"},
+                {"role": "system", "content": "few-shot prefix"},
+            ],
+            json_schema={"type": "object"},
+        )
+
+        messages = sdk_client.chat.completions.create.call_args.kwargs["messages"]
+        self.assertEqual([message["role"] for message in messages], ["system", "user", "system"])
+        self.assertEqual(messages[2], {"role": "system", "content": "few-shot prefix"})
 
     @patch("a2a_t.llm.providers.openai.httpx")
     @patch("a2a_t.llm.providers.openai.OpenAI")
@@ -304,7 +361,7 @@ class OpenAIClientDetailLoggingTest(unittest.TestCase):
         self.assertIn("llm_call event=response ", output)
         self.assertNotIn("event=request_body", output)
         self.assertNotIn("event=response_body", output)
-        self.assertIn("messages=3", output)
+        self.assertIn("messages=2", output)
         self.assertIn("temperature=0.25", output)
         self.assertIn("max_tokens=9", output)
         self.assertIn("elapsed_ms=", output)
