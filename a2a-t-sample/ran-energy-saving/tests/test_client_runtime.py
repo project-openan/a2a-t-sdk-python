@@ -16,6 +16,7 @@ from demo.composition import build_demo_runtime
 from demo.scenario import SCENARIO_ABORT, SCENARIO_TARGET, get_scenario
 from dotenv import dotenv_values
 from google.adk.agents.llm_agent import LlmAgent
+from google.adk.models.lite_llm import LiteLlm
 from protocol.client_runtime import (
     prepare_client_sdk_env,
 )
@@ -134,6 +135,45 @@ async def test_scripted_mode_uses_the_scenario_decisions(
     assert isinstance(runtime.provider, ScriptedDecisionProvider)
     assert runtime.provider.remaining == 2
     await runtime.aclose()
+
+
+async def test_auto_live_mode_uses_the_live_decision_model(
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Live mode must run the client ADK agent on the configured endpoint, not the fake model."""
+    import protocol.client_runtime as client_runtime
+
+    async def fake_discover(**kwargs: object) -> DiscoveredAgent:
+        del kwargs
+        return _card()
+
+    async def fake_create(agent: object, client_config: ClientConfig | None = None) -> _FakeA2AClient:
+        del agent, client_config
+        return _FakeA2AClient()
+
+    monkeypatch.setattr(client_runtime, "discover_agent", fake_discover)
+    monkeypatch.setattr(client_runtime, "create_client", fake_create)
+    monkeypatch.setenv("A2AT_LANGUAGE", offline_config.language)
+    live_config = replace(offline_config, model_mode=MODEL_MODE_LIVE)
+
+    runtime = await build_demo_runtime(
+        live_config,
+        "night",
+        "auto",
+        "sse",
+        live_config.discovery,
+        env_path=tmp_path / "missing.env",
+    )
+    try:
+        assert isinstance(runtime.provider, AdkDecisionProvider)
+        assert runtime.provider.is_offline is False
+        model = runtime.provider.runner.agent.model
+        assert isinstance(model, TracingLlm)
+        assert isinstance(model.inner, LiteLlm)
+    finally:
+        await runtime.aclose()
 
 
 @pytest.mark.parametrize(
@@ -465,8 +505,6 @@ async def test_nms_runtime_uses_the_raw_transport_and_skips_the_a2a_sdk_client(
     assert runtime.a2a_client is None
     assert runtime._httpx_client is None
     await runtime.aclose()
-
-
 
 
 def test_sdk_env_follows_a_shell_adk_model_over_the_source_sdk_keys(

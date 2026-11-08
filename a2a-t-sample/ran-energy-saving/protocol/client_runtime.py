@@ -268,10 +268,10 @@ def _build_adk_decision_provider(
     # conflict but not the concrete throughput target, so the model cannot resolve them alone.
     return AdkDecisionProvider(
         model=build_traced_adk_model(config, model=model),
-        # The demo supplies a scripted decision model whose script covers the run's expected
-        # proposals. An unexpected proposal (for example a live validator that opens the wrong
-        # negotiation kind) has no scripted answer; falling back to accept keeps the run alive
-        # instead of failing it with an unparseable decision.
+        # Only the offline demo supplies a scripted decision model. When an unexpected proposal
+        # has no scripted answer, the offline fallback keeps the demo alive. A live run keeps
+        # ``offline=False``: an unparseable live decision fails the run instead of inventing an
+        # accept the model never made.
         offline=config.is_offline or model is not None,
         user_request=run_spec.user_request,
         session_db_path=config.client_db_path,
@@ -748,7 +748,14 @@ async def build_client_runtime(
         if protocol == PROTOCOL_PURE:
             provider: NegotiationDecisionProvider | None = None
         else:
-            offline_model = offline_model_factory(run_spec) if offline_model_factory is not None else None
+            # Only offline mode runs the deterministic decision model. Passing it in live mode
+            # made every negotiation decision (and every manual-answer parse) run the fake model,
+            # which has no script for an unexpected proposal and fell back to a canned accept.
+            offline_model = (
+                offline_model_factory(run_spec)
+                if config.is_offline and offline_model_factory is not None
+                else None
+            )
             provider = _decision_provider(
                 config,
                 run_spec,

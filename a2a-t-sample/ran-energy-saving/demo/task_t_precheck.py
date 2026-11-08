@@ -63,14 +63,20 @@ def _span(start: str, end: str) -> tuple[int, int]:
 
 
 def _target_segments(data: Mapping[str, object]) -> list[tuple[int, int, float]]:
-    """Return the target segments of one Task-T parameter map."""
+    """Return the distinct target segments of one Task-T parameter map.
+
+    A rendered Task-T prompt repeats the same target in Task Description and Task Context. The
+    repeated segment describes the same window, not a second one, so duplicates are collapsed
+    before the overlap check.
+    """
     target = data.get("guaranteedThroughputTarget")
     if not isinstance(target, str):
         return []
-    return [
+    segments = [
         (*_span(match.group(1), match.group(2)), float(match.group(3)))
         for match in _TARGET_SEGMENT_PATTERN.finditer(target)
     ]
+    return list(dict.fromkeys(segments))
 
 
 def _overlaps(first: tuple[int, int], second: tuple[int, int]) -> bool:
@@ -108,13 +114,18 @@ def _conflict_data(
     if not prompt:
         return data
     merged = dict(data)
-    # Only override a field the prompt actually carries: a stub prompt in a unit test must not
-    # hide the parameters it was given.
+    # The target is the one field whose prose repeats: Task Description and Task Context both
+    # carry it, so replacing the structured value with the whole prompt makes the regex read the
+    # same segment twice and report a conflict the request does not have. Only fall back to the
+    # prompt when the validator nulled the slot (a failed validation does that).
+    target = merged.get("guaranteedThroughputTarget")
+    if (not isinstance(target, str) or not target.strip()) and _TARGET_SEGMENT_PATTERN.search(prompt):
+        merged["guaranteedThroughputTarget"] = prompt
+    # Region and background event are single lines of the rendered prompt and are the deterministic
+    # source when the semantic pass filled them from somewhere else (or nulled them).
     region = _REGION_SENTENCE_PATTERN.search(prompt)
     if region is not None:
         merged["region"] = region.group(1).strip()
-    if _TARGET_SEGMENT_PATTERN.search(prompt):
-        merged["guaranteedThroughputTarget"] = prompt
     sentence = _OUTAGE_SENTENCE_PATTERN.search(prompt)
     if sentence is not None:
         merged["backgroundEvent"] = _outage_clause(sentence.group(0))

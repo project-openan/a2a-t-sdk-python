@@ -3,9 +3,20 @@
 from __future__ import annotations
 
 from a2a_t.core.validation_pipeline import FilledParamData
-from demo.task_t_precheck import RanDataTaskTPrecheck
+from demo.task_t_precheck import RanDataTaskTPrecheck, _deterministic_negotiation_kind
 from protocol.negotiation_policy import NegotiationKind
 from shared.task_schema import TASK_PARAM_SCHEMA
+
+#: A rendered Task-T prompt repeats the rate target in Task Description and Task Context.
+_REPEATED_TARGET_PROMPT = (
+    "## Task Description\n"
+    "Based on Region A and the time-segmented rate guarantee goal "
+    "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}, "
+    "output a wireless network energy saving plan.\n\n"
+    "## Task Context\n"
+    "Time-segmented rate guarantee goal: "
+    "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}."
+)
 
 
 def _filled(**data: object) -> FilledParamData:
@@ -105,6 +116,32 @@ def test_a_near_miss_area_recommends_one_candidate() -> None:
     assert finding.options is not None
     options = finding.options["options"]
     assert [option["recommended"] for option in options] == [True, False]
+
+
+def test_a_target_repeated_by_the_rendered_prompt_is_not_an_overlap() -> None:
+    """Task Description and Task Context both carry the target; the duplicate is not a conflict."""
+    finding = RanDataTaskTPrecheck()(
+        _filled(
+            operationType="Create",
+            region="Region A",
+            guaranteedThroughputTarget=(
+                "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
+            ),
+        ),
+        TASK_PARAM_SCHEMA,
+        prompt=_REPEATED_TARGET_PROMPT,
+    )
+
+    assert finding is None
+
+
+def test_a_repeated_segment_is_deduplicated_before_the_overlap_check() -> None:
+    """The same segment twice is one segment, not two overlapping ones."""
+    kind = _deterministic_negotiation_kind(
+        {"guaranteedThroughputTarget": _REPEATED_TARGET_PROMPT}
+    )
+
+    assert kind is None
 
 
 def test_a_valid_task_needs_no_negotiation() -> None:
