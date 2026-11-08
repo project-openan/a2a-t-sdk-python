@@ -435,6 +435,52 @@ async def test_second_manager_cannot_start_an_active_conversation(
     await _finish(first, run.run_id)
 
 
+async def test_start_keeps_the_chain_but_not_the_conversation(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """A retry shares the correction chain while getting its own conversation and run."""
+    manager, store, _ = _manager(tmp_path, offline_config)
+    run = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        conversation_id="conv-retry",
+        chain_id="chain-1",
+        parent_run_id="blocked-run",
+    )
+    assert run.chain_id == "chain-1"
+    assert run.parent_run_id == "blocked-run"
+    snapshot = run.snapshot()
+    assert snapshot["chainId"] == "chain-1"
+    assert snapshot["parentRunId"] == "blocked-run"
+
+    await _finish(manager, run.run_id)
+
+    stored = await store.get_run(run.run_id)
+    assert stored is not None
+    assert stored.chain_id == "chain-1"
+    assert stored.parent_run_id == "blocked-run"
+    assert stored.conversation_id == "conv-retry"
+
+
+async def test_start_defaults_the_chain_to_the_conversation(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """A run without a retry belongs to a chain of its own, named by its conversation."""
+    manager, store, _ = _manager(tmp_path, offline_config)
+    run = await manager.start("information", "auto", "sse", conversation_id="conv-1")
+
+    assert run.chain_id == "conv-1"
+    assert run.parent_run_id == ""
+
+    await _finish(manager, run.run_id)
+
+    stored = await store.get_run(run.run_id)
+    assert stored is not None and stored.chain_id == "conv-1"
+
+
 async def test_a_dead_owner_run_is_reclaimed(
     tmp_path: Path,
     offline_config: SampleConfig,
@@ -737,6 +783,8 @@ async def test_a_restart_recovers_a_run_that_still_has_a_remote_task(
             server_context_id="ctx-1",
             owner_pid=2**31 - 1,
             source={"kind": "presentation"},
+            chain_id="chain-1",
+            parent_run_id="blocked-1",
         )
     )
     await store.ensure_conversation(conversation_id="conv-2")
@@ -803,6 +851,9 @@ async def test_a_restart_recovers_a_run_that_still_has_a_remote_task(
     assert run.detached is True
     assert run.runtime is poll_runtime
     assert run.snapshot()["finalState"] is None
+    # The recovered run keeps the correction chain it was started with.
+    assert run.chain_id == "chain-1"
+    assert run.parent_run_id == "blocked-1"
     assert manager.get("gateway-1") is None
     lost = await store.get_run("lost")
     assert lost is not None and lost.status == "interrupted"

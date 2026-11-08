@@ -268,6 +268,23 @@ def _add_run_downstream(connection: sqlite3.Connection) -> None:
         )
 
 
+def _add_run_chain(connection: sqlite3.Connection) -> None:
+    """Add the correction-chain identity shared by one operator's retries.
+
+    ``chain_id`` stays the same across every attempt of one corrected request; a retry gets a
+    new ``run_id``/``conversation_id`` and keeps the chain id, so the attempts stay grouped
+    without reusing a conversation that would leak the blocked text into the next prompt.
+    ``parent_run_id`` names the immediately preceding attempt.
+    """
+    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)")}
+    if "chain_id" not in columns:
+        connection.execute("ALTER TABLE runs ADD COLUMN chain_id TEXT NOT NULL DEFAULT ''")
+    if "parent_run_id" not in columns:
+        connection.execute(
+            "ALTER TABLE runs ADD COLUMN parent_run_id TEXT NOT NULL DEFAULT ''"
+        )
+
+
 #: Ordered schema migrations; index ``i`` upgrades version ``i`` to ``i + 1``.
 _MIGRATIONS: Final[tuple[SchemaMigration, ...]] = (
     _create_schema,
@@ -276,6 +293,7 @@ _MIGRATIONS: Final[tuple[SchemaMigration, ...]] = (
     _add_run_protocol,
     _add_run_source,
     _add_run_downstream,
+    _add_run_chain,
 )
 
 
@@ -296,6 +314,8 @@ _RUN_UPDATE_FIELDS: Final[frozenset[str]] = frozenset(
         "transcript_json",
         "transcript_markdown",
         "trace_json",
+        "chain_id",
+        "parent_run_id",
         "finished_at",
     }
 )
@@ -430,6 +450,8 @@ class ClientRunRecord:
     protocol: str = PROTOCOL_A2A_T
     source_kind: str = ""
     source: dict[str, object] = field(default_factory=dict)
+    chain_id: str = ""
+    parent_run_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -976,8 +998,9 @@ class SqliteClientStore:
                      protocol, user_request, status, final_state, server_context_id, server_task_id,
                      downstream_task_id, downstream_context_id, downstream_hop,
                      error, owner_pid, idempotency_key, source_kind, source_json, transcript_json,
-                     transcript_markdown, trace_json, created_at, updated_at, finished_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     transcript_markdown, trace_json, chain_id, parent_run_id,
+                     created_at, updated_at, finished_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.run_id,
@@ -1004,6 +1027,8 @@ class SqliteClientStore:
                     record.transcript_json,
                     record.transcript_markdown,
                     record.trace_json,
+                    record.chain_id,
+                    record.parent_run_id,
                     record.created_at,
                     record.updated_at,
                     record.finished_at,
@@ -1057,6 +1082,8 @@ class SqliteClientStore:
                 str(row["transcript_markdown"]) if row["transcript_markdown"] else None
             ),
             trace_json=str(row["trace_json"]) if row["trace_json"] else None,
+            chain_id=str(row["chain_id"] or ""),
+            parent_run_id=str(row["parent_run_id"] or ""),
             created_at=str(row["created_at"]),
             updated_at=str(row["updated_at"]),
             finished_at=str(row["finished_at"]) if row["finished_at"] else None,

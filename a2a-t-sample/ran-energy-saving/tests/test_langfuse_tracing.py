@@ -536,6 +536,49 @@ def test_trace_metadata_carries_the_osp_case_and_the_round_count(
     assert root.attributes["langfuse.trace.metadata.negotiated"] == "true"
 
 
+def test_a_correction_chain_is_one_langfuse_session(offline_config: SampleConfig) -> None:
+    """A retry opens its own trace but stays under the parent attempt's Langfuse session."""
+    config = replace(
+        offline_config,
+        model_mode=MODEL_MODE_LIVE,
+        langfuse_public_key="pk",
+        langfuse_secret_key="sk",
+    )
+    first_runtime = _Runtime()
+    retry_runtime = _Runtime()
+    first = LangfuseSpanExporter(
+        runtime=first_runtime,
+        config=config,
+        metadata=replace(_metadata(), chain_id="chain-1"),
+    )
+    retry = LangfuseSpanExporter(
+        runtime=retry_runtime,
+        config=config,
+        metadata=replace(
+            _metadata(),
+            run_id="run-2",
+            conversation_id="conv-2",
+            chain_id="chain-1",
+            parent_run_id="run-1",
+        ),
+    )
+    first.finish()
+    retry.finish()
+
+    first_root = next(
+        span for span in first_runtime.spans.get_finished_spans() if span.name.startswith("run ·")
+    )
+    retry_root = next(
+        span for span in retry_runtime.spans.get_finished_spans() if span.name.startswith("run ·")
+    )
+    assert first_root.attributes["session.id"] == "chain-1"
+    assert retry_root.attributes["session.id"] == "chain-1"
+    assert retry_root.attributes["langfuse.trace.metadata.chainId"] == "chain-1"
+    assert retry_root.attributes["langfuse.trace.metadata.parentRunId"] == "run-1"
+    # Each attempt keeps a trace of its own: one root per trace, grouped by the session.
+    assert first_root.context.trace_id != retry_root.context.trace_id
+
+
 def test_exporter_uses_the_explicit_run_trace_id(offline_config: SampleConfig) -> None:
     trace_id = "c" * 32
     exporter, runtime = _exporter(offline_config, parent_trace_id=trace_id)

@@ -150,6 +150,11 @@ class LangfuseRunMetadata:
     run_id: str
     scenario: str
     conversation_id: str | None = None
+    #: Stable session of one operator's correction chain; a retry keeps it while getting a new
+    #: trace, so Langfuse groups the attempts without putting several roots in one trace.
+    chain_id: str = ""
+    #: The attempt this run retries, when it is part of a correction chain.
+    parent_run_id: str = ""
     user_id: str | None = None
     language: str = ""
     mode: str = ""
@@ -588,13 +593,19 @@ def _root_attributes(metadata: LangfuseRunMetadata) -> dict[str, Any]:
         OBSERVATION_TYPE_ATTRIBUTE: OBSERVATION_SPAN,
         ROOT_ATTRIBUTE: True,
     }
-    if metadata.conversation_id:
-        attributes[TRACE_SESSION_ATTRIBUTE] = metadata.conversation_id
+    # A correction chain is a session: every retry gets its own trace (one root) but stays under
+    # one Langfuse session. A standalone run falls back to its conversation, preserving the
+    # historical grouping.
+    session_id = metadata.chain_id or metadata.conversation_id
+    if session_id:
+        attributes[TRACE_SESSION_ATTRIBUTE] = session_id
     if metadata.user_id:
         attributes[TRACE_USER_ATTRIBUTE] = metadata.user_id
     trace_metadata = {
         "runId": metadata.run_id,
         "scenario": metadata.scenario,
+        "chainId": metadata.chain_id,
+        "parentRunId": metadata.parent_run_id,
         "language": metadata.language,
         "mode": metadata.mode,
         "protocol": metadata.protocol,

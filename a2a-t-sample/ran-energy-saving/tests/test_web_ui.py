@@ -1261,7 +1261,7 @@ async def test_second_start_is_rejected_while_a_run_is_active(
 async def test_start_reuses_the_conversation_and_trace_id_of_a_retry(
     client: httpx.AsyncClient,
 ) -> None:
-    """A blocked attempt and its retry can share the client session and vendor trace."""
+    """An API caller can still pin the conversation and trace explicitly."""
     trace_id = "0123456789abcdef0123456789abcdef"
     response = await client.post(
         "/api/runs",
@@ -1293,6 +1293,41 @@ async def test_start_defaults_the_trace_id_to_the_run_id(client: httpx.AsyncClie
 
     payload = response.json()
     assert payload["traceId"] == payload["runId"]
+
+
+async def test_start_keeps_the_chain_across_a_retry(client: httpx.AsyncClient) -> None:
+    """A retry shares the chain id and names its parent, but gets its own conversation/trace."""
+    first = (
+        await client.post(
+            "/api/runs",
+            json={"scenario": "information", "mode": "auto", "transport": "sse"},
+        )
+    ).json()
+    assert first["chainId"] == first["conversationId"]
+
+    response = await client.post(
+        "/api/runs",
+        json={
+            "scenario": "information",
+            "mode": "auto",
+            "transport": "sse",
+            "chainId": first["chainId"],
+            "parentRunId": first["runId"],
+        },
+    )
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["chainId"] == first["chainId"]
+    assert payload["parentRunId"] == first["runId"]
+    # The corrected attempt is a new execution and a new conversation.
+    assert payload["runId"] != first["runId"]
+    assert payload["conversationId"] != first["conversationId"]
+    assert payload["traceId"] != first["traceId"]
+
+    snapshot = (await client.get(f"/api/runs/{payload['runId']}")).json()
+    assert snapshot["chainId"] == first["chainId"]
+    assert snapshot["parentRunId"] == first["runId"]
 
 
 async def test_start_rejects_an_invalid_trace_id(client: httpx.AsyncClient) -> None:

@@ -266,7 +266,8 @@ A2A-T 模式下，演示页在发送前用 SDK 内容校验检查渲染后的 Ta
 - LLM/基础设施失败降级为 warning 并放行；模型故障不会中断演示。
 - 选中任务的 Modify Task-T 走同一道门；被阻断时不发送任何内容。
 - 在校验卡中修改原始请求会**新建一次 run**；失败的 run 保留在历史中，并通过
-  `source.parentRunId` 关联。
+  `parentRunId` 关联。重试沿用同一个 `chainId`，但新建 run、会话和 trace，因此被拦截的原文
+  不会进入下一轮 Task-T 的会话上下文。
 - `A2AT_SAMPLE_PRE_SEND_VALIDATION=on|always|off` 控制范围；默认 `on`，只覆盖演示页。
 
 ### Langfuse 可观测
@@ -304,8 +305,8 @@ LLM/tool 调用、run 结果和 OSP 时间点载体——每跳 `message_sent`�
 Task-T rendered、Task created、业务意图、校验结论和审批对——去掉状态噪声、phase 代表行和仅排障用
 的行。NMS 原始报文使用 `kind=transport`，只有 `full` 才导出。`minimal` 只保留 LLM/tool 调用和
 最终结果，约为原来数量的三分之一；`full` 导出全部 span。
-Web UI 时间线始终保留全部 span，不影响排障。复用同一个 run `traceId` 的重试也会复用同一条
-Langfuse trace。
+Web UI 时间线始终保留全部 span，不影响排障。修正重试保持独立 trace（一条 trace 一个 root），
+通过与首次 attempt 共享的 `chainId` 归入同一个 Langfuse session。
 
 ### 真实厂商网管模式
 

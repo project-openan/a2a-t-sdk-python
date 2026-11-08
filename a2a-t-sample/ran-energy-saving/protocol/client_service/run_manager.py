@@ -455,6 +455,8 @@ class RunManager:
             status=STATUS_RUNNING,
             detached=True,
             conversation_id=record.conversation_id,
+            chain_id=record.chain_id or record.conversation_id or record.run_id,
+            parent_run_id=record.parent_run_id,
             idempotency_key=record.idempotency_key,
             downstream_task_id=record.downstream_task_id,
             downstream_context_id=record.downstream_context_id,
@@ -534,6 +536,8 @@ class RunManager:
         conversation_id: str | None = None,
         external_conversation_id: str | None = None,
         trace_id: str | None = None,
+        chain_id: str | None = None,
+        parent_run_id: str | None = None,
         user_id: str = "web-user",
         idempotency_key: str | None = None,
         intent_mode: str | None = None,
@@ -557,8 +561,12 @@ class RunManager:
             protocol: interaction protocol (``a2a-t`` / ``plain``); keyword-only.
             conversation_id: client conversation; generated when omitted.
             external_conversation_id: caller-side conversation id (Gemini Enterprise, console).
-            trace_id: stable vendor-facing trace id; defaults to the new run id. A retry of a
-                blocked run passes the blocked run's trace id so the vendor sees one trace.
+            trace_id: stable vendor-facing trace id; defaults to the new run id.
+            chain_id: stable id of one operator's correction chain; defaults to the new
+                conversation id. A retry of a blocked attempt passes the chain id so Langfuse
+                groups the attempts as one session, while each attempt keeps its own trace.
+            parent_run_id: immediately preceding attempt of the same chain, when this run retries
+                a blocked request.
             user_id: caller identity.
             idempotency_key: optional key that deduplicates a repeated request.
             intent_mode: per-run override of the process intent mode (``processed`` / ``raw``).
@@ -603,6 +611,11 @@ class RunManager:
         ):
             raise ValueError("trace_id must be 32 lowercase hex digits.")
         resolved_conversation = conversation_id or f"conv-{uuid.uuid4().hex}"
+        # The correction chain outlives a single run: every retry keeps this id while getting a
+        # new run/conversation/trace. Defaulting it to the conversation id leaves a run without a
+        # retry indistinguishable from today's runs.
+        resolved_chain_id = (chain_id or "").strip() or resolved_conversation
+        resolved_parent_run_id = (parent_run_id or "").strip()
         active = self.active_for_conversation(resolved_conversation)
         if active is not None:
             raise RunConflictError(
@@ -628,6 +641,8 @@ class RunManager:
         run = RunState(
             run_id=run_uuid,
             trace_id=resolved_trace_id or run_uuid,
+            chain_id=resolved_chain_id,
+            parent_run_id=resolved_parent_run_id,
             scenario=scenario,
             mode=mode,
             transport=transport,
@@ -667,6 +682,8 @@ class RunManager:
                 run_id=run.run_id,
                 scenario=run.scenario,
                 conversation_id=run.conversation_id,
+                chain_id=run.chain_id,
+                parent_run_id=run.parent_run_id,
                 user_id=run.user_id,
                 language=self._config.language,
                 mode=run.mode,
@@ -882,6 +899,8 @@ class RunManager:
             user_request=record.user_request,
             status=cast(RunStatus, record.status),
             conversation_id=record.conversation_id,
+            chain_id=record.chain_id or record.conversation_id or record.run_id,
+            parent_run_id=record.parent_run_id,
             idempotency_key=record.idempotency_key,
             downstream_task_id=record.downstream_task_id,
             downstream_context_id=record.downstream_context_id,
@@ -1331,6 +1350,8 @@ class RunManager:
                 idempotency_key=run.idempotency_key,
                 source_kind=str(run.source.get("kind") or ""),
                 source=dict(run.source),
+                chain_id=run.chain_id,
+                parent_run_id=run.parent_run_id,
             )
         )
         user_turn = await self._store.append_turn(

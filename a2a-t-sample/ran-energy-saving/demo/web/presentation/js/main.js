@@ -26,6 +26,13 @@ import {
   stageOf,
 } from "./state.js";
 import { STEP_KEYS, sceneFor } from "./scenes.js";
+import {
+  clear as forgetChain,
+  identity as chainIdentity,
+  pending as pendingChainOf,
+  restore as restoreChain,
+  save as saveChain,
+} from "./chain.js";
 import { createPlayer } from "./player.js";
 import { createStage, setStageCopy } from "./stage.js";
 import { createRail } from "./rail.js";
@@ -225,9 +232,12 @@ const ui = {
   copy: copyFor("zh-CN"),
   brand: document.documentElement.dataset.brand || "orange",
   selected: null,
-  retryParentRunId: null,
-  //: Conversation and vendor trace of a blocked attempt; the corrected retry reuses them.
-  attempt: null,
+  //: Pending correction chain ``{runId, chainId, scenario, protocol}`` of a blocked attempt.
+  //: A retry passes it as ``parentRunId``/``chainId``; it survives a page reload through
+  //: sessionStorage and is cleared by a new example, a reset or a run that sent its Task-T.
+  chain: null,
+  //: Identity of the run currently on the stage, so the finished frame can adopt it as the chain.
+  currentChain: null,
   protocol: "a2a-t",
   compareSaved: null,
   resultRevealed: null,
@@ -283,6 +293,25 @@ const ui = {
   modifyCancelArmed: false,
   modifyCancelTimer: null,
 };
+
+/** Return the pending chain when it still belongs to the example on the stage. */
+function pendingChain() {
+  return pendingChainOf(ui.chain, ui.selected, ui.protocol);
+}
+
+/** Adopt one blocked attempt as the pending chain and persist it across a page reload. */
+function rememberChain(chain) {
+  ui.chain = chain;
+  saveChain(sessionStorage, chain);
+}
+
+/** Drop the pending chain: a new example, a reset or a run that reached the server. */
+function clearChain() {
+  ui.chain = null;
+  forgetChain(sessionStorage);
+}
+
+ui.chain = restoreChain(sessionStorage);
 
 const stage = createStage(els);
 const rail = createRail(
@@ -454,6 +483,8 @@ async function restoreActiveRun(runId) {
   resetRunState();
   ui.selected = snapshot.scenario || ui.selected;
   ui.protocol = snapshot.protocol || ui.protocol;
+  // A run recovered after a reload can still end blocked; keep the identity needed to chain.
+  ui.currentChain = chainIdentity(runId, snapshot.chainId, ui.selected, ui.protocol);
   ui.view.runId = runId;
   ui.view.started = true;
   ui.view.status = "running";
@@ -799,6 +830,8 @@ function resetRunState() {
   ui.submitting = false;
   ui.cancelling = false;
   ui.looping = false;
+  // The stage no longer shows the previous attempt, so it must not adopt its identity either.
+  ui.currentChain = null;
   stage.reset();
   trace.reset();
 }
@@ -807,7 +840,7 @@ function selectScenario(name, { start = false } = {}) {
   clearModifyTarget(true);
   ui.selected = name;
   // A new example is a new intent, not a retry of a blocked attempt.
-  ui.attempt = null;
+  clearChain();
   renderProtocol();
   resetRunState();
   els.requestText.value = ui.meta?.scenarioRequests?.[name] || "";
@@ -821,7 +854,7 @@ function selectScenario(name, { start = false } = {}) {
 function resetRequest() {
   if (ui.busy) return;
   // The reset discards the edited request, so a following Start is a fresh attempt.
-  ui.attempt = null;
+  clearChain();
   els.requestText.value = ui.targetTask
     ? ui.modifyRequest || ui.meta?.modifyRequest || ""
     : ui.meta?.scenarioRequests?.[ui.selected] || "";
@@ -1144,7 +1177,7 @@ function applyModifyTarget() {
   renderProtocol();
   resetRunState();
   // A Modify is a different intent; do not inherit an intercepted attempt's session.
-  ui.attempt = null;
+  clearChain();
   ui.targetTask = task;
   ui.modifyRequest = ui.meta?.modifyRequest || "";
   els.requestText.value = ui.modifyRequest;
@@ -1167,10 +1200,10 @@ async function startRun() {
   // The request is sent; the editor window has done its job and gives the stage back.
   closeRequestDrawer();
   const request = els.requestText.value.trim();
-  const parentRunId = ui.retryParentRunId;
-  ui.retryParentRunId = null;
-  // A retry of a blocked request keeps the first attempt's session and vendor trace.
-  const attempt = ui.attempt;
+  // A retry of a blocked request keeps the correction chain. It carries the previous attempt's
+  // run id and the stable chain id, so Langfuse groups the attempts as one session while this
+  // run still gets its own conversation and trace.
+  const chain = pendingChain();
   hideError();
   resetRunState();
   clear(els.techLog);
@@ -1195,10 +1228,10 @@ async function startRun() {
         // What you see is what you send: the textarea text is the request, unchanged.
         userRequest: request,
         protocol: ui.protocol,
-        ...(attempt
+        ...(chain
           ? {
-              conversationId: attempt.conversationId,
-              traceId: attempt.traceId,
+              chainId: chain.chainId,
+              parentRunId: chain.runId,
             }
           : {}),
         ...(ui.targetTask
@@ -1207,19 +1240,20 @@ async function startRun() {
               targetContextId: ui.targetTask.contextId,
             }
           : {}),
-        source: parentRunId
-          ? { kind: "presentation", parentRunId }
+        source: chain
+          ? { kind: "presentation", parentRunId: chain.runId }
           : "presentation",
       }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    if (!attempt) {
-      ui.attempt = {
-        conversationId: payload.conversationId,
-        traceId: payload.traceId || payload.runId,
-      };
-    }
+    // The finished frame adopts this identity when the run is blocked before sending its Task-T.
+    ui.currentChain = chainIdentity(
+      payload.runId,
+      payload.chainId || payload.conversationId,
+      ui.selected,
+      ui.protocol,
+    );
     ui.view.runId = payload.runId;
     sessionStorage.setItem(ACTIVE_RUN_KEY, payload.runId);
     // A fresh run replaces whatever reload remnant the resume banner still offers.
@@ -1312,7 +1346,12 @@ function subscribe(runId) {
       setBusy(false);
       // ``enqueueFrame`` has just applied this frame to the shadow state, so the send marker is
       // current when deciding whether the next Start continues the blocked attempt.
-      if (!keepsAttemptChain(frame, ui.shadow)) ui.attempt = null;
+      if (keepsAttemptChain(frame, ui.shadow) && ui.currentChain) {
+        rememberChain(ui.currentChain);
+      } else {
+        clearChain();
+      }
+      ui.currentChain = null;
     }
   };
 }
@@ -1786,7 +1825,9 @@ function renderChoices(card) {
     retry.addEventListener("click", () => {
       const text = area.value.trim();
       if (!text) return;
-      ui.retryParentRunId = ui.view.runId;
+      // The finished handler already adopted the blocked run as the chain; this is a fallback
+      // for a card restored without one.
+      if (!ui.chain && ui.currentChain) rememberChain(ui.currentChain);
       els.requestText.value = text;
       startRun();
     });

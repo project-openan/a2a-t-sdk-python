@@ -169,6 +169,11 @@ class RunState:
     detached: bool = False
     conversation_id: str | None = None
     trace_id: str = ""
+    #: Stable id of one operator's correction chain. Every retry of a blocked attempt keeps it
+    #: while getting a new run/conversation/trace; Langfuse groups the attempts by this session.
+    chain_id: str = ""
+    #: Immediately preceding attempt of the same chain, when this run is a retry.
+    parent_run_id: str = ""
     external_conversation_id: str | None = None
     user_id: str | None = None
     idempotency_key: str = ""
@@ -338,6 +343,8 @@ class RunState:
         seq, step = self.allocate(PHASE_DISPATCH)
         detail: dict[str, object] = {
             "scenario": self.scenario,
+            "chainId": self.chain_id,
+            "parentRunId": self.parent_run_id or None,
             "description": description,
             "userRequest": user_request,
             "language": language,
@@ -368,6 +375,8 @@ class RunState:
         message: dict[str, object] = {
             "type": "run_started",
             "runId": self.run_id,
+            "chainId": self.chain_id,
+            "parentRunId": self.parent_run_id or None,
             "scenario": self.scenario,
             "description": description,
             "userRequest": user_request,
@@ -824,6 +833,8 @@ class RunState:
             "type": "finished",
             "runId": self.run_id,
             "conversationId": self.conversation_id,
+            "chainId": self.chain_id,
+            "parentRunId": self.parent_run_id or None,
             "status": self.status,
             "finalState": self.result.final_state if self.result is not None else None,
             "report": self.result.report if self.result is not None else None,
@@ -863,6 +874,8 @@ class RunState:
             "runId": self.run_id,
             "conversationId": self.conversation_id,
             "traceId": self.trace_id,
+            "chainId": self.chain_id,
+            "parentRunId": self.parent_run_id or None,
             "externalConversationId": self.external_conversation_id,
             "userId": self.user_id,
             "idempotencyKey": self.idempotency_key,

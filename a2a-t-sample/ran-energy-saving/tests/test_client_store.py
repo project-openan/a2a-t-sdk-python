@@ -250,7 +250,7 @@ def test_v2_migration_dedupes_active_runs(tmp_path: Path) -> None:
     # Constructing the store applies migration 2.
     SqliteClientStore(path)
     with connect(path) as connection:
-        assert schema_version(connection) == 6
+        assert schema_version(connection) == 7
         statuses = {
             str(run_id): str(status)
             for run_id, status in connection.execute(
@@ -268,6 +268,7 @@ def test_v2_migration_dedupes_active_runs(tmp_path: Path) -> None:
         downstream = connection.execute(
             "SELECT downstream_task_id, downstream_context_id, downstream_hop FROM runs"
         ).fetchall()
+        chains = connection.execute("SELECT chain_id, parent_run_id FROM runs").fetchall()
     assert statuses == {"older": "interrupted", "newer": "running"}
     # Rows written before the switch existed were A2A-T; the migration keeps that history.
     assert protocols == {"a2a-t"}
@@ -277,6 +278,9 @@ def test_v2_migration_dedupes_active_runs(tmp_path: Path) -> None:
     # The downstream identity columns exist too, and old rows carry no far-side Task.
     assert {"downstream_task_id", "downstream_context_id", "downstream_hop"} <= source_columns
     assert set(downstream) == {(None, None, "")}
+    # The correction-chain columns exist; a legacy row carries no chain yet.
+    assert {"chain_id", "parent_run_id"} <= source_columns
+    assert set(chains) == {("", "")}
 
     with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
         with connect(path) as connection:
@@ -564,3 +568,45 @@ async def test_downstream_identity_round_trips_and_is_searchable(tmp_path: Path)
     assert detail["downstreamTaskId"] == "nms-task"
     assert detail["downstreamContextId"] == "nms-ctx"
     assert detail["downstreamHop"] == "nms"
+
+
+async def test_chain_identity_round_trips_through_the_store(tmp_path: Path) -> None:
+    """A retry keeps the chain id, names its parent and still gets its own conversation."""
+    path = tmp_path / "client.sqlite3"
+    store = SqliteClientStore(path)
+    await store.ensure_conversation(conversation_id="conv-1")
+    await store.ensure_conversation(conversation_id="conv-2")
+    await store.create_run(
+        ClientRunRecord(
+            run_id="run-1",
+            conversation_id="conv-1",
+            scenario="information",
+            mode="auto",
+            transport="sse",
+            discovery="registry",
+            user_request="blocked request",
+            chain_id="chain-1",
+        )
+    )
+    await store.update_run("run-1", status="finished", final_state="input_invalid")
+    await store.create_run(
+        ClientRunRecord(
+            run_id="run-2",
+            conversation_id="conv-2",
+            scenario="information",
+            mode="auto",
+            transport="sse",
+            discovery="registry",
+            user_request="corrected request",
+            chain_id="chain-1",
+            parent_run_id="run-1",
+        )
+    )
+
+    first = await store.get_run("run-1")
+    second = await store.get_run("run-2")
+    assert first is not None and second is not None
+    assert first.chain_id == "chain-1" and first.parent_run_id == ""
+    assert second.chain_id == "chain-1" and second.parent_run_id == "run-1"
+    # The retry is a new conversation, so the blocked turn is never prompt memory.
+    assert second.conversation_id == "conv-2"

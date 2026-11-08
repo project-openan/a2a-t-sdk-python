@@ -318,7 +318,8 @@ never sent and no negotiation starts.
   the demo.
 - The selected-Task Modify Task-T uses the same gate; a blocked Modify sends nothing.
 - Edit the original request in the validation card to start a **new** run; the failed run stays in
-  the history and is linked with `source.parentRunId`.
+  the history and is linked with `parentRunId`. The retry keeps the same `chainId` but gets a new
+  run, conversation and trace, so the blocked text never enters the next Task-T prompt.
 - `A2AT_SAMPLE_PRE_SEND_VALIDATION=on|always|off` selects the scope; `on` is the default and
   covers the presentation page only.
 
@@ -364,8 +365,9 @@ validation verdict and the approval pair — and drops status noise, phase repre
 debug-only rows. NMS wire evidence uses `kind=transport` and only `full` exports it. `minimal`
 keeps only LLM/tool calls and the run result (about a third of the previous volume); `full`
 exports every span. The Web UI
-timeline always keeps every span, so diagnosis is unaffected. Retries that reuse the run `traceId`
-also reuse the Langfuse trace.
+timeline always keeps every span, so diagnosis is unaffected. A corrected retry keeps its own
+trace (one root per trace) and is grouped with the blocked attempt by the Langfuse session, which
+uses the shared `chainId`.
 
 ### Real vendor NMS mode
 

@@ -571,8 +571,9 @@ Implementation details:
   cookies redacted. Frames the reader cannot parse go to `wire-error.jsonl`.
 - Every outbound A2A call carries a W3C `traceparent`: the run id (32 hex) is the default
   trace-id, so the vendor can join its logs to one run, and the span-id is generated per call.
-  A retry can pass the blocked attempt's trace id as `traceId` on `POST /api/runs`; the vendor
-  then receives the same trace-id for the original attempt and the retry. It is written to
+  API callers may still pass `traceId` on `POST /api/runs` to reuse a trace. The presentation's
+  corrected retry does **not** override the trace id: every attempt owns its trace (one root per
+  trace), and `chainId` groups the attempts in one Langfuse session. It is written to
   `wire.jsonl` with the other headers, and the Web UI's `GET /api/runs/{id}/wire` serves those
   redacted records to the On-the-wire inspector.
 - The a2a-sdk HTTP transport writes the same record shape to `runs/<runId>/wire.jsonl`
@@ -702,9 +703,13 @@ reaches the server and never starts a negotiation.
 - The presentation page renders the errors inline: negotiable items appear under the intent card,
   blocking items become a validation card that pre-fills the original request and starts a **new**
   run after the engineer edits it. The failed run stays in the history and is linked through
-  `source.parentRunId`. The retry also reuses the blocked run's `conversationId` and `traceId`, so
-  the blocked attempt and its retry form one client session and one vendor trace; a run that was
-  sent, completed or cancelled ends the chain and the next request starts a new conversation.
+  `parentRunId`. The retry reuses the blocked run's `chainId` but gets a **new** `runId`,
+  `conversationId` and `traceId`: each attempt's trace stays self-contained (one root per trace),
+  Langfuse groups the attempts by `session.id = chainId`, and the new conversation keeps the
+  blocked text out of the next Task-T prompt. Only an attempt that sent no Task-T continues the
+  chain; a run that was sent, completed or cancelled ends it. The chain survives a page reload
+  through sessionStorage; resolving `parentRunId` and `task_t_sent` on the server is the next
+  stage.
 
 ## 4. NMS-side developer guide (how-to)
 

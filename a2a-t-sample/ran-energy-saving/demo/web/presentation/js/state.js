@@ -595,9 +595,9 @@ function applyTrace(state, span) {
  * Whether a retry should stay in the attempt chain of a terminal frame.
  *
  * A request blocked before it was sent (validation gate, intent rejection or a Task-T generation
- * failure) keeps the conversation and trace id so the corrected retry is one session and one
- * vendor trace. A run that reached the server already owns its trace; a completed or cancelled
- * run starts a new one next time.
+ * failure) keeps the correction chain so the corrected retry stays grouped with it in Langfuse.
+ * The retry still gets its own run, conversation and trace; a run that reached the server already
+ * owns its trace, and a completed or cancelled run starts a new chain next time.
  */
 export function keepsAttemptChain(frame, state) {
   if (!frame || frame.type !== "finished") return false;

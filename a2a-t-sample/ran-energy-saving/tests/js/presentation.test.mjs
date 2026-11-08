@@ -24,6 +24,13 @@ import {
   traceDirection,
   traceStageKey,
 } from "../../demo/web/presentation/js/state.js";
+import {
+  clear as clearChain,
+  identity as chainIdentity,
+  pending as pendingChain,
+  restore as restoreChain,
+  save as saveChain,
+} from "../../demo/web/presentation/js/chain.js";
 import { sceneFor } from "../../demo/web/presentation/js/scenes.js";
 import { createPlayer } from "../../demo/web/presentation/js/player.js";
 import { entryOfRow, rowKey } from "../../demo/web/presentation/js/trace.js";
@@ -1986,3 +1993,52 @@ const capturedExtensionText = wireText(
 assert.ok(capturedExtensionText.includes("FULL TASK T PAYLOAD"));
 assert.ok(!capturedExtensionText.includes("truncated"));
 assert.ok(capturedExtensionText.includes("Task-T/network-layer/ran-energy-saving/v1"));
+
+// ---------------------------------------------------------------------------
+// Correction chain
+// ---------------------------------------------------------------------------
+
+function memoryStorage() {
+  const data = new Map();
+  return {
+    getItem: (key) => (data.has(key) ? data.get(key) : null),
+    setItem: (key, value) => data.set(key, String(value)),
+    removeItem: (key) => data.delete(key),
+  };
+}
+
+assert.equal(chainIdentity("run-1", "chain-1", "information", "a2a-t").chainId, "chain-1");
+// A server without a chain id still gives the retry a parent to follow.
+assert.equal(chainIdentity("run-1", "", "information", "a2a-t").chainId, "run-1");
+assert.equal(chainIdentity("", "chain-1", "information", "a2a-t"), null);
+
+const pending = chainIdentity("run-1", "chain-1", "information", "a2a-t");
+assert.equal(pendingChain(pending, "information", "a2a-t"), pending);
+// A different example or protocol is a new intent, not a retry.
+assert.equal(pendingChain(pending, "outage", "a2a-t"), null);
+assert.equal(pendingChain(pending, "information", "plain"), null);
+assert.equal(pendingChain(null, "information", "a2a-t"), null);
+
+const storage = memoryStorage();
+saveChain(storage, pending);
+assert.deepEqual(restoreChain(storage), pending);
+clearChain(storage);
+assert.equal(restoreChain(storage), null);
+
+storage.setItem("a2at-ran-correction-chain", "{not json");
+assert.equal(restoreChain(storage), null);
+
+const broken = {
+  getItem: () => {
+    throw new Error("blocked");
+  },
+  setItem: () => {
+    throw new Error("blocked");
+  },
+  removeItem: () => {
+    throw new Error("blocked");
+  },
+};
+saveChain(broken, pending);
+clearChain(broken);
+assert.equal(restoreChain(broken), null);
