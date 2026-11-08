@@ -1847,20 +1847,24 @@ applyFrame(pureIntent, {
 assert.equal(pureIntent.rawRequest, "raw text");
 assert.equal(pureIntent.normalizedRequest, "normalized text");
 
-// Langfuse: the trace id arrives with run_started, the URL with finished.
+// Langfuse: the trace id arrives with run_started, the URL in a late langfuse frame.
 assert.equal(copy.result.openInLangfuse, "在 Langfuse 中打开");
 assert.equal(copyFor("en-US").result.openInLangfuse, "Open in Langfuse");
+assert.equal(copyFor("zh-CN").result.runLabel, "Run");
+assert.equal(copyFor("zh-CN").result.traceLabel, "Trace");
 const langfuseState = createState();
 applyFrame(langfuseState, {
   type: "run_started",
   runId: "run-lf",
+  traceId: "trace-1",
   langfuse: { enabled: true, traceId: "trace-1", status: "exporting" },
 });
+assert.equal(langfuseState.traceId, "trace-1");
 assert.equal(langfuseState.langfuse.traceId, "trace-1");
+assert.equal(langfuseState.langfuse.url, undefined);
 applyFrame(langfuseState, {
-  type: "finished",
+  type: "langfuse",
   runId: "run-lf",
-  status: "finished",
   langfuse: {
     enabled: true,
     traceId: "trace-1",
@@ -1870,6 +1874,13 @@ applyFrame(langfuseState, {
 });
 assert.equal(langfuseState.langfuse.url, "https://langfuse.example/project/p/traces/trace-1");
 assert.equal(langfuseState.langfuse.status, "exported");
+// A late frame from another run must not overwrite this page's link.
+applyFrame(langfuseState, {
+  type: "langfuse",
+  runId: "run-other",
+  langfuse: { enabled: true, traceId: "trace-2", url: "https://langfuse.example/trace-2" },
+});
+assert.equal(langfuseState.langfuse.traceId, "trace-1");
 
 console.log("presentation model harness: ok");
 

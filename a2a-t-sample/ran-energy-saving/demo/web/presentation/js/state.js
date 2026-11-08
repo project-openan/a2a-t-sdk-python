@@ -28,6 +28,8 @@ export function createState() {
     status: STATUS.IDLE,
     started: false,
     runId: null,
+    //: Vendor-facing trace id of this run; equal to the Langfuse trace id when export is on.
+    traceId: null,
     // Redacted NMS exchanges captured for this run; the wire inspector renders the request from
     // them instead of reconstructing one.
     wire: [],
@@ -142,6 +144,7 @@ export function applyFrame(state, frame) {
       if (state.runId !== null && frame.runId !== state.runId) return state;
       state.started = true;
       state.runId = typeof frame.runId === "string" ? frame.runId : state.runId;
+      if (typeof frame.traceId === "string" && frame.traceId) state.traceId = frame.traceId;
       if (typeof frame.scenario === "string") state.scenario = frame.scenario;
       if (typeof frame.mode === "string") state.mode = frame.mode;
       if (frame.protocol === "plain") state.protocol = "plain";
@@ -170,6 +173,14 @@ export function applyFrame(state, frame) {
       if (Array.isArray(frame.expectedSequence)) state.expectedSequence = frame.expectedSequence;
       if (isObject(frame.langfuse)) state.langfuse = frame.langfuse;
       if (state.status === STATUS.IDLE) state.status = STATUS.RUNNING;
+      return state;
+    }
+    case "langfuse": {
+      // The URL arrives after the run started, once the exporter has resolved it.
+      if (state.runId !== null && typeof frame.runId === "string" && frame.runId !== state.runId) {
+        return state;
+      }
+      if (isObject(frame.langfuse)) state.langfuse = frame.langfuse;
       return state;
     }
     case "event":

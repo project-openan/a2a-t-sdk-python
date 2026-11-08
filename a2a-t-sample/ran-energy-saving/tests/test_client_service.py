@@ -577,6 +577,17 @@ async def test_run_publishes_langfuse_trace_state(
     run = await manager.start("information", "auto", "sse")
     started = next(message for message in run.messages if message.get("type") == "run_started")
     assert started["langfuse"]["traceId"] == "trace-1"
+    # The vendor-facing trace id is known at start, so the page can show it immediately.
+    assert started["traceId"] == run.trace_id
+
+    # The URL is resolved in the background: the page links to the live trace during the run.
+    for _ in range(200):
+        if any(message.get("type") == "langfuse" for message in run.messages):
+            break
+        await asyncio.sleep(0.01)
+    early = next(message for message in run.messages if message.get("type") == "langfuse")
+    assert early["runId"] == run.run_id
+    assert early["langfuse"]["url"] == "https://langfuse.example/trace-1"
 
     await _finish(manager, run.run_id)
 

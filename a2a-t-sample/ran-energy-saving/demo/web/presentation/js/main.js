@@ -184,6 +184,15 @@ const els = {
   turns: byId("turns"),
   wire: byId("wire"),
   wireFormat: byId("wire-format"),
+  identity: byId("run-identity"),
+  identityRun: byId("identity-run"),
+  identityTask: byId("identity-task"),
+  identityTaskLabel: byId("identity-task-label"),
+  identityTask2Row: byId("identity-task2-row"),
+  identityTask2: byId("identity-task2"),
+  identityTask2Label: byId("identity-task2-label"),
+  identityTrace: byId("identity-trace"),
+  identityLangfuse: byId("identity-langfuse"),
   wireT: byId("wire-t"),
   wireX: byId("wire-x"),
   wireA: byId("wire-a"),
@@ -1561,6 +1570,7 @@ function render() {
       ui.tab === "wire" ? ui.copy.wire.panelTitle : ui.copy.negotiation.title;
     stage.render(ui.view, ui.copy);
     renderRequest();
+    renderIdentity();
     renderIntentPanel();
     rail.render(ui.view);
     wire.render(ui.view);
@@ -2292,22 +2302,11 @@ function buildResultCard() {
     const metrics = ui.view.pureMetrics || pureMetricsFromLog();
     if (metrics) card.append(pureMetricsBlock(metrics, ui.copy));
   }
-  const identities = runIdentities();
-  if (identities.length > 0) card.append(identityBlock(identities));
+  // The ids and the Langfuse link live in the fixed rail strip; the card keeps only an export
+  // warning, which is not repeated there.
   const langfuse = ui.view.langfuse;
-  if (langfuse && langfuse.enabled && typeof langfuse.traceId === "string") {
-    if (typeof langfuse.url === "string" && langfuse.url) {
-      const link = el("a", "result-langfuse", ui.copy.result.openInLangfuse);
-      link.href = langfuse.url;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      card.append(link);
-    } else {
-      card.append(el("p", "result-detail", `${ui.copy.result.langfuseTrace}: ${langfuse.traceId}`));
-    }
-    if (typeof langfuse.warning === "string" && langfuse.warning) {
-      card.append(el("p", "result-detail", langfuse.warning));
-    }
+  if (langfuse && langfuse.enabled && typeof langfuse.warning === "string" && langfuse.warning) {
+    card.append(el("p", "result-detail", langfuse.warning));
   }
   return card;
 }
@@ -2326,45 +2325,57 @@ function pureMetricsFromLog() {
   return null;
 }
 
-/** The Task and context of each hop this run touched, labelled by owner.
+/** Fill the fixed identity strip of the right rail.
  *
- * A pure run has two contexts: the one this page owns (the OSS Agent) and the one the OSS Agent
- * continued on its own far side (the NMS or RAN Agent). They are different A2A conversations, so
- * the card must never show one under the other's name.
+ * The strip is the always-visible view of the correlation ids: Run from the start, Task once the
+ * A2A Task exists (pure runs split into the OSS Task and the downstream Task), and the run's
+ * vendor trace id (also the Langfuse trace id when export is enabled). The Langfuse link is
+ * clickable as soon as the backend has assembled its URL.
  */
-function runIdentities() {
+function renderIdentity() {
+  const strip = els.identity;
+  if (!strip) return;
   const view = ui.view;
   const labels = ui.copy.result;
+  strip.hidden = !view.runId;
+  if (strip.hidden) return;
+  els.identityRun.textContent = view.runId || "";
+  els.identityRun.title = view.runId || "";
   const nms = Boolean(ui.meta?.nmsTasksEnabled);
-  const rows = [];
+  const downstream = view.pure || {};
+  const ran = downstream.downstreamHop === "ran";
   if (view.protocol === "pure") {
-    if (view.contextId) rows.push([labels.contextOss, view.contextId]);
-    const downstream = view.pure || {};
-    const ran = downstream.downstreamHop === "ran";
-    if (downstream.downstreamTaskId) {
-      rows.push([ran ? labels.taskRan : labels.taskNms, downstream.downstreamTaskId]);
-    }
-    if (downstream.downstreamContextId) {
-      rows.push([ran ? labels.contextRan : labels.contextNms, downstream.downstreamContextId]);
-    }
-    return rows;
+    els.identityTaskLabel.textContent = labels.taskOss;
+    els.identityTask.textContent = view.taskId || "—";
+    const downstreamTask = downstream.downstreamTaskId || "";
+    els.identityTask2Row.hidden = !downstreamTask;
+    els.identityTask2Label.textContent = ran ? labels.taskRan : labels.taskNms;
+    els.identityTask2.textContent = downstreamTask;
+  } else {
+    els.identityTask2Row.hidden = true;
+    els.identityTaskLabel.textContent = nms ? labels.taskNms : labels.taskRan;
+    els.identityTask.textContent = view.taskId || "—";
   }
-  // A2A-T talks to the RAN side directly, so this run's own Task is the one that side owns.
-  if (view.taskId) rows.push([nms ? labels.taskNms : labels.taskRan, view.taskId]);
-  if (view.contextId) rows.push([nms ? labels.contextNms : labels.contextRan, view.contextId]);
-  return rows;
-}
-
-/** Compact block of the A2A identities, one row per value. */
-function identityBlock(rows) {
-  const block = el("section", "pure-metrics run-identity");
-  block.append(el("h4", "pure-metrics-title", ui.copy.result.identities));
-  for (const [label, value] of rows) {
-    const row = el("div", "pure-metric");
-    row.append(el("span", "", label), el("b", "", value));
-    block.append(row);
+  const langfuse = view.langfuse;
+  const traceId = view.traceId || (langfuse && langfuse.traceId) || "";
+  els.identityTrace.textContent = traceId || "—";
+  els.identityTrace.title = traceId;
+  const link = els.identityLangfuse;
+  const exporting = Boolean(langfuse && langfuse.enabled && langfuse.traceId);
+  link.hidden = !exporting;
+  if (!exporting) return;
+  const url = typeof langfuse.url === "string" ? langfuse.url : "";
+  if (url) {
+    link.href = url;
+    link.removeAttribute("aria-disabled");
+    link.textContent = labels.openInLangfuse;
+    link.title = url;
+  } else {
+    link.removeAttribute("href");
+    link.setAttribute("aria-disabled", "true");
+    link.textContent = labels.langfusePreparing;
+    link.title = labels.langfusePreparing;
   }
-  return block;
 }
 
 /** Compact metrics block of one pure A2A run. */

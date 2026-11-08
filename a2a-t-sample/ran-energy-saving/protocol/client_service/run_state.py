@@ -375,6 +375,9 @@ class RunState:
         message: dict[str, object] = {
             "type": "run_started",
             "runId": self.run_id,
+            # The vendor-facing trace id this run injects downstream. It is also the Langfuse
+            # trace id when the exporter is enabled, so the page can show it from the start.
+            "traceId": self.trace_id,
             "chainId": self.chain_id,
             "parentRunId": self.parent_run_id or None,
             "scenario": self.scenario,

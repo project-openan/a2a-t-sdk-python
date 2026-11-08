@@ -283,6 +283,7 @@ class RunManager:
         self._active_by_conversation: dict[str, RunState] = {}
         self._last_session_sweep = 0.0
         self._metric_tasks: set[asyncio.Task[None]] = set()
+        self._langfuse_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def store(self) -> ClientStore | None:
@@ -731,6 +732,10 @@ class RunManager:
 
         self._runs[run.run_id] = run
         self._active_by_conversation[resolved_conversation] = run
+        # The trace id is already known, but the browser URL needs one Langfuse lookup. Resolve it
+        # in the background so the page can link to the live trace instead of waiting for the end,
+        # and so a slow Langfuse endpoint never delays the run itself.
+        self._schedule_langfuse_url(run)
         run.task = asyncio.create_task(self._execute_in_context(run), name=f"ran-client-run-{run.run_id}")
         return run
 
@@ -821,6 +826,36 @@ class RunManager:
         if run is None:
             return None
         return self._build_metrics(run)
+
+    def _schedule_langfuse_url(self, run: RunState) -> None:
+        """Resolve the Langfuse trace URL off the run path and publish it to the page."""
+        if run.langfuse_exporter is None or run.langfuse.get("url"):
+            return
+        try:
+            task = asyncio.create_task(
+                self._resolve_langfuse_url(run), name=f"ran-langfuse-{run.run_id}"
+            )
+        except RuntimeError:
+            # The event loop is already closing (a synchronous test helper or shutdown).
+            return
+        self._langfuse_tasks.add(task)
+        task.add_done_callback(self._langfuse_tasks.discard)
+
+    async def _resolve_langfuse_url(self, run: RunState) -> None:
+        """Turn the run's trace id into a clickable Langfuse URL as early as possible."""
+        exporter = run.langfuse_exporter
+        if exporter is None:
+            return
+        try:
+            snapshot = await asyncio.to_thread(exporter.snapshot, resolve_url=True)
+        except Exception as exc:  # noqa: BLE001 - observability must never break the run
+            _LOGGER.warning("Langfuse trace URL resolution failed: %s: %s", type(exc).__name__, exc)
+            return
+        url = snapshot.get("url")
+        if not url or url == run.langfuse.get("url"):
+            return
+        run.langfuse = snapshot
+        run.broadcast({"type": "langfuse", "runId": run.run_id, "langfuse": snapshot})
 
     def _schedule_metrics(self, run: RunState) -> None:
         """Aggregate and persist one finished run's metrics after the trace flush window."""
@@ -1408,6 +1443,12 @@ class RunManager:
             # persisted before the process exits.
             with suppress(asyncio.CancelledError, Exception):
                 await asyncio.gather(*tuple(self._metric_tasks), return_exceptions=True)
+        if self._langfuse_tasks:
+            # A URL lookup is best effort; do not let a slow Langfuse endpoint delay shutdown.
+            for task in tuple(self._langfuse_tasks):
+                task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await asyncio.gather(*tuple(self._langfuse_tasks), return_exceptions=True)
 
 
 def _format_conversation_context(turns: list[Any]) -> str:
