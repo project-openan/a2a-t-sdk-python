@@ -215,13 +215,84 @@ class OpenAIClient(LLMClient):
         # never a silent empty string.
         if raw_content is None or not raw_content.strip():
             raise LLMRuntimeError(f"{self._config.provider} returned empty content (rate limit or model timeout)")
+        candidate = self._extract_json_object(raw_content)
+        if candidate is None:
+            raise LLMRuntimeError(
+                f"{self._config.provider} returned invalid json: no JSON object found in response"
+            )
         try:
-            parsed = json.loads(raw_content)
+            parsed = json.loads(candidate)
         except json.JSONDecodeError as exc:
             raise LLMRuntimeError(f"{self._config.provider} returned invalid json: {exc}") from exc
         if not isinstance(parsed, dict):
             raise LLMRuntimeError(f"{self._config.provider} must return a JSON object string")
-        return raw_content
+        return candidate
+
+    @staticmethod
+    def _extract_json_object(content: str) -> str | None:
+        """Tolerantly extract the outermost JSON object string from raw LLM content.
+
+        Handles three common cases where an OpenAI-compatible proxy does not enforce
+        ``response_format: json_object``:
+        1. Markdown code fences: `````json\\n{...}\\n````` or `````\\n{...}\\n`````.
+        2. Leading/trailing prose around the JSON object.
+        3. Nested braces inside string values (tracked via a depth counter that
+           respects string/escape state so braces inside strings do not close the
+           object prematurely).
+        """
+        text = content.strip()
+        # Strip markdown code fences.
+        if text.startswith("```"):
+            newline_idx = text.find("\n")
+            if newline_idx != -1:
+                text = text[newline_idx + 1:]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
+        # Fast path: the whole thing is already valid JSON.
+        try:
+            json.loads(text)
+            return text
+        except json.JSONDecodeError:
+            pass
+        # Slow path: scan for the outermost { ... } using a depth counter that
+        # respects string/escape state.
+        start = text.find("{")
+        if start == -1:
+            return None
+        depth = 0
+        in_string = False
+        escaped = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start:i + 1]
+                    try:
+                        json.loads(candidate)
+                        return candidate
+                    except json.JSONDecodeError:
+                        # Keep scanning for a later valid object.
+                        start = text.find("{", i + 1)
+                        if start == -1:
+                            return None
+                        depth = 0
+                        i = start - 1  # loop will increment to start
+        return None
 
     def _extract_message_text(self, response: Any) -> str:
         choices = getattr(response, "choices", None) or []
