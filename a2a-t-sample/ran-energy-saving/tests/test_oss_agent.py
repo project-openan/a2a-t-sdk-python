@@ -9,6 +9,7 @@ import threading
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import replace
 from pathlib import Path
 
@@ -311,6 +312,122 @@ async def test_a_plain_downstream_question_becomes_an_outer_input_required() -> 
     assert pending.run_id == ""
 
 
+class _ContextRequestProvider:
+    """Test double mirroring the ADK provider's per-task request storage."""
+
+    def __init__(self) -> None:
+        self._request: ContextVar[str | None] = ContextVar("test_oss_user_request", default=None)
+
+    def set_user_request(self, value: str | None) -> None:
+        """Store the request of the current asyncio task."""
+        self._request.set(value)
+
+    def current(self) -> str | None:
+        """Return the request visible to the current asyncio task."""
+        return self._request.get()
+
+
+def _new_oss_context(text: str, *, task_id: str) -> RequestContext:
+    """Build one request that creates a new outer Task with a known id."""
+    message = Message(message_id="message-1", role=Role.ROLE_USER, context_id="outer-ctx")
+    message.parts.add(text=text)
+    return RequestContext(
+        call_context=ServerCallContext(state={}, user=UnauthenticatedUser(), requested_extensions=set()),
+        request=SendMessageRequest(message=message),
+        task_id=task_id,
+        context_id="outer-ctx",
+    )
+
+
+async def _ask_a_first_question(executor: OSSPureExecutor, user_request: str) -> None:
+    """Run the initial request until the downstream asks its first text question."""
+    async def run_ran(request_text: str, *args: object, **kwargs: object) -> ClientFlowResult:
+        del args, kwargs
+        setter = getattr(executor._decision_provider, "set_user_request", None)
+        if callable(setter):
+            setter(request_text)
+        raise _QuestionPendingError(
+            {"kind": "message", "context_id": "inner-ctx", "text": "Please provide the region."}
+        )
+
+    executor._run_ran = run_ran  # type: ignore[method-assign]
+    await asyncio.create_task(
+        executor.execute(_new_oss_context(user_request, task_id="outer-1"), _RecordingQueue())
+    )
+
+
+async def test_the_continuation_recommendation_sees_the_original_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The operator answer runs in a new request task; it must still carry the original request."""
+    provider = _ContextRequestProvider()
+    seen: list[str | None] = []
+
+    async def recommendation(event: dict[str, object]) -> dict[str, object] | None:
+        del event
+        seen.append(provider.current())
+        return {"action": "accept", "rationale": "grounded", "text": "Region A"}
+
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "",
+        recommendation=recommendation,
+        decision_provider=provider,
+    )
+    await _ask_a_first_question(executor, "Create a task for Region A.")
+
+    async def fake_continuation(
+        pending: _PendingQuestion,
+        answer_text: str,
+        event_sink: object,
+        updater: TaskUpdater,
+        call_context: object,
+    ) -> ClientFlowResult:
+        del pending, answer_text, event_sink, updater, call_context
+        raise _QuestionPendingError(
+            {"kind": "message", "context_id": "inner-ctx", "text": "Which region?"}
+        )
+
+    monkeypatch.setattr(executor, "_run_question_continuation", fake_continuation)
+    await asyncio.create_task(executor.execute(_task_context("Region A"), _RecordingQueue()))
+
+    assert seen[-1] == "Create a task for Region A."
+
+
+async def test_the_continuation_answer_sees_the_original_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A structured question after the operator answer needs the request just as much."""
+    provider = _ContextRequestProvider()
+    seen: list[str | None] = []
+
+    def answer(event: dict[str, object]) -> str:
+        del event
+        seen.append(provider.current())
+        return "Region A"
+
+    executor = OSSPureExecutor(answer=answer, decision_provider=provider)
+    await _ask_a_first_question(executor, "Create a task for Region A.")
+
+    async def fake_continuation(
+        pending: _PendingQuestion,
+        answer_text: str,
+        event_sink: object,
+        updater: TaskUpdater,
+        call_context: object,
+    ) -> ClientFlowResult:
+        del pending, answer_text, event_sink, updater, call_context
+        executor._answer_or_relay(
+            {"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Which region?"}
+        )
+        return ClientFlowResult(final_state=FINAL_STATE_TASK_COMPLETED, context_id="inner-ctx")
+
+    monkeypatch.setattr(executor, "_run_question_continuation", fake_continuation)
+    await asyncio.create_task(executor.execute(_task_context("Region A"), _RecordingQueue()))
+
+    assert seen[-1] == "Create a task for Region A."
+
+
 async def test_the_operator_answer_resumes_the_downstream_question(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -323,8 +440,9 @@ async def test_the_operator_answer_resumes_the_downstream_question(
         answer_text: str,
         event_sink: object,
         updater: TaskUpdater,
+        call_context: object,
     ) -> ClientFlowResult:
-        del pending, event_sink, updater
+        del pending, event_sink, updater, call_context
         captured["text"] = answer_text
         return ClientFlowResult(final_state=FINAL_STATE_TASK_COMPLETED, context_id="inner-ctx")
 
@@ -668,6 +786,148 @@ def test_long_task_mode_auto_enables_only_for_the_nms_webhook_hop(tmp_path: Path
         long_task_mode=LONG_TASK_MODE_OFF,
     )
     assert off._long_task_enabled() is False
+
+
+async def test_the_question_continuation_hands_an_incomplete_task_to_the_pump(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """After the operator answer, a still-running vendor Task needs the pump again."""
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    config = replace(
+        offline_direct_config(8000),
+        discovery=DISCOVERY_NMS,
+        transport=TRANSPORT_WEBHOOK,
+    )
+    executor = OSSPureExecutor(config=config, answer=lambda event: "", binding_store=binding_store)
+    router = WebhookRouter()
+    executor._webhook_router = router
+    executor._nms_client = object()  # type: ignore[assignment]
+
+    async def fake_flow(**kwargs: object) -> ClientFlowResult:
+        del kwargs
+        return ClientFlowResult(
+            final_state=FINAL_STATE_INCOMPLETE,
+            task_id="inner-1",
+            context_id="inner-ctx",
+        )
+
+    monkeypatch.setattr("protocol.oss_agent.continue_pure_client_flow", fake_flow)
+    pending = _PendingQuestion(
+        outer_task_id="outer-1",
+        outer_context_id="outer-ctx",
+        run_id="run-1",
+        inner_task_id="inner-1",
+        inner_context_id="inner-ctx",
+        round_number=1,
+        user_request="Create a task for Region A.",
+    )
+    updater = TaskUpdater(_RecordingQueue(), "outer-1", "outer-ctx")
+
+    result = await executor._run_question_continuation(
+        pending,
+        "Region A",
+        lambda event: None,
+        updater,
+        _task_context("Region A").call_context,
+    )
+
+    assert result.final_state == FINAL_STATE_INCOMPLETE
+    binding = await binding_store.get("inner-1", "inner-ctx")
+    assert binding is not None
+    assert binding.outer_task_id == "outer-1"
+    assert "outer-1" in executor._pending_handoffs
+    assert executor._pending_handoffs["outer-1"].user_request == "Create a task for Region A."
+    assert router.active_subscriptions == 1
+
+    executor._start_pending_pump("outer-1")
+    assert "outer-1" in executor._pumps
+    await executor._stop_pumps()
+    assert router.active_subscriptions == 0
+
+
+async def test_the_question_continuation_retires_the_binding_on_a_terminal_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The pump suspended for the question; a terminal answer must not leave a live binding."""
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    await binding_store.save(
+        DownstreamBinding(
+            inner_task_id="inner-1",
+            inner_context_id="inner-ctx",
+            outer_task_id="outer-1",
+            run_id="run-1",
+            protocol="pure",
+        )
+    )
+    config = replace(
+        offline_direct_config(8000),
+        discovery=DISCOVERY_NMS,
+        transport=TRANSPORT_WEBHOOK,
+    )
+    executor = OSSPureExecutor(config=config, answer=lambda event: "", binding_store=binding_store)
+    executor._webhook_router = WebhookRouter()
+    executor._nms_client = object()  # type: ignore[assignment]
+
+    async def fake_flow(**kwargs: object) -> ClientFlowResult:
+        del kwargs
+        return ClientFlowResult(
+            final_state=FINAL_STATE_TASK_COMPLETED,
+            task_id="inner-1",
+            context_id="inner-ctx",
+        )
+
+    monkeypatch.setattr("protocol.oss_agent.continue_pure_client_flow", fake_flow)
+    pending = _PendingQuestion(
+        outer_task_id="outer-1",
+        outer_context_id="outer-ctx",
+        run_id="run-1",
+        inner_task_id="inner-1",
+        inner_context_id="inner-ctx",
+        round_number=1,
+        user_request="Create a task for Region A.",
+    )
+
+    await executor._run_question_continuation(
+        pending,
+        "Region A",
+        lambda event: None,
+        TaskUpdater(_RecordingQueue(), "outer-1", "outer-ctx"),
+        _task_context("Region A").call_context,
+    )
+
+    binding = await binding_store.get("inner-1", "inner-ctx")
+    assert binding is not None
+    assert binding.terminal is True
+
+
+async def test_the_pump_callbacks_restore_the_request_for_each_decision() -> None:
+    """A pump started by a later request must see that request, not the last one another task set."""
+    provider = _ContextRequestProvider()
+    seen: list[str | None] = []
+
+    async def recommendation(event: dict[str, object]) -> None:
+        del event
+        seen.append(provider.current())
+
+    def answer(event: dict[str, object]) -> str:
+        del event
+        seen.append(provider.current())
+        return "Region A"
+
+    executor = OSSPureExecutor(
+        answer=answer,
+        recommendation=recommendation,  # type: ignore[arg-type]
+        decision_provider=provider,
+    )
+    wrapped_answer = executor._answer_for_request("Create a task for Region A.")
+    wrapped_recommendation = executor._recommendation_for_request("Create a task for Region A.")
+
+    assert wrapped_recommendation is not None
+    await wrapped_recommendation({})
+    assert wrapped_answer({}) == "Region A"
+    assert seen == ["Create a task for Region A.", "Create a task for Region A."]
 
 
 async def test_the_nms_webhook_flow_hands_the_subscription_to_the_pump(

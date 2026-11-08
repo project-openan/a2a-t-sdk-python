@@ -1970,9 +1970,9 @@ function renderChoices(card) {
   }
 
   // One decision surface at a time: the manual editor replaces the action row. Without a
-  // recommendation it also keeps the two escape actions visible as a compact quick-action row.
+  // recommendation it also keeps its escape action(s) visible as a compact quick-action row.
   if (card.type === "decision" && ui.manualOpen) {
-    renderManualAnswer();
+    renderManualAnswer(card);
     if (!card.hasRecommendation) {
       appendActionRow(card, ui.copy.decision.quickActions);
     }
@@ -2044,18 +2044,21 @@ function appendManualToggle(open) {
  * deliberate override when it has one. Parsing is explicit: the engineer sees the structured
  * decision and confirms it before anything is submitted.
  */
-function renderManualAnswer() {
+function renderManualAnswer(card = null) {
   const labels = ui.copy.decision;
+  // The decision card picks an example that matches the asked item (for example a region answer
+  // for a region question); the static copy value is only the fallback.
+  const exampleText = card?.manualExample || labels.manualExample;
   const section = el("div", "manual-answer");
   section.append(el("span", "micro-label", labels.manualLabel));
   if (ui.manualPreview === null) {
     // The example is a selectable hint, not a textarea placeholder: placeholder text cannot be
     // selected or copied. The button also fills it in for the engineer.
-    if (labels.manualExample) {
+    if (exampleText) {
       const example = el("p", "manual-example");
       example.append(
         el("span", "manual-example-label", `${labels.manualExampleLabel || "Example"}: `),
-        el("code", "", labels.manualExample),
+        el("code", "", exampleText),
       );
       section.append(example);
     }
@@ -2077,13 +2080,13 @@ function renderManualAnswer() {
     parse.disabled = ui.manualParsing || ui.submitting;
     parse.addEventListener("click", () => parseManualAnswer());
     row.append(parse);
-    if (labels.manualExample && labels.manualUseExample) {
+    if (exampleText && labels.manualUseExample) {
       const useExample = el("button", "", labels.manualUseExample);
       useExample.type = "button";
       useExample.disabled = ui.manualParsing || ui.submitting;
       useExample.addEventListener("click", () => {
-        ui.manualText = labels.manualExample;
-        area.value = labels.manualExample;
+        ui.manualText = exampleText;
+        area.value = exampleText;
         area.focus();
         area.setSelectionRange(area.value.length, area.value.length);
       });

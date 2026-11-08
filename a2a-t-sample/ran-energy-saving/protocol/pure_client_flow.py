@@ -223,6 +223,21 @@ def _pure_request(text: str) -> SendMessageRequest:
     return _message_request(text)
 
 
+def build_follow_up_request(
+    text: str,
+    *,
+    task_id: str | None,
+    context_id: str | None,
+    followup: str = PURE_FOLLOWUP_BOTH,
+) -> SendMessageRequest:
+    """Build the continuation message that resumes an ``INPUT_REQUIRED`` Task.
+
+    Public so a caller that only observed the Task by polling (the Web UI long-task watcher) sends
+    the operator's answer with the same fields the streaming flow uses.
+    """
+    return _follow_up_request(text, task_id=task_id, context_id=context_id, followup=followup)
+
+
 def _follow_up_request(
     text: str,
     *,
@@ -286,19 +301,27 @@ def _pending_negotiation(
             if pure and pure.get("kind") not in (None, "negotiation"):
                 continue
             return event
-        if kind == "message" and allow_plain_question:
-            text = event.get("text")
-            if not isinstance(text, str) or not text.strip():
-                continue
-            metadata = event.get("metadata")
-            if isinstance(metadata, Mapping) and is_negotiation_message(metadata_to_dict(metadata)):
-                continue
-            if event.get("task_id"):
-                # A plain message on an existing Task is an observation; the Task state carries
-                # the protocol meaning.
-                continue
+        if allow_plain_question and is_plain_question(event):
             return event
     return None
+
+
+def is_plain_question(event: Mapping[str, object]) -> bool:
+    """Return whether one normalized pure event is a vendor text question.
+
+    A vendor that does not negotiate at the protocol level answers a pure request with a plain
+    agent ``message`` (no Task, no negotiation metadata). A message that belongs to a Task is an
+    observation: the Task state carries the protocol meaning.
+    """
+    if event.get("kind") != "message":
+        return False
+    text = event.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return False
+    metadata = event.get("metadata")
+    if isinstance(metadata, Mapping) and is_negotiation_message(metadata_to_dict(metadata)):
+        return False
+    return not event.get("task_id")
 
 
 def pure_metadata(event: Mapping[str, object]) -> dict[str, object]:
@@ -376,7 +399,9 @@ def _text(value: object) -> str | None:
 
 __all__ = [
     "DEFAULT_PURE_LABEL",
+    "build_follow_up_request",
     "continue_pure_client_flow",
+    "is_plain_question",
     "pure_metadata",
     "run_pure_client_flow",
 ]

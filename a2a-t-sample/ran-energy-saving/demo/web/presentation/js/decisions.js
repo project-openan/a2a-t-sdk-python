@@ -57,23 +57,38 @@ export function decisionCard(state, copy) {
   const recommendationUnavailable = decision.recommendationUnavailable === true;
   if (state.mode === "confirm" && !recommendation && !recommendationUnavailable) return null;
   const regionOptions = areaOptions(decision.proposal?.options, copy);
+  const missingItems = Array.isArray(decision.missingItems)
+    ? decision.missingItems.filter((item) => typeof item === "string")
+    : [];
   const proposalText =
     proposalItemText(decision.proposal?.content, "region") ||
     proposalLine(copy, state.scenario, round) ||
     firstLine(decision.proposal?.content) ||
     copy.negotiation.generic;
+  // An information proposal is a vendor question: show what it actually asked for instead of the
+  // generic scenario line. Without parsed items the proposal text is still the fallback.
+  const text =
+    kind === "information" && missingItems.length > 0
+      ? format(copy.decision.askedItems, { items: missingItems.join(", ") })
+      : proposalText;
 
   // A deterministic recommendation is the only case where the card offers a recommended action.
   // Without it the RAN Agent is asking for information (or the OSS Agent could not decide), so the
-  // card drops to the two escape actions and lets the manual area carry the answer.
+  // card drops to its escape actions and lets the manual area carry the answer.
   const hasRecommendation = Boolean(recommendation);
   const options = [];
   if (hasRecommendation) {
-    options.push({ action: "confirm", label: confirmLabel(copy, recommendedAction), primary: true });
+    options.push({
+      action: "confirm",
+      label:
+        kind === "information" && copy.decision.confirmInformation
+          ? copy.decision.confirmInformation
+          : confirmLabel(copy, recommendedAction),
+      primary: true,
+    });
     if (kind === "information") {
-      if (recommendedAction !== "accept") {
-        options.push({ action: "accept", label: copy.decision.acceptNms });
-      }
+      // The NMS asked a question, not for an accept: the only shortcuts are the recommendation
+      // (confirm) and the escape. The operator's value still goes through the manual box.
       if (recommendedAction !== "reject") {
         options.push({ action: "reject", label: copy.decision.reject, danger: true });
       }
@@ -88,6 +103,10 @@ export function decisionCard(state, copy) {
         options.push({ action: "reject", label: copy.decision.reject, danger: true });
       }
     }
+  } else if (kind === "information") {
+    // There is no RAN proposal to accept: the engineer must supply the value, so only the reject
+    // escape action remains beside the manual editor.
+    options.push({ action: "reject", label: copy.decision.reject, danger: true });
   } else {
     options.push({ action: "accept", label: copy.decision.acceptNms, primary: true });
     options.push({ action: "reject", label: copy.decision.reject, danger: true });
@@ -107,12 +126,14 @@ export function decisionCard(state, copy) {
     type: "decision",
     kicker: copy.decision.kicker,
     title: format(copy.decision.title, { round, maxRounds }),
-    text: proposalText,
+    text,
     detail,
     kind,
     hasRecommendation,
     recommendedAction,
     recommendation,
+    missingItems,
+    manualExample: manualExampleFor(copy, missingItems),
     // Without a deterministic recommendation the manual area is the primary answer surface, so it
     // opens by default; with one, the action row leads and the manual area stays collapsed.
     manualOpen: !hasRecommendation,
@@ -129,6 +150,26 @@ function confirmLabel(copy, action) {
   if (action === "reject") return copy.decision.confirmReject;
   if (action === "abort") return copy.decision.confirmAbort;
   return copy.decision.confirmAccept;
+}
+
+/** Pick the manual example that matches the first asked item, or the generic sentence. */
+function manualExampleFor(copy, missingItems) {
+  const examples = copy.decision.manualExamples || {};
+  const fallback = examples.default || copy.decision.manualExample || "";
+  for (const item of missingItems) {
+    const key = manualExampleKey(item);
+    if (key && examples[key]) return examples[key];
+  }
+  return fallback;
+}
+
+/** Map one asked-item label to a bounded example key. */
+function manualExampleKey(item) {
+  const text = String(item).toLowerCase();
+  if (/region|区域/.test(text)) return "region";
+  if (/throughput|吞吐/.test(text)) return "throughput";
+  if (/rate|速率|带宽/.test(text)) return "rate";
+  return "";
 }
 
 /** Build approval 2 (the MIE MML review), or ``null`` when no review is pending. */

@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from a2a.types import Artifact, Task, TaskState, TaskStatus
+from a2a.types import Artifact, Message, Role, Task, TaskState, TaskStatus
 from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
 from demo.catalog import DemoRunCatalog
 from google.adk.sessions.sqlite_session_service import SqliteSessionService
@@ -1175,3 +1175,222 @@ def test_recommendation_frame_carries_the_agent_decision() -> None:
 
     assert frame["recommendation"] == decision.model_dump()
     assert "recommendationUnavailable" not in frame
+
+
+def test_recommendation_frame_lists_the_items_an_information_proposal_asks_for() -> None:
+    """The page needs the asked items to label the card and pick a matching example."""
+    from protocol.client_service.run_manager import _recommendation_frame
+
+    frame = _recommendation_frame(
+        mode="confirm",
+        propose=NegotiationProposeView(
+            negotiation_id="neg-1",
+            kind="information",
+            round=1,
+            max_rounds=3,
+            content=(
+                "Energy saving region is not recognized. "
+                "Please provide the correct region name."
+            ),
+            performative="PROPOSE",
+        ),
+        session=NegotiationContext(
+            id="neg-1",
+            round=1,
+            max_rounds=3,
+            performative=NegotiationPerformative.PROPOSE,
+        ),
+        recommendation=None,
+        recommendation_error=None,
+        timeout_seconds=300.0,
+        requested_at="2026-11-08T03:44:09.538Z",
+    )
+
+    assert frame["missingItems"] == ["Region"]
+
+
+def test_recommendation_frame_reports_no_missing_items_for_a_target_proposal() -> None:
+    """A target/feasibility proposal carries an empty list, never a guess."""
+    from protocol.client_service.run_manager import _recommendation_frame
+
+    frame = _recommendation_frame(
+        mode="confirm",
+        propose=NegotiationProposeView(
+            negotiation_id="neg-1",
+            kind="target",
+            round=1,
+            max_rounds=3,
+            content="the target overlaps",
+            performative="PROPOSE",
+        ),
+        session=NegotiationContext(
+            id="neg-1",
+            round=1,
+            max_rounds=3,
+            performative=NegotiationPerformative.PROPOSE,
+        ),
+        recommendation=None,
+        recommendation_error=None,
+        timeout_seconds=300.0,
+        requested_at="2026-11-08T03:44:09.538Z",
+    )
+
+    assert frame["missingItems"] == []
+
+
+def test_a_polled_task_keeps_the_status_message_text_and_metadata() -> None:
+    """A delayed question is in the Task status message; polling must not discard it."""
+    from protocol.client_service.run_manager import _polled_task_from_a2a
+
+    status = TaskStatus(state=TaskState.TASK_STATE_INPUT_REQUIRED)
+    message = Message(message_id="message-1", role=Role.ROLE_AGENT)
+    message.parts.add(text="Energy saving region is not recognized.")
+    message.metadata.update({"pure": {"round": 2, "recommendation": {"action": "accept"}}})
+    status.message.CopyFrom(message)
+    task = Task(id="outer-1", context_id="ctx-1", status=status)
+
+    polled = _polled_task_from_a2a(task, "outer-1")
+
+    assert polled.text == "Energy saving region is not recognized."
+    assert polled.metadata == {"pure": {"round": 2.0, "recommendation": {"action": "accept"}}}
+
+
+async def test_a_polled_input_required_is_answered_through_the_pure_decision(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """The page's pure decision card must also open for a question observed by polling."""
+    from types import SimpleNamespace
+
+    from protocol.client_service.run_manager import _PolledTask
+    from protocol.client_service.run_state import RunState
+
+    manager, _store, _runtimes = _manager(tmp_path, offline_config)
+    run = RunState(
+        run_id="run-1",
+        scenario="night",
+        mode="confirm",
+        transport="sse",
+        protocol=PROTOCOL_PURE,
+    )
+    events: list[dict[str, object]] = []
+    sent: list[object] = []
+
+    async def pure_answer(event: dict[str, object]) -> str:
+        events.append(dict(event))
+        return "Region A"
+
+    class _Transport:
+        async def send(self, request: object, call_context: object) -> list[object]:
+            del call_context
+            sent.append(request)
+            return []
+
+    run.runtime = SimpleNamespace(pure_answer=pure_answer, transport=_Transport())
+    polled = _PolledTask(
+        state_name="TASK_STATE_INPUT_REQUIRED",
+        context_id="ctx-1",
+        reports=[],
+        report=None,
+        text="Energy saving region is not recognized.",
+        metadata={"pure": {"round": 2, "recommendation": {"action": "accept"}}},
+    )
+
+    await manager._answer_remote_question(run, "outer-1", polled)
+
+    assert events[0]["text"] == "Energy saving region is not recognized."
+    assert events[0]["metadata"]["pure"]["round"] == 2
+    request = sent[0]
+    assert request.message.parts[0].text == "Region A"
+    assert request.message.task_id == "outer-1"
+    assert request.message.context_id == "ctx-1"
+
+
+async def test_the_long_task_watcher_answers_a_polled_question(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A question that arrives after the initial stream closed must still reach the operator."""
+    from types import SimpleNamespace
+
+    from protocol.client_service.run_manager import _PolledTask
+    from protocol.client_service.run_state import RunState
+
+    config = replace(offline_config, nms_state_poll_interval=0.01, task_poll_interval_seconds=0.01)
+    manager, _store, _runtimes = _manager(tmp_path, config)
+    run = RunState(
+        run_id="run-1",
+        scenario="night",
+        mode="confirm",
+        transport="sse",
+        protocol=PROTOCOL_PURE,
+    )
+    run.runtime = SimpleNamespace()
+    answered: list[tuple[str, str]] = []
+
+    async def fake_answer(run_arg: RunState, task_id: str, polled: object) -> None:
+        del run_arg
+        answered.append((task_id, polled.text))
+
+    async def fake_poll(run_arg: RunState, task_id: str) -> object:
+        del run_arg, task_id
+        return polls.pop(0)
+
+    monkeypatch.setattr(manager, "_answer_remote_question", fake_answer)
+    monkeypatch.setattr(manager, "_poll_remote_task", fake_poll)
+    polls = [
+        _PolledTask("TASK_STATE_WORKING", "ctx-1", [], None),
+        _PolledTask("TASK_STATE_INPUT_REQUIRED", "ctx-1", [], None, text="Which region?"),
+        _PolledTask("TASK_STATE_COMPLETED", "ctx-1", [], None),
+    ]
+    result = ClientFlowResult(
+        final_state=FINAL_STATE_INCOMPLETE,
+        task_id="outer-1",
+        context_id="ctx-1",
+    )
+
+    finished = await asyncio.wait_for(manager._watch_long_task(run, result), timeout=3.0)
+
+    assert answered == [("outer-1", "Which region?")]
+    assert finished.final_state == FINAL_STATE_TASK_COMPLETED
+
+
+async def test_a_polled_question_accepts_a_sync_pure_answer(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """Auto/scripted modes use a plain callable, not the confirmation coroutine."""
+    from types import SimpleNamespace
+
+    from protocol.client_service.run_manager import _PolledTask
+    from protocol.client_service.run_state import RunState
+
+    manager, _store, _runtimes = _manager(tmp_path, offline_config)
+    run = RunState(
+        run_id="run-1",
+        scenario="night",
+        mode="auto",
+        transport="sse",
+        protocol=PROTOCOL_PURE,
+    )
+    sent: list[object] = []
+
+    class _Transport:
+        async def send(self, request: object, call_context: object) -> list[object]:
+            del call_context
+            sent.append(request)
+            return []
+
+    run.runtime = SimpleNamespace(pure_answer=lambda event: "Region A", transport=_Transport())
+    polled = _PolledTask(
+        state_name="TASK_STATE_INPUT_REQUIRED",
+        context_id="ctx-1",
+        reports=[],
+        report=None,
+        text="Which region?",
+    )
+
+    await manager._answer_remote_question(run, "outer-1", polled)
+
+    assert sent[0].message.parts[0].text == "Region A"

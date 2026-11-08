@@ -215,6 +215,10 @@ export function applyFrame(state, frame) {
         recommendationUnavailable: frame.recommendationUnavailable === true,
         recommendationError:
           typeof frame.recommendationError === "string" ? frame.recommendationError : "",
+        //: Labels of the items the information proposal asks for, as computed by the server.
+        missingItems: Array.isArray(frame.missingItems)
+          ? frame.missingItems.filter((item) => typeof item === "string")
+          : [],
         resolved: false,
       };
       pushTrace(state, {

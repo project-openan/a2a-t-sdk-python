@@ -162,6 +162,9 @@ class _PendingQuestion:
     inner_task_id: str
     inner_context_id: str
     round_number: int
+    #: Natural-language request that opened the run. The operator answer arrives in a new request
+    #: task, so the provider cannot rely on a context variable set by the first hop.
+    user_request: str = ""
 
 
 @dataclass(frozen=True)
@@ -173,6 +176,8 @@ class _PumpHandoff:
     binding: DownstreamBinding
     outer_context_id: str
     call_context: ServerCallContext
+    #: Request that opened the run; a pump resumed after a restart has none.
+    user_request: str = ""
 
 
 @dataclass
@@ -417,7 +422,9 @@ class OSSPureExecutor(AgentExecutor):
             task_store=self._task_store,
             binding_store=self._binding_store,
             push_sender=self._push_sender,
-            answer=self._answer,
+            answer=self._answer_for_request(handoff.user_request),
+            recommendation=self._recommendation_for_request(handoff.user_request),
+            on_question=self._question_registrar(handoff),
         )
 
     def _register_pump(self, handoff: _PumpHandoff, pump: DownstreamPump) -> None:
@@ -583,6 +590,7 @@ class OSSPureExecutor(AgentExecutor):
                 run_id=run_id or "",
                 event=question.event,
                 round_number=1,
+                user_request=a2a_request_text(intent),
             )
             return
         except Exception as exc:  # noqa: BLE001 - the outer Task must reach a terminal state
@@ -798,12 +806,69 @@ class OSSPureExecutor(AgentExecutor):
                     binding=binding,
                     outer_context_id=updater.context_id,
                     call_context=call_context,
+                    user_request=user_request,
                 )
                 handed_off = True
             return result
         finally:
             if not handed_off:
                 subscription.unsubscribe()
+
+    def _set_decision_request(self, user_request: str) -> None:
+        """Give the decision provider the natural-language request of the current task.
+
+        The provider stores it in a context variable, so this must run in the same asyncio task as
+        the decision call. A subsequent request (the operator answer) is a new task and sets it
+        again from the pending question.
+        """
+        setter = getattr(self._decision_provider, "set_user_request", None)
+        if callable(setter):
+            setter(user_request)
+
+    def _answer_for_request(
+        self, user_request: str
+    ) -> Callable[[dict[str, object]], str | Awaitable[str]]:
+        """Wrap the answer callback so it always runs with the request of this run."""
+        base = self._answer
+
+        def answer(event: dict[str, object]) -> str | Awaitable[str]:
+            self._set_decision_request(user_request)
+            return base(event)
+
+        return answer
+
+    def _recommendation_for_request(self, user_request: str) -> RecommendationBuilder | None:
+        """Wrap the recommendation callback so it always runs with the request of this run."""
+        base = self._recommendation
+        if base is None:
+            return None
+
+        async def recommend(event: dict[str, object]) -> dict[str, object] | None:
+            self._set_decision_request(user_request)
+            return await base(event)
+
+        return recommend
+
+    def _question_registrar(
+        self, handoff: _PumpHandoff
+    ) -> Callable[[Mapping[str, object], int], None]:
+        """Build the hook recording a question the background pump relayed to the operator."""
+        outer_task_id = handoff.binding.outer_task_id
+
+        def register(event: Mapping[str, object], round_number: int) -> None:
+            self._pending_questions[outer_task_id] = _PendingQuestion(
+                outer_task_id=outer_task_id,
+                outer_context_id=handoff.outer_context_id,
+                run_id=handoff.binding.run_id,
+                inner_task_id=str(event.get("task_id") or handoff.binding.inner_task_id),
+                inner_context_id=str(
+                    event.get("context_id") or handoff.binding.inner_context_id
+                ),
+                round_number=round_number,
+                user_request=handoff.user_request,
+            )
+
+        return register
 
     async def _run_ran(
         self,
@@ -814,9 +879,7 @@ class OSSPureExecutor(AgentExecutor):
         call_context: ServerCallContext,
     ) -> ClientFlowResult:
         """Run the standard A2A client flow against the configured downstream agent."""
-        setter = getattr(self._decision_provider, "set_user_request", None)
-        if callable(setter):
-            setter(user_request)
+        self._set_decision_request(user_request)
         self._bind_wire_log(run_id)
         if self._webhook_router is not None:
             return await self._run_ran_webhook(user_request, run_id, event_sink, updater, call_context)
@@ -918,6 +981,7 @@ class OSSPureExecutor(AgentExecutor):
         run_id: str,
         event: Mapping[str, object],
         round_number: int,
+        user_request: str = "",
     ) -> None:
         """Publish one downstream text question as an outer ``INPUT_REQUIRED`` status."""
         text = str(event.get("text") or "").strip() or (
@@ -952,6 +1016,7 @@ class OSSPureExecutor(AgentExecutor):
             inner_task_id=inner_task_id,
             inner_context_id=inner_context_id,
             round_number=round_number,
+            user_request=user_request,
         )
         _LOGGER.info(
             "relayed downstream question: outer=%s inner_context=%s round=%s",
@@ -980,6 +1045,9 @@ class OSSPureExecutor(AgentExecutor):
             )
             self._pending_questions[pending.outer_task_id] = pending
             return
+        # The answer arrives in a new request task: re-establish the original request before the
+        # next decision call, otherwise the provider (a context variable) sees no request at all.
+        self._set_decision_request(pending.user_request)
         hop = self._downstream_hop()
         await updater.update_status(
             TaskState.TASK_STATE_WORKING,
@@ -1000,6 +1068,7 @@ class OSSPureExecutor(AgentExecutor):
                 answer_text,
                 events.put_nowait,
                 updater,
+                context.call_context,
             )
         except _QuestionPendingError as question:
             events.put_nowait(None)
@@ -1011,6 +1080,7 @@ class OSSPureExecutor(AgentExecutor):
                 run_id=pending.run_id,
                 event=question.event,
                 round_number=pending.round_number + 1,
+                user_request=pending.user_request,
             )
             return
         except Exception as exc:  # noqa: BLE001 - the outer Task must reach a terminal state
@@ -1031,6 +1101,7 @@ class OSSPureExecutor(AgentExecutor):
         answer_text: str,
         event_sink: Callable[[dict[str, object]], None],
         updater: TaskUpdater,
+        call_context: ServerCallContext,
     ) -> ClientFlowResult:
         """Send the caller's answer on the downstream context and consume the next phase."""
         if self._webhook_router is not None and self._nms_client is not None:
@@ -1042,6 +1113,7 @@ class OSSPureExecutor(AgentExecutor):
                 )
             elif pending.inner_context_id:
                 subscription.bind(None, pending.inner_context_id)
+            handed_off = False
             try:
                 transport = NmsWebhookTransport(
                     self._nms_client,
@@ -1063,7 +1135,7 @@ class OSSPureExecutor(AgentExecutor):
                     # second registration is rejected by the real NMS.
                     register_push_config=False,
                 )
-                return await continue_pure_client_flow(
+                result = await continue_pure_client_flow(
                     transport=transport,
                     text=answer_text,
                     task_id=pending.inner_task_id or None,
@@ -1077,8 +1149,46 @@ class OSSPureExecutor(AgentExecutor):
                     followup=self._followup,
                     plain_questions=True,
                 )
+                if (
+                    self._long_task_enabled()
+                    and self._binding_store is not None
+                    and result.task_id
+                    and result.final_state == FINAL_STATE_INCOMPLETE
+                ):
+                    # The answer did not end the vendor Task: hand it back to a fresh pump instead
+                    # of releasing the run's only tracker.
+                    binding = DownstreamBinding(
+                        inner_task_id=result.task_id,
+                        inner_context_id=result.context_id or "",
+                        outer_task_id=updater.task_id,
+                        run_id=pending.run_id,
+                        owner=call_context.user.user_name,
+                        protocol=PROTOCOL_PURE,
+                    )
+                    await self._binding_store.save(binding)
+                    self._pending_handoffs[updater.task_id] = _PumpHandoff(
+                        subscription=subscription,
+                        transport=transport,
+                        binding=binding,
+                        outer_context_id=updater.context_id,
+                        call_context=call_context,
+                        user_request=pending.user_request,
+                    )
+                    handed_off = True
+                elif self._binding_store is not None and result.task_id:
+                    # The pump suspended when it relayed the question; the answer ended the Task,
+                    # so retire the binding it left active.
+                    try:
+                        await self._binding_store.mark_terminal(
+                            result.task_id,
+                            result.context_id or "",
+                        )
+                    except Exception:  # noqa: BLE001 - tracking is best effort
+                        _LOGGER.warning("could not retire the downstream binding", exc_info=True)
+                return result
             finally:
-                subscription.unsubscribe()
+                if not handed_off:
+                    subscription.unsubscribe()
         if self._nms_client is not None and self._config is not None:
             return await continue_pure_client_flow(
                 transport=NmsSseTransport(

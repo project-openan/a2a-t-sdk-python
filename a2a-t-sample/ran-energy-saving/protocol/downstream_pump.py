@@ -47,6 +47,7 @@ from shared.trace import infer_event_phase, record_span, trace_scope
 
 from protocol.client_flow import is_report_artifact, normalize_webhook_payload
 from protocol.downstream_binding_store import DownstreamBindingStore
+from protocol.pure_client_flow import is_plain_question
 
 _LOGGER = logging.getLogger("ran_energy_saving.downstream_pump")
 
@@ -130,6 +131,8 @@ class DownstreamPump:
         binding_store: DownstreamBindingStore,
         push_sender: PushNotificationSender | None = None,
         answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = None,
+        recommendation: Callable[[dict[str, object]], Awaitable[dict[str, object] | None]] | None = None,
+        on_question: Callable[[Mapping[str, object], int], None] | None = None,
     ) -> None:
         """Create one pump.
 
@@ -141,6 +144,10 @@ class DownstreamPump:
             binding_store: Durable binding used by restart recovery and retention.
             push_sender: Optional A2A push-notification sender.
             answer: Decision callback answering a downstream ``INPUT_REQUIRED``.
+            recommendation: Advisory-answer callback for one vendor text question; ``None`` keeps
+                the question as a plain status update.
+            on_question: Hook registering the relayed question so the operator answer can resume
+                the downstream context.
         """
         self._context = context
         self._subscription = subscription
@@ -149,7 +156,10 @@ class DownstreamPump:
         self._binding_store = binding_store
         self._push_sender = push_sender
         self._answer = answer
+        self._recommendation = recommendation
+        self._on_question = on_question
         self._terminal = False
+        self._suspended = False
         self._rounds = 0
         self._recent: deque[str] = deque(maxlen=_RECENT_EVENTS)
         self._manager: TaskManager | None = None
@@ -200,7 +210,7 @@ class DownstreamPump:
             try:
                 # Let the request handler persist the outer Task's last synchronous event first.
                 await asyncio.sleep(0)
-                while not self._terminal:
+                while not self._terminal and not self._suspended:
                     payload = await self._subscription.queue.get()
                     event = normalize_webhook_payload(payload)
                     try:
@@ -219,6 +229,9 @@ class DownstreamPump:
         kind = str(event.get("kind") or "")
         if kind == "status" and event.get("state") == "TASK_STATE_INPUT_REQUIRED":
             await self._answer_input_required(event)
+            return
+        if is_plain_question(event) and self._recommendation is not None and self._on_question is not None:
+            await self._relay_question(event)
             return
         await self._publish_outer(event)
         if self._is_terminal_event(event):
@@ -266,6 +279,48 @@ class DownstreamPump:
         )
         for item in batch:
             await self._apply(item)
+
+    async def _relay_question(self, event: Mapping[str, object]) -> None:
+        """Publish one vendor text question as an outer ``INPUT_REQUIRED`` and stop the pump.
+
+        The operator answer resumes the downstream context in a new request, which creates its own
+        subscription and binds the same vendor identity. This pump releases the queue instead of
+        competing with that subscription; an incomplete answer hands the Task back to a new pump.
+        """
+        text = _text(event.get("text")) or f"The {self._context.downstream_name} requested information."
+        recommendation: dict[str, object] | None = None
+        if self._recommendation is not None:
+            try:
+                recommendation = await self._recommendation(dict(event))
+            except Exception:  # noqa: BLE001 - the operator can still answer manually
+                _LOGGER.warning("could not draft an answer to the downstream question", exc_info=True)
+        round_number = self._rounds + 1
+        metadata = self._metadata(event, "question")
+        pure = metadata.get("pure")
+        if not isinstance(pure, dict):
+            pure = {}
+            metadata["pure"] = pure
+        pure.update(
+            {
+                "kind": "negotiation",
+                "round": round_number,
+                "maxRounds": self._context.max_rounds,
+                "recommendation": recommendation or None,
+            }
+        )
+        outer_event = self._status_message(
+            TaskState.TASK_STATE_INPUT_REQUIRED,
+            text,
+            "question",
+            metadata,
+        )
+        await self._persist(outer_event)
+        await self._push(outer_event)
+        self._trace(event)
+        self._rounds = round_number
+        if self._on_question is not None:
+            self._on_question(dict(event), round_number)
+        self._suspended = True
 
     async def _publish_outer(self, event: dict[str, object]) -> None:
         """Persist one outer Task event, push it, and trace it."""

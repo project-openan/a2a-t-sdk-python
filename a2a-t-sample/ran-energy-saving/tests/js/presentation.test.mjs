@@ -420,12 +420,78 @@ const unavailableInfoCard = decisionCard(unavailableInfo, copy);
 assert.ok(unavailableInfoCard);
 assert.deepEqual(
   unavailableInfoCard.options.map((option) => option.action),
-  ["accept", "reject"],
+  ["reject"],
 );
 assert.equal(unavailableInfoCard.manualOpen, true);
 assert.ok(!unavailableInfoCard.options.some((option) => option.action === "counter"));
+assert.ok(!unavailableInfoCard.options.some((option) => option.action === "accept"));
 assert.ok(copy.decision.manualExample);
 assert.ok(copy.decision.manualUseExample);
+
+// The vendor question drives the card text and the manual example: asking for a region must not
+// suggest a throughput answer. With no recommendation only the reject escape action remains.
+const regionQuestion = createState();
+applyFrame(regionQuestion, {
+  type: "run_started",
+  runId: "r-region-question",
+  scenario: "information",
+  mode: "confirm",
+});
+applyFrame(regionQuestion, {
+  type: "decision_requested",
+  round: 1,
+  maxRounds: 3,
+  proposal: {
+    kind: "information",
+    round: 1,
+    content: "Energy saving region is not recognized. Please provide the correct region name.",
+  },
+  missingItems: ["Region"],
+  recommendationUnavailable: true,
+  requestedAt: new Date().toISOString(),
+});
+assert.deepEqual(regionQuestion.decision.missingItems, ["Region"]);
+const regionQuestionCard = decisionCard(regionQuestion, copy);
+assert.ok(regionQuestionCard);
+assert.equal(regionQuestionCard.manualOpen, true);
+assert.deepEqual(
+  regionQuestionCard.options.map((option) => option.action),
+  ["reject"],
+);
+assert.equal(regionQuestionCard.text, copy.decision.askedItems.replace("{items}", "Region"));
+assert.equal(regionQuestionCard.manualExample, copy.decision.manualExamples.region);
+assert.notEqual(regionQuestionCard.manualExample, copy.decision.manualExample);
+
+// An information proposal that does carry a recommendation offers confirm and reject only: the
+// "accept RAN proposal" shortcut is meaningless when the NMS asked a question.
+const recommendedInfo = createState();
+applyFrame(recommendedInfo, {
+  type: "run_started",
+  runId: "r-recommended-info",
+  scenario: "information",
+  mode: "confirm",
+});
+applyFrame(recommendedInfo, {
+  type: "decision_requested",
+  round: 1,
+  maxRounds: 3,
+  proposal: {
+    kind: "information",
+    round: 1,
+    content: "Energy saving region is not recognized. Please provide the correct region name.",
+  },
+  missingItems: ["Region"],
+  recommendation: { action: "accept", rationale: "use Region A", filled_params: { region: "Region A" } },
+  requestedAt: new Date().toISOString(),
+});
+const recommendedInfoCard = decisionCard(recommendedInfo, copy);
+assert.ok(recommendedInfoCard);
+assert.deepEqual(
+  recommendedInfoCard.options.map((option) => option.action),
+  ["confirm", "reject"],
+);
+assert.equal(recommendedInfoCard.options[0].label, copy.decision.confirmInformation);
+assert.equal(recommendedInfoCard.manualExample, copy.decision.manualExamples.region);
 
 // A recommendation to accept still leaves a counter path and keeps the manual area collapsed.
 const acceptDecision = createState();

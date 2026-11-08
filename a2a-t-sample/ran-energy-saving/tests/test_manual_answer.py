@@ -26,3 +26,20 @@ def test_chinese_missing_items_are_read() -> None:
 def test_a_proposal_without_missing_items_returns_empty() -> None:
     assert missing_item_labels("The target is not feasible.") == ()
     assert missing_item_labels("") == ()
+
+
+def test_correct_item_name_phrasing_is_canonicalized() -> None:
+    content = "Energy saving region is not recognized. Please provide the correct region name."
+
+    assert missing_item_labels(content) == ("Region",)
+
+
+def test_correct_item_name_phrasing_uses_the_bounded_vocabulary() -> None:
+    assert missing_item_labels("Please provide the correct cell name.") == ("Cell",)
+    assert missing_item_labels("Please provide the correct colour name.") == ()
+
+
+def test_required_information_block_wins_over_the_inline_pattern() -> None:
+    content = "Required Information Items:\n1. Region\n2. Rate"
+
+    assert missing_item_labels(content) == ("Region", "Rate")

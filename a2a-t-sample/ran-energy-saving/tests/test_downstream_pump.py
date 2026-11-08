@@ -51,6 +51,13 @@ def _status_payload(
     )
 
 
+def _message_payload(text: str) -> dict[str, object]:
+    """Build one webhook agent-message payload with no Task identity (a plain vendor question)."""
+    message = Message(message_id="message-2", role=Role.ROLE_AGENT)
+    message.parts.add(text=text)
+    return MessageToDict(StreamResponse(message=message))
+
+
 def _artifact_payload(task_id: str, context_id: str, name: str, text: str) -> dict[str, object]:
     """Build one webhook report artifact payload."""
     artifact = Artifact(artifact_id="artifact-1", name=name)
@@ -123,6 +130,8 @@ def _pump(
     transport: _Transport,
     push_sender: _PushSender,
     answer: object = None,
+    recommendation: object = None,
+    on_question: object = None,
 ) -> DownstreamPump:
     """Build one pump over the shared outer Task."""
     return DownstreamPump(
@@ -145,6 +154,8 @@ def _pump(
         binding_store=binding_store,
         push_sender=push_sender,
         answer=answer,  # type: ignore[arg-type]
+        recommendation=recommendation,  # type: ignore[arg-type]
+        on_question=on_question,  # type: ignore[arg-type]
     )
 
 
@@ -282,6 +293,122 @@ async def test_reconcile_keeps_a_working_task_active(tmp_path: Path) -> None:
     assert outer is not None
     assert outer.status.state == TaskState.TASK_STATE_WORKING
     assert pump.terminal is False
+
+
+async def test_a_plain_message_question_is_relayed_to_the_operator(tmp_path: Path) -> None:
+    """A vendor text question after the handoff must reach the operator, not become WORKING."""
+    store = InMemoryTaskStore()
+    await store.save(
+        Task(id="outer-1", context_id="outer-ctx", status=TaskStatus(state=TaskState.TASK_STATE_WORKING)),
+        _context(),
+    )
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    await binding_store.save(
+        DownstreamBinding(
+            inner_task_id="inner-1",
+            inner_context_id="inner-ctx",
+            outer_task_id="outer-1",
+            run_id="run-1",
+            protocol="pure",
+        )
+    )
+    subscription = _Subscription()
+    push_sender = _PushSender()
+    registered: list[tuple[dict[str, object], int]] = []
+
+    async def recommendation(event: dict[str, object]) -> dict[str, object]:
+        return {
+            "action": "accept",
+            "rationale": "the request names Region A",
+            "text": "Region A",
+            "filledParams": {"region": "Region A"},
+        }
+
+    def on_question(event: dict[str, object], round_number: int) -> None:
+        registered.append((dict(event), round_number))
+
+    pump = _pump(
+        store=store,
+        binding_store=binding_store,
+        subscription=subscription,
+        transport=_Transport(),
+        push_sender=push_sender,
+        recommendation=recommendation,
+        on_question=on_question,
+    )
+
+    task = pump.start()
+    await subscription.queue.put(
+        _message_payload("Energy saving region is not recognized. Please provide the correct region name.")
+    )
+    await asyncio.wait_for(task, timeout=3.0)
+
+    outer = await store.get("outer-1", _context())
+    assert outer is not None
+    assert outer.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+    assert "correct region name" in outer.status.message.parts[0].text
+    last = push_sender.events[-1][1]
+    assert isinstance(last, TaskStatusUpdateEvent)
+    assert last.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+    pure = last.metadata["pure"]
+    assert pure["phase"] == "question"
+    assert pure["kind"] == "negotiation"
+    assert pure["round"] == 1
+    assert pure["recommendation"]["text"] == "Region A"
+    assert pure["downstreamTaskId"] == "inner-1"
+    assert len(registered) == 1
+    assert registered[0][1] == 1
+    assert registered[0][0]["text"].startswith("Energy saving region")
+    # The pump releases the queue: the answer continuation owns the downstream identity next.
+    assert subscription.unsubscribed is True
+    assert pump.terminal is False
+
+
+async def test_a_plain_message_with_a_task_id_stays_an_observation(tmp_path: Path) -> None:
+    """A message that belongs to the Task is a status note, not a question to the operator."""
+    store = InMemoryTaskStore()
+    await store.save(
+        Task(id="outer-1", context_id="outer-ctx", status=TaskStatus(state=TaskState.TASK_STATE_WORKING)),
+        _context(),
+    )
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    await binding_store.save(
+        DownstreamBinding(
+            inner_task_id="inner-1",
+            inner_context_id="inner-ctx",
+            outer_task_id="outer-1",
+            run_id="run-1",
+            protocol="pure",
+        )
+    )
+    subscription = _Subscription()
+    registered: list[object] = []
+
+    def on_question(event: dict[str, object], round_number: int) -> None:
+        del round_number
+        registered.append(event)
+
+    pump = _pump(
+        store=store,
+        binding_store=binding_store,
+        subscription=subscription,
+        transport=_Transport(),
+        push_sender=_PushSender(),
+        on_question=on_question,
+    )
+
+    payload = _message_payload("Collecting data.")
+    payload["message"]["taskId"] = "inner-1"  # type: ignore[index]
+    task = pump.start()
+    await subscription.queue.put(payload)
+    await asyncio.sleep(0)
+    await subscription.queue.put(_artifact_payload("inner-1", "inner-ctx", "energy saving report", "Done."))
+    await asyncio.wait_for(task, timeout=3.0)
+
+    assert registered == []
+    outer = await store.get("outer-1", _context())
+    assert outer is not None
+    assert outer.artifacts[0].parts[0].text == "Done."
 
 
 async def test_the_pump_answers_a_delayed_input_required(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 import time
@@ -77,6 +78,8 @@ from protocol.client_store import (
 )
 from protocol.client_store.store import _pid_alive
 from protocol.decision_provider import sweep_stale_sessions
+from protocol.manual_answer import missing_item_labels
+from protocol.pure_client_flow import build_follow_up_request
 from protocol.run_metrics import append_metrics_jsonl, build_run_metrics
 from protocol.run_spec import RunCatalog
 from protocol.transcript import DEFAULT_RUNS_DIR, NegotiationTranscript
@@ -132,6 +135,10 @@ class _PolledTask:
     context_id: str
     reports: list[dict[str, object]]
     report: dict[str, object] | None
+    #: Status message of an ``INPUT_REQUIRED`` Task (the vendor question, or the OSS relayed one).
+    text: str = ""
+    #: Metadata of that status message; the pure relay keeps ``round``/``recommendation`` here.
+    metadata: dict[str, object] | None = None
 
 
 def _should_watch_long_task(run: RunState, result: ClientFlowResult | None) -> bool:
@@ -147,6 +154,16 @@ def _should_watch_long_task(run: RunState, result: ClientFlowResult | None) -> b
 def _final_state_for_task_state(state_name: str) -> str | None:
     """Map one remote A2A Task state name to a run final state."""
     return _TASK_STATE_FINAL_STATES.get(state_name)
+
+
+def _question_round(metadata: Mapping[str, object] | None) -> int:
+    """Return the negotiation round of one polled status message (0 when it carries none)."""
+    pure = metadata.get("pure") if isinstance(metadata, Mapping) else None
+    raw = pure.get("round") if isinstance(pure, Mapping) else None
+    try:
+        return int(raw) if raw is not None else 0  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
 
 
 def _artifact_payload(artifact: object, *, task_id: str, context_id: str) -> dict[str, object]:
@@ -189,6 +206,8 @@ def _polled_task_from_events(
     state_name: str,
     context_id: str,
     artifacts: list[dict[str, object]],
+    text: str = "",
+    metadata: dict[str, object] | None = None,
 ) -> _PolledTask:
     """Build the report of one polled Task.
 
@@ -213,6 +232,8 @@ def _polled_task_from_events(
         context_id=context_id,
         reports=reports,
         report=reports[-1] if reports else None,
+        text=text,
+        metadata=metadata,
     )
 
 
@@ -221,6 +242,18 @@ def _polled_task_from_a2a(task: object, task_id: str) -> _PolledTask:
     context_id = str(getattr(task, "context_id", "") or "")
     status = getattr(task, "status", None)
     state_name = TaskState.Name(status.state) if status is not None else ""
+    text = ""
+    metadata: dict[str, object] | None = None
+    status_message = getattr(status, "message", None) if status is not None else None
+    if status_message is not None:
+        text = " ".join(
+            part.text for part in getattr(status_message, "parts", ()) or () if part.text
+        ).strip()
+        try:
+            raw_metadata = MessageToDict(status_message.metadata)
+        except Exception:  # noqa: BLE001 - metadata is an observability aid, not the state
+            raw_metadata = {}
+        metadata = raw_metadata or None
     artifacts = [
         _artifact_payload(artifact, task_id=task_id, context_id=context_id)
         for artifact in getattr(task, "artifacts", []) or []
@@ -229,6 +262,8 @@ def _polled_task_from_a2a(task: object, task_id: str) -> _PolledTask:
         state_name=state_name,
         context_id=context_id,
         artifacts=artifacts,
+        text=text,
+        metadata=metadata,
     )
 
 
@@ -237,6 +272,18 @@ def _polled_task_from_nms(task: Mapping[str, object], task_id: str) -> _PolledTa
     status = task.get("status")
     state_name = str(status.get("state") or "") if isinstance(status, Mapping) else ""
     context_id = str(task.get("contextId") or task.get("context_id") or "")
+    text = ""
+    metadata: dict[str, object] | None = None
+    message = status.get("message") if isinstance(status, Mapping) else None
+    if isinstance(message, Mapping):
+        parts = message.get("parts")
+        text = " ".join(
+            str(part.get("text") or "")
+            for part in (parts if isinstance(parts, list) else [])
+            if isinstance(part, Mapping) and part.get("text")
+        ).strip()
+        raw_metadata = message.get("metadata")
+        metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else None
     raw_artifacts = task.get("artifacts")
     artifacts = [
         _artifact_payload(artifact, task_id=task_id, context_id=context_id)
@@ -246,6 +293,8 @@ def _polled_task_from_nms(task: Mapping[str, object], task_id: str) -> _PolledTa
         state_name=state_name,
         context_id=context_id,
         artifacts=artifacts,
+        text=text,
+        metadata=metadata,
     )
 
 
@@ -275,6 +324,9 @@ def _recommendation_frame(
         "phase": "negotiation",
         "timeoutSeconds": timeout_seconds,
         "requestedAt": requested_at,
+        # What the information proposal asks the engineer to supply. The page uses it for the card
+        # text and to pick a matching manual example; it is empty for target/feasibility.
+        "missingItems": list(missing_item_labels(propose.content)),
     }
     if recommendation is not None:
         frame["recommendation"] = recommendation.model_dump()
@@ -1312,6 +1364,7 @@ class RunManager:
 
         publish_wait_state("")
         last_state: str | None = None
+        answered_questions: set[tuple[int, str]] = set()
         while True:
             if is_presentation:
                 if run.subscribers:
@@ -1361,6 +1414,13 @@ class RunManager:
                     # Every poll publishes, including an unchanged one: a stable SUBMITTED state
                     # is still proof that the client is alive and still checking.
                     publish_wait_state(polled.state_name)
+                if polled.state_name == "TASK_STATE_INPUT_REQUIRED" and run.protocol == PROTOCOL_PURE:
+                    # The initial stream may have closed before the OSS Agent relayed the vendor
+                    # question. Open the same human decision instead of waiting forever.
+                    key = (_question_round(polled.metadata), polled.text)
+                    if key not in answered_questions:
+                        answered_questions.add(key)
+                        await self._answer_remote_question(run, task_id, polled)
                 final_state = _final_state_for_task_state(polled.state_name)
                 if final_state is not None:
                     publish_wait_state(polled.state_name or last_state or "", status="done")
@@ -1389,6 +1449,50 @@ class RunManager:
                     if run.detached:
                         break
                 await asyncio.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+
+    async def _answer_remote_question(
+        self,
+        run: RunState,
+        task_id: str,
+        polled: _PolledTask,
+    ) -> None:
+        """Open the same human decision for a question observed by polling.
+
+        The pure answer callback is the one the page already uses: it publishes the decision frame
+        and waits for the operator; this method then sends the answer back to the same Task.
+        """
+        runtime = run.runtime
+        answer = getattr(runtime, "pure_answer", None) if runtime is not None else None
+        transport = getattr(runtime, "transport", None) if runtime is not None else None
+        if not callable(answer) or transport is None:
+            return
+        event = {
+            "kind": "status",
+            "state": "TASK_STATE_INPUT_REQUIRED",
+            "task_id": task_id,
+            "context_id": polled.context_id,
+            "text": polled.text,
+            "metadata": dict(polled.metadata or {}),
+        }
+        answered = answer(event)
+        if inspect.isawaitable(answered):
+            answered = await answered
+        text = answered
+        if not isinstance(text, str) or not text.strip():
+            return
+        request = build_follow_up_request(
+            text,
+            task_id=task_id,
+            context_id=polled.context_id or None,
+            followup=self._config.pure_followup,
+        )
+        await transport.send(
+            request,
+            ClientCallContext(
+                timeout=self._config.http_timeout_seconds,
+                service_parameters={"A2A-Extensions": ""},
+            ),
+        )
 
     async def _poll_remote_task(self, run: RunState, task_id: str) -> _PolledTask:
         """Poll the authoritative Task of one long-running run."""
