@@ -897,7 +897,25 @@ body.resizing-y { cursor: row-resize; user-select: none; }
 }
 .choices button.primary { background: var(--black); color: var(--white); }
 .choices button.danger { border-color: var(--red); color: var(--red); }
+.choices-label {
+  flex-basis: 100%;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+.choices button.link {
+  border: 0;
+  background: none;
+  padding: 2px 0;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 [data-brand="orange"] .choices button:hover { background: var(--g900); color: var(--white); }
+[data-brand="orange"] .choices button.link:hover { background: none; color: var(--black); }
 .say.ask .choices button.primary { background: var(--black); color: var(--white); }
 .say.ask .choices button.danger { background: var(--white); border-color: var(--red); color: var(--red); }
 .region-options {

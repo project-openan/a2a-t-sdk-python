@@ -281,6 +281,10 @@ const ui = {
   submitting: false,
   counterOpen: false,
   counterText: "",
+  //: Whether the manual-answer editor replaces the action row on the current decision card.
+  manualOpen: false,
+  //: Card key that set ``manualOpen``; a new card restores its own default.
+  manualCardKey: null,
   manualText: "",
   manualPreview: null,
   manualMissing: [],
@@ -838,6 +842,8 @@ function resetRunState() {
   ui.wirePinned = false;
   ui.counterOpen = false;
   ui.counterText = "";
+  ui.manualOpen = false;
+  ui.manualCardKey = null;
   ui.manualText = "";
   ui.manualPreview = null;
   ui.manualMissing = [];
@@ -1816,6 +1822,8 @@ function renderNarrator() {
   els.choices.hidden = true;
   clear(els.choices);
   ui.counterOpen = false;
+  ui.manualOpen = false;
+  ui.manualCardKey = null;
   els.sayDetail.hidden = true;
   els.sayDetail.replaceChildren();
 
@@ -1864,6 +1872,19 @@ function pendingCard() {
 function renderChoices(card) {
   els.choices.hidden = false;
   els.choices.replaceChildren();
+  // A new human card restores its own default surface; a re-render of the same card keeps the
+  // engineer's open/collapsed choice and typed text.
+  const cardKey = `${card.type}:${card.title}:${card.options.map((option) => option.action).join(",")}`;
+  if (ui.manualCardKey !== cardKey) {
+    ui.manualCardKey = cardKey;
+    ui.counterOpen = false;
+    ui.counterText = "";
+    ui.manualOpen = card.manualOpen === true;
+    ui.manualPreview = null;
+    ui.manualMissing = [];
+    ui.manualError = "";
+    ui.manualText = "";
+  }
   if (card.type === "validation") {
     const area = el("textarea", "validation-editor");
     area.value = card.rawRequest;
@@ -1901,7 +1922,7 @@ function renderChoices(card) {
       ui.counterText = area.value;
     });
     const row = el("div", "choices");
-    const send = el("button", "primary", ui.copy.decision.confirm);
+    const send = el("button", "primary", ui.copy.decision.counterSend);
     send.type = "button";
     send.addEventListener("click", () => submitDecision("counter", ui.counterText));
     const cancel = el("button", "", ui.copy.decision.cancel);
@@ -1948,8 +1969,29 @@ function renderChoices(card) {
     els.choices.append(group);
   }
 
+  // One decision surface at a time: the manual editor replaces the action row. Without a
+  // recommendation it also keeps the two escape actions visible as a compact quick-action row.
+  if (card.type === "decision" && ui.manualOpen) {
+    renderManualAnswer();
+    if (!card.hasRecommendation) {
+      appendActionRow(card, ui.copy.decision.quickActions);
+    }
+    appendManualToggle(true);
+    return;
+  }
+
+  appendActionRow(card);
+  if (card.type === "decision") appendManualToggle(false);
+}
+
+/** Append the action buttons of one card; ``label`` wraps them in a titled row. */
+function appendActionRow(card, label = "") {
+  const row = label ? el("div", "choices") : els.choices;
+  if (label) els.choices.append(el("span", "choices-label", label));
   for (const option of card.options) {
-    const button = el("button", option.primary ? "primary" : option.danger ? "danger" : "", option.label);
+    // A quick-action row is secondary: the manual area's parse/send button is the primary there.
+    const variant = !label && option.primary ? "primary" : option.danger ? "danger" : "";
+    const button = el("button", variant, option.label);
     button.type = "button";
     button.disabled = ui.submitting;
     button.addEventListener("click", () => {
@@ -1963,22 +2005,44 @@ function renderChoices(card) {
       }
       if (option.action === "counter") {
         ui.counterOpen = true;
+        ui.manualOpen = false;
         ui.counterText = card.counterText || "";
         renderNarrator();
         return;
       }
       submitDecision(option.action);
     });
-    els.choices.append(button);
+    row.append(button);
   }
-  if (card.type === "decision") renderManualAnswer();
+  if (label) els.choices.append(row);
+}
+
+/** Toggle the manual-answer editor on a decision card. */
+function appendManualToggle(open) {
+  const button = el(
+    "button",
+    "link",
+    open ? ui.copy.decision.manualCollapse : ui.copy.decision.manualToggle,
+  );
+  button.type = "button";
+  button.disabled = ui.submitting;
+  button.addEventListener("click", () => {
+    ui.manualOpen = !ui.manualOpen;
+    ui.counterOpen = false;
+    if (!ui.manualOpen) {
+      ui.manualPreview = null;
+      ui.manualError = "";
+    }
+    renderNarrator();
+  });
+  els.choices.append(button);
 }
 
 /** Render the free-text manual-answer box and its parsed preview.
  *
- * The box is always available for a decision, whether the OSS Agent recommended an action or the
- * run is in pure manual mode. Parsing is explicit: the engineer sees the structured decision and
- * confirms it before anything is submitted.
+ * The box is the primary surface when the OSS Agent has no deterministic recommendation, and a
+ * deliberate override when it has one. Parsing is explicit: the engineer sees the structured
+ * decision and confirms it before anything is submitted.
  */
 function renderManualAnswer() {
   const labels = ui.copy.decision;
@@ -2031,7 +2095,7 @@ function renderManualAnswer() {
     section.append(el("span", "micro-label", labels.manualPreview));
     section.append(manualPreview(ui.manualPreview, ui.manualMissing, labels));
     const row = el("div", "choices");
-    const confirm = el("button", "primary", labels.manualConfirm);
+    const confirm = el("button", "primary", labels.manualSend);
     confirm.type = "button";
     confirm.disabled = ui.submitting;
     confirm.addEventListener("click", () => submitParsedDecision(ui.manualPreview));

@@ -63,21 +63,35 @@ export function decisionCard(state, copy) {
     firstLine(decision.proposal?.content) ||
     copy.negotiation.generic;
 
+  // A deterministic recommendation is the only case where the card offers a recommended action.
+  // Without it the RAN Agent is asking for information (or the OSS Agent could not decide), so the
+  // card drops to the two escape actions and lets the manual area carry the answer.
+  const hasRecommendation = Boolean(recommendation);
   const options = [];
-  if (recommendedAction) {
-    options.push({ action: "confirm", label: copy.decision.confirm, primary: true });
+  if (hasRecommendation) {
+    options.push({ action: "confirm", label: confirmLabel(copy, recommendedAction), primary: true });
+    if (kind === "information") {
+      if (recommendedAction !== "accept") {
+        options.push({ action: "accept", label: copy.decision.acceptNms });
+      }
+      if (recommendedAction !== "reject") {
+        options.push({ action: "reject", label: copy.decision.reject, danger: true });
+      }
+    } else {
+      if (recommendedAction !== "accept") {
+        options.push({ action: "accept", label: copy.decision.acceptNms });
+      }
+      // Keep a counter path in every target/feasibility case: it lets the engineer disagree with an
+      // accept recommendation and edit a recommended counter before sending it.
+      options.push({ action: "counter", label: copy.decision.editCounter });
+      if (recommendedAction !== "reject") {
+        options.push({ action: "reject", label: copy.decision.reject, danger: true });
+      }
+    }
   } else {
     options.push({ action: "accept", label: copy.decision.acceptNms, primary: true });
+    options.push({ action: "reject", label: copy.decision.reject, danger: true });
   }
-  if (recommendedAction && recommendedAction !== "accept") {
-    options.push({ action: "accept", label: copy.decision.acceptNms });
-    options.push({ action: "counter", label: copy.decision.editCounter });
-  } else if (!recommendedAction && (kind === "target" || kind === "feasibility")) {
-    // Without a recommendation the engineer still needs the counter action of a target or
-    // feasibility proposal; an information answer goes through the free-text box instead.
-    options.push({ action: "counter", label: copy.decision.editCounter });
-  }
-  options.push({ action: "reject", label: copy.decision.reject, danger: true });
 
   const detail = recommendation
     ? `${format(copy.decision.recommendation, {
@@ -96,13 +110,25 @@ export function decisionCard(state, copy) {
     text: proposalText,
     detail,
     kind,
+    hasRecommendation,
     recommendedAction,
     recommendation,
+    // Without a deterministic recommendation the manual area is the primary answer surface, so it
+    // opens by default; with one, the action row leads and the manual area stays collapsed.
+    manualOpen: !hasRecommendation,
     counterText: recommendation?.counter_proposal || "",
     regionOptions,
     requestedRegion: decision.proposal?.options?.requested || "",
     options,
   };
+}
+
+/** Label the primary button with the action it actually sends. */
+function confirmLabel(copy, action) {
+  if (action === "counter") return copy.decision.confirmCounter;
+  if (action === "reject") return copy.decision.confirmReject;
+  if (action === "abort") return copy.decision.confirmAbort;
+  return copy.decision.confirmAccept;
 }
 
 /** Build approval 2 (the MIE MML review), or ``null`` when no review is pending. */

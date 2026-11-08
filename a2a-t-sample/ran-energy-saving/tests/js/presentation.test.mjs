@@ -359,7 +359,13 @@ assert.equal(pendingHuman(confirming), "decision");
 assert.equal(confirming.decision.recommendation.action, "counter");
 const card = decisionCard(confirming, copy);
 assert.ok(card);
-assert.ok(card.options.some((option) => option.action === "confirm"));
+assert.deepEqual(
+  card.options.map((option) => option.action),
+  ["confirm", "accept", "counter", "reject"],
+);
+assert.equal(card.options[0].label, copy.decision.confirmCounter);
+assert.equal(card.manualOpen, false);
+assert.ok(card.options.length <= 4);
 assert.equal(decisionPayload(card, "confirm", copy).action, "counter");
 assert.equal(decisionPayload(card, "counter", copy, "new text").counter_proposal, "new text");
 assert.equal(decisionPayload(card, "reject", copy).action, "reject");
@@ -391,11 +397,13 @@ applyFrame(unavailable, {
 assert.equal(unavailable.decision.recommendationUnavailable, true);
 const unavailableCard = decisionCard(unavailable, copy);
 assert.ok(unavailableCard);
-assert.ok(unavailableCard.options.some((option) => option.action === "accept"));
-assert.ok(unavailableCard.options.some((option) => option.action === "counter"));
+assert.deepEqual(
+  unavailableCard.options.map((option) => option.action),
+  ["accept", "reject"],
+);
+assert.equal(unavailableCard.manualOpen, true);
 assert.match(unavailableCard.detail, /OSS Agent/);
 assert.equal(decisionPayload(unavailableCard, "accept", copy).action, "accept");
-assert.equal(decisionPayload(unavailableCard, "counter", copy, "new text").counter_proposal, "new text");
 
 // An information proposal has no counter action; its answer goes through the free-text box.
 const unavailableInfo = createState();
@@ -410,9 +418,66 @@ applyFrame(unavailableInfo, {
 });
 const unavailableInfoCard = decisionCard(unavailableInfo, copy);
 assert.ok(unavailableInfoCard);
+assert.deepEqual(
+  unavailableInfoCard.options.map((option) => option.action),
+  ["accept", "reject"],
+);
+assert.equal(unavailableInfoCard.manualOpen, true);
 assert.ok(!unavailableInfoCard.options.some((option) => option.action === "counter"));
 assert.ok(copy.decision.manualExample);
 assert.ok(copy.decision.manualUseExample);
+
+// A recommendation to accept still leaves a counter path and keeps the manual area collapsed.
+const acceptDecision = createState();
+applyFrame(acceptDecision, {
+  type: "run_started",
+  runId: "r-accept",
+  scenario: "target",
+  mode: "confirm",
+});
+applyFrame(acceptDecision, {
+  type: "decision_requested",
+  round: 1,
+  maxRounds: 3,
+  proposal: { kind: "target", round: 1 },
+  recommendation: { action: "accept", rationale: "feasible", filled_params: {} },
+  requestedAt: new Date().toISOString(),
+});
+const acceptCard = decisionCard(acceptDecision, copy);
+assert.ok(acceptCard);
+assert.deepEqual(
+  acceptCard.options.map((option) => option.action),
+  ["confirm", "counter", "reject"],
+);
+assert.equal(acceptCard.options[0].label, copy.decision.confirmAccept);
+assert.equal(acceptCard.manualOpen, false);
+assert.ok(acceptCard.options.length <= 4);
+
+// A recommendation to reject does not duplicate the reject action.
+const rejectDecision = createState();
+applyFrame(rejectDecision, {
+  type: "run_started",
+  runId: "r-reject",
+  scenario: "target",
+  mode: "confirm",
+});
+applyFrame(rejectDecision, {
+  type: "decision_requested",
+  round: 1,
+  maxRounds: 3,
+  proposal: { kind: "target", round: 1 },
+  recommendation: { action: "reject", rationale: "not available" },
+  requestedAt: new Date().toISOString(),
+});
+const rejectCard = decisionCard(rejectDecision, copy);
+assert.ok(rejectCard);
+assert.deepEqual(
+  rejectCard.options.map((option) => option.action),
+  ["confirm", "accept", "counter"],
+);
+assert.equal(rejectCard.options[0].label, copy.decision.confirmReject);
+assert.equal(rejectCard.manualOpen, false);
+assert.ok(rejectCard.options.length <= 4);
 
 applyFrame(confirming, decision(2, "counter", 1));
 assert.equal(pendingHuman(confirming), null);
