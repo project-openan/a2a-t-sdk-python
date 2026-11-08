@@ -37,6 +37,9 @@ class LLMClientConfig:
             false}}``). ``None`` sends nothing, so non-reasoning providers are unaffected.
         timeout_retries: how many extra attempts one structured call makes after the transport
             timeout (``0`` keeps the original single-attempt behavior).
+        response_format: ``json_object`` (default) sends the portable JSON-mode request format;
+            ``json_schema`` asks the gateway to enforce the caller's output schema. The latter is
+            opt-in because not every OpenAI-compatible gateway accepts it.
     """
 
     provider: str
@@ -54,3 +57,4 @@ class LLMClientConfig:
     detail_log_enabled: bool = False
     extra_body: dict[str, Any] | None = None
     timeout_retries: int = 0
+    response_format: str = "json_object"

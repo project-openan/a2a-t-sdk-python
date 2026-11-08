@@ -162,6 +162,59 @@ class LLMConfigLoaderTest(ManagedTempDirTestCase):
                 with self.assertRaisesRegex(LLMConfigError, "A2AT_LLM_TIMEOUT_RETRIES"):
                     LLMConfigLoader.load(env_path)
 
+    def test_load_parses_the_response_format(self) -> None:
+        from a2a_t.llm.config_loader import LLMConfigLoader
+
+        for raw_value, expected in [("json_object", "json_object"), ("json_schema", "json_schema")]:
+            with self.subTest(raw_value=raw_value):
+                env_path = self._write_env(
+                    "\n".join(
+                        [
+                            "A2AT_LLM_PROVIDER=openai",
+                            "A2AT_LLM_MODEL=gpt-4o-mini",
+                            "A2AT_LLM_API_KEY=sk-test",
+                            f"A2AT_LLM_RESPONSE_FORMAT={raw_value}",
+                        ]
+                    )
+                    + "\n"
+                )
+
+                self.assertEqual(LLMConfigLoader.load(env_path).response_format, expected)
+
+    def test_load_defaults_the_response_format_to_json_object(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4o-mini",
+                    "A2AT_LLM_API_KEY=sk-test",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.config_loader import LLMConfigLoader
+
+        self.assertEqual(LLMConfigLoader.load(env_path).response_format, "json_object")
+
+    def test_load_rejects_an_unknown_response_format(self) -> None:
+        from a2a_t.llm.config_loader import LLMConfigLoader
+
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4o-mini",
+                    "A2AT_LLM_API_KEY=sk-test",
+                    "A2AT_LLM_RESPONSE_FORMAT=yaml",
+                ]
+            )
+            + "\n"
+        )
+
+        with self.assertRaisesRegex(LLMConfigError, "A2AT_LLM_RESPONSE_FORMAT"):
+            LLMConfigLoader.load(env_path)
+
     def test_load_parses_detail_log_enabled(self) -> None:
         from a2a_t.llm.config_loader import LLMConfigLoader
 

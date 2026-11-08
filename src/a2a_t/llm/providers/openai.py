@@ -19,7 +19,9 @@ _JSON_MODE_INSTRUCTION_DEFAULT = (
     "Return a valid JSON object string. "
     "The output must be valid json. "
     "Do not wrap the response in markdown code fences. "
-    "Do not include any explanation outside the JSON object."
+    "Do not include any explanation outside the JSON object. "
+    "The JSON schema below describes the required shape of your output; never echo or repeat "
+    "the schema itself."
 )
 
 _STRUCTURED_SCHEMA_INSTRUCTION_PREFIX = "Return JSON that conforms to this JSON schema: "
@@ -174,7 +176,7 @@ class OpenAIClient(LLMClient):
         payload: dict[str, Any] = {
             "model": self._config.model,
             "messages": self._build_structured_messages(messages, json_schema),
-            "response_format": {"type": "json_object"},
+            "response_format": self._response_format(json_schema),
         }
         # A call-site value wins; otherwise the configured default applies. Many call sites pass
         # neither, so without this fallback ``A2AT_LLM_TEMPERATURE`` would be silently ignored.
@@ -196,6 +198,25 @@ class OpenAIClient(LLMClient):
             # provider-specific branch in this client.
             payload["extra_body"] = dict(self._config.extra_body)
         return payload
+
+    def _response_format(self, json_schema: dict[str, Any]) -> dict[str, Any]:
+        """Return the request ``response_format`` selected by the configuration.
+
+        ``json_object`` is the portable default. ``json_schema`` asks the gateway to constrain the
+        output to the caller's schema and is opt-in because not every OpenAI-compatible gateway
+        accepts it. ``strict`` is false so the existing schemas (which do not set
+        ``additionalProperties``) remain valid.
+        """
+        if self._config.response_format == "json_schema":
+            return {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "a2at_structured_response",
+                    "schema": json_schema,
+                    "strict": False,
+                },
+            }
+        return {"type": "json_object"}
 
     def _build_structured_messages(
         self,

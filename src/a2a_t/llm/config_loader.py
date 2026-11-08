@@ -20,6 +20,8 @@ _MAX_TIMEOUT_RETRIES = 5
 
 #: Accepted reasoning-effort values (Java ``LLMClientConfig.VALID_REASONING_EFFORTS``).
 _VALID_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
+#: Accepted ``A2AT_LLM_RESPONSE_FORMAT`` values.
+_VALID_RESPONSE_FORMATS = ("json_object", "json_schema")
 
 
 def default_env_path() -> Path:
@@ -102,6 +104,16 @@ def coerce_extra_body(value: str | None, key: str) -> dict[str, Any] | None:
     if not isinstance(parsed, dict):
         raise LLMConfigError(f"{key} must be a JSON object")
     return parsed
+
+
+def coerce_response_format(value: str | None, key: str) -> str:
+    """Parse the structured-call response format; a blank value keeps the portable JSON mode."""
+    if value is None or not value.strip():
+        return "json_object"
+    normalized = value.strip().lower()
+    if normalized not in _VALID_RESPONSE_FORMATS:
+        raise LLMConfigError(f"{key} must be one of {_VALID_RESPONSE_FORMATS}")
+    return normalized
 
 
 def coerce_timeout_retries(value: str | None, key: str) -> int:
@@ -188,6 +200,9 @@ class LLMConfigLoader:
             extra_body=coerce_extra_body(values.get("A2AT_LLM_EXTRA_BODY"), "A2AT_LLM_EXTRA_BODY"),
             timeout_retries=coerce_timeout_retries(
                 values.get("A2AT_LLM_TIMEOUT_RETRIES"), "A2AT_LLM_TIMEOUT_RETRIES"
+            ),
+            response_format=coerce_response_format(
+                values.get("A2AT_LLM_RESPONSE_FORMAT"), "A2AT_LLM_RESPONSE_FORMAT"
             ),
             ssl_verify=coerce_boolean(values.get("A2AT_LLM_SSL_VERIFY"), "A2AT_LLM_SSL_VERIFY", default=True),
             detail_log_enabled=coerce_boolean(

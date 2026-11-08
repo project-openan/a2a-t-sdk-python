@@ -403,6 +403,49 @@ class OpenAIClientTest(unittest.TestCase):
         self.assertEqual(payload["extra_body"], extra_body)
 
     @patch("a2a_t.llm.providers.openai.OpenAI")
+    def test_structured_can_send_the_output_schema_as_response_format(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(prompt_tokens=7, completion_tokens=2),
+        )
+        openai_cls.return_value = sdk_client
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        client = OpenAIClient(
+            replace(build_config(base_url="https://api.example.test/v1"), response_format="json_schema")
+        )
+        json_schema = {"type": "object", "properties": {"semantic_verdict": {"type": "boolean"}}}
+
+        client.structured(messages=[{"role": "user", "content": "validate"}], json_schema=json_schema)
+
+        payload = sdk_client.chat.completions.create.call_args.kwargs
+        self.assertEqual(payload["response_format"]["type"], "json_schema")
+        self.assertEqual(payload["response_format"]["json_schema"]["schema"], json_schema)
+
+    @patch("a2a_t.llm.providers.openai.OpenAI")
+    def test_structured_forbids_echoing_the_schema_itself(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(prompt_tokens=7, completion_tokens=2),
+        )
+        openai_cls.return_value = sdk_client
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        client = OpenAIClient(build_config(base_url="https://api.example.test/v1"))
+
+        client.structured(messages=[{"role": "user", "content": "validate"}], json_schema={"type": "object"})
+
+        payload = sdk_client.chat.completions.create.call_args.kwargs
+        system_message = payload["messages"][0]["content"]
+        self.assertIn("never echo", system_message)
+
+    @patch("a2a_t.llm.providers.openai.OpenAI")
     def test_structured_retries_a_timeout_when_configured(self, openai_cls: Mock) -> None:
         import httpx
         from openai import APITimeoutError
