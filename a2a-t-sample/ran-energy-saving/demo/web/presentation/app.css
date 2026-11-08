@@ -980,18 +980,9 @@ body.resizing-y { cursor: row-resize; user-select: none; }
 .legend > span { display: flex; align-items: center; gap: 5px; }
 .legend i { width: 13px; height: 10px; border: 1.5px solid var(--black); display: inline-block; }
 
-/* ---------- fixed run identity strip (between negotiation and trace) ---------- */
-.run-identity {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 11px;
-  border: 1px solid var(--g200);
-  border-left: 5px solid var(--orange);
-  background: var(--g50);
-}
-.identity-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+/* ---------- run identities (Run tab) and the Langfuse link ---------- */
+.run-info { display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow: auto; }
+.identity-row { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
 .identity-label {
   flex: none;
   width: 52px;
@@ -1004,20 +995,19 @@ body.resizing-y { cursor: row-resize; user-select: none; }
 .identity-row code {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-family: var(--mono);
   font-size: 11.5px;
   color: var(--g900);
+  overflow-wrap: anywhere;
 }
 .identity-langfuse {
   flex: none;
+  margin-left: auto;
   padding: 2px 8px;
   border: 1.5px solid var(--orange);
   background: var(--white);
   color: var(--orange-text);
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 700;
   text-decoration: none;
   white-space: nowrap;
@@ -1179,6 +1169,10 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 .fact b { font-size: 12.3px; font-weight: 600; word-break: break-word; }
 .fact b.flag { background: var(--yellow); align-self: flex-start; padding: 0 4px; }
 .business-intent { border: 1px solid var(--g200); border-left: 3px solid var(--accent); padding: 6px 8px; margin-bottom: 6px; display: flex; flex-direction: column; gap: 5px; }
+.business-intent > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; }
+.business-intent > summary::-webkit-details-marker { display: none; }
+.business-intent > summary::before { content: "▸"; font-size: 11px; color: var(--g700); }
+.business-intent[open] > summary::before { content: "▾"; }
 .business-intent .business-text span { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--g700); }
 .business-intent .business-text p { margin: 1px 0 0; font-size: 12px; line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
 /* The normalized request is long; the summary row toggles it so the facts stay in view. */

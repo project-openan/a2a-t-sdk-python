@@ -89,7 +89,10 @@ async def test_root_serves_the_presentation_shell(client: httpx.AsyncClient) -> 
         'id="p-nego"',
         'id="p-trace"',
         'id="protocol-switch"',
-        'id="turns"',
+        'id="tab-run"',
+        'id="tab-wire"',
+        'id="run-info"',
+        'id="identity-langfuse"',
         'id="wire"',
         'id="wire-t"',
         'id="wire-x"',
@@ -213,27 +216,30 @@ def test_intent_panel_is_resizable_and_the_normalized_request_collapses() -> Non
     assert ".business-text > summary" in css
 
 
-def test_the_fixed_identity_strip_sits_between_negotiation_and_trace() -> None:
-    """runId, Task and the vendor trace id stay visible in the rail, with the Langfuse link."""
+def test_the_run_tab_carries_the_identities_inside_the_negotiation_panel() -> None:
+    """The ids are a tab of the negotiation panel; the Langfuse link stays in its header."""
     page = (PRESENTATION_DIR / "index.html").read_text(encoding="utf-8")
     css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")
     main = (PRESENTATION_DIR / "js" / "main.js").read_text(encoding="utf-8")
     state = (PRESENTATION_DIR / "js" / "state.js").read_text(encoding="utf-8")
 
-    strip = page.index('id="run-identity"')
-    assert page.index('id="p-nego"') < strip < page.index('id="trace-splitter"')
-    assert 'aria-label="Run identifiers"' in page
-    for element_id in (
-        "identity-run",
-        "identity-task",
-        "identity-task2",
-        "identity-trace",
-        "identity-langfuse",
-    ):
+    # The standalone strip and the business turn list are gone.
+    assert 'id="run-identity"' not in page
+    assert 'id="tab-business"' not in page
+    assert 'id="turns"' not in page
+    run_tab = page.index('id="tab-run"')
+    run_info = page.index('id="run-info"')
+    assert page.index('id="p-nego"') < run_tab < run_info < page.index('id="trace-splitter"')
+    # The Langfuse link is pinned in the negotiation header, outside both tab bodies.
+    langfuse = page.index('id="identity-langfuse"')
+    assert page.index('id="p-nego"') < langfuse < run_tab
+    for element_id in ("identity-run", "identity-task", "identity-task2", "identity-trace"):
         assert f'id="{element_id}"' in page
 
     assert "function renderIdentity()" in main
+    assert "function renderNegotiationView()" in main
     assert "renderIdentity();" in main
+    assert "renderNegotiationView();" in main
     # The ids and the link moved out of the ending card; only the export warning stays there.
     assert "function runIdentities()" not in main
     assert "identityBlock(" not in main
@@ -243,8 +249,20 @@ def test_the_fixed_identity_strip_sits_between_negotiation_and_trace() -> None:
     # The run's vendor trace id arrives with run_started; the URL arrives in a late langfuse frame.
     assert 'case "langfuse"' in state
     assert 'if (typeof frame.traceId === "string"' in state
-    assert ".run-identity" in css
+    assert ".run-info" in css
     assert ".identity-langfuse" in css
+
+
+def test_the_whole_business_intent_block_folds_away() -> None:
+    """The request text folds by default; a blocking validation forces the block open."""
+    intent = (PRESENTATION_DIR / "js" / "intent.js").read_text(encoding="utf-8")
+    css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")
+
+    assert 'el("details", "business-intent business-collapsible")' in intent
+    assert "let businessOpen = false" in intent
+    assert "validation.blocking === true" in intent
+    assert ".business-intent > summary" in css
+    assert ".business-intent[open] > summary::before" in css
 
 
 def test_phone_breakpoint_wraps_the_header_meta() -> None:

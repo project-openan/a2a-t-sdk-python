@@ -278,14 +278,26 @@ function validationHint(error, labels) {
 
 /** Whether the normalized-request disclosure is open; the panel is rebuilt on every event. */
 let normalizedOpen = false;
+/** Whether the whole business-intent block is open; same rebuild caveat as ``normalizedOpen``. */
+let businessOpen = false;
 
-/** Render the raw operator request next to the normalized business intent. */
+/** Render the raw operator request next to the normalized business intent.
+ *
+ * The whole block folds away by default so the parsed intent and its chart get the panel height.
+ * A blocking validation forces it open: the reason must never be hidden behind a disclosure.
+ */
 function businessBlock(
   copy,
   { rawRequest, normalizedText, source, warnings, missingFields, conflicts, validation },
 ) {
-  const section = el("section", "business-intent");
-  section.append(el("span", "micro-label", copy.intent.business));
+  const section = el("details", "business-intent business-collapsible");
+  section.open = businessOpen || (isObject(validation) && validation.blocking === true);
+  section.addEventListener("toggle", () => {
+    businessOpen = section.open;
+  });
+  const summary = el("summary", "");
+  summary.append(el("span", "micro-label", copy.intent.business));
+  section.append(summary);
   if (rawRequest) {
     const raw = el("div", "business-text");
     raw.append(el("span", "", copy.intent.raw), el("p", "", rawRequest));

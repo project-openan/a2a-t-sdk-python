@@ -179,19 +179,21 @@ const els = {
   negoTitle: byId("nego-title"),
   negoStatus: byId("nego-status"),
   roundDots: byId("round-dots"),
-  tabBusiness: byId("tab-business"),
+  tabRun: byId("tab-run"),
   tabWire: byId("tab-wire"),
-  turns: byId("turns"),
   wire: byId("wire"),
   wireFormat: byId("wire-format"),
-  identity: byId("run-identity"),
+  runInfo: byId("run-info"),
   identityRun: byId("identity-run"),
+  identityRunLabel: byId("identity-run-label"),
+  identityTaskRow: byId("identity-task-row"),
   identityTask: byId("identity-task"),
   identityTaskLabel: byId("identity-task-label"),
   identityTask2Row: byId("identity-task2-row"),
   identityTask2: byId("identity-task2"),
   identityTask2Label: byId("identity-task2-label"),
   identityTrace: byId("identity-trace"),
+  identityTraceLabel: byId("identity-trace-label"),
   identityLangfuse: byId("identity-langfuse"),
   wireT: byId("wire-t"),
   wireX: byId("wire-x"),
@@ -199,7 +201,6 @@ const els = {
   wireTitle: byId("wire-title"),
   wireCode: byId("wire-code"),
   wireNote: byId("wire-note"),
-  negoEmpty: byId("nego-empty"),
   traceTitle: byId("trace-title"),
   traceSub: byId("trace-sub"),
   traceCalls: byId("trace-calls"),
@@ -267,8 +268,7 @@ const ui = {
   mieSource: null,
   mieEnabled: false,
   busy: false,
-  tab: "business",
-  selectedTurn: -1,
+  tab: "wire",
   wireEntry: null,
   wireFormat: "t",
   wirePinned: false,
@@ -324,18 +324,8 @@ ui.chain = restoreChain(sessionStorage);
 
 const stage = createStage(els);
 const rail = createRail(
-  {
-    roundDots: els.roundDots,
-    status: els.negoStatus,
-    empty: els.negoEmpty,
-    turns: els.turns,
-    wire: els.wire,
-    wireTitle: els.wireTitle,
-    wireCode: els.wireCode,
-    wireNote: els.wireNote,
-  },
+  { roundDots: els.roundDots, status: els.negoStatus },
   () => ui.copy,
-  () => ui,
 );
 const wire = createWire(
   {
@@ -580,7 +570,7 @@ function bindStaticEvents() {
     if (status.paused) player.resume();
     else player.pause();
   });
-  els.tabBusiness.addEventListener("click", () => setTab("business"));
+  els.tabRun.addEventListener("click", () => setTab("run"));
   els.tabWire.addEventListener("click", () => setTab("wire"));
   els.requestText.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
@@ -647,9 +637,18 @@ function onNext() {
 
 function setTab(tab) {
   ui.tab = tab;
-  els.tabBusiness.setAttribute("aria-pressed", String(tab === "business"));
-  els.tabWire.setAttribute("aria-pressed", String(tab === "wire"));
   render();
+}
+
+/** Show the selected negotiation tab; the wire tab can be unavailable in a pure A2A run. */
+function renderNegotiationView() {
+  const wireAvailable = Boolean(els.tabWire && !els.tabWire.hidden);
+  if (!wireAvailable && ui.tab === "wire" && els.tabRun && !els.tabRun.hidden) ui.tab = "run";
+  const showWire = wireAvailable && ui.tab !== "run";
+  if (els.tabWire) els.tabWire.setAttribute("aria-pressed", String(showWire));
+  if (els.tabRun) els.tabRun.setAttribute("aria-pressed", String(!showWire));
+  els.wire.hidden = !showWire;
+  if (els.runInfo) els.runInfo.hidden = showWire;
 }
 
 function currentBrand() {
@@ -713,8 +712,10 @@ function applyStaticCopy() {
   els.intentTitle.textContent = copy.intent.title;
   els.intentSub.textContent = copy.intent.sub;
   els.negoTitle.textContent = copy.negotiation.title;
-  els.tabBusiness.textContent = copy.negotiation.business;
+  els.tabRun.textContent = copy.negotiation.runTab;
   els.tabWire.textContent = copy.negotiation.wire;
+  els.identityRunLabel.textContent = copy.result.runLabel;
+  els.identityTraceLabel.textContent = copy.result.traceLabel;
   els.traceTitle.textContent = copy.trace.title;
   els.traceSub.textContent = copy.trace.sub;
   if (els.traceCallsLabel) els.traceCallsLabel.textContent = copy.trace.callsFilter;
@@ -823,8 +824,7 @@ function resetRunState() {
   ui.lastQueuedScene = null;
   ui.maxStep = 0;
   ui.terminalApplied = null;
-  ui.tab = "business";
-  ui.selectedTurn = -1;
+  ui.tab = "wire";
   ui.wireEntry = null;
   ui.wireFormat = "t";
   ui.wirePinned = false;
@@ -1566,13 +1566,13 @@ function render() {
     renderProtocol();
     renderSteps();
     renderContinuity();
-    els.negoTitle.textContent =
-      ui.tab === "wire" ? ui.copy.wire.panelTitle : ui.copy.negotiation.title;
+    els.negoTitle.textContent = ui.copy.negotiation.title;
     stage.render(ui.view, ui.copy);
     renderRequest();
     renderIdentity();
     renderIntentPanel();
     rail.render(ui.view);
+    renderNegotiationView();
     wire.render(ui.view);
     trace.render(ui.view);
     renderNarrator();
@@ -2333,20 +2333,18 @@ function pureMetricsFromLog() {
  * clickable as soon as the backend has assembled its URL.
  */
 function renderIdentity() {
-  const strip = els.identity;
-  if (!strip) return;
   const view = ui.view;
   const labels = ui.copy.result;
-  strip.hidden = !view.runId;
-  if (strip.hidden) return;
-  els.identityRun.textContent = view.runId || "";
+  els.identityRun.textContent = view.runId || "—";
   els.identityRun.title = view.runId || "";
   const nms = Boolean(ui.meta?.nmsTasksEnabled);
   const downstream = view.pure || {};
   const ran = downstream.downstreamHop === "ran";
+  const taskId = view.taskId || "";
   if (view.protocol === "pure") {
     els.identityTaskLabel.textContent = labels.taskOss;
-    els.identityTask.textContent = view.taskId || "—";
+    els.identityTaskRow.hidden = !taskId;
+    els.identityTask.textContent = taskId;
     const downstreamTask = downstream.downstreamTaskId || "";
     els.identityTask2Row.hidden = !downstreamTask;
     els.identityTask2Label.textContent = ran ? labels.taskRan : labels.taskNms;
@@ -2354,7 +2352,8 @@ function renderIdentity() {
   } else {
     els.identityTask2Row.hidden = true;
     els.identityTaskLabel.textContent = nms ? labels.taskNms : labels.taskRan;
-    els.identityTask.textContent = view.taskId || "—";
+    els.identityTaskRow.hidden = !taskId;
+    els.identityTask.textContent = taskId;
   }
   const langfuse = view.langfuse;
   const traceId = view.traceId || (langfuse && langfuse.traceId) || "";

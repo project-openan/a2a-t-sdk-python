@@ -286,16 +286,35 @@
         <header>
           <h2 id="nego-title">Negotiation</h2>
           <span class="sub" id="nego-status">Not started</span>
+          <a class="identity-langfuse" id="identity-langfuse" href="#" target="_blank"
+             rel="noopener noreferrer" hidden>Open in Langfuse</a>
         </header>
         <div class="nego-tools">
           <span class="round-dots" id="round-dots" aria-hidden="true"></span>
           <div class="seg" role="group" aria-label="Negotiation view">
-            <button id="tab-business" type="button" aria-pressed="true">Business</button>
-            <button id="tab-wire" type="button" aria-pressed="false">On the wire</button>
+            <button id="tab-wire" type="button" aria-pressed="true">On the wire</button>
+            <button id="tab-run" type="button" aria-pressed="false">Run</button>
           </div>
         </div>
         <div class="body nego-body" id="nego-body">
-          <ol class="turns" id="turns"></ol>
+          <div class="run-info" id="run-info" hidden>
+            <div class="identity-row">
+              <span class="identity-label" id="identity-run-label">Run</span>
+              <code id="identity-run"></code>
+            </div>
+            <div class="identity-row" id="identity-task-row" hidden>
+              <span class="identity-label" id="identity-task-label">Task</span>
+              <code id="identity-task"></code>
+            </div>
+            <div class="identity-row" id="identity-task2-row" hidden>
+              <span class="identity-label" id="identity-task2-label">Task</span>
+              <code id="identity-task2"></code>
+            </div>
+            <div class="identity-row">
+              <span class="identity-label" id="identity-trace-label">Trace</span>
+              <code id="identity-trace"></code>
+            </div>
+          </div>
           <div class="wire" id="wire" hidden>
             <div class="wire-format" id="wire-format" role="group" aria-label="Message format">
               <button id="wire-t" type="button" aria-pressed="true">A2A-T (Task-T)</button>
@@ -306,28 +325,6 @@
             <pre class="wire-code" id="wire-code"></pre>
             <p class="wire-note" id="wire-note" hidden></p>
           </div>
-          <p class="empty" id="nego-empty">Waiting for the request.</p>
-        </div>
-      </section>
-
-      <section class="run-identity" id="run-identity" aria-label="Run identifiers" hidden>
-        <div class="identity-row">
-          <span class="identity-label" id="identity-run-label">Run</span>
-          <code id="identity-run"></code>
-        </div>
-        <div class="identity-row">
-          <span class="identity-label" id="identity-task-label">Task</span>
-          <code id="identity-task"></code>
-        </div>
-        <div class="identity-row" id="identity-task2-row" hidden>
-          <span class="identity-label" id="identity-task2-label">Task</span>
-          <code id="identity-task2"></code>
-        </div>
-        <div class="identity-row">
-          <span class="identity-label" id="identity-trace-label">Trace</span>
-          <code id="identity-trace"></code>
-          <a class="identity-langfuse" id="identity-langfuse" href="#" target="_blank"
-             rel="noopener noreferrer" hidden>Open in Langfuse</a>
         </div>
       </section>
 
