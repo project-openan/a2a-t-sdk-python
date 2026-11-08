@@ -1601,6 +1601,9 @@ function render() {
 
 /** Render the live wait strip; the elapsed counter ticks without a server frame per second. */
 function renderActivity() {
+  // The strip is optional markup: a page served from a snapshot older than this script must not
+  // lose the whole render (which runs before the send) to one missing element.
+  if (!els.activityStrip) return;
   const model = activityView(ui.view, ui.copy, Date.now());
   if (model === null) {
     if (!els.activityStrip.hidden) {
