@@ -1907,15 +1907,25 @@ def _context_id_of(events: list[dict[str, object]]) -> str | None:
 def _find_negotiation_message(
     events: list[dict[str, object]],
 ) -> tuple[dict[str, object], dict[str, object]] | None:
-    """Return the last standalone Negotiation-T message of a batch and its metadata."""
+    """Return the last inbound Negotiation-T proposal of a batch and its metadata.
+
+    A conformant A2A-T server sends the proposal as a standalone ``Message``. The vendor NMS
+    instead delivers it inside ``statusUpdate.status.message``, which normalization keeps as a
+    ``status`` event; only ``INPUT_REQUIRED`` hands the turn back to the client, so any other
+    state that carries the same metadata is an observation, not a proposal to answer.
+    """
+    input_required = TaskState.Name(TaskState.TASK_STATE_INPUT_REQUIRED)
     for event in reversed(events):
-        if event.get("kind") != "message":
-            continue
         metadata = event.get("metadata")
         if not isinstance(metadata, Mapping):
             continue
         metadata_dict = metadata_to_dict(metadata)
-        if is_negotiation_message(metadata_dict):
+        if not is_negotiation_message(metadata_dict):
+            continue
+        kind = event.get("kind")
+        if kind == "message":
+            return event, metadata_dict
+        if kind == "status" and event.get("state") == input_required:
             return event, metadata_dict
     return None
 

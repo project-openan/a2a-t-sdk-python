@@ -53,6 +53,7 @@ from demo.scenario import (
 from google.protobuf.json_format import MessageToDict
 from protocol.client_flow import (
     DEFAULT_CALL_TIMEOUT_SECONDS,
+    FINAL_STATE_INCOMPLETE,
     TASK_REQUEST_LABEL,
     ClientFlowError,
     ClientFlowResult,
@@ -241,6 +242,30 @@ def propose_event(
             template_uri=_PROPOSE_URIS[kind],
             content=content or f"Server proposal for round {round_number}",
             negotiation_id=negotiation_id,
+        ),
+    }
+
+
+def status_propose_event(
+    kind: str,
+    round_number: int,
+    *,
+    state: str = "TASK_STATE_INPUT_REQUIRED",
+    content: str | None = None,
+) -> dict[str, object]:
+    """A vendor NMS delivers the Negotiation-T propose inside a status update."""
+    text = content or f"Server proposal for round {round_number}"
+    return {
+        "kind": "status",
+        "task_id": "task-1",
+        "context_id": CONTEXT_ID,
+        "state": state,
+        "text": text,
+        "metadata": _negotiation_metadata(
+            performative="PROPOSE",
+            round_number=round_number,
+            template_uri=_PROPOSE_URIS[kind],
+            content=text,
         ),
     }
 
@@ -681,6 +706,33 @@ async def test_feasibility_scenario_accepts_the_alternative() -> None:
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
     assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1)]
     assert prompt_client.refill_data[0]["siteList"] == "Station 1,Station 2"
+
+
+async def test_a_propose_embedded_in_a_status_update_is_answered() -> None:
+    """The vendor NMS delivers the Negotiation-T propose as ``statusUpdate.status.message``."""
+    result, transport, _ = await _run(
+        SCENARIO_FEASIBILITY_SPEC,
+        [[status_propose_event("feasibility", 1)], _task_completed_batch()],
+        SCENARIO_FEASIBILITY_SPEC.scripted_client_decisions,
+    )
+
+    assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1)]
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+
+
+async def test_a_working_status_carrying_negotiation_metadata_is_not_answered() -> None:
+    """Only ``INPUT_REQUIRED`` hands the turn to the client; other states are observations."""
+    result, transport, _ = await _run(
+        SCENARIO_FEASIBILITY_SPEC,
+        [
+            [status_propose_event("feasibility", 1, state="TASK_STATE_WORKING")],
+            _task_completed_batch(),
+        ],
+        SCENARIO_FEASIBILITY_SPEC.scripted_client_decisions,
+    )
+
+    assert _client_negotiation_steps(transport.requests) == []
+    assert result.final_state == FINAL_STATE_INCOMPLETE
 
 
 async def test_reject_scenario_ends_without_a_task() -> None:
