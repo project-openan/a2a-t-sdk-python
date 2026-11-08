@@ -219,8 +219,11 @@ shows the verdict, actual final state, negotiation kind/rounds, duration and the
 `trace` links; the results can be exported back to `.xlsx`. An empty approval cell defaults to
 `approve`, so an unattended batch does not wait for the approval window; `reject` tests the
 rejection path and `auto` leaves the gate to a human or the timeout. Batches are persisted under
-`runs/tester`, so reloading the page reopens the latest one; **Retry failed** rebuilds a draft from
-the failed, errored or cancelled rows. On a real-NMS deployment the page shows a warning and asks
+`runs/tester` per browser: the page assigns an anonymous `a2at_tester_client` cookie and only
+lists, opens or retries the batches created by that browser, so reloading reopens your own latest
+batch and a fresh browser starts empty. **Retry failed** rebuilds a draft from the failed, errored
+or cancelled rows, and **Start** always starts a new batch from the current selection even while
+an older result is on screen. On a real-NMS deployment the page shows a warning and asks
 for confirmation before starting. Each case records its wall-clock duration, model/tool/approval
 latency, LLM call count and token usage (prompt/completion/total, split by client and server),
 including the provider-reported cached-prefix tokens and cache hit rate when the endpoint returns
@@ -668,4 +671,5 @@ LangGraph; those are implementation choices and do not change the interaction ab
 ## 7. Technical guide
 
 Protocol details, implementation structure, configuration, tests and production notes are in the
-[technical guide](TECHNICAL.md).
+[technical guide](TECHNICAL.md). Before field integration, read the
+[field notes](FIELD-NOTES.md) (LLM latency, intent default, token accounting).
