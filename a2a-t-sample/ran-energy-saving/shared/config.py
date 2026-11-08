@@ -725,7 +725,9 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
             f"expected one of {SERVER_PROTOCOL_MODES}"
         )
 
-    intent_mode = _env_value(values, INTENT_MODE_ENV_KEY, INTENT_MODE_PROCESSED)
+    # A2A-T sends the operator's own text to the SDK; the ADK intent layer is display-only and
+    # costs one full model turn per run, so it is opt-in rather than the default.
+    intent_mode = _env_value(values, INTENT_MODE_ENV_KEY, INTENT_MODE_RAW)
     if intent_mode not in SUPPORTED_INTENT_MODES:
         raise ValueError(
             f"Unsupported {INTENT_MODE_ENV_KEY}: {intent_mode}; "

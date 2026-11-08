@@ -823,18 +823,19 @@ def test_webhook_host_is_configurable_for_a_real_nms(tmp_path: Path) -> None:
     assert load_config(env_path=env_file).webhook_host == "192.0.2.10"
 
 
-def test_intent_mode_defaults_to_processed(tmp_path: Path) -> None:
+def test_intent_mode_defaults_to_raw(tmp_path: Path) -> None:
+    """A2A-T sends the operator text to the SDK; the display-only ADK intent is opt-in."""
     env_file = tmp_path / ".env"
     env_file.write_text("", encoding="utf-8")
 
-    assert load_config(env_path=env_file).intent_mode == "processed"
-
-
-def test_intent_mode_can_be_raw(tmp_path: Path) -> None:
-    env_file = tmp_path / ".env"
-    env_file.write_text(f"{INTENT_MODE_ENV_KEY}=raw\n", encoding="utf-8")
-
     assert load_config(env_path=env_file).intent_mode == "raw"
+
+
+def test_intent_mode_can_be_processed(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{INTENT_MODE_ENV_KEY}=processed\n", encoding="utf-8")
+
+    assert load_config(env_path=env_file).intent_mode == "processed"
 
 
 def test_unsupported_intent_mode_is_rejected(tmp_path: Path) -> None:

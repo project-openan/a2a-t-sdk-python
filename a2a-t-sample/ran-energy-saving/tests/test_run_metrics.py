@@ -132,6 +132,51 @@ def test_scripted_runs_report_tokens_as_unavailable() -> None:
     assert tokens["total"] is None
 
 
+def test_missing_usage_contributes_an_estimated_prompt_size() -> None:
+    """A timed-out call reports no usage; its request size must still be visible."""
+    spans = [
+        _span(spanId="intent", tokens={"prompt": 689, "completion": 10, "total": 699}),
+        _span(
+            spanId="slot",
+            stage="task_t_modify_extraction",
+            status="error",
+            durationMs=300_000.0,
+            detail={
+                "request": {
+                    "messages": [
+                        {"role": "system", "content": "s" * 8_000},
+                        {"role": "user", "content": "u" * 12_000},
+                    ]
+                }
+            },
+        ),
+    ]
+    metrics = build_run_metrics(
+        run_id="run-1",
+        conversation_id=None,
+        protocol=PROTOCOL_A2A_T,
+        scenario="outage",
+        mode="auto",
+        transport="sse",
+        language=LANGUAGE_ZH,
+        model_mode="live",
+        model_label="test",
+        status="failed",
+        transcript=_transcript(),
+        result=None,
+        spans=spans,
+        expected=None,
+    )
+
+    tokens = metrics["tokens"]
+    assert isinstance(tokens, dict)
+    assert tokens["prompt"] == 689
+    assert tokens["missingCalls"] == 1
+    assert tokens["estimatedCalls"] == 1
+    # 20 000 ASCII characters at the documented ~4 chars/token ratio.
+    assert tokens["promptEstimated"] == 5_000
+
+
 def test_latency_splits_model_tool_and_approval_wait() -> None:
     spans = [
         _span(spanId="llm", durationMs=100.0, tokens={"prompt": 1, "completion": 1}),

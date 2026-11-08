@@ -471,10 +471,11 @@ class ClientRuntime:
                         trace_sink=sink,
                     )
                 intent: ProcessedIntent | None = None
-                if processed or modify_mode:
+                if processed:
                     # The intent is an ADK/LLM reading of the request for the intent panel and the
                     # approval step. It never rewrites the request: what the operator wrote is what
-                    # the client sends.
+                    # the client sends. It is opt-in (``A2AT_SAMPLE_INTENT_MODE=processed``) because
+                    # a Modify run pays the same display-only model turn as a Create run.
                     intent = await self._process_intent(raw_text, custom=bool(custom_request))
                     _emit_intent_span(
                         trace_sink=sink,

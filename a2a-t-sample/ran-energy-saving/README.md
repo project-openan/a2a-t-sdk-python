@@ -257,11 +257,13 @@ The page is Chinese-only, like the tester console, because it is an internal too
 
 ### Operator intent layer
 
-The operator's text is the source of truth. The default `processed` mode inserts the business read
-a real OSS performs, but it never rewrites the request:
+The operator's text is the source of truth. A2A-T defaults to `raw`: the SDK extracts the Task-T
+from that text, so the ADK intent reading is only needed when the page should display the structured
+fields. Opt-in `processed` mode inserts the business read a real OSS performs, but it never rewrites
+the request:
 
 ```text
-operator request → ADK intent agent (ProcessedIntent: display / approval only)
+operator request → [processed] ADK intent agent (ProcessedIntent: display / approval only)
                  → approval 1 → Task-T extracted from the same operator text
 ```
 
@@ -285,9 +287,10 @@ operator request → ADK intent agent (ProcessedIntent: display / approval only)
   the OSS Agent reads it into an intent, publishes it, and forwards the same text to RAN.
 - The presentation page shows the operator request and the structured intent fields side by side;
   the trace records `intent_processed`.
-- `processed` is the default. Use `A2AT_SAMPLE_INTENT_MODE=raw`, `--intent-mode raw` or
-  `POST /api/runs {"intentMode":"raw"}` to skip the intent reading; the text is still what gets
-  sent. Gateway input is always treated as raw.
+- `raw` is the A2A-T default because it removes one full model turn per run; the pure A2A OSS Agent
+  always runs its own intent layer. Use `A2AT_SAMPLE_INTENT_MODE=processed`, `--intent-mode
+  processed` or `POST /api/runs {"intentMode":"processed"}` to show the structured intent fields.
+  The text is still what gets sent. Gateway input is always treated as raw.
 
 ### Pre-send Task-T validation
 

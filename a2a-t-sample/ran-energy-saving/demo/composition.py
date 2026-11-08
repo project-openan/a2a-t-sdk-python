@@ -13,7 +13,7 @@ from typing import Any
 from protocol.client_runtime import build_client_runtime
 from protocol.pre_task_negotiation import TaskTPrecheck
 from protocol.run_spec import RunSpec
-from shared.config import SampleConfig
+from shared.config import INTENT_MODE_PROCESSED, SampleConfig
 from shared.models import NegotiationDecision
 from shared.run_constants import PROTOCOL_A2A_T, PROTOCOL_PURE
 
@@ -95,6 +95,11 @@ async def build_demo_runtime(
     else:
         pure_answer = None
 
+    # The display-only intent layer is opt-in for A2A-T; in raw mode skip building its ADK model
+    # entirely so the run pays neither the model turn nor the object construction.
+    intent_processor_factory = (
+        build_demo_intent_processor if config.intent_mode == INTENT_MODE_PROCESSED else None
+    )
     resolved_config = replace(config, discovery=discovery)
     return await build_client_runtime(
         resolved_config,
@@ -114,5 +119,5 @@ async def build_demo_runtime(
         client_agent_factory=build_client_agent,
         pure_answer=pure_answer,
         scripted_decisions=scripted_decisions,
-        intent_processor_factory=build_demo_intent_processor,
+        intent_processor_factory=intent_processor_factory,
     )

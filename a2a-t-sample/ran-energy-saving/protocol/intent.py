@@ -21,7 +21,7 @@ from typing import Final, Protocol, runtime_checkable
 INTENT_MODE_PROCESSED: Final[str] = "processed"
 INTENT_MODE_RAW: Final[str] = "raw"
 SUPPORTED_INTENT_MODES: Final[tuple[str, ...]] = (INTENT_MODE_PROCESSED, INTENT_MODE_RAW)
-DEFAULT_INTENT_MODE: Final[str] = INTENT_MODE_PROCESSED
+DEFAULT_INTENT_MODE: Final[str] = INTENT_MODE_RAW
 
 #: Source labels recorded on a processed intent.
 INTENT_SOURCE_MODEL: Final[str] = "model"

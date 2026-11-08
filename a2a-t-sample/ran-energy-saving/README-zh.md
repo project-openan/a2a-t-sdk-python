@@ -239,9 +239,10 @@ HTTP 503 取消应答。
 - A2A 把同样的处理放在 OSS Agent 内：工程师客户端发送原文，OSS Agent 解析并发布意图，
   再把同一段文本转发给 RAN。
 - 展示页并列显示操作员请求和结构化意图；trace 记录 `intent_processed`。
-- 默认 `processed`。使用 `A2AT_SAMPLE_INTENT_MODE=raw`、`--intent-mode raw` 或
-  `POST /api/runs {"intentMode":"raw"}` 可跳过意图解析；发送的仍然是原文。Gateway 入站文本
-  一律按 raw 处理。
+- A2A-T 默认 `raw`：Task-T 由 SDK 从原文生成，ADK 意图层只用于展示/审批，默认省掉这一次
+  模型调用。需要展示结构化意图时用 `A2AT_SAMPLE_INTENT_MODE=processed`、
+  `--intent-mode processed` 或 `POST /api/runs {"intentMode":"processed"}`；发送的始终是原文。
+  Gateway 入站文本一律按 raw 处理。
 
 ### 发送前 Task-T 校验
 

@@ -407,6 +407,63 @@ async def test_a_free_text_request_reaches_the_sdk_unrewritten(
     assert "## Operation Type" not in str(captured[0]["user_request"])
 
 
+@pytest.mark.asyncio
+async def test_a_raw_run_does_not_call_the_intent_agent(
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A2A-T raw mode must not spend an ADK turn on the display-only intent layer."""
+    import protocol.client_runtime as client_runtime
+    from protocol.intent import OperatorRequest, ProcessedIntent
+
+    calls = 0
+
+    class FakeIntentProcessor:
+        async def process(self, request: OperatorRequest) -> ProcessedIntent:
+            nonlocal calls
+            calls += 1
+            return ProcessedIntent.raw(request.text)
+
+    async def fake_discover(**kwargs: object) -> DiscoveredAgent:
+        del kwargs
+        return _card()
+
+    async def fake_create(agent: object, client_config: ClientConfig | None = None) -> _FakeA2AClient:
+        del agent, client_config
+        return _FakeA2AClient()
+
+    monkeypatch.setattr(client_runtime, "discover_agent", fake_discover)
+    monkeypatch.setattr(client_runtime, "create_client", fake_create)
+    monkeypatch.setattr(
+        "demo.intent.build_demo_intent_processor",
+        lambda config, run_spec=None: FakeIntentProcessor(),
+    )
+    captured: list[dict[str, object]] = []
+
+    async def fake_flow(**kwargs: object) -> object:
+        captured.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(client_runtime, "run_client_flow", fake_flow)
+    config = replace(offline_config, intent_mode="raw")
+    runtime = await build_demo_runtime(
+        config, "information", "manual", "sse", config.discovery, env_path=tmp_path / "missing.env"
+    )
+    try:
+        await runtime.run(
+            user_request="modify the running task",
+            run_mode="modify",
+            target_task_id="task-1",
+            target_context_id="ctx-1",
+        )
+    finally:
+        await runtime.aclose()
+
+    assert calls == 0
+    assert captured[0]["intent_fields"] == {}
+
+
 def test_importing_the_server_does_not_import_adk() -> None:
     """The server is a plain A2A/A2A-T service: its assembly must not load Google ADK."""
     sample_root = Path(__file__).resolve().parents[1]

@@ -908,7 +908,7 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_SAMPLE_DIRECT_SERVER_URL` | 默认 `http://127.0.0.1:8000` | `direct` 发现读取的基础 URL。 |
 | `A2AT_SAMPLE_TRANSPORT` | `sse`（默认）、`webhook` | 客户端事件传输。真实 `--nms` 默认 webhook（`message:send` + 推送）；`--nms-sim` 保持 sse。 |
 | `A2AT_SAMPLE_WEBHOOK_HOST` / `A2AT_SAMPLE_WEBHOOK_PORT` | 默认 `127.0.0.1` / `9000` | webhook 接收地址；真实网管必须能访问该主机和端口。 |
-| `A2AT_SAMPLE_INTENT_MODE` | `processed`（默认）、`raw` | 在 A2A/A2A-T 映射前执行业务意图层，或直接发送操作员文本。`--intent-mode` 与 `POST /api/runs.intentMode` 可按 run 覆盖。 |
+| `A2AT_SAMPLE_INTENT_MODE` | `raw`（默认）、`processed` | `raw` 直接发送操作员原文：A2A-T 的 Task-T 由 SDK 生成，ADK 意图层只用于展示，默认关闭。`processed` 先执行 ADK 业务意图层。pure A2A 的 OSS Agent 始终执行自己的意图层。`--intent-mode` 与 `POST /api/runs.intentMode` 可按 run 覆盖。 |
 | `A2AT_SAMPLE_PRE_SEND_VALIDATION` | `on`（默认）、`always`、`off` | 发送前用 SDK 内容校验检查渲染后的 Task-T。`on` 仅覆盖演示页；`always` 覆盖所有入口；`off` 关闭。 |
 | `A2AT_SAMPLE_RUN_DIR` | 未设置；`%TEMP%/a2at-ran-energy-saving-adk` | 启动器状态目录：`pids.json`、子进程日志和每次运行的 `.env`。第二个实例设置不同值，`--stop` 只停自己的进程。 |
 | `A2AT_SAMPLE_RUNS_DIR` | 默认 `<sample>/runs` | 数据目录：transcript、client/task/gateway SQLite、每次 run 的 `wire.jsonl` 和 Web UI 历史。相对路径按 sample 根目录解析。 |

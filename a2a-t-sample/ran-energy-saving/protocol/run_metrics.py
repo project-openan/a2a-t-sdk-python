@@ -182,6 +182,8 @@ def _tokens(spans: list[dict[str, object]], *, model_mode: str) -> dict[str, obj
     calls = 0
     known = 0
     estimated = False
+    estimated_calls = 0
+    estimated_prompt_total = 0
     scripted = model_mode == "offline"
     for span in spans:
         if span.get("kind") != "llm":
@@ -189,6 +191,10 @@ def _tokens(spans: list[dict[str, object]], *, model_mode: str) -> dict[str, obj
         calls += 1
         usage = _span_usage(span)
         if usage is None:
+            estimate = _estimate_prompt_tokens(span)
+            if estimate is not None:
+                estimated_calls += 1
+                estimated_prompt_total += estimate
             continue
         known += 1
         estimated = estimated or bool(usage.get("estimated"))
@@ -219,6 +225,11 @@ def _tokens(spans: list[dict[str, object]], *, model_mode: str) -> dict[str, obj
         "llmCalls": calls,
         "reportedCalls": known,
         "missingCalls": calls - known,
+        # An estimate derived from the captured request text of the calls that reported no usage.
+        # It is kept separate from ``prompt`` so a provider-reported count is never mixed with a
+        # guess; ``None`` means no missing call carried a request payload.
+        "estimatedCalls": estimated_calls,
+        "promptEstimated": estimated_prompt_total if estimated_calls else None,
         "prompt": totals["prompt"] if available else None,
         "completion": totals["completion"] if available else None,
         "total": totals["total"] if available else None,
@@ -250,6 +261,39 @@ def _span_usage(span: Mapping[str, object]) -> dict[str, object] | None:
         if normalized is not None:
             return normalized
     return _normalize_usage(detail.get("usage"))
+
+
+def _estimate_prompt_tokens(span: Mapping[str, object]) -> int | None:
+    """Estimate the prompt tokens of one LLM span that reported no usage.
+
+    A timed-out call never returns a usage object, yet its request text is already captured on the
+    span. Reporting that size separately keeps a run's real ``prompt`` count from being read as the
+    whole request size.
+    """
+    detail = span.get("detail")
+    if not isinstance(detail, Mapping):
+        return None
+    request = detail.get("request")
+    if not isinstance(request, Mapping):
+        return None
+    messages = request.get("messages")
+    if not isinstance(messages, list):
+        return None
+    parts = [
+        str(message.get("content"))
+        for message in messages
+        if isinstance(message, Mapping) and isinstance(message.get("content"), str)
+    ]
+    if not parts:
+        return None
+    return _estimate_tokens("".join(parts))
+
+
+def _estimate_tokens(text: str) -> int:
+    """Return a coarse token estimate: CJK glyphs are ~1.5 per token, other text ~4 per token."""
+    cjk = sum(1 for char in text if "㐀" <= char <= "鿿")
+    other = len(text) - cjk
+    return max(1, (cjk * 2 + 2) // 3 + (other + 3) // 4)
 
 
 def _normalize_usage(raw: object) -> dict[str, object] | None:
