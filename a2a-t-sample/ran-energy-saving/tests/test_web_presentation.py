@@ -249,10 +249,17 @@ def test_confirm_strip_scales_its_type_for_the_orange_ground() -> None:
     css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")
 
     assert re.search(r"\.say\.ask textarea \{[^}]*font-size: 15px", css, re.S)
-    assert re.search(r"\.say\.ask \.say-detail \{[^}]*font-size: 14px", css, re.S)
+    assert re.search(r"\.say\.ask \.say-detail \{[^}]*font-size: 15px", css, re.S)
     assert re.search(r"\.say\.ask \.micro-label \{[^}]*color: var\(--black\)", css, re.S)
     assert re.search(r"\.say\.ask \.manual-preview \{[^}]*font-size: 13\.5px", css, re.S)
-    assert re.search(r"\.say\.ask \.validation-errors li \{[^}]*font-size: 13px", css, re.S)
+    assert re.search(r"\.say\.ask \.validation-errors li \{[^}]*font-size: 15px", css, re.S)
+    assert re.search(
+        r"\.say\.ask \.validation-errors span:not\(\.validation-hint\)[^{]*\{[^}]*font-size: 14px",
+        css,
+        re.S,
+    )
+    # The raw SDK code is noise for the audience and used to take a whole line of its own.
+    assert re.search(r"\.say\.ask \.validation-errors code \{ display: none", css, re.S)
     assert re.search(r"\.say\.ask \.manual-answer \{[^}]*rgba\(0, 0, 0, \.28\)", css, re.S)
 
 
