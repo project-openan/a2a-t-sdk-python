@@ -613,18 +613,56 @@ class RunState:
         if _string_value(event.get("state")) != TASK_STATE_SUBMITTED:
             return
         operation = self.run_mode if self.run_mode == RUN_MODE_MODIFY else RUN_MODE_CREATE
+        # This row is derived locally from a real status; the peer never sent a "Task created"
+        # message, so the span must not claim ``actor=server``.
         self.emit_trace(
             kind="task_created",
             phase=PHASE_EXECUTION,
             title="Task modified" if operation == RUN_MODE_MODIFY else "Task created",
-            actor="server",
-            side="server",
-            direction="server->client",
+            actor="client",
+            side="client",
+            direction="internal",
             context_id=_string_value(event.get("context_id")),
             task_id=_string_value(event.get("task_id")),
             detail={"operation": operation, "state": TASK_STATE_SUBMITTED, "source": "a2a-status"},
         )
         self._task_created_emitted = True
+
+    def record_polled_task_state(
+        self,
+        *,
+        task_id: str,
+        context_id: str | None,
+        state: str,
+    ) -> dict[str, object]:
+        """Record one local poll snapshot of the remote Task.
+
+        Polling is an observation, not a wire event. The row is explicitly local
+        (``actor=client`` / ``direction=poll``) so the timeline and the wire inspector never
+        present a fabricated ``statusUpdate`` the peer did not send. The authoritative state is
+        still persisted for the Run Explorer.
+        """
+        span = self.emit_trace(
+            kind="task_poll",
+            phase=PHASE_EXECUTION,
+            title=f"Polled task state: {state}",
+            actor="client",
+            side="client",
+            direction="poll",
+            context_id=context_id,
+            task_id=task_id,
+            detail={"state": state, "origin": "poll"},
+        )
+        self._persist_task_snapshot(
+            {
+                "kind": "task_poll",
+                "task_id": task_id,
+                "context_id": context_id,
+                "state": state,
+                "origin": "poll",
+            }
+        )
+        return span
 
     def record_intent(self, detail: Mapping[str, object]) -> None:
         """Capture the business intent carried by one ``intent_processed`` trace row."""

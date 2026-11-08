@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import time
@@ -122,11 +121,14 @@ _TASK_STATE_FINAL_STATES: Final[dict[str, str]] = {
 
 @dataclass(frozen=True)
 class _PolledTask:
-    """One polled remote Task rendered for the run timeline."""
+    """One polled remote Task observed by the client.
+
+    A poll is a local snapshot, not a wire message: it yields the authoritative state and the
+    report, never synthetic protocol events.
+    """
 
     state_name: str
     context_id: str
-    events: list[dict[str, object]]
     reports: list[dict[str, object]]
     report: dict[str, object] | None
 
@@ -184,23 +186,15 @@ def _artifact_payload(artifact: object, *, task_id: str, context_id: str) -> dic
 def _polled_task_from_events(
     *,
     state_name: str,
-    task_id: str,
     context_id: str,
     artifacts: list[dict[str, object]],
 ) -> _PolledTask:
-    """Build the timeline events and report of one polled Task."""
-    events: list[dict[str, object]] = []
-    if state_name:
-        events.append(
-            {
-                "kind": "status",
-                "task_id": task_id,
-                "context_id": context_id,
-                "state": state_name,
-                "text": f"The remote task is {state_name}.",
-            }
-        )
-    events.extend(artifacts)
+    """Build the report of one polled Task.
+
+    ``artifacts`` is the rendered snapshot of the remote Task. Polling must not turn that snapshot
+    into ``status``/``artifact`` events: those look exactly like wire messages the peer never sent.
+    The run timeline records a local ``task_poll`` row instead.
+    """
     reports = [
         {
             "name": event.get("name"),
@@ -216,7 +210,6 @@ def _polled_task_from_events(
     return _PolledTask(
         state_name=state_name,
         context_id=context_id,
-        events=events,
         reports=reports,
         report=reports[-1] if reports else None,
     )
@@ -233,7 +226,6 @@ def _polled_task_from_a2a(task: object, task_id: str) -> _PolledTask:
     ]
     return _polled_task_from_events(
         state_name=state_name,
-        task_id=task_id,
         context_id=context_id,
         artifacts=artifacts,
     )
@@ -251,7 +243,6 @@ def _polled_task_from_nms(task: Mapping[str, object], task_id: str) -> _PolledTa
     ]
     return _polled_task_from_events(
         state_name=state_name,
-        task_id=task_id,
         context_id=context_id,
         artifacts=artifacts,
     )
@@ -1205,7 +1196,7 @@ class RunManager:
                 "updatedAt": now_iso(),
             }
         )
-        last_signature: str | None = None
+        last_state: str | None = None
         while True:
             if is_presentation:
                 if run.subscribers:
@@ -1254,15 +1245,15 @@ class RunManager:
                 interval = watched_interval if run.subscribers else background_interval
             try:
                 polled = await self._poll_remote_task(run, task_id)
-                signature = json.dumps(
-                    {"state": polled.state_name, "events": polled.events},
-                    sort_keys=True,
-                    default=str,
-                )
-                if signature != last_signature:
-                    last_signature = signature
-                    for event in polled.events:
-                        run.record_event(event)
+                if polled.state_name and polled.state_name != last_state:
+                    last_state = polled.state_name
+                    # Polling observes the Task; it never fabricates a status update the peer
+                    # did not send. The local snapshot row is explicitly client-origin.
+                    run.record_polled_task_state(
+                        task_id=task_id,
+                        context_id=polled.context_id or result.context_id,
+                        state=polled.state_name,
+                    )
                     run.broadcast(
                         {
                             "type": "task_tracking",

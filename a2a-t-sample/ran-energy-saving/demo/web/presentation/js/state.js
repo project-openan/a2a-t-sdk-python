@@ -1017,6 +1017,8 @@ export function traceDirection(entry) {
   if (hop === "nms") return "NMS → OSS";
   if (hop === "mie") return "MIE ⇄ RAN";
   if (entry.kind === "approval" || entry.actor === "human") return "MIE ⇄ Engineer";
+  // A polled Task state is a local observation, not a message from the peer.
+  if (entry.direction === "poll" || entry.origin === "poll") return "Local poll";
   if (entry.direction === "client->server") return "OSS → RAN";
   if (entry.direction === "server->client") return "RAN → OSS";
   if (entry.side === "server") return "RAN internal";

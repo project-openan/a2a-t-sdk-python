@@ -746,6 +746,17 @@ async def test_a_presentation_run_keeps_tracking_without_a_viewer(
     assert run.status == "finished"
     assert run.result is not None
     assert run.result.final_state == FINAL_STATE_TASK_COMPLETED
+    # Polling observes the remote Task; it must never put a fabricated status row on the timeline.
+    assert run.transcript is not None
+    assert not any(
+        "The remote task is" in str(entry.get("summary") or "") for entry in run.transcript.events
+    )
+    polls = [span for span in run.traces if span.get("kind") == "task_poll"]
+    assert polls
+    assert all(
+        (span["actor"], span["side"], span["direction"]) == ("client", "client", "poll")
+        for span in polls
+    )
 
 
 class _PollRuntime:
@@ -961,3 +972,29 @@ async def test_active_runs_for_task_matches_the_nms_task(
 
     run.target_task_id = "nms-2"
     assert manager.active_runs_for_task("nms-2") == [run]
+
+
+def test_a_polled_task_extracts_its_report_without_synthesizing_events() -> None:
+    """A GetTask snapshot yields the report only; it is not a wire status/artifact update."""
+    from protocol.client_service.run_manager import _polled_task_from_events
+
+    polled = _polled_task_from_events(
+        state_name="TASK_STATE_COMPLETED",
+        context_id="ctx-1",
+        artifacts=[
+            {
+                "kind": "artifact",
+                "task_id": "task-1",
+                "context_id": "ctx-1",
+                "name": "energy saving intent report",
+                "text": "done",
+            }
+        ],
+    )
+
+    assert polled.state_name == "TASK_STATE_COMPLETED"
+    assert polled.report == {
+        "name": "energy saving intent report",
+        "text": "done",
+        "data": None,
+    }

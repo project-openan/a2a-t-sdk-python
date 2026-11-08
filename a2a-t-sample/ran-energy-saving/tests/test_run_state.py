@@ -101,6 +101,32 @@ def test_first_submitted_status_emits_one_task_created_span(tmp_path: Path) -> N
     assert created[0]["title"] == "Task created"
     assert created[0]["taskId"] == "task-1"
     assert created[0]["detail"]["operation"] == "create"
+    # ``Task created`` is derived locally from a real status; it must not claim the peer spoke.
+    assert (created[0]["actor"], created[0]["side"], created[0]["direction"]) == (
+        "client",
+        "client",
+        "internal",
+    )
+
+
+def test_a_polled_task_state_is_recorded_as_a_local_snapshot(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+
+    span = run.record_polled_task_state(
+        task_id="task-1",
+        context_id="ctx-1",
+        state="TASK_STATE_WORKING",
+    )
+
+    assert span["kind"] == "task_poll"
+    assert span["title"] == "Polled task state: TASK_STATE_WORKING"
+    assert (span["actor"], span["side"], span["direction"]) == ("client", "client", "poll")
+    assert span["detail"]["state"] == "TASK_STATE_WORKING"
+    # The export carries the local origin instead of a fabricated status update.
+    assert run.transcript is not None
+    entry = run.transcript.events[-1]
+    assert (entry["entryType"], entry["kind"], entry["direction"]) == ("trace", "task_poll", "poll")
+    assert not [row for row in run.transcript.events if row.get("eventKind") == "status"]
 
 
 def test_a_modify_run_marks_the_task_modified(tmp_path: Path) -> None:

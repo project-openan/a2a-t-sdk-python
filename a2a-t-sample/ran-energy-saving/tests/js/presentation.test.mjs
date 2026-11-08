@@ -764,6 +764,8 @@ assert.equal(
 );
 assert.equal(traceDirection({ direction: "client->server" }), "OSS → RAN");
 assert.equal(traceDirection({ direction: "server->client" }), "RAN → OSS");
+assert.equal(traceDirection({ direction: "poll" }), "Local poll");
+assert.equal(traceDirection({ origin: "poll", direction: "poll" }), "Local poll");
 assert.equal(traceDirection({ kind: "approval", side: "server", actor: "human" }), "MIE ⇄ Engineer");
 assert.equal(traceDirection({ detail: { hop: "mie" }, direction: "server->client" }), "MIE ⇄ RAN");
 
@@ -1070,6 +1072,24 @@ const workingText = wireText(workingModel);
 assert.ok(workingText.includes('"state": "TASK_STATE_WORKING"'));
 assert.ok(workingText.includes("Region: Region A"));
 assert.ok(!workingText.includes('"state": "Region'));
+
+// A locally polled Task state is a trace row, never a fabricated wire statusUpdate.
+const polledModel = buildWireModel(
+  {
+    entryType: "trace",
+    kind: "task_poll",
+    direction: "poll",
+    title: "Polled task state: TASK_STATE_WORKING",
+    summary: "Polled task state: TASK_STATE_WORKING",
+    detail: { state: "TASK_STATE_WORKING", origin: "poll" },
+  },
+  { runId: "run-wire" },
+  "t",
+  copy,
+);
+const polledText = wireText(polledModel);
+assert.ok(polledText.includes("task_poll"));
+assert.ok(!polledText.includes('"statusUpdate"'));
 
 const proposeModel = buildWireModel(
   {
