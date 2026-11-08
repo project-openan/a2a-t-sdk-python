@@ -70,6 +70,45 @@ It cannot support the OSP time points; use it only to inspect model/tool cost.
 Filter: `shared/langfuse_tracing.py::LangfuseSpanExporter._should_export`. The Web UI timeline and
 the transcript always keep every span; only Langfuse is filtered.
 
+### 2.1 OSS-side LLM calls in detail
+
+The OSS process has two LLM paths, distinguishable by the observation name:
+
+| Path | Producer | Span title | Stage source |
+|---|---|---|---|
+| ADK agents (intent / decision / manual-answer structuring) | `shared/adk_tracing.py` | `LLM call · <stage or adk_agent>` | `trace_scope(stage=…)` |
+| A2A-T SDK traced provider | `shared/traced_llm.py` | `LLM call · <stage or structured>` | `trace_stage(…)` |
+
+The four names currently seen most often on the OSS side:
+
+| Observation | Trigger | Purpose | Core content | Phase | Metric link |
+|---|---|---|---|---|---|
+| `LLM call · adk_agent` | an ADK model turn without an explicit stage; on the OSS side this is the **business intent agent** (`AdkIntentExtractor`, the approval-1 intent card) | read the operator text into a `BusinessIntent` (operationType / region / sites / windows / goal / backgroundEvent). It only feeds display and approval; it never generates Task-T | request = operator text; response = structured intent JSON | `execution` (ADK default) | tokens count in AX/AZ; `run_metrics` buckets it as `byComponent["client:execution"]` |
+| `LLM call · task_t_slot_extraction` | `client_flow` calls the SDK `generate_task_prompt_from_text` under `trace_stage("task_t_slot_extraction")` | initial **Create** Task-T: extract slots from the operator text and render the Task-T template. The SDK may call the model several times; each call is one generation with the same name | request = text + conversation context; response = Task-T Markdown | `task_prompt` | produces column X; the main fixed A2A-T overhead; bucket `client:task_t_slot_extraction` |
+| `LLM call · task_t_modify_extraction` | same, `run_mode=modify` (the modify branch of `client_flow`) | **Modify** Task-T: render the change text into a new Task-T that continues the target Task; no Task is created | request = modify text + context; response = new Task-T | `task_modify` | column X; bucket `client:task_t_modify_extraction` |
+| `LLM call · structured` | fallback for an SDK structured call without a stage; on the OSS side this is the **pre-send content validation** `validate_task_prompt_and_data_filling` (`_validate_task_prompt`, not wrapped in `trace_stage`) | semantic validation of the generated Task-T: blocked / negotiable verdict, missing items, structured params. It never generates Task-T | request = Task-T + schema; response = verdict/errors/filled JSON | `negotiation` (SDK default) | produces column Y; tokens count in AX/AZ but land in `client:negotiation` (no stage) |
+
+Other names on the same paths (recognize them when aggregating):
+
+| Observation | Purpose |
+|---|---|
+| `client_decision_agent` | ADK negotiation decision: read the proposal and choose accept / counter / reject / abort |
+| `client_manual_answer` | structuring the engineer's manual answer for preview |
+| `task_t_slot_extraction_refill` | refill Task-T from the agreed values after an accept |
+| `negotiation_accept_extraction` / `negotiation_propose_extraction` / `negotiation_reject_extraction` / `negotiation_abort_extraction` | build the Negotiation-T message with the SDK (model calls before AR/AS) |
+
+Notes:
+
+- `adk_agent` and `structured` are **fallback names**: the first means "an ADK turn without a
+  stage label", the second "an SDK structured call without a stage label". Neither is a business
+  action; use the phase and the request content to tell them apart.
+- `structured` can appear several times per run (the SDK validation has multiple internal steps),
+  and it has no stage, so validation tokens are mixed into the negotiation bucket of
+  `run_metrics.tokens.byComponent`. To account for them separately, wrap `_validate_task_prompt`
+  in an explicit stage (for example `task_t_validation`).
+- All four are **client/OSS-side**. `Planner turn` and `LLM call · task_t_server_validation` are
+  RAN-Agent-side; split by `bySide` when comparing A2A with A2A-T.
+
 ## 3. Mapping to the OSP columns
 
 | Col | Metric | Phase-level source | Computation |

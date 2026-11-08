@@ -68,6 +68,43 @@ token/时延统计的载体。
 过滤实现：`shared/langfuse_tracing.py::LangfuseSpanExporter._should_export`。
 UI 时间线和 transcript 永远保留全部 span，过滤只影响 Langfuse。
 
+### 2.1 OSS 侧 LLM 调用详解
+
+OSS 进程里有两条 LLM 链路，观测名就能区分：
+
+| 链路 | 生产者 | span 标题 | 是否有 stage |
+|---|---|---|---|
+| ADK agent（意图 / 决策 / 人工答复结构化） | `shared/adk_tracing.py` | `LLM call · <stage 或 adk_agent>` | 由 `trace_scope(stage=…)` 指定 |
+| A2A-T SDK 注入的 traced provider | `shared/traced_llm.py` | `LLM call · <stage 或 structured>` | 由 `trace_stage(…)` 指定 |
+
+当前 OSS 侧最常看到的四个名字：
+
+| 观测名 | 触发点 | 作用 | 核心内容 | phase | 指标关联 |
+|---|---|---|---|---|---|
+| `LLM call · adk_agent` | ADK 模型轮次没有显式 stage；OSS 侧主要是**业务意图理解**（`AdkIntentExtractor`，审批 1 的意图卡） | 把 operator 原文读成 `BusinessIntent`（operationType / region / sites / windows / goal / backgroundEvent …），**只用于展示与审批，不生成 Task-T** | 请求=operator 原文；响应=结构化意图 JSON | `execution`（ADK 默认） | token 计入 AX/AZ；`run_metrics` 归到 `byComponent["client:execution"]` |
+| `LLM call · task_t_slot_extraction` | `client_flow` 在 `trace_stage("task_t_slot_extraction")` 下调用 SDK `generate_task_prompt_from_text` | 初次 **Create** 的 Task-T 生成：从 operator 原文抽取 slot 并渲染 Task-T 模板；SDK 内部可能多次调用模型，每次一条 generation，全部同名 | 请求=原文+会话上下文；响应=Task-T Markdown（含 Task Context / Terminology / Expected Output） | `task_prompt` | 决定 X 列；token 是 A2A-T 的主要固定开销；`client:task_t_slot_extraction` |
+| `LLM call · task_t_modify_extraction` | 同上，但 `run_mode=modify`（`client_flow` 的 modify 分支） | **Modify** run 的 Task-T 生成：把修改要求渲染成续传目标 Task 的新 Task-T；不新建 Task | 请求=修改原文+上下文；响应=新 Task-T | `task_modify` | 同 X 列；`client:task_t_modify_extraction` |
+| `LLM call · structured` | 没有 stage 的 SDK 结构化调用兜底；OSS 侧当前主要是**发送前内容校验** `validate_task_prompt_and_data_filling`（`_validate_task_prompt`，未包 `trace_stage`） | 对已生成的 Task-T 做语义校验，返回拦截/可协商结论、缺失项与结构化参数；不生成 Task-T | 请求=Task-T+schema；响应=校验 JSON（verdict / errors / filled） | `negotiation`（SDK 默认） | 决定 Y 列；token 计入 AX/AZ，但 `byComponent` 会落到 `client:negotiation`（因为没有 stage） |
+
+同链路还会出现的名字（不在上面四个里，但统计时要认得）：
+
+| 观测名 | 作用 |
+|---|---|
+| `client_decision_agent` | ADK 协商决策：读 propose，产出 accept / counter / reject / abort |
+| `client_manual_answer` | 人工答复的结构化预览（manual/confirm 模式） |
+| `task_t_slot_extraction_refill` | accept 后按协商结果重新填充 Task-T |
+| `negotiation_accept_extraction` / `negotiation_propose_extraction` / `negotiation_reject_extraction` / `negotiation_abort_extraction` | 用 SDK 把决策构造成 Negotiation-T 报文（AR/AS 前的模型调用） |
+
+要点：
+
+- `adk_agent` 与 `structured` 都是**兜底名**：前者表示"ADK 调用没被 stage 标注"，后者表示
+  "SDK structured 调用没被 stage 标注"，并不代表一种业务动作。看阶段和请求内容才能判断。
+- `structured` 可能一次 run 出现多条（SDK 校验内部的多步调用），且目前没有独立 stage，
+  所以 `run_metrics.tokens.byComponent` 里校验开销和协商阶段混在一起。若要把校验 token
+  单独统计，应给 `_validate_task_prompt` 包一个显式 stage（例如 `task_t_validation`）。
+- 这四类调用都属于 **client / OSS 侧**；`Planner turn`、`LLM call · task_t_server_validation`
+  等属于 RAN Agent 侧，比较 A2A 与 A2A-T 时要按 `bySide` 分开。
+
 ## 3. 与 OSP 指标列的对应
 
 | 列 | 指标 | 数据来源（phase 级） | 计算 |
