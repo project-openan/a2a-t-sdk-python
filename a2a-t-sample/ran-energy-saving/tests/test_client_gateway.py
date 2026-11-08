@@ -75,6 +75,7 @@ class FakeRuntime:
         | None = None,
         on_intent_ready: Callable[[str], Awaitable[bool]] | None = None,
         trace_sink: Callable[[dict[str, object]], None] | None = None,
+        activity_sink: Callable[[dict[str, object]], None] | None = None,
         run_id: str | None = None,
         user_request: str | None = None,
         conversation_context: str | None = None,
@@ -84,7 +85,7 @@ class FakeRuntime:
         target_task_id: str | None = None,
         target_context_id: str | None = None,
     ) -> ClientFlowResult:
-        del on_intent_ready, trace_sink, run_id, validate_before_send, enforce_required_fields
+        del on_intent_ready, trace_sink, activity_sink, run_id, validate_before_send, enforce_required_fields
         del run_mode, target_task_id, target_context_id
         self.user_request = user_request
         self.conversation_context = conversation_context

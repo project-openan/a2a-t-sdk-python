@@ -71,6 +71,7 @@ class ClientRuntimeLike(Protocol):
         on_decision_requested: Callable[[NegotiationProposeView, NegotiationContext], None] | None = None,
         on_decision_made: DecisionMadeCallback | None = None,
         trace_sink: Callable[[dict[str, object]], None] | None = None,
+        activity_sink: Callable[[dict[str, object]], None] | None = None,
         run_id: str | None = None,
         user_request: str | None = None,
         conversation_context: str | None = None,
@@ -118,6 +119,7 @@ class RunState:
         detached: whether the page stopped watching while the remote Task still runs; tracking
             continues at the background cadence and the run does not end.
         messages: every SSE message broadcast so far (replayed to late subscribers).
+        activity: latest ephemeral wait-state signal (never replayed as a timeline row).
         subscribers: live SSE queues.
         transcript: transcript recorded while the run executes.
         runtime: assembled client runtime, once built.
@@ -179,6 +181,10 @@ class RunState:
     idempotency_key: str = ""
     conversation_context: str | None = None
     messages: list[dict[str, object]] = field(default_factory=list)
+    #: Latest ``activity`` frame of this run (a wait-state signal, not a timeline row). It is
+    #: replaced in place instead of appended to ``messages``: a long task polls for days, and one
+    #: replay entry per poll would make every page load walk an unbounded backlog.
+    activity: dict[str, object] | None = None
     subscribers: set[asyncio.Queue[dict[str, object]]] = field(default_factory=set)
     transcript: NegotiationTranscript | None = None
     runtime: ClientRuntimeLike | None = None
@@ -328,6 +334,50 @@ class RunState:
         for queue in queues:
             queue.put_nowait(message)
         return message
+
+    def broadcast_ephemeral(self, message: dict[str, object]) -> None:
+        """Publish one message to live subscribers only; it is never replayed."""
+        with self._trace_lock:
+            queues = tuple(self.subscribers)
+        for queue in queues:
+            queue.put_nowait(message)
+
+    def record_activity(self, detail: Mapping[str, object]) -> dict[str, object] | None:
+        """Publish one wait-state update without touching the trace timeline or replay buffer.
+
+        A producer emits an ``activity`` envelope when a step starts waiting (a slow model call,
+        the first NMS push) and another when the wait ends. ``running`` keeps the state visible to
+        late subscribers; any other status clears it. Either way the frame reaches live
+        subscribers so the page can start or stop its elapsed counter.
+        """
+        activity_id = detail.get("activityId")
+        if not isinstance(activity_id, str) or not activity_id:
+            return None
+        status = detail.get("status")
+        status_text = status if isinstance(status, str) and status else "running"
+        started = detail.get("startedAt")
+        activity: dict[str, object] = {
+            "activityId": activity_id,
+            "kind": _activity_text(detail.get("activityKind")),
+            "labelKey": _activity_text(detail.get("labelKey")),
+            "stage": _activity_text(detail.get("stage")),
+            "status": status_text,
+            "startedAt": started if isinstance(started, str) and started else _now_iso(),
+            "updatedAt": _now_iso(),
+            "detail": {
+                key: value
+                for key, value in detail.items()
+                if key not in {"activityId", "activityKind", "labelKey", "stage", "status", "startedAt"}
+            },
+        }
+        if status_text == "running":
+            self.activity = activity
+        elif self.activity is not None and self.activity.get("activityId") == activity_id:
+            self.activity = None
+        self.broadcast_ephemeral(
+            {"type": "activity", "runId": self.run_id, "activity": activity}
+        )
+        return activity
 
     def emit_run_started(
         self,
@@ -856,6 +906,12 @@ class RunState:
     def subscribe(self) -> tuple[list[dict[str, object]], asyncio.Queue[dict[str, object]]]:
         """Return the replay snapshot and the live queue of one new subscriber atomically."""
         snapshot = list(self.messages)
+        if self.activity is not None:
+            # Wait-state frames are not in the replay buffer; hand the current one to the late
+            # subscriber so a page opened mid-wait still shows what the run is waiting for.
+            snapshot.append(
+                {"type": "activity", "runId": self.run_id, "activity": self.activity}
+            )
         queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
         self.subscribers.add(queue)
         return snapshot, queue
@@ -957,6 +1013,11 @@ class RunState:
             "source": dict(self.source),
             "transcript": transcript,
         }
+
+
+def _activity_text(value: object) -> str:
+    """Return one narrow string field of an activity payload, empty when absent."""
+    return value if isinstance(value, str) else ""
 
 
 def _now_iso() -> str:

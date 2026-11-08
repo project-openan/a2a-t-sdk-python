@@ -715,7 +715,7 @@ def test_nms_region_and_wire_log_settings(tmp_path: Path) -> None:
     assert config.nms_wire_log is False
 
 
-def test_nms_idle_defaults_to_45_seconds_and_read_after_send_is_on(tmp_path: Path) -> None:
+def test_nms_idle_defaults_to_two_minutes_and_read_after_send_is_on(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
         "\n".join(
@@ -731,7 +731,9 @@ def test_nms_idle_defaults_to_45_seconds_and_read_after_send_is_on(tmp_path: Pat
 
     config = load_config(env_path=env_file)
 
-    assert config.nms_idle_timeout == 45.0
+    # The vendor NMS can take well over a minute to send its first push; a short window turned
+    # that wait into an early downgrade to polling and looked like the run had gone silent.
+    assert config.nms_idle_timeout == 120.0
     assert config.nms_read_after_send is True
 
 

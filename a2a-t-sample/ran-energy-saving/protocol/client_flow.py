@@ -84,8 +84,10 @@ from shared.trace import (
     TraceRecorder,
     current_trace,
     elapsed_ms,
+    emit_activity,
     infer_decision_phase,
     is_report_artifact,
+    producer_span_id,
     trace_stage,
 )
 
@@ -913,6 +915,33 @@ async def run_client_flow(
         )
         trace_sink(span.to_dict())
 
+    async def send_with_wait_activity(
+        request: SendMessageRequest,
+        call_context: ClientCallContext,
+        *,
+        stage: str,
+    ) -> list[dict[str, object]]:
+        """Send one request while publishing what the page is waiting for."""
+        activity_id = producer_span_id("activity")
+        emit_activity(
+            activity_id=activity_id,
+            activity_kind="peer",
+            status="running",
+            label_key="waitingPeer",
+            stage=stage,
+            detail={"producer": "client_flow"},
+        )
+        try:
+            return await transport.send(request, call_context)
+        finally:
+            emit_activity(
+                activity_id=activity_id,
+                activity_kind="peer",
+                status="done",
+                label_key="waitingPeer",
+                stage=stage,
+            )
+
     def emit_validation(
         validation: TaskValidation,
         prompt_text: str,
@@ -1142,7 +1171,11 @@ async def run_client_flow(
         context_id=target_context_id if modify_only else None,
     )
     _LOGGER.info("client flow started: transport=%s", type(transport).__name__)
-    batch = await transport.send(initial_request, initial_context)
+    batch = await send_with_wait_activity(
+        initial_request,
+        initial_context,
+        stage="task_t_modify_send" if modify_only else "task_t_send",
+    )
     exchanges += 1
     collect(batch)
     context_id = context_id or _context_id_of(batch)
@@ -1264,7 +1297,9 @@ async def run_client_flow(
                 round_number=session.round,
                 context_id=context_id,
             )
-            batch = await transport.send(request, call_context)
+            batch = await send_with_wait_activity(
+                request, call_context, stage="negotiation_send"
+            )
             exchanges += 1
             collect(batch)
             result.error = reason
@@ -1357,7 +1392,9 @@ async def run_client_flow(
             round_number=session.round,
             context_id=context_id,
         )
-        batch = await transport.send(request, call_context)
+        batch = await send_with_wait_activity(
+            request, call_context, stage="negotiation_send"
+        )
         exchanges += 1
         collect(batch)
         if decision.action in ("reject", "abort"):

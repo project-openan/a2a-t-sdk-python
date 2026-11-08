@@ -342,6 +342,41 @@ body.resizing-y { cursor: row-resize; user-select: none; }
 .continuity[hidden] { display: none; }
 .continuity-badge { font-weight: 700; color: var(--text); }
 .continuity-change { color: var(--text-secondary); }
+/* Live wait state: one compact line, so a long model call or an unchanged Task never looks like
+   a frozen page. It is deliberately not a timeline row. */
+.activity-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 6px 0 0;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  background: var(--surface-subtle);
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--text-secondary);
+}
+.activity-strip[hidden] { display: none; }
+.activity-spinner {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: activity-spin 1s linear infinite;
+}
+@keyframes activity-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .activity-spinner { animation: none; }
+}
+.activity-text { display: flex; flex-wrap: wrap; gap: 2px 8px; }
+.activity-label { font-weight: 700; color: var(--text); }
+.activity-meta { font-variant-numeric: tabular-nums; }
+.activity-hint { flex-basis: 100%; padding-left: 18px; }
+.activity-hint[hidden] { display: none; }
 .report-download { margin-top: 8px; }
 .request-card {
   margin: 4px 0 0;

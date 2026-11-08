@@ -438,8 +438,8 @@ Vendor contract notes:
   on the same context id.
 - After an accept/counter/reject, the client keeps reading the response stream until it idles
   (`A2AT_SAMPLE_NMS_READ_AFTER_SEND`, on by default) so a new proposal on that stream is not lost.
-- The idle window is 45 s by default (`A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS`); `: heartbeat`
-  frames do not count as progress.
+- The idle window is 2 minutes by default (`A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS`); `: heartbeat`
+  frames do not count as progress. The vendor NMS can take over a minute to send its first push.
 - Task cancellation returns HTTP 503; the client treats it as a known limitation and never retries
   the send.
 - The presentation toolbar has **Cancel task** next to **Edit request**. It asks the remote NMS to

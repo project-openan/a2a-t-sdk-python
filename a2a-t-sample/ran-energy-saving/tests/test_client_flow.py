@@ -79,6 +79,7 @@ from shared.trace import (
     PHASE_TASK_PROMPT,
     PHASE_TASK_VALIDATION,
     PHASES,
+    set_global_activity_sink,
 )
 
 CONTEXT_ID = "ctx-client-flow"
@@ -354,6 +355,26 @@ async def test_message_sent_span_carries_the_wire_fields() -> None:
     assert detail["performative"] == "TASK_T"
     # The wire inspector shows the rendered Task-T, not the natural-language request.
     assert detail["taskT"] == f"Task-T prompt for: {prompt_client.task_prompts[-1]}"
+
+
+async def test_waiting_for_the_server_publishes_a_peer_activity() -> None:
+    """The NMS can stay silent for a long time; the page must still show that it is waiting."""
+    activities: list[dict[str, object]] = []
+    set_global_activity_sink(activities.append)
+    try:
+        await run_client_flow(
+            prompt_client=FakePromptClient(),
+            transport=ScriptedTransport([_task_completed_batch()]),
+            user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+            provider=ScriptedDecisionProvider(()),
+            language="en-US",
+        )
+    finally:
+        set_global_activity_sink(None)
+
+    peer = [item for item in activities if item["detail"]["activityKind"] == "peer"]
+    assert [item["detail"]["status"] for item in peer] == ["running", "done"]
+    assert peer[0]["detail"]["labelKey"] == "waitingPeer"
 
 
 async def test_accept_span_carries_the_refilled_task_t_and_the_negotiation_payload() -> None:

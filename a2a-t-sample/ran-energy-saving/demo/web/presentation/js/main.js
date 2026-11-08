@@ -14,6 +14,7 @@ import {
   scenarioTag,
 } from "../copy.js";
 import {
+  activityView,
   applyFrame,
   continuityModel,
   createState,
@@ -98,6 +99,10 @@ const els = {
   wireFormat: byId("wire-format"),
   scenarioSelect: byId("scenario-select"),
   scenarioDesc: byId("scenario-desc"),
+  activityStrip: byId("activity-strip"),
+  activityLabel: byId("activity-label"),
+  activityMeta: byId("activity-meta"),
+  activityHint: byId("activity-hint"),
   continuity: byId("continuity"),
   continuityBadge: byId("continuity-badge"),
   continuityChange: byId("continuity-change"),
@@ -381,6 +386,9 @@ const player = createPlayer({
 });
 
 boot();
+
+// The wait counter advances locally: one second per tick, not one server frame per second.
+setInterval(renderActivity, 1000);
 
 async function boot() {
   installTokenFromUrl();
@@ -1321,6 +1329,14 @@ function subscribe(runId) {
       return;
     }
     logFrame(frame);
+    if (frame.type === "activity") {
+      // Liveness is not a story beat: apply it now instead of queueing it behind the animation,
+      // and keep it out of the rewind log so stepping back does not replay a wait.
+      applyFrame(ui.view, frame);
+      applyFrame(ui.shadow, frame);
+      renderActivity();
+      return;
+    }
     // The request is on the wire by the time its span arrives, so the captured exchange can be
     // read back here and rendered as-is instead of being reconstructed from the span.
     if (frame.type === "trace" && frame.event?.kind === "message_sent") {
@@ -1568,6 +1584,7 @@ function render() {
     renderContinuity();
     els.negoTitle.textContent = ui.copy.negotiation.title;
     stage.render(ui.view, ui.copy);
+    renderActivity();
     renderRequest();
     renderIdentity();
     renderIntentPanel();
@@ -1580,6 +1597,26 @@ function render() {
   } finally {
     ui.rendering = false;
   }
+}
+
+/** Render the live wait strip; the elapsed counter ticks without a server frame per second. */
+function renderActivity() {
+  const model = activityView(ui.view, ui.copy, Date.now());
+  if (model === null) {
+    if (!els.activityStrip.hidden) {
+      els.activityStrip.hidden = true;
+      els.activityLabel.textContent = "";
+      els.activityMeta.textContent = "";
+      els.activityHint.textContent = "";
+      els.activityHint.hidden = true;
+    }
+    return;
+  }
+  els.activityStrip.hidden = false;
+  els.activityLabel.textContent = model.label;
+  els.activityMeta.textContent = model.meta;
+  els.activityHint.textContent = model.hint;
+  els.activityHint.hidden = model.hint === "";
 }
 
 /** Show the two-phase continuity evidence: same Task, same plan, before/after rate. */

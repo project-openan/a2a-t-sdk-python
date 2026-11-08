@@ -39,7 +39,9 @@ from shared.trace import (
     PHASE_EXECUTION,
     current_trace,
     elapsed_ms,
+    emit_activity,
     phase_for_stage,
+    producer_span_id,
     record_span,
 )
 
@@ -69,6 +71,21 @@ def _role() -> str:
 def _span_prefix(kind: str) -> str:
     """Return a role-scoped, cross-process unique producer id namespace."""
     return f"{kind}_{_role()}_adk"
+
+
+def _emit_activity(activity_id: str, *, stage: str | None, status: str) -> None:
+    """Publish the wait state of one model turn; a failure never changes model behavior."""
+    try:
+        emit_activity(
+            activity_id=activity_id,
+            activity_kind="model",
+            status=status,
+            label_key="waitingModel",
+            stage=stage,
+            detail={"producer": "adk"},
+        )
+    except Exception:  # noqa: BLE001 - tracing is an observer
+        return
 
 
 def json_safe(value: object, depth: int = 0) -> object:
@@ -325,6 +342,10 @@ class TracingLlm(BaseLlm):
         request_detail = _safe_serialize_request(llm_request)
         last: LlmResponse | None = None
         emitted = False
+        # Liveness is published before the blocking call: the span below only exists once the
+        # model answers, which is exactly the silence the page must not show.
+        activity_id = producer_span_id("activity")
+        _emit_activity(activity_id, stage=stage, status="running")
         try:
             async for response in self.inner.generate_content_async(llm_request, stream=stream):
                 last = response
@@ -333,6 +354,7 @@ class TracingLlm(BaseLlm):
                     emitted = True
                 yield response
         except Exception as exc:
+            _emit_activity(activity_id, stage=stage, status="error")
             self._emit_guarded(
                 stage,
                 request_detail,
@@ -344,6 +366,7 @@ class TracingLlm(BaseLlm):
             raise
         if not emitted and last is not None:
             self._emit_guarded(stage, request_detail, last, started, started_at)
+        _emit_activity(activity_id, stage=stage, status="done")
 
     def _emit_guarded(
         self,

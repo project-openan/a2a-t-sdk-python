@@ -544,7 +544,7 @@ Implementation details:
   `normalizedText` and the Task-T all derive from that visible text; nothing replaces a value after
   the operator has seen it.
 - The SSE reader skips `: heartbeat` comments and leaves the stream after
-  `A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS` (default 45 s) without a `data:` frame. Heartbeats do not
+  `A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS` (default 2 min) without a `data:` frame. Heartbeats do not
   reset that window. It then polls `GET <base>/tasks/{id}` to a terminal state; a send timeout is
   never retried.
 - `negotiationContext.id` is the vendor's negotiation handle, not the A2A `contextId`. The client

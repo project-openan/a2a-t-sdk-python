@@ -456,7 +456,7 @@ Gateway Task 数据库的 `push_notification_configs` 表（schema 版本 2）�
   控制该行为。ACCEPT 批次里若还有 PROPOSE，流程会回到协商循环而不是直接结束。
 - `abort` 用例改为在 information 协商中持续 counter（真机网管会先开信息协商），直到服务端
   达到最大轮次并 ABORT。
-- SSE 读取跳过 `: heartbeat`；连续 `A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS`（默认 45 秒）没有 `data:`
+- SSE 读取跳过 `: heartbeat`；连续 `A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS`（默认 2 分钟）没有 `data:`
   帧就断开，转为 `GET <base>/tasks/{id}` 轮询到终态；发送超时后不重试。
 - 原始帧回填为 `StreamResponse`，继续由 `shared.sse_event_consumer.normalize_event` 归一化，
   因此协商和 trace 代码不变。

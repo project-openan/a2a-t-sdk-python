@@ -56,10 +56,13 @@ from shared.run_constants import (
 from shared.sdk_env import SdkEnvFile, prepare_sdk_env
 from shared.trace import (
     PHASE_TASK_PROMPT,
+    ActivitySink,
     TraceRecorder,
     TraceSink,
     current_trace,
+    reset_activity_sink,
     reset_task_sink,
+    set_activity_sink,
     set_task_sink,
     trace_scope,
 )
@@ -320,6 +323,8 @@ class ClientRuntime:
     nms_client: NmsClient | None = None
     _closed: bool = False
     trace_sink: Callable[[dict[str, object]], None] | None = None
+    #: Liveness sink of this runtime (``None`` when the caller does not show wait states).
+    activity_sink: ActivitySink | None = None
     pure_answer: Callable[[dict[str, object]], str] | None = None
     intent_processor: IntentProcessor | None = None
     wire_log: HttpWireLog | None = None
@@ -381,6 +386,7 @@ class ClientRuntime:
         on_decision_made: DecisionMadeCallback | None = None,
         on_intent_ready: Callable[[str], Awaitable[bool]] | None = None,
         trace_sink: Callable[[dict[str, object]], None] | None = None,
+        activity_sink: ActivitySink | None = None,
         run_id: str | None = None,
         user_request: str | None = None,
         conversation_context: str | None = None,
@@ -434,6 +440,11 @@ class ClientRuntime:
         # The UI runs several clients on one loop. A task-local override keeps this run's spans in
         # its own sink instead of whichever run attached a process-wide sink last.
         sink_token = set_task_sink(sink)
+        # Liveness is a separate channel: it never enters the trace timeline. A run without an
+        # explicit sink still installs ``None`` so a process-wide sink cannot leak into it.
+        activity_token = set_activity_sink(
+            activity_sink if activity_sink is not None else self.activity_sink
+        )
         try:
             with trace_scope(run_id=run_id, role="client"):
                 custom_request = user_request.strip() if isinstance(user_request, str) and user_request.strip() else ""
@@ -539,6 +550,7 @@ class ClientRuntime:
                     target_context_id=target_context_id,
                 )
         finally:
+            reset_activity_sink(activity_token)
             reset_task_sink(sink_token)
 
     async def aclose(self) -> None:

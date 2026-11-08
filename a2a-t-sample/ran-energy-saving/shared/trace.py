@@ -92,6 +92,9 @@ PHASES: Final[tuple[str, ...]] = (
 
 #: Sink signature shared by producers and the Web UI.
 TraceSink = Callable[[dict[str, object]], None]
+#: Liveness channel sink. It receives an activity envelope (never a timeline span), so a page can
+#: show what the run is waiting for without adding evidence rows or replay backlog.
+ActivitySink = Callable[[dict[str, object]], None]
 
 
 def _now_iso() -> str:
@@ -614,6 +617,13 @@ _UNSET_SINK: Final[object] = object()
 #: send one run's spans to whichever run attached last, so each run scopes its own sink here.
 _SINK_OVERRIDE: ContextVar[TraceSink | None | object] = ContextVar("a2at_trace_sink_override", default=_UNSET_SINK)
 
+#: Per-task activity sink, mirroring ``_SINK_OVERRIDE`` so concurrent runs stay separate.
+_ACTIVITY_SINK_OVERRIDE: ContextVar[ActivitySink | None | object] = ContextVar(
+    "a2at_activity_sink_override", default=_UNSET_SINK
+)
+_GLOBAL_ACTIVITY_SINK: ActivitySink | None = None
+_ACTIVITY_SINK_LOCK = threading.Lock()
+
 
 def set_global_sink(sink: TraceSink | None) -> None:
     """Attach (or clear) the process-wide sink used by :func:`emit_span`.
@@ -638,6 +648,23 @@ def set_task_sink(sink: TraceSink | None) -> Token[TraceSink | None | object]:
 def reset_task_sink(token: Token[TraceSink | None | object]) -> None:
     """Drop a task-local sink override installed by :func:`set_task_sink`."""
     _SINK_OVERRIDE.reset(token)
+
+
+def set_activity_sink(sink: ActivitySink | None) -> Token[ActivitySink | None | object]:
+    """Attach a task-local liveness sink (``None`` silences activity for this task)."""
+    return _ACTIVITY_SINK_OVERRIDE.set(sink)
+
+
+def reset_activity_sink(token: Token[ActivitySink | None | object]) -> None:
+    """Drop a task-local liveness sink installed by :func:`set_activity_sink`."""
+    _ACTIVITY_SINK_OVERRIDE.reset(token)
+
+
+def set_global_activity_sink(sink: ActivitySink | None) -> None:
+    """Attach (or clear) the process-wide liveness sink."""
+    global _GLOBAL_ACTIVITY_SINK
+    with _ACTIVITY_SINK_LOCK:
+        _GLOBAL_ACTIVITY_SINK = sink
 
 
 def emit_span(span: Span | Mapping[str, object]) -> None:
@@ -765,6 +792,90 @@ def producer_span_id(prefix: str) -> str:
         counter = _PRODUCER_COUNTERS.get(resolved, 0) + 1
         _PRODUCER_COUNTERS[resolved] = counter
     return f"{resolved}_{counter:04d}"
+
+
+#: Span kind of an ephemeral activity envelope: a wait-state signal, never a timeline row.
+ACTIVITY_KIND: Final[str] = "activity"
+
+
+def build_activity(
+    *,
+    activity_id: str,
+    activity_kind: str,
+    status: str,
+    label_key: str,
+    stage: str | None = None,
+    detail: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Build one ephemeral activity envelope for a run's live wait-state channel.
+
+    Activity is not a trace row: it says what the run is waiting for right now (a slow model
+    call, the first NMS push, an unchanged polling result). The client run broadcasts it to live
+    subscribers only, so a long task never accumulates one message per poll in its replay buffer.
+
+    Args:
+        activity_id: Stable id shared by the start and end of one wait.
+        activity_kind: ``model`` / ``peer`` / ``nms_task`` / ``degraded``.
+        status: ``running`` / ``done`` / ``error``.
+        label_key: Copy key the page localizes (``waitingModel``, ...).
+        stage: Capture stage of the wait, when known.
+        detail: Extra narrow fields (model, taskId, pollCount, ...).
+    """
+    trace = current_trace()
+    started_at = _now_iso()
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "runId": trace.run_id or "",
+        "kind": ACTIVITY_KIND,
+        "phase": phase_for_stage(stage, default=PHASE_DISPATCH),
+        "actor": trace.role or "system",
+        "side": trace.role or "",
+        "stage": stage,
+        "title": f"Activity · {activity_kind}",
+        "status": status,
+        "startedAt": started_at,
+        "detail": {
+            "activityId": activity_id,
+            "activityKind": activity_kind,
+            "labelKey": label_key,
+            "status": status,
+            "startedAt": started_at,
+            "stage": stage,
+            **dict(detail or {}),
+        },
+    }
+
+
+def emit_activity(
+    *,
+    activity_id: str,
+    activity_kind: str,
+    status: str,
+    label_key: str,
+    stage: str | None = None,
+    detail: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Build and forward one activity envelope to the task-local or process sink."""
+    payload = build_activity(
+        activity_id=activity_id,
+        activity_kind=activity_kind,
+        status=status,
+        label_key=label_key,
+        stage=stage,
+        detail=detail,
+    )
+    override = _ACTIVITY_SINK_OVERRIDE.get()
+    if override is _UNSET_SINK:
+        with _ACTIVITY_SINK_LOCK:
+            sink = _GLOBAL_ACTIVITY_SINK
+    else:
+        sink = override if override is None or callable(override) else None
+    if sink is not None:
+        try:
+            sink(payload)
+        except Exception:  # noqa: BLE001 - liveness must never break the observed flow
+            return payload
+    return payload
 
 
 def record_span(
@@ -1064,6 +1175,7 @@ class HttpTraceEmitter:
 
 
 __all__ = [
+    "ACTIVITY_KIND",
     "DEFAULT_TRACE_BATCH_SIZE",
     "DEFAULT_TRACE_FLUSH_INTERVAL",
     "DEFAULT_TRACE_MAX_ATTEMPTS",
@@ -1089,9 +1201,14 @@ __all__ = [
     "TracePoster",
     "TraceRecorder",
     "TraceSink",
+    "build_activity",
     "current_trace",
     "elapsed_ms",
+    "emit_activity",
     "emit_span",
+    "reset_activity_sink",
+    "set_activity_sink",
+    "set_global_activity_sink",
     "reset_task_sink",
     "set_task_sink",
     "infer_decision_phase",

@@ -33,7 +33,9 @@ from shared.json_text import first_json_object_text
 from shared.trace import (
     current_trace,
     elapsed_ms,
+    emit_activity,
     phase_for_stage,
+    producer_span_id,
     record_span,
 )
 
@@ -212,6 +214,11 @@ class TracedStructuredMixin:
         started_at = _now_iso()
         capture: dict[str, object] = {}
         token = _RAW_RESPONSE.set(capture)
+        # The llm span below is written only when the call returns; publish the wait first so a
+        # slow provider (the yellow zone sees 80-260 s) still shows progress on the page.
+        activity_id = producer_span_id("activity")
+        stage_hint = current_trace().stage
+        _emit_activity(activity_id, stage=stage_hint, status="running")
         try:
             response = self._call_structured(
                 messages=messages,
@@ -221,6 +228,7 @@ class TracedStructuredMixin:
             )
         except Exception as exc:
             _RAW_RESPONSE.reset(token)
+            _emit_activity(activity_id, stage=stage_hint, status="error")
             stage = current_trace().stage or _infer_stage(messages, json_schema)
             record_span(
                 kind="llm",
@@ -278,7 +286,23 @@ class TracedStructuredMixin:
             ended_at=_now_iso(),
             duration_ms=elapsed_ms(started),
         )
+        _emit_activity(activity_id, stage=stage, status="done")
         return response
+
+
+def _emit_activity(activity_id: str, *, stage: str | None, status: str) -> None:
+    """Publish the wait state of one structured call; a failure never changes the LLM result."""
+    try:
+        emit_activity(
+            activity_id=activity_id,
+            activity_kind="model",
+            status=status,
+            label_key="waitingModel",
+            stage=stage,
+            detail={"producer": "sdk"},
+        )
+    except Exception:  # noqa: BLE001 - tracing is an observer
+        return
 
 
 class TracedOpenAIClient(TracedStructuredMixin, OpenAIClient):

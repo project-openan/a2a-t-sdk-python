@@ -6,6 +6,7 @@
  * reconnect (or a step back) never duplicates a row.
  */
 
+import { format } from "../copy.js";
 import { hhmm, parseIntent, taskTFromTask } from "./intent.js";
 
 export const STATUS = {
@@ -129,6 +130,9 @@ function startModifyPhase(state) {
   state.negotiationEnded = false;
   state.taskTPrompt = null;
   state.lastStatusText = "";
+  //: Current wait-state signal (slow model call, first NMS push, unchanged Task poll). It is
+  //: liveness only: it never becomes a timeline row and clears as soon as the wait ends.
+  state.activity = null;
   state.nmsTool = null;
   state.nmsStage = "strategy";
   state.mieApproval = null;
@@ -234,9 +238,38 @@ export function applyFrame(state, frame) {
       }
       return state;
     }
+    case "activity": {
+      if (state.runId !== null && typeof frame.runId === "string" && frame.runId !== state.runId) {
+        return state;
+      }
+      const activity = isObject(frame.activity) ? frame.activity : null;
+      if (activity === null) return state;
+      const activityId =
+        typeof activity.activityId === "string" ? activity.activityId : "";
+      const status = typeof activity.status === "string" ? activity.status : "running";
+      if (status !== "running") {
+        // A finished wait clears only its own state; a late "done" must not erase a newer one.
+        if (state.activity !== null && state.activity.activityId === activityId) {
+          state.activity = null;
+        }
+        return state;
+      }
+      state.activity = {
+        activityId,
+        kind: typeof activity.kind === "string" ? activity.kind : "",
+        labelKey: typeof activity.labelKey === "string" ? activity.labelKey : "",
+        stage: typeof activity.stage === "string" ? activity.stage : "",
+        startedAt: typeof activity.startedAt === "string" ? activity.startedAt : null,
+        updatedAt: typeof activity.updatedAt === "string" ? activity.updatedAt : null,
+        detail: isObject(activity.detail) ? activity.detail : {},
+      };
+      return state;
+    }
     case "finished": {
       if (state.finished) return state;
       state.finished = true;
+      // A terminal run has nothing left to wait for, even if the producer's "done" was lost.
+      state.activity = null;
       if (frame.status === "interrupted") {
         // The run task was cancelled: either by the operator's Cancel button or by a process
         // shutdown. Both stop the same way and the presentation says so.
@@ -618,6 +651,77 @@ export function keepsAttemptChain(frame, state) {
   const finalState = typeof frame.finalState === "string" ? frame.finalState : "";
   if (finalState === "input_invalid" || finalState === "intent_not_confirmed") return true;
   return frame.status === "failed" && !state?.taskTSent;
+}
+
+/** Seconds elapsed since one ISO timestamp, floored at zero. */
+export function elapsedSeconds(startedAt, now = Date.now()) {
+  const started = typeof startedAt === "string" ? Date.parse(startedAt) : Number.NaN;
+  if (!Number.isFinite(started)) return 0;
+  return Math.max(0, Math.floor((now - started) / 1000));
+}
+
+/** Human duration: ``1 分 42 秒`` in Chinese, ``1m 42s`` in English. */
+export function formatElapsed(seconds, language = "en-US") {
+  const safe = Math.max(0, Math.floor(Number(seconds) || 0));
+  const minutes = Math.floor(safe / 60);
+  const rest = safe % 60;
+  if (String(language).startsWith("zh")) {
+    return minutes > 0 ? `${minutes} 分 ${rest} 秒` : `${rest} 秒`;
+  }
+  return minutes > 0 ? `${minutes}m ${rest}s` : `${rest}s`;
+}
+
+/**
+ * Build the one-line wait description shown while the run is quiet.
+ *
+ * Returns ``null`` when nothing is being waited on. The page ticks this every second, so the
+ * elapsed counter advances without a server frame per second.
+ */
+export function activityView(state, copy, now = Date.now()) {
+  const activity = state?.activity;
+  if (!activity) return null;
+  const labels = copy.activity || {};
+  const stages = labels.stages || {};
+  const detail = isObject(activity.detail) ? activity.detail : {};
+  const language = copy.lang || "en-US";
+  const elapsed = elapsedSeconds(activity.startedAt, now);
+  const elapsedText = format(labels.elapsed || "{elapsed}", {
+    elapsed: formatElapsed(elapsed, language),
+  });
+  let label = labels.waitingModel || "";
+  let meta = elapsedText;
+  let hint = "";
+
+  if (activity.kind === "nms_task") {
+    label = labels.waitingNmsTask || label;
+    const stateName = typeof detail.state === "string" ? detail.state : "";
+    const pollSeconds = Number(detail.pollIntervalSeconds);
+    const parts = [];
+    if (stateName) parts.push(modifyStateLabel(copy, stateName));
+    parts.push(elapsedText);
+    if (pollSeconds > 0) {
+      parts.push(format(labels.pollEvery || "{seconds}s", { seconds: pollSeconds }));
+    }
+    meta = parts.join(" · ");
+    const idle = elapsedSeconds(detail.stateSince, now);
+    if (stateName && idle >= 120) {
+      hint = format(labels.nmsTaskStale || "", {
+        state: modifyStateLabel(copy, stateName),
+        minutes: Math.max(2, Math.floor(idle / 60)),
+      });
+    }
+    if (Number(detail.pollErrorCount) > 0) hint = labels.pollDegraded || hint;
+    if (detail.detached === true) hint = labels.detached || hint;
+  } else if (activity.kind === "peer") {
+    label = labels.waitingPeer || label;
+    if (elapsed >= 30) hint = labels.peerSlow || "";
+  } else if (activity.kind === "degraded") {
+    label = labels.degradedPush || label;
+  } else {
+    label = stages[activity.stage] || labels.waitingModel || label;
+    if (elapsed >= 60) hint = labels.modelSlow || "";
+  }
+  return { kind: activity.kind || "model", label, meta, hint, elapsedSeconds: elapsed };
 }
 
 /** The localized label of one NMS Task state shown by the Running-tasks picker. */

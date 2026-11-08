@@ -22,6 +22,18 @@ def _run(tmp_path: Path) -> RunState:
     return run
 
 
+def _activity(status: str, *, activity_id: str = "act-1", **detail: object) -> dict[str, object]:
+    """One wait-state detail as a producer publishes it."""
+    return {
+        "activityId": activity_id,
+        "activityKind": "model",
+        "labelKey": "waitingModel",
+        "status": status,
+        "startedAt": "2026-11-08T02:33:32.759Z",
+        **detail,
+    }
+
+
 def _waiting_event() -> dict[str, object]:
     """One OSS event that names the Task the OSS Agent continued on the NMS side."""
     return {
@@ -40,6 +52,52 @@ def _waiting_event() -> dict[str, object]:
             },
         },
     }
+
+
+def test_an_activity_is_broadcast_but_not_replayed_as_a_timeline_message(tmp_path: Path) -> None:
+    """A wait-state signal must not accumulate in the replay buffer of a days-long run."""
+    run = _run(tmp_path)
+    snapshot, queue = run.subscribe()
+    assert snapshot == []
+
+    run.record_activity(_activity("running"))
+
+    frame = queue.get_nowait()
+    assert frame["type"] == "activity"
+    assert frame["activity"]["labelKey"] == "waitingModel"
+    assert frame["activity"]["kind"] == "model"
+    assert run.messages == []
+    assert run.traces == []
+    assert run.transcript is not None and run.transcript.events == []
+
+    # A page that opens mid-wait still sees the current state without a replay backlog.
+    late_snapshot, _ = run.subscribe()
+    assert [item["type"] for item in late_snapshot] == ["activity"]
+
+
+def test_an_activity_keeps_the_stage_the_page_uses_for_its_label(tmp_path: Path) -> None:
+    """The page names the wait from the stage (``task_t_slot_extraction``), not a generic line."""
+    run = _run(tmp_path)
+
+    run.record_activity(_activity("running", stage="task_t_slot_extraction"))
+
+    assert run.activity is not None
+    assert run.activity["stage"] == "task_t_slot_extraction"
+    detail = run.activity["detail"]
+    assert isinstance(detail, dict)
+    assert "stage" not in detail
+
+
+def test_a_finished_activity_clears_the_wait_state(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    run.record_activity(_activity("running"))
+    assert run.activity is not None
+
+    run.record_activity(_activity("done"))
+
+    assert run.activity is None
+    snapshot, _ = run.subscribe()
+    assert snapshot == []
 
 
 def test_record_event_keeps_the_downstream_identity_beside_the_run_identity(tmp_path: Path) -> None:

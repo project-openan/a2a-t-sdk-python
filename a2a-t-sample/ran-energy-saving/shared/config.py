@@ -261,9 +261,11 @@ DEFAULT_GATEWAY_PORT = 8001
 DEFAULT_GATEWAY_SCENARIO = "information"
 
 #: Vendor NMS defaults. The A2A stream sends heartbeat comments every 15 s; the client treats a
-#: 45 s window without a ``data:`` frame as idle and switches to task polling. The window is wider
-#: than one heartbeat because heartbeats do not count as progress.
-DEFAULT_NMS_IDLE_TIMEOUT_SECONDS = 45.0
+#: two-minute window without a ``data:`` frame as idle and switches to task polling. The vendor
+#: NMS can take over a minute to send its first push, and a shorter window turned that ordinary
+#: wait into an early downgrade to polling. The window is wider than one heartbeat because
+#: heartbeats do not count as progress.
+DEFAULT_NMS_IDLE_TIMEOUT_SECONDS = 120.0
 DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS = 120.0
 DEFAULT_NMS_POLL_INTERVAL_SECONDS = 1.0
 

@@ -102,6 +102,14 @@
         <button class="target-clear" id="target-clear" type="button" aria-label="取消选择">✕</button>
       </div>
       <p class="scenario-desc" id="scenario-desc"></p>
+      <div class="activity-strip" id="activity-strip" role="status" aria-live="polite" hidden>
+        <span class="activity-spinner" aria-hidden="true"></span>
+        <span class="activity-text">
+          <span class="activity-label" id="activity-label"></span>
+          <span class="activity-meta" id="activity-meta"></span>
+        </span>
+        <span class="activity-hint" id="activity-hint" hidden></span>
+      </div>
       <div class="continuity" id="continuity" role="status" aria-live="polite" hidden>
         <span class="continuity-badge" id="continuity-badge"></span>
         <span class="continuity-change" id="continuity-change"></span>

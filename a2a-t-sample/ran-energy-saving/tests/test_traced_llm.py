@@ -19,6 +19,7 @@ from shared.trace import (
     PHASE_TASK_PROMPT,
     emit_span,
     phase_for_stage,
+    set_global_activity_sink,
     set_global_sink,
     trace_scope,
     trace_stage,
@@ -153,6 +154,27 @@ def test_traced_scripted_client_emits_request_response_and_scripted_tokens(
     assert json.loads(str(response_detail["rawContent"]))["semantic_verdict"] is True
     assert response_detail["parsed"] == json.loads(response.content)
     assert response_detail["parseError"] is None
+
+
+def test_a_structured_call_publishes_its_wait_state_before_and_after_the_call(
+    english_language: None,
+) -> None:
+    """The SDK span is written after the provider returns; the page needs the start signal."""
+    del english_language
+    activities: list[dict[str, object]] = []
+    set_global_activity_sink(activities.append)
+    try:
+        client = TracedScriptedClient(_client_config())
+        with trace_scope(run_id="run-1", role="client"), trace_stage("negotiation_propose_validation"):
+            client.structured(messages=_valid_messages(), json_schema=_VALIDATION_SCHEMA)
+    finally:
+        set_global_activity_sink(None)
+
+    assert [item["detail"]["status"] for item in activities] == ["running", "done"]
+    assert all(item["detail"]["activityKind"] == "model" for item in activities)
+    assert len({item["detail"]["activityId"] for item in activities}) == 1
+    assert activities[0]["runId"] == "run-1"
+    assert activities[0]["stage"] == "negotiation_propose_validation"
 
 
 def test_stage_falls_back_to_the_scripted_metadata_without_trace_stage(

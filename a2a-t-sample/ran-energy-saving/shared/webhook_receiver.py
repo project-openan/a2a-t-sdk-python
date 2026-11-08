@@ -47,6 +47,19 @@ from starlette.routing import Route
 _LOGGER = logging.getLogger("ran_energy_saving.webhook_receiver")
 
 
+def _accepted_auth_headers(credentials: str) -> frozenset[str]:
+    """Return the ``Authorization`` values accepted for one configured credential.
+
+    ``AuthenticationInfo.credentials`` is an opaque string in A2A, so a peer may echo it verbatim
+    (the vendor NMS does) or send the RFC 7617 base64 form. Both come from the same secret, so
+    accepting both does not weaken the check — re-encoding only one is what rejected the real NMS.
+    """
+    if not credentials:
+        return frozenset()
+    encoded = base64.b64encode(credentials.encode()).decode()
+    return frozenset({f"Basic {credentials}", f"Basic {encoded}"})
+
+
 class WebhookPortInUseError(RuntimeError):
     """The webhook callback port is pinned by configuration and cannot be bound."""
 
@@ -173,7 +186,10 @@ class WebhookReceiver:
         self._public_url = public_url
         self._tls_cert = tls_cert
         self._tls_key = tls_key
-        self._auth_header = f"Basic {base64.b64encode(auth_credentials.encode()).decode()}" if auth_credentials else ""
+        # ``AuthenticationInfo.credentials`` is an opaque string in A2A: the vendor NMS echoes it
+        # verbatim after ``Basic ``, while another peer may apply RFC 7617 encoding. Accept both
+        # forms instead of re-encoding only one and rejecting the shape the real NMS sends.
+        self._auth_headers = _accepted_auth_headers(auth_credentials)
         self._resolved_port = port
         self._server: uvicorn.Server | None = None
         self._serve_task: asyncio.Task[None] | None = None
@@ -328,7 +344,7 @@ class WebhookReceiver:
     async def _handle_webhook(self, request: Request) -> Response:
         """Authenticate, parse and deliver one webhook POST (the class docstring's contract)."""
         received = request.headers.get(_AUTH_HEADER, "")
-        if self._auth_header and received != self._auth_header:
+        if self._auth_headers and received not in self._auth_headers:
             # Never log the value: it is the sender's credential. The shape tells us whether the
             # NMS echoed the push config or used different/basic-mangled credentials.
             scheme, _, payload = received.partition(" ")
@@ -338,7 +354,7 @@ class WebhookReceiver:
                 f"present={bool(received)} length={len(payload)}",
             )
             return JSONResponse(status_code=401, content={"error": "missing or invalid Basic credentials"})
-        if not self._auth_header and request.headers.get(_TOKEN_HEADER, "") != self._token:
+        if not self._auth_headers and request.headers.get(_TOKEN_HEADER, "") != self._token:
             self._log("token-rejected", f"status=401 header={_TOKEN_HEADER} mismatch")
             return JSONResponse(status_code=401, content={"error": "missing or invalid X-A2A-Notification-Token"})
         raw_body = await request.body()

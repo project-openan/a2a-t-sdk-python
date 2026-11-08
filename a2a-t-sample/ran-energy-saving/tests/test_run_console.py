@@ -25,6 +25,7 @@ class _PassRuntime:
         *,
         event_sink: Callable[[dict[str, object]], None] | None = None,
         trace_sink: Callable[[dict[str, object]], None] | None = None,
+        activity_sink: Callable[[dict[str, object]], None] | None = None,
         run_id: str | None = None,
         user_request: str | None = None,
         conversation_context: str | None = None,
@@ -37,7 +38,7 @@ class _PassRuntime:
         target_task_id: str | None = None,
         target_context_id: str | None = None,
     ) -> ClientFlowResult:
-        del trace_sink, run_id, user_request, conversation_context
+        del trace_sink, activity_sink, run_id, user_request, conversation_context
         del validate_before_send, enforce_required_fields
         del run_mode, target_task_id, target_context_id
         del on_decision_requested, on_decision_made, on_intent_ready

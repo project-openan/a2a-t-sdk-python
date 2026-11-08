@@ -34,6 +34,7 @@ class _PassRuntime:
         *,
         event_sink: Callable[[dict[str, object]], None] | None = None,
         trace_sink: Callable[[dict[str, object]], None] | None = None,
+        activity_sink: Callable[[dict[str, object]], None] | None = None,
         run_id: str | None = None,
         user_request: str | None = None,
         conversation_context: str | None = None,

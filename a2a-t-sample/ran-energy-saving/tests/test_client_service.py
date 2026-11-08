@@ -65,6 +65,7 @@ class FakeRuntime:
         | None = None,
         on_intent_ready: Callable[[str], Awaitable[bool]] | None = None,
         trace_sink: Callable[[dict[str, object]], None] | None = None,
+        activity_sink: Callable[[dict[str, object]], None] | None = None,
         run_id: str | None = None,
         user_request: str | None = None,
         conversation_context: str | None = None,
@@ -74,7 +75,7 @@ class FakeRuntime:
         target_task_id: str | None = None,
         target_context_id: str | None = None,
     ) -> ClientFlowResult:
-        del on_intent_ready, trace_sink, run_id, validate_before_send, enforce_required_fields
+        del on_intent_ready, trace_sink, activity_sink, run_id, validate_before_send, enforce_required_fields
         del run_mode, target_task_id, target_context_id
         # Observed from inside the run task: a binding placed outside ``create_task`` is gone here.
         self.trace_id = current_trace_id()
@@ -698,6 +699,101 @@ class _SwitchableRuntime(_LongRunningRuntime):
     def __init__(self) -> None:
         super().__init__()
         self.a2a_client = _SwitchableA2AClient()
+
+
+class _RepeatedStateA2AClient:
+    """Return one unchanged WORKING state for several polls, then complete."""
+
+    def __init__(self, stable_polls: int) -> None:
+        self.stable_polls = stable_polls
+        self.calls = 0
+
+    async def get_task(self, request: object, *, context: object = None) -> object:
+        del context
+        self.calls += 1
+        state = (
+            TaskState.TASK_STATE_WORKING
+            if self.calls <= self.stable_polls
+            else TaskState.TASK_STATE_COMPLETED
+        )
+        return _task_with_state(str(getattr(request, "id", "task-1")), state)
+
+
+class _RepeatedStateRuntime(_LongRunningRuntime):
+    def __init__(self, stable_polls: int) -> None:
+        super().__init__()
+        self.a2a_client = _RepeatedStateA2AClient(stable_polls)
+
+
+async def test_long_task_publishes_wait_state_on_every_poll_even_when_nothing_changes(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """An unchanged SUBMITTED/WORKING result is still proof of life for the page."""
+    runtime = _RepeatedStateRuntime(stable_polls=3)
+
+    async def factory(
+        resolved_config: SampleConfig,
+        scenario: str,
+        mode: str,
+        transport: str,
+        discovery: str,
+        *,
+        protocol: str = PROTOCOL_A2A_T,
+        run_id: str = "",
+    ) -> _RepeatedStateRuntime:
+        del resolved_config, scenario, mode, transport, discovery, protocol, run_id
+        return runtime
+
+    manager = RunManager(
+        config=replace(
+            offline_config,
+            task_poll_interval_seconds=0.01,
+            nms_state_poll_interval=0.01,
+        ),
+        runtime_factory=factory,
+        catalog=DemoRunCatalog(),
+        runs_dir=tmp_path / "runs",
+    )
+    run = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        protocol=PROTOCOL_PURE,
+        source={"kind": "presentation"},
+    )
+    _, queue = run.subscribe()
+
+    first: dict[str, object] | None = None
+    second: dict[str, object] | None = None
+    deadline = asyncio.get_running_loop().time() + 3.0
+    while asyncio.get_running_loop().time() < deadline and second is None:
+        try:
+            frame = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            await asyncio.sleep(0.01)
+            continue
+        if frame.get("type") != "activity":
+            continue
+        activity = frame.get("activity")
+        detail = activity.get("detail") if isinstance(activity, dict) else None
+        if not isinstance(detail, dict) or not detail.get("state"):
+            # The handoff frame announces tracking before the first poll names a state.
+            continue
+        if first is None:
+            first = dict(detail)
+        elif int(detail.get("pollCount") or 0) > int(first.get("pollCount") or 0):
+            second = dict(detail)
+
+    await _finish(manager, run.run_id)
+
+    assert first is not None and second is not None
+    # The state did not change between the two frames; only the poll counter advanced.
+    assert first.get("state") == second.get("state") == "TASK_STATE_WORKING"
+    assert int(second["pollCount"]) > int(first["pollCount"])
+    # Wait states are live-only: they must not grow the replay buffer of a days-long run.
+    assert all(message.get("type") != "activity" for message in run.messages)
+    assert run.activity is None
 
 
 async def test_a_presentation_run_keeps_tracking_without_a_viewer(

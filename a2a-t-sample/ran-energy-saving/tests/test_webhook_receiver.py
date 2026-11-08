@@ -36,6 +36,17 @@ _needs_cert = pytest.mark.skipif(
 
 
 def _basic(credentials: str) -> dict[str, str]:
+    """What the vendor NMS sends: the registered credentials echoed verbatim.
+
+    A2A defines ``AuthenticationInfo.credentials`` as an opaque string; the NMS observed in the
+    yellow zone puts it after ``Basic `` without base64-encoding it (length 33 for a 33-character
+    ``user:password``). The receiver must therefore not assume RFC 7617 encoding on its own.
+    """
+    return {"Authorization": f"Basic {credentials}"}
+
+
+def _standard_basic(credentials: str) -> dict[str, str]:
+    """The RFC 7617 form some peers send; the receiver accepts it for compatibility."""
     return {"Authorization": f"Basic {base64.b64encode(credentials.encode()).decode()}"}
 
 
@@ -150,6 +161,32 @@ def test_without_a_public_url_the_scheme_follows_the_tls_pair(events: list[dict[
 async def test_listener_accepts_basic_auth_without_the_push_token(events: list[dict[str, object]]) -> None:
     async with _receiver(events, token="ignored", auth_credentials=_CREDENTIALS) as receiver:
         response = await _send(receiver, _basic(_CREDENTIALS))
+
+    assert response.status_code == 200
+    assert events == [_EVENT]
+
+
+async def test_listener_accepts_verbatim_credentials_whose_length_is_not_a_base64_multiple(
+    events: list[dict[str, object]],
+) -> None:
+    """Regression: a raw ``user:password`` echo must not be rejected for not being base64.
+
+    The yellow-zone NMS echoed the registered 33-character credentials; 33 is not a multiple of
+    four, so treating the value as base64 was never going to match.
+    """
+    credentials = "snbitestDefaultNorth:0123456789abcdef"
+    assert len(credentials) % 4 != 0
+    async with _receiver(events, token="ignored", auth_credentials=credentials) as receiver:
+        response = await _send(receiver, _basic(credentials))
+
+    assert response.status_code == 200
+    assert events == [_EVENT]
+
+
+async def test_listener_also_accepts_standard_base64_basic(events: list[dict[str, object]]) -> None:
+    """A peer that does apply RFC 7617 encoding keeps working after the verbatim fix."""
+    async with _receiver(events, token="ignored", auth_credentials=_CREDENTIALS) as receiver:
+        response = await _send(receiver, _standard_basic(_CREDENTIALS))
 
     assert response.status_code == 200
     assert events == [_EVENT]

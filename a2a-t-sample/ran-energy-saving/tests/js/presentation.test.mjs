@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 
 import {
   STATUS,
+  activityView,
   applyFrame,
   continuityModel,
   createState,
@@ -2097,6 +2098,45 @@ assert.equal(restoreChain(storage), null);
 
 storage.setItem("a2at-ran-correction-chain", "{not json");
 assert.equal(restoreChain(storage), null);
+
+// --- Live wait state ---------------------------------------------------------
+// A wait-state frame explains a long silence; it must never become a timeline row.
+const waiting = createState();
+const startedAt = new Date(Date.now() - 42_000).toISOString();
+applyFrame(waiting, {
+  type: "activity",
+  activity: {
+    activityId: "act-1",
+    kind: "model",
+    labelKey: "waitingModel",
+    status: "running",
+    stage: "task_t_slot_extraction",
+    startedAt,
+    updatedAt: startedAt,
+    detail: {},
+  },
+});
+assert.equal(waiting.activity.kind, "model");
+assert.equal(waiting.trace.length, 0);
+const waitView = activityView(waiting, copy, Date.now());
+assert.ok(waitView !== null);
+assert.equal(waitView.elapsedSeconds, 42);
+assert.ok(waitView.label.length > 0);
+
+applyFrame(waiting, {
+  type: "activity",
+  activity: {
+    activityId: "act-1",
+    kind: "model",
+    labelKey: "waitingModel",
+    status: "done",
+    stage: "task_t_slot_extraction",
+    startedAt,
+    detail: {},
+  },
+});
+assert.equal(waiting.activity, null);
+assert.equal(activityView(waiting, copy, Date.now()), null);
 
 const broken = {
   getItem: () => {

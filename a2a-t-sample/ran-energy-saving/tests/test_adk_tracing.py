@@ -30,6 +30,7 @@ from shared.models import NegotiationDecision
 from shared.trace import (
     PHASE_EXECUTION,
     emit_span,
+    set_global_activity_sink,
     set_global_sink,
     trace_scope,
 )
@@ -140,6 +141,26 @@ async def test_llm_span_carries_the_full_request_and_response(spans: list[dict[s
     response = detail["response"]
     assert isinstance(response, dict)
     assert "RAN energy-saving task completed." in str(response["text"])
+
+
+@pytest.mark.asyncio
+async def test_a_model_turn_publishes_its_wait_state_before_and_after_the_call() -> None:
+    """The span only exists after the model answers; the wait state must exist before it."""
+    activities: list[dict[str, object]] = []
+    set_global_activity_sink(activities.append)
+    try:
+        traced = TracingLlm.wrap(build_fake_model())
+        with trace_scope(run_id="run-adk", role="server", stage="client_decision_agent"):
+            await _collect(traced, _request())
+    finally:
+        set_global_activity_sink(None)
+
+    assert [item["detail"]["status"] for item in activities] == ["running", "done"]
+    assert all(item["detail"]["activityKind"] == "model" for item in activities)
+    assert all(item["detail"]["labelKey"] == "waitingModel" for item in activities)
+    assert len({item["detail"]["activityId"] for item in activities}) == 1
+    assert activities[0]["runId"] == "run-adk"
+    assert activities[0]["stage"] == "client_decision_agent"
 
 
 @pytest.mark.asyncio

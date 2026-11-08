@@ -1103,6 +1103,12 @@ class RunManager:
         def trace_sink(span: dict[str, object]) -> None:
             run.record_trace(span)
 
+        def activity_sink(payload: dict[str, object]) -> None:
+            """Route one liveness envelope to this run's ephemeral wait-state channel."""
+            detail = payload.get("detail")
+            if isinstance(detail, Mapping):
+                run.record_activity(detail)
+
         try:
             runtime_kwargs: dict[str, object] = {}
             if run.scripted_decisions:
@@ -1157,6 +1163,7 @@ class RunManager:
                 on_decision_made=on_decision_made,
                 on_intent_ready=(on_intent_ready if run.mode == MODE_CONFIRM and self._intent_review else None),
                 trace_sink=trace_sink,
+                activity_sink=activity_sink,
                 run_id=run.run_id,
                 user_request=run.user_request,
                 conversation_context=run.conversation_context,
@@ -1271,15 +1278,39 @@ class RunManager:
                 "pollIntervalSeconds": interval,
             },
         )
-        run.broadcast(
-            {
-                "type": "task_tracking",
-                "taskId": task_id,
-                "state": "working",
-                "pollIntervalSeconds": interval,
-                "updatedAt": now_iso(),
-            }
-        )
+        # The page must be able to tell "still waiting" from "nothing happened". This signal is
+        # ephemeral: it is broadcast to live subscribers only, so a task polled for days does not
+        # accumulate one replay message per poll.
+        tracking_started_at = now_iso()
+        state_since = tracking_started_at
+        poll_count = 0
+        poll_errors = 0
+
+        def publish_wait_state(
+            state: str,
+            *,
+            status: str = "running",
+            detached: bool | None = None,
+        ) -> None:
+            """Publish the current wait state of the tracked Task (one frame per poll)."""
+            run.record_activity(
+                {
+                    "activityId": f"nms-task:{task_id}",
+                    "activityKind": "nms_task",
+                    "labelKey": "waitingNmsTask",
+                    "status": status,
+                    "startedAt": tracking_started_at,
+                    "taskId": task_id,
+                    "state": state,
+                    "stateSince": state_since,
+                    "pollCount": poll_count,
+                    "pollErrorCount": poll_errors,
+                    "pollIntervalSeconds": interval,
+                    "detached": run.detached if detached is None else detached,
+                }
+            )
+
+        publish_wait_state("")
         last_state: str | None = None
         while True:
             if is_presentation:
@@ -1287,15 +1318,8 @@ class RunManager:
                     if run.detached:
                         run.detached = False
                         _LOGGER.info("run %s has a viewer again; resuming fast tracking", run.run_id)
-                        run.broadcast(
-                            {
-                                "type": "task_tracking",
-                                "taskId": task_id,
-                                "state": "watching",
-                                "pollIntervalSeconds": watched_interval,
-                                "updatedAt": now_iso(),
-                            }
-                        )
+                        interval = watched_interval
+                        publish_wait_state(last_state or "", detached=False)
                     last_watched = time.monotonic()
                 elif (
                     not run.detached
@@ -1317,20 +1341,15 @@ class RunManager:
                             "pollIntervalSeconds": background_interval,
                         },
                     )
-                    run.broadcast(
-                        {
-                            "type": "task_tracking",
-                            "taskId": task_id,
-                            "state": "detached",
-                            "pollIntervalSeconds": background_interval,
-                            "updatedAt": now_iso(),
-                        }
-                    )
+                    interval = background_interval
+                    publish_wait_state(last_state or "", detached=True)
                 interval = watched_interval if run.subscribers else background_interval
             try:
                 polled = await self._poll_remote_task(run, task_id)
+                poll_count += 1
                 if polled.state_name and polled.state_name != last_state:
                     last_state = polled.state_name
+                    state_since = now_iso()
                     # Polling observes the Task; it never fabricates a status update the peer
                     # did not send. The local snapshot row is explicitly client-origin.
                     run.record_polled_task_state(
@@ -1338,17 +1357,13 @@ class RunManager:
                         context_id=polled.context_id or result.context_id,
                         state=polled.state_name,
                     )
-                    run.broadcast(
-                        {
-                            "type": "task_tracking",
-                            "taskId": task_id,
-                            "state": polled.state_name,
-                            "pollIntervalSeconds": interval,
-                            "updatedAt": now_iso(),
-                        }
-                    )
+                if polled.state_name:
+                    # Every poll publishes, including an unchanged one: a stable SUBMITTED state
+                    # is still proof that the client is alive and still checking.
+                    publish_wait_state(polled.state_name)
                 final_state = _final_state_for_task_state(polled.state_name)
                 if final_state is not None:
+                    publish_wait_state(polled.state_name or last_state or "", status="done")
                     return replace(
                         result,
                         final_state=final_state,
@@ -1359,7 +1374,10 @@ class RunManager:
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - a poll failure must not end a days-long run
+                poll_errors += 1
                 _LOGGER.warning("task poll failed for run %s", run.run_id, exc_info=True)
+                # Surface the retry: a silent failure looks exactly like an idle task.
+                publish_wait_state(last_state or "")
             # Sleep in one-second slices so a disappearing viewer is noticed within the grace
             # window instead of after a full background poll interval.
             deadline = time.monotonic() + interval
