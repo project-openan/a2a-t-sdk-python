@@ -38,6 +38,8 @@ Raising the timeout alone does not fix it.
   ```
 
   Otherwise the HTTP request times out first. 120 s x 2 = 240 s fits; 300 s x 2 = 600 s does not.
+  This bounds **one call**; one A2A request may still run slot extraction, validation and other
+  structured calls in series, so their sum must also fit the HTTP budget.
 - Retry is a **temporary mitigation**, not the fix. The second request may hit the server-side
   prefix cache (156 s -> 5.9 s measured), but a client-side timeout does not guarantee the gateway
   keeps and caches the computation.
