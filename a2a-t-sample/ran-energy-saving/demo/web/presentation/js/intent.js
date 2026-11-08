@@ -220,6 +220,11 @@ export function renderIntent(
  * ``blocked`` means nothing was sent and the operator must repair the request; ``unavailable``
  * means the validator itself failed and the request was allowed through.
  */
+/** Return whether one validation code names a validator/infrastructure failure. */
+function isInfrastructureCode(code) {
+  return typeof code === "string" && (code.startsWith("llm.") || code.startsWith("infra."));
+}
+
 export function validationBlock(validation, copy) {
   if (!isObject(validation)) return null;
   const verdict = typeof validation.verdict === "string" ? validation.verdict : "";
@@ -230,11 +235,21 @@ export function validationBlock(validation, copy) {
   const missingInfo =
     errors.length > 0 &&
     errors.every((error) => isObject(error) && error.code === "content.param_missing");
+  // A blocked result whose reason or error is an infrastructure code means the validator itself
+  // failed, not that the operator left a field empty.
+  const validatorFailed =
+    isInfrastructureCode(validation.reason) ||
+    errors.some((error) => isObject(error) && isInfrastructureCode(error.code));
   let note = labels.blocked;
   if (verdict === "negotiable") note = labels.negotiable;
   else if (verdict === "unavailable") note = labels.unavailable;
+  else if (verdict === "blocked" && validatorFailed) note = labels.validatorFailed;
   else if (verdict === "blocked" && missingInfo) note = labels.missingInfo;
   if (note) section.append(el("p", "validation-note", note));
+  const attempts = Number.isInteger(validation.attempts) ? validation.attempts : 1;
+  if (attempts > 1 && labels.retried) {
+    section.append(el("p", "validation-note", format(labels.retried, { count: attempts })));
+  }
   if (errors.length > 0) {
     const list = el("ul", "validation-errors");
     for (const error of errors) {

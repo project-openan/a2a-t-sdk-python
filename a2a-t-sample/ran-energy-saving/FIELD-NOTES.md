@@ -22,6 +22,7 @@ Raising the timeout alone does not fix it.
 | --- | --- | --- |
 | `A2AT_LLM_EXTRA_BODY` | empty | JSON object forwarded as the OpenAI SDK `extra_body` (merged into the request body). Example: `{"chat_template_kwargs":{"enable_thinking":false}}` |
 | `A2AT_LLM_TIMEOUT_RETRIES` | `0` | Extra attempts after a transport timeout (0-5). Covers **SDK structured calls only**, retries only `APITimeoutError`; the ADK/LiteLlm turn is not covered |
+| `A2AT_LLM_RESPONSE_FORMAT` | `json_object` | Structured-call output constraint. `json_object` is the portable default; `json_schema` asks the gateway to enforce the output schema (the gateway must support it, otherwise HTTP 400) and reduces qwen3.x schema echo |
 | `A2AT_LLM_TEMPERATURE` | source `.env` value | Now applied when a structured call site passes no temperature |
 | `A2AT_LLM_MAX_TOKENS` | source `.env` value | Still **not applied** to structured calls: a low cap truncates a reasoning model into invalid JSON. A call site that needs a cap passes `max_tokens` explicitly |
 | `A2AT_SAMPLE_INTENT_MODE` | **`raw`** | A2A-T no longer runs the ADK intent layer by default; see section 4 |
@@ -91,7 +92,25 @@ Raising the timeout alone does not fix it.
    frames, the `task_t_*_extraction` span `durationMs` and `usage`, and whether it reproduces
    offline.
 
-## 7. Rollback
+## 7. Validation failures show their real cause (W16)
+
+A semantic-validation failure (model echoes the schema, returns empty, or times out) used to be
+degraded by the business gate into "Operation Type is empty", which looks like an operator mistake.
+Now:
+
+- Validator failures (`llm.response_invalid` / `llm.invocation_failed`) keep their real reason: the
+  UI shows "The validation model returned an invalid response; the required fields could not be
+  verified. Nothing was sent." and lists the missing required fields as secondary context.
+- `llm.response_invalid` is retried **once** on the sample side
+  (`client_flow.py::_SEMANTIC_VALIDATION_RETRIES`); the UI shows "Validation was attempted N times".
+  Timeouts (`llm.invocation_failed`) are **not** retried: a second 120 s wait would exhaust the HTTP
+  budget.
+- To reduce schema echo at the model, try `A2AT_LLM_RESPONSE_FORMAT=json_schema` (confirm oneapi
+  supports it first).
+- Required-field labels now come from `TASK_PARAM_SCHEMA`'s `title` / `x-title-zh-CN`, so a new
+  required field no longer leaks its camelCase name.
+
+## 8. Rollback
 
 Remove `A2AT_LLM_EXTRA_BODY` / `A2AT_LLM_TIMEOUT_RETRIES`, set
 `A2AT_SAMPLE_INTENT_MODE=processed`, and restore `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS=120`.

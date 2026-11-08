@@ -223,6 +223,8 @@ class TaskValidation:
     reason: str | None
     duration_ms: int
     filled: Mapping[str, object] = field(default_factory=dict)
+    #: How many SDK validation attempts this result consumed (1 when no retry was needed).
+    attempts: int = 1
 
 
 def _elapsed_ms(started: float) -> int:
@@ -296,6 +298,29 @@ _REQUIRED_FIELD_LABELS_ZH: Final[dict[str, str]] = {
 }
 
 
+def _required_field_label(
+    name: str,
+    schema: Mapping[str, object],
+    language: str,
+) -> str:
+    """Return the business label of one required field.
+
+    The schema's own ``title`` (and ``x-title-zh-CN``) is authoritative, so adding a required field
+    also adds its label instead of leaking the camelCase property name. The static maps remain a
+    fallback for schemas that predate the titles.
+    """
+    properties = schema.get("properties")
+    if isinstance(properties, Mapping):
+        prop = properties.get(name)
+        if isinstance(prop, Mapping):
+            key = "x-title-zh-CN" if language == LANGUAGE_ZH else "title"
+            value = prop.get(key) or prop.get("title")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    labels = _REQUIRED_FIELD_LABELS_ZH if language == LANGUAGE_ZH else _REQUIRED_FIELD_LABELS
+    return labels.get(name, name)
+
+
 def _missing_required_fields(
     data: Mapping[str, object],
     schema: Mapping[str, object],
@@ -313,7 +338,6 @@ def _missing_required_fields(
     required = schema.get("required")
     if not isinstance(required, list):
         return []
-    labels = _REQUIRED_FIELD_LABELS_ZH if language == LANGUAGE_ZH else _REQUIRED_FIELD_LABELS
     errors: list[dict[str, object]] = []
     for name in required:
         if not isinstance(name, str):
@@ -321,7 +345,7 @@ def _missing_required_fields(
         value = data.get(name)
         if value is not None and not (isinstance(value, str) and not value.strip()):
             continue
-        label = labels.get(name, name)
+        label = _required_field_label(name, schema, language)
         message = (
             f"缺少必填项「{label}」，请补充后重试"
             if language == LANGUAGE_ZH
@@ -361,6 +385,14 @@ def _validation_names_a_missing_required(
     return str(error.code_str) in {"content.param_missing", "content.entry_field_missing"}
 
 
+#: Extra attempts the sample makes when the SDK reports ``llm.response_invalid``. The SDK already
+#: retries that code, but the sample pins ``A2AT_LLM_MAX_ATTEMPTS=1`` to keep one LLM call inside
+#: the A2A HTTP budget. Retrying the contract failure here is cheap (the model returned in seconds);
+#: transport timeouts (``llm.invocation_failed``) are deliberately not retried, because a second
+#: 120 s wait would exhaust the same budget.
+_SEMANTIC_VALIDATION_RETRIES: Final[int] = 1
+
+
 async def _validate_task_prompt(
     prompt_client: PromptClient,
     prompt: str,
@@ -376,55 +408,68 @@ async def _validate_task_prompt(
     accept refill and the required-field gate both need the operator-derived baseline.
     """
     started = time.monotonic()
-    try:
-        filled = await asyncio.to_thread(
-            prompt_client.validate_task_prompt_and_data_filling,
-            prompt,
-            schema,
-            template_uri,
-        )
-    except ContentValidationError as error:
-        params = error.params if isinstance(error.params, Mapping) else {}
-        if enforce_required_fields and _validation_names_a_missing_required(error, schema):
-            missing = _missing_required_fields(params, schema, language)
+    total_attempts = _SEMANTIC_VALIDATION_RETRIES + 1
+    for attempt in range(1, total_attempts + 1):
+        try:
+            filled = await asyncio.to_thread(
+                prompt_client.validate_task_prompt_and_data_filling,
+                prompt,
+                schema,
+                template_uri,
+            )
+        except ContentValidationError as error:
+            if error.code_str == "llm.response_invalid" and attempt < total_attempts:
+                _LOGGER.warning(
+                    "Task-T semantic validation returned an invalid response (attempt %s/%s); retrying",
+                    attempt,
+                    total_attempts,
+                )
+                continue
+            params = error.params if isinstance(error.params, Mapping) else {}
+            if enforce_required_fields and _validation_names_a_missing_required(error, schema):
+                missing = _missing_required_fields(params, schema, language)
+                if missing:
+                    return TaskValidation(
+                        "blocked",
+                        None,
+                        missing,
+                        "content.param_missing",
+                        _elapsed_ms(started),
+                        params,
+                        attempt,
+                    )
+            verdict, kind = _classify_validation_error(error)
+            return TaskValidation(
+                verdict,
+                kind,
+                _validation_errors(error),
+                error.code_str,
+                _elapsed_ms(started),
+                params,
+                attempt,
+            )
+        except Exception as error:  # noqa: BLE001 - validation must never break the send path
+            _LOGGER.warning("Task-T validation unavailable: %s", error)
+            reason = f"{type(error).__name__}: {error}"
+            return TaskValidation("unavailable", None, [], reason, _elapsed_ms(started), {}, attempt)
+        extracted = getattr(filled, "data", filled)
+        data = dict(extracted) if isinstance(extracted, Mapping) else {}
+        if enforce_required_fields:
+            missing = _missing_required_fields(data, schema, language)
             if missing:
+                # The OSS agent owns the business-required fields: do not send an incomplete Task-T
+                # and rely on the network's negotiation for a value the operator can supply here.
                 return TaskValidation(
                     "blocked",
                     None,
                     missing,
                     "content.param_missing",
                     _elapsed_ms(started),
-                    params,
+                    data,
+                    attempt,
                 )
-        verdict, kind = _classify_validation_error(error)
-        return TaskValidation(
-            verdict,
-            kind,
-            _validation_errors(error),
-            error.code_str,
-            _elapsed_ms(started),
-            params,
-        )
-    except Exception as error:  # noqa: BLE001 - validation must never break the send path
-        _LOGGER.warning("Task-T validation unavailable: %s", error)
-        reason = f"{type(error).__name__}: {error}"
-        return TaskValidation("unavailable", None, [], reason, _elapsed_ms(started), {})
-    extracted = getattr(filled, "data", filled)
-    data = dict(extracted) if isinstance(extracted, Mapping) else {}
-    if enforce_required_fields:
-        missing = _missing_required_fields(data, schema, language)
-        if missing:
-            # The OSS agent owns the business-required fields: do not send an incomplete Task-T
-            # and rely on the network's negotiation for a value the operator can supply here.
-            return TaskValidation(
-                "blocked",
-                None,
-                missing,
-                "content.param_missing",
-                _elapsed_ms(started),
-                data,
-            )
-    return TaskValidation("passed", None, [], None, _elapsed_ms(started), data)
+        return TaskValidation("passed", None, [], None, _elapsed_ms(started), data, attempt)
+    raise RuntimeError("unreachable")  # pragma: no cover - every loop path returns
 
 
 def _merge_initial_filled(
@@ -964,6 +1009,7 @@ async def run_client_flow(
                 ),
                 "durationMs": validation.duration_ms,
                 "reason": validation.reason,
+                "attempts": validation.attempts,
             },
         )
 
@@ -1085,6 +1131,7 @@ async def run_client_flow(
     )
     initial_filled: dict[str, object] = _merge_initial_filled(None, intent_fields)
     validation: TaskValidation | None = None
+    required_unknown = False
     if validate_before_send or enforce_required_fields:
         validation = await _validate_task_prompt(
             prompt_client,
@@ -1096,13 +1143,21 @@ async def run_client_flow(
         )
         initial_filled = _merge_initial_filled(validation, intent_fields)
         if enforce_required_fields and validation.verdict == "unavailable":
-            # The semantic pipeline is unavailable (for example a transient model outage). The
-            # business gate still has the intent fallback; only block when neither source has the
-            # required values.
+            # The semantic pipeline is unavailable (for example a contract-breaking model
+            # response). Keep the real validator reason: reporting "field is empty" would blame
+            # the operator for a validator failure. The missing caller-required values stay in the
+            # error list as secondary context, and the gate still blocks.
             missing = _missing_required_fields(initial_filled, validation_schema, language)
             if missing:
+                required_unknown = True
                 validation = TaskValidation(
-                    "blocked", None, missing, "content.param_missing", 0, initial_filled
+                    "blocked",
+                    None,
+                    [*validation.errors, *missing],
+                    validation.reason or "content.param_missing",
+                    validation.duration_ms,
+                    initial_filled,
+                    validation.attempts,
                 )
         if enforce_required_fields and validation.filled:
             mismatch = _region_consistency_errors(validation.filled, intent_fields, language)
@@ -1114,6 +1169,7 @@ async def run_client_flow(
                     "content.value_mismatch",
                     validation.duration_ms,
                     initial_filled,
+                    validation.attempts,
                 )
         if validate_before_send:
             emit_validation(validation, prompt_text, task_template_uri, initial_phase)
@@ -1123,7 +1179,7 @@ async def run_client_flow(
                 blocked.final_state = FINAL_STATE_INPUT_INVALID
                 _fill_result(blocked, None)
                 return blocked
-        elif validation.reason in {"content.param_missing", "content.value_mismatch"}:
+        elif required_unknown or validation.reason in {"content.param_missing", "content.value_mismatch"}:
             # Only the business gate runs when semantic validation is off; negotiable content
             # still goes to the server.
             emit_validation(validation, prompt_text, task_template_uri, initial_phase)

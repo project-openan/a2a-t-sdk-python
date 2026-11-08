@@ -20,6 +20,7 @@
 | --- | --- | --- |
 | `A2AT_LLM_EXTRA_BODY` | 空 | JSON 对象，原样作为 OpenAI SDK 的 `extra_body` 合并进请求体。例：`{"chat_template_kwargs":{"enable_thinking":false}}` |
 | `A2AT_LLM_TIMEOUT_RETRIES` | `0` | 传输超时后的额外尝试次数（0–5）。只覆盖 **SDK structured 调用**，只重试 `APITimeoutError`；不覆盖 ADK/LiteLlm 那一轮 |
+| `A2AT_LLM_RESPONSE_FORMAT` | `json_object` | structured 调用的输出约束。`json_object` 是可移植默认值；`json_schema` 让网关按输出 schema 约束，需网关支持（不支持会 400），可降低 qwen3.x 的 schema 回显 |
 | `A2AT_LLM_TEMPERATURE` | 源 `.env` 值 | 现在**真正生效**：调用点没传 temperature 时使用它 |
 | `A2AT_LLM_MAX_TOKENS` | 源 `.env` 值 | **仍不作用于 structured 调用**：低上限会把思考输出截成非法 JSON。需要硬上限的调用点显式传 `max_tokens` |
 | `A2AT_SAMPLE_INTENT_MODE` | **`raw`** | A2A-T 默认不再跑 ADK 意图解析；见第 4 节 |
@@ -83,7 +84,20 @@
 5. 仍然失败时，请带：run id、实例/端口/模型、请求原文、`wire*.jsonl` 关键帧、
    `task_t_*_extraction` span 的 `durationMs` 与 `usage`、是否离线可复现。
 
-## 7. 回滚
+## 7. 校验失败的真实原因（W16）
+
+以前语义校验失败（模型吐回 schema、输出空、超时）会被业务门禁降级成
+“Operation Type is empty”，看起来像操作员没填。现在：
+
+- 校验器失败（`llm.response_invalid` / `llm.invocation_failed`）会**保留真实原因**：
+  UI 显示“校验模型返回了非法响应，无法确认必填项；本次没有发送”，缺失的必填项作为次要信息列出。
+- `llm.response_invalid` 在样例侧**额外重试 1 次**（`client_flow.py::_SEMANTIC_VALIDATION_RETRIES`）；
+  UI 会显示“校验共尝试 N 次”。超时（`llm.invocation_failed`）**不重试**，避免第二次 120s 挤爆 HTTP 预算。
+- 想从模型侧减少 schema 回显，可试 `A2AT_LLM_RESPONSE_FORMAT=json_schema`（先确认 oneapi 支持）。
+- 必填项标签现在来自 `TASK_PARAM_SCHEMA` 的 `title` / `x-title-zh-CN`，新增必填字段不会再漏出
+  camelCase 字段名。
+
+## 8. 回滚
 
 删除 `A2AT_LLM_EXTRA_BODY` / `A2AT_LLM_TIMEOUT_RETRIES`，把
 `A2AT_SAMPLE_INTENT_MODE=processed` 加回来，`A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` 恢复 120 即可。

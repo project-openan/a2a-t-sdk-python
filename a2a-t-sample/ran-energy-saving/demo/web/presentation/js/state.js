@@ -602,6 +602,7 @@ function applyTrace(state, span) {
       promptText: typeof detail.promptText === "string" ? detail.promptText : null,
       templateUri: typeof detail.templateUri === "string" ? detail.templateUri : null,
       reason: typeof detail.reason === "string" ? detail.reason : null,
+      attempts: Number.isInteger(detail.attempts) ? detail.attempts : 1,
       phase: typeof span.phase === "string" ? span.phase : null,
     };
   }

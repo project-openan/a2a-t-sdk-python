@@ -1216,7 +1216,9 @@ script can switch the model with a plain `export ADK_MODEL_NAME=...`.
 | `A2AT_LLM_MODEL` | default `mass/volcengine/deepseek-v4.1-flash` | SDK model id (no LiteLlm prefix). |
 | `A2AT_LLM_API_KEY` | default `not-needed`; overridden offline | SDK endpoint key. |
 | `A2AT_LLM_BASE_URL` | default `http://127.0.0.1:31943/v1` | SDK endpoint base URL. |
-| `A2AT_LLM_MAX_TOKENS`, `A2AT_LLM_TEMPERATURE`, `A2AT_LLM_TIMEOUT_SECONDS` | SDK defaults (`A2AT_LLM_TIMEOUT_SECONDS` is overridden per run) | Structured-call limits. The per-run SDK `.env` always uses `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` / `A2AT_SAMPLE_LLM_MAX_ATTEMPTS`. |
+| `A2AT_LLM_TEMPERATURE`, `A2AT_LLM_TIMEOUT_SECONDS` | SDK defaults (`A2AT_LLM_TIMEOUT_SECONDS` is overridden per run) | Structured-call temperature and timeout. The per-run SDK `.env` always uses `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` / `A2AT_SAMPLE_LLM_MAX_ATTEMPTS`. |
+| `A2AT_LLM_MAX_TOKENS` | SDK default | Read but **not applied to structured calls**: a low cap truncates a reasoning model's output into invalid JSON. |
+| `A2AT_LLM_EXTRA_BODY`, `A2AT_LLM_RESPONSE_FORMAT`, `A2AT_LLM_TIMEOUT_RETRIES` | empty / `json_object` / `0` | Provider-specific request body (`extra_body`), output-constraint mode and timeout retry budget. See [field notes](FIELD-NOTES.md). |
 | `A2AT_LLM_DETAIL_LOG_ENABLED` | `false` (default) | Print full LLM payloads (debug; may expose sensitive content). |
 | `A2AT_SAMPLE_LOG_LEVEL` | `INFO` (default) | Root log level: `DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL`. |
 | `A2AT_SAMPLE_LOG_FORMAT` | `text` (default) or `json` | One line per record; `json` carries `runId` / `conversationId` / `taskId` / `contextId` / `negotiationId` / `round` as top-level fields. |

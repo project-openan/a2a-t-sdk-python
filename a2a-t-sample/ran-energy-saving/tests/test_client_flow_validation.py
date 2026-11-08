@@ -329,6 +329,116 @@ async def test_a_complete_caller_schema_still_reaches_the_server() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unavailable_validation_reports_the_validator_failure_not_empty_fields() -> None:
+    """The business gate must not hide a broken validator behind "field is empty"."""
+    validator_error = _content_error(
+        ErrorCatalog.LLM_RESPONSE_INVALID,
+        slot_errors=[_slot_error("llm.response_invalid", slot_name="_llm")],
+    )
+    prompt_client = ValidatingPromptClient(validation_errors=[validator_error, validator_error])
+    transport = RecordingTransport([_completed_task()])
+    traces: list[dict[str, object]] = []
+
+    result = await _run(
+        prompt_client=prompt_client,
+        transport=transport,
+        trace_sink=traces,
+        enforce_required_fields=True,
+    )
+
+    assert result.final_state == FINAL_STATE_INPUT_INVALID
+    assert transport.requests == []
+    detail = _validation_spans(traces)[0]["detail"]
+    assert isinstance(detail, dict)
+    assert detail["verdict"] == "blocked"
+    assert detail["reason"] == "llm.response_invalid"
+    assert detail["attempts"] == 2
+    codes = [error["code"] for error in detail["errors"]]
+    assert codes[0] == "llm.response_invalid"
+    assert "content.param_missing" in codes
+    missing = [error for error in detail["errors"] if error["code"] == "content.param_missing"]
+    assert any(error["facts"]["section_label"] == "Operation Type" for error in missing)
+
+
+@pytest.mark.asyncio
+async def test_a_schema_echo_is_retried_before_the_validation_is_used() -> None:
+    """``llm.response_invalid`` is retryable; the second attempt may return the contract shape."""
+    validator_error = _content_error(
+        ErrorCatalog.LLM_RESPONSE_INVALID,
+        slot_errors=[_slot_error("llm.response_invalid", slot_name="_llm")],
+    )
+    prompt_client = ValidatingPromptClient(
+        validation_errors=[validator_error, None],
+        filled_data={
+            "operationType": "Create",
+            "region": "A2ATestRegion",
+            "guaranteedThroughputTarget": "{00:00~06:00,2Mbps}",
+        },
+    )
+    transport = RecordingTransport([_completed_task()])
+    traces: list[dict[str, object]] = []
+
+    result = await _run(prompt_client=prompt_client, transport=transport, trace_sink=traces)
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert len(prompt_client.validation_calls) == 2
+    detail = _validation_spans(traces)[0]["detail"]
+    assert isinstance(detail, dict)
+    assert detail["verdict"] == "passed"
+    assert detail["attempts"] == 2
+
+
+@pytest.mark.asyncio
+async def test_a_semantic_rejection_is_not_retried() -> None:
+    """Only the contract failure is retried; a real semantic rejection is final."""
+    prompt_client = ValidatingPromptClient(
+        validation_errors=[
+            _content_error(
+                ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
+                slot_errors=[_slot_error("content.format_error")],
+            )
+        ]
+    )
+    transport = RecordingTransport([_completed_task()])
+    traces: list[dict[str, object]] = []
+
+    result = await _run(prompt_client=prompt_client, transport=transport, trace_sink=traces)
+
+    assert result.final_state == FINAL_STATE_INPUT_INVALID
+    assert len(prompt_client.validation_calls) == 1
+    detail = _validation_spans(traces)[0]["detail"]
+    assert isinstance(detail, dict)
+    assert detail["attempts"] == 1
+
+
+def test_required_field_labels_come_from_the_schema_title() -> None:
+    from protocol.client_flow import _missing_required_fields
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "siteList": {"type": "string", "title": "Site List", "x-title-zh-CN": "站点列表"},
+        },
+        "required": ["siteList"],
+    }
+
+    assert _missing_required_fields({}, schema, "en-US")[0]["facts"]["section_label"] == "Site List"
+    assert _missing_required_fields({}, schema, "zh-CN")[0]["facts"]["section_label"] == "站点列表"
+
+
+def test_a_required_field_without_a_title_falls_back_to_its_name() -> None:
+    from protocol.client_flow import _missing_required_fields
+
+    schema = {
+        "type": "object",
+        "properties": {"newField": {"type": "string"}},
+        "required": ["newField"],
+    }
+
+    assert _missing_required_fields({}, schema, "en-US")[0]["facts"]["section_label"] == "newField"
+
+
+@pytest.mark.asyncio
 async def test_a_slot_generation_failure_blocks_with_structured_errors() -> None:
     """A failed extraction has no Task-T to send; the operator edits the request and retries."""
     error = PromptGenerationError(
@@ -393,7 +503,10 @@ async def test_an_infrastructure_generation_failure_is_not_misreported_as_input(
 async def test_validation_infrastructure_failures_let_the_request_through(
     code: ErrorCatalog,
 ) -> None:
-    prompt_client = ValidatingPromptClient(validation_errors=[_content_error(code)])
+    # ``llm.response_invalid`` is retried once before the failure is reported, so the double must
+    # fail on both attempts; the other codes fail immediately.
+    attempts = 2 if code == ErrorCatalog.LLM_RESPONSE_INVALID else 1
+    prompt_client = ValidatingPromptClient(validation_errors=[_content_error(code) for _ in range(attempts)])
     transport = RecordingTransport([_completed_task()])
     traces: list[dict[str, object]] = []
 
@@ -401,9 +514,11 @@ async def test_validation_infrastructure_failures_let_the_request_through(
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
     assert len(transport.requests) == 1
+    assert len(prompt_client.validation_calls) == attempts
     detail = _validation_spans(traces)[0]["detail"]
     assert isinstance(detail, dict)
     assert detail["verdict"] == "unavailable"
+    assert detail["attempts"] == attempts
 
 
 @pytest.mark.asyncio

@@ -516,6 +516,36 @@ assert.equal(blockedCard.type, "validation");
 assert.equal(blockedCard.validation.errors.length, 1);
 assert.equal(blockedCard.options[0].action, "retry");
 
+// A validator failure keeps its real reason and the attempt count, so the UI can say "the
+// validation model returned an invalid response" instead of "Operation Type is empty".
+const validatorFailed = createState();
+applyFrame(validatorFailed, { type: "run_started", runId: "r-val-fail", scenario: "night" });
+applyFrame(validatorFailed, {
+  type: "trace",
+  event: {
+    seq: 1,
+    kind: "task_validation",
+    phase: "task_prompt",
+    detail: {
+      verdict: "blocked",
+      blocking: true,
+      reason: "llm.response_invalid",
+      attempts: 2,
+      errors: [
+        { slotName: "_llm", code: "llm.response_invalid", message: "invalid json" },
+        { slotName: "operationType", code: "content.param_missing", message: "'Operation Type' is empty" },
+      ],
+    },
+  },
+});
+applyFrame(validatorFailed, finished("input_invalid"));
+assert.equal(validatorFailed.validation.reason, "llm.response_invalid");
+assert.equal(validatorFailed.validation.attempts, 2);
+const validatorFailedCard = validationCard(validatorFailed, copy);
+assert.ok(validatorFailedCard);
+assert.equal(validatorFailedCard.validation.reason, "llm.response_invalid");
+assert.equal(validatorFailedCard.validation.attempts, 2);
+
 const negotiable = createState();
 applyFrame(negotiable, { type: "run_started", runId: "r-neg", scenario: "information" });
 applyFrame(negotiable, {

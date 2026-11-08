@@ -968,7 +968,9 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_LLM_MODEL` | 默认 `mass/volcengine/deepseek-v4.1-flash` | SDK 模型 id（不带 LiteLlm 前缀）。 |
 | `A2AT_LLM_API_KEY` | 默认 `not-needed`；离线被覆盖 | SDK 端点 key。 |
 | `A2AT_LLM_BASE_URL` | 默认 `http://127.0.0.1:31943/v1` | SDK 端点基础 URL。 |
-| `A2AT_LLM_MAX_TOKENS`、`A2AT_LLM_TEMPERATURE`、`A2AT_LLM_TIMEOUT_SECONDS` | SDK 默认值（`A2AT_LLM_TIMEOUT_SECONDS` 会按运行被覆盖） | 结构化调用限制。每次运行的 SDK `.env` 始终使用 `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` / `A2AT_SAMPLE_LLM_MAX_ATTEMPTS`。 |
+| `A2AT_LLM_TEMPERATURE`、`A2AT_LLM_TIMEOUT_SECONDS` | SDK 默认值（`A2AT_LLM_TIMEOUT_SECONDS` 会按运行被覆盖） | 结构化调用的 temperature 与超时。每次运行的 SDK `.env` 始终使用 `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` / `A2AT_SAMPLE_LLM_MAX_ATTEMPTS`。 |
+| `A2AT_LLM_MAX_TOKENS` | SDK 默认值 | 会读取但**不作用于 structured 调用**：低上限会把思考模型的输出截成非法 JSON。 |
+| `A2AT_LLM_EXTRA_BODY`、`A2AT_LLM_RESPONSE_FORMAT`、`A2AT_LLM_TIMEOUT_RETRIES` | 空 / `json_object` / `0` | provider 专用请求体（`extra_body`）、输出约束模式与超时重试预算。见[现场注意](FIELD-NOTES-zh.md)。 |
 | `A2AT_LLM_DETAIL_LOG_ENABLED` | `false`（默认） | 打印完整 LLM 载荷（调试；可能暴露敏感内容）。 |
 | `A2AT_SAMPLE_LOG_LEVEL` | 默认 `INFO` | 根日志级别：`DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL`。 |
 | `A2AT_SAMPLE_LOG_FORMAT` | 默认 `text`，可选 `json` | 每条记录一行；`json` 会把 `runId` / `conversationId` / `taskId` / `contextId` / `negotiationId` / `round` 作为顶层字段。 |
