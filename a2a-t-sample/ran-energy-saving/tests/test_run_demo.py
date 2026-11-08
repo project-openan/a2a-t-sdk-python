@@ -730,6 +730,7 @@ def _launch_both_nms(
     tmp_path: Path,
     source_lines: list[str],
     configure: Callable[[pytest.MonkeyPatch], None] | None = None,
+    extra_args: list[str] | None = None,
 ) -> tuple[int, list[dict[str, object]], list[int]]:
     """Run ``main`` for ``--protocol both --nms`` with every child process stubbed out."""
     env_file = tmp_path / "source.env"
@@ -755,6 +756,7 @@ def _launch_both_nms(
         "18080",
         "--oss-port",
         "18011",
+        *(extra_args or []),
     ])
     monkeypatch.setattr(run_demo, "_preflight", lambda *_: True)
     monkeypatch.setattr(run_demo, "_warm_live_model", lambda _config: warmups.append(1))
@@ -986,3 +988,88 @@ def test_both_nms_pins_the_topology_env_of_the_ui_and_oss(
     assert oss["A2AT_SAMPLE_DISCOVERY"] == "nms"
     assert oss["A2AT_SAMPLE_TRANSPORT"] == "webhook"
     assert oss["A2AT_SAMPLE_RAN_URL"] == "http://127.0.0.1:8000"
+
+
+# ---------------------------------------------------------------------------
+# --nms-sim over the webhook transport
+# ---------------------------------------------------------------------------
+
+
+def _sim_child_env(started: list[dict[str, object]]) -> dict[str, object]:
+    """Return the environment of the simulator child."""
+    modules = [str(call["command"][2]) for call in started]
+    return started[modules.index("demo.nms_sim.main")]["env"]
+
+
+def test_nms_sim_accepts_the_webhook_transport(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The simulator now serves message:send, so it is no longer SSE-only."""
+    code, started, _ = _launch_both_nms(
+        monkeypatch,
+        tmp_path,
+        _both_nms_source(),
+        extra_args=["--nms-sim", "--nms-sim-port", "18090"],
+    )
+
+    assert code == 0
+    modules = [str(call["command"][2]) for call in started]
+    assert "demo.nms_sim.main" in modules
+    sim = _sim_child_env(started)
+    assert sim["A2AT_SAMPLE_NMS_SIM_PORT"] == "18090"
+    # The tester records, rather than asserts, the pure-A2A dialogue against the simulator.
+    ui = started[modules.index("demo.web.serve")]["env"]
+    assert ui["A2AT_SAMPLE_NMS_SIM"] == "1"
+
+
+def test_nms_sim_child_env_carries_every_switch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A shell export and a source .env value both reach the simulator child."""
+    monkeypatch.setenv("A2AT_SAMPLE_NMS_SIM_NEGOTIATION_CARRIER", "message")
+    monkeypatch.setenv("A2AT_SAMPLE_NMS_SIM_MAX_ROUNDS", "2")
+    source = _both_nms_source(
+        "A2AT_SAMPLE_NMS_SIM_REGION=OtherRegion",
+        "A2AT_SAMPLE_NMS_SIM_WINDOW=08:00~10:00",
+        "A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1",
+        "A2AT_SAMPLE_NMS_SIM_NEGOTIATION_KINDS=information",
+        "A2AT_SAMPLE_NMS_SIM_TASK_SHAPE=toplevel",
+        "A2AT_SAMPLE_NMS_SIM_MAX_SAVING_RATE=40",
+        "A2AT_SAMPLE_NMS_SIM_SITES=site-a,site-b",
+    )
+
+    code, started, _ = _launch_both_nms(
+        monkeypatch,
+        tmp_path,
+        source,
+        extra_args=["--nms-sim", "--nms-sim-port", "18090"],
+    )
+
+    assert code == 0
+    sim = _sim_child_env(started)
+    assert sim["A2AT_SAMPLE_NMS_SIM_NEGOTIATION_CARRIER"] == "message"
+    assert sim["A2AT_SAMPLE_NMS_SIM_MAX_ROUNDS"] == "2"
+    assert sim["A2AT_SAMPLE_NMS_SIM_REGION"] == "OtherRegion"
+    assert sim["A2AT_SAMPLE_NMS_SIM_WINDOW"] == "08:00~10:00"
+    assert sim["A2AT_SAMPLE_NMS_SIM_HOLD_WORKING"] == "1"
+    assert sim["A2AT_SAMPLE_NMS_SIM_NEGOTIATION_KINDS"] == "information"
+    assert sim["A2AT_SAMPLE_NMS_SIM_TASK_SHAPE"] == "toplevel"
+    assert sim["A2AT_SAMPLE_NMS_SIM_MAX_SAVING_RATE"] == "40"
+    assert sim["A2AT_SAMPLE_NMS_SIM_SITES"] == "site-a,site-b"
+    assert sim["A2AT_SAMPLE_NMS_SIM_FIDELITY"] == "strict"
+
+
+def test_nms_sim_still_requires_nms(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_demo.py", "--nms-sim"])
+    with pytest.raises(SystemExit) as error:
+        run_demo.main()
+    assert error.value.code == 2
+
+
+def test_a_real_nms_run_still_requires_the_webhook_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_demo.py", "--nms", "--transport", "sse"])
+    with pytest.raises(SystemExit) as error:
+        run_demo.main()
+    assert error.value.code == 2

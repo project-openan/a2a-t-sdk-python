@@ -18,6 +18,7 @@ from a2a.client.client import ClientCallContext
 from a2a.types import GetTaskRequest, TaskState
 from a2a_t.core.metadata import NegotiationContext
 from google.protobuf.json_format import MessageToDict
+from google.protobuf.message import Message
 from shared.config import (
     DISCOVERY_NMS,
     DISCOVERY_REGISTRY,
@@ -174,7 +175,7 @@ def _artifact_payload(artifact: object, *, task_id: str, context_id: str) -> dic
         artifact_id = str(raw.get("artifactId") or raw.get("artifact_id") or "")
         parts = raw.get("parts")
     else:
-        raw = MessageToDict(artifact)
+        raw = MessageToDict(cast(Message, artifact))
         name = str(raw.get("name") or "")
         artifact_id = str(raw.get("artifactId") or "")
         parts = raw.get("parts")
@@ -629,6 +630,7 @@ class RunManager:
         scripted_decisions: Sequence[NegotiationDecision] | None = None,
         pure_answers: Sequence[str] | None = None,
         validate_before_send: bool | None = None,
+        language: str | None = None,
     ) -> RunState:
         """Start one background run and broadcast ``run_started`` before the task is scheduled.
 
@@ -662,6 +664,7 @@ class RunManager:
                 order; ``None`` keeps the process-level pure policy.
             validate_before_send: force the pre-send Task-T validation on or off; ``None`` uses the
                 process setting and the source kind.
+            language: per-run scenario language; ``None``/empty keeps the process language.
 
         Raises:
             RunConflictError: when the same conversation already has an active run.
@@ -715,7 +718,7 @@ class RunManager:
         custom_request = user_request.strip() if isinstance(user_request, str) else None
         if not custom_request:
             custom_request = None
-        spec = self._catalog.spec(scenario, language=self._config.language)
+        spec = self._catalog.spec(scenario, language=language or self._config.language)
         # The scenario request is the text the client sends; a Modify-only run sends the operator's
         # Modify text, so any A2A-T scenario can target an existing Task.
         raw_request = custom_request or spec.user_request
@@ -1298,7 +1301,7 @@ class RunManager:
             with suppress(Exception):
                 subscription.unsubscribe()
             with suppress(Exception):
-                runtime.webhook_subscription = None
+                setattr(runtime, "webhook_subscription", None)
         background_interval = max(0.01, self._config.task_poll_interval_seconds)
         watched_interval = max(0.01, self._config.nms_state_poll_interval)
         # Only the engineer page is a viewer. A gateway run has a caller waiting for the result

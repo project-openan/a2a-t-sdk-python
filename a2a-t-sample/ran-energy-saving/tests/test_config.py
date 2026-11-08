@@ -1016,6 +1016,15 @@ def test_nms_discovery_has_no_implicit_region_or_sites(tmp_path: Path) -> None:
     assert config.nms_sites == ()
 
 
+def test_the_nms_simulator_flag_is_read_from_the_environment(tmp_path: Path) -> None:
+    """The tester needs to know the A2A-T hop is the simulator, not a vendor NMS."""
+    config = load_config(
+        env_path=_nms_env_file(tmp_path, "A2AT_SAMPLE_NMS_SIM=1\n")
+    )
+
+    assert config.nms_sim is True
+
+
 def test_nms_region_and_sites_can_be_overridden(tmp_path: Path) -> None:
     config = load_config(
         env_path=_nms_env_file(

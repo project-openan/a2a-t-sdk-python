@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final
 
 #: Fidelity profiles.
 FIDELITY_STRICT: Final[str] = "strict"
 FIDELITY_FAST: Final[str] = "fast"
 SUPPORTED_FIDELITIES: Final[tuple[str, ...]] = (FIDELITY_STRICT, FIDELITY_FAST)
+
+#: Negotiation carriers: a standalone ``Message`` or a Task in ``INPUT_REQUIRED``.
+CARRIER_MESSAGE: Final[str] = "message"
+CARRIER_TASK: Final[str] = "task"
+SUPPORTED_CARRIERS: Final[tuple[str, ...]] = (CARRIER_MESSAGE, CARRIER_TASK)
+
+#: Task document shapes: the vendor's nested shape, or the extra top-level fields.
+TASK_SHAPE_STANDARD: Final[str] = "standard"
+TASK_SHAPE_TOPLEVEL: Final[str] = "toplevel"
+SUPPORTED_TASK_SHAPES: Final[tuple[str, ...]] = (TASK_SHAPE_STANDARD, TASK_SHAPE_TOPLEVEL)
 
 #: Environment keys read by the standalone simulator entry point.
 FIDELITY_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_FIDELITY"
@@ -20,6 +30,18 @@ PORT_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_PORT"
 HOLD_WORKING_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_HOLD_WORKING"
 #: Reproduce the vendor's old cancel defect: ``:cancel`` always answers HTTP 503.
 CANCEL_UNSUPPORTED_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_CANCEL_UNSUPPORTED"
+#: Business constraints the simulator enforces.
+REGION_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_REGION"
+WINDOW_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_WINDOW"
+MAX_SAVING_RATE_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_MAX_SAVING_RATE"
+SITES_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_SITES"
+#: Negotiation shape: ``task`` (the real NMS) or ``message`` (the older local demo path).
+NEGOTIATION_CARRIER_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_NEGOTIATION_CARRIER"
+#: Comma-separated kinds the simulator may propose: information,target,feasibility.
+NEGOTIATION_KINDS_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_NEGOTIATION_KINDS"
+MAX_ROUNDS_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_MAX_ROUNDS"
+#: ``standard`` keeps the vendor's nested shape; ``toplevel`` adds top-level state/timestamp.
+TASK_SHAPE_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_TASK_SHAPE"
 
 #: Test region the real 910 environment accepts.
 DEFAULT_REGION: Final[str] = "A2ATestRegion"
@@ -27,6 +49,8 @@ DEFAULT_REGION: Final[str] = "A2ATestRegion"
 DEFAULT_WINDOW: Final[str] = "00:00~06:00"
 #: Maximum energy-saving rate of the simulator cell.
 DEFAULT_MAX_SAVING_RATE: Final[float] = 35.0
+#: Negotiation round budget before the simulator aborts.
+DEFAULT_MAX_ROUNDS: Final[int] = 5
 #: Task list size kept by the NMS (the real one keeps the latest 50).
 DEFAULT_TASK_LIMIT: Final[int] = 50
 #: Default token endpoint credentials of the test environment.
@@ -47,6 +71,7 @@ class SimConfig:
         region: Region the simulator serves.
         window: Activation window the simulator accepts.
         max_saving_rate: Maximum energy-saving rate of the simulator cell.
+        sites: Site names shown in the report text only.
         token_user: Accepted northbound user.
         token_value: Accepted password.
         task_limit: Number of tasks kept in the list.
@@ -54,6 +79,11 @@ class SimConfig:
             an existing Task still completes it.
         cancel_supported: Accept ``:cancel`` and move the Task to ``TASK_STATE_CANCELED``.
             ``False`` reproduces the vendor's older HTTP 503 answer.
+        negotiation_carrier: ``task`` carries proposals in ``INPUT_REQUIRED`` status messages,
+            ``message`` carries them as standalone messages.
+        negotiation_kinds: Negotiation kinds the simulator may propose.
+        max_rounds: Round budget before the simulator answers ``ABORT``.
+        task_shape: ``toplevel`` adds top-level ``state``/``timestamp`` to Task documents.
     """
 
     fidelity: str = FIDELITY_STRICT
@@ -64,11 +94,16 @@ class SimConfig:
     region: str = DEFAULT_REGION
     window: str = DEFAULT_WINDOW
     max_saving_rate: float = DEFAULT_MAX_SAVING_RATE
+    sites: tuple[str, ...] = ()
     token_user: str = DEFAULT_TOKEN_USER
     token_value: str = DEFAULT_TOKEN_VALUE
     task_limit: int = DEFAULT_TASK_LIMIT
     hold_working: bool = False
     cancel_supported: bool = True
+    negotiation_carrier: str = CARRIER_TASK
+    negotiation_kinds: tuple[str, ...] = ("information", "target", "feasibility")
+    max_rounds: int = DEFAULT_MAX_ROUNDS
+    task_shape: str = TASK_SHAPE_STANDARD
 
     @property
     def strict(self) -> bool:
@@ -80,36 +115,72 @@ class SimConfig:
         """Build the settings from the process environment.
 
         Raises:
-            ValueError: when the fidelity profile is unknown.
+            ValueError: when a profile, carrier, kind, task shape or round budget is invalid.
         """
         fidelity = os.environ.get(FIDELITY_ENV_KEY, FIDELITY_STRICT).strip().lower()
         if fidelity not in SUPPORTED_FIDELITIES:
             raise ValueError(f"Unsupported {FIDELITY_ENV_KEY}: {fidelity}; expected one of {SUPPORTED_FIDELITIES}")
-        hold_working = os.environ.get(HOLD_WORKING_ENV_KEY, "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-        cancel_unsupported = os.environ.get(CANCEL_UNSUPPORTED_ENV_KEY, "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
+        carrier = os.environ.get(NEGOTIATION_CARRIER_ENV_KEY, CARRIER_TASK).strip().lower()
+        if carrier not in SUPPORTED_CARRIERS:
+            raise ValueError(
+                f"Unsupported {NEGOTIATION_CARRIER_ENV_KEY}: {carrier}; "
+                f"expected one of {SUPPORTED_CARRIERS}"
+            )
+        task_shape = os.environ.get(TASK_SHAPE_ENV_KEY, TASK_SHAPE_STANDARD).strip().lower()
+        if task_shape not in SUPPORTED_TASK_SHAPES:
+            raise ValueError(
+                f"Unsupported {TASK_SHAPE_ENV_KEY}: {task_shape}; expected one of {SUPPORTED_TASK_SHAPES}"
+            )
+        kinds = _parse_kinds(os.environ.get(NEGOTIATION_KINDS_ENV_KEY, ""))
+        try:
+            max_rounds = int(os.environ.get(MAX_ROUNDS_ENV_KEY, str(DEFAULT_MAX_ROUNDS)).strip())
+        except ValueError as exc:
+            raise ValueError(f"Invalid {MAX_ROUNDS_ENV_KEY}: {os.environ.get(MAX_ROUNDS_ENV_KEY)!r}") from exc
+        if max_rounds < 1:
+            raise ValueError(f"{MAX_ROUNDS_ENV_KEY} must be at least 1")
+        try:
+            max_saving_rate = float(
+                os.environ.get(MAX_SAVING_RATE_ENV_KEY, str(DEFAULT_MAX_SAVING_RATE)).strip()
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid {MAX_SAVING_RATE_ENV_KEY}: {os.environ.get(MAX_SAVING_RATE_ENV_KEY)!r}"
+            ) from exc
         profile = cls(
             fidelity=fidelity,
-            hold_working=hold_working,
-            cancel_supported=not cancel_unsupported,
+            region=os.environ.get(REGION_ENV_KEY, DEFAULT_REGION).strip() or DEFAULT_REGION,
+            window=os.environ.get(WINDOW_ENV_KEY, DEFAULT_WINDOW).strip() or DEFAULT_WINDOW,
+            max_saving_rate=max_saving_rate,
+            sites=_parse_sites(os.environ.get(SITES_ENV_KEY, "")),
+            hold_working=_truthy(os.environ.get(HOLD_WORKING_ENV_KEY, "")),
+            cancel_supported=not _truthy(os.environ.get(CANCEL_UNSUPPORTED_ENV_KEY, "")),
+            negotiation_carrier=carrier,
+            negotiation_kinds=kinds,
+            max_rounds=max_rounds,
+            task_shape=task_shape,
         )
+        # The fast profile keeps the wire contract but removes the wall-clock delays.
         if profile.strict:
             return profile
-        # The fast profile keeps the wire contract but removes the wall-clock delays.
-        return cls(
-            fidelity=fidelity,
-            heartbeat_seconds=0.0,
-            working_delay=0.0,
-            completion_delay=0.0,
-            hold_working=hold_working,
-            cancel_supported=not cancel_unsupported,
-        )
+        return replace(profile, heartbeat_seconds=0.0, working_delay=0.0, completion_delay=0.0)
+
+
+def _truthy(value: str) -> bool:
+    """Return whether one environment value means "on"."""
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_kinds(value: str) -> tuple[str, ...]:
+    """Parse the negotiation-kind list; an empty value means all kinds."""
+    if not value.strip():
+        return ("information", "target", "feasibility")
+    kinds = tuple(item.strip().lower() for item in value.split(",") if item.strip())
+    unknown = [kind for kind in kinds if kind not in {"information", "target", "feasibility"}]
+    if unknown:
+        raise ValueError(f"Unsupported negotiation kind(s) in {NEGOTIATION_KINDS_ENV_KEY}: {', '.join(unknown)}")
+    return kinds
+
+
+def _parse_sites(value: str) -> tuple[str, ...]:
+    """Parse the comma-separated site list."""
+    return tuple(item.strip() for item in value.split(",") if item.strip())

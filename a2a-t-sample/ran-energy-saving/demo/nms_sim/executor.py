@@ -72,6 +72,7 @@ def apply_intent(intent: ParsedIntent) -> dict[str, object]:
             f"Region: {intent.region}.",
             f"Plan {plan.plan_id} is {plan.status} for window {plan.window}.",
             f"Guaranteed throughput: {intent.rate_mbps:g} Mbps.",
+            *([f"Sites: {', '.join(intent.sites)}."] if intent.sites else []),
         ],
     }
 

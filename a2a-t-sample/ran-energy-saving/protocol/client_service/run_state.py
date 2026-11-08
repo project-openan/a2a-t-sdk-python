@@ -70,12 +70,14 @@ class ClientRuntimeLike(Protocol):
         event_sink: Callable[[dict[str, object]], None] | None = None,
         on_decision_requested: Callable[[NegotiationProposeView, NegotiationContext], None] | None = None,
         on_decision_made: DecisionMadeCallback | None = None,
+        on_intent_ready: Callable[[str], Awaitable[bool]] | None = None,
         trace_sink: Callable[[dict[str, object]], None] | None = None,
         activity_sink: Callable[[dict[str, object]], None] | None = None,
         run_id: str | None = None,
         user_request: str | None = None,
         conversation_context: str | None = None,
         validate_before_send: bool = False,
+        enforce_required_fields: bool = False,
         run_mode: str = RUN_MODE_CREATE,
         target_task_id: str | None = None,
         target_context_id: str | None = None,
@@ -132,6 +134,8 @@ class RunState:
         intent_future: resolver of the pending intent review.
         cancel_requested: whether the operator asked to cancel the run.
         remote_task_id: last Task id observed on the remote side (cancel target).
+        remote_context_id: last Task context id observed on the remote side.
+        latest_task_state: last Task state observed on the remote side.
         intent_mode: ``processed`` or ``raw`` for this run.
         validate_before_send: whether the client validates the rendered Task-T before sending it.
         run_mode: ``create`` or ``modify`` (Modify-only against an existing Task).
@@ -197,6 +201,10 @@ class RunState:
     intent_future: asyncio.Future[bool] | None = None
     cancel_requested: bool = False
     remote_task_id: str | None = None
+    #: Context id paired with :attr:`remote_task_id`, when a status event or a poll carried one.
+    remote_context_id: str | None = None
+    #: Latest Task state observed on the remote side (status event or ``GET /tasks/{id}`` poll).
+    latest_task_state: str | None = None
     #: Downstream Task the server continued on its own far side (NMS / RAN Agent), when it reports
     #: one. These never replace ``result.task_id``/``context_id``: those belong to this run's hop.
     downstream_task_id: str | None = None
@@ -656,6 +664,12 @@ class RunState:
         task_id = _string_value(event.get("task_id"))
         if task_id is not None:
             self.remote_task_id = task_id
+        context_id = _string_value(event.get("context_id"))
+        if context_id is not None:
+            self.remote_context_id = context_id
+        state = _string_value(event.get("state"))
+        if state is not None:
+            self.latest_task_state = state
         self._persist_task_snapshot(event)
         return entry
 
@@ -730,6 +744,10 @@ class RunState:
         present a fabricated ``statusUpdate`` the peer did not send. The authoritative state is
         still persisted for the Run Explorer.
         """
+        self.remote_task_id = task_id
+        if context_id:
+            self.remote_context_id = context_id
+        self.latest_task_state = state
         span = self.emit_trace(
             kind="task_poll",
             phase=PHASE_EXECUTION,

@@ -27,11 +27,23 @@ from demo.nms_sim.tasks import (
 )
 
 
-async def status_stream(task: SimTask, *, config: SimConfig) -> AsyncIterator[str]:
-    """Stream one non-terminal Task state (INPUT_REQUIRED / REJECTED) and keep the SSE open."""
-    yield _data({"task": task.to_dict()})
+async def status_stream(
+    task: SimTask,
+    *,
+    config: SimConfig,
+    keep_open: bool = True,
+) -> AsyncIterator[str]:
+    """Stream one non-terminal Task state (INPUT_REQUIRED / REJECTED).
+
+    Args:
+        task: Task whose current state is streamed.
+        config: fidelity settings; strict mode keeps the vendor stream open.
+        keep_open: when false, close after the state frames. A Task-carried negotiation needs
+            this: the client answers from the status message and must not wait for a heartbeat.
+    """
+    yield _data({"task": task.to_dict(embedded=True)})
     yield _data(task.status_frame())
-    if config.strict:
+    if keep_open and config.strict:
         while True:
             yield ": heartbeat\n\n"
             await asyncio.sleep(config.heartbeat_seconds or 15.0)
@@ -73,7 +85,7 @@ async def task_stream(
     The Task object is the same instance held by the store, so a concurrent ``GET /tasks/{id}``
     observes the transitions.
     """
-    yield _data({"task": task.to_dict()})
+    yield _data({"task": task.to_dict(embedded=True)})
 
     async for chunk in _pause(config.working_delay, config.heartbeat_seconds):
         yield chunk
@@ -118,6 +130,7 @@ async def message_stream(
     context_id: str | None,
     config: SimConfig,
     structured: bool = True,
+    metadata: dict[str, object] | None = None,
 ) -> AsyncIterator[str]:
     """Stream one negotiation message without creating a Task.
 
@@ -125,12 +138,19 @@ async def message_stream(
     travels in the ``Negotiation-T`` metadata and the text part is only a pointer, matching the
     vendor. When it is false, the message is a bare Message with empty metadata and the full text
     in its part, which the client must treat as an explicit negotiation-required signal.
+
+    Args:
+        text: Rendered Negotiation-T body.
+        context_id: A2A context id of the proposal.
+        config: fidelity settings.
+        structured: whether the request declared the Negotiation-T extension.
+        metadata: explicit metadata of a state-machine proposal; built from ``text`` when absent.
     """
     resolved_context = context_id or str(uuid.uuid4())
-    metadata: dict[str, object] = {}
+    resolved_metadata: dict[str, object] = {}
     part_text = text
     if structured:
-        metadata = {
+        resolved_metadata = dict(metadata) if metadata is not None else {
             NEGOTIATION_T_EXTENSION_URI: text,
             TEMPLATE_URI_METADATA_KEY: "Negotiation-T/info-negotiation/propose/v1",
             NEGOTIATION_CONTEXT_METADATA_KEY: {
@@ -146,7 +166,7 @@ async def message_stream(
         "contextId": resolved_context,
         "role": "ROLE_AGENT",
         "parts": [{"text": part_text}],
-        "metadata": metadata,
+        "metadata": resolved_metadata,
     }
     yield _data({"message": message})
     if config.strict:

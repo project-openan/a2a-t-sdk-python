@@ -190,8 +190,16 @@ async def test_the_meta_lists_the_stage_chain(client: httpx.AsyncClient) -> None
         "validate",
         "send",
         "negotiate",
+        "accepted",
+        "working",
         "final",
     ]
+    assert payload["stageOrder"] == payload["stopAfter"]
+    assert payload["decisionModes"] == ["scripted", "live"]
+    assert payload["defaults"]["workingTimeoutSeconds"] == 60
+    assert payload["runnerDefaultsIndicateCase"] is True
+    assert payload["transport"] in {"sse", "webhook"}
+    assert payload["discovery"]
     assert payload["catalogCount"] == 51
 
 
@@ -261,6 +269,8 @@ async def test_the_full_flow_asserts_send_negotiate_and_final(client: httpx.Asyn
     assert item["status"] == "passed", item
     assert item["stages"]["send"]["status"] == "passed"
     assert item["stages"]["negotiate"]["status"] == "passed"
+    assert item["stages"]["accepted"]["status"] == "passed"
+    assert item["stages"]["working"]["status"] == "passed"
     assert item["stages"]["final"]["status"] == "passed"
 
 
@@ -275,11 +285,95 @@ async def test_a2a_rejects_a_sdk_only_stop_stage(client: httpx.AsyncClient) -> N
             "timeoutSeconds": 60,
         },
     )
-    batch_id = created.json()["batchId"]
+    assert created.status_code == 400
+    assert "SDK 阶段" in created.json()["error"]
+
+
+async def test_a_trace_of_an_unknown_previous_run_is_explicitly_unavailable(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get("/api/runs/does-not-exist/trace.json")
+    assert response.status_code == 404
+    payload = response.json()
+    assert payload["code"] == "trace_not_available"
+    assert payload["error"]
+
+
+async def test_the_catalog_detail_returns_the_full_case(client: httpx.AsyncClient) -> None:
+    response = await client.get("/api/tester/catalog/1")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["id"] == 1
+    assert payload["case"]["id"] == 1
+    assert payload["case"]["user_input"]
+    assert "runner" in payload["case"]
+    assert "_path" not in payload["case"]
+
+    assert (await client.get("/api/tester/catalog/9999")).status_code == 404
+    assert (await client.get("/api/tester/catalog/not-a-number")).status_code == 404
+
+
+class _HangingRuntime:
+    """Runtime double that keeps the run open until it is cancelled."""
+
+    async def run(self, **kwargs: object) -> ClientFlowResult:
+        del kwargs
+        await asyncio.sleep(30)
+        return ClientFlowResult(final_state=FINAL_STATE_TASK_COMPLETED)
+
+    async def aclose(self) -> None:
+        """Release the runtime."""
+
+
+async def test_rerun_is_rejected_while_the_batch_is_running(
+    offline_config: SampleConfig,
+    tmp_path: Path,
+) -> None:
+    async def hanging_factory(*args: object, **kwargs: object) -> _HangingRuntime:
+        del args, kwargs
+        return _HangingRuntime()
+
+    app = create_app(
+        offline_config,
+        runs_dir=tmp_path,
+        runtime_factory=hanging_factory,
+        finished_grace_seconds=0.0,
+        protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
+        nms_enabled=False,
+        tester_prompt_client=FakePromptClient(),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
+        created = await http.post(
+            "/api/tester/batches",
+            json={
+                "caseIds": [1],
+                "protocols": ["a2a-t"],
+                "stopAfter": "final",
+                "approval": "approve",
+                "timeoutSeconds": 60,
+            },
+        )
+        batch_id = created.json()["batchId"]
+        await http.post(f"/api/tester/batches/{batch_id}/start")
+        rerun = await http.post(f"/api/tester/batches/{batch_id}/items/0/rerun")
+        assert rerun.status_code == 409
+        await http.post(f"/api/tester/batches/{batch_id}/cancel")
+
+
+async def test_rerun_of_an_unknown_batch_or_index_is_rejected(
+    client: httpx.AsyncClient,
+) -> None:
+    created = await _create_tester_batch(client)
+    batch_id = created["batchId"]
     await client.post(f"/api/tester/batches/{batch_id}/start")
     finished = await _wait_batch(client, batch_id)
-    assert finished["items"][0]["status"] == "error"
-    assert "SDK 阶段" in finished["items"][0]["error"]
+
+    assert finished["status"] == "finished"
+    unknown = await client.post("/api/tester/batches/batch-missing/items/0/rerun")
+    assert unknown.status_code == 404
+    invalid = await client.post(f"/api/tester/batches/{batch_id}/items/9/rerun")
+    assert invalid.status_code == 409
 
 
 async def test_a_scratch_request_runs_without_expectations(client: httpx.AsyncClient) -> None:
@@ -517,3 +611,34 @@ def test_the_tester_stylesheet_hides_hidden_elements() -> None:
     assert re.search(r"\[hidden\]\s*\{\s*display:\s*none\s*!important;?\s*\}", css)
     for element_id in ("drawer", "drawer-backdrop", "nms-warning", "history-wrap", "progress"):
         assert re.search(rf'id="{element_id}"[^>]*\bhidden\b', page), element_id
+
+
+async def test_meta_exposes_the_acceptance_stage_model_and_transport(
+    client: httpx.AsyncClient,
+) -> None:
+    """The page builds its stage chain and run form from meta, not from hard-coded lists."""
+    meta = (await client.get("/api/tester/meta")).json()
+
+    stage_order = meta["stageOrder"]
+    for stage in ("send", "negotiate", "accepted", "working", "final"):
+        assert stage in stage_order
+    assert stage_order.index("accepted") < stage_order.index("working") < stage_order.index("final")
+    assert meta["defaults"]["stopAfter"] == "working"
+    assert meta["defaults"]["approval"] is None
+    assert meta["decisionModes"] == ["scripted", "live"]
+    assert meta["transport"] in {"sse", "webhook"}
+    assert meta["discovery"]
+
+
+def test_the_tester_page_binds_the_case_detail_drawer_and_rerun() -> None:
+    """The detail drawer and per-row rerun are DOM contracts, not just service behavior."""
+    tester = Path(__file__).resolve().parent.parent / "demo" / "web" / "tester"
+    js = (tester / "main.js").read_text(encoding="utf-8")
+    page = (tester / "index.html").read_text(encoding="utf-8")
+
+    assert "accepted" in js and "working" in js
+    assert "/api/tester/catalog/" in js
+    assert "/items/${index}/rerun" in js
+    for element_id in ("drawer-tab-result", "drawer-tab-case", "config-decision", "config-working-timeout"):
+        assert re.search(rf'id="{element_id}"', page), element_id
+    assert "不自动答复" in page

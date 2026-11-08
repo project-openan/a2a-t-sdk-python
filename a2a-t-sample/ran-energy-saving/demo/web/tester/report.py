@@ -21,6 +21,8 @@ _STAGE_ORDER: Final[tuple[str, ...]] = (
     "validate",
     "send",
     "negotiate",
+    "accepted",
+    "working",
     "final",
 )
 
@@ -38,6 +40,9 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
         "耗时(ms)",
         "Token 总量",
         "Run ID",
+        "决策模式",
+        "传输",
+        "发现",
         *[f"{stage} 状态" for stage in _STAGE_ORDER],
         "错误信息",
     )
@@ -60,6 +65,9 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
                 item.get("durationMs", ""),
                 token_map.get("total", ""),
                 item.get("runId", ""),
+                batch.get("decisionMode", ""),
+                batch.get("transport", ""),
+                batch.get("discovery", ""),
                 *[
                     (stage_map.get(stage, {}).get("status", "") if isinstance(stage_map.get(stage), Mapping) else "")
                     for stage in _STAGE_ORDER
@@ -67,7 +75,10 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
                 item.get("error", ""),
             ]
         )
-    _set_widths(results, (12, 42, 10, 10, 12, 12, 34, 12, 12, 12, 12, 14, 12, 40))
+    _set_widths(
+        results,
+        (12, 42, 10, 10, 12, 12, 34, 10, 10, 10, 12, 12, 12, 12, 14, 12, 12, 12, 40),
+    )
 
     diffs = workbook.create_sheet("阶段差异")
     diffs.append(["用例编号", "协议", "阶段", "状态", "字段", "预期", "实际", "说明"])
@@ -121,6 +132,9 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
         summary.append([key, value])
     summary.append(["stopAfter", batch.get("stopAfter", "")])
     summary.append(["approval", batch.get("approval", "")])
+    summary.append(["decisionMode", batch.get("decisionMode", "")])
+    summary.append(["transport", batch.get("transport", "")])
+    summary.append(["discovery", batch.get("discovery", "")])
     summary.append(["batchId", batch.get("batchId", "")])
     _set_widths(summary, (28, 36))
 

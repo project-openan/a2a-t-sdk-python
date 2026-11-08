@@ -19,7 +19,13 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from demo.web.tester.report import write_report
-from demo.web.tester.service import ALL_STAGES, EvalBatchManager
+from demo.web.tester.service import (
+    ALL_STAGES,
+    DECISION_MODE_SCRIPTED,
+    DECISION_MODES,
+    DEFAULT_WORKING_TIMEOUT_SECONDS,
+    EvalBatchManager,
+)
 
 #: Directory of the tester page assets.
 TESTER_DIR: Final[Path] = Path(__file__).resolve().parent
@@ -41,9 +47,9 @@ def build_tester_routes(
     protocol_defaults: Mapping[str, Mapping[str, str]],
     server_url: str | None,
     server_auth_token: str | None,
-    mie_url: str | None,
     runs_dir: Path | None = None,
     nms_enabled: bool = False,
+    nms_sim: bool = False,
     language: str = "",
     model_mode: str = "",
     model_label: str = "",
@@ -62,8 +68,8 @@ def build_tester_routes(
         protocol_defaults=protocol_defaults,
         server_url=server_url,
         server_auth_token=server_auth_token,
-        mie_url=mie_url,
         runs_dir=runs_dir,
+        nms_sim=nms_sim,
         language=language,
         model_mode=model_mode,
         model_label=model_label,
@@ -98,18 +104,28 @@ def build_tester_routes(
     async def meta(request: Request) -> Response:
         """Describe what the page may offer."""
         del request
+        defaults = protocol_defaults.get(PROTOCOL_A2A_T, {})
         return JSONResponse(
             {
                 "protocols": [PROTOCOL_A2A_T, PROTOCOL_A2A],
                 "stopAfter": list(ALL_STAGES),
+                "stageOrder": list(ALL_STAGES),
                 "approvals": ["approve", "reject", "auto"],
+                "decisionModes": list(DECISION_MODES),
+                "transport": defaults.get("transport", "sse"),
+                "discovery": defaults.get("discovery", "direct"),
                 "defaults": {
-                    "stopAfter": "final",
-                    "approval": "approve",
-                    "timeoutSeconds": 300,
+                    "stopAfter": "working",
+                    "approval": None,
+                    "timeoutSeconds": None,
+                    "workingTimeoutSeconds": DEFAULT_WORKING_TIMEOUT_SECONDS,
+                    "decisionMode": DECISION_MODE_SCRIPTED,
                 },
+                "runnerDefaultsIndicateCase": True,
                 "catalogCount": resolved_catalog.count,
+                "modelMode": model_mode,
                 "nmsEnabled": nms_enabled,
+                "nmsSim": nms_sim,
                 "advertisedProtocols": list(protocols),
             }
         )
@@ -119,6 +135,21 @@ def build_tester_routes(
         del request
         return JSONResponse({"cases": batches.catalog(), "count": resolved_catalog.count})
 
+    async def catalog_detail(request: Request) -> Response:
+        """Return one case's summary and its full YAML document (read-only)."""
+        try:
+            case_id = int(request.path_params["case_id"])
+        except ValueError:
+            return JSONResponse({"error": "未知用例。", "code": "unknown_case"}, status_code=404)
+        case = resolved_catalog.get(case_id)
+        summary = next(
+            (row for row in resolved_catalog.summaries() if row.id == case_id), None
+        )
+        if case is None or summary is None:
+            return JSONResponse({"error": "未知用例。", "code": "unknown_case"}, status_code=404)
+        document = {key: value for key, value in case.items() if key != "_path"}
+        return JSONResponse({"summary": summary.to_dict(), "case": document})
+
     async def create_batch(request: Request) -> Response:
         """Create a draft batch from selected cases and protocols."""
         try:
@@ -127,8 +158,10 @@ def build_tester_routes(
                 case_ids=_int_list(body.get("caseIds"), "caseIds"),
                 protocols=_str_list(body.get("protocols"), "protocols"),
                 stop_after=str(body.get("stopAfter") or "final"),
-                approval=str(body.get("approval") or "approve"),
-                timeout_seconds=float(body.get("timeoutSeconds") or 300.0),
+                approval=_optional_str(body.get("approval")),
+                timeout_seconds=_optional_float(body.get("timeoutSeconds")),
+                working_timeout_seconds=_optional_float(body.get("workingTimeoutSeconds")),
+                decision_mode=str(body.get("decisionMode") or DECISION_MODE_SCRIPTED),
                 owner=_client_id(request),
             )
         except (TypeError, ValueError) as exc:
@@ -142,8 +175,9 @@ def build_tester_routes(
             snapshot = batches.create_scratch(
                 user_input=str(body.get("userInput") or ""),
                 protocol=str(body.get("protocol") or PROTOCOL_A2A_T),
-                approval=str(body.get("approval") or "approve"),
-                timeout_seconds=float(body.get("timeoutSeconds") or 300.0),
+                approval=_optional_str(body.get("approval")) or "approve",
+                timeout_seconds=_optional_float(body.get("timeoutSeconds")),
+                decision_mode=str(body.get("decisionMode") or DECISION_MODE_SCRIPTED),
                 owner=_client_id(request),
             )
         except (TypeError, ValueError) as exc:
@@ -210,6 +244,22 @@ def build_tester_routes(
             return JSONResponse({"error": str(exc), "code": "batch_not_retryable"}, status_code=409)
         return JSONResponse(snapshot, status_code=201)
 
+    async def rerun_item(request: Request) -> Response:
+        """Rerun one item of a finished batch in place."""
+        try:
+            index = int(request.path_params["index"])
+        except ValueError:
+            return JSONResponse({"error": "用例下标无效。", "code": "invalid_index"}, status_code=409)
+        try:
+            snapshot = await batches.rerun_item(
+                request.path_params["batch_id"], index, owner=_client_id(request)
+            )
+        except KeyError:
+            return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc), "code": "batch_not_rerunnable"}, status_code=409)
+        return JSONResponse(snapshot, status_code=202)
+
     async def export_json(request: Request) -> Response:
         """Download the batch as JSON."""
         batch_id = request.path_params["batch_id"]
@@ -240,6 +290,7 @@ def build_tester_routes(
         Route("/tester/main.js", script),
         Route("/api/tester/meta", meta),
         Route("/api/tester/catalog", catalog_rows),
+        Route("/api/tester/catalog/{case_id}", catalog_detail),
         Route("/api/tester/batches", list_batches),
         Route("/api/tester/batches", create_batch, methods=["POST"]),
         Route("/api/tester/scratch", create_scratch, methods=["POST"]),
@@ -247,6 +298,11 @@ def build_tester_routes(
         Route("/api/tester/batches/{batch_id}/start", start_batch, methods=["POST"]),
         Route("/api/tester/batches/{batch_id}/cancel", cancel_batch, methods=["POST"]),
         Route("/api/tester/batches/{batch_id}/retry", retry_batch, methods=["POST"]),
+        Route(
+            "/api/tester/batches/{batch_id}/items/{index}/rerun",
+            rerun_item,
+            methods=["POST"],
+        ),
         Route("/api/tester/batches/{batch_id}/export.json", export_json),
         Route("/api/tester/batches/{batch_id}/export.xlsx", export_xlsx),
     ]
@@ -279,6 +335,26 @@ def _int_list(value: object, name: str) -> list[int]:
     if not result:
         raise ValueError(f"{name} 不能为空。")
     return result
+
+
+def _optional_str(value: object) -> str | None:
+    """Return a non-empty string value or ``None`` (``None`` means per-case)."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _optional_float(value: object) -> float | None:
+    """Return a numeric value or ``None`` (``None`` means per-case)."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise ValueError("数值参数格式不正确。")
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError("数值参数格式不正确。") from exc
 
 
 def _str_list(value: object, name: str) -> list[str]:

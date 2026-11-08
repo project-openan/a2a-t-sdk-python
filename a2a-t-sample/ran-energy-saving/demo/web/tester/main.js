@@ -1,20 +1,25 @@
 /* Tester console: catalog-driven case selection, staged execution and diffs. */
 
-const STAGE_ORDER = ["intent", "task_t", "validate", "send", "negotiate", "final"];
+const STAGE_ORDER = ["intent", "task_t", "validate", "send", "negotiate", "accepted", "working", "final"];
 const STAGE_LABELS = {
   intent: "意图",
   task_t: "Task-T",
   validate: "校验",
   send: "发送",
   negotiate: "协商",
+  accepted: "受理",
+  working: "运行",
   final: "终态",
 };
+const SDK_STAGES = new Set(["intent", "task_t", "validate"]);
 const STATUS_LABELS = {
   pending: "待执行",
   running: "执行中",
   passed: "通过",
   failed: "失败",
   error: "错误",
+  partial: "部分确认",
+  waiting: "待 WORKING",
   recorded: "仅记录",
   skipped: "跳过",
   cancelled: "已取消",
@@ -35,6 +40,7 @@ const state = {
   history: [],
   polling: null,
   tab: "catalog",
+  drawer: { item: null, tab: "result", caseDoc: null, loading: false },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -112,9 +118,16 @@ async function loadMeta() {
     option.value = stage;
     stopAfter.append(option);
   }
-  stopAfter.value = meta?.defaults?.stopAfter || "final";
-  $("config-approval").value = meta?.defaults?.approval || "approve";
-  $("config-timeout").value = meta?.defaults?.timeoutSeconds || 300;
+  stopAfter.value = meta?.defaults?.stopAfter || "working";
+  $("config-approval").value = meta?.defaults?.approval || "";
+  $("config-timeout").value = meta?.defaults?.timeoutSeconds ?? "";
+  $("config-working-timeout").value = meta?.defaults?.workingTimeoutSeconds ?? "";
+  const liveEnabled = (meta?.modelMode || "") !== "offline";
+  const decision = $("config-decision");
+  decision.value = meta?.defaults?.decisionMode || "scripted";
+  decision.querySelector('option[value="live"]').disabled = !liveEnabled;
+  if (!liveEnabled) decision.title = "离线模式只能使用 scripted";
+  $("scratch-decision").querySelector('option[value="live"]').disabled = !liveEnabled;
 }
 
 async function loadCatalog() {
@@ -230,11 +243,13 @@ async function startBatch() {
       caseIds,
       protocols,
       stopAfter: $("config-stop-after").value,
-      approval: $("config-approval").value,
-      timeoutSeconds: Number($("config-timeout").value) || 300,
+      approval: $("config-approval").value || null,
+      decisionMode: $("config-decision").value,
+      timeoutSeconds: $("config-timeout").value === "" ? null : Number($("config-timeout").value),
+      workingTimeoutSeconds:
+        $("config-working-timeout").value === "" ? null : Number($("config-working-timeout").value),
     });
-    state.batch = created;
-    await fetch(`/api/tester/batches/${encodeURIComponent(created.batchId)}/start`, { method: "POST" });
+    state.batch = await postJson(`/api/tester/batches/${encodeURIComponent(created.batchId)}/start`, {});
     renderResults();
     startPolling();
   } catch (error) {
@@ -259,10 +274,10 @@ async function startScratch() {
       userInput,
       protocol: $("scratch-protocol").value,
       approval: $("scratch-approval").value,
+      decisionMode: $("scratch-decision").value,
       timeoutSeconds: Number($("scratch-timeout").value) || 300,
     });
-    state.batch = created;
-    await fetch(`/api/tester/batches/${encodeURIComponent(created.batchId)}/start`, { method: "POST" });
+    state.batch = await postJson(`/api/tester/batches/${encodeURIComponent(created.batchId)}/start`, {});
     $("scratch-status").textContent = "已启动；结果见“评测用例”页。";
     switchTab("catalog");
     renderResults();
@@ -293,8 +308,9 @@ async function refreshBatch() {
       stopPolling();
       void loadHistory();
     }
-  } catch {
-    /* keep the last snapshot; the next tick retries */
+  } catch (error) {
+    stopPolling();
+    showToast(`批次状态刷新失败：${error.message || error}`, "error");
   }
 }
 
@@ -324,8 +340,21 @@ async function retryBatch() {
   if (!state.batch?.batchId) return;
   try {
     const created = await postJson(`/api/tester/batches/${encodeURIComponent(state.batch.batchId)}/retry`, {});
-    state.batch = created;
-    await fetch(`/api/tester/batches/${encodeURIComponent(created.batchId)}/start`, { method: "POST" });
+    state.batch = await postJson(`/api/tester/batches/${encodeURIComponent(created.batchId)}/start`, {});
+    renderResults();
+    startPolling();
+  } catch (error) {
+    showToast(`重跑失败：${error.message || error}`, "error");
+  }
+}
+
+async function rerunItem(index) {
+  if (!state.batch?.batchId) return;
+  try {
+    state.batch = await postJson(
+      `/api/tester/batches/${encodeURIComponent(state.batch.batchId)}/items/${index}/rerun`,
+      {},
+    );
     renderResults();
     startPolling();
   } catch (error) {
@@ -350,7 +379,9 @@ async function loadHistory() {
   clear(select);
   wrap.hidden = state.history.length === 0;
   for (const batch of state.history) {
-    const option = el("option", "", `${batch.stopAfter || "final"} · ${statusLabel(batch.status)} · ${batch.createdAt || ""}`);
+    const mode = batch.decisionMode ? ` · ${batch.decisionMode}` : "";
+    const transport = batch.transport ? ` · ${batch.transport}` : "";
+    const option = el("option", "", `${batch.stopAfter || "final"}${mode}${transport} · ${statusLabel(batch.status)} · ${batch.createdAt || ""}`);
     option.value = batch.batchId;
     select.append(option);
   }
@@ -362,7 +393,9 @@ async function loadHistory() {
 function stageChips(item, stopAfter) {
   const wrap = el("span", "stage-chips");
   const limit = STAGE_ORDER.indexOf(stopAfter || "final");
+  const pure = item.protocol === "a2a";
   for (const stage of STAGE_ORDER) {
+    if (pure && SDK_STAGES.has(stage)) continue;
     if (limit >= 0 && STAGE_ORDER.indexOf(stage) > limit) continue;
     const result = item.stages?.[stage];
     const status = result?.status || (item.status === "pending" ? "pending" : "skipped");
@@ -392,6 +425,10 @@ function resultText(item) {
   const failed = Object.entries(item.stages || {}).filter(([, stage]) => stage.status === "failed");
   if (failed.length) {
     return failed.map(([stage, value]) => `${stage}: ${value.message || "不匹配"}`).join("；");
+  }
+  const waiting = Object.entries(item.stages || {}).filter(([, stage]) => stage.status === "waiting");
+  if (waiting.length) {
+    return waiting.map(([stage, value]) => `${stage}: ${value.message || "待 WORKING"}`).join("；");
   }
   const recorded = Object.entries(item.stages || {}).filter(([, stage]) => stage.status === "recorded");
   if (recorded.length) return `${recorded.length} 个阶段仅记录`;
@@ -442,18 +479,21 @@ function renderResults() {
       trace.target = "_blank";
       actions.append(wire, document.createTextNode(" · "), trace);
     }
-    if (Object.keys(item.stages || {}).length) {
-      const diff = el("button", "link-button", "差异");
-      diff.type = "button";
-      diff.addEventListener("click", () => openDrawer(item));
-      actions.append(document.createTextNode(" · "), diff);
-    }
+    const detail = el("button", "link-button", "详情");
+    detail.type = "button";
+    detail.addEventListener("click", () => openDrawer(item, index));
+    actions.append(document.createTextNode(" · "), detail);
+    const rerun = el("button", "link-button", "重跑");
+    rerun.type = "button";
+    rerun.disabled = batch.status === "running";
+    rerun.addEventListener("click", () => rerunItem(index));
+    actions.append(document.createTextNode(" · "), rerun);
     row.append(number, id, name, protocol, stages, status, duration, tokens, result, actions);
     body.append(row);
   });
 
   const summary = batch.summary || {};
-  $("result-summary").textContent = `${summary.total || 0} 项 · 通过 ${summary.passed || 0} · 失败 ${summary.failed || 0} · 错误 ${summary.error || 0} · 仅记录 ${summary.stageRecorded || 0}`;
+  $("result-summary").textContent = `${summary.total || 0} 项 · 通过 ${summary.passed || 0} · 待确认 ${summary.partial || 0} · 失败 ${summary.failed || 0} · 错误 ${summary.error || 0} · 仅记录 ${summary.stageRecorded || 0}`;
   const running = batch.status === "running";
   const retryable = (summary.failed || 0) + (summary.error || 0) + (summary.cancelled || 0) > 0;
   $("start-button").hidden = running;
@@ -464,7 +504,8 @@ function renderResults() {
   $("export-xlsx").disabled = false;
   $("progress").hidden = !running && batch.status !== "finished" && batch.status !== "cancelled";
   const total = summary.total || 0;
-  const done = (summary.passed || 0) + (summary.failed || 0) + (summary.error || 0) + (summary.cancelled || 0);
+  const done =
+    (summary.passed || 0) + (summary.partial || 0) + (summary.failed || 0) + (summary.error || 0) + (summary.cancelled || 0);
   $("progress-bar").style.width = `${total ? Math.min(100, Math.round((done / total) * 100)) : 0}%`;
   $("progress-text").textContent = `${done}/${total}`;
   if (running) startPolling();
@@ -478,14 +519,10 @@ function textBlock(value) {
   return JSON.stringify(value, null, 2);
 }
 
-function renderDrawer(item) {
-  $("drawer-title").textContent = `#${String(item.caseId).padStart(2, "0")} ${item.name} · ${item.protocol === "a2a-t" ? "A2A-T" : "A2A"}`;
-  const body = $("drawer-body");
-  clear(body);
+function renderResultTab(item, body) {
   const stages = item.stages || {};
   if (!Object.keys(stages).length) {
     body.append(el("p", "status-line", "该运行项还没有阶段结果。"));
-    return;
   }
   for (const stage of STAGE_ORDER) {
     const result = stages[stage];
@@ -525,12 +562,139 @@ function renderDrawer(item) {
     }
     body.append(block);
   }
+  const attempts = Array.isArray(item.attempts) ? item.attempts : [];
+  if (attempts.length) {
+    const block = el("section", "diff-block");
+    block.append(el("strong", "", "历史尝试"));
+    for (const attempt of attempts) {
+      const line = el("div", "attempt-line");
+      line.append(el("span", "summary", `${attempt.decisionMode || ""} · ${statusLabel(attempt.status)} · ${attempt.finishedAt || ""}`));
+      if (attempt.runId) {
+        const wire = el("a", "run-link", `wire ${attempt.runId}`);
+        wire.href = `/api/runs/${encodeURIComponent(attempt.runId)}/wire`;
+        wire.target = "_blank";
+        line.append(document.createTextNode(" "), wire);
+      }
+      block.append(line);
+    }
+    body.append(block);
+  }
 }
 
-function openDrawer(item) {
-  renderDrawer(item);
+function caseSection(title, value) {
+  const block = el("section", "diff-block");
+  block.append(el("strong", "", title));
+  block.append(el("pre", "mono case-pre", textBlock(value)));
+  return block;
+}
+
+function renderCaseTab(item, body) {
+  if (item.caseId === 0) {
+    body.append(caseSection("临时请求", item.scratch || ""));
+    return;
+  }
+  const drawer = state.drawer;
+  if (drawer.loading) {
+    body.append(el("p", "status-line", "正在加载用例详情…"));
+    return;
+  }
+  if (drawer.error) {
+    body.append(el("p", "status-line error", `加载用例详情失败：${drawer.error}`));
+    return;
+  }
+  const doc = drawer.caseDoc;
+  if (!doc) {
+    body.append(el("p", "status-line", "没有用例详情。"));
+    return;
+  }
+  const summary = doc.summary || {};
+  const meta = el("div", "case-meta");
+  meta.append(
+    el("span", "pill", summary.dimension || "未分组"),
+    el("span", "pill", summary.operation || ""),
+    el("span", "pill", summary.validateLabel || ""),
+    ...(summary.tags || []).map((tag) => el("span", "pill", tag)),
+  );
+  body.append(meta);
+  if (doc.case?.known_issue) body.append(caseSection("已知问题", doc.case.known_issue));
+  body.append(caseSection("请求原文", doc.case?.user_input || ""));
+  const intent = doc.case?.expect?.intent;
+  if (intent && typeof intent === "object") {
+    const table = el("table", "grid kv-table");
+    const tbody = document.createElement("tbody");
+    for (const [key, value] of Object.entries(intent)) {
+      const row = document.createElement("tr");
+      row.append(el("td", "mono", key), el("td", "mono pre", textBlock(value)));
+      tbody.append(row);
+    }
+    table.append(tbody);
+    const block = el("section", "diff-block");
+    block.append(el("strong", "", "期望意图"), table);
+    body.append(block);
+  }
+  const protocolBlock = doc.case?.expect?.protocols?.[item.protocol] || {};
+  body.append(caseSection(`期望 Task-T（${item.protocol === "a2a-t" ? "A2A-T" : "A2A"}）`, protocolBlock.task_t || "该协议没有 Task-T 期望"));
+  const negotiation = protocolBlock.negotiation;
+  if (negotiation) {
+    const block = el("section", "diff-block");
+    block.append(el("strong", "", "协商预期"));
+    block.append(
+      el(
+        "p",
+        "summary",
+        `expected=${negotiation.expected} · rounds=${negotiation.expected_rounds} · kinds=${(negotiation.kinds || []).join(", ") || "—"}`,
+      ),
+    );
+    (negotiation.rounds || []).forEach((round, index) => {
+      block.append(el("div", "summary", `第 ${index + 1} 轮`));
+      block.append(el("pre", "mono case-pre", textBlock(round)));
+    });
+    body.append(block);
+  }
+  body.append(caseSection("断言开关", doc.case?.assert || {}));
+  body.append(caseSection("runner", doc.case?.runner || {}));
+  body.append(caseSection("来源", doc.case?.source || {}));
+}
+
+async function ensureCaseDoc(item) {
+  if (item.caseId === 0 || state.drawer.caseDoc || state.drawer.loading) return;
+  state.drawer.loading = true;
+  renderDrawer();
+  try {
+    state.drawer.caseDoc = await getJson(`/api/tester/catalog/${item.caseId}`);
+  } catch (error) {
+    state.drawer.error = error.message || String(error);
+  } finally {
+    state.drawer.loading = false;
+    renderDrawer();
+  }
+}
+
+function renderDrawer() {
+  const drawer = state.drawer;
+  const item = drawer.item;
+  if (!item) return;
+  const protocol = item.protocol === "a2a-t" ? "A2A-T" : "A2A";
+  $("drawer-title").textContent = `#${String(item.caseId).padStart(2, "0")} ${item.name} · ${protocol}`;
+  $("drawer-tab-result").classList.toggle("active", drawer.tab === "result");
+  $("drawer-tab-case").classList.toggle("active", drawer.tab === "case");
+  const body = $("drawer-body");
+  clear(body);
+  if (drawer.tab === "result") renderResultTab(item, body);
+  else renderCaseTab(item, body);
+}
+
+function openDrawer(item, index) {
+  state.drawer = { item, index, tab: "result", caseDoc: null, loading: false, error: "" };
+  renderDrawer();
   $("drawer").hidden = false;
   $("drawer-backdrop").hidden = false;
+}
+
+function switchDrawerTab(tab) {
+  state.drawer.tab = tab;
+  renderDrawer();
+  if (tab === "case") void ensureCaseDoc(state.drawer.item);
 }
 
 function closeDrawer() {
@@ -585,6 +749,8 @@ function wireEvents() {
   $("history-select").addEventListener("change", () => openBatch($("history-select").value));
   $("drawer-close").addEventListener("click", closeDrawer);
   $("drawer-backdrop").addEventListener("click", closeDrawer);
+  $("drawer-tab-result").addEventListener("click", () => switchDrawerTab("result"));
+  $("drawer-tab-case").addEventListener("click", () => switchDrawerTab("case"));
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeDrawer();
   });

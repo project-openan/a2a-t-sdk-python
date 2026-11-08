@@ -21,11 +21,17 @@ def main() -> None:
     host = os.environ.get(HOST_ENV_KEY, "127.0.0.1").strip() or "127.0.0.1"
     port = int(os.environ.get(PORT_ENV_KEY, "18080"))
     _LOGGER.info(
-        "NMS simulator starting: host=%s port=%s fidelity=%s region=%s",
+        "NMS simulator starting: host=%s port=%s fidelity=%s transport=stream+webhook "
+        "carrier=%s kinds=%s region=%s window=%s max_rounds=%s task_shape=%s",
         host,
         port,
         config.fidelity,
+        config.negotiation_carrier,
+        ",".join(config.negotiation_kinds),
         config.region,
+        config.window,
+        config.max_rounds,
+        config.task_shape,
     )
     uvicorn.run(build_sim_app(config), host=host, port=port)
 

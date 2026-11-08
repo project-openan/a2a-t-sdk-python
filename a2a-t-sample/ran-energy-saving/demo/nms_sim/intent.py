@@ -1,9 +1,10 @@
 """Task-T / plain-text intent parsing and business validation of the simulator.
 
 The parser accepts the sample's rendered Task-T (English headings, with optional bilingual
-parentheses) and the vendor's Chinese L0 template. It validates the same business constraints the
-910 test environment enforces: the test region, the activation window, a time-segmented throughput
-target and the cell's maximum saving rate.
+parentheses) and the vendor's Chinese L0 template. It extracts the same business constraints the
+910 test environment enforces (test region, activation window, time-segmented throughput target
+and the cell's maximum saving rate); :mod:`demo.nms_sim.negotiation` decides how a violation is
+reported to the client.
 """
 
 from __future__ import annotations
@@ -16,6 +17,12 @@ from typing import Final
 from a2a_t.core.metadata import NEGOTIATION_T_EXTENSION_URI, TASK_T_EXTENSION_URI
 
 from demo.nms_sim.config import SimConfig
+from demo.nms_sim.negotiation import (
+    KIND_FEASIBILITY,
+    KIND_INFORMATION,
+    KIND_TARGET,
+    NegotiationIssue,
+)
 
 #: Header names the vendor accepts (A2A 1.0 and the older Java SDK spelling).
 EXTENSION_HEADERS: Final[tuple[str, ...]] = ("a2a-extensions", "x-a2a-extensions")
@@ -29,15 +36,61 @@ MISSING_EXTENSION_METADATA: Final[dict[str, object]] = {
     }
 }
 
+#: Throughput assumed when an accept carries no new rate value.
+DEFAULT_ACCEPT_RATE_MBPS: Final[float] = 30.0
+
 _WINDOW_PATTERN: Final[re.Pattern[str]] = re.compile(r"(\d{1,2}:\d{2})\s*[~\-–]\s*(\d{1,2}:\d{2})")
 _THROUGHPUT_PATTERN: Final[re.Pattern[str]] = re.compile(r"(\d+(?:\.\d+)?)\s*Mbps", re.IGNORECASE)
 _PERCENT_PATTERN: Final[re.Pattern[str]] = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+#: A saving rate can be written without ``%`` ("energy saving rate: 40").
+_SAVING_RATE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?:energy[-\s]*saving\s*rate|节电率|节能率)[^\d]{0,20}(\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
 _REGION_PREFIXES: Final[tuple[str, ...]] = (
     "the area is",
     "region:",
     "区域：",
     "区域:",
 )
+
+
+@dataclass(frozen=True)
+class ExtractedContent:
+    """Business values read from one Task-T prompt or negotiation reply.
+
+    Attributes:
+        operation: ``Create``/``Modify`` when the text names one, else ``None``.
+        region: Region the NMS will act on (empty when absent).
+        windows: Activation windows found in the text, canonicalized with ``~``.
+        rate_mbps: First guaranteed throughput value in Mbps, when present.
+        percent: First percentage value in the text, when present.
+        source: The text the values came from.
+    """
+
+    operation: str | None
+    region: str
+    windows: tuple[str, ...]
+    rate_mbps: float | None
+    percent: float | None
+    source: str
+
+    def merged_with(self, baseline: ExtractedContent | None) -> ExtractedContent:
+        """Return this reply's values over the original request's values.
+
+        A negotiation reply often answers only the asked item (an information accept names the
+        missing region and nothing else), so the original request supplies the untouched fields.
+        """
+        if baseline is None:
+            return self
+        return ExtractedContent(
+            operation=self.operation or baseline.operation,
+            region=self.region or baseline.region,
+            windows=self.windows or baseline.windows,
+            rate_mbps=self.rate_mbps if self.rate_mbps is not None else baseline.rate_mbps,
+            percent=self.percent if self.percent is not None else baseline.percent,
+            source=_join_sources(baseline.source, self.source),
+        )
 
 
 @dataclass(frozen=True)
@@ -49,6 +102,7 @@ class ParsedIntent:
         region: Region the NMS will act on.
         window: Activation window in ``HH:MM~HH:MM`` form.
         rate_mbps: First guaranteed throughput value, in Mbps.
+        sites: Site names shown in the report text only.
         source: The Task-T prompt or the message text the values came from.
     """
 
@@ -56,6 +110,7 @@ class ParsedIntent:
     region: str
     window: str
     rate_mbps: float
+    sites: tuple[str, ...]
     source: str
 
 
@@ -69,28 +124,26 @@ class SimRequestError(Exception):
 
 
 class SimNegotiationRequiredError(Exception):
-    """A request the simulator answers with an information-negotation message."""
+    """A request the simulator answers with a Negotiation-T proposal."""
 
-    def __init__(self, text: str) -> None:
-        self.text = text
-        super().__init__(text)
+    def __init__(self, issue: NegotiationIssue) -> None:
+        self.issue = issue
+        super().__init__(issue.body())
+
+    @property
+    def text(self) -> str:
+        """Return the rendered Negotiation-T body."""
+        return self.issue.body()
 
 
-def parse_message_request(
+def read_message_request(
     body: Mapping[str, object],
     headers: Mapping[str, str],
-    config: SimConfig,
-) -> ParsedIntent:
-    """Parse and validate one ``message:stream`` request.
-
-    Args:
-        body: Parsed JSON request body.
-        headers: Request headers (case-insensitive keys are expected; see :func:`extension_header`).
-        config: simulator business constraints.
+) -> ExtractedContent:
+    """Validate the request envelope and read the business content without judging it.
 
     Raises:
         SimRequestError: on a malformed body or the extension-header/metadata mismatch.
-        SimNegotiationRequiredError: when the business content is incomplete or not served.
     """
     message = body.get("message")
     if not isinstance(message, Mapping):
@@ -111,64 +164,129 @@ def parse_message_request(
     text = _first_text(message)
     # An accept carries only Negotiation-T; its refilled values live in that metadata body.
     source = prompt_text or negotiation_text or text
-    if not source.strip():
-        raise SimNegotiationRequiredError(_negotiation_text(["Task content"]))
+    return extract_content(source)
 
-    operation = _operation(source)
-    region = _region(source)
-    windows = _windows(source)
-    rate = _throughput(source)
 
-    if not region:
-        raise SimNegotiationRequiredError(
-            _negotiation_text(
-                ["Energy saving region"],
-                "The energy-saving region is missing. Please specify the region explicitly.",
-            )
+def extract_content(source: str) -> ExtractedContent:
+    """Read the business values of one Task-T prompt or negotiation reply body."""
+    return ExtractedContent(
+        operation=_operation(source),
+        region=_region(source),
+        windows=_windows(source),
+        rate_mbps=_throughput(source),
+        percent=_percent(source),
+        source=source,
+    )
+
+
+def validate_content(content: ExtractedContent, config: SimConfig) -> NegotiationIssue | None:
+    """Return the first business violation of one request, or ``None`` when it is acceptable.
+
+    The order is the vendor's own: missing/unknown data first (information), then an unavailable
+    window (feasibility), then an unattainable goal (target). One kind per call, so one proposal
+    per round.
+    """
+    if not content.source.strip() and not content.region and not content.windows and content.rate_mbps is None:
+        return NegotiationIssue(KIND_INFORMATION, ("Task content",), "")
+    if not content.region:
+        return NegotiationIssue(
+            KIND_INFORMATION,
+            ("Energy saving region",),
+            "The energy-saving region is missing. Please specify the region explicitly.",
         )
-    if config.region.lower() not in region.lower():
-        raise SimNegotiationRequiredError(
-            _negotiation_text(
-                ["Energy saving region"],
-                f"The region '{region}' is not served. Available test region: {config.region}.",
-            )
+    if config.region.lower() not in content.region.lower():
+        return NegotiationIssue(
+            KIND_INFORMATION,
+            ("Energy saving region",),
+            f"The region '{content.region}' is not served. Available test region: {config.region}.",
         )
-    if not windows:
-        raise SimNegotiationRequiredError(
-            _negotiation_text(
-                ["Energy saving time"],
-                "The energy-saving activation time is missing. Please provide an explicit time "
-                f"range such as {config.window}.",
-            )
+    if not content.windows:
+        return NegotiationIssue(
+            KIND_INFORMATION,
+            ("Energy saving time",),
+            "The energy-saving activation time is missing. Please provide an explicit time "
+            f"range such as {config.window}.",
         )
-    if config.window not in windows:
-        raise SimNegotiationRequiredError(
-            _negotiation_text(
-                ["Energy saving time"],
-                f"The activation time {', '.join(windows)} is not available. Available test window: {config.window}.",
-            )
+    if config.window not in content.windows:
+        return NegotiationIssue(
+            KIND_FEASIBILITY,
+            ("Energy saving time",),
+            f"The activation time {', '.join(content.windows)} is not available. "
+            f"Available test window: {config.window}.",
         )
-    if rate is None:
-        raise SimNegotiationRequiredError(
-            _negotiation_text(
-                ["Time-segmented guaranteed throughput target"],
-                "missing explicit time-segmented rate goals",
-            )
+    if content.rate_mbps is None:
+        return NegotiationIssue(
+            KIND_INFORMATION,
+            ("Time-segmented guaranteed throughput target",),
+            "missing explicit time-segmented rate goals",
         )
-    percent = _percent(source)
-    if percent is not None and percent > config.max_saving_rate:
-        raise SimNegotiationRequiredError(
-            _negotiation_text(
-                ["Energy saving rate"],
-                f"The requested {percent:g}% exceeds the {config.max_saving_rate:g}% maximum.",
-            )
+    if content.percent is not None and content.percent > config.max_saving_rate:
+        return NegotiationIssue(
+            KIND_TARGET,
+            ("Energy saving rate",),
+            f"The requested {content.percent:g}% exceeds the {config.max_saving_rate:g}% maximum.",
         )
+    return None
+
+
+def select_issue(content: ExtractedContent, config: SimConfig) -> NegotiationIssue | None:
+    """Return the issue to propose for one request, honouring the configured kinds.
+
+    Missing information is never suppressed: without the region/window/rate the request cannot be
+    executed at all, so a disabled kind falls back to ``information`` instead of silently
+    accepting an invalid request.
+    """
+    issue = validate_content(content, config)
+    if issue is None or issue.kind in config.negotiation_kinds or issue.kind == KIND_INFORMATION:
+        return issue
+    return NegotiationIssue(KIND_INFORMATION, issue.items, issue.detail)
+
+
+def accepted_intent(
+    content: ExtractedContent,
+    baseline: ExtractedContent | None,
+    config: SimConfig,
+) -> ParsedIntent:
+    """Build the intent of an accepted negotiation.
+
+    An accept completes the request even when its terse body names only the answered item, so
+    untouched fields come from the original request and, failing that, from the served defaults.
+    """
+    merged = content.merged_with(baseline)
     return ParsedIntent(
-        operation=operation,
+        operation=merged.operation or "Create",
         region=config.region,
         window=config.window,
-        rate_mbps=rate,
-        source=source,
+        rate_mbps=merged.rate_mbps if merged.rate_mbps is not None else DEFAULT_ACCEPT_RATE_MBPS,
+        sites=config.sites,
+        source=merged.source,
+    )
+
+
+def parse_message_request(
+    body: Mapping[str, object],
+    headers: Mapping[str, str],
+    config: SimConfig,
+) -> ParsedIntent:
+    """Parse and validate one request that is expected to be executable.
+
+    Raises:
+        SimRequestError: on a malformed body or the extension-header/metadata mismatch.
+        SimNegotiationRequiredError: when the business content is incomplete or not served.
+    """
+    content = read_message_request(body, headers)
+    issue = select_issue(content, config)
+    if issue is not None:
+        raise SimNegotiationRequiredError(issue)
+    # ``select_issue`` returning ``None`` guarantees the rate and window are present.
+    assert content.rate_mbps is not None
+    return ParsedIntent(
+        operation=content.operation or "Create",
+        region=config.region,
+        window=config.window,
+        rate_mbps=content.rate_mbps,
+        sites=config.sites,
+        source=content.source,
     )
 
 
@@ -224,11 +342,15 @@ def _section(text: str, *names: str) -> str:
     return ""
 
 
-def _operation(text: str) -> str:
-    """Return ``Create`` or ``Modify`` (default ``Create``)."""
+def _operation(text: str) -> str | None:
+    """Return ``Create``/``Modify`` when the text names one, else ``None``."""
     section = _section(text, "Operation Type", "操作类型")
     haystack = section or text
-    return "Modify" if re.search(r"\bmodify\b|修改", haystack, re.IGNORECASE) else "Create"
+    if re.search(r"\bmodify\b|修改", haystack, re.IGNORECASE):
+        return "Modify"
+    if re.search(r"\bcreate\b|创建", haystack, re.IGNORECASE):
+        return "Create"
+    return None
 
 
 def _region(text: str) -> str:
@@ -262,8 +384,8 @@ def _throughput(text: str) -> float | None:
 
 
 def _percent(text: str) -> float | None:
-    """Return the first percentage value in the text, if any."""
-    match = _PERCENT_PATTERN.search(text)
+    """Return the first percentage/saving-rate value in the text, if any."""
+    match = _PERCENT_PATTERN.search(text) or _SAVING_RATE_PATTERN.search(text)
     return float(match.group(1)) if match else None
 
 
@@ -273,16 +395,10 @@ def _clock(value: str) -> str:
     return f"{int(hour):02d}:{minute}"
 
 
-def _negotiation_text(items: list[str], detail: str = "") -> str:
-    """Render the vendor-style information-negotation message body."""
-    lines = [
-        "## Information Negotiation",
-        "",
-        "Please supplement the relevant content based on <Required Information Items>.",
-        "",
-        "## Required Information Items",
-    ]
-    lines.extend(f"{index}. {item}" for index, item in enumerate(items, 1))
-    if detail:
-        lines.extend(["", detail])
-    return "\n".join(lines)
+def _join_sources(baseline: str, reply: str) -> str:
+    """Join the original request and one reply for the report text."""
+    if not reply.strip():
+        return baseline
+    if not baseline.strip():
+        return reply
+    return f"{baseline}\n{reply}"

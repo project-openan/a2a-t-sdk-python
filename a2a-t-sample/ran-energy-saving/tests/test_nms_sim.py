@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from collections.abc import AsyncIterator
 
 import httpx
@@ -11,14 +12,24 @@ import pytest
 from a2a.client.client import ClientCallContext
 from a2a.types import Role, SendMessageRequest
 from a2a_t.core.metadata import (
+    NEGOTIATION_CONTEXT_METADATA_KEY,
     NEGOTIATION_T_EXTENSION_URI,
     TASK_T_EXTENSION_URI,
+    TEMPLATE_URI_METADATA_KEY,
 )
 from demo import ran_data
 from demo.nms_sim.app import build_sim_app
-from demo.nms_sim.config import FIDELITY_FAST, FIDELITY_STRICT, SimConfig
+from demo.nms_sim.config import (
+    CARRIER_MESSAGE,
+    CARRIER_TASK,
+    FIDELITY_FAST,
+    FIDELITY_STRICT,
+    TASK_SHAPE_TOPLEVEL,
+    SimConfig,
+)
 from demo.nms_sim.sse import task_stream
 from demo.nms_sim.tasks import TASK_SUBMITTED, SimTask, TaskStore
+from starlette.applications import Starlette
 
 TOKEN_URL = "/rest/plat/smapp/v1/sessions"
 STREAM_URL = "/a2a/json/message:stream"
@@ -33,7 +44,8 @@ def _reset_plans() -> None:
 
 
 def _config(fidelity: str = FIDELITY_FAST) -> SimConfig:
-    return SimConfig(fidelity=fidelity)
+    """Default to the standalone-message carrier so the legacy SSE tests keep their shape."""
+    return SimConfig(fidelity=fidelity, negotiation_carrier=CARRIER_MESSAGE)
 
 
 async def _client(config: SimConfig | None = None) -> AsyncIterator[httpx.AsyncClient]:
@@ -387,18 +399,17 @@ async def test_pure_missing_target_asks_then_resumes_to_completed() -> None:
         }
         frames = await _frames(client, body, headers)
 
-        assert "task" in frames[0]
-        assert any(
-            frame.get("statusUpdate", {}).get("status", {}).get("state")
-            == "TASK_STATE_INPUT_REQUIRED"
-            for frame in frames
-        )
-        task_id = str(frames[0]["task"]["id"])
+        # A plain-A2A question is a standalone Message (no Task), matching the real NMS: a Task
+        # status would be answered by the OSS Agent itself instead of relayed to the caller.
+        assert "message" in frames[0]
+        assert "TASK_STATE_INPUT_REQUIRED" not in json.dumps(frames[0])
+        context_id = str(frames[0]["message"]["contextId"])
+        assert "Time-segmented guaranteed throughput target" in json.dumps(frames[0])
 
         follow_up = {
             "message": {
                 "messageId": "m2",
-                "taskId": task_id,
+                "contextId": context_id,
                 "role": "ROLE_USER",
                 "parts": [{"text": "{00:00~06:00,30Mbps}"}],
             }
@@ -506,3 +517,294 @@ async def test_task_stream_stops_when_the_task_is_canceled() -> None:
     assert states[-1] == TASK_CANCELED
     assert "TASK_STATE_COMPLETED" not in states
     assert not any("artifactUpdate" in frame for frame in rest)
+
+
+# ---------------------------------------------------------------------------
+# message:send + webhook push
+# ---------------------------------------------------------------------------
+
+SEND_URL = "/a2a/json/message:send"
+
+
+def _push_config(**overrides: object) -> dict[str, object]:
+    """Return one vendor-shaped task push notification config."""
+    config: dict[str, object] = {
+        "id": str(uuid.uuid4()),
+        "url": "http://callback.test/webhook",
+        "token": "push-token",
+        "authentication": {"scheme": "Basic", "credentials": "user:pass"},
+    }
+    config.update(overrides)
+    return config
+
+
+def _send_body(
+    prompt: str | None,
+    *,
+    task_id: str | None = None,
+    push_config: dict[str, object] | None = None,
+    extra_metadata: dict[str, object] | None = None,
+    text: str = "create ran energy saving task",
+) -> dict[str, object]:
+    """Build one ``message:send`` body with an optional Task continuation and push config."""
+    metadata: dict[str, object] = dict(extra_metadata or {})
+    if prompt is not None:
+        metadata[TASK_T_EXTENSION_URI] = prompt
+    message: dict[str, object] = {
+        "messageId": str(uuid.uuid4()),
+        "role": "ROLE_USER",
+        "parts": [{"text": text}],
+        "metadata": metadata,
+    }
+    if task_id:
+        message["taskId"] = task_id
+    body: dict[str, object] = {"message": message}
+    if push_config is not None:
+        body["configuration"] = {"taskPushNotificationConfig": push_config}
+    return body
+
+
+def _push_app(config: SimConfig, pushes: list[dict[str, object]]) -> Starlette:
+    """Build a simulator app whose pushes land in ``pushes`` instead of the network."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        pushes.append(
+            {
+                "url": str(request.url),
+                "authorization": request.headers.get("authorization", ""),
+                "token": request.headers.get("x-a2a-notification-token", ""),
+                "body": json.loads(request.content),
+            }
+        )
+        return httpx.Response(200, json={"received": "ok"})
+
+    return build_sim_app(config, push_transport=httpx.MockTransport(handler))
+
+
+async def _send(
+    client: httpx.AsyncClient,
+    body: dict[str, object],
+    headers: dict[str, str],
+) -> httpx.Response:
+    return await client.post(SEND_URL, json=body, headers=headers)
+
+
+async def _wait_for_pushes(app: Starlette) -> None:
+    """Wait for the simulator's background pushes to finish."""
+    await app.state.sim.pushes.wait_idle()
+
+
+async def test_message_send_answers_with_the_task_and_pushes_later_states() -> None:
+    pushes: list[dict[str, object]] = []
+    config = SimConfig(fidelity=FIDELITY_FAST, negotiation_carrier=CARRIER_MESSAGE)
+    app = _push_app(config, pushes)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://sim") as client:
+        token = await _token(client)
+        response = await _send(client, _send_body(_prompt(), push_config=_push_config()), _headers(token))
+
+        assert response.status_code == 200
+        task = response.json()["task"]
+        assert task["status"]["state"] == TASK_SUBMITTED
+        task_id = task["id"]
+
+        await _wait_for_pushes(app)
+
+        kinds = [next(iter(push["body"])) for push in pushes]
+        assert kinds == ["statusUpdate", "artifactUpdate", "statusUpdate"]
+        assert pushes[0]["body"]["statusUpdate"]["status"]["state"] == "TASK_STATE_WORKING"
+        assert pushes[-1]["body"]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
+        metadata = pushes[0]["body"]["statusUpdate"]["metadata"]
+        assert isinstance(metadata["timestamp"], int)
+        for push in pushes:
+            assert push["authorization"] == "Basic user:pass"
+            assert push["token"] == "push-token"
+            assert push["url"] == "http://callback.test/webhook"
+
+        stored = await client.get(f"/a2a/json/tasks/{task_id}", headers={"X-Auth-Token": token})
+        document = stored.json()["task"]
+        assert document["status"]["state"] == "TASK_STATE_COMPLETED"
+        assert isinstance(document["timestamp"], int)
+
+
+async def test_a_second_registration_for_the_same_task_is_500() -> None:
+    pushes: list[dict[str, object]] = []
+    config = SimConfig(fidelity=FIDELITY_FAST, negotiation_carrier=CARRIER_MESSAGE)
+    app = _push_app(config, pushes)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://sim") as client:
+        token = await _token(client)
+        first = await _send(client, _send_body(_prompt(), push_config=_push_config()), _headers(token))
+        task_id = first.json()["task"]["id"]
+        await _wait_for_pushes(app)
+
+        second = await _send(
+            client,
+            _send_body(_prompt(), task_id=task_id, push_config=_push_config()),
+            _headers(token),
+        )
+
+        assert second.status_code == 500
+        assert "config already exists" in second.json()["error"]["message"]
+
+
+async def test_task_carried_negotiation_is_an_input_required_task() -> None:
+    config = SimConfig(fidelity=FIDELITY_FAST, negotiation_carrier=CARRIER_TASK)
+    async for client in _client(config):
+        token = await _token(client)
+        response = await _send(
+            client,
+            _send_body("## Task Context\n\nEnergy saving time: 00:00~06:00; 30 Mbps."),
+            _headers(token),
+        )
+
+        assert response.status_code == 200
+        task = response.json()["task"]
+        assert task["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
+        metadata = task["status"]["message"]["metadata"]
+        assert "Information Negotiation" in metadata[NEGOTIATION_T_EXTENSION_URI]
+        assert metadata[TEMPLATE_URI_METADATA_KEY] == "Negotiation-T/information-negotiation/propose/v1"
+        context = metadata[NEGOTIATION_CONTEXT_METADATA_KEY]
+        assert context["round"] == 1
+        assert context["performative"] == "PROPOSE"
+
+
+async def test_standalone_message_negotiation_returns_a_message() -> None:
+    config = SimConfig(fidelity=FIDELITY_FAST, negotiation_carrier=CARRIER_MESSAGE)
+    async for client in _client(config):
+        token = await _token(client)
+        response = await _send(client, _send_body(_prompt(region="")), _headers(token))
+
+        assert response.status_code == 200
+        message = response.json()["message"]
+        assert NEGOTIATION_T_EXTENSION_URI in message["metadata"]
+        assert message["metadata"][NEGOTIATION_CONTEXT_METADATA_KEY]["round"] == 1
+
+
+async def test_a_foreign_negotiation_id_is_422() -> None:
+    config = SimConfig(fidelity=FIDELITY_FAST, negotiation_carrier=CARRIER_MESSAGE)
+    async for client in _client(config):
+        token = await _token(client)
+        context = {"id": str(uuid.uuid4()), "round": 1, "maxRounds": 5, "performative": "ACCEPT"}
+        response = await _send(
+            client,
+            _send_body(
+                None,
+                extra_metadata={
+                    NEGOTIATION_T_EXTENSION_URI: "Accept.",
+                    NEGOTIATION_CONTEXT_METADATA_KEY: context,
+                },
+            ),
+            _headers(token),
+        )
+
+        assert response.status_code == 422
+        assert "does not match an active negotiation" in response.json()["error"]["message"]
+
+
+async def test_rounds_increment_and_abort_at_the_budget() -> None:
+    config = SimConfig(
+        fidelity=FIDELITY_FAST,
+        negotiation_carrier=CARRIER_MESSAGE,
+        max_rounds=2,
+    )
+    async for client in _client(config):
+        token = await _token(client)
+        invalid = _prompt(region="")
+        first = await _send(client, _send_body(invalid), _headers(token))
+        context = first.json()["message"]["metadata"][NEGOTIATION_CONTEXT_METADATA_KEY]
+
+        def reply(performative: str) -> dict[str, object]:
+            return _send_body(
+                None,
+                extra_metadata={
+                    NEGOTIATION_T_EXTENSION_URI: invalid,
+                    NEGOTIATION_CONTEXT_METADATA_KEY: {**context, "performative": performative},
+                },
+            )
+
+        second = await _send(client, reply("PROPOSE"), _headers(token))
+        assert second.json()["message"]["metadata"][NEGOTIATION_CONTEXT_METADATA_KEY]["round"] == 2
+
+        aborted = await _send(client, reply("PROPOSE"), _headers(token))
+
+        assert aborted.status_code == 200
+        metadata = aborted.json()["message"]["metadata"]
+        assert metadata[NEGOTIATION_CONTEXT_METADATA_KEY]["performative"] == "ABORT"
+        assert metadata[NEGOTIATION_T_EXTENSION_URI].startswith("## Abort Negotiation")
+
+
+@pytest.mark.parametrize(
+    ("prompt", "kind"),
+    [
+        (_prompt(region=""), "information"),
+        (_prompt(window="19:00~22:00"), "feasibility"),
+        (_prompt(percent="50%"), "target"),
+    ],
+)
+async def test_negotiation_kind_selection(prompt: str, kind: str) -> None:
+    config = SimConfig(fidelity=FIDELITY_FAST, negotiation_carrier=CARRIER_MESSAGE)
+    async for client in _client(config):
+        token = await _token(client)
+        response = await _send(client, _send_body(prompt), _headers(token))
+
+        metadata = response.json()["message"]["metadata"]
+        assert metadata[TEMPLATE_URI_METADATA_KEY] == f"Negotiation-T/{kind}-negotiation/propose/v1"
+        assert metadata[NEGOTIATION_T_EXTENSION_URI].startswith(f"## {kind.capitalize()} Negotiation")
+
+
+async def test_task_shape_toplevel_adds_state_and_timestamp() -> None:
+    pushes: list[dict[str, object]] = []
+    config = SimConfig(fidelity=FIDELITY_FAST, task_shape=TASK_SHAPE_TOPLEVEL)
+    app = _push_app(config, pushes)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://sim") as client:
+        token = await _token(client)
+        response = await _send(client, _send_body(_prompt()), _headers(token))
+        task_id = response.json()["task"]["id"]
+        await _wait_for_pushes(app)
+
+        document = (
+            await client.get(f"/a2a/json/tasks/{task_id}", headers={"X-Auth-Token": token})
+        ).json()["task"]
+        assert document["state"] == document["status"]["state"]
+        assert isinstance(document["timestamp"], int)
+
+
+async def test_hold_working_webhook_pushes_the_artifact_then_stays_working() -> None:
+    pushes: list[dict[str, object]] = []
+    config = SimConfig(
+        fidelity=FIDELITY_FAST,
+        negotiation_carrier=CARRIER_MESSAGE,
+        hold_working=True,
+    )
+    app = _push_app(config, pushes)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://sim") as client:
+        token = await _token(client)
+        response = await _send(client, _send_body(_prompt(), push_config=_push_config()), _headers(token))
+        task_id = response.json()["task"]["id"]
+        await _wait_for_pushes(app)
+
+        kinds = [next(iter(push["body"])) for push in pushes]
+        assert kinds == ["statusUpdate", "artifactUpdate", "statusUpdate"]
+        assert pushes[-1]["body"]["statusUpdate"]["status"]["state"] == "TASK_STATE_WORKING"
+        stored = (
+            await client.get(f"/a2a/json/tasks/{task_id}", headers={"X-Auth-Token": token})
+        ).json()["task"]
+        assert stored["status"]["state"] == "TASK_STATE_WORKING"
+
+
+async def test_message_stream_task_carrier_closes_after_the_input_required_task() -> None:
+    config = SimConfig(fidelity=FIDELITY_FAST, negotiation_carrier=CARRIER_TASK)
+    async for client in _client(config):
+        token = await _token(client)
+        frames = await _frames(
+            client,
+            _send_body("## Task Context\n\nEnergy saving time: 00:00~06:00; 30 Mbps."),
+            _headers(token),
+        )
+
+        assert frames[0]["task"]["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
+        metadata = frames[0]["task"]["status"]["message"]["metadata"]
+        assert metadata[NEGOTIATION_CONTEXT_METADATA_KEY]["round"] == 1

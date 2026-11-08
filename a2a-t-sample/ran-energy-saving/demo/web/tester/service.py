@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from collections.abc import Mapping, Sequence
@@ -42,26 +43,38 @@ from eval.osp.runner import (
 from protocol.client_runtime import MODE_AUTO, MODE_SCRIPTED
 from protocol.client_service import STATUS_FAILED, RunManager, RunState
 from protocol.run_metrics import build_run_metrics
+from shared.config import MODEL_MODE_LIVE, MODEL_MODE_OFFLINE
 from shared.run_constants import (
-    PROTOCOL_A2A_T as RUNTIME_A2A_T,
+    FINAL_STATE_DECISION_UNGROUNDED,
+    FINAL_STATE_INPUT_INVALID,
+    FINAL_STATE_INTENT_NOT_CONFIRMED,
+    PROTOCOL_PURE,
+    TASK_STATE_SUBMITTED,
 )
 from shared.run_constants import (
-    PROTOCOL_PURE,
+    PROTOCOL_A2A_T as RUNTIME_A2A_T,
 )
 
 from demo.web.tester.decisions import a2at_decisions, pure_answers
 
 _LOGGER = logging.getLogger("ran_energy_saving.tester")
 
-#: Every stage the console can run.
+#: Every stage the console can run, in execution order.
 ALL_STAGES: Final[tuple[str, ...]] = (
     "intent",
     "task_t",
     "validate",
     "send",
     "negotiate",
+    "accepted",
+    "working",
     "final",
 )
+
+#: Stage status used by ``working`` when the Task never left ``SUBMITTED``: yellow, not red.
+STAGE_WAITING: Final[str] = "waiting"
+#: Stage status used when the case expects no send, so the stage cannot be judged.
+STAGE_SKIPPED: Final[str] = "skipped"
 
 #: Batch / item states.
 BATCH_DRAFT: Final[str] = "draft"
@@ -75,21 +88,70 @@ CASE_PASSED: Final[str] = "passed"
 CASE_FAILED: Final[str] = "failed"
 CASE_CANCELLED: Final[str] = "cancelled"
 CASE_ERROR: Final[str] = "error"
+#: At least one stage is ``waiting`` but none failed: the request is not proven either way.
+CASE_PARTIAL: Final[str] = "partial"
 
-#: Persisted batch schema. Older Excel batches are ignored on load.
-SCHEMA: Final[str] = "osp-tester/v1"
+#: Decision modes of a batch.
+DECISION_MODE_SCRIPTED: Final[str] = "scripted"
+DECISION_MODE_LIVE: Final[str] = "live"
+DECISION_MODES: Final[tuple[str, ...]] = (DECISION_MODE_SCRIPTED, DECISION_MODE_LIVE)
+
+#: Persisted batch schema; v1 batches are still readable.
+SCHEMA: Final[str] = "osp-tester/v2"
+SCHEMA_V1: Final[str] = "osp-tester/v1"
+_SCHEMAS: Final[frozenset[str]] = frozenset({SCHEMA, SCHEMA_V1})
+
+#: Task states that end the item in red.
+_FAILED_TASK_STATES: Final[frozenset[str]] = frozenset(
+    {"TASK_STATE_FAILED", "TASK_STATE_REJECTED", "TASK_STATE_CANCELED"}
+)
+#: Task states that prove the Task moved past SUBMITTED.
+_WORKING_TASK_STATES: Final[frozenset[str]] = frozenset(
+    {"TASK_STATE_WORKING", "TASK_STATE_COMPLETED"}
+)
+#: Client outcomes that prove the request ended before any Task was sent.
+_PRE_SEND_TERMINAL_STATES: Final[frozenset[str]] = frozenset(
+    {
+        FINAL_STATE_INPUT_INVALID,
+        FINAL_STATE_DECISION_UNGROUNDED,
+        FINAL_STATE_INTENT_NOT_CONFIRMED,
+    }
+)
+
+#: Message of a stage whose assertion the case disabled.
+_ASSERTION_OFF_MESSAGE: Final[str] = "用例关闭了该断言。"
+
+#: Message of a negotiation case's Task-T stage: the expectation is the post-negotiation value.
+_NEGOTIATED_TASK_T_MESSAGE: Final[str] = (
+    "期望 Task-T 是协商后的结果；SDK runner 只看到初始请求，因此只记录。"
+)
+
+#: Message of a pure-A2A negotiation stage run against the simulator.
+_SIM_PURE_NEGOTIATION_MESSAGE: Final[str] = (
+    "模拟器不重现厂商纯 A2A 对话轮次；真实轮次需在真机验证，因此只记录。"
+)
 
 #: Scenario used to seed a Modify target task; it is a complete request that creates a task.
 BASELINE_SCENARIO: Final[str] = "night"
 
+#: Region placeholder of the baseline request; ``_baseline_request`` replaces it with the region
+#: the configured NMS (or simulator) actually serves.
+BASELINE_REGION: Final[str] = "A2ATestRegion"
+
+#: Activation window the NMS (and simulator) serves; the baseline must name it exactly.
+BASELINE_WINDOW: Final[str] = "00:00~06:00"
+
 #: Complete baseline request used to seed a Modify target task.
 BASELINE_REQUEST: Final[str] = (
-    "Create an energy saving task for Region A with these guaranteed throughputs: "
-    "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}."
+    f"Create an energy saving task for {BASELINE_REGION} with these guaranteed throughputs: "
+    "{00:00~06:00,10Mbps}, {06:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}."
 )
 
 #: Polling interval of the batch runner.
 _POLL_SECONDS: Final[float] = 0.2
+
+#: Default observation window of the ``working`` stage when the batch does not override it.
+DEFAULT_WORKING_TIMEOUT_SECONDS: Final[float] = 60.0
 
 #: Grace after a stop-after stage before the run is cancelled.
 _CANCEL_GRACE_SECONDS: Final[float] = 1.0
@@ -140,6 +202,8 @@ class CaseItem:
     error: str | None = None
     baseline: dict[str, object] | None = None
     scratch: str | None = None
+    #: Previous executions of this item (a rerun appends before it resets the row).
+    attempts: list[dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         """Return the JSON-friendly representation."""
@@ -155,6 +219,7 @@ class CaseItem:
             "error": self.error,
             "baseline": self.baseline,
             "scratch": self.scratch,
+            "attempts": [dict(attempt) for attempt in self.attempts],
         }
 
 
@@ -166,9 +231,13 @@ class _Batch:
     case_ids: list[int]
     protocols: list[str]
     stop_after: str
-    approval: str
-    timeout_seconds: float
+    approval: str | None
+    timeout_seconds: float | None
     items: list[CaseItem]
+    working_timeout_seconds: float | None = None
+    decision_mode: str = DECISION_MODE_SCRIPTED
+    transport: str = "sse"
+    discovery: str = "direct"
     owner_id: str = ""
     status: str = BATCH_DRAFT
     created_at: str = field(default_factory=_now_iso)
@@ -191,8 +260,8 @@ class EvalBatchManager:
         protocol_defaults: Mapping[str, Mapping[str, str]],
         server_url: str | None,
         server_auth_token: str | None,
-        mie_url: str | None,
         runs_dir: Path | None = None,
+        nms_sim: bool = False,
         language: str = "",
         model_mode: str = "",
         model_label: str = "",
@@ -204,14 +273,17 @@ class EvalBatchManager:
         self._protocol_defaults = protocol_defaults
         self._server_url = (server_url or "").rstrip("/")
         self._server_auth_token = server_auth_token
-        self._mie_url = (mie_url or "").rstrip("/")
         self._history_dir = (Path(runs_dir) / "tester") if runs_dir is not None else None
+        self._nms_sim = nms_sim
         self._language = language
         self._model_mode = model_mode
         self._model_label = model_label
         self._metrics_grace_seconds = max(0.0, metrics_grace_seconds)
         self._prompt_client = prompt_client
-        self._prompt_error: str | None = None
+        #: One SDK client per model mode: a live batch must not reuse the offline scripted client.
+        self._prompt_clients: dict[str, Any] = {}
+        self._prompt_errors: dict[str, str] = {}
+        self._baseline_request = _baseline_request()
         self._sdk_lock = asyncio.Lock()
         self._batches: dict[str, _Batch] = {}
 
@@ -229,18 +301,28 @@ class EvalBatchManager:
         case_ids: Sequence[int],
         protocols: Sequence[str],
         stop_after: str,
-        approval: str,
-        timeout_seconds: float,
+        approval: str | None = None,
+        timeout_seconds: float | None = None,
+        working_timeout_seconds: float | None = None,
+        decision_mode: str = DECISION_MODE_SCRIPTED,
         owner: str = "",
     ) -> dict[str, object]:
-        """Register one draft batch from the selected cases and protocols."""
+        """Register one draft batch from the selected cases and protocols.
+
+        ``approval``/``timeout_seconds``/``working_timeout_seconds`` may be ``None``: the batch then
+        uses each case's own ``runner`` block (or the process defaults for a scratch request).
+        """
         if stop_after not in ALL_STAGES:
             raise ValueError(f"unknown stop_after {stop_after!r}")
-        if approval not in {"approve", "reject", "auto"}:
-            raise ValueError(f"unknown approval {approval!r}")
+        resolved_approval = _validate_approval(approval)
+        resolved_decision_mode = self._validate_decision_mode(decision_mode)
         selected_protocols = [protocol for protocol in protocols if protocol in {PROTOCOL_A2A_T, PROTOCOL_A2A}]
         if not selected_protocols:
             raise ValueError("至少选择一个协议。")
+        if PROTOCOL_A2A in selected_protocols and stop_after in SDK_STAGE_ORDER:
+            raise ValueError(
+                "A2A 协议没有 SDK 阶段；请把执行到设为 send / negotiate / accepted / working / final。"
+            )
         items: list[CaseItem] = []
         for case_id in case_ids:
             case = self._catalog.get(case_id)
@@ -250,13 +332,18 @@ class EvalBatchManager:
                 items.append(CaseItem(case_id=case_id, name=str(case["name"]), protocol=protocol))
         if not items:
             raise ValueError("没有可执行的用例。")
+        defaults = self._protocol_defaults.get(PROTOCOL_A2A_T, {})
         batch = _Batch(
             batch_id=f"batch-{uuid.uuid4().hex[:12]}",
             case_ids=list(case_ids),
             protocols=selected_protocols,
             stop_after=stop_after,
-            approval=approval,
-            timeout_seconds=max(1.0, float(timeout_seconds)),
+            approval=resolved_approval,
+            timeout_seconds=_positive_or_none(timeout_seconds),
+            working_timeout_seconds=_positive_or_none(working_timeout_seconds),
+            decision_mode=resolved_decision_mode,
+            transport=defaults.get("transport", "sse"),
+            discovery=defaults.get("discovery", "direct"),
             items=items,
             owner_id=owner,
         )
@@ -270,7 +357,8 @@ class EvalBatchManager:
         user_input: str,
         protocol: str,
         approval: str = "approve",
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float | None = 300.0,
+        decision_mode: str = DECISION_MODE_SCRIPTED,
         owner: str = "",
     ) -> dict[str, object]:
         """Create a one-item batch for an ad-hoc request (full flow only)."""
@@ -279,20 +367,34 @@ class EvalBatchManager:
             raise ValueError("临时请求不能为空。")
         if protocol not in {PROTOCOL_A2A_T, PROTOCOL_A2A}:
             raise ValueError(f"unknown protocol {protocol!r}")
+        resolved_approval = _validate_approval(approval) or "approve"
+        resolved_decision_mode = self._validate_decision_mode(decision_mode)
+        defaults = self._protocol_defaults.get(_runtime_protocol(protocol), {})
         item = CaseItem(case_id=0, name="临时请求", protocol=protocol, scratch=text)
         batch = _Batch(
             batch_id=f"batch-{uuid.uuid4().hex[:12]}",
             case_ids=[0],
             protocols=[protocol],
             stop_after="final",
-            approval=approval,
-            timeout_seconds=max(1.0, float(timeout_seconds)),
+            approval=resolved_approval,
+            timeout_seconds=_positive_or_none(timeout_seconds) or 300.0,
+            decision_mode=resolved_decision_mode,
+            transport=defaults.get("transport", "sse"),
+            discovery=defaults.get("discovery", "direct"),
             items=[item],
             owner_id=owner,
         )
         self._batches[batch.batch_id] = batch
         self._persist(batch)
         return self._snapshot(batch)
+
+    def _validate_decision_mode(self, decision_mode: str) -> str:
+        """Validate one batch decision mode; a live batch requires an online model."""
+        if decision_mode not in DECISION_MODES:
+            raise ValueError(f"unknown decision_mode {decision_mode!r}")
+        if decision_mode == DECISION_MODE_LIVE and self._model_mode == "offline":
+            raise ValueError("live 决策需要在线模型。")
+        return decision_mode
 
     def get(self, batch_id: str, *, owner: str = "") -> dict[str, object] | None:
         """Return one batch snapshot, or ``None`` when unknown or owned by someone else."""
@@ -368,6 +470,10 @@ class EvalBatchManager:
             stop_after=batch.stop_after,
             approval=batch.approval,
             timeout_seconds=batch.timeout_seconds,
+            working_timeout_seconds=batch.working_timeout_seconds,
+            decision_mode=batch.decision_mode,
+            transport=batch.transport,
+            discovery=batch.discovery,
             items=[
                 CaseItem(
                     case_id=item.case_id,
@@ -403,7 +509,7 @@ class EvalBatchManager:
                 document = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            if not isinstance(document, Mapping) or document.get("schema") != SCHEMA:
+            if not isinstance(document, Mapping) or document.get("schema") not in _SCHEMAS:
                 continue
             if str(document.get("ownerId") or "") != owner:
                 continue
@@ -416,6 +522,9 @@ class EvalBatchManager:
                     "finishedAt": document.get("finishedAt"),
                     "summary": document.get("summary", {}),
                     "stopAfter": document.get("stopAfter"),
+                    "decisionMode": document.get("decisionMode"),
+                    "transport": document.get("transport"),
+                    "discovery": document.get("discovery"),
                 }
             )
             if len(summaries) >= limit:
@@ -426,13 +535,58 @@ class EvalBatchManager:
     # Execution
     # ------------------------------------------------------------------
 
-    async def _run_batch(self, batch: _Batch) -> None:
+    async def rerun_item(
+        self, batch_id: str, index: int, *, owner: str = ""
+    ) -> dict[str, object]:
+        """Rerun one item in place with a fresh run identity.
+
+        Only a batch that is not running can be rerun. The previous attempt is kept in
+        ``item.attempts`` so the drawer can still open its wire log.
+        """
+        batch = self._owned(batch_id, owner)
+        if batch is None:
+            raise KeyError(batch_id)
+        if batch.status == BATCH_RUNNING:
+            raise ValueError("该批次仍在执行中。")
+        if index < 0 or index >= len(batch.items):
+            raise ValueError("用例下标无效。")
+        item = batch.items[index]
+        item.attempts.append(
+            {
+                "runId": item.run_id,
+                "decisionMode": batch.decision_mode,
+                "status": item.status,
+                "finishedAt": _now_iso(),
+            }
+        )
+        item.status = CASE_PENDING
+        item.stages = {}
+        item.run_id = None
+        item.duration_ms = None
+        item.tokens = {}
+        item.error = None
+        item.baseline = None
+        batch.status = BATCH_RUNNING
+        batch.cancel_requested = False
+        batch.finished_at = None
+        batch.error = None
+        self._persist(batch)
+        batch.task = asyncio.create_task(
+            self._run_batch(batch, [index]), name=f"tester-{batch_id}-rerun-{index}"
+        )
+        await asyncio.sleep(0)
+        return self._snapshot(batch)
+
+    async def _run_batch(
+        self, batch: _Batch, indices: Sequence[int] | None = None
+    ) -> None:
+        selected = list(range(len(batch.items))) if indices is None else list(indices)
         try:
-            for index, item in enumerate(batch.items):
+            for index in selected:
                 if batch.cancel_requested:
                     break
                 batch.current_index = index
-                await self._run_item(batch, index, item)
+                await self._run_item(batch, index, batch.items[index])
         except asyncio.CancelledError:
             self._mark_pending_cancelled(batch)
             batch.status = BATCH_CANCELLED
@@ -463,13 +617,17 @@ class EvalBatchManager:
                 await self._run_scratch(batch, index, item)
             else:
                 await self._run_case_item(batch, index, item)
+        except asyncio.CancelledError:
+            item.status = CASE_CANCELLED
+            item.error = "批次已取消。"
+            raise
         except Exception as exc:  # noqa: BLE001 - one bad item must not stop the batch
             _LOGGER.warning("tester item %s/%s failed", item.case_id, item.protocol, exc_info=True)
             item.status = CASE_ERROR
             item.error = f"{type(exc).__name__}: {exc}"
         finally:
             item.duration_ms = int(round((time.monotonic() - started) * 1000))
-            if item.status == CASE_RUNNING:
+            if item.status == CASE_RUNNING and not batch.cancel_requested:
                 item.status = CASE_PASSED
             self._persist(batch)
 
@@ -480,25 +638,33 @@ class EvalBatchManager:
             item.error = f"未知用例 {item.case_id}"
             return
         stages = list(ALL_STAGES[: ALL_STAGES.index(batch.stop_after) + 1])
-        if item.protocol == PROTOCOL_A2A and batch.stop_after in SDK_STAGE_ORDER:
-            item.status = CASE_ERROR
-            item.error = "A2A 协议没有 SDK 阶段；请把执行到设为 send / negotiate / final。"
-            return
-        sdk_stages = [stage for stage in stages if stage in SDK_STAGE_ORDER]
-        if sdk_stages:
-            await self._run_sdk_stages(case, item, sdk_stages[-1])
+        if item.protocol == PROTOCOL_A2A:
+            # OSP defines no SDK stages for pure A2A; only the runtime chain applies.
+            stages = [stage for stage in stages if stage not in SDK_STAGE_ORDER]
+        else:
+            sdk_stages = [stage for stage in stages if stage in SDK_STAGE_ORDER]
+            if sdk_stages:
+                await self._run_sdk_stages(case, item, sdk_stages[-1], batch.decision_mode)
         if batch.stop_after in SDK_STAGE_ORDER:
             item.status = self._item_status(item)
             return
         await self._run_full_flow(batch, index, item, case, stages)
         item.status = self._item_status(item)
 
-    async def _run_sdk_stages(self, case: Mapping[str, Any], item: CaseItem, stop_after: str) -> None:
+    async def _run_sdk_stages(
+        self,
+        case: Mapping[str, Any],
+        item: CaseItem,
+        stop_after: str,
+        decision_mode: str = DECISION_MODE_SCRIPTED,
+    ) -> None:
+        model_mode = MODEL_MODE_LIVE if decision_mode == DECISION_MODE_LIVE else None
         async with self._sdk_lock:
-            client = await self._ensure_prompt_client()
+            client = await self._ensure_prompt_client(model_mode)
             outcome = await asyncio.to_thread(run_case, case, client, stop_after=stop_after)
+        negotiation_expected = _negotiation_expected(case, PROTOCOL_A2A_T)
         for stage in outcome.stages:
-            item.stages[stage.stage] = StageResult(
+            result = StageResult(
                 stage=stage.stage,
                 status=stage.status,
                 message=stage.message,
@@ -506,6 +672,14 @@ class EvalBatchManager:
                 actual=stage.actual,
                 diffs=[diff.to_dict() for diff in stage.diffs],
             )
+            protocol = "" if stage.stage == "intent" else PROTOCOL_A2A_T
+            result = _apply_assertion(case, protocol, stage.stage, result)
+            if stage.stage == "task_t" and negotiation_expected:
+                # The case's Task-T is the post-negotiation one; the SDK runner only sees the
+                # initial request, so comparing them would be a false failure.
+                result.status = STAGE_RECORDED
+                result.message = _NEGOTIATED_TASK_T_MESSAGE
+            item.stages[stage.stage] = result
         if outcome.error:
             item.error = outcome.error
 
@@ -518,12 +692,18 @@ class EvalBatchManager:
         stages: Sequence[str],
     ) -> None:
         runtime_protocol = _runtime_protocol(item.protocol)
+        runner = _case_runner(case)
+        scenario = str(runner.get("scenario") or "night")
+        language = runner.get("language")
+        resolved_language = language if isinstance(language, str) and language else None
+        resolved_approval = self._resolved_approval(batch, case)
+        resolved_timeout = self._resolved_timeout(batch, case)
         target_task_id: str | None = None
         target_context_id: str | None = None
         if runtime_protocol == RUNTIME_A2A_T and case.get("operation") == "Modify":
             baseline = await self._seed_baseline(batch, index, item)
             if baseline is None:
-                for stage in ("send", "negotiate", "final"):
+                for stage in ("send", "negotiate", "accepted", "working", "final"):
                     if stage in stages:
                         item.stages[stage] = StageResult(
                             stage, STAGE_ERROR, "Modify 基线任务创建失败。"
@@ -538,17 +718,17 @@ class EvalBatchManager:
         defaults = self._protocol_defaults.get(runtime_protocol, {})
         transport = defaults.get("transport", "sse")
         discovery = defaults.get("discovery", "direct")
-        mode = MODE_SCRIPTED if runtime_protocol == RUNTIME_A2A_T else MODE_AUTO
+        conversation_id, idempotency_key = self._run_identity(batch, index, item)
         run = await self._runs.start(
-            "night",
-            mode,
+            scenario,
+            self._mode_for(batch, item.protocol),
             transport,
             discovery,
             str(case["user_input"]),
             protocol=runtime_protocol,
-            conversation_id=f"tester-{batch.batch_id}-{index}",
+            conversation_id=conversation_id,
             user_id="tester",
-            idempotency_key=f"tester-{batch.batch_id}-{index}",
+            idempotency_key=idempotency_key,
             source={
                 "kind": "tester",
                 "channel": "tester-console",
@@ -560,21 +740,31 @@ class EvalBatchManager:
             target_context_id=target_context_id,
             scripted_decisions=decisions or None,
             pure_answers=answers or None,
-            validate_before_send=True,
+            validate_before_send=_pre_send_validation(runner),
+            language=resolved_language,
         )
         item.run_id = run.run_id
         self._persist(batch)
         approval_task = asyncio.create_task(
-            self._answer_approval_gate(batch.approval, item.protocol, run),
+            self._answer_approval_gate(resolved_approval, item.protocol, run),
             name=f"tester-approval-{run.run_id}",
         )
         try:
-            await self._wait_for_stage(run, item, batch, stages)
+            await self._wait_for_stage(
+                run,
+                item,
+                batch,
+                stages,
+                timeout_seconds=resolved_timeout,
+                working_timeout_seconds=self._resolved_working_timeout(batch),
+            )
         finally:
             approval_task.cancel()
             await asyncio.gather(approval_task, return_exceptions=True)
             await self._collect_metrics(item, run)
-            if run.status == "running":
+            # ``accepted``/``working`` end the observation window, not the run: the Task keeps
+            # running in the background, so the tester must not cancel it.
+            if batch.stop_after not in {"accepted", "working"} and run.status == "running":
                 await self._runs.cancel(run.run_id)
                 await self._wait_for_run(run, _CANCEL_GRACE_SECONDS)
 
@@ -584,24 +774,24 @@ class EvalBatchManager:
             return
         runtime_protocol = _runtime_protocol(item.protocol)
         defaults = self._protocol_defaults.get(runtime_protocol, {})
-        mode = MODE_SCRIPTED if runtime_protocol == RUNTIME_A2A_T else MODE_AUTO
+        conversation_id, idempotency_key = self._run_identity(batch, index, item)
         run = await self._runs.start(
             "night",
-            mode,
+            self._mode_for(batch, item.protocol),
             defaults.get("transport", "sse"),
             defaults.get("discovery", "direct"),
             item.scratch,
             protocol=runtime_protocol,
-            conversation_id=f"tester-{batch.batch_id}-{index}",
+            conversation_id=conversation_id,
             user_id="tester",
-            idempotency_key=f"tester-{batch.batch_id}-{index}",
+            idempotency_key=idempotency_key,
             source={"kind": "tester", "channel": "tester-scratch", "batchId": batch.batch_id},
             scripted_decisions=(),
             validate_before_send=True,
         )
         item.run_id = run.run_id
         self._persist(batch)
-        timed_out = await self._wait_for_run(run, batch.timeout_seconds)
+        timed_out = await self._wait_for_run(run, self._resolved_timeout(batch))
         actual = run.result.final_state if run.result is not None else None
         if run.status == STATUS_FAILED:
             item.stages["final"] = StageResult(
@@ -619,24 +809,67 @@ class EvalBatchManager:
             )
         await self._collect_metrics(item, run)
 
+    def _run_identity(self, batch: _Batch, index: int, item: CaseItem) -> tuple[str, str]:
+        """Return the conversation id and idempotency key of this attempt.
+
+        A rerun must not reuse the previous run: ``RunManager`` deduplicates by idempotency key, and
+        a finished conversation would return the old run instead of executing again.
+        """
+        attempt = len(item.attempts)
+        suffix = f"-r{attempt}" if attempt else ""
+        base = f"tester-{batch.batch_id}-{index}{suffix}"
+        return base, base
+
+    @staticmethod
+    def _mode_for(batch: _Batch, protocol: str) -> str:
+        """Return the runtime decision mode of one item."""
+        if protocol == PROTOCOL_A2A_T and batch.decision_mode != DECISION_MODE_LIVE:
+            return MODE_SCRIPTED
+        return MODE_AUTO
+
+    @staticmethod
+    def _resolved_approval(batch: _Batch, case: Mapping[str, Any] | None = None) -> str:
+        """Return the approval behaviour of one item: batch override, else case runner."""
+        if batch.approval is not None:
+            return batch.approval
+        return str(_case_runner(case).get("approval") or "approve")
+
+    @staticmethod
+    def _resolved_timeout(batch: _Batch, case: Mapping[str, Any] | None = None) -> float:
+        """Return the run timeout of one item: batch override, else case runner, else 300s."""
+        if batch.timeout_seconds is not None:
+            return batch.timeout_seconds
+        value = _case_runner(case).get("timeout_seconds")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return max(1.0, float(value))
+        return 300.0
+
+    @staticmethod
+    def _resolved_working_timeout(batch: _Batch) -> float:
+        """Return the ``working`` observation window of one item."""
+        if batch.working_timeout_seconds is not None:
+            return batch.working_timeout_seconds
+        return DEFAULT_WORKING_TIMEOUT_SECONDS
+
     async def _seed_baseline(self, batch: _Batch, index: int, item: CaseItem) -> dict[str, object] | None:
         """Create one baseline task for a Modify A2A-T item."""
         defaults = self._protocol_defaults.get(PROTOCOL_A2A_T, {})
+        conversation_id, idempotency_key = self._run_identity(batch, index, item)
         run = await self._runs.start(
             BASELINE_SCENARIO,
             MODE_SCRIPTED,
             defaults.get("transport", "sse"),
             defaults.get("discovery", "direct"),
-            BASELINE_REQUEST,
+            self._baseline_request,
             protocol=PROTOCOL_A2A_T,
-            conversation_id=f"tester-{batch.batch_id}-{index}-baseline",
+            conversation_id=f"{conversation_id}-baseline",
             user_id="tester",
-            idempotency_key=f"tester-{batch.batch_id}-{index}-baseline",
+            idempotency_key=f"{idempotency_key}-baseline",
             source={"kind": "tester", "channel": "tester-baseline", "batchId": batch.batch_id},
             scripted_decisions=(),
             validate_before_send=True,
         )
-        timed_out = await self._wait_for_run(run, batch.timeout_seconds)
+        timed_out = await self._wait_for_run(run, self._resolved_timeout(batch))
         if timed_out or run.result is None or not run.result.task_id or not run.result.context_id:
             item.baseline = {
                 "runId": run.run_id,
@@ -661,6 +894,9 @@ class EvalBatchManager:
         item: CaseItem,
         batch: _Batch,
         stages: Sequence[str],
+        *,
+        timeout_seconds: float,
+        working_timeout_seconds: float,
     ) -> None:
         """Wait for the last requested runtime stage and record its assertion."""
         expected_send = True
@@ -670,18 +906,22 @@ class EvalBatchManager:
         case = self._catalog.get(item.case_id)
         if case is not None:
             protocol_block = case["expect"]["protocols"][item.protocol]
+            expected_final = protocol_block.get("final_state")
             if item.protocol == PROTOCOL_A2A_T:
                 expected_send = bool(protocol_block.get("send"))
-                expected_final = protocol_block.get("final_state")
             negotiation = protocol_block["negotiation"]
             expected_rounds = int(negotiation.get("expected_rounds", 0))
             expected_kinds = negotiation.get("kinds")
 
+        # ``accepted``/``working`` only make sense when the case expects a send. Disabling the
+        # ``send`` assertion does not mean no Task is created, so it must not skip them.
+        send_expected = expected_send
+
         started = time.monotonic()
         if "send" in stages:
-            sent = await self._wait_for_span(run, "message_sent", batch.timeout_seconds)
+            sent = await self._wait_for_span(run, "message_sent", timeout_seconds)
             status = STAGE_PASSED if sent == expected_send else STAGE_FAILED
-            item.stages["send"] = StageResult(
+            send_result = StageResult(
                 "send",
                 status,
                 "" if status == STAGE_PASSED else "预期发送状态与观察结果不一致。",
@@ -689,12 +929,15 @@ class EvalBatchManager:
                 actual=sent,
                 duration_ms=int(round((time.monotonic() - started) * 1000)),
             )
+            if case is not None:
+                send_result = _apply_assertion(case, item.protocol, "send", send_result)
+            item.stages["send"] = send_result
             if batch.stop_after == "send":
                 return
 
         started = time.monotonic()
         if "negotiate" in stages:
-            await self._wait_for_negotiation(run, expected_rounds, batch.timeout_seconds)
+            await self._wait_for_negotiation(run, expected_rounds, timeout_seconds)
             actual_rounds = len(run.proposals)
             actual_kinds = [proposal.kind for proposal in run.proposals]
             rounds_ok = actual_rounds == expected_rounds
@@ -702,7 +945,7 @@ class EvalBatchManager:
                 kind in actual_kinds for kind in expected_kinds
             )
             status = STAGE_PASSED if rounds_ok and kinds_ok else STAGE_FAILED
-            item.stages["negotiate"] = StageResult(
+            negotiate_result = StageResult(
                 "negotiate",
                 status,
                 "" if status == STAGE_PASSED else "协商轮次或类型与预期不一致。",
@@ -710,12 +953,36 @@ class EvalBatchManager:
                 actual={"rounds": actual_rounds, "kinds": actual_kinds},
                 duration_ms=int(round((time.monotonic() - started) * 1000)),
             )
+            if case is not None:
+                negotiate_result = _apply_assertion(
+                    case, item.protocol, "negotiation", negotiate_result
+                )
+            if item.protocol == PROTOCOL_A2A and self._nms_sim:
+                # The simulator asks a generic plain-A2A question; the vendor's dialogue and
+                # round count come from the OSP P column and cannot be reproduced offline.
+                negotiate_result.status = STAGE_RECORDED
+                negotiate_result.message = _SIM_PURE_NEGOTIATION_MESSAGE
+            item.stages["negotiate"] = negotiate_result
             if batch.stop_after == "negotiate":
+                return
+
+        if "accepted" in stages:
+            item.stages["accepted"] = await self._judge_accepted(
+                run, item, case, send_expected, timeout_seconds
+            )
+            if batch.stop_after == "accepted":
+                return
+
+        if "working" in stages:
+            item.stages["working"] = await self._judge_working(
+                run, item, case, send_expected, working_timeout_seconds
+            )
+            if batch.stop_after == "working":
                 return
 
         started = time.monotonic()
         if "final" in stages:
-            await self._wait_for_run(run, batch.timeout_seconds)
+            await self._wait_for_run(run, timeout_seconds)
             actual_final = run.result.final_state if run.result is not None else None
             if run.status == STATUS_FAILED:
                 status = STAGE_ERROR
@@ -727,7 +994,7 @@ class EvalBatchManager:
             else:
                 status = STAGE_PASSED if actual_final == expected_final else STAGE_FAILED
                 message = "" if status == STAGE_PASSED else "最终状态与预期不一致。"
-            item.stages["final"] = StageResult(
+            final_result = StageResult(
                 "final",
                 status,
                 message,
@@ -735,6 +1002,157 @@ class EvalBatchManager:
                 actual=actual_final,
                 duration_ms=int(round((time.monotonic() - started) * 1000)),
             )
+            if case is not None:
+                final_result = _apply_assertion(case, item.protocol, "final_state", final_result)
+            item.stages["final"] = final_result
+
+    async def _judge_accepted(
+        self,
+        run: RunState,
+        item: CaseItem,
+        case: Mapping[str, Any] | None,
+        send_expected: bool,
+        timeout_seconds: float,
+    ) -> StageResult:
+        """Judge whether the remote side accepted the request (a Task exists)."""
+        started = time.monotonic()
+        actual = _task_observation(run)
+        if item.protocol == PROTOCOL_A2A:
+            return StageResult(
+                "accepted",
+                STAGE_RECORDED,
+                "纯 A2A 只记录外层 Task，不判定受理。",
+                expected=None,
+                actual=actual,
+                duration_ms=int(round((time.monotonic() - started) * 1000)),
+            )
+        if not send_expected:
+            return StageResult(
+                "accepted",
+                STAGE_SKIPPED,
+                "用例期望不发送",
+                expected=None,
+                actual=actual,
+                duration_ms=int(round((time.monotonic() - started) * 1000)),
+            )
+
+        await self._wait_for_task_identity(run, timeout_seconds)
+        actual = _task_observation(run)
+        final_state = run.result.final_state if run.result is not None else None
+        if final_state in _PRE_SEND_TERMINAL_STATES:
+            status = STAGE_FAILED
+            message = f"run 在发送前结束：{final_state}"
+        elif run.remote_task_id is None or run.remote_context_id is None:
+            status = STAGE_FAILED
+            message = "run 已结束但没有 Task。" if run.finished() else "等待 Task 超时。"
+        elif run.latest_task_state in _FAILED_TASK_STATES:
+            status = STAGE_FAILED
+            message = f"Task 状态为 {run.latest_task_state}。"
+        else:
+            status = STAGE_PASSED
+            message = ""
+        return StageResult(
+            "accepted",
+            status,
+            message,
+            expected={"taskId": "非空", "contextId": "非空", "state": "不在失败终态"},
+            actual=actual,
+            duration_ms=int(round((time.monotonic() - started) * 1000)),
+        )
+
+    async def _judge_working(
+        self,
+        run: RunState,
+        item: CaseItem,
+        case: Mapping[str, Any] | None,
+        send_expected: bool,
+        working_timeout_seconds: float,
+    ) -> StageResult:
+        """Judge whether the Task was observed moving past ``SUBMITTED``."""
+        started = time.monotonic()
+        actual = _task_observation(run)
+        if item.protocol == PROTOCOL_A2A:
+            return StageResult(
+                "working",
+                STAGE_RECORDED,
+                "纯 A2A 只记录外层 Task，不判定运行状态。",
+                expected=None,
+                actual=actual,
+                duration_ms=int(round((time.monotonic() - started) * 1000)),
+            )
+        if not send_expected:
+            return StageResult(
+                "working",
+                STAGE_SKIPPED,
+                "用例期望不发送",
+                expected=None,
+                actual=actual,
+                duration_ms=int(round((time.monotonic() - started) * 1000)),
+            )
+
+        state = await self._wait_for_working_state(run, working_timeout_seconds)
+        actual = _task_observation(run)
+        if state in _WORKING_TASK_STATES:
+            status = STAGE_PASSED
+            message = ""
+        elif state in _FAILED_TASK_STATES:
+            status = STAGE_FAILED
+            message = f"Task 状态为 {state}。"
+        elif state == TASK_STATE_SUBMITTED:
+            status = STAGE_WAITING
+            message = f"{working_timeout_seconds:g}s 内 Task 仍停留在 SUBMITTED。"
+        elif state == "TASK_STATE_INPUT_REQUIRED":
+            status = STAGE_WAITING
+            message = "Task 仍在协商（INPUT_REQUIRED）。"
+        else:
+            final_state = run.result.final_state if run.result is not None else None
+            if final_state == "task_completed":
+                status = STAGE_PASSED
+                message = "通过终态 task_completed 观察到完成。"
+            elif final_state in {"task_failed", "task_rejected"}:
+                status = STAGE_FAILED
+                message = f"run 终态为 {final_state}。"
+            else:
+                status = STAGE_WAITING
+                message = (
+                    f"{working_timeout_seconds:g}s 内未观察到 WORKING。"
+                    if run.finished()
+                    else "未观察到 WORKING。"
+                )
+        return StageResult(
+            "working",
+            status,
+            message,
+            expected="WORKING 或 COMPLETED",
+            actual=actual,
+            duration_ms=int(round((time.monotonic() - started) * 1000)),
+        )
+
+    async def _wait_for_task_identity(self, run: RunState, timeout_seconds: float) -> None:
+        """Wait until the run reports both a Task id and its context id, or the run ends."""
+        deadline = time.monotonic() + max(0.1, timeout_seconds)
+        while time.monotonic() < deadline:
+            if run.remote_task_id and run.remote_context_id:
+                return
+            if run.finished():
+                return
+            await asyncio.sleep(_POLL_SECONDS)
+
+    async def _wait_for_working_state(
+        self, run: RunState, timeout_seconds: float
+    ) -> str | None:
+        """Poll the observed Task state until it leaves SUBMITTED, the run ends or time is up."""
+        deadline = time.monotonic() + max(1.0, timeout_seconds)
+        while time.monotonic() < deadline:
+            state = run.latest_task_state
+            if state in _WORKING_TASK_STATES or state in _FAILED_TASK_STATES:
+                return state
+            if run.finished():
+                # A task-carried negotiation can still be INPUT_REQUIRED right after the accept;
+                # keep polling rather than reporting a premature "waiting".
+                return state
+            await asyncio.sleep(_POLL_SECONDS)
+        return run.latest_task_state
 
     async def _wait_for_run(self, run: RunState, timeout_seconds: float) -> bool:
         deadline = time.monotonic() + max(0.1, timeout_seconds)
@@ -792,17 +1210,23 @@ class EvalBatchManager:
         tokens = metrics.get("tokens")
         item.tokens = dict(tokens) if isinstance(tokens, Mapping) else {}
 
-    async def _ensure_prompt_client(self) -> Any:
+    async def _ensure_prompt_client(self, model_mode: str | None = None) -> Any:
+        """Return the SDK prompt client of one model mode (offline scripted by default)."""
         if self._prompt_client is not None:
             return self._prompt_client
-        if self._prompt_error is not None:
-            raise RuntimeError(self._prompt_error)
+        key = model_mode or self._model_mode or MODEL_MODE_OFFLINE
+        if key in self._prompt_errors:
+            raise RuntimeError(self._prompt_errors[key])
+        cached = self._prompt_clients.get(key)
+        if cached is not None:
+            return cached
         try:
-            self._prompt_client = await asyncio.to_thread(build_client)
+            client = await asyncio.to_thread(build_client, model_mode=model_mode)
         except Exception as exc:  # noqa: BLE001 - reported per case
-            self._prompt_error = f"{type(exc).__name__}: {exc}"
+            self._prompt_errors[key] = f"{type(exc).__name__}: {exc}"
             raise
-        return self._prompt_client
+        self._prompt_clients[key] = client
+        return client
 
     def _item_status(self, item: CaseItem) -> str:
         statuses = [result.status for result in item.stages.values()]
@@ -810,6 +1234,12 @@ class EvalBatchManager:
             return CASE_ERROR
         if any(status == STAGE_FAILED for status in statuses):
             return CASE_FAILED
+        if any(status == STAGE_WAITING for status in statuses):
+            return CASE_PARTIAL
+        if item.error:
+            # The run failed, but its only red stage was recorded (assertion off / simulator
+            # dialogue). A green row would overstate what the batch proved.
+            return CASE_PARTIAL
         return CASE_PASSED
 
     # ------------------------------------------------------------------
@@ -817,16 +1247,15 @@ class EvalBatchManager:
     # ------------------------------------------------------------------
 
     async def _answer_approval_gate(self, approval: str, protocol: str, run: RunState) -> None:
+        """Auto-answer the A2A-T server approval gate; ``auto`` waits for the timeout.
+
+        MIE approval is out of scope for the tester; only the A2A-T server gate is handled.
+        """
         if approval == "auto":
             return
-        approved = approval == "approve"
-        watchers: list[asyncio.Task[None]] = []
-        if protocol == PROTOCOL_A2A_T and self._server_url:
-            watchers.append(asyncio.create_task(self._watch_server_gate(run, approved)))
-        if protocol == PROTOCOL_A2A and self._mie_url:
-            watchers.append(asyncio.create_task(self._watch_mie_gate(approved)))
-        if watchers:
-            await asyncio.gather(*watchers, return_exceptions=True)
+        if protocol != PROTOCOL_A2A_T or not self._server_url:
+            return
+        await self._watch_server_gate(run, approval == "approve")
 
     async def _watch_server_gate(self, run: RunState, approved: bool) -> None:
         snapshot, queue = run.subscribe()
@@ -875,37 +1304,6 @@ class EvalBatchManager:
         except httpx.HTTPError as exc:
             _LOGGER.warning("tester approval forward failed: %s", exc)
 
-    async def _watch_mie_gate(self, approved: bool) -> None:
-        handled: set[str] = set()
-        try:
-            async with httpx.AsyncClient(timeout=None, trust_env=False) as client:
-                async with client.stream("GET", f"{self._mie_url}/approvals/events") as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if not line.startswith("data:"):
-                            continue
-                        try:
-                            payload = json.loads(line[5:].strip())
-                        except ValueError:
-                            continue
-                        if not isinstance(payload, Mapping):
-                            continue
-                        if payload.get("type") != "approval_requested":
-                            continue
-                        task_id = str(payload.get("taskId") or "")
-                        if not task_id or task_id in handled:
-                            continue
-                        handled.add(task_id)
-                        try:
-                            await client.post(
-                                f"{self._mie_url}/approvals/{task_id}",
-                                json={"approved": approved},
-                            )
-                        except httpx.HTTPError as exc:
-                            _LOGGER.warning("tester MIE decision failed: %s", exc)
-        except httpx.HTTPError as exc:
-            _LOGGER.warning("tester MIE event stream stopped: %s", exc)
-
     # ------------------------------------------------------------------
     # Persistence and snapshots
     # ------------------------------------------------------------------
@@ -922,6 +1320,7 @@ class EvalBatchManager:
             temporary.replace(target)
         except OSError as exc:
             _LOGGER.warning("tester batch %s could not be persisted: %s", batch.batch_id, exc)
+            batch.error = f"批次持久化失败：{exc}"
 
     def _load(self, batch_id: str) -> _Batch | None:
         if self._history_dir is None:
@@ -931,7 +1330,7 @@ class EvalBatchManager:
             document = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
-        if not isinstance(document, Mapping) or document.get("schema") != SCHEMA:
+        if not isinstance(document, Mapping) or document.get("schema") not in _SCHEMAS:
             return None
         raw_items = document.get("items")
         if not isinstance(raw_items, list):
@@ -942,23 +1341,30 @@ class EvalBatchManager:
                 name=str(item.get("name") or ""),
                 protocol=str(item.get("protocol") or PROTOCOL_A2A_T),
                 status=str(item.get("status") or CASE_PENDING),
+                stages=_load_stages(item.get("stages")),
                 run_id=item.get("runId") if isinstance(item.get("runId"), str) else None,
                 duration_ms=item.get("durationMs") if isinstance(item.get("durationMs"), int) else None,
                 tokens=dict(item.get("tokens") or {}),
                 error=item.get("error") if isinstance(item.get("error"), str) else None,
                 baseline=dict(item.get("baseline") or {}) if isinstance(item.get("baseline"), Mapping) else None,
                 scratch=item.get("scratch") if isinstance(item.get("scratch"), str) else None,
+                attempts=_load_attempts(item.get("attempts")),
             )
             for item in raw_items
             if isinstance(item, Mapping)
         ]
+        defaults = self._protocol_defaults.get(PROTOCOL_A2A_T, {})
         batch = _Batch(
             batch_id=str(document.get("batchId") or batch_id),
             case_ids=[int(value) for value in document.get("caseIds", []) if isinstance(value, int)],
             protocols=[str(value) for value in document.get("protocols", [])],
             stop_after=str(document.get("stopAfter") or "final"),
-            approval=str(document.get("approval") or "approve"),
-            timeout_seconds=float(document.get("timeoutSeconds") or 300.0),
+            approval=document.get("approval") if isinstance(document.get("approval"), str) else None,
+            timeout_seconds=_optional_float(document.get("timeoutSeconds")),
+            working_timeout_seconds=_optional_float(document.get("workingTimeoutSeconds")),
+            decision_mode=str(document.get("decisionMode") or DECISION_MODE_SCRIPTED),
+            transport=str(document.get("transport") or defaults.get("transport", "sse")),
+            discovery=str(document.get("discovery") or defaults.get("discovery", "direct")),
             items=items,
             owner_id=str(document.get("ownerId") or ""),
             status=str(document.get("status") or BATCH_DRAFT),
@@ -987,6 +1393,15 @@ class EvalBatchManager:
             "stopAfter": batch.stop_after,
             "approval": batch.approval,
             "timeoutSeconds": batch.timeout_seconds,
+            "workingTimeoutSeconds": batch.working_timeout_seconds,
+            "decisionMode": batch.decision_mode,
+            "transport": batch.transport,
+            "discovery": batch.discovery,
+            "resolvedRunner": {
+                "approval": batch.approval,
+                "timeoutSeconds": batch.timeout_seconds,
+                "workingTimeoutSeconds": batch.working_timeout_seconds,
+            },
             "ownerId": batch.owner_id,
             "createdAt": batch.created_at,
             "startedAt": batch.started_at,
@@ -1007,11 +1422,13 @@ def _summary(items: Sequence[CaseItem]) -> dict[str, int]:
         "failed": 0,
         "error": 0,
         "cancelled": 0,
+        "partial": 0,
         "durationMs": 0,
         "stagePassed": 0,
         "stageFailed": 0,
         "stageRecorded": 0,
         "stageError": 0,
+        "stageWaiting": 0,
     }
     for item in items:
         if item.status in counts:
@@ -1027,7 +1444,150 @@ def _summary(items: Sequence[CaseItem]) -> dict[str, int]:
                 counts["stageRecorded"] += 1
             elif stage.status == STAGE_ERROR:
                 counts["stageError"] += 1
+            elif stage.status == STAGE_WAITING:
+                counts["stageWaiting"] += 1
     return counts
+
+
+def _baseline_request() -> str:
+    """Return the Modify baseline request for the region the configured NMS serves.
+
+    The demo's ``Region A`` placeholder is not a served region: the real NMS and the simulator
+    answer it with an information negotiation. A Modify baseline must therefore name the
+    configured ``A2AT_SAMPLE_NMS_REGION`` (the simulator's region in a ``--nms-sim`` run).
+    """
+    region = os.environ.get("A2AT_SAMPLE_NMS_REGION", "").strip()
+    if not region:
+        try:
+            from shared.config import load_config
+
+            region = (load_config().nms_region or "").strip()
+        except Exception:  # noqa: BLE001 - the baseline falls back to the test region
+            region = ""
+    region = region or BASELINE_REGION
+    window = os.environ.get("A2AT_SAMPLE_NMS_SIM_WINDOW", "").strip() or BASELINE_WINDOW
+    request = BASELINE_REQUEST.replace(BASELINE_REGION, region)
+    if window != BASELINE_WINDOW:
+        request = request.replace(f"{{{BASELINE_WINDOW},10Mbps}}", f"{{{window},10Mbps}}")
+    return request
+
+
+def _negotiation_expected(case: Mapping[str, Any], protocol: str) -> bool:
+    """Return whether the case expects a negotiation round on one protocol."""
+    expect = case.get("expect")
+    protocols = expect.get("protocols") if isinstance(expect, Mapping) else None
+    block = protocols.get(protocol) if isinstance(protocols, Mapping) else None
+    negotiation = block.get("negotiation") if isinstance(block, Mapping) else None
+    return bool(isinstance(negotiation, Mapping) and negotiation.get("expected"))
+
+
+def _case_runner(case: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    """Return the ``runner`` block of a case, empty when absent."""
+    if not isinstance(case, Mapping):
+        return {}
+    runner = case.get("runner")
+    return runner if isinstance(runner, Mapping) else {}
+
+
+def _pre_send_validation(runner: Mapping[str, Any]) -> bool | None:
+    """Map ``runner.pre_send_validation`` to the run override (``None`` keeps the process rule)."""
+    value = runner.get("pre_send_validation")
+    if value == "always":
+        return True
+    if value == "off":
+        return False
+    return None
+
+
+def _assertion_enabled(case: Mapping[str, Any], protocol: str, key: str) -> bool:
+    """Return whether ``case.assert`` enables one assertion.
+
+    ``protocol=""`` reads the top-level key (``intent``); otherwise the protocol block is used
+    (``a2a-t.task_t`` / ``a2a.negotiation``). A missing flag means enabled.
+    """
+    block = case.get("assert")
+    if not isinstance(block, Mapping):
+        return True
+    container: object = block.get(protocol) if protocol else block
+    if not isinstance(container, Mapping):
+        return True
+    value = container.get(key)
+    return True if value is None else bool(value)
+
+
+def _apply_assertion(
+    case: Mapping[str, Any], protocol: str, key: str, result: StageResult
+) -> StageResult:
+    """Keep the observed values but record (never judge) a stage whose assertion is disabled."""
+    if _assertion_enabled(case, protocol, key):
+        return result
+    result.status = STAGE_RECORDED
+    result.message = _ASSERTION_OFF_MESSAGE
+    return result
+
+
+def _task_observation(run: RunState) -> dict[str, object]:
+    """Return the Task identity/state the run last observed."""
+    return {
+        "taskId": run.remote_task_id,
+        "contextId": run.remote_context_id,
+        "state": run.latest_task_state,
+    }
+
+
+def _load_stages(raw: object) -> dict[str, StageResult]:
+    """Restore the persisted stage results of one item (v1 batches have none)."""
+    if not isinstance(raw, Mapping):
+        return {}
+    stages: dict[str, StageResult] = {}
+    for name, value in raw.items():
+        if not isinstance(value, Mapping):
+            continue
+        raw_diffs = value.get("diffs")
+        stages[str(name)] = StageResult(
+            stage=str(value.get("stage") or name),
+            status=str(value.get("status") or STAGE_ERROR),
+            message=str(value.get("message") or ""),
+            expected=value.get("expected"),
+            actual=value.get("actual"),
+            diffs=[
+                dict(diff) for diff in raw_diffs if isinstance(diff, Mapping)
+            ]
+            if isinstance(raw_diffs, list)
+            else [],
+            duration_ms=int(value.get("durationMs") or 0),
+        )
+    return stages
+
+
+def _load_attempts(raw: object) -> list[dict[str, object]]:
+    """Restore the previous attempts of one item."""
+    if not isinstance(raw, list):
+        return []
+    return [dict(attempt) for attempt in raw if isinstance(attempt, Mapping)]
+
+
+def _validate_approval(approval: str | None) -> str | None:
+    """Validate one optional batch approval value."""
+    if approval is None:
+        return None
+    if approval not in {"approve", "reject", "auto"}:
+        raise ValueError(f"unknown approval {approval!r}")
+    return approval
+
+
+def _positive_or_none(value: float | None) -> float | None:
+    """Return a positive float, or ``None`` when the caller wants the per-case value."""
+    if value is None:
+        return None
+    return max(1.0, float(value))
+
+
+def _optional_float(value: object) -> float | None:
+    """Return a float persisted in a batch document, or ``None`` when absent/invalid."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 
 def _runtime_protocol(protocol: str) -> str:
@@ -1044,9 +1604,16 @@ __all__ = [
     "CASE_CANCELLED",
     "CASE_ERROR",
     "CASE_FAILED",
+    "CASE_PARTIAL",
     "CASE_PASSED",
     "CASE_PENDING",
     "CASE_RUNNING",
+    "DECISION_MODES",
+    "DECISION_MODE_LIVE",
+    "DECISION_MODE_SCRIPTED",
+    "DEFAULT_WORKING_TIMEOUT_SECONDS",
     "EvalBatchManager",
     "SCHEMA",
+    "STAGE_SKIPPED",
+    "STAGE_WAITING",
 ]

@@ -85,13 +85,23 @@
               </label>
               <label>审批
                 <select id="config-approval">
+                  <option value="">按用例配置</option>
                   <option value="approve">approve（自动通过）</option>
                   <option value="reject">reject（自动拒绝）</option>
-                  <option value="auto">auto（等待人工/超时）</option>
+                  <option value="auto">auto（不自动答复，等待超时）</option>
+                </select>
+              </label>
+              <label>决策
+                <select id="config-decision">
+                  <option value="scripted">scripted（脚本）</option>
+                  <option value="live">live（模型）</option>
                 </select>
               </label>
               <label>超时（秒）
-                <input id="config-timeout" type="number" min="1" step="1" value="300">
+                <input id="config-timeout" type="number" min="1" step="1" placeholder="按用例（300）">
+              </label>
+              <label>观察窗口（秒）
+                <input id="config-working-timeout" type="number" min="1" step="1" placeholder="按用例（60）">
               </label>
             </div>
             <div class="actions">
@@ -162,7 +172,13 @@
             <select id="scratch-approval">
               <option value="approve">approve（自动通过）</option>
               <option value="reject">reject（自动拒绝）</option>
-              <option value="auto">auto（等待人工/超时）</option>
+              <option value="auto">auto（不自动答复，等待超时）</option>
+            </select>
+          </label>
+          <label>决策
+            <select id="scratch-decision">
+              <option value="scripted">scripted（脚本）</option>
+              <option value="live">live（模型）</option>
             </select>
           </label>
           <label>超时（秒）
@@ -180,8 +196,12 @@
   <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
   <aside class="drawer" id="drawer" hidden aria-modal="true" role="dialog">
     <div class="drawer-head">
-      <h2 id="drawer-title">阶段差异</h2>
-      <button class="secondary" id="drawer-close" type="button">关闭</button>
+      <h2 id="drawer-title">用例详情</h2>
+      <div class="drawer-tools">
+        <button class="tab small active" id="drawer-tab-result" type="button">结果</button>
+        <button class="tab small" id="drawer-tab-case" type="button">用例</button>
+        <button class="secondary" id="drawer-close" type="button">关闭</button>
+      </div>
     </div>
     <div class="drawer-body" id="drawer-body"></div>
   </aside>

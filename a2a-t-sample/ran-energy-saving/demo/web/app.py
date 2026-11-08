@@ -383,9 +383,9 @@ def create_app(
         default_language=config.language,
         server_url=server_url,
         server_auth_token=config.server_auth_token,
-        mie_url=mie_url,
         runs_dir=resolved_runs_dir,
         nms_enabled=resolved_nms,
+        nms_sim=config.nms_sim,
         language=config.language,
         model_mode=config.model_mode,
         model_label=config.model_label,
@@ -1427,20 +1427,68 @@ def create_app(
         return JSONResponse(span)
 
     async def run_trace_json(request: Request) -> Response:
-        run = manager.get(request.path_params["run_id"])
-        if run is None:
-            return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
-        spans = sorted(run.spans.values(), key=_span_seq)
+        run_id = request.path_params["run_id"]
+        run = manager.get(run_id)
+        if run is not None:
+            spans = sorted(run.spans.values(), key=_span_seq)
+            return JSONResponse(
+                {
+                    "schemaVersion": SCHEMA_VERSION,
+                    "runId": run.run_id,
+                    "scenario": run.scenario,
+                    "status": run.status,
+                    "spans": spans,
+                    "transcript": run.transcript.to_dict() if run.transcript is not None else None,
+                }
+            )
+        persisted = await _persisted_trace(run_id)
+        if persisted is not None:
+            return JSONResponse(persisted)
         return JSONResponse(
-            {
-                "schemaVersion": SCHEMA_VERSION,
-                "runId": run.run_id,
-                "scenario": run.scenario,
-                "status": run.status,
-                "spans": spans,
-                "transcript": run.transcript.to_dict() if run.transcript is not None else None,
-            }
+            {"error": "trace 仅本次进程内可看", "code": "trace_not_available"},
+            status_code=404,
         )
+
+    async def _persisted_trace(run_id: str) -> dict[str, object] | None:
+        """Rebuild a trace document from the persisted run/transcript of a previous process.
+
+        The client store keeps no separate trace file, but the transcript JSON persists every trace
+        span as a timeline entry. The reconstruction is best effort: a run record without a readable
+        transcript still returns an (empty) trace document rather than pretending it is unavailable.
+        """
+        path = config.client_db_path
+        if path is None:
+            return None
+        detail = await asyncio.to_thread(read_client_run_detail, path, run_id)
+        if detail is None:
+            return None
+        transcript: dict[str, object] | None = None
+        spans: list[dict[str, object]] = []
+        transcript_path = detail.get("transcriptJson")
+        if isinstance(transcript_path, str) and Path(transcript_path).is_file():
+            try:
+                text = await asyncio.to_thread(Path(transcript_path).read_text, encoding="utf-8")
+                document = json.loads(text)
+            except (OSError, ValueError):
+                document = None
+            if isinstance(document, dict):
+                transcript = document
+                events = document.get("events")
+                if isinstance(events, list):
+                    spans = [
+                        _span_from_transcript_event(event)
+                        for event in events
+                        if isinstance(event, dict) and event.get("entryType") == "trace"
+                    ]
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "runId": run_id,
+            "scenario": detail.get("scenario"),
+            "status": detail.get("status"),
+            "spans": sorted(spans, key=_span_seq),
+            "transcript": transcript,
+            "persisted": True,
+        }
 
     async def ingest_trace(request: Request) -> Response:
         run = manager.get(request.path_params["run_id"])
@@ -1682,6 +1730,29 @@ def _span_seq(span: Mapping[str, object]) -> int:
     """Return the ``seq`` of one span, ``0`` when absent."""
     value = span.get("seq")
     return value if isinstance(value, int) else 0
+
+
+def _span_from_transcript_event(event: Mapping[str, object]) -> dict[str, object]:
+    """Map one persisted transcript trace row back to the ``trace.json`` span shape."""
+    return {
+        "spanId": event.get("spanId"),
+        "parentSpanId": event.get("parentSpanId"),
+        "seq": event.get("seq"),
+        "phase": event.get("phase"),
+        "phaseStep": event.get("phaseStep"),
+        "kind": event.get("kind"),
+        "title": event.get("summary"),
+        "actor": event.get("actor") or "server",
+        "side": event.get("side") or "server",
+        "direction": event.get("direction"),
+        "status": event.get("status"),
+        "round": event.get("round"),
+        "contextId": event.get("contextId"),
+        "taskId": event.get("taskId"),
+        "detail": event.get("detail"),
+        "startedAt": event.get("ts"),
+        "durationMs": event.get("durationMs"),
+    }
 
 
 def _trace_token_ok(request: Request) -> bool:
