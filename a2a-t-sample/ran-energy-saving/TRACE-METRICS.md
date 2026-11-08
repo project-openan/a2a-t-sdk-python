@@ -30,8 +30,10 @@ Identity keys (never mix them):
 | Key | Meaning | Where it goes |
 |---|---|---|
 | `runId` | one run | spans, SQLite, Langfuse trace metadata |
-| `traceId` | 32-hex downstream trace id, defaults to `runId` | Langfuse trace id |
-| `conversationId` | conversation | Langfuse `session.id` |
+| `traceId` | 32-hex downstream trace id, defaults to `runId` | Langfuse trace id (one per attempt) |
+| `conversationId` | conversation; a corrected retry starts a new one | client history/session |
+| `chainId` | one correction chain (blocked attempt + retries); equals `conversationId` without a retry | Langfuse `session.id`, trace metadata |
+| `parentRunId` | previous attempt of the same chain | trace metadata |
 | `caseId` | OSP case 1–51 (tester only) | Langfuse trace metadata |
 | `taskId` / `contextId` | A2A task identity | span fields, SQLite, webhook routing |
 
@@ -134,11 +136,11 @@ Langfuse.
 
 ### 4.4 Langfuse trace metadata
 
-Written on the root span (`_root_attributes`): `runId`, `scenario`, `language`, `mode`, `protocol`,
-`transport`, `discovery`, `intentMode`, `modelMode`, `modelLabel`, `runMode`, `sourceKind`,
-`caseId`, `caseName`, `batchId`, `receivedAt`, `userRequest`; `phase`/`minimal` also write
-`rounds` and `negotiated` at `finish()`. `session.id = conversationId` (a retry of the same
-correction chain uses `chainId` and carries `parentRunId`), `user.id = userId`.
+Written on the root span (`_root_attributes`): `runId`, `scenario`, `chainId`, `parentRunId`,
+`language`, `mode`, `protocol`, `transport`, `discovery`, `intentMode`, `modelMode`, `modelLabel`,
+`runMode`, `sourceKind`, `caseId`, `caseName`, `batchId`, `receivedAt`, `userRequest`;
+`phase`/`minimal` also write `rounds` and `negotiated` at `finish()`.
+`session.id = chainId` (equal to `conversationId` without a correction chain), `user.id = userId`.
 
 In Langfuse you can therefore filter by `protocol` / `caseId` / `modelMode` and sum generation
 `usage_details` for AX/AY/AZ/BA, read `rounds`/`negotiated` for AW/BB, and use the
@@ -150,8 +152,10 @@ In Langfuse you can therefore filter by `protocol` / `caseId` / `modelMode` and 
 
 1. Start the run from the tester so `caseId/batchId/receivedAt` are recorded.
 2. On finish read `run_metrics` (complete tokens/accuracy) or the Langfuse trace.
-3. Fill AK–BB per §3; put `run.traceId` in column U.
+3. Fill AK–BB per §3; put this attempt's `run.traceId` in column U.
 4. Compare A2A and A2A-T on the same `caseId`.
+5. A corrected retry is its own row with its own U: group attempts by `chainId`, order them by
+   `parentRunId`, and never merge several attempts into one run's latency/token numbers.
 
 ### 5.2 Langfuse batch view
 
@@ -188,3 +192,6 @@ the UI.
 - **offline** runs mark tokens `scripted` and are not exported to Langfuse; they exist for
   deterministic regression only.
 - **`transport`** appears only in `full`; real-NMS long polls never reach the dashboard.
+- **Correction retries**: a blocked attempt that never sent Task-T has no AM/AN/negotiation
+  values; compute AU/AX over the effective attempt only. Group attempts by `chainId` and keep
+  each attempt's own `traceId`.

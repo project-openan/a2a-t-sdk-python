@@ -28,8 +28,10 @@ RunState / ClientFlow / ServerExecutor / ADK / LangGraph
 | 键 | 含义 | 去向 |
 |---|---|---|
 | `runId` | 一次运行的唯一 id | span、SQLite、Langfuse trace metadata |
-| `traceId` | 网管/下游可见的 32 位 hex；默认等于 runId | Langfuse trace id（同一 trace 可查） |
-| `conversationId` | 会话 | Langfuse `session.id` |
+| `traceId` | 网管/下游可见的 32 位 hex；默认等于 runId | Langfuse trace id（每次 attempt 一条） |
+| `conversationId` | 会话；纠错重试会新建 | 客户端会话/历史 |
+| `chainId` | 一次纠错链（被拦截的 attempt + 其重试）；无重试时等于 conversationId | Langfuse `session.id`、trace metadata |
+| `parentRunId` | 本 attempt 重试的前一条 run | trace metadata |
 | `caseId` | OSP 用例 1–51（tester 启动时） | Langfuse trace metadata |
 | `taskId` / `contextId` | A2A 任务身份 | span 字段、SQLite、webhook 路由 |
 
@@ -131,10 +133,10 @@ Prometheus 适合做实时告警和趋势；OSP 的逐用例回填仍以 run_met
 
 root span 上写入（`shared/langfuse_tracing.py::_root_attributes`）：
 
-`runId`、`scenario`、`language`、`mode`、`protocol`、`transport`、`discovery`、`intentMode`、
-`modelMode`、`modelLabel`、`runMode`、`sourceKind`、`caseId`、`caseName`、`batchId`、
-`receivedAt`、`userRequest`；`phase`/`minimal` 在 `finish()` 时再写 `rounds`、`negotiated`。
-`session.id = conversationId`（同一次纠错链的重试会改用 `chainId`，并带 `parentRunId`），
+`runId`、`scenario`、`chainId`、`parentRunId`、`language`、`mode`、`protocol`、`transport`、
+`discovery`、`intentMode`、`modelMode`、`modelLabel`、`runMode`、`sourceKind`、`caseId`、
+`caseName`、`batchId`、`receivedAt`、`userRequest`；`phase`/`minimal` 在 `finish()` 时再写
+`rounds`、`negotiated`。`session.id = chainId`（无纠错链时等于 conversationId），
 `user.id = userId`。
 
 因此 Langfuse 里可以：按 `protocol` / `caseId` / `modelMode` 过滤 → 对 generation 的
@@ -147,8 +149,10 @@ root span 上写入（`shared/langfuse_tracing.py::_root_attributes`）：
 
 1. tester 启动 run，写入 `caseId/batchId/receivedAt`；
 2. run 结束读 `run_metrics`（本地，完整 token/accuracy）或 Langfuse trace；
-3. 按 §3 填 AK–BB；U 列填 `run.traceId`；
-4. A2A 与 A2A-T 用同一 `caseId` 对齐比较。
+3. 按 §3 填 AK–BB；U 列填本次 attempt 的 `run.traceId`；
+4. A2A 与 A2A-T 用同一 `caseId` 对齐比较；
+5. 被拦截后的修正重试每次 attempt 单独一行、单独 U 列，用 `chainId` 归组、`parentRunId`
+   表示先后，不要把多次 attempt 合并成一个 run 的时延/token。
 
 ### 5.2 Langfuse 批量看板
 
@@ -181,3 +185,5 @@ curl localhost:8080/api/metrics/export.csv
   拆分；Langfuse 中按 observation metadata `side` 过滤。
 - **offline** 运行 token 标记为 `scripted`，不导出 Langfuse；只用于确定性回归。
 - **`transport`** 只在 `full` 出现，真机长任务的长轮询不会进入 dashboard。
+- **纠错重试**：被拦截、未发出 Task-T 的 attempt 没有 AM/AN/协商列，AU/AX 等应按“有效
+  attempt”统计；多次 attempt 用 `chainId` 归组、各自保留 traceId。
