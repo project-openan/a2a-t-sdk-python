@@ -105,7 +105,7 @@ SUBMITTED 任务的状态变化无需重新打开就能看到。选中一行后�
   该行保留、页面给出警告，不会假装成功。run 运行期间选择器仍可打开，但「修改该任务」禁用。
 
 网管流在到达终态前安静时，任务改由 run manager 接管：直连 NMS 的传输在
-`A2AT_SAMPLE_NMS_POLL_AFTER_SECONDS`（15s）没有状态事件后交出任务，不再等满 HTTP 预算；
+`A2AT_SAMPLE_NMS_POLL_AFTER_SECONDS`（120s）后交出任务，不再等满 HTTP 预算；
 `RunManager._watch_long_task` 会轮询 `GET /tasks/{id}`。页面仍订阅该 run 时，跟踪器一直运行并按
 `A2AT_SAMPLE_NMS_STATE_POLL_SECONDS`（5s）轮询；无订阅时的后台间隔为
 `A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS`（30s）。演示来源的 run 连续 30s 没有订阅者时停止跟踪，以
@@ -944,7 +944,7 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_SAMPLE_LONG_TASK_MODE` | `auto` | OSS 长任务跟踪（`auto` / `on` / `off`）。`auto` 在配置了 OSS Task 数据库时对真实网管 webhook 链路启用后台 pump。 |
 | `A2AT_SAMPLE_LONG_TASK_SETTLE_SECONDS` | `5` | 网管受理后 OSS 保留初始同步流的秒数。它只决定何时转后台跟踪，run 和 Task 继续更新，网管任务不会被取消。 |
 | `A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS` | `30` | Web UI 轮询仍在执行远端 Task 的间隔（秒）。run 保持活动，只有远端终态/报告到达才结束。 |
-| `A2AT_SAMPLE_NMS_POLL_AFTER_SECONDS` | `15` | 直连 NMS 的传输在多少秒没有状态事件后，把未终态任务交给 `RunManager` 的后台跟踪。 |
+| `A2AT_SAMPLE_NMS_POLL_AFTER_SECONDS` | `120` | 直连 NMS 的传输在回复后多少秒把未终态任务交给 `RunManager` 的后台跟踪。覆盖网管首推延迟（实测约 20s）；交后台时会释放 webhook 订阅。 |
 | `A2AT_SAMPLE_NMS_STATE_POLL_SECONDS` | `5` | 演示页面仍订阅该 run 时，后台跟踪器的轮询间隔；无订阅时使用 `A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS`。 |
 | `A2AT_SAMPLE_CLIENT_DB` | 未设置 = 内存；`run_demo.py` 写入 `<sample>/runs/client-state.sqlite3` | 客户端会话/运行/协商存储，以及 ADK 决策智能体会话的绝对 SQLite 路径。 |
 | `A2AT_SAMPLE_CLIENT_MEMORY_TURNS` | 默认 `6`（>= 0） | 注入下一次决策提示词与 Task-T 生成的最近会话轮数。 |

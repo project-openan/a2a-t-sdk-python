@@ -7,6 +7,7 @@ from pathlib import Path
 from protocol.client_service.run_state import RunState
 from protocol.transcript import NegotiationTranscript
 from shared.models import NegotiationDecision
+from shared.trace_propagation import reset_active_trace, set_active_trace
 
 
 def _run(tmp_path: Path) -> RunState:
@@ -98,6 +99,26 @@ def test_a_finished_activity_clears_the_wait_state(tmp_path: Path) -> None:
     assert run.activity is None
     snapshot, _ = run.subscribe()
     assert snapshot == []
+
+
+def test_a_webhook_event_carries_the_run_trace_id(tmp_path: Path) -> None:
+    """A pushed status is an independent inbound request; its span must still name this run.
+
+    The event is consumed in the run task, where ``set_active_trace`` binds the vendor-facing trace
+    id, so the envelope does not open an unrelated trace.
+    """
+    run = _run(tmp_path)
+    run.trace_id = "0123456789abcdef0123456789abcdef"
+    tokens = set_active_trace(run_id=run.run_id, downstream_trace_id=run.trace_id)
+    try:
+        entry = run.record_event(_waiting_event())
+    finally:
+        reset_active_trace(tokens)
+
+    assert entry.get("spanId")
+    spans = [span for span in run.traces if span.get("kind") == "status"]
+    assert spans
+    assert spans[-1]["traceId"] == run.trace_id
 
 
 def test_record_event_keeps_the_downstream_identity_beside_the_run_identity(tmp_path: Path) -> None:

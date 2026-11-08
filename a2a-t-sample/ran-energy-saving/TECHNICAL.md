@@ -122,7 +122,7 @@ actions and nothing is sent until one is pressed:
   Modify is disabled then.
 
 When the NMS stream goes quiet before a terminal state, the run manager owns the Task: the direct
-NMS transport hands it over after `A2AT_SAMPLE_NMS_POLL_AFTER_SECONDS` (15s) instead of waiting for
+NMS transport hands it over after `A2AT_SAMPLE_NMS_POLL_AFTER_SECONDS` (120s) instead of waiting for
 the full HTTP budget, and `RunManager._watch_long_task` polls `GET /tasks/{id}`. A page that still
 subscribes to the run keeps the tracker alive indefinitely and polls at
 `A2AT_SAMPLE_NMS_STATE_POLL_SECONDS` (5s); the detached cadence stays at
@@ -1192,7 +1192,7 @@ script can switch the model with a plain `export ADK_MODEL_NAME=...`.
 | `A2AT_SAMPLE_LONG_TASK_MODE` | `auto` | OSS long-task tracking (`auto` / `on` / `off`). `auto` enables the background pump for the real NMS webhook hop when the OSS Task database is configured. |
 | `A2AT_SAMPLE_LONG_TASK_SETTLE_SECONDS` | `5` | Seconds the OSS keeps the initial synchronous stream after the NMS accepts the Task. It only changes when tracking moves to the background; the run and the Task keep tracking and the NMS Task is never cancelled. |
 | `A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS` | `30` | How often the Web UI polls a remote Task that is still executing. The run stays active and finishes only on the remote terminal state/report. |
-| `A2AT_SAMPLE_NMS_POLL_AFTER_SECONDS` | `15` | Silence without an NMS status event before the direct NMS transport hands a non-terminal Task to `RunManager`'s background tracker. |
+| `A2AT_SAMPLE_NMS_POLL_AFTER_SECONDS` | `120` | Seconds after the reply before the direct NMS transport hands a non-terminal Task to `RunManager`'s background tracker. Covers the vendor's first push latency (~20 s observed); the handoff releases the webhook subscription. |
 | `A2AT_SAMPLE_NMS_STATE_POLL_SECONDS` | `5` | Tracker poll interval while a presentation page is still subscribed to the run. The detached tracker uses `A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS`. |
 | `A2AT_SAMPLE_CLIENT_DB` | unset = in-memory; `run_demo.py` writes `<sample>/runs/client-state.sqlite3` | Absolute SQLite path of the client's conversation/run/negotiation store and of the ADK decision-agent sessions. |
 | `A2AT_SAMPLE_CLIENT_MEMORY_TURNS` | default `6` (>= 0) | Number of recent conversation turns injected into the next decision prompt and Task-T generation. |

@@ -474,8 +474,8 @@ class RunManager:
         """Rebuild the in-memory view of one persisted running run."""
         run = RunState(
             run_id=record.run_id,
-            # The store does not persist the vendor trace id; the run id is the fallback.
-            trace_id=record.run_id,
+            # Rows written before the trace_id column fall back to the run id.
+            trace_id=record.trace_id or record.run_id,
             scenario=record.scenario,
             mode=record.mode,
             transport=record.transport,
@@ -953,8 +953,8 @@ class RunManager:
         """Build a read-only run view for an idempotent replay."""
         run = RunState(
             run_id=record.run_id,
-            # The store does not persist the vendor trace id; a replay falls back to the run id.
-            trace_id=record.run_id,
+            # Rows written before the trace_id column fall back to the run id.
+            trace_id=record.trace_id or record.run_id,
             scenario=record.scenario,
             mode=record.mode,
             transport=record.transport,
@@ -1437,6 +1437,7 @@ class RunManager:
                 transport=run.transport,
                 discovery=run.discovery,
                 protocol=run.protocol,
+                trace_id=run.trace_id,
                 user_request=request_text,
                 status=RUN_STATUS_RUNNING,
                 owner_pid=os.getpid(),

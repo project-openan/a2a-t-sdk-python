@@ -187,6 +187,27 @@ async def test_negotiation_events_and_task_snapshot(tmp_path: Path) -> None:
     assert snapshot.payload["state"] == "TASK_STATE_COMPLETED"
 
 
+async def test_a_run_round_trips_its_vendor_trace_id(tmp_path: Path) -> None:
+    """The vendor-facing trace id survives a restart; falling back to run_id loses the linkage."""
+    store = SqliteClientStore(tmp_path / "client.sqlite3")
+    await store.create_run(
+        ClientRunRecord(
+            run_id="run-trace",
+            scenario="information",
+            mode="auto",
+            transport="sse",
+            discovery="direct",
+            user_request="request",
+            trace_id="0123456789abcdef0123456789abcdef",
+        )
+    )
+
+    record = await store.get_run("run-trace")
+
+    assert record is not None
+    assert record.trace_id == "0123456789abcdef0123456789abcdef"
+
+
 async def test_claim_run_rejects_a_second_active_run(tmp_path: Path) -> None:
     store = SqliteClientStore(tmp_path / "client.sqlite3")
     first = ClientRunRecord(
@@ -250,7 +271,7 @@ def test_v2_migration_dedupes_active_runs(tmp_path: Path) -> None:
     # Constructing the store applies migration 2.
     SqliteClientStore(path)
     with connect(path) as connection:
-        assert schema_version(connection) == 7
+        assert schema_version(connection) == 8
         statuses = {
             str(run_id): str(status)
             for run_id, status in connection.execute(
@@ -269,6 +290,7 @@ def test_v2_migration_dedupes_active_runs(tmp_path: Path) -> None:
             "SELECT downstream_task_id, downstream_context_id, downstream_hop FROM runs"
         ).fetchall()
         chains = connection.execute("SELECT chain_id, parent_run_id FROM runs").fetchall()
+        trace_ids = connection.execute("SELECT trace_id FROM runs").fetchall()
     assert statuses == {"older": "interrupted", "newer": "running"}
     # Rows written before the switch existed were A2A-T; the migration keeps that history.
     assert protocols == {"a2a-t"}
@@ -281,6 +303,9 @@ def test_v2_migration_dedupes_active_runs(tmp_path: Path) -> None:
     # The correction-chain columns exist; a legacy row carries no chain yet.
     assert {"chain_id", "parent_run_id"} <= source_columns
     assert set(chains) == {("", "")}
+    # The vendor trace id column exists; a legacy row has no recorded value.
+    assert "trace_id" in source_columns
+    assert set(trace_ids) == {("",)}
 
     with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
         with connect(path) as connection:

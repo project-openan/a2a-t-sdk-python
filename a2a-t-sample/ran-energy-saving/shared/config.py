@@ -233,8 +233,10 @@ DEFAULT_LONG_TASK_MODE = LONG_TASK_MODE_AUTO
 DEFAULT_LONG_TASK_SETTLE_SECONDS = 5.0
 #: How often the Web UI polls the remote Task while a days-long run is still executing.
 DEFAULT_TASK_POLL_INTERVAL_SECONDS = 30.0
-#: Seconds without an NMS status event before the transport hands the Task to background tracking.
-DEFAULT_NMS_POLL_AFTER_SECONDS = 15.0
+#: Seconds after the reply before the transport hands a non-terminal Task to background tracking.
+#: The vendor NMS often sends its first status push ~20 s after the reply; a shorter window ended
+#: the webhook phase (and released its subscription) before that push arrived.
+DEFAULT_NMS_POLL_AFTER_SECONDS = 120.0
 #: Faster poll interval while the engineer page is still subscribed to the run.
 DEFAULT_NMS_STATE_POLL_SECONDS = 5.0
 

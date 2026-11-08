@@ -274,6 +274,7 @@ async def test_idempotency_key_reuses_the_existing_run(
         user_request="request",
         conversation_id="conv-1",
         idempotency_key="key-1",
+        trace_id="0123456789abcdef0123456789abcdef",
     )
     await _finish(manager, first.run_id)
     turn_count = len(await store.list_turns("conv-1"))
@@ -287,6 +288,7 @@ async def test_idempotency_key_reuses_the_existing_run(
         idempotency_key="key-1",
     )
     assert reused.run_id == first.run_id
+    assert reused.trace_id == "0123456789abcdef0123456789abcdef"
     assert reused.task is None
     assert len(runtimes) == 1
     assert len(await store.list_turns("conv-1")) == turn_count
@@ -903,6 +905,7 @@ async def test_a_restart_recovers_a_run_that_still_has_a_remote_task(
             source={"kind": "presentation"},
             chain_id="chain-1",
             parent_run_id="blocked-1",
+            trace_id="0123456789abcdef0123456789abcdef",
         )
     )
     await store.ensure_conversation(conversation_id="conv-2")
@@ -969,9 +972,10 @@ async def test_a_restart_recovers_a_run_that_still_has_a_remote_task(
     assert run.detached is True
     assert run.runtime is poll_runtime
     assert run.snapshot()["finalState"] is None
-    # The recovered run keeps the correction chain it was started with.
+    # The recovered run keeps the correction chain and the vendor trace it was started with.
     assert run.chain_id == "chain-1"
     assert run.parent_run_id == "blocked-1"
+    assert run.trace_id == "0123456789abcdef0123456789abcdef"
     assert manager.get("gateway-1") is None
     lost = await store.get_run("lost")
     assert lost is not None and lost.status == "interrupted"

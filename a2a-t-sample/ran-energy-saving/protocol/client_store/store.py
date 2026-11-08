@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS runs (
   transport         TEXT NOT NULL,
   discovery         TEXT NOT NULL,
   protocol          TEXT NOT NULL DEFAULT 'a2a-t',
+  trace_id          TEXT NOT NULL DEFAULT '',
   user_request      TEXT NOT NULL,
   status            TEXT NOT NULL,
   final_state       TEXT,
@@ -285,6 +286,18 @@ def _add_run_chain(connection: sqlite3.Connection) -> None:
         )
 
 
+def _add_run_trace_id(connection: sqlite3.Connection) -> None:
+    """Persist the vendor-facing trace id so a restart/replay keeps the same linkage.
+
+    Without the column the rehydrated run can only fall back to its run id, which is wrong as soon
+    as a caller supplied a different traceparent (or a retry inherited the blocked run's trace).
+    Rows written before this migration keep the empty value and the fallback still applies.
+    """
+    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)")}
+    if "trace_id" not in columns:
+        connection.execute("ALTER TABLE runs ADD COLUMN trace_id TEXT NOT NULL DEFAULT ''")
+
+
 #: Ordered schema migrations; index ``i`` upgrades version ``i`` to ``i + 1``.
 _MIGRATIONS: Final[tuple[SchemaMigration, ...]] = (
     _create_schema,
@@ -294,6 +307,7 @@ _MIGRATIONS: Final[tuple[SchemaMigration, ...]] = (
     _add_run_source,
     _add_run_downstream,
     _add_run_chain,
+    _add_run_trace_id,
 )
 
 
@@ -304,6 +318,7 @@ _RUN_UPDATE_FIELDS: Final[frozenset[str]] = frozenset(
         "turn_id",
         "status",
         "final_state",
+        "trace_id",
         "server_context_id",
         "server_task_id",
         "downstream_task_id",
@@ -452,6 +467,8 @@ class ClientRunRecord:
     source: dict[str, object] = field(default_factory=dict)
     chain_id: str = ""
     parent_run_id: str = ""
+    #: Vendor-facing trace id of this run; empty on rows written before the column existed.
+    trace_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -995,12 +1012,12 @@ class SqliteClientStore:
                 """
                 INSERT INTO runs
                     (run_id, conversation_id, turn_id, scenario, mode, transport, discovery,
-                     protocol, user_request, status, final_state, server_context_id, server_task_id,
-                     downstream_task_id, downstream_context_id, downstream_hop,
+                     protocol, trace_id, user_request, status, final_state, server_context_id,
+                     server_task_id, downstream_task_id, downstream_context_id, downstream_hop,
                      error, owner_pid, idempotency_key, source_kind, source_json, transcript_json,
                      transcript_markdown, trace_json, chain_id, parent_run_id,
                      created_at, updated_at, finished_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.run_id,
@@ -1011,6 +1028,7 @@ class SqliteClientStore:
                     record.transport,
                     record.discovery,
                     record.protocol,
+                    record.trace_id,
                     record.user_request,
                     record.status,
                     record.final_state,
@@ -1058,6 +1076,7 @@ class SqliteClientStore:
             transport=str(row["transport"]),
             discovery=str(row["discovery"]),
             protocol=str(row["protocol"]),
+            trace_id=str(row["trace_id"] or ""),
             user_request=str(row["user_request"]),
             status=str(row["status"]),
             final_state=str(row["final_state"]) if row["final_state"] else None,
