@@ -207,7 +207,16 @@ function renderCatalog() {
     const tags = el("span", "catalog-tags");
     for (const tag of item.tags || []) tags.append(el("span", "pill", tag));
     body.append(tags);
-    row.append(check, body);
+    const detail = el("button", "catalog-detail", "详情");
+    detail.type = "button";
+    detail.title = "查看用例详情（不运行）";
+    detail.addEventListener("click", (event) => {
+      // The row is a <label>; prevent the click from toggling the selection checkbox.
+      event.preventDefault();
+      event.stopPropagation();
+      openCasePreview(item);
+    });
+    row.append(check, body, detail);
     list.append(row);
   }
   updateSelectionSummary();
@@ -594,6 +603,22 @@ function renderCaseTab(item, body) {
     return;
   }
   const drawer = state.drawer;
+  const protocol = drawer.protocol || item.protocol;
+  const protocolSwitch = el("div", "protocol-switch");
+  for (const value of ["a2a-t", "a2a"]) {
+    const button = el(
+      "button",
+      `tab small${value === protocol ? " active" : ""}`,
+      value === "a2a-t" ? "A2A-T" : "A2A",
+    );
+    button.type = "button";
+    button.addEventListener("click", () => {
+      state.drawer.protocol = value;
+      renderDrawer();
+    });
+    protocolSwitch.append(button);
+  }
+  body.append(protocolSwitch);
   if (drawer.loading) {
     body.append(el("p", "status-line", "正在加载用例详情…"));
     return;
@@ -632,8 +657,8 @@ function renderCaseTab(item, body) {
     block.append(el("strong", "", "期望意图"), table);
     body.append(block);
   }
-  const protocolBlock = doc.case?.expect?.protocols?.[item.protocol] || {};
-  body.append(caseSection(`期望 Task-T（${item.protocol === "a2a-t" ? "A2A-T" : "A2A"}）`, protocolBlock.task_t || "该协议没有 Task-T 期望"));
+  const protocolBlock = doc.case?.expect?.protocols?.[protocol] || {};
+  body.append(caseSection(`期望 Task-T（${protocol === "a2a-t" ? "A2A-T" : "A2A"}）`, protocolBlock.task_t || "该协议没有 Task-T 期望"));
   const negotiation = protocolBlock.negotiation;
   if (negotiation) {
     const block = el("section", "diff-block");
@@ -676,6 +701,7 @@ function renderDrawer() {
   if (!item) return;
   const protocol = item.protocol === "a2a-t" ? "A2A-T" : "A2A";
   $("drawer-title").textContent = `#${String(item.caseId).padStart(2, "0")} ${item.name} · ${protocol}`;
+  $("drawer-tab-result").hidden = drawer.preview === true;
   $("drawer-tab-result").classList.toggle("active", drawer.tab === "result");
   $("drawer-tab-case").classList.toggle("active", drawer.tab === "case");
   const body = $("drawer-body");
@@ -685,10 +711,42 @@ function renderDrawer() {
 }
 
 function openDrawer(item, index) {
-  state.drawer = { item, index, tab: "result", caseDoc: null, loading: false, error: "" };
+  state.drawer = {
+    item,
+    index,
+    tab: "result",
+    protocol: item.protocol,
+    preview: false,
+    caseDoc: null,
+    loading: false,
+    error: "",
+  };
   renderDrawer();
   $("drawer").hidden = false;
   $("drawer-backdrop").hidden = false;
+}
+
+function openCasePreview(summary) {
+  const item = {
+    caseId: summary.id,
+    name: summary.name,
+    protocol: "a2a-t",
+    stages: {},
+  };
+  state.drawer = {
+    item,
+    index: null,
+    tab: "case",
+    protocol: "a2a-t",
+    preview: true,
+    caseDoc: null,
+    loading: false,
+    error: "",
+  };
+  renderDrawer();
+  $("drawer").hidden = false;
+  $("drawer-backdrop").hidden = false;
+  void ensureCaseDoc(item);
 }
 
 function switchDrawerTab(tab) {

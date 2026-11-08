@@ -100,7 +100,8 @@ html, body {
 .ghost:hover { border-color: var(--orange); color: var(--orange); }
 
 .main {
-  max-width: 1440px;
+  /* Data console: use the whole screen on a large monitor instead of a centered 1440px column. */
+  max-width: none;
   margin: 0 auto;
   padding: 24px 28px 64px;
   display: grid;
@@ -376,7 +377,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
   gap: 18px;
   align-items: start;
 }
@@ -395,7 +396,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 }
 .catalog-item {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-columns: 18px minmax(0, 1fr) auto;
   gap: 8px;
   align-items: start;
   padding: 7px 8px;
@@ -410,6 +411,17 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .catalog-title { font-size: 12.5px; word-break: break-word; }
 .catalog-meta { color: var(--g500); font-size: 11px; }
 .catalog-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.catalog-detail {
+  align-self: start;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--orange-text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.catalog-detail:hover { text-decoration: underline; }
 .pill {
   display: inline-block;
   padding: 0 5px;
@@ -524,6 +536,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .drawer-tools { display: flex; align-items: center; gap: 6px; }
 .tab.small { padding: 4px 10px; font-size: 12px; border-bottom-width: 1px; }
 .case-meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.protocol-switch { display: flex; gap: 4px; border-bottom: 1px solid var(--g200); }
 .case-pre {
   margin: 0;
   padding: 10px;

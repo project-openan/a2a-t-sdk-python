@@ -642,3 +642,23 @@ def test_the_tester_page_binds_the_case_detail_drawer_and_rerun() -> None:
     for element_id in ("drawer-tab-result", "drawer-tab-case", "config-decision", "config-working-timeout"):
         assert re.search(rf'id="{element_id}"', page), element_id
     assert "不自动答复" in page
+
+
+def test_the_catalog_offers_a_case_detail_without_running_it() -> None:
+    """A detail click inside the selection <label> must not toggle the checkbox."""
+    tester = Path(__file__).resolve().parent.parent / "demo" / "web" / "tester"
+    js = (tester / "main.js").read_text(encoding="utf-8")
+
+    assert "openCasePreview" in js
+    assert 'el("button", "catalog-detail", "详情")' in js
+    assert "event.preventDefault()" in js
+    assert "event.stopPropagation()" in js
+    # The drawer shows the other protocol's expectations too.
+    assert "protocol-switch" in js
+
+
+def test_the_console_uses_the_full_width_of_a_large_screen() -> None:
+    tester = Path(__file__).resolve().parent.parent / "demo" / "web" / "tester"
+    css = (tester / "app.css").read_text(encoding="utf-8")
+
+    assert not re.search(r"\.main\s*\{[^}]*max-width:\s*1440px", css)
