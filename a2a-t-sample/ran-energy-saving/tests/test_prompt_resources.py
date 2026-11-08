@@ -15,6 +15,8 @@ _SLOT_DIR: Final[Path] = (
 
 #: Slot carrying the rate guarantee goal and its time windows, per language.
 _TASK_CONTEXT_SLOT: Final[dict[str, str]] = {"en-US": "task_context", "zh-CN": "任务上下文"}
+#: Slot carrying the Task Description, per language.
+_TASK_DESCRIPTION_SLOT: Final[dict[str, str]] = {"en-US": "task_description", "zh-CN": "任务描述"}
 
 
 def _task_context_constraint(language: str) -> str:
@@ -22,6 +24,13 @@ def _task_context_constraint(language: str) -> str:
     path = _SLOT_DIR / language / "slot.json"
     schema = json.loads(path.read_text(encoding="utf-8"))
     return str(schema["properties"][_TASK_CONTEXT_SLOT[language]]["x-a2at-value-constraint"])
+
+
+def _task_description_constraint(language: str) -> str:
+    """Return the extraction constraint of the Task Description slot for one language."""
+    path = _SLOT_DIR / language / "slot.json"
+    schema = json.loads(path.read_text(encoding="utf-8"))
+    return str(schema["properties"][_TASK_DESCRIPTION_SLOT[language]]["x-a2at-value-constraint"])
 
 
 def test_the_slot_rule_defines_24_00_as_the_end_of_the_day() -> None:
@@ -38,3 +47,15 @@ def test_the_slot_rule_keeps_the_overlap_violation() -> None:
     """The overlap rule itself must survive edits to the day-boundary clarification."""
     assert "MUST NOT overlap" in _task_context_constraint("en-US")
     assert "不允许重叠" in _task_context_constraint("zh-CN")
+
+
+def test_the_task_description_is_fixed_text_not_slot_substitution() -> None:
+    """The anchor links in the Task Description are in-document links, not placeholders.
+
+    The SDK template changed to this wording; the sample overlay must carry the same rule or
+    it keeps telling the extractor to substitute slot values into the Task Description.
+    """
+    assert "Output the fixed text verbatim" in _task_description_constraint("en-US")
+    assert "直接输出固定文本" in _task_description_constraint("zh-CN")
+    assert "placeholders must be formatted" not in _task_description_constraint("en-US")
+    assert "占位符需分别" not in _task_description_constraint("zh-CN")
