@@ -10,7 +10,7 @@
     }
   ],
   "params": {
-    "operationType": "create",
+    "operationType": "Create",
     "region": "Region A",
     "energySavingGoal": "Maximize energy saving under the condition that the task context is met.",
     "guaranteedThroughputTarget": null

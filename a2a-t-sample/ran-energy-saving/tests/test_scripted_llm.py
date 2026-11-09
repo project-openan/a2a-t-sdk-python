@@ -118,7 +118,7 @@ def test_outage_content_validation_extracts_modify(client: ScriptedLLMClient) ->
 
     assert client.calls[-1] == STAGE_CONTENT_VALIDATION_OUTAGE
     payload = json.loads(response.content)
-    assert payload["params"]["operationType"] == "modify"
+    assert payload["params"]["operationType"] == "Modify"
 
 
 def test_outage_baseline_content_validation_uses_the_create_fixture(
@@ -131,7 +131,7 @@ def test_outage_baseline_content_validation_uses_the_create_fixture(
 
     assert client.calls[-1] == STAGE_CONTENT_VALIDATION_OUTAGE_BASELINE
     payload = json.loads(response.content)
-    assert payload["params"]["operationType"] == "create"
+    assert payload["params"]["operationType"] == "Create"
     assert payload["params"]["guaranteedThroughputTarget"] == "{00:00~24:00,10Mbps}"
 
 
@@ -439,6 +439,29 @@ def test_information_client_extraction_succeeds_and_server_maps_to_information(
     assert [error.slot_name for error in errors] == ["guaranteedThroughputTarget"]
     assert errors[0].code == "content.param_missing"
     assert negotiation_kind_for_errors(errors) is NegotiationKind.INFORMATION
+
+
+def test_the_planned_outage_modify_keeps_the_site_list_in_the_task_context(
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The overlay's site-level outage rule reads the site list from the Task Context.
+
+    A site list that stays in the Task Object leaves the Task Context of an outage request without
+    one, and the declarative rule then blocks the generated Task-T.
+    """
+    from demo.scenario import MODIFY_REQUEST
+
+    register_scripted_provider()
+    monkeypatch.setenv("A2AT_LANGUAGE", offline_config.language)
+    client = A2ATClient(env_path=prepare_sdk_env_path(offline_config))
+
+    content = client.generate_task_prompt_from_text(MODIFY_REQUEST["en-US"], TASK_TEMPLATE_URI)
+
+    prompt_text = content.prompt_text
+    assert prompt_text is not None
+    context = prompt_text[prompt_text.index("## Task Context") :]
+    assert 'Site list 1: ["Site 1", "Site 2"]' in context
 
 
 def test_real_server_validates_accept_offline(real_negotiation_server: A2ATServer) -> None:

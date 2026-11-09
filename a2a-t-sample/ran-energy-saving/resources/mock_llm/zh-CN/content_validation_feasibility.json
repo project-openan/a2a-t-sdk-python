@@ -10,7 +10,7 @@
     }
   ],
   "params": {
-    "operationType": "create",
+    "operationType": "Create",
     "region": "区域 A",
     "energySavingGoal": "在满足任务上下文的前提下最大化节能。",
     "guaranteedThroughputTarget": null,

@@ -1192,6 +1192,6 @@ def test_the_sdk_env_mounts_the_sample_slot_overlay(offline_config: SampleConfig
         assert slot.is_file()
         text = slot.read_text(encoding="utf-8")
         assert "Only an explicit energy saving gain target belongs in this slot" in text
-        assert "Preserve the operator's own wording for rate, UX and qualitative goals" in text
+        assert "preserve the operator's own wording; do not normalize it" in text
     finally:
         shutil.rmtree(sdk_env.directory)

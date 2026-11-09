@@ -699,18 +699,27 @@ def data_slot_extraction_response(user_content: str, language: str) -> str | Non
     zh = language == LANGUAGE_ZH
     task_object = f"区域为{region}。" if zh else f"The area is the {region}."
     sites = data.get("siteList")
-    if isinstance(sites, str) and sites.strip():
-        items = [item.strip() for item in sites.split(",") if item.strip()]
+    site_names = [item.strip() for item in sites.split(",") if item.strip()] if isinstance(sites, str) else []
+    background = data.get("backgroundEvent")
+    outage = isinstance(background, str) and bool(background.strip())
+    if site_names and not outage:
+        # A plain site-level request keeps the demo's Task Object wording.
         if zh:
-            task_object += f" 站点列表1为[{'、'.join(items)}]。"
+            task_object += f" 站点列表1为[{'、'.join(site_names)}]。"
         else:
-            quoted = ", ".join(f'"{item}"' for item in items)
+            quoted = ", ".join(f'"{item}"' for item in site_names)
             task_object += f" Site list 1: [{quoted}]."
     context = (
         f"分时段保障速率目标为 {target}。" if zh else f"Time-segment-based guaranteed throughput target: {target}."
     )
-    background = data.get("backgroundEvent")
-    if isinstance(background, str) and background.strip():
+    if site_names and outage:
+        # The overlay's site-level outage rule reads the site list from the Task Context.
+        if zh:
+            context = f"站点列表1：[{'、'.join(site_names)}]，{context}"
+        else:
+            quoted = ", ".join(f'"{item}"' for item in site_names)
+            context = f"Site list 1: [{quoted}], {context}"
+    if outage:
         context += f" 背景事件为{background}。" if zh else f" Background event: {background}."
     operation = str(data.get("operationType") or "Create")
     description = _task_description(data.get("task_description"), operation, zh)

@@ -27,7 +27,7 @@
     {
       "slot": "task_context",
       "when": "(?:power outage|outage|停电)",
-      "require": "\\b(?:LTE|NRES|NES|LNR|NE)[_ ]?[A-Za-z0-9_]{3,}",
+      "require": "(?:\\b(?:LTE|NRES|NES|LNR|NE)[_ ]?[A-Za-z0-9_]{3,}|\\b(?:site|station)s?\\s*(?:#|no\\.?)?\\s*\\d+|站点\\s*(?:列表)?\\s*(?:名称)?\\s*\\d+)",
       "error": "slot.not_provided",
       "slot_label": "Site list"
     },
