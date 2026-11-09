@@ -1106,7 +1106,10 @@ class EvalBatchManager:
         defaults = self._protocol_defaults.get(protocol, {})
         conversation_id, idempotency_key = self._run_identity(batch, index, item)
         request = _baseline_request(case)
-        mode = MODE_SCRIPTED if protocol == RUNTIME_A2A_T else self._mode_for(batch, item.protocol)
+        # The baseline follows the batch's decision mode. A live batch must not seed the Create
+        # with ``MODE_SCRIPTED``: its script is empty, so a server question (INPUT_REQUIRED) would
+        # raise "The scripted decision sequence is exhausted" and abort the Modify before it runs.
+        mode = self._mode_for(batch, protocol)
         run = await self._runs.start(
             BASELINE_SCENARIO,
             mode,

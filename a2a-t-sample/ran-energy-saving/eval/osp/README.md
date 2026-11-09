@@ -333,6 +333,9 @@ PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-af
   Create 里的某一行：它们没有一条同时覆盖这些站点和时段（22/28/31/43/46 本身还是 blocked），而且把
   一条评分用例复制成前置步骤会污染它自己的结果。没有 `baseline.request` 的用例回退到共享 fixture
   （`_baseline_request`）。
+- **决策模式**：基线跟随批次的决策模式（`_mode_for`）。live 批次用在线决策代理（`MODE_AUTO`），
+  网管对基线 Create 追问时由 ADK 回答；scripted 批次的基线仍是空 script，一旦触发协商就会以
+  `The scripted decision sequence is exhausted` 明确失败，而不是静默继续。
 - **受理门槛**：基线必须到达可续传状态才会发送 Modify。A2A-T 是 `SUBMITTED`（或已进入 `WORKING`）；纯
   A2A 是外层 Task 的 `WORKING`。`COMPLETED` 是终态，A2A 层会拒绝续传；`INPUT_REQUIRED` 会把 Modify 文本
   当成待答问题的答案，同样不算可续传。基线失败时结果里记录 `baseline`（run id、taskId、state、原请求、

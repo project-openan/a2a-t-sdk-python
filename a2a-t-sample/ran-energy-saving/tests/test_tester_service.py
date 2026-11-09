@@ -827,6 +827,33 @@ async def test_an_a2a_t_modify_continues_the_task_it_just_created(tmp_path: Path
     assert runs.calls[1]["target_server_task_id"] is None
 
 
+async def test_a_live_a2a_t_modify_baseline_uses_the_live_decision_provider(
+    tmp_path: Path,
+) -> None:
+    """A live batch must not seed the baseline with the empty scripted decision script.
+
+    The baseline is a normal Create, but the server may still ask a question (INPUT_REQUIRED).
+    ``MODE_SCRIPTED`` with no scripted decisions then fails with "The scripted decision sequence
+    is exhausted" before the Modify is ever sent.
+    """
+    runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED))
+    manager = _manager(tmp_path, runs, model_mode="live")
+    created = manager.create(
+        case_ids=[18],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="send",
+        approval=None,
+        timeout_seconds=2,
+        decision_mode=DECISION_MODE_LIVE,
+    )
+
+    await manager.start(str(created["batchId"]))
+    await _wait_status(manager, str(created["batchId"]), "finished")
+
+    assert runs.calls[0]["mode"] == MODE_AUTO
+    assert runs.calls[0]["scripted_decisions"] == ()
+
+
 async def test_a_pure_modify_continues_the_outer_task_it_just_created(tmp_path: Path) -> None:
     """Pure A2A continues the OSS Agent's outer Task, not a new message on a new Task."""
     runs = _FakeRuns(_seed_then_modify("TASK_STATE_WORKING"))
