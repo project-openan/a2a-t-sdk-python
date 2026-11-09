@@ -154,26 +154,27 @@ A2A 与 A2A-T 的预期结构化意图在这 51 条里完全相同，因此只�
 
 ```yaml
 baseline:
-  # Paired Create: case 1's region-level rate guarantee (2Mbps); kept below the outage target ...
+  # Paired Create: the manual baseline the testers use (A2ATestRegion; 00:00-07:00 2Mbps,
+  # 07:00-18:00 10Mbps, 18:00-24:00 20Mbps). ...
   request: |-
-    Implement energy-saving in A2ATestRegion region, the time range is from 00:00 to 22:00. ...
+    Create an energy saving task for A2ATestRegion: guarantee 2Mbps from 00:00 to 07:00, 10Mbps
+    from 07:00 to 18:00 and 20Mbps from 18:00 to 24:00.
 ```
 
-配对规则：
+基线是测试人员手工验收时使用的 Create Task-T（`A2ATestRegion` + 三段日计划），已确认不拦截、
+不协商；不是按用例自由发挥的“前一天计划”。配对规则：
 
-1. 区域与 Modify 的 Task Object 相同（`A2ATestRegion`）。
-2. 站点取该用例 `expect.intent` 的 Site list；没有具体站点的用例（27/29/39/41）写成
-   “all sites in the region”。
-3. 计划是普通的一天计划（00:00-22:00），**不含**停电/背景事件——停电是 Modify 引入的新事件。
-4. 速率与停电目标不同：停电目标是 10Mbps 的用例用 2Mbps 基线（参考 Create 1 的 720p→2Mbps）；
-   停电目标是 2Mbps/1Mbps 的用例用 10Mbps 基线（参考 Create 8/9/10/11 的 10Mbps）。这样 Modify
-   是真的改变计划，而不是复述原计划。
-5. 时间窗用散文写（`the time range is from 00:00 to 22:00`），不要写 `{HH:MM~HH:MM,NMbps}`：
-   scripted provider 会把显式窗口改写成 Task Context，随后 content validation 走到 “missing”
-   分支，基线会被误判为拦截。
-6. nms-sim 回放必须用 `A2AT_SAMPLE_NMS_SIM_WINDOW_POLICY=any`：基线是普通日计划，不是 demo 的
-   `00:00~06:00` 窗口。offline/scripted 模式下基线的 Task-T 由 scripted provider 的固定日计划渲染，
-   请求文本里的站点和速率只在 live 模式生效；这不影响建 Task 和续传，但看 wire 时不要按请求文本逐字核对。
+1. 地点必须显式写成 `A2ATestRegion`。写成 `Region A` 或其他区域会信息协商或校验不通过。
+2. 计划保持手工基线 `00:00-07:00 2Mbps / 07:00-18:00 10Mbps / 18:00-24:00 20Mbps`；**不要**
+   按用例站点或停电目标另造“10Mbps 整天”之类的计划：高费率 × 长窗口会被网管在基线 Create
+   阶段判为不可行并要求降到 2Mbps，基线任务根本建不出来，Modify 也就跑不到。
+3. **不含**停电/背景事件——停电是 Modify 引入的新事件。
+4. 时间窗用散文写（`from 00:00 to 07:00`），不要写 `{HH:MM~HH:MM,NMbps}`：scripted provider 会把
+   显式窗口改写成 Task Context，随后语义校验失败，基线判 blocked。
+5. offline/scripted 模式下基线的 Task-T 由 `night` 场景的固定计划渲染，请求文本里的站点/速率只在
+   live 模式生效；这不影响建 Task 和续传，但看 wire 时不要按请求文本逐字核对。
+6. nms-sim 回放仍建议 `A2AT_SAMPLE_NMS_SIM_WINDOW_POLICY=any`：OSP 的 Modify 窗口和手工基线
+   的第一段都不是 demo 的 `00:00~06:00` 窗口。
 
 `/tester` 优先用用例自己的 `baseline.request`；没有该字段时回退到共享 fixture（`_baseline_request`）。
 生成器尚未支持该字段，手工加入后 `--check` 会报漂移（与 `blocked_followup` 相同）。
@@ -316,23 +317,26 @@ PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-af
 - 用例详情抽屉展示 `baseline.request`（Modify 的前置基线 Create；从结果行打开时同时显示本次实际
   基线的 state 与 wire 链接）和 `blocked_followup.input`（拦截后补充请求）。有补充请求时，
   `expect.intent` / `task_t` 标注为「（补充请求）」。
-- 执行上下文不再需要导出才能看到：结果行在「结果 / 错误」下显示 `run <短 id>` / `task <短 id>`
-  （悬停看完整 runId / traceId / taskId / contextId）；结果抽屉的「运行上下文」给出完整
-  `runId`（wire / trace 链接）、`traceId`、`taskId`、`contextId`，Modify 另列基线的
-  runId / taskId / contextId / state。
+- 执行上下文不再需要导出才能看到：结果表有独立的 `RunId` 列；Modify 运行项分两行显示
+  `基线` 和 `修改` 两个 run（各自链到 wire），普通用例只有一行。结果行在「结果 / 错误」下显示
+  `task <短 id>`（悬停看完整 runId / traceId / taskId / contextId）；结果抽屉的「运行上下文」
+  给出 `runId`（wire / trace 链接）、`traceId`、`taskId`、`contextId`。
+- 基线进度在结果抽屉的「基线 Create（Modify 前置）」块实时显示（创建中 / 已受理 / 失败 +
+  当前 Task state + runId / taskId / contextId），结果表的阶段列也会出现「基线」chip。
+- 报告导出 JSON / XLSX；JSON 带完整 `baseline` 对象，XLSX「用例结果」新增「基线状态 / 基线 Run ID /
+  基线 taskId / 基线 state / 基线错误」列，「仲裁格式」的备注会写明基线失败原因。Excel 只作为导出
+  格式，不再是输入。
 - 临时请求 tab：手输文本直接跑一次，不做预期断言。
-- 报告导出 JSON / XLSX；Excel 只作为导出格式，不再是输入。
 
 ### 9.1 Modify 的配对基线与限制
 
 每条 Modify 用例都会先跑一条**配对的基线 Create**，拿到 `taskId` / `contextId` 后再续传：
 
-- **配对规则**：每条 Modify 用例在 YAML 里带自己的 `baseline.request`——一条 Create 请求，区域与
-  Modify 的 `Task Object` 相同（`A2ATestRegion`），站点取该用例的 Site list，计划是普通的一天
-  （00:00-22:00），不含停电事件，速率与停电目标不同。规则和示例见第 3.5 节。这里不直接复用 51 条
-  Create 里的某一行：它们没有一条同时覆盖这些站点和时段（22/28/31/43/46 本身还是 blocked），而且把
-  一条评分用例复制成前置步骤会污染它自己的结果。没有 `baseline.request` 的用例回退到共享 fixture
-  （`_baseline_request`）。
+- **配对规则**：每条 Modify 用例在 YAML 里带自己的 `baseline.request`——测试人员手工验收用的
+  Create Task-T（`A2ATestRegion` + 三段日计划，不拦截、不协商），不含停电事件。不要按用例另造
+  计划：高费率 × 长窗口会让网管在基线 Create 阶段就发起可行性协商，基线任务建不出来。规则和示例
+  见第 3.5 节。没有 `baseline.request` 的用例回退到共享 fixture（`_baseline_request`），它同样
+  使用 `A2ATestRegion` 和手工基线计划。
 - **决策模式**：基线跟随批次的决策模式（`_mode_for`）。live 批次用在线决策代理（`MODE_AUTO`），
   网管对基线 Create 追问时由 ADK 回答；scripted 批次的基线仍是空 script，一旦触发协商就会以
   `The scripted decision sequence is exhausted` 明确失败，而不是静默继续。

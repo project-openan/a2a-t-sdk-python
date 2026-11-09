@@ -180,21 +180,26 @@ BASELINE_SCENARIO: Final[str] = "night"
 #: the configured NMS (or simulator) actually serves.
 BASELINE_REGION: Final[str] = "A2ATestRegion"
 
-#: Activation window the NMS (and simulator) serves; the baseline must name it exactly.
+#: Default activation window of the simulator. Only used by the fallback baseline: a configured
+#: window that differs from it replaces the day plan with one segment, because two segments
+#: covering the same hours would describe an ambiguous prior task.
 BASELINE_WINDOW: Final[str] = "00:00~06:00"
 
-#: One-day rate plan of the shared fallback baseline. The first segment is the NMS activation
-#: window the request must name; the remaining segments keep the day covered so a Modify's "keep
-#: the rest unchanged" has a rest to keep. Every Modify case ships its own ``baseline.request``
-#: (see eval/osp/README.md 3.5); this plan is only the fallback for a case without one.
+#: One-day rate plan of the shared fallback baseline: the Task-T the testers use as the manual
+#: baseline (``00:00-07:00 2Mbps``, ``07:00-18:00 10Mbps``, ``18:00-24:00 20Mbps``). It is a
+#: complete Create the vendor accepts without a pre-task negotiation, so baselines reuse it instead
+#: of inventing a per-site plan. The plan is written in prose: an explicit
+#: ``{HH:MM~HH:MM,NMbps}`` list is rewritten by the scripted provider into the Task Context and
+#: then fails semantic validation on the offline path. Every Modify case ships its own
+#: ``baseline.request`` (see eval/osp/README.md 3.5); this plan is the fallback.
 BASELINE_SCHEDULE: Final[str] = (
-    "{00:00~06:00,10Mbps}, {06:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
+    "guarantee 2Mbps from 00:00 to 07:00, 10Mbps from 07:00 to 18:00 "
+    "and 20Mbps from 18:00 to 24:00"
 )
 
 #: Fallback baseline request used when a Modify case declares no ``baseline.request``.
 BASELINE_REQUEST: Final[str] = (
-    f"Create an energy saving task for {BASELINE_REGION} with these guaranteed throughputs: "
-    f"{BASELINE_SCHEDULE}."
+    f"Create an energy saving task for {BASELINE_REGION}: {BASELINE_SCHEDULE}."
 )
 
 #: Polling interval of the batch runner.
@@ -1130,11 +1135,20 @@ class EvalBatchManager:
             # Only the A2A-T flow has a Task-T pre-send gate; the pure hop sends raw text.
             validate_before_send=protocol == RUNTIME_A2A_T,
         )
+        # Publish the baseline as soon as it starts: the tester UI polls the batch snapshot, and
+        # without this the Modify item showed no run and no progress until the Create finished.
+        item.baseline = {
+            "runId": run.run_id,
+            "protocol": protocol,
+            "status": "running",
+            "state": run.latest_task_state,
+            "request": request,
+        }
         # A Modify needs the Task accepted and still continuable. It must not wait for the
         # baseline run to reach a terminal state: a real NMS keeps the Create Task WORKING for the
         # whole energy-saving window, which made every Modify item time out as a baseline failure.
         state = await self._wait_for_baseline_acceptance(
-            run, protocol, self._resolved_timeout(batch)
+            run, protocol, self._resolved_timeout(batch), item=item
         )
         task_id = run.remote_task_id or (run.result.task_id if run.result is not None else None)
         context_id = run.remote_context_id or (
@@ -1149,6 +1163,7 @@ class EvalBatchManager:
                 "status": "failed",
                 "state": state,
                 "finalState": run.result.final_state if run.result is not None else None,
+                "request": request,
                 "error": message,
             }
             item.error = message
@@ -1156,6 +1171,7 @@ class EvalBatchManager:
         baseline = {
             "runId": run.run_id,
             "protocol": protocol,
+            "status": "accepted",
             "taskId": task_id,
             "contextId": context_id,
             "state": state,
@@ -1166,7 +1182,12 @@ class EvalBatchManager:
         return baseline
 
     async def _wait_for_baseline_acceptance(
-        self, run: RunState, protocol: str, timeout_seconds: float
+        self,
+        run: RunState,
+        protocol: str,
+        timeout_seconds: float,
+        *,
+        item: CaseItem | None = None,
     ) -> str | None:
         """Poll until the baseline Task reaches the state a Modify can continue from.
 
@@ -1174,11 +1195,20 @@ class EvalBatchManager:
         A2A continues the OSS Agent's outer Task, which must be ``WORKING``: ``COMPLETED`` is
         terminal (the A2A layer rejects the continuation) and ``INPUT_REQUIRED`` would route the
         Modify text as an answer to the pending question.
+
+        ``item`` is updated in place on every poll so the batch snapshot (and therefore the tester
+        UI) shows the baseline's current state while the Create is still in flight.
         """
         wanted = _baseline_accepted_states(protocol)
         deadline = time.monotonic() + max(0.1, timeout_seconds)
         while time.monotonic() < deadline:
             state = run.latest_task_state
+            if item is not None and isinstance(item.baseline, dict):
+                item.baseline["state"] = state
+                if run.remote_task_id:
+                    item.baseline["taskId"] = run.remote_task_id
+                if run.remote_context_id:
+                    item.baseline["contextId"] = run.remote_context_id
             if state in _FAILED_TASK_STATES:
                 return state
             if run.remote_task_id and run.remote_context_id and state in wanted:
@@ -1936,10 +1966,10 @@ def _summary(items: Sequence[CaseItem]) -> dict[str, int]:
 def _baseline_request(case: Mapping[str, Any] | None = None) -> str:
     """Return the Create request paired with one Modify case.
 
-    Every Modify case ships a ``baseline.request``: a normal-day Create for the same region and
-    sites, with a rate that differs from the outage target (see eval/osp/README.md 3.5). This
-    function returns it. A case without one falls back to the shared fixture below, which keeps
-    the previous behaviour for hand-written or future rows.
+    Every Modify case ships a ``baseline.request``: the manual-acceptance Create Task-T for
+    ``A2ATestRegion`` (three day segments, no outage), which the vendor accepts without opening a
+    negotiation (see eval/osp/README.md 3.5). This function returns it. A case without one falls
+    back to the shared fixture below, which keeps the previous behaviour for hand-written rows.
 
     The demo's ``Region A`` placeholder is not a served region: the real NMS and the simulator
     answer it with an information negotiation. A Modify baseline must therefore name the
@@ -1959,12 +1989,13 @@ def _baseline_request(case: Mapping[str, Any] | None = None) -> str:
     region = region or BASELINE_REGION
     window = os.environ.get("A2AT_SAMPLE_NMS_SIM_WINDOW", "").strip() or BASELINE_WINDOW
     # A single-segment plan when the served window differs, otherwise the day plan would carry two
-    # overlapping segments for the same hours.
-    schedule = (
-        BASELINE_SCHEDULE
-        if window == BASELINE_WINDOW
-        else f"{{{window},10Mbps}}"
-    )
+    # overlapping segments for the same hours. Prose again: the scripted provider must not rewrite
+    # the canned Task Context.
+    if window == BASELINE_WINDOW:
+        schedule = BASELINE_SCHEDULE
+    else:
+        start, end = (part.strip() for part in window.split("~", 1))
+        schedule = f"guarantee 10Mbps from {start} to {end}"
     return BASELINE_REQUEST.replace(BASELINE_REGION, region).replace(BASELINE_SCHEDULE, schedule)
 
 
@@ -1993,6 +2024,12 @@ def _baseline_accepted_states(protocol: str) -> frozenset[str]:
 def _baseline_failure_message(protocol: str, state: str | None) -> str:
     """Explain why the paired Create cannot be continued by a Modify."""
     if protocol == RUNTIME_A2A_T:
+        if state == "TASK_STATE_INPUT_REQUIRED":
+            return (
+                "Modify 基线 Create 触发了协商（TASK_STATE_INPUT_REQUIRED），不是可续传状态；"
+                "请检查 baseline.request：必须显式使用 A2ATestRegion，并采用手工验收那类"
+                "不拦截、不协商的三段日计划。"
+            )
         return (
             f"Modify 基线任务未到达可续传状态（当前 {state or '未观察到状态'}）；"
             "任务已是终态时服务端会拒绝 Modify。"

@@ -26,6 +26,7 @@ const STATUS_LABELS = {
   draft: "已创建",
   finished: "已完成",
   blocked: "拦截",
+  accepted: "已受理",
   pass: "不拦截",
   pass_with_terminology: "不拦截+术语",
   unfilled: "未填写",
@@ -63,6 +64,7 @@ function statusLabel(status) {
 function badge(status, text) {
   const mapped = {
     blocked: "failed",
+    accepted: "passed",
     pass: "passed",
     pass_with_terminology: "passed",
     unfilled: "skipped",
@@ -406,6 +408,22 @@ function stageChips(item, stopAfter) {
   const wrap = el("span", "stage-chips");
   const limit = STAGE_ORDER.indexOf(stopAfter || "final");
   const pure = item.protocol === "a2a";
+  const baseline = item.baseline && typeof item.baseline === "object" ? item.baseline : null;
+  if (baseline) {
+    const status =
+      baseline.status === "accepted"
+        ? "passed"
+        : baseline.status === "running"
+          ? "waiting"
+          : baseline.status === "failed"
+            ? "failed"
+            : "pending";
+    const chip = el("span", `stage-chip ${status}`, "基线");
+    chip.title = `基线 Create：${baseline.status || ""}${baseline.state ? ` · ${baseline.state}` : ""}${
+      baseline.error ? ` · ${baseline.error}` : ""
+    }`;
+    wrap.append(chip);
+  }
   const interception = item.interception;
   if (interception?.stages) {
     const validate = interception.stages.validate;
@@ -490,14 +508,16 @@ function renderResults() {
     status.append(badge(item.status));
     const duration = el("td", "metric", durationText(item.durationMs));
     const tokens = el("td", "metric", tokenText(item.tokens));
+    const runs = document.createElement("td");
+    runs.className = "run-cell";
+    const baseline = item.baseline && typeof item.baseline === "object" ? item.baseline : null;
+    if (baseline?.runId) runs.append(runLine("基线", baseline.runId));
+    if (item.runId) runs.append(runLine(baseline?.runId ? "修改" : "", item.runId));
+    if (!runs.childNodes.length) runs.append(document.createTextNode("—"));
     const result = el("td", "result", resultText(item));
     const context = itemContext(item);
-    const identifiers = [
-      context.runId ? `run ${shortId(context.runId)}` : "",
-      context.taskId ? `task ${shortId(context.taskId)}` : "",
-    ].filter(Boolean);
-    if (identifiers.length) {
-      const line = el("div", "context-line", identifiers.join(" · "));
+    if (context.taskId) {
+      const line = el("div", "context-line", `task ${shortId(context.taskId)}`);
       line.title = [
         ["runId", context.runId],
         ["traceId", context.traceId],
@@ -579,6 +599,21 @@ function shortId(value) {
   return text.length > 12 ? `${text.slice(0, 12)}…` : text;
 }
 
+function runLink(runId, label) {
+  const link = el("a", "run-link", label);
+  link.href = `/api/runs/${encodeURIComponent(runId)}/wire`;
+  link.target = "_blank";
+  link.title = `wire ${runId}`;
+  return link;
+}
+
+function runLine(tag, runId) {
+  const line = el("div", "run-line");
+  if (tag) line.append(el("span", "run-tag", tag));
+  line.append(runLink(runId, shortId(runId)));
+  return line;
+}
+
 function contextTable(rows) {
   const table = el("table", "grid kv-table");
   const tbody = document.createElement("tbody");
@@ -614,21 +649,32 @@ function appendContextBlock(body, item) {
     ]),
   );
   body.append(block);
-  if (context.baseline) {
-    const baseline = context.baseline;
-    const baselineBlock = el("section", "diff-block");
-    baselineBlock.append(el("strong", "", "基线（Modify 前置 Create）"));
-    baselineBlock.append(
-      contextTable([
-        { label: "runId", value: baseline.runId, runId: baseline.runId },
-        { label: "taskId", value: baseline.taskId },
-        { label: "contextId", value: baseline.contextId },
-        { label: "state", value: baseline.state },
-        ...(baseline.error ? [{ label: "错误", value: baseline.error }] : []),
-      ]),
-    );
-    body.append(baselineBlock);
-  }
+}
+
+function appendBaselineBlock(body, item) {
+  const baseline = item.baseline;
+  if (!baseline || typeof baseline !== "object") return;
+  const status = String(baseline.status || "");
+  const label =
+    status === "running" ? "创建中" : status === "accepted" ? "已受理" : status === "failed" ? "失败" : "已记录";
+  const block = el("section", "diff-block");
+  const head = el("div", "diff-head");
+  head.append(
+    el("strong", "", "基线 Create（Modify 前置）"),
+    badge(status, label),
+    el("span", "summary", baseline.state || (status === "running" ? "等待受理…" : "")),
+  );
+  block.append(head);
+  if (baseline.error) block.append(el("p", "summary error", String(baseline.error)));
+  block.append(
+    contextTable([
+      { label: "runId", value: baseline.runId, runId: baseline.runId },
+      { label: "taskId", value: baseline.taskId },
+      { label: "contextId", value: baseline.contextId },
+    ]),
+  );
+  if (baseline.request) block.append(el("pre", "mono case-pre", textBlock(baseline.request)));
+  body.append(block);
 }
 
 function appendStageBlock(body, label, result) {
@@ -669,6 +715,7 @@ function appendStageBlock(body, label, result) {
 }
 
 function renderResultTab(item, body) {
+  appendBaselineBlock(body, item);
   appendContextBlock(body, item);
   const stages = item.stages || {};
   if (!Object.keys(stages).length) {

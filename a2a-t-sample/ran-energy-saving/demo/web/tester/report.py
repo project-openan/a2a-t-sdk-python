@@ -105,6 +105,11 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
         "耗时(ms)",
         "Token 总量",
         "Run ID",
+        "基线状态",
+        "基线 Run ID",
+        "基线 taskId",
+        "基线 state",
+        "基线错误",
         "决策模式",
         "传输",
         "发现",
@@ -123,6 +128,8 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
         stage_map = stages if isinstance(stages, Mapping) else {}
         tokens = item.get("tokens")
         token_map = tokens if isinstance(tokens, Mapping) else {}
+        baseline = item.get("baseline")
+        baseline_map = baseline if isinstance(baseline, Mapping) else {}
         results.append(
             [
                 item.get("caseId", ""),
@@ -132,6 +139,11 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
                 item.get("durationMs", ""),
                 token_map.get("total", ""),
                 item.get("runId", ""),
+                baseline_map.get("status", ""),
+                baseline_map.get("runId", ""),
+                baseline_map.get("taskId", ""),
+                baseline_map.get("state", ""),
+                baseline_map.get("error", ""),
                 batch.get("decisionMode", ""),
                 batch.get("transport", ""),
                 batch.get("discovery", ""),
@@ -146,7 +158,12 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
         )
     _set_widths(
         results,
-        (12, 42, 10, 10, 12, 12, 34, 10, 10, 10, 14, 48, 12, 12, 12, 12, 14, 12, 12, 12, 40),
+        (
+            12, 42, 10, 10, 12, 12, 34,
+            10, 34, 34, 18, 40,
+            10, 10, 10, 14, 48,
+            12, 12, 12, 12, 14, 12, 12, 12, 40,
+        ),
     )
 
     diffs = workbook.create_sheet("阶段差异")
@@ -311,6 +328,12 @@ def _reference_note(
 ) -> str:
     """Explain the empty arbitration cells of one item."""
     notes: list[str] = []
+    baseline = item.get("baseline")
+    if isinstance(baseline, Mapping) and baseline.get("status") == "failed":
+        detail = " ".join(
+            str(part) for part in (baseline.get("state"), baseline.get("error")) if part
+        )
+        notes.append(f"Modify 基线 Create 失败：{detail or '未记录原因'}")
     if item.get("scratch") is not None:
         notes.append("临时请求")
     elif not refs:

@@ -164,21 +164,11 @@ def test_a2a_t_negotiation_only_for_the_six_cases(cases: dict[int, dict[str, Any
             assert negotiation["kinds"] == []
 
 
-#: Rate named by a Modify baseline request.
-BASELINE_RATE_PATTERN = re.compile(r"guaranteed throughput of (\d+)Mbps")
-
-
-def _target_rates(document: dict[str, Any]) -> set[int]:
-    """Return the outage rates the case expects, read from the structured intent."""
-    rates: set[int] = set()
-    for entry in document["expect"]["intent"]["Scenario-based energy saving"] or ():
-        for target in entry.get("Guaranteed throughput target by site") or ():
-            match = re.search(
-                r"(\d+)Mbps", str(target.get("Guaranteed throughput target") or "")
-            )
-            if match:
-                rates.add(int(match.group(1)))
-    return rates
+#: The manual baseline Task-T the testers use: a complete, non-negotiating Create.
+BASELINE_SCHEDULE = (
+    "guarantee 2Mbps from 00:00 to 07:00, 10Mbps from 07:00 to 18:00 "
+    "and 20Mbps from 18:00 to 24:00"
+)
 
 
 def test_every_modify_case_pairs_a_normal_create_baseline(
@@ -187,9 +177,13 @@ def test_every_modify_case_pairs_a_normal_create_baseline(
     """A Modify continues a Task that must already exist.
 
     The corpus does not say where that Task came from, so each Modify row states its paired Create
-    explicitly. It is a normal-day task: the power outage is the new event the Modify introduces,
-    and the baseline rate differs from the outage target so the Modify changes the plan instead of
-    restating it.
+    explicitly. The baseline is the Create Task-T the testers use manually: a complete plan the
+    vendor accepts without a pre-task negotiation. The region must be written as ``A2ATestRegion``;
+    any other region either fails validation or opens an information negotiation.
+
+    A per-site high-rate day plan is not used. Widening Create 8/9's 10Mbps guarantee to the whole
+    day makes the baseline itself infeasible: the vendor answers a high rate over a long window
+    with a feasibility negotiation, so no continuable Task is created and the Modify never runs.
     """
     for case_id, document in cases.items():
         if document["operation"] != "Modify":
@@ -199,19 +193,17 @@ def test_every_modify_case_pairs_a_normal_create_baseline(
         assert isinstance(baseline, dict), case_id
         request = baseline.get("request")
         assert isinstance(request, str) and request.strip(), case_id
-        assert request.startswith("Implement energy-saving in A2ATestRegion region"), case_id
-        assert "00:00 to 22:00" in request, case_id
+        assert request.startswith("Create an energy saving task for A2ATestRegion"), case_id
+        assert BASELINE_SCHEDULE in request, case_id
         assert "Modify" not in request, case_id
+        # Prose only: the scripted provider rewrites an explicit window list into the Task Context
+        # and content validation then rejects the baseline.
+        assert "{" not in request and "}" not in request, case_id
+        # The region is part of the request, never inherited from the environment.
+        assert "Region A" not in request and "Region Z" not in request, case_id
         lowered = request.lower()
         for marker in ("outage", "停电", "background event"):
             assert marker not in lowered, f"{case_id}: baseline carries the new event"
-        match = BASELINE_RATE_PATTERN.search(request)
-        assert match is not None, case_id
-        target_rates = _target_rates(document)
-        assert target_rates, case_id
-        assert int(match.group(1)) not in target_rates, (
-            f"{case_id}: baseline restates the outage target"
-        )
 
 
 def test_every_modify_baseline_passes_the_sdk_pipeline(
@@ -219,9 +211,8 @@ def test_every_modify_baseline_passes_the_sdk_pipeline(
 ) -> None:
     """The baseline is a real Create: the SDK must generate and validate its Task-T.
 
-    The scripted provider rewrites an explicit window list into the Task Context and then routes
-    content validation to its "missing throughput target" branch, so a baseline that writes
-    ``{HH:MM~HH:MM,NMbps}`` is blocked. Keeping the windows in prose is what this test protects.
+    The baseline runs on the ``night`` scenario, so its canned Task-T is the default plan; the
+    test keeps every baseline request on the path that renders and validates that plan.
     """
     from eval.osp.runner import build_client
     from protocol.messages import TASK_TEMPLATE_URI

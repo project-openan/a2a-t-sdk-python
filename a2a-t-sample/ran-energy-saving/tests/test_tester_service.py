@@ -746,11 +746,11 @@ def test_the_modify_baseline_uses_the_configured_region_and_window(
     request = _baseline_request()
 
     assert "OtherRegion" in request
-    assert "{08:00~10:00,10Mbps}" in request
+    assert "10Mbps from 08:00 to 10:00" in request
     assert "Region A" not in request
     # The served window replaces the day plan instead of being inserted next to it: two segments
     # covering the same hours would describe an ambiguous prior task.
-    assert "17:30~23:00" not in request
+    assert "07:00 to 18:00" not in request
 
 
 def test_the_modify_baseline_is_a_one_day_region_task(
@@ -765,8 +765,8 @@ def test_the_modify_baseline_is_a_one_day_region_task(
     request = _baseline_request()
 
     assert "Create an energy saving task for OtherRegion" in request
-    assert "{00:00~06:00,10Mbps}" in request
-    assert "{23:00~24:00,10Mbps}" in request
+    assert "2Mbps from 00:00 to 07:00" in request
+    assert "20Mbps from 18:00 to 24:00" in request
 
 
 def test_a_case_can_override_the_paired_baseline() -> None:
@@ -819,6 +819,7 @@ async def test_an_a2a_t_modify_continues_the_task_it_just_created(tmp_path: Path
     assert isinstance(item, Mapping)
     baseline = item["baseline"]
     assert isinstance(baseline, Mapping)
+    assert baseline["status"] == "accepted"
     assert baseline["taskId"] == "task-1"
     assert baseline["state"] == TASK_STATE_SUBMITTED
     assert runs.calls[0]["protocol"] == PROTOCOL_A2A_T
@@ -854,6 +855,39 @@ async def test_a_live_a2a_t_modify_baseline_uses_the_live_decision_provider(
     assert runs.calls[0]["scripted_decisions"] == ()
 
 
+async def test_a_negotiating_baseline_is_recorded_as_failed_with_its_run(tmp_path: Path) -> None:
+    """A baseline that opens a negotiation is not continuable; the export must still name it."""
+
+    def _negotiating(run: RunState) -> None:
+        run.remote_task_id = "task-1"
+        run.remote_context_id = "ctx-1"
+        run.latest_task_state = "TASK_STATE_INPUT_REQUIRED"
+        run.status = "finished"
+
+    runs = _FakeRuns(_negotiating)
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[18],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="send",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    snapshot = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = snapshot["items"][0]
+    baseline = item["baseline"]
+    assert isinstance(baseline, Mapping)
+    assert item["status"] == CASE_ERROR
+    assert baseline["status"] == "failed"
+    assert baseline["runId"] == "run-1"
+    assert baseline["state"] == "TASK_STATE_INPUT_REQUIRED"
+    assert "协商" in str(baseline["error"])
+    assert "协商" in str(item["error"])
+
+
 async def test_a_pure_modify_continues_the_outer_task_it_just_created(tmp_path: Path) -> None:
     """Pure A2A continues the OSS Agent's outer Task, not a new message on a new Task."""
     runs = _FakeRuns(_seed_then_modify("TASK_STATE_WORKING"))
@@ -874,6 +908,7 @@ async def test_a_pure_modify_continues_the_outer_task_it_just_created(tmp_path: 
     baseline = item["baseline"]
     assert isinstance(baseline, Mapping)
     assert baseline["protocol"] == "pure"
+    assert baseline["status"] == "accepted"
     assert baseline["taskId"] == "task-1"
     assert runs.calls[0]["protocol"] == "pure"
     assert runs.calls[1]["protocol"] == "pure"

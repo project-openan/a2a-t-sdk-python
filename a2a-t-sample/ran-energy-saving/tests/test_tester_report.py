@@ -263,6 +263,45 @@ def test_the_results_sheet_carries_the_interception_columns() -> None:
     assert row[headers.index("拦截后补充信息")] == "clarified request"
 
 
+def _with_baseline(status: str = "failed") -> dict[str, Any]:
+    batch = _snapshot()
+    item = batch["items"][0]
+    item["operation"] = "Modify"
+    item["baseline"] = {
+        "runId": "c" * 32,
+        "protocol": "a2a-t",
+        "status": status,
+        "taskId": None if status == "failed" else "task-base",
+        "contextId": "ctx-base",
+        "state": "TASK_STATE_INPUT_REQUIRED" if status == "failed" else "TASK_STATE_SUBMITTED",
+        "error": (
+            "Modify 基线 Create 触发了协商（TASK_STATE_INPUT_REQUIRED），不是可续传状态。"
+            if status == "failed"
+            else None
+        ),
+    }
+    return batch
+
+
+def test_the_results_sheet_carries_the_baseline_columns() -> None:
+    """A baseline failure must be diagnosable from the export, not only from the live drawer."""
+    rows = _results_sheet(_with_baseline())
+    headers, row = rows[0], rows[1]
+
+    assert row[headers.index("基线状态")] == "failed"
+    assert row[headers.index("基线 Run ID")] == "c" * 32
+    assert row[headers.index("基线 taskId")] in (None, "")
+    assert row[headers.index("基线 state")] == "TASK_STATE_INPUT_REQUIRED"
+    assert "协商" in str(row[headers.index("基线错误")])
+
+
+def test_the_arbitration_note_names_a_failed_baseline() -> None:
+    """The arbitration sheet is the comparison view; a baseline failure must not look silent."""
+    rows = _reference_sheet(_with_baseline())
+
+    assert "Modify 基线 Create 失败" in str(rows[1][32])
+
+
 def test_the_stage_diff_sheet_labels_interception_stages() -> None:
     batch = _with_interception()
     batch["items"][0]["interception"]["stages"]["validate"]["diffs"] = [
