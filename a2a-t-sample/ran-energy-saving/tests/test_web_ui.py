@@ -47,7 +47,7 @@ from protocol.decision_provider import ManualDecisionProvider
 from protocol.sqlite_task_store import SqliteTaskStore
 from shared.config import DISCOVERY_NMS, TRANSPORT_WEBHOOK, SampleConfig
 from shared.models import NegotiationDecision, NegotiationProposeView
-from shared.run_constants import FINAL_STATE_INTENT_NOT_CONFIRMED, PROTOCOL_A2A_T
+from shared.run_constants import FINAL_STATE_INTENT_NOT_CONFIRMED, PROTOCOL_A2A_T, PROTOCOL_PURE
 from shared.trace import PHASES
 from shared.webhook_receiver import WebhookPortInUseError, WebhookReceiver
 
@@ -190,6 +190,8 @@ class FakeRuntime:
         self.run_mode = "create"
         self.target_task_id: str | None = None
         self.target_context_id: str | None = None
+        self.target_server_task_id: str | None = None
+        self.target_server_context_id: str | None = None
 
     def set_recommendation_sink(self, sink: Callable[..., None] | None) -> None:
         """Accept the confirmation recommendation callback."""
@@ -215,6 +217,8 @@ class FakeRuntime:
         run_mode: str = "create",
         target_task_id: str | None = None,
         target_context_id: str | None = None,
+        target_server_task_id: str | None = None,
+        target_server_context_id: str | None = None,
     ) -> ClientFlowResult:
         del validate_before_send, enforce_required_fields, require_rate_target, site_level_rate_optional
         self.run_id = run_id
@@ -223,6 +227,8 @@ class FakeRuntime:
         self.run_mode = run_mode
         self.target_task_id = target_task_id
         self.target_context_id = target_context_id
+        self.target_server_task_id = target_server_task_id
+        self.target_server_context_id = target_server_context_id
         if on_intent_ready is not None and self.intent_gate:
             if not await on_intent_ready("## Operation Type\nCreate"):
                 return ClientFlowResult(final_state=FINAL_STATE_INTENT_NOT_CONFIRMED)
@@ -688,6 +694,155 @@ async def test_start_run_passes_the_target_to_the_runtime(
     assert runtimes[0].run_mode == "modify"
     assert runtimes[0].target_task_id == "task-9"
     assert runtimes[0].target_context_id == "ctx-9"
+
+
+def _pure_run_record(
+    *,
+    run_id: str = "run-pure",
+    downstream_task_id: str = "task-9",
+    downstream_context_id: str = "ctx-9",
+) -> ClientRunRecord:
+    """Build one pure run that observed the vendor Task and keeps its outer identity."""
+    return ClientRunRecord(
+        run_id=run_id,
+        conversation_id=f"conv-{run_id}",
+        scenario="night",
+        mode="auto",
+        transport="sse",
+        discovery="direct",
+        user_request="create",
+        status="running",
+        protocol="pure",
+        server_task_id="outer-1",
+        server_context_id="outer-ctx",
+        downstream_task_id=downstream_task_id,
+        downstream_context_id=downstream_context_id,
+    )
+
+
+async def test_a_pure_modify_forwards_the_outer_task_ids_to_the_runtime(
+    offline_config: SampleConfig,
+    factory: Callable[..., Any],
+    runtimes: list[FakeRuntime],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The A2A message continues the OSS outer Task, not the vendor Task the picker names."""
+    async def working_task(_config: SampleConfig, task_id: str) -> dict[str, object]:
+        del task_id
+        return _working_task_row()
+
+    monkeypatch.setattr("demo.web.app.read_task", working_task)
+    store = SqliteClientStore(tmp_path / "client.sqlite3")
+    await store.ensure_conversation(conversation_id="conv-run-pure", user_id="user-1")
+    await store.create_run(_pure_run_record())
+    app = create_app(
+        replace(_nms_config(offline_config), client_db_path=str(store.path)),
+        runs_dir=tmp_path,
+        runtime_factory=factory,
+        client_store=store,
+        finished_grace_seconds=0.0,
+        ui_mode="explorer",
+        protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        response = await http_client.post(
+            "/api/runs",
+            json={
+                "scenario": "outage",
+                "mode": "auto",
+                "protocol": "pure",
+                "targetTaskId": "task-9",
+                "targetContextId": "ctx-9",
+                "targetServerTaskId": "outer-1",
+                "targetServerContextId": "outer-ctx",
+            },
+        )
+        assert response.status_code == 202, response.text
+        run_id = response.json()["runId"]
+        await _wait_status(http_client, run_id, lambda data: data["status"] == "finished")
+
+    assert runtimes[0].run_mode == "modify"
+    assert runtimes[0].target_task_id == "task-9"
+    assert runtimes[0].target_context_id == "ctx-9"
+    assert runtimes[0].target_server_task_id == "outer-1"
+    assert runtimes[0].target_server_context_id == "outer-ctx"
+
+
+async def test_a_pure_modify_without_an_outer_task_mapping_is_rejected(
+    offline_config: SampleConfig,
+    factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A vendor Task with no pure run of this page cannot be continued over A2A."""
+    async def working_task(_config: SampleConfig, task_id: str) -> dict[str, object]:
+        del task_id
+        return _working_task_row()
+
+    monkeypatch.setattr("demo.web.app.read_task", working_task)
+    app = create_app(
+        _nms_config(offline_config),
+        runs_dir=tmp_path,
+        runtime_factory=factory,
+        finished_grace_seconds=0.0,
+        ui_mode="explorer",
+        protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        response = await http_client.post(
+            "/api/runs",
+            json={
+                "scenario": "outage",
+                "mode": "auto",
+                "protocol": "pure",
+                "targetTaskId": "task-9",
+                "targetContextId": "ctx-9",
+                "targetServerTaskId": "outer-1",
+                "targetServerContextId": "outer-ctx",
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "target_server_mapping_missing"
+
+
+async def test_the_task_picker_reports_the_pure_outer_task_ids(
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The page needs the A2A peer id next to the vendor id it shows in the picker."""
+    async def working_task(_config: SampleConfig, task_id: str) -> dict[str, object]:
+        del task_id
+        return _working_task_row()
+
+    async def active_tasks(_config: SampleConfig) -> list[dict[str, object]]:
+        return [_working_task_row()]
+
+    monkeypatch.setattr("demo.web.app.read_task", working_task)
+    monkeypatch.setattr("demo.web.app.list_active_tasks", active_tasks)
+    store = SqliteClientStore(tmp_path / "client.sqlite3")
+    await store.ensure_conversation(conversation_id="conv-run-pure", user_id="user-1")
+    await store.create_run(_pure_run_record())
+    app = create_app(
+        replace(_nms_config(offline_config), client_db_path=str(store.path)),
+        runs_dir=tmp_path,
+        client_store=store,
+        finished_grace_seconds=0.0,
+        ui_mode="explorer",
+        protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        response = await http_client.get("/api/nms/tasks?state=active")
+
+    assert response.status_code == 200
+    row = response.json()["tasks"][0]
+    assert row["serverTaskId"] == "outer-1"
+    assert row["serverContextId"] == "outer-ctx"
 
 
 async def test_client_run_endpoints_return_persisted_runs_and_conversations(

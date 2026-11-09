@@ -156,6 +156,25 @@ class DownstreamBindingStore:
             ).fetchone()
         return _binding_from_row(row) if row is not None else None
 
+    async def get_by_outer_task(self, outer_task_id: str) -> DownstreamBinding | None:
+        """Return the active binding of one outer Task, ``None`` when absent or terminal.
+
+        A pure-A2A continuation arrives addressed to the outer Task the caller owns, not to the
+        vendor Task id. The OSS Agent uses this lookup to find the downstream identity it must
+        forward the message to.
+        """
+        return await asyncio.to_thread(self._get_by_outer_task, outer_task_id)
+
+    def _get_by_outer_task(self, outer_task_id: str) -> DownstreamBinding | None:
+        """Synchronous outer-Task lookup."""
+        with self._connection() as connection:
+            row = connection.execute(
+                f"SELECT {_SELECT_COLUMNS} FROM downstream_bindings "
+                "WHERE outer_task_id = ? AND state = ? ORDER BY updated_at DESC LIMIT 1",
+                (outer_task_id, WORKING_STATE),
+            ).fetchone()
+        return _binding_from_row(row) if row is not None else None
+
     async def list_active(self) -> list[DownstreamBinding]:
         """Return every binding still tracking a downstream Task."""
         return await asyncio.to_thread(self._list_active)

@@ -523,6 +523,8 @@ const EN = {
     stoppedRuns: "Stopped local runs: {ids}",
     activeCount: "{count} active tasks",
     modifyNotAllowed: "Only a SUBMITTED or WORKING task can be modified.",
+    needsServerTask:
+      "This Task has no pure-A2A outer Task; switch to A2A-T to modify it.",
     selected: "Selected",
     targetLabel: "Target A2A task",
     clear: "Clear selection",
@@ -1389,6 +1391,7 @@ const ZH = {
     stoppedRuns: "已停止本地 run：{ids}",
     activeCount: "活跃任务 {count} 个",
     modifyNotAllowed: "只有 SUBMITTED 或 WORKING 的任务可以修改。",
+    needsServerTask: "该任务没有 pure A2A 外层 Task，请切换到 A2A-T 修改。",
     selected: "已选择",
     targetLabel: "目标 A2A 任务",
     clear: "取消选择",

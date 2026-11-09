@@ -588,6 +588,90 @@ async def test_the_operator_answer_resumes_the_downstream_question(
     assert TaskState.TASK_STATE_COMPLETED in states
 
 
+async def test_a_follow_up_on_a_working_outer_task_reaches_the_bound_downstream(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A pure-A2A follow-up is a continuation of the vendor Task, not an echo of the outer Task."""
+    executor = OSSPureExecutor(answer=lambda event: "")
+    executor._binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    await executor._binding_store.save(
+        DownstreamBinding(
+            inner_task_id="nms-task-1",
+            inner_context_id="inner-ctx",
+            outer_task_id="outer-1",
+            protocol=PROTOCOL_PURE,
+        )
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_continuation(
+        pending: _PendingQuestion,
+        text: str,
+        event_sink: object,
+        updater: TaskUpdater,
+        call_context: object,
+    ) -> ClientFlowResult:
+        del event_sink, updater, call_context
+        captured["inner"] = (pending.inner_task_id, pending.inner_context_id)
+        captured["text"] = text
+        return ClientFlowResult(
+            final_state=FINAL_STATE_TASK_COMPLETED,
+            task_id="nms-task-1",
+            context_id="inner-ctx",
+        )
+
+    monkeypatch.setattr(executor, "_run_question_continuation", fake_continuation)
+    context = _task_context("Modify the rate to 10 Mbps.", task_id="outer-1")
+    context.current_task.status.state = TaskState.TASK_STATE_WORKING
+    queue = _RecordingQueue()
+
+    await executor.execute(context, queue)
+
+    assert captured == {
+        "inner": ("nms-task-1", "inner-ctx"),
+        "text": "Modify the rate to 10 Mbps.",
+    }
+    states = [event.status.state for event in queue.events if isinstance(event, TaskStatusUpdateEvent)]
+    assert states[-1] == TaskState.TASK_STATE_COMPLETED
+
+
+async def test_a_follow_up_without_a_binding_fails_instead_of_echoing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Telling the caller the message was accepted while nothing was sent is worse than failing."""
+    executor = OSSPureExecutor(answer=lambda event: "")
+    executor._binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    context = _task_context("Modify the rate to 10 Mbps.", task_id="outer-unbound")
+    context.current_task.status.state = TaskState.TASK_STATE_WORKING
+    queue = _RecordingQueue()
+
+    await executor.execute(context, queue)
+
+    states = [event.status.state for event in queue.events if isinstance(event, TaskStatusUpdateEvent)]
+    assert states[-1] == TaskState.TASK_STATE_FAILED
+    failed = queue.events[-1]
+    assert isinstance(failed, TaskStatusUpdateEvent)
+    assert failed.status.message is not None
+    assert "No downstream Task is bound" in failed.status.message.parts[0].text
+
+
+async def test_an_incomplete_sse_hop_remembers_its_downstream_binding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The SSE hop has no pump; a later follow-up still needs the outer→downstream mapping."""
+    executor = OSSPureExecutor(answer=lambda event: "")
+    executor._binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    executor._nms_client = object()  # type: ignore[assignment]
+    _fake_downstream(monkeypatch, executor, FINAL_STATE_INCOMPLETE)
+    queue = _RecordingQueue()
+
+    await executor.execute(_new_oss_context("Start energy saving.", task_id="outer-1"), queue)
+
+    binding = await executor._binding_store.get_by_outer_task("outer-1")
+    assert binding is not None
+    assert binding.inner_task_id == "nms-task-1"
+
+
 async def test_oss_keeps_the_outer_task_working_when_the_downstream_is_incomplete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

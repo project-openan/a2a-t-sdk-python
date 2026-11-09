@@ -102,16 +102,20 @@ state, region, sites, current target, last message). The picker refreshes every 
 open so a SUBMITTED Task's transition is visible without reopening it. A selected row enables two
 actions and nothing is sent until one is pressed:
 
-* **Modify this task** (SUBMITTED/WORKING, A2A-T only): it resets the stage, records the target task
-  id/context, switches the example to the planned-outage modification, fills the editor with
-  `MODIFY_REQUEST`, and waits for the operator. Pressing Start posts `targetTaskId`/
+* **Modify this task** (SUBMITTED/WORKING, A2A-T or pure A2A): it resets the stage, records the
+  target task id/context, switches the example to the planned-outage modification, fills the editor
+  with `MODIFY_REQUEST`, and waits for the operator. Pressing Start posts `targetTaskId`/
   `targetContextId`; the backend re-reads the Task and rejects a Task that is no longer SUBMITTED or
-  WORKING (409 `target_not_modifiable`) before starting. The Modify is sent immediately even while
-  the Task is still SUBMITTED. The run has `runMode=modify`: `run_client_flow` skips the baseline
-  and sends the Modify Task-T as its first message with `message.task_id`/`context_id`, and the
-  presentation reducer starts in the single Modify phase (the step bar marks the Create send as not
-  applicable). The run record, transcript, metrics document and live snapshot carry the run mode and
-  target ids.
+  WORKING (409 `target_not_modifiable`) before starting. Under A2A-T the Modify is sent immediately
+  even while the Task is still SUBMITTED: `run_client_flow` skips the baseline and sends the Modify
+  Task-T as its first message with `message.task_id`/`context_id`, and the presentation reducer
+  starts in the single Modify phase (the step bar marks the Create send as not applicable). Under
+  pure A2A the picker row additionally carries `serverTaskId`/`serverContextId`, the OSS Agent's
+  outer Task; `run_pure_client_flow` sends the operator text as `message.task_id`/`context_id` of
+  that Task, and `OSSPureExecutor` forwards it to the bound downstream Task. A vendor Task with no
+  pure run of this page is rejected (409 `target_server_mapping_missing`) instead of creating a new
+  Task. The run record, transcript, metrics document and live snapshot carry the run mode and both
+  target id pairs.
 * **Cancel this task** (any listed state, any protocol): the destructive action is armed by the
   first click and sent by the second one within five seconds. `POST /api/nms/tasks/{id}/cancel`
   calls `NmsClient.cancel_task` (body `{"id": taskId}`, the form the real NMS requires); on success

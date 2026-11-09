@@ -464,6 +464,99 @@ async def test_a_raw_run_does_not_call_the_intent_agent(
     assert captured[0]["intent_fields"] == {}
 
 
+async def test_a_pure_modify_sends_the_outer_task_ids(
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Pure A2A continues the peer's Task; the vendor id is only the picker's identity."""
+    import protocol.client_runtime as client_runtime
+    from protocol.client_flow import ClientFlowResult
+    from shared.run_constants import FINAL_STATE_TASK_COMPLETED, PROTOCOL_PURE
+
+    captured: dict[str, object] = {}
+
+    async def fake_discover(**kwargs: object) -> DiscoveredAgent:
+        del kwargs
+        return _card()
+
+    async def fake_create(agent: object, client_config: ClientConfig | None = None) -> _FakeA2AClient:
+        del agent, client_config
+        return _FakeA2AClient()
+
+    async def fake_pure(**kwargs: object) -> ClientFlowResult:
+        captured.update(kwargs)
+        return ClientFlowResult(final_state=FINAL_STATE_TASK_COMPLETED)
+
+    monkeypatch.setattr(client_runtime, "discover_agent", fake_discover)
+    monkeypatch.setattr(client_runtime, "create_client", fake_create)
+    monkeypatch.setattr(client_runtime, "run_pure_client_flow", fake_pure)
+    runtime = await build_demo_runtime(
+        offline_config,
+        "outage",
+        "auto",
+        "sse",
+        "direct",
+        protocol=PROTOCOL_PURE,
+        env_path=tmp_path / "missing.env",
+    )
+    try:
+        await runtime.run(
+            user_request="modify the running task",
+            run_mode="modify",
+            target_task_id="task-1",
+            target_context_id="ctx-1",
+            target_server_task_id="outer-1",
+            target_server_context_id="outer-ctx",
+        )
+    finally:
+        await runtime.aclose()
+
+    assert captured["task_id"] == "outer-1"
+    assert captured["context_id"] == "outer-ctx"
+
+
+async def test_a_pure_modify_without_the_outer_ids_is_refused(
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A vendor Task id cannot be continued over pure A2A without the peer's own Task id."""
+    import protocol.client_runtime as client_runtime
+    from protocol.client_runtime import ClientRuntimeError
+    from shared.run_constants import PROTOCOL_PURE
+
+    async def fake_discover(**kwargs: object) -> DiscoveredAgent:
+        del kwargs
+        return _card()
+
+    async def fake_create(agent: object, client_config: ClientConfig | None = None) -> _FakeA2AClient:
+        del agent, client_config
+        return _FakeA2AClient()
+
+    monkeypatch.setattr(client_runtime, "discover_agent", fake_discover)
+    monkeypatch.setattr(client_runtime, "create_client", fake_create)
+    runtime = await build_demo_runtime(
+        offline_config,
+        "outage",
+        "auto",
+        "sse",
+        "direct",
+        protocol=PROTOCOL_PURE,
+        env_path=tmp_path / "missing.env",
+    )
+    try:
+        with pytest.raises(ClientRuntimeError, match="outer Task id"):
+            await runtime.run(
+                user_request="modify the running task",
+                run_mode="modify",
+                target_task_id="task-1",
+                target_context_id="ctx-1",
+            )
+    finally:
+        await runtime.aclose()
+
+
 def test_importing_the_server_does_not_import_adk() -> None:
     """The server is a plain A2A/A2A-T service: its assembly must not load Google ADK."""
     sample_root = Path(__file__).resolve().parents[1]

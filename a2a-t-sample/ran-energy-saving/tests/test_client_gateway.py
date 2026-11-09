@@ -86,9 +86,12 @@ class FakeRuntime:
         run_mode: str = "create",
         target_task_id: str | None = None,
         target_context_id: str | None = None,
+        target_server_task_id: str | None = None,
+        target_server_context_id: str | None = None,
     ) -> ClientFlowResult:
         del on_intent_ready, trace_sink, activity_sink, run_id, validate_before_send, enforce_required_fields
         del require_rate_target, site_level_rate_optional, run_mode, target_task_id, target_context_id
+        del target_server_task_id, target_server_context_id
         self.user_request = user_request
         self.conversation_context = conversation_context
         if self.wait is not None:

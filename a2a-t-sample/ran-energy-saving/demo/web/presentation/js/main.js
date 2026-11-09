@@ -787,12 +787,14 @@ function selectProtocol(protocol) {
   if (!(ui.meta?.protocols || []).includes(protocol)) return;
   ui.protocol = protocol;
   const scenarios = scenariosForProtocol(protocol);
-  if (!scenarios.includes(ui.selected)) {
+  // A selected Modify target keeps its own scenario and request: switching the request form must
+  // not discard the Task the operator chose. Only a plain scenario switch falls back to the list.
+  if (!ui.targetTask && !scenarios.includes(ui.selected)) {
     ui.selected = scenarios[0] || ui.selected;
   }
   renderPresets();
   // Reuse the scenario reset path so no frame from the previous request form stays on stage.
-  selectScenario(ui.selected);
+  selectScenario(ui.selected, { keepTarget: true });
   renderProtocol();
 }
 
@@ -800,7 +802,11 @@ function renderPresets() {
   const select = els.scenarioSelect;
   if (!select) return;
   select.replaceChildren();
-  for (const name of scenariosForProtocol(ui.protocol)) {
+  const names = scenariosForProtocol(ui.protocol).slice();
+  // A Modify target keeps the planned-outage profile even in a request form whose curated list
+  // does not offer it (pure A2A).
+  if (ui.targetTask && ui.selected && !names.includes(ui.selected)) names.push(ui.selected);
+  for (const name of names) {
     const option = el("option", "", `${scenarioLabel(ui.copy, name)} · ${scenarioTag(ui.copy, name)}`);
     option.value = name;
     option.title = scenarioStory(ui.copy, name);
@@ -866,14 +872,18 @@ function resetRunState() {
   trace.reset();
 }
 
-function selectScenario(name, { start = false } = {}) {
-  clearModifyTarget(true);
+function selectScenario(name, { start = false, keepTarget = false } = {}) {
+  if (!keepTarget) clearModifyTarget(true);
   ui.selected = name;
   // A new example is a new intent, not a retry of a blocked attempt.
   clearChain();
   renderProtocol();
   resetRunState();
-  els.requestText.value = ui.meta?.scenarioRequests?.[name] || "";
+  // A selected target owns the request text; a scenario switch must not replace the Modify
+  // request with the scenario's create example.
+  els.requestText.value = ui.targetTask
+    ? ui.modifyRequest || ui.meta?.modifyRequest || ""
+    : ui.meta?.scenarioRequests?.[name] || "";
   hideError();
   if (els.scenarioSelect) els.scenarioSelect.value = name;
   renderScenarioDescription();
@@ -897,7 +907,8 @@ function resetRequest() {
 function renderModifyButton() {
   if (!els.modifyTask) return;
   // Cancel is protocol-independent, and a pure-A2A test also leaves Tasks that hold quota. The
-  // Modify action inside the picker keeps its own A2A-T / state checks.
+  // Modify action inside the picker checks whether the current request form can continue the
+  // selected row: A2A-T addresses the vendor Task directly, pure A2A addresses the OSS outer Task.
   els.modifyTask.hidden = !ui.meta?.nmsTasksEnabled;
   if (els.modifyLabel) els.modifyLabel.textContent = ui.copy.modifyTask;
   els.modifyTask.title = ui.copy.modifyTask;
@@ -930,6 +941,11 @@ function clearModifyTarget(silent = false) {
   ui.targetTask = null;
   renderTargetCard();
   if (!silent) {
+    // The Modify profile ("outage") may not belong to the current request form; clearing the
+    // target must return the dropdown to a scenario the form actually offers.
+    const names = scenariosForProtocol(ui.protocol);
+    if (!names.includes(ui.selected)) ui.selected = names[0] || ui.selected;
+    renderPresets();
     els.requestText.value = ui.meta?.scenarioRequests?.[ui.selected] || "";
     hideError();
     renderIntentPanel();
@@ -1087,11 +1103,23 @@ function renderModifyActions() {
   }
   if (els.modifyConfirm) {
     const modifiable = task !== null && isModifiableTaskState(task.state);
-    const a2aT = (ui.meta?.protocols || ["a2a-t"]).includes("a2a-t");
+    // A2A-T talks to the NMS directly, so the picker id is the Task the message continues. A pure
+    // run continues the OSS Agent's outer Task instead, which only exists for Tasks created by a
+    // pure run of this page.
+    const protocolAllows =
+      ui.protocol === "pure"
+        ? true
+        : (ui.meta?.protocols || ["a2a-t"]).includes("a2a-t");
+    const addressable =
+      ui.protocol !== "pure" || (task !== null && Boolean(task.serverTaskId));
     // A running page does not block a Modify: the backend hands the Task over to the new run.
-    els.modifyConfirm.disabled = !modifiable || !a2aT || cancelling;
+    els.modifyConfirm.disabled = !modifiable || !protocolAllows || !addressable || cancelling;
     els.modifyConfirm.textContent = ui.copy.modify.confirm;
-    els.modifyConfirm.title = modifiable ? "" : ui.copy.modify.modifyNotAllowed;
+    els.modifyConfirm.title = !modifiable
+      ? ui.copy.modify.modifyNotAllowed
+      : !addressable
+        ? ui.copy.modify.needsServerTask
+        : "";
   }
 }
 
@@ -1198,14 +1226,18 @@ function applyModifyTarget() {
     els.modifyError.hidden = false;
     return;
   }
+  if (ui.protocol === "pure" && !task.serverTaskId) {
+    els.modifyError.textContent = ui.copy.modify.needsServerTask;
+    els.modifyError.hidden = false;
+    return;
+  }
   closeModifyPicker();
   ui.targetTask = null;
   renderTargetCard();
   // The Modify reuses the planned-outage values; the visible example changes with the request.
+  // The selected request form stays as the operator set it: a pure Modify continues the OSS
+  // Agent's outer Task, an A2A-T Modify continues the vendor Task directly.
   ui.selected = "outage";
-  if (ui.protocol !== "a2a-t" && (ui.meta?.protocols || []).includes("a2a-t")) {
-    ui.protocol = "a2a-t";
-  }
   renderPresets();
   renderProtocol();
   // While a run is still on stage, keep it (and its stream) until Start replaces it: the operator
@@ -1232,8 +1264,12 @@ function applyModifyTarget() {
 async function startRun() {
   // A Modify may start while the page still shows a run: starting it hands the Task over and
   // stops the previous run server-side, instead of refusing and forcing a page reload first.
-  if (ui.busy && !canStartModify(ui.targetTask)) {
+  if (ui.busy && !canStartModify(ui.targetTask, ui.protocol)) {
     showError(ui.copy.running);
+    return;
+  }
+  if (ui.targetTask && ui.protocol === "pure" && !ui.targetTask.serverTaskId) {
+    showError(ui.copy.modify.needsServerTask);
     return;
   }
   // The request is sent; the editor window has done its job and gives the stage back.
@@ -1277,6 +1313,12 @@ async function startRun() {
           ? {
               targetTaskId: ui.targetTask.taskId,
               targetContextId: ui.targetTask.contextId,
+              ...(ui.targetTask.serverTaskId
+                ? {
+                    targetServerTaskId: ui.targetTask.serverTaskId,
+                    targetServerContextId: ui.targetTask.serverContextId || "",
+                  }
+                : {}),
             }
           : {}),
         source: chain
@@ -1596,7 +1638,7 @@ function closeStream() {
 function setBusy(busy) {
   // A selected Modify target keeps Start and the request editor usable while a run is on stage:
   // starting it is the handover that replaces that run.
-  const canRun = !busy || canStartModify(ui.targetTask);
+  const canRun = !busy || canStartModify(ui.targetTask, ui.protocol);
   ui.busy = busy;
   els.start.disabled = !canRun;
   els.reset.disabled = busy;
@@ -2416,10 +2458,10 @@ function renderControls() {
   els.pausedTag.hidden = !status.paused;
   els.stage.classList.toggle("paused", status.paused);
   els.start.textContent =
-    ui.busy && !canStartModify(ui.targetTask) ? ui.copy.running : ui.copy.start;
+    ui.busy && !canStartModify(ui.targetTask, ui.protocol) ? ui.copy.running : ui.copy.start;
   if (els.startQuick) {
     // With a Modify target ready, Start is the handover that replaces the run on stage.
-    const canRun = !ui.busy || canStartModify(ui.targetTask);
+    const canRun = !ui.busy || canStartModify(ui.targetTask, ui.protocol);
     els.startQuick.textContent = canRun ? ui.copy.start : ui.copy.running;
     els.startQuick.disabled = !canRun;
   }

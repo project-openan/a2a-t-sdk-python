@@ -185,11 +185,15 @@ still holds NMS quota — SUBMITTED, WORKING and INPUT_REQUIRED — with its rea
 refreshes every five seconds while it is open. Selecting a Task enables two actions, and nothing is
 sent until the operator presses one:
 
-* **Modify this task** — available for SUBMITTED or WORKING Tasks under A2A-T. It records the task
-  id and context, switches the example to the planned-outage modification and fills the editor with
-  a Modify-only request. Pressing Start posts the target ids; the run has no baseline phase, and its
-  first Task-T is the real Modify continuation of the selected Task, even while it is still
-  SUBMITTED. A Task that reaches a terminal state before the send is rejected with a clear message.
+* **Modify this task** — available for SUBMITTED or WORKING Tasks under A2A-T and, for Tasks created
+  by a pure-A2A run of this page, under A2A too. It records the task id and context, switches the
+  example to the planned-outage modification and fills the editor with a Modify-only request.
+  Pressing Start posts the target ids; the run has no baseline phase. Under A2A-T its first Task-T
+  continues the selected vendor Task, even while it is still SUBMITTED. Under A2A the message
+  continues the OSS Agent's outer Task (the picker row reports both ids) and the OSS Agent forwards
+  the operator's text to its bound vendor Task. A Task that reaches a terminal state before the send
+  is rejected with a clear message. Switching the request form keeps the selected Task; a Task
+  without a pure-A2A outer Task stays selected but says to use A2A-T instead of silently dropping it.
 * **Cancel this task** — available for any listed Task and protocol, useful when repeated tests
   exhaust the Task quota. It needs a second click ("Confirm cancel?") within five seconds, then
   calls `POST /api/nms/tasks/{id}/cancel`; the backend sends the vendor `:cancel` request and stops

@@ -448,6 +448,8 @@ class ClientRuntime:
         run_mode: str = RUN_MODE_CREATE,
         target_task_id: str | None = None,
         target_context_id: str | None = None,
+        target_server_task_id: str | None = None,
+        target_server_context_id: str | None = None,
     ) -> ClientFlowResult:
         """Run the full client flow of the configured scenario.
 
@@ -477,6 +479,9 @@ class ClientRuntime:
                 Task-T against an existing running Task.
             target_task_id: Task a Modify-only run continues.
             target_context_id: Context of the Task a Modify-only run continues.
+            target_server_task_id: A2A peer's Task a pure Modify continues (the outer Task owned
+                by the OSS Agent). The vendor Task id above is only the picker's identity.
+            target_server_context_id: Context paired with ``target_server_task_id``.
 
         Returns:
             The collected events, decisions and terminal state.
@@ -504,11 +509,22 @@ class ClientRuntime:
                 processed = self.config.intent_mode == INTENT_MODE_PROCESSED
                 modify_mode = run_mode == RUN_MODE_MODIFY
                 if modify_mode:
-                    if self.protocol != PROTOCOL_A2A_T:
-                        raise ClientRuntimeError("A Modify-only run requires the A2A-T protocol.")
-                    if not target_task_id or not target_context_id:
-                        raise ClientRuntimeError("A Modify-only run needs both the target Task id and its context id.")
-                elif target_task_id or target_context_id:
+                    if self.protocol == PROTOCOL_PURE:
+                        # A pure Modify is a standard A2A continuation of the Task the caller
+                        # owns (the OSS Agent's outer Task), not of the vendor Task the picker
+                        # lists. The two ids travel together.
+                        if not target_server_task_id or not target_server_context_id:
+                            raise ClientRuntimeError(
+                                "A pure A2A Modify needs the outer Task id and context of the A2A peer."
+                            )
+                    elif self.protocol == PROTOCOL_A2A_T:
+                        if not target_task_id or not target_context_id:
+                            raise ClientRuntimeError(
+                                "A Modify-only run needs both the target Task id and its context id."
+                            )
+                    else:
+                        raise ClientRuntimeError("A Modify-only run requires A2A-T or pure A2A.")
+                elif target_task_id or target_context_id or target_server_task_id or target_server_context_id:
                     raise ClientRuntimeError("A target Task can only be used by a Modify-only run.")
                 raw_text = custom_request or self._scenario_raw_request()
                 if self.protocol == PROTOCOL_PURE:
@@ -541,6 +557,8 @@ class ClientRuntime:
                         call_timeout_seconds=self.config.http_timeout_seconds,
                         event_sink=event_sink,
                         trace_sink=sink,
+                        task_id=target_server_task_id if modify_mode else None,
+                        context_id=target_server_context_id if modify_mode else None,
                     )
                 intent: ProcessedIntent | None = None
                 if processed:

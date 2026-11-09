@@ -162,10 +162,13 @@ Task-T metadata）。a2a-sdk 的 HTTP 传输同样会被捕获，因此本地 A2
 SUBMITTED、WORKING 和 INPUT_REQUIRED——并显示真实状态；选择器打开期间每 5 秒自动刷新。选中任务后
 有两个动作，未点击前不会发送任何内容：
 
-* **修改该任务** —— 仅对 A2A-T 下的 SUBMITTED / WORKING 任务可用。它会记录该任务的 task id 和
-  context，把示例切到计划停电的修改场景，把“只修改”的请求填入输入框。点击开始才提交目标 id；这样
-  发起的 run 没有 baseline 阶段，第一条 Task-T 就是对所选任务的真实 Modify 续接，即使任务仍处于
-  SUBMITTED。发送前任务若已进入终态，后端会明确拒绝。
+* **修改该任务** —— 对 A2A-T 下的 SUBMITTED / WORKING 任务可用；对由本页面纯 A2A run 创建的 Task，
+  在 A2A 下也可用。它会记录该任务的 task id 和 context，把示例切到计划停电的修改场景，把“只修改”的
+  请求填入输入框。点击开始才提交目标 id；这样发起的 run 没有 baseline 阶段。A2A-T 下第一条 Task-T
+  直接续接所选网管任务（即使仍处于 SUBMITTED）；A2A 下消息续接 OSS Agent 的外层 Task（选择器行会
+  同时给出两套 id），由 OSS Agent 把操作员原文转发给它绑定的网管 Task。发送前任务若已进入终态，后端
+  会明确拒绝。切换协议请求形态不会丢弃已选任务；若该任务没有纯 A2A 外层 Task，页面会提示改用 A2A-T，
+  而不是静默清空选择。
 * **取消该任务** —— 对列表中的任意任务、任意协议可用，适合反复测试把任务配额跑满的情况。第一次点击
   进入“确认取消？”，5 秒内第二次点击才真正下发；后端调用 `POST /api/nms/tasks/{id}/cancel`，向网管
   发送厂商 `:cancel` 请求，并停止本进程内仍跟踪该 Task 的 run。网管回已知的 HTTP 503 时表示任务未被

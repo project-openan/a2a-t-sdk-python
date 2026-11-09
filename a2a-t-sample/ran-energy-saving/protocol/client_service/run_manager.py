@@ -696,6 +696,8 @@ class RunManager:
         source: Mapping[str, object] | None = None,
         target_task_id: str | None = None,
         target_context_id: str | None = None,
+        target_server_task_id: str | None = None,
+        target_server_context_id: str | None = None,
         scripted_decisions: Sequence[NegotiationDecision] | None = None,
         pure_answers: Sequence[str] | None = None,
         validate_before_send: bool | None = None,
@@ -727,6 +729,9 @@ class RunManager:
                 through :func:`shared.run_source.normalize_run_source`.
             target_task_id: existing running Task a Modify-only run continues.
             target_context_id: context of the Task a Modify-only run continues.
+            target_server_task_id: A2A peer's Task a pure Modify continues; the pair above is the
+                vendor-facing picker identity and this is what the A2A message carries.
+            target_server_context_id: context paired with ``target_server_task_id``.
             scripted_decisions: per-run A2A-T decision script used by ``MODE_SCRIPTED``; ``None``
                 keeps the scenario's catalog script.
             pure_answers: per-run answers for the pure A2A ``INPUT_REQUIRED`` rounds, consumed in
@@ -744,9 +749,29 @@ class RunManager:
         resolved_target_context = target_context_id.strip() if isinstance(target_context_id, str) else ""
         if bool(resolved_target_task) != bool(resolved_target_context):
             raise ValueError("target_task_id and target_context_id must be provided together.")
-        run_mode = RUN_MODE_MODIFY if resolved_target_task else RUN_MODE_CREATE
-        if run_mode == RUN_MODE_MODIFY and protocol != PROTOCOL_A2A_T:
-            raise ValueError("A Modify-only run requires the A2A-T protocol.")
+        resolved_server_task = (
+            target_server_task_id.strip() if isinstance(target_server_task_id, str) else ""
+        )
+        resolved_server_context = (
+            target_server_context_id.strip() if isinstance(target_server_context_id, str) else ""
+        )
+        if bool(resolved_server_task) != bool(resolved_server_context):
+            raise ValueError(
+                "target_server_task_id and target_server_context_id must be provided together."
+            )
+        run_mode = RUN_MODE_MODIFY if resolved_target_task or resolved_server_task else RUN_MODE_CREATE
+        if run_mode == RUN_MODE_MODIFY:
+            if protocol == PROTOCOL_PURE:
+                if not resolved_server_task:
+                    raise ValueError(
+                        "A pure A2A Modify needs the outer Task id and context of the A2A peer."
+                    )
+            elif protocol != PROTOCOL_A2A_T:
+                raise ValueError("A Modify-only run requires A2A-T or pure A2A.")
+            elif not resolved_target_task:
+                raise ValueError(
+                    "A Modify-only run needs both the target Task id and its context id."
+                )
         resolved_validate_before_send = (
             _should_validate_before_send(self._config, resolved_source)
             if validate_before_send is None
@@ -815,6 +840,8 @@ class RunManager:
             run_mode=run_mode,
             target_task_id=resolved_target_task or None,
             target_context_id=resolved_target_context or None,
+            target_server_task_id=resolved_server_task or None,
+            target_server_context_id=resolved_server_context or None,
             scripted_decisions=tuple(scripted_decisions or ()),
             pure_answers=tuple(pure_answers or ()),
         )
@@ -897,13 +924,29 @@ class RunManager:
             # Refuse before registering anything: a Task no run has observed yet has no server-side
             # identity to continue. Then stop the run the operator replaced before the new one
             # starts, so its callback subscription is released and its unread pushes are buffered.
-            superseded = self._task_handover_candidates(resolved_target_task)
+            # A pure Modify names the vendor Task in the picker but continues the A2A peer's outer
+            # Task; either id identifies a run that must hand the Task over.
+            handover_ids = [
+                candidate
+                for candidate in (resolved_target_task, resolved_server_task)
+                if candidate
+            ]
+            handover_ids = list(dict.fromkeys(handover_ids))
+            superseded: list[RunState] = []
+            seen: set[str] = set()
+            for handover_id in handover_ids:
+                for candidate in self._task_handover_candidates(handover_id):
+                    if candidate.run_id in seen:
+                        continue
+                    seen.add(candidate.run_id)
+                    superseded.append(candidate)
+            handover_id = resolved_target_task or resolved_server_task
             try:
-                await self._hand_over_task(resolved_target_task, run.run_id, superseded)
+                await self._hand_over_task(handover_id, run.run_id, superseded)
             except Exception:  # noqa: BLE001 - the new run is already accepted
                 _LOGGER.warning(
                     "handover of task %s to run %s did not stop the previous run",
-                    resolved_target_task,
+                    handover_id,
                     run.run_id,
                     exc_info=True,
                 )
@@ -1452,6 +1495,8 @@ class RunManager:
                 run_mode=run.run_mode,
                 target_task_id=run.target_task_id,
                 target_context_id=run.target_context_id,
+                target_server_task_id=run.target_server_task_id,
+                target_server_context_id=run.target_server_context_id,
             )
             if run.pending_decision and not run.cancel_requested:
                 # A provider that returns while the operator is still being waited for would let

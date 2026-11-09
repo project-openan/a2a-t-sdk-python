@@ -51,6 +51,8 @@ async def run_pure_client_flow(
     trace_sink: Callable[[dict[str, object]], None] | None = None,
     followup: str = PURE_FOLLOWUP_BOTH,
     plain_questions: bool = False,
+    task_id: str | None = None,
+    context_id: str | None = None,
 ) -> ClientFlowResult:
     """Send one pure A2A request and answer its ``INPUT_REQUIRED`` rounds.
 
@@ -68,6 +70,9 @@ async def run_pure_client_flow(
         plain_questions: Whether a plain agent message without negotiation metadata asks the
             client for information. The real vendor NMS answers a pure request this way; the
             local demo server never does, so the default stays false.
+        task_id: Existing Task the message continues (a pure-A2A Modify). Standard A2A lets a
+            non-terminal Task be continued; the peer forwards the text to its own downstream.
+        context_id: Context paired with ``task_id``.
 
     The downstream correlation travels on the ``X-A2AT-Run-Id``/``traceparent`` headers (the
     propagation context), so the message itself carries no sample-local metadata.
@@ -77,7 +82,16 @@ async def run_pure_client_flow(
     """
     transport_emits_events = _attach_event_sink(transport, event_sink)
     result = ClientFlowResult()
-    request = _pure_request(user_request)
+    request = (
+        _follow_up_request(
+            user_request,
+            task_id=task_id,
+            context_id=context_id,
+            followup=PURE_FOLLOWUP_BOTH,
+        )
+        if task_id or context_id
+        else _pure_request(user_request)
+    )
     _emit_message_sent(request, user_request, trace_sink)
     batch = await transport.send(request, _call_context(call_timeout_seconds))
     _collect(result, batch, event_sink, transport_emits_events)

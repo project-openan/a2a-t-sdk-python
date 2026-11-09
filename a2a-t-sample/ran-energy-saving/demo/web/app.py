@@ -283,6 +283,50 @@ async def _forward_json_or_empty(response: httpx.Response) -> dict[str, object]:
     return dict(value) if isinstance(value, dict) else {}
 
 
+async def _pure_run_mapping(client_store: ClientStore | None) -> dict[str, tuple[str, str]]:
+    """Map each observed vendor Task id to the pure-A2A outer Task that owns it.
+
+    The newest run wins: a Task can be continued by more than one run, and the latest attempt holds
+    the outer Task the page should address.
+    """
+    if client_store is None:
+        return {}
+    try:
+        runs = await client_store.list_runs(limit=500)
+    except Exception:  # noqa: BLE001 - the picker must still show the NMS list
+        _LOGGER.warning("could not read pure runs for the task picker", exc_info=True)
+        return {}
+    mapping: dict[str, tuple[str, str]] = {}
+    for run in runs:
+        if run.protocol != PROTOCOL_PURE or not run.downstream_task_id or not run.server_task_id:
+            continue
+        mapping.setdefault(
+            run.downstream_task_id,
+            (run.server_task_id, run.server_context_id or ""),
+        )
+    return mapping
+
+
+async def _annotate_server_tasks(
+    client_store: ClientStore | None,
+    rows: list[dict[str, object]],
+) -> None:
+    """Add the pure-A2A outer Task ids to the picker rows.
+
+    In pure mode a picker row names the OSS Agent's downstream Task. The A2A peer the page may
+    continue is the OSS outer Task, and every pure run that observed the downstream already
+    recorded both identities in the client store. Joining them here keeps the vendor task id (used
+    for the NMS state checks) next to the id the A2A message must carry.
+    """
+    if client_store is None or not rows:
+        return
+    mapping = await _pure_run_mapping(client_store)
+    for row in rows:
+        pair = mapping.get(str(row.get("taskId") or ""))
+        if pair is not None:
+            row["serverTaskId"], row["serverContextId"] = pair
+
+
 def create_app(
     config: SampleConfig,
     *,
@@ -657,6 +701,7 @@ def create_app(
             rows = [row for row in rows if row.get("state") == NMS_WORKING_STATE]
         elif state == "submitted":
             rows = [row for row in rows if row.get("state") == NMS_SUBMITTED_STATE]
+        await _annotate_server_tasks(client_store, rows)
         return JSONResponse(
             {
                 "enabled": True,
@@ -995,9 +1040,13 @@ def create_app(
             )
         target_task_id = body.get("targetTaskId")
         target_context_id = body.get("targetContextId")
+        target_server_task_id = body.get("targetServerTaskId")
+        target_server_context_id = body.get("targetServerContextId")
         for field_name, value in (
             ("targetTaskId", target_task_id),
             ("targetContextId", target_context_id),
+            ("targetServerTaskId", target_server_task_id),
+            ("targetServerContextId", target_server_context_id),
         ):
             if value is not None and not isinstance(value, str):
                 return JSONResponse(
@@ -1006,6 +1055,12 @@ def create_app(
                 )
         resolved_target_task = target_task_id.strip() if isinstance(target_task_id, str) else ""
         resolved_target_context = target_context_id.strip() if isinstance(target_context_id, str) else ""
+        resolved_server_task = (
+            target_server_task_id.strip() if isinstance(target_server_task_id, str) else ""
+        )
+        resolved_server_context = (
+            target_server_context_id.strip() if isinstance(target_server_context_id, str) else ""
+        )
         if bool(resolved_target_task) != bool(resolved_target_context):
             return JSONResponse(
                 {
@@ -1014,16 +1069,29 @@ def create_app(
                 },
                 status_code=400,
             )
+        if bool(resolved_server_task) != bool(resolved_server_context):
+            return JSONResponse(
+                {
+                    "error": "targetServerTaskId and targetServerContextId must be provided together.",
+                    "code": "target_server_pair_required",
+                },
+                status_code=400,
+            )
         if resolved_target_task:
-            if protocol != PROTOCOL_A2A_T:
+            if protocol not in (PROTOCOL_A2A_T, PROTOCOL_PURE):
                 return JSONResponse(
                     {
-                        "error": "A Modify-only run requires the A2A-T protocol.",
+                        "error": "A Modify-only run requires A2A-T or pure A2A.",
                         "code": "target_protocol_unsupported",
                     },
                     status_code=400,
                 )
-            if discovery != DISCOVERY_NMS:
+            # The picker always reads the vendor NMS from this process, while a pure run's own hop
+            # is the OSS Agent (direct). What matters is that the page can validate the vendor
+            # Task; an A2A-T run additionally continues that same Task directly.
+            if config.discovery != DISCOVERY_NMS or (
+                protocol == PROTOCOL_A2A_T and discovery != DISCOVERY_NMS
+            ):
                 return JSONResponse(
                     {
                         "error": "The task picker is available only with NMS discovery.",
@@ -1069,6 +1137,42 @@ def create_app(
                     },
                     status_code=409,
                 )
+            if protocol == PROTOCOL_PURE:
+                # The vendor Task is only the picker's identity. The message must continue the
+                # A2A peer's outer Task, and only a pure run that observed this vendor Task knows
+                # that id. Refuse rather than send a message that OSS would treat as a new Task.
+                if not resolved_server_task:
+                    return JSONResponse(
+                        {
+                            "error": (
+                                "A pure-A2A Modify needs the A2A peer's Task and context "
+                                "(targetServerTaskId/targetServerContextId)."
+                            ),
+                            "code": "target_server_pair_required",
+                        },
+                        status_code=400,
+                    )
+                mapping = await _pure_run_mapping(client_store)
+                mapped = mapping.get(resolved_target_task)
+                if mapped != (resolved_server_task, resolved_server_context):
+                    return JSONResponse(
+                        {
+                            "error": (
+                                "No pure-A2A run of this page owns the target Task; create the "
+                                "Task from this page first or use the A2A-T request form."
+                            ),
+                            "code": "target_server_mapping_missing",
+                        },
+                        status_code=409,
+                    )
+        elif resolved_server_task:
+            return JSONResponse(
+                {
+                    "error": "targetServerTaskId/targetServerContextId require targetTaskId.",
+                    "code": "target_pair_required",
+                },
+                status_code=400,
+            )
         requested_scenarios = scenarios_by_protocol.get(
             protocol_key,
             (
@@ -1079,6 +1183,10 @@ def create_app(
                 else scenario_names
             ),
         )
+        if resolved_target_task and protocol == PROTOCOL_PURE and scenario in scenario_names:
+            # A pure Modify carries the operator's text; the scenario only labels the run and
+            # supplies the Modify example. It is not a request form the pure list curates.
+            requested_scenarios = (scenario,)
         if scenario not in requested_scenarios:
             return JSONResponse(
                 {
@@ -1133,6 +1241,8 @@ def create_app(
                 source=_request_source(request, body.get("source")),
                 target_task_id=resolved_target_task or None,
                 target_context_id=resolved_target_context or None,
+                target_server_task_id=resolved_server_task or None,
+                target_server_context_id=resolved_server_context or None,
             )
         except RunConflictError as exc:
             return JSONResponse({"error": str(exc), "code": "run_conflict"}, status_code=409)

@@ -87,6 +87,9 @@ function eventScene(entry, state, frame) {
     if (pure?.kind === "negotiation") return scene("propose", 1800, frame);
     if (hop === "oss" && pure?.phase === "receive") return scene("understand", 2600, frame);
     if (hop === "oss" && pure?.phase === "intent") return scene("understand", 2200, frame);
+    // A follow-up on a running Task is the standard A2A Modify: the OSS understood the operator
+    // and forwards the text to its downstream Task.
+    if (hop === "oss" && pure?.phase === "modify") return scene("understand", 2200, frame);
     if (hop === "oss" && pure?.phase === "answer") return scene("decision", 1600, frame);
     if (hop === "oss" && pure?.phase === "report") return scene("report", 2600, frame);
     if (summary.includes("Data collection started")) return scene("collect-start", 2200, frame);

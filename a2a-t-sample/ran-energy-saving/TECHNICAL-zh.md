@@ -91,13 +91,17 @@ A2A-T 通道），右侧是三块证据面板。八个示例覆盖用例 1（夜
 （task id、context id、状态、区域、站点、当前目标、最后一条消息）。选择器打开期间每 5 秒自动刷新，
 SUBMITTED 任务的状态变化无需重新打开就能看到。选中一行后有两个动作，未点击前不会发送任何内容：
 
-* **修改该任务**（SUBMITTED / WORKING，仅 A2A-T）：页面重置舞台、记录目标 task id/context、把示例切到
+* **修改该任务**（SUBMITTED / WORKING，A2A-T 或纯 A2A）：页面重置舞台、记录目标 task id/context、把示例切到
   计划停电的修改场景、把 `MODIFY_REQUEST` 填入输入框，然后等待工程师操作。点击开始后才会提交
   `targetTaskId` / `targetContextId`；后端会重新读取该任务，如果它已不在 `SUBMITTED` / `WORKING` 状态
-  则在启动前返回 409 `target_not_modifiable`。即使任务仍处于 SUBMITTED，Modify 也会立即发送。这样的 run
-  使用 `runMode=modify`：`run_client_flow` 跳过 baseline，把 Modify Task-T 作为第一条消息发送并携带
+  则在启动前返回 409 `target_not_modifiable`。A2A-T 下即使任务仍处于 SUBMITTED，Modify 也会立即发送：
+  `run_client_flow` 跳过 baseline，把 Modify Task-T 作为第一条消息发送并携带
   `message.task_id` / `context_id`，演示 reducer 从一开始就处于单 Modify 阶段（步骤条把 Create 下发标为
-  不适用）。run 记录、transcript、metrics 文档和 live 快照都会带上 run mode 与目标 id。
+  不适用）。纯 A2A 下选择器行还会带 `serverTaskId` / `serverContextId`（OSS Agent 的外层 Task）；
+  `run_pure_client_flow` 把操作员原文作为该 Task 的 `message.task_id` / `context_id` 发送，由
+  `OSSPureExecutor` 转发给它绑定的下游 Task。没有本页面纯 A2A run 观测过的网管任务会被拒绝
+  （409 `target_server_mapping_missing`），不会退化成新建任务。run 记录、transcript、metrics 文档和
+  live 快照都会带上 run mode 与两组目标 id。
 * **取消该任务**（列表内任意状态、任意协议）：第一次点击进入待确认态，5 秒内第二次点击才真正下发。
   `POST /api/nms/tasks/{id}/cancel` 调用 `NmsClient.cancel_task`（body `{"id": taskId}`，真机要求的形式）；
   成功后通过 `RunManager.cancel(..., remote=False)` 停止本进程内 `remote_task_id` 或 `target_task_id`

@@ -73,10 +73,18 @@ def _expected_answer(case: dict[str, Any]) -> str:
 async def _run_pure(
     user_request: str,
     answer: Callable[[dict[str, object]], str],
+    *,
+    task_id: str | None = None,
+    context_id: str | None = None,
+    sim_app: Any | None = None,
 ) -> tuple[ClientFlowResult, list[tuple[dict[str, object], str]]]:
-    """Run one pure client flow against an in-process simulator."""
+    """Run one pure client flow against an in-process simulator.
+
+    ``sim_app`` lets two calls share the simulator's Task store, which is how a Modify rehearsal
+    continues the Task its create phase just left running.
+    """
     http_client = httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=build_sim_app(_sim_config())),
+        transport=httpx.ASGITransport(app=sim_app or build_sim_app(_sim_config())),
         base_url="http://sim",
     )
     nms_client = NmsClient(
@@ -106,6 +114,8 @@ async def _run_pure(
             max_rounds=3,
             call_timeout_seconds=_CALL_TIMEOUT_SECONDS,
             plain_questions=True,
+            task_id=task_id,
+            context_id=context_id,
         )
     finally:
         await nms_client.aclose()
@@ -124,6 +134,33 @@ async def test_osp_case_40_region_answer_completes_the_task() -> None:
     assert answered[0][1] == expected
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
     assert result.reports
+
+
+async def test_a_pure_follow_up_continues_the_same_vendor_task() -> None:
+    """A standard A2A Modify is a follow-up message on the Task the first request created."""
+    case = _case(40)
+    expected = _expected_answer(case)
+    sim = build_sim_app(_sim_config())
+
+    first, _ = await _run_pure(str(case["user_input"]), lambda event: expected, sim_app=sim)
+    assert first.final_state == FINAL_STATE_TASK_COMPLETED
+    assert first.task_id
+    assert first.context_id
+
+    second, _ = await _run_pure(
+        (
+            "Modify the guaranteed throughput target to "
+            "{00:00~08:00,2Mbps}, {08:00~24:00,10Mbps} for A2ATestRegion."
+        ),
+        lambda event: "",
+        sim_app=sim,
+        task_id=first.task_id,
+        context_id=first.context_id,
+    )
+
+    assert second.task_id == first.task_id
+    assert second.context_id == first.context_id
+    assert second.final_state == FINAL_STATE_TASK_COMPLETED
 
 
 async def test_an_accept_with_two_values_sends_both_and_completes() -> None:

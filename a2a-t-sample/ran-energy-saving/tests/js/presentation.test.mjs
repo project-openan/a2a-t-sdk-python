@@ -97,6 +97,11 @@ assert.equal(isModifiableTaskState("TASK_STATE_INPUT_REQUIRED"), false);
 assert.equal(canStartModify(null), false);
 assert.equal(canStartModify({ taskId: "" }), false);
 assert.equal(canStartModify({ taskId: "task-1" }), true);
+// A pure-A2A Modify continues the OSS Agent's Task, which the picker row only exposes when a
+// pure run of this page observed it.
+assert.equal(canStartModify({ taskId: "task-1" }, "pure"), false);
+assert.equal(canStartModify({ taskId: "task-1", serverTaskId: "outer-1" }, "pure"), true);
+assert.equal(canStartModify({ taskId: "task-1" }, "a2a-t"), true);
 
 // A retry after a pre-send block keeps the attempt chain (conversation and trace id); a run that
 // reached the server, completed or was cancelled starts a new one.

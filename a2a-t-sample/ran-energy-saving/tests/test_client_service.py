@@ -91,9 +91,12 @@ class FakeRuntime:
         run_mode: str = "create",
         target_task_id: str | None = None,
         target_context_id: str | None = None,
+        target_server_task_id: str | None = None,
+        target_server_context_id: str | None = None,
     ) -> ClientFlowResult:
         del on_intent_ready, trace_sink, activity_sink, run_id, validate_before_send, enforce_required_fields
         del require_rate_target, site_level_rate_optional, run_mode, target_task_id, target_context_id
+        del target_server_task_id, target_server_context_id
         # Observed from inside the run task: a binding placed outside ``create_task`` is gone here.
         self.trace_id = current_trace_id()
         self.downstream_trace_id = current_downstream_trace_id()
@@ -543,6 +546,40 @@ async def test_a_modify_run_stops_the_previous_run_of_the_same_task(
     assert first.status == "interrupted"
     assert first.error == HANDED_OVER
     assert second.finished() is False
+    hold.set()
+    await _finish(manager, second.run_id)
+
+
+async def test_a_pure_modify_stops_the_run_tracking_the_outer_task(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """The A2A peer's Task is the continuation target; its previous run must hand it over."""
+    hold = asyncio.Event()
+    manager, _, runtimes = _manager(tmp_path, offline_config, hold_decision=hold)
+    first = await manager.start(
+        "information", "auto", "sse", user_request="create", protocol="pure"
+    )
+    while first.runtime is None:
+        await asyncio.sleep(0.01)
+    await runtimes[0].decision_entered.wait()
+    # A pure run observes the OSS Agent's outer Task, not the vendor Task in the picker.
+    first.remote_task_id = "outer-1"
+
+    second = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        user_request="modify",
+        protocol="pure",
+        target_task_id="task-1",
+        target_context_id="ctx-1",
+        target_server_task_id="outer-1",
+        target_server_context_id="outer-ctx",
+    )
+
+    assert first.finished()
+    assert first.error == HANDED_OVER
     hold.set()
     await _finish(manager, second.run_id)
 

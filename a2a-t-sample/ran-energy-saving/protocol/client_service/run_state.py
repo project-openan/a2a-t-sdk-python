@@ -78,9 +78,13 @@ class ClientRuntimeLike(Protocol):
         conversation_context: str | None = None,
         validate_before_send: bool = False,
         enforce_required_fields: bool = False,
+        require_rate_target: bool = True,
+        site_level_rate_optional: bool = False,
         run_mode: str = RUN_MODE_CREATE,
         target_task_id: str | None = None,
         target_context_id: str | None = None,
+        target_server_task_id: str | None = None,
+        target_server_context_id: str | None = None,
     ) -> ClientFlowResult: ...
 
     async def aclose(self) -> None: ...
@@ -223,6 +227,10 @@ class RunState:
     run_mode: str = RUN_MODE_CREATE
     target_task_id: str | None = None
     target_context_id: str | None = None
+    #: A2A peer's Task a pure Modify continues (the OSS Agent's outer Task). Kept separately from
+    #: ``target_task_id`` so cancel matching still compares the vendor-facing picker id.
+    target_server_task_id: str | None = None
+    target_server_context_id: str | None = None
     raw_request: str | None = None
     normalized_request: str | None = None
     processed_intent: dict[str, object] | None = None
@@ -455,6 +463,8 @@ class RunState:
             "runMode": self.run_mode,
             "targetTaskId": self.target_task_id,
             "targetContextId": self.target_context_id,
+            "targetServerTaskId": self.target_server_task_id,
+            "targetServerContextId": self.target_server_context_id,
             "modelMode": model_mode,
             "modelLabel": model_label,
             "expectedSequence": expected_sequence,
@@ -491,6 +501,8 @@ class RunState:
             "runMode": self.run_mode,
             "targetTaskId": self.target_task_id,
             "targetContextId": self.target_context_id,
+            "targetServerTaskId": self.target_server_task_id,
+            "targetServerContextId": self.target_server_context_id,
             "modelMode": model_mode,
             "modelLabel": model_label,
             "expectedSequence": expected_sequence,
@@ -1081,6 +1093,8 @@ class RunState:
             "runMode": self.run_mode,
             "targetTaskId": self.target_task_id,
             "targetContextId": self.target_context_id,
+            "targetServerTaskId": self.target_server_task_id,
+            "targetServerContextId": self.target_server_context_id,
             "rawRequest": self.raw_request,
             "normalizedRequest": self.normalized_request,
             "intent": self.processed_intent,

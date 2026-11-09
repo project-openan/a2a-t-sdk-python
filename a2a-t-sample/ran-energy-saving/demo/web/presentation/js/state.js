@@ -882,8 +882,11 @@ export function isModifiableTaskState(stateName) {
  * The server hands the Task over: the new run takes the callback stream and the previous run is
  * stopped, so the page must not block Start behind its own busy flag.
  */
-export function canStartModify(targetTask) {
-  return targetTask !== null && Boolean(targetTask.taskId);
+export function canStartModify(targetTask, protocol = null) {
+  if (targetTask === null || !targetTask.taskId) return false;
+  // A pure-A2A Modify continues the A2A peer's Task: the vendor id alone is not addressable.
+  if (protocol === "pure") return Boolean(targetTask.serverTaskId);
+  return true;
 }
 
 /** The act the page should show. */

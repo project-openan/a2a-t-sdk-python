@@ -66,6 +66,30 @@ async def test_save_updates_an_existing_binding_and_keeps_created_at(tmp_path: P
     assert binding.created_at == original.created_at
 
 
+async def test_get_by_outer_task_returns_the_active_binding(tmp_path: Path) -> None:
+    """A continuation addressed to the outer Task must find its downstream identity."""
+    store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    await store.save(_binding(outer_task_id="outer-task-1"))
+    await store.save(
+        _binding("nms-task-2", inner_context_id="nms-ctx-2", outer_task_id="outer-task-2")
+    )
+
+    binding = await store.get_by_outer_task("outer-task-2")
+
+    assert binding is not None
+    assert binding.inner_task_id == "nms-task-2"
+    assert binding.inner_context_id == "nms-ctx-2"
+    assert await store.get_by_outer_task("missing") is None
+
+
+async def test_get_by_outer_task_ignores_terminal_bindings(tmp_path: Path) -> None:
+    """A finished downstream Task cannot be continued."""
+    store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    await store.save(_binding(state=TERMINAL_STATE, terminal_at=time.time()))
+
+    assert await store.get_by_outer_task("outer-task-1") is None
+
+
 async def test_list_active_excludes_terminal_bindings(tmp_path: Path) -> None:
     store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
     await store.save(_binding("active-1"))

@@ -49,6 +49,7 @@ from a2a.types import (
     AgentProvider,
     AgentSkill,
     Part,
+    Task,
     TaskState,
 )
 from a2a.utils.constants import TransportProtocol
@@ -546,7 +547,7 @@ class OSSPureExecutor(AgentExecutor):
             if pending is not None:
                 await self._resume_question(context, event_queue, pending)
                 return
-            await event_queue.enqueue_event(context.current_task)
+            await self._continue_running_task(context, event_queue, context.current_task)
             return
         message = context.message
         if message is None:
@@ -608,6 +609,40 @@ class OSSPureExecutor(AgentExecutor):
         events.put_nowait(None)
         await consumer
         await self._publish_result(updater, result)
+        await self._remember_downstream_binding(task, result, run_id, context.call_context)
+
+    async def _remember_downstream_binding(
+        self,
+        task: Task,
+        result: ClientFlowResult,
+        run_id: str | None,
+        call_context: ServerCallContext,
+    ) -> None:
+        """Persist the outer ↔ downstream identity of a still-running hop.
+
+        The webhook path writes the binding when it hands the Task to the pump. The SSE path has
+        no pump, but a later follow-up still has to find the downstream Task, so it records the
+        same durable mapping here.
+        """
+        # Only the NMS hop can be continued by a later message. The local RAN hop answers its
+        # questions inside the synchronous flow and has no vendor Task to resume.
+        if self._binding_store is None or self._nms_client is None or not result.task_id:
+            return
+        if result.final_state != FINAL_STATE_INCOMPLETE:
+            return
+        existing = await self._binding_store.get(result.task_id, result.context_id or "")
+        if existing is not None:
+            return
+        await self._binding_store.save(
+            DownstreamBinding(
+                inner_task_id=result.task_id,
+                inner_context_id=result.context_id or "",
+                outer_task_id=task.id,
+                run_id=run_id or "",
+                owner=call_context.user.user_name,
+                protocol=PROTOCOL_PURE,
+            )
+        )
 
     async def _publish_result(self, updater: TaskUpdater, result: ClientFlowResult) -> None:
         """Map one finished downstream flow onto the outer Task."""
@@ -1089,6 +1124,128 @@ class OSSPureExecutor(AgentExecutor):
             round_number,
         )
 
+    async def _continue_running_task(
+        self,
+        context: RequestContext,
+        event_queue: EventQueue,
+        current_task: Task,
+    ) -> None:
+        """Forward a follow-up message on a running outer Task to its bound downstream Task.
+
+        Standard A2A lets a caller append a message to a non-terminal Task. In pure mode the outer
+        Task belongs to this agent while the vendor Task owns the actual state, so echoing the
+        outer Task back would tell the operator that a modification was accepted when nothing
+        reached the downstream. The text is forwarded verbatim (the operator's own words), which
+        is also what a Task-T Modify carries.
+
+        A terminal Task, an empty message or a Task without a downstream binding keeps the old
+        echo behavior: there is nothing to forward, and the A2A handler decides the outcome.
+        """
+        message = context.message
+        text = _message_text(message) if message is not None else ""
+        outer_task_id = context.task_id or current_task.id
+        outer_context_id = context.context_id or current_task.context_id
+        if not text.strip() or current_task.status.state in _TERMINAL_TASK_STATES:
+            await event_queue.enqueue_event(current_task)
+            return
+        binding = (
+            await self._binding_store.get_by_outer_task(outer_task_id)
+            if self._binding_store is not None
+            else None
+        )
+        if binding is None:
+            # Never pretend the follow-up reached the downstream. The real failure mode is a
+            # message addressed to a Task that has no downstream hop left to continue.
+            updater = TaskUpdater(event_queue, outer_task_id, outer_context_id)
+            await updater.failed(
+                message=updater.new_agent_message(
+                    [Part(text="No downstream Task is bound to this A2A Task; the follow-up was not sent.")],
+                    metadata=self._oss_metadata("continuation-unbound"),
+                )
+            )
+            return
+        await self._take_over_pump(outer_task_id)
+        self._set_decision_request(text)
+        updater = TaskUpdater(event_queue, outer_task_id, outer_context_id)
+        metadata = self._oss_metadata("modify")
+        await updater.update_status(
+            TaskState.TASK_STATE_WORKING,
+            message=updater.new_agent_message(
+                [Part(text=f"OSS Agent forwarded the follow-up to the {self._downstream_name()}.")],
+                metadata=metadata,
+            ),
+            metadata={"pure": metadata["pure"]},
+        )
+        pending = _PendingQuestion(
+            outer_task_id=outer_task_id,
+            outer_context_id=outer_context_id,
+            run_id=_run_id_of(message) or "",
+            inner_task_id=binding.inner_task_id,
+            inner_context_id=binding.inner_context_id,
+            round_number=1,
+            user_request=text,
+            sent_texts=(text,),
+        )
+        await self._continue_downstream(updater, pending, text, context.call_context)
+
+    async def _take_over_pump(self, outer_task_id: str) -> None:
+        """Stop the background pump of one outer Task before a new continuation writes to it."""
+        handle = self._pumps.pop(outer_task_id, None)
+        if handle is None:
+            return
+        handle.task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await handle.task
+        handle.subscription.unsubscribe()
+
+    async def _continue_downstream(
+        self,
+        updater: TaskUpdater,
+        pending: _PendingQuestion,
+        text: str,
+        call_context: ServerCallContext,
+    ) -> None:
+        """Send one follow-up text downstream and publish what the next phase reports."""
+        events: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
+        consumer = asyncio.create_task(
+            self._consume(events, updater),
+            name=f"oss-continuation-consumer-{pending.outer_task_id}",
+        )
+        hop = self._downstream_hop()
+        try:
+            result = await self._run_question_continuation(
+                pending,
+                text,
+                events.put_nowait,
+                updater,
+                call_context,
+            )
+        except _QuestionPendingError as question:
+            events.put_nowait(None)
+            await consumer
+            await self._relay_question(
+                updater,
+                outer_task_id=pending.outer_task_id,
+                outer_context_id=pending.outer_context_id,
+                run_id=pending.run_id,
+                event=question.event,
+                round_number=pending.round_number + 1,
+                user_request=pending.user_request,
+                sent_texts=(*pending.sent_texts, text),
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - the outer Task must reach a terminal state
+            _LOGGER.exception("OSS downstream continuation failed")
+            events.put_nowait(None)
+            await consumer
+            await updater.failed(
+                message=updater.new_agent_message([Part(text=f"The {hop} hop failed: {exc}")])
+            )
+            return
+        events.put_nowait(None)
+        await consumer
+        await self._publish_result(updater, result)
+
     async def _resume_question(
         self,
         context: RequestContext,
@@ -1112,7 +1269,6 @@ class OSSPureExecutor(AgentExecutor):
         # The answer arrives in a new request task: re-establish the original request before the
         # next decision call, otherwise the provider (a context variable) sees no request at all.
         self._set_decision_request(pending.user_request)
-        hop = self._downstream_hop()
         metadata = self._oss_metadata("answer")
         await updater.update_status(
             TaskState.TASK_STATE_WORKING,
@@ -1122,44 +1278,7 @@ class OSSPureExecutor(AgentExecutor):
             ),
             metadata={"pure": metadata["pure"]},
         )
-        events: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
-        consumer = asyncio.create_task(
-            self._consume(events, updater),
-            name=f"oss-question-consumer-{pending.outer_task_id}",
-        )
-        try:
-            result = await self._run_question_continuation(
-                pending,
-                answer_text,
-                events.put_nowait,
-                updater,
-                context.call_context,
-            )
-        except _QuestionPendingError as question:
-            events.put_nowait(None)
-            await consumer
-            await self._relay_question(
-                updater,
-                outer_task_id=pending.outer_task_id,
-                outer_context_id=pending.outer_context_id,
-                run_id=pending.run_id,
-                event=question.event,
-                round_number=pending.round_number + 1,
-                user_request=pending.user_request,
-                sent_texts=(*pending.sent_texts, answer_text),
-            )
-            return
-        except Exception as exc:  # noqa: BLE001 - the outer Task must reach a terminal state
-            _LOGGER.exception("OSS->RAN question continuation failed")
-            events.put_nowait(None)
-            await consumer
-            await updater.failed(
-                message=updater.new_agent_message([Part(text=f"The {hop} hop failed: {exc}")])
-            )
-            return
-        events.put_nowait(None)
-        await consumer
-        await self._publish_result(updater, result)
+        await self._continue_downstream(updater, pending, answer_text, context.call_context)
 
     async def _run_question_continuation(
         self,

@@ -57,6 +57,24 @@ def _completed() -> dict[str, object]:
     }
 
 
+async def test_a_first_message_can_continue_an_existing_task() -> None:
+    """A pure Modify is a standard A2A continuation: the first message carries the peer's ids."""
+    transport = _FakeTransport([[_completed()]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Modify the rate to 10 Mbps.",
+        task_id="outer-1",
+        context_id="outer-ctx",
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    first_request, _ = transport.requests[0]
+    assert first_request.message.task_id == "outer-1"
+    assert first_request.message.context_id == "outer-ctx"
+    assert first_request.message.parts[0].text == "Modify the rate to 10 Mbps."
+
+
 async def test_the_flow_continues_the_same_task_after_input_required() -> None:
     transport = _FakeTransport([[_input_required()], [_completed()]])
     spans: list[dict[str, object]] = []
