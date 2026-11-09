@@ -5,6 +5,10 @@
   "properties": {
     "operation_type": {
       "type": "string",
+      "enum": [
+        "Create",
+        "Modify"
+      ],
       "description": "Provide the operation type. Allowed values: Create, Modify. Synonyms must be normalized to the canonical value.",
       "examples": [
         "Create"

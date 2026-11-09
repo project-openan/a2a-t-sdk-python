@@ -5,6 +5,10 @@
   "properties": {
     "操作类型": {
       "type": "string",
+      "enum": [
+        "创建",
+        "修改"
+      ],
       "description": "请提供操作类型，取值范围：创建、修改。同义词需归一化为规范取值。",
       "examples": [
         "创建"
