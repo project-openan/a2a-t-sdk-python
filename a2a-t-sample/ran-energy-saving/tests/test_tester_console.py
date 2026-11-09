@@ -282,6 +282,35 @@ async def test_the_full_flow_asserts_send_negotiate_and_final(client: httpx.Asyn
     assert item["stages"]["final"]["status"] == "passed"
 
 
+async def test_the_trace_tab_reads_the_tester_run_timeline(
+    client: httpx.AsyncClient,
+) -> None:
+    """The drawer's trace tab reuses the run trace endpoint: it must resolve a tester run."""
+    created = await client.post(
+        "/api/tester/batches",
+        json={
+            "caseIds": [1],
+            "protocols": ["a2a-t"],
+            "stopAfter": "final",
+            "approval": "approve",
+            "timeoutSeconds": 60,
+        },
+    )
+    batch_id = created.json()["batchId"]
+    await client.post(f"/api/tester/batches/{batch_id}/start")
+    finished = await _wait_batch(client, batch_id)
+    run_id = finished["items"][0]["runId"]
+    assert run_id
+
+    response = await client.get(f"/api/runs/{run_id}/trace.json")
+
+    assert response.status_code == 200
+    document = response.json()
+    assert document["runId"] == run_id
+    assert isinstance(document["transcript"], dict)
+    assert document["transcript"]["timeline"]
+
+
 async def test_a2a_rejects_a_sdk_only_stop_stage(client: httpx.AsyncClient) -> None:
     created = await client.post(
         "/api/tester/batches",
@@ -677,7 +706,13 @@ def test_the_tester_page_binds_the_case_detail_drawer_and_rerun() -> None:
     assert "accepted" in js and "working" in js
     assert "/api/tester/catalog/" in js
     assert "/items/${index}/rerun" in js
-    for element_id in ("drawer-tab-result", "drawer-tab-case", "config-decision", "config-working-timeout"):
+    for element_id in (
+        "drawer-tab-result",
+        "drawer-tab-trace",
+        "drawer-tab-case",
+        "config-decision",
+        "config-working-timeout",
+    ):
         assert re.search(rf'id="{element_id}"', page), element_id
     assert "不自动答复" in page
 
@@ -719,6 +754,11 @@ def test_the_result_row_and_drawer_expose_run_context_ids() -> None:
     assert '<th>RunId</th>' in page
     # The RunId cell must actually be appended: the header and the row have 11 columns.
     assert "tokens, runs, result, actions" in js
+    # A live session-trace tab reuses the run trace endpoint for the baseline and Modify runs.
+    assert "function renderTraceTab" in js
+    assert "/trace.json" in js
+    assert "function refreshOpenDrawer" in js
+    assert 'id="drawer-tab-trace"' in page
 
 
 def test_the_console_uses_the_full_width_of_a_large_screen() -> None:

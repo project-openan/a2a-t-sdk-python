@@ -267,6 +267,20 @@ table.grid td.result.pass { color: var(--green); }
 table.grid td.run-cell { font-family: var(--mono); font-size: 11px; white-space: nowrap; }
 .run-line { display: flex; gap: 6px; align-items: baseline; }
 .run-tag { color: var(--g500); }
+.trace-list { display: grid; gap: 6px; }
+.trace-event { border: 1px solid var(--g200); background: var(--white); }
+.trace-event > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.trace-seq { font-family: var(--mono); color: var(--g500); min-width: 36px; }
+.trace-kind { font-family: var(--mono); font-size: 11px; color: var(--g700); }
+.trace-title { flex: 1; word-break: break-word; }
+.trace-event .muted { color: var(--g500); font-size: 11px; }
 table.grid tr.running { background: var(--yellow-soft); }
 table.grid tr.invalid { background: var(--red-soft); }
 

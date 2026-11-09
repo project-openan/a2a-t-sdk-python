@@ -317,6 +317,7 @@ async function refreshBatch() {
     const payload = await getJson(`/api/tester/batches/${encodeURIComponent(state.batch.batchId)}`);
     state.batch = payload;
     renderResults();
+    refreshOpenDrawer();
     if (payload.status !== "running") {
       stopPolling();
       void loadHistory();
@@ -903,6 +904,188 @@ async function ensureCaseDoc(item) {
   }
 }
 
+function drawerRuns(item) {
+  const runs = [];
+  const baseline = item.baseline && typeof item.baseline === "object" ? item.baseline : null;
+  if (baseline?.runId) runs.push({ key: "baseline", label: "基线", runId: String(baseline.runId) });
+  if (item.runId) runs.push({ key: "modify", label: runs.length ? "修改" : "运行", runId: String(item.runId) });
+  return runs;
+}
+
+function activeDrawerRun(item) {
+  const runs = drawerRuns(item);
+  if (!runs.length) return null;
+  return runs.find((run) => run.key === state.drawer.run) || runs[runs.length - 1];
+}
+
+function traceEvents(doc) {
+  const transcript =
+    doc && typeof doc.transcript === "object" && doc.transcript ? doc.transcript : {};
+  if (Array.isArray(transcript.timeline) && transcript.timeline.length) return transcript.timeline;
+  if (Array.isArray(transcript.events)) return transcript.events;
+  return Array.isArray(doc?.spans) ? doc.spans : [];
+}
+
+async function ensureTraceDoc(item) {
+  const run = activeDrawerRun(item);
+  if (!run) return;
+  const drawer = state.drawer;
+  if (drawer.traceDoc && drawer.traceRunId === run.runId) return;
+  if (drawer.traceLoading) return;
+  drawer.traceLoading = true;
+  drawer.traceRunId = run.runId;
+  drawer.traceError = "";
+  renderDrawer();
+  try {
+    const doc = await getJson(`/api/runs/${encodeURIComponent(run.runId)}/trace.json`);
+    drawer.traceDoc = doc;
+    drawer.traceStatus = doc.status || "";
+  } catch (error) {
+    drawer.traceDoc = null;
+    drawer.traceError = error.message || String(error);
+  } finally {
+    drawer.traceLoading = false;
+    renderDrawer();
+  }
+}
+
+async function refreshTraceDoc(item) {
+  const drawer = state.drawer;
+  if (drawer.traceLoading) return;
+  const run = activeDrawerRun(item);
+  if (!run) return;
+  try {
+    const doc = await getJson(`/api/runs/${encodeURIComponent(run.runId)}/trace.json`);
+    const grew = traceEvents(doc).length !== traceEvents(drawer.traceDoc).length;
+    const statusChanged = (doc.status || "") !== drawer.traceStatus;
+    drawer.traceDoc = doc;
+    drawer.traceRunId = run.runId;
+    drawer.traceStatus = doc.status || "";
+    drawer.traceError = "";
+    if (grew || statusChanged) renderDrawer();
+  } catch (error) {
+    drawer.traceError = error.message || String(error);
+    renderDrawer();
+  }
+}
+
+function drawerSignature(item) {
+  const stages = item.stages && typeof item.stages === "object" ? item.stages : {};
+  const baseline =
+    item.baseline && typeof item.baseline === "object"
+      ? `${item.baseline.status || ""}:${item.baseline.state || ""}`
+      : "";
+  return [
+    item.status || "",
+    item.runId || "",
+    baseline,
+    item.error || "",
+    Object.entries(stages)
+      .map(([name, value]) => `${name}:${value?.status || ""}:${value?.message || ""}`)
+      .join("|"),
+  ].join("§");
+}
+
+function refreshOpenDrawer() {
+  const drawer = state.drawer;
+  if (!drawer.item || drawer.preview === true || drawer.index === null) return;
+  const items = Array.isArray(state.batch?.items) ? state.batch.items : [];
+  const fresh = items[drawer.index];
+  if (!fresh) return;
+  const signature = drawerSignature(fresh);
+  const changed = signature !== drawer.signature;
+  drawer.item = fresh;
+  drawer.signature = signature;
+  if (drawer.tab === "trace") {
+    void refreshTraceDoc(fresh);
+    if (changed) renderDrawer();
+    return;
+  }
+  if (changed) renderDrawer();
+}
+
+function traceEventNode(event, index) {
+  const details = document.createElement("details");
+  details.className = "trace-event";
+  const summary = document.createElement("summary");
+  const seq = event.seq !== undefined ? `#${event.seq}` : `#${index + 1}`;
+  summary.append(
+    el("span", "trace-seq", seq),
+    el("span", "trace-kind", String(event.kind || event.performative || "event")),
+    el("span", "trace-title", String(event.title || event.summary || event.content || "")),
+  );
+  if (event.status) summary.append(badge(String(event.status)));
+  if (typeof event.durationMs === "number") {
+    summary.append(el("span", "muted", durationText(event.durationMs)));
+  }
+  details.append(summary);
+  const text = textBlock(event);
+  details.append(el("pre", "mono case-pre", text.length > 6000 ? `${text.slice(0, 6000)}…` : text));
+  return details;
+}
+
+function renderTraceTab(item, body) {
+  const drawer = state.drawer;
+  const runs = drawerRuns(item);
+  if (!runs.length) {
+    body.append(
+      el("p", "status-line", "尚无运行：基线 Create 或请求发送后，轨迹会实时显示在这里。"),
+    );
+    return;
+  }
+  const active = activeDrawerRun(item);
+  if (runs.length > 1) {
+    const switcher = el("div", "protocol-switch");
+    for (const run of runs) {
+      const button = el("button", `tab small${run.key === active.key ? " active" : ""}`, run.label);
+      button.type = "button";
+      button.addEventListener("click", () => {
+        state.drawer.run = run.key;
+        state.drawer.traceDoc = null;
+        state.drawer.traceRunId = "";
+        state.drawer.traceStatus = "";
+        renderDrawer();
+        void ensureTraceDoc(state.drawer.item);
+      });
+      switcher.append(button);
+    }
+    body.append(switcher);
+  }
+  if (drawer.traceLoading && drawer.traceRunId === active.runId) {
+    body.append(el("p", "status-line", `正在加载轨迹 ${shortId(active.runId)}…`));
+    return;
+  }
+  if (drawer.traceError) {
+    body.append(el("p", "status-line error", `加载轨迹失败：${drawer.traceError}`));
+    return;
+  }
+  if (!drawer.traceDoc || drawer.traceRunId !== active.runId) {
+    body.append(el("p", "status-line", "正在加载轨迹…"));
+    return;
+  }
+  const doc = drawer.traceDoc;
+  const transcript =
+    doc && typeof doc.transcript === "object" && doc.transcript ? doc.transcript : {};
+  const meta = el("div", "case-meta");
+  meta.append(
+    el("span", "pill", `${active.label} ${shortId(active.runId)}`),
+    el("span", "pill", String(doc.status || transcript.finalState || "运行中")),
+  );
+  if (transcript.traceId) meta.append(el("span", "pill", `trace ${shortId(transcript.traceId)}`));
+  if (transcript.taskId) meta.append(el("span", "pill", `task ${shortId(transcript.taskId)}`));
+  body.append(meta);
+  const events = traceEvents(doc);
+  if (!events.length) {
+    body.append(el("p", "status-line", "暂无轨迹事件；运行开始后会逐步出现。"));
+    return;
+  }
+  const list = el("div", "trace-list");
+  events.forEach((event, index) => {
+    if (event && typeof event === "object") list.append(traceEventNode(event, index));
+  });
+  body.append(list);
+}
+
 function renderDrawer() {
   const drawer = state.drawer;
   const item = drawer.item;
@@ -911,11 +1094,16 @@ function renderDrawer() {
   $("drawer-title").textContent = `#${String(item.caseId).padStart(2, "0")} ${item.name} · ${protocol}`;
   $("drawer-tab-result").hidden = drawer.preview === true;
   $("drawer-tab-result").classList.toggle("active", drawer.tab === "result");
+  $("drawer-tab-trace").hidden = drawer.preview === true;
+  $("drawer-tab-trace").classList.toggle("active", drawer.tab === "trace");
   $("drawer-tab-case").classList.toggle("active", drawer.tab === "case");
   const body = $("drawer-body");
+  const scroll = body.scrollTop;
   clear(body);
   if (drawer.tab === "result") renderResultTab(item, body);
+  else if (drawer.tab === "trace") renderTraceTab(item, body);
   else renderCaseTab(item, body);
+  body.scrollTop = scroll;
 }
 
 function openDrawer(item, index) {
@@ -928,7 +1116,15 @@ function openDrawer(item, index) {
     caseDoc: null,
     loading: false,
     error: "",
+    run: null,
+    traceDoc: null,
+    traceRunId: "",
+    traceStatus: "",
+    traceLoading: false,
+    traceError: "",
+    signature: "",
   };
+  state.drawer.signature = drawerSignature(item);
   renderDrawer();
   $("drawer").hidden = false;
   $("drawer-backdrop").hidden = false;
@@ -950,6 +1146,13 @@ function openCasePreview(summary) {
     caseDoc: null,
     loading: false,
     error: "",
+    run: null,
+    traceDoc: null,
+    traceRunId: "",
+    traceStatus: "",
+    traceLoading: false,
+    traceError: "",
+    signature: drawerSignature(item),
   };
   renderDrawer();
   $("drawer").hidden = false;
@@ -961,6 +1164,7 @@ function switchDrawerTab(tab) {
   state.drawer.tab = tab;
   renderDrawer();
   if (tab === "case") void ensureCaseDoc(state.drawer.item);
+  if (tab === "trace") void ensureTraceDoc(state.drawer.item);
 }
 
 function closeDrawer() {
@@ -1016,6 +1220,7 @@ function wireEvents() {
   $("drawer-close").addEventListener("click", closeDrawer);
   $("drawer-backdrop").addEventListener("click", closeDrawer);
   $("drawer-tab-result").addEventListener("click", () => switchDrawerTab("result"));
+  $("drawer-tab-trace").addEventListener("click", () => switchDrawerTab("trace"));
   $("drawer-tab-case").addEventListener("click", () => switchDrawerTab("case"));
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeDrawer();

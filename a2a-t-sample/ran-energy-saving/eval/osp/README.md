@@ -323,6 +323,9 @@ PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-af
   给出 `runId`（wire / trace 链接）、`traceId`、`taskId`、`contextId`。
 - 基线进度在结果抽屉的「基线 Create（Modify 前置）」块实时显示（创建中 / 已受理 / 失败 +
   当前 Task state + runId / taskId / contextId），结果表的阶段列也会出现「基线」chip。
+- 结果抽屉新增「轨迹」tab：读取 `/api/runs/{runId}/trace.json` 的 transcript timeline，按 seq 展示
+  事件/状态/耗时，展开可看原始 JSON；Modify 可在「基线 / 修改」两个 run 之间切换。抽屉打开时随批次
+  轮询刷新（只有事件数或 run 状态变化才重绘，保留滚动位置）。
 - 报告导出 JSON / XLSX；JSON 带完整 `baseline` 对象，XLSX「用例结果」新增「基线状态 / 基线 Run ID /
   基线 taskId / 基线 state / 基线错误」列，「仲裁格式」的备注会写明基线失败原因。Excel 只作为导出
   格式，不再是输入。
