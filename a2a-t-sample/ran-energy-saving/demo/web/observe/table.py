@@ -264,6 +264,8 @@ ROUNDS_COLUMNS: tuple[str, ...] = (
     "decisionAt",
     "sdkConstructedAt",
     "replySentAt",
+    "negotiationType",
+    "hop",
 )
 
 
@@ -478,7 +480,7 @@ FIELD_NOTES: tuple[FieldNote, ...] = (
         "E2 Token 分侧",
         "client 侧上报的 input token。",
         "tokens.bySide.client.input。",
-        "该侧缺失时整组留空；side 存在但键缺失时按 0。",
+        "上游 0.4.3 起，缺失侧输出 0；整块缺失（旧 trace）才留空。",
     ),
     _note(
         "client.cachedInput",
@@ -506,7 +508,7 @@ FIELD_NOTES: tuple[FieldNote, ...] = (
         "E2 Token 分侧",
         "a2a-t-server 侧上报的 input token。",
         "tokens.bySide.server.input，来自 a2a-t-server OTel gen_ai.usage.*；父/子 span 重复上报只计一次（去重）。",
-        "该侧缺失时整组留空；side 存在但键缺失时按 0。",
+        "上游 0.4.3 起，缺失侧输出 0；整块缺失（旧 trace）才留空。",
     ),
     _note(
         "server.cachedInput",
@@ -727,6 +729,22 @@ FIELD_NOTES: tuple[FieldNote, ...] = (
         "协商回复发出的时间点。",
         "roundsDetail[].replySentAt（phase=negotiation/resolution 的 message_sent.startTime）。",
         "真机 NMS 的 statusUpdate 路径可能为空。",
+    ),
+    _note(
+        "negotiationType",
+        "rounds 轮次明细",
+        "本轮协商的类型：information / target / feasibility（无法识别时为 unknown）。",
+        "Langfuse metadata 的 detail.negotiationType（嵌套 detail 会被展平）；pure A2A 由 "
+        "metadata.pure.negotiationKind 或 phase 解析，"
+        "A2A-T 提案取 Negotiation-T 的类型。",
+        "取不到时留空。",
+    ),
+    _note(
+        "hop",
+        "rounds 轮次明细",
+        "pure A2A 提案所在的 OSS hop 标签。",
+        "Langfuse metadata 的 detail.hop（run 的 pure hop 透传到 observation detail）。",
+        "A2A-T 轮次为空；导出器未捕获 content 明细时也为空。",
     ),
 )
 

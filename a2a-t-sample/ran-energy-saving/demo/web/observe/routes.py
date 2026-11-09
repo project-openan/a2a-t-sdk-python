@@ -237,6 +237,39 @@ def build_observe_routes(
             return _error("job_not_found", f"未知 job：{job_id}", 404)
         return _csv_response(fields_csv(), "langfuse-fields.csv")
 
+    async def table_file(request: Request) -> Response:
+        """Download the Issue #1 AF–AW table as an XLSX workbook."""
+        job_id = request.path_params["job_id"]
+        snapshot = resolved_manager.get(job_id)
+        rows = resolved_manager.rows(job_id)
+        if snapshot is None or rows is None:
+            return _error("job_not_found", f"未知 job：{job_id}", 404)
+        if snapshot.get("status") == "running":
+            return _error("observe_not_finished", "job 尚未结束，XLSX 需在完成后下载。", 409)
+        metrics_list: list[dict[str, Any]] = []
+        for row in rows:
+            if row.get("status") != "ok":
+                continue
+            metrics = _mapping_or_none(row.get("metrics"))
+            if metrics is None:
+                continue
+            metrics_list.append(dict(metrics))
+        if not metrics_list:
+            return _error("no_metrics", "没有可导出的指标行。", 404)
+        # Lazy import keeps the page importable without the vendored package's side effects,
+        # matching the ``meta`` handler's deferred ``langfuse_export`` import.
+        from langfuse_export.table import build_table
+        from langfuse_export.writer import write_xlsx
+
+        headers, table_rows = build_table(metrics_list)
+        path = runs_dir / "observability" / "jobs" / f"{job_id}-table.xlsx"
+        write_xlsx(path, headers, table_rows)
+        return FileResponse(
+            path,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=f"langfuse-table-{job_id}.xlsx",
+        )
+
     async def archive(request: Request) -> Response:
         """Download one trace's full-export zip when the job produced it."""
         job_id = request.path_params["job_id"]
@@ -259,6 +292,7 @@ def build_observe_routes(
         Route("/api/observe/jobs/{job_id}/metrics.csv", metrics_file),
         Route("/api/observe/jobs/{job_id}/rounds.csv", rounds_file),
         Route("/api/observe/jobs/{job_id}/fields.csv", fields_file),
+        Route("/api/observe/jobs/{job_id}/table.xlsx", table_file),
         Route("/api/observe/jobs/{job_id}/archives/{trace_id}.zip", archive),
     ]
 

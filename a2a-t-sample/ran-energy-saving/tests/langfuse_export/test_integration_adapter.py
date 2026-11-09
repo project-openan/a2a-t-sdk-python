@@ -1,6 +1,6 @@
-"""Adapter contract tests for the sample-side patches P1-P4.
+"""Adapter contract tests for the sample-side patches P1-P6.
 
-The vendored upstream package is kept byte-for-byte except for the four patches
+The vendored upstream package is kept byte-for-byte except for the patches
 documented in ``langfuse_export/UPSTREAM.md``. These tests pin the behaviour the
 web observer depends on, without touching the upstream CLI contracts.
 """
@@ -10,6 +10,7 @@ from __future__ import annotations
 import shutil
 import types
 from collections.abc import Iterator
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,8 @@ from langfuse_export.client import LangfuseClient, NotFoundError
 from langfuse_export.config import Config, ConfigError
 
 TRACE = "9f2c1a7de4b34c0e8a5f2d1c6b9e3a70"
+TRACE_2 = "1a2b3c4d5e6f708192a3b4c5d6e7f809"
+EXPORTED_AT = datetime(2026, 11, 10, 1, 2, 3, tzinfo=timezone.utc)
 
 
 class FakeClient:
@@ -159,6 +162,40 @@ def test_run_export_cli_path_still_prints(
     assert f"exported {TRACE} ->" in captured.out
 
 
+def test_run_export_print_result_false_keeps_notices_but_drops_the_result_block(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    workdir: Path,
+    sample_rows: list[dict[str, Any]],
+    sample_scores: list[dict[str, Any]],
+) -> None:
+    _wire(monkeypatch, FakeBackend(sample_rows, sample_scores), FakeClient())
+
+    cli.run_export(
+        _args("--out", str(workdir / "out"), "--no-media", "--verbose"),
+        config=_config(insecure=True),
+        print_result=False,
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "TLS verification disabled" in captured.err
+
+
+def test_run_export_accepts_the_multi_trace_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+    workdir: Path,
+    sample_rows: list[dict[str, Any]],
+    sample_scores: list[dict[str, Any]],
+) -> None:
+    _wire(monkeypatch, FakeBackend(sample_rows, sample_scores), FakeClient())
+
+    args = cli.build_parser().parse_args([TRACE, TRACE_2, "--out", str(workdir / "out"), "--no-media"])
+    assert args.trace_id == [TRACE, TRACE_2]
+
+    result = cli.run_export(args, config=_config(), emit=False)
+    assert result["traceId"] == TRACE
+
+
 # -- P2: session close ----------------------------------------------------
 def test_client_close_closes_the_authenticated_session(monkeypatch: pytest.MonkeyPatch) -> None:
     client = LangfuseClient(host="https://example.test", public_key="pk", secret_key="sk")
@@ -253,22 +290,31 @@ def test_export_full_builds_the_expected_namespace(
     config = _config()
     captured: dict[str, Any] = {}
 
-    def fake_run_export(args: Any, exported_at: Any = None, *, config: Config | None = None, emit: bool = True) -> dict[str, Any]:
-        captured.update(args=args, config=config, emit=emit)
-        return {"traceId": args.trace_id}
+    def fake_run_export(
+        args: Any,
+        exported_at: Any = None,
+        *,
+        config: Config | None = None,
+        emit: bool = True,
+        print_result: bool = True,
+    ) -> dict[str, Any]:
+        captured.update(args=args, config=config, emit=emit, print_result=print_result)
+        return {"traceId": args.trace_id[0]}
 
     monkeypatch.setattr(cli, "run_export", fake_run_export)
 
     result = cli.export_full(config, TRACE, workdir / "full", zip_file=True)
 
     args = captured["args"]
-    assert args.trace_id == TRACE
+    # 0.4.0 made trace_id nargs="+"; a single id arrives as a one-item list.
+    assert args.trace_id == [TRACE]
     assert args.out == str(workdir / "full")
     assert args.metrics is True
     assert args.no_media is True
     assert args.zip is True
     assert captured["config"] is config
     assert captured["emit"] is False
+    assert captured["print_result"] is True
     assert result == {"traceId": TRACE}
 
     cli.export_full(config, TRACE, workdir / "full", zip_file=False)
@@ -292,3 +338,28 @@ def test_export_full_runs_silently(
     assert result["metrics"] is not None
     assert capsys.readouterr() == ("", "")
     assert client.closed == 1
+
+
+# -- 0.4.0 multi-trace batch ---------------------------------------------
+def test_run_batch_export_uses_the_patched_run_export(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    workdir: Path,
+    sample_rows: list[dict[str, Any]],
+    sample_scores: list[dict[str, Any]],
+) -> None:
+    client = _wire(monkeypatch, FakeBackend(sample_rows, sample_scores), FakeClient())
+    monkeypatch.setattr(cli, "load_config", lambda **kwargs: _config())
+
+    args = cli.build_parser().parse_args(
+        [TRACE, TRACE_2, "--out", str(workdir / "batch"), "--no-media", "--metrics", "--table", "--quiet"]
+    )
+    summary = cli.run_batch_export(args, [TRACE, TRACE_2], exported_at=EXPORTED_AT)
+
+    assert summary["exitCode"] == 0
+    assert len(summary["exports"]) == 2
+    assert len(summary["errors"]) == 0
+    assert Path(summary["table"]).is_file()
+    # Only the batch directory line reaches stdout; per-trace results stay silent.
+    assert capsys.readouterr().out.strip().splitlines() == [summary["batchDir"]]
+    assert client.closed == 2

@@ -6,14 +6,17 @@ Design: ``docs-local/2026-11-09-langfuse-observer-design.md`` §6.5-§6.6.
 from __future__ import annotations
 
 import dataclasses
+import io
 import re
 import uuid
+import zipfile
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import httpx
+import langfuse_export
 from demo.web.app import create_app
 from demo.web.observe.routes import build_observe_routes
 from demo.web.observe.service import ObserveBusyError, ObserveJobManager
@@ -25,8 +28,10 @@ from starlette.routing import Route
 
 TID_A = "a" * 32
 TID_B = "b" * 32
+TID_C = "c" * 32
 
 METRICS_A: dict[str, Any] = {
+    "traceId": TID_A,
     "runId": "run-a",
     "protocol": "a2a-t",
     "scenario": "night",
@@ -43,7 +48,7 @@ METRICS_A: dict[str, Any] = {
     },
 }
 
-METRICS_B: dict[str, Any] = {"runId": "run-b", "counts": {"serverObservations": 1}}
+METRICS_B: dict[str, Any] = {"traceId": TID_B, "runId": "run-b", "counts": {"serverObservations": 1}}
 
 
 class FakeExporter:
@@ -71,6 +76,24 @@ class FakeExporter:
                 "warnings": [],
             },
         )
+
+
+class FailingExporter(FakeExporter):
+    """FakeExporter that fails the given trace ids, to exercise the mixed-status table."""
+
+    def __init__(
+        self,
+        failing: set[str],
+        *,
+        metrics_by_trace: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(metrics_by_trace=metrics_by_trace)
+        self.failing = failing
+
+    def metrics(self, trace_id: str) -> tuple[Mapping[str, Any], Sequence[str]]:
+        if trace_id in self.failing:
+            raise RuntimeError(f"cannot export {trace_id}")
+        return super().metrics(trace_id)
 
 
 class StubManager:
@@ -161,7 +184,7 @@ async def test_meta_reports_an_unconfigured_langfuse(offline_config: SampleConfi
     assert meta["configured"] is False
     assert meta["hostLabel"] == "us.cloud.langfuse.com"
     assert meta["uiBaseUrl"] == offline_config.langfuse_ui_base_url
-    assert meta["toolVersion"] == "0.2.6"
+    assert meta["toolVersion"] == langfuse_export.__version__
     assert meta["maxTraces"] == 200
     assert meta["runningJobId"] is None
 
@@ -441,6 +464,66 @@ async def test_fields_csv_is_available_for_a_known_job(offline_config: SampleCon
     assert len(lines) == len(FIELD_NOTES) + 1
     assert response.headers["content-disposition"].endswith('"langfuse-fields.csv"')
     assert unknown.status_code == 404
+
+
+# ------------------------------------------------------------------------ xlsx
+
+
+async def test_table_xlsx_exports_only_ok_metrics(offline_config: SampleConfig, tmp_path: Path) -> None:
+    exporter = FailingExporter(
+        {TID_C},
+        metrics_by_trace={TID_A: METRICS_A, TID_B: METRICS_B},
+    )
+    manager = _manager(tmp_path, exporter)
+    async with _asgi(_routes(offline_config, tmp_path, manager=manager)) as client:
+        created = await client.post("/api/observe/jobs", json={"traceIds": [TID_A, TID_B, TID_C]})
+        job_id = created.json()["jobId"]
+        await manager.wait(job_id)
+        response = await client.get(f"/api/observe/jobs/{job_id}/table.xlsx")
+        saved = tmp_path / "observability" / "jobs" / f"{job_id}-table.xlsx"
+
+    assert response.status_code == 200
+    assert response.content.startswith(b"PK")
+    assert response.headers["content-type"] == (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert response.headers["content-disposition"] == (
+        f'attachment; filename="langfuse-table-{job_id}.xlsx"'
+    )
+    assert saved.is_file()
+    assert saved.read_bytes().startswith(b"PK")
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        sheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+    assert TID_A in sheet
+    assert TID_B in sheet
+    assert TID_C not in sheet
+
+
+async def test_table_xlsx_requires_a_finished_job(offline_config: SampleConfig, tmp_path: Path) -> None:
+    stub = StubManager()
+    async with _asgi(_routes(offline_config, tmp_path, manager=stub)) as client:
+        running = await client.get("/api/observe/jobs/job-running/table.xlsx")
+        unknown = await client.get("/api/observe/jobs/unknown/table.xlsx")
+
+    assert running.status_code == 409
+    assert running.json()["error"] == "observe_not_finished"
+    assert unknown.status_code == 404
+    assert unknown.json()["error"] == "job_not_found"
+
+
+async def test_table_xlsx_returns_404_without_ok_metrics(offline_config: SampleConfig, tmp_path: Path) -> None:
+    manager = _manager(tmp_path, FailingExporter({TID_C}))
+    async with _asgi(_routes(offline_config, tmp_path, manager=manager)) as client:
+        created = await client.post("/api/observe/jobs", json={"traceIds": [TID_C]})
+        job_id = created.json()["jobId"]
+        await manager.wait(job_id)
+        response = await client.get(f"/api/observe/jobs/{job_id}/table.xlsx")
+
+    assert response.status_code == 404
+    payload = response.json()
+    assert payload["error"] == "no_metrics"
+    assert payload["message"]
+    assert re.search(r"[一-鿿]", payload["message"])
 
 
 # --------------------------------------------------------------------- archive

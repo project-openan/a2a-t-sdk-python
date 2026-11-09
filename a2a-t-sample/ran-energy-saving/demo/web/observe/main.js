@@ -531,6 +531,7 @@ function renderDownloads() {
   $("download-metrics").disabled = !done;
   $("download-rounds").disabled = !done;
   $("download-fields").disabled = !done;
+  $("download-table").disabled = !done;
 }
 
 function downloadCsv(kind) {
@@ -540,6 +541,7 @@ function downloadCsv(kind) {
   if (kind === "metrics") window.location.href = `${base}/metrics.csv`;
   else if (kind === "rounds") window.location.href = `${base}/rounds.csv`;
   else if (kind === "fields") window.location.href = `${base}/fields.csv`;
+  else if (kind === "table") window.location.href = `${base}/table.xlsx`;
 }
 
 function archiveUrl(jobId, traceId) {
@@ -669,6 +671,7 @@ function boot() {
   $("download-metrics").addEventListener("click", () => downloadCsv("metrics"));
   $("download-rounds").addEventListener("click", () => downloadCsv("rounds"));
   $("download-fields").addEventListener("click", () => downloadCsv("fields"));
+  $("download-table").addEventListener("click", () => downloadCsv("table"));
 
   updateTraceCount();
   updateStartState();

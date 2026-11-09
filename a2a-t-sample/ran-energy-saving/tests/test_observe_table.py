@@ -72,6 +72,24 @@ def test_main_columns_follow_the_contract_order() -> None:
     )
 
 
+def test_rounds_columns_keep_the_prefix_and_append_pure_a2a_fields() -> None:
+    assert ROUNDS_COLUMNS == (
+        "traceId",
+        "round",
+        "proposeAt",
+        "notifiedAt",
+        "notifiedAtSource",
+        "negotiationStartedAt",
+        "negotiationStartedAtSource",
+        "clock",
+        "decisionAt",
+        "sdkConstructedAt",
+        "replySentAt",
+        "negotiationType",
+        "hop",
+    )
+
+
 def test_failed_export_keeps_identity_and_warnings_only() -> None:
     row = build_row(
         "abc123",
@@ -290,6 +308,50 @@ def test_missing_tokens_counts_as_zero_but_missing_by_side_stays_blank() -> None
     assert row["server.total"] == ""
 
 
+def test_zero_by_side_buckets_render_as_zero() -> None:
+    # Upstream 0.4.3 always emits both sides, using zeros when a side had no usage
+    # (e.g. pure A2A has no server LLM). A present side dict must print 0, not blank.
+    metrics = _ok_metrics()
+    metrics["tokens"] = {
+        "input": 10,
+        "cachedInput": 0,
+        "output": 5,
+        "total": 15,
+        "bySide": {
+            "client": {"input": 0, "cachedInput": 0, "output": 0, "total": 0},
+            "server": {"input": 0, "cachedInput": 0, "output": 0, "total": 0},
+        },
+    }
+
+    row = build_row("t1", "ok", metrics, [], None)
+
+    assert (row["client.input"], row["client.cachedInput"], row["client.output"], row["client.total"]) == (
+        "0",
+        "0",
+        "0",
+        "0",
+    )
+    assert (row["server.input"], row["server.cachedInput"], row["server.output"], row["server.total"]) == (
+        "0",
+        "0",
+        "0",
+        "0",
+    )
+
+
+def test_missing_by_side_block_stays_blank_for_old_traces() -> None:
+    # Old traces (before 0.4.3) may have no bySide bucket at all: keep it blank.
+    metrics = _ok_metrics()
+    metrics["tokens"] = {"input": 10, "cachedInput": 0, "output": 5, "total": 15}
+
+    row = build_row("t1", "ok", metrics, [], None)
+
+    for column in ("client.input", "client.cachedInput", "client.output", "client.total"):
+        assert row[column] == ""
+    for column in ("server.input", "server.cachedInput", "server.output", "server.total"):
+        assert row[column] == ""
+
+
 def test_by_side_missing_side_stays_blank_and_present_side_defaults_to_zero() -> None:
     metrics = _ok_metrics()
     metrics["tokens"] = {
@@ -399,6 +461,8 @@ def test_rounds_csv_expands_every_round_detail_row() -> None:
                 "decisionAt": "2026-11-09T10:00:02.200Z",
                 "sdkConstructedAt": "2026-11-09T10:00:02.100Z",
                 "replySentAt": "2026-11-09T10:00:02.300Z",
+                "negotiationType": "target",
+                "hop": "oss",
             },
             {
                 "round": 1,
@@ -422,6 +486,8 @@ def test_rounds_csv_expands_every_round_detail_row() -> None:
     assert first["proposeAt"] == "2026-11-09T10:00:01.000Z"
     assert first["notifiedAtSource"] == "propose"
     assert first["sdkConstructedAt"] == "2026-11-09T10:00:02.100Z"
+    assert first["negotiationType"] == "target"
+    assert first["hop"] == "oss"
     second = dict(zip(ROUNDS_COLUMNS, parsed[2], strict=True))
     assert second["traceId"] == "t1"
     assert second["round"] == "1"
@@ -429,6 +495,8 @@ def test_rounds_csv_expands_every_round_detail_row() -> None:
     assert second["decisionAt"] == ""
     assert second["sdkConstructedAt"] == ""
     assert second["replySentAt"] == ""
+    assert second["negotiationType"] == ""
+    assert second["hop"] == ""
 
 
 def test_field_notes_cover_every_main_and_rounds_column() -> None:
@@ -461,6 +529,30 @@ def test_field_notes_document_the_d8_token_semantics() -> None:
     assert "不计入" in notes["negotiationLatencyMs"].caveat
     assert "statusUpdate" in notes["prepareMs"].caveat
     assert "空值 = 数据缺失，不猜测填充" in notes["input"].caveat
+
+
+def test_field_notes_document_pure_a2a_rounds_and_zero_bucket_semantics() -> None:
+    notes = {note.column: note for note in FIELD_NOTES}
+
+    negotiation_type = notes["negotiationType"]
+    assert "information" in negotiation_type.meaning_zh
+    assert "target" in negotiation_type.meaning_zh
+    assert "feasibility" in negotiation_type.meaning_zh
+    assert "unknown" in negotiation_type.meaning_zh
+    assert "metadata.pure.negotiationKind" in negotiation_type.source
+    assert "phase" in negotiation_type.source
+    assert "留空" in negotiation_type.caveat  # missing -> blank
+
+    hop = notes["hop"]
+    assert "OSS" in hop.meaning_zh
+    assert "content" in hop.caveat
+
+    assert "0.4.3" in notes["client.input"].caveat
+    assert "0" in notes["client.input"].caveat
+    assert "旧 trace" in notes["client.input"].caveat
+    assert "0.4.3" in notes["server.input"].caveat
+    assert "0" in notes["server.input"].caveat
+    assert "旧 trace" in notes["server.input"].caveat
 
 
 def test_end_to_end_uses_metrics_latency_instead_of_recomputing() -> None:

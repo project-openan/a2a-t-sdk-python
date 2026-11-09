@@ -385,15 +385,24 @@ The launcher prints `/observe`, an internal, Chinese-only page for the developme
 Paste one Langfuse trace id per line (a run's `traceId` equals its run id while export is on, so it
 can be copied from `/runs`) or pick a recent run from the candidate list; the server fetches each
 trace and derives the A2A / A2A-T metrics with the vendored `langfuse_export` package
-(`langfuse_export/`, upstream `langfuse-export` 0.2.6).
+(`langfuse_export/`, upstream `langfuse-export` 0.4.3).
 
 - The page shows the per-trace timeline, stage latencies, tokens (total plus client/server split),
   negotiation rounds and observation counts. Downloads: `langfuse-metrics.csv` (UTF-8 BOM, one row
-  per trace), `rounds.csv` (one row per negotiation round) and `fields.csv` (what every column
-  means, where it is derived from and what to watch out for). The same field legend is on the page.
+  per trace), `rounds.csv` (one row per negotiation round, including the pure-A2A
+  `negotiationType` and `hop`), `fields.csv` (what every column means, where it is derived from and
+  what to watch out for) and `table.xlsx` (the upstream Issue AF–AW wide table: one row per trace,
+  one AJ–AO block per negotiation round, sized to the widest trace in the batch). The same field
+  legend is on the page.
 - Tokens follow the upstream implementation: `input` **includes** the cached part, `cachedInput` is
   its subset, `total` is the provider-reported total, and `inputExcludingCached` gives the second
-  reading. `server.*` is the a2a-t-server side, de-duplicated when a parent span repeats its child.
+  reading. `server.*` is the a2a-t-server side, de-duplicated when a parent span repeats its child;
+  a side with no usage is printed as `0` (upstream 0.4.3), so pure A2A runs show a zero server
+  bucket instead of a blank cell.
+- Pure A2A negotiation rounds are first-class: every relayed `INPUT_REQUIRED` question exports a
+  `propose` and every answer an `accept`, so `rounds` and `negotiationLatencyMs` work for both
+  protocols. When the trace has no `negotiation_started`, the round start is the propose time
+  (client clock); the a2a-t-server fallback is used only when neither exists.
 - Batches run sequentially, one job at a time, up to 200 trace ids. The page polls incrementally
   (1 s / 2 s / 5 s by batch size) and can be closed and reopened; completed jobs are recorded under
   `runs/observability/jobs/`.

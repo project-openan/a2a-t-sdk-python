@@ -331,8 +331,13 @@ def test_metrics_fills_ao_from_server_send_message_but_keeps_latency_null():
         },
     )
     server["startTime"] = "2026-11-08T06:44:33.633Z"
-    # Remove the client negotiation_started row so AO has to fall back to the server span.
-    rows = [row for row in _a2a_rows() if (row.get("metadata") or {}).get("kind") != "negotiation_started"]
+    # Remove both client starts (negotiation_started and propose) so AO has to fall
+    # back to the server span: P5 only prefers a client propose when one exists.
+    rows = [
+        row
+        for row in _a2a_rows()
+        if (row.get("metadata") or {}).get("kind") not in {"negotiation_started", "propose"}
+    ]
     rows.append(server)
     metrics = build_metrics(rows, trace_id=TRACE)
     detail = metrics["negotiation"]["roundsDetail"][0]
@@ -343,6 +348,125 @@ def test_metrics_fills_ao_from_server_send_message_but_keeps_latency_null():
     assert metrics["negotiation"]["latencyMs"] is None
     assert metrics["negotiation"]["serverDurationMs"] == 51125
     assert any("server clock" in warning for warning in metrics["warnings"])
+
+
+def test_metrics_pure_a2a_round_uses_the_client_propose_as_start():
+    rows = [
+        _opened(),
+        _row("Propose · create · R1", "2026-11-08T07:00:03.000Z", kind="propose", phase="negotiation", round="1"),
+        _row("Decision · accept · R1", "2026-11-08T07:00:05.000Z", kind="accept", phase="negotiation", round="1"),
+    ]
+    metrics = build_metrics(rows, trace_id=TRACE)
+    detail = metrics["negotiation"]["roundsDetail"][0]
+    assert detail["negotiationStartedAt"] == "2026-11-08T07:00:03.000Z"
+    assert detail["negotiationStartedAt"] == detail["proposeAt"]
+    assert detail["negotiationStartedAtSource"] == "client:propose"
+    assert detail["clock"] == "client"
+    assert metrics["negotiation"]["latencyMs"] == 2000
+    assert not any("server clock" in warning for warning in metrics["warnings"])
+
+
+def test_metrics_client_propose_wins_over_the_server_fallback():
+    server = make_row(
+        id="send_message_negotiation",
+        name="SendMessage-negotiation",
+        type="GENERATION",
+        metadata={
+            "scope.name": "a2a-t-server",
+            "attributes.gen_ai.agent.a2at.negotiation.performative": "PROPOSE",
+            "attributes.gen_ai.agent.a2at.negotiation.round": "1",
+            "attributes.gen_ai.agent.a2at.negotiation.total_duration_ms": "51125",
+        },
+    )
+    server["startTime"] = "2026-11-08T06:44:33.633Z"
+    rows = [
+        _opened(),
+        _row("Propose · create · R1", "2026-11-08T07:00:03.000Z", kind="propose", phase="negotiation", round="1"),
+        _row("Decision · accept · R1", "2026-11-08T07:00:05.000Z", kind="accept", phase="negotiation", round="1"),
+        server,
+    ]
+    metrics = build_metrics(rows, trace_id=TRACE)
+    detail = metrics["negotiation"]["roundsDetail"][0]
+    # The client propose fills AO before the server fallback gets a chance to.
+    assert detail["negotiationStartedAt"] == "2026-11-08T07:00:03.000Z"
+    assert detail["negotiationStartedAtSource"] == "client:propose"
+    assert detail["clock"] == "client"
+    assert metrics["negotiation"]["latencyMs"] == 2000
+    assert metrics["negotiation"]["serverDurationMs"] == 51125
+    assert not any("server clock" in warning for warning in metrics["warnings"])
+
+
+def test_metrics_client_negotiation_started_still_wins_over_propose():
+    metrics = build_metrics(_a2a_rows(), trace_id=TRACE)
+    detail = metrics["negotiation"]["roundsDetail"][0]
+    assert detail["negotiationStartedAt"] == "2026-11-08T07:00:04.000Z"
+    assert detail["negotiationStartedAtSource"] == "client:negotiation_started"
+    assert detail["clock"] == "client"
+    assert metrics["negotiation"]["latencyMs"] == 2000  # 06 - 04, not 06 - 03
+
+
+def test_metrics_round_detail_carries_negotiation_type_and_hop():
+    rows = [
+        _opened(),
+        _row(
+            "Propose · create · R1",
+            "2026-11-08T07:00:03.000Z",
+            kind="propose",
+            phase="negotiation",
+            round="1",
+            detail={"negotiationType": "information", "hop": "oss"},
+        ),
+        _row("Decision · accept · R1", "2026-11-08T07:00:05.000Z", kind="accept", phase="negotiation", round="1"),
+    ]
+    metrics = build_metrics(rows, trace_id=TRACE)
+    detail = metrics["negotiation"]["roundsDetail"][0]
+    assert detail["negotiationType"] == "information"
+    assert detail["hop"] == "oss"
+
+
+def test_metrics_round_detail_defaults_negotiation_type_and_hop_to_none():
+    metrics = build_metrics(_a2a_rows(), trace_id=TRACE)
+    detail = metrics["negotiation"]["roundsDetail"][0]
+    assert detail["negotiationType"] is None
+    assert detail["hop"] is None
+
+
+def test_metrics_round_detail_keeps_negotiation_type_without_hop():
+    rows = [
+        _opened(),
+        _row(
+            "Propose · create · R1",
+            "2026-11-08T07:00:03.000Z",
+            kind="propose",
+            phase="negotiation",
+            round="1",
+            detail={"negotiationType": "target"},
+        ),
+    ]
+    metrics = build_metrics(rows, trace_id=TRACE)
+    detail = metrics["negotiation"]["roundsDetail"][0]
+    assert detail["negotiationType"] == "target"
+    assert detail["hop"] is None
+
+
+def test_metrics_round_detail_reads_flattened_langfuse_detail_keys():
+    """Langfuse v2 flattens nested attributes: real rows expose `detail.negotiationType`."""
+    rows = [
+        _opened(),
+        _row(
+            "Propose · information · R1",
+            "2026-11-08T07:00:03.000Z",
+            kind="propose",
+            phase="negotiation",
+            round="1",
+            **{"detail.negotiationType": "information", "detail.hop": "oss"},
+        ),
+        _row("Decision · accept · R1", "2026-11-08T07:00:05.000Z", kind="accept", phase="negotiation", round="1"),
+    ]
+    metrics = build_metrics(rows, trace_id=TRACE)
+    detail = metrics["negotiation"]["roundsDetail"][0]
+    assert detail["negotiationType"] == "information"
+    assert detail["hop"] == "oss"
 
 
 def test_metrics_notified_at_uses_decision_requested_when_available():
@@ -462,3 +586,21 @@ def test_metrics_ignores_status_rows_when_picking_server_negotiation_start():
     detail = metrics["negotiation"]["roundsDetail"][0]
     assert detail["negotiationStartedAt"] == "2026-11-09T06:02:17.756Z"
     assert detail["negotiationStartedAtSource"] == "server:SendMessage-negotiation"
+
+
+def test_metrics_without_usage_reports_zero_side_buckets():
+    rows = [
+        _opened(),
+        _row("Task created", "2026-11-09T07:31:10.468Z", kind="task_created", phase="execution"),
+        _row("Run finished", "2026-11-09T07:31:19.152Z", kind="finished", phase="done"),
+    ]
+    metrics = build_metrics(rows, trace_id=TRACE)
+    assert metrics["tokens"]["input"] == 0
+    assert metrics["tokens"]["total"] == 0
+    assert metrics["tokens"]["bySide"]["client"] == {
+        "input": 0, "cachedInput": 0, "output": 0, "total": 0,
+    }
+    assert metrics["tokens"]["bySide"]["server"] == {
+        "input": 0, "cachedInput": 0, "output": 0, "total": 0,
+    }
+    assert any("no token usage" in warning for warning in metrics["warnings"])

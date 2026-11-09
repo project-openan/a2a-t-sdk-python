@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -42,7 +43,8 @@ from .normalize import (
     normalize_scores,
 )
 from .render import media_extension, render_transcript
-from .writer import build_manifest, make_zip, write_json, write_jsonl, write_text
+from .table import build_table
+from .writer import build_manifest, make_zip, write_json, write_jsonl, write_text, write_xlsx
 
 TRACE_ID_RE = re.compile(r"^[0-9A-Za-z_-]{1,128}$")
 DEFAULT_MAX_MEDIA_BYTES = 20 * 1024 * 1024
@@ -86,7 +88,11 @@ def build_parser() -> argparse.ArgumentParser:
         prog="langfuse-export",
         description="Export one Langfuse trace (raw JSON + manifest + transcript.md).",
     )
-    parser.add_argument("trace_id", help="trace id, or a Langfuse UI URL containing it")
+    parser.add_argument(
+        "trace_id",
+        nargs="+",
+        help="one or more trace ids / Langfuse UI URLs (space or comma separated)",
+    )
     parser.add_argument("--host", help="Langfuse host (default: env/.env, else EU cloud)")
     parser.add_argument("--public-key", help="public key (default: LANGFUSE_PUBLIC_KEY)")
     parser.add_argument("--secret-key", help="secret key (default: LANGFUSE_SECRET_KEY)")
@@ -124,6 +130,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--metrics",
         action="store_true",
         help="also write metrics.json (run-level A2A metrics derived from observations)",
+    )
+    parser.add_argument(
+        "--table",
+        action="store_true",
+        help="also write metrics.xlsx (Issue AF-AW table); implies --metrics",
     )
     parser.add_argument("--json", action="store_true", help="print a machine readable JSON result to stdout")
     parser.add_argument("--quiet", action="store_true")
@@ -452,8 +463,12 @@ def run_export(
     *,
     config: Config | None = None,
     emit: bool = True,
+    print_result: bool = True,
 ) -> dict[str, Any]:
-    trace_id, url_host = parse_trace_input(args.trace_id)
+    raw_trace_id = args.trace_id
+    if isinstance(raw_trace_id, (list, tuple)):
+        raw_trace_id = raw_trace_id[0] if raw_trace_id else ""
+    trace_id, url_host = parse_trace_input(raw_trace_id)
     if config is None:
         config = load_config(
             host=args.host,
@@ -532,11 +547,16 @@ def run_export(
         write_json(export_dir / "trace-summary.json", collected.summary.to_dict())
         metrics = (
             build_metrics(collected.rows, trace_id=trace_id, summary=collected.summary)
-            if args.metrics
+            if (getattr(args, "metrics", False) or getattr(args, "table", False))
             else None
         )
         if metrics is not None:
             write_json(export_dir / "metrics.json", metrics)
+        table_path: str | None = None
+        if getattr(args, "table", False) and metrics is not None:
+            headers, table_rows = build_table(metrics)
+            write_xlsx(export_dir / "metrics.xlsx", headers, table_rows)
+            table_path = "metrics.xlsx"
 
         manifest = build_manifest(export_dir, bundle, exported_at, config.host_source)
         write_json(export_dir / "manifest.json", manifest)
@@ -553,10 +573,11 @@ def run_export(
             "network": network.to_dict(),
             "notices": notices,
             "metrics": metrics,
+            "table": table_path,
             "warnings": warnings,
             "zip": str(archive) if archive else None,
         }
-        if emit:
+        if emit and print_result:
             if args.quiet:
                 # --quiet means exactly one line: the export directory path. It wins over
                 # --json so scripts can rely on `dir=$(langfuse-export ... --quiet)`.
@@ -605,6 +626,98 @@ def export_full(
     return run_export(args, config=config, emit=False)
 
 
+def _trace_ids(raw: list[str] | str) -> list[str]:
+    values = [raw] if isinstance(raw, str) else list(raw)
+    ids: list[str] = []
+    for value in values:
+        for part in value.split(","):
+            part = part.strip()
+            if part and part not in ids:
+                ids.append(part)
+    return ids
+
+
+def _error_exit_code(exc: BaseException) -> int:
+    if isinstance(exc, AuthError):
+        return 3
+    if isinstance(exc, NotFoundError):
+        return 2
+    if isinstance(exc, NetworkError):
+        return 4
+    if isinstance(exc, SettingsError):
+        return 1
+    if isinstance(exc, ExportError):
+        return 1
+    return 1
+
+
+def run_batch_export(
+    args: argparse.Namespace,
+    trace_ids: list[str],
+    exported_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Export several traces into one batch directory and (optionally) one table."""
+    exported_at = exported_at or datetime.now(timezone.utc).astimezone()
+    batch_dir = Path(args.out) / f"batch_{exported_at.strftime('%Y%m%d-%H%M%S')}"
+    batch_dir.mkdir(parents=True, exist_ok=True)
+
+    exports: list[str] = []
+    metrics_list: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    warnings: list[str] = []
+    exit_code = 0
+    for trace_id in trace_ids:
+        child = copy.copy(args)
+        child.trace_id = trace_id
+        child.out = str(batch_dir)
+        # The batch owns stdout/stderr; per-trace results are summarised below.
+        child.quiet = True
+        child.json = False
+        try:
+            result = run_export(child, exported_at=exported_at, print_result=False)
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:  # report and continue so one bad trace cannot kill the table
+            errors.append({"traceId": trace_id, "error": f"{type(exc).__name__}: {exc}"})
+            code = _error_exit_code(exc)
+            exit_code = exit_code or code
+            continue
+        exports.append(result["exportDir"])
+        warnings.extend(result.get("warnings") or [])
+        if result.get("metrics"):
+            metrics_list.append(result["metrics"])
+
+    table_path: str | None = None
+    if getattr(args, "table", False) and metrics_list:
+        headers, rows = build_table(metrics_list)
+        write_xlsx(batch_dir / "table.xlsx", headers, rows)
+        table_path = str(batch_dir / "table.xlsx")
+
+    summary = {
+        "batchDir": str(batch_dir),
+        "table": table_path,
+        "exports": exports,
+        "errors": errors,
+        "warnings": warnings,
+        "exitCode": exit_code,
+    }
+    write_json(batch_dir / "batch.json", summary)
+
+    if args.quiet:
+        safe_print(str(batch_dir))
+    elif args.json:
+        safe_print(json.dumps(summary, ensure_ascii=True, indent=2))
+    else:
+        safe_print(f"exported {len(exports)}/{len(trace_ids)} traces -> {batch_dir}")
+        for path in exports:
+            safe_print(f"  export: {path}")
+        for error in errors:
+            safe_print(f"  error: {error['traceId']}: {error['error']}")
+        if table_path:
+            safe_print(f"  table: {table_path}")
+    return summary
+
+
 def _walk(obs) -> list:
     values = [obs]
     for child in obs.children:
@@ -615,8 +728,16 @@ def _walk(obs) -> list:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    trace_ids = _trace_ids(args.trace_id)
+    if not trace_ids:
+        print("error: no trace id given", file=sys.stderr)
+        return 1
     try:
-        result = run_export(args)
+        if len(trace_ids) == 1:
+            args.trace_id = trace_ids[0]
+            result = run_export(args)
+        else:
+            result = run_batch_export(args, trace_ids)
     except SettingsError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -635,6 +756,8 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
         return 130
+    if result.get("exitCode"):
+        return int(result["exitCode"])
     if args.strict and result["warnings"]:
         return 1
     return 0

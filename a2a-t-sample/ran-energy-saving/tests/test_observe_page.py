@@ -65,11 +65,14 @@ def test_index_exposes_the_required_controls() -> None:
         "download-metrics",
         "download-rounds",
         "download-fields",
+        "download-table",
         "jobs-body",
     ):
         assert f'id="{control}"' in html, control
     assert "同时生成完整导出" in html
     assert "开始导出" in html
+    assert "table.xlsx（AF–AW）" in html
+    assert 'id="download-table" type="button" disabled' in html
     assert "字段说明" in html
 
 
@@ -96,6 +99,7 @@ def test_module_contract_for_api_fields_and_downloads() -> None:
         "/metrics.csv",
         "/rounds.csv",
         "/fields.csv",
+        "/table.xlsx",
         "/archives/",
     ):
         assert url in module, url

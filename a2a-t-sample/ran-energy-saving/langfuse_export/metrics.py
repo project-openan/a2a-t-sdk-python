@@ -363,6 +363,8 @@ def _negotiation(
                 "decisionAt": None,
                 "sdkConstructedAt": None,
                 "replySentAt": None,
+                "negotiationType": None,
+                "hop": None,
             },
         )
 
@@ -374,6 +376,15 @@ def _negotiation(
             entry = bucket(round_no)
             if kind == "propose" and entry["proposeAt"] is None:
                 entry["proposeAt"] = start
+                # Langfuse v2 flattens nested OTel attributes, so a real row exposes
+                # ``detail.negotiationType``; unit fixtures may still pass a nested dict.
+                detail = _meta(row, "detail")
+                entry["negotiationType"] = _as_text(_meta(row, "detail.negotiationType")) or (
+                    _as_text(detail.get("negotiationType")) if isinstance(detail, dict) else None
+                )
+                entry["hop"] = _as_text(_meta(row, "detail.hop")) or (
+                    _as_text(detail.get("hop")) if isinstance(detail, dict) else None
+                )
             elif kind == "negotiation_started" and entry["negotiationStartedAt"] is None:
                 entry["negotiationStartedAt"] = start
                 entry["negotiationStartedAtSource"] = "client:negotiation_started"
@@ -414,6 +425,15 @@ def _negotiation(
             # PROPOSE, which is the same instant the operator is notified (OSP AK/AP).
             entry["notifiedAt"] = entry["proposeAt"]
             entry["notifiedAtSource"] = "propose"
+
+    # P5: a pure A2A round (propose + Decision, no client `negotiation_started`) still
+    # has a client-clock start: the propose span. Prefer it over the server fallback so
+    # the round gets a real latencyMs; a client negotiation_started already won above.
+    for entry in rounds.values():
+        if entry["negotiationStartedAt"] is None and entry["proposeAt"] is not None:
+            entry["negotiationStartedAt"] = entry["proposeAt"]
+            entry["negotiationStartedAtSource"] = "client:propose"
+            entry["clock"] = "client"
 
     server_starts, server_duration = _server_negotiation(all_rows or [])
     if server_starts:
@@ -500,6 +520,12 @@ def build_metrics(
         warnings.append("end-to-end latency unavailable (no task_created/receivedAt)")
 
     token_data, tokens_found = _token_sums(rows)
+    # "No usage" is data, not absence: keep both side buckets at zero so downstream
+    # tables can print 0 instead of blank cells (pure A2A runs have no LLM calls).
+    for side in ("client", "server"):
+        token_data["bySide"].setdefault(
+            side, {"input": 0, "cachedInput": 0, "output": 0, "total": 0}
+        )
     tokens = {"input": 0, "cachedInput": 0, "output": 0, "total": 0}
     tokens.update(token_data["**totals**"])
     if not tokens_found:
@@ -585,7 +611,9 @@ def build_metrics(
             "negotiation.rounds": "max(distinct rounds from propose/negotiation_started/decision, run metadata rounds)",
             "tokens.siblingDedupe": "identical usage repeated on sibling generations under the same parent is counted once",
             "negotiation.notifiedAt": "decision_requested startTime when present (full level), else the client propose startTime (same instant the operator is notified)",
-            "negotiation.negotiationStartedAt": "client negotiation_started span, else the a2a-t-server SendMessage/SendMessage-negotiation start (server clock, not used for latency)",
+            "negotiation.negotiationStartedAt": "client negotiation_started span, else the client propose span, else the a2a-t-server SendMessage/SendMessage-negotiation start (server clock, not used for latency)",
+            "negotiation.roundsDetail.negotiationType": "propose row metadata.detail.negotiationType; None when absent",
+            "negotiation.roundsDetail.hop": "propose row metadata.detail.hop; None when absent",
             "negotiation.serverDurationMs": "metadata attributes.gen_ai.agent.a2at.negotiation.total_duration_ms from a2a-t-server spans",
             "negotiation.latencyMs": "sum(decisionAt - negotiationStartedAt) over rounds; only for client-clock rounds",
         },

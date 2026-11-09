@@ -318,16 +318,22 @@ Web UI 时间线始终保留全部 span，不影响排障。修正重试保持�
 
 启动器会打印 `/observe` 地址。这是一个面向开发和测试团队的中文内部页面：一行粘贴一个
 Langfuse traceId（导出开启时 run 的 `traceId` 等于 run id，可直接从 `/runs` 复制），或从"最近
-run"列表勾选；服务端用 vendoring 进来的 `langfuse_export` 包（上游 `langfuse-export` 0.2.6）
+run"列表勾选；服务端用 vendoring 进来的 `langfuse_export` 包（上游 `langfuse-export` 0.4.3）
 拉取 trace 并派生 A2A / A2A-T 指标。
 
 - 页面展示每条 trace 的时间线、阶段耗时、token（总数 + client/server 分侧）、协商轮次和
   observation 数量。可下载：`langfuse-metrics.csv`（UTF-8 BOM，一行一个 trace）、
-  `rounds.csv`（一行一个协商轮次）、`fields.csv`（每个字段的含义、来源和注意事项）；同样的字段
-  说明也内嵌在页面上。
+  `rounds.csv`（一行一个协商轮次，含 pure A2A 的 `negotiationType`、`hop`）、
+  `fields.csv`（每个字段的含义、来源和注意事项）、`table.xlsx`（上游 Issue AF–AW 宽表：一行一个
+  trace，协商按轮展开成 AJ–AO 列，按批量内最大轮数取列）；同样的字段说明也内嵌在页面上。
 - Token 口径按上游代码实际行为：`input` **包含**缓存命中部分，`cachedInput` 是它的子集，
   `total` 取 provider 上报值；额外提供 `inputExcludingCached` 作为第二口径。`server.*` 是
-  a2a-t-server 侧，父 span 与子 generation 重复上报时只计一次。
+  a2a-t-server 侧，父 span 与子 generation 重复上报时只计一次；没有用量的侧输出 `0`
+  （上游 0.4.3），所以 pure A2A 的 server 桶是 0 而不是空白。
+- pure A2A 的协商轮次已与 A2A-T 同构：每个转发的 `INPUT_REQUIRED` 提问导出 `propose`，每个回答
+  导出 `accept`，因此两种协议的 `rounds` 与 `negotiationLatencyMs` 都可用。没有
+  `negotiation_started` 时，以 propose 时刻（client 时钟）作为本轮协商起点；两者都没有才回退
+  a2a-t-server。
 - 批量顺序执行，同一时刻只跑一个 job，单批最多 200 条 traceId。页面按批量大小自适应轮询
   （1s / 2s / 5s），可以关掉页面再回来；完成的 job 记录在 `runs/observability/jobs/`。
 - **完整导出**会额外在上游证据目录里写出原始 observation、`transcript.md` 和带 sha256 的
