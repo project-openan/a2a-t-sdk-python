@@ -22,3 +22,7 @@ minimal so a future upstream refresh is "replace the directory, replay P1-P4".
 | P2 | `client.LangfuseClient` / `cli.run_export` | Add `close()` for the authenticated `requests.Session`; `run_export` closes its client in a `finally`, including when an exception is raised. |
 | P3 | `cli.export_metrics` / `cli.export_full` | Add two output-free functions for the web observer: `export_metrics(config, trace_id)` returns `{"metrics": ..., "warnings": [...]}` without disk writes; `export_full(config, trace_id, out_root, *, zip_file=True)` builds the argparse Namespace (`--out`, `--metrics`, `--no-media`, zip flag) and calls `run_export(..., config=config, emit=False)`. |
 | P4 | `cli._collect` | Extract the shared fetch/derive steps from `run_export` into an internal `_collect(...)` used by both `run_export` and `export_metrics`, so the same trace yields identical `metrics`, `endToEndMs`, `notFound` behaviour and warnings on both paths. |
+
+The vendored tests keep the upstream layout with one rename: `test_metrics.py` becomes
+`test_export_metrics.py` because the sample already has a top-level `tests/test_metrics.py` and
+pytest imports these modules without packages. Replay the rename during a sync.
