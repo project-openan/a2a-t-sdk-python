@@ -8,14 +8,13 @@ operation: Create
 tags:
   - cell-rat
   - negotiation-a2a
-  - needs-confirmation
 user_input: |-
   Implement energy saving in the A2ATestRegion region, ensuring a 10 Mbps throughput guarantee from 19:00 to 22:00. Energy-Saving Scope is NG-RAN
 expect:
   intent:
     Operation type: Create
     Energy saving cell RAT: NR
-    Energy saving mode: ''
+    Energy saving aggressiveness: ''
     Energy saving region: A2ATestRegion
     Whether Experience-Preserving Energy Saving is Required: ''
     Special Requirements for Carrier Shutdown Frequencies: ''
@@ -28,9 +27,9 @@ expect:
     Scenario-based energy saving: []
   protocols:
     a2a-t:
-      validate: null
-      validate_label: 未填写
-      send: null
+      validate: pass_with_terminology
+      validate_label: 不拦截，携带术语上下文信息
+      send: true
       task_t: |-
         ## Operation Type
         Create
@@ -93,8 +92,8 @@ expect:
         expected_rounds: 0
         kinds: []
         rounds: []
-      final_state: null
-      final_state_derived: false
+      final_state: task_completed
+      final_state_derived: true
     a2a:
       negotiation:
         expected: true
@@ -107,11 +106,11 @@ expect:
 assert:
   intent: true
   a2a-t:
-    validate: false
+    validate: true
     task_t: true
-    send: false
+    send: true
     negotiation: true
-    final_state: false
+    final_state: true
   a2a:
     negotiation: true
     final_state: false
@@ -125,5 +124,4 @@ source:
   file: OSP-Unified Evaluation Set_v.01.xlsx
   sheet: A2A-T_原始数据
   row: 52
-known_issue: |-
-  原表“预期SDK校验结果”为空，按约定只校验意图与转换，不判定拦截。本题用 Energy-Saving Scope 而不是 Cell RAT 表达制式。
+known_issue: null

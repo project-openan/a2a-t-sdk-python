@@ -372,7 +372,7 @@ def _normalize_intent_value(key: str, value: object) -> object:
         return _clean_text(str(value or "")).capitalize()
     if key == "Energy saving cell RAT":
         return _normalize_rat(value)
-    if key == "Energy saving mode":
+    if key == "Energy saving aggressiveness":
         return _normalize_mode(value)
     if key == "Energy saving region":
         return _clean_text(str(value or "")).lower()

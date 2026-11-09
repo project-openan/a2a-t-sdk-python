@@ -4,7 +4,7 @@ schema: osp-eval-case/v1
 id: 23
 name: 停电2-3个小时
 dimension: D1 意图完备无歧义
-operation: Create
+operation: Modify
 tags:
   - power-outage
   - negotiation-a2a
@@ -13,9 +13,9 @@ user_input: |-
   A power outage will occur for 2 or 3 hours on 12:00, affecting LTE_26441_LNR_OCL, NRES_XCS_6102937 in the A2ATestRegion area. The Time-segmented rate guarantee target for LTE_26441_LNR_OCL, NRES_XCS_6102937 needs to be modified to 10Mbps during the power outage period
 expect:
   intent:
-    Operation type: Create
+    Operation type: Modify
     Energy saving cell RAT: ALL
-    Energy saving mode: ''
+    Energy saving aggressiveness: ''
     Energy saving region: A2ATestRegion
     Whether Experience-Preserving Energy Saving is Required: ''
     Special Requirements for Carrier Shutdown Frequencies: ''

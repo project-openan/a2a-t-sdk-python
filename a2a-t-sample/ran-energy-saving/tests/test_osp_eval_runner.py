@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -125,7 +126,7 @@ def test_compare_intent_normalizes_notation() -> None:
     expected = {
         "Operation type": "Create",
         "Energy saving cell RAT": "ALL",
-        "Energy saving mode": "",
+        "Energy saving aggressiveness": "",
         "Energy saving region": "A2ATestRegion",
         "Whether Experience-Preserving Energy Saving is Required": "",
         "Special Requirements for Carrier Shutdown Frequencies": "",
@@ -143,7 +144,7 @@ def test_compare_intent_normalizes_notation() -> None:
     actual = {
         "Operation type": "create",
         "Energy saving cell RAT": "LNR",
-        "Energy saving mode": "",
+        "Energy saving aggressiveness": "",
         "Energy saving region": "a2atestregion",
         "Whether Experience-Preserving Energy Saving is Required": "",
         "Special Requirements for Carrier Shutdown Frequencies": "",
@@ -316,8 +317,14 @@ def test_runner_records_the_conflict_fields() -> None:
 
 
 def test_runner_records_an_unfilled_validation_result() -> None:
+    # No corpus case is unfilled any more, but the contract still has to hold for generated
+    # cases whose source validation column is empty.
+    unfilled = copy.deepcopy(CASES[49])
+    unfilled["expect"]["protocols"]["a2a-t"]["validate"] = None
+    unfilled["expect"]["protocols"]["a2a-t"]["validate_label"] = "未填写"
+    unfilled["assert"]["a2a-t"]["validate"] = False
     client = FakePromptClient()
-    outcome = run_case(CASES[49], client, stop_after="validate")
+    outcome = run_case(unfilled, client, stop_after="validate")
     assert outcome.passed is True
     assert _statuses(outcome) == {
         "intent": STAGE_PASSED,

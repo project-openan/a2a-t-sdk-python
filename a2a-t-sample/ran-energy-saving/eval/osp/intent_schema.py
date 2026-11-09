@@ -18,7 +18,7 @@ from typing import Final
 OSP_INTENT_KEYS: Final[tuple[str, ...]] = (
     "Operation type",
     "Energy saving cell RAT",
-    "Energy saving mode",
+    "Energy saving aggressiveness",
     "Energy saving region",
     "Whether Experience-Preserving Energy Saving is Required",
     "Special Requirements for Carrier Shutdown Frequencies",
@@ -105,7 +105,7 @@ OSP_INTENT_SCHEMA: Final[dict[str, object]] = {
             ),
             "enum": ["ALL", "LTE", "NR", "LNR"],
         },
-        "Energy saving mode": {
+        "Energy saving aggressiveness": {
             "type": "string",
             "description": (
                 "Qualitative energy-saving aggressiveness: 'Aggressive' or 'Conservative'. "

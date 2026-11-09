@@ -21,7 +21,7 @@ INDEX_PATH = OSP_DIR / "index.yaml"
 INTENT_KEYS = (
     "Operation type",
     "Energy saving cell RAT",
-    "Energy saving mode",
+    "Energy saving aggressiveness",
     "Energy saving region",
     "Whether Experience-Preserving Energy Saving is Required",
     "Special Requirements for Carrier Shutdown Frequencies",
@@ -49,8 +49,8 @@ FILENAME_PATTERN = re.compile(
 )
 
 A2AT_NEGOTIATION_IDS = frozenset({32, 34, 35, 36, 37, 38})
-PARTIAL_IDS = frozenset({40, 46, 49, 50, 51})
-ISSUE_IDS = frozenset({20, 21, 28, 34, 40, 46, 49, 50, 51})
+PARTIAL_IDS = frozenset({40, 46})
+ISSUE_IDS = frozenset({20, 21, 28, 34, 40, 46})
 
 VALIDATE_LABELS: dict[str | None, str] = {
     "blocked": "拦截",
@@ -174,11 +174,14 @@ def test_conflict_assert_switches(cases: dict[int, dict[str, Any]]) -> None:
         assert cases[case_id]["assert"]["a2a-t"]["task_t"] is False
         assert cases[case_id]["assert"]["a2a-t"]["validate"] is True
     for case_id in (49, 50, 51):
+        # Promoted to fully judged cases in the 2026-11-09 source table.
         protocol = cases[case_id]["expect"]["protocols"]["a2a-t"]
-        assert protocol["validate"] is None
-        assert cases[case_id]["assert"]["a2a-t"]["validate"] is False
-        assert cases[case_id]["assert"]["a2a-t"]["send"] is False
-        assert cases[case_id]["assert"]["a2a-t"]["final_state"] is False
+        assert protocol["validate"] == "pass_with_terminology"
+        assert cases[case_id]["known_issue"] is None
+        assert "needs-confirmation" not in cases[case_id]["tags"]
+        assert cases[case_id]["assert"]["a2a-t"]["validate"] is True
+        assert cases[case_id]["assert"]["a2a-t"]["send"] is True
+        assert cases[case_id]["assert"]["a2a-t"]["final_state"] is True
     for case_id in ISSUE_IDS:
         assert cases[case_id]["known_issue"], case_id
 

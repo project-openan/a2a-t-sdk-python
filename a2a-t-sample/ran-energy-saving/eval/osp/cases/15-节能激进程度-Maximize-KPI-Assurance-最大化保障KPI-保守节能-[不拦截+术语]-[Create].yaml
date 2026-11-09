@@ -14,7 +14,7 @@ expect:
   intent:
     Operation type: Create
     Energy saving cell RAT: ALL
-    Energy saving mode: Conservative
+    Energy saving aggressiveness: Conservative
     Energy saving region: A2ATestRegion
     Whether Experience-Preserving Energy Saving is Required: ''
     Special Requirements for Carrier Shutdown Frequencies: ''

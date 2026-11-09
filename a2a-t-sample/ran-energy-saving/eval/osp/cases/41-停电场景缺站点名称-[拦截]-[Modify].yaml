@@ -17,7 +17,7 @@ expect:
   intent:
     Operation type: Modify
     Energy saving cell RAT: ALL
-    Energy saving mode: ''
+    Energy saving aggressiveness: ''
     Energy saving region: A2ATestRegion
     Whether Experience-Preserving Energy Saving is Required: ''
     Special Requirements for Carrier Shutdown Frequencies: ''
@@ -29,7 +29,6 @@ expect:
       - Site list:
           - LTE_26441_LNR_OCL
           - NRES_XCS_6102937
-          - LTE_26441_LNR_OCL
         Guaranteed throughput target by site:
           - Guaranteed throughput target: 10Mbps
             Effective time period: 00:00:00-00:59:59&01:00:00-01:59:59&02:00:00-02:59:59&03:00:00-03:59:59
@@ -56,7 +55,7 @@ expect:
         ## Task Target
 
         ## Task Context
-        Site list: ["LTE_26441_LNR_OCL", "NRES_XCS_6102937", "LTE_26441_LNR_OCL"], Time-segmented rate guarantee target: {00:00-04:00: 10Mbps}, Background event: power outage from 00:00 to 04:00.
+        Site list: ["LTE_26441_LNR_OCL", "NRES_XCS_6102937"], Time-segmented rate guarantee target: {00:00-04:00: 10Mbps}, Background event: power outage from 00:00 to 04:00.
 
         ## Terminology Explanation
         1. LTE

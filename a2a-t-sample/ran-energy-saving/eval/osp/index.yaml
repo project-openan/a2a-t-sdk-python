@@ -267,9 +267,9 @@ cases:
     a2a_negotiation_rounds: 1
     a2a_t_negotiation_rounds: 0
   - id: 23
-    file: 23-停电2-3个小时-[拦截]-[Create].yaml
+    file: 23-停电2-3个小时-[拦截]-[Modify].yaml
     name: 停电2-3个小时
-    operation: Create
+    operation: Modify
     validate: blocked
     validate_label: 拦截
     tags:
@@ -596,33 +596,33 @@ cases:
     a2a_negotiation_rounds: 1
     a2a_t_negotiation_rounds: 0
   - id: 49
-    file: 49-调整输入描述-让模型猜不出来是速率-AVG-DL-THP-[未填写]-[Create].yaml
+    file: 49-调整输入描述-让模型猜不出来是速率-AVG-DL-THP-[不拦截+术语]-[Create].yaml
     name: 调整输入描述，让模型猜不出来是速率-AVG DL THP
     operation: Create
-    validate: null
-    validate_label: 未填写
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
     tags:
       - negotiation-a2a
       - needs-confirmation
     a2a_negotiation_rounds: 1
     a2a_t_negotiation_rounds: 0
   - id: 50
-    file: 50-加入干扰信息-也是速率Mbps的形式-[未填写]-[Create].yaml
+    file: 50-加入干扰信息-也是速率Mbps的形式-[不拦截+术语]-[Create].yaml
     name: 加入干扰信息，也是速率Mbps的形式
     operation: Create
-    validate: null
-    validate_label: 未填写
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
     tags:
       - negotiation-a2a
       - needs-confirmation
     a2a_negotiation_rounds: 1
     a2a_t_negotiation_rounds: 0
   - id: 51
-    file: 51-Energy-Saving-Scope-is-NG-RAN-[未填写]-[Create].yaml
+    file: 51-Energy-Saving-Scope-is-NG-RAN-[不拦截+术语]-[Create].yaml
     name: Energy-Saving Scope is NG-RAN
     operation: Create
-    validate: null
-    validate_label: 未填写
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
     tags:
       - cell-rat
       - negotiation-a2a

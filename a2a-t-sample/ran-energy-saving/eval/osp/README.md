@@ -103,7 +103,7 @@ A2A 与 A2A-T 的预期结构化意图在这 51 条里完全相同，因此只�
 
 1. `Operation type`
 2. `Energy saving cell RAT`
-3. `Energy saving mode`
+3. `Energy saving aggressiveness`
 4. `Energy saving region`
 5. `Whether Experience-Preserving Energy Saving is Required`
 6. `Special Requirements for Carrier Shutdown Frequencies`
