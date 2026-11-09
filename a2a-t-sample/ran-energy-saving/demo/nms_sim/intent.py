@@ -17,7 +17,13 @@ from typing import Final
 
 from a2a_t.core.metadata import NEGOTIATION_T_EXTENSION_URI, TASK_T_EXTENSION_URI
 
-from demo.nms_sim.config import WINDOW_POLICY_EXACT, SimConfig
+from demo.nms_sim.config import (
+    LONG_OUTAGE_HOURS,
+    RATE_POLICY_OPTIONAL,
+    WINDOW_POLICY_ANY,
+    WINDOW_POLICY_EXACT,
+    SimConfig,
+)
 from demo.nms_sim.negotiation import (
     KIND_FEASIBILITY,
     KIND_INFORMATION,
@@ -40,7 +46,20 @@ MISSING_EXTENSION_METADATA: Final[dict[str, object]] = {
 #: Throughput assumed when an accept carries no new rate value.
 DEFAULT_ACCEPT_RATE_MBPS: Final[float] = 30.0
 
-_WINDOW_PATTERN: Final[re.Pattern[str]] = re.compile(r"(\d{1,2}:\d{2})\s*[~\-–]\s*(\d{1,2}:\d{2})")
+#: Activation window assumed when the Task-T omits the optional energy-saving period.
+FULL_DAY_WINDOW: Final[str] = "00:00~24:00"
+
+_WINDOW_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(\d{1,2}:\d{2})(?::\d{2})?\s*(?:[~\-–]|to|until|至)\s*(\d{1,2}:\d{2})(?::\d{2})?",
+    re.IGNORECASE,
+)
+#: The Task-T rendering ``start time "00:00:00", end time "22:00:00"`` has no direct separator
+#: between the two clocks, so the pair above cannot see it.
+_START_END_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"start time\s*\"?(\d{1,2}:\d{2})(?::\d{2})?\"?\s*,\s*"
+    r"end time\s*\"?(\d{1,2}:\d{2})(?::\d{2})?\"?",
+    re.IGNORECASE,
+)
 _THROUGHPUT_PATTERN: Final[re.Pattern[str]] = re.compile(r"(\d+(?:\.\d+)?)\s*Mbps", re.IGNORECASE)
 _PERCENT_PATTERN: Final[re.Pattern[str]] = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 #: A saving rate can be written without ``%`` ("energy saving rate: 40").
@@ -223,7 +242,10 @@ def validate_content(content: ExtractedContent, config: SimConfig) -> Negotiatio
             f'The region name "{content.region}" is not recognized. '
             f"Available test region: {config.region}.",
         )
-    if not content.windows:
+    if not content.windows and config.window_policy != WINDOW_POLICY_ANY:
+        # The Task-T template makes the activation period optional (full-period default). Under
+        # the vendor-like ``any`` policy an omitted period is accepted as the full day instead of
+        # opening an information round the client cannot answer.
         return NegotiationIssue(
             KIND_INFORMATION,
             ("Energy saving time",),
@@ -237,12 +259,22 @@ def validate_content(content: ExtractedContent, config: SimConfig) -> Negotiatio
             f"The activation time {', '.join(content.windows)} is not available. "
             f"Available test window: {config.window}.",
         )
-    if content.rate_mbps is None:
+    if content.rate_mbps is None and config.rate_policy != RATE_POLICY_OPTIONAL:
         return NegotiationIssue(
             KIND_INFORMATION,
             ("Time-segmented guaranteed throughput target",),
             "missing explicit time-segmented rate goals",
         )
+    if config.long_outage_feasibility:
+        outage_hours = _outage_hours(content)
+        if outage_hours > LONG_OUTAGE_HOURS:
+            return NegotiationIssue(
+                KIND_FEASIBILITY,
+                ("Guaranteed throughput target",),
+                f"The {outage_hours}-hour power outage exceeds the "
+                f"{LONG_OUTAGE_HOURS}-hour feasibility limit. Reduce the guaranteed throughput "
+                "target for the outage period.",
+            )
     if content.percent is not None and content.percent > config.max_saving_rate:
         return NegotiationIssue(
             KIND_TARGET,
@@ -278,8 +310,15 @@ def accepted_intent(
     merged = content.merged_with(baseline)
     return ParsedIntent(
         operation=merged.operation or "Create",
-        region=config.region,
-        window=config.window,
+        # Echo what the request asked for; the report must not claim a different region or window.
+        region=merged.region or config.region,
+        window=(
+            merged.windows[0]
+            if merged.windows
+            else FULL_DAY_WINDOW
+            if config.window_policy == WINDOW_POLICY_ANY
+            else config.window
+        ),
         rate_mbps=merged.rate_mbps if merged.rate_mbps is not None else DEFAULT_ACCEPT_RATE_MBPS,
         sites=config.sites,
         source=merged.source,
@@ -301,13 +340,19 @@ def parse_message_request(
     issue = select_issue(content, config)
     if issue is not None:
         raise SimNegotiationRequiredError(issue)
-    # ``select_issue`` returning ``None`` guarantees the rate and window are present.
-    assert content.rate_mbps is not None
     return ParsedIntent(
         operation=content.operation or "Create",
-        region=config.region,
-        window=config.window,
-        rate_mbps=content.rate_mbps,
+        # Echo the requested values instead of the configured defaults, so the report and the
+        # acceptance evidence describe the plan the operator actually asked for.
+        region=content.region or config.region,
+        window=(
+            content.windows[0]
+            if content.windows
+            else FULL_DAY_WINDOW
+            if config.window_policy == WINDOW_POLICY_ANY
+            else config.window
+        ),
+        rate_mbps=content.rate_mbps if content.rate_mbps is not None else DEFAULT_ACCEPT_RATE_MBPS,
         sites=config.sites,
         source=content.source,
     )
@@ -423,7 +468,25 @@ def _strip_region_line(line: str) -> str:
 
 def _windows(text: str) -> tuple[str, ...]:
     """Return every ``HH:MM~HH:MM`` window found in the text, canonicalized with ``~``."""
-    return tuple(f"{_clock(start)}~{_clock(end)}" for start, end in _WINDOW_PATTERN.findall(text))
+    pairs = _WINDOW_PATTERN.findall(text) + _START_END_PATTERN.findall(text)
+    return tuple(f"{_clock(start)}~{_clock(end)}" for start, end in pairs)
+
+
+def _outage_hours(content: ExtractedContent) -> int:
+    """Return the number of distinct hours covered by the outage windows in one request."""
+    if "outage" not in content.source.lower():
+        return 0
+    hours: set[int] = set()
+    for window in content.windows:
+        start, end = window.split("~", 1)
+        start_hour = int(start.split(":", 1)[0])
+        end_hour, end_minute = (int(part) for part in end.split(":", 1))
+        if end_hour < start_hour:
+            end_hour += 24
+        last = end_hour if end_minute > 0 else end_hour - 1
+        for hour in range(start_hour, min(last, 23) + 1):
+            hours.add(hour % 24)
+    return len(hours)
 
 
 def _throughput(text: str) -> float | None:

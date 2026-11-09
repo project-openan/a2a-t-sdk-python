@@ -272,8 +272,13 @@ def find_ungrounded(
             continue
         ungrounded.append(UngroundedValue(name, str(value), "value is not grounded"))
     required = TASK_PARAM_SCHEMA.get("required")
+    site_level = any(_present(filled.get(field)) for field in ("siteList", "backgroundEvent"))
     if isinstance(required, list):
         for name in required:
+            if name == "guaranteedThroughputTarget" and not site_level:
+                # Area-level requests may omit the rate; the server executes the default
+                # no-disruption mode. Site-level requests still need a concrete rate.
+                continue
             if isinstance(name, str) and not _present(filled.get(name)):
                 ungrounded.append(UngroundedValue(name, "", "required value is missing"))
     return ungrounded

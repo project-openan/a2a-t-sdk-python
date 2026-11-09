@@ -48,6 +48,8 @@ from shared.run_constants import (
     FINAL_STATE_DECISION_UNGROUNDED,
     FINAL_STATE_INPUT_INVALID,
     FINAL_STATE_INTENT_NOT_CONFIRMED,
+    FINAL_STATE_TASK_FAILED,
+    FINAL_STATE_TASK_REJECTED,
     PROTOCOL_PURE,
     TASK_STATE_SUBMITTED,
 )
@@ -155,6 +157,11 @@ DEFAULT_WORKING_TIMEOUT_SECONDS: Final[float] = 60.0
 
 #: Grace after a stop-after stage before the run is cancelled.
 _CANCEL_GRACE_SECONDS: Final[float] = 1.0
+
+#: How long the pure-A2A negotiate stage waits for the simulator's generic question before it is
+#: recorded. The vendor dialogue and round count come from the OSP P column and cannot be
+#: reproduced against nms-sim, so waiting for the workbook's round count would only stall the batch.
+_SIM_PURE_SETTLE_SECONDS: Final[float] = 30.0
 
 
 def _now_iso() -> str:
@@ -628,7 +635,9 @@ class EvalBatchManager:
         finally:
             item.duration_ms = int(round((time.monotonic() - started) * 1000))
             if item.status == CASE_RUNNING and not batch.cancel_requested:
-                item.status = CASE_PASSED
+                # A scratch item never calls ``_run_case_item``'s status mapping; derive the
+                # status from its stages so a failed or timed-out scratch is not counted as a pass.
+                item.status = self._item_status(item)
             self._persist(batch)
 
     async def _run_case_item(self, batch: _Batch, index: int, item: CaseItem) -> None:
@@ -869,8 +878,15 @@ class EvalBatchManager:
             scripted_decisions=(),
             validate_before_send=True,
         )
-        timed_out = await self._wait_for_run(run, self._resolved_timeout(batch))
-        if timed_out or run.result is None or not run.result.task_id or not run.result.context_id:
+        # A Modify only needs the baseline Task to exist and stay alive; it must not wait for the
+        # baseline run to reach a terminal state. A real NMS keeps the Create Task WORKING for the
+        # whole energy-saving window, which made every Modify item time out as a baseline failure.
+        await self._wait_for_task_identity(run, self._resolved_timeout(batch))
+        task_id = run.remote_task_id or (run.result.task_id if run.result is not None else None)
+        context_id = run.remote_context_id or (
+            run.result.context_id if run.result is not None else None
+        )
+        if not task_id or not context_id:
             item.baseline = {
                 "runId": run.run_id,
                 "status": "failed",
@@ -881,9 +897,9 @@ class EvalBatchManager:
             return None
         baseline = {
             "runId": run.run_id,
-            "taskId": run.result.task_id,
-            "contextId": run.result.context_id,
-            "finalState": run.result.final_state,
+            "taskId": task_id,
+            "contextId": context_id,
+            "finalState": run.result.final_state if run.result is not None else None,
         }
         item.baseline = baseline
         return baseline
@@ -937,7 +953,12 @@ class EvalBatchManager:
 
         started = time.monotonic()
         if "negotiate" in stages:
-            await self._wait_for_negotiation(run, expected_rounds, timeout_seconds)
+            sim_pure = item.protocol == PROTOCOL_A2A and self._nms_sim
+            await self._wait_for_negotiation(
+                run,
+                0 if sim_pure else expected_rounds,
+                min(timeout_seconds, _SIM_PURE_SETTLE_SECONDS) if sim_pure else timeout_seconds,
+            )
             actual_rounds = len(run.proposals)
             actual_kinds = [proposal.kind for proposal in run.proposals]
             rounds_ok = actual_rounds == expected_rounds
@@ -1071,15 +1092,9 @@ class EvalBatchManager:
         """Judge whether the Task was observed moving past ``SUBMITTED``."""
         started = time.monotonic()
         actual = _task_observation(run)
-        if item.protocol == PROTOCOL_A2A:
-            return StageResult(
-                "working",
-                STAGE_RECORDED,
-                "纯 A2A 只记录外层 Task，不判定运行状态。",
-                expected=None,
-                actual=actual,
-                duration_ms=int(round((time.monotonic() - started) * 1000)),
-            )
+        # Pure A2A has no workbook final-state oracle, but "the outer Task was accepted and is
+        # running" is a protocol fact, not a corpus expectation. Recording the stage made every
+        # pure item green by construction; judge the outer Task state instead.
         if not send_expected:
             return StageResult(
                 "working",
@@ -1092,9 +1107,19 @@ class EvalBatchManager:
 
         state = await self._wait_for_working_state(run, working_timeout_seconds)
         actual = _task_observation(run)
-        if state in _WORKING_TASK_STATES:
+        final_state = run.result.final_state if run.result is not None else None
+        refused_completion = (
+            state == "TASK_STATE_COMPLETED"
+            and final_state in {FINAL_STATE_TASK_FAILED, FINAL_STATE_TASK_REJECTED}
+        )
+        if state in _WORKING_TASK_STATES and not refused_completion:
             status = STAGE_PASSED
             message = ""
+        elif refused_completion:
+            # The vendor reports a refusal as TASK_STATE_COMPLETED; the run layer already
+            # downgraded it to task_failed. A green card here would be a false acceptance.
+            status = STAGE_FAILED
+            message = f"Task 以 TASK_STATE_COMPLETED 结束，但 run 终态为 {final_state}。"
         elif state in _FAILED_TASK_STATES:
             status = STAGE_FAILED
             message = f"Task 状态为 {state}。"

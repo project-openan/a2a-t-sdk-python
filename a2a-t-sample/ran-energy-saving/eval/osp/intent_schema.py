@@ -59,7 +59,11 @@ _SITE_TARGET_SCHEMA: Final[dict[str, object]] = {
         },
         "Guaranteed throughput target by site": {
             "type": "array",
-            "description": "Time-segmented throughput targets applying to the listed sites.",
+            "description": (
+                "Time-segmented throughput targets applying to the listed sites. When the "
+                "request describes an outage, each target's Effective time period is the outage "
+                "period, not the full day."
+            ),
             "items": _THROUGHPUT_TARGET_SCHEMA,
         },
         "Scenario": {
@@ -95,7 +99,9 @@ OSP_INTENT_SCHEMA: Final[dict[str, object]] = {
             "description": (
                 "Cell radio access technology covered by energy saving. Map 4G / E-UTRAN to "
                 "'LTE', 5G / NG-RAN to 'NR', and LNR to 'ALL'. Use 'ALL' when the request does "
-                "not mention or restrict the RAT; never return null."
+                "not mention or restrict the RAT; never return null. A frequency numbering "
+                "scheme such as NR-ARFCN or EARFCN names a frequency, not a RAT: do not infer "
+                "'NR' or 'LTE' from it."
             ),
             "enum": ["ALL", "LTE", "NR", "LNR"],
         },
@@ -111,15 +117,19 @@ OSP_INTENT_SCHEMA: Final[dict[str, object]] = {
         "Energy saving region": {
             "type": "string",
             "description": (
-                "Region named by the request, kept verbatim. Empty when the request names no "
-                "region; never invent one."
+                "Region named by the request, kept verbatim. The served test region is sometimes "
+                "called 'A2A test area'; normalize that phrase to 'A2ATestRegion'. Empty when the "
+                "request names no region; never invent one."
             ),
         },
         "Whether Experience-Preserving Energy Saving is Required": {
             "type": "string",
             "description": (
                 "'Y' when the request says user experience first / lossless experience; 'N' "
-                "when it says energy saving first / lossy experience; empty otherwise."
+                "when it says energy saving first / lossy experience; empty otherwise. A "
+                "bitrate or rate-quality phrase such as 'ensuring user experience for 720p "
+                "video' or 'UX target 10Mbps' is a guaranteed throughput target, not an "
+                "experience-preserving mode: leave this field empty for it."
             ),
             "enum": ["Y", "N", ""],
         },

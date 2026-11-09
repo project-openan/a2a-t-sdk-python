@@ -60,6 +60,10 @@ def normalize_event(stream_response: StreamResponse) -> dict[str, object]:
             "context_id": message.context_id,
             "message_id": message.message_id,
         }
+        if message.task_id:
+            # A message that continues a Task is an observation of that Task, not a free-standing
+            # vendor question; dropping the id made the pump relay progress text as a question.
+            event["task_id"] = message.task_id
         metadata = MessageToDict(message.metadata)
         if metadata:
             event["metadata"] = metadata

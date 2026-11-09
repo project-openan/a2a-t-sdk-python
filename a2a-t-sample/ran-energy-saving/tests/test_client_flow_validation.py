@@ -256,11 +256,12 @@ async def test_a_missing_entry_field_is_negotiable_information() -> None:
 
 @pytest.mark.asyncio
 async def test_the_oss_agent_intercepts_a_missing_required_field() -> None:
-    """The caller schema's required values are the OSS agent's own business gate."""
+    """A site-level request still needs its concrete guaranteed rate."""
     prompt_client = ValidatingPromptClient(
         filled_data={
             "operationType": "Create",
             "region": "A2ATestRegion",
+            "siteList": "NRES_XCS_6102937",
             "guaranteedThroughputTarget": None,
         }
     )
@@ -282,6 +283,31 @@ async def test_the_oss_agent_intercepts_a_missing_required_field() -> None:
     assert detail["errors"][0]["code"] == "content.param_missing"
     assert detail["errors"][0]["facts"]["section_label"] == "Rate guarantee goal"
     assert "Rate guarantee goal" in detail["errors"][0]["message"]
+
+
+@pytest.mark.asyncio
+async def test_an_area_level_request_may_omit_the_rate_target() -> None:
+    """An area-level Create without a rate is valid; the server executes its default mode."""
+    prompt_client = ValidatingPromptClient(
+        filled_data={
+            "operationType": "Create",
+            "region": "A2ATestRegion",
+            "guaranteedThroughputTarget": None,
+        }
+    )
+    transport = RecordingTransport([_completed_task()])
+    traces: list[dict[str, object]] = []
+
+    result = await _run(
+        prompt_client=prompt_client,
+        transport=transport,
+        trace_sink=traces,
+        enforce_required_fields=True,
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert len(transport.requests) == 1
+    assert _validation_spans(traces)[0]["detail"]["verdict"] == "passed"
 
 
 @pytest.mark.asyncio

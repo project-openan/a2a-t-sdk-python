@@ -38,14 +38,16 @@ def structured_output(intent: ParsedIntent) -> dict[str, object]:
     }
 
 
-def apply_intent(intent: ParsedIntent) -> dict[str, object]:
+def apply_intent(intent: ParsedIntent, *, allow_any_window: bool = False) -> dict[str, object]:
     """Apply the intent on the simulator cell and return the report payload.
 
     Raises:
         demo.ran_data.RanDataError: when the sample dataset rejects the plan. The simulator only
             calls this after its own validation, so a failure indicates a simulator bug.
     """
-    plan = ran_data.apply_plan(SIM_CELL_ID, intent.window, SIM_TARGET_RATE)
+    plan = ran_data.apply_plan(
+        SIM_CELL_ID, intent.window, SIM_TARGET_RATE, allow_any_window=allow_any_window
+    )
     return {
         "plan_id": plan.plan_id,
         "cell_id": plan.cell_id,

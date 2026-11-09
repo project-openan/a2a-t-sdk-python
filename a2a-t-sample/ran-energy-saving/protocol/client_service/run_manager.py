@@ -1436,8 +1436,11 @@ class RunManager:
                     # question. Open the same human decision instead of waiting forever.
                     key = (_question_round(polled.metadata), polled.text)
                     if key not in answered_questions:
-                        answered_questions.add(key)
-                        await self._answer_remote_question(run, task_id, polled)
+                        # Mark the question answered only after the answer was actually sent.
+                        # An empty answer (manual timeout) or a transient send failure must leave
+                        # the question open, otherwise the Task stays INPUT_REQUIRED forever.
+                        if await self._answer_remote_question(run, task_id, polled):
+                            answered_questions.add(key)
                 final_state = _final_state_for_task_state(
                     polled.state_name,
                     polled.text,
@@ -1476,17 +1479,21 @@ class RunManager:
         run: RunState,
         task_id: str,
         polled: _PolledTask,
-    ) -> None:
+    ) -> bool:
         """Open the same human decision for a question observed by polling.
 
         The pure answer callback is the one the page already uses: it publishes the decision frame
         and waits for the operator; this method then sends the answer back to the same Task.
+
+        Returns ``True`` only when the answer was actually sent. An empty answer (manual timeout)
+        or a send failure returns/raises without consuming the question, so the next poll can
+        present it again instead of stranding the Task in ``INPUT_REQUIRED``.
         """
         runtime = run.runtime
         answer = getattr(runtime, "pure_answer", None) if runtime is not None else None
         transport = getattr(runtime, "transport", None) if runtime is not None else None
         if not callable(answer) or transport is None:
-            return
+            return False
         event = {
             "kind": "status",
             "state": "TASK_STATE_INPUT_REQUIRED",
@@ -1500,12 +1507,14 @@ class RunManager:
             answered = await answered
         text = answered
         if not isinstance(text, str) or not text.strip():
-            return
+            return False
+        # This answer resumes the caller→OSS Task, so it must use the streaming path's default
+        # (taskId + contextId). ``A2AT_SAMPLE_PURE_FOLLOWUP`` configures the OSS→downstream hop;
+        # applying it here drops the taskId the OSS needs to find the INPUT_REQUIRED Task.
         request = build_follow_up_request(
             text,
             task_id=task_id,
             context_id=polled.context_id or None,
-            followup=self._config.pure_followup,
         )
         await transport.send(
             request,
@@ -1514,6 +1523,7 @@ class RunManager:
                 service_parameters={"A2A-Extensions": ""},
             ),
         )
+        return True
 
     async def _poll_remote_task(self, run: RunState, task_id: str) -> _PolledTask:
         """Poll the authoritative Task of one long-running run."""

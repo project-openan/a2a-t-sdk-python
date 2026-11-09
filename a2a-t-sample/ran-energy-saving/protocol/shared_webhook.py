@@ -68,7 +68,10 @@ def _payload_keys(payload: Mapping[str, object]) -> tuple[str, str]:
             )
     message = payload.get("message")
     if isinstance(message, Mapping):
-        return "", _text(message.get("contextId") or message.get("context_id"))
+        return (
+            _text(message.get("taskId") or message.get("task_id")),
+            _text(message.get("contextId") or message.get("context_id")),
+        )
     return "", ""
 
 

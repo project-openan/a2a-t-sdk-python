@@ -231,7 +231,9 @@ class DownstreamPump:
         if kind == "status" and event.get("state") == "TASK_STATE_INPUT_REQUIRED":
             await self._answer_input_required(event)
             return
-        if is_plain_question(event) and self._recommendation is not None and self._on_question is not None:
+        # The recommendation is advisory card text, not a precondition: an offline or restarted
+        # OSS has no recommendation builder, and the vendor question must still reach the caller.
+        if is_plain_question(event) and self._on_question is not None:
             await self._relay_question(event)
             return
         await self._publish_outer(event)

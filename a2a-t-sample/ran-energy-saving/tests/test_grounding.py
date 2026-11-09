@@ -155,7 +155,11 @@ def test_a_tool_result_grounds_a_region_only_in_the_authoritative_domain() -> No
 
 
 def test_a_missing_required_value_is_reported() -> None:
-    filled = {"operationType": "Create", "region": "Region A"}
+    filled = {
+        "operationType": "Create",
+        "region": "Region A",
+        "siteList": "NRES_XCS_6102937",
+    }
     ungrounded = find_ungrounded(
         filled,
         baseline=filled,
@@ -166,6 +170,21 @@ def test_a_missing_required_value_is_reported() -> None:
     )
 
     assert [item.field for item in ungrounded] == ["guaranteedThroughputTarget"]
+
+
+def test_an_area_level_request_may_omit_the_rate_target() -> None:
+    """Area-level requests may omit the rate; the server runs the no-disruption default."""
+    filled = {"operationType": "Create", "region": "Region A"}
+    ungrounded = find_ungrounded(
+        filled,
+        baseline=filled,
+        intent=filled,
+        propose=_propose("Region 'Region A' is not recognized."),
+        tool_calls=(),
+        tools_authoritative=False,
+    )
+
+    assert ungrounded == []
 
 
 def test_reask_text_names_the_fields_and_server_options() -> None:

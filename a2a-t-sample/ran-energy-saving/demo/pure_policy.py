@@ -76,7 +76,9 @@ def pure_answer_for(kind: str, round_number: int, language: str = LANGUAGE_EN) -
         if round_number <= 1:
             return _ALTERNATIVE_TARGETS.get(language, _ALTERNATIVE_TARGETS[LANGUAGE_EN])
         return pure_corrected_target(language)
-    return pure_base_target(language)
+    # An OSS-relayed vendor question is tagged ``phase='question'`` and must be answered with the
+    # operator's value (or not at all), never with the demonstration dataset's canned target.
+    return ""
 
 
 def pure_answer_from_event(

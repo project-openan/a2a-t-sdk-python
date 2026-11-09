@@ -342,8 +342,18 @@ def _missing_required_fields(
     if not isinstance(required, list):
         return []
     errors: list[dict[str, object]] = []
+    # A rate target is optional for an area-level request (the Task-T template marks it optional
+    # and the server may execute with the default no-disruption mode). Only a site-level request
+    # needs the site list plus a concrete rate. Blocking every rate-less area-level request here
+    # would make the OSP cases that expect a plain Create unsendable.
+    site_level = any(
+        data.get(field) not in (None, "")
+        for field in ("siteList", "backgroundEvent")
+    )
     for name in required:
         if not isinstance(name, str):
+            continue
+        if name == "guaranteedThroughputTarget" and not site_level:
             continue
         value = data.get(name)
         if value is not None and not (isinstance(value, str) and not value.strip()):

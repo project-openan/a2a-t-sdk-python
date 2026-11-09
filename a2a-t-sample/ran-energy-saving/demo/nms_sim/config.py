@@ -36,6 +36,20 @@ WINDOW_POLICY_EXACT: Final[str] = "exact"
 WINDOW_POLICY_ANY: Final[str] = "any"
 SUPPORTED_WINDOW_POLICIES: Final[tuple[str, ...]] = (WINDOW_POLICY_EXACT, WINDOW_POLICY_ANY)
 
+#: Whether a request must state a guaranteed rate. The vendor accepts an area-level request
+#: without one (default no-disruption mode), and the OSP corpus contains such cases; the strict
+#: default keeps the historical behavior for demos and benchmarks.
+RATE_POLICY_REQUIRED: Final[str] = "required"
+RATE_POLICY_OPTIONAL: Final[str] = "optional"
+SUPPORTED_RATE_POLICIES: Final[tuple[str, ...]] = (RATE_POLICY_REQUIRED, RATE_POLICY_OPTIONAL)
+RATE_POLICY_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_RATE_POLICY"
+#: Acceptance rehearsal: propose a feasibility negotiation when a power outage lasts longer than
+#: four hours. The vendor's feasibility dialogue covers long outages; short outages (<= 4h) stay
+#: at zero rounds, which is what the OSP corpus expects.
+LONG_OUTAGE_FEASIBILITY_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_LONG_OUTAGE_FEASIBILITY"
+#: Outage length above which the feasibility rule fires.
+LONG_OUTAGE_HOURS: Final[int] = 4
+
 #: Environment keys read by the standalone simulator entry point.
 FIDELITY_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_FIDELITY"
 HOST_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_HOST"
@@ -130,6 +144,8 @@ class SimConfig:
     task_shape: str = TASK_SHAPE_STANDARD
     pure_failure: str = PURE_FAILURE_COMPLETED
     window_policy: str = WINDOW_POLICY_EXACT
+    rate_policy: str = RATE_POLICY_REQUIRED
+    long_outage_feasibility: bool = False
 
     @property
     def strict(self) -> bool:
@@ -169,6 +185,12 @@ class SimConfig:
                 f"Unsupported {WINDOW_POLICY_ENV_KEY}: {window_policy}; "
                 f"expected one of {SUPPORTED_WINDOW_POLICIES}"
             )
+        rate_policy = os.environ.get(RATE_POLICY_ENV_KEY, RATE_POLICY_REQUIRED).strip().lower()
+        if rate_policy not in SUPPORTED_RATE_POLICIES:
+            raise ValueError(
+                f"Unsupported {RATE_POLICY_ENV_KEY}: {rate_policy}; "
+                f"expected one of {SUPPORTED_RATE_POLICIES}"
+            )
         kinds = _parse_kinds(os.environ.get(NEGOTIATION_KINDS_ENV_KEY, ""))
         try:
             max_rounds = int(os.environ.get(MAX_ROUNDS_ENV_KEY, str(DEFAULT_MAX_ROUNDS)).strip())
@@ -198,6 +220,8 @@ class SimConfig:
             task_shape=task_shape,
             pure_failure=pure_failure,
             window_policy=window_policy,
+            rate_policy=rate_policy,
+            long_outage_feasibility=_truthy(os.environ.get(LONG_OUTAGE_FEASIBILITY_ENV_KEY, "")),
         )
         # The fast profile keeps the wire contract but removes the wall-clock delays.
         if profile.strict:

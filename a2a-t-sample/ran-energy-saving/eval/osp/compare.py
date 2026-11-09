@@ -186,6 +186,16 @@ def normalize_task_context(text: str) -> str:
     )
     value = re.sub(r"\bensuring\s+", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\bensure the .*? target is\s+", "", value, flags=re.IGNORECASE)
+    # "with the objective to maximize X" and "maximize X" state the same requirement.
+    value = re.sub(
+        r"\b(?:with\s+)?(?:the\s+)?(?:objective|goal)\s+to\s+",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    )
+    # The same requirement may be rendered as a label ("objective: maximize X") or as a verb.
+    # Do not match the tail of "Rate guarantee goal:" -- the label stripper below owns that.
+    value = re.sub(r"\bobjective\s*:\s*", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\bcarrier frequency\s+", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\bMbit/s\b", "Mbps", value, flags=re.IGNORECASE)
     value = re.sub(r"\bMbit\b", "Mbps", value, flags=re.IGNORECASE)
@@ -234,7 +244,11 @@ _CONTEXT_STOPWORDS: Final[frozenset[str]] = frozenset(
 
 def _task_context_tokens(text: str) -> tuple[str, ...]:
     """Return a word-order-insensitive token bag of the normalized Task Context."""
-    tokens = re.findall(r"[a-z0-9][a-z0-9:.+\-]*", normalize_task_context(text))
+    # "Power Savings Ratio: 10" and "Set the Power Savings Ratio to 10" differ only in the label
+    # separator, so a colon must not glue the label to its value in one form and not the other.
+    tokens = re.findall(
+        r"[a-z0-9][a-z0-9.+\-]*", normalize_task_context(text).replace(":", " ")
+    )
     return tuple(sorted(token for token in tokens if token not in _CONTEXT_STOPWORDS))
 
 
@@ -329,6 +343,8 @@ def _normalize_section(section: str, value: str) -> str:
         text = re.sub(
             r"^(?:energy consumption goal|goal|target)\s*:\s*", "", text, flags=re.IGNORECASE
         )
+        # The section is a single goal phrase; its label casing is not a business difference.
+        text = text.lower()
     return text
 
 
@@ -428,12 +444,14 @@ def _normalize_time(value: object) -> tuple[str, ...]:
     for match in _TIME_PAIR_RE.finditer(text):
         start = int(match.group(1))
         end = int(match.group(3))
-        if start == end:
-            hours.add(start % 24)
-            continue
+        end_minute = int(match.group(4))
         if end < start:
             end += 24
-        for hour in range(start, min(end, 24)):
+        # ``08:00-09:59`` covers hour 9; ``19:00-22:00`` stops before hour 22. Ignoring the end
+        # minute made the range form lose its last hour, so it never matched the expanded
+        # ``08:00-08:59&09:00-09:59`` form the SDK emits.
+        last = end if end_minute > 0 else end - 1
+        for hour in range(start, min(last, 23) + 1):
             hours.add(hour % 24)
     if not hours:
         return (text.lower(),)

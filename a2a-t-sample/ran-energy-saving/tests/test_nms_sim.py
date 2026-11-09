@@ -25,6 +25,7 @@ from demo.nms_sim.config import (
     FIDELITY_FAST,
     FIDELITY_STRICT,
     PURE_FAILURE_RETRY,
+    RATE_POLICY_OPTIONAL,
     TASK_SHAPE_TOPLEVEL,
     WINDOW_POLICY_ANY,
     SimConfig,
@@ -566,6 +567,51 @@ async def test_window_policy_any_accepts_an_osp_activation_window() -> None:
         assert any(frame.get("artifactUpdate") for frame in frames)
 
 
+async def test_window_policy_any_treats_a_missing_activation_time_as_full_period() -> None:
+    """The Task-T template makes the period optional; ``any`` accepts the full-period default."""
+    config = SimConfig(
+        fidelity=FIDELITY_FAST,
+        negotiation_carrier=CARRIER_MESSAGE,
+        window_policy=WINDOW_POLICY_ANY,
+    )
+    async for client in _client(config):
+        token = await _token(client)
+        frames = await _frames(
+            client,
+            _pure_message(
+                "Create an energy saving task in the A2ATestRegion area. "
+                "EARFCN 1600 can be shut down. Guaranteed throughput: 10Mbps."
+            ),
+            {"Authorization": f"Bearer {token}"},
+        )
+
+        assert "task" in frames[0]
+        assert any(frame.get("artifactUpdate") for frame in frames)
+
+
+async def test_rate_policy_optional_accepts_an_area_level_request_without_a_rate() -> None:
+    """The OSP corpus has area-level Creates without a rate; the vendor default mode runs them."""
+    config = SimConfig(
+        fidelity=FIDELITY_FAST,
+        negotiation_carrier=CARRIER_MESSAGE,
+        window_policy=WINDOW_POLICY_ANY,
+        rate_policy=RATE_POLICY_OPTIONAL,
+    )
+    async for client in _client(config):
+        token = await _token(client)
+        frames = await _frames(
+            client,
+            _pure_message(
+                "Create an energy saving task in the A2ATestRegion area. "
+                "The time range is from 00:00 to 22:00."
+            ),
+            {"Authorization": f"Bearer {token}"},
+        )
+
+        assert "task" in frames[0]
+        assert any(frame.get("artifactUpdate") for frame in frames)
+
+
 def test_sim_config_reads_the_hold_working_switch(monkeypatch: pytest.MonkeyPatch) -> None:
     """The Modify picker's local rehearsal switch is opt-in."""
     from demo.nms_sim.config import FIDELITY_ENV_KEY, HOLD_WORKING_ENV_KEY
@@ -977,3 +1023,37 @@ async def test_message_stream_task_carrier_closes_after_the_input_required_task(
         assert frames[0]["task"]["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
         metadata = frames[0]["task"]["status"]["message"]["metadata"]
         assert metadata[NEGOTIATION_CONTEXT_METADATA_KEY]["round"] == 1
+
+
+def test_outage_hours_merges_windows_and_ignores_a_zero_length_tail() -> None:
+    """The long-outage feasibility rule counts distinct outage hours, not window count."""
+    from demo.nms_sim.intent import ExtractedContent, _outage_hours
+
+    long_outage = ExtractedContent(
+        operation="Modify",
+        region="A2ATestRegion",
+        windows=("08:00~18:00",),
+        rate_mbps=10.0,
+        percent=None,
+        source="A power outage from 08:00 to 18:00 affects the sites.",
+    )
+    split_outage = ExtractedContent(
+        operation="Modify",
+        region="A2ATestRegion",
+        windows=("08:00~10:00", "15:00~18:00"),
+        rate_mbps=10.0,
+        percent=None,
+        source="A power outage from 08:00 to 10:00 and from 15:00 to 18:00.",
+    )
+    short_outage = ExtractedContent(
+        operation="Modify",
+        region="A2ATestRegion",
+        windows=("08:00~10:00",),
+        rate_mbps=10.0,
+        percent=None,
+        source="A power outage from 08:00 to 10:00.",
+    )
+
+    assert _outage_hours(long_outage) == 10
+    assert _outage_hours(split_outage) == 5
+    assert _outage_hours(short_outage) == 2

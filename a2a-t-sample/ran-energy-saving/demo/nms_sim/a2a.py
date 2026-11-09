@@ -32,6 +32,7 @@ from demo.nms_sim.config import (
     CARRIER_TASK,
     PURE_FAILURE_COMPLETED,
     PURE_FAILURE_REJECTED,
+    WINDOW_POLICY_ANY,
     SimConfig,
 )
 from demo.nms_sim.executor import apply_intent, report_artifact, structured_output
@@ -197,7 +198,9 @@ def build_routes(
             message=f"Task creation succeeded{_json_compact(output)}",
         )
         try:
-            report = apply_intent(intent)
+            report = apply_intent(
+                intent, allow_any_window=config.window_policy == WINDOW_POLICY_ANY
+            )
         except ran_data.RanDataError as exc:
             _LOGGER.warning("simulator execution failed: %s", exc)
             resolved_store.update(task.task_id, state=TASK_FAILED, message=str(exc))

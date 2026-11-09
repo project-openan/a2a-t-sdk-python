@@ -244,6 +244,58 @@ async def test_working_passes_on_working_or_completed(tmp_path: Path) -> None:
     assert result.status == STAGE_PASSED
 
 
+async def test_pure_working_is_judged_by_the_outer_task_state(tmp_path: Path) -> None:
+    """A pure item is green only when the outer Task was accepted and is running."""
+    manager = _manager(tmp_path, _FakeRuns(_hang))
+    run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="sse")
+    run.remote_task_id = "task-1"
+    run.remote_context_id = "ctx-1"
+    run.latest_task_state = "TASK_STATE_WORKING"
+    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A)
+
+    result = await manager._judge_working(
+        run, item, CASES[1], True, working_timeout_seconds=1.0
+    )
+
+    assert result.status == STAGE_PASSED
+
+
+async def test_pure_working_waits_while_the_outer_task_is_input_required(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_hang))
+    run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="sse")
+    run.remote_task_id = "task-1"
+    run.remote_context_id = "ctx-1"
+    run.latest_task_state = "TASK_STATE_INPUT_REQUIRED"
+    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A)
+
+    result = await manager._judge_working(
+        run, item, CASES[1], True, working_timeout_seconds=1.0
+    )
+
+    assert result.status == STAGE_WAITING
+
+
+async def test_working_fails_on_a_refused_completed_task(tmp_path: Path) -> None:
+    """The vendor signals a refusal as COMPLETED; the run layer downgrades it to task_failed."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="sse")
+    run.remote_task_id = "task-1"
+    run.remote_context_id = "ctx-1"
+    run.latest_task_state = "TASK_STATE_COMPLETED"
+    run.status = "finished"
+    run.result = ClientFlowResult(
+        final_state="task_failed", context_id="ctx-1", task_id="task-1"
+    )
+    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A_T)
+
+    result = await manager._judge_working(
+        run, item, CASES[1], True, working_timeout_seconds=1.0
+    )
+
+    assert result.status == STAGE_FAILED
+    assert "task_failed" in result.message
+
+
 async def test_working_is_waiting_while_the_task_stays_submitted(tmp_path: Path) -> None:
     manager = _manager(tmp_path, _FakeRuns(_hang))
     run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="sse")
@@ -314,7 +366,7 @@ async def test_an_a2a_item_has_no_sdk_stages(tmp_path: Path) -> None:
     for stage in ("intent", "task_t", "validate"):
         assert stage not in stages
     assert stages["accepted"]["status"] == STAGE_RECORDED
-    assert stages["working"]["status"] == STAGE_RECORDED
+    assert stages["working"]["status"] == STAGE_PASSED
 
 
 def test_a2a_with_an_sdk_only_stop_stage_is_rejected(tmp_path: Path) -> None:

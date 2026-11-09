@@ -1866,6 +1866,7 @@ def main() -> int:
                 os.environ["A2AT_SAMPLE_TRACE_TOKEN"] = server_trace_env["A2AT_SAMPLE_TRACE_TOKEN"]
             server_env = dict(server_trace_env)
             server_env["A2AT_SAMPLE_PROTOCOL_MODE"] = args.protocol
+            server_env["A2AT_SAMPLE_MODEL_MODE"] = args.model_mode
             needs_pure_stack = args.protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH)
             if needs_pure_stack:
                 mie_env = {"A2AT_SAMPLE_MIE_PORT": str(args.mie_port)}
@@ -1893,6 +1894,13 @@ def main() -> int:
                     "A2AT_SAMPLE_RAN_URL": f"http://{server_host}:{server_port}",
                     "A2AT_SAMPLE_OSS_HOST": server_host,
                     "A2AT_SAMPLE_OSS_PORT": str(args.oss_port),
+                    "A2AT_SAMPLE_MODEL_MODE": args.model_mode,
+                    **(
+                        {"A2AT_SAMPLE_INTENT_MODE": args.intent_mode}
+                        if args.intent_mode
+                        else {}
+                    ),
+                    **nms_overrides,
                     **oss_trace_env,
                     **oss_webhook_env,
                 }
@@ -1908,7 +1916,15 @@ def main() -> int:
                     is None
                 ):
                     return 1
-            elif args.gateway and start("gateway", GATEWAY_MODULE, args.gateway_port) is None:
+            elif args.gateway and start(
+                "gateway",
+                GATEWAY_MODULE,
+                args.gateway_port,
+                {
+                    "A2AT_SAMPLE_GATEWAY_REGISTER": "1" if args.gateway_register else "0",
+                    "A2AT_SAMPLE_MODEL_MODE": args.model_mode,
+                },
+            ) is None:
                 return 1
         elif args.protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH):
             # The NMS deployment keeps the OSS Agent but drops the local RAN Agent and MIE: the OSS
@@ -1923,6 +1939,13 @@ def main() -> int:
                 "A2AT_SAMPLE_RAN_URL": f"http://{server_host}:{server_port}",
                 "A2AT_SAMPLE_OSS_HOST": server_host,
                 "A2AT_SAMPLE_OSS_PORT": str(args.oss_port),
+                "A2AT_SAMPLE_MODEL_MODE": args.model_mode,
+                **(
+                    {"A2AT_SAMPLE_INTENT_MODE": args.intent_mode}
+                    if args.intent_mode
+                    else {}
+                ),
+                **nms_overrides,
                 **oss_trace_env,
                 **oss_webhook_env,
             }
@@ -1956,6 +1979,20 @@ def main() -> int:
                     f"http://{server_host}:{args.oss_port if pure_stack else server_port}"
                 ),
                 "A2AT_SAMPLE_NMS_SIM": "1" if args.nms_sim else "0",
+                # CLI values must win over an exported shell value; shared.config prefers the
+                # process environment over RUN_DIR/.env, so an un-pinned CLI flag silently loses.
+                "A2AT_SAMPLE_MODEL_MODE": args.model_mode,
+                **(
+                    {"A2AT_SAMPLE_INTENT_MODE": args.intent_mode}
+                    if args.intent_mode
+                    else {}
+                ),
+                **(
+                    {"A2AT_SAMPLE_WEBHOOK_HOST": args.webhook_host}
+                    if args.webhook_host
+                    else {}
+                ),
+                **nms_overrides,
             }
             pure_nms = args.nms and args.protocol == "pure"
             if pure_nms:

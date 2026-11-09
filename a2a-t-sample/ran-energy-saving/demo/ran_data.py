@@ -485,7 +485,13 @@ def _hourly_in_window(cell: RanCell, hours: tuple[int, ...]) -> tuple[HourlySamp
     return tuple(cell.hourly[hour] for hour in hours)
 
 
-def evaluate_plan(cell_id: str, window: str, target_rate: str) -> PlanEvaluation:
+def evaluate_plan(
+    cell_id: str,
+    window: str,
+    target_rate: str,
+    *,
+    allow_any_window: bool = False,
+) -> PlanEvaluation:
     """Evaluate a plan against the cell's windows, rate cap, and SLA.
 
     The evaluation never raises for an infeasible plan; ``feasible`` is ``False`` and ``reasons``
@@ -501,7 +507,7 @@ def evaluate_plan(cell_id: str, window: str, target_rate: str) -> PlanEvaluation
     samples = _hourly_in_window(cell, hours)
 
     reasons: list[str] = []
-    if canonical not in cell.available_windows:
+    if not allow_any_window and canonical not in cell.available_windows:
         reasons.append(
             f"Window {canonical} is not available for cell {cell_id}; "
             f"available windows: {', '.join(cell.available_windows)}"
@@ -552,7 +558,13 @@ def evaluate_plan(cell_id: str, window: str, target_rate: str) -> PlanEvaluation
     )
 
 
-def apply_plan(cell_id: str, window: str, target_rate: str) -> EnergySavingPlan:
+def apply_plan(
+    cell_id: str,
+    window: str,
+    target_rate: str,
+    *,
+    allow_any_window: bool = False,
+) -> EnergySavingPlan:
     """Evaluate a plan and write it to the process-local plan store.
 
     Raises:
@@ -560,7 +572,9 @@ def apply_plan(cell_id: str, window: str, target_rate: str) -> EnergySavingPlan:
         InvalidPlanError: when the window or target rate is malformed.
         PlanInfeasibleError: when the evaluation rejects the plan; nothing is stored then.
     """
-    evaluation = evaluate_plan(cell_id, window, target_rate)
+    evaluation = evaluate_plan(
+        cell_id, window, target_rate, allow_any_window=allow_any_window
+    )
     if not evaluation.feasible:
         raise PlanInfeasibleError(evaluation)
     cell = get_cell_or_raise(cell_id)

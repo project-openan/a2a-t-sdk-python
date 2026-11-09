@@ -373,3 +373,24 @@ def test_validate_stage_reports_a_crash() -> None:
 def test_stop_after_rejects_an_unsupported_stage() -> None:
     with pytest.raises(ValueError, match="unsupported stop_after"):
         run_case(CASES[1], FakePromptClient(), stop_after="send")
+
+
+def test_time_ranges_with_seconds_normalize_to_the_same_hours() -> None:
+    """A range ending at HH:59 covers that hour; the expanded SDK form must match it."""
+    from eval.osp.compare import _normalize_time
+
+    assert _normalize_time("08:00:00-09:59:59") == _normalize_time(
+        "08:00:00-08:59:59&09:00:00-09:59:59"
+    )
+    assert _normalize_time("19:00-22:00") == ("19", "20", "21")
+
+
+def test_task_context_label_separator_is_not_a_business_difference() -> None:
+    """'Label: value' and 'Set the label to value' state the same context."""
+    from eval.osp.compare import _contexts_match
+
+    assert _contexts_match("Set the Power Savings Ratio to 10%", "Power Savings Ratio: 10%.")
+    assert _contexts_match(
+        "maximize user experience assurance",
+        "with the objective to maximize user experience assurance.",
+    )
