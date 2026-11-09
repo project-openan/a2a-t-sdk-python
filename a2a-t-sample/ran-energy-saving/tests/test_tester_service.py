@@ -17,6 +17,7 @@ from a2a_t.core.errors.exceptions import ContentValidationError
 from demo.web.tester.service import (
     ALL_STAGES,
     CASE_CANCELLED,
+    CASE_ERROR,
     CASE_PARTIAL,
     CASE_PASSED,
     DECISION_MODE_LIVE,
@@ -747,6 +748,136 @@ def test_the_modify_baseline_uses_the_configured_region_and_window(
     assert "OtherRegion" in request
     assert "{08:00~10:00,10Mbps}" in request
     assert "Region A" not in request
+    # The served window replaces the day plan instead of being inserted next to it: two segments
+    # covering the same hours would describe an ambiguous prior task.
+    assert "17:30~23:00" not in request
+
+
+def test_the_modify_baseline_is_a_one_day_region_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default fixture covers the day so a Modify's "keep the rest unchanged" has a rest."""
+    from demo.web.tester.service import _baseline_request
+
+    monkeypatch.delenv("A2AT_SAMPLE_NMS_SIM_WINDOW", raising=False)
+    monkeypatch.setenv("A2AT_SAMPLE_NMS_REGION", "OtherRegion")
+
+    request = _baseline_request()
+
+    assert "Create an energy saving task for OtherRegion" in request
+    assert "{00:00~06:00,10Mbps}" in request
+    assert "{23:00~24:00,10Mbps}" in request
+
+
+def test_a_case_can_override_the_paired_baseline() -> None:
+    """A row whose prior task is not the shared fixture states its own paired Create."""
+    from demo.web.tester.service import _baseline_request
+
+    request = _baseline_request({"baseline": {"request": "Create the prior task."}})
+
+    assert request == "Create the prior task."
+
+
+def _seed_then_modify(seed_state: str) -> Callable[[RunState], None]:
+    """Build a fake RunManager that reports the paired Create, then the Modify run."""
+    calls = {"count": 0}
+
+    def build(run: RunState) -> None:
+        calls["count"] += 1
+        index = calls["count"]
+        run.remote_task_id = f"task-{index}"
+        run.remote_context_id = f"ctx-{index}"
+        if index == 1:
+            run.latest_task_state = seed_state
+            run.status = (
+                "finished" if seed_state in {"TASK_STATE_COMPLETED", "TASK_STATE_FAILED"} else "running"
+            )
+            return
+        run.latest_task_state = "TASK_STATE_WORKING"
+        run.status = "running"
+        run.traces.append({"kind": "message_sent"})
+
+    return build
+
+
+async def test_an_a2a_t_modify_continues_the_task_it_just_created(tmp_path: Path) -> None:
+    """The Modify must carry the baseline runner's Task id, not pick a Task on its own."""
+    runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED))
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[18],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="send",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    snapshot = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = snapshot["items"][0]
+    assert isinstance(item, Mapping)
+    baseline = item["baseline"]
+    assert isinstance(baseline, Mapping)
+    assert baseline["taskId"] == "task-1"
+    assert baseline["state"] == TASK_STATE_SUBMITTED
+    assert runs.calls[0]["protocol"] == PROTOCOL_A2A_T
+    assert runs.calls[1]["target_task_id"] == "task-1"
+    assert runs.calls[1]["target_context_id"] == "ctx-1"
+    assert runs.calls[1]["target_server_task_id"] is None
+
+
+async def test_a_pure_modify_continues_the_outer_task_it_just_created(tmp_path: Path) -> None:
+    """Pure A2A continues the OSS Agent's outer Task, not a new message on a new Task."""
+    runs = _FakeRuns(_seed_then_modify("TASK_STATE_WORKING"))
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[18],
+        protocols=[PROTOCOL_A2A],
+        stop_after="send",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    snapshot = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = snapshot["items"][0]
+    assert isinstance(item, Mapping)
+    baseline = item["baseline"]
+    assert isinstance(baseline, Mapping)
+    assert baseline["protocol"] == "pure"
+    assert baseline["taskId"] == "task-1"
+    assert runs.calls[0]["protocol"] == "pure"
+    assert runs.calls[1]["protocol"] == "pure"
+    assert runs.calls[1]["target_task_id"] is None
+    assert runs.calls[1]["target_server_task_id"] == "task-1"
+    assert runs.calls[1]["target_server_context_id"] == "ctx-1"
+
+
+async def test_a_pure_modify_refuses_a_terminal_baseline_task(tmp_path: Path) -> None:
+    """A2A rejects a message addressed to a terminal Task; the tester must say so, not modify."""
+    runs = _FakeRuns(_seed_then_modify("TASK_STATE_COMPLETED"))
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[18],
+        protocols=[PROTOCOL_A2A],
+        stop_after="send",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    snapshot = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = snapshot["items"][0]
+    assert isinstance(item, Mapping)
+    assert item["status"] == CASE_ERROR
+    assert "WORKING" in str(item["error"])
+    assert len(runs.calls) == 1
+    stages = item["stages"]
+    assert isinstance(stages, Mapping)
+    assert stages["send"]["status"] == STAGE_ERROR
 
 
 def test_an_item_whose_failure_was_recorded_is_partial(tmp_path: Path) -> None:

@@ -120,9 +120,13 @@ _SCHEMAS: Final[frozenset[str]] = frozenset({SCHEMA, SCHEMA_V2, SCHEMA_V1})
 _FAILED_TASK_STATES: Final[frozenset[str]] = frozenset(
     {"TASK_STATE_FAILED", "TASK_STATE_REJECTED", "TASK_STATE_CANCELED"}
 )
+#: The A2A state a pure outer Task reports once the OSS Agent accepted the Create. It is also the
+#: only non-terminal state a pure Modify can continue: ``COMPLETED`` rejects the continuation and
+#: ``INPUT_REQUIRED`` would route the Modify text as an answer to the pending question.
+TASK_STATE_WORKING: Final[str] = "TASK_STATE_WORKING"
 #: Task states that prove the Task moved past SUBMITTED.
 _WORKING_TASK_STATES: Final[frozenset[str]] = frozenset(
-    {"TASK_STATE_WORKING", "TASK_STATE_COMPLETED"}
+    {TASK_STATE_WORKING, "TASK_STATE_COMPLETED"}
 )
 #: Task states that prove the downstream accepted the Create/Modify request. A2A-T reports
 #: :data:`TASK_STATE_SUBMITTED` (the machine-readable success signal); pure A2A starts its outer
@@ -179,10 +183,19 @@ BASELINE_REGION: Final[str] = "A2ATestRegion"
 #: Activation window the NMS (and simulator) serves; the baseline must name it exactly.
 BASELINE_WINDOW: Final[str] = "00:00~06:00"
 
+#: One-day rate plan of the paired baseline Task. The first segment is the NMS activation window
+#: the request must name; the remaining segments keep the day covered so a Modify's "keep the
+#: rest unchanged" has a rest to keep. The rates are the demo's normal day/evening plan, not a
+#: corpus expectation: the baseline exists to give the Modify a live Task, and the corpus says
+#: nothing about the plan that preceded it.
+BASELINE_SCHEDULE: Final[str] = (
+    "{00:00~06:00,10Mbps}, {06:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
+)
+
 #: Complete baseline request used to seed a Modify target task.
 BASELINE_REQUEST: Final[str] = (
     f"Create an energy saving task for {BASELINE_REGION} with these guaranteed throughputs: "
-    "{00:00~06:00,10Mbps}, {06:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}."
+    f"{BASELINE_SCHEDULE}."
 )
 
 #: Polling interval of the batch runner.
@@ -876,8 +889,22 @@ class EvalBatchManager:
         resolved_timeout = self._resolved_timeout(batch, case)
         target_task_id: str | None = None
         target_context_id: str | None = None
-        if runtime_protocol == RUNTIME_A2A_T and case.get("operation") == "Modify":
-            baseline = await self._seed_baseline(batch, index, item)
+        target_server_task_id: str | None = None
+        target_server_context_id: str | None = None
+        # A blocked A2A-T request never reaches the NMS, so it has nothing to continue; without a
+        # follow-up, seeding would only create a Task that the case then refuses to modify.
+        blocked_without_followup = (
+            runtime_protocol == RUNTIME_A2A_T
+            and is_blocked_case(case)
+            and not has_followup(case)
+        )
+        if case.get("operation") == "Modify" and not blocked_without_followup:
+            # A Modify continues an existing Task. The corpus says nothing about where that Task
+            # came from, so the tester pairs every Modify row with one explicit baseline Create
+            # (see ``_baseline_request``) and continues the Task it produced. A2A-T continues the
+            # vendor Task directly; pure A2A continues the OSS Agent's outer Task, which is the
+            # Task id that hop owns.
+            baseline = await self._seed_baseline(batch, index, item, runtime_protocol, case)
             if baseline is None:
                 for stage in ("send", "negotiate", "accepted", "working", "final"):
                     if stage in stages:
@@ -886,8 +913,12 @@ class EvalBatchManager:
                         )
                 item.status = CASE_ERROR
                 return
-            target_task_id = str(baseline["taskId"])
-            target_context_id = str(baseline["contextId"])
+            if runtime_protocol == RUNTIME_A2A_T:
+                target_task_id = str(baseline["taskId"])
+                target_context_id = str(baseline["contextId"])
+            else:
+                target_server_task_id = str(baseline["taskId"])
+                target_server_context_id = str(baseline["contextId"])
 
         decisions = a2at_decisions(case) if runtime_protocol == RUNTIME_A2A_T else []
         answers = pure_answers(case) if runtime_protocol == PROTOCOL_PURE else []
@@ -922,6 +953,8 @@ class EvalBatchManager:
             },
             target_task_id=target_task_id,
             target_context_id=target_context_id,
+            target_server_task_id=target_server_task_id,
+            target_server_context_id=target_server_context_id,
             scripted_decisions=decisions or None,
             pure_answers=answers or None,
             validate_before_send=_pre_send_validation(runner),
@@ -1057,49 +1090,101 @@ class EvalBatchManager:
             return batch.working_timeout_seconds
         return DEFAULT_WORKING_TIMEOUT_SECONDS
 
-    async def _seed_baseline(self, batch: _Batch, index: int, item: CaseItem) -> dict[str, object] | None:
-        """Create one baseline task for a Modify A2A-T item."""
-        defaults = self._protocol_defaults.get(PROTOCOL_A2A_T, {})
+    async def _seed_baseline(
+        self,
+        batch: _Batch,
+        index: int,
+        item: CaseItem,
+        protocol: str,
+        case: Mapping[str, Any],
+    ) -> dict[str, object] | None:
+        """Create the Task a Modify item continues, and wait until it can be continued.
+
+        The paired Create is deliberately independent of the case's expectations: it only has to
+        produce a live Task in the same region. The case's own sites and outage window stay in the
+        Modify request, so the Modify never targets a Task the tester did not just create.
+        """
+        defaults = self._protocol_defaults.get(protocol, {})
         conversation_id, idempotency_key = self._run_identity(batch, index, item)
+        request = _baseline_request(case)
+        mode = MODE_SCRIPTED if protocol == RUNTIME_A2A_T else self._mode_for(batch, item.protocol)
         run = await self._runs.start(
             BASELINE_SCENARIO,
-            MODE_SCRIPTED,
+            mode,
             defaults.get("transport", "sse"),
             defaults.get("discovery", "direct"),
-            self._baseline_request,
-            protocol=PROTOCOL_A2A_T,
+            request,
+            protocol=protocol,
             conversation_id=f"{conversation_id}-baseline",
             user_id="tester",
             idempotency_key=f"{idempotency_key}-baseline",
-            source={"kind": "tester", "channel": "tester-baseline", "batchId": batch.batch_id},
+            source={
+                "kind": "tester",
+                "channel": f"tester-baseline-{protocol}",
+                "batchId": batch.batch_id,
+                "caseId": item.case_id,
+            },
             scripted_decisions=(),
-            validate_before_send=True,
+            # Only the A2A-T flow has a Task-T pre-send gate; the pure hop sends raw text.
+            validate_before_send=protocol == RUNTIME_A2A_T,
         )
-        # A Modify only needs the baseline Task to exist and stay alive; it must not wait for the
-        # baseline run to reach a terminal state. A real NMS keeps the Create Task WORKING for the
+        # A Modify needs the Task accepted and still continuable. It must not wait for the
+        # baseline run to reach a terminal state: a real NMS keeps the Create Task WORKING for the
         # whole energy-saving window, which made every Modify item time out as a baseline failure.
-        await self._wait_for_task_identity(run, self._resolved_timeout(batch))
+        state = await self._wait_for_baseline_acceptance(
+            run, protocol, self._resolved_timeout(batch)
+        )
         task_id = run.remote_task_id or (run.result.task_id if run.result is not None else None)
         context_id = run.remote_context_id or (
             run.result.context_id if run.result is not None else None
         )
-        if not task_id or not context_id:
+        accepted = state in _baseline_accepted_states(protocol)
+        if not task_id or not context_id or not accepted:
+            message = run.error or _baseline_failure_message(protocol, state)
             item.baseline = {
                 "runId": run.run_id,
+                "protocol": protocol,
                 "status": "failed",
+                "state": state,
                 "finalState": run.result.final_state if run.result is not None else None,
-                "error": run.error,
+                "error": message,
             }
-            item.error = run.error or "Modify 基线任务创建失败。"
+            item.error = message
             return None
         baseline = {
             "runId": run.run_id,
+            "protocol": protocol,
             "taskId": task_id,
             "contextId": context_id,
+            "state": state,
+            "request": request,
             "finalState": run.result.final_state if run.result is not None else None,
         }
         item.baseline = baseline
         return baseline
+
+    async def _wait_for_baseline_acceptance(
+        self, run: RunState, protocol: str, timeout_seconds: float
+    ) -> str | None:
+        """Poll until the baseline Task reaches the state a Modify can continue from.
+
+        A2A-T can continue any non-terminal Task and reports ``SUBMITTED`` on acceptance. Pure
+        A2A continues the OSS Agent's outer Task, which must be ``WORKING``: ``COMPLETED`` is
+        terminal (the A2A layer rejects the continuation) and ``INPUT_REQUIRED`` would route the
+        Modify text as an answer to the pending question.
+        """
+        wanted = _baseline_accepted_states(protocol)
+        deadline = time.monotonic() + max(0.1, timeout_seconds)
+        while time.monotonic() < deadline:
+            state = run.latest_task_state
+            if state in _FAILED_TASK_STATES:
+                return state
+            if run.remote_task_id and run.remote_context_id and state in wanted:
+                return state
+            if run.finished():
+                return state
+            await asyncio.sleep(_POLL_SECONDS)
+        return run.latest_task_state
 
     async def _wait_for_stage(
         self,
@@ -1352,16 +1437,6 @@ class EvalBatchManager:
             actual=actual,
             duration_ms=int(round((time.monotonic() - started) * 1000)),
         )
-
-    async def _wait_for_task_identity(self, run: RunState, timeout_seconds: float) -> None:
-        """Wait until the run reports both a Task id and its context id, or the run ends."""
-        deadline = time.monotonic() + max(0.1, timeout_seconds)
-        while time.monotonic() < deadline:
-            if run.remote_task_id and run.remote_context_id:
-                return
-            if run.finished():
-                return
-            await asyncio.sleep(_POLL_SECONDS)
 
     async def _wait_for_acceptance_state(
         self, run: RunState, timeout_seconds: float
@@ -1856,13 +1931,23 @@ def _summary(items: Sequence[CaseItem]) -> dict[str, int]:
     return counts
 
 
-def _baseline_request() -> str:
-    """Return the Modify baseline request for the region the configured NMS serves.
+def _baseline_request(case: Mapping[str, Any] | None = None) -> str:
+    """Return the Create request paired with one Modify case.
+
+    The OSP rows do not say what task preceded the Modify, and none of the corpus' Create rows
+    creates a one-day region-level task with the Modify's sites. Pairing to a graded Create row
+    would therefore mismatch the prior plan and duplicate that row's result, so every Modify item
+    is paired with this one explicit baseline fixture instead. Its ``Task Object`` is the same
+    configured region the Modify Task-T names; the case's sites and outage window stay in the
+    Modify request. A case may replace the fixture with ``baseline.request``.
 
     The demo's ``Region A`` placeholder is not a served region: the real NMS and the simulator
     answer it with an information negotiation. A Modify baseline must therefore name the
     configured ``A2AT_SAMPLE_NMS_REGION`` (the simulator's region in a ``--nms-sim`` run).
     """
+    override = _case_baseline_request(case)
+    if override is not None:
+        return override
     region = os.environ.get("A2AT_SAMPLE_NMS_REGION", "").strip()
     if not region:
         try:
@@ -1873,10 +1958,50 @@ def _baseline_request() -> str:
             region = ""
     region = region or BASELINE_REGION
     window = os.environ.get("A2AT_SAMPLE_NMS_SIM_WINDOW", "").strip() or BASELINE_WINDOW
-    request = BASELINE_REQUEST.replace(BASELINE_REGION, region)
-    if window != BASELINE_WINDOW:
-        request = request.replace(f"{{{BASELINE_WINDOW},10Mbps}}", f"{{{window},10Mbps}}")
-    return request
+    # A single-segment plan when the served window differs, otherwise the day plan would carry two
+    # overlapping segments for the same hours.
+    schedule = (
+        BASELINE_SCHEDULE
+        if window == BASELINE_WINDOW
+        else f"{{{window},10Mbps}}"
+    )
+    return BASELINE_REQUEST.replace(BASELINE_REGION, region).replace(BASELINE_SCHEDULE, schedule)
+
+
+def _case_baseline_request(case: Mapping[str, Any] | None) -> str | None:
+    """Return a case's own ``baseline.request``, when it overrides the shared fixture."""
+    if not isinstance(case, Mapping):
+        return None
+    block = case.get("baseline")
+    if not isinstance(block, Mapping):
+        return None
+    request = block.get("request")
+    return request.strip() if isinstance(request, str) and request.strip() else None
+
+
+def _baseline_accepted_states(protocol: str) -> frozenset[str]:
+    """Return the states a Modify can continue from, for one protocol.
+
+    ``COMPLETED`` is excluded on purpose even though it is an acceptance signal for a Create:
+    the A2A layer rejects a message addressed to a terminal Task.
+    """
+    if protocol == RUNTIME_A2A_T:
+        return frozenset({TASK_STATE_SUBMITTED, TASK_STATE_WORKING})
+    return frozenset({TASK_STATE_WORKING})
+
+
+def _baseline_failure_message(protocol: str, state: str | None) -> str:
+    """Explain why the paired Create cannot be continued by a Modify."""
+    if protocol == RUNTIME_A2A_T:
+        return (
+            f"Modify 基线任务未到达可续传状态（当前 {state or '未观察到状态'}）；"
+            "任务已是终态时服务端会拒绝 Modify。"
+        )
+    return (
+        f"Modify 基线任务的纯 A2A 外层 Task 未停留在 WORKING（当前 {state or '未观察到状态'}）；"
+        "纯 A2A 只能续传非终态 Task，请使用 --nms-sim + A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1 "
+        "或真实 NMS。"
+    )
 
 
 def _negotiation_expected(case: Mapping[str, Any], protocol: str) -> bool:

@@ -147,6 +147,20 @@ A2A 与 A2A-T 的预期结构化意图在这 51 条里完全相同，因此只�
 生成器尚未支持该列：重跑 `generate_osp_cases.py` 会丢掉字段，`--check` 会报漂移。合并脚本见
 `docs-local/merge-osp-blocked-followup.py`（内部，不入库）。
 
+### 3.5 `baseline`（Modify 的配对创建，可选）
+
+`operation: Modify` 的用例默认由 `/tester` 用共享的区域级基线 Create 建出被修改的 Task（见 9.1）。
+只有某条用例需要不同的前置任务时才写这个块：
+
+```yaml
+baseline:
+  request: |-
+    Create an energy saving task for A2ATestRegion with these guaranteed throughputs: ...
+```
+
+和 `blocked_followup` 一样，这是运行期 fixture，不产生额外的 OSP 期望；`request` 只负责建出一个可续传的
+Task。生成器尚未支持该字段，手工加入后 `--check` 会报漂移。
+
 ## 4. 阶段模型与 `stop_after`
 
 固定阶段：
@@ -282,11 +296,28 @@ PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-af
 - 临时请求 tab：手输文本直接跑一次，不做预期断言。
 - 报告导出 JSON / XLSX；Excel 只作为导出格式，不再是输入。
 
-### 9.1 Modify 的限制
+### 9.1 Modify 的配对基线与限制
 
-Modify 用例会先跑一个基线 Create，拿到 `taskId` / `contextId` 后再以 modify 模式续传。但**本地 RAN Agent 会立即把任务置为终态**，随后服务端拒绝 Modify（`Task ... is in terminal state`）。
+每条 Modify 用例都会先跑一条**配对的基线 Create**，拿到 `taskId` / `contextId` 后再续传：
 
-要在本地验证 19 条 Modify 用例，请用支持长任务的 NMS 模拟器（`--nms --nms-sim` + `A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1`），或直接连真实 NMS。控制台会把基线 run id、Task id 和失败原因写进结果，便于判断是 seed 问题还是服务端拒绝。
+- **配对规则**：基线是同一个区域的、覆盖一整天的区域级任务（`BASELINE_REQUEST`），不是用例集里的某条
+  Create 行。20 条 Modify 的 Task-T 里 `Task Object` 都是区域、站点只在 `Task Context`；而 51 条 Create
+  里没有一条覆盖这些站点/停电时段（22/28/31/43/46 本身还是 blocked）。直接复用一条 Create 行会同时制造
+  两个问题：前置计划不匹配，且把一条评分用例复制成前置步骤。用例如需不同的前置任务，可用
+  `baseline.request` 覆盖（见第 3.5 节）。
+- **受理门槛**：基线必须到达可续传状态才会发送 Modify。A2A-T 是 `SUBMITTED`（或已进入 `WORKING`）；纯
+  A2A 是外层 Task 的 `WORKING`。`COMPLETED` 是终态，A2A 层会拒绝续传；`INPUT_REQUIRED` 会把 Modify 文本
+  当成待答问题的答案，同样不算可续传。基线失败时结果里记录 `baseline`（run id、taskId、state、原请求、
+  失败原因），不会退化成“随便挑一个 Task”。
+- **协议差异**：A2A-T 的 Modify 直接续传厂商 Task；纯 A2A 的 Modify 是标准 A2A 续传，续的是 OSS Agent 的
+  外层 Task（`message.taskId` / `contextId`），由 OSS 把原文转发给下游。纯 A2A 没有 `Task-T` 门禁，所有
+  Modify 行都会真实发送，因此更依赖基线 Task 保持非终态。另外，OSS 只对**自己的 NMS 下游**持久化
+  outer↔inner binding：纯 A2A Modify 需要 `--nms`（真实 NMS 或 `--nms-sim`），本地 RAN hop 没有可续传的
+  下游 Task。
+
+**本地 RAN Agent 会立即把任务置为终态**，随后服务端拒绝 Modify（`Task ... is in terminal state`）。要在本地
+验证 20 条 Modify 用例，请用支持长任务的 NMS 模拟器（`--nms --nms-sim` +
+`A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1`），或直接连真实 NMS。
 
 ## 10. 已知限制
 
