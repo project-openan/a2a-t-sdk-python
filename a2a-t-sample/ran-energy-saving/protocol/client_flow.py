@@ -93,7 +93,12 @@ from shared.trace import (
     trace_stage,
 )
 
-from protocol.decision_provider import AdkDecisionProvider, NegotiationDecisionProvider, ScriptedDecisionProvider
+from protocol.decision_provider import (
+    AdkDecisionProvider,
+    DecisionTimeoutError,
+    NegotiationDecisionProvider,
+    ScriptedDecisionProvider,
+)
 from protocol.grounding import ToolCall, UngroundedValue, find_ungrounded, grounding_reask_text, normalize
 from protocol.messages import (
     END_MESSAGE_TEXT,
@@ -182,6 +187,10 @@ _ERROR_NO_TEMPLATE_URI: Final[str] = "The negotiation propose carries no templat
 _ERROR_NO_SESSION: Final[str] = "The negotiation propose carries no valid negotiationContext."
 _ERROR_UNKNOWN_KIND: Final[str] = "The negotiation propose template is not a sample negotiation template."
 _ERROR_NO_PROPOSE: Final[str] = "The server sent a negotiation message that is not a Propose or Abort."
+_ERROR_DECISION_WAIT: Final[str] = (
+    "The decision provider stopped waiting without a decision; nothing was sent and the run "
+    "failed (wiring error)."
+)
 
 
 class ClientFlowError(RuntimeError):
@@ -1347,7 +1356,12 @@ async def run_client_flow(
             round=session.round,
             context_id=context_id,
         ):
-            decision = await provider.respond(propose, session)
+            try:
+                decision = await provider.respond(propose, session)
+            except DecisionTimeoutError as exc:
+                # The provider loop normally only notifies the page. Reaching here means the wait
+                # sink was never installed; refuse to send an abort the operator never chose.
+                raise ClientFlowError(_ERROR_DECISION_WAIT) from exc
             decision, ungrounded = await _ensure_grounded_decision(
                 provider,
                 decision,
@@ -1466,9 +1480,14 @@ async def run_client_flow(
             send_phase = PHASE_NEGOTIATION
             send_performative = NegotiationPerformative.PROPOSE.value
             send_title = f"Counter proposal sent · R{session.round}"
-        else:
+        elif decision.action in ("reject", "abort"):
+            # Only an explicit operator/agent decision may end the negotiation. Any other action
+            # is a wiring error: sending ABORT as the fallback would terminate the remote Task on
+            # behalf of a human who never chose it.
             performative = (
-                NegotiationPerformative.REJECT if decision.action == "reject" else NegotiationPerformative.ABORT
+                NegotiationPerformative.REJECT
+                if decision.action == "reject"
+                else NegotiationPerformative.ABORT
             )
             request, call_context = await _build_terminal_request(
                 prompt_client=prompt_client,
@@ -1485,6 +1504,8 @@ async def run_client_flow(
             send_phase = PHASE_RESOLUTION
             send_performative = performative.value
             send_title = f"{performative.value.capitalize()} sent"
+        else:
+            raise ClientFlowError(f"Unsupported decision action: {decision.action}")
 
         emit_message_sent(
             request,

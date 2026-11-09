@@ -28,7 +28,12 @@ from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.trace import PHASE_NEGOTIATION, infer_event_phase, is_report_artifact
 
 from protocol.client_flow import ClientFlowResult
-from protocol.messages import parse_negotiation_context
+from protocol.messages import (
+    is_negotiation_message as carries_negotiation_metadata,
+)
+from protocol.messages import (
+    parse_negotiation_context,
+)
 from protocol.negotiation_policy import negotiation_kind_for_template_uri
 
 #: Direction of an inbound event (server to client).
@@ -262,6 +267,10 @@ class NegotiationTranscript:
             "templateUri": template_uri if isinstance(template_uri, str) else None,
             "negotiationType": _negotiation_type(template_uri),
             "performative": performative,
+            # Deterministic carrier fact (same predicate as ``client_flow._find_negotiation_message``):
+            # a status update that carries Negotiation-T metadata is a proposal hand-back, not an
+            # execution approval gate. The UI must not re-derive this from prose or optional keys.
+            "negotiation": carries_negotiation_metadata(metadata_map),
             "summary": _event_summary(event, performative, negotiation_text),
             # The full negotiation content (not the truncated summary), so an audience-facing view
             # can show what the NMS actually asked for without re-reading the raw message.

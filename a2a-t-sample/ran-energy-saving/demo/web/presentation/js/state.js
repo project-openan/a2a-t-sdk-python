@@ -23,6 +23,41 @@ export const APPROVAL = {
   REJECTED: "rejected",
 };
 
+/** Negotiation performatives a status update may carry on the wire. */
+const NEGOTIATION_ACTIONS = new Set(["PROPOSE", "ACCEPT", "REJECT", "COUNTER", "ABORT"]);
+
+/**
+ * Return the negotiation turn carried by an INPUT_REQUIRED status, or ``null``.
+ *
+ * The backend marks the entry with ``negotiation`` using the same predicate as the client flow,
+ * so the page does not re-derive protocol facts from prose. The fallbacks keep older replays
+ * readable. An INPUT_REQUIRED status without that mark is an execution approval gate, not a
+ * negotiation hand-back.
+ */
+export function negotiationTurn(entry) {
+  if (!isObject(entry) || entry.kind !== "status") return null;
+  const state = typeof entry.state === "string" ? entry.state : "";
+  const summary = typeof entry.summary === "string" ? entry.summary : "";
+  if (!(state === "TASK_STATE_INPUT_REQUIRED" || summary.includes("INPUT_REQUIRED"))) return null;
+  const marked =
+    entry.negotiation === true ||
+    entry.round != null ||
+    entry.maxRounds != null ||
+    entry.templateUri != null ||
+    entry.negotiationType != null;
+  if (!marked) return null;
+  const raw = typeof entry.performative === "string" ? entry.performative.toUpperCase() : "";
+  const performative = NEGOTIATION_ACTIONS.has(raw) ? raw : "PROPOSE";
+  return {
+    side: "nms",
+    action: performative.toLowerCase(),
+    performative,
+    round: intOrNull(entry.round),
+    maxRounds: intOrNull(entry.maxRounds),
+    negotiationType: typeof entry.negotiationType === "string" ? entry.negotiationType : null,
+  };
+}
+
 /** One page state, before any run. */
 export function createState() {
   return {
@@ -88,6 +123,9 @@ export function createState() {
     decision: null,
     approval: null,
     approvalState: null,
+    //: Whether this run really has a server approval gate. ``--nms`` runs never do: the vendor
+    //: owns execution approval and has no ``/approvals`` route.
+    approvalGate: false,
     nmsTool: null,
     lastStatusText: "",
     nmsStage: "strategy",
@@ -158,6 +196,9 @@ export function applyFrame(state, frame) {
       else if (frame.protocol === "pure") state.protocol = "pure";
       else if (frame.protocol === "a2a-t") state.protocol = "a2a-t";
       state.runMode = frame.runMode === "modify" ? "modify" : "create";
+      // The server/UI that owns the run states whether an execution approval gate exists; a
+      // missing key is not an approval.
+      state.approvalGate = frame.approvalGate === true || state.approvalGate === true;
       if (typeof frame.targetTaskId === "string" && frame.targetTaskId) {
         state.targetTaskId = frame.targetTaskId;
       }
@@ -405,7 +446,8 @@ function applyEvent(state, entry) {
     title: traceTitle(entry, summary, state.protocol),
     titleKey:
       entry.kind === "status" &&
-      (entry.state === "TASK_STATE_INPUT_REQUIRED" || summary.includes("INPUT_REQUIRED"))
+      (entry.state === "TASK_STATE_INPUT_REQUIRED" || summary.includes("INPUT_REQUIRED")) &&
+      negotiationTurn(entry) === null
         ? "approval"
         : null,
     sub: traceSub(entry) || taskCreationSub(entry, state),
@@ -482,7 +524,23 @@ function applyEvent(state, entry) {
       ) {
         state.taskCreated = true;
       }
-      if (inputRequired) {
+      const turn = negotiationTurn(entry);
+      if (turn !== null) {
+        // A negotiation hand-back is not an execution gate. Keep it in the negotiation timeline
+        // and never open the approval state (the playback must not hold on an MIE card).
+        state.taskCreated = true;
+        state.negotiation.push({
+          side: "nms",
+          action: turn.action,
+          round: turn.round,
+          maxRounds: turn.maxRounds,
+          summary,
+          content,
+          negotiationType: turn.negotiationType,
+          performative: turn.performative,
+          source: "status",
+        });
+      } else if (inputRequired && (state.approvalGate === true || approvalFromText(label) !== null)) {
         if (state.approval === null) {
           // The status text already names the plan; the approval span (which also carries the
           // timeout) may arrive a moment later. Show the real plan immediately either way.
@@ -622,6 +680,9 @@ function applyTrace(state, span) {
   if (kind === "approval") {
     const approved = detail && detail.approved === true;
     if (span.title === "Approval requested" || (detail && detail.approvalState === "requested")) {
+      // A real server approval span is authoritative: it proves this run has a gate even when the
+      // Web UI process was started without ``--approval-gate`` (split deployment).
+      if (state.protocol !== "pure") state.approvalGate = true;
       state.approval = {
         cellId: detail?.cellId ?? null,
         window: detail?.window ?? null,
@@ -726,6 +787,22 @@ export function activityView(state, copy, now = Date.now()) {
   } else if (activity.kind === "peer") {
     label = labels.waitingPeer || label;
     if (elapsed >= 30) hint = labels.peerSlow || "";
+  } else if (activity.kind === "decision_wait") {
+    // The local window is an observation budget: the run keeps waiting and nothing is sent.
+    label = labels.waitingOperator || label;
+    const expired = Number(detail.expiredWindows) || 0;
+    const windowSeconds = Number(detail.timeoutSeconds);
+    if (expired >= 1) {
+      hint = labels.stillWaiting || "";
+      const expiredText =
+        windowSeconds > 0
+          ? format(labels.expiredWindows || "{count} × {seconds}s", {
+              count: expired,
+              seconds: windowSeconds,
+            })
+          : String(expired);
+      meta = `${expiredText} · ${elapsedText}`;
+    }
   } else if (activity.kind === "degraded") {
     label = labels.degradedPush || label;
   } else {
@@ -861,7 +938,7 @@ export function pendingHuman(state) {
   if (state.status !== STATUS.RUNNING) return null;
   if (state.mieWaiting && state.mieResolved === null) return "approval";
   if (state.intentReview !== null && !state.intentReview.resolved) return "intent";
-  if (state.approvalState === APPROVAL.WAITING) return "approval";
+  if (state.approvalGate === true && state.approvalState === APPROVAL.WAITING) return "approval";
   if (state.decision !== null && !state.decision.resolved) return "decision";
   return null;
 }
@@ -929,6 +1006,7 @@ function traceSpanTag(span, kind, protocol) {
 
 function traceTag(entry, protocol) {
   if (entry.entryType === "decision") return "human";
+  if (protocol !== "pure" && entry.kind === "status" && negotiationTurn(entry) !== null) return "neg-t";
   if (entry.kind === "approval" || entry.actor === "human") return "human";
   const extension = extensionTag(entry);
   if (extension !== null) return extension;
@@ -958,7 +1036,11 @@ function traceTitle(entry, summary, protocol) {
   if (entry.kind === "accept") return "ACCEPT · OSS";
   if (entry.kind === "reject") return "REJECT · OSS";
   if (entry.kind === "counter") return "COUNTER · OSS";
-  if (entry.kind === "status") return statusTitle(entry, summary, protocol);
+  if (entry.kind === "status") {
+    const turn = negotiationTurn(entry);
+    if (turn !== null) return `${turn.performative} · NMS`;
+    return statusTitle(entry, summary, protocol);
+  }
   if (entry.kind === "artifact") return artifactTitle(entry);
   return summary || entry.kind || "event";
 }
@@ -1012,6 +1094,8 @@ function artifactTitle(entry) {
 /** Short right-hand chip: the A2A task state, not the generic word "status". */
 function traceChip(entry) {
   if (entry.kind === "status") {
+    const turn = negotiationTurn(entry);
+    if (turn !== null) return turn.performative;
     if (entry.state) return String(entry.state).replace("TASK_STATE_", "");
     return "status";
   }
@@ -1045,7 +1129,7 @@ function taskCreationSub(entry, state) {
 }
 
 function chipKind(entry) {
-  if (entry.kind === "status") return "status";
+  if (entry.kind === "status") return negotiationTurn(entry) !== null ? "neg" : "status";
   if (entry.kind === "artifact") return "art";
   if (entry.entryType === "decision") return "neg";
   if (entry.kind === "reject" || entry.kind === "abort") return "no";
@@ -1091,6 +1175,7 @@ export function traceStageKey(entry) {
     return "strategy";
   }
   if (kind === "approval") return "mml";
+  if (kind === "status" && negotiationTurn(entry) !== null) return "negotiation";
   if (kind === "decision_requested") return "negotiation";
   if (entry.phase === "negotiation" || entry.phase === "resolution") return "negotiation";
   if (kind === "tool") {
@@ -1211,6 +1296,10 @@ export function traceDedupeKey(entry) {
   const phase = typeof entry.phase === "string" ? entry.phase : "";
   const prefix = `${phase}:`;
   if (kind === "status") {
+    const turn = negotiationTurn(entry);
+    if (turn !== null) {
+      return `${prefix}negotiation:${turn.round ?? "?"}:${turn.performative}`;
+    }
     if (summary.includes("Data collection completed")) return `${prefix}status:collection-completed`;
     if (entry.state === "TASK_STATE_INPUT_REQUIRED") return `${prefix}approval:requested`;
     if (summary.includes("MIE Agent's approval")) return `${prefix}approval:requested`;

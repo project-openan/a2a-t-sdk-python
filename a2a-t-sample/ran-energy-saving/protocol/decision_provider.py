@@ -67,6 +67,32 @@ CLIENT_USER_ID = "ran-energy-client"
 #: Default budget of one manual decision (design §12: five minutes).
 DEFAULT_MANUAL_TIMEOUT_SECONDS = 300.0
 
+
+class DecisionTimeoutError(Exception):
+    """The local wait window expired without an operator decision.
+
+    This is not a protocol decision. A provider that keeps waiting uses this exception only to
+    notify the UI that another window expired; the flow must never turn it into a message. If it
+    escapes to the flow, the wait sink was never installed, which is a wiring error: fail the run
+    loudly instead of sending an abort the operator never chose.
+    """
+
+    def __init__(
+        self,
+        *,
+        round_number: int,
+        window_seconds: float,
+        expired_windows: int,
+    ) -> None:
+        """Describe one expired local window."""
+        self.round_number = round_number
+        self.window_seconds = window_seconds
+        self.expired_windows = expired_windows
+        super().__init__(
+            f"no operator decision within {window_seconds:g}s (round {round_number}); "
+            f"window {expired_windows} expired"
+        )
+
 #: Decision returned by the offline ADK provider when the model output cannot be parsed.
 OFFLINE_FALLBACK_DECISION = NegotiationDecision(
     action="accept",
@@ -744,10 +770,19 @@ class ConfirmingDecisionProvider:
         inner: NegotiationDecisionProvider,
         *,
         timeout_seconds: float = DEFAULT_MANUAL_TIMEOUT_SECONDS,
+        keep_waiting: bool = True,
     ) -> None:
-        """Create one confirming provider around the agent provider."""
+        """Create one confirming provider around the agent provider.
+
+        ``keep_waiting`` is the A2A-T default: the local window is only an observation budget and
+        never ends the negotiation. The pure hop keeps its legacy single-window behaviour by
+        constructing ``ManualDecisionProvider`` directly.
+        """
         self._inner = inner
-        self._manual = ManualDecisionProvider(timeout_seconds=timeout_seconds)
+        self._manual = ManualDecisionProvider(
+            timeout_seconds=timeout_seconds,
+            keep_waiting=keep_waiting,
+        )
         self._sink: Callable[[NegotiationDecision | None, NegotiationProposeView, Any], None] | None = None
         self._last_recommendation_error: str | None = None
 
@@ -787,6 +822,10 @@ class ConfirmingDecisionProvider:
         :attr:`last_recommendation_error` carries the reason in that case.
         """
         self._sink = sink
+
+    def set_wait_sink(self, sink: Callable[[DecisionTimeoutError], None] | None) -> None:
+        """Install the callback invoked when a local wait window expires (advisory only)."""
+        self._manual.set_wait_sink(sink)
 
     def set_conversation_context(self, conversation_context: str | None) -> None:
         """Forward the conversation context to the inner decision provider."""
@@ -834,15 +873,23 @@ class ConfirmingDecisionProvider:
 class ManualDecisionProvider:
     """Decision provider waiting for a decision submitted by a human (Web UI).
 
-    ``submit`` may be called before or while ``respond`` waits. On timeout the provider answers with
-    an ``abort`` decision whose rationale reports the timeout, per the design's error handling.
+    ``submit`` may be called before or while ``respond`` waits. ``keep_waiting`` separates the two
+    policies: A2A-T keeps waiting after a window expires and only notifies the page, while the pure
+    hop keeps its legacy single-window abort (which it maps to an empty answer and never sends).
     """
 
-    def __init__(self, *, timeout_seconds: float = DEFAULT_MANUAL_TIMEOUT_SECONDS) -> None:
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float = DEFAULT_MANUAL_TIMEOUT_SECONDS,
+        keep_waiting: bool = False,
+    ) -> None:
         """Create one manual provider with the given decision budget."""
         self._timeout_seconds = timeout_seconds
+        self._keep_waiting = keep_waiting
         self._queue: asyncio.Queue[NegotiationDecision] = asyncio.Queue()
         self._waiting = False
+        self._on_window_expired: Callable[[DecisionTimeoutError], None] | None = None
 
     @property
     def timeout_seconds(self) -> float:
@@ -850,9 +897,22 @@ class ManualDecisionProvider:
         return self._timeout_seconds
 
     @property
+    def keep_waiting(self) -> bool:
+        """Whether an expired window only notifies the page instead of producing a decision."""
+        return self._keep_waiting
+
+    @property
     def pending(self) -> bool:
         """Whether a decision is submitted and not consumed yet, or a decision is expected."""
         return self._waiting or not self._queue.empty()
+
+    def set_wait_sink(self, sink: Callable[[DecisionTimeoutError], None] | None) -> None:
+        """Install the callback invoked when a local wait window expires.
+
+        The callback is advisory: a failing observer must not change the wait, so callers catch
+        everything it raises.
+        """
+        self._on_window_expired = sink
 
     def submit(self, decision: NegotiationDecision) -> None:
         """Hand one decision to the waiting flow."""
@@ -863,7 +923,9 @@ class ManualDecisionProvider:
         propose: NegotiationProposeView,
         session: NegotiationContext,
     ) -> NegotiationDecision:
-        """Wait for the next submitted decision, or abort after the configured timeout."""
+        """Wait for the next submitted decision, following the configured timeout policy."""
+        if self._keep_waiting:
+            return await self.wait_for_operator(propose, session)
         del propose
         self._waiting = True
         try:
@@ -876,5 +938,42 @@ class ManualDecisionProvider:
                     f"{self._timeout_seconds:g}s; the negotiation is aborted."
                 ),
             )
+        finally:
+            self._waiting = False
+
+    async def wait_for_operator(
+        self,
+        propose: NegotiationProposeView,
+        session: NegotiationContext,
+    ) -> NegotiationDecision:
+        """Wait for a decision, notifying the page after each expired window.
+
+        The wait never ends the run and never produces a protocol decision. With no sink the first
+        expired window raises :class:`DecisionTimeoutError`, because silently waiting forever would hide
+        a wiring error; the flow turns that into a failed run with nothing sent.
+        """
+        del propose
+        expired_windows = 0
+        self._waiting = True
+        try:
+            while True:
+                try:
+                    return await asyncio.wait_for(self._queue.get(), timeout=self._timeout_seconds)
+                except TimeoutError:
+                    expired_windows += 1
+                    timeout = DecisionTimeoutError(
+                        round_number=session.round,
+                        window_seconds=self._timeout_seconds,
+                        expired_windows=expired_windows,
+                    )
+                    if self._on_window_expired is None:
+                        raise timeout from None
+                    try:
+                        self._on_window_expired(timeout)
+                    except Exception:  # noqa: BLE001 - observation must not change the wait
+                        _LOGGER.warning(
+                            "decision wait notification failed",
+                            exc_info=True,
+                        )
         finally:
             self._waiting = False

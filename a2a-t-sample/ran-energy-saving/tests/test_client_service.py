@@ -23,7 +23,7 @@ from protocol.client_store import (
     read_client_run_detail,
     read_conversation_detail,
 )
-from protocol.decision_provider import CLIENT_APP_NAME, CLIENT_USER_ID
+from protocol.decision_provider import CLIENT_APP_NAME, CLIENT_USER_ID, DecisionTimeoutError
 from shared.config import SampleConfig
 from shared.metrics import render_prometheus, reset_metrics
 from shared.models import NegotiationDecision, NegotiationProposeView
@@ -45,17 +45,30 @@ class FakeRuntime:
         *,
         wait: asyncio.Event | None = None,
         error: Exception | None = None,
+        hold_decision: asyncio.Event | None = None,
+        expire_windows: int = 0,
+        skip_decision: bool = False,
     ) -> None:
         self.manual_provider = None
         self.discovered = SimpleNamespace(url="http://server", agent_card=SimpleNamespace(name="ran"))
         self.wait = wait
         self.error = error
+        self.hold_decision = hold_decision
+        self.expire_windows = expire_windows
+        self.skip_decision = skip_decision
+        self.wait_sink: Callable[[DecisionTimeoutError], None] | None = None
         self.conversation_context: str | None = None
         self.user_request: str | None = None
         self.closed = False
         self.entered = asyncio.Event()
+        self.decision_entered = asyncio.Event()
         self.trace_id = ""
         self.downstream_trace_id = ""
+
+    def set_decision_wait_sink(self, sink: Callable[[DecisionTimeoutError], None] | None) -> bool:
+        """Accept the manager's expired-window observer."""
+        self.wait_sink = sink
+        return True
 
     async def run(
         self,
@@ -117,8 +130,20 @@ class FakeRuntime:
         )
         if on_decision_requested is not None:
             on_decision_requested(propose, session)
+        self.decision_entered.set()
+        for window in range(self.expire_windows):
+            if self.wait_sink is not None:
+                self.wait_sink(
+                    DecisionTimeoutError(
+                        round_number=session.round,
+                        window_seconds=0.01,
+                        expired_windows=window + 1,
+                    )
+                )
+        if self.hold_decision is not None:
+            await self.hold_decision.wait()
         decision = NegotiationDecision(action="accept", rationale="accepted")
-        if on_decision_made is not None:
+        if not self.skip_decision and on_decision_made is not None:
             on_decision_made(decision, propose, session)
         return ClientFlowResult(
             final_state="task_completed",
@@ -139,6 +164,9 @@ def _manager(
     wait: asyncio.Event | None = None,
     error: Exception | None = None,
     memory_turns: int = 6,
+    hold_decision: asyncio.Event | None = None,
+    expire_windows: int = 0,
+    skip_decision: bool = False,
 ) -> tuple[RunManager, SqliteClientStore, list[FakeRuntime]]:
     store = SqliteClientStore(tmp_path / "client.sqlite3")
     runtimes: list[FakeRuntime] = []
@@ -154,7 +182,13 @@ def _manager(
         run_id: str = "",
     ) -> FakeRuntime:
         del resolved_config, scenario, mode, transport, discovery, protocol, run_id
-        runtime = FakeRuntime(wait=wait, error=error)
+        runtime = FakeRuntime(
+            wait=wait,
+            error=error,
+            hold_decision=hold_decision,
+            expire_windows=expire_windows,
+            skip_decision=skip_decision,
+        )
         runtimes.append(runtime)
         return runtime
 
@@ -210,6 +244,53 @@ async def test_run_persists_lifecycle_negotiation_and_task_snapshot(
     assert snapshot is not None
     assert snapshot.task_id == "task-1"
     assert snapshot.state == "TASK_STATE_WORKING"
+
+
+async def test_a_waiting_decision_keeps_the_run_running(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    hold = asyncio.Event()
+    manager, _store, runtimes = _manager(
+        tmp_path,
+        offline_config,
+        hold_decision=hold,
+        expire_windows=1,
+    )
+    run = await manager.start("information", "manual", "sse", user_request="please save energy")
+    try:
+        for _ in range(100):
+            if runtimes:
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.wait_for(runtimes[0].decision_entered.wait(), timeout=1)
+        await asyncio.sleep(0)
+
+        assert run.status == "running"
+        assert run.pending_decision is True
+        assert run.activity is not None
+        assert run.activity["kind"] == "decision_wait"
+        assert run.activity["detail"]["expiredWindows"] == 1
+        assert any(event.get("kind") == "decision_wait_expired" for event in run.transcript.events)
+    finally:
+        hold.set()
+    await _finish(manager, run.run_id)
+
+    assert run.status == "finished"
+    assert run.pending_decision is False
+    assert run.activity is None
+
+
+async def test_a_flow_that_returns_while_waiting_fails_instead_of_finishing(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    manager, _store, _runtimes = _manager(tmp_path, offline_config, skip_decision=True)
+    run = await manager.start("information", "manual", "sse", user_request="please save energy")
+    await _finish(manager, run.run_id)
+
+    assert run.status == "failed"
+    assert "still pending" in (run.error or "")
 
 
 async def test_run_applies_the_decision_session_retention_window(

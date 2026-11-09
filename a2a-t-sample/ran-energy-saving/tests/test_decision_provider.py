@@ -28,6 +28,7 @@ from protocol.decision_provider import (
     AdkDecisionProvider,
     ConfirmingDecisionProvider,
     DecisionProviderError,
+    DecisionTimeoutError,
     ManualDecisionProvider,
     NegotiationDecisionProvider,
     ScriptedDecisionProvider,
@@ -237,16 +238,36 @@ async def test_confirming_provider_degrades_when_the_recommendation_fails() -> N
     assert decision is submitted
 
 
-async def test_confirming_provider_times_out_into_an_abort() -> None:
+async def test_confirming_provider_keeps_waiting_after_a_window() -> None:
     provider = ConfirmingDecisionProvider(
         ScriptedDecisionProvider([NegotiationDecision(action="accept", rationale="ok")]),
         timeout_seconds=0.01,
     )
+    expired: list[DecisionTimeoutError] = []
+    provider.set_wait_sink(expired.append)
 
-    decision = await provider.respond(_view(), _session(round_number=2))
+    task = asyncio.create_task(provider.respond(_view(), _session(round_number=2)))
+    await asyncio.sleep(0.03)
 
-    assert decision.action == "abort"
-    assert "timed out" in decision.rationale
+    assert task.done() is False
+    assert expired
+    assert expired[0].round_number == 2
+    assert provider.pending is True
+
+    provider.submit(NegotiationDecision(action="reject", rationale="operator"))
+    decision = await asyncio.wait_for(task, timeout=1)
+
+    assert decision.action == "reject"
+
+
+async def test_a_manual_provider_without_a_wait_sink_fails_after_one_window() -> None:
+    provider = ManualDecisionProvider(timeout_seconds=0.01, keep_waiting=True)
+
+    with pytest.raises(DecisionTimeoutError) as raised:
+        await provider.respond(_view(), _session(round_number=2))
+
+    assert raised.value.expired_windows == 1
+    assert provider.pending is False
 
 
 async def test_adk_provider_returns_the_fake_model_decision() -> None:

@@ -241,7 +241,10 @@ def _decision_provider(
         ClientRuntimeError: when the mode is not supported.
     """
     if mode == MODE_MANUAL:
-        return ManualDecisionProvider()
+        # A2A-T keeps waiting after a local window expires: the window is an observation budget,
+        # not a reason to terminate the remote Task. The pure hop constructs its own provider and
+        # keeps the legacy single-window policy.
+        return ManualDecisionProvider(keep_waiting=True)
     if mode == MODE_SCRIPTED:
         decisions = scripted_decisions if scripted_decisions is not None else run_spec.scripted_decisions
         return ScriptedDecisionProvider(decisions)
@@ -349,6 +352,20 @@ class ClientRuntime:
         setter = getattr(target, "set_recommendation_sink", None)
         if callable(setter):
             setter(sink)
+
+    def set_decision_wait_sink(self, sink: Callable[[Any], None] | None) -> bool:
+        """Install the expired-window observer when the provider supports one.
+
+        Returns:
+            ``True`` when the provider accepted the sink. A provider without one must not silently
+            keep waiting: its first expired window raises and the run fails without sending.
+        """
+        target = self.provider
+        setter = getattr(target, "set_wait_sink", None)
+        if callable(setter):
+            setter(sink)
+            return True
+        return False
 
     def _scenario_raw_request(self) -> str:
         """Return the request of the scenario; it is the text the client sends."""

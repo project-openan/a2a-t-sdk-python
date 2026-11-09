@@ -17,6 +17,7 @@ import {
   keepsAttemptChain,
   modifyStateLabel,
   negotiationExpected,
+  negotiationTurn,
   pendingHuman,
   pushTrace,
   resolutionOf,
@@ -714,7 +715,13 @@ assert.equal(negotiableCard.validation.verdict, "negotiable");
 // --- Approval gate ------------------------------------------------------
 
 const approval = createState();
-applyFrame(approval, { type: "run_started", runId: "r7", scenario: "information", mode: "confirm" });
+applyFrame(approval, {
+  type: "run_started",
+  runId: "r7",
+  scenario: "information",
+  mode: "confirm",
+  approvalGate: true,
+});
 applyFrame(approval, status(1, "TASK_STATE_SUBMITTED"));
 applyFrame(approval, status(2, "TASK_STATE_WORKING"));
 applyFrame(approval, status(3, "TASK_STATE_INPUT_REQUIRED"));
@@ -750,7 +757,13 @@ assert.equal(approvalCard(approval, copy).text.includes("cell-001"), true);
 
 // The status text names the plan even when the approval span has not arrived yet.
 const namedApproval = createState();
-applyFrame(namedApproval, { type: "run_started", runId: "r70", scenario: "night", mode: "confirm" });
+applyFrame(namedApproval, {
+  type: "run_started",
+  runId: "r70",
+  scenario: "night",
+  mode: "confirm",
+  approvalGate: true,
+});
 applyFrame(
   namedApproval,
   event({
@@ -788,12 +801,89 @@ assert.equal(approvalCard(approval, copy), null);
 
 // A gate still marked waiting when the run ends must not keep the card on screen.
 const timedOut = createState();
-applyFrame(timedOut, { type: "run_started", runId: "r71", scenario: "night", mode: "confirm" });
+applyFrame(timedOut, {
+  type: "run_started",
+  runId: "r71",
+  scenario: "night",
+  mode: "confirm",
+  approvalGate: true,
+});
 applyFrame(timedOut, status(1, "TASK_STATE_INPUT_REQUIRED"));
 assert.ok(approvalCard(timedOut, copy));
 applyFrame(timedOut, finished("task_rejected", null, "approval timeout"));
 assert.equal(timedOut.approvalState, "rejected");
 assert.equal(approvalCard(timedOut, copy), null);
+
+// A bare INPUT_REQUIRED without an approval gate is evidence, not an approval: a --nms run has no
+// local /approvals route, so the page must not hold on a card nobody can submit.
+const noGate = createState();
+applyFrame(noGate, { type: "run_started", runId: "r72", scenario: "night", mode: "confirm" });
+applyFrame(noGate, status(1, "TASK_STATE_INPUT_REQUIRED", { state: "TASK_STATE_INPUT_REQUIRED" }));
+assert.equal(noGate.approvalState, null);
+assert.equal(pendingHuman(noGate), null);
+assert.equal(approvalCard(noGate, copy), null);
+assert.equal(
+  sceneFor(
+    { type: "event", event: { kind: "status", state: "TASK_STATE_INPUT_REQUIRED" } },
+    noGate,
+  ).hold,
+  false,
+);
+
+// The vendor hands a Negotiation-T proposal back inside INPUT_REQUIRED. The backend marks the
+// entry; the page must treat it as a negotiation turn, never as the MIE review.
+const negotiationStatus = createState();
+applyFrame(negotiationStatus, {
+  type: "run_started",
+  runId: "r73",
+  scenario: "feasibility",
+  mode: "confirm",
+});
+applyFrame(
+  negotiationStatus,
+  status(1, "The requested rate conflicts with the outage window.", {
+    state: "TASK_STATE_INPUT_REQUIRED",
+    negotiation: true,
+    round: 1,
+    maxRounds: 5,
+    negotiationType: "feasibility",
+  }),
+);
+assert.equal(negotiationStatus.approvalState, null);
+assert.equal(negotiationStatus.approval, null);
+assert.equal(negotiationStatus.negotiation.at(-1).action, "propose");
+assert.equal(negotiationStatus.negotiation.at(-1).round, 1);
+assert.equal(negotiationStatus.negotiation.at(-1).maxRounds, 5);
+assert.equal(negotiationTurn(negotiationStatus.trace.at(-1).entry).performative, "PROPOSE");
+assert.equal(pendingHuman(negotiationStatus), null);
+assert.equal(approvalCard(negotiationStatus, copy), null);
+assert.equal(sceneFor({ type: "event", event: negotiationStatus.trace.at(-1).entry }, negotiationStatus).key, "propose");
+assert.equal(sceneFor({ type: "event", event: negotiationStatus.trace.at(-1).entry }, negotiationStatus).hold, false);
+
+// A vendor status that carries the extension but no round/template is still a negotiation turn.
+const bareNegotiation = createState();
+applyFrame(bareNegotiation, { type: "run_started", runId: "r74", scenario: "feasibility" });
+applyFrame(
+  bareNegotiation,
+  status(1, "Please adjust the request.", {
+    state: "TASK_STATE_INPUT_REQUIRED",
+    negotiation: true,
+  }),
+);
+assert.equal(bareNegotiation.approvalState, null);
+assert.equal(bareNegotiation.negotiation.at(-1).action, "propose");
+assert.equal(negotiationTurn(bareNegotiation.trace.at(-1).entry).performative, "PROPOSE");
+
+// Audit metadata on a completed Task is not a proposal hand-back.
+assert.equal(
+  negotiationTurn({
+    kind: "status",
+    state: "TASK_STATE_COMPLETED",
+    negotiation: true,
+    round: 1,
+  }),
+  null,
+);
 
 const notApplied = createState();
 applyFrame(notApplied, { type: "run_started", runId: "r8", scenario: "information", mode: "confirm" });
@@ -814,7 +904,13 @@ assert.equal(stageOf(notApplied), "notApplied");
 // --- Scene mapping ------------------------------------------------------
 
 const sceneState = createState();
-applyFrame(sceneState, { type: "run_started", runId: "s1", scenario: "target", mode: "confirm" });
+applyFrame(sceneState, {
+  type: "run_started",
+  runId: "s1",
+  scenario: "target",
+  mode: "confirm",
+  approvalGate: true,
+});
 assert.equal(sceneFor({ type: "decision_requested", round: 1 }, sceneState).hold, true);
 assert.equal(
   sceneFor({ type: "event", event: { kind: "status", summary: "TASK_STATE_INPUT_REQUIRED" } }, sceneState)
@@ -1624,6 +1720,7 @@ applyFrame(twoPhase, {
   runId: "run-two-phase",
   scenario: "outage",
   protocol: "a2a-t",
+  approvalGate: true,
 });
 twoPhase.intentText = "Create a baseline, then modify the running task for the outage.";
 twoPhase.taskId = "task-1";

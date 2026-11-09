@@ -223,6 +223,10 @@ export function approvalCard(state, copy) {
       ],
     };
   }
+  // No local approval gate means no card: a --nms run has no /approvals route, and a bare
+  // INPUT_REQUIRED status is not an approval. The server approval span sets the gate when it is
+  // real, so a split deployment still shows the card.
+  if (state.approvalGate !== true) return null;
   // A gate that is still marked waiting when the run has already ended must not keep the page
   // stuck on the card: the ending card has to take over.
   if (state.approvalState !== "waiting" || state.finished || state.status !== "running") return null;

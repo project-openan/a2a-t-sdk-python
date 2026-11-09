@@ -79,7 +79,7 @@ from protocol.client_store import (
     now_iso,
 )
 from protocol.client_store.store import _pid_alive
-from protocol.decision_provider import sweep_stale_sessions
+from protocol.decision_provider import DecisionTimeoutError, sweep_stale_sessions
 from protocol.manual_answer import missing_item_labels
 from protocol.pure_client_flow import build_follow_up_request
 from protocol.run_metrics import append_metrics_jsonl, build_run_metrics
@@ -1064,6 +1064,90 @@ class RunManager:
         def event_sink(event: dict[str, object]) -> None:
             run.record_event(event)
 
+        #: Round whose operator wait is currently surfaced as an activity. The wait itself lives in
+        #: the provider; this only mirrors it to late subscribers so a reload still shows why the
+        #: run is idle.
+        decision_wait_round: int | None = None
+
+        def _decision_wait_detail(
+            round_number: int,
+            *,
+            status: str,
+            timeout_seconds: float | None,
+            expired_windows: int,
+        ) -> dict[str, object]:
+            return {
+                "activityId": f"decision-wait:{round_number}",
+                "activityKind": "decision_wait",
+                "labelKey": "waitingOperator",
+                "stage": "waiting_operator",
+                "status": status,
+                "round": round_number,
+                "timeoutSeconds": timeout_seconds,
+                "expiredWindows": expired_windows,
+            }
+
+        def _show_decision_wait(round_number: int, timeout_seconds: float | None) -> None:
+            nonlocal decision_wait_round
+            decision_wait_round = round_number
+            try:
+                run.record_activity(
+                    _decision_wait_detail(
+                        round_number,
+                        status="running",
+                        timeout_seconds=timeout_seconds,
+                        expired_windows=0,
+                    )
+                )
+            except Exception:  # noqa: BLE001 - observation must not change the protocol result
+                _LOGGER.warning("decision wait activity failed for run %s", run.run_id, exc_info=True)
+
+        def _clear_decision_wait() -> None:
+            nonlocal decision_wait_round
+            round_number = decision_wait_round
+            if round_number is None:
+                return
+            decision_wait_round = None
+            try:
+                run.record_activity(
+                    _decision_wait_detail(
+                        round_number,
+                        status="done",
+                        timeout_seconds=None,
+                        expired_windows=0,
+                    )
+                )
+            except Exception:  # noqa: BLE001 - observation must not change the protocol result
+                _LOGGER.warning("decision wait cleanup failed for run %s", run.run_id, exc_info=True)
+
+        def on_decision_window_expired(expired: DecisionTimeoutError) -> None:
+            """Mirror one expired local window; never produce or send a decision."""
+            try:
+                if expired.expired_windows == 1:
+                    run.emit_trace(
+                        kind="decision_wait_expired",
+                        phase=PHASE_NEGOTIATION,
+                        title="Decision window expired; still waiting",
+                        actor="system",
+                        round_number=expired.round_number,
+                        detail={
+                            "expiredWindows": expired.expired_windows,
+                            "timeoutSeconds": expired.window_seconds,
+                            "decidedBy": "timeout",
+                            "sentToPeer": False,
+                        },
+                    )
+                run.record_activity(
+                    _decision_wait_detail(
+                        expired.round_number,
+                        status="running",
+                        timeout_seconds=expired.window_seconds,
+                        expired_windows=expired.expired_windows,
+                    )
+                )
+            except Exception:  # noqa: BLE001 - observation must not change the protocol result
+                _LOGGER.warning("decision wait expiry was not recorded for run %s", run.run_id, exc_info=True)
+
         def on_decision_requested(propose: NegotiationProposeView, session: NegotiationContext) -> None:
             # The proposals are recorded in both modes because the finished run pairs them with the
             # provider decisions; a manual decision panel only exists in manual mode.
@@ -1092,6 +1176,10 @@ class RunManager:
                     "requestedAt": now_iso(),
                 }
             )
+            _show_decision_wait(
+                session.round,
+                float(timeout_seconds) if isinstance(timeout_seconds, (int, float)) else None,
+            )
 
         def on_decision_made(
             decision: NegotiationDecision,
@@ -1099,6 +1187,9 @@ class RunManager:
             session: NegotiationContext,
         ) -> None:
             run.record_decision(decision, propose, session=session)
+            # The decision is consumed: the run is no longer waiting for a submission.
+            run.pending_decision = False
+            _clear_decision_wait()
             NEGOTIATION_ROUNDS_TOTAL.inc({"role": "client", "round": session.round})
 
         def on_decision_recommended(
@@ -1109,6 +1200,10 @@ class RunManager:
             """Publish the recommendation, or an unavailable notice, and let the engineer decide."""
             run.pending_decision = True
             timeout_seconds = getattr(run.manual_provider, "timeout_seconds", None)
+            _show_decision_wait(
+                session.round,
+                float(timeout_seconds) if isinstance(timeout_seconds, (int, float)) else None,
+            )
             # A pure run has no negotiation provider: its confirmation answer owns the human
             # moment and reports why a relayed recommendation is missing.
             provider = getattr(run.runtime, "provider", None) or getattr(run.runtime, "pure_answer", None)
@@ -1210,6 +1305,14 @@ class RunManager:
                 set_recommendation_sink = getattr(run.runtime, "set_recommendation_sink", None)
                 if callable(set_recommendation_sink):
                     set_recommendation_sink(on_decision_recommended)
+            if run.mode in (MODE_MANUAL, MODE_CONFIRM) and run.protocol == PROTOCOL_A2A_T:
+                set_wait_sink = getattr(run.runtime, "set_decision_wait_sink", None)
+                if callable(set_wait_sink) and not set_wait_sink(on_decision_window_expired):
+                    _LOGGER.warning(
+                        "decision provider of run %s cannot report wait windows; the first expired "
+                        "window will fail the run instead of sending an abort",
+                        run.run_id,
+                    )
             run.emit_trace(
                 kind="discovery",
                 phase=PHASE_DISPATCH,
@@ -1238,6 +1341,13 @@ class RunManager:
                 target_task_id=run.target_task_id,
                 target_context_id=run.target_context_id,
             )
+            if run.pending_decision and not run.cancel_requested:
+                # A provider that returns while the operator is still being waited for would let
+                # the run finish as if the negotiation had concluded. Refuse to hide that state.
+                raise RuntimeError(
+                    "The client flow returned while a decision was still pending; refusing to "
+                    "finish the run."
+                )
             run.result = result
             if result.final_state == FINAL_STATE_INPUT_INVALID:
                 run.error = _input_invalid_summary(run)
@@ -1267,6 +1377,7 @@ class RunManager:
             run.error = f"{type(exc).__name__}: {exc}"
             transcript.record_error(run.error)
         finally:
+            _clear_decision_wait()
             run.pending_decision = False
             run.pending_intent = False
             run.intent_future = None

@@ -33,6 +33,9 @@ const EN = {
     degradedPush: "The push callback was rejected; falling back to polling.",
     pollDegraded: "The last check failed; retrying.",
     detached: "The page is closed; tracking continues in the background.",
+    waitingOperator: "Waiting for the operator's decision",
+    stillWaiting: "The local window expired; still waiting and nothing is sent to the NMS.",
+    expiredWindows: "{count} × {seconds}s window expired",
     elapsed: "elapsed {elapsed}",
     pollEvery: "checking every {seconds}s",
     stages: {
@@ -902,6 +905,9 @@ const ZH = {
     degradedPush: "回调鉴权失败，已改用轮询。",
     pollDegraded: "上次轮询失败，正在重试。",
     detached: "页面已断开，后台继续跟踪。",
+    waitingOperator: "等待运行人员决策",
+    stillWaiting: "本地观察窗口已到期；仍在等待，不会向网管发送任何报文。",
+    expiredWindows: "已到期 {count} × {seconds} 秒窗口",
     elapsed: "已 {elapsed}",
     pollEvery: "每 {seconds} 秒检查一次",
     stages: {

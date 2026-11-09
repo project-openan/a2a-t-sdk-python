@@ -5,7 +5,7 @@
  * must wait for the engineer (approval 1, a negotiation decision or the MML review).
  */
 
-import { artifactTool } from "./state.js";
+import { artifactTool, negotiationTurn } from "./state.js";
 
 export const STEP_KEYS = [
   "request",
@@ -158,10 +158,17 @@ function eventScene(entry, state, frame) {
       if (label.includes("Progress: the energy-saving report is ready.")) {
         return scene("trace", 0, frame);
       }
+      if (negotiationTurn(entry) !== null) {
+        // The vendor hands a Negotiation-T proposal back inside an INPUT_REQUIRED status. It is a
+        // negotiation turn, not the MIE review: advance the negotiation beat without holding.
+        return scene("propose", 1800, frame);
+      }
       if (taskState === "TASK_STATE_INPUT_REQUIRED" || label.includes("INPUT_REQUIRED")) {
-        // The MIE review is a human gate by definition. The status only names the state; the
-        // plan details arrive in the approval trace span, which the page applies while held.
-        return scene("approval", 0, frame, true);
+        // The MIE review is a human gate, but only when this run really has one. A --nms run has
+        // no local approval route, so the status stays evidence instead of holding the page.
+        return state.approvalGate === true
+          ? scene("approval", 0, frame, true)
+          : scene("trace", 0, frame);
       }
       if (taskState === "TASK_STATE_SUBMITTED" || label.includes("SUBMITTED")) {
         return scene("strategy", 4200, frame);

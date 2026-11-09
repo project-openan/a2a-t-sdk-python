@@ -64,6 +64,7 @@ const REPEATED_SILENT = new Set([
   "understand",
   "intent-review",
   "send",
+  "propose",
   "strategy",
   "collect-start",
   "collect-progress",
@@ -830,6 +831,10 @@ function resetRunState() {
   player.reset();
   ui.view = createState();
   ui.shadow = createState();
+  // The UI process knows whether it owns an execution approval gate; the run's own frames may
+  // confirm it later. A missing key is not an approval.
+  ui.view.approvalGate = ui.meta?.approvalGate === true;
+  ui.shadow.approvalGate = ui.view.approvalGate;
   ui.frameLog = [];
   ui.seenFrames = new Set();
   ui.lastScene = null;
@@ -1368,6 +1373,15 @@ function subscribe(runId) {
       render();
       if (pendingHuman(ui.view) === null) player.release();
     }
+    if (frame.type === "decision_requested" && player.status().hold) {
+      // The negotiation decision is the real human gate. If an earlier (misclassified) approval
+      // scene is holding the player, apply the decision now instead of queueing it behind a card
+      // that has no server action.
+      applyFrame(ui.view, frame);
+      applyFrame(ui.shadow, frame);
+      render();
+      player.release();
+    }
     enqueueFrame(frame);
     if (frame.type === "finished") {
       closeStream();
@@ -1722,7 +1736,7 @@ function renderSteps() {
   const approvalEnabled =
     runProtocol === "pure"
       ? ui.meta?.mieEnabled === true
-      : ui.meta?.approvalGate !== false;
+      : ui.meta?.approvalGate === true;
   const finished = ui.view.finished;
   const plain = runProtocol === "plain";
   const plainNa = new Set(plain ? ["understand", "intent", "negotiate"] : []);

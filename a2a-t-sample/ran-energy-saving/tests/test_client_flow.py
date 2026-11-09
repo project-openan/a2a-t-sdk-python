@@ -9,6 +9,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from a2a.client.client import ClientCallContext
@@ -65,7 +66,7 @@ from protocol.client_flow import (
     normalize_webhook_payload,
     run_client_flow,
 )
-from protocol.decision_provider import ScriptedDecisionProvider
+from protocol.decision_provider import DecisionTimeoutError, ScriptedDecisionProvider
 from protocol.messages import (
     END_MESSAGE_TEXT,
     SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
@@ -659,6 +660,63 @@ async def test_information_scenario_accepts_and_completes_a_task() -> None:
     accept_metadata = MessageToDict(transport.requests[1].message.metadata)
     assert accept_metadata[TASK_T_EXTENSION_URI].startswith("Refilled Task-T prompt:")
     assert accept_metadata[TEMPLATE_URI_METADATA_KEY] == "Negotiation-T/information-negotiation/accept-reject/v1"
+
+
+class _UnsupportedActionProvider:
+    """Return an action the protocol has no message for."""
+
+    async def respond(self, propose: NegotiationProposeView, session: NegotiationContext) -> object:
+        del propose, session
+        return SimpleNamespace(
+            action="noop",
+            rationale="not a protocol decision",
+            filled_params=None,
+            counter_proposal=None,
+            counter_params=None,
+            confirmed_intent=None,
+            feasibility_summary=None,
+        )
+
+
+class _TimingOutProvider:
+    """Report an expired local window instead of a decision."""
+
+    async def respond(self, propose: NegotiationProposeView, session: NegotiationContext) -> object:
+        del propose
+        raise DecisionTimeoutError(
+            round_number=session.round,
+            window_seconds=1.0,
+            expired_windows=1,
+        )
+
+
+async def test_an_unsupported_decision_action_raises_instead_of_aborting() -> None:
+    transport = ScriptedTransport([[propose_event("information", 1)]])
+    with pytest.raises(ClientFlowError, match="Unsupported decision action: noop"):
+        await run_client_flow(
+            prompt_client=FakePromptClient(),
+            transport=transport,
+            user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+            provider=_UnsupportedActionProvider(),
+            language="en-US",
+            intent_fields=_INTENT_FIELDS,
+        )
+    # Only the Task-T went out; the unknown action must never fall back to ABORT.
+    assert len(transport.requests) == 1
+
+
+async def test_a_decision_timeout_from_the_provider_fails_without_sending() -> None:
+    transport = ScriptedTransport([[propose_event("information", 1)]])
+    with pytest.raises(ClientFlowError, match="stopped waiting without a decision"):
+        await run_client_flow(
+            prompt_client=FakePromptClient(),
+            transport=transport,
+            user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+            provider=_TimingOutProvider(),
+            language="en-US",
+            intent_fields=_INTENT_FIELDS,
+        )
+    assert len(transport.requests) == 1
 
 
 async def test_accept_carries_the_proposal_negotiation_id_not_the_context_id() -> None:
