@@ -372,12 +372,39 @@ def test_the_decision_span_starts_at_the_engineer_answer(tmp_path: Path) -> None
     assert run._decision_answered_at is None
 
 
+def test_the_decision_span_records_who_supplied_the_values(tmp_path: Path) -> None:
+    """The trace must distinguish an AI suggestion the operator confirmed from a typed answer."""
+    run = RunState(run_id="run-confirm", scenario="night", mode="confirm", transport="sse")
+    run.transcript = NegotiationTranscript(
+        scenario="night",
+        language="en-US",
+        model_mode="live",
+        mode="confirm",
+        transport="sse",
+        runs_dir=tmp_path,
+    )
+    run.pending_answer_source = "ai_recommendation"
+
+    entry = run.record_decision(
+        NegotiationDecision(
+            action="accept",
+            rationale="Accepts the NMS question.",
+            filled_params={"region": "Region A"},
+        ),
+        None,
+    )
+
+    assert entry["answerSource"] == "ai_recommendation"
+    assert entry["filledParams"] == {"region": "Region A"}
+    span = next(span for span in run.traces if span.get("kind") == "accept")
+    assert span["detail"]["answerSource"] == "ai_recommendation"
+    assert run.pending_answer_source is None
+
+
 def test_task_created_span_reuses_the_identity_learned_from_a_poll(tmp_path: Path) -> None:
     """A bare SUBMITTED status may omit taskId; the transcript row must still name the Task."""
     run = _run(tmp_path)
-    run.record_polled_task_state(
-        task_id="task-9", context_id="ctx-9", state="TASK_STATE_WORKING"
-    )
+    run.record_polled_task_state(task_id="task-9", context_id="ctx-9", state="TASK_STATE_WORKING")
 
     run.record_event({"kind": "status", "state": "TASK_STATE_SUBMITTED"})
 

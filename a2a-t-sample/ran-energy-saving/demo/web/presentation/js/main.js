@@ -1798,6 +1798,18 @@ function renderNarrator() {
     els.sayDetail.replaceChildren();
     els.sayDetail.append(el("span", "", card.text));
     if (card.detail) els.sayDetail.append(el("span", "reason", card.detail));
+    if (Array.isArray(card.recommendationFields) && card.recommendationFields.length > 0) {
+      const block = el("div", "ai-suggestion");
+      block.append(el("span", "ai-suggestion-label", ui.copy.decision.aiSuggestion));
+      const list = el("ul");
+      for (const field of card.recommendationFields) {
+        const item = el("li");
+        item.append(el("b", "", field.name), el("span", "", field.value));
+        list.append(item);
+      }
+      block.append(list);
+      els.sayDetail.append(block);
+    }
     if (card.validation) {
       const block = validationBlock(card.validation, ui.copy);
       if (block) els.sayDetail.append(block);
@@ -2159,7 +2171,9 @@ async function parseManualAnswer() {
     const response = await fetch(`/api/runs/${encodeURIComponent(ui.view.runId)}/decisions/parse`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text }),
+      // The clicked served-area option is operator input too: send it so the server's grounding
+      // check accepts it even when the typed answer does not repeat the area name.
+      body: JSON.stringify({ text, region: ui.selectedRegion || "" }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -2184,6 +2198,10 @@ async function submitParsedDecision(decision) {
   ui.manualError = "";
   renderNarrator();
   const payload = { ...decision };
+  // Provenance: the preview was structured by the model; a clicked served area is operator input.
+  const modelRegion = payload.filled_params?.region;
+  payload.answerSource =
+    ui.selectedRegion && ui.selectedRegion !== modelRegion ? "operator_edited" : "ai_structured";
   if (ui.selectedRegion) {
     payload.filled_params = { ...(payload.filled_params || {}), region: ui.selectedRegion };
   }

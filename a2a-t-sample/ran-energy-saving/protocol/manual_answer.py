@@ -13,6 +13,8 @@ unstructured answer must not silently become Task-T values.
 from __future__ import annotations
 
 import re
+import unicodedata
+from collections.abc import Iterable, Mapping
 from typing import Final
 
 #: "Please provide the following missing items: A, B." / "Required items: A, B".
@@ -53,6 +55,75 @@ _LIST_ITEM_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\s*(?:\d+[.)、]|[-*�
 
 #: Separators inside an inline item list.
 _INLINE_SEPARATOR_PATTERN: Final[re.Pattern[str]] = re.compile(r"\s*(?:,|，|、|;|；|\band\b)\s*")
+
+
+#: Everything that is not a letter, digit or CJK character. Comparing compact forms makes
+#: punctuation and separators (``{00:00~06:00,2Mbps}`` vs ``00:00-06:00 2 Mbps``) irrelevant.
+_COMPACT_STRIP: Final[re.Pattern[str]] = re.compile(r"[^0-9a-z一-鿿]+")
+
+#: One clock token of a structured target segment.
+_TIME_TOKEN: Final[re.Pattern[str]] = re.compile(r"\d{1,2}:\d{2}")
+
+#: One rate token of a structured target segment.
+_RATE_TOKEN: Final[re.Pattern[str]] = re.compile(r"\d+(?:\.\d+)?\s*Mbps", re.IGNORECASE)
+
+
+def _compact(value: object) -> str:
+    """Return the separator-free comparison form of one value."""
+    text = unicodedata.normalize("NFKC", str(value)).casefold()
+    return _COMPACT_STRIP.sub("", text)
+
+
+def _answer_items(value: object) -> list[object]:
+    """Return the individual values one filled parameter carries."""
+    if isinstance(value, (list, tuple)):
+        return [item for item in value if isinstance(item, (str, int, float)) and not isinstance(item, bool)]
+    if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+        return [value]
+    return []
+
+
+def _value_grounded(value: object, text: str, compact: str) -> bool:
+    """Whether one filled value appears in the operator's answer.
+
+    Structured targets are compared token by token: the model may restate
+    ``{00:00~06:00,2Mbps}`` with different separators, but every clock and rate it claims must
+    still be present in the answer.
+    """
+    rendered = str(value)
+    tokens = [*_TIME_TOKEN.findall(rendered), *_RATE_TOKEN.findall(rendered)]
+    if tokens:
+        return all(_compact(token) in compact for token in tokens)
+    wanted = _compact(rendered)
+    if len(wanted) >= 2:
+        return wanted in compact
+    return re.search(rf"(?<![0-9a-z]){re.escape(wanted)}(?![0-9a-z])", text) is not None
+
+
+def ungrounded_answer_fields(
+    answer: str,
+    filled: Mapping[str, object] | None,
+    *,
+    allow: Iterable[object] = (),
+) -> tuple[str, ...]:
+    """Return the filled parameters whose values the operator never supplied.
+
+    The manual-answer structurer is an LLM: it can return a value that appears nowhere in the
+    engineer's words (the reported ``Region A`` answer). A pure A2A question has no structured
+    channel, so an invented value would be sent to the vendor as if the operator had typed it.
+    ``allow`` carries values the page itself supplied (a clicked served-area option), which are
+    operator input too.
+    """
+    text = unicodedata.normalize(
+        "NFKC",
+        " ".join([answer, *(str(item) for item in allow if item)]),
+    ).casefold()
+    compact = _COMPACT_STRIP.sub("", text)
+    missing: list[str] = []
+    for name, value in (filled or {}).items():
+        if any(not _value_grounded(item, text, compact) for item in _answer_items(value)):
+            missing.append(name)
+    return tuple(missing)
 
 
 def _canonical_item_label(phrase: str) -> str | None:
@@ -105,4 +176,4 @@ def missing_item_labels(content: str) -> tuple[str, ...]:
     return tuple(labels)
 
 
-__all__ = ["missing_item_labels"]
+__all__ = ["missing_item_labels", "ungrounded_answer_fields"]

@@ -2321,3 +2321,73 @@ const broken = {
 saveChain(broken, pending);
 clearChain(broken);
 assert.equal(restoreChain(broken), null);
+
+// --- Pure A2A trace fidelity: real hop names, visible status text, answer provenance ----
+
+// OSS-owned statuses are narration to the page, not a message from the OSS to the RAN.
+assert.equal(traceDirection({ detail: { hop: "oss" }, direction: "server->client" }), "OSS internal");
+assert.equal(traceDirection({ detail: { hop: "nms" }, direction: "server->client" }), "NMS → OSS");
+// The OSS->downstream message must name the downstream that actually exists.
+assert.equal(
+  traceDirection(
+    { detail: { hop: "oss", role: "oss", protocol: "pure" }, direction: "client->server" },
+    { downstream: "nms" },
+  ),
+  "OSS → NMS",
+);
+assert.equal(
+  traceDirection(
+    { detail: { hop: "oss", role: "oss", protocol: "pure" }, direction: "client->server" },
+    { downstream: "ran" },
+  ),
+  "OSS → RAN",
+);
+// In a pure run the engineer client talks to the OSS Agent, not to the RAN.
+assert.equal(
+  traceDirection(
+    { detail: { role: "client", protocol: "pure" }, direction: "client->server" },
+    { protocol: "pure" },
+  ),
+  "UI → OSS",
+);
+
+// A pure status keeps its sentence instead of collapsing to the bare state name.
+const pureStatus = createState();
+applyFrame(pureStatus, { type: "run_started", runId: "r8", scenario: "night", mode: "confirm", protocol: "pure" });
+applyFrame(pureStatus, {
+  type: "event",
+  event: {
+    seq: 1,
+    entryType: "event",
+    kind: "status",
+    state: "TASK_STATE_WORKING",
+    phase: "answer",
+    summary: "OSS Agent answered the NMS: The region is Region A.",
+    direction: "server->client",
+    detail: { hop: "oss", pure: { hop: "oss", phase: "answer", downstream: "nms" } },
+  },
+});
+const pureRow = pureStatus.trace.at(-1);
+assert.equal(pureRow.title, "OSS Agent answered the NMS: The region is Region A.");
+assert.equal(pureRow.dir, "OSS internal");
+assert.equal(pureStatus.downstream, "nms");
+
+// The confirmation card shows the concrete AI-suggested values, not only the action.
+const suggestion = createState();
+applyFrame(suggestion, { type: "run_started", runId: "r9", scenario: "night", mode: "confirm", protocol: "pure" });
+applyFrame(suggestion, {
+  type: "decision_requested",
+  round: 1,
+  maxRounds: 5,
+  proposal: { kind: "information", content: "Region not recognized." },
+  recommendation: {
+    action: "accept",
+    rationale: "the only grounded value",
+    filled_params: { region: "Region A" },
+  },
+  requestedAt: new Date().toISOString(),
+});
+const suggestionCard = decisionCard(suggestion, copy);
+assert.deepEqual(suggestionCard.recommendationFields, [{ name: "region", value: "Region A" }]);
+assert.equal(decisionPayload(suggestionCard, "confirm", copy).answerSource, "ai_recommendation");
+assert.equal(decisionPayload(suggestionCard, "reject", copy).answerSource, "operator");

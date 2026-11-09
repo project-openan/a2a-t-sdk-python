@@ -261,9 +261,7 @@ def _polled_task_from_a2a(task: object, task_id: str) -> _PolledTask:
     metadata: dict[str, object] | None = None
     status_message = getattr(status, "message", None) if status is not None else None
     if status_message is not None:
-        text = " ".join(
-            part.text for part in getattr(status_message, "parts", ()) or () if part.text
-        ).strip()
+        text = " ".join(part.text for part in getattr(status_message, "parts", ()) or () if part.text).strip()
         try:
             raw_metadata = MessageToDict(status_message.metadata)
         except Exception:  # noqa: BLE001 - metadata is an observability aid, not the state
@@ -525,9 +523,7 @@ class RunManager:
             self._runs[run.run_id] = run
             if run.conversation_id:
                 self._active_by_conversation[run.conversation_id] = run
-            run.task = asyncio.create_task(
-                self._resume_run(run), name=f"ran-client-resume-{run.run_id}"
-            )
+            run.task = asyncio.create_task(self._resume_run(run), name=f"ran-client-resume-{run.run_id}")
             recovered += 1
             _LOGGER.info(
                 "recovered run %s: task=%s conversation=%s",
@@ -939,9 +935,7 @@ class RunManager:
         if run.langfuse_exporter is None or run.langfuse.get("url"):
             return
         try:
-            task = asyncio.create_task(
-                self._resolve_langfuse_url(run), name=f"ran-langfuse-{run.run_id}"
-            )
+            task = asyncio.create_task(self._resolve_langfuse_url(run), name=f"ran-langfuse-{run.run_id}")
         except RuntimeError:
             # The event loop is already closing (a synchronous test helper or shutdown).
             return
@@ -1115,7 +1109,9 @@ class RunManager:
             """Publish the recommendation, or an unavailable notice, and let the engineer decide."""
             run.pending_decision = True
             timeout_seconds = getattr(run.manual_provider, "timeout_seconds", None)
-            provider = getattr(run.runtime, "provider", None)
+            # A pure run has no negotiation provider: its confirmation answer owns the human
+            # moment and reports why a relayed recommendation is missing.
+            provider = getattr(run.runtime, "provider", None) or getattr(run.runtime, "pure_answer", None)
             error = getattr(provider, "last_recommendation_error", None)
             frame = _recommendation_frame(
                 mode=run.mode,
@@ -1123,9 +1119,7 @@ class RunManager:
                 session=session,
                 recommendation=decision,
                 recommendation_error=error if isinstance(error, str) and error else None,
-                timeout_seconds=(
-                    float(timeout_seconds) if isinstance(timeout_seconds, (int, float)) else None
-                ),
+                timeout_seconds=(float(timeout_seconds) if isinstance(timeout_seconds, (int, float)) else None),
                 requested_at=now_iso(),
             )
             if decision is None:
@@ -1393,10 +1387,7 @@ class RunManager:
                         interval = watched_interval
                         publish_wait_state(last_state or "", detached=False)
                     last_watched = time.monotonic()
-                elif (
-                    not run.detached
-                    and time.monotonic() - last_watched >= _DETACHED_TRACKING_GRACE_SECONDS
-                ):
+                elif not run.detached and time.monotonic() - last_watched >= _DETACHED_TRACKING_GRACE_SECONDS:
                     run.detached = True
                     _LOGGER.info(
                         "run %s has no viewer; continuing remote task tracking for %s in the background",
@@ -1616,6 +1607,14 @@ class RunManager:
             transcript_markdown=(str(run.paths.markdown_path) if run.paths is not None else None),
             finished_at=now_iso(),
         )
+        question = _question_turn(run)
+        if question is not None:
+            await self._store.append_turn(
+                conversation_id=run.conversation_id,
+                role=TURN_ROLE_ASSISTANT,
+                content=question,
+                run_id=run.run_id,
+            )
         await self._store.append_turn(
             conversation_id=run.conversation_id,
             role=TURN_ROLE_ASSISTANT,
@@ -1675,9 +1674,7 @@ def _format_conversation_context(turns: list[Any]) -> str:
 #: Entry points whose requests must satisfy the caller schema's required fields. A gateway or API
 #: caller keeps its previous behavior this iteration; the interactive entry points do not send an
 #: incomplete Task-T to the network.
-_REQUIRED_FIELD_SOURCE_KINDS: Final[frozenset[str]] = frozenset(
-    {"presentation", "tester", "explorer", "cli"}
-)
+_REQUIRED_FIELD_SOURCE_KINDS: Final[frozenset[str]] = frozenset({"presentation", "tester", "explorer", "cli"})
 
 
 def _should_validate_before_send(
@@ -1730,9 +1727,48 @@ def _run_summary(run: RunState) -> str:
         return f"Run failed: {run.error}"
     if run.result is None:
         return f"Run finished with status {run.status}."
+    if run.protocol == PROTOCOL_PURE and run.result.final_state == FINAL_STATE_TASK_FAILED:
+        # The vendor's refusal sentence is the answer the engineer needs; the generic final-state
+        # line hides it from the conversation.
+        detail = _last_status_text(run)
+        if detail:
+            return detail
     report = run.result.report
     if isinstance(report, Mapping):
         summary = report.get("summary")
         if isinstance(summary, str) and summary.strip():
             return summary.strip()
     return f"Run completed with final state {run.result.final_state}."
+
+
+def _last_status_text(run: RunState) -> str:
+    """Return the latest non-empty status text recorded in this run's transcript."""
+    if run.transcript is None:
+        return ""
+    for entry in reversed(run.transcript.events):
+        if entry.get("entryType") != "event" or entry.get("kind") != "status":
+            continue
+        text = entry.get("summary")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    return ""
+
+
+def _question_turn(run: RunState) -> str | None:
+    """Render the relayed downstream questions as one assistant turn, or ``None``.
+
+    A pure run has no structured negotiation channel: the vendor's text question is the actual
+    interaction. Keeping it only in the Explorer leaves the conversation with the engineer's
+    request and a generic ending.
+    """
+    if run.protocol != PROTOCOL_PURE or not run.proposals:
+        return None
+    downstream = "NMS" if run.discovery == DISCOVERY_NMS else "RAN Agent"
+    questions: list[str] = []
+    for propose in run.proposals:
+        content = propose.content.strip()
+        if content and content not in questions:
+            questions.append(content)
+    if not questions:
+        return None
+    return "\n\n".join(f"The {downstream} asked: {question}" for question in questions)

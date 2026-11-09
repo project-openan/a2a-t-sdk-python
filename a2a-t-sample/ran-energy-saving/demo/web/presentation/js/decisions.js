@@ -132,6 +132,9 @@ export function decisionCard(state, copy) {
     hasRecommendation,
     recommendedAction,
     recommendation,
+    // The confirm button sends these values verbatim; show them instead of hiding the concrete
+    // answer behind an action label.
+    recommendationFields: recommendationFields(recommendation),
     missingItems,
     manualExample: manualExampleFor(copy, missingItems),
     // Without a deterministic recommendation the manual area is the primary answer surface, so it
@@ -142,6 +145,23 @@ export function decisionCard(state, copy) {
     requestedRegion: decision.proposal?.options?.requested || "",
     options,
   };
+}
+
+/** List the concrete values a recommendation would send, for the confirmation card. */
+function recommendationFields(recommendation) {
+  const filled = isObject(recommendation?.filled_params) ? recommendation.filled_params : null;
+  if (filled === null) return [];
+  return Object.entries(filled)
+    .map(([name, value]) => ({ name, value: fieldText(value) }))
+    .filter((field) => field.value !== "");
+}
+
+/** Render one recommended field value without dropping list/object values. */
+function fieldText(value) {
+  if (Array.isArray(value)) return value.map((item) => fieldText(item)).filter(Boolean).join(", ");
+  if (isObject(value)) return JSON.stringify(value);
+  if (value === null || value === undefined) return "";
+  return String(value);
 }
 
 /** Label the primary button with the action it actually sends. */
@@ -249,6 +269,9 @@ export function decisionPayload(card, action, copy, counterText, selectedArea) {
       counter_params: card.recommendation.counter_params ?? null,
       confirmed_intent: card.recommendation.confirmed_intent ?? null,
       feasibility_summary: card.recommendation.feasibility_summary ?? null,
+      // The trace records where the concrete values came from: the AI suggestion the operator
+      // confirmed (even after picking a served area) is not the same fact as an operator answer.
+      answerSource: areaParams === null ? "ai_recommendation" : "operator_edited",
     });
   }
   if (action === "counter") {
@@ -256,18 +279,20 @@ export function decisionPayload(card, action, copy, counterText, selectedArea) {
       action: "counter",
       rationale: copy.decision.counterRationale,
       counter_proposal: (counterText || "").trim() || card.counterText,
+      answerSource: "operator_edited",
     });
   }
   if (action === "reject") {
-    return { action: "reject", rationale: copy.decision.rejectRationale };
+    return { action: "reject", rationale: copy.decision.rejectRationale, answerSource: "operator" };
   }
   if (action === "abort") {
-    return { action: "abort", rationale: copy.decision.abortRationale };
+    return { action: "abort", rationale: copy.decision.abortRationale, answerSource: "operator" };
   }
   return clean({
     action: "accept",
     rationale: copy.decision.acceptRationale,
     filled_params: areaParams,
+    answerSource: "operator",
   });
 }
 

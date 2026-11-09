@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from protocol.manual_answer import missing_item_labels
+from protocol.manual_answer import missing_item_labels, ungrounded_answer_fields
 
 
 def test_inline_missing_items_are_split() -> None:
@@ -43,3 +43,50 @@ def test_required_information_block_wins_over_the_inline_pattern() -> None:
     content = "Required Information Items:\n1. Region\n2. Rate"
 
     assert missing_item_labels(content) == ("Region", "Rate")
+
+
+def test_an_invented_region_is_not_grounded_in_the_answer() -> None:
+    # The reported run: the operator answered a region question, the model returned a value that
+    # never appeared in the answer text.
+    assert ungrounded_answer_fields(
+        "Please use the region the NMS already rejected.",
+        {"region": "Region A"},
+    ) == ("region",)
+
+
+def test_values_named_in_the_answer_are_grounded_case_insensitively() -> None:
+    assert (
+        ungrounded_answer_fields(
+            "the region is a2atestregion and the target is 20 mbps",
+            {"region": "A2ATestRegion", "guaranteedThroughputTarget": "20Mbps"},
+        )
+        == ()
+    )
+
+
+def test_an_explicit_selection_counts_as_an_operator_supplied_value() -> None:
+    assert (
+        ungrounded_answer_fields(
+            "Use the selected area.",
+            {"region": "A2ATestRegion"},
+            allow=("A2ATestRegion",),
+        )
+        == ()
+    )
+
+
+def test_every_item_of_a_list_value_must_be_grounded() -> None:
+    assert ungrounded_answer_fields(
+        "The sites are NRES_XCS_6102937.",
+        {"siteList": ["NRES_XCS_6102937", "LTE_26441_LNR_OCL"]},
+    ) == ("siteList",)
+
+
+def test_structured_target_notation_matches_its_plain_spelling() -> None:
+    assert (
+        ungrounded_answer_fields(
+            "Set the target to 00:00-06:00 with 2 Mbps and 06:00-24:00 with 10 Mbps.",
+            {"guaranteedThroughputTarget": "{00:00~06:00,2Mbps}, {06:00~24:00,10Mbps}"},
+        )
+        == ()
+    )

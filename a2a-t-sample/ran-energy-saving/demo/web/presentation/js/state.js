@@ -95,6 +95,9 @@ export function createState() {
     //: Langfuse export state carried by ``run_started`` / ``finished``.
     langfuse: null,
     hop: null,
+    //: Downstream behind the OSS Agent (``nms`` in a vendor run, ``ran`` locally); empty when the
+    //: run never announced one.
+    downstream: "",
     pureRound: 0,
     pureMetrics: null,
     mieApproval: null,
@@ -361,6 +364,9 @@ function applyEvent(state, entry) {
   if (pure !== null || hop !== null) {
     if (pure !== null) state.pure = { ...(state.pure || {}), ...pure };
     if (hop !== null) state.hop = hop;
+    if (pure !== null && typeof pure.downstream === "string" && pure.downstream) {
+      state.downstream = pure.downstream;
+    }
     if (pure !== null && pure.kind === "negotiation") {
       state.negotiation.push({
         side: "nms",
@@ -396,7 +402,7 @@ function applyEvent(state, entry) {
 
   pushTrace(state, {
     tag: traceTag(entry, state.protocol),
-    title: traceTitle(entry, summary),
+    title: traceTitle(entry, summary, state.protocol),
     titleKey:
       entry.kind === "status" &&
       (entry.state === "TASK_STATE_INPUT_REQUIRED" || summary.includes("INPUT_REQUIRED"))
@@ -946,19 +952,19 @@ function traceTag(entry, protocol) {
   return "oss";
 }
 
-function traceTitle(entry, summary) {
+function traceTitle(entry, summary, protocol) {
   if (entry.kind === "propose") return "PROPOSE · NMS";
   if (entry.kind === "abort") return "ABORT · NMS";
   if (entry.kind === "accept") return "ACCEPT · OSS";
   if (entry.kind === "reject") return "REJECT · OSS";
   if (entry.kind === "counter") return "COUNTER · OSS";
-  if (entry.kind === "status") return statusTitle(entry, summary);
+  if (entry.kind === "status") return statusTitle(entry, summary, protocol);
   if (entry.kind === "artifact") return artifactTitle(entry);
   return summary || entry.kind || "event";
 }
 
 /** Short human title of one status notification; the full sentence stays in the wire/inspector. */
-function statusTitle(entry, summary) {
+function statusTitle(entry, summary, protocol) {
   const text = summary.toLowerCase();
   const stateOnly = !summary || /^task_state_/i.test(summary);
   if (stateOnly && entry.state === "TASK_STATE_SUBMITTED") return "Task created";
@@ -981,6 +987,11 @@ function statusTitle(entry, summary) {
   if (text.includes("ran agent is working")) return "Task started";
   if (text.includes("oss agent completed")) return "Task completed";
   if (text.includes("ran energy-saving task completed")) return "Task completed";
+  // A pure run's OSS narration (forwarding, answer, failure) is the interaction itself; keep the
+  // sentence instead of collapsing every row into "WORKING".
+  if (protocol === "pure" && summary && !stateOnly) {
+    return summary.length > 80 ? `${summary.slice(0, 79)}…` : summary;
+  }
   if (entry.state) return String(entry.state).replace("TASK_STATE_", "");
   return summary.length > 80 ? `${summary.slice(0, 79)}…` : summary || "status";
 }
@@ -1135,17 +1146,35 @@ export function traceStageKey(entry) {
 }
 
 /** Who is talking to whom, in the demo's roles, or ``""`` when the row is not a message. */
-export function traceDirection(entry) {
+export function traceDirection(entry, context = null) {
   if (!isObject(entry)) return "";
-  const hop = isObject(entry.detail) && typeof entry.detail.hop === "string" ? entry.detail.hop : "";
-  if (hop === "oss") return "OSS → RAN";
+  const detail = isObject(entry.detail) ? entry.detail : {};
+  const hop = typeof detail.hop === "string" ? detail.hop : "";
+  const protocol = typeof context?.protocol === "string" ? context.protocol : "";
+  const downstream =
+    typeof context?.downstream === "string" && context.downstream
+      ? context.downstream
+      : typeof detail?.pure?.downstream === "string"
+        ? detail.pure.downstream
+        : "";
+  // The OSS Agent's own outbound message is a real hop even though its status narration is not.
+  if (entry.direction === "client->server" && detail.role === "oss") {
+    return downstream === "ran" ? "OSS → RAN" : "OSS → NMS";
+  }
+  if (hop === "oss") return "OSS internal";
   if (hop === "ran") return "RAN → OSS";
   if (hop === "nms") return "NMS → OSS";
   if (hop === "mie") return "MIE ⇄ RAN";
   if (entry.kind === "approval" || entry.actor === "human") return "MIE ⇄ Engineer";
   // A polled Task state is a local observation, not a message from the peer.
   if (entry.direction === "poll" || entry.origin === "poll") return "Local poll";
-  if (entry.direction === "client->server") return "OSS → RAN";
+  // The pure hop is two different links: the engineer client talks to the OSS Agent, and the
+  // OSS Agent talks to the downstream (NMS or local RAN Agent).
+  if (entry.direction === "client->server") {
+    if (detail.role === "oss") return downstream === "ran" ? "OSS → RAN" : "OSS → NMS";
+    if (protocol === "pure" || detail.protocol === "pure") return "UI → OSS";
+    return "OSS → RAN";
+  }
   if (entry.direction === "server->client") return "RAN → OSS";
   if (entry.side === "server") return "RAN internal";
   if (entry.side === "client") return "OSS internal";
@@ -1243,7 +1272,14 @@ export function pushTrace(state, row) {
     order,
     phase: typeof entry?.phase === "string" ? entry.phase : "",
     stage: row.stage ?? traceStageKey(entry),
-    dir: row.dir ?? traceDirection(entry),
+    dir: row.dir ?? traceDirection(entry, state),
+    // Provenance of the answered values: an AI suggestion the engineer confirmed is a different
+    // fact from an answer the engineer typed.
+    answerSource:
+      entry?.answerSource ??
+      (isObject(entry?.detail) && typeof entry.detail.answerSource === "string"
+        ? entry.detail.answerSource
+        : ""),
     dedupeKey,
   };
   let index = state.trace.length;

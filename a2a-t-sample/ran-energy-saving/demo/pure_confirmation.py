@@ -20,9 +20,7 @@ from shared.models import NegotiationDecision, NegotiationProposeView
 from demo.pure_policy import recommendation_decision, render_pure_answer
 
 ProposalSink = Callable[[NegotiationProposeView, NegotiationContext], None]
-RecommendationSink = Callable[
-    [NegotiationDecision | None, NegotiationProposeView, NegotiationContext], None
-]
+RecommendationSink = Callable[[NegotiationDecision | None, NegotiationProposeView, NegotiationContext], None]
 DecisionSink = Callable[[NegotiationDecision, NegotiationProposeView, NegotiationContext], None]
 
 #: Metadata key the OSS Agent uses for the relayed question payload.
@@ -70,6 +68,12 @@ class PureConfirmationAnswer:
         self._proposal_sink: ProposalSink | None = None
         self._recommendation_sink: RecommendationSink | None = None
         self._decision_sink: DecisionSink | None = None
+        self._last_recommendation_error: str | None = None
+
+    @property
+    def last_recommendation_error(self) -> str | None:
+        """Why the relayed recommendation is empty (suppressed or unavailable), else ``None``."""
+        return self._last_recommendation_error
 
     @property
     def timeout_seconds(self) -> float:
@@ -100,12 +104,9 @@ class PureConfirmationAnswer:
     async def __call__(self, event: Mapping[str, object]) -> str:
         """Build the proposal view, wait for the operator, and render the answer text."""
         pure = _pure_metadata(event)
-        text = str(event.get("text") or "").strip() or (
-            "The downstream requested additional information."
-        )
-        context_id = str(
-            event.get("context_id") or event.get("task_id") or "pure-question"
-        )
+        self._last_recommendation_error = None
+        text = str(event.get("text") or "").strip() or ("The downstream requested additional information.")
+        context_id = str(event.get("context_id") or event.get("task_id") or "pure-question")
         round_number = _int_value(pure.get("round"), 1)
         max_rounds = _int_value(pure.get("maxRounds"), self._max_rounds)
         propose = NegotiationProposeView(
@@ -126,6 +127,12 @@ class PureConfirmationAnswer:
         if self._proposal_sink is not None:
             self._proposal_sink(propose, session)
         if self._mode == MODE_CONFIRM and self._recommendation_sink is not None:
+            suppressed = pure.get("recommendationSuppressed")
+            self._last_recommendation_error = (
+                "The AI suggestion repeats a value the NMS already rejected; enter the answer manually."
+                if suppressed == "already_sent"
+                else None
+            )
             self._recommendation_sink(
                 recommendation_decision(pure.get("recommendation")),
                 propose,

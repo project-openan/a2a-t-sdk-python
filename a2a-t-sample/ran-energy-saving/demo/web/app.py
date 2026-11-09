@@ -59,7 +59,7 @@ from protocol.client_store import (
     read_run_metrics,
     read_run_metrics_rows,
 )
-from protocol.manual_answer import missing_item_labels
+from protocol.manual_answer import missing_item_labels, ungrounded_answer_fields
 from protocol.metrics_summary import summarize_metrics, summarize_protocols
 from protocol.nms_client import NmsConfigError, NmsError
 from protocol.run_spec import RunCatalog
@@ -1128,6 +1128,9 @@ def create_app(
             return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
         try:
             body = await request.json()
+            # ``answerSource`` is page provenance, not a protocol field: read it before validation
+            # because the decision model ignores unknown keys.
+            source = body.get("answerSource") if isinstance(body, dict) else None
             decision = NegotiationDecision.model_validate(body)
         except (ValueError, TypeError):
             return JSONResponse(
@@ -1144,6 +1147,7 @@ def create_app(
                 status_code=409,
             )
         run.pending_decision = False
+        run.pending_answer_source = source.strip() if isinstance(source, str) and source.strip() else None
         # OSP `AQ`: the answer moment is here, not when the grounded decision is recorded later.
         run.mark_decision_answered()
         provider.submit(decision)
@@ -1219,6 +1223,28 @@ def create_app(
                 },
                 status_code=422,
             )
+        if run.protocol == PROTOCOL_PURE and propose.kind == "information":
+            # A pure A2A answer is one plain sentence: an invented value would reach the vendor as
+            # if the operator had typed it. Only accept values grounded in the answer text or in an
+            # explicit page selection.
+            selected = body.get("region")
+            ungrounded = ungrounded_answer_fields(
+                text,
+                decision.filled_params,
+                allow=(selected,) if isinstance(selected, str) and selected.strip() else (),
+            )
+            if ungrounded:
+                return JSONResponse(
+                    {
+                        "error": (
+                            "The structured answer contains values the operator did not supply: "
+                            f"{', '.join(ungrounded)}. Rewrite the answer with the exact value."
+                        ),
+                        "code": "manual_answer_ungrounded",
+                        "fields": list(ungrounded),
+                    },
+                    status_code=422,
+                )
         return JSONResponse(
             {
                 "decision": decision.model_dump(),

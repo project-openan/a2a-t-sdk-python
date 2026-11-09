@@ -716,11 +716,7 @@ class _RepeatedStateA2AClient:
     async def get_task(self, request: object, *, context: object = None) -> object:
         del context
         self.calls += 1
-        state = (
-            TaskState.TASK_STATE_WORKING
-            if self.calls <= self.stable_polls
-            else TaskState.TASK_STATE_COMPLETED
-        )
+        state = TaskState.TASK_STATE_WORKING if self.calls <= self.stable_polls else TaskState.TASK_STATE_COMPLETED
         return _task_with_state(str(getattr(request, "id", "task-1")), state)
 
 
@@ -1191,10 +1187,7 @@ def test_recommendation_frame_lists_the_items_an_information_proposal_asks_for()
             kind="information",
             round=1,
             max_rounds=3,
-            content=(
-                "Energy saving region is not recognized. "
-                "Please provide the correct region name."
-            ),
+            content=("Energy saving region is not recognized. Please provide the correct region name."),
             performative="PROPOSE",
         ),
         session=NegotiationContext(
@@ -1410,10 +1403,7 @@ def test_polled_completed_with_a_refusal_text_is_a_failed_run() -> None:
         )
         == FINAL_STATE_TASK_FAILED
     )
-    assert (
-        _final_state_for_task_state("TASK_STATE_COMPLETED", "Task completed.")
-        == FINAL_STATE_TASK_COMPLETED
-    )
+    assert _final_state_for_task_state("TASK_STATE_COMPLETED", "Task completed.") == FINAL_STATE_TASK_COMPLETED
     assert (
         _final_state_for_task_state(
             "TASK_STATE_COMPLETED",
@@ -1422,3 +1412,56 @@ def test_polled_completed_with_a_refusal_text_is_a_failed_run() -> None:
         )
         == FINAL_STATE_TASK_COMPLETED
     )
+
+
+def test_a_failed_pure_run_says_why_the_downstream_refused(tmp_path: Path) -> None:
+    """The page transcript must carry the vendor's reason, not only the generic final state."""
+    from protocol.client_service.run_manager import _run_summary
+    from protocol.client_service.run_state import RunState
+    from protocol.transcript import NegotiationTranscript
+
+    run = RunState(run_id="run-1", scenario="night", mode="confirm", transport="sse")
+    run.protocol = PROTOCOL_PURE
+    run.transcript = NegotiationTranscript(
+        scenario="night",
+        language="en-US",
+        model_mode="live",
+        mode="confirm",
+        transport="sse",
+        runs_dir=tmp_path,
+    )
+    run.result = ClientFlowResult(final_state=FINAL_STATE_TASK_FAILED)
+    run.record_event(
+        {
+            "kind": "status",
+            "task_id": "nms-task-1",
+            "context_id": "nms-ctx-1",
+            "state": "TASK_STATE_COMPLETED",
+            "text": 'The region names "Region A" and "Lianqiu Lake" are not recognized.',
+        }
+    )
+
+    assert _run_summary(run) == ('The region names "Region A" and "Lianqiu Lake" are not recognized.')
+
+
+def test_the_question_turn_names_the_downstream() -> None:
+    """The relayed vendor question is part of the conversation, not Explorer-only detail."""
+    from protocol.client_service.run_manager import _question_turn
+    from protocol.client_service.run_state import RunState
+    from shared.config import DISCOVERY_NMS
+
+    run = RunState(run_id="run-1", scenario="night", mode="confirm", transport="sse")
+    run.protocol = PROTOCOL_PURE
+    run.discovery = DISCOVERY_NMS
+    run.proposals = [
+        NegotiationProposeView(
+            negotiation_id="neg-1",
+            kind="information",
+            round=1,
+            max_rounds=5,
+            content="Region not recognized. Please provide a valid region name.",
+            performative="PROPOSE",
+        )
+    ]
+
+    assert _question_turn(run) == ("The NMS asked: Region not recognized. Please provide a valid region name.")

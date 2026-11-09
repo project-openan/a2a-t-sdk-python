@@ -359,9 +359,7 @@ def _emit_message_sent(
     # must not collide, otherwise the UI deduplicates the OSS->NMS row against the client row and
     # the downstream hop disappears from the trace.
     trace = current_trace()
-    recorder = TraceRecorder(
-        trace.run_id or "", id_prefix=f"flow-{trace.role or 'client'}"
-    )
+    recorder = TraceRecorder(trace.run_id or "", id_prefix=f"flow-{trace.role or 'client'}")
     span = recorder.emit(
         kind="message_sent",
         phase=PHASE_TASK_PROMPT,
@@ -373,6 +371,8 @@ def _emit_message_sent(
             "protocol": "pure",
             "performative": "MESSAGE",
             "summary": text,
+            # Who sent this hop: the engineer client (UI -> OSS) or the OSS Agent (OSS -> downstream).
+            "role": trace.role or "",
             "metadataKeys": sorted(request.message.metadata.keys()),
             "templateUri": None,
             "extensionUri": None,

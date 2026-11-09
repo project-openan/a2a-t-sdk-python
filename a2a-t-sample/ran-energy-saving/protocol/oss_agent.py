@@ -94,6 +94,7 @@ from protocol.downstream_binding_store import DownstreamBinding, DownstreamBindi
 from protocol.downstream_pump import DownstreamPump, DownstreamPumpContext
 from protocol.gateway_push import ValidatingPushConfigStore
 from protocol.intent import IntentProcessor, OperatorRequest, ProcessedIntent
+from protocol.manual_answer import ungrounded_answer_fields
 from protocol.messages import SAMPLE_RUN_ID_METADATA_KEY, metadata_to_dict
 from protocol.nms_client import NmsClient, NmsConfig, NmsSseTransport, NmsWebhookTransport
 from protocol.pure_client_flow import continue_pure_client_flow, run_pure_client_flow
@@ -132,6 +133,7 @@ class _PureDecisionProvider(Protocol):
     ) -> NegotiationDecision:
         """Return one structured decision for the proposal."""
 
+
 #: Outer Task states that need no background tracking after a restart.
 _TERMINAL_TASK_STATES: Final[frozenset[TaskState]] = frozenset(
     {
@@ -165,6 +167,9 @@ class _PendingQuestion:
     #: Natural-language request that opened the run. The operator answer arrives in a new request
     #: task, so the provider cannot rely on a context variable set by the first hop.
     user_request: str = ""
+    #: Texts already sent downstream in this run, oldest first. A recommendation that repeats one
+    #: of them cannot answer the vendor's question.
+    sent_texts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -554,12 +559,11 @@ class OSSPureExecutor(AgentExecutor):
 
         updater = TaskUpdater(event_queue, task.id, task.context_id)
         await updater.start_work()
-        downstream = self._downstream_name()
         await updater.update_status(
             TaskState.TASK_STATE_WORKING,
             message=updater.new_agent_message(
-                [Part(text=f"OSS Agent received the request and is forwarding it to the {downstream}.")],
-                metadata={"pure": {"hop": "oss", "phase": "receive"}, "hop": "oss"},
+                [Part(text="OSS Agent received the request and is processing it.")],
+                metadata=self._oss_metadata("receive"),
             ),
         )
 
@@ -573,6 +577,7 @@ class OSSPureExecutor(AgentExecutor):
             with trace_scope(run_id=run_id, role="oss"):
                 # The downstream hop is standard A2A: send the natural-language request, never
                 # the Task-T section layout used by the A2A-T path.
+                await self._announce_forwarding(updater)
                 result = await self._run_ran(
                     a2a_request_text(intent),
                     run_id,
@@ -591,6 +596,7 @@ class OSSPureExecutor(AgentExecutor):
                 event=question.event,
                 round_number=1,
                 user_request=a2a_request_text(intent),
+                sent_texts=(a2a_request_text(intent),),
             )
             return
         except Exception as exc:  # noqa: BLE001 - the outer Task must reach a terminal state
@@ -689,6 +695,34 @@ class OSSPureExecutor(AgentExecutor):
             )
         )
 
+    def _oss_metadata(self, phase: str) -> dict[str, object]:
+        """Return the ``pure`` tags of one OSS-owned status.
+
+        The downstream name travels with every OSS status so the trace can label the row with the
+        hop that actually exists (NMS or local RAN) instead of assuming ``RAN``.
+        """
+        return {
+            "pure": {
+                "hop": "oss",
+                "phase": phase,
+                "downstream": self._downstream_hop(),
+            },
+            "hop": "oss",
+        }
+
+    async def _announce_forwarding(self, updater: TaskUpdater) -> None:
+        """Publish the forward claim only when the downstream hop is about to start."""
+        downstream = self._downstream_name()
+        metadata = self._oss_metadata("dispatch")
+        await updater.update_status(
+            TaskState.TASK_STATE_WORKING,
+            message=updater.new_agent_message(
+                [Part(text=f"OSS Agent is forwarding the request to the {downstream}.")],
+                metadata=metadata,
+            ),
+            metadata=metadata,
+        )
+
     def _nms_mode(self) -> bool:
         """Whether the downstream hop is the vendor NMS rather than the local RAN Agent."""
         return self._config is not None and self._config.discovery == DISCOVERY_NMS
@@ -734,14 +768,14 @@ class OSSPureExecutor(AgentExecutor):
 
     async def _publish_intent(self, updater: TaskUpdater, intent: ProcessedIntent) -> None:
         """Expose the normalized intent on the outer Task before the RAN hop starts."""
+        metadata = self._oss_metadata("intent")
+        # ``_pure_detail`` reads ``intentProcessed`` from the metadata top level, next to ``pure``.
+        metadata["intentProcessed"] = intent.to_dict()
         await updater.update_status(
             TaskState.TASK_STATE_WORKING,
             message=updater.new_agent_message(
                 [Part(text=f"Business intent ready: {intent.region or intent.operation_type}")],
-                metadata={
-                    "pure": {"hop": "oss", "phase": "intent"},
-                    "intentProcessed": intent.to_dict(),
-                },
+                metadata=metadata,
             ),
         )
 
@@ -970,18 +1004,37 @@ class OSSPureExecutor(AgentExecutor):
     async def _draft_answer(
         self,
         event: Mapping[str, object],
-    ) -> dict[str, object] | str | None:
-        """Ask the decision callback for a suggested answer; an agent failure is not fatal."""
+        *,
+        already_sent: tuple[str, ...] = (),
+    ) -> tuple[dict[str, object] | str | None, str | None]:
+        """Ask the decision callback for a suggested answer; an agent failure is not fatal.
+
+        Returns the recommendation and, when it was suppressed, the sample-local reason. A
+        recommendation that only restates a value this run already sent cannot answer the vendor:
+        the vendor asked because that value was insufficient or rejected.
+        """
         try:
             if self._recommendation is not None:
-                return await self._recommendation(dict(event))
-            value = self._answer(dict(event))
-            if inspect.isawaitable(value):
-                value = await value
+                value: object = await self._recommendation(dict(event))
+            else:
+                value = self._answer(dict(event))
+                if inspect.isawaitable(value):
+                    value = await value
         except Exception:  # noqa: BLE001 - the operator can still answer manually
             _LOGGER.warning("could not draft an answer to the downstream question", exc_info=True)
-            return None
-        return value if isinstance(value, str) and value.strip() else None
+            return None, None
+        if isinstance(value, Mapping):
+            filled = value.get("filledParams")
+            if (
+                isinstance(filled, Mapping)
+                and filled
+                and already_sent
+                and not ungrounded_answer_fields("\n".join(already_sent), dict(filled))
+            ):
+                _LOGGER.info("suppressed a recommendation that repeats an already-sent value")
+                return None, "already_sent"
+            return dict(value), None
+        return (value if isinstance(value, str) and value.strip() else None), None
 
     async def _relay_question(
         self,
@@ -993,28 +1046,27 @@ class OSSPureExecutor(AgentExecutor):
         event: Mapping[str, object],
         round_number: int,
         user_request: str = "",
+        sent_texts: tuple[str, ...] = (),
     ) -> None:
         """Publish one downstream text question as an outer ``INPUT_REQUIRED`` status."""
-        text = str(event.get("text") or "").strip() or (
-            "The downstream requested additional information."
-        )
-        recommendation = await self._draft_answer(event)
+        text = str(event.get("text") or "").strip() or ("The downstream requested additional information.")
+        recommendation, suppressed = await self._draft_answer(event, already_sent=sent_texts)
         inner_context_id = str(event.get("context_id") or "")
         inner_task_id = str(event.get("task_id") or "")
         hop = self._downstream_hop()
-        metadata = {
-            "pure": {
-                "hop": hop,
-                "phase": "question",
-                "kind": "negotiation",
-                "round": round_number,
-                "maxRounds": self._max_rounds,
-                "recommendation": recommendation or None,
-                "downstreamTaskId": inner_task_id or None,
-                "downstreamContextId": inner_context_id or None,
-            },
+        pure: dict[str, object] = {
             "hop": hop,
+            "phase": "question",
+            "kind": "negotiation",
+            "round": round_number,
+            "maxRounds": self._max_rounds,
+            "recommendation": recommendation or None,
+            "downstreamTaskId": inner_task_id or None,
+            "downstreamContextId": inner_context_id or None,
         }
+        if suppressed is not None:
+            pure["recommendationSuppressed"] = suppressed
+        metadata = {"pure": pure, "hop": hop}
         await updater.update_status(
             TaskState.TASK_STATE_INPUT_REQUIRED,
             message=updater.new_agent_message([Part(text=text)], metadata=metadata),
@@ -1028,6 +1080,7 @@ class OSSPureExecutor(AgentExecutor):
             inner_context_id=inner_context_id,
             round_number=round_number,
             user_request=user_request,
+            sent_texts=sent_texts,
         )
         _LOGGER.info(
             "relayed downstream question: outer=%s inner_context=%s round=%s",
@@ -1060,13 +1113,14 @@ class OSSPureExecutor(AgentExecutor):
         # next decision call, otherwise the provider (a context variable) sees no request at all.
         self._set_decision_request(pending.user_request)
         hop = self._downstream_hop()
+        metadata = self._oss_metadata("answer")
         await updater.update_status(
             TaskState.TASK_STATE_WORKING,
             message=updater.new_agent_message(
                 [Part(text=f"OSS Agent answered the {self._downstream_name()}: {answer_text}")],
-                metadata={"pure": {"hop": "oss", "phase": "answer"}, "hop": "oss"},
+                metadata=metadata,
             ),
-            metadata={"pure": {"hop": "oss", "phase": "answer"}},
+            metadata={"pure": metadata["pure"]},
         )
         events: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
         consumer = asyncio.create_task(
@@ -1092,6 +1146,7 @@ class OSSPureExecutor(AgentExecutor):
                 event=question.event,
                 round_number=pending.round_number + 1,
                 user_request=pending.user_request,
+                sent_texts=(*pending.sent_texts, answer_text),
             )
             return
         except Exception as exc:  # noqa: BLE001 - the outer Task must reach a terminal state
@@ -1259,15 +1314,11 @@ class OSSPureExecutor(AgentExecutor):
     ) -> None:
         """Publish the OSS Agent's answer before the follow-up message reaches RAN."""
         pure = _pure_metadata(event)
-        metadata = {
-            "pure": {
-                "hop": "oss",
-                "phase": "answer",
-                "kind": "answer",
-                "round": pure.get("round"),
-            },
-            "hop": "oss",
-        }
+        metadata = self._oss_metadata("answer")
+        tags = metadata["pure"]
+        assert isinstance(tags, dict)
+        tags["kind"] = "answer"
+        tags["round"] = pure.get("round")
         await updater.update_status(
             TaskState.TASK_STATE_WORKING,
             message=updater.new_agent_message(

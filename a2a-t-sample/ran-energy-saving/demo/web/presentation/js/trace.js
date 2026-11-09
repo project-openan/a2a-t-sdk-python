@@ -146,15 +146,23 @@ function rowNode(row, copy, key, open) {
   const title = el("span", "title", (row.titleKey && copy.trace[row.titleKey]) || row.title || "");
   text.append(title);
   const dir = typeof row.dir === "string" ? row.dir : "";
-  if (stageText || dir || row.sub) {
+  const answerSource = typeof row.answerSource === "string" ? row.answerSource : "";
+  const sourceLabel = answerSource
+    ? copy.trace.answerSources?.[answerSource] || answerSource
+    : "";
+  if (stageText || dir || sourceLabel || row.sub) {
     const small = el("small", "");
     if (stageText) small.append(el("span", "stage-meta", stageText));
     if (dir) {
       if (stageText) small.append(document.createTextNode(" · "));
       small.append(el("span", "dir", dir));
     }
-    if (row.sub) {
+    if (sourceLabel) {
       if (stageText || dir) small.append(document.createTextNode(" · "));
+      small.append(el("span", "source", sourceLabel));
+    }
+    if (row.sub) {
+      if (stageText || dir || sourceLabel) small.append(document.createTextNode(" · "));
       small.append(document.createTextNode(row.sub));
     }
     text.append(small);

@@ -141,6 +141,22 @@ async def test_manual_mode_does_not_publish_a_recommendation() -> None:
     assert recommendations == []
 
 
+async def test_confirm_mode_reports_a_suppressed_recommendation() -> None:
+    """A suppressed recommendation is not an agent failure; the page must say why it is empty."""
+    answer = PureConfirmationAnswer(mode=MODE_CONFIRM, timeout_seconds=0.01)
+    recommendations: list[NegotiationDecision | None] = []
+    answer.set_recommendation_sink(lambda decision, propose, session: recommendations.append(decision))
+    question = _question(recommendation=None)
+    pure = question["metadata"]["pure"]  # type: ignore[index]
+    pure["recommendationSuppressed"] = "already_sent"
+
+    assert await answer(question) == ""
+
+    assert recommendations == [None]
+    assert answer.last_recommendation_error is not None
+    assert "already rejected" in answer.last_recommendation_error
+
+
 async def test_a_confirmation_timeout_sends_nothing() -> None:
     answer = PureConfirmationAnswer(mode=MODE_CONFIRM, timeout_seconds=0.01)
 

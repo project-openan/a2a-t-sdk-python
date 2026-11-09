@@ -197,6 +197,9 @@ class RunState:
     error: str | None = None
     transcript_error: str | None = None
     pending_decision: bool = False
+    #: Provenance of the decision about to be submitted by the page (``ai_recommendation`` /
+    #: ``ai_structured`` / ``operator_edited``). Recorded on the decision span, then cleared.
+    pending_answer_source: str | None = None
     pending_intent: bool = False
     intent_future: asyncio.Future[bool] | None = None
     cancel_requested: bool = False
@@ -417,9 +420,7 @@ class RunState:
             self.activity = activity
         elif self.activity is not None and self.activity.get("activityId") == activity_id:
             self.activity = None
-        self.broadcast_ephemeral(
-            {"type": "activity", "runId": self.run_id, "activity": activity}
-        )
+        self.broadcast_ephemeral({"type": "activity", "runId": self.run_id, "activity": activity})
         return activity
 
     def emit_run_started(
@@ -641,10 +642,23 @@ class RunState:
         )
         round_number = entry.get("round")
         context_value = entry.get("contextId")
+        # A proposal keeps the kind its performative gives it: the phase export uses it as the
+        # client-side negotiation-start carrier (OSP AJ), and the "message" envelope would hide
+        # it among every other inbound message.
+        span_kind = "propose" if entry.get("kind") == "propose" else str(event.get("kind") or "event")
+        span_detail: dict[str, object] = {"event": dict(event)}
+        if span_kind == "propose":
+            span_detail.update(
+                {
+                    "negotiationType": entry.get("negotiationType"),
+                    "templateUri": entry.get("templateUri"),
+                    "content": entry.get("content"),
+                }
+            )
         span = self._recorder.emit(
             seq=seq,
             phase_step=step,
-            kind=str(event.get("kind") or "event"),
+            kind=span_kind,
             phase=phase,
             title=str(entry.get("summary") or event.get("kind") or "event"),
             actor="server",
@@ -653,7 +667,7 @@ class RunState:
             round=round_number if isinstance(round_number, int) else None,
             context_id=context_value if isinstance(context_value, str) else None,
             task_id=str(event.get("task_id") or "") or None,
-            detail={"event": dict(event)},
+            detail=span_detail,
         )
         entry["spanId"] = span.span_id
         self._store_span(span, seq=seq, record=False, broadcast_frame=False)
@@ -849,6 +863,8 @@ class RunState:
             phase_step=step,
             seq=seq,
         )
+        if self.pending_answer_source:
+            entry["answerSource"] = self.pending_answer_source
         # OSP `AQ`: use the engineer's answer time as the span start (the span is written after
         # the manual structurer and the grounding pass). Automatic decisions keep the default.
         answered = self._decision_answered_at
@@ -878,8 +894,10 @@ class RunState:
                 "confirmedIntent": decision.confirmed_intent,
                 "feasibilitySummary": decision.feasibility_summary,
                 "confirmedBy": "engineer" if self.mode == MODE_CONFIRM else None,
+                "answerSource": self.pending_answer_source,
             },
         )
+        self.pending_answer_source = None
         entry["spanId"] = span.span_id
         self._store_span(span, seq=seq, record=False, broadcast_frame=False)
         self.broadcast({"type": "event", "event": entry}, seq=seq)
@@ -968,9 +986,7 @@ class RunState:
         if self.activity is not None:
             # Wait-state frames are not in the replay buffer; hand the current one to the late
             # subscriber so a page opened mid-wait still shows what the run is waiting for.
-            snapshot.append(
-                {"type": "activity", "runId": self.run_id, "activity": self.activity}
-            )
+            snapshot.append({"type": "activity", "runId": self.run_id, "activity": self.activity})
         queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
         self.subscribers.add(queue)
         return snapshot, queue
@@ -1054,9 +1070,7 @@ class RunState:
             # A recovered long-running run carries a synthetic incomplete seed result; only a
             # finished run exposes a final state to the page and the API.
             "finalState": (
-                self.result.final_state
-                if self.result is not None and self.status != STATUS_RUNNING
-                else None
+                self.result.final_state if self.result is not None and self.status != STATUS_RUNNING else None
             ),
             "contextId": self.result.context_id if self.result is not None else None,
             "taskId": self.result.task_id if self.result is not None else None,

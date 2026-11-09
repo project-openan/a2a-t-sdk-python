@@ -33,6 +33,7 @@ from a2a.types import (
 from a2a_t.core.metadata import TASK_T_EXTENSION_URI
 from demo.composition import build_demo_runtime
 from demo.pure_policy import build_demo_pure_policy, pure_answer_from_event
+from google.protobuf.json_format import MessageToDict
 from protocol.client_flow import ClientFlowResult
 from protocol.downstream_binding_store import DownstreamBinding, DownstreamBindingStore
 from protocol.intent import ProcessedIntent
@@ -300,8 +301,7 @@ async def test_a_plain_downstream_question_becomes_an_outer_input_required() -> 
     status = next(
         event
         for event in queue.events
-        if isinstance(event, TaskStatusUpdateEvent)
-        and event.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+        if isinstance(event, TaskStatusUpdateEvent) and event.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
     )
     pure = status.metadata["pure"]
     assert pure["kind"] == "negotiation"
@@ -310,6 +310,134 @@ async def test_a_plain_downstream_question_becomes_an_outer_input_required() -> 
     pending = executor._pending_questions["outer-1"]
     assert pending.inner_context_id == "inner-ctx"
     assert pending.run_id == ""
+
+
+def _status_texts(events: list[object]) -> list[str]:
+    """Return the non-empty status texts one executor enqueued, in order."""
+    texts: list[str] = []
+    for event in events:
+        if not isinstance(event, TaskStatusUpdateEvent):
+            continue
+        message = event.status.message
+        if message is None or not message.parts:
+            continue
+        text = message.parts[0].text
+        if isinstance(text, str) and text:
+            texts.append(text)
+    return texts
+
+
+async def test_the_receive_status_does_not_announce_forwarding() -> None:
+    """The opening status says what is true at that moment; the forward claim waits for the hop."""
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "",
+    )
+    queue = _RecordingQueue()
+    at_downstream_start: list[str] = []
+
+    async def run_ran(*args: object, **kwargs: object) -> ClientFlowResult:
+        del args, kwargs
+        at_downstream_start.extend(_status_texts(queue.events))
+        raise _QuestionPendingError(
+            {"kind": "message", "context_id": "inner-ctx", "text": "Please provide the region."}
+        )
+
+    executor._run_ran = run_ran  # type: ignore[method-assign]
+    await executor.execute(
+        _new_oss_context("Create an energy saving task for TestRegion.", task_id="outer-1"),
+        queue,
+    )
+
+    assert at_downstream_start[0] == "OSS Agent received the request and is processing it."
+    assert at_downstream_start[-1] == "OSS Agent is forwarding the request to the NMS."
+    intent_status = next(
+        event
+        for event in queue.events
+        if isinstance(event, TaskStatusUpdateEvent)
+        and event.status.message is not None
+        and event.status.message.parts
+        and event.status.message.parts[0].text.startswith("Business intent ready")
+    )
+    intent_metadata = MessageToDict(intent_status.status.message.metadata)
+    assert "intentProcessed" in intent_metadata
+    assert intent_metadata["pure"]["phase"] == "intent"
+    assert intent_metadata["pure"]["downstream"] == "nms"
+
+
+async def test_a_recommendation_repeating_the_sent_value_is_suppressed() -> None:
+    """A recommendation equal to what was just sent cannot answer the vendor's question."""
+
+    async def recommend(event: dict[str, object]) -> dict[str, object]:
+        del event
+        return {
+            "action": "accept",
+            "rationale": "grounded",
+            "text": "The region is TestRegion.",
+            "filledParams": {"region": "TestRegion"},
+        }
+
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "",
+        recommendation=recommend,
+    )
+    queue = _RecordingQueue()
+
+    async def run_ran(*args: object, **kwargs: object) -> ClientFlowResult:
+        del args, kwargs
+        raise _QuestionPendingError({"kind": "message", "context_id": "inner-ctx", "text": "Region not recognized."})
+
+    executor._run_ran = run_ran  # type: ignore[method-assign]
+    await executor.execute(
+        _new_oss_context("Create an energy saving task for TestRegion.", task_id="outer-1"),
+        queue,
+    )
+
+    status = next(
+        event
+        for event in queue.events
+        if isinstance(event, TaskStatusUpdateEvent) and event.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+    )
+    pure = status.metadata["pure"]
+    assert pure["recommendation"] is None
+    assert pure["recommendationSuppressed"] == "already_sent"
+
+
+async def test_a_recommendation_with_a_new_value_is_kept() -> None:
+    """Suppression is about repeating the rejected value, not about having any recommendation."""
+
+    async def recommend(event: dict[str, object]) -> dict[str, object]:
+        del event
+        return {
+            "action": "accept",
+            "rationale": "grounded in the answer",
+            "filledParams": {"region": "A2ATestRegion"},
+        }
+
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "",
+        recommendation=recommend,
+    )
+    queue = _RecordingQueue()
+
+    async def run_ran(*args: object, **kwargs: object) -> ClientFlowResult:
+        del args, kwargs
+        raise _QuestionPendingError({"kind": "message", "context_id": "inner-ctx", "text": "Region not recognized."})
+
+    executor._run_ran = run_ran  # type: ignore[method-assign]
+    await executor.execute(
+        _new_oss_context("Create an energy saving task for TestRegion.", task_id="outer-1"),
+        queue,
+    )
+
+    status = next(
+        event
+        for event in queue.events
+        if isinstance(event, TaskStatusUpdateEvent) and event.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+    )
+    assert status.metadata["pure"]["recommendation"]["filledParams"] == {"region": "A2ATestRegion"}
 
 
 class _ContextRequestProvider:
@@ -341,6 +469,7 @@ def _new_oss_context(text: str, *, task_id: str) -> RequestContext:
 
 async def _ask_a_first_question(executor: OSSPureExecutor, user_request: str) -> None:
     """Run the initial request until the downstream asks its first text question."""
+
     async def run_ran(request_text: str, *args: object, **kwargs: object) -> ClientFlowResult:
         del args, kwargs
         setter = getattr(executor._decision_provider, "set_user_request", None)
@@ -351,9 +480,7 @@ async def _ask_a_first_question(executor: OSSPureExecutor, user_request: str) ->
         )
 
     executor._run_ran = run_ran  # type: ignore[method-assign]
-    await asyncio.create_task(
-        executor.execute(_new_oss_context(user_request, task_id="outer-1"), _RecordingQueue())
-    )
+    await asyncio.create_task(executor.execute(_new_oss_context(user_request, task_id="outer-1"), _RecordingQueue()))
 
 
 async def test_the_continuation_recommendation_sees_the_original_request(
@@ -384,9 +511,7 @@ async def test_the_continuation_recommendation_sees_the_original_request(
         call_context: object,
     ) -> ClientFlowResult:
         del pending, answer_text, event_sink, updater, call_context
-        raise _QuestionPendingError(
-            {"kind": "message", "context_id": "inner-ctx", "text": "Which region?"}
-        )
+        raise _QuestionPendingError({"kind": "message", "context_id": "inner-ctx", "text": "Which region?"})
 
     monkeypatch.setattr(executor, "_run_question_continuation", fake_continuation)
     await asyncio.create_task(executor.execute(_task_context("Region A"), _RecordingQueue()))
@@ -417,9 +542,7 @@ async def test_the_continuation_answer_sees_the_original_request(
         call_context: object,
     ) -> ClientFlowResult:
         del pending, answer_text, event_sink, updater, call_context
-        executor._answer_or_relay(
-            {"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Which region?"}
-        )
+        executor._answer_or_relay({"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Which region?"})
         return ClientFlowResult(final_state=FINAL_STATE_TASK_COMPLETED, context_id="inner-ctx")
 
     monkeypatch.setattr(executor, "_run_question_continuation", fake_continuation)
@@ -535,8 +658,7 @@ async def test_oss_failure_message_carries_the_downstream_refusal(
     failed = [
         event
         for event in queue.events
-        if isinstance(event, TaskStatusUpdateEvent)
-        and event.status.state == TaskState.TASK_STATE_FAILED
+        if isinstance(event, TaskStatusUpdateEvent) and event.status.state == TaskState.TASK_STATE_FAILED
     ][-1]
     assert 'The region name "TestRegion" is not recognized.' in failed.status.message.parts[0].text
 
