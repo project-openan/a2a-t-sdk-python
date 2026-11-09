@@ -444,7 +444,7 @@ class PromptGenerationOrchestrator:
         if extraction_errors:
             raise self._slot_errors_exception(extraction_errors)
         slots = extraction_result.slots
-        self._validate_slot_constraints(slots, template_identifier, language)
+        self._validate_slot_constraints(slots, template_identifier, language, user_input)
 
         rendered_prompt_text, render_failure_reason = self._render_prompt_text(
             template_text=template_text,
@@ -591,6 +591,7 @@ class PromptGenerationOrchestrator:
         slots: Mapping[str, str | None] | None,
         template_identifier: str,
         language: str,
+        user_input: object = None,
     ) -> None:
         """Fail with ``slot.*`` when a machine-readable schema constraint is violated.
 
@@ -630,8 +631,11 @@ class PromptGenerationOrchestrator:
                         name, self._slot_label(definition), str(value), language
                     )
                 )
+        failed.extend(
+            _declarative_check_errors(slot_json_schema, effective_slots, language, user_input)
+        )
         if failed:
-            raise self._slot_errors_exception(failed)
+            raise self._slot_errors_exception(_dedupe_slot_errors(failed))
 
     def _not_provided_error(self, slot_name: str, slot_label: str, language: str) -> SlotValidationError:
         """Build the ``slot.not_provided`` error of one missing required slot."""
@@ -966,6 +970,83 @@ def _stringify_user_input(user_input: object) -> str:
     if isinstance(user_input, Mapping):
         return str(dict(user_input))
     return str(user_input)
+
+
+def _declarative_check_errors(
+    slot_json_schema: Mapping[str, object],
+    slots: Mapping[str, str | None],
+    language: str,
+    user_input: object = None,
+) -> list[SlotValidationError]:
+    """Evaluate the schema's ``x-a2at-checks`` business rules against the extracted slots.
+
+    A check is ``{"slot", "when", "require"?, "error", "slot_label", "actual"?, "source"?}``:
+    when the inspected text matches the ``when`` pattern and does not match ``require`` (when
+    present), the check reports ``error``. ``source`` defaults to ``both``: the rule must hold on
+    the extracted slot and on the operator's original text, because the extractor may normalize
+    away the phrase that makes the input incomplete ("five-hour outage", "sites such as X and Y").
+    ``slot`` inspects only the extracted value and ``input`` only the operator text. The rules live
+    in the prompt-resource overlay, so the SDK only owns this small evaluator and the business set
+    stays with the sample. A malformed pattern is ignored instead of turning an authoring mistake
+    into a user-facing block.
+    """
+    raw_checks = slot_json_schema.get("x-a2at-checks")
+    if not isinstance(raw_checks, list):
+        return []
+    errors: list[SlotValidationError] = []
+    for check in raw_checks:
+        if not isinstance(check, Mapping):
+            continue
+        slot_name = check.get("slot")
+        when = check.get("when")
+        if not isinstance(slot_name, str) or not isinstance(when, str):
+            continue
+        source = check.get("source")
+        if source == "input":
+            candidates: list[object] = [_stringify_user_input(user_input)]
+        elif source == "slot":
+            candidates = [slots.get(slot_name)]
+        else:
+            # Default: the rule must hold on both the extracted slot and the operator's text. The
+            # extractor may normalize away the phrase that makes the input incomplete ("five-hour
+            # outage", "such as X and Y"), so checking only the extracted value lets the request
+            # through. Either source violating the rule is enough to block.
+            candidates = [slots.get(slot_name), _stringify_user_input(user_input)]
+        violated = False
+        for candidate in candidates:
+            if not isinstance(candidate, str) or not candidate.strip():
+                continue
+            try:
+                if re.search(when, candidate, re.IGNORECASE) is None:
+                    continue
+                require = check.get("require")
+                if isinstance(require, str) and re.search(
+                    require, candidate, re.IGNORECASE
+                ) is not None:
+                    continue
+            except re.error:
+                continue
+            violated = True
+            break
+        if not violated:
+            continue
+        catalog = _known_slot_code(str(check.get("error") or "slot.constraint_violated"))
+        if catalog is None:
+            continue
+        label = str(check.get("slot_label") or slot_name)
+        facts: dict[str, str] = {"slot_label": label}
+        if catalog is ErrorCatalog.SLOT_CONSTRAINT_VIOLATED:
+            actual = check.get("actual") or str(slots.get(slot_name) or "").strip()[:120]
+            facts["actual"] = str(actual or slot_name)
+        errors.append(
+            SlotValidationError(
+                slot_name=slot_name,
+                code=catalog.value,
+                message=render_error_message(catalog, facts, language),
+                facts=facts,
+            )
+        )
+    return errors
 
 
 def _slot_constraint_reason(definition: SlotDefinition, value: str) -> str | None:
