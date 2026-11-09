@@ -120,6 +120,10 @@ assert:
   a2a:
     negotiation: true
     final_state: false
+baseline:
+  # Paired Create: case 1's region-level rate guarantee (2Mbps); kept below the outage target so the Modify changes the plan.
+  request: |-
+    Implement energy-saving in A2ATestRegion region, the time range is from 00:00 to 22:00. Ensure a guaranteed throughput of 2Mbps for base stations NRES_XCS_6102937 and LTE_26441_LNR_OCL.
 runner:
   scenario: night
   language: en-US

@@ -164,6 +164,80 @@ def test_a2a_t_negotiation_only_for_the_six_cases(cases: dict[int, dict[str, Any
             assert negotiation["kinds"] == []
 
 
+#: Rate named by a Modify baseline request.
+BASELINE_RATE_PATTERN = re.compile(r"guaranteed throughput of (\d+)Mbps")
+
+
+def _target_rates(document: dict[str, Any]) -> set[int]:
+    """Return the outage rates the case expects, read from the structured intent."""
+    rates: set[int] = set()
+    for entry in document["expect"]["intent"]["Scenario-based energy saving"] or ():
+        for target in entry.get("Guaranteed throughput target by site") or ():
+            match = re.search(
+                r"(\d+)Mbps", str(target.get("Guaranteed throughput target") or "")
+            )
+            if match:
+                rates.add(int(match.group(1)))
+    return rates
+
+
+def test_every_modify_case_pairs_a_normal_create_baseline(
+    cases: dict[int, dict[str, Any]],
+) -> None:
+    """A Modify continues a Task that must already exist.
+
+    The corpus does not say where that Task came from, so each Modify row states its paired Create
+    explicitly. It is a normal-day task: the power outage is the new event the Modify introduces,
+    and the baseline rate differs from the outage target so the Modify changes the plan instead of
+    restating it.
+    """
+    for case_id, document in cases.items():
+        if document["operation"] != "Modify":
+            assert "baseline" not in document, case_id
+            continue
+        baseline = document.get("baseline")
+        assert isinstance(baseline, dict), case_id
+        request = baseline.get("request")
+        assert isinstance(request, str) and request.strip(), case_id
+        assert request.startswith("Implement energy-saving in A2ATestRegion region"), case_id
+        assert "00:00 to 22:00" in request, case_id
+        assert "Modify" not in request, case_id
+        lowered = request.lower()
+        for marker in ("outage", "停电", "background event"):
+            assert marker not in lowered, f"{case_id}: baseline carries the new event"
+        match = BASELINE_RATE_PATTERN.search(request)
+        assert match is not None, case_id
+        target_rates = _target_rates(document)
+        assert target_rates, case_id
+        assert int(match.group(1)) not in target_rates, (
+            f"{case_id}: baseline restates the outage target"
+        )
+
+
+def test_every_modify_baseline_passes_the_sdk_pipeline(
+    cases: dict[int, dict[str, Any]],
+) -> None:
+    """The baseline is a real Create: the SDK must generate and validate its Task-T.
+
+    The scripted provider rewrites an explicit window list into the Task Context and then routes
+    content validation to its "missing throughput target" branch, so a baseline that writes
+    ``{HH:MM~HH:MM,NMbps}`` is blocked. Keeping the windows in prose is what this test protects.
+    """
+    from eval.osp.runner import build_client
+    from protocol.messages import TASK_TEMPLATE_URI
+    from shared.task_schema import TASK_PARAM_SCHEMA
+
+    client = build_client(model_mode="offline")
+    for case_id, document in cases.items():
+        if document["operation"] != "Modify":
+            continue
+        request = document["baseline"]["request"]
+        generated = client.generate_task_prompt_from_text(request, TASK_TEMPLATE_URI)
+        text = getattr(generated, "prompt_text", "")
+        assert isinstance(text, str) and text.strip(), case_id
+        client.validate_task_prompt_and_data_filling(text, TASK_PARAM_SCHEMA, TASK_TEMPLATE_URI)
+
+
 def test_conflict_assert_switches(cases: dict[int, dict[str, Any]]) -> None:
     for case_id in PARTIAL_IDS:
         document = cases[case_id]

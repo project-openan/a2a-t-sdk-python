@@ -133,6 +133,10 @@ assert:
   a2a:
     negotiation: true
     final_state: false
+baseline:
+  # Paired Create: case 8/9's 10Mbps guarantee, widened to 00:00-22:00 so the outage reduction is a real change.
+  request: |-
+    Implement energy-saving in A2ATestRegion region, the time range is from 00:00 to 22:00. Ensure a guaranteed throughput of 10Mbps for sites LTE_26441_LNR_OCL and NRES_XCS_6102937.
 runner:
   scenario: night
   language: en-US

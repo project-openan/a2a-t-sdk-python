@@ -25,8 +25,10 @@ _INFORMATION = "Information Negotiation Result"
 def a2at_decisions(case: Mapping[str, object]) -> list[NegotiationDecision]:
     """Turn the A2A-T Q-column replies of one case into ordered client decisions.
 
-    A single workbook reply can carry both a target and a feasibility section (id 34); the order of
-    the sections is preserved because the server sends its proposals in that order.
+    A single workbook reply can carry both a target and a feasibility section; the order of the
+    sections is preserved because the server sends its proposals in that order. The current corpus
+    has no such reply (id 34 was refreshed to a feasibility-only answer), but the vendor can still
+    return one.
     """
     decisions: list[NegotiationDecision] = []
     for text in _negotiation_rounds(case, "a2a-t"):

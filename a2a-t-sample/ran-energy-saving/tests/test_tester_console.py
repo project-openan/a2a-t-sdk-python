@@ -587,10 +587,39 @@ def test_the_start_button_stays_available_after_a_batch_finished() -> None:
 
 
 def test_a2at_decision_parser_keeps_target_and_feasibility_order() -> None:
-    decisions = a2at_decisions(CASES[34])
+    """A vendor reply may carry both sections in one round; keep their order."""
+    case = {
+        "expect": {
+            "protocols": {
+                "a2a-t": {
+                    "negotiation": {
+                        "rounds": [
+                            "## Target Negotiation Result\n\nAccept\n\n"
+                            "## Target Negotiation Result in Detail\n\n"
+                            "08:00-12:00→10Mbps, 12:00-18:00→5Mbps.\n\n"
+                            "## Feasibility Negotiation Result\n\nAccept\n\n"
+                            "## Feasibility Negotiation Result in Detail\n\n"
+                            "Reduce throughput target from 5Mbps to 2Mbps for the power outage period."
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+    decisions = a2at_decisions(case)
+
     assert len(decisions) == 2
     assert "10Mbps" in str(decisions[0].confirmed_intent)
-    assert decisions[1].feasibility_summary
+    assert decisions[1].feasibility_summary.startswith("Reduce throughput target")
+
+
+def test_a2at_decision_parser_follows_the_refreshed_case_34() -> None:
+    """The refreshed R column only has a feasibility answer; no target decision is expected."""
+    decisions = a2at_decisions(CASES[34])
+
+    assert len(decisions) == 1
+    assert "2Mbps" in str(decisions[0].feasibility_summary)
 
 
 def test_a2at_decision_parser_reads_a_feasibility_reply() -> None:

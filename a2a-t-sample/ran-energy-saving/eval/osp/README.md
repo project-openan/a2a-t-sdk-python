@@ -147,19 +147,36 @@ A2A 与 A2A-T 的预期结构化意图在这 51 条里完全相同，因此只�
 生成器尚未支持该列：重跑 `generate_osp_cases.py` 会丢掉字段，`--check` 会报漂移。合并脚本见
 `docs-local/merge-osp-blocked-followup.py`（内部，不入库）。
 
-### 3.5 `baseline`（Modify 的配对创建，可选）
+### 3.5 `baseline`（Modify 的配对创建）
 
-`operation: Modify` 的用例默认由 `/tester` 用共享的区域级基线 Create 建出被修改的 Task（见 9.1）。
-只有某条用例需要不同的前置任务时才写这个块：
+每条 `operation: Modify` 的用例都带一个 `baseline.request`：一条 Create 请求，用来建出被修改的 Task。
+它是运行期 fixture，不产生额外的 OSP 期望；`request` 只负责建出一个可续传的 Task。
 
 ```yaml
 baseline:
+  # Paired Create: case 1's region-level rate guarantee (2Mbps); kept below the outage target ...
   request: |-
-    Create an energy saving task for A2ATestRegion with these guaranteed throughputs: ...
+    Implement energy-saving in A2ATestRegion region, the time range is from 00:00 to 22:00. ...
 ```
 
-和 `blocked_followup` 一样，这是运行期 fixture，不产生额外的 OSP 期望；`request` 只负责建出一个可续传的
-Task。生成器尚未支持该字段，手工加入后 `--check` 会报漂移。
+配对规则：
+
+1. 区域与 Modify 的 Task Object 相同（`A2ATestRegion`）。
+2. 站点取该用例 `expect.intent` 的 Site list；没有具体站点的用例（27/29/39/41）写成
+   “all sites in the region”。
+3. 计划是普通的一天计划（00:00-22:00），**不含**停电/背景事件——停电是 Modify 引入的新事件。
+4. 速率与停电目标不同：停电目标是 10Mbps 的用例用 2Mbps 基线（参考 Create 1 的 720p→2Mbps）；
+   停电目标是 2Mbps/1Mbps 的用例用 10Mbps 基线（参考 Create 8/9/10/11 的 10Mbps）。这样 Modify
+   是真的改变计划，而不是复述原计划。
+5. 时间窗用散文写（`the time range is from 00:00 to 22:00`），不要写 `{HH:MM~HH:MM,NMbps}`：
+   scripted provider 会把显式窗口改写成 Task Context，随后 content validation 走到 “missing”
+   分支，基线会被误判为拦截。
+6. nms-sim 回放必须用 `A2AT_SAMPLE_NMS_SIM_WINDOW_POLICY=any`：基线是普通日计划，不是 demo 的
+   `00:00~06:00` 窗口。offline/scripted 模式下基线的 Task-T 由 scripted provider 的固定日计划渲染，
+   请求文本里的站点和速率只在 live 模式生效；这不影响建 Task 和续传，但看 wire 时不要按请求文本逐字核对。
+
+`/tester` 优先用用例自己的 `baseline.request`；没有该字段时回退到共享 fixture（`_baseline_request`）。
+生成器尚未支持该字段，手工加入后 `--check` 会报漂移（与 `blocked_followup` 相同）。
 
 ## 4. 阶段模型与 `stop_after`
 
@@ -212,7 +229,9 @@ A2A-T 只有 6 条需要协商（32/34/35/36/37/38），其余 45 条断言 0 �
   `kinds: null`，不判定类型。
 - **A2A-T**：仅 6 条有 Q 列协商答复，各 1 轮；`kinds` 由答复里的标题派生：
   `Feasibility Negotiation Result` → `feasibility`，`Target Negotiation Result` → `target`。
-  id 34 同一段里先 Target 后 Feasibility，记为 `[target, feasibility]`。
+  6 条当前都只有 `Feasibility Negotiation Result`，所以 `kinds: [feasibility]`。解析器仍支持一条
+  答复里同时出现 Target 与 Feasibility，并按出现顺序生成决策；id 34 的早期版本就是这种形态，已刷新，
+  不要再按 `[target, feasibility]` 理解。
 
 ### 5.5 最终状态
 
@@ -228,9 +247,10 @@ A2A-T 只有 6 条需要协商（32/34/35/36/37/38），其余 45 条断言 0 �
 | 46 | 输入 `green energy-saving mode`，I 列预期拦截；J/H 写成 `Aggressive` | 同上 |
 | 49–51 | I 列"预期SDK校验结果"为空 | `assert.a2a-t.validate/send/final_state: false`；意图与 Task-T 仍判定 |
 | 7 | H 列把 gain target 放在 Task Context、Task Target 留空；slot 约束要求定量 gain target 放在 Task Target | 保留断言，`known_issue` 说明差异，待业务确认 |
-| 20 / 21 / 28 / 34 | A2A 与 A2A-T 的预期行为差异，见 `known_issue` | 只加说明，不关断言 |
+| 20 / 21 / 28 / 34 | A2A 与 A2A-T 的预期行为差异，见 `known_issue`；34 另有 H/J 时段不一致 | 只加说明，不关断言 |
 
-这些用例都标了 `tags: [needs-confirmation]`，业务确认后把对应 `assert` 打开即可。
+`tags: [needs-confirmation]` 目前只在 34（H/J 时段不一致）和 40/46（原表预期与输入矛盾）上。业务
+确认后去掉标签；40/46 再把对应 `assert` 打开。7 与 20/21/28 只保留 `known_issue` 说明。
 
 ## 7. 重新生成
 
@@ -300,11 +320,12 @@ PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-af
 
 每条 Modify 用例都会先跑一条**配对的基线 Create**，拿到 `taskId` / `contextId` 后再续传：
 
-- **配对规则**：基线是同一个区域的、覆盖一整天的区域级任务（`BASELINE_REQUEST`），不是用例集里的某条
-  Create 行。20 条 Modify 的 Task-T 里 `Task Object` 都是区域、站点只在 `Task Context`；而 51 条 Create
-  里没有一条覆盖这些站点/停电时段（22/28/31/43/46 本身还是 blocked）。直接复用一条 Create 行会同时制造
-  两个问题：前置计划不匹配，且把一条评分用例复制成前置步骤。用例如需不同的前置任务，可用
-  `baseline.request` 覆盖（见第 3.5 节）。
+- **配对规则**：每条 Modify 用例在 YAML 里带自己的 `baseline.request`——一条 Create 请求，区域与
+  Modify 的 `Task Object` 相同（`A2ATestRegion`），站点取该用例的 Site list，计划是普通的一天
+  （00:00-22:00），不含停电事件，速率与停电目标不同。规则和示例见第 3.5 节。这里不直接复用 51 条
+  Create 里的某一行：它们没有一条同时覆盖这些站点和时段（22/28/31/43/46 本身还是 blocked），而且把
+  一条评分用例复制成前置步骤会污染它自己的结果。没有 `baseline.request` 的用例回退到共享 fixture
+  （`_baseline_request`）。
 - **受理门槛**：基线必须到达可续传状态才会发送 Modify。A2A-T 是 `SUBMITTED`（或已进入 `WORKING`）；纯
   A2A 是外层 Task 的 `WORKING`。`COMPLETED` 是终态，A2A 层会拒绝续传；`INPUT_REQUIRED` 会把 Modify 文本
   当成待答问题的答案，同样不算可续传。基线失败时结果里记录 `baseline`（run id、taskId、state、原请求、
@@ -317,7 +338,7 @@ PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-af
 
 **本地 RAN Agent 会立即把任务置为终态**，随后服务端拒绝 Modify（`Task ... is in terminal state`）。要在本地
 验证 20 条 Modify 用例，请用支持长任务的 NMS 模拟器（`--nms --nms-sim` +
-`A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1`），或直接连真实 NMS。
+`A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1` + `A2AT_SAMPLE_NMS_SIM_WINDOW_POLICY=any`），或直接连真实 NMS。
 
 ## 10. 已知限制
 

@@ -183,16 +183,15 @@ BASELINE_REGION: Final[str] = "A2ATestRegion"
 #: Activation window the NMS (and simulator) serves; the baseline must name it exactly.
 BASELINE_WINDOW: Final[str] = "00:00~06:00"
 
-#: One-day rate plan of the paired baseline Task. The first segment is the NMS activation window
-#: the request must name; the remaining segments keep the day covered so a Modify's "keep the
-#: rest unchanged" has a rest to keep. The rates are the demo's normal day/evening plan, not a
-#: corpus expectation: the baseline exists to give the Modify a live Task, and the corpus says
-#: nothing about the plan that preceded it.
+#: One-day rate plan of the shared fallback baseline. The first segment is the NMS activation
+#: window the request must name; the remaining segments keep the day covered so a Modify's "keep
+#: the rest unchanged" has a rest to keep. Every Modify case ships its own ``baseline.request``
+#: (see eval/osp/README.md 3.5); this plan is only the fallback for a case without one.
 BASELINE_SCHEDULE: Final[str] = (
     "{00:00~06:00,10Mbps}, {06:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
 )
 
-#: Complete baseline request used to seed a Modify target task.
+#: Fallback baseline request used when a Modify case declares no ``baseline.request``.
 BASELINE_REQUEST: Final[str] = (
     f"Create an energy saving task for {BASELINE_REGION} with these guaranteed throughputs: "
     f"{BASELINE_SCHEDULE}."
@@ -1100,9 +1099,9 @@ class EvalBatchManager:
     ) -> dict[str, object] | None:
         """Create the Task a Modify item continues, and wait until it can be continued.
 
-        The paired Create is deliberately independent of the case's expectations: it only has to
-        produce a live Task in the same region. The case's own sites and outage window stay in the
-        Modify request, so the Modify never targets a Task the tester did not just create.
+        The case's ``baseline.request`` is the paired Create (a normal-day task for the same region
+        and sites); the fallback fixture is used only when the case declares none. The Modify never
+        targets a Task the tester did not just create.
         """
         defaults = self._protocol_defaults.get(protocol, {})
         conversation_id, idempotency_key = self._run_identity(batch, index, item)
@@ -1934,12 +1933,10 @@ def _summary(items: Sequence[CaseItem]) -> dict[str, int]:
 def _baseline_request(case: Mapping[str, Any] | None = None) -> str:
     """Return the Create request paired with one Modify case.
 
-    The OSP rows do not say what task preceded the Modify, and none of the corpus' Create rows
-    creates a one-day region-level task with the Modify's sites. Pairing to a graded Create row
-    would therefore mismatch the prior plan and duplicate that row's result, so every Modify item
-    is paired with this one explicit baseline fixture instead. Its ``Task Object`` is the same
-    configured region the Modify Task-T names; the case's sites and outage window stay in the
-    Modify request. A case may replace the fixture with ``baseline.request``.
+    Every Modify case ships a ``baseline.request``: a normal-day Create for the same region and
+    sites, with a rate that differs from the outage target (see eval/osp/README.md 3.5). This
+    function returns it. A case without one falls back to the shared fixture below, which keeps
+    the previous behaviour for hand-written or future rows.
 
     The demo's ``Region A`` placeholder is not a served region: the real NMS and the simulator
     answer it with an information negotiation. A Modify baseline must therefore name the

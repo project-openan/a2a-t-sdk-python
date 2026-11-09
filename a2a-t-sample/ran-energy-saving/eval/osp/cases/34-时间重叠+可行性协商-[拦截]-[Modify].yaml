@@ -10,6 +10,7 @@ tags:
   - scenario-based
   - negotiation-a2a
   - negotiation-a2at
+  - needs-confirmation
 user_input: |-
   Because LNR_KPI_7745 and NES_27A_321071 in the A2ATestRegion zone experienced a power outage from 08:00 to 18:00 on the second day, the guaranteed bandwidth for LNR_KPI_7745 and NES_27A_321071 needs to be modified to 10 Mbit/s from 08:00 to 12:00 and 5 Mbit/s from 11:00 to 18:00.
 expect:
@@ -35,9 +36,9 @@ expect:
         Scenario period: 08:00:00-17:59:59
   protocols:
     a2a-t:
-      validate: pass
-      validate_label: 不拦截
-      send: true
+      validate: blocked
+      validate_label: 拦截
+      send: false
       task_t: |-
         ## Operation Type
         Modify
@@ -54,7 +55,7 @@ expect:
         ## Task Target
 
         ## Task Context
-        Site list: ["LNR_KPI_7745", "NES_27A_321071"], Time-segmented rate guarantee target: {08:00-12:00: 10Mbps}, {11:00-18:00: 5Mbps}, Background event: power outage from 08:00 to 18:00.
+        Site list: ["LNR_KPI_7745", "NES_27A_321071"], Time-segmented rate guarantee target: {08:00-12:00: 10Mbps}, {12:00-18:00: 5Mbps}, Background event: power outage from 08:00 to 18:00.
 
         ## Terminology Explanation
         1. LTE
@@ -97,18 +98,9 @@ expect:
         expected: true
         expected_rounds: 1
         kinds:
-          - target
           - feasibility
         rounds:
           - |-
-            ## Target Negotiation Result
-
-            Accept
-
-            ## Target Negotiation Result in Detail
-
-            08:00-12:00→10Mbps, 12:00-18:00→5Mbps.
-
             ## Feasibility Negotiation Result
 
             Accept
@@ -116,7 +108,7 @@ expect:
             ## Feasibility Negotiation Result in Detail
 
             Reduce throughput target from 5Mbps to 2Mbps for the power outage period.
-      final_state: task_completed
+      final_state: input_invalid
       final_state_derived: true
     a2a:
       negotiation:
@@ -142,6 +134,13 @@ assert:
   a2a:
     negotiation: true
     final_state: false
+blocked_followup:
+  input: |-
+    Because LNR_KPI_7745 and NES_27A_321071 in the A2ATestRegion zone experienced a power outage from 08:00 to 18:00 on the second day, the guaranteed bandwidth for those sites needs to be modified to 10 Mbit/s from 08:00 to 12:00 and 5 Mbit/s from 12:00 to 18:00.
+baseline:
+  # Paired Create: case 8/9's 10Mbps guarantee, widened to 00:00-22:00 so the outage reduction is a real change.
+  request: |-
+    Implement energy-saving in A2ATestRegion region, the time range is from 00:00 to 22:00. Ensure a guaranteed throughput of 10Mbps for sites LNR_KPI_7745 and NES_27A_321071.
 runner:
   scenario: night
   language: en-US
@@ -153,4 +152,17 @@ source:
   sheet: A2A-T_原始数据
   row: 35
 known_issue: |-
-  同一段协商答复里先写 Target Negotiation、再写 Feasibility Negotiation，原表没有拆成两轮；本文件保留原文，并按 kinds=[target, feasibility] 记录。
+  原表 I 列（预期SDK校验结果）为「拦截」，J 列给出拦截后补充请求，本文件按 blocked_followup 处理：
+  拦截段只判 validate=blocked，intent/task_t 只作证据；补充段的 validate=pass、send=true、
+  final_state=task_completed 由拦截态机械派生，intent/task_t/send/final_state 参与判定。
+  补充请求（J 列）把第二个时段写成 12:00-18:00，而原表 H 列（预期SDK转换输入）仍按原始输入写成
+  11:00-18:00；本文件按 README 3.4 的规则，expect.task_t 描述的是补充请求，故取 12:00-18:00。
+  H 列未同步，待业务确认；确认前保留 tags: [needs-confirmation]。
+  原表 R 列（A2A-T 协商信息）只含 Feasibility Negotiation Result，不含 Target Negotiation，故
+  kinds=[feasibility]、1 轮。解析器仍支持一条答复里同时出现 Target 与 Feasibility，并按出现顺序生成
+  决策（当前语料已没有这种答复）。
+  A2A 与 A2A-T 的预期协商轮次不同：A2A-T 为 1 轮（feasibility），A2A 为 3 轮
+  （{08:00-12:00,10Mbps}/{12:00-18:00,5Mbps} → 5Mbps → 2Mbps），属协议行为差异，不关断言。
+  expect.intent 为协商后的最终意图（停电时段 2Mbps）；离线 runner 看不到协商结果（拦截段只看原
+  请求，补充段只看 J 列请求），intent 阶段标 recorded。
+
