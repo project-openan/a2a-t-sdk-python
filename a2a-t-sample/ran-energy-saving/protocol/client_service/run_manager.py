@@ -1239,6 +1239,7 @@ class RunManager:
                 validate_before_send=run.validate_before_send,
                 enforce_required_fields=_should_enforce_required_fields(run.source),
                 require_rate_target=_requires_rate_target(run.source),
+                site_level_rate_optional=bool(run.source.get("negotiationExpected")),
                 run_mode=run.run_mode,
                 target_task_id=run.target_task_id,
                 target_context_id=run.target_context_id,

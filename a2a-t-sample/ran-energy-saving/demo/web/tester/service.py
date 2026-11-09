@@ -728,9 +728,14 @@ class EvalBatchManager:
         transport = defaults.get("transport", "sse")
         discovery = defaults.get("discovery", "direct")
         conversation_id, idempotency_key = self._run_identity(batch, index, item)
+        mode = self._mode_for(batch, item.protocol)
+        if runtime_protocol == RUNTIME_A2A_T and _negotiation_expected(case, PROTOCOL_A2A_T):
+            # The OSP Q column is the expected negotiation dialogue. Replaying it verifies the
+            # protocol path deterministically; the SDK intent/Task-T stages still run in live mode.
+            mode = MODE_SCRIPTED
         run = await self._runs.start(
             scenario,
-            self._mode_for(batch, item.protocol),
+            mode,
             transport,
             discovery,
             str(case["user_input"]),
@@ -744,6 +749,9 @@ class EvalBatchManager:
                 "batchId": batch.batch_id,
                 "caseId": item.case_id,
                 "caseName": item.name,
+                # A rate-less site-level negotiation is expected to reach the server, which
+                # proposes the missing value; only the corpus' negotiation cases get this pass.
+                "negotiationExpected": _negotiation_expected(case, PROTOCOL_A2A_T),
             },
             target_task_id=target_task_id,
             target_context_id=target_context_id,

@@ -145,9 +145,11 @@ OSP_INTENT_SCHEMA: Final[dict[str, object]] = {
             "description": (
                 "Daily energy-saving period, rendered as hour-by-hour intervals "
                 "HH:00:00-HH:59:59 joined by '&'. Extract an explicit range even when it sits "
-                "inside a throughput sentence. For an area-level request with no explicit range, "
-                "use the full day (all 24 hourly intervals). For a site-level request, leave "
-                "empty and put the outage window in 'Scenario period'."
+                "inside a throughput sentence. A range whose end is HH:00 stops before that hour: "
+                "19:00-22:00 covers 19:00:00-19:59:59, 20:00:00-20:59:59 and 21:00:00-21:59:59; "
+                "never add the 22:00-22:59:59 interval. For an area-level request with no explicit "
+                "range, use the full day (all 24 hourly intervals). For a site-level request, "
+                "leave empty and put the outage window in 'Scenario period'."
             ),
         },
         "Frequencies of carriers that can be shut down": {
