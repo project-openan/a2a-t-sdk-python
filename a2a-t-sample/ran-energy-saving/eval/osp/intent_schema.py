@@ -136,8 +136,10 @@ OSP_INTENT_SCHEMA: Final[dict[str, object]] = {
         "Special Requirements for Carrier Shutdown Frequencies": {
             "type": "string",
             "description": (
-                "Free-text special requirement about carrier shutdown frequencies. Empty when "
-                "none is stated."
+                "Free-text special requirement about carrier shutdown frequencies, beyond the "
+                "frequency number itself. Keep it empty when the request only names a concrete "
+                "frequency to shut down (EARFCN/NR-ARFCN); put that number in 'Frequencies of "
+                "carriers that can be shut down' instead."
             ),
         },
         "Energy saving time": {
