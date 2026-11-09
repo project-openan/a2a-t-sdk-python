@@ -12,9 +12,10 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Final
 
-from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
+from a2a_t.core.metadata import NegotiationContext
 from protocol.client_runtime import MODE_CONFIRM
 from protocol.decision_provider import DEFAULT_MANUAL_TIMEOUT_SECONDS, ManualDecisionProvider
+from protocol.pure_client_flow import pure_proposal_view
 from shared.models import NegotiationDecision, NegotiationProposeView
 
 from demo.pure_policy import recommendation_decision, render_pure_answer
@@ -34,17 +35,6 @@ def _pure_metadata(event: Mapping[str, object]) -> Mapping[str, object]:
         return {}
     raw = metadata.get(_PURE_METADATA_KEY)
     return raw if isinstance(raw, Mapping) else {}
-
-
-def _int_value(value: object, default: int) -> int:
-    """Return one positive int metadata value, or the default."""
-    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-        return default
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return parsed if parsed > 0 else default
 
 
 class PureConfirmationAnswer:
@@ -105,25 +95,7 @@ class PureConfirmationAnswer:
         """Build the proposal view, wait for the operator, and render the answer text."""
         pure = _pure_metadata(event)
         self._last_recommendation_error = None
-        text = str(event.get("text") or "").strip() or ("The downstream requested additional information.")
-        context_id = str(event.get("context_id") or event.get("task_id") or "pure-question")
-        round_number = _int_value(pure.get("round"), 1)
-        max_rounds = _int_value(pure.get("maxRounds"), self._max_rounds)
-        propose = NegotiationProposeView(
-            negotiation_id=context_id,
-            kind="information",
-            round=round_number,
-            max_rounds=max_rounds,
-            content=text,
-            template_uri=None,
-            context_id=context_id,
-        )
-        session = NegotiationContext(
-            id=context_id,
-            round=round_number,
-            max_rounds=max_rounds,
-            performative=NegotiationPerformative.PROPOSE,
-        )
+        propose, session = pure_proposal_view(event, default_max_rounds=self._max_rounds)
         if self._proposal_sink is not None:
             self._proposal_sink(propose, session)
         if self._mode == MODE_CONFIRM and self._recommendation_sink is not None:

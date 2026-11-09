@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import shutil
 from collections.abc import Awaitable, Callable, Sequence
@@ -98,7 +99,7 @@ from protocol.nms_client import (
     NmsWebhookTransport,
 )
 from protocol.plain_client_flow import run_plain_client_flow
-from protocol.pure_client_flow import run_pure_client_flow
+from protocol.pure_client_flow import pure_proposal_view, run_pure_client_flow
 from protocol.run_spec import RunCatalog, RunSpec
 from protocol.shared_webhook import SharedWebhook, WebhookSubscription, get_shared_webhook
 from protocol.wire_log import HttpWireLog
@@ -290,6 +291,29 @@ def _build_adk_decision_provider(
         session_db_path=config.client_db_path,
         agent_factory=client_agent_factory,
     )
+
+
+def _announce_pure_proposals(
+    answer: Callable[[dict[str, object]], str | Awaitable[str]],
+    on_decision_requested: Callable[[NegotiationProposeView, NegotiationContext], None],
+    max_rounds: int,
+) -> Callable[[dict[str, object]], Awaitable[str]]:
+    """Wrap a plain pure answer so every relayed question is reported to the run.
+
+    ``PureConfirmationAnswer`` already publishes through ``set_proposal_sink``. Scripted and policy
+    answers do not, which left ``run.proposals`` empty: the tester could not assert the negotiation
+    round and waited for the run instead of the question.
+    """
+
+    async def announce(event: dict[str, object]) -> str:
+        propose, session = pure_proposal_view(event, default_max_rounds=max_rounds)
+        on_decision_requested(propose, session)
+        result = answer(event)
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+
+    return announce
 
 
 @dataclass
@@ -492,17 +516,27 @@ class ClientRuntime:
                     # intent layer, so the engineer client sends the raw request to it.
                     # A confirmation answer owns the human moment; hand it the same hooks the
                     # A2A-T decision provider receives.
+                    answer = self.pure_answer
                     for setter_name, hook in (
                         ("set_proposal_sink", on_decision_requested),
                         ("set_decision_sink", on_decision_made),
                     ):
-                        setter = getattr(self.pure_answer, setter_name, None)
+                        setter = getattr(answer, setter_name, None)
                         if callable(setter):
                             setter(hook)
+                    if (
+                        answer is not None
+                        and on_decision_requested is not None
+                        and not callable(getattr(answer, "set_proposal_sink", None))
+                    ):
+                        # A scripted/policy answer is a plain callable: wrap it so the run still
+                        # reports the relayed question. Without this, ``run.proposals`` stayed empty
+                        # and the tester's ``negotiate`` stage waited for the run instead of the round.
+                        answer = _announce_pure_proposals(answer, on_decision_requested, MAX_ROUNDS)
                     return await run_pure_client_flow(
                         transport=self.transport,
                         user_request=raw_text if processed else self._raw_mode_request(custom_request),
-                        answer=self.pure_answer,
+                        answer=answer,
                         max_rounds=MAX_ROUNDS,
                         call_timeout_seconds=self.config.http_timeout_seconds,
                         event_sink=event_sink,

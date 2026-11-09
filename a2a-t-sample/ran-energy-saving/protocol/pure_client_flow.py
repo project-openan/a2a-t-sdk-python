@@ -15,12 +15,14 @@ from collections.abc import Awaitable, Callable, Mapping
 
 from a2a.client.client import ClientCallContext
 from a2a.types import Role, SendMessageRequest
+from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
 from shared.config import (
     DEFAULT_HTTP_TIMEOUT_SECONDS,
     PURE_FOLLOWUP_BOTH,
     PURE_FOLLOWUP_CONTEXT,
     PURE_FOLLOWUP_TASK,
 )
+from shared.models import NegotiationProposeView
 from shared.trace import PHASE_TASK_PROMPT, TraceRecorder, current_trace
 
 from protocol.client_flow import (
@@ -333,6 +335,53 @@ def pure_metadata(event: Mapping[str, object]) -> dict[str, object]:
     return dict(raw) if isinstance(raw, Mapping) else {}
 
 
+def _positive_int(value: object, default: int) -> int:
+    """Return one positive int metadata value, or the default."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def pure_proposal_view(
+    event: Mapping[str, object],
+    *,
+    default_max_rounds: int = 3,
+) -> tuple[NegotiationProposeView, NegotiationContext]:
+    """Build the proposal view of one relayed pure A2A question.
+
+    The pure hop has no Negotiation-T metadata, so the view is derived from the question text and
+    the sample-local ``pure`` tags. Both the confirmation card and the plain scripted answer use
+    this view, which keeps the run's negotiation panel and the tester's round assertion honest.
+    """
+    pure = pure_metadata(event)
+    text = str(event.get("text") or "").strip() or (
+        "The downstream requested additional information."
+    )
+    context_id = str(event.get("context_id") or event.get("task_id") or "pure-question")
+    round_number = _positive_int(pure.get("round"), 1)
+    max_rounds = _positive_int(pure.get("maxRounds"), default_max_rounds)
+    propose = NegotiationProposeView(
+        negotiation_id=context_id,
+        kind="information",
+        round=round_number,
+        max_rounds=max_rounds,
+        content=text,
+        template_uri=None,
+        context_id=context_id,
+    )
+    session = NegotiationContext(
+        id=context_id,
+        round=round_number,
+        max_rounds=max_rounds,
+        performative=NegotiationPerformative.PROPOSE,
+    )
+    return propose, session
+
+
 async def _answer_for(
     event: dict[str, object],
     answer: Callable[[dict[str, object]], str | Awaitable[str]] | None,
@@ -403,5 +452,6 @@ __all__ = [
     "continue_pure_client_flow",
     "is_plain_question",
     "pure_metadata",
+    "pure_proposal_view",
     "run_pure_client_flow",
 ]

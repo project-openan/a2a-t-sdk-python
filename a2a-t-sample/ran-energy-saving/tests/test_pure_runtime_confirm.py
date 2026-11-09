@@ -119,3 +119,46 @@ async def test_confirm_mode_answers_the_relayed_question(offline_config: SampleC
     assert len(transport.requests) == 2
     assert transport.requests[1].message.parts[0].text == "The region is Region A."
     assert transport.requests[1].message.context_id == "ctx-1"
+
+
+async def test_a_scripted_pure_answer_publishes_the_relayed_question(
+    offline_config: SampleConfig,
+) -> None:
+    """The tester replays the P column through a plain callable; it must still report rounds."""
+    answers = ["The region is A2ATestRegion."]
+
+    def answer(event: dict[str, object]) -> str:
+        del event
+        return answers.pop(0)
+
+    transport = _FakeTransport([[_relayed_question()], [_completed()]])
+    runtime = ClientRuntime(
+        config=offline_config,
+        run_spec=DemoRunCatalog().spec("information"),
+        mode="auto",
+        protocol=PROTOCOL_PURE,
+        transport_name="sse",
+        prompt_client=None,
+        a2a_client=None,
+        transport=transport,  # type: ignore[arg-type]
+        provider=None,
+        discovered=None,  # type: ignore[arg-type]
+        sdk_env=None,
+        manual_provider=None,
+        _httpx_client=None,
+        pure_answer=answer,
+    )
+    proposals: list[object] = []
+
+    result = await asyncio.wait_for(
+        runtime.run(
+            user_request="Create an energy saving task.",
+            on_decision_requested=lambda propose, session: proposals.append(propose),
+        ),
+        timeout=5.0,
+    )
+
+    assert len(proposals) == 1
+    assert proposals[0].content == "Please provide a real region."  # type: ignore[union-attr]
+    assert proposals[0].round == 1  # type: ignore[union-attr]
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
