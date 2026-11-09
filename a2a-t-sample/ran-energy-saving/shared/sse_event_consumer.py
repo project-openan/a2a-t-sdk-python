@@ -2,10 +2,34 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
+from typing import Final
 
 from a2a.types import StreamResponse, TaskState, TaskStatus
 from google.protobuf.json_format import MessageToDict
+
+#: Top-level keys of one ``StreamResponse`` JSON body (``MessageToDict`` camelCase spelling).
+#: The real NMS appends wrapper fields such as a top-level ``contextId`` next to ``statusUpdate``;
+#: ``ParseDict`` is strict and would reject the whole event, so only these keys reach it.
+_STREAM_RESPONSE_FIELDS: Final[tuple[str, ...]] = (
+    "task",
+    "message",
+    "statusUpdate",
+    "artifactUpdate",
+)
+
+
+def stream_response_payload(payload: Mapping[str, object]) -> dict[str, object]:
+    """Return the ``StreamResponse`` part of one vendor JSON body.
+
+    A body carrying none of the recognized keys is returned unchanged, so a genuinely malformed
+    payload still fails to parse instead of silently becoming an empty event.
+    """
+    selected = {
+        key: value for key, value in payload.items() if key in _STREAM_RESPONSE_FIELDS
+    }
+    return selected or dict(payload)
 
 
 def _status_message_metadata(status: TaskStatus) -> dict[str, object] | None:

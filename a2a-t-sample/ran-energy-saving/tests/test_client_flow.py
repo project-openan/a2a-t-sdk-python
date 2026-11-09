@@ -21,6 +21,7 @@ from a2a.types import (
     Task,
     TaskState,
     TaskStatus,
+    TaskStatusUpdateEvent,
 )
 from a2a_t.core.metadata import (
     NEGOTIATION_CONTEXT_METADATA_KEY,
@@ -1063,6 +1064,28 @@ async def test_call_timeout_defaults_to_the_documented_budget() -> None:
     )
 
     assert all(context.timeout == DEFAULT_CALL_TIMEOUT_SECONDS for context in transport.call_contexts)
+
+
+def test_webhook_payload_tolerates_the_vendor_context_wrapper() -> None:
+    """The real NMS appends a top-level contextId, which is not a StreamResponse field."""
+    message = Message(message_id="msg-1", role=Role.ROLE_AGENT, context_id=CONTEXT_ID)
+    message.parts.add(text="Task modification succeeded")
+    payload = MessageToDict(
+        StreamResponse(
+            status_update=TaskStatusUpdateEvent(
+                task_id="task-1",
+                context_id=CONTEXT_ID,
+                status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED, message=message),
+            )
+        )
+    )
+    payload["contextId"] = CONTEXT_ID
+
+    event = normalize_webhook_payload(payload)
+
+    assert event["kind"] == "status"
+    assert event["state"] == "TASK_STATE_SUBMITTED"
+    assert event["text"] == "Task modification succeeded"
 
 
 def test_webhook_payload_normalization_matches_sse_shape() -> None:

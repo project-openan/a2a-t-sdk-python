@@ -76,7 +76,7 @@ from shared.run_constants import (
     reports_failed_completion,
 )
 from shared.run_source import now_iso
-from shared.sse_event_consumer import normalize_event
+from shared.sse_event_consumer import normalize_event, stream_response_payload
 from shared.task_schema import TASK_PARAM_SCHEMA
 from shared.trace import (
     PHASE_NEGOTIATION,
@@ -677,7 +677,7 @@ def normalize_webhook_payload(payload: Mapping[str, object]) -> dict[str, object
     """
     try:
         stream_response = StreamResponse()
-        ParseDict(dict(payload), stream_response)
+        ParseDict(stream_response_payload(payload), stream_response)
         return normalize_event(stream_response)
     except Exception as exc:
         raise ClientFlowError(f"Unsupported webhook payload: {exc}") from exc

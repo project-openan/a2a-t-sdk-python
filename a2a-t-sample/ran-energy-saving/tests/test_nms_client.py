@@ -200,6 +200,30 @@ async def test_a_non_200_stream_raises_a_protocol_error() -> None:
     await client.aclose()
 
 
+def test_a_status_update_with_the_vendor_wrapper_field_is_normalized() -> None:
+    """The real NMS puts a top-level contextId next to statusUpdate on Modify pushes."""
+    event = _frame_to_event(
+        {
+            "statusUpdate": {
+                "taskId": "task-1",
+                "contextId": "ctx-1",
+                "status": {
+                    "state": "TASK_STATE_SUBMITTED",
+                    "message": {
+                        "role": "ROLE_AGENT",
+                        "parts": [{"text": "Task modification succeeded"}],
+                    },
+                },
+            },
+            "contextId": "ctx-1",
+        }
+    )
+
+    assert event["kind"] == "status"
+    assert event["state"] == "TASK_STATE_SUBMITTED"
+    assert event["text"] == "Task modification succeeded"
+
+
 def test_status_update_frame_is_normalized() -> None:
     event = _frame_to_event(
         {

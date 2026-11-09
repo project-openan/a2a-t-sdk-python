@@ -45,7 +45,7 @@ from shared.config import (
     SampleConfig,
 )
 from shared.run_constants import PROTOCOL_A2A_T, PROTOCOL_PURE
-from shared.sse_event_consumer import normalize_event
+from shared.sse_event_consumer import normalize_event, stream_response_payload
 from shared.trace import (
     PHASE_DISPATCH,
     PHASE_EXECUTION,
@@ -1110,7 +1110,7 @@ def _frame_to_event(frame: Mapping[str, object]) -> dict[str, object]:
     """Convert one raw JSON frame into the normalized event shape."""
     try:
         response = StreamResponse()
-        ParseDict(dict(frame), response)
+        ParseDict(stream_response_payload(frame), response)
         return normalize_event(response)
     except (ParseError, TypeError, ValueError):
         return {"kind": "raw", "frame": dict(frame)}
