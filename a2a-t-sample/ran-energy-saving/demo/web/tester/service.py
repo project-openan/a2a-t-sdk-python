@@ -124,6 +124,13 @@ _FAILED_TASK_STATES: Final[frozenset[str]] = frozenset(
 _WORKING_TASK_STATES: Final[frozenset[str]] = frozenset(
     {"TASK_STATE_WORKING", "TASK_STATE_COMPLETED"}
 )
+#: Task states that prove the downstream accepted the Create/Modify request. A2A-T reports
+#: :data:`TASK_STATE_SUBMITTED` (the machine-readable success signal); pure A2A starts its outer
+#: Task at ``TASK_STATE_WORKING``. ``INPUT_REQUIRED`` is not acceptance: the negotiation is still
+#: in progress, so the item keeps observing.
+_ACCEPTED_TASK_STATES: Final[frozenset[str]] = frozenset(
+    {TASK_STATE_SUBMITTED}
+) | _WORKING_TASK_STATES
 #: Client outcomes that prove the request ended before any Task was sent.
 _PRE_SEND_TERMINAL_STATES: Final[frozenset[str]] = frozenset(
     {
@@ -1225,18 +1232,14 @@ class EvalBatchManager:
         send_expected: bool,
         timeout_seconds: float,
     ) -> StageResult:
-        """Judge whether the remote side accepted the request (a Task exists)."""
+        """Judge whether the remote side accepted the request (the success status arrived).
+
+        ``TASK_STATE_SUBMITTED`` is the A2A-T success signal for Create and Modify alike; a pure
+        A2A outer Task starts at ``TASK_STATE_WORKING``. An ``INPUT_REQUIRED`` Task carries an
+        identity but the negotiation is not finished, so it must not turn the row green.
+        """
         started = time.monotonic()
         actual = _task_observation(run)
-        if item.protocol == PROTOCOL_A2A:
-            return StageResult(
-                "accepted",
-                STAGE_RECORDED,
-                "纯 A2A 只记录外层 Task，不判定受理。",
-                expected=None,
-                actual=actual,
-                duration_ms=int(round((time.monotonic() - started) * 1000)),
-            )
         if not send_expected:
             return StageResult(
                 "accepted",
@@ -1247,8 +1250,9 @@ class EvalBatchManager:
                 duration_ms=int(round((time.monotonic() - started) * 1000)),
             )
 
-        await self._wait_for_task_identity(run, timeout_seconds)
+        await self._wait_for_acceptance_state(run, timeout_seconds)
         actual = _task_observation(run)
+        state = run.latest_task_state
         final_state = run.result.final_state if run.result is not None else None
         if final_state in _PRE_SEND_TERMINAL_STATES:
             status = STAGE_FAILED
@@ -1256,17 +1260,23 @@ class EvalBatchManager:
         elif run.remote_task_id is None or run.remote_context_id is None:
             status = STAGE_FAILED
             message = "run 已结束但没有 Task。" if run.finished() else "等待 Task 超时。"
-        elif run.latest_task_state in _FAILED_TASK_STATES:
+        elif state in _FAILED_TASK_STATES:
             status = STAGE_FAILED
-            message = f"Task 状态为 {run.latest_task_state}。"
-        else:
+            message = f"Task 状态为 {state}。"
+        elif state in _ACCEPTED_TASK_STATES:
             status = STAGE_PASSED
             message = ""
+        elif state == "TASK_STATE_INPUT_REQUIRED":
+            status = STAGE_WAITING
+            message = "Task 仍在协商（INPUT_REQUIRED），尚未确认受理。"
+        else:
+            status = STAGE_WAITING
+            message = "未观察到受理状态。"
         return StageResult(
             "accepted",
             status,
             message,
-            expected={"taskId": "非空", "contextId": "非空", "state": "不在失败终态"},
+            expected={"taskId": "非空", "contextId": "非空", "state": "已受理"},
             actual=actual,
             duration_ms=int(round((time.monotonic() - started) * 1000)),
         )
@@ -1353,6 +1363,30 @@ class EvalBatchManager:
                 return
             await asyncio.sleep(_POLL_SECONDS)
 
+    async def _wait_for_acceptance_state(
+        self, run: RunState, timeout_seconds: float
+    ) -> str | None:
+        """Poll until the Task identity and an accepted or failed state are observed.
+
+        A Task only proves the downstream accepted the request once its status state arrives;
+        ``INPUT_REQUIRED`` means the negotiation is still in progress.
+        """
+        deadline = time.monotonic() + max(0.1, timeout_seconds)
+        while time.monotonic() < deadline:
+            state = run.latest_task_state
+            if state in _FAILED_TASK_STATES:
+                return state
+            if (
+                run.remote_task_id
+                and run.remote_context_id
+                and state in _ACCEPTED_TASK_STATES
+            ):
+                return state
+            if run.finished():
+                return state
+            await asyncio.sleep(_POLL_SECONDS)
+        return run.latest_task_state
+
     async def _wait_for_working_state(
         self, run: RunState, timeout_seconds: float
     ) -> str | None:
@@ -1390,9 +1424,19 @@ class EvalBatchManager:
     async def _wait_for_negotiation(
         self, run: RunState, expected_rounds: int, timeout_seconds: float
     ) -> None:
+        """Wait for the expected rounds, or for the first response when none is expected.
+
+        A case that expects no negotiation still has to observe the first response: a proposal
+        there is a failure and the Task identity there ends the item. Waiting for the run to
+        finish instead is wrong for a long task — the run stays alive while the remote Task
+        executes, so the item would sit for the whole timeout.
+        """
         deadline = time.monotonic() + max(0.1, timeout_seconds)
         while time.monotonic() < deadline:
-            if expected_rounds > 0 and len(run.proposals) >= expected_rounds:
+            if expected_rounds > 0:
+                if len(run.proposals) >= expected_rounds:
+                    return
+            elif run.proposals or run.remote_task_id or run.remote_context_id:
                 return
             if run.finished():
                 return

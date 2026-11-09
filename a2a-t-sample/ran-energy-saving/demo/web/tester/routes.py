@@ -115,7 +115,7 @@ def build_tester_routes(
                 "transport": defaults.get("transport", "sse"),
                 "discovery": defaults.get("discovery", "direct"),
                 "defaults": {
-                    "stopAfter": "working",
+                    "stopAfter": "accepted",
                     "approval": None,
                     "timeoutSeconds": None,
                     "workingTimeoutSeconds": DEFAULT_WORKING_TIMEOUT_SECONDS,

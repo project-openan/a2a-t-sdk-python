@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import SimpleNamespace
@@ -233,6 +234,72 @@ async def test_accepted_passes_when_a_task_exists(tmp_path: Path) -> None:
     }
 
 
+async def test_accepted_waits_for_a_success_state_not_identity_alone(tmp_path: Path) -> None:
+    """An INPUT_REQUIRED Task carries identity but the negotiation is not finished."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="sse")
+    run.remote_task_id = "task-1"
+    run.remote_context_id = "ctx-1"
+    run.latest_task_state = "TASK_STATE_INPUT_REQUIRED"
+    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A_T)
+
+    result = await manager._judge_accepted(
+        run, item, CASES[1], True, timeout_seconds=0.2
+    )
+
+    assert result.status == STAGE_WAITING
+
+
+async def test_pure_accepted_is_judged_by_the_outer_task_state(tmp_path: Path) -> None:
+    """Pure A2A acceptance is the outer Task's first successful state, not a recording."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="sse")
+    run.remote_task_id = "task-1"
+    run.remote_context_id = "ctx-1"
+    run.latest_task_state = "TASK_STATE_WORKING"
+    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A)
+
+    result = await manager._judge_accepted(
+        run, item, CASES[1], True, timeout_seconds=0.2
+    )
+
+    assert result.status == STAGE_PASSED
+
+
+async def test_negotiation_without_expected_rounds_ends_on_the_first_response(
+    tmp_path: Path,
+) -> None:
+    """A no-negotiation case must not wait for the long-task run to finish."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="sse")
+    run.status = "running"
+    run.remote_task_id = "task-1"
+    run.remote_context_id = "ctx-1"
+    run.latest_task_state = TASK_STATE_SUBMITTED
+
+    started = time.monotonic()
+    await manager._wait_for_negotiation(run, 0, timeout_seconds=5.0)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 1.0
+
+
+async def test_negotiation_without_expected_rounds_ends_on_an_unexpected_proposal(
+    tmp_path: Path,
+) -> None:
+    """An unexpected proposal is the first response too: record it instead of stalling."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="sse")
+    run.status = "running"
+    run.proposals.append(SimpleNamespace())  # type: ignore[arg-type]
+
+    started = time.monotonic()
+    await manager._wait_for_negotiation(run, 0, timeout_seconds=5.0)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 1.0
+
+
 async def test_accepted_fails_fast_when_the_run_ended_before_sending(tmp_path: Path) -> None:
     manager = _manager(tmp_path, _FakeRuns(_finish))
     run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="sse")
@@ -397,7 +464,7 @@ async def test_an_a2a_item_has_no_sdk_stages(tmp_path: Path) -> None:
     assert isinstance(stages, Mapping)
     for stage in ("intent", "task_t", "validate"):
         assert stage not in stages
-    assert stages["accepted"]["status"] == STAGE_RECORDED
+    assert stages["accepted"]["status"] == STAGE_PASSED
     assert stages["working"]["status"] == STAGE_PASSED
 
 

@@ -631,7 +631,7 @@ async def test_meta_exposes_the_acceptance_stage_model_and_transport(
     for stage in ("send", "negotiate", "accepted", "working", "final"):
         assert stage in stage_order
     assert stage_order.index("accepted") < stage_order.index("working") < stage_order.index("final")
-    assert meta["defaults"]["stopAfter"] == "working"
+    assert meta["defaults"]["stopAfter"] == "accepted"
     assert meta["defaults"]["approval"] is None
     assert meta["defaults"]["decisionMode"] == "scripted"
     assert meta["decisionModes"] == ["scripted", "live"]
