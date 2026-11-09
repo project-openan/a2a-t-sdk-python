@@ -693,6 +693,10 @@ def test_the_catalog_offers_a_case_detail_without_running_it() -> None:
     assert "event.stopPropagation()" in js
     # The drawer shows the other protocol's expectations too.
     assert "protocol-switch" in js
+    # The case detail surfaces the paired Modify baseline and the blocked follow-up request.
+    assert "前置基线 Create" in js
+    assert "拦截后补充请求" in js
+    assert "补充段 expect 覆盖" in js
 
 
 def test_the_console_uses_the_full_width_of_a_large_screen() -> None:

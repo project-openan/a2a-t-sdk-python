@@ -672,6 +672,8 @@ function renderCaseTab(item, body) {
     return;
   }
   const summary = doc.summary || {};
+  const baselineRequest = doc.case?.baseline?.request;
+  const followup = doc.case?.blocked_followup;
   const meta = el("div", "case-meta");
   meta.append(
     el("span", "pill", summary.dimension || "未分组"),
@@ -679,10 +681,39 @@ function renderCaseTab(item, body) {
     el("span", "pill", summary.validateLabel || ""),
     ...(summary.tags || []).map((tag) => el("span", "pill", tag)),
   );
+  if (baselineRequest) meta.append(el("span", "pill", "基线 Create"));
+  if (followup?.input) meta.append(el("span", "pill", "拦截+补充"));
   body.append(meta);
   if (doc.case?.known_issue) body.append(caseSection("已知问题", doc.case.known_issue));
-  body.append(caseSection("请求原文", doc.case?.user_input || ""));
+  if (baselineRequest) {
+    const block = el("section", "diff-block");
+    block.append(el("strong", "", "前置基线 Create（Modify 续传用）"));
+    block.append(el("p", "summary", "运行期 fixture：先建出被修改的 Task；不参与 OSP 期望判定。"));
+    block.append(el("pre", "mono case-pre", textBlock(baselineRequest)));
+    const actual = drawer.item?.baseline;
+    if (actual?.runId) {
+      const line = el("div", "attempt-line");
+      line.append(el("span", "summary", `本次实际基线：${actual.state || "—"}${actual.error ? ` · ${actual.error}` : ""}`));
+      const wire = el("a", "run-link", `wire ${actual.runId}`);
+      wire.href = `/api/runs/${encodeURIComponent(actual.runId)}/wire`;
+      wire.target = "_blank";
+      line.append(document.createTextNode(" "), wire);
+      block.append(line);
+    }
+    body.append(block);
+  }
+  body.append(caseSection(followup?.input ? "请求原文（拦截段）" : "请求原文", doc.case?.user_input || ""));
+  if (followup?.input) {
+    const block = el("section", "diff-block");
+    block.append(el("strong", "", "拦截后补充请求（A2A-T）"));
+    block.append(el("p", "summary", "拦截段只记录；补充段用该请求重跑完整期望。"));
+    block.append(el("pre", "mono case-pre", textBlock(followup.input)));
+    body.append(block);
+    if (followup.expect) body.append(caseSection("补充段 expect 覆盖", followup.expect));
+    if (followup.assert) body.append(caseSection("补充段 assert 覆盖", followup.assert));
+  }
   const intent = doc.case?.expect?.intent;
+  const expectationScope = followup?.input ? "（补充请求）" : "";
   if (intent && typeof intent === "object") {
     const table = el("table", "grid kv-table");
     const tbody = document.createElement("tbody");
@@ -693,11 +724,11 @@ function renderCaseTab(item, body) {
     }
     table.append(tbody);
     const block = el("section", "diff-block");
-    block.append(el("strong", "", "期望意图"), table);
+    block.append(el("strong", "", `期望意图${expectationScope}`), table);
     body.append(block);
   }
   const protocolBlock = doc.case?.expect?.protocols?.[protocol] || {};
-  body.append(caseSection(`期望 Task-T（${protocol === "a2a-t" ? "A2A-T" : "A2A"}）`, protocolBlock.task_t || "该协议没有 Task-T 期望"));
+  body.append(caseSection(`期望 Task-T（${protocol === "a2a-t" ? "A2A-T" : "A2A"}）${expectationScope}`, protocolBlock.task_t || "该协议没有 Task-T 期望"));
   const negotiation = protocolBlock.negotiation;
   if (negotiation) {
     const block = el("section", "diff-block");

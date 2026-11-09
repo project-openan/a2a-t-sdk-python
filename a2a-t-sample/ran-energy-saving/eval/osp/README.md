@@ -313,6 +313,9 @@ PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-af
 - 结果表按阶段显示 `passed / failed / recorded / error`，点“差异”看逐字段/逐段 expected/actual。
 - 带 `blocked_followup` 的拦截用例先记录拦截段，再用补充请求继续跑；拦截段证据在抽屉里以
   `拦截/...` 展示，拦截请求不会被下发。
+- 用例详情抽屉展示 `baseline.request`（Modify 的前置基线 Create；从结果行打开时同时显示本次实际
+  基线的 state 与 wire 链接）和 `blocked_followup.input`（拦截后补充请求）。有补充请求时，
+  `expect.intent` / `task_t` 标注为「（补充请求）」。
 - 临时请求 tab：手输文本直接跑一次，不做预期断言。
 - 报告导出 JSON / XLSX；Excel 只作为导出格式，不再是输入。
 
