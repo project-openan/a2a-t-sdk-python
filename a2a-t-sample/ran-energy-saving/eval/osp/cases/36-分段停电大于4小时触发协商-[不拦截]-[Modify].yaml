@@ -118,11 +118,11 @@ expect:
         kinds: null
         rounds:
           - |-
-            LTE_26441_LNR_OCL and NRES_XCS_6102937 needs 10Mbps.
+            LNR_KPI_7745 and NES_27A_321071 needs 10Mbps.
           - |-
-            LTE_26441_LNR_OCL and NRES_XCS_6102937 needs 5Mbps.
+            LNR_KPI_7745 and NES_27A_321071 needs 5Mbps.
           - |-
-            LTE_26441_LNR_OCL and NRES_XCS_6102937 needs 2Mbps.
+            LNR_KPI_7745 and NES_27A_321071 needs 2Mbps.
       final_state: null
 assert:
   intent: true
