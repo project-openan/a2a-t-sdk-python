@@ -44,7 +44,7 @@ Requirement:
 3. Energy saving cell coverage type (optional); allowed values: indoor, outdoor, all
 4. Whether experience-lossless energy saving is required (optional); allowed values: yes, no
 5. Coverage layer and capacity layer requirements (optional): specify which frequencies are used as the coverage layer and which as the capacity layer. Example: frequency 1650 serves as the coverage layer for carrier shutdown
-6. Carrier frequencies that can be turned off during energy saving (optional); Example: Downlink frequency numbers: 1650, 1600
+6. Carrier frequencies that can be turned off during energy saving (optional); Example: Carrier frequencies 1650 and 1600 can be turned off.
 7. Rate guarantee target (optional): the minimum downlink throughput target that must be guaranteed and its effective time period
     - Supports both area-level and site-level configuration modes, where site-level configuration is supported only when [Operation Type](#operation-type) is set to `Modify`.
     - **For the area-level setting**, the following information needs to be provided:
