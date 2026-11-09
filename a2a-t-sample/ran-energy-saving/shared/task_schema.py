@@ -44,8 +44,10 @@ TASK_PARAM_SCHEMA: dict[str, object] = {
             "title": "Rate guarantee goal",
             "x-title-zh-CN": "速率保障目标",
             "description": (
-                "Time-segment-based guaranteed throughput target (task context), e.g. "
-                "{00:00~07:00,2Mbps}, {07:00~17:30,10Mbps}."
+                "Guaranteed throughput target (task context): a numeric rate plus its effective "
+                "time window. Accept either the time-segmented form {00:00~07:00,2Mbps} or a "
+                "labeled rate such as 'Rate guarantee target: 10Mbps' whose window is stated in "
+                "the energy saving time range. Notation alone is not a validation error."
             ),
         },
         "siteList": {
