@@ -31,6 +31,7 @@ from shared.run_constants import (
     RUN_MODE_MODIFY,
     TASK_STATE_SUBMITTED,
 )
+from shared.server_intent import parse_server_intent
 from shared.trace import (
     PHASE_DISPATCH,
     PHASE_DONE,
@@ -141,6 +142,8 @@ class RunState:
         remote_task_id: last Task id observed on the remote side (cancel target).
         remote_context_id: last Task context id observed on the remote side.
         latest_task_state: last Task state observed on the remote side.
+        server_intent: structured Task payload the downstream returned with ``TASK_STATE_SUBMITTED``,
+            i.e. the downstream's own understanding of the Task-T (``None`` when it returns none).
         intent_mode: ``processed`` or ``raw`` for this run.
         validate_before_send: whether the client validates the rendered Task-T before sending it.
         run_mode: ``create`` or ``modify`` (Modify-only against an existing Task).
@@ -216,6 +219,10 @@ class RunState:
     remote_context_id: str | None = None
     #: Latest Task state observed on the remote side (status event or ``GET /tasks/{id}`` poll).
     latest_task_state: str | None = None
+    #: Structured Task payload the downstream returned with ``TASK_STATE_SUBMITTED``. The A2A state
+    #: proves submission; this payload is the downstream's own reading of the Task-T (the vendor
+    #: NMS and the simulator append it to the localized copy), kept verbatim as evidence.
+    server_intent: dict[str, object] | None = None
     #: Downstream Task the server continued on its own far side (NMS / RAN Agent), when it reports
     #: one. These never replace ``result.task_id``/``context_id``: those belong to this run's hop.
     downstream_task_id: str | None = None
@@ -691,14 +698,21 @@ class RunState:
         self.broadcast({"type": "event", "event": entry}, seq=seq)
         if isinstance(intent_payload, Mapping):
             self._promote_intent_span(intent_payload)
-        self._maybe_emit_task_created(event)
+        state = _string_value(event.get("state"))
+        # The A2A state is the submission signal; the payload the downstream appends to its
+        # localized copy is data, read only once the state already proves the Task was accepted.
+        server_intent: dict[str, object] | None = None
+        if state == TASK_STATE_SUBMITTED:
+            server_intent = parse_server_intent(event.get("text"))
+            if server_intent is not None:
+                self.server_intent = server_intent
+        self._maybe_emit_task_created(event, server_intent)
         task_id = _string_value(event.get("task_id"))
         if task_id is not None:
             self.remote_task_id = task_id
         context_id = _string_value(event.get("context_id"))
         if context_id is not None:
             self.remote_context_id = context_id
-        state = _string_value(event.get("state"))
         if state is not None:
             self.latest_task_state = state
         self._persist_task_snapshot(event)
@@ -733,11 +747,17 @@ class RunState:
         )
         self._intent_span_emitted = True
 
-    def _maybe_emit_task_created(self, event: Mapping[str, object]) -> None:
+    def _maybe_emit_task_created(
+        self,
+        event: Mapping[str, object],
+        server_intent: Mapping[str, object] | None = None,
+    ) -> None:
         """Record the first Task creation/modification success (OSP ``AN``).
 
         ``TASK_STATE_SUBMITTED`` is the A2A-defined success signal and works for Create and
-        Modify alike; the business text is locale-dependent.
+        Modify alike; the business text is locale-dependent. The structured payload the
+        downstream appends to it, when present, is carried as ``params`` so the session trace
+        shows what the downstream understood instead of only the state name.
         """
         if self._task_created_emitted:
             return
@@ -759,7 +779,12 @@ class RunState:
             # A bare SUBMITTED status may omit taskId; the identity learned from the Task event
             # is still the authoritative one and makes the transcript row actionable.
             task_id=_string_value(event.get("task_id")) or self.remote_task_id,
-            detail={"operation": operation, "state": TASK_STATE_SUBMITTED, "source": "a2a-status"},
+            detail={
+                "operation": operation,
+                "state": TASK_STATE_SUBMITTED,
+                "source": "a2a-status",
+                **({"params": dict(server_intent)} if server_intent is not None else {}),
+            },
         )
         self._task_created_emitted = True
 
@@ -1098,6 +1123,7 @@ class RunState:
             "rawRequest": self.raw_request,
             "normalizedRequest": self.normalized_request,
             "intent": self.processed_intent,
+            "serverIntent": self.server_intent,
             "status": self.status,
             "detached": self.detached,
             "pendingDecision": self.pending_decision,

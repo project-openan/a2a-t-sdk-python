@@ -162,6 +162,7 @@ def _manager(
     runs: _FakeRuns,
     *,
     model_mode: str = "offline",
+    nms_sim: bool = False,
 ) -> EvalBatchManager:
     return EvalBatchManager(
         runs=runs,  # type: ignore[arg-type]
@@ -170,6 +171,7 @@ def _manager(
         server_url=None,
         server_auth_token=None,
         runs_dir=tmp_path,
+        nms_sim=nms_sim,
         language="en-US",
         model_mode=model_mode,
         prompt_client=_PromptClient(),
@@ -737,6 +739,89 @@ async def test_a_full_run_records_the_trace_id_and_answer(tmp_path: Path) -> Non
     data = item.to_dict()
     assert data["traceId"] == "run-1"
     assert data["answer"] == item.answer
+
+
+async def _run_item_with_server_intent(
+    tmp_path: Path,
+    payload: Mapping[str, object] | None,
+    *,
+    nms_sim: bool = False,
+) -> CaseItem:
+    """Run case 1 to ``final`` against a fake run carrying one downstream payload."""
+
+    def builder(run: RunState) -> None:
+        _finish(run)
+        run.server_intent = dict(payload) if payload is not None else None
+
+    manager = _manager(tmp_path, _FakeRuns(builder), nms_sim=nms_sim)
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=None,
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_status(manager, batch_id, "finished")
+    return manager._batches[batch_id].items[0]
+
+
+async def test_the_intent_stage_judges_the_downstream_payload_not_the_sdk_extraction(
+    tmp_path: Path,
+) -> None:
+    """The SDK extraction matches the case, but the server understood something else."""
+    item = await _run_item_with_server_intent(
+        tmp_path,
+        {"Operation type": "Modify", "Energy saving region": "OtherRegion"},
+    )
+
+    stage = item.stages["intent"]
+    assert stage.status == STAGE_FAILED
+    assert stage.actual == {"Operation type": "Modify", "Energy saving region": "OtherRegion"}
+    assert any(diff["path"] == "intent.Energy saving region" for diff in stage.diffs)
+    # The SDK extraction stays available for the auxiliary export column.
+    assert item.intent == CASES[1]["expect"]["intent"]
+    assert item.server_intent == {"Operation type": "Modify", "Energy saving region": "OtherRegion"}
+    assert item.intent_meta["source"] == "server"
+    assert item.status == "failed"
+
+
+async def test_a_matching_downstream_payload_passes_the_intent_stage(tmp_path: Path) -> None:
+    item = await _run_item_with_server_intent(tmp_path, CASES[1]["expect"]["intent"])
+
+    stage = item.stages["intent"]
+    assert stage.status == STAGE_PASSED
+    assert stage.diffs == []
+    assert item.server_intent == CASES[1]["expect"]["intent"]
+    assert item.to_dict()["serverIntent"] == CASES[1]["expect"]["intent"]
+
+
+async def test_a_downstream_that_returns_no_payload_records_the_intent_stage(
+    tmp_path: Path,
+) -> None:
+    """Our own RAN Agent answers SUBMITTED without a payload; that is not a red result."""
+    item = await _run_item_with_server_intent(tmp_path, None)
+
+    stage = item.stages["intent"]
+    assert stage.status == STAGE_RECORDED
+    assert item.server_intent is None
+    assert item.status == "passed"
+
+
+async def test_the_simulator_payload_is_recorded_not_judged(tmp_path: Path) -> None:
+    """The simulator answers a reduced key set; comparing it would be a false failure."""
+    item = await _run_item_with_server_intent(
+        tmp_path,
+        {"Operation type": "Create", "Energy saving region": "A2ATestRegion"},
+        nms_sim=True,
+    )
+
+    assert item.stages["intent"].status == STAGE_RECORDED
+    assert item.server_intent == {
+        "Operation type": "Create",
+        "Energy saving region": "A2ATestRegion",
+    }
 
 
 def test_the_default_decision_mode_is_live_for_an_online_model(tmp_path: Path) -> None:

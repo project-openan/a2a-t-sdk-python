@@ -597,6 +597,16 @@ function renderResultTab(item, body) {
     if (!result) continue;
     appendStageBlock(body, STAGE_LABELS[stage] || stage, result);
   }
+  if (item.serverIntent && typeof item.serverIntent === "object") {
+    body.append(caseSection("意图理解结果（服务端）", item.serverIntent));
+  }
+  const expectedIntent = item.refs?.expectedIntent;
+  if (expectedIntent && typeof expectedIntent === "object") {
+    body.append(caseSection("期望意图", expectedIntent));
+  }
+  if (item.intent && typeof item.intent === "object") {
+    body.append(caseSection("SDK 抽取意图（辅助证据）", item.intent));
+  }
   const attempts = Array.isArray(item.attempts) ? item.attempts : [];
   if (attempts.length) {
     const block = el("section", "diff-block");

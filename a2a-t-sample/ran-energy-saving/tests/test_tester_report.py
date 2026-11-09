@@ -23,6 +23,7 @@ REFERENCE_HEADERS: tuple[str, ...] = (
     "原始请求",
     "标准化请求",
     "意图理解结果(结构化JSON)",
+    "SDK抽取意图",
     "意图来源",
     "期望意图",
     "answer与reference差异点",
@@ -48,6 +49,8 @@ REFERENCE_HEADERS: tuple[str, ...] = (
 
 def _snapshot() -> dict[str, Any]:
     intent = {"Operation type": "Create", "Energy saving region": "A2ATestRegion"}
+    #: The SDK's own pre-send extraction, deliberately different from the server payload.
+    sdk_intent = {"Operation type": "Create", "Energy saving region": "SDKRegion"}
     answer = {
         "code": "SUCCESS",
         "message": "异步任务已创建",
@@ -94,11 +97,12 @@ def _snapshot() -> dict[str, Any]:
                 "tokens": {"output": 0, "total": 0},
                 "error": None,
                 "traceId": "b" * 32,
-                "intent": intent,
+                "intent": sdk_intent,
+                "serverIntent": intent,
                 "intentMeta": {
                     "rawRequest": "Implement energy-saving in A2ATestRegion",
                     "normalizedText": "Implement energy-saving in A2ATestRegion",
-                    "source": "client",
+                    "source": "server",
                 },
                 "refs": {
                     "caseName": "速率保障目标：视频码率720p",
@@ -141,27 +145,27 @@ def test_the_arbitration_row_carries_the_intent_diff_and_answer() -> None:
     assert row[2] == 1
     assert row[5] == "TC00000001"
     assert row[7] == "徐峰"
-    assert row[11] is not None
     assert json.loads(str(row[11]))["Energy saving region"] == "A2ATestRegion"
-    assert row[12] == "client"
-    assert json.loads(str(row[13]))["Operation type"] == "Create"
-    assert row[14] == "完全一致"
-    assert json.loads(str(row[15]))["code"] == "SUCCESS"
-    assert json.loads(str(row[16]))["taskId"] == "task-1"
-    assert row[17] == (
+    assert json.loads(str(row[12]))["Energy saving region"] == "SDKRegion"
+    assert row[13] == "server"
+    assert json.loads(str(row[14]))["Operation type"] == "Create"
+    assert row[15] == "完全一致"
+    assert json.loads(str(row[16]))["code"] == "SUCCESS"
+    assert json.loads(str(row[17]))["taskId"] == "task-1"
+    assert row[18] == (
         "### Round 1 | Client | Task-T\n\n"
         "### Round 0 | Server | TASK_STATE_SUBMITTED"
     )
-    assert row[18] == "SUCCESS"
-    assert row[19] == 60163
-    assert row[20] == 0
-    assert row[21] == "false"
-    assert row[22] == "true"
-    assert row[26] == 10
+    assert row[19] == "SUCCESS"
+    assert row[20] == 60163
+    assert row[21] == 0
+    assert row[22] == "false"
+    assert row[23] == "true"
     assert row[27] == 10
-    assert row[28] == "通过"
-    assert row[29] in (None, "")
+    assert row[28] == 10
+    assert row[29] == "通过"
     assert row[30] in (None, "")
+    assert row[31] in (None, "")
 
 
 def test_a_pure_a2a_row_leaves_the_intent_columns_blank_and_says_so() -> None:
@@ -169,6 +173,7 @@ def test_a_pure_a2a_row_leaves_the_intent_columns_blank_and_says_so() -> None:
     item = batch["items"][0]
     item["protocol"] = "a2a"
     item["intent"] = None
+    item["serverIntent"] = None
     item["intentMeta"]["source"] = ""
     item["stages"].pop("intent")
 
@@ -176,14 +181,42 @@ def test_a_pure_a2a_row_leaves_the_intent_columns_blank_and_says_so() -> None:
     row = rows[1]
 
     assert row[11] in (None, "")
-    assert row[14] in (None, "")
-    assert "纯 A2A 未采集 SDK 意图" in str(row[31])
+    assert row[12] in (None, "")
+    assert row[15] in (None, "")
+    assert "纯 A2A 未采集服务端意图" in str(row[32])
+
+
+def test_a_row_without_a_server_payload_keeps_the_sdk_column_and_says_why() -> None:
+    batch = _snapshot()
+    item = batch["items"][0]
+    item["serverIntent"] = None
+
+    rows = _reference_sheet(batch)
+    row = rows[1]
+
+    assert row[11] in (None, "")
+    assert json.loads(str(row[12]))["Energy saving region"] == "SDKRegion"
+    assert row[15] in (None, "")
+    assert "下游未返回结构化意图" in str(row[32])
+
+
+def test_a_validate_only_row_does_not_blame_the_downstream() -> None:
+    batch = _snapshot()
+    item = batch["items"][0]
+    item["serverIntent"] = None
+    item["answer"] = None
+
+    rows = _reference_sheet(batch)
+    note = str(rows[1][32])
+
+    assert "未执行发送阶段" in note
+    assert "下游未返回结构化意图" not in note
 
 
 def test_a_v2_item_without_export_fields_still_exports() -> None:
     batch = _snapshot()
     item = batch["items"][0]
-    for key in ("traceId", "intent", "intentMeta", "refs", "answer"):
+    for key in ("traceId", "intent", "serverIntent", "intentMeta", "refs", "answer"):
         item.pop(key)
     item.pop("stages")
 
@@ -192,8 +225,8 @@ def test_a_v2_item_without_export_fields_still_exports() -> None:
 
     assert row[0] in (None, "")
     assert row[11] in (None, "")
-    assert row[15] in (None, "")
-    assert "本批次未采集意图" in str(row[31])
+    assert row[16] in (None, "")
+    assert "本批次未采集意图" in str(row[32])
 
 
 def _results_sheet(batch: dict[str, Any]) -> list[tuple[object, ...]]:

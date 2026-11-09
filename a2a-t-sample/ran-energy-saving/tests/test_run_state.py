@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from pathlib import Path
 
@@ -300,6 +301,40 @@ def test_first_submitted_status_emits_one_task_created_span(tmp_path: Path) -> N
         "client",
         "internal",
     )
+
+
+def test_the_submitted_status_payload_is_kept_as_the_downstream_intent(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    payload = {"Operation type": "Create", "Energy saving region": "A2ATestRegion"}
+    event = _submitted_event()
+    event["text"] = f"Task creation succeeded{json.dumps(payload, separators=(',', ':'))}"
+
+    run.record_event(event)
+
+    assert run.server_intent == payload
+    assert run.snapshot()["serverIntent"] == payload
+    created = next(span for span in run.traces if span.get("kind") == "task_created")
+    assert created["detail"]["params"] == payload
+
+
+def test_a_status_that_is_not_submitted_never_populates_the_downstream_intent(
+    tmp_path: Path,
+) -> None:
+    run = _run(tmp_path)
+    payload = {"Operation type": "Create", "Energy saving region": "A2ATestRegion"}
+
+    run.record_event(
+        {
+            "kind": "status",
+            "state": "TASK_STATE_WORKING",
+            "task_id": "task-1",
+            "context_id": "ctx-1",
+            "text": f"Task creation succeeded{json.dumps(payload, separators=(',', ':'))}",
+        }
+    )
+
+    assert run.server_intent is None
+    assert run.snapshot()["serverIntent"] is None
 
 
 def test_a_polled_task_state_is_recorded_as_a_local_snapshot(tmp_path: Path) -> None:

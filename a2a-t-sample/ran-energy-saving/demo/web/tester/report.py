@@ -52,6 +52,7 @@ _REFERENCE_HEADERS: Final[tuple[str, ...]] = (
     "原始请求",
     "标准化请求",
     "意图理解结果(结构化JSON)",
+    "SDK抽取意图",
     "意图来源",
     "期望意图",
     "answer与reference差异点",
@@ -79,8 +80,10 @@ _MAX_CELL_CHARS: Final[int] = 32000
 
 #: Note written when an item never produced a run answer (validate-only batch).
 _NO_ANSWER_NOTE: Final[str] = "未执行发送阶段"
+#: Note written when the downstream accepted the Task without returning its reading.
+_NO_SERVER_INTENT_NOTE: Final[str] = "下游未返回结构化意图"
 #: Note written when the SDK intent stage did not run (pure A2A has no SDK stages).
-_NO_SDK_INTENT_NOTE: Final[str] = "纯 A2A 未采集 SDK 意图"
+_NO_SERVER_INTENT_PURE_NOTE: Final[str] = "纯 A2A 未采集服务端意图"
 #: Note written when an old batch has no intent data at all.
 _NO_INTENT_NOTE: Final[str] = "本批次未采集意图"
 #: Note written when the traceparent could not be read from the wire log.
@@ -228,7 +231,7 @@ def _write_reference_sheet(sheet: Worksheet, batch: Mapping[str, Any]) -> None:
     _set_widths(
         sheet,
         (
-            34, 8, 10, 42, 10, 12, 36, 10, 60, 48, 48, 60, 10, 60, 60, 60, 60, 50,
+            34, 8, 10, 42, 10, 12, 36, 10, 60, 48, 48, 60, 60, 10, 60, 60, 60, 60, 50,
             16, 14, 10, 10, 10, 12, 12, 10, 10, 10, 10, 10, 12, 40,
         ),
     )
@@ -240,9 +243,14 @@ def _reference_row(item: Mapping[str, Any]) -> list[object]:
     intent_meta = _map_of(item.get("intentMeta"))
     stages = _map_of(item.get("stages"))
     intent_stage = _map_of(stages.get("intent"))
-    actual_intent = item.get("intent")
-    if not isinstance(actual_intent, Mapping):
-        actual_intent = intent_stage.get("actual")
+    # The stage ``actual`` is the server payload once the Task is accepted, so it must not be
+    # used as a fallback for the SDK column; ``item.intent`` is the SDK document.
+    sdk_intent = item.get("intent")
+    if not isinstance(sdk_intent, Mapping):
+        sdk_intent = None
+    server_intent = item.get("serverIntent")
+    if not isinstance(server_intent, Mapping):
+        server_intent = None
     expected_intent = refs.get("expectedIntent")
     if not isinstance(expected_intent, Mapping):
         expected_intent = intent_stage.get("expected")
@@ -264,12 +272,13 @@ def _reference_row(item: Mapping[str, Any]) -> list[object]:
         refs.get("taskT", ""),
         raw_request,
         intent_meta.get("normalizedText") or raw_request,
-        _json_cell(actual_intent, indent=2),
+        _json_cell(server_intent, indent=2),
+        _json_cell(sdk_intent, indent=2),
         intent_meta.get("source", ""),
         _json_cell(expected_intent, indent=2),
         render_intent_diff(
             expected_intent if isinstance(expected_intent, Mapping) else None,
-            actual_intent if isinstance(actual_intent, Mapping) else None,
+            server_intent,
         ),
         _json_cell(answer, indent=2),
         _json_cell(answer, indent=None),
@@ -287,7 +296,7 @@ def _reference_row(item: Mapping[str, Any]) -> list[object]:
         result_label(status),
         "",
         "",
-        _reference_note(item, refs, intent_meta, answer, actual_intent),
+        _reference_note(item, refs, intent_meta, answer, server_intent, sdk_intent),
     ]
 
 
@@ -296,7 +305,8 @@ def _reference_note(
     refs: Mapping[str, Any],
     intent_meta: Mapping[str, Any],
     answer: Mapping[str, Any],
-    actual_intent: object,
+    server_intent: Mapping[str, Any] | None,
+    sdk_intent: object,
 ) -> str:
     """Explain the empty arbitration cells of one item."""
     notes: list[str] = []
@@ -304,13 +314,18 @@ def _reference_note(
         notes.append("临时请求")
     elif not refs:
         notes.append("本批次未采集用例元数据")
-    if not isinstance(actual_intent, Mapping) and item.get("scratch") is None:
+    if item.get("scratch") is None:
         if not refs:
             notes.append(_NO_INTENT_NOTE)
-        elif str(item.get("protocol") or "") == "a2a":
-            notes.append(_NO_SDK_INTENT_NOTE)
-        else:
-            notes.append("SDK 意图未采集")
+        elif server_intent is None and answer:
+            # A validate-only batch never sent anything; ``_NO_ANSWER_NOTE`` says that instead of
+            # blaming a downstream that was never asked.
+            if str(item.get("protocol") or "") == "a2a":
+                notes.append(_NO_SERVER_INTENT_PURE_NOTE)
+            else:
+                notes.append(_NO_SERVER_INTENT_NOTE)
+        if not isinstance(sdk_intent, Mapping):
+            notes.append("SDK 抽取意图未采集")
     if not answer:
         notes.append(_NO_ANSWER_NOTE)
     if intent_meta.get("traceparentSource") == "reconstructed":

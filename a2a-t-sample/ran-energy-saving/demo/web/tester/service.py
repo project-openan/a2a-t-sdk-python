@@ -29,7 +29,8 @@ from typing import Any, Final
 
 import httpx
 from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog
-from eval.osp.followup import followup_case, has_followup, interception_case, is_blocked_case
+from eval.osp.compare import compare_intent
+from eval.osp.followup import followup_case, followup_input, has_followup, is_blocked_case
 from eval.osp.runner import (
     STAGE_ERROR,
     STAGE_FAILED,
@@ -145,6 +146,22 @@ _SIM_PURE_NEGOTIATION_MESSAGE: Final[str] = (
     "模拟器不重现厂商纯 A2A 对话轮次；真实轮次需在真机验证，因此只记录。"
 )
 
+#: Message of the intent stage when the downstream accepts a Task without returning its reading.
+_NO_SERVER_INTENT_MESSAGE: Final[str] = (
+    "下游的 TASK_STATE_SUBMITTED 报文没有结构化意图，意图阶段只记录。"
+)
+
+#: Message of the intent stage against the simulator: its payload key set is not the vendor's.
+_SIM_SERVER_INTENT_MESSAGE: Final[str] = (
+    "模拟器返回的意图键集与厂商不同，只记录，不据此判定。"
+)
+
+#: Message of the intent stage when the case carries no expectation to compare with.
+_NO_EXPECTED_INTENT_MESSAGE: Final[str] = "用例没有期望意图，只记录。"
+
+#: Message of a failed intent stage: the case asks what the server understood.
+_SERVER_INTENT_MISMATCH_MESSAGE: Final[str] = "服务端意图理解结果与期望不一致。"
+
 #: Scenario used to seed a Modify target task; it is a complete request that creates a task.
 BASELINE_SCENARIO: Final[str] = "night"
 
@@ -227,6 +244,9 @@ class CaseItem:
     trace_id: str = ""
     #: OSP 11-key structured intent extracted by the tester's SDK ``intent`` stage.
     intent: dict[str, object] | None = None
+    #: Structured Task payload the downstream returned with ``TASK_STATE_SUBMITTED``: the
+    #: downstream's own reading of the Task-T, and the oracle the arbitration sheet compares with.
+    server_intent: dict[str, object] | None = None
     #: Raw/normalized operator request and how the intent was produced.
     intent_meta: dict[str, object] = field(default_factory=dict)
     #: Case metadata and expectations frozen when the item was collected.
@@ -253,6 +273,7 @@ class CaseItem:
             "attempts": [dict(attempt) for attempt in self.attempts],
             "traceId": self.trace_id,
             "intent": self.intent,
+            "serverIntent": self.server_intent,
             "intentMeta": dict(self.intent_meta),
             "refs": dict(self.refs),
             "answer": self.answer,
@@ -612,6 +633,7 @@ class EvalBatchManager:
         # export the previous run's intent/trace/answer when the new attempt fails early.
         item.trace_id = ""
         item.intent = None
+        item.server_intent = None
         item.intent_meta = {}
         item.refs = {}
         item.answer = None
@@ -697,15 +719,18 @@ class EvalBatchManager:
         else:
             sdk_stages = [stage for stage in stages if stage in SDK_STAGE_ORDER]
             if sdk_stages:
-                if is_blocked_case(case) and has_followup(case):
-                    # Record the interception first, then test the replacement request. The
-                    # intercepted request is never dispatched.
+                blocked_followup = is_blocked_case(case) and has_followup(case)
+                if blocked_followup:
                     effective_case = followup_case(case)
-                    item.interception = await self._run_interception(
-                        case, effective_case, sdk_stages[-1], batch.decision_mode
-                    )
+                # The SDK runner owns the two-segment split of a blocked case: it returns the
+                # follow-up request's stages as the outcome and keeps the intercepted original as
+                # ``outcome.interception``. The full flow below dispatches the replacement request.
                 await self._run_sdk_stages(
-                    effective_case, item, sdk_stages[-1], batch.decision_mode
+                    case,
+                    item,
+                    sdk_stages[-1],
+                    batch.decision_mode,
+                    outcome_case=effective_case if blocked_followup else None,
                 )
         self._collect_reference(item, effective_case)
         if batch.stop_after in SDK_STAGE_ORDER:
@@ -714,35 +739,34 @@ class EvalBatchManager:
         await self._run_full_flow(batch, index, item, effective_case, stages)
         item.status = self._item_status(item)
 
-    async def _run_interception(
-        self,
-        case: Mapping[str, Any],
-        followup: Mapping[str, Any],
-        stop_after: str,
-        decision_mode: str,
-    ) -> dict[str, object]:
-        """Run the blocked request through the SDK stages and record the interception."""
-        results, error = await self._sdk_stage_results(
-            interception_case(case), stop_after, decision_mode
-        )
-        record: dict[str, object] = {
-            "input": str(case.get("user_input") or ""),
-            "followupInput": str(followup.get("user_input") or ""),
-            "stages": {stage: result.to_dict() for stage, result in results.items()},
-        }
-        if error:
-            record["error"] = error
-        return record
-
     async def _run_sdk_stages(
         self,
         case: Mapping[str, Any],
         item: CaseItem,
         stop_after: str,
         decision_mode: str = DECISION_MODE_SCRIPTED,
+        *,
+        outcome_case: Mapping[str, Any] | None = None,
     ) -> None:
-        results, error = await self._sdk_stage_results(case, stop_after, decision_mode)
+        """Run the SDK stages of one case and record its interception segment, when split.
+
+        ``outcome_case`` is the derived replacement case whose expectations judge the returned
+        stages; the runner already judged the intercepted original, so those stages are recorded
+        verbatim (the runner derived their assertion flags).
+        """
+        results, interception, error = await self._sdk_stage_results(
+            case, stop_after, decision_mode, outcome_case=outcome_case
+        )
         item.stages.update(results)
+        if interception is not None:
+            record: dict[str, object] = {
+                "input": str(case.get("user_input") or ""),
+                "followupInput": followup_input(case) or "",
+                "stages": {stage: result.to_dict() for stage, result in interception.items()},
+            }
+            if error:
+                record["error"] = error
+            item.interception = record
         if error:
             item.error = error
 
@@ -751,13 +775,20 @@ class EvalBatchManager:
         case: Mapping[str, Any],
         stop_after: str,
         decision_mode: str,
-    ) -> tuple[dict[str, StageResult], str | None]:
-        """Run the SDK-owned stages of one case and return their results and error."""
+        *,
+        outcome_case: Mapping[str, Any] | None = None,
+    ) -> tuple[dict[str, StageResult], dict[str, StageResult] | None, str | None]:
+        """Run the SDK-owned stages of one case and return stages, interception and error.
+
+        A blocked case with a replacement request makes the runner execute two segments; the
+        follow-up segment is the returned outcome and the original is ``outcome.interception``.
+        """
+        judge = outcome_case if outcome_case is not None else case
         model_mode = MODEL_MODE_LIVE if decision_mode == DECISION_MODE_LIVE else None
         async with self._sdk_lock:
             client = await self._ensure_prompt_client(model_mode)
             outcome = await asyncio.to_thread(run_case, case, client, stop_after=stop_after)
-        negotiation_expected = _negotiation_expected(case, PROTOCOL_A2A_T)
+        negotiation_expected = _negotiation_expected(judge, PROTOCOL_A2A_T)
         results: dict[str, StageResult] = {}
         for stage in outcome.stages:
             result = StageResult(
@@ -769,14 +800,27 @@ class EvalBatchManager:
                 diffs=[diff.to_dict() for diff in stage.diffs],
             )
             protocol = "" if stage.stage == "intent" else PROTOCOL_A2A_T
-            result = _apply_assertion(case, protocol, stage.stage, result)
+            result = _apply_assertion(judge, protocol, stage.stage, result)
             if stage.stage == "task_t" and negotiation_expected:
                 # The case's Task-T is the post-negotiation one; the SDK runner only sees the
                 # initial request, so comparing them would be a false failure.
                 result.status = STAGE_RECORDED
                 result.message = _NEGOTIATED_TASK_T_MESSAGE
             results[stage.stage] = result
-        return results, outcome.error
+        interception: dict[str, StageResult] | None = None
+        if outcome.interception is not None:
+            interception = {
+                stage.stage: StageResult(
+                    stage=stage.stage,
+                    status=stage.status,
+                    message=stage.message,
+                    expected=stage.expected,
+                    actual=stage.actual,
+                    diffs=[diff.to_dict() for diff in stage.diffs],
+                )
+                for stage in outcome.interception
+            }
+        return results, interception, outcome.error
 
     async def _run_full_flow(
         self,
@@ -1399,10 +1443,14 @@ class EvalBatchManager:
             raw_request = run.raw_request or str(item.refs.get("userInput") or "")
             item.intent_meta["rawRequest"] = raw_request
             item.intent_meta["normalizedText"] = run.normalized_request or raw_request
-            # The exported intent is the SDK extraction from the Task-T, so its provenance is the
-            # SDK call, not the client ADK layer or the OSS server. Both of those also emit an
-            # ``intent_processed`` span, but that document is a different (business-slot) shape.
-            item.intent_meta["source"] = "sdk" if item.intent is not None else ""
+            # The arbitration intent is what the downstream understood, not our own extraction.
+            # ``item.intent`` keeps the SDK document as auxiliary evidence.
+            self._judge_server_intent(item, run, case)
+            item.intent_meta["source"] = (
+                "server"
+                if item.server_intent is not None
+                else ("sdk" if item.intent is not None else "")
+            )
             traceparent, traceparent_source = read_traceparent(
                 self._history_dir.parent if self._history_dir is not None else None,
                 run.run_id,
@@ -1412,6 +1460,56 @@ class EvalBatchManager:
             item.answer = build_answer(run, refs=item.refs, traceparent=traceparent)
         except Exception:  # noqa: BLE001 - the export evidence must never fail the item
             _LOGGER.warning("tester export evidence failed for run %s", run.run_id, exc_info=True)
+
+    def _judge_server_intent(
+        self,
+        item: CaseItem,
+        run: RunState,
+        case: Mapping[str, Any] | None,
+    ) -> None:
+        """Re-judge the ``intent`` stage against the downstream's own reading.
+
+        The case asks what the server understood, not what our SDK extracted from the Task-T. The
+        stage keeps the SDK extraction until the run starts; once the downstream accepts the Task
+        and returns its payload with ``TASK_STATE_SUBMITTED``, that payload becomes the actual and
+        the stage is compared with ``expect.intent``. ``item.intent`` is left untouched so the
+        auxiliary SDK column still exports the pre-send extraction.
+        """
+        payload = run.server_intent
+        item.server_intent = dict(payload) if isinstance(payload, Mapping) else None
+        stage = item.stages.get("intent")
+        if stage is None or case is None:
+            return
+        if item.server_intent is None:
+            # Our own RAN Agent accepts a Task without returning its reading; that is evidence
+            # missing, not a wrong understanding, so it must not turn the row red.
+            stage.status = STAGE_RECORDED
+            stage.actual = None
+            stage.diffs = []
+            stage.message = _NO_SERVER_INTENT_MESSAGE
+            return
+        stage.actual = dict(item.server_intent)
+        stage.diffs = []
+        if self._nms_sim:
+            stage.status = STAGE_RECORDED
+            stage.message = _SIM_SERVER_INTENT_MESSAGE
+            return
+        expected = item.refs.get("expectedIntent")
+        if not isinstance(expected, Mapping) or not expected:
+            stage.status = STAGE_RECORDED
+            stage.message = _NO_EXPECTED_INTENT_MESSAGE
+            return
+        diffs = compare_intent(expected, item.server_intent)
+        stage.diffs = [diff.to_dict() for diff in diffs]
+        if not _assertion_enabled(case, "", "intent"):
+            stage.status = STAGE_RECORDED
+            stage.message = _ASSERTION_OFF_MESSAGE
+        elif diffs:
+            stage.status = STAGE_FAILED
+            stage.message = _SERVER_INTENT_MISMATCH_MESSAGE
+        else:
+            stage.status = STAGE_PASSED
+            stage.message = ""
 
     async def _ensure_prompt_client(self, model_mode: str | None = None) -> Any:
         """Return the SDK prompt client of one model mode (offline scripted by default)."""
@@ -1556,6 +1654,7 @@ class EvalBatchManager:
                 attempts=_load_attempts(item.get("attempts")),
                 trace_id=item.get("traceId") if isinstance(item.get("traceId"), str) else "",
                 intent=_optional_mapping(item.get("intent")),
+                server_intent=_optional_mapping(item.get("serverIntent")),
                 intent_meta=_mapping_or_empty(item.get("intentMeta")),
                 refs=_mapping_or_empty(item.get("refs")),
                 answer=_optional_mapping(item.get("answer")),
