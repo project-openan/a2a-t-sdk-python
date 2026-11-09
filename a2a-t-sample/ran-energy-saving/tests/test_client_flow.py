@@ -1908,14 +1908,166 @@ async def test_the_array_envelope_without_negotiation_type_uses_its_nested_templ
 
 
 async def test_a_truncated_vendor_envelope_is_typed_from_its_raw_fields() -> None:
-    """A body the client cannot parse still spells its typed fields verbatim, so they are read."""
-    truncated = _field_feasibility_frame()[:-1]
+    """A body the client cannot parse still spells its typed fields verbatim, so they are read.
+
+    The text deliberately carries no negotiation heading: only the scoped raw read of
+    ``responseMetadata`` can type this frame, so removing it fails the test.
+    """
+    truncated = _vendor_propose_content(
+        negotiation_type="FEASIBILITY",
+        template_uri="Negotiation-T/feasibility-negotiation/propose/v1",
+        text="Reduce the rate target to 2Mbps or less.",
+    )[:-1]
     with pytest.raises(ValueError):
         json.loads(truncated)
 
     requested = await _requested_propose(truncated)
 
     assert requested == [("feasibility", FEASIBILITY_NEGOTIATION_PROPOSE_URI)]
+
+
+async def test_a_truncated_vendor_envelope_hands_its_escaped_prose_to_the_decision_provider() -> (
+    None
+):
+    """The raw read also unescapes the proposal body, so the provider never sees ``\\n`` literals."""
+    text = "## Feasibility Negotiation\nThe current rate goal cannot be met."
+    truncated = _vendor_propose_content(negotiation_type="FEASIBILITY", text=text)[:-1]
+
+    propose = await _seen_propose(truncated)
+
+    assert propose.content == text
+
+
+async def test_a_parseable_body_is_never_typed_from_a_sibling_field() -> None:
+    """A readable document is typed only by its own ``responseMetadata``, never by a decoy."""
+    content = json.dumps(
+        {
+            "message": [
+                {"text": "## Information Negotiation\nPlease provide the region."},
+            ],
+            "requestEcho": {"negotiationType": "FEASIBILITY"},
+        }
+    )
+
+    requested = await _requested_propose(content)
+
+    assert requested == [("information", INFORMATION_NEGOTIATION_PROPOSE_URI)]
+
+
+async def test_a_truncated_body_is_typed_only_inside_its_response_metadata_block() -> None:
+    """A field quoted elsewhere in a truncated body must not outrank the typed block."""
+    frame = _vendor_propose_content(
+        negotiation_type="FEASIBILITY",
+        template_uri="Negotiation-T/feasibility-negotiation/propose/v1",
+        text="Reduce the rate target to 2Mbps or less.",
+    )
+    decoyed = frame.replace(
+        '{"message"',
+        '{"instruction": {"negotiationType": "TARGET"}, "message"',
+        1,
+    )
+    truncated = decoyed[:-1]
+    with pytest.raises(ValueError):
+        json.loads(truncated)
+
+    requested = await _requested_propose(truncated)
+
+    assert requested == [("feasibility", FEASIBILITY_NEGOTIATION_PROPOSE_URI)]
+
+
+async def test_an_empty_typed_block_does_not_shadow_a_later_typed_one() -> None:
+    """An array envelope may carry several bundles; an empty one must not hide the typed one."""
+    empty = {"message": [{"text": "Please continue.", "metadata": {"responseMetadata": {}}}]}
+    typed = {
+        "message": [
+            {
+                "text": "Reduce the rate target to 2Mbps or less.",
+                "metadata": {
+                    "responseMetadata": {
+                        "performative": "PROPOSE",
+                        "templateUri": "Negotiation-T/feasibility-negotiation/propose/v1",
+                        "negotiationType": "FEASIBILITY",
+                    }
+                },
+            }
+        ]
+    }
+
+    requested = await _requested_propose(json.dumps([empty, typed]))
+
+    assert requested == [("feasibility", FEASIBILITY_NEGOTIATION_PROPOSE_URI)]
+
+
+async def test_a_structured_extension_value_is_read_without_json_parsing() -> None:
+    """A peer may deliver the value already structured; it is read like the JSON string."""
+    event = propose_event("information", 1)
+    metadata = event["metadata"]
+    assert isinstance(metadata, dict)
+    metadata.pop(TEMPLATE_URI_METADATA_KEY)
+    metadata[NEGOTIATION_T_EXTENSION_URI] = {
+        "message": [
+            {
+                "text": "Please provide the region.",
+                "metadata": {
+                    "responseMetadata": {
+                        "performative": "PROPOSE",
+                        "templateUri": "Negotiation-T/info-negotiation/propose/v1",
+                        "negotiationType": "INFORMATION",
+                    }
+                },
+            }
+        ]
+    }
+    seen: list[NegotiationProposeView] = []
+
+    await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=ScriptedTransport([[event], [end_event()]]),
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+        language="en-US",
+        on_decision_requested=lambda propose, session: seen.append(propose),
+        infer_missing_negotiation_kind=True,
+    )
+
+    assert [(item.kind, item.content) for item in seen] == [
+        ("information", "Please provide the region.")
+    ]
+
+
+async def test_prose_that_starts_like_json_keeps_its_body() -> None:
+    """Rendered prose may start with ``[`` or ``{``; it must reach the provider unchanged."""
+    bodies = [
+        "[1]: https://example.com/docs\n## Information Negotiation\nPlease provide the region.",
+        "{00:00~07:00,2Mbps} exceeds the cell's capacity. Please provide the correct region name.",
+    ]
+    for body in bodies:
+        seen: list[NegotiationProposeView] = []
+        await run_client_flow(
+            prompt_client=FakePromptClient(),
+            transport=ScriptedTransport(
+                [[propose_event("information", 1, content=body)], [end_event()]]
+            ),
+            user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+            provider=ScriptedDecisionProvider(
+                (NegotiationDecision(action="reject", rationale="No."),)
+            ),
+            language="en-US",
+            on_decision_requested=lambda propose, session: seen.append(propose),
+        )
+
+        assert seen[0].content == body
+
+
+async def test_brace_led_prose_quoting_a_typed_field_never_types_the_proposal() -> None:
+    """A quoted field in prose is not a typed signal: with no heading the run stays loud."""
+    content = (
+        '{note} the peer wrote "negotiationType": "TARGET" in prose, '
+        "but this is an information request."
+    )
+
+    with pytest.raises(ClientFlowError, match="carries no template URI"):
+        await _requested_propose(content)
 
 
 async def test_a_json_envelope_without_any_typed_signal_still_fails_loudly() -> None:
@@ -1962,6 +2114,32 @@ async def test_an_unknown_vendor_template_uri_is_inferred_from_the_body() -> Non
     assert [(item.kind, item.template_uri) for item in seen] == [
         ("feasibility", FEASIBILITY_NEGOTIATION_PROPOSE_URI)
     ]
+
+
+async def test_an_unknown_vendor_template_uri_that_cannot_be_typed_is_reported_as_unknown() -> None:
+    """The frame did carry a URI; saying it carried none would misdirect the field report."""
+    transport = ScriptedTransport(
+        [
+            [
+                _propose_with_vendor_template_uri(
+                    "information",
+                    content=json.dumps([{"message": [{"text": "Please continue."}]}]),
+                )
+            ]
+        ]
+    )
+
+    with pytest.raises(ClientFlowError, match="not a sample negotiation template") as raised:
+        await run_client_flow(
+            prompt_client=FakePromptClient(),
+            transport=transport,
+            user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+            provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+            language="en-US",
+            infer_missing_negotiation_kind=True,
+        )
+
+    assert "outer templateUri:" in str(raised.value)
 
 
 async def test_an_unknown_vendor_template_uri_fails_when_inference_is_off() -> None:

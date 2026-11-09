@@ -372,3 +372,23 @@ def test_extension_value_decodes_the_named_extension() -> None:
 def test_extension_value_returns_none_for_a_missing_key_or_map() -> None:
     assert extension_value(None, NEGOTIATION_T_EXTENSION_URI) is None
     assert extension_value({}, NEGOTIATION_T_EXTENSION_URI) is None
+
+
+def test_extension_value_reads_the_protobuf_struct_of_an_a2a_message() -> None:
+    from google.protobuf.struct_pb2 import Struct
+
+    metadata = Struct()
+    metadata.update({NEGOTIATION_T_EXTENSION_URI: '[{"message": []}]'})
+
+    assert extension_value(metadata, NEGOTIATION_T_EXTENSION_URI) == [{"message": []}]
+
+
+def test_extension_value_returns_none_for_an_unsupported_container() -> None:
+    assert extension_value([NEGOTIATION_T_EXTENSION_URI], NEGOTIATION_T_EXTENSION_URI) is None
+
+
+def test_decode_extension_value_keeps_deeply_nested_json() -> None:
+    """``json`` raises ``RecursionError`` on a peer-controlled deep document; never propagate it."""
+    deeply_nested = "[" * 5000 + "]" * 5000
+
+    assert decode_extension_value(deeply_nested) == deeply_nested
