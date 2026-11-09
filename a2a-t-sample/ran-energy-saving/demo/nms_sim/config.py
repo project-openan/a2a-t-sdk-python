@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Final
 
 #: Fidelity profiles.
@@ -147,6 +147,18 @@ class SimConfig:
     rate_policy: str = RATE_POLICY_REQUIRED
     long_outage_feasibility: bool = False
 
+    def __post_init__(self) -> None:
+        """Apply the fast profile to settings built directly, not only through ``from_env``.
+
+        ``fast`` is documented as "finishes immediately"; the environment path already zeroes the
+        delays, but a direct ``SimConfig(fidelity=FIDELITY_FAST)`` used to keep the strict 2 s + 4 s
+        wall-clock delays. Normalizing here keeps both construction paths identical.
+        """
+        if self.fidelity == FIDELITY_FAST:
+            object.__setattr__(self, "heartbeat_seconds", 0.0)
+            object.__setattr__(self, "working_delay", 0.0)
+            object.__setattr__(self, "completion_delay", 0.0)
+
     @property
     def strict(self) -> bool:
         """Return whether the strict fidelity profile is active."""
@@ -223,10 +235,9 @@ class SimConfig:
             rate_policy=rate_policy,
             long_outage_feasibility=_truthy(os.environ.get(LONG_OUTAGE_FEASIBILITY_ENV_KEY, "")),
         )
-        # The fast profile keeps the wire contract but removes the wall-clock delays.
-        if profile.strict:
-            return profile
-        return replace(profile, heartbeat_seconds=0.0, working_delay=0.0, completion_delay=0.0)
+        # The fast profile keeps the wire contract but removes the wall-clock delays; the dataclass
+        # applies that normalization in ``__post_init__``, so ``profile`` is ready as built.
+        return profile
 
 
 def _truthy(value: str) -> bool:
