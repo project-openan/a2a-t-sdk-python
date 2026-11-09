@@ -9,7 +9,7 @@
       "examples": [
         "创建"
       ],
-      "x-a2at-value-constraint": "规范取值：创建、修改。同义词需归一化为规范取值，不应判为取值越界：新增/建立/部署/实施/新加/启用/开启/激活/配置 均归一化为创建；调整/变更/更新 均归一化为修改。"
+      "x-a2at-value-constraint": "规范取值：创建、修改。同义词需归一化为规范取值，不应判为取值越界：新增/建立/部署/实施/新加/启用/开启/激活/配置 均归一化为创建；调整/变更/更新 均归一化为修改。描述站点级停电速率保障（具体站点、停电时间窗、吞吐量）的请求即使没有“修改”动词也归一化为修改，因为模板只允许修改操作使用站点级速率目标。"
     },
     "任务描述": {
       "type": "string",
@@ -25,7 +25,7 @@
       "examples": [
         "区域为 ExampleRegion。"
       ],
-      "x-a2at-value-constraint": "区域名称。命名区域（一个具体区域名，如“ExampleRegion”或“Slice A”）是合法的。只有“test area”、“sites in this area”、“所有小区”、“室内小区”、“室外小区”这类无具体区域名的匿名模糊描述，必须上报 slot.not_provided，slot_label 用“区域”，actual 写缺失原因。只允许输入一个区域名称；若输入指定多个区域，必须上报 slot.constraint_violated。"
+      "x-a2at-value-constraint": "区域名称。命名区域（一个具体区域名，如“ExampleRegion”或“Slice A”）是合法的。“A2A test area”是被测区域，归一化为“A2ATestRegion”，按具体区域处理。只有“test area”、“sites in this area”、“所有小区”、“室内小区”、“室外小区”这类无具体区域名的匿名模糊描述，必须上报 slot.not_provided，slot_label 用“区域”，actual 写缺失原因。只允许输入一个区域名称；若输入指定多个区域，必须上报 slot.constraint_violated。"
     },
     "任务目标": {
       "type": "string",
@@ -41,7 +41,7 @@
       "examples": [
         "节能的小区制式：NR；需要节能的时间范围：起始时间“08:00:00”，结束时间“12:00:00”；分时段速率保障目标：{00:00~06:00,2Mbps}、{06:00~18:00,10Mbps}。"
       ],
-      "x-a2at-value-constraint": "1. 小区制式：LTE、NR、LNR、全部（同义词见下方[terminology]术语段）。非法值（如“3G”）上报 slot.constraint_violated。 2. 跨任务引用：输入通过引用历史任务继承参数（如“same as the previous task”）但存在多个历史任务且引用未指明继承自哪一个时，上报 slot.constraint_violated，slot_label 用“任务引用”。不得静默选择候选任务的值；值置为 null。示例：输入提到两个历史任务（一个覆盖 ExampleRegionA，NR，00:00:00–06:00:00，5 Mbps 下限；另一个覆盖 ExampleRegionB，NR，00:00:00–06:00:00，2 Mbps 下限），然后说“same as the previous task”——引用歧义，上报 slot.constraint_violated；不得选择第二个任务的 2 Mbps 下限。 3. 节能时间段，以天为周期循环执行，缺省则全时段节能，仅在节能时间范围内保障速率目标。 4. 可关闭载波的频点。请求关断载波但具体频点缺失时上报 slot.not_provided，slot_label 用“关断频点”。频点须为具体数值（如1600），约数（如“approximately 1600”）上报 slot.constraint_violated。 5. 速率保障目标：下行吞吐率目标最小值及生效时间段（区域级支持分时段/全时段；站点级需站点列表、分时段速率目标、选填背景事件与持续时间）。当输入给出吞吐/速率/用户体验目标时，必须放入本槽位的速率保障目标，不得留在任务目标槽位。分时段时间段不允许重叠且须落在节能时间段内；重叠上报 slot.constraint_violated，slot_label 用“节能时段”。分时段时间窗是当日内的半开区间：00:00 是当日开始，24:00 是当日结束。因此以 24:00 结束的时间窗（如 05:00~24:00）不会延续到当日或次日的 00:00，也不与从 00:00 开始的时间窗重叠。仅在端点相接的时间窗（如 00:00~03:00 与 03:00~05:00，或 00:00~03:00 与 05:00~24:00）不构成重叠；只有共享超过一个端点的时间窗（如 05:00~08:00 与 07:00~10:00）才算重叠。模糊时段（busy/idle/peak/off-peak）上报 slot.constraint_violated。速率模糊（如“尽量最大化速率”无具体数值）上报 slot.not_provided，slot_label 用“保障速率”。速率变更绑定具体时间段但未给速率值时上报 slot.not_provided，slot_label 用“保障速率”；仅泛泛说“修改吞吐目标”且未给具体时间段时可接受不报错。 6. 停电/修改场景下，受影响站点列表（具体站点名，不能是“sites in this area”/“10 sites”）和停电起止时间（具体时间，不能只有“tomorrow”/“five-hour”）为必填。缺停电时间上报 slot.not_provided，slot_label 用“停电起止时间”；缺站点上报 slot.not_provided，slot_label 用“站点列表”。停电时长须为单个具体数值（如3小时），区间（如“2 or 3 hours”）上报 slot.constraint_violated。速率保障目标格式：每个速率保障目标必须写成一个或多个分时段片段，格式严格为 {HH:MM~HH:MM,NMbps}，起止时间之间使用波浪号 ~，速率必须带 Mbps 单位。裸速率（如 10Mbps）和数值型用户体验目标（如 User Experience Target to 10）也按此规则：使用节能激活时间段作为片段；未给出时间段时使用 {00:00~24:00,NMbps}。本槽位内不得出现 (full period)、HH:MM-HH:MM 这类连字符写法，或缺少 Mbps 单位的速率。"
+      "x-a2at-value-constraint": "1. 小区制式：LTE、NR、LNR、全部（同义词见下方[terminology]术语段）。非法值（如“3G”）上报 slot.constraint_violated。 2. 跨任务引用：输入通过引用历史任务继承参数（如“same as the previous task”）但存在多个历史任务且引用未指明继承自哪一个时，上报 slot.constraint_violated，slot_label 用“任务引用”。不得静默选择候选任务的值；值置为 null。示例：输入提到两个历史任务（一个覆盖 ExampleRegionA，NR，00:00:00–06:00:00，5 Mbps 下限；另一个覆盖 ExampleRegionB，NR，00:00:00–06:00:00，2 Mbps 下限），然后说“same as the previous task”——引用歧义，上报 slot.constraint_violated；不得选择第二个任务的 2 Mbps 下限。 3. 节能时间段，以天为周期循环执行，缺省则全时段节能，仅在节能时间范围内保障速率目标。 4. 可关闭载波的频点。请求关断载波但具体频点缺失时上报 slot.not_provided，slot_label 用“关断频点”。频点须为具体数值（如1600），约数（如“approximately 1600”）上报 slot.constraint_violated。 5. 速率保障目标：下行吞吐率目标最小值及生效时间段（区域级支持分时段/全时段；站点级需站点列表、分时段速率目标、选填背景事件与持续时间）。当输入给出吞吐/速率/用户体验目标时，必须放入本槽位的速率保障目标，不得留在任务目标槽位。分时段时间段不允许重叠且须落在节能时间段内；重叠上报 slot.constraint_violated，slot_label 用“节能时段”。分时段时间窗是当日内的半开区间：00:00 是当日开始，24:00 是当日结束。因此以 24:00 结束的时间窗（如 05:00~24:00）不会延续到当日或次日的 00:00，也不与从 00:00 开始的时间窗重叠。仅在端点相接的时间窗（如 00:00~03:00 与 03:00~05:00，或 00:00~03:00 与 05:00~24:00）不构成重叠；只有共享超过一个端点的时间窗（如 05:00~08:00 与 07:00~10:00）才算重叠。模糊时段（busy/idle/peak/off-peak）上报 slot.constraint_violated。速率模糊（如“尽量最大化速率”无具体数值）上报 slot.not_provided，slot_label 用“保障速率”。速率变更绑定具体时间段但未给速率值时上报 slot.not_provided，slot_label 用“保障速率”；仅泛泛说“修改吞吐目标”且未给具体时间段时可接受不报错。 6. 停电/背景事件属于站点级，必须有具体站点列表。不得把“区域 + 停电事件 + 速率”当作区域级请求放行；未给出具体站点时上报 slot.not_provided，slot_label 用“站点列表”。停电/修改场景下，受影响站点列表（具体站点名，不能是“sites in this area”/“10 sites”）和停电起止时间（具体时间，不能只有“tomorrow”/“five-hour”）为必填。缺停电时间上报 slot.not_provided，slot_label 用“停电起止时间”；缺站点上报 slot.not_provided，slot_label 用“站点列表”。停电时长须为单个具体数值（如3小时），区间（如“2 or 3 hours”）上报 slot.constraint_violated。速率保障目标格式：每个速率保障目标必须写成一个或多个分时段片段，格式严格为 {HH:MM~HH:MM,NMbps}，起止时间之间使用波浪号 ~，速率必须带 Mbps 单位。裸速率（如 10Mbps）和数值型用户体验目标（如 User Experience Target to 10）也按此规则：使用节能激活时间段作为片段；未给出时间段时使用 {00:00~24:00,NMbps}。本槽位内不得出现 (full period)、HH:MM-HH:MM 这类连字符写法，或缺少 Mbps 单位的速率。"
     },
     "预期输出": {
       "type": "string",

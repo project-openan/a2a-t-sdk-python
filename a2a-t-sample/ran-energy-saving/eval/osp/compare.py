@@ -46,8 +46,17 @@ TASK_T_SECTIONS: Final[tuple[str, ...]] = (
 )
 
 _SECTION_RE: Final[re.Pattern[str]] = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+#: Optional seconds of a time value. It must not swallow the rate of a segment such as
+#: ``{08:00-24:00:10Mbps}``: ``:10`` there is the rate, not seconds. A following rate unit or a
+#: following letter/number therefore rejects the optional group, leaving the value as minutes.
+_OPTIONAL_SECONDS: Final[str] = (
+    r"(?::\d{2}(?![0-9A-Za-z])(?!\s*(?:[Mm]bps|[Mm]bit|[Mm])\b))?"
+)
 _TIME_PAIR_RE: Final[re.Pattern[str]] = re.compile(
-    r"(\d{1,2}):(\d{2})(?::\d{2})?\s*(?:-|~|–|—|to)\s*(\d{1,2}):(\d{2})(?::\d{2})?"
+    r"(\d{1,2}):(\d{2})"
+    + _OPTIONAL_SECONDS
+    + r"\s*(?:-|~|–|—|to)\s*(\d{1,2}):(\d{2})"
+    + _OPTIONAL_SECONDS
 )
 _NUMBER_RE: Final[re.Pattern[str]] = re.compile(r"([0-9]+(?:\.[0-9]+)?)")
 _RATE_RE: Final[re.Pattern[str]] = re.compile(
@@ -172,14 +181,20 @@ def normalize_task_context(text: str) -> str:
     value = re.sub(r"\((?:full|whole) period\)", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\(recurring daily\)", "", value, flags=re.IGNORECASE)
     value = re.sub(
-        r'start time\s*"?(\d{1,2}:\d{2})(?::\d{2})?"?\s*,\s*end time\s*'
-        r'"?(\d{1,2}:\d{2})(?::\d{2})?"?',
+        r'start time\s*"?(\d{1,2}:\d{2})'
+        + _OPTIONAL_SECONDS
+        + r'"?\s*,\s*end time\s*"?(\d{1,2}:\d{2})'
+        + _OPTIONAL_SECONDS
+        + r'"?',
         r"\1-\2",
         value,
         flags=re.IGNORECASE,
     )
     value = re.sub(
-        r"(\d{1,2}:\d{2})(?::\d{2})?\s*(?:to|~|–|—|-)\s*(\d{1,2}:\d{2})(?::\d{2})?",
+        r"(\d{1,2}:\d{2})"
+        + _OPTIONAL_SECONDS
+        + r"\s*(?:to|~|–|—|-)\s*(\d{1,2}:\d{2})"
+        + _OPTIONAL_SECONDS,
         r"\1-\2",
         value,
         flags=re.IGNORECASE,
@@ -487,6 +502,9 @@ def _normalize_scenario_based(value: object) -> tuple[object, ...]:
         sites = _normalize_sites(item.get("Site list"))
         targets = _normalize_zone_targets(item.get("Guaranteed throughput target by site"))
         scenario = _clean_text(str(item.get("Scenario") or "")).lower()
+        if scenario in {"outage", "power cut", "power outage"}:
+            # "Outage" and "power outage" name the same background event.
+            scenario = "power outage"
         period = _normalize_time(item.get("Scenario period"))
         entries.append((sites, targets, scenario, period))
     return tuple(sorted(entries, key=repr))

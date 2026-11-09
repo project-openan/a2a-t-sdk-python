@@ -38,6 +38,7 @@ from protocol.messages import TASK_TEMPLATE_URI
 from shared.task_schema import TASK_PARAM_SCHEMA
 
 from eval.osp.compare import Diff, compare_intent, compare_task_t
+from eval.osp.followup import followup_case, has_followup, interception_case, is_blocked_case
 from eval.osp.intent_schema import OSP_INTENT_SCHEMA
 
 #: Stages this runner can execute, in pipeline order.
@@ -48,6 +49,12 @@ STAGE_PASSED: Final[str] = "passed"
 STAGE_FAILED: Final[str] = "failed"
 STAGE_RECORDED: Final[str] = "recorded"
 STAGE_ERROR: Final[str] = "error"
+
+#: The 24 hourly intervals of a full-day energy-saving period. ``OSP_INTENT_SCHEMA`` declares this
+#: as the default for an area-level request that names no time range.
+_FULL_DAY_TIME: Final[str] = "&".join(
+    f"{hour:02d}:00:00-{hour:02d}:59:59" for hour in range(24)
+)
 
 #: The case directory shipped next to this module.
 DEFAULT_CASES_DIR: Final[Path] = Path(__file__).resolve().parent / "cases"
@@ -97,23 +104,40 @@ class StageOutcome:
 
 @dataclass(frozen=True)
 class CaseOutcome:
-    """Result of one case."""
+    """Result of one case.
+
+    A case whose A2A-T request is expected to be intercepted carries two segments: the
+    ``interception`` records the original request (intent and Task-T are evidence; only the
+    ``blocked`` validation is judged) and ``stages`` is the follow-up request that carries the
+    case's real expectations. A case without a follow-up has ``interception`` set to ``None`` and
+    ``stages`` is its only segment.
+    """
 
     case_id: int
     name: str
     stages: tuple[StageOutcome, ...]
     passed: bool
     error: str | None = None
+    interception: tuple[StageOutcome, ...] | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Return the JSON-friendly representation used by the report."""
-        return {
+        result: dict[str, object] = {
             "id": self.case_id,
             "name": self.name,
             "passed": self.passed,
             "error": self.error,
             "stages": {stage.stage: stage.to_dict() for stage in self.stages},
         }
+        if self.interception is not None:
+            result["interception"] = {
+                "passed": all(
+                    stage.status in {STAGE_PASSED, STAGE_RECORDED}
+                    for stage in self.interception
+                ),
+                "stages": {stage.stage: stage.to_dict() for stage in self.interception},
+            }
+        return result
 
 
 def load_cases(cases_dir: Path = DEFAULT_CASES_DIR) -> list[dict[str, Any]]:
@@ -150,9 +174,39 @@ def run_case(
     *,
     stop_after: str = "validate",
 ) -> CaseOutcome:
-    """Execute the stages of one case up to and including ``stop_after``."""
+    """Execute the stages of one case up to and including ``stop_after``.
+
+    A blocked case with a ``blocked_followup`` request runs twice, matching the case contract:
+    the interception segment judges only that the original request is blocked, and the follow-up
+    segment replays the replacement request against the case's intent, Task-T and validation
+    expectations. Without the second segment the replacement expectations would be compared with
+    the incomplete original request, which reports a model error for a request the operator never
+    meant to send.
+    """
     if stop_after not in STAGE_ORDER:
         raise ValueError(f"unsupported stop_after {stop_after!r}; expected one of {STAGE_ORDER}")
+    if not (is_blocked_case(case) and has_followup(case)):
+        return _run_segment(case, client, stop_after=stop_after)
+
+    interception = _run_segment(interception_case(case), client, stop_after=stop_after)
+    followup = _run_segment(followup_case(case), client, stop_after=stop_after)
+    return CaseOutcome(
+        case_id=followup.case_id,
+        name=followup.name,
+        stages=followup.stages,
+        passed=interception.passed and followup.passed,
+        error=followup.error or interception.error,
+        interception=interception.stages,
+    )
+
+
+def _run_segment(
+    case: Mapping[str, Any],
+    client: EvalPromptClient,
+    *,
+    stop_after: str = "validate",
+) -> CaseOutcome:
+    """Execute one request segment of a case up to and including ``stop_after``."""
     stages = STAGE_ORDER[: STAGE_ORDER.index(stop_after) + 1]
     case_id = int(case["id"])
     name = str(case["name"])
@@ -287,6 +341,9 @@ def _run_intent(
         )
     if not isinstance(actual, Mapping):
         actual = {}
+    actual, applied_defaults = _apply_intent_defaults(actual)
+    if applied_defaults:
+        note = _append_note(note, f"schema defaults: {', '.join(applied_defaults)}")
     diffs = compare_intent(expected, actual)
     negotiation = case["expect"]["protocols"]["a2a-t"]["negotiation"]
     post_negotiation = bool(negotiation.get("expected"))
@@ -309,6 +366,32 @@ def _run_intent(
         actual=dict(actual),
         diffs=tuple(diffs),
     )
+
+
+def _apply_intent_defaults(
+    actual: Mapping[str, object],
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    """Fill the defaults ``OSP_INTENT_SCHEMA`` declares but the model may leave null.
+
+    The schema states that an unmentioned RAT is ``ALL`` and that an area-level request without a
+    time range covers the full day. Those are schema semantics, not guesses about the operator's
+    text, so they are applied here instead of trusting every model turn to repeat them. A
+    site-level request (one that carries ``Scenario-based energy saving``) keeps its empty time:
+    the outage window belongs to the scenario period there.
+    """
+    data = dict(actual)
+    applied: list[str] = []
+    rat = data.get("Energy saving cell RAT")
+    if rat is None or (isinstance(rat, str) and not rat.strip()):
+        data["Energy saving cell RAT"] = "ALL"
+        applied.append("Energy saving cell RAT=ALL")
+    time = data.get("Energy saving time")
+    if not data.get("Scenario-based energy saving") and (
+        time is None or (isinstance(time, str) and not time.strip())
+    ):
+        data["Energy saving time"] = _FULL_DAY_TIME
+        applied.append("Energy saving time=full day")
+    return data, tuple(applied)
 
 
 def _run_task_t(case: Mapping[str, Any], task_t: str) -> StageOutcome:
@@ -449,12 +532,15 @@ def build_report(
     recorded = sum(
         1
         for outcome in outcomes
-        for stage in outcome.stages
+        for stage in (*outcome.stages, *(outcome.interception or ()))
         if stage.status == STAGE_RECORDED
     )
     counts["recordedStages"] = recorded
     counts["stageErrors"] = sum(
-        1 for outcome in outcomes for stage in outcome.stages if stage.status == STAGE_ERROR
+        1
+        for outcome in outcomes
+        for stage in (*outcome.stages, *(outcome.interception or ()))
+        if stage.status == STAGE_ERROR
     )
     return {
         "schema": "osp-eval-run/v1",
@@ -469,13 +555,18 @@ def build_report(
 def _print_outcome(outcome: CaseOutcome, *, verbose: bool) -> None:
     label = "PASS" if outcome.passed else "FAIL"
     stage_text = " ".join(f"{stage.stage}={stage.status}" for stage in outcome.stages)
+    if outcome.interception is not None:
+        intercepted = " ".join(
+            f"{stage.stage}={stage.status}" for stage in outcome.interception
+        )
+        stage_text = f"{stage_text}  [interception: {intercepted}]"
     display_name = " ".join(outcome.name.split())
     print(f"[{outcome.case_id:>3}] {label}  {stage_text}  {display_name}")
     if outcome.error:
         print(f"      error: {outcome.error}")
     if not verbose:
         return
-    for stage in outcome.stages:
+    for stage in (*outcome.stages, *(outcome.interception or ())):
         if stage.message:
             print(f"      {stage.stage}: {stage.message}")
         for diff in stage.diffs:

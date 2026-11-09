@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, TypeVar
 
 import pytest
 from a2a_t.core.errors.catalog import ErrorCatalog
@@ -15,6 +15,7 @@ from a2a_t.core.errors.exceptions import (
     SlotValidationError,
 )
 from eval.osp.compare import compare_intent, compare_task_t
+from eval.osp.followup import followup_input
 from eval.osp.intent_schema import OSP_INTENT_SCHEMA
 from eval.osp.runner import (
     STAGE_ERROR,
@@ -27,28 +28,43 @@ from eval.osp.runner import (
 
 CASES = {case["id"]: case for case in load_cases()}
 
+T = TypeVar("T")
+
 
 @dataclass
 class FakePromptClient:
     """SDK double keyed by the case's operator text."""
 
     intent_overrides: Mapping[int, Mapping[str, object]] = field(default_factory=dict)
-    validate_outcomes: Mapping[int, str] = field(default_factory=dict)
-    generation_errors: Mapping[int, PromptGenerationError] = field(default_factory=dict)
+    validate_outcomes: Mapping[int | tuple[int, str], str] = field(default_factory=dict)
+    generation_errors: Mapping[int | tuple[int, str], PromptGenerationError] = field(
+        default_factory=dict
+    )
     last_case_id: int | None = None
+    current_segment: str = "original"
     calls: list[tuple[int | None, str]] = field(default_factory=list)
 
     def _case_for_text(self, text: str) -> Mapping[str, Any]:
         for case in CASES.values():
             if case["user_input"] == text:
+                self.current_segment = "original"
+                return case
+            if followup_input(case) == text:
+                self.current_segment = "followup"
                 return case
         raise AssertionError(f"unknown user input: {text!r}")
+
+    def _segment_value(self, values: Mapping[int | tuple[int, str], T], default: T) -> T:
+        value = values.get((self.last_case_id, self.current_segment))
+        return value if value is not None else values.get(self.last_case_id, default)
 
     def generate_task_prompt_from_text(self, text: str, template_uri: str) -> object:
         case = self._case_for_text(text)
         self.last_case_id = int(case["id"])
         self.calls.append((self.last_case_id, "generate"))
-        error = self.generation_errors.get(self.last_case_id)
+        error = self.generation_errors.get((self.last_case_id, self.current_segment))
+        if error is None:
+            error = self.generation_errors.get(self.last_case_id)
         if error is not None:
             raise error
         return SimpleNamespace(
@@ -71,7 +87,7 @@ class FakePromptClient:
                 self.last_case_id, case["expect"]["intent"]
             )
             return SimpleNamespace(data=dict(intent))
-        outcome = self.validate_outcomes.get(self.last_case_id, "pass")
+        outcome = self._segment_value(self.validate_outcomes, "pass")
         if outcome == "blocked":
             raise ContentValidationError(
                 ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
@@ -99,6 +115,10 @@ class FakePromptClient:
 
 def _statuses(outcome: Any) -> dict[str, str]:
     return {stage.stage: stage.status for stage in outcome.stages}
+
+
+def _statuses_of(stages: Any) -> dict[str, str]:
+    return {stage.stage: stage.status for stage in stages}
 
 
 def test_compare_intent_normalizes_notation() -> None:
@@ -278,10 +298,17 @@ def test_runner_passes_a_clean_case() -> None:
 
 
 def test_runner_records_the_conflict_fields() -> None:
-    client = FakePromptClient(validate_outcomes={40: "blocked"})
+    client = FakePromptClient(validate_outcomes={(40, "original"): "blocked"})
     outcome = run_case(CASES[40], client, stop_after="validate")
     assert outcome.passed is True
+    # The base case disables the conflicting intent/Task-T assertions; the follow-up override
+    # turns them back on, so the replacement request is judged on both.
     assert _statuses(outcome) == {
+        "intent": STAGE_PASSED,
+        "task_t": STAGE_PASSED,
+        "validate": STAGE_PASSED,
+    }
+    assert _statuses_of(outcome.interception) == {
         "intent": STAGE_RECORDED,
         "task_t": STAGE_RECORDED,
         "validate": STAGE_PASSED,
@@ -305,16 +332,64 @@ def test_runner_handles_a_blocked_generation_as_the_expected_outcome() -> None:
         {"slot_label": "Area"},
         message="'Area' is not provided in the input.",
     )
-    client = FakePromptClient(generation_errors={40: error})
+    client = FakePromptClient(generation_errors={(40, "original"): error})
     outcome = run_case(CASES[40], client, stop_after="validate")
     assert outcome.passed is True
     assert _statuses(outcome) == {
+        "intent": STAGE_PASSED,
+        "task_t": STAGE_PASSED,
+        "validate": STAGE_PASSED,
+    }
+    assert outcome.interception is not None
+    validate_stage = next(
+        stage for stage in outcome.interception if stage.stage == "validate"
+    )
+    assert validate_stage.actual == "blocked"
+
+
+def test_blocked_case_runs_the_followup_segment() -> None:
+    client = FakePromptClient(validate_outcomes={(25, "original"): "blocked"})
+    outcome = run_case(CASES[25], client, stop_after="validate")
+    assert outcome.passed is True
+    assert _statuses(outcome) == {
+        "intent": STAGE_PASSED,
+        "task_t": STAGE_PASSED,
+        "validate": STAGE_PASSED,
+    }
+    assert _statuses_of(outcome.interception) == {
         "intent": STAGE_RECORDED,
         "task_t": STAGE_RECORDED,
         "validate": STAGE_PASSED,
     }
-    validate_stage = next(stage for stage in outcome.stages if stage.stage == "validate")
-    assert validate_stage.actual == "blocked"
+    assert client.calls.count((25, "generate")) == 2, "both the blocked and the follow-up input ran"
+
+
+def test_blocked_case_fails_when_the_original_request_is_not_blocked() -> None:
+    client = FakePromptClient()  # the original request validates as pass
+    outcome = run_case(CASES[25], client, stop_after="validate")
+    assert outcome.passed is False
+    assert _statuses(outcome) == {
+        "intent": STAGE_PASSED,
+        "task_t": STAGE_PASSED,
+        "validate": STAGE_PASSED,
+    }
+    assert _statuses_of(outcome.interception)["validate"] == STAGE_FAILED
+
+
+def test_blocked_case_reports_a_followup_generation_failure() -> None:
+    error = PromptGenerationError(
+        ErrorCatalog.SLOT_NOT_PROVIDED,
+        {"slot_label": "Site list"},
+        message="'Site list' is not provided in the input.",
+    )
+    client = FakePromptClient(
+        generation_errors={(25, "followup"): error},
+        validate_outcomes={(25, "original"): "blocked"},
+    )
+    outcome = run_case(CASES[25], client, stop_after="validate")
+    assert outcome.passed is False
+    assert _statuses_of(outcome.interception)["validate"] == STAGE_PASSED
+    assert _statuses(outcome)["validate"] == STAGE_FAILED
 
 
 def test_runner_fails_when_an_unexpected_block_stops_generation() -> None:
@@ -373,6 +448,70 @@ def test_validate_stage_reports_a_crash() -> None:
 def test_stop_after_rejects_an_unsupported_stage() -> None:
     with pytest.raises(ValueError, match="unsupported stop_after"):
         run_case(CASES[1], FakePromptClient(), stop_after="send")
+
+
+def test_time_segment_does_not_swallow_a_rate_as_seconds() -> None:
+    """``{08:00-24:00:10Mbps}`` keeps ``10`` as the rate; ``:10`` is not seconds."""
+    from eval.osp.compare import _contexts_match
+
+    assert _contexts_match(
+        "Time-segmented rate guarantee target: {00:00-08:00: 2Mbps}, {08:00-24:00:10Mbps}",
+        "Time-segmented rate guarantee goal: {00:00-08:00: 2Mbps}, {08:00-24:00: 10Mbps}",
+    )
+
+
+def test_scenario_outage_is_the_same_as_power_outage() -> None:
+    from eval.osp.compare import compare_intent
+
+    expected = CASES[25]["expect"]["intent"]
+    actual = dict(expected)
+    actual["Scenario-based energy saving"] = [
+        {
+            **expected["Scenario-based energy saving"][0],
+            "Scenario": "Outage",
+        }
+    ]
+    assert compare_intent(expected, actual) == []
+
+
+def test_intent_defaults_fill_rat_and_full_day() -> None:
+    from eval.osp.runner import _apply_intent_defaults
+
+    data, applied = _apply_intent_defaults(
+        {
+            "Energy saving cell RAT": None,
+            "Energy saving time": "",
+            "Scenario-based energy saving": [],
+        }
+    )
+    assert data["Energy saving cell RAT"] == "ALL"
+    assert len(str(data["Energy saving time"]).split("&")) == 24
+    assert applied == ("Energy saving cell RAT=ALL", "Energy saving time=full day")
+
+
+def test_intent_defaults_keep_a_site_level_time_empty() -> None:
+    from eval.osp.runner import _apply_intent_defaults
+
+    data, applied = _apply_intent_defaults(
+        {
+            "Energy saving cell RAT": "ALL",
+            "Energy saving time": "",
+            "Scenario-based energy saving": [{"Site list": ["NE_A"]}],
+        }
+    )
+    assert data["Energy saving time"] == ""
+    assert applied == ()
+
+
+def test_runner_applies_the_schema_defaults_before_comparison() -> None:
+    missing = dict(CASES[16]["expect"]["intent"])
+    missing["Energy saving cell RAT"] = None
+    missing["Energy saving time"] = ""
+    client = FakePromptClient(intent_overrides={16: missing})
+    outcome = run_case(CASES[16], client, stop_after="intent")
+    assert outcome.passed is True
+    assert _statuses(outcome) == {"intent": STAGE_PASSED}
+    assert "schema defaults" in outcome.stages[0].message
 
 
 def test_time_ranges_with_seconds_normalize_to_the_same_hours() -> None:

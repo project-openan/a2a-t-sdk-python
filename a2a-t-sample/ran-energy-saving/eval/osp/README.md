@@ -247,15 +247,24 @@ PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-af
 
 `send / negotiate / final` 需要完整运行时，不在这个 runner 内。
 
+**带 `blocked_followup` 的拦截用例跑两段**（与 `/tester` 共用 `eval/osp/followup.py` 的派生规则）：
+
+| 段 | 输入 | 判定 | 报告位置 |
+|---|---|---|---|
+| 拦截段 | 原 `user_input` | 只判 `validate: blocked`；intent/task_t 标 `recorded` | `interception.stages` |
+| 补充段 | `blocked_followup.input` | 判 intent / task_t / validate（`validate: pass` 机械派生），`blocked_followup.expect/assert` 可局部覆盖 | `stages` |
+
+用例 pass = 拦截段与补充段都通过。**不要把原请求的 intent/task_t 与补充请求的期望比较**：期望描述的是补充请求，原请求本来就缺这些值。
+
 - `--model-mode live` 用 sample `.env` 里的真实模型；`offline` 用 demo 的脚本模型。脚本模型不支持 11-key schema，提取结果会为空，只适合链路自检。
 - `--out` 写 JSON 报告；默认写到 `runs/osp-eval/<timestamp>.json`。
 
 ### 8.1 判定细节
 
-- `assert.intent: false` 的用例（40/46）和 `assert.a2a-t.task_t: false` 的用例只记录，不参与 pass/fail。
+- `assert.intent: false` 的用例（40/46）和 `assert.a2a-t.task_t: false` 的用例只记录，不参与 pass/fail；如果 `blocked_followup.assert` 把开关打开，则补充段判定。
 - `assert.a2a-t.validate: false` 的用例（49–51）只记录。
-- 6 条协商用例（32/34/35/36/37/38）的 `expect.intent` 是协商后的最终意图；离线 runner 只看到初始请求，所以 `intent` 阶段标 `recorded`，不判失败。
-- `slot.*` 生成失败（缺区域、缺速率、非法制式等）发生在 Task-T 之前；如果该用例预期 `validate: blocked`，runner 把 validate 判为通过，intent/task_t 标 `recorded`。
+- 6 条协商用例（32/34/35/36/37/38）的 `expect.intent` 是协商后的最终意图；离线 runner 只看到初始请求，所以 `intent` 阶段标 `recorded`，不判失败。这些用例的 `task_t` / `validate` 期望也可能包含协商后才产生的值（例如 37 的 `10Mbps`），离线跑出现差异时先对照 `known_issue` 判断是初始转换问题还是协商终态差异。
+- `slot.*` 生成失败（缺区域、缺速率、非法制式等）发生在 Task-T 之前；如果该用例预期 `validate: blocked`，runner 把 validate 判为通过，intent/task_t 标 `recorded`。补充段若仍发生 `slot.*`，说明补充请求仍不完整，按 error/failed 记录。
 - Task Context 是自由文本，runner 先抽取速率、时段、站点、RAT、模式再比较；两边都只有时段时才退回分词比较。有疑问时看报告里的 `expected` / `actual` 原文。
 
 ## 9. 评测控制台 `/tester`
