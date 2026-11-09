@@ -41,7 +41,7 @@ _THROUGHPUT_TARGET_SCHEMA: Final[dict[str, object]] = {
             "type": "string",
             "description": (
                 "Hour-by-hour intervals HH:00:00-HH:59:59 joined by '&', e.g. "
-                "'08:00:00-08:59:59&09:00:00-09:59:59'."
+                "'08:00:00-08:59:59&09:00:00-09:59:59'. Use the rate target's own effective window from the request (e.g. 19:00-22:00 -> 19:00:00-19:59:59&20:00:00-20:59:59&21:00:00-21:59:59); do not default to the full day when the request names an activation period."
             ),
         },
     },
