@@ -168,6 +168,17 @@ def compare_task_t(expected_text: str, actual_text: str) -> list[Diff]:
     return diffs
 
 
+def time_period_hours(value: object) -> frozenset[int]:
+    """Return the hours of day covered by one normalized time period.
+
+    Accepts the hour-by-hour form the schema emits and a plain range such as ``00:00-06:00``;
+    a value with no time pair yields an empty set so callers can fall back to another rule.
+    """
+    return frozenset(
+        int(hour) for hour in _normalize_time(value) if hour.isdigit()
+    )
+
+
 def normalize_task_context(text: str) -> str:
     """Normalize the free-form Task Context for comparison.
 

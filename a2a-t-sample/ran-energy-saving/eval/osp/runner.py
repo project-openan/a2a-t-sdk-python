@@ -37,7 +37,7 @@ from protocol.client_flow import _classify_validation_error
 from protocol.messages import TASK_TEMPLATE_URI
 from shared.task_schema import TASK_PARAM_SCHEMA
 
-from eval.osp.compare import Diff, compare_intent, compare_task_t
+from eval.osp.compare import Diff, compare_intent, compare_task_t, time_period_hours
 from eval.osp.followup import followup_case, has_followup, interception_case, is_blocked_case
 from eval.osp.intent_schema import OSP_INTENT_SCHEMA
 
@@ -375,9 +375,11 @@ def _apply_intent_defaults(
 
     The schema states that an unmentioned RAT is ``ALL`` and that an area-level request without a
     time range covers the full day. Those are schema semantics, not guesses about the operator's
-    text, so they are applied here instead of trusting every model turn to repeat them. A
-    site-level request (one that carries ``Scenario-based energy saving``) keeps its empty time:
-    the outage window belongs to the scenario period there.
+    text, so they are applied here instead of trusting every model turn to repeat them. When the
+    zone targets carry their own effective periods, their union is the energy-saving window and
+    overrides whatever the model wrote. A site-level request (one that carries
+    ``Scenario-based energy saving``) keeps its empty time: the outage window belongs to the
+    scenario period there.
     """
     data = dict(actual)
     applied: list[str] = []
@@ -386,12 +388,39 @@ def _apply_intent_defaults(
         data["Energy saving cell RAT"] = "ALL"
         applied.append("Energy saving cell RAT=ALL")
     time = data.get("Energy saving time")
-    if not data.get("Scenario-based energy saving") and (
-        time is None or (isinstance(time, str) and not time.strip())
-    ):
-        data["Energy saving time"] = _FULL_DAY_TIME
-        applied.append("Energy saving time=full day")
+    if not data.get("Scenario-based energy saving"):
+        # An area-level request whose zone targets already carry their own effective periods has
+        # its real energy-saving window there; the model may still have written the full day, so
+        # the target union wins. Only a request with no range at all covers the whole day.
+        derived = _time_from_zone_targets(data.get("Guaranteed throughput target by zone"))
+        if derived is not None:
+            if data.get("Energy saving time") != derived:
+                data["Energy saving time"] = derived
+                applied.append("Energy saving time=zone target periods")
+        elif time is None or (isinstance(time, str) and not time.strip()):
+            data["Energy saving time"] = _FULL_DAY_TIME
+            applied.append("Energy saving time=full day")
     return data, tuple(applied)
+
+
+def _time_from_zone_targets(targets: object) -> str | None:
+    """Return the union of the hourly periods of area-level zone targets.
+
+    The intent extractor may leave ``Energy saving time`` empty while correctly filling a
+    time-segmented zone target; the schema says the rate goal is guaranteed only inside the
+    energy-saving window, so the target's own effective periods are that window. Returns ``None``
+    when no hourly period can be read, so the caller falls back to the full-day default.
+    """
+    if not isinstance(targets, (list, tuple)):
+        return None
+    hours: set[int] = set()
+    for entry in targets:
+        if not isinstance(entry, Mapping):
+            continue
+        hours.update(time_period_hours(entry.get("Effective time period")))
+    if not hours:
+        return None
+    return "&".join(f"{hour:02d}:00:00-{hour:02d}:59:59" for hour in sorted(hours))
 
 
 def _run_task_t(case: Mapping[str, Any], task_t: str) -> StageOutcome:

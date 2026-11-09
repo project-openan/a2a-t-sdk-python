@@ -496,6 +496,79 @@ def test_intent_defaults_fill_rat_and_full_day() -> None:
     assert applied == ("Energy saving cell RAT=ALL", "Energy saving time=full day")
 
 
+def test_intent_defaults_derive_the_time_from_zone_targets() -> None:
+    from eval.osp.runner import _apply_intent_defaults
+
+    data, applied = _apply_intent_defaults(
+        {
+            "Energy saving cell RAT": "ALL",
+            "Energy saving time": "",
+            "Scenario-based energy saving": [],
+            "Guaranteed throughput target by zone": [
+                {
+                    "Guaranteed throughput target": "10Mbps",
+                    "Effective time period": (
+                        "19:00:00-19:59:59&20:00:00-20:59:59&21:00:00-21:59:59"
+                    ),
+                }
+            ],
+        }
+    )
+    assert data["Energy saving time"] == (
+        "19:00:00-19:59:59&20:00:00-20:59:59&21:00:00-21:59:59"
+    )
+    assert applied == ("Energy saving time=zone target periods",)
+
+
+def test_intent_defaults_override_a_model_full_day_with_the_zone_union() -> None:
+    from eval.osp.runner import _apply_intent_defaults
+
+    data, applied = _apply_intent_defaults(
+        {
+            "Energy saving cell RAT": "NR",
+            "Energy saving time": "00:00:00-00:59:59&01:00:00-01:59:59",
+            "Scenario-based energy saving": [],
+            "Guaranteed throughput target by zone": [
+                {
+                    "Guaranteed throughput target": "2Mbps",
+                    "Effective time period": "00:00-06:00",
+                }
+            ],
+        }
+    )
+    assert data["Energy saving time"] == (
+        "00:00:00-00:59:59&01:00:00-01:59:59&02:00:00-02:59:59&"
+        "03:00:00-03:59:59&04:00:00-04:59:59&05:00:00-05:59:59"
+    )
+    assert applied == ("Energy saving time=zone target periods",)
+
+
+def test_intent_defaults_union_overlapping_zone_targets() -> None:
+    from eval.osp.runner import _apply_intent_defaults
+
+    data, _applied = _apply_intent_defaults(
+        {
+            "Energy saving cell RAT": "ALL",
+            "Energy saving time": "",
+            "Scenario-based energy saving": [],
+            "Guaranteed throughput target by zone": [
+                {
+                    "Guaranteed throughput target": "2Mbps",
+                    "Effective time period": "00:00:00-01:59:59",
+                },
+                {
+                    "Guaranteed throughput target": "10Mbps",
+                    "Effective time period": "02:00:00-05:59:59",
+                },
+            ],
+        }
+    )
+    assert data["Energy saving time"] == (
+        "00:00:00-00:59:59&01:00:00-01:59:59&02:00:00-02:59:59&"
+        "03:00:00-03:59:59&04:00:00-04:59:59&05:00:00-05:59:59"
+    )
+
+
 def test_intent_defaults_keep_a_site_level_time_empty() -> None:
     from eval.osp.runner import _apply_intent_defaults
 
