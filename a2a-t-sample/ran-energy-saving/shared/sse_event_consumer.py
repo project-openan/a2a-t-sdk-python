@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from a2a.types import StreamResponse, TaskState, TaskStatus
 from google.protobuf.json_format import MessageToDict
 
@@ -39,6 +41,17 @@ def normalize_event(stream_response: StreamResponse) -> dict[str, object]:
             "state": state_name,
             "text": text,
         }
+        # The vendor often reuses an older status snapshot. Keep its own timestamp so the client
+        # can tell a late replay from a fresh transition instead of trusting arrival order.
+        if status.HasField("timestamp") and (status.timestamp.seconds or status.timestamp.nanos):
+            event["timestamp"] = (
+                datetime.fromtimestamp(
+                    status.timestamp.seconds + status.timestamp.nanos / 1e9,
+                    UTC,
+                )
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z")
+            )
         # A2A carries extension metadata on the event and on its status message. Keep both so a
         # status update can show the Task-T / Negotiation-T payload it actually carried.
         metadata = _merge_metadata(

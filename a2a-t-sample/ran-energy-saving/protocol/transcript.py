@@ -261,6 +261,8 @@ class NegotiationTranscript:
             # The Task state name. The human-readable text of a status is localized business
             # copy, so consumers must never infer the state from the text.
             "state": _text(event.get("state")) or None,
+            # The peer's own status time; the client's ``ts`` is when it observed the event.
+            "timestamp": _text(event.get("timestamp")) or None,
             "round": session.round if session is not None else None,
             "maxRounds": session.max_rounds if session is not None else None,
             "contextId": _text(event.get("context_id")) or (session.id if session is not None else None) or None,

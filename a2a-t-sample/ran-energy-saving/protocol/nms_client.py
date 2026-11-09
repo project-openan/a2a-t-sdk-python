@@ -626,6 +626,17 @@ class NmsClient:
         if self._owns_http:
             await self._http.aclose()
 
+    def record_inbound(self, frame: Mapping[str, object], *, source: str) -> None:
+        """Record one inbound push or poll reply in ``wire.jsonl`` (best effort).
+
+        A vendor push never passes through ``message:send``, so without this the wire log proves
+        only what the client sent. Failing to record must not change the protocol result.
+        """
+        try:
+            self._write_wire("in", source=source, body=dict(frame))
+        except Exception:  # noqa: BLE001 - observability must never change the protocol result
+            _LOGGER.warning("failed to record an inbound %s frame in the wire log", source, exc_info=True)
+
     def _write_wire(self, direction: str, **fields: object) -> None:
         """Append one redacted record to the run's ``wire.jsonl``."""
         path = self._current_wire_path()
@@ -953,6 +964,9 @@ class NmsWebhookTransport:
                     " (handing the task to background tracking)" if budget != self._idle_timeout else "",
                 )
                 return events
+            recorder = getattr(self._client, "record_inbound", None)
+            if callable(recorder):
+                recorder(pushed, source="webhook")
             event = _frame_to_event(pushed)
             events.append(event)
             self._emit(event)

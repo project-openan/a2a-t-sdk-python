@@ -1078,3 +1078,26 @@ async def test_wire_path_is_task_local_on_a_shared_client(tmp_path: Path) -> Non
         assert await asyncio.gather(select("run-a"), select("run-b")) == ["run-a", "run-b"]
     finally:
         await client.aclose()
+
+
+async def test_an_inbound_push_is_recorded_in_the_wire_log(tmp_path: Path) -> None:
+    """A webhook push never passes through message:send, so the wire must record it explicitly."""
+    client = _client(_handler(frames=[]))
+    wire_path = tmp_path / "run" / "wire.jsonl"
+    client.set_wire_path(wire_path)
+
+    client.record_inbound(
+        {
+            "statusUpdate": {
+                "taskId": "task-1",
+                "status": {"state": "TASK_STATE_INPUT_REQUIRED"},
+            }
+        },
+        source="webhook",
+    )
+
+    records = [json.loads(line) for line in wire_path.read_text(encoding="utf-8").splitlines()]
+    assert records[-1]["dir"] == "in"
+    assert records[-1]["source"] == "webhook"
+    assert records[-1]["body"]["statusUpdate"]["taskId"] == "task-1"
+    await client.aclose()
