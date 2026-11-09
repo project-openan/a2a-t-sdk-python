@@ -635,3 +635,50 @@ async def test_chain_identity_round_trips_through_the_store(tmp_path: Path) -> N
     assert second.chain_id == "chain-1" and second.parent_run_id == "run-1"
     # The retry is a new conversation, so the blocked turn is never prompt memory.
     assert second.conversation_id == "conv-2"
+
+
+async def test_run_summaries_expose_the_trace_id_and_filter_by_it(tmp_path: Path) -> None:
+    """The observe page needs a run's Langfuse trace id and an exact lookup by it."""
+    path = tmp_path / "client.sqlite3"
+    store = SqliteClientStore(path)
+    await store.ensure_conversation(conversation_id="conv-a")
+    await store.create_run(
+        ClientRunRecord(
+            run_id="run-a",
+            conversation_id="conv-a",
+            scenario="night",
+            mode="auto",
+            transport="sse",
+            discovery="registry",
+            user_request="first",
+            trace_id="a" * 32,
+            source_kind="tester",
+            source={"kind": "tester", "caseId": "TC-001", "batchId": "batch-1"},
+        )
+    )
+    await store.ensure_conversation(conversation_id="conv-b")
+    await store.create_run(
+        ClientRunRecord(
+            run_id="run-b",
+            conversation_id="conv-b",
+            scenario="night",
+            mode="auto",
+            transport="sse",
+            discovery="registry",
+            user_request="second",
+            trace_id="b" * 32,
+        )
+    )
+
+    rows = read_client_run_summaries(path)
+    assert {str(row["runId"]): row["traceId"] for row in rows} == {
+        "run-a": "a" * 32,
+        "run-b": "b" * 32,
+    }
+    by_run = {str(row["runId"]): row for row in rows}
+    assert by_run["run-a"]["caseId"] == "TC-001"
+    assert by_run["run-a"]["batchId"] == "batch-1"
+    assert by_run["run-b"]["caseId"] == ""
+
+    filtered = read_client_run_summaries(path, trace_id="b" * 32)
+    assert [str(row["runId"]) for row in filtered] == ["run-b"]

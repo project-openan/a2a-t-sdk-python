@@ -29,11 +29,13 @@ def read_client_run_summaries(
     source_kind: str | None = None,
     scenario: str | None = None,
     query: str | None = None,
+    trace_id: str | None = None,
 ) -> builtins.list[dict[str, object]]:
     """Return UI rows for the newest client runs (never creates the database).
 
     The optional filters support the internal run console. ``query`` matches the request, run id
-    and conversation id as a case-insensitive substring; every other filter is an exact match.
+    and conversation id as a case-insensitive substring; every other filter is an exact match,
+    including ``trace_id`` (the vendor-facing id used by the observe page).
     """
     connection = _readonly_connection(path)
     if connection is None:
@@ -46,6 +48,7 @@ def read_client_run_summaries(
         source_kind=source_kind,
         scenario=scenario,
         query=query,
+        trace_id=trace_id,
     )
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     try:
@@ -53,7 +56,7 @@ def read_client_run_summaries(
         rows = connection.execute(
             f"""
             SELECT r.run_id, r.conversation_id, r.scenario, r.mode, r.status, r.final_state,
-                   r.protocol, r.user_request, r.error, r.source_kind, r.source_json,
+                   r.protocol, r.trace_id, r.user_request, r.error, r.source_kind, r.source_json,
                    r.downstream_task_id, r.downstream_context_id, r.downstream_hop,
                    r.created_at, r.updated_at, r.finished_at,
                    m.duration_ms, m.total_tokens, m.prompt_tokens, m.completion_tokens,
@@ -75,12 +78,15 @@ def read_client_run_summaries(
                 "scenario": str(row["scenario"]),
                 "mode": str(row["mode"]),
                 "protocol": str(row["protocol"]),
+                "traceId": str(row["trace_id"] or ""),
                 "status": str(row["status"]),
                 "finalState": row["final_state"],
                 "userRequest": _truncate(str(row["user_request"])),
                 "error": row["error"],
                 "sourceKind": str(row["source_kind"] or ""),
                 "sourceChannel": _source_channel(row["source_json"]),
+                "caseId": _source_text(row["source_json"], "caseId"),
+                "batchId": _source_text(row["source_json"], "batchId"),
                 "downstreamTaskId": row["downstream_task_id"],
                 "downstreamContextId": row["downstream_context_id"],
                 "downstreamHop": str(row["downstream_hop"] or ""),
@@ -112,6 +118,7 @@ def count_client_runs(
     source_kind: str | None = None,
     scenario: str | None = None,
     query: str | None = None,
+    trace_id: str | None = None,
 ) -> int:
     """Return how many runs match the console filters (never creates the database)."""
     connection = _readonly_connection(path)
@@ -123,6 +130,7 @@ def count_client_runs(
         source_kind=source_kind,
         scenario=scenario,
         query=query,
+        trace_id=trace_id,
     )
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     try:
@@ -146,6 +154,7 @@ def _run_filters(
     source_kind: str | None,
     scenario: str | None,
     query: str | None,
+    trace_id: str | None,
 ) -> tuple[builtins.list[str], builtins.list[object]]:
     """Build the WHERE clauses and parameters shared by the run list and its count."""
     clauses: builtins.list[str] = []
@@ -170,6 +179,9 @@ def _run_filters(
             " OR r.downstream_task_id LIKE ? OR r.downstream_context_id LIKE ?)"
         )
         params.extend((needle, needle, needle, needle, needle, needle, needle))
+    if trace_id:
+        clauses.append("r.trace_id=?")
+        params.append(trace_id)
     return clauses, params
 
 
@@ -178,6 +190,13 @@ def _source_channel(raw: object) -> str:
     source = _load_json(raw) if isinstance(raw, str) else {}
     channel = source.get("channel")
     return str(channel) if isinstance(channel, str) else ""
+
+
+def _source_text(raw: object, key: str) -> str:
+    """Return one string field of a persisted source document (tester case/batch ids)."""
+    source = _load_json(raw) if isinstance(raw, str) else {}
+    value = source.get(key)
+    return str(value) if isinstance(value, str) else ""
 
 
 def read_client_run_detail(path: str | Path, run_id: str) -> dict[str, object] | None:

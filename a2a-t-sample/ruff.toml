@@ -1,8 +1,17 @@
 line-length = 120
 target-version = "py312"
+# Vendored upstream code (LangfuseObserveTools) keeps its own style; see UPSTREAM.md.
+extend-exclude = [
+    "ran-energy-saving/langfuse_export",
+    "ran-energy-saving/tests/langfuse_export",
+]
 
 [lint]
 select = ["E", "F", "I", "N", "W"]
 
+# Explicit paths bypass ``extend-exclude`` unless ``--force-exclude`` is passed,
+# so the vendored dirs also ignore every selected rule when linted directly.
 [lint.per-file-ignores]
 "fault-management/test/**/*.py" = ["E402", "E501"]
+"ran-energy-saving/langfuse_export/**/*.py" = ["E", "F", "I", "N", "W"]
+"ran-energy-saving/tests/langfuse_export/**/*.py" = ["E", "F", "I", "N", "W"]

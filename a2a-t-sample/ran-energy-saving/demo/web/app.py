@@ -132,6 +132,7 @@ from demo.web.nms_tasks import (
     list_modifiable_tasks,
     read_task,
 )
+from demo.web.observe.routes import build_observe_routes
 from demo.web.runs_console import build_run_console_routes
 from demo.web.tester import build_tester_routes
 from demo.web.wire_records import read_wire_records
@@ -546,6 +547,12 @@ def create_app(
         protocols=advertised_protocols,
         scenarios_by_protocol=scenarios_by_protocol,
         language=config.language,
+    )
+    observe_routes = build_observe_routes(
+        config=config,
+        runs_dir=resolved_runs_dir,
+        env_path=env_path,
+        client_db_path=Path(config.client_db_path) if config.client_db_path else None,
     )
 
     @asynccontextmanager
@@ -1813,6 +1820,7 @@ def create_app(
             Route("/api/runs/{run_id}/spans/{span_id}", run_span),
             *tester_routes,
             *run_console_routes,
+            *observe_routes,
             Mount("/static", app=StaticFiles(directory=static_dir), name="static"),
         ],
         lifespan=lifespan,

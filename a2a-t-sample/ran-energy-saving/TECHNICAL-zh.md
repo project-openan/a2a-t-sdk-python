@@ -1186,7 +1186,8 @@ python run_demo.py --scenario target --mode auto --model-mode live
 | [`shared/webhook_receiver.py`](shared/webhook_receiver.py) | 内置 webhook 推送接收器，校验 token。 |
 | [`shared/sse_event_consumer.py`](shared/sse_event_consumer.py) | 将 A2A 流事件归一化为统一事件结构。 |
 | [`demo/registry/`](demo/registry) | Mock 注册中心（AgentCard 注册/查询，端口 5001）。 |
-| [`demo/web/`](demo/web) | Starlette Web UI（`app.py`，由 `serve.py` 作为受管子进程启动）、演示前端（`presentation/`，默认）、Run Explorer（`static/`）、Excel 测试控制台（`tester/`）和内部 Run 控制台（`runs_console/`，`/runs`）。演示页消费同一 SSE 流；Web UI 负责审批 1（`POST /api/runs/{id}/intent`）并把审批 2 转发给 RAN Agent。 |
+| [`demo/web/`](demo/web) | Starlette Web UI（`app.py`，由 `serve.py` 作为受管子进程启动）、演示前端（`presentation/`，默认）、Run Explorer（`static/`）、Excel 测试控制台（`tester/`）、内部 Run 控制台（`runs_console/`，`/runs`）和 Langfuse 指标导出（`observe/`，`/observe`）。演示页消费同一 SSE 流；Web UI 负责审批 1（`POST /api/runs/{id}/intent`）并把审批 2 转发给 RAN Agent。 |
+| [`langfuse_export/`](langfuse_export) | Vendoring 的上游 `langfuse-export` 客户端（0.2.6）：拉取单条 Langfuse trace、派生 A2A/A2A-T 指标，并写出原始 observation、transcript 与 manifest。本地补丁见 `UPSTREAM.md`。 |
 | [`tests/`](tests) | 单元、集成、传输、Web UI 与八场景离线验收测试；`tests/js/` 为 pytest 驱动的 Node harness。 |
 
 ### B.2 替换清单

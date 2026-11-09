@@ -379,6 +379,34 @@ timeline always keeps every span, so diagnosis is unaffected. A corrected retry 
 trace (one root per trace) and is grouped with the blocked attempt by the Langfuse session, which
 uses the shared `chainId`.
 
+### Langfuse metrics export (`/observe`)
+
+The launcher prints `/observe`, an internal, Chinese-only page for the development and test team.
+Paste one Langfuse trace id per line (a run's `traceId` equals its run id while export is on, so it
+can be copied from `/runs`) or pick a recent run from the candidate list; the server fetches each
+trace and derives the A2A / A2A-T metrics with the vendored `langfuse_export` package
+(`langfuse_export/`, upstream `langfuse-export` 0.2.6).
+
+- The page shows the per-trace timeline, stage latencies, tokens (total plus client/server split),
+  negotiation rounds and observation counts. Downloads: `langfuse-metrics.csv` (UTF-8 BOM, one row
+  per trace), `rounds.csv` (one row per negotiation round) and `fields.csv` (what every column
+  means, where it is derived from and what to watch out for). The same field legend is on the page.
+- Tokens follow the upstream implementation: `input` **includes** the cached part, `cachedInput` is
+  its subset, `total` is the provider-reported total, and `inputExcludingCached` gives the second
+  reading. `server.*` is the a2a-t-server side, de-duplicated when a parent span repeats its child.
+- Batches run sequentially, one job at a time, up to 200 trace ids. The page polls incrementally
+  (1 s / 2 s / 5 s by batch size) and can be closed and reopened; completed jobs are recorded under
+  `runs/observability/jobs/`.
+- **Full export** additionally writes the upstream evidence directory (raw observations,
+  `transcript.md`, hashed `manifest.json`) under `runs/observability/` and offers it as a zip per
+  trace.
+- Credentials and network settings come only from the environment / `.env`
+  (`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, and optionally
+  `LANGFUSE_PROXY`, `LANGFUSE_NO_PROXY`, `LANGFUSE_CACERT`, `LANGFUSE_INSECURE`); the page never
+  asks for keys and only shows the masked host.
+- This CSV is the Langfuse trace view and includes the a2a-t-server side. It is deliberately not
+  the client-side accounting of `/api/metrics/export.csv`; both exports exist side by side.
+
 ### Real vendor NMS mode
 
 The sample can also act as the OSS client of a real vendor NMS. With `--nms`, the launcher starts

@@ -314,6 +314,30 @@ Task-T rendered、Task created、业务意图、校验结论和审批对——�
 Web UI 时间线始终保留全部 span，不影响排障。修正重试保持独立 trace（一条 trace 一个 root），
 通过与首次 attempt 共享的 `chainId` 归入同一个 Langfuse session。
 
+### Langfuse 指标导出（`/observe`）
+
+启动器会打印 `/observe` 地址。这是一个面向开发和测试团队的中文内部页面：一行粘贴一个
+Langfuse traceId（导出开启时 run 的 `traceId` 等于 run id，可直接从 `/runs` 复制），或从"最近
+run"列表勾选；服务端用 vendoring 进来的 `langfuse_export` 包（上游 `langfuse-export` 0.2.6）
+拉取 trace 并派生 A2A / A2A-T 指标。
+
+- 页面展示每条 trace 的时间线、阶段耗时、token（总数 + client/server 分侧）、协商轮次和
+  observation 数量。可下载：`langfuse-metrics.csv`（UTF-8 BOM，一行一个 trace）、
+  `rounds.csv`（一行一个协商轮次）、`fields.csv`（每个字段的含义、来源和注意事项）；同样的字段
+  说明也内嵌在页面上。
+- Token 口径按上游代码实际行为：`input` **包含**缓存命中部分，`cachedInput` 是它的子集，
+  `total` 取 provider 上报值；额外提供 `inputExcludingCached` 作为第二口径。`server.*` 是
+  a2a-t-server 侧，父 span 与子 generation 重复上报时只计一次。
+- 批量顺序执行，同一时刻只跑一个 job，单批最多 200 条 traceId。页面按批量大小自适应轮询
+  （1s / 2s / 5s），可以关掉页面再回来；完成的 job 记录在 `runs/observability/jobs/`。
+- **完整导出**会额外在上游证据目录里写出原始 observation、`transcript.md` 和带 sha256 的
+  `manifest.json`（位于 `runs/observability/`），并按 trace 提供 zip 下载。
+- 凭证和网络配置只从环境变量 / `.env` 读取（`LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`、
+  `LANGFUSE_BASE_URL`，以及可选的 `LANGFUSE_PROXY`、`LANGFUSE_NO_PROXY`、
+  `LANGFUSE_CACERT`、`LANGFUSE_INSECURE`）；页面不接收密钥，只显示脱敏后的 host。
+- 这份 CSV 是 Langfuse trace 口径（含 a2a-t-server 侧），与 `/api/metrics/export.csv` 的
+  客户端自记账口径**不同**，两者并存。
+
 ### 真实厂商网管模式
 
 sample 也可以作为真实厂商网管的 OSS 客户端。加 `--nms` 后，启动器不再启动本地 registry、RAN

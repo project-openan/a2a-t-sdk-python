@@ -1541,7 +1541,8 @@ The sample is deliberately a prototype. Before production:
 | [`shared/webhook_receiver.py`](shared/webhook_receiver.py) | Embedded webhook push receiver with token validation. |
 | [`shared/sse_event_consumer.py`](shared/sse_event_consumer.py) | Normalizes A2A stream events into one event shape. |
 | [`demo/registry/`](demo/registry) | Mock registry center (AgentCard register/query, port 5001). |
-| [`demo/web/`](demo/web) | Starlette Web UI (`app.py`, served as a managed child through `serve.py`), the presentation front end (`presentation/`, `--ui-mode presentation`, default), the Run Explorer (`static/`, `--ui-mode explorer`), the Excel tester console (`tester/`) and the internal run console (`runs_console/`, `/runs`). The presentation page consumes the same SSE stream; the Web UI resolves approval 1 (`POST /api/runs/{id}/intent`) and proxies approval 2 to the RAN Agent. |
+| [`demo/web/`](demo/web) | Starlette Web UI (`app.py`, served as a managed child through `serve.py`), the presentation front end (`presentation/`, `--ui-mode presentation`, default), the Run Explorer (`static/`, `--ui-mode explorer`), the Excel tester console (`tester/`), the internal run console (`runs_console/`, `/runs`) and the Langfuse metrics exporter (`observe/`, `/observe`). The presentation page consumes the same SSE stream; the Web UI resolves approval 1 (`POST /api/runs/{id}/intent`) and proxies approval 2 to the RAN Agent. |
+| [`langfuse_export/`](langfuse_export) | Vendored upstream `langfuse-export` client (0.2.6): fetch one Langfuse trace, derive A2A/A2A-T metrics and write raw observations, transcript and manifest. See `UPSTREAM.md` for the local patches. |
 | [`tests/`](tests) | Unit, integration, transport, Web UI, and eight-scenario offline acceptance tests; `tests/js/` holds the Node harnesses run by pytest. |
 
 ### B.2 Replace checklist

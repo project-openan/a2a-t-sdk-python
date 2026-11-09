@@ -156,6 +156,7 @@ def run_ui(
     )
     print(f"[ui] tester console on http://{host}:{ui_port}/tester")
     print(f"[ui] run console on http://{host}:{ui_port}/runs")
+    print(f"[ui] observe console on http://{host}:{ui_port}/observe")
     if not is_loopback(host):
         try:
             lan_ip = socket.gethostbyname(socket.gethostname())
