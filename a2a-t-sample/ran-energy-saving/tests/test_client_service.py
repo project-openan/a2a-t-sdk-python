@@ -281,6 +281,35 @@ async def test_a_waiting_decision_keeps_the_run_running(
     assert run.activity is None
 
 
+async def test_confirm_opens_the_decision_surface_before_the_recommendation(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    hold = asyncio.Event()
+    manager, _store, runtimes = _manager(tmp_path, offline_config, hold_decision=hold)
+    run = await manager.start("information", "confirm", "sse", user_request="please save energy")
+    try:
+        for _ in range(100):
+            if runtimes:
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.wait_for(runtimes[0].decision_entered.wait(), timeout=1)
+        await asyncio.sleep(0)
+
+        assert run.pending_decision is True
+        pending = [frame for frame in run.messages if frame.get("type") == "decision_pending"]
+        assert len(pending) == 1
+        assert pending[0]["round"] == 1
+        assert isinstance(pending[0]["missingItems"], list)
+        assert "recommendationTimeoutSeconds" in pending[0]
+        assert not any(frame.get("type") == "decision_requested" for frame in run.messages)
+    finally:
+        hold.set()
+    await _finish(manager, run.run_id)
+
+    assert run.status == "finished"
+
+
 async def test_a_flow_that_returns_while_waiting_fails_instead_of_finishing(
     tmp_path: Path,
     offline_config: SampleConfig,

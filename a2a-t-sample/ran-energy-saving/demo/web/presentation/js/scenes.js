@@ -47,6 +47,9 @@ export function sceneFor(frame, state) {
       return traceScene(frame.event, state, frame);
     case "intent_review_requested":
       return scene("intent-review", 0, frame, true);
+    case "decision_pending":
+      // Confirm mode opens the decision surface before the agent recommendation arrives.
+      return scene("decision-pending", 0, frame, true);
     case "decision_requested":
       // Confirm mode delivers the proposal and the agent recommendation in one frame; manual
       // mode delivers the proposal alone. Both stop the show for the engineer.
@@ -297,6 +300,7 @@ function stepOf(key) {
       return "apply";
     case "propose":
     case "decision":
+    case "decision-pending":
     case "negotiate-send":
     case "end":
     case "abort":

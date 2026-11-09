@@ -109,6 +109,11 @@ PURE_FOLLOWUP_ENV_KEY = "A2AT_SAMPLE_PURE_FOLLOWUP"
 HTTP_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS"
 LLM_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_LLM_TIMEOUT_SECONDS"
 LLM_MAX_ATTEMPTS_ENV_KEY = "A2AT_SAMPLE_LLM_MAX_ATTEMPTS"
+#: Length of one local operator-decision window. The run keeps waiting after it expires; only an
+#: explicit decision sends a protocol message.
+MANUAL_DECISION_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_MANUAL_DECISION_TIMEOUT_SECONDS"
+#: Budget of the advisory decision recommendation before the page opens the manual surface.
+DECISION_RECOMMENDATION_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_DECISION_RECOMMENDATION_TIMEOUT_SECONDS"
 TASK_DB_ENV_KEY = "A2AT_SAMPLE_TASK_DB"
 OSS_TASK_DB_ENV_KEY = "A2AT_SAMPLE_OSS_TASK_DB"
 #: Long-running OSS task tracking: ``auto`` enables it for the real NMS webhook hop.
@@ -251,6 +256,13 @@ DEFAULT_LLM_TIMEOUT_SECONDS = 180.0
 
 #: Live SDK LLM attempt limit per retryable step (the SDK accepts 1..10).
 DEFAULT_LLM_MAX_ATTEMPTS = 1
+
+#: One local operator-decision window. Expiry only updates the page; the run keeps waiting.
+DEFAULT_MANUAL_DECISION_TIMEOUT_SECONDS = 300.0
+
+#: Advisory recommendation budget. Shorter than the manual window so a slow model never hides the
+#: operator's decision surface; the operator can answer before it returns anyway.
+DEFAULT_DECISION_RECOMMENDATION_TIMEOUT_SECONDS = 120.0
 
 #: Inclusive bounds of ``A2AT_SAMPLE_LLM_MAX_ATTEMPTS`` (mirrors the SDK's clamping bounds).
 LLM_MAX_ATTEMPTS_LOWER_BOUND = 1
@@ -618,6 +630,8 @@ class SampleConfig:
     defer_to_tracker: bool = False
     llm_timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS
     llm_max_attempts: int = DEFAULT_LLM_MAX_ATTEMPTS
+    manual_decision_timeout_seconds: float = DEFAULT_MANUAL_DECISION_TIMEOUT_SECONDS
+    decision_recommendation_timeout_seconds: float = DEFAULT_DECISION_RECOMMENDATION_TIMEOUT_SECONDS
     task_db_path: str | None = None
     oss_task_db_path: str | None = None
     client_db_path: str | None = None
@@ -823,6 +837,20 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
     # planner keys are independent so a deployment can point the server at a different model.
     planner_model_default = adk_model_name.removeprefix("openai/")
 
+    manual_decision_timeout = _positive_seconds(
+        values, MANUAL_DECISION_TIMEOUT_ENV_KEY, DEFAULT_MANUAL_DECISION_TIMEOUT_SECONDS
+    )
+    decision_recommendation_timeout = _positive_seconds(
+        values,
+        DECISION_RECOMMENDATION_TIMEOUT_ENV_KEY,
+        DEFAULT_DECISION_RECOMMENDATION_TIMEOUT_SECONDS,
+    )
+    if decision_recommendation_timeout >= manual_decision_timeout:
+        raise ValueError(
+            f"{DECISION_RECOMMENDATION_TIMEOUT_ENV_KEY} ({decision_recommendation_timeout:g}) must "
+            f"be shorter than {MANUAL_DECISION_TIMEOUT_ENV_KEY} ({manual_decision_timeout:g})"
+        )
+
     return SampleConfig(
         model_mode=model_mode,
         language=language,
@@ -863,6 +891,8 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         ),
         llm_timeout_seconds=_positive_seconds(values, LLM_TIMEOUT_ENV_KEY, DEFAULT_LLM_TIMEOUT_SECONDS),
         llm_max_attempts=_llm_max_attempts(values),
+        manual_decision_timeout_seconds=manual_decision_timeout,
+        decision_recommendation_timeout_seconds=decision_recommendation_timeout,
         task_db_path=_optional_absolute_path(values, TASK_DB_ENV_KEY),
         oss_task_db_path=_optional_absolute_path(values, OSS_TASK_DB_ENV_KEY),
         client_db_path=_optional_absolute_path(values, CLIENT_DB_ENV_KEY),

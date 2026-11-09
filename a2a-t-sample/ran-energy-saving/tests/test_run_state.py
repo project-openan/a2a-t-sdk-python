@@ -411,3 +411,37 @@ def test_task_created_span_reuses_the_identity_learned_from_a_poll(tmp_path: Pat
     created = [span for span in run.traces if span.get("kind") == "task_created"]
     assert created[-1]["taskId"] == "task-9"
     assert created[-1]["contextId"] == "ctx-9"
+
+
+def test_a_decision_records_who_made_it(tmp_path: Path) -> None:
+    """A machine decision must not be recorded as the engineer's."""
+    run = RunState(run_id="run-auto", scenario="night", mode="auto", transport="sse")
+    run.transcript = NegotiationTranscript(
+        scenario="night",
+        language="en-US",
+        model_mode="live",
+        mode="auto",
+        transport="sse",
+        runs_dir=tmp_path,
+    )
+
+    entry = run.record_decision(
+        NegotiationDecision(action="accept", rationale="automatic"),
+        None,
+        decided_by="agent",
+    )
+
+    span = next(span for span in run.traces if span.get("kind") == "accept")
+    assert entry["decidedBy"] == "agent"
+    assert span["actor"] == "client"
+    assert span["detail"]["decidedBy"] == "agent"
+    assert span["detail"]["confirmedBy"] is None
+
+    human = run.record_decision(
+        NegotiationDecision(action="reject", rationale="operator"),
+        None,
+        decided_by="human",
+    )
+    human_span = next(span for span in run.traces if span.get("kind") == "reject")
+    assert human["decidedBy"] == "human"
+    assert human_span["actor"] == "human"

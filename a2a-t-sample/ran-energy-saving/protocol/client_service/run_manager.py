@@ -351,6 +351,20 @@ def _recommendation_frame(
     return frame
 
 
+def _decision_origin(mode: str) -> str:
+    """Return who produced a decision in this mode (``human`` or ``agent``)."""
+    return "human" if mode in (MODE_MANUAL, MODE_CONFIRM) else "agent"
+
+
+def _waits_for_recommendation(run: RunState) -> bool:
+    """Whether this run's confirmation waits for an agent recommendation before the page.
+
+    A pure confirmation owns its own answer surface and publishes synchronously, so it must not
+    receive the A2A-T pending frame.
+    """
+    return run.mode == MODE_CONFIRM and run.protocol != PROTOCOL_PURE
+
+
 class RunManager:
     """Owns client runs and conversations of one process.
 
@@ -1154,9 +1168,38 @@ class RunManager:
             run.record_proposal(propose, session)
             run.proposals.append(propose)
             NEGOTIATION_ROUNDS_TOTAL.inc({"role": "server", "round": session.round})
-            # Confirm mode waits for the agent recommendation; its callback publishes the
-            # decision frame with the recommendation attached, so the page never shows a
-            # decision before the OSS Agent has one.
+            if _waits_for_recommendation(run):
+                # Open the decision surface immediately, before the model answers. The operator
+                # can decide now; a later recommendation is advisory and is dropped once the
+                # operator has submitted.
+                run.pending_decision = True
+                provider = getattr(run.runtime, "provider", None)
+                recommendation_timeout = getattr(provider, "recommendation_timeout_seconds", None)
+                run.broadcast(
+                    {
+                        "type": "decision_pending",
+                        "mode": run.mode,
+                        "proposal": propose.model_dump(),
+                        "round": session.round,
+                        "maxRounds": session.max_rounds,
+                        "performative": session.performative.value,
+                        "phase": "negotiation",
+                        "recommendationTimeoutSeconds": (
+                            float(recommendation_timeout)
+                            if isinstance(recommendation_timeout, (int, float))
+                            else None
+                        ),
+                        "requestedAt": now_iso(),
+                        "missingItems": list(missing_item_labels(propose.content)),
+                    }
+                )
+                _show_decision_wait(
+                    session.round,
+                    float(recommendation_timeout)
+                    if isinstance(recommendation_timeout, (int, float))
+                    else None,
+                )
+                return
             if run.mode != MODE_MANUAL:
                 return
             run.pending_decision = True
@@ -1186,7 +1229,12 @@ class RunManager:
             propose: NegotiationProposeView,
             session: NegotiationContext,
         ) -> None:
-            run.record_decision(decision, propose, session=session)
+            run.record_decision(
+                decision,
+                propose,
+                session=session,
+                decided_by=_decision_origin(run.mode),
+            )
             # The decision is consumed: the run is no longer waiting for a submission.
             run.pending_decision = False
             _clear_decision_wait()
@@ -1198,6 +1246,10 @@ class RunManager:
             session: NegotiationContext,
         ) -> None:
             """Publish the recommendation, or an unavailable notice, and let the engineer decide."""
+            if _waits_for_recommendation(run) and not run.pending_decision:
+                # The operator already answered while the model was thinking. Publishing the late
+                # recommendation would reopen a card they already resolved.
+                return
             run.pending_decision = True
             timeout_seconds = getattr(run.manual_provider, "timeout_seconds", None)
             _show_decision_wait(
@@ -1362,7 +1414,7 @@ class RunManager:
                 if index < len(transcript.decisions):
                     continue
                 propose = run.proposals[index] if index < len(run.proposals) else None
-                run.record_decision(decision, propose)
+                run.record_decision(decision, propose, decided_by=_decision_origin(run.mode))
             transcript.intent = run.processed_intent
             transcript.record_final(result)
             run.status = STATUS_FINISHED

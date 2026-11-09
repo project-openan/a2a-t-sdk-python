@@ -270,6 +270,84 @@ async def test_a_manual_provider_without_a_wait_sink_fails_after_one_window() ->
     assert provider.pending is False
 
 
+class _HangingProvider:
+    """A recommendation that never answers until cancelled."""
+
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    async def respond(self, propose: NegotiationProposeView, session: NegotiationContext) -> object:
+        del propose, session
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
+async def test_a_submission_beats_a_slow_recommendation() -> None:
+    inner = _HangingProvider()
+    provider = ConfirmingDecisionProvider(
+        inner,  # type: ignore[arg-type]
+        timeout_seconds=60,
+        recommendation_timeout_seconds=60,
+    )
+    published: list[NegotiationDecision | None] = []
+    provider.set_recommendation_sink(lambda decision, _p, _s: published.append(decision))
+
+    task = asyncio.create_task(provider.respond(_view(), _session(round_number=2)))
+    await asyncio.sleep(0.01)
+    provider.submit(NegotiationDecision(action="accept", rationale="operator"))
+
+    decision = await asyncio.wait_for(task, timeout=1)
+
+    assert decision.action == "accept"
+    assert published == []
+    assert inner.cancelled is True
+
+
+async def test_the_recommendation_budget_publishes_unavailable() -> None:
+    inner = _HangingProvider()
+    provider = ConfirmingDecisionProvider(
+        inner,  # type: ignore[arg-type]
+        timeout_seconds=60,
+        recommendation_timeout_seconds=0.01,
+    )
+    published: list[NegotiationDecision | None] = []
+    provider.set_recommendation_sink(lambda decision, _p, _s: published.append(decision))
+    task = asyncio.create_task(provider.respond(_view(), _session(round_number=2)))
+    await asyncio.sleep(0.03)
+
+    assert published == [None]
+    assert "RecommendationTimeout" in (provider.last_recommendation_error or "")
+    assert task.done() is False
+    assert inner.cancelled is True
+
+    provider.submit(NegotiationDecision(action="reject", rationale="operator"))
+    decision = await asyncio.wait_for(task, timeout=1)
+
+    assert decision.action == "reject"
+
+
+async def test_cancelling_respond_releases_the_child_tasks() -> None:
+    inner = _HangingProvider()
+    provider = ConfirmingDecisionProvider(
+        inner,  # type: ignore[arg-type]
+        timeout_seconds=60,
+        recommendation_timeout_seconds=60,
+    )
+    task = asyncio.create_task(provider.respond(_view(), _session(round_number=2)))
+    await asyncio.sleep(0.01)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0.01)
+
+    assert provider.pending is False
+    assert inner.cancelled is True
+
+
 async def test_adk_provider_returns_the_fake_model_decision() -> None:
     provider = AdkDecisionProvider(agent_factory=build_client_agent, model=build_fake_model())
 

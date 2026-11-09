@@ -244,7 +244,10 @@ def _decision_provider(
         # A2A-T keeps waiting after a local window expires: the window is an observation budget,
         # not a reason to terminate the remote Task. The pure hop constructs its own provider and
         # keeps the legacy single-window policy.
-        return ManualDecisionProvider(keep_waiting=True)
+        return ManualDecisionProvider(
+            keep_waiting=True,
+            timeout_seconds=config.manual_decision_timeout_seconds,
+        )
     if mode == MODE_SCRIPTED:
         decisions = scripted_decisions if scripted_decisions is not None else run_spec.scripted_decisions
         return ScriptedDecisionProvider(decisions)
@@ -256,7 +259,11 @@ def _decision_provider(
             client_agent_factory=client_agent_factory,
         )
         if mode == MODE_CONFIRM:
-            return ConfirmingDecisionProvider(provider)
+            return ConfirmingDecisionProvider(
+                provider,
+                timeout_seconds=config.manual_decision_timeout_seconds,
+                recommendation_timeout_seconds=config.decision_recommendation_timeout_seconds,
+            )
         return provider
     raise ClientRuntimeError(f"Unsupported client mode: {mode}; expected one of {SUPPORTED_MODES}")
 

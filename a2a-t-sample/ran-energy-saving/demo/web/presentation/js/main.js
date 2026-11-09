@@ -45,6 +45,7 @@ import {
   decisionCard,
   decisionPayload,
   intentCard,
+  pendingDecisionCard,
   validationCard,
 } from "./decisions.js";
 import { clear, el } from "./dom.js";
@@ -1373,15 +1374,6 @@ function subscribe(runId) {
       render();
       if (pendingHuman(ui.view) === null) player.release();
     }
-    if (frame.type === "decision_requested" && player.status().hold) {
-      // The negotiation decision is the real human gate. If an earlier (misclassified) approval
-      // scene is holding the player, apply the decision now instead of queueing it behind a card
-      // that has no server action.
-      applyFrame(ui.view, frame);
-      applyFrame(ui.shadow, frame);
-      render();
-      player.release();
-    }
     enqueueFrame(frame);
     if (frame.type === "finished") {
       closeStream();
@@ -1513,7 +1505,13 @@ function enqueueFrame(frame) {
   ) {
     ui.wireEntry = frame.event;
   }
-  if (frame.type === "decision_requested") {
+  // The recommendation may answer the same round the early card already opened. Keep whatever the
+  // operator typed; a new round (or the first frame) starts from a clean manual surface.
+  const samePendingRound =
+    frame.type === "decision_requested" &&
+    ui.view.decisionPending !== null &&
+    ui.view.decisionPending.round === frame.round;
+  if (frame.type === "decision_pending" || (frame.type === "decision_requested" && !samePendingRound)) {
     ui.selectedRegion = "";
     ui.manualText = "";
     ui.manualPreview = null;
@@ -1524,6 +1522,13 @@ function enqueueFrame(frame) {
   applyFrame(ui.shadow, frame);
   ui.frameLog.push(frame);
   player.enqueue(scene);
+  if (samePendingRound && player.status().hold) {
+    // The early card is holding the player. Bring the recommendation card in now instead of
+    // queueing it behind a gate the operator already has open.
+    applyFrame(ui.view, frame);
+    render();
+    player.release();
+  }
 }
 
 function frameKey(frame) {
@@ -1537,7 +1542,11 @@ function frameKey(frame) {
   if (frame.type === "intent_review_requested") {
     return `intent:${frame.requestedAt ?? ""}`;
   }
-  if (frame.type === "decision_requested" || frame.type === "decision_recommended") {
+  if (
+    frame.type === "decision_requested" ||
+    frame.type === "decision_pending" ||
+    frame.type === "decision_recommended"
+  ) {
     return `${frame.type}:${frame.round ?? "?"}:${frame.requestedAt ?? ""}`;
   }
   if (frame.type === "finished") return "finished";
@@ -1890,6 +1899,7 @@ function pendingCard() {
   return (
     intentCard(ui.view, ui.copy) ||
     decisionCard(ui.view, ui.copy) ||
+    pendingDecisionCard(ui.view, ui.copy) ||
     approvalCard(ui.view, ui.copy) ||
     validationCard(ui.view, ui.copy)
   );
@@ -2233,6 +2243,7 @@ async function submitParsedDecision(decision) {
     ui.manualPreview = null;
     ui.manualMissing = [];
     if (ui.view.decision !== null) ui.view.decision.resolved = true;
+    if (ui.view.decisionPending !== null) ui.view.decisionPending.resolved = true;
     ui.submitting = false;
     player.release();
     render();
@@ -2245,7 +2256,7 @@ async function submitParsedDecision(decision) {
 
 async function submitDecision(action, counterText = "") {
   if (ui.submitting) return;
-  const card = decisionCard(ui.view, ui.copy);
+  const card = decisionCard(ui.view, ui.copy) || pendingDecisionCard(ui.view, ui.copy);
   if (card === null) return;
   ui.submitting = true;
   renderChoices(card);
@@ -2264,6 +2275,7 @@ async function submitDecision(action, counterText = "") {
     ui.counterOpen = false;
     ui.selectedRegion = "";
     if (ui.view.decision !== null) ui.view.decision.resolved = true;
+    if (ui.view.decisionPending !== null) ui.view.decisionPending.resolved = true;
     player.release();
     render();
   } catch (error) {
@@ -2326,7 +2338,9 @@ async function submitApproval(approved) {
     });
     if (!response.ok) {
       const detail = await response.json().catch(() => ({}));
-      throw new Error(detail.error || `HTTP ${response.status}`);
+      const error = new Error(detail.error || `HTTP ${response.status}`);
+      error.code = typeof detail.code === "string" ? detail.code : "";
+      throw error;
     }
     ui.submitting = false;
     ui.cardError = "";
@@ -2351,7 +2365,22 @@ async function submitApproval(approved) {
   } catch (error) {
     ui.submitting = false;
     const message = error instanceof Error ? error.message : String(error);
-    ui.cardError = `${ui.copy.approval.submitFailed} ${message}`;
+    const code = error instanceof Error && typeof error.code === "string" ? error.code : "";
+    const localized = code && ui.copy.approval.errors ? ui.copy.approval.errors[code] : "";
+    ui.cardError = localized || `${ui.copy.approval.submitFailed} ${message}`;
+    if (
+      code === "approval_not_supported_in_nms" ||
+      code === "run_not_running" ||
+      code === "approval_not_pending"
+    ) {
+      // No local gate exists or the gate already closed: clear the card instead of trapping the
+      // playback on a button that can never succeed.
+      ui.view.approvalState = null;
+      ui.shadow.approvalState = null;
+      ui.view.approval = null;
+      ui.shadow.approval = null;
+      player.release();
+    }
     render();
     if (card) renderChoices(card);
   }

@@ -42,6 +42,7 @@ import {
   decisionCard,
   decisionPayload,
   intentCard,
+  pendingDecisionCard,
   validationCard,
 } from "../../demo/web/presentation/js/decisions.js";
 import { copyFor } from "../../demo/web/presentation/copy.js";
@@ -60,6 +61,12 @@ globalThis.document = {
 
 const copy = copyFor("zh-CN");
 const event = (payload) => ({ type: "event", event: payload });
+
+// Every approval failure code the page can show has both translations.
+assert.deepEqual(
+  Object.keys(copyFor("en-US").approval.errors).sort(),
+  Object.keys(copy.approval.errors).sort(),
+);
 
 // The sample has exactly two use cases: use case 1 covers the energy-saving scenarios (complete,
 // negotiation and ending), use case 2 is the planned outage.
@@ -884,6 +891,72 @@ assert.equal(
   }),
   null,
 );
+
+// Confirm mode opens the decision surface before the recommendation. The operator can answer;
+// the later recommendation must not reopen the card.
+const earlyDecision = createState();
+applyFrame(earlyDecision, {
+  type: "run_started",
+  runId: "r75",
+  scenario: "feasibility",
+  mode: "confirm",
+});
+applyFrame(earlyDecision, {
+  type: "decision_pending",
+  mode: "confirm",
+  round: 1,
+  maxRounds: 5,
+  performative: "PROPOSE",
+  recommendationTimeoutSeconds: 120,
+  requestedAt: "2026-11-09T02:29:45.000Z",
+  proposal: { kind: "feasibility", content: "10 Mbps and a 10 h outage conflict." },
+});
+assert.equal(earlyDecision.decision, null);
+assert.equal(earlyDecision.decisionPending.round, 1);
+assert.equal(earlyDecision.decisionPending.recommendationTimeoutSeconds, 120);
+assert.equal(pendingHuman(earlyDecision), "decision");
+assert.equal(decisionCard(earlyDecision, copy), null);
+const earlyCard = pendingDecisionCard(earlyDecision, copy);
+assert.ok(earlyCard);
+assert.equal(earlyCard.pendingRecommendation, true);
+assert.equal(earlyCard.manualOpen, true);
+assert.equal(earlyCard.recommendation, null);
+assert.equal(earlyCard.options.some((option) => option.action === "accept"), true);
+assert.equal(
+  sceneFor({ type: "decision_pending", round: 1 }, earlyDecision).key,
+  "decision-pending",
+);
+assert.equal(sceneFor({ type: "decision_pending", round: 1 }, earlyDecision).hold, true);
+
+// The recommendation for the same round replaces the early card.
+applyFrame(earlyDecision, {
+  type: "decision_requested",
+  mode: "confirm",
+  round: 1,
+  maxRounds: 5,
+  performative: "PROPOSE",
+  requestedAt: "2026-11-09T02:31:00.000Z",
+  proposal: { kind: "feasibility", content: "10 Mbps and a 10 h outage conflict." },
+  recommendation: { action: "accept", rationale: "reduce to 2 Mbps", filled_params: {} },
+});
+assert.equal(earlyDecision.decisionPending, null);
+assert.ok(decisionCard(earlyDecision, copy));
+assert.equal(decisionCard(earlyDecision, copy).hasRecommendation, true);
+
+// A resolved decision is not reopened by a late/replayed recommendation.
+earlyDecision.decision.resolved = true;
+applyFrame(earlyDecision, {
+  type: "decision_requested",
+  mode: "confirm",
+  round: 1,
+  maxRounds: 5,
+  performative: "PROPOSE",
+  requestedAt: "2026-11-09T02:32:00.000Z",
+  proposal: { kind: "feasibility" },
+  recommendation: { action: "reject", rationale: "late" },
+});
+assert.equal(earlyDecision.decision.resolved, true);
+assert.equal(decisionCard(earlyDecision, copy), null);
 
 const notApplied = createState();
 applyFrame(notApplied, { type: "run_started", runId: "r8", scenario: "information", mode: "confirm" });

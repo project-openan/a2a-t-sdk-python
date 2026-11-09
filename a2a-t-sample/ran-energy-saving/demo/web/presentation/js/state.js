@@ -121,6 +121,8 @@ export function createState() {
     executed: false,
     trace: [],
     decision: null,
+    //: Confirm mode's early decision surface, published before the agent recommendation.
+    decisionPending: null,
     approval: null,
     approvalState: null,
     //: Whether this run really has a server approval gate. ``--nms`` runs never do: the vendor
@@ -247,7 +249,55 @@ export function applyFrame(state, frame) {
       }
       return state;
     }
+    case "decision_pending": {
+      const round = intOrNull(frame.round);
+      // A decision the operator already submitted must not be reopened by a replay.
+      if (state.decision !== null && state.decision.round === round && state.decision.resolved) {
+        return state;
+      }
+      state.decisionPending = {
+        mode: typeof frame.mode === "string" ? frame.mode : "confirm",
+        proposal: isObject(frame.proposal) ? frame.proposal : {},
+        round,
+        maxRounds: intOrNull(frame.maxRounds),
+        performative: typeof frame.performative === "string" ? frame.performative : "",
+        recommendationTimeoutSeconds: numberOrNull(frame.recommendationTimeoutSeconds),
+        requestedAt: typeof frame.requestedAt === "string" ? frame.requestedAt : null,
+        missingItems: Array.isArray(frame.missingItems)
+          ? frame.missingItems.filter((item) => typeof item === "string")
+          : [],
+        resolved: false,
+      };
+      pushTrace(state, {
+        tag: "human",
+        title: "Decision pending",
+        titleKey: "decisionPending",
+        sub: `round ${frame.round ?? "?"} · ${frame.proposal?.kind ?? ""}`,
+        chip: "decision",
+        chipKind: "neg",
+        decision: true,
+        stage: "negotiation",
+        dir: "OSS internal",
+        order: traceOrder({ ts: frame.requestedAt }, Date.now()),
+        dedupeKey: `decision-pending:${frame.round ?? "?"}`,
+      });
+      return state;
+    }
     case "decision_requested": {
+      const round = intOrNull(frame.round);
+      if (state.decision !== null && state.decision.round === round && state.decision.resolved) {
+        return state;
+      }
+      if (
+        state.decisionPending !== null &&
+        state.decisionPending.resolved &&
+        state.decisionPending.round === round
+      ) {
+        // The operator answered while the model was still thinking; the late recommendation is
+        // advisory only and must not reopen the card.
+        return state;
+      }
+      state.decisionPending = null;
       state.decision = {
         proposal: isObject(frame.proposal) ? frame.proposal : {},
         round: intOrNull(frame.round),
@@ -337,6 +387,7 @@ export function applyFrame(state, frame) {
       state.error =
         typeof frame.error === "string" && frame.error ? frame.error : state.error;
       if (state.decision !== null) state.decision.resolved = true;
+      if (state.decisionPending !== null) state.decisionPending.resolved = true;
       if (state.intentReview !== null) state.intentReview.resolved = true;
       // If the run ended while a gate was still open (timeout, disconnect or failure), close the
       // card so the ending is visible instead of an immovable "waiting" card.
@@ -468,6 +519,7 @@ function applyEvent(state, entry) {
       confirmedBy: entry.confirmedBy || entry.detail?.confirmedBy || null,
     });
     if (state.decision !== null) state.decision.resolved = true;
+    if (state.decisionPending !== null) state.decisionPending.resolved = true;
     return state;
   }
 
@@ -940,6 +992,7 @@ export function pendingHuman(state) {
   if (state.intentReview !== null && !state.intentReview.resolved) return "intent";
   if (state.approvalGate === true && state.approvalState === APPROVAL.WAITING) return "approval";
   if (state.decision !== null && !state.decision.resolved) return "decision";
+  if (state.decisionPending !== null && !state.decisionPending.resolved) return "decision";
   return null;
 }
 

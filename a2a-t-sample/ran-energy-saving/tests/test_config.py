@@ -18,10 +18,13 @@ from shared.config import (
     APPROVAL_TIMEOUT_ENV_KEY,
     CLIENT_DB_ENV_KEY,
     CLIENT_MEMORY_TURNS_ENV_KEY,
+    DECISION_RECOMMENDATION_TIMEOUT_ENV_KEY,
     DEFAULT_ADK_SESSION_RETENTION_DAYS,
+    DEFAULT_DECISION_RECOMMENDATION_TIMEOUT_SECONDS,
     DEFAULT_HTTP_TIMEOUT_SECONDS,
     DEFAULT_LLM_MAX_ATTEMPTS,
     DEFAULT_LLM_TIMEOUT_SECONDS,
+    DEFAULT_MANUAL_DECISION_TIMEOUT_SECONDS,
     DEFAULT_PLANNER_MAX_STEPS,
     DEFAULT_WEBHOOK_IDLE_TIMEOUT,
     GATEWAY_PORT_ENV_KEY,
@@ -41,6 +44,7 @@ from shared.config import (
     LLM_TIMEOUT_ENV_KEY,
     LONG_TASK_MODE_ENV_KEY,
     LONG_TASK_SETTLE_ENV_KEY,
+    MANUAL_DECISION_TIMEOUT_ENV_KEY,
     MIE_HOST_ENV_KEY,
     MIE_PORT_ENV_KEY,
     MIE_URL_ENV_KEY,
@@ -410,6 +414,16 @@ def test_missing_env_file_uses_offline_defaults(tmp_path: Path) -> None:
     assert config.http_timeout_seconds == DEFAULT_HTTP_TIMEOUT_SECONDS == 300.0
     assert config.llm_timeout_seconds == DEFAULT_LLM_TIMEOUT_SECONDS == 180.0
     assert config.llm_max_attempts == DEFAULT_LLM_MAX_ATTEMPTS == 1
+    assert (
+        config.manual_decision_timeout_seconds
+        == DEFAULT_MANUAL_DECISION_TIMEOUT_SECONDS
+        == 300.0
+    )
+    assert (
+        config.decision_recommendation_timeout_seconds
+        == DEFAULT_DECISION_RECOMMENDATION_TIMEOUT_SECONDS
+        == 120.0
+    )
     assert config.webhook_idle_timeout == DEFAULT_WEBHOOK_IDLE_TIMEOUT == 300
     assert DEFAULT_WEBHOOK_IDLE_TIMEOUT == int(DEFAULT_HTTP_TIMEOUT_SECONDS)
     assert config.adk_session_retention_days == DEFAULT_ADK_SESSION_RETENTION_DAYS == 7
@@ -438,6 +452,57 @@ def test_timeout_budgets_are_read_from_the_env_file(tmp_path: Path) -> None:
 @pytest.mark.parametrize("key", [HTTP_TIMEOUT_ENV_KEY, LLM_TIMEOUT_ENV_KEY])
 @pytest.mark.parametrize("value", ["not-a-number", "0", "-1", "nan", "inf"])
 def test_timeout_budgets_reject_non_positive_values(tmp_path: Path, key: str, value: str) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{key}={value}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=key):
+        load_config(env_path=env_file)
+
+
+def test_decision_budgets_are_read_from_the_env_file(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                f"{MANUAL_DECISION_TIMEOUT_ENV_KEY}=45",
+                f"{DECISION_RECOMMENDATION_TIMEOUT_ENV_KEY}=20",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert config.manual_decision_timeout_seconds == 45.0
+    assert config.decision_recommendation_timeout_seconds == 20.0
+
+
+def test_the_recommendation_budget_must_be_shorter_than_the_manual_window(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                f"{MANUAL_DECISION_TIMEOUT_ENV_KEY}=30",
+                f"{DECISION_RECOMMENDATION_TIMEOUT_ENV_KEY}=30",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=DECISION_RECOMMENDATION_TIMEOUT_ENV_KEY):
+        load_config(env_path=env_file)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [MANUAL_DECISION_TIMEOUT_ENV_KEY, DECISION_RECOMMENDATION_TIMEOUT_ENV_KEY],
+)
+@pytest.mark.parametrize("value", ["not-a-number", "0", "-1", "nan", "inf"])
+def test_decision_budgets_reject_non_positive_values(
+    tmp_path: Path,
+    key: str,
+    value: str,
+) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(f"{key}={value}\n", encoding="utf-8")
 

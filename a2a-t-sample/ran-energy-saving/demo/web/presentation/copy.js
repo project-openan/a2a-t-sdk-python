@@ -445,6 +445,11 @@ const EN = {
     kicker: "Your turn",
     title: "Round {round} of {maxRounds}",
     question: "The RAN Agent is asking for a decision.",
+    pendingTitle: "Round {round} of {maxRounds} — decide now",
+    pendingDetail:
+      "The OSS Agent is still preparing its suggestion (up to {seconds}s). You can decide now; a later suggestion is discarded.",
+    pendingDetailNoTimeout:
+      "The OSS Agent is still preparing its suggestion. You can decide now; a later suggestion is discarded.",
     askedItems: "The NMS asked for: {items}",
     recommendation: "OSS Agent recommends: {action}",
     recommendationUnavailable: "The OSS Agent could not make a recommendation. Decide manually.",
@@ -573,6 +578,24 @@ const EN = {
     rejected: "Rejected · no suggestions executed",
     expired: "The review window has expired; nothing was applied.",
     submitFailed: "The MML review could not be submitted.",
+    errors: {
+      approval_not_supported_in_nms:
+        "This run talks to the vendor NMS, which owns execution approval. Nothing was sent.",
+      approval_timeout:
+        "The approval request timed out; the outcome is unknown. Refresh the run status before retrying.",
+      approval_tls_error:
+        "The approval target's TLS certificate was not accepted. Nothing was sent.",
+      approval_connect_failed: "The approval target could not be reached. Nothing was sent.",
+      approval_target_not_found:
+        "The approval target has no /approvals route. Nothing was sent.",
+      approval_target_rejected:
+        "The approval target rejected the request; it was not applied.",
+      approval_target_invalid: "The configured approval target is not a valid URL. Nothing was sent.",
+      approval_forward_unconfigured:
+        "This Web UI has no A2A server URL to forward the approval to. Nothing was sent.",
+      run_not_running: "The run is no longer running, so the approval was not sent.",
+      approval_not_pending: "No approval is pending for this run.",
+    },
     note: "Nothing is sent to the network before the engineer approves the MML suggestions in MIE.",
     policy: "Operator policy: changes are applied Monday to Thursday only.",
     suggestions: "Optimization suggestions are waiting for review in MIE.",
@@ -1291,6 +1314,9 @@ const ZH = {
     kicker: "该你决定了",
     title: "第 {round} / {maxRounds} 轮",
     question: "RAN Agent 正在等待一个决策。",
+    pendingTitle: "第 {round} / {maxRounds} 轮 — 可先行决策",
+    pendingDetail: "OSS Agent 仍在生成建议（最多 {seconds} 秒）。你可以先手动决策；之后返回的建议会被丢弃。",
+    pendingDetailNoTimeout: "OSS Agent 仍在生成建议。你可以先手动决策；之后返回的建议会被丢弃。",
     askedItems: "网管要求补充：{items}",
     recommendation: "OSS Agent 建议：{action}",
     recommendationUnavailable: "OSS Agent 未能给出建议，请人工决策。",
@@ -1417,6 +1443,19 @@ const ZH = {
     rejected: "未确认 · 未执行任何建议",
     expired: "审核窗口已超时；未下发任何变更。",
     submitFailed: "MML 审核提交失败。",
+    errors: {
+      approval_not_supported_in_nms:
+        "该 run 连接的是厂商网管，执行审批由网管负责；未发送任何内容。",
+      approval_timeout: "审批请求超时，结果未知；请先刷新 run 状态再重试。",
+      approval_tls_error: "审批目标的 TLS 证书未被接受；未发送任何内容。",
+      approval_connect_failed: "无法连接审批目标；未发送任何内容。",
+      approval_target_not_found: "审批目标没有 /approvals 路由；未发送任何内容。",
+      approval_target_rejected: "审批目标拒绝了该请求，未执行任何变更。",
+      approval_target_invalid: "配置的审批目标不是合法 URL；未发送任何内容。",
+      approval_forward_unconfigured: "该 Web UI 未配置 A2A 服务端地址；未发送任何内容。",
+      run_not_running: "run 已不在运行中，未发送审批。",
+      approval_not_pending: "该 run 当前没有待审批项。",
+    },
     note: "在 MIE 中确认 MML 建议之前，任何内容都不会到达网络。",
     policy: "运营商策略：仅在周一至周四执行变更。",
     suggestions: "优化建议已准备好，等待在 MIE 中审核。",

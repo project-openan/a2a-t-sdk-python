@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import re
+import ssl
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -178,6 +179,108 @@ def _resolve_default(
     if value not in allowed:
         raise ValueError(f"Unsupported default {label}: {value}; expected one of {allowed}")
     return value
+
+
+#: Seconds one forwarded approval request may take before the page is told the result is unknown.
+APPROVAL_FORWARD_TIMEOUT_SECONDS: Final[float] = 10.0
+
+
+def _approval_forward_client(*, verify_tls: bool = True) -> httpx.AsyncClient:
+    """Build the HTTP client that forwards one local approval decision."""
+    return httpx.AsyncClient(trust_env=False, timeout=APPROVAL_FORWARD_TIMEOUT_SECONDS, verify=verify_tls)
+
+
+def _targets_the_nms(server_url: str | None, config: SampleConfig) -> bool:
+    """Whether a configured server URL is the vendor NMS rather than a local A2A server."""
+    if not server_url:
+        return False
+    base = (config.nms_a2a_base or "").rstrip("/")
+    return bool(base) and server_url.rstrip("/") == base
+
+
+def _is_tls_failure(exc: BaseException) -> bool:
+    """Whether an HTTP error was caused by certificate verification (walk the cause chain)."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ssl.SSLError):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+async def forward_approval_decision(
+    server_url: str,
+    *,
+    run_id: str,
+    approved: bool,
+    headers: Mapping[str, str],
+    verify_tls: bool,
+    timeout: float = APPROVAL_FORWARD_TIMEOUT_SECONDS,
+) -> tuple[int, dict[str, object]]:
+    """Forward one approval decision and classify every failure instead of "unreachable".
+
+    Returns:
+        ``(status_code, body)`` for the page. Only a 2xx from the target is an acceptance: a
+        redirect means the POST was not applied, so it must not read as success.
+    """
+    try:
+        async with httpx.AsyncClient(trust_env=False, timeout=timeout, verify=verify_tls) as client:
+            forwarded = await client.post(
+                f"{server_url.rstrip('/')}/approvals",
+                json={"runId": run_id, "approved": approved},
+                headers=dict(headers),
+            )
+    except httpx.TimeoutException as exc:
+        _LOGGER.warning("approval forward timed out: %s", exc)
+        return 504, {
+            "error": "The approval request timed out; the outcome is unknown. Refresh the run status.",
+            "code": "approval_timeout",
+        }
+    except httpx.InvalidURL as exc:
+        _LOGGER.warning("approval forward target is invalid: %s", exc)
+        return 500, {
+            "error": "The configured approval target is not a valid URL.",
+            "code": "approval_target_invalid",
+        }
+    except httpx.HTTPError as exc:
+        _LOGGER.warning("approval forward failed: %s", exc)
+        if _is_tls_failure(exc):
+            return 502, {
+                "error": f"The approval target's TLS certificate was not accepted: {exc}",
+                "code": "approval_tls_error",
+            }
+        return 502, {
+            "error": f"The approval target could not be reached: {exc}",
+            "code": "approval_connect_failed",
+        }
+    payload = await _forward_json_or_empty(forwarded)
+    if 300 <= forwarded.status_code < 400:
+        return 502, {
+            "error": "The approval target redirected the request; nothing was applied.",
+            "code": "approval_target_rejected",
+        }
+    if forwarded.status_code == 404:
+        return 404, {
+            "error": "The approval target has no /approvals route.",
+            "code": "approval_target_not_found",
+        }
+    if forwarded.status_code >= 400:
+        code = payload.get("code")
+        if not isinstance(code, str) or not code:
+            payload["code"] = "approval_target_rejected"
+        return forwarded.status_code, payload
+    return 200, {"accepted": True, "runId": run_id, "approved": approved}
+
+
+async def _forward_json_or_empty(response: httpx.Response) -> dict[str, object]:
+    """Return one forwarded JSON object, or an empty mapping."""
+    try:
+        value = response.json()
+    except ValueError:
+        return {}
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def create_app(
@@ -483,7 +586,8 @@ def create_app(
                 "brands": list(SUPPORTED_BRANDS),
                 "decisionMode": resolved_default_mode,
                 "intentReview": resolved_intent_review and resolved_default_mode == "confirm",
-                "approvalGate": approval_gate,
+                # The vendor NMS has no local approval route: never advertise a gate it cannot serve.
+                "approvalGate": approval_gate and not resolved_nms,
                 "approvalTimeoutSeconds": approval_timeout_seconds,
                 "metricsEnabled": config.client_db_path is not None,
                 # The UI must keep its stream open at least as long as the backend grace window,
@@ -1299,6 +1403,19 @@ def create_app(
                 },
                 status_code=400,
             )
+        # A real NMS owns execution approval and exposes no /approvals route. Refuse before any
+        # network call so the page gets a truthful reason instead of a 404/TLS "unreachable".
+        if resolved_nms or _targets_the_nms(server_url, config):
+            return JSONResponse(
+                {
+                    "error": (
+                        "This run talks to the vendor NMS, which owns execution approval and has "
+                        "no local /approvals route. Nothing was sent."
+                    ),
+                    "code": "approval_not_supported_in_nms",
+                },
+                status_code=409,
+            )
         # The page's gate flag only controls whether it expects the MIE card. Forward whenever the
         # server URL is configured: a Web UI started separately from the A2A server must still be
         # able to resolve a gate the server is actually holding.
@@ -1318,23 +1435,14 @@ def create_app(
         headers = {}
         if config.server_auth_token:
             headers["authorization"] = f"Bearer {config.server_auth_token}"
-        try:
-            async with httpx.AsyncClient(trust_env=False, timeout=10.0) as client:
-                forwarded = await client.post(
-                    f"{server_url.rstrip('/')}/approvals",
-                    json={"runId": run.run_id, "approved": body["approved"]},
-                    headers=headers,
-                )
-        except httpx.HTTPError as exc:
-            _LOGGER.warning("approval forward failed: %s", exc)
-            return JSONResponse(
-                {"error": "The NMS approval gate is unreachable.", "code": "approval_unreachable"},
-                status_code=502,
-            )
-        payload = await _json_or_empty(forwarded)
-        if forwarded.status_code >= 400:
-            return JSONResponse(payload, status_code=forwarded.status_code)
-        return JSONResponse({"accepted": True, "runId": run.run_id, "approved": body["approved"]})
+        status_code, payload = await forward_approval_decision(
+            server_url,
+            run_id=run.run_id,
+            approved=body["approved"],
+            headers=headers,
+            verify_tls=config.nms_verify_tls,
+        )
+        return JSONResponse(payload, status_code=status_code)
 
     async def _json_or_empty(response: httpx.Response) -> dict[str, object]:
         """Return one forwarded JSON object, or an empty mapping."""

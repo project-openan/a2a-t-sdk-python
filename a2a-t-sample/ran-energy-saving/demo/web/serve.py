@@ -180,6 +180,10 @@ def run_ui(
 def main(argv: list[str] | None = None) -> int:
     """Parse the launcher arguments and serve the UI."""
     args = _build_parser().parse_args(argv)
+    if args.nms and args.approval_gate:
+        _build_parser().error(
+            "--approval-gate is the local MIE review; a real NMS owns execution approval."
+        )
     return run_ui(
         env_path=args.env_file,
         ui_port=args.port,

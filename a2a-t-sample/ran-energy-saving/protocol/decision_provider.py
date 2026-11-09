@@ -67,6 +67,10 @@ CLIENT_USER_ID = "ran-energy-client"
 #: Default budget of one manual decision (design §12: five minutes).
 DEFAULT_MANUAL_TIMEOUT_SECONDS = 300.0
 
+#: Default budget of the agent recommendation before the page opens the manual decision surface.
+#: It must stay shorter than the manual window: a slow model must not hide the operator's turn.
+DEFAULT_RECOMMENDATION_TIMEOUT_SECONDS = 120.0
+
 
 class DecisionTimeoutError(Exception):
     """The local wait window expired without an operator decision.
@@ -770,6 +774,7 @@ class ConfirmingDecisionProvider:
         inner: NegotiationDecisionProvider,
         *,
         timeout_seconds: float = DEFAULT_MANUAL_TIMEOUT_SECONDS,
+        recommendation_timeout_seconds: float = DEFAULT_RECOMMENDATION_TIMEOUT_SECONDS,
         keep_waiting: bool = True,
     ) -> None:
         """Create one confirming provider around the agent provider.
@@ -777,14 +782,21 @@ class ConfirmingDecisionProvider:
         ``keep_waiting`` is the A2A-T default: the local window is only an observation budget and
         never ends the negotiation. The pure hop keeps its legacy single-window behaviour by
         constructing ``ManualDecisionProvider`` directly.
+
+        ``recommendation_timeout_seconds`` bounds the advisory model turn. When it expires the page
+        is told the recommendation is unavailable and the operator decides immediately.
         """
+        if recommendation_timeout_seconds <= 0:
+            raise ValueError("recommendation_timeout_seconds must be positive")
         self._inner = inner
         self._manual = ManualDecisionProvider(
             timeout_seconds=timeout_seconds,
             keep_waiting=keep_waiting,
         )
+        self._recommendation_timeout_seconds = recommendation_timeout_seconds
         self._sink: Callable[[NegotiationDecision | None, NegotiationProposeView, Any], None] | None = None
         self._last_recommendation_error: str | None = None
+        self._published_tool_calls: tuple[ToolCall, ...] = ()
 
     @property
     def last_recommendation_error(self) -> str | None:
@@ -795,6 +807,11 @@ class ConfirmingDecisionProvider:
     def timeout_seconds(self) -> float:
         """Confirmation budget in seconds."""
         return self._manual.timeout_seconds
+
+    @property
+    def recommendation_timeout_seconds(self) -> float:
+        """Budget of the advisory recommendation before the operator decides alone."""
+        return self._recommendation_timeout_seconds
 
     @property
     def pending(self) -> bool:
@@ -809,6 +826,8 @@ class ConfirmingDecisionProvider:
     @property
     def last_tool_calls(self) -> tuple[ToolCall, ...]:
         """Tool calls recorded by the inner provider during its recommendation turn."""
+        if self._published_tool_calls:
+            return self._published_tool_calls
         getter = getattr(self._inner, "last_tool_calls", None)
         return getter if isinstance(getter, tuple) else ()
 
@@ -848,15 +867,55 @@ class ConfirmingDecisionProvider:
         propose: NegotiationProposeView,
         session: NegotiationContext,
     ) -> NegotiationDecision:
-        """Ask the agent for a recommendation, publish it, then wait for the engineer.
+        """Race the recommendation against the operator, then publish the outcome.
 
-        A recommendation failure is advisory, not fatal: the sink receives ``None`` with the error
-        attached to :attr:`last_recommendation_error`, and the engineer still decides.
+        The two waits run concurrently, so the operator can decide before the model answers and a
+        slow model cannot hide the decision surface. A submission wins over the recommendation; a
+        recommendation that finishes first is published and the operator still decides. When the
+        recommendation budget expires, the page receives ``recommendationUnavailable`` and the
+        operator keeps the full manual window.
         """
         self._last_recommendation_error = None
-        recommendation: NegotiationDecision | None
+        self._published_tool_calls = ()
+        recommendation_task = asyncio.create_task(self._recommend(propose, session))
+        submission_task = asyncio.create_task(self._manual.wait_for_operator(propose, session))
         try:
-            recommendation = await self._inner.respond(propose, session)
+            done, _pending = await asyncio.wait(
+                {recommendation_task, submission_task},
+                timeout=self._recommendation_timeout_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if submission_task in done:
+                # The operator outran the model. Discard the late recommendation: publishing it
+                # now would reopen a card the operator already resolved.
+                await self._discard(recommendation_task)
+                return submission_task.result()
+            if recommendation_task in done:
+                recommendation = recommendation_task.result()
+                if self._sink is not None:
+                    self._sink(recommendation, propose, session)
+                return await submission_task
+            await self._discard(recommendation_task)
+            self._last_recommendation_error = (
+                f"RecommendationTimeout: no recommendation within "
+                f"{self._recommendation_timeout_seconds:g}s"
+            )
+            if self._sink is not None:
+                self._sink(None, propose, session)
+            return await submission_task
+        finally:
+            await self._discard(recommendation_task)
+            if not submission_task.done():
+                await self._discard(submission_task)
+
+    async def _recommend(
+        self,
+        propose: NegotiationProposeView,
+        session: NegotiationContext,
+    ) -> NegotiationDecision | None:
+        """Run one advisory recommendation turn; failures become ``None`` with the reason."""
+        try:
+            return await self._inner.respond(propose, session)
         except Exception as exc:  # noqa: BLE001 - the engineer is the authority, not the model
             _LOGGER.warning(
                 "decision recommendation unavailable: %s: %s",
@@ -864,10 +923,20 @@ class ConfirmingDecisionProvider:
                 exc,
             )
             self._last_recommendation_error = f"{type(exc).__name__}: {exc}"
-            recommendation = None
-        if self._sink is not None:
-            self._sink(recommendation, propose, session)
-        return await self._manual.respond(propose, session)
+            return None
+        finally:
+            getter = getattr(self._inner, "last_tool_calls", None)
+            self._published_tool_calls = getter if isinstance(getter, tuple) else ()
+
+    @staticmethod
+    async def _discard(task: asyncio.Task[object]) -> None:
+        """Cancel one loser task and swallow its terminal exception."""
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 class ManualDecisionProvider:

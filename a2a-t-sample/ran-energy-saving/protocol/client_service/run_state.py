@@ -850,10 +850,21 @@ class RunState:
         propose: NegotiationProposeView | None,
         *,
         session: NegotiationContext | None = None,
+        decided_by: str | None = None,
     ) -> dict[str, object]:
-        """Record one provider/human decision live and broadcast it with its span."""
+        """Record one provider/human decision live and broadcast it with its span.
+
+        ``decided_by`` separates an operator's answer (``human``) from an automatic provider's
+        (``agent``). Deriving it from the run mode alone marks every decision in a manual/confirm
+        run as human, which would hide a future machine-produced decision.
+        """
         if self.transcript is None:
             return {}
+        origin = (
+            decided_by
+            if decided_by in ("human", "agent")
+            else ("human" if self.mode in (MODE_MANUAL, MODE_CONFIRM) else "agent")
+        )
         phase = infer_decision_phase(decision.action)
         seq, step = self.allocate(phase)
         entry = self.transcript.record_decision(
@@ -877,7 +888,7 @@ class RunState:
             kind=decision.action,
             phase=phase,
             title=f"Decision · {decision.action}",
-            actor="human" if self.mode in (MODE_MANUAL, MODE_CONFIRM) else "client",
+            actor="human" if origin == "human" else "client",
             side="client",
             direction="internal",
             status="ok",
@@ -893,15 +904,17 @@ class RunState:
                 "counterParams": dict(decision.counter_params) if decision.counter_params else None,
                 "confirmedIntent": decision.confirmed_intent,
                 "feasibilitySummary": decision.feasibility_summary,
-                "confirmedBy": "engineer" if self.mode == MODE_CONFIRM else None,
+                "confirmedBy": "engineer" if origin == "human" and self.mode == MODE_CONFIRM else None,
+                "decidedBy": origin,
                 "answerSource": self.pending_answer_source,
             },
         )
         self.pending_answer_source = None
+        entry["decidedBy"] = origin
         entry["spanId"] = span.span_id
         self._store_span(span, seq=seq, record=False, broadcast_frame=False)
         self.broadcast({"type": "event", "event": entry}, seq=seq)
-        self._persist_decision(decision, propose, session)
+        self._persist_decision(decision, propose, session, origin=origin)
         return entry
 
     def _persist_decision(
@@ -909,6 +922,8 @@ class RunState:
         decision: NegotiationDecision,
         propose: NegotiationProposeView | None,
         session: NegotiationContext | None,
+        *,
+        origin: str = "agent",
     ) -> None:
         """Persist one outbound decision in the negotiation audit."""
         if self.store is None:
@@ -919,7 +934,7 @@ class RunState:
                     run_id=self.run_id,
                     seq=self.next_negotiation_seq(),
                     direction=NEGOTIATION_DIRECTION_OUTBOUND,
-                    actor="human" if self.mode in (MODE_MANUAL, MODE_CONFIRM) else "client",
+                    actor="human" if origin == "human" else "client",
                     negotiation_id=(
                         propose.negotiation_id if propose is not None else (session.id if session is not None else None)
                     ),
@@ -933,6 +948,7 @@ class RunState:
                         "counterParams": (dict(decision.counter_params) if decision.counter_params else None),
                         "confirmedIntent": decision.confirmed_intent,
                         "feasibilitySummary": decision.feasibility_summary,
+                        "decidedBy": origin,
                     },
                     decision_action=decision.action,
                     rationale=decision.rationale,

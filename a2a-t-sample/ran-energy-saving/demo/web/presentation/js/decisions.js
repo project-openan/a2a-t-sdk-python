@@ -147,6 +147,66 @@ export function decisionCard(state, copy) {
   };
 }
 
+/**
+ * Build the early confirm-mode decision card, or ``null`` when none is pending.
+ *
+ * The agent recommendation may take longer than the operator is willing to wait. This card opens
+ * the manual surface immediately; when the recommendation arrives the server publishes the normal
+ * card, unless the operator already answered.
+ */
+export function pendingDecisionCard(state, copy) {
+  const pending = state.decisionPending;
+  if (!isObject(pending) || pending.resolved || state.finished) return null;
+  if (state.mode !== "confirm" || state.protocol === "pure") return null;
+  if (state.decision !== null && !state.decision.resolved) return null;
+  const round = pending.round ?? pending.proposal?.round ?? 1;
+  const maxRounds = pending.maxRounds ?? pending.proposal?.max_rounds ?? 1;
+  const kind = pending.proposal?.kind || "";
+  const missingItems = Array.isArray(pending.missingItems)
+    ? pending.missingItems.filter((item) => typeof item === "string")
+    : [];
+  const proposalText =
+    proposalItemText(pending.proposal?.content, "region") ||
+    proposalLine(copy, state.scenario, round) ||
+    firstLine(pending.proposal?.content) ||
+    copy.negotiation.generic;
+  const text =
+    kind === "information" && missingItems.length > 0
+      ? format(copy.decision.askedItems, { items: missingItems.join(", ") })
+      : proposalText;
+  const seconds = pending.recommendationTimeoutSeconds;
+  const detail = seconds
+    ? format(copy.decision.pendingDetail, { seconds })
+    : copy.decision.pendingDetailNoTimeout;
+  return {
+    type: "decision",
+    pendingRecommendation: true,
+    round,
+    kicker: copy.decision.kicker,
+    title: format(copy.decision.pendingTitle, { round, maxRounds }),
+    text,
+    detail,
+    kind,
+    hasRecommendation: false,
+    recommendedAction: null,
+    recommendation: null,
+    recommendationFields: [],
+    missingItems,
+    manualExample: manualExampleFor(copy, missingItems),
+    manualOpen: true,
+    counterText: "",
+    regionOptions: areaOptions(pending.proposal?.options, copy),
+    requestedRegion: pending.proposal?.options?.requested || "",
+    options:
+      kind === "information"
+        ? [{ action: "reject", label: copy.decision.reject, danger: true }]
+        : [
+            { action: "accept", label: copy.decision.acceptNms, primary: true },
+            { action: "reject", label: copy.decision.reject, danger: true },
+          ],
+  };
+}
+
 /** List the concrete values a recommendation would send, for the confirmation card. */
 function recommendationFields(recommendation) {
   const filled = isObject(recommendation?.filled_params) ? recommendation.filled_params : null;
