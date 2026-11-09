@@ -79,6 +79,11 @@ assert:
   a2a:
     negotiation: true
     final_state: false
+blocked_followup:                    # 仅 a2a-t 且 validate: blocked 的用例
+  input: |-                          # A2A-T 拦截后替换/补充的请求原文
+    Implement energy-saving in A2ATestRegion and set the guaranteed throughput targets: ...
+  expect: {}                         # 可选：局部覆盖补充后阶段的期望
+  assert: {}                         # 可选：局部覆盖补充后阶段的断言开关
 runner:
   scenario: night                    # 仅作运行时配置，不提供预期
   language: en-US
@@ -120,6 +125,27 @@ A2A 与 A2A-T 的预期结构化意图在这 51 条里完全相同，因此只�
 
 决定某个字段只记录还是参与 pass/fail。默认全开；只有原表本身矛盾的用例才关掉对应项，
 见第 6 节。
+
+### 3.4 `blocked_followup`（A2A-T 拦截后补充信息）
+
+只有 `expect.protocols.a2a-t.validate: blocked` 的用例可以带这个字段。`input` 是拦截后由操作员
+补充/替换的请求原文；用例现有的 `expect.intent`、`task_t`、`negotiation` 描述的就是这条请求，
+不需要再写一份完整期望。
+
+`/tester` 对这类用例跑两段：
+
+| 段 | 输入 | 判定 |
+|---|---|---|
+| 拦截段 | 原 `user_input` | 只跑 SDK 三阶段；`intent` / `task_t` 记为 `recorded`（期望值属于补充请求），`validate: blocked` 参与判定；**不启动 runtime run，不下发请求** |
+| 补充段 | `blocked_followup.input` | 跑完整管线；`validate: pass`、`send: true`、`final_state: task_completed` 由拦截态机械派生，其余期望继承用例 |
+
+补充段的 `expect`/`assert` 可用同名子块局部覆盖（例如补充请求触发一轮可行性协商）。拦截段结果
+写在 item 的 `interception`（持久化 JSON 同名键）；结果表增加「拦截校验」「拦截后补充信息」两列，
+阶段差异表用 `拦截/validate` 等前缀区分两段。
+
+数据来源是重构版工作簿 K 列（`无线节能场景用例_重构版_A2ATestRegion`）。用例文件仍是生成产物，
+生成器尚未支持该列：重跑 `generate_osp_cases.py` 会丢掉字段，`--check` 会报漂移。合并脚本见
+`docs-local/merge-osp-blocked-followup.py`（内部，不入库）。
 
 ## 4. 阶段模型与 `stop_after`
 
@@ -242,6 +268,8 @@ PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-af
 - 前三阶段走 SDK-only runner；后三阶段走 `RunManager` 完整运行时。
 - 协商脚本化：A2A-T 用 Q 列答复生成 `NegotiationDecision`，A2A 用 P 列答复作为 `INPUT_REQUIRED` 答案。
 - 结果表按阶段显示 `passed / failed / recorded / error`，点“差异”看逐字段/逐段 expected/actual。
+- 带 `blocked_followup` 的拦截用例先记录拦截段，再用补充请求继续跑；拦截段证据在抽屉里以
+  `拦截/...` 展示，拦截请求不会被下发。
 - 临时请求 tab：手输文本直接跑一次，不做预期断言。
 - 报告导出 JSON / XLSX；Excel 只作为导出格式，不再是输入。
 

@@ -629,6 +629,7 @@ async def test_meta_exposes_the_acceptance_stage_model_and_transport(
     assert stage_order.index("accepted") < stage_order.index("working") < stage_order.index("final")
     assert meta["defaults"]["stopAfter"] == "working"
     assert meta["defaults"]["approval"] is None
+    assert meta["defaults"]["decisionMode"] == "scripted"
     assert meta["decisionModes"] == ["scripted", "live"]
     assert meta["transport"] in {"sse", "webhook"}
     assert meta["discovery"]

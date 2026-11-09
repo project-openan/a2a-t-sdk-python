@@ -131,3 +131,10 @@ source:
   row: 47
 known_issue: |-
   H/J 与 I 冲突：user_input 写“green energy-saving mode”，I 列预期拦截，但 J/H 把模式写成 Aggressive；A2A 的 P 列解释“green 指 aggressive”。待业务确认 A2A-T 应拦截还是按术语解释放行；确认前 intent 与 task_t 仅记录，不参与判定。
+blocked_followup:
+  input: |-
+    Create an energy-saving task with the Aggressive energy-saving mode in the A2ATestRegion area. The guaranteed rate objectives for each time period are set as follows: 00:00-07:00 → 2 Mbps, 07:00-18:00 → 10 Mbps, 18:00-24:00 → 2 Mbps.
+  assert:
+    intent: true
+    a2a-t:
+      task_t: true

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from a2a_t.core.errors.catalog import ErrorCatalog
+from a2a_t.core.errors.exceptions import ContentValidationError
 from demo.web.tester.service import (
     ALL_STAGES,
     CASE_CANCELLED,
@@ -28,6 +31,7 @@ from demo.web.tester.service import (
     _apply_assertion,
 )
 from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog
+from eval.osp.followup import followup_input
 from eval.osp.intent_schema import OSP_INTENT_SCHEMA
 from eval.osp.runner import load_cases
 from protocol.client_flow import ClientFlowResult
@@ -52,11 +56,19 @@ class _PromptClient:
 
     def __init__(self) -> None:
         self._by_text = {case["user_input"]: case for case in CASES.values()}
+        for case in CASES.values():
+            text = followup_input(case)
+            if text is not None:
+                self._by_text[text] = case
         self._last_id: int | None = None
+        self._last_text = ""
+        #: Extra operator texts whose runtime validation must report ``blocked``.
+        self.blocked_texts: set[str] = set()
 
     def generate_task_prompt_from_text(self, text: str, template_uri: str) -> object:
         case = self._by_text[text]
         self._last_id = int(case["id"])
+        self._last_text = text
         return SimpleNamespace(
             prompt_text=str(case["expect"]["protocols"]["a2a-t"]["task_t"]),
             template_uri=template_uri,
@@ -72,6 +84,15 @@ class _PromptClient:
         assert self._last_id is not None
         if schema is OSP_INTENT_SCHEMA:
             return SimpleNamespace(data=dict(CASES[self._last_id]["expect"]["intent"]))
+        case = CASES[self._last_id]
+        blocked_case = case["expect"]["protocols"]["a2a-t"]["validate"] == "blocked"
+        original_input = self._last_text == str(case.get("user_input"))
+        if self._last_text in self.blocked_texts or (blocked_case and original_input):
+            raise ContentValidationError(
+                ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
+                {"reason": "test"},
+                message="blocked by test",
+            )
         return SimpleNamespace(data={})
 
 
@@ -663,3 +684,374 @@ def test_an_item_whose_failure_was_recorded_is_partial(tmp_path: Path) -> None:
     )
 
     assert manager._item_status(item) == CASE_PARTIAL
+
+
+async def test_a_validate_only_batch_freezes_the_case_reference_and_intent(
+    tmp_path: Path,
+) -> None:
+    """The arbitration sheet must carry the intent even when no run was started."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+        approval=None,
+        timeout_seconds=None,
+    )
+    batch_id = str(created["batchId"])
+
+    await manager.start(batch_id)
+    await _wait_status(manager, batch_id, "finished")
+
+    item = manager._batches[batch_id].items[0]
+    assert item.trace_id == ""
+    assert item.answer is None
+    assert item.refs["caseName"] == CASES[1]["name"]
+    assert str(item.refs["taskT"]).startswith("## Operation Type")
+    assert item.refs["expectedIntent"] == CASES[1]["expect"]["intent"]
+    assert item.intent == CASES[1]["expect"]["intent"]
+    snapshot = manager.get(batch_id)
+    assert snapshot is not None
+    assert snapshot["items"][0]["intent"]["Operation type"] == "Create"
+
+
+async def test_a_full_run_records_the_trace_id_and_answer(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=None,
+    )
+    batch_id = str(created["batchId"])
+
+    await manager.start(batch_id)
+    await _wait_status(manager, batch_id, "finished")
+
+    item = manager._batches[batch_id].items[0]
+    assert item.trace_id == "run-1"
+    assert item.answer is not None
+    assert item.answer["code"] == "SUCCESS"
+    assert item.answer["taskId"] == "task-1"
+    data = item.to_dict()
+    assert data["traceId"] == "run-1"
+    assert data["answer"] == item.answer
+
+
+def test_the_default_decision_mode_is_live_for_an_online_model(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
+
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+        approval=None,
+        timeout_seconds=None,
+    )
+
+    assert created["decisionMode"] == "live"
+
+
+def test_the_default_decision_mode_stays_scripted_offline(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="offline")
+
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+        approval=None,
+        timeout_seconds=None,
+    )
+
+    assert created["decisionMode"] == "scripted"
+
+
+async def test_a_rerun_clears_the_previous_arbitration_evidence(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_hang))
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=None,
+    )
+    batch_id = str(created["batchId"])
+    item = manager._batches[batch_id].items[0]
+    item.trace_id = "old-trace"
+    item.intent = {"Operation type": "Create"}
+    item.intent_meta = {"rawRequest": "old"}
+    item.refs = {"caseName": "old"}
+    item.answer = {"code": "OLD"}
+
+    try:
+        await manager.rerun_item(batch_id, 0)
+        assert item.trace_id == ""
+        assert item.intent is None
+        assert item.intent_meta == {}
+        assert item.refs == {}
+        assert item.answer is None
+    finally:
+        await manager.cancel(batch_id)
+
+
+def test_an_old_v2_batch_loads_with_empty_export_fields(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    history = tmp_path / "tester"
+    history.mkdir(parents=True)
+    document = {
+        "schema": "osp-tester/v2",
+        "batchId": "old-batch",
+        "caseIds": [1],
+        "protocols": [PROTOCOL_A2A_T],
+        "stopAfter": "validate",
+        "items": [
+            {
+                "caseId": 1,
+                "name": "old",
+                "protocol": PROTOCOL_A2A_T,
+                "status": "passed",
+            }
+        ],
+    }
+    (history / "old-batch.json").write_text(json.dumps(document), encoding="utf-8")
+
+    snapshot = manager.get("old-batch")
+
+    assert snapshot is not None
+    item = snapshot["items"][0]
+    assert item["traceId"] == ""
+    assert item["intent"] is None
+    assert item["answer"] is None
+    assert item["refs"] == {}
+
+
+FOLLOWUP_INPUT = "Implement energy-saving in A2ATestRegion. Set the gain target to 30%."
+
+
+def _inject_followup(manager: EvalBatchManager, case_id: int, text: str = FOLLOWUP_INPUT) -> None:
+    """Give one catalog case a replacement request and teach the SDK double about it."""
+    case = manager._catalog.get(case_id)
+    assert case is not None
+    case["blocked_followup"] = {"input": text}
+    client = manager._prompt_client
+    assert isinstance(client, _PromptClient)
+    client._by_text[text] = case
+    client.blocked_texts.add(str(case["user_input"]))
+
+
+def _only_item(snapshot: Mapping[str, object]) -> Mapping[str, Any]:
+    items = snapshot["items"]
+    assert isinstance(items, list)
+    item = items[0]
+    assert isinstance(item, Mapping)
+    return item
+
+
+async def test_a_blocked_case_with_a_followup_records_the_interception(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    _inject_followup(manager, 22)
+    created = manager.create(
+        case_ids=[22],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    finished = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = _only_item(finished)
+    interception = item["interception"]
+    assert isinstance(interception, Mapping)
+    assert interception["input"] == str(CASES[22]["user_input"])
+    assert interception["followupInput"] == FOLLOWUP_INPUT
+    blocked = interception["stages"]
+    assert isinstance(blocked, Mapping)
+    assert blocked["validate"]["status"] == STAGE_PASSED
+    assert blocked["validate"]["expected"] == "blocked"
+    assert blocked["validate"]["actual"] == "blocked"
+    assert blocked["intent"]["status"] == STAGE_RECORDED
+    assert blocked["task_t"]["status"] == STAGE_RECORDED
+    stages = item["stages"]
+    assert isinstance(stages, Mapping)
+    assert stages["validate"]["expected"] == "pass"
+    assert stages["validate"]["status"] == STAGE_PASSED
+    assert item["status"] == CASE_PASSED
+    runs = manager._runs
+    assert isinstance(runs, _FakeRuns)
+    assert runs.calls == []
+
+
+async def test_the_followup_request_is_what_the_full_flow_dispatches(tmp_path: Path) -> None:
+    runs = _FakeRuns(_finish)
+    manager = _manager(tmp_path, runs)
+    _inject_followup(manager, 22)
+    created = manager.create(
+        case_ids=[22],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    finished = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    assert len(runs.calls) == 1
+    assert runs.calls[0]["userRequest"] == FOLLOWUP_INPUT
+    item = _only_item(finished)
+    assert isinstance(item["interception"], Mapping)
+    stages = item["stages"]
+    assert isinstance(stages, Mapping)
+    assert stages["send"]["expected"] is True
+    assert stages["send"]["status"] == STAGE_PASSED
+    assert stages["final"]["expected"] == "task_completed"
+    assert stages["final"]["status"] == STAGE_PASSED
+    assert item["status"] == CASE_PASSED
+    refs = item["refs"]
+    assert isinstance(refs, Mapping)
+    assert refs["userInput"] == FOLLOWUP_INPUT
+    assert refs["expectedFinalState"] == "task_completed"
+
+
+async def test_a_blocked_case_without_a_followup_keeps_the_original_flow(tmp_path: Path) -> None:
+    runs = _FakeRuns(_finish)
+    manager = _manager(tmp_path, runs)
+    case = manager._catalog.get(22)
+    assert case is not None
+    case.pop("blocked_followup", None)
+    created = manager.create(
+        case_ids=[22],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    finished = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = _only_item(finished)
+    assert item["interception"] is None
+    assert runs.calls[0]["userRequest"] == str(CASES[22]["user_input"])
+
+
+async def test_a_followup_that_is_still_blocked_fails_the_item(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    _inject_followup(manager, 22)
+    client = manager._prompt_client
+    assert isinstance(client, _PromptClient)
+    client.blocked_texts.add(FOLLOWUP_INPUT)
+    created = manager.create(
+        case_ids=[22],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    finished = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = _only_item(finished)
+    stages = item["stages"]
+    assert isinstance(stages, Mapping)
+    assert stages["validate"]["actual"] == "blocked"
+    assert stages["validate"]["status"] == STAGE_FAILED
+    assert item["status"] == "failed"
+
+
+async def test_a_pure_a2a_item_ignores_a_followup(tmp_path: Path) -> None:
+    runs = _FakeRuns(_finish)
+    manager = _manager(tmp_path, runs)
+    _inject_followup(manager, 22)
+    created = manager.create(
+        case_ids=[22],
+        protocols=[PROTOCOL_A2A],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    finished = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = _only_item(finished)
+    assert item["interception"] is None
+    assert runs.calls[0]["userRequest"] == str(CASES[22]["user_input"])
+
+
+async def test_an_unblocked_case_ignores_a_followup(tmp_path: Path) -> None:
+    runs = _FakeRuns(_finish)
+    manager = _manager(tmp_path, runs)
+    _inject_followup(manager, 1)
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    finished = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = _only_item(finished)
+    assert item["interception"] is None
+    assert runs.calls[0]["userRequest"] == str(CASES[1]["user_input"])
+
+
+async def test_load_restores_the_interception_record(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    _inject_followup(manager, 22)
+    created = manager.create(
+        case_ids=[22],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+        approval=None,
+        timeout_seconds=2,
+    )
+    batch_id = str(created["batchId"])
+
+    await manager.start(batch_id)
+    await _wait_status(manager, batch_id, "finished")
+
+    reloaded = _manager(tmp_path, _FakeRuns(_finish)).get(batch_id)
+
+    assert reloaded is not None
+    item = _only_item(reloaded)
+    interception = item["interception"]
+    assert isinstance(interception, Mapping)
+    assert interception["followupInput"] == FOLLOWUP_INPUT
+    blocked = interception["stages"]
+    assert isinstance(blocked, Mapping)
+    assert blocked["validate"]["status"] == STAGE_PASSED
+
+
+async def test_a_case_file_followup_is_used_without_test_injection(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    case = manager._catalog.get(22)
+    assert case is not None
+    supplement = followup_input(case)
+    assert supplement is not None
+    created = manager.create(
+        case_ids=[22],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    finished = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = _only_item(finished)
+    interception = item["interception"]
+    assert isinstance(interception, Mapping)
+    assert interception["followupInput"] == supplement
+    blocked = interception["stages"]
+    assert isinstance(blocked, Mapping)
+    assert blocked["validate"]["status"] == STAGE_PASSED
+    assert item["status"] == CASE_PASSED

@@ -157,6 +157,7 @@ class NegotiationTranscript:
         model_mode: ``live`` or ``offline``.
         mode: Client decision mode (``auto`` / ``manual`` / ``scripted``).
         transport: Event transport (``sse`` / ``webhook``).
+        trace_id: Vendor-facing W3C trace id of the run (32 lowercase hex digits).
         started_at: UTC start time (ISO 8601).
         finished_at: UTC end time (ISO 8601), set when the terminal outcome is recorded.
         events: Timeline entries in arrival order.
@@ -179,6 +180,7 @@ class NegotiationTranscript:
     model_mode: str
     mode: str = "auto"
     transport: str = "sse"
+    trace_id: str = ""
     started_at: str = field(default_factory=_now_iso)
     finished_at: str | None = None
     events: list[dict[str, object]] = field(default_factory=list)
@@ -434,6 +436,7 @@ class NegotiationTranscript:
             "modelMode": self.model_mode,
             "mode": self.mode,
             "transport": self.transport,
+            "traceId": self.trace_id or None,
             "startedAt": self.started_at,
             "finishedAt": self.finished_at,
             "finalState": self.final_state,

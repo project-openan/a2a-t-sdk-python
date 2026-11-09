@@ -21,10 +21,10 @@ from starlette.routing import Route
 from demo.web.tester.report import write_report
 from demo.web.tester.service import (
     ALL_STAGES,
-    DECISION_MODE_SCRIPTED,
     DECISION_MODES,
     DEFAULT_WORKING_TIMEOUT_SECONDS,
     EvalBatchManager,
+    default_decision_mode,
 )
 
 #: Directory of the tester page assets.
@@ -119,7 +119,7 @@ def build_tester_routes(
                     "approval": None,
                     "timeoutSeconds": None,
                     "workingTimeoutSeconds": DEFAULT_WORKING_TIMEOUT_SECONDS,
-                    "decisionMode": DECISION_MODE_SCRIPTED,
+                    "decisionMode": default_decision_mode(model_mode),
                 },
                 "runnerDefaultsIndicateCase": True,
                 "catalogCount": resolved_catalog.count,
@@ -161,7 +161,7 @@ def build_tester_routes(
                 approval=_optional_str(body.get("approval")),
                 timeout_seconds=_optional_float(body.get("timeoutSeconds")),
                 working_timeout_seconds=_optional_float(body.get("workingTimeoutSeconds")),
-                decision_mode=str(body.get("decisionMode") or DECISION_MODE_SCRIPTED),
+                decision_mode=_optional_str(body.get("decisionMode")),
                 owner=_client_id(request),
             )
         except (TypeError, ValueError) as exc:
@@ -177,7 +177,7 @@ def build_tester_routes(
                 protocol=str(body.get("protocol") or PROTOCOL_A2A_T),
                 approval=_optional_str(body.get("approval")) or "approve",
                 timeout_seconds=_optional_float(body.get("timeoutSeconds")),
-                decision_mode=str(body.get("decisionMode") or DECISION_MODE_SCRIPTED),
+                decision_mode=_optional_str(body.get("decisionMode")),
                 owner=_client_id(request),
             )
         except (TypeError, ValueError) as exc:

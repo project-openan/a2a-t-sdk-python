@@ -131,3 +131,6 @@ source:
   sheet: A2A-T_原始数据
   row: 28
 known_issue: null
+blocked_followup:
+  input: |-
+    Due to a power outage in the A2ATestRegion area from 08:00 to 11:00 tomorrow, the guaranteed bandwidth for NRES_XCS_6102937 in this area affected by the power outage needs to be modified to 10 Mbps.

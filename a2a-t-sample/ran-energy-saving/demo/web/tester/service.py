@@ -29,6 +29,7 @@ from typing import Any, Final
 
 import httpx
 from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog
+from eval.osp.followup import followup_case, has_followup, interception_case, is_blocked_case
 from eval.osp.runner import (
     STAGE_ERROR,
     STAGE_FAILED,
@@ -58,6 +59,7 @@ from shared.run_constants import (
 )
 
 from demo.web.tester.decisions import a2at_decisions, pure_answers
+from demo.web.tester.export_view import build_answer, read_traceparent
 
 _LOGGER = logging.getLogger("ran_energy_saving.tester")
 
@@ -98,10 +100,20 @@ DECISION_MODE_SCRIPTED: Final[str] = "scripted"
 DECISION_MODE_LIVE: Final[str] = "live"
 DECISION_MODES: Final[tuple[str, ...]] = (DECISION_MODE_SCRIPTED, DECISION_MODE_LIVE)
 
-#: Persisted batch schema; v1 batches are still readable.
-SCHEMA: Final[str] = "osp-tester/v2"
+#: Batch decision mode used when the caller does not choose one. An online model should exercise
+#: the model decisions by default; an offline process can only run the scripted mode.
+DEFAULT_DECISION_MODE: Final[str] = DECISION_MODE_LIVE
+
+
+def default_decision_mode(model_mode: str) -> str:
+    """Return the default decision mode of a tester process in one model mode."""
+    return DECISION_MODE_SCRIPTED if model_mode == MODEL_MODE_OFFLINE else DEFAULT_DECISION_MODE
+
+#: Persisted batch schema; v1/v2 batches are still readable.
+SCHEMA: Final[str] = "osp-tester/v3"
 SCHEMA_V1: Final[str] = "osp-tester/v1"
-_SCHEMAS: Final[frozenset[str]] = frozenset({SCHEMA, SCHEMA_V1})
+SCHEMA_V2: Final[str] = "osp-tester/v2"
+_SCHEMAS: Final[frozenset[str]] = frozenset({SCHEMA, SCHEMA_V2, SCHEMA_V1})
 
 #: Task states that end the item in red.
 _FAILED_TASK_STATES: Final[frozenset[str]] = frozenset(
@@ -211,6 +223,18 @@ class CaseItem:
     scratch: str | None = None
     #: Previous executions of this item (a rerun appends before it resets the row).
     attempts: list[dict[str, object]] = field(default_factory=list)
+    #: Vendor-facing trace id of the run (``run.trace_id``, 32 lowercase hex digits).
+    trace_id: str = ""
+    #: OSP 11-key structured intent extracted by the tester's SDK ``intent`` stage.
+    intent: dict[str, object] | None = None
+    #: Raw/normalized operator request and how the intent was produced.
+    intent_meta: dict[str, object] = field(default_factory=dict)
+    #: Case metadata and expectations frozen when the item was collected.
+    refs: dict[str, object] = field(default_factory=dict)
+    #: Reference-workbook answer/origin object (columns 76 and 87).
+    answer: dict[str, object] | None = None
+    #: The interception the case expects before its follow-up request (``blocked_followup``).
+    interception: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Return the JSON-friendly representation."""
@@ -227,6 +251,12 @@ class CaseItem:
             "baseline": self.baseline,
             "scratch": self.scratch,
             "attempts": [dict(attempt) for attempt in self.attempts],
+            "traceId": self.trace_id,
+            "intent": self.intent,
+            "intentMeta": dict(self.intent_meta),
+            "refs": dict(self.refs),
+            "answer": self.answer,
+            "interception": self.interception,
         }
 
 
@@ -311,18 +341,21 @@ class EvalBatchManager:
         approval: str | None = None,
         timeout_seconds: float | None = None,
         working_timeout_seconds: float | None = None,
-        decision_mode: str = DECISION_MODE_SCRIPTED,
+        decision_mode: str | None = None,
         owner: str = "",
     ) -> dict[str, object]:
         """Register one draft batch from the selected cases and protocols.
 
         ``approval``/``timeout_seconds``/``working_timeout_seconds`` may be ``None``: the batch then
         uses each case's own ``runner`` block (or the process defaults for a scratch request).
+        ``decision_mode`` defaults to the process mode: live for an online model, scripted offline.
         """
         if stop_after not in ALL_STAGES:
             raise ValueError(f"unknown stop_after {stop_after!r}")
         resolved_approval = _validate_approval(approval)
-        resolved_decision_mode = self._validate_decision_mode(decision_mode)
+        resolved_decision_mode = self._validate_decision_mode(
+            decision_mode or default_decision_mode(self._model_mode)
+        )
         selected_protocols = [protocol for protocol in protocols if protocol in {PROTOCOL_A2A_T, PROTOCOL_A2A}]
         if not selected_protocols:
             raise ValueError("至少选择一个协议。")
@@ -365,7 +398,7 @@ class EvalBatchManager:
         protocol: str,
         approval: str = "approve",
         timeout_seconds: float | None = 300.0,
-        decision_mode: str = DECISION_MODE_SCRIPTED,
+        decision_mode: str | None = None,
         owner: str = "",
     ) -> dict[str, object]:
         """Create a one-item batch for an ad-hoc request (full flow only)."""
@@ -375,7 +408,9 @@ class EvalBatchManager:
         if protocol not in {PROTOCOL_A2A_T, PROTOCOL_A2A}:
             raise ValueError(f"unknown protocol {protocol!r}")
         resolved_approval = _validate_approval(approval) or "approve"
-        resolved_decision_mode = self._validate_decision_mode(decision_mode)
+        resolved_decision_mode = self._validate_decision_mode(
+            decision_mode or default_decision_mode(self._model_mode)
+        )
         defaults = self._protocol_defaults.get(_runtime_protocol(protocol), {})
         item = CaseItem(case_id=0, name="临时请求", protocol=protocol, scratch=text)
         batch = _Batch(
@@ -573,6 +608,14 @@ class EvalBatchManager:
         item.tokens = {}
         item.error = None
         item.baseline = None
+        # The arbitration evidence belongs to the attempt that produced it; a rerun must not
+        # export the previous run's intent/trace/answer when the new attempt fails early.
+        item.trace_id = ""
+        item.intent = None
+        item.intent_meta = {}
+        item.refs = {}
+        item.answer = None
+        item.interception = None
         batch.status = BATCH_RUNNING
         batch.cancel_requested = False
         batch.finished_at = None
@@ -647,18 +690,49 @@ class EvalBatchManager:
             item.error = f"未知用例 {item.case_id}"
             return
         stages = list(ALL_STAGES[: ALL_STAGES.index(batch.stop_after) + 1])
+        effective_case = case
         if item.protocol == PROTOCOL_A2A:
             # OSP defines no SDK stages for pure A2A; only the runtime chain applies.
             stages = [stage for stage in stages if stage not in SDK_STAGE_ORDER]
         else:
             sdk_stages = [stage for stage in stages if stage in SDK_STAGE_ORDER]
             if sdk_stages:
-                await self._run_sdk_stages(case, item, sdk_stages[-1], batch.decision_mode)
+                if is_blocked_case(case) and has_followup(case):
+                    # Record the interception first, then test the replacement request. The
+                    # intercepted request is never dispatched.
+                    effective_case = followup_case(case)
+                    item.interception = await self._run_interception(
+                        case, effective_case, sdk_stages[-1], batch.decision_mode
+                    )
+                await self._run_sdk_stages(
+                    effective_case, item, sdk_stages[-1], batch.decision_mode
+                )
+        self._collect_reference(item, effective_case)
         if batch.stop_after in SDK_STAGE_ORDER:
             item.status = self._item_status(item)
             return
-        await self._run_full_flow(batch, index, item, case, stages)
+        await self._run_full_flow(batch, index, item, effective_case, stages)
         item.status = self._item_status(item)
+
+    async def _run_interception(
+        self,
+        case: Mapping[str, Any],
+        followup: Mapping[str, Any],
+        stop_after: str,
+        decision_mode: str,
+    ) -> dict[str, object]:
+        """Run the blocked request through the SDK stages and record the interception."""
+        results, error = await self._sdk_stage_results(
+            interception_case(case), stop_after, decision_mode
+        )
+        record: dict[str, object] = {
+            "input": str(case.get("user_input") or ""),
+            "followupInput": str(followup.get("user_input") or ""),
+            "stages": {stage: result.to_dict() for stage, result in results.items()},
+        }
+        if error:
+            record["error"] = error
+        return record
 
     async def _run_sdk_stages(
         self,
@@ -667,11 +741,24 @@ class EvalBatchManager:
         stop_after: str,
         decision_mode: str = DECISION_MODE_SCRIPTED,
     ) -> None:
+        results, error = await self._sdk_stage_results(case, stop_after, decision_mode)
+        item.stages.update(results)
+        if error:
+            item.error = error
+
+    async def _sdk_stage_results(
+        self,
+        case: Mapping[str, Any],
+        stop_after: str,
+        decision_mode: str,
+    ) -> tuple[dict[str, StageResult], str | None]:
+        """Run the SDK-owned stages of one case and return their results and error."""
         model_mode = MODEL_MODE_LIVE if decision_mode == DECISION_MODE_LIVE else None
         async with self._sdk_lock:
             client = await self._ensure_prompt_client(model_mode)
             outcome = await asyncio.to_thread(run_case, case, client, stop_after=stop_after)
         negotiation_expected = _negotiation_expected(case, PROTOCOL_A2A_T)
+        results: dict[str, StageResult] = {}
         for stage in outcome.stages:
             result = StageResult(
                 stage=stage.stage,
@@ -688,9 +775,8 @@ class EvalBatchManager:
                 # initial request, so comparing them would be a false failure.
                 result.status = STAGE_RECORDED
                 result.message = _NEGOTIATED_TASK_T_MESSAGE
-            item.stages[stage.stage] = result
-        if outcome.error:
-            item.error = outcome.error
+            results[stage.stage] = result
+        return results, outcome.error
 
     async def _run_full_flow(
         self,
@@ -772,13 +858,14 @@ class EvalBatchManager:
                 item,
                 batch,
                 stages,
+                case=case,
                 timeout_seconds=resolved_timeout,
                 working_timeout_seconds=self._resolved_working_timeout(batch),
             )
         finally:
             approval_task.cancel()
             await asyncio.gather(approval_task, return_exceptions=True)
-            await self._collect_metrics(item, run)
+            await self._collect_metrics(item, run, case)
             # ``accepted``/``working`` end the observation window, not the run: the Task keeps
             # running in the background, so the tester must not cancel it.
             if batch.stop_after not in {"accepted", "working"} and run.status == "running":
@@ -919,6 +1006,7 @@ class EvalBatchManager:
         batch: _Batch,
         stages: Sequence[str],
         *,
+        case: Mapping[str, Any] | None,
         timeout_seconds: float,
         working_timeout_seconds: float,
     ) -> None:
@@ -927,7 +1015,6 @@ class EvalBatchManager:
         expected_rounds = 0
         expected_kinds: list[str] | None = None
         expected_final: object = None
-        case = self._catalog.get(item.case_id)
         if case is not None:
             protocol_block = case["expect"]["protocols"][item.protocol]
             expected_final = protocol_block.get("final_state")
@@ -1216,9 +1303,17 @@ class EvalBatchManager:
                 return
             await asyncio.sleep(_POLL_SECONDS)
 
-    async def _collect_metrics(self, item: CaseItem, run: RunState) -> None:
+    async def _collect_metrics(
+        self,
+        item: CaseItem,
+        run: RunState,
+        case: Mapping[str, Any] | None = None,
+    ) -> None:
         if self._metrics_grace_seconds:
             await asyncio.sleep(self._metrics_grace_seconds)
+        # The export evidence does not depend on the metrics pipeline; collect it even when the
+        # metrics builder fails, because a missing answer is worse than missing token counts.
+        self._collect_run_evidence(item, run, case)
         try:
             metrics = build_run_metrics(
                 run_id=run.run_id,
@@ -1243,6 +1338,81 @@ class EvalBatchManager:
         tokens = metrics.get("tokens")
         item.tokens = dict(tokens) if isinstance(tokens, Mapping) else {}
 
+    def _collect_reference(
+        self, item: CaseItem, case: Mapping[str, Any] | None = None
+    ) -> None:
+        """Freeze the case metadata and expectations the arbitration export needs.
+
+        Called twice per item: once right after the SDK stages (a ``validate``-only batch never
+        starts a run, but must still export intent and reference values) and once at metrics
+        collection time. ``case`` is the effective case: for a blocked case with a follow-up it
+        is the replacement request, so the export shows what was actually sent.
+        """
+        if case is None:
+            case = self._catalog.get(item.case_id)
+        if case is None:
+            return
+        expect = case.get("expect")
+        protocols = expect.get("protocols") if isinstance(expect, Mapping) else None
+        protocol_block = protocols.get(PROTOCOL_A2A_T) if isinstance(protocols, Mapping) else None
+        block = protocol_block if isinstance(protocol_block, Mapping) else {}
+        negotiation = block.get("negotiation")
+        negotiation_block = negotiation if isinstance(negotiation, Mapping) else {}
+        raw_intent = expect.get("intent") if isinstance(expect, Mapping) else None
+        item.refs = {
+            "caseName": str(case.get("name") or ""),
+            "operation": str(case.get("operation") or ""),
+            "designer": str(case.get("designer") or ""),
+            "qaId": f"TC{item.case_id:08d}",
+            "uid": str(case.get("uid") or ""),
+            "taskT": str(block.get("task_t") or ""),
+            "userInput": str(case.get("user_input") or ""),
+            "expectedIntent": (
+                {str(key): value for key, value in raw_intent.items()}
+                if isinstance(raw_intent, Mapping)
+                else {}
+            ),
+            "negotiationExpected": bool(negotiation_block.get("expected")),
+            "expectedRounds": int(negotiation_block.get("expected_rounds") or 0),
+            "expectedKinds": list(negotiation_block.get("kinds") or []),
+            "expectedFinalState": block.get("final_state"),
+        }
+        stage = item.stages.get("intent")
+        if stage is not None and isinstance(stage.actual, Mapping):
+            item.intent = {str(key): value for key, value in stage.actual.items()}
+        if not item.intent_meta.get("rawRequest"):
+            item.intent_meta["rawRequest"] = str(item.refs.get("userInput") or "")
+            item.intent_meta["normalizedText"] = item.intent_meta["rawRequest"]
+        if not item.intent_meta.get("source"):
+            item.intent_meta["source"] = "sdk" if item.intent is not None else ""
+
+    def _collect_run_evidence(
+        self,
+        item: CaseItem,
+        run: RunState,
+        case: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Collect the trace id, the operator request and the reference answer of one run."""
+        try:
+            item.trace_id = run.trace_id or run.run_id
+            self._collect_reference(item, case)
+            raw_request = run.raw_request or str(item.refs.get("userInput") or "")
+            item.intent_meta["rawRequest"] = raw_request
+            item.intent_meta["normalizedText"] = run.normalized_request or raw_request
+            # The exported intent is the SDK extraction from the Task-T, so its provenance is the
+            # SDK call, not the client ADK layer or the OSS server. Both of those also emit an
+            # ``intent_processed`` span, but that document is a different (business-slot) shape.
+            item.intent_meta["source"] = "sdk" if item.intent is not None else ""
+            traceparent, traceparent_source = read_traceparent(
+                self._history_dir.parent if self._history_dir is not None else None,
+                run.run_id,
+                trace_id=item.trace_id,
+            )
+            item.intent_meta["traceparentSource"] = traceparent_source
+            item.answer = build_answer(run, refs=item.refs, traceparent=traceparent)
+        except Exception:  # noqa: BLE001 - the export evidence must never fail the item
+            _LOGGER.warning("tester export evidence failed for run %s", run.run_id, exc_info=True)
+
     async def _ensure_prompt_client(self, model_mode: str | None = None) -> Any:
         """Return the SDK prompt client of one model mode (offline scripted by default)."""
         if self._prompt_client is not None:
@@ -1263,6 +1433,8 @@ class EvalBatchManager:
 
     def _item_status(self, item: CaseItem) -> str:
         statuses = [result.status for result in item.stages.values()]
+        if item.interception is not None:
+            statuses.extend(_interception_statuses(item.interception))
         if any(status == STAGE_ERROR for status in statuses):
             return CASE_ERROR
         if any(status == STAGE_FAILED for status in statuses):
@@ -1382,6 +1554,12 @@ class EvalBatchManager:
                 baseline=dict(item.get("baseline") or {}) if isinstance(item.get("baseline"), Mapping) else None,
                 scratch=item.get("scratch") if isinstance(item.get("scratch"), str) else None,
                 attempts=_load_attempts(item.get("attempts")),
+                trace_id=item.get("traceId") if isinstance(item.get("traceId"), str) else "",
+                intent=_optional_mapping(item.get("intent")),
+                intent_meta=_mapping_or_empty(item.get("intentMeta")),
+                refs=_mapping_or_empty(item.get("refs")),
+                answer=_optional_mapping(item.get("answer")),
+                interception=_optional_mapping(item.get("interception")),
             )
             for item in raw_items
             if isinstance(item, Mapping)
@@ -1559,6 +1737,18 @@ def _apply_assertion(
     return result
 
 
+def _interception_statuses(record: Mapping[str, object]) -> list[str]:
+    """Return the stage statuses of one interception record (empty when malformed)."""
+    stages = record.get("stages")
+    if not isinstance(stages, Mapping):
+        return []
+    return [
+        str(stage.get("status"))
+        for stage in stages.values()
+        if isinstance(stage, Mapping) and stage.get("status")
+    ]
+
+
 def _task_observation(run: RunState) -> dict[str, object]:
     """Return the Task identity/state the run last observed."""
     return {
@@ -1598,6 +1788,16 @@ def _load_attempts(raw: object) -> list[dict[str, object]]:
     if not isinstance(raw, list):
         return []
     return [dict(attempt) for attempt in raw if isinstance(attempt, Mapping)]
+
+
+def _optional_mapping(raw: object) -> dict[str, object] | None:
+    """Restore an optional JSON object persisted in a batch document."""
+    return _mapping_or_empty(raw) if isinstance(raw, Mapping) else None
+
+
+def _mapping_or_empty(raw: object) -> dict[str, object]:
+    """Restore a JSON object, empty when the batch predates the field."""
+    return {str(key): value for key, value in raw.items()} if isinstance(raw, Mapping) else {}
 
 
 def _validate_approval(approval: str | None) -> str | None:

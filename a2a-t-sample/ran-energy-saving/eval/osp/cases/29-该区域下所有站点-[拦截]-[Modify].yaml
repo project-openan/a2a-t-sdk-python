@@ -130,3 +130,6 @@ source:
   sheet: A2A-T_原始数据
   row: 30
 known_issue: null
+blocked_followup:
+  input: |-
+    The power outage will begin at 3:00 AM tomorrow and last for 3 hours. During the outage, the site NRES_XCS_6102937 within the A2ATestRegion area must maintain a throughput of 10 Mbps.

@@ -130,3 +130,6 @@ source:
   sheet: A2A-T_原始数据
   row: 44
 known_issue: null
+blocked_followup:
+  input: |-
+    Implement energy saving in the A2ATestRegion area and turn off the carrier frequencies 1600 during energy saving. The guaranteed rate targets for each time period are set as follows: 00:00-07:00 → 2 Mbps, 07:00-18:00 → 10 Mbps, 18:00-24:00 → 2 Mbps.

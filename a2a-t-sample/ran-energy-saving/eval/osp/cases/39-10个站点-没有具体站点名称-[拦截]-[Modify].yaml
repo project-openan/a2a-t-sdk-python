@@ -132,3 +132,6 @@ source:
   sheet: A2A-T_原始数据
   row: 40
 known_issue: null
+blocked_followup:
+  input: |-
+    Modify the energy-saving plan for LTE_26441_LNR_OCL、NRES_XCS_6102937 and LTE_26441_LNR_OCL in A2ATestRegion region. A power outage will occur from 00:00 to 04:00 tomorrow. Set the throughput rate guarantee to 10Mbps during the outage.

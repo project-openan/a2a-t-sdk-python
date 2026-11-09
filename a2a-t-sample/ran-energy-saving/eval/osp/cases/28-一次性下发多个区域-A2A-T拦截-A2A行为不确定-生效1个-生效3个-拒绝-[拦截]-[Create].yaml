@@ -129,3 +129,6 @@ source:
   row: 29
 known_issue: |-
   A2A-T 预期拦截（一次请求三个区域）；A2A 行为不确定（可能只生效 1 个、生效 3 个或拒绝）。
+blocked_followup:
+  input: |-
+    Enable energy saving in A2ATestRegion. The guaranteed rates in each time segment are as follows: 00:00-07:00: 2 Mbit/s; 07:00-18:00: 10 Mbit/s; 18:00-24:00: 2 Mbit/s.

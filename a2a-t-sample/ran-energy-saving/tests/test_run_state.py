@@ -30,6 +30,26 @@ def _run(tmp_path: Path) -> RunState:
     return run
 
 
+def test_the_run_started_frame_carries_the_trace_id(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    run.trace_id = "b" * 32
+
+    frame = run.emit_run_started(
+        description="d",
+        user_request="r",
+        language="en-US",
+        model_mode="offline",
+        model_label="",
+        expected_sequence=[],
+    )
+
+    assert frame["traceId"] == "b" * 32
+    started = next(span for span in run.traces if span["kind"] == "run_started")
+    detail = started["detail"]
+    assert isinstance(detail, dict)
+    assert detail["traceId"] == "b" * 32
+
+
 def _activity(status: str, *, activity_id: str = "act-1", **detail: object) -> dict[str, object]:
     """One wait-state detail as a producer publishes it."""
     return {

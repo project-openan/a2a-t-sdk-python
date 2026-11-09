@@ -134,3 +134,10 @@ source:
   sheet: A2A-T_原始数据
   row: 32
 known_issue: null
+blocked_followup:
+  input: |-
+    Implement energy-saving in A2ATestRegion region, set the guaranteed throughput as follows:
+    00:00~07:00→2Mbps
+    23:00~24:00→2Mbps
+    07:00~18:00→10Mbps
+    18:00~23:00→20Mbps

@@ -441,6 +441,7 @@ class RunState:
         seq, step = self.allocate(PHASE_DISPATCH)
         detail: dict[str, object] = {
             "scenario": self.scenario,
+            "traceId": self.trace_id,
             "chainId": self.chain_id,
             "parentRunId": self.parent_run_id or None,
             "description": description,

@@ -130,3 +130,6 @@ source:
   sheet: A2A-T_原始数据
   row: 26
 known_issue: null
+blocked_followup:
+  input: |-
+    There will be a power outage tomorrow from 08:00 to 13:00. During the outage, NRES_XCS_6102937 in the A2ATestRegion area need to maintain a throughput of 2 Mbps.

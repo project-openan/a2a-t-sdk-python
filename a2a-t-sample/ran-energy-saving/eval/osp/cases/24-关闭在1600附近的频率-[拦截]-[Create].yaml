@@ -128,3 +128,6 @@ source:
   sheet: A2A-T_原始数据
   row: 25
 known_issue: null
+blocked_followup:
+  input: |-
+    Implement energy-saving in A2ATestRegion region. Carrier frequency 1600 and 1550 can be turned off. Set the guaranteed throughput targets: 00:00-08:00→2Mbps, 08:00-24:00→10Mbps.

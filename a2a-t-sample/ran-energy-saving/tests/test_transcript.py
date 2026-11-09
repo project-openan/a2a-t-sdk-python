@@ -83,6 +83,19 @@ def _transcript() -> NegotiationTranscript:
     )
 
 
+def test_the_transcript_carries_the_run_trace_id() -> None:
+    transcript = NegotiationTranscript(
+        scenario="information",
+        language="en-US",
+        model_mode="offline",
+        mode="auto",
+        transport="sse",
+        trace_id="b" * 32,
+    )
+
+    assert transcript.to_dict()["traceId"] == "b" * 32
+
+
 def test_record_event_extracts_round_performative_and_kind() -> None:
     transcript = _transcript()
 

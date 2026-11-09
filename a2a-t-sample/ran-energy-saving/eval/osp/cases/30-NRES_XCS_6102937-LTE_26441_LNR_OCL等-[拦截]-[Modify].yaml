@@ -131,3 +131,6 @@ source:
   sheet: A2A-T_原始数据
   row: 31
 known_issue: null
+blocked_followup:
+  input: |-
+    The power outage will start at 3:00 a.m. tomorrow and last for 3 hours. During the outage, NRES_XCS_6102937、LTE_26441_LNR_OCL and LNR_KPI_7745 within the A2A test area must maintain a throughput of 10 Mbps.

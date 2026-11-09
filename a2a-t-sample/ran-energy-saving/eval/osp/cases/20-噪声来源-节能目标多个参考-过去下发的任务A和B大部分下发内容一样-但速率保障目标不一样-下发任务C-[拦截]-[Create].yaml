@@ -137,3 +137,6 @@ source:
   row: 21
 known_issue: |-
   A2A 预期识别出错；A2A-T 预期触发拦截。user_input 用“the previous task”指代两个内容不同（5Mbps / 2Mbps）的历史任务，无法确定引用哪一个。
+blocked_followup:
+  input: |-
+    Implement energy-saving in NR cells within the A2ATestRegion area, and set the guaranteed throughput targets for each time period as follows: 00:00–06:00→2Mbps.

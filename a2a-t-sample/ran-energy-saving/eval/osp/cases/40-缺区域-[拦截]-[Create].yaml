@@ -128,3 +128,10 @@ source:
   row: 41
 known_issue: |-
   H/J 与 I 冲突：user_input 未提区域，但 J（预期意图）和 H（转换输入）填了 A2ATestRegion；A2A 的 P 列以“用户答复：The region is A2ATestRegion.”补了区域。待业务确认这是数据污染还是“先拦截、再补区域”的两段流程；确认前 intent 与 task_t 仅记录，不参与判定。
+blocked_followup:
+  input: |-
+    Implement energy-saving in A2ATestRegion and set the guaranteed throughput targets: 00:00-08:00→2Mbps, 08:00-24:00→10Mbps.
+  assert:
+    intent: true
+    a2a-t:
+      task_t: true

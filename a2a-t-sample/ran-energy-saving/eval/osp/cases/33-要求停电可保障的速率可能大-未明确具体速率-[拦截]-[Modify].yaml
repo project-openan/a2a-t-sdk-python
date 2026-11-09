@@ -131,3 +131,6 @@ source:
   sheet: A2A-T_原始数据
   row: 34
 known_issue: null
+blocked_followup:
+  input: |-
+    Due to a power outage at LNR_KPI_7745 and NES_27A_321071 in A2ATestRegion from 08:00 to 12:00 on the 2nd, the throughput requirements for LNR_KPI_7745 and NES_27A_321071 need to be adjusted to 10 Mbps.

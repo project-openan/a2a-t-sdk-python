@@ -621,6 +621,7 @@ class RunManager:
             model_mode=self._config.model_mode,
             mode=record.mode,
             transport=record.transport,
+            trace_id=run.trace_id,
             runs_dir=self._runs_dir or DEFAULT_RUNS_DIR,
             source=dict(record.source),
         )
@@ -823,6 +824,7 @@ class RunManager:
             model_mode=self._config.model_mode,
             mode=mode,
             transport=transport,
+            trace_id=run.trace_id,
             runs_dir=self._runs_dir or DEFAULT_RUNS_DIR,
             source=dict(resolved_source),
             run_mode=run_mode,

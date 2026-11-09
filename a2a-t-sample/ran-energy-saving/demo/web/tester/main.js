@@ -403,6 +403,14 @@ function stageChips(item, stopAfter) {
   const wrap = el("span", "stage-chips");
   const limit = STAGE_ORDER.indexOf(stopAfter || "final");
   const pure = item.protocol === "a2a";
+  const interception = item.interception;
+  if (interception?.stages) {
+    const validate = interception.stages.validate;
+    const status = validate?.status || "recorded";
+    const chip = el("span", `stage-chip ${status}`, "拦截");
+    chip.title = `A2A-T 拦截：${statusLabel(status)}${validate?.message ? ` · ${validate.message}` : ""}`;
+    wrap.append(chip);
+  }
   for (const stage of STAGE_ORDER) {
     if (pure && SDK_STAGES.has(stage)) continue;
     if (limit >= 0 && STAGE_ORDER.indexOf(stage) > limit) continue;
@@ -431,7 +439,9 @@ function tokenText(tokens) {
 
 function resultText(item) {
   if (item.error) return item.error;
-  const failed = Object.entries(item.stages || {}).filter(([, stage]) => stage.status === "failed");
+  const blocked = Object.entries(item.interception?.stages || {}).map(([stage, value]) => [`拦截/${stage}`, value]);
+  const all = [...Object.entries(item.stages || {}), ...blocked];
+  const failed = all.filter(([, stage]) => stage.status === "failed");
   if (failed.length) {
     return failed.map(([stage, value]) => `${stage}: ${value.message || "不匹配"}`).join("；");
   }
@@ -528,48 +538,64 @@ function textBlock(value) {
   return JSON.stringify(value, null, 2);
 }
 
+function appendStageBlock(body, label, result) {
+  const block = el("section", "diff-block");
+  const head = el("div", "diff-head");
+  head.append(el("strong", "", label), badge(result.status), el("span", "summary", result.message || ""));
+  block.append(head);
+  if (result.expected !== undefined || result.actual !== undefined) {
+    const summary = el("div", "diff-summary");
+    summary.append(
+      el("div", "", `预期：${textBlock(result.expected)}`),
+      el("div", "", `实际：${textBlock(result.actual)}`),
+    );
+    block.append(summary);
+  }
+  const diffs = Array.isArray(result.diffs) ? result.diffs : [];
+  if (diffs.length) {
+    const table = el("table", "grid diff-table");
+    const thead = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    for (const title of ["字段", "预期", "实际", "说明"]) headRow.append(el("th", "", title));
+    thead.append(headRow);
+    const tbody = document.createElement("tbody");
+    for (const diff of diffs) {
+      const row = document.createElement("tr");
+      row.append(
+        el("td", "mono", diff.path || ""),
+        el("td", "mono pre", textBlock(diff.expected)),
+        el("td", "mono pre", textBlock(diff.actual)),
+        el("td", "", diff.reason || ""),
+      );
+      tbody.append(row);
+    }
+    table.append(thead, tbody);
+    block.append(table);
+  }
+  body.append(block);
+}
+
 function renderResultTab(item, body) {
   const stages = item.stages || {};
   if (!Object.keys(stages).length) {
     body.append(el("p", "status-line", "该运行项还没有阶段结果。"));
   }
+  const interception = item.interception;
+  if (interception?.stages) {
+    const block = el("section", "diff-block");
+    block.append(el("strong", "", "A2A-T 拦截（原请求）"));
+    block.append(el("p", "summary", `补充请求：${interception.followupInput || "—"}`));
+    block.append(el("pre", "mono pre", interception.input || "—"));
+    body.append(block);
+    for (const stage of STAGE_ORDER) {
+      const result = interception.stages[stage];
+      if (result) appendStageBlock(body, `拦截/${STAGE_LABELS[stage] || stage}`, result);
+    }
+  }
   for (const stage of STAGE_ORDER) {
     const result = stages[stage];
     if (!result) continue;
-    const block = el("section", "diff-block");
-    const head = el("div", "diff-head");
-    head.append(el("strong", "", STAGE_LABELS[stage] || stage), badge(result.status), el("span", "summary", result.message || ""));
-    block.append(head);
-    if (result.expected !== undefined || result.actual !== undefined) {
-      const summary = el("div", "diff-summary");
-      summary.append(
-        el("div", "", `预期：${textBlock(result.expected)}`),
-        el("div", "", `实际：${textBlock(result.actual)}`),
-      );
-      block.append(summary);
-    }
-    const diffs = Array.isArray(result.diffs) ? result.diffs : [];
-    if (diffs.length) {
-      const table = el("table", "grid diff-table");
-      const thead = document.createElement("thead");
-      const headRow = document.createElement("tr");
-      for (const title of ["字段", "预期", "实际", "说明"]) headRow.append(el("th", "", title));
-      thead.append(headRow);
-      const tbody = document.createElement("tbody");
-      for (const diff of diffs) {
-        const row = document.createElement("tr");
-        row.append(
-          el("td", "mono", diff.path || ""),
-          el("td", "mono pre", textBlock(diff.expected)),
-          el("td", "mono pre", textBlock(diff.actual)),
-          el("td", "", diff.reason || ""),
-        );
-        tbody.append(row);
-      }
-      table.append(thead, tbody);
-      block.append(table);
-    }
-    body.append(block);
+    appendStageBlock(body, STAGE_LABELS[stage] || stage, result);
   }
   const attempts = Array.isArray(item.attempts) ? item.attempts : [];
   if (attempts.length) {
