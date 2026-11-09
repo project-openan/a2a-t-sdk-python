@@ -33,7 +33,7 @@
       "examples": [
         "能耗目标：30%"
       ],
-      "x-a2at-value-constraint": "1. 量化目标：节能增益目标，为单个百分比（如30%）。区间（如“20%-30%”）上报 slot.constraint_violated。 2. 定性目标：在任务上下文条件下最大化节能。模式必须是下列之一：激进、保守、体验无损、体验有损（同义词见下方[terminology]术语段）；其它值（如“green”）上报 slot.constraint_violated。带数值的吐吐/速率/用户体验目标是速率保障目标，不是模式，不应判为模式越界。"
+      "x-a2at-value-constraint": "1. 量化目标：节能增益目标，为单个百分比（如30%）。区间（如“20%-30%”）上报 slot.constraint_violated。 2. 定性目标：在任务上下文条件下最大化节能。模式必须是下列之一：激进、保守、体验无损、体验有损（同义词见下方[terminology]术语段）；其它值（如“green”）上报 slot.constraint_violated。带数值的吞吐/速率/用户体验目标是速率保障目标，不是模式，不应判为模式越界。"
     },
     "任务上下文": {
       "type": "string",
