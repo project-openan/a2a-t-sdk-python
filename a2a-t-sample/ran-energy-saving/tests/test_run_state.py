@@ -6,6 +6,11 @@ import asyncio
 import threading
 from pathlib import Path
 
+from a2a_t.core.metadata import (
+    NEGOTIATION_CONTEXT_METADATA_KEY,
+    NEGOTIATION_T_EXTENSION_URI,
+    TEMPLATE_URI_METADATA_KEY,
+)
 from protocol.client_service.run_state import RunState
 from protocol.transcript import NegotiationTranscript
 from shared.models import NegotiationDecision
@@ -52,6 +57,25 @@ def _waiting_event() -> dict[str, object]:
                 "downstreamTaskId": "nms-task",
                 "downstreamContextId": "nms-ctx",
                 "downstreamHop": "nms",
+            },
+        },
+    }
+
+
+def _propose_event() -> dict[str, object]:
+    """One inbound Negotiation-T proposal as a transport normalizes it."""
+    return {
+        "kind": "message",
+        "text": "Please provide the following missing items: region.",
+        "context_id": "ctx-propose",
+        "metadata": {
+            NEGOTIATION_T_EXTENSION_URI: "Please provide the following missing items: region.",
+            TEMPLATE_URI_METADATA_KEY: "Negotiation-T/information-negotiation/propose/v1",
+            NEGOTIATION_CONTEXT_METADATA_KEY: {
+                "id": "ctx-propose",
+                "round": 2,
+                "maxRounds": 3,
+                "performative": "PROPOSE",
             },
         },
     }
@@ -171,6 +195,24 @@ def test_a_webhook_event_carries_the_run_trace_id(tmp_path: Path) -> None:
     spans = [span for span in run.traces if span.get("kind") == "status"]
     assert spans
     assert spans[-1]["traceId"] == run.trace_id
+
+
+def test_a_proposal_is_traced_as_a_propose_span_with_its_kind_and_round(tmp_path: Path) -> None:
+    """AJ: every inbound proposal carries a client-side "negotiation started" timestamp."""
+    run = _run(tmp_path)
+
+    run.record_event(_propose_event())
+
+    spans = [span for span in run.traces if span.get("kind") == "propose"]
+    assert len(spans) == 1
+    span = spans[0]
+    assert span["round"] == 2
+    assert span["contextId"] == "ctx-propose"
+    detail = span["detail"]
+    assert isinstance(detail, dict)
+    assert detail["negotiationType"] == "information"
+    assert detail["templateUri"] == "Negotiation-T/information-negotiation/propose/v1"
+    assert detail["content"] == "Please provide the following missing items: region."
 
 
 def test_record_event_keeps_the_downstream_identity_beside_the_run_identity(tmp_path: Path) -> None:
@@ -328,3 +370,17 @@ def test_the_decision_span_starts_at_the_engineer_answer(tmp_path: Path) -> None
     assert decision["startedAt"] == answered_at
     assert decision["durationMs"] >= 0
     assert run._decision_answered_at is None
+
+
+def test_task_created_span_reuses_the_identity_learned_from_a_poll(tmp_path: Path) -> None:
+    """A bare SUBMITTED status may omit taskId; the transcript row must still name the Task."""
+    run = _run(tmp_path)
+    run.record_polled_task_state(
+        task_id="task-9", context_id="ctx-9", state="TASK_STATE_WORKING"
+    )
+
+    run.record_event({"kind": "status", "state": "TASK_STATE_SUBMITTED"})
+
+    created = [span for span in run.traces if span.get("kind") == "task_created"]
+    assert created[-1]["taskId"] == "task-9"
+    assert created[-1]["contextId"] == "ctx-9"

@@ -34,12 +34,13 @@ class _PassRuntime:
         on_intent_ready: Callable[[str], Awaitable[bool]] | None = None,
         validate_before_send: bool = False,
         enforce_required_fields: bool = False,
+        require_rate_target: bool = True,
         run_mode: str = "create",
         target_task_id: str | None = None,
         target_context_id: str | None = None,
     ) -> ClientFlowResult:
         del trace_sink, activity_sink, run_id, user_request, conversation_context
-        del validate_before_send, enforce_required_fields
+        del validate_before_send, enforce_required_fields, require_rate_target
         del run_mode, target_task_id, target_context_id
         del on_decision_requested, on_decision_made, on_intent_ready
         if event_sink is not None:

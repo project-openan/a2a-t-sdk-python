@@ -328,6 +328,8 @@ def _missing_required_fields(
     data: Mapping[str, object],
     schema: Mapping[str, object],
     language: str,
+    *,
+    require_rate_target: bool = True,
 ) -> list[dict[str, object]]:
     """Return the caller-schema required fields the OSS agent must ask the operator to supply.
 
@@ -353,7 +355,7 @@ def _missing_required_fields(
     for name in required:
         if not isinstance(name, str):
             continue
-        if name == "guaranteedThroughputTarget" and not site_level:
+        if name == "guaranteedThroughputTarget" and not site_level and not require_rate_target:
             continue
         value = data.get(name)
         if value is not None and not (isinstance(value, str) and not value.strip()):
@@ -414,6 +416,7 @@ async def _validate_task_prompt(
     *,
     language: str,
     enforce_required_fields: bool = True,
+    require_rate_target: bool = True,
 ) -> TaskValidation:
     """Run the SDK content validation without blocking the event loop.
 
@@ -440,7 +443,9 @@ async def _validate_task_prompt(
                 continue
             params = error.params if isinstance(error.params, Mapping) else {}
             if enforce_required_fields and _validation_names_a_missing_required(error, schema):
-                missing = _missing_required_fields(params, schema, language)
+                missing = _missing_required_fields(
+                    params, schema, language, require_rate_target=require_rate_target
+                )
                 if missing:
                     return TaskValidation(
                         "blocked",
@@ -468,7 +473,9 @@ async def _validate_task_prompt(
         extracted = getattr(filled, "data", filled)
         data = dict(extracted) if isinstance(extracted, Mapping) else {}
         if enforce_required_fields:
-            missing = _missing_required_fields(data, schema, language)
+            missing = _missing_required_fields(
+                data, schema, language, require_rate_target=require_rate_target
+            )
             if missing:
                 # The OSS agent owns the business-required fields: do not send an incomplete Task-T
                 # and rely on the network's negotiation for a value the operator can supply here.
@@ -855,6 +862,7 @@ async def run_client_flow(
     tools_authoritative: bool = False,
     validate_before_send: bool = False,
     enforce_required_fields: bool = False,
+    require_rate_target: bool = True,
     run_mode: str = RUN_MODE_CREATE,
     target_task_id: str | None = None,
     target_context_id: str | None = None,
@@ -1156,6 +1164,7 @@ async def run_client_flow(
             task_template_uri,
             language=language,
             enforce_required_fields=enforce_required_fields,
+            require_rate_target=require_rate_target,
         )
         initial_filled = _merge_initial_filled(validation, intent_fields)
         if enforce_required_fields and validation.verdict == "unavailable":
@@ -1163,7 +1172,12 @@ async def run_client_flow(
             # response). Keep the real validator reason: reporting "field is empty" would blame
             # the operator for a validator failure. The missing caller-required values stay in the
             # error list as secondary context, and the gate still blocks.
-            missing = _missing_required_fields(initial_filled, validation_schema, language)
+            missing = _missing_required_fields(
+                initial_filled,
+                validation_schema,
+                language,
+                require_rate_target=require_rate_target,
+            )
             if missing:
                 required_unknown = True
                 validation = TaskValidation(

@@ -209,3 +209,20 @@ def test_reask_text_names_the_fields_and_server_options() -> None:
     assert "region=OtherRegion" in text
     assert "Server options for region: A2ATestRegion." in text
     assert "do not accept" in text
+
+
+def test_a_prose_feasibility_target_grounds_the_accepted_segment() -> None:
+    """A feasibility proposal states its revised rate in prose, not in segment notation."""
+    propose = _propose("Reduce the throughput target from 10Mbps to 2Mbps for the outage period.")
+    filled = {**_BASELINE, "guaranteedThroughputTarget": "{08:00~18:00,2Mbps}"}
+
+    ungrounded = find_ungrounded(
+        filled,
+        baseline=_BASELINE,
+        intent=_BASELINE,
+        propose=propose,
+        tool_calls=(),
+        tools_authoritative=False,
+    )
+
+    assert ungrounded == []

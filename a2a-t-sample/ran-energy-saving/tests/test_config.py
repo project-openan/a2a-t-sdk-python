@@ -1123,6 +1123,8 @@ def test_the_sdk_env_mounts_the_sample_slot_overlay(offline_config: SampleConfig
         assert Path(str(values["A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR"])) == SAMPLE_PROMPT_RESOURCES
         slot = SAMPLE_PROMPT_RESOURCES / "slots/Task-T/network-layer/ran-energy-saving/v1/en-US/slot.json"
         assert slot.is_file()
-        assert "belongs in the task_context rate guarantee goal" in slot.read_text(encoding="utf-8")
+        text = slot.read_text(encoding="utf-8")
+        assert "Only an explicit energy saving gain target belongs in this slot" in text
+        assert "Preserve the operator's own wording for rate, UX and qualitative goals" in text
     finally:
         shutil.rmtree(sdk_env.directory)

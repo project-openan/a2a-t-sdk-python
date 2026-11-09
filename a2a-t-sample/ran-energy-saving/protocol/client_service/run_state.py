@@ -724,8 +724,10 @@ class RunState:
             actor="client",
             side="client",
             direction="internal",
-            context_id=_string_value(event.get("context_id")),
-            task_id=_string_value(event.get("task_id")),
+            context_id=_string_value(event.get("context_id")) or self.remote_context_id,
+            # A bare SUBMITTED status may omit taskId; the identity learned from the Task event
+            # is still the authoritative one and makes the transcript row actionable.
+            task_id=_string_value(event.get("task_id")) or self.remote_task_id,
             detail={"operation": operation, "state": TASK_STATE_SUBMITTED, "source": "a2a-status"},
         )
         self._task_created_emitted = True

@@ -84,11 +84,14 @@ _AFFIRMATIVE_MARKERS: Final[tuple[str, ...]] = (
     "替代",
 )
 
-#: One ``{HH:MM~HH:MM,NMbps}`` target segment.
+#: One ``{HH:MM~HH:MM,NMbps}`` target segment (the workbook also uses a hyphen separator).
 _TARGET_SEGMENT: Final[re.Pattern[str]] = re.compile(
-    r"\{\s*\d{1,2}:\d{2}\s*~\s*\d{1,2}:\d{2}\s*,\s*\d+(?:\.\d+)?\s*Mbps\s*\}",
+    r"\{\s*\d{1,2}:\d{2}\s*[-~–]\s*\d{1,2}:\d{2}\s*,\s*\d+(?:\.\d+)?\s*Mbps\s*\}",
     re.IGNORECASE,
 )
+
+#: A plain rate in affirmative proposal prose ("reduce the target from 10Mbps to 2Mbps").
+_RATE_VALUE: Final[re.Pattern[str]] = re.compile(r"\d+(?:\.\d+)?\s*Mbps", re.IGNORECASE)
 
 #: One served-area value following a label in affirmative prose.
 _AREA_VALUE_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
@@ -179,6 +182,21 @@ def _server_target_segments(propose: NegotiationProposeView) -> set[str]:
     return segments
 
 
+def _server_target_rates(propose: NegotiationProposeView) -> set[str]:
+    """Return the plain Mbps rates an affirmative proposal sentence offers.
+
+    A feasibility proposal often states its revised target in prose
+    ("reduce the throughput target from 10Mbps to 2Mbps for the outage period") without the
+    ``{HH:MM~HH:MM,NMbps}`` notation. The accepted value is still grounded by that sentence.
+    """
+    rates: set[str] = set()
+    for sentence in _sentences(propose.content):
+        if _negated(sentence) and not _affirmative(sentence):
+            continue
+        rates.update(normalize(match.group(0)) for match in _RATE_VALUE.finditer(sentence))
+    return rates
+
+
 def _server_contains(propose: NegotiationProposeView, value: object) -> bool:
     """Return whether an affirmative proposal sentence contains the value."""
     wanted = normalize(value)
@@ -261,6 +279,14 @@ def find_ungrounded(
                 continue
             missing = [item for item in value_segments if item not in segments]
             if not missing:
+                continue
+            value_rates = {
+                normalize(match.group(0))
+                for item in value_segments
+                for match in _RATE_VALUE.finditer(item)
+            }
+            if value_rates and value_rates <= _server_target_rates(propose):
+                # The proposal offered the same rate in prose; the segment notation differs.
                 continue
             ungrounded.append(
                 UngroundedValue(name, str(value), "target segments are not offered by the server")

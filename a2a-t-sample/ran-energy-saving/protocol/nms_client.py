@@ -894,10 +894,14 @@ class NmsWebhookTransport:
             # Register the webhook only on the message that creates the Task. A Modify send
             # continues an existing Task whose registration is still in force, and the vendor
             # answers a second registration for that Task with "config already exists".
-            config = TaskPushNotificationConfig(id=str(uuid.uuid4()), url=self._push_url, token=self._push_token)
+            config = TaskPushNotificationConfig(id=str(uuid.uuid4()), url=self._push_url)
             if self._push_auth_credentials:
+                # The vendor uses Basic authentication for the callback. Sending the SDK token as
+                # well is noise the NMS may ignore (or reject); keep the two modes exclusive.
                 config.authentication.scheme = "Basic"
                 config.authentication.credentials = self._push_auth_credentials
+            elif self._push_token:
+                config.token = self._push_token
             request.configuration.task_push_notification_config.CopyFrom(config)
         extension_header = ""
         if self._protocol == PROTOCOL_A2A_T:

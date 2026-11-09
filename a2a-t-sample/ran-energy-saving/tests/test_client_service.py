@@ -72,12 +72,13 @@ class FakeRuntime:
         conversation_context: str | None = None,
         validate_before_send: bool = False,
         enforce_required_fields: bool = False,
+        require_rate_target: bool = True,
         run_mode: str = "create",
         target_task_id: str | None = None,
         target_context_id: str | None = None,
     ) -> ClientFlowResult:
         del on_intent_ready, trace_sink, activity_sink, run_id, validate_before_send, enforce_required_fields
-        del run_mode, target_task_id, target_context_id
+        del require_rate_target, run_mode, target_task_id, target_context_id
         # Observed from inside the run task: a binding placed outside ``create_task`` is gone here.
         self.trace_id = current_trace_id()
         self.downstream_trace_id = current_downstream_trace_id()

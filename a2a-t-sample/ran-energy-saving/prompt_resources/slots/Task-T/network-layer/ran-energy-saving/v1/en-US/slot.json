@@ -25,7 +25,7 @@
       "examples": [
         "The area is ExampleRegion."
       ],
-      "x-a2at-value-constraint": "Area name. A named region (a specific region name such as \"ExampleRegion\" or \"Slice A\") is valid. The served test region is sometimes called \"A2A test area\"; write \"A2ATestRegion\" for it. Only anonymous vague descriptions that carry no concrete region name, such as \"test area\", \"sites in this area\", \"all communities\", \"indoor communities\", or \"outdoor communities\", must report slot.not_provided with slot_label 'Area' and actual describing what is missing. Only one region name is allowed; if the input specifies multiple regions, report slot.constraint_violated."
+      "x-a2at-value-constraint": "Area name. A named region (a specific region name such as \"ExampleRegion\" or \"Slice A\") is valid. Only anonymous vague descriptions that carry no concrete region name, such as \"test area\", \"sites in this area\", \"all communities\", \"indoor communities\", or \"outdoor communities\", must report slot.not_provided with slot_label 'Area' and actual describing what is missing. Only one region name is allowed; if the input specifies multiple regions, report slot.constraint_violated."
     },
     "task_target": {
       "type": "string",

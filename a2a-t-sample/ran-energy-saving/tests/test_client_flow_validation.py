@@ -159,6 +159,7 @@ async def _run(
     trace_sink: list[dict[str, object]],
     validate: bool = True,
     enforce_required_fields: bool = False,
+    require_rate_target: bool = True,
 ):
     return await run_client_flow(
         prompt_client=prompt_client,
@@ -171,6 +172,7 @@ async def _run(
         single_extension_per_message=False,
         validate_before_send=validate,
         enforce_required_fields=enforce_required_fields,
+        require_rate_target=require_rate_target,
     )
 
 
@@ -303,6 +305,7 @@ async def test_an_area_level_request_may_omit_the_rate_target() -> None:
         transport=transport,
         trace_sink=traces,
         enforce_required_fields=True,
+        require_rate_target=False,
     )
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED

@@ -998,6 +998,8 @@ async def test_webhook_transport_registers_the_push_config_the_vendor_accepts() 
     config = client.payload["configuration"]["taskPushNotificationConfig"]  # ty: ignore[index]
     assert config["id"] and len(config["id"]) <= 36
     assert config["authentication"] == {"scheme": "Basic", "credentials": "north:secret"}
+    # Basic credentials are the authentication channel; the SDK token would be noise.
+    assert "token" not in config
 
 
 async def test_traceparent_carries_the_run_id_as_the_w3c_trace_id() -> None:
