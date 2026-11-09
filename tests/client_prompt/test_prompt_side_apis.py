@@ -402,6 +402,92 @@ def test_required_slot_missing_fails_with_not_provided_and_slot_label() -> None:
     assert failed[0].facts == {"slot_label": "Site name"}
 
 
+def _constrained_orchestrator(
+    *,
+    slot_name: str,
+    constraints: dict[str, object],
+    slot_value: str,
+    slot_type: str = "string",
+) -> PromptGenerationOrchestrator:
+    schema: dict[str, object] = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "site": {"type": "string", "description": "Site name"},
+            slot_name: {"type": slot_type, "description": "Constrained slot", **constraints},
+        },
+        "required": ["site"],
+    }
+    access = FakePromptResourceAccess(
+        template_text="Site: {site}",
+        slot_json_schema=schema,
+        system_prompt="Extract slots.",
+        user_prompt="Return slots.",
+    )
+    extraction = SlotExtractionResult(slots={"site": "Site A", slot_name: slot_value}, slot_errors=[])
+    return _build_orchestrator(
+        slot_extractor=RecordingSlotExtractor(extraction),
+        resource_access=access,
+    )
+
+
+def test_enum_slot_violation_fails_with_constraint_violated() -> None:
+    orchestrator = _constrained_orchestrator(
+        slot_name="incident_level",
+        constraints={"enum": ["critical", "major"]},
+        slot_value="warning",
+    )
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert exc_info.value.code_str == "slot.constraint_violated"
+    failed = exc_info.value.failed_parameters
+    assert [error.slot_name for error in failed] == ["incident_level"]
+    assert failed[0].facts == {"slot_label": "Constrained slot", "actual": "warning"}
+
+
+def test_pattern_slot_violation_fails_with_constraint_violated() -> None:
+    orchestrator = _constrained_orchestrator(
+        slot_name="site_code",
+        constraints={"pattern": "^[A-Z][a-z]+$"},
+        slot_value="site-a",
+    )
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert exc_info.value.code_str == "slot.constraint_violated"
+    assert [error.slot_name for error in exc_info.value.failed_parameters] == ["site_code"]
+
+
+def test_numeric_range_slot_violation_fails_with_constraint_violated() -> None:
+    orchestrator = _constrained_orchestrator(
+        slot_name="priority",
+        constraints={"minimum": 1, "maximum": 5},
+        slot_value="9",
+        slot_type="integer",
+    )
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert exc_info.value.code_str == "slot.constraint_violated"
+    assert [error.slot_name for error in exc_info.value.failed_parameters] == ["priority"]
+
+
+def test_valid_constrained_slots_pass() -> None:
+    orchestrator = _constrained_orchestrator(
+        slot_name="incident_level",
+        constraints={"enum": ["critical", "major"]},
+        slot_value="critical",
+    )
+
+    content = orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert content.prompt_text == "Site: Site A"
+
+
 def test_render_failure_surfaces_render_failed_with_template_uri_fact() -> None:
     class RaisingRenderer:
         def render(self, **kwargs: Any) -> str:

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Mapping
 from typing import Any
 
 from a2a_t.common.prompt_resources import PromptResourceAccess
-from a2a_t.common.prompt_resources.models import PromptMessages, SlotSchema, slot_schema_from_json_schema
+from a2a_t.common.prompt_resources.models import (
+    PromptMessages,
+    SlotDefinition,
+    SlotSchema,
+    slot_schema_from_json_schema,
+)
 from a2a_t.config.models import PromptRuntimeConfig
 from a2a_t.core.errors.catalog import ErrorCatalog, by_code
 from a2a_t.core.errors.exceptions import (
@@ -438,7 +444,7 @@ class PromptGenerationOrchestrator:
         if extraction_errors:
             raise self._slot_errors_exception(extraction_errors)
         slots = extraction_result.slots
-        self._validate_required_slots(slots, template_identifier, language)
+        self._validate_slot_constraints(slots, template_identifier, language)
 
         rendered_prompt_text, render_failure_reason = self._render_prompt_text(
             template_text=template_text,
@@ -580,16 +586,20 @@ class PromptGenerationOrchestrator:
             facts=facts,
         )
 
-    def _validate_required_slots(
+    def _validate_slot_constraints(
         self,
         slots: Mapping[str, str | None] | None,
         template_identifier: str,
         language: str,
     ) -> None:
-        """Fail with ``slot.not_provided`` when a schema-required slot is blank (Java parity).
+        """Fail with ``slot.*`` when a machine-readable schema constraint is violated.
 
         The slot schema is resolved through the same access seam as the extraction step; a miss
-        surfaces as ``slot.schema_not_found`` before the required-slot inspection runs.
+        surfaces as ``slot.schema_not_found`` before the inspection runs. A blank required slot is
+        ``slot.not_provided``. A filled slot that violates the schema's ``enum``, ``pattern`` or
+        numeric ``minimum``/``maximum`` is ``slot.constraint_violated``: the extraction model does
+        not own that decision, so a model that reports no error cannot silently emit an invalid
+        value.
         """
         try:
             slot_json_schema = self._resource_access.slot_schema(template_identifier, language)
@@ -602,14 +612,24 @@ class PromptGenerationOrchestrator:
         effective_slots: Mapping[str, str | None] = slots if slots is not None else {}
         failed: list[SlotValidationError] = []
         for definition in slot_schema.slots:
-            if definition is None or not definition.required:
+            if definition is None:
                 continue
             name = definition.name
             if name is None:
                 continue
             value = effective_slots.get(name)
             if value is None or not str(value).strip():
-                failed.append(self._not_provided_error(name, self._slot_label(definition), language))
+                if definition.required:
+                    failed.append(
+                        self._not_provided_error(name, self._slot_label(definition), language)
+                    )
+                continue
+            if _slot_constraint_reason(definition, str(value)) is not None:
+                failed.append(
+                    self._constraint_violated_error(
+                        name, self._slot_label(definition), str(value), language
+                    )
+                )
         if failed:
             raise self._slot_errors_exception(failed)
 
@@ -620,6 +640,22 @@ class PromptGenerationOrchestrator:
             slot_name=slot_name,
             code=ErrorCatalog.SLOT_NOT_PROVIDED.value,
             message=render_error_message(ErrorCatalog.SLOT_NOT_PROVIDED, facts, language),
+            facts=facts,
+        )
+
+    def _constraint_violated_error(
+        self,
+        slot_name: str,
+        slot_label: str,
+        actual: str,
+        language: str,
+    ) -> SlotValidationError:
+        """Build the ``slot.constraint_violated`` error of one filled-but-invalid slot."""
+        facts = {"slot_label": slot_label, "actual": actual}
+        return SlotValidationError(
+            slot_name=slot_name,
+            code=ErrorCatalog.SLOT_CONSTRAINT_VIOLATED.value,
+            message=render_error_message(ErrorCatalog.SLOT_CONSTRAINT_VIOLATED, facts, language),
             facts=facts,
         )
 
@@ -930,3 +966,33 @@ def _stringify_user_input(user_input: object) -> str:
     if isinstance(user_input, Mapping):
         return str(dict(user_input))
     return str(user_input)
+
+
+def _slot_constraint_reason(definition: SlotDefinition, value: str) -> str | None:
+    """Return the violated machine-readable constraint of one slot, or ``None``.
+
+    The slot JSON Schema already carries ``enum`` (or the ``x-a2at-allowed-values`` alias),
+    ``pattern`` and numeric ``minimum``/``maximum``; the model projection keeps them but the
+    generation pipeline used to enforce only ``required``. A malformed authoring pattern is not a
+    slot error, so it is ignored rather than turning a schema mistake into a user-facing block.
+    """
+    if definition.allowed_values is not None:
+        allowed = {str(item) for item in definition.allowed_values}
+        if value not in allowed:
+            return "allowed_values"
+    if definition.pattern is not None:
+        try:
+            if re.search(definition.pattern, value) is None:
+                return "pattern"
+        except re.error:
+            return None
+    if definition.range is not None:
+        try:
+            number = float(value)
+        except ValueError:
+            return "range" if definition.type in {"integer", "number"} else None
+        if definition.range.min is not None and number < definition.range.min:
+            return "range"
+        if definition.range.max is not None and number > definition.range.max:
+            return "range"
+    return None
