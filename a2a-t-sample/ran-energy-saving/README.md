@@ -383,9 +383,10 @@ uses the shared `chainId`.
 
 The launcher prints `/observe`, an internal, Chinese-only page for the development and test team.
 Paste one Langfuse trace id per line (a run's `traceId` equals its run id while export is on, so it
-can be copied from `/runs`) or pick a recent run from the candidate list; the server fetches each
-trace and derives the A2A / A2A-T metrics with the vendored `langfuse_export` package
-(`langfuse_export/`, upstream `langfuse-export` 0.4.3).
+can be copied from `/runs`) or pick a recent run from the candidate list. A single id is looked up
+with **查询**; two or more use **批量导出** (the batch mode and its `table.xlsx` are the export
+path). The server fetches each trace and derives the A2A / A2A-T metrics with the vendored
+`langfuse_export` package (`langfuse_export/`, upstream `langfuse-export` 0.4.3).
 
 - The page shows the per-trace timeline, stage latencies, tokens (total plus client/server split),
   negotiation rounds and observation counts. Downloads: `langfuse-metrics.csv` (UTF-8 BOM, one row

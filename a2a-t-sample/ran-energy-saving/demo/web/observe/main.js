@@ -228,21 +228,35 @@ function rowValue(result, column) {
   return textOf(metrics[column] ?? localRun[column]);
 }
 
-function countTraceIds(text) {
+function parseTraceIds(text) {
   return String(text || "")
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter((line) => line.length > 0).length;
+    .filter((line) => line.length > 0);
+}
+
+function countTraceIds(text) {
+  return parseTraceIds(text).length;
+}
+
+function autoGrowInput() {
+  const area = $("trace-input");
+  area.style.height = "auto";
+  area.style.height = `${Math.max(64, Math.min(area.scrollHeight, 220))}px`;
 }
 
 function updateTraceCount() {
-  $("trace-count").textContent = `${countTraceIds($("trace-input").value)} 条`;
+  const count = countTraceIds($("trace-input").value);
+  const hint = count === 0 ? "" : count === 1 ? " · 可查询" : " · 可批量导出";
+  $("trace-count").textContent = `${count} 条${hint}`;
 }
 
 function updateStartState() {
   const configured = Boolean(state.meta?.configured);
-  const hasTraces = countTraceIds($("trace-input").value) > 0;
-  $("start-button").disabled = !configured || !hasTraces || state.busy;
+  const count = countTraceIds($("trace-input").value);
+  const ready = configured && !state.busy;
+  $("query-button").disabled = !ready || count !== 1;
+  $("start-button").disabled = !ready || count < 2;
 }
 
 /* ------------------------------------------------------------- configuration */
@@ -303,6 +317,7 @@ function appendTrace(traceId) {
   const area = $("trace-input");
   const current = area.value.trim();
   area.value = current === "" ? traceId : `${current}\n${traceId}`;
+  autoGrowInput();
   updateTraceCount();
   updateStartState();
 }
@@ -466,19 +481,24 @@ async function openJob(jobId) {
   }
 }
 
-async function startExport() {
+async function startExport(action = "batch") {
   if (state.busy) return;
-  const traceIds = String($("trace-input").value)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+  const traceIds = parseTraceIds($("trace-input").value);
   if (traceIds.length === 0) {
-    showBanner("请输入至少一个 traceId。");
+    showBanner("请输入 traceId。");
+    return;
+  }
+  if (action === "query" && traceIds.length !== 1) {
+    showBanner("查询只接受一个 traceId；多个请用“批量导出”。");
+    return;
+  }
+  if (action === "batch" && traceIds.length < 2) {
+    showBanner("批量导出至少需要两个 traceId；单个请用“查询”。");
     return;
   }
   const maxTraces = Number(state.meta?.maxTraces);
   if (Number.isFinite(maxTraces) && maxTraces > 0 && traceIds.length > maxTraces) {
-    showBanner(`一次最多导出 ${maxTraces} 条 trace，当前输入 ${traceIds.length} 条。`);
+    showBanner(`一次最多处理 ${maxTraces} 条 trace，当前输入 ${traceIds.length} 条。`);
     return;
   }
   state.busy = true;
@@ -492,7 +512,8 @@ async function startExport() {
     adoptJob(job, job?.results);
     if (job?.status !== "done") startPolling();
   } catch (error) {
-    showBanner(`创建导出任务失败：${errorMessage(error)}`);
+    const noun = action === "query" ? "查询" : "导出任务";
+    showBanner(`创建${noun}失败：${errorMessage(error)}`);
   } finally {
     state.busy = false;
     updateStartState();
@@ -657,16 +678,21 @@ async function loadJobs() {
 
 function boot() {
   $("trace-input").addEventListener("input", () => {
+    autoGrowInput();
     updateTraceCount();
     updateStartState();
   });
   $("clear-button").addEventListener("click", () => {
     $("trace-input").value = "";
+    autoGrowInput();
     updateTraceCount();
     updateStartState();
   });
+  $("query-button").addEventListener("click", () => {
+    void startExport("query");
+  });
   $("start-button").addEventListener("click", () => {
-    void startExport();
+    void startExport("batch");
   });
   $("download-metrics").addEventListener("click", () => downloadCsv("metrics"));
   $("download-rounds").addEventListener("click", () => downloadCsv("rounds"));

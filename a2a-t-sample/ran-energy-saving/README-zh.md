@@ -318,7 +318,8 @@ Web UI 时间线始终保留全部 span，不影响排障。修正重试保持�
 
 启动器会打印 `/observe` 地址。这是一个面向开发和测试团队的中文内部页面：一行粘贴一个
 Langfuse traceId（导出开启时 run 的 `traceId` 等于 run id，可直接从 `/runs` 复制），或从"最近
-run"列表勾选；服务端用 vendoring 进来的 `langfuse_export` 包（上游 `langfuse-export` 0.4.3）
+run"列表勾选。单个 traceId 用 **查询**；两个及以上用 **批量导出**（批量模式与 `table.xlsx`
+属于导出路径）。服务端用 vendoring 进来的 `langfuse_export` 包（上游 `langfuse-export` 0.4.3）
 拉取 trace 并派生 A2A / A2A-T 指标。
 
 - 页面展示每条 trace 的时间线、阶段耗时、token（总数 + client/server 分侧）、协商轮次和

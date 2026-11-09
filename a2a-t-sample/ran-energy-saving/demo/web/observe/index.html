@@ -43,8 +43,9 @@
           <h2>Trace ID</h2>
           <span class="summary" id="trace-count">0 条</span>
         </div>
-        <textarea id="trace-input" class="trace-input" rows="10"
-          placeholder="一行一个 Langfuse traceId（32 位十六进制）"></textarea>
+        <textarea id="trace-input" class="trace-input" rows="2"
+          placeholder="一行一个 Langfuse traceId（32 位十六进制）；单个可直接查询"></textarea>
+        <p class="muted input-hint" id="input-hint">输入单个 traceId 用“查询”；多个用“批量导出”。</p>
         <div class="actions">
           <label class="check">
             <input id="full-export" type="checkbox">
@@ -52,7 +53,8 @@
           </label>
           <span class="spacer"></span>
           <button class="secondary" id="clear-button" type="button">清空</button>
-          <button class="primary" id="start-button" type="button" disabled>开始导出</button>
+          <button class="primary" id="query-button" type="button" disabled>查询</button>
+          <button class="secondary" id="start-button" type="button" disabled>批量导出</button>
         </div>
         <div class="progress" id="progress" hidden>
           <span class="progress-track"><span class="progress-bar" id="progress-bar"></span></span>
@@ -73,9 +75,9 @@
 
     <section class="card" aria-label="导出结果">
       <div class="card-head">
-        <h2>导出结果</h2>
+        <h2>查询结果</h2>
         <div class="head-tools">
-          <span class="summary" id="job-summary">尚未开始</span>
+          <span class="summary" id="job-summary">尚未查询</span>
           <button class="secondary" id="download-metrics" type="button" disabled>metrics.csv</button>
           <button class="secondary" id="download-rounds" type="button" disabled>rounds.csv</button>
           <button class="secondary" id="download-fields" type="button" disabled>fields.csv</button>
@@ -88,11 +90,11 @@
             <tr id="results-head"></tr>
           </thead>
           <tbody id="results-body">
-            <tr><td class="empty">尚未开始导出。</td></tr>
+            <tr><td class="empty">尚未查询。</td></tr>
           </tbody>
         </table>
       </div>
-      <p class="status-line">点击结果行可展开该 trace 的耗时、警告与完整导出下载。</p>
+      <p class="status-line">点击结果行可展开该 trace 的耗时、警告与完整导出下载；批量导出时可下载汇总表。</p>
     </section>
 
     <section class="card" aria-label="字段说明">

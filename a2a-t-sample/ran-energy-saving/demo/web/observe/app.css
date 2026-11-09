@@ -167,7 +167,8 @@ html, body {
 
 .trace-input {
   width: 100%;
-  min-height: 180px;
+  min-height: 64px;
+  max-height: 220px;
   resize: vertical;
   padding: 10px 12px;
   border: 1px solid var(--g300);
@@ -176,6 +177,7 @@ html, body {
   font: 12px/1.6 var(--mono);
 }
 .trace-input:focus { outline: 2px solid var(--orange); outline-offset: -2px; }
+.input-hint { margin: 6px 0 0; font-size: 12px; }
 
 .actions {
   display: flex;

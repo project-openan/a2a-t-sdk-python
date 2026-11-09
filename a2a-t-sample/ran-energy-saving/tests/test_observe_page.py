@@ -54,6 +54,7 @@ def test_index_exposes_the_required_controls() -> None:
         "tls-hint",
         "trace-input",
         "full-export",
+        "query-button",
         "start-button",
         "progress",
         "progress-bar",
@@ -70,7 +71,12 @@ def test_index_exposes_the_required_controls() -> None:
     ):
         assert f'id="{control}"' in html, control
     assert "同时生成完整导出" in html
-    assert "开始导出" in html
+    # A single id is a query; the batch action is separate and explicit.
+    assert '<button class="primary" id="query-button" type="button" disabled>查询</button>' in html
+    assert '<button class="secondary" id="start-button" type="button" disabled>批量导出</button>' in html
+    assert "开始导出" not in html
+    assert 'rows="2"' in html
+    assert 'rows="10"' not in html
     assert "table.xlsx（AF–AW）" in html
     assert 'id="download-table" type="button" disabled' in html
     assert "字段说明" in html
@@ -110,6 +116,9 @@ def test_module_contract_for_api_fields_and_downloads() -> None:
     assert "export function statusLabel" in module
     assert "row-error" in module
     assert "exportStatus" in module
+    assert '$("query-button")' in module
+    assert "count !== 1" in module
+    assert "count < 2" in module
 
 
 def test_node_syntax_check() -> None:
