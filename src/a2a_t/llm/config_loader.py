@@ -22,6 +22,11 @@ _MAX_TIMEOUT_RETRIES = 5
 _VALID_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
 #: Accepted ``A2AT_LLM_RESPONSE_FORMAT`` values.
 _VALID_RESPONSE_FORMATS = ("json_object", "json_schema")
+#: Default completion cap of a structured call when ``A2AT_LLM_MAX_TOKENS`` is not configured.
+#: A structured call must emit a whole JSON object, and a reasoning model spends part of the
+#: completion budget on its thinking; 16384 leaves room for both while still bounding a runaway
+#: generation. ``A2AT_LLM_MAX_TOKENS=none`` removes the cap explicitly.
+DEFAULT_MAX_TOKENS = 16384
 
 
 def default_env_path() -> Path:
@@ -61,6 +66,29 @@ def coerce_optional_int(value: str | None, key: str) -> int | None:
         return int(value)
     except ValueError as exc:
         raise LLMConfigError(f"{key} must be an integer") from exc
+
+
+def coerce_max_tokens(value: str | None) -> int | None:
+    """Parse ``A2AT_LLM_MAX_TOKENS`` into a completion cap.
+
+    An unset or blank value falls back to :data:`DEFAULT_MAX_TOKENS`, so a reasoning model is
+    bounded by default instead of being allowed to generate for minutes. The explicit words
+    ``none``/``null`` (case insensitive) mean "no cap" and omit the provider parameter; a positive
+    integer is used verbatim. Zero, negative values and non-integers are configuration errors,
+    because the provider would either reject them or silently ignore the caller's intent.
+    """
+    if value is None or not value.strip():
+        return DEFAULT_MAX_TOKENS
+    normalized = value.strip().lower()
+    if normalized in {"none", "null"}:
+        return None
+    try:
+        parsed = int(normalized)
+    except ValueError as exc:
+        raise LLMConfigError("A2AT_LLM_MAX_TOKENS must be an integer, 'none' or 'null'") from exc
+    if parsed <= 0:
+        raise LLMConfigError("A2AT_LLM_MAX_TOKENS must be greater than zero, or 'none'/'null'")
+    return parsed
 
 
 def coerce_optional_float(value: str | None, key: str) -> float | None:
@@ -188,7 +216,7 @@ class LLMConfigLoader:
             api_key=api_key,
             base_url=str(values.get("A2AT_LLM_BASE_URL", "")).strip() or None,
             history_window=history_window,
-            max_tokens=coerce_optional_int(values.get("A2AT_LLM_MAX_TOKENS"), "A2AT_LLM_MAX_TOKENS"),
+            max_tokens=coerce_max_tokens(values.get("A2AT_LLM_MAX_TOKENS")),
             temperature=coerce_optional_float(values.get("A2AT_LLM_TEMPERATURE"), "A2AT_LLM_TEMPERATURE"),
             timeout_seconds=coerce_optional_float(
                 values.get("A2AT_LLM_TIMEOUT_SECONDS"),

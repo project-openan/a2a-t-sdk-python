@@ -183,11 +183,13 @@ class OpenAIClient(LLMClient):
         resolved_temperature = temperature if temperature is not None else self._config.temperature
         if resolved_temperature is not None:
             payload["temperature"] = resolved_temperature
-        # ``A2AT_LLM_MAX_TOKENS`` is deliberately not applied here: a structured call must be able
-        # to emit the whole JSON object, and a low cap turns a reasoning model's long output into
-        # truncated, invalid JSON. Callers that need a hard cap pass ``max_tokens`` explicitly.
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
+        # A call-site value wins; otherwise the configured default applies. A structured call must
+        # be able to emit the whole JSON object, so the cap must leave room for a reasoning model's
+        # thinking. ``A2AT_LLM_MAX_TOKENS=none`` keeps the parameter unset (no cap), while an unset
+        # key resolves to the SDK's documented default in the config loader.
+        resolved_max_tokens = max_tokens if max_tokens is not None else self._config.max_tokens
+        if resolved_max_tokens is not None:
+            payload["max_tokens"] = resolved_max_tokens
         # Java parity: the reasoning effort is only forwarded when configured with a non-blank
         # value, so non-reasoning models never receive the parameter.
         if self._config.reasoning_effort:

@@ -22,6 +22,10 @@ class LLMClientConfig:
     """Resolved default configuration for the shared LLM client.
 
     Attributes:
+        max_tokens: default completion cap of a structured call whose call site passes
+            ``max_tokens=None``; ``None`` means "no cap" (the provider decides). The config loader
+            fills ``DEFAULT_MAX_TOKENS`` when ``A2AT_LLM_MAX_TOKENS`` is unset and keeps ``None``
+            only for the explicit ``none``/``null`` value. Java ``LLMClientConfig.maxTokens``.
         reasoning_effort: optional reasoning effort for reasoning models, one of
             ``none``/``minimal``/``low``/``medium``/``high``/``xhigh`` (already normalized to lower
             case); ``None`` leaves the provider parameter unset. Java ``LLMClientConfig.reasoningEffort``.

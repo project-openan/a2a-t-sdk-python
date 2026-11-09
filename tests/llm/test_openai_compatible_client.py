@@ -118,6 +118,54 @@ class OpenAIClientTest(unittest.TestCase):
         self.assertEqual(payload["messages"][1], {"role": "user", "content": "extract router"})
 
     @patch("a2a_t.llm.providers.openai.OpenAI")
+    def test_structured_falls_back_to_the_configured_max_tokens(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+        openai_cls.return_value = sdk_client
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        client = OpenAIClient(
+            replace(build_config(base_url="https://custom.example/v1"), max_tokens=64)
+        )
+
+        client.structured(
+            messages=[{"role": "user", "content": "extract router"}],
+            json_schema={"type": "object"},
+            max_tokens=None,
+        )
+
+        payload = sdk_client.chat.completions.create.call_args.kwargs
+        self.assertEqual(payload["max_tokens"], 64)
+
+    @patch("a2a_t.llm.providers.openai.OpenAI")
+    def test_structured_omits_max_tokens_when_the_config_disables_the_cap(self, openai_cls: Mock) -> None:
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+        openai_cls.return_value = sdk_client
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        client = OpenAIClient(build_config(base_url="https://custom.example/v1"))
+
+        client.structured(
+            messages=[{"role": "user", "content": "extract router"}],
+            json_schema={"type": "object"},
+            max_tokens=None,
+        )
+
+        payload = sdk_client.chat.completions.create.call_args.kwargs
+        self.assertNotIn("max_tokens", payload)
+
+    @patch("a2a_t.llm.providers.openai.OpenAI")
     def test_structured_merges_a_callers_system_message_into_the_single_system_message(self, openai_cls: Mock) -> None:
         sdk_client = Mock()
         sdk_client.chat.completions.create.return_value = SimpleNamespace(

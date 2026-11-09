@@ -72,12 +72,51 @@ class LLMConfigLoaderTest(ManagedTempDirTestCase):
         self.assertEqual(config.history_window, 10)
         self.assertEqual(config.session_max_total, 300)
         self.assertEqual(config.session_max_per_provider, 100)
+        from a2a_t.llm.config_loader import DEFAULT_MAX_TOKENS
+
         self.assertIsNone(config.base_url)
-        self.assertIsNone(config.max_tokens)
+        self.assertEqual(config.max_tokens, DEFAULT_MAX_TOKENS)
         self.assertIsNone(config.temperature)
         self.assertIsNone(config.timeout_seconds)
         self.assertTrue(config.ssl_verify)
         self.assertFalse(config.detail_log_enabled)
+
+    def test_load_max_tokens_none_disables_the_cap(self) -> None:
+        from a2a_t.llm.config_loader import LLMConfigLoader
+
+        for raw in ("none", "null", "NONE", " null "):
+            with self.subTest(raw=raw):
+                env_path = self._write_env(
+                    "\n".join(
+                        [
+                            "A2AT_LLM_PROVIDER=openai",
+                            "A2AT_LLM_MODEL=gpt-4o-mini",
+                            "A2AT_LLM_API_KEY=sk-test",
+                            f"A2AT_LLM_MAX_TOKENS={raw}",
+                        ]
+                    )
+                    + "\n"
+                )
+                self.assertIsNone(LLMConfigLoader.load(env_path).max_tokens)
+
+    def test_load_rejects_zero_or_negative_max_tokens(self) -> None:
+        from a2a_t.llm.config_loader import LLMConfigLoader
+
+        for raw in ("0", "-1"):
+            with self.subTest(raw=raw):
+                env_path = self._write_env(
+                    "\n".join(
+                        [
+                            "A2AT_LLM_PROVIDER=openai",
+                            "A2AT_LLM_MODEL=gpt-4o-mini",
+                            "A2AT_LLM_API_KEY=sk-test",
+                            f"A2AT_LLM_MAX_TOKENS={raw}",
+                        ]
+                    )
+                    + "\n"
+                )
+                with self.assertRaisesRegex(LLMConfigError, "A2AT_LLM_MAX_TOKENS"):
+                    LLMConfigLoader.load(env_path)
 
     def test_load_parses_extra_body_and_timeout_retries(self) -> None:
         env_path = self._write_env(
