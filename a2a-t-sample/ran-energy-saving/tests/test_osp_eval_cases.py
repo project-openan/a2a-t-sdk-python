@@ -198,6 +198,7 @@ def test_index_matches_cases(cases: dict[int, dict[str, Any]]) -> None:
         assert entry["file"] == document["_path"].name
         assert entry["operation"] == document["operation"]
         assert entry["validate"] == document["expect"]["protocols"]["a2a-t"]["validate"]
+        assert entry["tags"] == document["tags"]
 
 
 def test_top_level_contract(cases: dict[int, dict[str, Any]]) -> None:

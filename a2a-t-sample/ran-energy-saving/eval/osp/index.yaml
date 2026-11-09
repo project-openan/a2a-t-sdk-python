@@ -603,7 +603,6 @@ cases:
     validate_label: 不拦截，携带术语上下文信息
     tags:
       - negotiation-a2a
-      - needs-confirmation
     a2a_negotiation_rounds: 1
     a2a_t_negotiation_rounds: 0
   - id: 50
@@ -614,7 +613,6 @@ cases:
     validate_label: 不拦截，携带术语上下文信息
     tags:
       - negotiation-a2a
-      - needs-confirmation
     a2a_negotiation_rounds: 1
     a2a_t_negotiation_rounds: 0
   - id: 51
@@ -626,6 +624,5 @@ cases:
     tags:
       - cell-rat
       - negotiation-a2a
-      - needs-confirmation
     a2a_negotiation_rounds: 1
     a2a_t_negotiation_rounds: 0
