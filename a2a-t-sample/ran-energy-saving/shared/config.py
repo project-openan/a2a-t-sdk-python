@@ -239,8 +239,10 @@ DEFAULT_LONG_TASK_MODE = LONG_TASK_MODE_AUTO
 #: A real NMS replies to ``message:send`` with a Task; after this settle window the OSS stops
 #: streaming and hands the subscription to the background pump. It is not a task lifetime.
 DEFAULT_LONG_TASK_SETTLE_SECONDS = 5.0
-#: How often the Web UI polls the remote Task while a days-long run is still executing.
-DEFAULT_TASK_POLL_INTERVAL_SECONDS = 30.0
+#: How often the Web UI polls the remote Task while a days-long run is still executing with no
+#: page watching. Two minutes is enough to reattach safely: the run is kept alive by its own
+#: tracker (or by NMS pushes), and every poll is charged to the same quota bucket as the sends.
+DEFAULT_TASK_POLL_INTERVAL_SECONDS = 120.0
 #: Seconds after the reply before the transport hands a non-terminal Task to background tracking.
 #: The vendor NMS often sends its first status push ~20 s after the reply; a shorter window ended
 #: the webhook phase (and released its subscription) before that push arrived.

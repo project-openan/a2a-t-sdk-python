@@ -305,7 +305,7 @@ def test_long_task_mode_defaults_and_overrides(tmp_path: Path) -> None:
 
     assert config.long_task_mode == "auto"
     assert config.long_task_settle_seconds == 5.0
-    assert config.task_poll_interval_seconds == 30.0
+    assert config.task_poll_interval_seconds == 120.0
     # The vendor NMS often sends its first status update ~20 s after the reply; a 15 s handoff
     # dropped that push (and released the webhook subscription before it arrived).
     assert config.nms_poll_after_silence == 120.0
