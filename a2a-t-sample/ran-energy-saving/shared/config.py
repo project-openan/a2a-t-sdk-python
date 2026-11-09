@@ -245,8 +245,10 @@ DEFAULT_TASK_POLL_INTERVAL_SECONDS = 30.0
 #: The vendor NMS often sends its first status push ~20 s after the reply; a shorter window ended
 #: the webhook phase (and released its subscription) before that push arrived.
 DEFAULT_NMS_POLL_AFTER_SECONDS = 120.0
-#: Faster poll interval while the engineer page is still subscribed to the run.
-DEFAULT_NMS_STATE_POLL_SECONDS = 5.0
+#: Faster poll interval while the engineer page is still subscribed to the run. The vendor NMS
+#: counts a poll against the same ``api quotaControl`` bucket as ``message:send``; a 5 s cadence
+#: per tracked run (plus the Modify picker) exhausted it and produced HTTP 429 on the send.
+DEFAULT_NMS_STATE_POLL_SECONDS = 15.0
 
 #: Live LLM budget of one call (SDK structured calls and ADK LiteLlm turns). A local live smoke
 #: observed a 58s validation and a >90s accept validation; the yellow zone then saw one
@@ -285,7 +287,8 @@ DEFAULT_GATEWAY_SCENARIO = "information"
 #: heartbeats do not count as progress.
 DEFAULT_NMS_IDLE_TIMEOUT_SECONDS = 120.0
 DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS = 120.0
-DEFAULT_NMS_POLL_INTERVAL_SECONDS = 1.0
+#: Polling faster than this spends the NMS quota bucket on observations instead of requests.
+DEFAULT_NMS_POLL_INTERVAL_SECONDS = 5.0
 
 #: Region and sites of the 910 test environment are intentionally not defaults. A real-NMS run
 #: must configure them explicitly; the launcher pins them only for the local simulator. This keeps

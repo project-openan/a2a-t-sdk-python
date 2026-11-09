@@ -309,7 +309,9 @@ def test_long_task_mode_defaults_and_overrides(tmp_path: Path) -> None:
     # The vendor NMS often sends its first status update ~20 s after the reply; a 15 s handoff
     # dropped that push (and released the webhook subscription before it arrived).
     assert config.nms_poll_after_silence == 120.0
-    assert config.nms_state_poll_interval == 5.0
+    # The vendor NMS counts task polls against the same quota bucket as message:send; the 5 s
+    # cadence exhausted it (docs-local/nms-真机-429问题.md).
+    assert config.nms_state_poll_interval == 15.0
     assert config.defer_to_tracker is False
 
     env_file.write_text(

@@ -1720,6 +1720,9 @@ class RunManager:
                 raise
             except Exception:  # noqa: BLE001 - a poll failure must not end a days-long run
                 poll_errors += 1
+                # A failed poll is not retried early: the next attempt keeps the normal cadence.
+                # The vendor NMS delivers progress through its push/webhook channel, so a poll
+                # failure costs at most one observation, not the run.
                 _LOGGER.warning("task poll failed for run %s", run.run_id, exc_info=True)
                 # Surface the retry: a silent failure looks exactly like an idle task.
                 publish_wait_state(last_state or "")

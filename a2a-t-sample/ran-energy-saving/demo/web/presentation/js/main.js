@@ -55,8 +55,10 @@ const byId = (id) => document.getElementById(id);
 
 //: Evidence rows are applied one at a time so a batch of server spans does not flash the panels.
 const EVIDENCE_MS = 60;
-//: The Running-tasks picker refreshes while open so a SUBMITTED task's state stays current.
-const MODIFY_REFRESH_MS = 5000;
+//: The Running-tasks picker refreshes while open so a SUBMITTED task's state stays current. The
+//: vendor NMS charges this list call to the same quota bucket as message:send, so it stays slow:
+//: the dialog also refreshes on open and on demand, which is when the operator needs it.
+const MODIFY_REFRESH_MS = 15000;
 //: How long the destructive action stays armed after the first click.
 const MODIFY_CANCEL_CONFIRM_MS = 5000;
 

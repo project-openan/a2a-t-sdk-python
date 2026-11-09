@@ -903,6 +903,90 @@ async def test_error_envelope_raises_and_is_written_to_wire_error(tmp_path: Path
     await client.aclose()
 
 
+async def test_a_rate_limited_send_keeps_its_status_headers_and_retry_after(tmp_path: Path) -> None:
+    """The vendor's 429 body is empty, so the status and headers are the only evidence."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        return httpx.Response(
+            429,
+            headers={
+                "retry-after": "17",
+                "x-hiro-apigw-err-desc": "Request is rejected by api quotaControl.",
+                "x-request-id": "req-1",
+                "x-internal-detail": "must not be logged",
+            },
+        )
+
+    client = _client(httpx.MockTransport(handle))
+    wire_path = tmp_path / "run" / "wire.jsonl"
+    client.set_wire_path(wire_path)
+
+    with pytest.raises(NmsProtocolError) as raised:
+        await client.send_message({"message": {"messageId": "m1"}})
+
+    assert raised.value.http_status == 429
+    assert raised.value.retry_after == 17.0
+    assert "<empty body>" in str(raised.value)
+
+    records = [json.loads(line) for line in wire_path.read_text(encoding="utf-8").splitlines()]
+    assert [record["dir"] for record in records] == ["out", "in"]
+    failed = records[1]
+    assert failed["status"] == 429
+    assert failed["body"] is None
+    assert failed["elapsedMs"] >= 0
+    assert failed["headers"]["retry-after"] == "17"
+    assert failed["headers"]["x-hiro-apigw-err-desc"] == "Request is rejected by api quotaControl."
+    assert "x-internal-detail" not in failed["headers"]
+
+    error_text = (tmp_path / "run" / "wire-error.jsonl").read_text(encoding="utf-8")
+    assert '"status": 429' in error_text
+    assert '"retry-after": "17"' in error_text
+    await client.aclose()
+
+
+async def test_a_rate_limited_task_poll_carries_its_http_status(tmp_path: Path) -> None:
+    """The watcher needs the status (and Retry-After) to back off instead of re-polling."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        return httpx.Response(429, headers={"retry-after": "23"}, json={"retCode": "429"})
+
+    client = _client(httpx.MockTransport(handle))
+    wire_path = tmp_path / "run" / "wire.jsonl"
+    client.set_wire_path(wire_path)
+
+    with pytest.raises(NmsProtocolError) as raised:
+        await client.get_task("task-1")
+
+    assert raised.value.http_status == 429
+    assert raised.value.retry_after == 23.0
+    poll_record = json.loads(wire_path.read_text(encoding="utf-8"))
+    assert poll_record["status"] == 429
+    assert poll_record["body"] == '{"retCode":"429"}'
+    await client.aclose()
+
+
+async def test_a_failure_without_retry_after_carries_no_delay_hint() -> None:
+    """Only a rate limit carries a retry hint; a plain 500 must not slow the poll schedule."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        return httpx.Response(500, text="internal")
+
+    client = _client(httpx.MockTransport(handle))
+
+    with pytest.raises(NmsProtocolError) as raised:
+        await client.send_message({"message": {"messageId": "m1"}})
+
+    assert raised.value.http_status == 500
+    assert raised.value.retry_after is None
+    await client.aclose()
+
+
 async def test_wire_log_switch_disables_both_files(tmp_path: Path) -> None:
     client = _client(_handler(frames=[]), wire_log=False)
     wire_path = tmp_path / "run" / "wire.jsonl"

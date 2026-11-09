@@ -80,6 +80,18 @@ DEFAULT_NMS_CONNECT_TIMEOUT_SECONDS: Final[float] = 10.0
 #: Upper bound of a stored request/response body excerpt in an error message.
 _ERROR_EXCERPT_LENGTH: Final[int] = 500
 
+#: Response headers kept when an NMS call fails. The vendor puts its quota diagnosis in
+#: ``x-hiro-apigw-err-desc`` / ``x-tiered-rate-limit`` and its recovery hint in ``retry-after``;
+#: the rest identify the exchange. Every other header is dropped before it reaches the wire log.
+_FAILURE_HEADER_NAMES: Final[tuple[str, ...]] = (
+    "date",
+    "retry-after",
+    "x-tiered-rate-limit",
+    "x-hiro-apigw-err-desc",
+    "content-type",
+    "x-request-id",
+)
+
 
 class NmsError(RuntimeError):
     """Base class of the vendor NMS errors."""
@@ -94,7 +106,23 @@ class NmsAuthError(NmsError):
 
 
 class NmsProtocolError(NmsError):
-    """Raised on an unexpected HTTP status or SSE frame."""
+    """Raised on an unexpected HTTP status or SSE frame.
+
+    Attributes:
+        http_status: HTTP status of the failed exchange; ``None`` for a non-HTTP failure.
+        retry_after: ``Retry-After`` of that response in seconds, when the NMS sent a usable one.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        http_status: int | None = None,
+        retry_after: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+        self.retry_after = retry_after
 
 
 class NmsTimeoutError(NmsError):
@@ -359,11 +387,21 @@ class NmsClient:
             self._config.request_timeout,
             connect=min(DEFAULT_NMS_CONNECT_TIMEOUT_SECONDS, self._config.request_timeout),
         )
+        started = time.monotonic()
         try:
             async with self._http.stream("POST", url, json=dict(payload), headers=headers, timeout=timeout) as response:
                 if response.status_code != 200:
                     body = (await response.aread()).decode("utf-8", "replace")
-                    raise NmsProtocolError(f"NMS A2A request returned HTTP {response.status_code}: {_excerpt(body)}")
+                    self._record_failure_response(
+                        response,
+                        url=url,
+                        elapsed_seconds=time.monotonic() - started,
+                    )
+                    raise NmsProtocolError(
+                        f"NMS A2A request returned HTTP {response.status_code}: {_excerpt(body)}",
+                        http_status=response.status_code,
+                        retry_after=_retry_after_seconds(response),
+                    )
                 lines = response.aiter_lines()
                 # The NMS emits ``: heartbeat`` every 15 s forever, so an idle window measured
                 # between *any* two lines never expires: the stream hung for minutes after the
@@ -469,6 +507,7 @@ class NmsClient:
             self._config.request_timeout,
             connect=min(DEFAULT_NMS_CONNECT_TIMEOUT_SECONDS, self._config.request_timeout),
         )
+        started = time.monotonic()
         try:
             response = await self._http.post(
                 url,
@@ -480,12 +519,25 @@ class NmsClient:
             raise NmsProtocolError(f"NMS A2A request failed: {exc}") from exc
         if response.status_code != 200:
             body = response.text
+            headers_seen = _failure_headers(response)
+            self._record_failure_response(
+                response,
+                url=url,
+                elapsed_seconds=time.monotonic() - started,
+            )
+            message = f"NMS A2A request returned HTTP {response.status_code}: {_excerpt(body)}"
             self.record_error(
                 "NmsProtocolError",
-                f"HTTP {response.status_code}: {_excerpt(body)}",
+                message,
                 body,
+                status=response.status_code,
+                headers=headers_seen,
             )
-            raise NmsProtocolError(f"NMS A2A request returned HTTP {response.status_code}: {_excerpt(body)}")
+            raise NmsProtocolError(
+                message,
+                http_status=response.status_code,
+                retry_after=_retry_after_seconds(response),
+            )
         try:
             body = response.json()
         except ValueError as exc:
@@ -520,12 +572,18 @@ class NmsClient:
             "Authorization": f"Bearer {token}",
             "X-Auth-Token": token,
         }
+        started = time.monotonic()
         try:
             response = await self._http.get(url, headers=headers, timeout=self._config.request_timeout)
         except httpx.HTTPError as exc:
             raise NmsProtocolError(f"NMS task request failed: {exc}") from exc
         if response.status_code != 200:
-            raise NmsProtocolError(f"NMS task request returned HTTP {response.status_code}: {_excerpt(response.text)}")
+            self._record_failure_response(response, url=url, elapsed_seconds=time.monotonic() - started)
+            raise NmsProtocolError(
+                f"NMS task request returned HTTP {response.status_code}: {_excerpt(response.text)}",
+                http_status=response.status_code,
+                retry_after=_retry_after_seconds(response),
+            )
         try:
             data = response.json()
         except ValueError as exc:
@@ -544,12 +602,18 @@ class NmsClient:
             "Authorization": f"Bearer {token}",
             "X-Auth-Token": token,
         }
+        started = time.monotonic()
         try:
             response = await self._http.get(url, headers=headers, timeout=self._config.request_timeout)
         except httpx.HTTPError as exc:
             raise NmsProtocolError(f"NMS task list request failed: {exc}") from exc
         if response.status_code != 200:
-            raise NmsProtocolError(f"NMS task list returned HTTP {response.status_code}: {_excerpt(response.text)}")
+            self._record_failure_response(response, url=url, elapsed_seconds=time.monotonic() - started)
+            raise NmsProtocolError(
+                f"NMS task list returned HTTP {response.status_code}: {_excerpt(response.text)}",
+                http_status=response.status_code,
+                retry_after=_retry_after_seconds(response),
+            )
         try:
             data = response.json()
         except ValueError as exc:
@@ -569,6 +633,7 @@ class NmsClient:
             "Authorization": f"Bearer {token}",
             "X-Auth-Token": token,
         }
+        started = time.monotonic()
         try:
             # The NMS answers 500 INTERNAL for an empty or ``{"taskId": …}`` body.
             response = await self._http.post(
@@ -586,7 +651,12 @@ class NmsClient:
             )
             return False
         if response.status_code >= 400:
-            raise NmsProtocolError(f"NMS cancel returned HTTP {response.status_code}: {_excerpt(response.text)}")
+            self._record_failure_response(response, url=url, elapsed_seconds=time.monotonic() - started)
+            raise NmsProtocolError(
+                f"NMS cancel returned HTTP {response.status_code}: {_excerpt(response.text)}",
+                http_status=response.status_code,
+                retry_after=_retry_after_seconds(response),
+            )
         return True
 
     async def wait_for_terminal(self, task_id: str, *, timeout: float | None = None) -> dict[str, object]:
@@ -626,6 +696,30 @@ class NmsClient:
         if self._owns_http:
             await self._http.aclose()
 
+    def _record_failure_response(
+        self,
+        response: httpx.Response,
+        *,
+        url: str,
+        elapsed_seconds: float,
+    ) -> None:
+        """Record a non-200 response as an ``in`` frame in ``wire.jsonl``.
+
+        A successful exchange writes its reply body; a failed one used to write nothing, so the
+        status, the response headers and the time it took were lost. The vendor answers a quota
+        rejection with an empty body, which made a rate-limited call indistinguishable from a
+        call that was never logged.
+        """
+        self._write_wire(
+            "in",
+            method=response.request.method,
+            url=url,
+            status=response.status_code,
+            headers=_failure_headers(response),
+            body=response.text or None,
+            elapsedMs=int(elapsed_seconds * 1000),
+        )
+
     def record_inbound(self, frame: Mapping[str, object], *, source: str) -> None:
         """Record one inbound push or poll reply in ``wire.jsonl`` (best effort).
 
@@ -654,11 +748,15 @@ class NmsClient:
         kind: str,
         message: str,
         frame: object | None = None,
+        *,
+        status: int | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> None:
         """Append one failed exchange to ``wire-error.jsonl``.
 
         The SDK or the raw reader may reject a frame before any ``wire.jsonl`` record is written;
-        this keeps the frame that explains the failure.
+        this keeps the frame that explains the failure. ``status``/``headers`` carry the parts of
+        an HTTP rejection the body does not (the vendor's 429 body is empty).
         """
         path = self._current_wire_path()
         if not self._config.wire_log or path is None:
@@ -670,6 +768,10 @@ class NmsClient:
         }
         if frame is not None:
             record["frame"] = frame
+        if status is not None:
+            record["status"] = status
+        if headers:
+            record["headers"] = dict(headers)
         self._append_wire(path.with_name("wire-error.jsonl"), record)
 
     def _append_wire(self, path: Path, record: Mapping[str, object]) -> None:
@@ -1074,7 +1176,32 @@ def _positive_number(value: object, *, default: float) -> float:
 def _excerpt(text: str, limit: int = _ERROR_EXCERPT_LENGTH) -> str:
     """Return a short single-line excerpt of one response body."""
     compact = " ".join(text.split())
+    if not compact:
+        # The vendor answers a quota rejection with an empty body; an empty excerpt would make
+        # the error read ``HTTP 429: `` and hide that the body was in fact empty.
+        return "<empty body>"
     return compact[:limit] + ("..." if len(compact) > limit else "")
+
+
+def _failure_headers(response: httpx.Response) -> dict[str, str]:
+    """Return the whitelisted headers of one failed response (credentials are never included)."""
+    return {name: response.headers[name] for name in _FAILURE_HEADER_NAMES if name in response.headers}
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """Return the response's ``Retry-After`` in seconds, or ``None`` when absent or unusable.
+
+    Only the delta-seconds form is parsed; an HTTP-date is ignored so a parsing mistake can never
+    produce a huge or negative delay.
+    """
+    value = response.headers.get("retry-after", "").strip()
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        return None
+    return seconds if seconds > 0 else None
 
 
 def _is_negotiation_metadata(metadata: Mapping[str, object]) -> bool:
