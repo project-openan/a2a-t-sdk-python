@@ -316,6 +316,10 @@ PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-af
 - 用例详情抽屉展示 `baseline.request`（Modify 的前置基线 Create；从结果行打开时同时显示本次实际
   基线的 state 与 wire 链接）和 `blocked_followup.input`（拦截后补充请求）。有补充请求时，
   `expect.intent` / `task_t` 标注为「（补充请求）」。
+- 执行上下文不再需要导出才能看到：结果行在「结果 / 错误」下显示 `run <短 id>` / `task <短 id>`
+  （悬停看完整 runId / traceId / taskId / contextId）；结果抽屉的「运行上下文」给出完整
+  `runId`（wire / trace 链接）、`traceId`、`taskId`、`contextId`，Modify 另列基线的
+  runId / taskId / contextId / state。
 - 临时请求 tab：手输文本直接跑一次，不做预期断言。
 - 报告导出 JSON / XLSX；Excel 只作为导出格式，不再是输入。
 

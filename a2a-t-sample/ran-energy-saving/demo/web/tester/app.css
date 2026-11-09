@@ -257,6 +257,13 @@ table.grid td.request {
 table.grid td.result { max-width: 360px; word-break: break-word; }
 table.grid td.result.fail { color: var(--red); }
 table.grid td.result.pass { color: var(--green); }
+.context-line {
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--g500);
+  word-break: break-all;
+}
 table.grid tr.running { background: var(--yellow-soft); }
 table.grid tr.invalid { background: var(--red-soft); }
 

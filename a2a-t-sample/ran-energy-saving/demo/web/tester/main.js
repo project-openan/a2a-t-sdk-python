@@ -491,6 +491,24 @@ function renderResults() {
     const duration = el("td", "metric", durationText(item.durationMs));
     const tokens = el("td", "metric", tokenText(item.tokens));
     const result = el("td", "result", resultText(item));
+    const context = itemContext(item);
+    const identifiers = [
+      context.runId ? `run ${shortId(context.runId)}` : "",
+      context.taskId ? `task ${shortId(context.taskId)}` : "",
+    ].filter(Boolean);
+    if (identifiers.length) {
+      const line = el("div", "context-line", identifiers.join(" · "));
+      line.title = [
+        ["runId", context.runId],
+        ["traceId", context.traceId],
+        ["taskId", context.taskId],
+        ["contextId", context.contextId],
+      ]
+        .filter(([, value]) => value)
+        .map(([key, value]) => `${key}: ${value}`)
+        .join("\n");
+      result.append(line);
+    }
     const actions = document.createElement("td");
     if (item.runId) {
       const wire = el("a", "run-link", "wire");
@@ -541,6 +559,78 @@ function textBlock(value) {
   return JSON.stringify(value, null, 2);
 }
 
+function itemContext(item) {
+  const stages = item.stages || {};
+  const observations = [stages.working?.actual, stages.accepted?.actual, stages.send?.actual].filter(
+    (value) => value && typeof value === "object",
+  );
+  const observation = observations.find((value) => value.taskId) || observations[0] || {};
+  return {
+    runId: item.runId || "",
+    traceId: item.traceId || "",
+    taskId: observation.taskId || "",
+    contextId: observation.contextId || "",
+    baseline: item.baseline && typeof item.baseline === "object" ? item.baseline : null,
+  };
+}
+
+function shortId(value) {
+  const text = String(value || "");
+  return text.length > 12 ? `${text.slice(0, 12)}…` : text;
+}
+
+function contextTable(rows) {
+  const table = el("table", "grid kv-table");
+  const tbody = document.createElement("tbody");
+  for (const row of rows) {
+    const cell = el("td", "mono pre", textBlock(row.value === undefined ? "" : row.value));
+    if (row.runId) {
+      const wire = el("a", "run-link", "wire");
+      wire.href = `/api/runs/${encodeURIComponent(row.runId)}/wire`;
+      wire.target = "_blank";
+      const trace = el("a", "run-link", "trace");
+      trace.href = `/api/runs/${encodeURIComponent(row.runId)}/trace.json`;
+      trace.target = "_blank";
+      cell.append(document.createTextNode(" "), wire, document.createTextNode(" · "), trace);
+    }
+    const tr = document.createElement("tr");
+    tr.append(el("td", "mono", row.label), cell);
+    tbody.append(tr);
+  }
+  table.append(tbody);
+  return table;
+}
+
+function appendContextBlock(body, item) {
+  const context = itemContext(item);
+  const block = el("section", "diff-block");
+  block.append(el("strong", "", "运行上下文"));
+  block.append(
+    contextTable([
+      { label: "runId", value: context.runId, runId: context.runId },
+      { label: "traceId", value: context.traceId },
+      { label: item.protocol === "a2a" ? "taskId（外层 Task）" : "taskId", value: context.taskId },
+      { label: "contextId", value: context.contextId },
+    ]),
+  );
+  body.append(block);
+  if (context.baseline) {
+    const baseline = context.baseline;
+    const baselineBlock = el("section", "diff-block");
+    baselineBlock.append(el("strong", "", "基线（Modify 前置 Create）"));
+    baselineBlock.append(
+      contextTable([
+        { label: "runId", value: baseline.runId, runId: baseline.runId },
+        { label: "taskId", value: baseline.taskId },
+        { label: "contextId", value: baseline.contextId },
+        { label: "state", value: baseline.state },
+        ...(baseline.error ? [{ label: "错误", value: baseline.error }] : []),
+      ]),
+    );
+    body.append(baselineBlock);
+  }
+}
+
 function appendStageBlock(body, label, result) {
   const block = el("section", "diff-block");
   const head = el("div", "diff-head");
@@ -579,6 +669,7 @@ function appendStageBlock(body, label, result) {
 }
 
 function renderResultTab(item, body) {
+  appendContextBlock(body, item);
   const stages = item.stages || {};
   if (!Object.keys(stages).length) {
     body.append(el("p", "status-line", "该运行项还没有阶段结果。"));

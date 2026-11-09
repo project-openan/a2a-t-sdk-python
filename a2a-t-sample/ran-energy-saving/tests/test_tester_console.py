@@ -699,6 +699,20 @@ def test_the_catalog_offers_a_case_detail_without_running_it() -> None:
     assert "补充段 expect 覆盖" in js
 
 
+def test_the_result_row_and_drawer_expose_run_context_ids() -> None:
+    """runId / traceId / taskId / contextId must be visible without exporting the report."""
+    tester = Path(__file__).resolve().parent.parent / "demo" / "web" / "tester"
+    js = (tester / "main.js").read_text(encoding="utf-8")
+    css = (tester / "app.css").read_text(encoding="utf-8")
+
+    assert "function itemContext" in js
+    assert "function appendContextBlock" in js
+    assert "运行上下文" in js
+    assert "context-line" in js
+    assert "taskId（外层 Task）" in js
+    assert ".context-line" in css
+
+
 def test_the_console_uses_the_full_width_of_a_large_screen() -> None:
     tester = Path(__file__).resolve().parent.parent / "demo" / "web" / "tester"
     css = (tester / "app.css").read_text(encoding="utf-8")
