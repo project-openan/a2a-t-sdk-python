@@ -9,6 +9,7 @@ import {
   STATUS,
   activityView,
   applyFrame,
+  canStartModify,
   continuityModel,
   createState,
   endingOf,
@@ -93,6 +94,9 @@ assert.equal(modifyStateLabel(copyFor("en-US"), "TASK_STATE_INPUT_REQUIRED"), "I
 assert.equal(isModifiableTaskState("TASK_STATE_SUBMITTED"), true);
 assert.equal(isModifiableTaskState("TASK_STATE_WORKING"), true);
 assert.equal(isModifiableTaskState("TASK_STATE_INPUT_REQUIRED"), false);
+assert.equal(canStartModify(null), false);
+assert.equal(canStartModify({ taskId: "" }), false);
+assert.equal(canStartModify({ taskId: "task-1" }), true);
 
 // A retry after a pre-send block keeps the attempt chain (conversation and trace id); a run that
 // reached the server, completed or was cancelled starts a new one.

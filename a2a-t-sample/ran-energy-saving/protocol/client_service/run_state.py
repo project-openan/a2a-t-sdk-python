@@ -133,6 +133,7 @@ class RunState:
         pending_intent: whether the run waits for approval 1 (the OSS intent review).
         intent_future: resolver of the pending intent review.
         cancel_requested: whether the operator asked to cancel the run.
+        cancel_reason: error label of a non-operator stop (handover); ``None`` for the defaults.
         remote_task_id: last Task id observed on the remote side (cancel target).
         remote_context_id: last Task context id observed on the remote side.
         latest_task_state: last Task state observed on the remote side.
@@ -203,6 +204,9 @@ class RunState:
     pending_intent: bool = False
     intent_future: asyncio.Future[bool] | None = None
     cancel_requested: bool = False
+    #: Error label recorded when the run was stopped; ``None`` keeps the operator/shutdown default.
+    #: A handover sets it so the stopped run is not reported as an operator cancel.
+    cancel_reason: str | None = None
     remote_task_id: str | None = None
     #: Context id paired with :attr:`remote_task_id`, when a status event or a poll carried one.
     remote_context_id: str | None = None

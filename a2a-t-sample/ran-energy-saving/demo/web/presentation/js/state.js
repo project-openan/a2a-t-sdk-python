@@ -877,6 +877,15 @@ export function isModifiableTaskState(stateName) {
   return stateName === "TASK_STATE_SUBMITTED" || stateName === "TASK_STATE_WORKING";
 }
 
+/** Whether a selected Modify target may start while another run is still on stage.
+ *
+ * The server hands the Task over: the new run takes the callback stream and the previous run is
+ * stopped, so the page must not block Start behind its own busy flag.
+ */
+export function canStartModify(targetTask) {
+  return targetTask !== null && Boolean(targetTask.taskId);
+}
+
 /** The act the page should show. */
 export function stageOf(state) {
   if (state.status === STATUS.CANCELED) return "canceled";

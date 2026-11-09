@@ -150,6 +150,25 @@ async def test_a_late_push_reaches_the_run_that_rebinds_the_finished_runs_task()
     assert [event["statusUpdate"]["taskId"] for event in events] == ["task-1"]  # type: ignore[index]
 
 
+async def test_stopping_a_run_hands_its_unconsumed_pushes_to_the_next_owner() -> None:
+    """A run stopped for a handover may already hold events it never read.
+
+    Dropping them with its queue would lose exactly the pushes the new Modify run is waiting for;
+    they are re-buffered under their identity and delivered when that run binds it.
+    """
+    router = WebhookRouter()
+    old = router.subscribe("old-run")
+    old.bind(task_id="task-1", context_id="ctx-1")
+    router.on_event(_status("task-1", "ctx-1"))
+    old.unsubscribe()
+
+    current = router.subscribe("new-run")
+    current.bind(task_id="task-1", context_id="ctx-1")
+
+    events = _drain(current)
+    assert [event["statusUpdate"]["taskId"] for event in events] == ["task-1"]  # type: ignore[index]
+
+
 async def test_a_reused_task_is_routed_by_its_live_context_owner() -> None:
     """A Modify run binds the context when it sends and the Task when the reply names it.
 

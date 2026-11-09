@@ -17,6 +17,7 @@ from demo.catalog import DemoRunCatalog
 from google.adk.sessions.sqlite_session_service import SqliteSessionService
 from protocol.client_flow import ClientFlowResult
 from protocol.client_service import RunConflictError, RunManager
+from protocol.client_service.run_manager import HANDED_OVER
 from protocol.client_store import (
     ClientRunRecord,
     SqliteClientStore,
@@ -510,6 +511,102 @@ async def test_cancel_asks_the_remote_side_and_stops_the_run(
     assert stored.status == "interrupted"
     assert stored.error == "The run was cancelled by the operator."
     assert await manager.cancel(run.run_id) is False
+
+
+async def test_a_modify_run_stops_the_previous_run_of_the_same_task(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """A Modify continues the same Task, so the run that was tracking it must stop.
+
+    The remote Task is untouched: the new run owns it now. Stopping first releases the previous
+    run's callback subscription, so pushes arriving before the new run binds stay buffered for it.
+    """
+    hold = asyncio.Event()
+    manager, _, runtimes = _manager(tmp_path, offline_config, hold_decision=hold)
+    first = await manager.start("information", "auto", "sse", user_request="create")
+    while first.runtime is None:
+        await asyncio.sleep(0.01)
+    await runtimes[0].decision_entered.wait()
+    first.remote_task_id = "task-1"
+
+    second = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        user_request="modify",
+        target_task_id="task-1",
+        target_context_id="ctx-1",
+    )
+
+    assert first.finished()
+    assert first.status == "interrupted"
+    assert first.error == HANDED_OVER
+    assert second.finished() is False
+    hold.set()
+    await _finish(manager, second.run_id)
+
+
+async def test_a_modify_waits_until_the_target_task_has_reached_submitted(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """A Task that no run has observed yet has no server-side identity to continue.
+
+    Handing over at that moment would race the create that is still in flight; the operator has to
+    wait until the NMS accepts the Task (SUBMITTED) before modifying it.
+    """
+    hold = asyncio.Event()
+    manager, _, runtimes = _manager(tmp_path, offline_config, hold_decision=hold)
+    first = await manager.start("information", "auto", "sse", user_request="create")
+    while first.runtime is None:
+        await asyncio.sleep(0.01)
+    await runtimes[0].decision_entered.wait()
+    first.target_task_id = "task-1"
+    first.remote_task_id = None
+    first.latest_task_state = None
+
+    with pytest.raises(RunConflictError, match="SUBMITTED"):
+        await manager.start(
+            "information",
+            "auto",
+            "sse",
+            user_request="modify",
+            target_task_id="task-1",
+            target_context_id="ctx-1",
+        )
+
+    assert first.finished() is False
+    hold.set()
+    await _finish(manager, first.run_id)
+
+
+async def test_a_modify_run_leaves_an_unrelated_run_alone(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """Only the run that owns the continued Task stops; an unrelated one keeps running."""
+    hold = asyncio.Event()
+    manager, _, runtimes = _manager(tmp_path, offline_config, hold_decision=hold)
+    other = await manager.start("information", "auto", "sse", user_request="other")
+    while other.runtime is None:
+        await asyncio.sleep(0.01)
+    await runtimes[0].decision_entered.wait()
+    other.remote_task_id = "other-task"
+
+    modify = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        user_request="modify",
+        target_task_id="task-1",
+        target_context_id="ctx-1",
+    )
+
+    assert other.finished() is False
+    hold.set()
+    await other.task  # type: ignore[union-attr]
+    await modify.task  # type: ignore[union-attr]
 
 
 async def test_a_finished_run_records_metrics(

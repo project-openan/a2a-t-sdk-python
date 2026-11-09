@@ -139,6 +139,7 @@ class WebhookRouter:
         if subscription.closed:
             return
         subscription.closed = True
+        self._requeue(subscription)
         self._subscriptions.pop(subscription.key, None)
         for task_id in subscription.task_ids:
             # Another run may already have taken this identity over; never release its mapping.
@@ -238,6 +239,30 @@ class WebhookRouter:
         if subscription.closed:
             return
         subscription.queue.put_nowait(payload)
+
+    def _requeue(self, subscription: WebhookSubscription) -> None:
+        """Return the pushes a stopping run never consumed to the unbound buffer.
+
+        A run stopped for a handover can already hold events it did not read (it was waiting on its
+        queue when the previous phase ended). Dropping them with its queue loses exactly the pushes
+        the next run continues with; they are buffered under their identity instead and delivered
+        when that run binds it. An event with no identity cannot be routed, so it is dropped.
+        """
+        while True:
+            try:
+                payload = subscription.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            task_id, context_id = _payload_keys(payload)
+            if task_id:
+                key = _identity_key("task", task_id)
+            elif context_id:
+                key = _identity_key("context", context_id)
+            else:
+                _LOGGER.warning("unconsumed webhook push without identity dropped on unsubscribe")
+                continue
+            _LOGGER.info("webhook push re-buffered on unsubscribe: %s", key)
+            self._pend(key, payload)
 
     def _pend(self, key: str, payload: dict[str, object]) -> None:
         """Buffer one unbound push until a run binds its identity."""

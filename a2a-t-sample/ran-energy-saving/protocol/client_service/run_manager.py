@@ -100,6 +100,7 @@ CANCEL_UNWIND_TIMEOUT_SECONDS: Final[float] = 5.0
 #: Cancellation reasons recorded in the transcript.
 CANCELED_BY_OPERATOR: Final[str] = "The run was cancelled by the operator."
 CANCELED_BY_SHUTDOWN: Final[str] = "The run was cancelled because the process is shutting down."
+HANDED_OVER: Final[str] = "The run was handed over to the run that continued the same Task."
 
 
 def _langfuse_disabled() -> dict[str, object]:
@@ -141,6 +142,13 @@ class _PolledTask:
     text: str = ""
     #: Metadata of that status message; the pure relay keeps ``round``/``recommendation`` here.
     metadata: dict[str, object] | None = None
+
+
+def _cancel_label(run: RunState) -> str:
+    """Return the error label recorded on a cancelled run."""
+    if run.cancel_reason:
+        return run.cancel_reason
+    return CANCELED_BY_OPERATOR if run.cancel_requested else CANCELED_BY_SHUTDOWN
 
 
 def _should_watch_long_task(run: RunState, result: ClientFlowResult | None) -> bool:
@@ -411,7 +419,7 @@ class RunManager:
         """Return one run by id, ``None`` when unknown."""
         return self._runs.get(run_id)
 
-    async def cancel(self, run_id: str, *, remote: bool = True) -> bool:
+    async def cancel(self, run_id: str, *, remote: bool = True, reason: str | None = None) -> bool:
         """Cancel one active run, asking the remote side to cancel its Task first.
 
         The remote cancel is best effort: the vendor NMS may answer HTTP 503, and the local run
@@ -421,6 +429,8 @@ class RunManager:
             run_id: run to cancel.
             remote: also ask the transport to cancel its Task. The Running-tasks picker already
                 cancelled the NMS Task and passes ``False`` to avoid a second ``:cancel``.
+            reason: error label recorded on the run; the default distinguishes an operator cancel
+                from a process shutdown. A handover passes :data:`HANDED_OVER`.
 
         Returns:
             ``True`` when a running run was cancelled, ``False`` for an unknown or finished run.
@@ -429,6 +439,7 @@ class RunManager:
         if run is None or run.finished():
             return False
         run.cancel_requested = True
+        run.cancel_reason = reason
         if remote:
             await self._cancel_remote_task(run)
         task = run.task
@@ -442,6 +453,39 @@ class RunManager:
                     CANCEL_UNWIND_TIMEOUT_SECONDS,
                 )
         return True
+
+    def _task_handover_candidates(self, task_id: str) -> list[RunState]:
+        """Return the live runs a Modify of ``task_id`` supersedes.
+
+        Raises:
+            RunConflictError: when a live run targets the Task but has not observed it yet. The
+                create is still in flight, so there is no server-side Task to continue; the
+                operator has to wait until the NMS accepts it (SUBMITTED) before modifying it.
+        """
+        owners = self.active_runs_for_task(task_id)
+        if owners and not any(run.remote_task_id == task_id for run in owners):
+            raise RunConflictError(
+                f"Task {task_id} has not reached SUBMITTED yet; wait for the NMS to accept it "
+                "before modifying it."
+            )
+        return owners
+
+    async def _hand_over_task(self, task_id: str, new_run_id: str, superseded: Sequence[RunState]) -> None:
+        """Stop the local runs that tracked a Task this Modify run now continues.
+
+        The remote Task is untouched — the new run owns it from here. Stopping the previous run
+        first releases its callback subscription and re-buffers any push it had not consumed, so a
+        push that arrives before the new run binds the Task is handed to the new run instead of
+        being answered by the run the operator just replaced.
+        """
+        for stale in superseded:
+            _LOGGER.info(
+                "run %s continues task %s; stopping run %s (handover)",
+                new_run_id,
+                task_id,
+                stale.run_id,
+            )
+            await self.cancel(stale.run_id, remote=False, reason=HANDED_OVER)
 
     async def _cancel_remote_task(self, run: RunState) -> None:
         """Ask the runtime transport to cancel the remote Task, when it exposes one."""
@@ -605,7 +649,7 @@ class RunManager:
             run.status = STATUS_FINISHED
         except asyncio.CancelledError:
             run.status = STATUS_INTERRUPTED
-            run.error = CANCELED_BY_OPERATOR if run.cancel_requested else CANCELED_BY_SHUTDOWN
+            run.error = _cancel_label(run)
             transcript.record_error(run.error)
             raise
         except Exception as exc:  # noqa: BLE001 - a failed recovery must reach the UI
@@ -847,6 +891,20 @@ class RunManager:
                     f"({exc.run_id or 'another process'}); wait for it to finish."
                 ) from exc
 
+        if run_mode == RUN_MODE_MODIFY:
+            # Refuse before registering anything: a Task no run has observed yet has no server-side
+            # identity to continue. Then stop the run the operator replaced before the new one
+            # starts, so its callback subscription is released and its unread pushes are buffered.
+            superseded = self._task_handover_candidates(resolved_target_task)
+            try:
+                await self._hand_over_task(resolved_target_task, run.run_id, superseded)
+            except Exception:  # noqa: BLE001 - the new run is already accepted
+                _LOGGER.warning(
+                    "handover of task %s to run %s did not stop the previous run",
+                    resolved_target_task,
+                    run.run_id,
+                    exc_info=True,
+                )
         self._runs[run.run_id] = run
         self._active_by_conversation[resolved_conversation] = run
         # The trace id is already known, but the browser URL needs one Langfuse lookup. Resolve it
@@ -1420,7 +1478,7 @@ class RunManager:
             run.status = STATUS_FINISHED
         except asyncio.CancelledError:
             run.status = STATUS_INTERRUPTED
-            run.error = CANCELED_BY_OPERATOR if run.cancel_requested else CANCELED_BY_SHUTDOWN
+            run.error = _cancel_label(run)
             transcript.record_error(run.error)
             raise
         except Exception as exc:  # noqa: BLE001 - a failed run must reach the UI, not a bare task

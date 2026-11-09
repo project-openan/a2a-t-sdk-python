@@ -16,6 +16,7 @@ import {
 import {
   activityView,
   applyFrame,
+  canStartModify,
   continuityModel,
   createState,
   endingOf,
@@ -934,6 +935,8 @@ function clearModifyTarget(silent = false) {
     renderIntentPanel();
     renderRequest();
   }
+  // Dropping the target removes the exception that let Start run while busy.
+  setBusy(ui.busy);
   renderScenarioDescription();
 }
 
@@ -1085,7 +1088,8 @@ function renderModifyActions() {
   if (els.modifyConfirm) {
     const modifiable = task !== null && isModifiableTaskState(task.state);
     const a2aT = (ui.meta?.protocols || ["a2a-t"]).includes("a2a-t");
-    els.modifyConfirm.disabled = !modifiable || !a2aT || Boolean(ui.busy) || cancelling;
+    // A running page does not block a Modify: the backend hands the Task over to the new run.
+    els.modifyConfirm.disabled = !modifiable || !a2aT || cancelling;
     els.modifyConfirm.textContent = ui.copy.modify.confirm;
     els.modifyConfirm.title = modifiable ? "" : ui.copy.modify.modifyNotAllowed;
   }
@@ -1204,7 +1208,9 @@ function applyModifyTarget() {
   }
   renderPresets();
   renderProtocol();
-  resetRunState();
+  // While a run is still on stage, keep it (and its stream) until Start replaces it: the operator
+  // may back out of the Modify, and closing the stream now would leave the page busy forever.
+  if (!ui.busy) resetRunState();
   // A Modify is a different intent; do not inherit an intercepted attempt's session.
   clearChain();
   ui.targetTask = task;
@@ -1218,11 +1224,15 @@ function applyModifyTarget() {
     els.editRequest.setAttribute("aria-expanded", "true");
   }
   els.requestText.focus();
+  // The target makes Start usable even while busy; refresh the controls that depend on it.
+  setBusy(ui.busy);
   render();
 }
 
 async function startRun() {
-  if (ui.busy) {
+  // A Modify may start while the page still shows a run: starting it hands the Task over and
+  // stops the previous run server-side, instead of refusing and forcing a page reload first.
+  if (ui.busy && !canStartModify(ui.targetTask)) {
     showError(ui.copy.running);
     return;
   }
@@ -1584,12 +1594,15 @@ function closeStream() {
 }
 
 function setBusy(busy) {
+  // A selected Modify target keeps Start and the request editor usable while a run is on stage:
+  // starting it is the handover that replaces that run.
+  const canRun = !busy || canStartModify(ui.targetTask);
   ui.busy = busy;
-  els.start.disabled = busy;
+  els.start.disabled = !canRun;
   els.reset.disabled = busy;
-  els.requestText.disabled = busy;
+  els.requestText.disabled = !canRun;
   if (els.scenarioSelect) els.scenarioSelect.disabled = busy;
-  if (els.startQuick) els.startQuick.disabled = busy;
+  if (els.startQuick) els.startQuick.disabled = !canRun;
   if (!busy) {
     ui.cancelling = false;
     if (els.cancelLabel) els.cancelLabel.textContent = ui.copy.cancelRequest;
@@ -2402,14 +2415,13 @@ function renderControls() {
   els.pbStep.checked = status.mode === "step";
   els.pausedTag.hidden = !status.paused;
   els.stage.classList.toggle("paused", status.paused);
-  if (ui.view.status !== "idle" && !ui.busy) {
-    els.start.textContent = ui.copy.start;
-  } else if (ui.busy) {
-    els.start.textContent = ui.copy.running;
-  }
+  els.start.textContent =
+    ui.busy && !canStartModify(ui.targetTask) ? ui.copy.running : ui.copy.start;
   if (els.startQuick) {
-    els.startQuick.textContent = ui.busy ? ui.copy.running : ui.copy.start;
-    els.startQuick.disabled = ui.busy;
+    // With a Modify target ready, Start is the handover that replaces the run on stage.
+    const canRun = !ui.busy || canStartModify(ui.targetTask);
+    els.startQuick.textContent = canRun ? ui.copy.start : ui.copy.running;
+    els.startQuick.disabled = !canRun;
   }
   if (els.cancelRun) {
     els.cancelRun.disabled = !ui.busy || ui.cancelling || !ui.view.runId;
