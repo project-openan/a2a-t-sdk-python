@@ -2,6 +2,78 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
+  "x-a2at-checks": [
+    {
+      "slot": "任务上下文",
+      "when": "(?:turn(?:ing)? off|shut(?:ting)? down|shutdown|关断|关闭).{0,60}(?:carrier|frequency|载波|频点)",
+      "require": "\\d{3,6}",
+      "error": "slot.not_provided",
+      "slot_label": "关断频点"
+    },
+    {
+      "slot": "任务上下文",
+      "when": "(?:approximately|approx\\.?|about|around|约)\\s*\\d{3,6}",
+      "error": "slot.constraint_violated",
+      "slot_label": "关断频点",
+      "actual": "approximate carrier frequency"
+    },
+    {
+      "slot": "任务上下文",
+      "when": "sites?\\s+(?:such as|like|e\\.g\\.)",
+      "source": "input",
+      "error": "slot.not_provided",
+      "slot_label": "站点列表"
+    },
+    {
+      "slot": "任务上下文",
+      "when": "(?:power outage|outage|停电)",
+      "require": "\\b(?:LTE|NRES|NES|LNR|NE)[_ ]?[A-Za-z0-9_]{3,}",
+      "error": "slot.not_provided",
+      "slot_label": "站点列表"
+    },
+    {
+      "slot": "任务上下文",
+      "when": "(?:power outage|outage|停电)",
+      "require": "\\d{1,2}:\\d{2}",
+      "error": "slot.not_provided",
+      "slot_label": "停电起止时间"
+    },
+    {
+      "slot": "任务上下文",
+      "when": "(?:\\d+\\s*(?:or|-|to)\\s*\\d+\\s*hours?|more than\\s+[\\w-]+\\s*hours?|at least\\s+[\\w-]+\\s*hours?|about\\s+[\\w-]+\\s*hours?|超过?\\s*\\S+\\s*(?:个)?小时|大约\\s*\\S+\\s*(?:个)?小时)",
+      "error": "slot.constraint_violated",
+      "slot_label": "停电时长",
+      "actual": "vague outage duration"
+    },
+    {
+      "slot": "任务上下文",
+      "when": "(?:maximi[sz]e (?:the )?rate|as much as possible|as high as possible|尽量最大化速率|尽可能高)",
+      "require": "\\d+(?:\\.\\d+)?\\s*(?:Mbps|Mbit/s|Mbit)\\b",
+      "error": "slot.not_provided",
+      "slot_label": "保障速率"
+    },
+    {
+      "slot": "任务上下文",
+      "when": "(?:adjust(?:ed)?|modif(?:y|ied)|change(?:d)?|调整|修改)[^.;]{0,120}\\bfrom\\s+\\d{1,2}:\\d{2}\\s+to\\s+\\d{1,2}:\\d{2}",
+      "require": "\\d+(?:\\.\\d+)?\\s*(?:Mbps|Mbit/s|Mbit)\\b",
+      "error": "slot.not_provided",
+      "slot_label": "保障速率"
+    },
+    {
+      "slot": "任务上下文",
+      "when": "\\b(?:green|eco)\\b",
+      "error": "slot.constraint_violated",
+      "slot_label": "节能模式",
+      "actual": "green"
+    },
+    {
+      "slot": "任务上下文",
+      "when": "\\b3G\\b",
+      "error": "slot.constraint_violated",
+      "slot_label": "小区制式",
+      "actual": "3G"
+    }
+  ],
   "properties": {
     "操作类型": {
       "type": "string",
