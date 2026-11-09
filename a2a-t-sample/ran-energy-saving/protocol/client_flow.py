@@ -48,6 +48,7 @@ from a2a_t.core.metadata import (
     MetadataContent,
     NegotiationContext,
     NegotiationPerformative,
+    decode_extension_value,
 )
 from a2a_t.core.standard_templates import (
     FEASIBILITY_NEGOTIATION_ACCEPT_REJECT_URI,
@@ -2015,58 +2016,187 @@ def _find_negotiation_message(
 #: Key of the vendor's nested typed metadata inside a Negotiation-T JSON body.
 _RESPONSE_METADATA_KEY: Final[str] = "responseMetadata"
 
+#: Typed fields a vendor Negotiation-T body spells on the wire. A body whose envelope the client
+#: cannot parse still contains them verbatim, so reading them from the raw value is the last-resort
+#: signal. They are only ever read, never interpreted here.
+_VENDOR_NEGOTIATION_TYPE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r'"negotiationType"\s*:\s*"([^"\\]+)"'
+)
+_VENDOR_TEMPLATE_URI_PATTERN: Final[re.Pattern[str]] = re.compile(r'"templateUri"\s*:\s*"([^"\\]+)"')
+_VENDOR_TEXT_PATTERN: Final[re.Pattern[str]] = re.compile(r'"text"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+#: Characters that open a JSON document; anything else is rendered text the heading fallback reads.
+_JSON_OPENERS: Final[frozenset[str]] = frozenset({"{", "["})
+
+
+def _vendor_documents(content: object) -> list[Mapping[str, object]]:
+    """Return the envelope objects of one vendor Negotiation-T value, whatever its wrapper.
+
+    The vendor sends the value as a JSON string. Depending on the endpoint it decodes to a bare
+    object or to a one-element list of objects, so both roots are accepted, as is a value a peer
+    already delivered structured. Anything else yields an empty list.
+    """
+    decoded = decode_extension_value(content)
+    if isinstance(decoded, Mapping):
+        return [decoded]
+    if isinstance(decoded, list):
+        return [item for item in decoded if isinstance(item, Mapping)]
+    return []
+
+
+def _vendor_message_entries(document: Mapping[str, object]) -> list[Mapping[str, object]]:
+    """Return the message entries of one vendor envelope (``message`` is a list on the wire)."""
+    message = document.get("message")
+    if isinstance(message, list):
+        return [entry for entry in message if isinstance(entry, Mapping)]
+    if isinstance(message, Mapping):
+        return [message]
+    return []
+
 
 def _vendor_response_metadata(content: object) -> Mapping[str, object] | None:
     """Return the nested ``responseMetadata`` of one vendor Negotiation-T JSON body.
 
     The vendor NMS sends the extension value as a JSON string, not rendered markdown:
-    ``{"message": [{"metadata": {"responseMetadata": {...}}}]}``. Anything else (a local server's
-    markdown body, an unparsable string) yields ``None`` so the caller keeps its other paths.
+    ``{"message": [{"metadata": {"responseMetadata": {...}}}]}``, wrapped in a list on some
+    endpoints. The document root and every message entry are inspected; the first mapping wins.
+    Anything else (a local server's markdown body, an unparsable string) yields ``None`` so the
+    caller keeps its other paths.
     """
-    if not isinstance(content, str):
-        return None
-    try:
-        parsed = json.loads(content)
-    except ValueError:
-        return None
-    message = parsed.get("message") if isinstance(parsed, Mapping) else None
-    if not isinstance(message, list):
-        return None
-    for entry in message:
-        if not isinstance(entry, Mapping):
-            continue
-        metadata = entry.get("metadata")
-        if not isinstance(metadata, Mapping):
-            continue
-        response_metadata = metadata.get(_RESPONSE_METADATA_KEY)
-        if isinstance(response_metadata, Mapping):
-            return response_metadata
+    for document in _vendor_documents(content):
+        candidates: list[object] = [document]
+        candidates.extend(entry.get("metadata") for entry in _vendor_message_entries(document))
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping):
+                continue
+            response_metadata = candidate.get(_RESPONSE_METADATA_KEY)
+            if isinstance(response_metadata, Mapping):
+                return response_metadata
     return None
 
 
-def _vendor_propose_kind(content: object) -> NegotiationKind | None:
-    """Return the kind named by a vendor propose's nested typed metadata, if any.
+def _vendor_typed_fields(content: object) -> tuple[str | None, str | None]:
+    """Return the raw ``negotiationType`` and ``templateUri`` a vendor body spells on the wire.
+
+    Reads the unparsed extension string, so it still works when the envelope is truncated or uses
+    an unknown wrapper. Only a JSON-looking value is read: free prose that happens to quote a
+    field name must never type a proposal. Returns ``None`` for each absent field and never
+    interprets the value.
+    """
+    if not isinstance(content, str):
+        return None, None
+    opening = content.lstrip()[:1]
+    if opening not in _JSON_OPENERS:
+        return None, None
+    negotiation_type = _VENDOR_NEGOTIATION_TYPE_PATTERN.search(content)
+    template_uri = _VENDOR_TEMPLATE_URI_PATTERN.search(content)
+    return (
+        negotiation_type.group(1) if negotiation_type is not None else None,
+        template_uri.group(1) if template_uri is not None else None,
+    )
+
+
+def _kind_from_vendor_fields(negotiation_type: object, template_uri: object) -> NegotiationKind | None:
+    """Return the kind named by a vendor ``negotiationType`` or nested ``templateUri``.
 
     ``negotiationType`` is the vendor's own typed field and outranks ``templateUri``, whose path
     does not follow the sample's template naming. A disagreement is logged, never silently
     resolved.
     """
-    response_metadata = _vendor_response_metadata(content)
-    if response_metadata is None:
-        return None
-    kind = negotiation_kind_for_negotiation_type(response_metadata.get("negotiationType"))
-    nested_uri = response_metadata.get("templateUri")
-    uri_kind = negotiation_kind_for_template_uri(nested_uri if isinstance(nested_uri, str) else None)
+    kind = negotiation_kind_for_negotiation_type(negotiation_type)
+    uri_kind = negotiation_kind_for_template_uri(template_uri if isinstance(template_uri, str) else None)
     if kind is not None:
         if uri_kind is not None and uri_kind is not kind:
             _LOGGER.warning(
                 "vendor propose negotiationType=%s disagrees with its templateUri kind=%s; "
                 "keeping negotiationType",
-                response_metadata.get("negotiationType"),
+                negotiation_type,
                 uri_kind.value,
             )
         return kind
     return uri_kind
+
+
+def _vendor_propose_kind(content: object) -> NegotiationKind | None:
+    """Return the kind named by a vendor propose body, or ``None`` when it names none.
+
+    The nested ``responseMetadata`` is authoritative. When the envelope does not parse (a root the
+    client does not know, truncated JSON), the same typed fields are read from the raw value, so a
+    typed proposal is still typed instead of guessed from prose.
+    """
+    response_metadata = _vendor_response_metadata(content)
+    if response_metadata is not None:
+        return _kind_from_vendor_fields(
+            response_metadata.get("negotiationType"), response_metadata.get("templateUri")
+        )
+    negotiation_type, template_uri = _vendor_typed_fields(content)
+    if negotiation_type is None and template_uri is None:
+        return None
+    _LOGGER.warning(
+        "vendor propose envelope was not readable as a document; typed fields read from its raw "
+        "value (negotiationType=%s, templateUri=%s)",
+        negotiation_type or "-",
+        template_uri or "-",
+    )
+    return _kind_from_vendor_fields(negotiation_type, template_uri)
+
+
+def _vendor_message_text(content: object) -> str | None:
+    """Return the rendered prose of one Negotiation-T value, or ``None`` when it carries none.
+
+    A conformant value is already prose and is returned unchanged. A vendor JSON body is unwrapped
+    to the first non-empty ``message[*].text``. When the envelope does not parse, the same field is
+    read from the raw string. ``None`` means "no prose": callers must not read the JSON envelope
+    itself as if it were a proposal body.
+    """
+    for document in _vendor_documents(content):
+        for entry in _vendor_message_entries(document):
+            text = entry.get("text")
+            if isinstance(text, str) and text.strip():
+                return text
+    if isinstance(content, str):
+        stripped = content.strip()
+        if stripped and stripped[0] not in _JSON_OPENERS:
+            return content
+        return _vendor_raw_text(content)
+    return None
+
+
+def _vendor_raw_text(content: str) -> str | None:
+    """Read the ``message[*].text`` field out of a JSON body the client could not parse.
+
+    The value is the vendor's own field, JSON-escaped inside the envelope, so it is unescaped with
+    the JSON rules before use. A body with no such field yields ``None``, never the envelope.
+    """
+    match = _VENDOR_TEXT_PATTERN.search(content)
+    if match is None:
+        return None
+    try:
+        return json.loads(f'"{match.group(1)}"')
+    except ValueError:
+        return match.group(1)
+
+
+def _propose_diagnostics(
+    metadata: Mapping[str, object],
+    *,
+    outer_template_uri: object = None,
+) -> str:
+    """Describe what one inbound propose actually carried, for the log and the raised error."""
+    keys = ", ".join(sorted(str(key) for key in metadata)) or "<none>"
+    content = metadata.get(NEGOTIATION_T_EXTENSION_URI)
+    if isinstance(content, str):
+        shape = "json" if content.strip()[:1] in _JSON_OPENERS else "text"
+    elif isinstance(content, Mapping):
+        shape = "mapping"
+    elif isinstance(content, list):
+        shape = "list"
+    else:
+        shape = "absent"
+    parts = [f"metadata keys: {keys}", f"Negotiation-T value: {shape}"]
+    if outer_template_uri is not None:
+        parts.append(f"outer templateUri: {outer_template_uri!r}")
+    return "; ".join(parts)
 
 
 def _resolve_propose_template(
@@ -2076,47 +2206,63 @@ def _resolve_propose_template(
 ) -> tuple[str, NegotiationKind, bool]:
     """Return one inbound propose's template URI, negotiation kind and whether it was inferred.
 
-    A conformant propose carries ``templateUri``. The vendor NMS omits it on the proposal that
-    continues a negotiation, so with ``infer_missing_template_uri`` on, the opening heading of the
-    rendered body supplies the kind and the canonical propose URI of that kind stands in for the
-    missing value. An unreadable body still fails: guessing the kind would select the wrong decision
-    prompt and the wrong reply template.
+    A conformant propose carries a sample ``templateUri``. The vendor NMS instead names its own
+    template (or omits it) and types the body through ``responseMetadata``, so with
+    ``infer_missing_template_uri`` on, the typed fields of the body supply the kind and the
+    canonical propose URI of that kind stands in for the unusable value. The resolution order is
+    nested ``negotiationType``, nested ``templateUri``, the typed fields read from the raw value,
+    then the opening heading of the unwrapped body. An untyped body still fails: guessing the kind
+    would select the wrong decision prompt and the wrong reply template.
 
     Args:
         metadata: A2A metadata map of the inbound propose.
-        infer_missing_template_uri: whether a missing ``templateUri`` may be recovered from the
+        infer_missing_template_uri: whether an unusable ``templateUri`` may be recovered from the
             propose body. Only the real-NMS client path turns this on.
 
     Returns:
         The template URI to report, the negotiation kind, and whether the URI was inferred.
 
     Raises:
-        ClientFlowError: when the propose carries no template URI and its kind is not readable from
-            the body, or when the URI names no sample negotiation template.
+        ClientFlowError: when the propose carries no usable template URI and its kind is not
+            readable from the body. The message lists the metadata keys, the value shape and the
+            outer URI so a field report is diagnosable without the raw frame.
     """
     value = metadata.get(TEMPLATE_URI_METADATA_KEY)
     if isinstance(value, str) and value.strip():
         kind = negotiation_kind_for_template_uri(value)
-        if kind is None:
-            raise ClientFlowError(f"{_ERROR_UNKNOWN_KIND} templateUri={value}")
-        return value, kind, False
-    if infer_missing_template_uri:
-        content = metadata.get(NEGOTIATION_T_EXTENSION_URI)
-        kind = _vendor_propose_kind(content) or negotiation_kind_for_propose_content(
-            content if isinstance(content, str) else None
-        )
         if kind is not None:
-            _LOGGER.warning(
-                "the negotiation propose carries no outer template URI; inferred kind=%s "
-                "from its responseMetadata or heading",
-                kind.value,
+            return value, kind, False
+        if not infer_missing_template_uri:
+            raise ClientFlowError(
+                f"{_ERROR_UNKNOWN_KIND} templateUri={value} "
+                f"({_propose_diagnostics(metadata, outer_template_uri=value)})"
             )
-            return _PROPOSE_TEMPLATE_URI_BY_KIND[kind.value], kind, True
+        _LOGGER.warning(
+            "the negotiation propose template %r is not a sample negotiation template; "
+            "inferring its kind from the body",
+            value,
+        )
+    elif not infer_missing_template_uri:
+        raise ClientFlowError(f"{_ERROR_NO_TEMPLATE_URI} ({_propose_diagnostics(metadata)})")
+
+    content = metadata.get(NEGOTIATION_T_EXTENSION_URI)
+    kind = _vendor_propose_kind(content)
+    if kind is None:
+        kind = negotiation_kind_for_propose_content(_vendor_message_text(content))
+    if kind is not None:
+        _LOGGER.warning(
+            "the negotiation propose carries no usable outer template URI; inferred kind=%s "
+            "from its responseMetadata, typed fields or heading",
+            kind.value,
+        )
+        return _PROPOSE_TEMPLATE_URI_BY_KIND[kind.value], kind, True
     _LOGGER.warning(
-        "the negotiation propose carries no template URI (metadata keys: %s)",
-        ", ".join(sorted(str(key) for key in metadata)),
+        "the negotiation propose carries no template URI (%s)",
+        _propose_diagnostics(metadata, outer_template_uri=value),
     )
-    raise ClientFlowError(_ERROR_NO_TEMPLATE_URI)
+    raise ClientFlowError(
+        f"{_ERROR_NO_TEMPLATE_URI} ({_propose_diagnostics(metadata, outer_template_uri=value)})"
+    )
 
 
 def _propose_view(
@@ -2127,14 +2273,19 @@ def _propose_view(
     template_uri: str,
     context_id: str,
 ) -> NegotiationProposeView:
-    """Build the provider-facing view of one inbound server proposal."""
-    content = metadata.get(NEGOTIATION_T_EXTENSION_URI)
+    """Build the provider-facing view of one inbound server proposal.
+
+    ``content`` is the rendered prose of the proposal, never the vendor's JSON envelope: the
+    decision prompt, the grounding checks, the transcript and the approval card all consume it as
+    the human-readable proposal body.
+    """
+    content = _vendor_message_text(metadata.get(NEGOTIATION_T_EXTENSION_URI)) or ""
     return NegotiationProposeView(
         negotiation_id=session.id,
         kind=kind.value,
         round=session.round,
         max_rounds=session.max_rounds,
-        content=content if isinstance(content, str) else "",
+        content=content,
         performative=session.performative.value,
         template_uri=template_uri,
         context_id=_string_field(event, "context_id") or context_id,

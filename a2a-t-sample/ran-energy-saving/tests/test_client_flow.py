@@ -1761,24 +1761,40 @@ def _vendor_propose_content(
     *,
     negotiation_type: str | None = "INFORMATION",
     template_uri: str = "Negotiation-T/network-layer/ran-energy-saving/v1/region-negotiation/propose/v1",
+    text: str = "Region 'Region Z' is not recognized. Please provide the correct region name.",
+    as_array: bool = False,
 ) -> str:
-    """Build the vendor's Negotiation-T body: one JSON string with a nested ``responseMetadata``."""
+    """Build the vendor's Negotiation-T body: one JSON string with a nested ``responseMetadata``.
+
+    ``as_array`` reproduces the envelope the real NMS sends on the proposal that continues a
+    negotiation: the document root is a one-element list of message bundles.
+    """
     response_metadata: dict[str, object] = {
         "performative": "PROPOSE",
         "templateUri": template_uri,
     }
     if negotiation_type is not None:
         response_metadata["negotiationType"] = negotiation_type
-    return json.dumps(
-        {
-            "message": [
-                {
-                    "text": "Region 'Region Z' is not recognized. Please provide the correct region name.",
-                    "metadata": {"responseMetadata": response_metadata},
-                }
-            ],
-            "messageType": "ASK_USER",
-        }
+    document: object = {
+        "message": [
+            {"text": text, "metadata": {"responseMetadata": response_metadata}},
+        ],
+        "messageType": "ASK_USER",
+    }
+    return json.dumps([document] if as_array else document)
+
+
+def _field_feasibility_frame() -> str:
+    """Build the frame observed in the field: array root, nested FEASIBILITY typed metadata."""
+    return _vendor_propose_content(
+        negotiation_type="FEASIBILITY",
+        template_uri="Negotiation-T/feasibility-negotiation/propose/v1",
+        text=(
+            "## Feasibility Negotiation\n"
+            "The current rate goal cannot simultaneously satisfy the power outage duration "
+            "requirement. Reduce the rate target to 2Mbps or less."
+        ),
+        as_array=True,
     )
 
 
@@ -1842,3 +1858,170 @@ async def test_an_unknown_vendor_propose_still_fails_loudly() -> None:
             language="en-US",
             infer_missing_negotiation_kind=True,
         )
+
+
+async def _seen_propose(content: str) -> NegotiationProposeView:
+    """Run one round against ``content`` and return the proposal the decision provider was shown."""
+    seen: list[NegotiationProposeView] = []
+    await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=ScriptedTransport(
+            [[_propose_without_template_uri("information", content=content)], [end_event()]]
+        ),
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+        language="en-US",
+        on_decision_requested=lambda propose, session: seen.append(propose),
+        infer_missing_negotiation_kind=True,
+    )
+    return seen[0]
+
+
+def _propose_with_vendor_template_uri(kind: str, *, content: str) -> dict[str, object]:
+    """Build a propose whose outer ``templateUri`` uses the vendor's own template naming."""
+    event = propose_event(kind, 1, content=content)
+    metadata = event["metadata"]
+    assert isinstance(metadata, dict)
+    metadata[TEMPLATE_URI_METADATA_KEY] = (
+        "Negotiation-T/network-layer/ran-energy-saving/v1/region-negotiation/propose/v1"
+    )
+    return event
+
+
+async def test_the_field_feasibility_frame_is_typed_from_its_nested_negotiation_type() -> None:
+    """The real NMS wraps the body in a top-level array; the nested type still names the kind."""
+    requested = await _requested_propose(_field_feasibility_frame())
+
+    assert requested == [("feasibility", FEASIBILITY_NEGOTIATION_PROPOSE_URI)]
+
+
+async def test_the_array_envelope_without_negotiation_type_uses_its_nested_template_uri() -> None:
+    requested = await _requested_propose(
+        _vendor_propose_content(
+            negotiation_type=None,
+            template_uri="Negotiation-T/info-negotiation/propose/v1",
+            as_array=True,
+        )
+    )
+
+    assert requested == [("information", INFORMATION_NEGOTIATION_PROPOSE_URI)]
+
+
+async def test_a_truncated_vendor_envelope_is_typed_from_its_raw_fields() -> None:
+    """A body the client cannot parse still spells its typed fields verbatim, so they are read."""
+    truncated = _field_feasibility_frame()[:-1]
+    with pytest.raises(ValueError):
+        json.loads(truncated)
+
+    requested = await _requested_propose(truncated)
+
+    assert requested == [("feasibility", FEASIBILITY_NEGOTIATION_PROPOSE_URI)]
+
+
+async def test_a_json_envelope_without_any_typed_signal_still_fails_loudly() -> None:
+    """Reading fields is not guessing: an envelope carrying none keeps the run loud."""
+    content = json.dumps([{"message": [{"text": "Please confirm the request."}]}])
+
+    with pytest.raises(ClientFlowError, match="carries no template URI"):
+        await _requested_propose(content)
+
+
+async def test_the_array_envelope_hands_the_prose_not_the_json_to_the_decision_provider() -> None:
+    text = "## Target Negotiation\nThe target rate is ambiguous. Please confirm 2Mbps."
+    propose = await _seen_propose(
+        _vendor_propose_content(negotiation_type="TARGET", text=text, as_array=True)
+    )
+
+    assert propose.content == text
+    assert propose.kind == "target"
+    assert propose.template_uri == TARGET_NEGOTIATION_PROPOSE_URI
+
+
+async def test_an_unknown_vendor_template_uri_is_inferred_from_the_body() -> None:
+    """A present-but-vendor-named outer URI must not short-circuit the typed body."""
+    seen: list[NegotiationProposeView] = []
+    await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=ScriptedTransport(
+            [
+                [
+                    _propose_with_vendor_template_uri(
+                        "information", content=_field_feasibility_frame()
+                    )
+                ],
+                [end_event()],
+            ]
+        ),
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+        language="en-US",
+        on_decision_requested=lambda propose, session: seen.append(propose),
+        infer_missing_negotiation_kind=True,
+    )
+
+    assert [(item.kind, item.template_uri) for item in seen] == [
+        ("feasibility", FEASIBILITY_NEGOTIATION_PROPOSE_URI)
+    ]
+
+
+async def test_an_unknown_vendor_template_uri_fails_when_inference_is_off() -> None:
+    transport = ScriptedTransport(
+        [
+            [
+                _propose_with_vendor_template_uri(
+                    "information", content=_field_feasibility_frame()
+                )
+            ]
+        ]
+    )
+
+    with pytest.raises(ClientFlowError, match="not a sample negotiation template") as raised:
+        await run_client_flow(
+            prompt_client=FakePromptClient(),
+            transport=transport,
+            user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+            provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+            language="en-US",
+        )
+
+    assert "metadata keys:" in str(raised.value)
+    assert "outer templateUri:" in str(raised.value)
+
+
+async def test_prose_quoting_a_typed_field_does_not_type_the_proposal() -> None:
+    """The raw-field read is restricted to JSON bodies; prose keeps its heading as the only signal."""
+    content = (
+        "## Information Negotiation\n"
+        'Example payload: "negotiationType": "TARGET". Please provide the region.'
+    )
+
+    requested = await _requested_propose(content)
+
+    assert requested == [("information", INFORMATION_NEGOTIATION_PROPOSE_URI)]
+
+
+async def test_an_untyped_propose_names_what_the_frame_carried() -> None:
+    """The failure must be diagnosable from the run log without the raw wire frame."""
+    transport = ScriptedTransport(
+        [
+            [
+                _propose_without_template_uri(
+                    "information", content=json.dumps([{"message": [{"text": "Confirm."}]}])
+                )
+            ]
+        ]
+    )
+
+    with pytest.raises(ClientFlowError, match="carries no template URI") as raised:
+        await run_client_flow(
+            prompt_client=FakePromptClient(),
+            transport=transport,
+            user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+            provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+            language="en-US",
+            infer_missing_negotiation_kind=True,
+        )
+
+    message = str(raised.value)
+    assert "metadata keys:" in message
+    assert "Negotiation-T value: json" in message

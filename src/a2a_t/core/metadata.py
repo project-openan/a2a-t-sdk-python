@@ -13,6 +13,8 @@ concern of the negotiation layer, not of this module.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import ClassVar, Final
@@ -28,6 +30,8 @@ __all__ = [
     "MetadataContent",
     "NegotiationContext",
     "NegotiationPerformative",
+    "decode_extension_value",
+    "extension_value",
 ]
 
 #: Metadata key carrying the template URI alongside the message itself.
@@ -62,6 +66,57 @@ NEGOTIATION_T_EXTENSION_URI: Final[str] = (
 NEGOTIATION_T_EXTENSION_URI_NL: Final[str] = (
     "https://projects.tmforum.org/a2aproject/telecommunication/extensions/Negotiation-T/NL/v1"
 )
+
+
+def decode_extension_value(value: object) -> object:
+    """Decode one A2A-T extension metadata value carrying an embedded JSON document.
+
+    A2A-T emits the extension value as rendered text, but peers in the field also send a JSON
+    document serialized into that string, sometimes with a list root (``[{...}]``) rather than an
+    object. Callers that need the structured payload should read it through this helper instead of
+    calling :func:`json.loads` themselves.
+
+    Only a string whose whole content parses as a JSON object or array is decoded: rendered prompt
+    text, malformed or truncated JSON and JSON scalars are returned unchanged. Nothing is decoded
+    recursively, so a value that was already structured passes through untouched. The helper never
+    raises.
+
+    Args:
+        value: raw extension metadata value; any type is accepted.
+
+    Returns:
+        the decoded ``dict``/``list`` when the value is a JSON object/array string, otherwise
+        ``value`` unchanged.
+    """
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text or text[0] not in "{[":
+        return value
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return value
+    return parsed if isinstance(parsed, (dict, list)) else value
+
+
+def extension_value(
+    metadata: Mapping[str, object] | None,
+    extension_uri: str,
+) -> object | None:
+    """Return one extension value of a metadata map, decoded by :func:`decode_extension_value`.
+
+    Args:
+        metadata: normalized A2A metadata map, or ``None``.
+        extension_uri: extension URI whose value is read, for example
+            :data:`NEGOTIATION_T_EXTENSION_URI`.
+
+    Returns:
+        the decoded extension value, or ``None`` when the map or the key is missing.
+    """
+    if not isinstance(metadata, Mapping):
+        return None
+    return decode_extension_value(metadata.get(extension_uri))
 
 
 class NegotiationPerformative(StrEnum):
