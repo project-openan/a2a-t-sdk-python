@@ -49,7 +49,7 @@ token/时延统计的载体。
 | `task_validation` | `Task-T validation <verdict>` | task_validation / task_modify | `client_flow` | verdict、errors、negotiationKind、reason | Y 列（拦截结论） |
 | `intent_processed` | `Intent processed` | task_prompt | `client_runtime`（A2A-T）/ `run_state`（pure 提升） | rawRequest、normalizedText、结构化 intent、missingFields | Z 列（A2A 侧） |
 | `task_created` | `Task created` / `Task modified` | execution | `run_state._maybe_emit_task_created` | operation、state=`TASK_STATE_SUBMITTED`、taskId/contextId | **AN** |
-| `propose` | `Propose · <kind> · Rn` | negotiation | `run_state.record_event` 按 performative 把入站协商报文标为 `propose` | round、templateUri、协商正文、negotiationContext | **AJ**、AO/AP、AW |
+| `propose` | `Propose · <kind> · Rn` | negotiation | `run_state.record_event` 按 performative 把入站协商报文标为 `propose`；或按 `metadata.pure.kind == negotiation` | round、templateUri、协商正文、negotiationContext；pure 另带 `negotiationType`、`hop` | **AJ**、AO/AP、AW |
 | `decision_requested` | `Decision requested · <kind> · Rn` | negotiation | `client_flow` 收到 PROPOSE 后请求决策 | kind、round、templateUri、协商正文 | **AK** |
 | `negotiation_started` | `Negotiation started · <kind> · Rn` | negotiation | `pre_task_negotiation`（本地 RAN Agent） | round、kind、templateUri、服务端理解起止 | **AT** |
 | `accept` / `counter` / `reject` / `abort` | `Decision · <action> · Rn` | negotiation / resolution | `run_state.record_decision` | action、rationale、filledParams/counterParams、confirmedBy | **AQ**、AW、BB |
@@ -57,6 +57,13 @@ token/时延统计的载体。
 | `finished` | `Run finished` | done | `run_state.emit_finished` | finalState、report、error | 结束时间、终态 |
 | root | `run · <scenario> · <protocol>` | — | exporter 创建 | trace 级 metadata（见 §5） | 运行级时间窗、结果 |
 | event | `trace opened` | — | exporter 创建 | 与 root 相同的 trace 属性 | 让 Langfuse 尽早就绪 |
+
+**pure A2A 的轮次**：pure 提问没有 Negotiation-T 元数据，`propose` span 由样例
+`metadata.pure` 推导：`round` 取 `metadata.pure.round`（OSS 外层自己编号），缺失时按本 run
+已回答提问的顺序计数；`negotiationType` 取 `metadata.pure.negotiationKind`（OSS 从下游透传）
+或 `phase`，两者都没有时记 `information`，无法识别的标签记 `unknown`；`hop` 为 OSS 跳标记。
+只记 UI 可见的外层跳，内层仍只在 `wire-oss.jsonl`。脚本/policy 的答案会记成 `accept`
+决策，所以每个 pure 轮次都有 `propose` 和 `Decision · accept` 两条，与 A2A-T 一致。
 
 **只在 `full` 导出**（排障证据，默认不进 dashboard）：`run_started`、`runtime_ready`、
 `discovery`、`intent_review_requested`、`task_tracking`、`decision_made` /
@@ -114,14 +121,14 @@ OSS 进程里有两条 LLM 链路，观测名就能区分：
 | AL | OSS 调 SDK | `task_prompt_rendered.startedAt` | 起点 |
 | AM | OSS 下发请求 | 首条 `message_sent`（对应 hop）的 `startedAt` | 起点 |
 | AN | 任务创建/修改成功 | `task_created.startedAt` | 起点 |
-| AO/AP | 协商发起/通知用户 | 每轮 `propose.startedAt` | 起点 |
+| AO/AP | 协商发起/通知用户 | 每轮 `propose.startedAt`（A2A-T 与 pure） | 起点 |
 | AQ | OSS 用户答复 | 每轮 `Decision · …` 的 `startedAt`（人工模式已回溯到提交时刻） | 起点 |
 | AR | 调 SDK 构造协商回复 | `negotiation_*_extraction` 的 `llm.startedAt` | 起点 |
 | AS | 下发协商回复 | 对应 `message_sent` 的 `startedAt` | 起点 |
 | AT | 模型发起协商 | `negotiation_started.startedAt`（本地服务端） | 起点 |
 | AU | 端到端时延 | AN − AK | 由上面两列相减 |
 | AV | 协商时延 | AQ − AT（多轮取和） | 相减 |
-| AW | 协商轮次 | trace metadata `rounds`；或 `max(round)` | 最大轮次 |
+| AW | 协商轮次 | trace metadata `rounds`；或 `max(round)`（pure：`metadata.pure.round`） | 最大轮次 |
 | AX/AY/AZ | 输入/缓存/输出 token | 所有 `generation` 的 `usage_details.input/input_cached/output` | 求和 |
 | BA | 总 token | AX + AZ 或 `usage_details.total` | 求和 |
 | BB | 是否协商 | trace metadata `negotiated`（或 `rounds > 0`） | 布尔 |
@@ -136,7 +143,7 @@ OSS 侧与 RAN 侧，避免把 Task-T 固定开销和 planner 开销混在一起
 
 | 列 | 指标 | phase 级数据来源 |
 |---|---|---|
-| AJ | 协商发起时间点 | `propose.startedAt`（客户端收到 PROPOSE） |
+| AJ | 协商发起时间点 | `propose.startedAt`（客户端收到 PROPOSE；pure 为转发的 `INPUT_REQUIRED` 提问） |
 | AK | 通知 OSS 用户处理 | `decision_requested.startedAt` |
 | AO | 意图理解（发起协商） | 客户端不可见，需远端 `a2a-t-server` 提供等价信号（见 `docs-local/osp-metrics-a2at-server-handover.md`） |
 
@@ -153,8 +160,15 @@ run 结束后（`metrics_grace_seconds` 等待服务端 trace 批次）生成一
   `bySide`/`byComponent`（client/server + stage）。
 - `latency`：`totalMs`（startedAt→finishedAt）、`modelMs`（llm duration 求和）、
   `toolMs`、`approvalWaitMs`（approval requested/resolved 配对）、`otherMs`。
-- `negotiation`：`rounds`、`messages`、`observedSequence`、`outcome`。
+- `negotiation`：`rounds`、`messages`、`observedSequence`、`outcome`。pure A2A 的序列取自
+  `metadata.pure.kind in {negotiation, answer}` 及其 `round`，A2A-T 取自 transcript 的
+  performative，两者都产出 `[server PROPOSE, client ANSWER]` 形式的步骤。
 - `accuracy`：终态、轮次、协商目标、报告存在性；A2A-T 还比对 performative 序列。
+
+逐轮审计落在 `runs/client-state.sqlite3::negotiation_events`；`protocol` 列（`a2a-t` / `pure`，
+schema 版本 9 引入）让跨 run 查询不必 join `runs`。pure 行与 A2A-T 同构：每条转发提问一条
+入站 `PROPOSE`，每条答案一条出站 `ACCEPT`，共享同一个 `round`、`kind`
+（`information` / `target` / `feasibility` / `unknown`）和 `created_at`。
 
 落库：`runs/client-state.sqlite3::run_metrics` + `runs/metrics/run-metrics.jsonl`。
 查询：`GET /api/runs/{runId}/metrics`、`/api/metrics/runs`、`/api/metrics/summary`、
@@ -228,10 +242,14 @@ curl localhost:8080/api/metrics/export.csv
 - **AL/AR** 是 SDK/LLM 调用起点；SDK 内部的预处理不计入。
 - **AQ** 只在 manual/confirm 的 UI 提交时有精确值；tester 的脚本化 decision 没有人工时延。
 - **AT** 只有本地 RAN Agent 会发 `negotiation_started`；真机 a2a-t-server 需要按
-  `docs-local/osp-metrics-a2at-server-handover.md` 提供等价信号。
+  `docs-local/osp-metrics-a2at-server-handover.md` 提供等价信号。pure A2A 永远不发它：
+  协商从第一条 `propose` 开始，用 AO/AJ 作为起点，跳过 AV。
 - **AN** 取首个 `TASK_STATE_SUBMITTED`；若厂商用别的成功信号，需要真机侧给出机器可读字段。
-- **pure A2A** 没有逐轮 `propose`/`decision` span（标准 A2A 的 INPUT_REQUIRED 轮次），
-  轮次以 `run_metrics.negotiation.rounds` 和 `message_sent` 为准。
+- **pure A2A** 现在每轮 INPUT_REQUIRED 都有一条 `propose` span 和一条 `Decision · accept`
+  span，与 A2A-T 一致。轮次取样例 `metadata.pure.round`；对端不编号时（真机厂商 NMS 不编号）
+  按本 run 已回答提问数计数。只记 UI 可见的外层跳，因此 `avgRounds` 与单跳 A2A-T 拓扑可比，
+  内层跳只出现在 `wire-oss.jsonl`。对端用纯文本 agent message（无 Task、无元数据）回答时，
+  仍记为 1 轮。
 - **token 双计**：`run_metrics.tokens` 同时包含 client 与 server，比较时必须按 `bySide`
   拆分；Langfuse 中按 observation metadata `side` 过滤。
 - **offline** 运行 token 标记为 `scripted`，不导出 Langfuse；只用于确定性回归。

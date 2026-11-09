@@ -51,7 +51,7 @@ time-point carrier or a token/latency source.
 | `task_validation` | `Task-T validation <verdict>` | task_validation / task_modify | `client_flow` | verdict, errors, negotiationKind, reason | Y (blocked/pass) |
 | `intent_processed` | `Intent processed` | task_prompt | `client_runtime` (A2A-T) / `run_state` (pure promotion) | rawRequest, normalizedText, structured intent, missingFields | Z (A2A side) |
 | `task_created` | `Task created` / `Task modified` | execution | `run_state._maybe_emit_task_created` | operation, state=`TASK_STATE_SUBMITTED`, taskId/contextId | **AN** |
-| `propose` | `Propose · <kind> · Rn` | negotiation | `run_state.record_event` labels an inbound proposal by its performative (transcript kind `propose`) | round, templateUri, body, negotiationContext | **AJ**, AO/AP, AW |
+| `propose` | `Propose · <kind> · Rn` | negotiation | `run_state.record_event` labels an inbound proposal by its performative (transcript kind `propose`) or by `metadata.pure.kind == negotiation` | round, templateUri, body, negotiationContext; for pure also `negotiationType` and `hop` | **AJ**, AO/AP, AW |
 | `decision_requested` | `Decision requested · <kind> Rn` | negotiation | `client_flow` receives a PROPOSE and asks the decision provider | kind, round, templateUri, body | **AK** |
 | `negotiation_started` | `Negotiation started · <kind> · Rn` | negotiation | `pre_task_negotiation` (local RAN Agent) | round, kind, templateUri, server understanding window | **AT** |
 | `accept` / `counter` / `reject` / `abort` | `Decision · <action> · Rn` | negotiation / resolution | `run_state.record_decision` | action, rationale, filled/counter params, confirmedBy | **AQ**, AW, BB |
@@ -59,6 +59,15 @@ time-point carrier or a token/latency source.
 | `finished` | `Run finished` | done | `run_state.emit_finished` | finalState, report, error | end time, outcome |
 | root | `run · <scenario> · <protocol>` | — | exporter | trace metadata (§5) | run window, result |
 | event | `trace opened` | — | exporter | same trace attributes | early trace naming |
+
+**pure A2A rounds.** A pure question has no Negotiation-T metadata, so its `propose` span is
+derived from the sample `metadata.pure`:
+`round` = `metadata.pure.round` (the OSS hop numbers its own outer rounds), else the sequence of
+questions answered in this run; `negotiationType` = `metadata.pure.negotiationKind` (forwarded by
+the OSS hop) or `phase`, with `information` when neither is present and `unknown` for an
+unrecognised tag; `hop` = the OSS hop tag. Only the UI-visible outer hop is recorded; the inner
+hop stays in `wire-oss.jsonl`. A scripted or policy answer is recorded as an `accept` decision, so
+each pure round has both a `propose` and a `Decision · accept`, exactly like A2A-T.
 
 **`full` only** (diagnosis evidence, not in the dashboard by default): `run_started`,
 `runtime_ready`, `discovery`, `intent_review_requested`, `task_tracking`, `decision_made` /
@@ -118,14 +127,14 @@ Notes:
 | AL | OSS calls the SDK | `task_prompt_rendered.startedAt` | start |
 | AM | request dispatched | first `message_sent` of the hop | start |
 | AN | task created/modified | `task_created.startedAt` | start |
-| AO/AP | negotiation initiated / user notified | each round's `propose.startedAt` | start |
+| AO/AP | negotiation initiated / user notified | each round's `propose.startedAt` (A2A-T and pure) | start |
 | AQ | user answer | each `Decision · …` `startedAt` (backdated to the submit in manual mode) | start |
 | AR | SDK builds the reply | `negotiation_*_extraction` `llm.startedAt` | start |
 | AS | reply dispatched | matching `message_sent.startedAt` | start |
 | AT | model starts negotiating | `negotiation_started.startedAt` (local server) | start |
 | AU | end-to-end | AN − AK | difference |
 | AV | negotiation | AQ − AT, summed over rounds | difference |
-| AW | rounds | trace metadata `rounds`, or `max(round)` | max |
+| AW | rounds | trace metadata `rounds`, or `max(round)` (pure: `metadata.pure.round`) | max |
 | AX/AY/AZ | input/cached/output tokens | `usage_details.input/input_cached/output` of every generation | sum |
 | BA | total tokens | AX + AZ, or `usage_details.total` | sum |
 | BB | negotiated | trace metadata `negotiated` (or `rounds > 0`) | boolean |
@@ -142,7 +151,7 @@ workbook above. Only these three are affected:
 
 | Col | Metric | Phase-level source |
 |---|---|---|
-| AJ | negotiation started | `propose.startedAt` (the client received the PROPOSE) |
+| AJ | negotiation started | `propose.startedAt` (the client received the PROPOSE; pure: the relayed `INPUT_REQUIRED` question) |
 | AK | OSS asked to handle it | `decision_requested.startedAt` |
 | AO | server-side intent understanding | not emitted by the client; the remote `a2a-t-server` must expose it (see `docs-local/osp-metrics-a2at-server-handover.md`) |
 
@@ -159,9 +168,17 @@ After the run (plus `metrics_grace_seconds` for late server spans) one JSON docu
   `bySide`/`byComponent` (client/server × stage).
 - `latency`: `totalMs` (startedAt→finishedAt), `modelMs` (sum of llm durations), `toolMs`,
   `approvalWaitMs` (requested/resolved pairing), `otherMs`.
-- `negotiation`: `rounds`, `messages`, `observedSequence`, `outcome`.
+- `negotiation`: `rounds`, `messages`, `observedSequence`, `outcome`. For pure A2A the sequence is
+  read from `metadata.pure.kind in {negotiation, answer}` and its `round`; for A2A-T from the
+  transcript performatives. Both therefore produce `[server PROPOSE, client ANSWER]`-style steps.
 - `accuracy`: final state, rounds, negotiated target, report presence; A2A-T also compares the
   performative sequence.
+
+The per-round audit rows are in `runs/client-state.sqlite3::negotiation_events`; the `protocol`
+column (`a2a-t` / `pure`, added in schema version 9) lets a cross-run query filter by protocol
+without joining `runs`. The pure rows follow the same shape as A2A-T: an inbound `PROPOSE` per
+relayed question and an outbound `ACCEPT` per answer, sharing the same `round`, `kind`
+(`information` / `target` / `feasibility` / `unknown`) and `created_at`.
 
 Persisted in `runs/client-state.sqlite3::run_metrics` and `runs/metrics/run-metrics.jsonl`.
 Exposed by `GET /api/runs/{runId}/metrics`, `/api/metrics/runs`, `/api/metrics/summary`,
@@ -236,11 +253,16 @@ the UI.
 - **AQ** is exact only for manual/confirm UI submissions; tester decisions are scripted and carry
   no human time.
 - **AT** is emitted only by the local RAN Agent. The real a2a-t-server must provide an equivalent
-  signal per `docs-local/osp-metrics-a2at-server-handover.md`.
+  signal per `docs-local/osp-metrics-a2at-server-handover.md`. Pure A2A never emits it: its
+  negotiation starts at the first `propose`, so use AO/AJ as the start and skip AV.
 - **AN** uses the first `TASK_STATE_SUBMITTED`; a vendor with a different success signal must
   expose a machine-readable field.
-- **pure A2A** has no per-round `propose`/`decision` spans (standard A2A INPUT_REQUIRED rounds);
-  use `run_metrics.negotiation.rounds` and `message_sent`.
+- **pure A2A** now emits one `propose` span and one `Decision · accept` span per input-required
+  round, like A2A-T. The round number comes from the sample `metadata.pure.round`, or from the
+  count of questions answered in the run when the peer does not number them (a real vendor NMS
+  does not). Only the UI-visible outer hop is recorded, so `avgRounds` stays comparable with the
+  single-hop A2A-T topology; the inner hop is only in `wire-oss.jsonl`. A pure question that the
+  peer answers with a plain agent message (no Task, no metadata) still yields one round.
 - **Token double count**: `run_metrics.tokens` contains both client and server; always split by
   `bySide`, and filter Langfuse observations by metadata `side`.
 - **offline** runs mark tokens `scripted` and are not exported to Langfuse; they exist for
