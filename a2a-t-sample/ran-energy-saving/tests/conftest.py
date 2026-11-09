@@ -46,8 +46,37 @@ def _clear_sample_environment(monkeypatch: pytest.MonkeyPatch) -> None:
             monkeypatch.delenv(key, raising=False)
 
 
+#: Modules of the heavyweight tier: every test in them owns a real server, a subprocess (import
+#: manifests, ``node --check``, the export CLI) or a real socket. ``-m "not slow"`` is the fast
+#: unit/offline tier; the default run stays the full acceptance gate.
+_SLOW_MODULES: frozenset[str] = frozenset(
+    {
+        "test_client_runtime",
+        "test_demo_boundary",
+        "test_mie_agent",
+        "test_net_proxy_integration",
+        "test_observe_page",
+        "test_oss_agent",
+        "test_pure_integration",
+        "test_run_demo",
+        "test_scenarios",
+        "test_tester_console",
+        "test_tester_service",
+        "test_transports",
+        "test_web_presentation",
+        "test_web_static",
+        "test_web_ui",
+    }
+)
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Register the targeted warning filters of the sample test suite."""
+    config.addinivalue_line(
+        "markers",
+        "slow: owns a real server, subprocess or socket; skipped by the fast tier "
+        "(-m 'not slow')",
+    )
     config.addinivalue_line(
         "filterwarnings", r"ignore:label\(\) is deprecated.*:DeprecationWarning"
     )
@@ -56,6 +85,13 @@ def pytest_configure(config: pytest.Config) -> None:
         "filterwarnings",
         r"ignore:The a2a_t\.negotiation\..* is deprecated.*:DeprecationWarning",
     )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Mark the heavyweight modules so ``-m 'not slow'`` gives a fast feedback tier."""
+    for item in items:
+        if Path(str(item.path)).stem in _SLOW_MODULES:
+            item.add_marker(pytest.mark.slow)
 
 
 @pytest.fixture(autouse=True)
