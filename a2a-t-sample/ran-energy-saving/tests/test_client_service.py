@@ -243,11 +243,33 @@ async def test_run_persists_lifecycle_negotiation_and_task_snapshot(
     assert events[0].performative == "PROPOSE"
     assert events[1].performative == "ACCEPT"
     assert events[1].decision_action == "accept"
+    assert {event.protocol for event in events} == {"a2a-t"}
 
     snapshot = await store.get_task_snapshot(run.run_id)
     assert snapshot is not None
     assert snapshot.task_id == "task-1"
     assert snapshot.state == "TASK_STATE_WORKING"
+
+
+async def test_a_pure_run_tags_its_negotiation_events(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """A cross-run report can separate the two protocols without joining ``runs``."""
+    manager, store, _runtimes = _manager(tmp_path, offline_config)
+    run = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        user_request="please save energy",
+        protocol=PROTOCOL_PURE,
+    )
+    await _finish(manager, run.run_id)
+
+    events = await store.list_negotiation_events(run.run_id)
+
+    assert [event.direction for event in events] == ["inbound", "outbound"]
+    assert {event.protocol for event in events} == {"pure"}
 
 
 async def test_a_waiting_decision_keeps_the_run_running(

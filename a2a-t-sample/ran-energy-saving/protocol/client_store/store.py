@@ -298,6 +298,20 @@ def _add_run_trace_id(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE runs ADD COLUMN trace_id TEXT NOT NULL DEFAULT ''")
 
 
+def _add_negotiation_event_protocol(connection: sqlite3.Connection) -> None:
+    """Tag negotiation events with the protocol that produced them.
+
+    A ``pure`` run writes its rounds into the same table as an A2A-T run. Without the column a
+    cross-run report has to join ``runs`` and every reader must remember to do it. Rows written
+    before this migration are A2A-T by definition, so the default backfills them correctly.
+    """
+    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(negotiation_events)")}
+    if "protocol" not in columns:
+        connection.execute(
+            "ALTER TABLE negotiation_events ADD COLUMN protocol TEXT NOT NULL DEFAULT 'a2a-t'"
+        )
+
+
 #: Ordered schema migrations; index ``i`` upgrades version ``i`` to ``i + 1``.
 _MIGRATIONS: Final[tuple[SchemaMigration, ...]] = (
     _create_schema,
@@ -308,6 +322,7 @@ _MIGRATIONS: Final[tuple[SchemaMigration, ...]] = (
     _add_run_downstream,
     _add_run_chain,
     _add_run_trace_id,
+    _add_negotiation_event_protocol,
 )
 
 
@@ -488,6 +503,8 @@ class NegotiationEventRecord:
     decision_action: str | None = None
     rationale: str | None = None
     created_at: str = field(default_factory=now_iso)
+    #: Protocol that produced the event (``a2a-t`` / ``pure``); rows before the column are A2A-T.
+    protocol: str = PROTOCOL_A2A_T
 
     @classmethod
     def new(
@@ -504,6 +521,7 @@ class NegotiationEventRecord:
         content: Mapping[str, object] | None = None,
         decision_action: str | None = None,
         rationale: str | None = None,
+        protocol: str = PROTOCOL_A2A_T,
     ) -> NegotiationEventRecord:
         """Build one event with a fresh id and timestamp."""
         return cls(
@@ -519,6 +537,7 @@ class NegotiationEventRecord:
             content=dict(content or {}),
             decision_action=decision_action,
             rationale=rationale,
+            protocol=protocol,
         )
 
 
@@ -1151,8 +1170,8 @@ class SqliteClientStore:
                 """
                 INSERT INTO negotiation_events
                     (event_id, run_id, seq, negotiation_id, kind, round, performative, direction,
-                     actor, content_json, decision_action, rationale, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     actor, content_json, decision_action, rationale, created_at, protocol)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.event_id,
@@ -1168,6 +1187,7 @@ class SqliteClientStore:
                     record.decision_action,
                     record.rationale,
                     record.created_at,
+                    record.protocol,
                 ),
             )
 
@@ -1197,6 +1217,7 @@ class SqliteClientStore:
                 ),
                 rationale=str(row["rationale"]) if row["rationale"] else None,
                 created_at=str(row["created_at"]),
+                protocol=str(row["protocol"] or PROTOCOL_A2A_T),
             )
             for row in rows
         ]

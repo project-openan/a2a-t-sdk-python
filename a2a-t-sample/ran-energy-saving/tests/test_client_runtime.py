@@ -684,3 +684,55 @@ def test_sdk_env_follows_a_shell_adk_model_over_the_source_sdk_keys(
     assert values["A2AT_LLM_MODEL"] == "qwen3-32b"
     assert values["A2AT_LLM_BASE_URL"] == "http://71.77.65.40:8008/v1"
     assert values["A2AT_LLM_API_KEY"] == "lab-key"
+
+
+async def test_a_scripted_pure_answer_is_recorded_as_an_accept_decision() -> None:
+    """The audit stream keeps both halves of a pure round, like an A2A-T proposal/decision."""
+    from protocol.client_runtime import _announce_pure_proposals
+
+    proposals: list[tuple[object, object]] = []
+    decisions: list[tuple[object, object, object]] = []
+    answer = _announce_pure_proposals(
+        lambda event: "Set the target to 80 Mbps.",
+        lambda propose, session: proposals.append((propose, session)),
+        3,
+        lambda decision, propose, session: decisions.append((decision, propose, session)),
+    )
+    event = {
+        "kind": "status",
+        "context_id": "ctx-1",
+        "text": "Which target rate?",
+        "metadata": {"pure": {"kind": "negotiation", "phase": "question"}},
+    }
+
+    assert await answer(event) == "Set the target to 80 Mbps."
+
+    propose, session = proposals[0]
+    assert session.round == 1
+    decision, propose_again, session_again = decisions[0]
+    assert decision.action == "accept"
+    assert decision.rationale == "Set the target to 80 Mbps."
+    assert propose_again is propose
+    assert session_again is session
+
+
+async def test_a_peer_that_does_not_number_its_rounds_get_a_sequence() -> None:
+    """Two unlabelled questions are rounds 1 and 2, not two round 1s."""
+    from protocol.client_runtime import _announce_pure_proposals
+
+    rounds: list[int] = []
+    answer = _announce_pure_proposals(
+        lambda event: "Region A",
+        lambda propose, session: rounds.append(session.round),
+        3,
+    )
+    event = {
+        "kind": "status",
+        "text": "Which region?",
+        "metadata": {"pure": {"kind": "negotiation", "phase": "question"}},
+    }
+
+    await answer(event)
+    await answer(event)
+
+    assert rounds == [1, 2]

@@ -168,3 +168,21 @@ def test_the_question_metadata_is_only_sample_local() -> None:
     metadata = _question()["metadata"]
     assert isinstance(metadata, Mapping)
     assert metadata["pure"]["kind"] == "negotiation"
+
+
+async def test_a_peer_that_does_not_number_its_rounds_gets_a_sequence() -> None:
+    """Two unlabelled questions are rounds 1 and 2, like the A2A-T propose counter."""
+    answer = PureConfirmationAnswer(mode=MODE_MANUAL, timeout_seconds=0.01)
+    rounds: list[int] = []
+    answer.set_proposal_sink(lambda propose, session: rounds.append(session.round))
+    question = _question()
+    metadata = question["metadata"]
+    assert isinstance(metadata, dict)
+    pure = metadata["pure"]
+    assert isinstance(pure, dict)
+    pure.pop("round")
+
+    await answer(question)
+    await answer(question)
+
+    assert rounds == [1, 2]

@@ -500,3 +500,37 @@ def test_a_decision_records_who_made_it(tmp_path: Path) -> None:
     human_span = next(span for span in run.traces if span.get("kind") == "reject")
     assert human["decidedBy"] == "human"
     assert human_span["actor"] == "human"
+
+
+def test_a_pure_question_span_carries_its_round_and_kind(tmp_path: Path) -> None:
+    """The A2A-T propose span and the pure question span must export the same facts."""
+    run = _run(tmp_path)
+    run.record_event(
+        {
+            "kind": "status",
+            "task_id": "task-1",
+            "context_id": "ctx-1",
+            "state": "TASK_STATE_INPUT_REQUIRED",
+            "text": "Which target rate?",
+            "metadata": {
+                "hop": "oss",
+                "pure": {
+                    "hop": "oss",
+                    "kind": "negotiation",
+                    "phase": "question",
+                    "negotiationKind": "target",
+                    "round": 2,
+                    "maxRounds": 3,
+                },
+            },
+        }
+    )
+
+    span = next(span for span in run.traces if span.get("kind") == "propose")
+
+    assert span["phase"] == "negotiation"
+    assert span["round"] == 2
+    detail = span["detail"]
+    assert isinstance(detail, dict)
+    assert detail["negotiationType"] == "target"
+    assert detail["hop"] == "oss"

@@ -268,10 +268,10 @@ def test_v2_migration_dedupes_active_runs(tmp_path: Path) -> None:
                 ),
             )
 
-    # Constructing the store applies migration 2.
+    # Constructing the store applies the remaining migrations.
     SqliteClientStore(path)
     with connect(path) as connection:
-        assert schema_version(connection) == 8
+        assert schema_version(connection) == 9
         statuses = {
             str(run_id): str(status)
             for run_id, status in connection.execute(
@@ -682,3 +682,67 @@ async def test_run_summaries_expose_the_trace_id_and_filter_by_it(tmp_path: Path
 
     filtered = read_client_run_summaries(path, trace_id="b" * 32)
     assert [str(row["runId"]) for row in filtered] == ["run-b"]
+
+
+async def test_negotiation_events_carry_the_protocol_that_produced_them(
+    tmp_path: Path,
+) -> None:
+    """pure and A2A-T share the table; the column keeps a cross-run report honest."""
+    store = SqliteClientStore(tmp_path / "client.sqlite3")
+    await store.record_negotiation_event(
+        NegotiationEventRecord.new(
+            run_id="run-a2at",
+            seq=1,
+            direction="inbound",
+            actor="server",
+            kind="information",
+            round=1,
+            performative="PROPOSE",
+        )
+    )
+    await store.record_negotiation_event(
+        NegotiationEventRecord.new(
+            run_id="run-pure",
+            seq=1,
+            direction="inbound",
+            actor="server",
+            kind="target",
+            round=1,
+            performative="PROPOSE",
+            protocol="pure",
+        )
+    )
+
+    a2at = await store.list_negotiation_events("run-a2at")
+    pure = await store.list_negotiation_events("run-pure")
+
+    assert a2at[0].protocol == "a2a-t"
+    assert pure[0].protocol == "pure"
+    assert pure[0].kind == "target"
+
+
+def test_the_protocol_migration_backfills_existing_events(tmp_path: Path) -> None:
+    """Rows written before the column existed are A2A-T by definition."""
+    from protocol.client_store.store import _MIGRATIONS
+    from shared.sqlite import apply_migrations, connect, schema_version
+
+    path = tmp_path / "client.sqlite3"
+    with connect(path) as connection:
+        assert apply_migrations(connection, _MIGRATIONS[:-1]) == len(_MIGRATIONS) - 1
+        connection.execute(
+            """
+            INSERT INTO negotiation_events
+                (event_id, run_id, seq, direction, actor, content_json, created_at)
+            VALUES ('event-1', 'run-1', 1, 'inbound', 'server', '{}', '2026-01-01T00:00:00Z')
+            """
+        )
+
+    SqliteClientStore(path)
+
+    with connect(path) as connection:
+        assert schema_version(connection) == len(_MIGRATIONS)
+        row = connection.execute(
+            "SELECT protocol FROM negotiation_events WHERE event_id='event-1'"
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "a2a-t"

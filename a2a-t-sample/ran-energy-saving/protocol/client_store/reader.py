@@ -272,6 +272,8 @@ def read_client_run_detail(path: str | Path, run_id: str) -> dict[str, object] |
                     "content": _load_json(row["content_json"]),
                     "decisionAction": row["decision_action"],
                     "rationale": row["rationale"],
+                    # Absent only on a database written before the migration; such a row is A2A-T.
+                    "protocol": row["protocol"] if "protocol" in row.keys() else None,
                     "createdAt": str(row["created_at"]),
                 }
                 for row in events

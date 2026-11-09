@@ -305,11 +305,58 @@ async def test_a_plain_downstream_question_becomes_an_outer_input_required() -> 
     )
     pure = status.metadata["pure"]
     assert pure["kind"] == "negotiation"
+    # A question without a downstream kind is a generic information request.
+    assert pure["negotiationKind"] == "information"
     assert pure["recommendation"] == "Region A"
     assert pure["downstreamContextId"] == "inner-ctx"
     pending = executor._pending_questions["outer-1"]
     assert pending.inner_context_id == "inner-ctx"
     assert pending.run_id == ""
+
+
+async def test_a_downstream_target_question_keeps_its_kind_on_the_outer_hop() -> None:
+    """The outer phase describes the hop; the downstream kind must survive it."""
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "80",
+    )
+    question = {
+        "kind": "status",
+        "context_id": "inner-ctx",
+        "state": "TASK_STATE_INPUT_REQUIRED",
+        "text": "Which target rate should the cell reach?",
+        "metadata": {
+            "pure": {"kind": "negotiation", "phase": "target", "round": 2, "maxRounds": 3}
+        },
+    }
+
+    async def run_ran(*args: object, **kwargs: object) -> ClientFlowResult:
+        del args, kwargs
+        raise _QuestionPendingError(question)
+
+    executor._run_ran = run_ran  # type: ignore[method-assign]
+    queue = _RecordingQueue()
+    message = Message(message_id="message-1", role=Role.ROLE_USER, context_id="ctx-oss")
+    message.parts.add(text="Start energy saving in Region A.")
+    context = RequestContext(
+        call_context=ServerCallContext(state={}, user=UnauthenticatedUser(), requested_extensions=set()),
+        request=SendMessageRequest(message=message),
+        task_id="outer-1",
+        context_id="outer-ctx",
+    )
+
+    await executor.execute(context, queue)
+
+    status = next(
+        event
+        for event in queue.events
+        if isinstance(event, TaskStatusUpdateEvent) and event.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+    )
+    pure = status.metadata["pure"]
+    assert pure["phase"] == "question"
+    assert pure["negotiationKind"] == "target"
+    # The OSS numbers its own outer rounds; only the kind is forwarded from the downstream hop.
+    assert pure["round"] == 1
 
 
 def _status_texts(events: list[object]) -> list[str]:

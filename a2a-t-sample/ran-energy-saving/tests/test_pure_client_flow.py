@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from a2a.client.client import ClientCallContext
 from a2a.types import SendMessageRequest
-from protocol.pure_client_flow import continue_pure_client_flow, run_pure_client_flow
+from protocol.pure_client_flow import (
+    continue_pure_client_flow,
+    pure_proposal_view,
+    run_pure_client_flow,
+)
 from shared.run_constants import (
     FINAL_STATE_NEGOTIATION_ENDED,
     FINAL_STATE_TASK_COMPLETED,
@@ -284,3 +288,50 @@ async def test_an_approval_input_required_is_not_answered() -> None:
 
     assert len(transport.requests) == 1
     assert result.final_state != FINAL_STATE_TASK_COMPLETED
+
+
+def test_the_proposal_view_reads_the_kind_the_oss_forwarded() -> None:
+    """The outer phase is ``question``; the negotiation kind travels as ``negotiationKind``."""
+    event = {
+        "kind": "status",
+        "context_id": "ctx-1",
+        "text": "Which target rate?",
+        "metadata": {
+            "pure": {
+                "hop": "oss",
+                "kind": "negotiation",
+                "phase": "question",
+                "negotiationKind": "target",
+                "round": 2,
+                "maxRounds": 3,
+            }
+        },
+    }
+
+    propose, session = pure_proposal_view(event)
+
+    assert propose.kind == "target"
+    assert session.round == 2
+    assert session.max_rounds == 3
+
+
+def test_an_unlabelled_question_uses_the_answered_count_as_its_round() -> None:
+    event = {
+        "kind": "status",
+        "context_id": "ctx-1",
+        "text": "Which region?",
+        "metadata": {"pure": {"kind": "negotiation", "phase": "question"}},
+    }
+
+    propose, session = pure_proposal_view(event, fallback_round=2)
+
+    assert propose.kind == "information"
+    assert session.round == 2
+
+
+def test_an_unknown_phase_is_recorded_as_unknown() -> None:
+    event = {"text": "Which region?", "metadata": {"pure": {"phase": "mystery"}}}
+
+    propose, _ = pure_proposal_view(event)
+
+    assert propose.kind == "unknown"

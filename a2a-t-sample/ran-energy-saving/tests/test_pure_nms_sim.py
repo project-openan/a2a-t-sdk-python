@@ -212,3 +212,31 @@ def test_the_region_cases_still_expect_a_plain_a2a_answer(case_id: int) -> None:
     case = _case(case_id)
 
     assert _expected_answer(case).startswith("The region is ")
+
+
+async def test_a_vendor_question_without_round_metadata_is_recorded_as_round_one() -> None:
+    """The vendor does not number its questions; the client still reports a timed round."""
+    from protocol.client_runtime import _announce_pure_proposals
+
+    case = _case(40)
+    expected = _expected_answer(case)
+    proposals: list[tuple[object, object]] = []
+    decisions: list[tuple[object, object, object]] = []
+    answer = _announce_pure_proposals(
+        lambda event: expected,
+        lambda propose, session: proposals.append((propose, session)),
+        3,
+        lambda decision, propose, session: decisions.append((decision, propose, session)),
+    )
+
+    result, answered = await _run_pure(str(case["user_input"]), answer)
+
+    assert len(answered) == 1
+    propose, session = proposals[0]
+    assert session.round == 1
+    assert propose.kind == "information"
+    decision, propose_again, session_again = decisions[0]
+    assert decision.action == "accept"
+    assert decision.rationale == expected
+    assert session_again.round == 1
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED

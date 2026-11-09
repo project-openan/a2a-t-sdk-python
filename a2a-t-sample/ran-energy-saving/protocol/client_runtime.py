@@ -297,20 +297,41 @@ def _announce_pure_proposals(
     answer: Callable[[dict[str, object]], str | Awaitable[str]],
     on_decision_requested: Callable[[NegotiationProposeView, NegotiationContext], None],
     max_rounds: int,
+    on_decision_made: DecisionMadeCallback | None = None,
 ) -> Callable[[dict[str, object]], Awaitable[str]]:
     """Wrap a plain pure answer so every relayed question is reported to the run.
 
-    ``PureConfirmationAnswer`` already publishes through ``set_proposal_sink``. Scripted and policy
-    answers do not, which left ``run.proposals`` empty: the tester could not assert the negotiation
-    round and waited for the run instead of the question.
+    ``PureConfirmationAnswer`` already publishes through ``set_proposal_sink`` and
+    ``set_decision_sink``. Scripted and policy answers do not, which left ``run.proposals`` empty
+    and wrote no outbound decision: the tester could not assert the negotiation round and the
+    audit stream had only half of each round.
+
+    A pure answer supplies the information the downstream asked for, so it is recorded as an
+    ``accept`` decision. That routes through the same decision span and ``negotiation_events``
+    writer the A2A-T side uses, which keeps both protocols comparable.
     """
 
+    rounds = 0
+
     async def announce(event: dict[str, object]) -> str:
-        propose, session = pure_proposal_view(event, default_max_rounds=max_rounds)
+        nonlocal rounds
+        rounds += 1
+        propose, session = pure_proposal_view(
+            event,
+            default_max_rounds=max_rounds,
+            fallback_round=rounds,
+        )
         on_decision_requested(propose, session)
         result = answer(event)
         if inspect.isawaitable(result):
             result = await result
+        text = result if isinstance(result, str) else ""
+        if on_decision_made is not None and text.strip():
+            on_decision_made(
+                NegotiationDecision(action="accept", rationale=text),
+                propose,
+                session,
+            )
         return result
 
     return announce
@@ -548,7 +569,12 @@ class ClientRuntime:
                         # A scripted/policy answer is a plain callable: wrap it so the run still
                         # reports the relayed question. Without this, ``run.proposals`` stayed empty
                         # and the tester's ``negotiate`` stage waited for the run instead of the round.
-                        answer = _announce_pure_proposals(answer, on_decision_requested, MAX_ROUNDS)
+                        answer = _announce_pure_proposals(
+                            answer,
+                            on_decision_requested,
+                            MAX_ROUNDS,
+                            on_decision_made,
+                        )
                     return await run_pure_client_flow(
                         transport=self.transport,
                         user_request=raw_text if processed else self._raw_mode_request(custom_request),

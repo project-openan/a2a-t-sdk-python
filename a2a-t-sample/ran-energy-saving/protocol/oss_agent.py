@@ -98,7 +98,12 @@ from protocol.intent import IntentProcessor, OperatorRequest, ProcessedIntent
 from protocol.manual_answer import ungrounded_answer_fields
 from protocol.messages import SAMPLE_RUN_ID_METADATA_KEY, metadata_to_dict
 from protocol.nms_client import NmsClient, NmsConfig, NmsSseTransport, NmsWebhookTransport
-from protocol.pure_client_flow import continue_pure_client_flow, run_pure_client_flow
+from protocol.pure_client_flow import (
+    continue_pure_client_flow,
+    pure_metadata,
+    pure_negotiation_kind,
+    run_pure_client_flow,
+)
 from protocol.shared_webhook import WebhookRouter, WebhookSubscription
 from protocol.sqlite_push_config_store import SqlitePushNotificationConfigStore
 from protocol.sqlite_task_store import SqliteTaskStore
@@ -1093,6 +1098,9 @@ class OSSPureExecutor(AgentExecutor):
             "hop": hop,
             "phase": "question",
             "kind": "negotiation",
+            # The outer phase describes the hop ("question"); the negotiation kind comes from the
+            # downstream hop so the client can report it the way A2A-T reports a propose.
+            "negotiationKind": pure_negotiation_kind(pure_metadata(event)),
             "round": round_number,
             "maxRounds": self._max_rounds,
             "recommendation": recommendation or None,

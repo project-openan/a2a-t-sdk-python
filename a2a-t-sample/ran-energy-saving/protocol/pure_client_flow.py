@@ -38,6 +38,12 @@ _LOGGER = logging.getLogger("ran_energy_saving.pure_client_flow")
 #: Short text part of the pure request (the task itself is in the same part).
 DEFAULT_PURE_LABEL: str = "RAN energy saving task"
 
+#: Negotiation kinds the A2A-T side already uses; the OSS Agent forwards one on the pure hop.
+_NEGOTIATION_KINDS: frozenset[str] = frozenset({"information", "target", "feasibility"})
+
+#: ``pure.phase`` values that describe the OSS hop rather than the negotiation itself.
+_RELAY_PHASES: frozenset[str] = frozenset({"question", "answer"})
+
 
 async def run_pure_client_flow(
     *,
@@ -360,27 +366,59 @@ def _positive_int(value: object, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
+def pure_negotiation_kind(pure: Mapping[str, object]) -> str:
+    """Return the negotiation kind of one sample-local ``pure`` metadata blob.
+
+    ``negotiationKind`` is the explicit tag the OSS Agent forwards from its downstream hop. The
+    local RAN Agent tags its own questions with ``phase``. An OSS relay only carries
+    ``phase="question"``/``"answer"``, which describes the hop rather than the negotiation, so it
+    falls back to the generic ``information`` kind. A question with no tag at all is likewise a
+    request for information.
+    """
+    for key in ("negotiationKind", "phase"):
+        raw = pure.get(key)
+        if not isinstance(raw, str):
+            continue
+        value = raw.strip().lower()
+        if value in _NEGOTIATION_KINDS:
+            return value
+        if value in _RELAY_PHASES:
+            return "information"
+        if value:
+            # Unknown is not a business value: record it as unknown instead of guessing a kind.
+            _LOGGER.warning("unknown pure negotiation kind %r; recording it as unknown", raw)
+            return "unknown"
+    return "information"
+
+
 def pure_proposal_view(
     event: Mapping[str, object],
     *,
     default_max_rounds: int = 3,
+    fallback_round: int | None = None,
 ) -> tuple[NegotiationProposeView, NegotiationContext]:
     """Build the proposal view of one relayed pure A2A question.
 
     The pure hop has no Negotiation-T metadata, so the view is derived from the question text and
     the sample-local ``pure`` tags. Both the confirmation card and the plain scripted answer use
     this view, which keeps the run's negotiation panel and the tester's round assertion honest.
+
+    Args:
+        event: One normalized downstream question.
+        default_max_rounds: Round budget used when the event carries none.
+        fallback_round: Round number for a peer that does not number its rounds. Callers pass the
+            count of questions already answered in this run.
     """
     pure = pure_metadata(event)
     text = str(event.get("text") or "").strip() or (
         "The downstream requested additional information."
     )
     context_id = str(event.get("context_id") or event.get("task_id") or "pure-question")
-    round_number = _positive_int(pure.get("round"), 1)
+    round_number = _positive_int(pure.get("round"), fallback_round if fallback_round is not None else 1)
     max_rounds = _positive_int(pure.get("maxRounds"), default_max_rounds)
     propose = NegotiationProposeView(
         negotiation_id=context_id,
-        kind="information",
+        kind=pure_negotiation_kind(pure),
         round=round_number,
         max_rounds=max_rounds,
         content=text,
@@ -466,6 +504,7 @@ __all__ = [
     "continue_pure_client_flow",
     "is_plain_question",
     "pure_metadata",
+    "pure_negotiation_kind",
     "pure_proposal_view",
     "run_pure_client_flow",
 ]

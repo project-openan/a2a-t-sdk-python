@@ -59,6 +59,8 @@ class PureConfirmationAnswer:
         self._recommendation_sink: RecommendationSink | None = None
         self._decision_sink: DecisionSink | None = None
         self._last_recommendation_error: str | None = None
+        #: Questions answered so far; the fallback round of a peer that does not number them.
+        self._rounds = 0
 
     @property
     def last_recommendation_error(self) -> str | None:
@@ -95,7 +97,12 @@ class PureConfirmationAnswer:
         """Build the proposal view, wait for the operator, and render the answer text."""
         pure = _pure_metadata(event)
         self._last_recommendation_error = None
-        propose, session = pure_proposal_view(event, default_max_rounds=self._max_rounds)
+        self._rounds += 1
+        propose, session = pure_proposal_view(
+            event,
+            default_max_rounds=self._max_rounds,
+            fallback_round=self._rounds,
+        )
         if self._proposal_sink is not None:
             self._proposal_sink(propose, session)
         if self._mode == MODE_CONFIRM and self._recommendation_sink is not None:

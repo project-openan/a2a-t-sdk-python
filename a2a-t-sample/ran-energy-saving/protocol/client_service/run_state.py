@@ -36,6 +36,7 @@ from shared.trace import (
     PHASE_DISPATCH,
     PHASE_DONE,
     PHASE_EXECUTION,
+    PHASE_NEGOTIATION,
     PHASE_TASK_PROMPT,
     Span,
     TraceRecorder,
@@ -52,6 +53,7 @@ from protocol.client_store import (
     NegotiationEventRecord,
     TaskSnapshotRecord,
 )
+from protocol.pure_client_flow import pure_negotiation_kind
 from protocol.transcript import NegotiationTranscript, TranscriptPaths
 
 _LOGGER = logging.getLogger("ran_energy_saving.client_service")
@@ -650,9 +652,14 @@ class RunState:
         """Record one normalized A2A event, its span and its SSE frame."""
         if self.transcript is None:
             return {}
-        phase = infer_event_phase(event)
-        seq, step = self.allocate(phase)
         detail = _pure_detail(event)
+        phase = infer_event_phase(event)
+        pure_detail = detail.get("pure") if isinstance(detail, Mapping) else None
+        if isinstance(pure_detail, Mapping) and pure_detail.get("kind") in ("negotiation", "answer"):
+            # A pure hop carries no A2A-T metadata, so the generic inference cannot see that this
+            # status is a negotiation question (or the OSS echo of the answer to one).
+            phase = PHASE_NEGOTIATION
+        seq, step = self.allocate(phase)
         self._note_downstream(detail)
         intent_payload = detail.get("intentProcessed") if isinstance(detail, Mapping) else None
         if isinstance(intent_payload, Mapping):
@@ -665,18 +672,31 @@ class RunState:
             detail=detail,
         )
         round_number = entry.get("round")
+        if not isinstance(round_number, int) and isinstance(pure_detail, Mapping):
+            # A pure hop has no ``negotiationContext``; its round travels in the sample metadata.
+            value = pure_detail.get("round")
+            round_number = value if isinstance(value, int) and not isinstance(value, bool) else None
         context_value = entry.get("contextId")
         # A proposal keeps the kind its performative gives it: the phase export uses it as the
         # client-side negotiation-start carrier (OSP AJ), and the "message" envelope would hide
         # it among every other inbound message.
         span_kind = "propose" if entry.get("kind") == "propose" else str(event.get("kind") or "event")
+        if span_kind != "propose" and isinstance(pure_detail, Mapping) and pure_detail.get("kind") == "negotiation":
+            # The same span kind the A2A-T propose gets: both protocols then export the same round.
+            span_kind = "propose"
         span_detail: dict[str, object] = {"event": dict(event)}
         if span_kind == "propose":
             span_detail.update(
                 {
-                    "negotiationType": entry.get("negotiationType"),
+                    "negotiationType": entry.get("negotiationType")
+                    or (
+                        pure_negotiation_kind(pure_detail)
+                        if isinstance(pure_detail, Mapping)
+                        else None
+                    ),
                     "templateUri": entry.get("templateUri"),
                     "content": entry.get("content"),
+                    "hop": detail.get("hop") if isinstance(detail, Mapping) else None,
                 }
             )
         span = self._recorder.emit(
@@ -882,6 +902,7 @@ class RunState:
                         "content": propose.content,
                         "templateUri": propose.template_uri,
                     },
+                    protocol=self.protocol,
                 )
             )
         )
@@ -994,6 +1015,7 @@ class RunState:
                     },
                     decision_action=decision.action,
                     rationale=decision.rationale,
+                    protocol=self.protocol,
                 )
             )
         )
