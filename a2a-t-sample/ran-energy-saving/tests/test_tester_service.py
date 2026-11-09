@@ -157,6 +157,15 @@ def _hang(run: RunState) -> None:
     run.status = "running"
 
 
+def _working(run: RunState) -> None:
+    """Leave one fake run accepted and working, as a long energy-saving Task stays."""
+    run.status = "running"
+    run.remote_task_id = "task-1"
+    run.remote_context_id = "ctx-1"
+    run.latest_task_state = "TASK_STATE_WORKING"
+    run.traces.append({"kind": "message_sent"})
+
+
 def _manager(
     tmp_path: Path,
     runs: _FakeRuns,
@@ -822,6 +831,79 @@ async def test_the_simulator_payload_is_recorded_not_judged(tmp_path: Path) -> N
         "Operation type": "Create",
         "Energy saving region": "A2ATestRegion",
     }
+
+
+async def test_a_working_item_releases_its_remote_task_after_the_evidence(
+    tmp_path: Path,
+) -> None:
+    """The Task is accepted and WORKING; the batch then releases it instead of holding quota."""
+    runs = _FakeRuns(_working)
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="working",
+        approval=None,
+        timeout_seconds=1,
+    )
+    batch_id = str(created["batchId"])
+
+    await manager.start(batch_id)
+    await _wait_status(manager, batch_id, "finished")
+
+    item = manager._batches[batch_id].items[0]
+    assert item.stages["working"].status == STAGE_PASSED
+    assert runs.cancelled == ["run-1"]
+
+
+async def test_keep_tasks_leaves_the_remote_task_running(tmp_path: Path) -> None:
+    runs = _FakeRuns(_working)
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="working",
+        approval=None,
+        timeout_seconds=1,
+        keep_tasks=True,
+    )
+    assert created["keepTasks"] is True
+
+    await manager.start(str(created["batchId"]))
+    await _wait_status(manager, str(created["batchId"]), "finished")
+
+    assert runs.cancelled == []
+
+
+async def test_releasing_an_item_covers_its_baseline_run(tmp_path: Path) -> None:
+    runs = _FakeRuns(_finish)
+    manager = _manager(tmp_path, runs)
+    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A_T)
+    item.run_id = "run-1"
+    item.baseline = {"runId": "run-baseline", "taskId": "task-0", "contextId": "ctx-0"}
+
+    await manager._release_item_runs(item)
+
+    assert runs.cancelled == ["run-1", "run-baseline"]
+
+
+async def test_shutdown_releases_the_runs_of_finished_batches(tmp_path: Path) -> None:
+    runs = _FakeRuns(_finish)
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+        approval=None,
+        timeout_seconds=1,
+    )
+    batch = manager._batches[str(created["batchId"])]
+    batch.items[0].run_id = "run-1"
+    batch.status = "finished"
+
+    await manager.shutdown()
+
+    assert runs.cancelled == ["run-1"]
 
 
 def test_the_default_decision_mode_is_live_for_an_online_model(tmp_path: Path) -> None:

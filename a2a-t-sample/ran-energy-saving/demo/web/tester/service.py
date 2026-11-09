@@ -294,6 +294,9 @@ class _Batch:
     items: list[CaseItem]
     working_timeout_seconds: float | None = None
     decision_mode: str = DECISION_MODE_SCRIPTED
+    #: Keep every Task this batch created alive after its item ends. Off by default: a finished
+    #: tester item releases its remote Task so a long acceptance run does not exhaust the NMS quota.
+    keep_tasks: bool = False
     transport: str = "sse"
     discovery: str = "direct"
     owner_id: str = ""
@@ -363,6 +366,7 @@ class EvalBatchManager:
         timeout_seconds: float | None = None,
         working_timeout_seconds: float | None = None,
         decision_mode: str | None = None,
+        keep_tasks: bool = False,
         owner: str = "",
     ) -> dict[str, object]:
         """Register one draft batch from the selected cases and protocols.
@@ -370,6 +374,8 @@ class EvalBatchManager:
         ``approval``/``timeout_seconds``/``working_timeout_seconds`` may be ``None``: the batch then
         uses each case's own ``runner`` block (or the process defaults for a scratch request).
         ``decision_mode`` defaults to the process mode: live for an online model, scripted offline.
+        ``keep_tasks`` keeps every Task alive after its item ends (long-task verification); by
+        default each item releases its remote Task once its evidence is collected.
         """
         if stop_after not in ALL_STAGES:
             raise ValueError(f"unknown stop_after {stop_after!r}")
@@ -403,6 +409,7 @@ class EvalBatchManager:
             timeout_seconds=_positive_or_none(timeout_seconds),
             working_timeout_seconds=_positive_or_none(working_timeout_seconds),
             decision_mode=resolved_decision_mode,
+            keep_tasks=keep_tasks,
             transport=defaults.get("transport", "sse"),
             discovery=defaults.get("discovery", "direct"),
             items=items,
@@ -420,6 +427,7 @@ class EvalBatchManager:
         approval: str = "approve",
         timeout_seconds: float | None = 300.0,
         decision_mode: str | None = None,
+        keep_tasks: bool = False,
         owner: str = "",
     ) -> dict[str, object]:
         """Create a one-item batch for an ad-hoc request (full flow only)."""
@@ -442,6 +450,7 @@ class EvalBatchManager:
             approval=resolved_approval,
             timeout_seconds=_positive_or_none(timeout_seconds) or 300.0,
             decision_mode=resolved_decision_mode,
+            keep_tasks=keep_tasks,
             transport=defaults.get("transport", "sse"),
             discovery=defaults.get("discovery", "direct"),
             items=[item],
@@ -491,16 +500,26 @@ class EvalBatchManager:
             item = batch.items[batch.current_index]
             if item.run_id:
                 await self._runs.cancel(item.run_id)
+            # A Modify item's baseline Task is not ``item.run_id``; release it too, otherwise a
+            # cancelled batch leaves the Create Task WORKING.
+            baseline = _baseline_run_id(item)
+            if baseline is not None and baseline != item.run_id:
+                await self._runs.cancel(baseline)
         if batch.task is not None and not batch.task.done():
             batch.task.cancel()
         self._persist(batch)
         return True
 
     async def shutdown(self) -> None:
-        """Cancel every running batch."""
+        """Cancel every running batch and release the Tasks its items still own."""
         for batch_id, batch in list(self._batches.items()):
             if batch.status == BATCH_RUNNING:
                 await self.cancel(batch_id)
+        for batch in list(self._batches.values()):
+            if batch.keep_tasks:
+                continue
+            for item in batch.items:
+                await self._release_item_runs(item)
 
     def _owned(self, batch_id: str, owner: str | None) -> _Batch | None:
         """Return one batch, or ``None`` when it belongs to a different browser.
@@ -514,8 +533,12 @@ class EvalBatchManager:
             return None
         return batch
 
-    def retry(self, batch_id: str, *, owner: str = "") -> dict[str, object]:
-        """Create a new draft batch from the failed, errored or cancelled items."""
+    async def retry(self, batch_id: str, *, owner: str = "") -> dict[str, object]:
+        """Create a new draft batch from the failed, errored or cancelled items.
+
+        The previous attempt may still hold a remote Task (a failed item keeps tracking it);
+        retrying releases those Tasks first so both attempts never occupy quota at once.
+        """
         batch = self._owned(batch_id, owner)
         if batch is None:
             raise KeyError(batch_id)
@@ -526,6 +549,8 @@ class EvalBatchManager:
         ]
         if not selected:
             raise ValueError("没有失败、错误或取消的用例可以重跑。")
+        for item in selected:
+            await self._release_item_runs(item)
         retried = _Batch(
             batch_id=f"batch-{uuid.uuid4().hex[:12]}",
             case_ids=batch.case_ids,
@@ -535,6 +560,7 @@ class EvalBatchManager:
             timeout_seconds=batch.timeout_seconds,
             working_timeout_seconds=batch.working_timeout_seconds,
             decision_mode=batch.decision_mode,
+            keep_tasks=batch.keep_tasks,
             transport=batch.transport,
             discovery=batch.discovery,
             items=[
@@ -586,6 +612,7 @@ class EvalBatchManager:
                     "summary": document.get("summary", {}),
                     "stopAfter": document.get("stopAfter"),
                     "decisionMode": document.get("decisionMode"),
+                    "keepTasks": bool(document.get("keepTasks")),
                     "transport": document.get("transport"),
                     "discovery": document.get("discovery"),
                 }
@@ -614,6 +641,9 @@ class EvalBatchManager:
         if index < 0 or index >= len(batch.items):
             raise ValueError("用例下标无效。")
         item = batch.items[index]
+        # The previous attempt may still hold a remote Task; release it before the new identity
+        # starts, so a rerun never doubles the quota the batch consumes.
+        await self._release_item_runs(item)
         item.attempts.append(
             {
                 "runId": item.run_id,
@@ -910,11 +940,12 @@ class EvalBatchManager:
             approval_task.cancel()
             await asyncio.gather(approval_task, return_exceptions=True)
             await self._collect_metrics(item, run, case)
-            # ``accepted``/``working`` end the observation window, not the run: the Task keeps
-            # running in the background, so the tester must not cancel it.
-            if batch.stop_after not in {"accepted", "working"} and run.status == "running":
-                await self._runs.cancel(run.run_id)
-                await self._wait_for_run(run, _CANCEL_GRACE_SECONDS)
+            # The evidence is collected; release the remote Task unless this batch keeps Tasks for
+            # long-task verification. ``accepted``/``working`` end the observation window, and the
+            # tester — unlike the presentation page — never reattaches to that run, so leaving the
+            # Task running through a 51-case acceptance batch would exhaust the NMS quota.
+            if not batch.keep_tasks:
+                await self._release_item_runs(item, run)
 
     async def _run_scratch(self, batch: _Batch, index: int, item: CaseItem) -> None:
         """Run an ad-hoc request through the full flow; no expectations are asserted."""
@@ -956,6 +987,26 @@ class EvalBatchManager:
                 "final", STAGE_RECORDED, "临时请求只记录结果。", expected=None, actual=actual
             )
         await self._collect_metrics(item, run)
+        if not batch.keep_tasks:
+            await self._release_item_runs(item, run)
+
+    async def _release_item_runs(self, item: CaseItem, run: RunState | None = None) -> None:
+        """Cancel the runs one item created and release their remote Tasks.
+
+        ``run`` is the item's own run when the caller still holds it; it is then awaited so the
+        cancellation unwinds before the batch moves on to the next item. A Modify item's baseline
+        run is released too: it is normally already stopped by the Task handover, in which case
+        ``RunManager.cancel`` is a no-op. Unknown or finished runs are ignored, so the shutdown
+        sweep can call this for every item.
+        """
+        if run is not None and run.status == "running":
+            await self._runs.cancel(run.run_id)
+            await self._wait_for_run(run, _CANCEL_GRACE_SECONDS)
+        elif run is None and item.run_id:
+            await self._runs.cancel(item.run_id)
+        baseline = _baseline_run_id(item)
+        if baseline is not None and baseline != item.run_id:
+            await self._runs.cancel(baseline)
 
     def _run_identity(self, batch: _Batch, index: int, item: CaseItem) -> tuple[str, str]:
         """Return the conversation id and idempotency key of this attempt.
@@ -1673,6 +1724,7 @@ class EvalBatchManager:
             timeout_seconds=_optional_float(document.get("timeoutSeconds")),
             working_timeout_seconds=_optional_float(document.get("workingTimeoutSeconds")),
             decision_mode=str(document.get("decisionMode") or DECISION_MODE_SCRIPTED),
+            keep_tasks=bool(document.get("keepTasks")),
             transport=str(document.get("transport") or defaults.get("transport", "sse")),
             discovery=str(document.get("discovery") or defaults.get("discovery", "direct")),
             items=items,
@@ -1705,6 +1757,7 @@ class EvalBatchManager:
             "timeoutSeconds": batch.timeout_seconds,
             "workingTimeoutSeconds": batch.working_timeout_seconds,
             "decisionMode": batch.decision_mode,
+            "keepTasks": batch.keep_tasks,
             "transport": batch.transport,
             "discovery": batch.discovery,
             "resolvedRunner": {
@@ -1846,6 +1899,15 @@ def _interception_statuses(record: Mapping[str, object]) -> list[str]:
         for stage in stages.values()
         if isinstance(stage, Mapping) and stage.get("status")
     ]
+
+
+def _baseline_run_id(item: CaseItem) -> str | None:
+    """Return the run that created a Modify item's baseline Task, when one was seeded."""
+    baseline = item.baseline
+    if not isinstance(baseline, Mapping):
+        return None
+    value = baseline.get("runId")
+    return value if isinstance(value, str) and value else None
 
 
 def _task_observation(run: RunState) -> dict[str, object]:

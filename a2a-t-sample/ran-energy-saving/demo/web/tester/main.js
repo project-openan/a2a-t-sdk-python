@@ -257,6 +257,7 @@ async function startBatch() {
       timeoutSeconds: $("config-timeout").value === "" ? null : Number($("config-timeout").value),
       workingTimeoutSeconds:
         $("config-working-timeout").value === "" ? null : Number($("config-working-timeout").value),
+      keepTasks: $("config-keep-tasks").checked,
     });
     state.batch = await postJson(`/api/tester/batches/${encodeURIComponent(created.batchId)}/start`, {});
     renderResults();
@@ -285,6 +286,7 @@ async function startScratch() {
       approval: $("scratch-approval").value,
       decisionMode: $("scratch-decision").value,
       timeoutSeconds: Number($("scratch-timeout").value) || 300,
+      keepTasks: $("config-keep-tasks").checked,
     });
     state.batch = await postJson(`/api/tester/batches/${encodeURIComponent(created.batchId)}/start`, {});
     $("scratch-status").textContent = "已启动；结果见“评测用例”页。";
@@ -390,7 +392,8 @@ async function loadHistory() {
   for (const batch of state.history) {
     const mode = batch.decisionMode ? ` · ${batch.decisionMode}` : "";
     const transport = batch.transport ? ` · ${batch.transport}` : "";
-    const option = el("option", "", `${batch.stopAfter || "final"}${mode}${transport} · ${statusLabel(batch.status)} · ${batch.createdAt || ""}`);
+    const keep = batch.keepTasks ? " · 保留任务" : "";
+    const option = el("option", "", `${batch.stopAfter || "final"}${mode}${transport}${keep} · ${statusLabel(batch.status)} · ${batch.createdAt || ""}`);
     option.value = batch.batchId;
     select.append(option);
   }

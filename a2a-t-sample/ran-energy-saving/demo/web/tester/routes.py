@@ -162,6 +162,7 @@ def build_tester_routes(
                 timeout_seconds=_optional_float(body.get("timeoutSeconds")),
                 working_timeout_seconds=_optional_float(body.get("workingTimeoutSeconds")),
                 decision_mode=_optional_str(body.get("decisionMode")),
+                keep_tasks=bool(body.get("keepTasks")),
                 owner=_client_id(request),
             )
         except (TypeError, ValueError) as exc:
@@ -178,6 +179,7 @@ def build_tester_routes(
                 approval=_optional_str(body.get("approval")) or "approve",
                 timeout_seconds=_optional_float(body.get("timeoutSeconds")),
                 decision_mode=_optional_str(body.get("decisionMode")),
+                keep_tasks=bool(body.get("keepTasks")),
                 owner=_client_id(request),
             )
         except (TypeError, ValueError) as exc:
@@ -235,7 +237,7 @@ def build_tester_routes(
     async def retry_batch(request: Request) -> Response:
         """Create a draft batch from the failed/errored/cancelled items."""
         try:
-            snapshot = batches.retry(
+            snapshot = await batches.retry(
                 request.path_params["batch_id"], owner=_client_id(request)
             )
         except KeyError:
