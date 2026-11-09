@@ -49,7 +49,8 @@ token/时延统计的载体。
 | `task_validation` | `Task-T validation <verdict>` | task_validation / task_modify | `client_flow` | verdict、errors、negotiationKind、reason | Y 列（拦截结论） |
 | `intent_processed` | `Intent processed` | task_prompt | `client_runtime`（A2A-T）/ `run_state`（pure 提升） | rawRequest、normalizedText、结构化 intent、missingFields | Z 列（A2A 侧） |
 | `task_created` | `Task created` / `Task modified` | execution | `run_state._maybe_emit_task_created` | operation、state=`TASK_STATE_SUBMITTED`、taskId/contextId | **AN** |
-| `propose` | `Propose · <kind> · Rn` | negotiation | 客户端收到服务端 PROPOSE（`record_event`） | round、templateUri、协商正文、negotiationContext | **AO/AP**、AW |
+| `propose` | `Propose · <kind> · Rn` | negotiation | `run_state.record_event` 按 performative 把入站协商报文标为 `propose` | round、templateUri、协商正文、negotiationContext | **AJ**、AO/AP、AW |
+| `decision_requested` | `Decision requested · <kind> · Rn` | negotiation | `client_flow` 收到 PROPOSE 后请求决策 | kind、round、templateUri、协商正文 | **AK** |
 | `negotiation_started` | `Negotiation started · <kind> · Rn` | negotiation | `pre_task_negotiation`（本地 RAN Agent） | round、kind、templateUri、服务端理解起止 | **AT** |
 | `accept` / `counter` / `reject` / `abort` | `Decision · <action> · Rn` | negotiation / resolution | `run_state.record_decision` | action、rationale、filledParams/counterParams、confirmedBy | **AQ**、AW、BB |
 | `approval` | `Approval requested` / `Approval resolved` | execution | `server_executor`（本地审批 / MIE） | approvalState、cellId、window、rate、timeout | 人工等待时延 |
@@ -58,8 +59,8 @@ token/时延统计的载体。
 | event | `trace opened` | — | exporter 创建 | 与 root 相同的 trace 属性 | 让 Langfuse 尽早就绪 |
 
 **只在 `full` 导出**（排障证据，默认不进 dashboard）：`run_started`、`runtime_ready`、
-`discovery`、`intent_review_requested`、`task_tracking`、`decision_requested` /
-`decision_made` / `decision_ungrounded`、`execution`、`artifact`（execution/report）、
+`discovery`、`intent_review_requested`、`task_tracking`、`decision_made` /
+`decision_ungrounded`、`execution`、`artifact`（execution/report）、
 非终态与终态 `status`、`transport`（NMS token/stream/poll、错误帧等原始报文）。
 
 **`minimal`**：只保留 `llm`、`tool`、`finished`（以及无 `finished` 时的最后一条 status）。
@@ -128,6 +129,19 @@ OSS 进程里有两条 LLM 链路，观测名就能区分：
 
 token 求和时按 metadata `side` 区分 `client` / `server`：A2A 与 A2A-T 的对比应分别给出
 OSS 侧与 RAN 侧，避免把 Task-T 固定开销和 planner 开销混在一起。
+
+### 3.1 客户端协商时间点 Issue 的列（2026-11-09）
+
+现场反馈"客户端协商时间点缺失"的 Issue 使用另一套列字母，只有下面三个受本轮改动影响：
+
+| 列 | 指标 | phase 级数据来源 |
+|---|---|---|
+| AJ | 协商发起时间点 | `propose.startedAt`（客户端收到 PROPOSE） |
+| AK | 通知 OSS 用户处理 | `decision_requested.startedAt` |
+| AO | 意图理解（发起协商） | 客户端不可见，需远端 `a2a-t-server` 提供等价信号（见 `docs-local/osp-metrics-a2at-server-handover.md`） |
+
+该 Issue 里的 `AL / AM / AN` 分别是用户答复、调 SDK 构造回复、下发回复，对应上表的
+AQ、AR、AS。
 
 ## 4. 与其他指标层的结合
 

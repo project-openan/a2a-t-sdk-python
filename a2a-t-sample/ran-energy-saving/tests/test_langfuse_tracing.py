@@ -475,6 +475,26 @@ def test_phase_level_keeps_every_round_and_hides_transport(offline_config: Sampl
     assert "NMS task polled" not in names
 
 
+def test_phase_level_exports_the_decision_request_as_the_oss_notification(
+    offline_config: SampleConfig,
+) -> None:
+    """AK: the moment the OSS is asked to handle a proposal must reach the dashboard."""
+    exporter, runtime = _exporter(offline_config, span_level="phase")
+    exporter(
+        {
+            "kind": "decision_requested",
+            "phase": "negotiation",
+            "title": "Decision requested · target R1",
+            "round": 1,
+            "detail": {"negotiationKind": "target", "content": "Set the target to 10 Mbps."},
+        }
+    )
+    exporter.finish()
+
+    names = [span.name for span in runtime.spans.get_finished_spans()]
+    assert "Decision requested · target R1" in names
+
+
 def test_phase_level_backfills_the_last_status_without_a_terminal_state(
     offline_config: SampleConfig,
 ) -> None:

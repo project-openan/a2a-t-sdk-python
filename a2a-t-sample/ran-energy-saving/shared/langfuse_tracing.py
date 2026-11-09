@@ -84,7 +84,7 @@ _DECISION_KINDS: Final[frozenset[str]] = frozenset({"accept", "counter", "reject
 _ALWAYS_EXPORT_KINDS: Final[frozenset[str]] = frozenset({"llm", "tool", "finished"})
 
 #: Kinds exported at ``phase`` (and above) on every occurrence -- one per hop/round. They are the
-#: OSP time-point carriers (AL/AM/AS, AO/AP, AQ, AN, AT) plus the business intent, the Task-T
+#: OSP time-point carriers (AL/AM/AS, AO/AP, AK, AQ, AN, AT) plus the business intent, the Task-T
 #: validation verdict and the approval wait.
 _PHASE_EXPORT_KINDS: Final[frozenset[str]] = (
     frozenset(
@@ -92,6 +92,7 @@ _PHASE_EXPORT_KINDS: Final[frozenset[str]] = (
             "message_sent",
             "propose",
             "negotiation_started",
+            "decision_requested",
             "task_created",
             "intent_processed",
             "task_prompt_rendered",

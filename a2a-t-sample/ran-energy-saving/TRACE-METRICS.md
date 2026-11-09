@@ -51,7 +51,8 @@ time-point carrier or a token/latency source.
 | `task_validation` | `Task-T validation <verdict>` | task_validation / task_modify | `client_flow` | verdict, errors, negotiationKind, reason | Y (blocked/pass) |
 | `intent_processed` | `Intent processed` | task_prompt | `client_runtime` (A2A-T) / `run_state` (pure promotion) | rawRequest, normalizedText, structured intent, missingFields | Z (A2A side) |
 | `task_created` | `Task created` / `Task modified` | execution | `run_state._maybe_emit_task_created` | operation, state=`TASK_STATE_SUBMITTED`, taskId/contextId | **AN** |
-| `propose` | `Propose · <kind> · Rn` | negotiation | client receives a server PROPOSE (`record_event`) | round, templateUri, body, negotiationContext | **AO/AP**, AW |
+| `propose` | `Propose · <kind> · Rn` | negotiation | `run_state.record_event` labels an inbound proposal by its performative (transcript kind `propose`) | round, templateUri, body, negotiationContext | **AJ**, AO/AP, AW |
+| `decision_requested` | `Decision requested · <kind> Rn` | negotiation | `client_flow` receives a PROPOSE and asks the decision provider | kind, round, templateUri, body | **AK** |
 | `negotiation_started` | `Negotiation started · <kind> · Rn` | negotiation | `pre_task_negotiation` (local RAN Agent) | round, kind, templateUri, server understanding window | **AT** |
 | `accept` / `counter` / `reject` / `abort` | `Decision · <action> · Rn` | negotiation / resolution | `run_state.record_decision` | action, rationale, filled/counter params, confirmedBy | **AQ**, AW, BB |
 | `approval` | `Approval requested` / `Approval resolved` | execution | `server_executor` (local gate / MIE) | approvalState, cellId, window, rate, timeout | human wait |
@@ -60,9 +61,9 @@ time-point carrier or a token/latency source.
 | event | `trace opened` | — | exporter | same trace attributes | early trace naming |
 
 **`full` only** (diagnosis evidence, not in the dashboard by default): `run_started`,
-`runtime_ready`, `discovery`, `intent_review_requested`, `task_tracking`, `decision_requested` /
-`decision_made` / `decision_ungrounded`, `execution`, `artifact` (execution/report), status rows
-(non-terminal and terminal), and `transport` (NMS token/stream/poll/error evidence).
+`runtime_ready`, `discovery`, `intent_review_requested`, `task_tracking`, `decision_made` /
+`decision_ungrounded`, `execution`, `artifact` (execution/report), status rows (non-terminal and
+terminal), and `transport` (NMS token/stream/poll/error evidence).
 
 **`minimal`** keeps `llm`, `tool`, `finished` (plus the last status when there is no `finished`).
 It cannot support the OSP time points; use it only to inspect model/tool cost.
@@ -133,6 +134,20 @@ Notes:
 When summing tokens, split by observation metadata `side` (`client` / `server`): an A2A vs A2A-T
 comparison must show OSS-side and RAN-side separately, otherwise Task-T overhead and planner cost
 are mixed.
+
+### 3.1 Client negotiation issue columns (2026-11-09)
+
+The field issue about the missing client negotiation time points uses different letters from the
+workbook above. Only these three are affected:
+
+| Col | Metric | Phase-level source |
+|---|---|---|
+| AJ | negotiation started | `propose.startedAt` (the client received the PROPOSE) |
+| AK | OSS asked to handle it | `decision_requested.startedAt` |
+| AO | server-side intent understanding | not emitted by the client; the remote `a2a-t-server` must expose it (see `docs-local/osp-metrics-a2at-server-handover.md`) |
+
+`AL / AM / AN` in that issue are the user answer, the SDK reply build and the reply dispatch, i.e.
+AQ, AR and AS above.
 
 ## 4. Combining with the other metric layers
 
