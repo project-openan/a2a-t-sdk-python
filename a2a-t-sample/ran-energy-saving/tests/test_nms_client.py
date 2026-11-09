@@ -400,6 +400,38 @@ async def test_webhook_transport_stamps_and_binds_its_context_before_sending() -
     assert bound[0] == (None, "ctx-run")
 
 
+async def test_webhook_transport_binds_a_modify_target_task_before_sending() -> None:
+    """A Modify send already names its Task, so the new run owns the pushes from the send on.
+
+    Binding only after the reply leaves a window where the previous run is retired and this run
+    owns just the context; a push that names the Task in that window used to be lost.
+    """
+    reply = {
+        "task": {
+            "id": "task-1",
+            "contextId": "ctx-1",
+            "status": {"state": "TASK_STATE_CANCELED"},
+        }
+    }
+    bound: list[tuple[str | None, str | None]] = []
+    transport = NmsWebhookTransport(
+        _FakeWebhookClient(reply),  # ty: ignore[invalid-argument-type]
+        queue=asyncio.Queue(),
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        idle_timeout=0.5,
+        context_id="ctx-run",
+        bind=lambda task_id, context_id: bound.append((task_id, context_id)),
+    )
+    request, context = _request()
+    request.message.task_id = "task-1"
+    request.message.context_id = "ctx-1"
+
+    await transport.send(request, context)
+
+    assert bound[0] == ("task-1", "ctx-1")
+
+
 async def test_webhook_transport_hands_a_long_task_to_the_tracker_after_the_silence() -> None:
     """A tracked webhook run returns quickly instead of occupying the callback for the budget."""
     reply = {

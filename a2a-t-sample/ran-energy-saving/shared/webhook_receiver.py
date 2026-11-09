@@ -372,13 +372,17 @@ class WebhookReceiver:
         return JSONResponse(content={"received": event_type})
 
     def _log(self, stage: str, detail: str) -> None:
-        """Emit one receiver event at the level its operational meaning deserves."""
+        """Emit one receiver event at the level its operational meaning deserves.
+
+        ``event-received`` is INFO: it is the only proof that a push the server believes it sent
+        actually reached the process, and routing a lost push is impossible without it. All other
+        stages stay at their own level (rejections WARNING, stop errors ERROR, the rest INFO).
+        """
         level = {
             "auth-rejected": logging.WARNING,
             "token-rejected": logging.WARNING,
             "body-rejected": logging.WARNING,
             "stop-error": logging.ERROR,
             "stop-timeout": logging.WARNING,
-            "event-received": logging.DEBUG,
         }.get(stage, logging.INFO)
         _LOGGER.log(level, "webhook %s: %s", stage, detail)

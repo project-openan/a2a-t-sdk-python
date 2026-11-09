@@ -112,7 +112,7 @@ async def test_a_push_that_beats_the_rpc_reply_is_flushed_on_bind() -> None:
     assert second.queue.empty()
 
 
-async def test_a_finished_runs_late_push_is_dropped_not_delivered_to_the_next_run() -> None:
+async def test_a_finished_runs_late_push_is_buffered_not_delivered_to_an_unrelated_run() -> None:
     """A sole remaining run must not be contaminated by a push of the run that just finished."""
     router = WebhookRouter()
     finished = router.subscribe("old-run")
@@ -127,6 +127,47 @@ async def test_a_finished_runs_late_push_is_dropped_not_delivered_to_the_next_ru
     events = _drain(current)
     assert len(events) == 1
     assert events[0]["statusUpdate"]["taskId"] == "new-task"  # type: ignore[index]
+
+
+async def test_a_late_push_reaches_the_run_that_rebinds_the_finished_runs_task() -> None:
+    """A Modify run continues the same Task; its push must not be lost when it arrives in between.
+
+    The previous run's flow returns and releases its subscription long before the next Modify run
+    binds the Task. Dropping every push of a finished run's identity loses the negotiation frame
+    the new run is waiting for. It stays buffered instead and is delivered on the explicit rebind.
+    """
+    router = WebhookRouter()
+    finished = router.subscribe("old-run")
+    finished.bind(task_id="task-1", context_id="ctx-1")
+    finished.unsubscribe()
+
+    router.on_event(_status("task-1", "ctx-1"))
+
+    current = router.subscribe("new-run")
+    current.bind(task_id="task-1", context_id="ctx-1")
+
+    events = _drain(current)
+    assert [event["statusUpdate"]["taskId"] for event in events] == ["task-1"]  # type: ignore[index]
+
+
+async def test_a_reused_task_is_routed_by_its_live_context_owner() -> None:
+    """A Modify run binds the context when it sends and the Task when the reply names it.
+
+    A push that lands in between carries both identities. The retired Task must not win over the
+    context that already belongs to the new run.
+    """
+    router = WebhookRouter()
+    finished = router.subscribe("old-run")
+    finished.bind(task_id="task-1", context_id="ctx-1")
+    finished.unsubscribe()
+
+    current = router.subscribe("new-run")
+    current.bind(context_id="ctx-1")
+
+    router.on_event(_status("task-1", "ctx-1"))
+
+    events = _drain(current)
+    assert [event["statusUpdate"]["taskId"] for event in events] == ["task-1"]  # type: ignore[index]
 
 
 async def test_an_unknown_identity_is_not_guessed_into_the_sole_run() -> None:

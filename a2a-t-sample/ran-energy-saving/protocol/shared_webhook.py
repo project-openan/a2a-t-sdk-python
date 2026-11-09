@@ -8,10 +8,12 @@ so the receiver is started once for the process and every run uses it.
 The receiver cannot feed one queue: a push only carries the server-side task/context identity, so
 two runs sharing a queue would consume each other's events. :class:`WebhookRouter` keeps one queue
 per run and routes each push to the queue that owns its ``taskId`` / ``contextId``. A run binds its
-identities from the synchronous RPC reply; a push that beats that reply in flight is held in a small
-pending buffer and flushed on bind. Events for a finished run are dropped for a grace period instead
-of leaking into the next run. This makes webhook transport concurrent: the callback port is still
-one process resource, but the event stream is per run.
+identities before it sends (a Modify request already names its Task) and again from the synchronous
+RPC reply; a push that beats that bind in flight is held in a small pending buffer and flushed on
+bind. That buffer is also what makes a Modify work: the run that continues a Task is the one that
+receives its pushes, even when the previous run of the same Task has already released its
+subscription. A push is only ever delivered to a run that explicitly bound its identity — never
+guessed into whichever run happens to be alone on the receiver.
 """
 
 from __future__ import annotations
@@ -38,10 +40,6 @@ _PENDING_TTL_SECONDS = 900.0
 
 #: Hard cap per pending identity: a leaking/attacking sender must not grow the buffer without bound.
 _PENDING_LIMIT = 256
-
-#: How long the identities of a finished run keep dropping late pushes instead of falling through
-#: to whichever run is alone on the receiver afterwards.
-_RETIRED_TTL_SECONDS = 300.0
 
 
 def _text(value: object) -> str:
@@ -92,24 +90,20 @@ class WebhookRouter:
         self,
         *,
         pending_ttl: float = _PENDING_TTL_SECONDS,
-        retired_ttl: float = _RETIRED_TTL_SECONDS,
         pending_limit: int = _PENDING_LIMIT,
     ) -> None:
         """Create an empty router.
 
         Args:
             pending_ttl: seconds an unbound identity keeps buffered pushes.
-            retired_ttl: seconds a finished run's identities keep dropping late pushes.
             pending_limit: maximum buffered pushes per unbound identity.
         """
         self._pending_ttl = pending_ttl
-        self._retired_ttl = retired_ttl
         self._pending_limit = pending_limit
         self._subscriptions: dict[str, WebhookSubscription] = {}
         self._by_task: dict[str, str] = {}
         self._by_context: dict[str, str] = {}
         self._pending: dict[str, list[tuple[float, dict[str, object]]]] = {}
-        self._retired: dict[str, float] = {}
 
     @property
     def active_subscriptions(self) -> int:
@@ -136,20 +130,23 @@ class WebhookRouter:
         return subscription
 
     def unsubscribe(self, subscription: WebhookSubscription) -> None:
-        """Remove one run and retire its identities so late pushes cannot reach another run."""
+        """Remove one run and release its identities.
+
+        Pushes of a released identity stay buffered (bounded by the pending TTL) instead of being
+        dropped: the run that continues the same Task — a Modify — is the next explicit owner, and
+        it binds the identity before it sends.
+        """
         if subscription.closed:
             return
         subscription.closed = True
         self._subscriptions.pop(subscription.key, None)
-        expires = time.monotonic() + self._retired_ttl
         for task_id in subscription.task_ids:
-            self._by_task.pop(task_id, None)
-            self._retired[_identity_key("task", task_id)] = expires
-            self._discard_pending(_identity_key("task", task_id))
+            # Another run may already have taken this identity over; never release its mapping.
+            if self._by_task.get(task_id) == subscription.key:
+                self._by_task.pop(task_id, None)
         for context_id in subscription.context_ids:
-            self._by_context.pop(context_id, None)
-            self._retired[_identity_key("context", context_id)] = expires
-            self._discard_pending(_identity_key("context", context_id))
+            if self._by_context.get(context_id) == subscription.key:
+                self._by_context.pop(context_id, None)
 
     def bind(
         self,
@@ -158,9 +155,12 @@ class WebhookRouter:
         task_id: str | None = None,
         context_id: str | None = None,
     ) -> None:
-        """Associate a run with the task/context identities observed on its RPC reply.
+        """Associate a run with a task/context identity it is about to use.
 
-        Buffered pushes for those identities are delivered immediately, in arrival order.
+        The transport binds before it sends (a Modify request already names its Task) and again from
+        the synchronous RPC reply, so a push that beats the reply is never orphaned. Buffered pushes
+        for those identities are delivered immediately, in arrival order; an identity a live run
+        still owns is handed over to this one.
         """
         if subscription.closed:
             return
@@ -174,36 +174,46 @@ class WebhookRouter:
             owned.add(value)
             previous = index.get(value)
             if previous is not None and previous != subscription.key:
-                # A reused identity (server restart, replay) belongs to the latest run.
+                # A continued Task (Modify) belongs to the run that most recently named it: hand the
+                # identity over instead of letting the previous run keep consuming its pushes.
                 stale = self._subscriptions.get(previous)
                 if stale is not None and kind == "task":
                     stale.task_ids.discard(value)
                 elif stale is not None:
                     stale.context_ids.discard(value)
+                if stale is not None and not stale.closed:
+                    _LOGGER.info(
+                        "webhook identity handed over: %s -> run %s (was run %s)",
+                        _identity_key(kind, value),
+                        subscription.scope,
+                        stale.scope,
+                    )
             index[value] = subscription.key
-            self._retired.pop(_identity_key(kind, value), None)
+            _LOGGER.info("webhook bind: %s -> run %s", _identity_key(kind, value), subscription.scope)
             self._flush(_identity_key(kind, value), subscription)
 
     def on_event(self, payload: dict[str, object]) -> None:
         """Route one authenticated push to the queue that owns its identity.
 
-        A push with an unknown identity is buffered until a run binds it. Only a push that carries
-        no identity at all may use the single-subscription fallback: an identity-bearing push is
-        never guessed into the one active run, because a late push from a previous Task would
-        otherwise cross into an unrelated run.
+        Every identity the payload carries is tried: a Modify run binds its context before it sends
+        and its Task on the reply, so a push in between must be routed by whichever of the two a
+        live run already owns. A push with no live owner is buffered until a run binds it. Only a
+        push that carries no identity at all may use the single-subscription fallback: an
+        identity-bearing push is never guessed into the one active run, because a late push from a
+        previous Task would otherwise cross into an unrelated run.
         """
         self._prune()
         task_id, context_id = _payload_keys(payload)
         task_key = _identity_key("task", task_id) if task_id else ""
         context_key = _identity_key("context", context_id) if context_id else ""
 
-        for key in (task_key, context_key):
+        for key, index, value in (
+            (task_key, self._by_task, task_id),
+            (context_key, self._by_context, context_id),
+        ):
             if not key:
                 continue
-            if key in self._retired:
-                _LOGGER.debug("webhook push for a finished run dropped: %s", key)
-                return
-            owner_key = self._by_task.get(task_id) if key == task_key else self._by_context.get(context_id)
+            owner_key = index.get(value)
             owner = self._subscriptions.get(owner_key) if owner_key else None
             if owner is not None and not owner.closed:
                 self._deliver(owner, payload)
@@ -220,6 +230,7 @@ class WebhookRouter:
                 len(self._subscriptions),
             )
             return
+        _LOGGER.info("webhook push buffered: no run owns %s yet", key)
         self._pend(key, payload)
 
     def _deliver(self, subscription: WebhookSubscription, payload: dict[str, object]) -> None:
@@ -246,12 +257,8 @@ class WebhookRouter:
         for _, payload in bucket:
             self._deliver(subscription, payload)
 
-    def _discard_pending(self, key: str) -> None:
-        """Drop buffered pushes of a retiring identity."""
-        self._pending.pop(key, None)
-
     def _prune(self) -> None:
-        """Expire unbound pushes and retired identities."""
+        """Expire buffered pushes of identities no run bound."""
         now = time.monotonic()
         for key, bucket in list(self._pending.items()):
             kept = [(stamp, payload) for stamp, payload in bucket if now - stamp < self._pending_ttl]
@@ -259,9 +266,6 @@ class WebhookRouter:
                 self._pending[key] = kept
             else:
                 self._pending.pop(key, None)
-        for key, expires in list(self._retired.items()):
-            if expires <= now:
-                self._retired.pop(key, None)
 
 
 @dataclass

@@ -885,13 +885,18 @@ class NmsWebhookTransport:
             self._event_sink(event)
 
     def _bind_context(self, request: SendMessageRequest) -> None:
-        """Stamp and bind the run's A2A context before the request leaves the process."""
+        """Stamp and bind the run's A2A context before the request leaves the process.
+
+        A Modify send already names the Task it continues, so the Task identity is handed over to
+        this run before the HTTP call: a push that beats the reply is routable from the send on,
+        without a window where only the previous run ever owned the Task.
+        """
         if not self._context_id:
             return
         if not request.message.context_id:
             request.message.context_id = self._context_id
         if self._bind is not None:
-            self._bind(None, request.message.context_id)
+            self._bind(_optional_str(request.message.task_id), request.message.context_id)
 
     async def send(
         self,
