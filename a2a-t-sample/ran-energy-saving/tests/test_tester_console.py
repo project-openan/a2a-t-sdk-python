@@ -717,6 +717,8 @@ def test_the_result_row_and_drawer_expose_run_context_ids() -> None:
     assert "基线 Create（Modify 前置）" in js
     assert "run-cell" in js and "run-line" in css
     assert '<th>RunId</th>' in page
+    # The RunId cell must actually be appended: the header and the row have 11 columns.
+    assert "tokens, runs, result, actions" in js
 
 
 def test_the_console_uses_the_full_width_of_a_large_screen() -> None:

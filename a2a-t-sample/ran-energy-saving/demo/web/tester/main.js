@@ -548,7 +548,7 @@ function renderResults() {
     rerun.disabled = batch.status === "running";
     rerun.addEventListener("click", () => rerunItem(index));
     actions.append(document.createTextNode(" · "), rerun);
-    row.append(number, id, name, protocol, stages, status, duration, tokens, result, actions);
+    row.append(number, id, name, protocol, stages, status, duration, tokens, runs, result, actions);
     body.append(row);
   });
 
