@@ -918,6 +918,7 @@ per-run `.env`，因此 SDK facade 与所有子进程看到同一份生效配置
 | `A2AT_SAMPLE_RUNS_DIR` | 默认 `<sample>/runs` | 数据目录：transcript、client/task/gateway SQLite、每次 run 的 `wire.jsonl` 和 Web UI 历史。相对路径按 sample 根目录解析。 |
 | `A2AT_SAMPLE_ENV_FILE` | 未设置 | 未传 `--env-file` 时 `run_demo.py` 读取的配置文件。每个启动脚本可以指向自己的配置，不再依赖候选路径猜测。 |
 | `A2AT_SAMPLE_PURE_FOLLOWUP` | `both`（默认）、`task`、`context` | A2A follow-up 携带的会话字段。网管拒绝带 `taskId` 的 follow-up 时切到 `context`。 |
+| `A2AT_SAMPLE_PURE_MESSAGE_MODE` | 未设置（跟随 `A2AT_SAMPLE_TRANSPORT`）、`stream`、`send` | 标准 A2A 请求形式的 RPC 方法。未设置时与 A2A-T 保持一致：webhook 发 `message:send`，sse 走 `message:stream`。`run_demo.py --pure-message-mode` 可覆盖。 |
 | `A2AT_SAMPLE_WEBHOOK_PORT` | 默认 `9000`（`0` = 临时端口） | 内置 webhook 接收器端口。 |
 | `A2AT_SAMPLE_WEBHOOK_TOKEN` | 默认 `demo-webhook-token` | 与 `X-A2A-Notification-Token` 比对的静态推送 token；设置 `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` 后不再使用。 |
 | `A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT` | 默认 `300`（与 HTTP 预算一致） | 无推送多少秒后结束 webhook 阶段；阶段不能早于客户端预算结束。 |

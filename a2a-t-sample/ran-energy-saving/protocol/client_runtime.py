@@ -36,6 +36,7 @@ from shared.agent_card import AGENT_CARD_NAME, AGENT_CARD_ORGANIZATION
 from shared.config import (
     DISCOVERY_NMS,
     INTENT_MODE_PROCESSED,
+    PURE_MESSAGE_SEND,
     SUPPORTED_TRANSPORTS,
     TRANSPORT_SSE,
     TRANSPORT_WEBHOOK,
@@ -841,8 +842,14 @@ async def build_client_runtime(
             # the traceparent header) for the wire inspector.
             event_hooks={"request": [inject_outgoing, wire_log.record_request]},
         )
+        # Pure A2A keeps the deployment's RPC method: a webhook deployment (the real NMS) sends
+        # non-streaming ``message/send`` exactly like the A2A-T hop, while an SSE deployment
+        # streams. The transport decides; the explicit pure mode can still override it.
+        streaming = transport == TRANSPORT_SSE and not (
+            protocol == PROTOCOL_PURE and config.pure_message_mode == PURE_MESSAGE_SEND
+        )
         client_config = ClientConfig(
-            streaming=transport == TRANSPORT_SSE,
+            streaming=streaming,
             httpx_client=httpx_client,
             supported_protocol_bindings=[TransportProtocol.HTTP_JSON],
             use_client_preference=True,

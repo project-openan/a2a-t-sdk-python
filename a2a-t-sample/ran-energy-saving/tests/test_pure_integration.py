@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from a2a_t.core.metadata import TASK_T_EXTENSION_URI
 from demo.composition import build_demo_runtime
@@ -68,6 +70,38 @@ async def test_a_pure_scenario_completes_end_to_end(scenario: str) -> None:
         assert TASK_T_EXTENSION_URI not in metadata
         assert "templateUri" not in metadata
         assert "negotiationContext" not in metadata
+
+
+async def test_a_pure_send_request_answers_the_input_required_round() -> None:
+    """The non-streaming ``message/send`` path keeps the same INPUT_REQUIRED continuation."""
+    port = free_tcp_port()
+    config = replace(offline_direct_config(port), pure_message_mode="send")
+
+    with running_server(
+        config,
+        protocol_mode=PROTOCOL_PURE,
+        pure_policy=build_demo_pure_policy(LANGUAGE_EN),
+    ):
+        runtime = await build_demo_runtime(
+            config,
+            "information",
+            "auto",
+            TRANSPORT_SSE,
+            DISCOVERY_DIRECT,
+            protocol=PROTOCOL_PURE,
+        )
+        try:
+            result = await runtime.run()
+        finally:
+            await runtime.aclose()
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert any(
+        event.get("state") == "TASK_STATE_INPUT_REQUIRED"
+        and isinstance(event.get("metadata"), dict)
+        and isinstance(event["metadata"].get("pure"), dict)
+        for event in result.events
+    )
 
 
 async def test_one_server_serves_the_extension_and_standard_a2a() -> None:

@@ -68,6 +68,32 @@ def test_write_run_env_points_both_processes_at_the_task_database(
     assert Path(str(values["A2AT_SAMPLE_RUNS_DIR"])) == run_demo.RUNS_DIR
 
 
+def test_write_run_env_carries_the_pure_message_mode_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The launcher's override must reach every file reader, not only its own process."""
+    monkeypatch.setattr(run_demo, "RUN_DIR", tmp_path)
+    monkeypatch.delenv("A2AT_SAMPLE_PURE_MESSAGE_MODE", raising=False)
+    env_path = run_demo._write_run_env(
+        source=None,
+        language="en-US",
+        model_mode="live",
+        discovery="nms",
+        transport="webhook",
+        webhook_port=9001,
+        server_host="127.0.0.1",
+        server_port=8000,
+        registry_host="127.0.0.1",
+        registry_port=5001,
+        ui_port=8081,
+        protocol="both",
+        oss_port=8011,
+        pure_message_mode="stream",
+    )
+
+    assert dotenv_values(env_path)["A2AT_SAMPLE_PURE_MESSAGE_MODE"] == "stream"
+
+
 def test_write_run_env_keeps_nms_discovery_for_pure_nms(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The OSS Agent reads the same .env; pure + NMS must keep nms discovery for it."""
     monkeypatch.setattr(run_demo, "RUN_DIR", tmp_path)
@@ -718,6 +744,7 @@ def _resolved_config() -> SimpleNamespace:
         adk_model_provider="litellm",
         discovery="nms",
         transport="webhook",
+        pure_message_mode="send",
         intent_mode="processed",
         nms_region="A2ATestRegion",
         nms_sites=["site-a"],
@@ -988,6 +1015,25 @@ def test_both_nms_pins_the_topology_env_of_the_ui_and_oss(
     assert oss["A2AT_SAMPLE_DISCOVERY"] == "nms"
     assert oss["A2AT_SAMPLE_TRANSPORT"] == "webhook"
     assert oss["A2AT_SAMPLE_RAN_URL"] == "http://127.0.0.1:8000"
+
+
+def test_both_nms_passes_the_pure_message_mode_override_to_the_ui(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A deployment can pin the standard-A2A method; the UI child inherits the choice."""
+    monkeypatch.delenv("A2AT_SAMPLE_PURE_MESSAGE_MODE", raising=False)
+
+    code, started, _ = _launch_both_nms(
+        monkeypatch,
+        tmp_path,
+        _both_nms_source(),
+        extra_args=["--pure-message-mode", "stream"],
+    )
+
+    assert code == 0
+    modules = [str(call["command"][2]) for call in started]
+    ui = started[modules.index("demo.web.serve")]["env"]
+    assert ui["A2AT_SAMPLE_PURE_MESSAGE_MODE"] == "stream"
 
 
 # ---------------------------------------------------------------------------

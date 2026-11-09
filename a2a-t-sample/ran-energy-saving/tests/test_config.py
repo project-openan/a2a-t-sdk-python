@@ -77,6 +77,7 @@ from shared.config import (
     PROTOCOL_MODE_ENV_KEY,
     PURE_APPROVAL_GATE_ENV_KEY,
     PURE_FOLLOWUP_ENV_KEY,
+    PURE_MESSAGE_MODE_ENV_KEY,
     RAN_URL_ENV_KEY,
     RUNS_DIR_ENV_KEY,
     SERVER_AUTH_TOKEN_ENV_KEY,
@@ -161,6 +162,7 @@ _ENV_KEYS = (
     LANGFUSE_UI_BASE_URL_ENV_KEY,
     RUNS_DIR_ENV_KEY,
     PURE_FOLLOWUP_ENV_KEY,
+    PURE_MESSAGE_MODE_ENV_KEY,
 )
 
 
@@ -1022,6 +1024,36 @@ def test_pure_followup_rejects_an_unknown_mode(tmp_path: Path) -> None:
     env_file.write_text(f"{PURE_FOLLOWUP_ENV_KEY}=guessed\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match=PURE_FOLLOWUP_ENV_KEY):
+        load_config(env_path=env_file)
+
+
+def test_pure_message_mode_follows_the_a2at_transport(tmp_path: Path) -> None:
+    """Pure A2A uses the same RPC method as A2A-T: webhook sends, SSE streams."""
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+    assert load_config(env_path=env_file).pure_message_mode == "stream"
+
+    env_file.write_text("A2AT_SAMPLE_TRANSPORT=webhook\n", encoding="utf-8")
+    assert load_config(env_path=env_file).pure_message_mode == "send"
+
+
+def test_pure_message_mode_accepts_an_explicit_override(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        f"A2AT_SAMPLE_TRANSPORT=webhook\n{PURE_MESSAGE_MODE_ENV_KEY}=stream\n",
+        encoding="utf-8",
+    )
+    assert load_config(env_path=env_file).pure_message_mode == "stream"
+
+    env_file.write_text(f"{PURE_MESSAGE_MODE_ENV_KEY}=send\n", encoding="utf-8")
+    assert load_config(env_path=env_file).pure_message_mode == "send"
+
+
+def test_pure_message_mode_rejects_an_unknown_value(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{PURE_MESSAGE_MODE_ENV_KEY}=poll\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=PURE_MESSAGE_MODE_ENV_KEY):
         load_config(env_path=env_file)
 
 

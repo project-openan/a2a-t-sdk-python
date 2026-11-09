@@ -57,7 +57,11 @@ from typing import Final, TextIO
 from urllib.parse import urlsplit
 
 from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
-from shared.config import merge_sample_process_env
+from shared.config import (
+    PURE_MESSAGE_MODE_ENV_KEY,
+    SUPPORTED_PURE_MESSAGE_MODES,
+    merge_sample_process_env,
+)
 from shared.run_constants import (
     DEMO_PROTOCOLS,
     PROTOCOL_A2A_NAME,
@@ -463,6 +467,7 @@ def _write_run_env(
     oss_port: int = 8001,
     mie_port: int = 8002,
     intent_mode: str | None = None,
+    pure_message_mode: str | None = None,
     extra: dict[str, str] | None = None,
 ) -> Path:
     """Write the per-run ``.env`` and return its path."""
@@ -510,6 +515,8 @@ def _write_run_env(
     )
     if intent_mode:
         values["A2AT_SAMPLE_INTENT_MODE"] = intent_mode
+    if pure_message_mode:
+        values[PURE_MESSAGE_MODE_ENV_KEY] = pure_message_mode
     if extra:
         values.update(extra)
     for key in _TLS_PATH_KEYS:
@@ -1218,6 +1225,16 @@ def _build_parser(
         ),
     )
     parser.add_argument(
+        "--pure-message-mode",
+        default=_env_str(env, PURE_MESSAGE_MODE_ENV_KEY, "") or None,
+        choices=list(SUPPORTED_PURE_MESSAGE_MODES),
+        help=(
+            "RPC method of the standard A2A request form (default: follows --transport, so a "
+            "webhook deployment sends message:send and an SSE deployment streams message:stream; "
+            "this flag overrides both protocols' consistency)"
+        ),
+    )
+    parser.add_argument(
         "--webhook-host",
         default=None,
         help=(
@@ -1402,6 +1419,10 @@ def main() -> int:
             return 2
     if args.transport is None:
         args.transport = "sse" if args.nms_sim or not args.nms else "webhook"
+    if args.pure_message_mode:
+        # A CLI choice beats a sourced .env in every child: the launcher environment is inherited
+        # and ``shared.config`` reads it before the per-run file.
+        os.environ[PURE_MESSAGE_MODE_ENV_KEY] = args.pure_message_mode
 
     from shared.logging_setup import configure_logging
 
@@ -1634,6 +1655,7 @@ def main() -> int:
         oss_port=args.oss_port,
         mie_port=args.mie_port,
         intent_mode=args.intent_mode,
+        pure_message_mode=args.pure_message_mode,
         extra=nms_overrides,
     )
 
@@ -1649,7 +1671,9 @@ def main() -> int:
         f"[run_demo] resolved: model_mode={resolved_config.model_mode}, "
         f"model={resolved_config.model_label}, language={resolved_config.language}, "
         f"provider={resolved_config.adk_model_provider}, discovery={resolved_config.discovery}, "
-        f"transport={resolved_config.transport}, intent_mode={resolved_config.intent_mode}, "
+        f"transport={resolved_config.transport}, "
+        f"pure_message_mode={resolved_config.pure_message_mode}, "
+        f"intent_mode={resolved_config.intent_mode}, "
         f"nms_region={resolved_config.nms_region or '-'}, "
         f"nms_sites={','.join(resolved_config.nms_sites) or '-'}"
     )

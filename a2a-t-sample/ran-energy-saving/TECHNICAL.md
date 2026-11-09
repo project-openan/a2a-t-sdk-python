@@ -1166,6 +1166,7 @@ script can switch the model with a plain `export ADK_MODEL_NAME=...`.
 | `A2AT_SAMPLE_RUNS_DIR` | default `<sample>/runs` | Data directory: transcripts, client/task/gateway SQLite stores, each run's `wire.jsonl` and the Web UI history. Relative values resolve against the sample root. |
 | `A2AT_SAMPLE_ENV_FILE` | unset | Configuration file `run_demo.py` reads when `--env-file` is not passed. Each launch script can point at its own profile instead of relying on candidate guessing. |
 | `A2AT_SAMPLE_PURE_FOLLOWUP` | `both` (default), `task`, `context` | Conversation fields of a A2A follow-up. Switch to `context` when the vendor rejects a follow-up carrying `taskId`. |
+| `A2AT_SAMPLE_PURE_MESSAGE_MODE` | unset (follows `A2AT_SAMPLE_TRANSPORT`), `stream`, `send` | RPC method of the standard-A2A request form. Unset keeps it consistent with A2A-T: webhook sends `message:send`, sse streams `message:stream`. `run_demo.py --pure-message-mode` overrides it. |
 | `A2AT_SAMPLE_WEBHOOK_PORT` | default `9000` (`0` = ephemeral) | Embedded webhook receiver port. |
 | `A2AT_SAMPLE_WEBHOOK_TOKEN` | default `demo-webhook-token` | Static push token checked against `X-A2A-Notification-Token`; unused when `A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` is set. |
 | `A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT` | default `300` (the HTTP budget) | Seconds without a push before a webhook phase ends; a phase must not end before the client gives up. |

@@ -63,6 +63,14 @@ PURE_FOLLOWUP_TASK = "task"
 PURE_FOLLOWUP_CONTEXT = "context"
 SUPPORTED_PURE_FOLLOWUPS = (PURE_FOLLOWUP_BOTH, PURE_FOLLOWUP_TASK, PURE_FOLLOWUP_CONTEXT)
 
+#: RPC method of a pure A2A request. ``stream`` sends ``message/stream`` through the a2a-sdk
+#: streaming client; ``send`` sends one non-streaming ``message/send``, the same method the A2A-T
+#: webhook hop uses against a real NMS. The simulator serves both, but only SSE transport.
+PURE_MESSAGE_STREAM = "stream"
+PURE_MESSAGE_SEND = "send"
+SUPPORTED_PURE_MESSAGE_MODES = (PURE_MESSAGE_STREAM, PURE_MESSAGE_SEND)
+DEFAULT_PURE_MESSAGE_MODE = PURE_MESSAGE_STREAM
+
 #: ``.env`` keys.
 MODEL_MODE_ENV_KEY = "A2AT_SAMPLE_MODEL_MODE"
 LANGUAGE_ENV_KEY = "A2AT_LANGUAGE"
@@ -106,6 +114,7 @@ TRACE_SPAN_LEVEL_ENV_KEY = "A2AT_SAMPLE_TRACE_SPAN_LEVEL"
 RUNS_DIR_ENV_KEY = "A2AT_SAMPLE_RUNS_DIR"
 #: Which conversation fields a pure A2A follow-up carries (``both`` / ``task`` / ``context``).
 PURE_FOLLOWUP_ENV_KEY = "A2AT_SAMPLE_PURE_FOLLOWUP"
+PURE_MESSAGE_MODE_ENV_KEY = "A2AT_SAMPLE_PURE_MESSAGE_MODE"
 HTTP_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS"
 LLM_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_LLM_TIMEOUT_SECONDS"
 LLM_MAX_ATTEMPTS_ENV_KEY = "A2AT_SAMPLE_LLM_MAX_ATTEMPTS"
@@ -349,6 +358,23 @@ def _pure_followup(values: dict[str, str | None]) -> str:
         raise ValueError(
             f"Unsupported {PURE_FOLLOWUP_ENV_KEY}: {value}; "
             f"expected one of {SUPPORTED_PURE_FOLLOWUPS}"
+        )
+    return value
+
+
+def _pure_message_mode(values: dict[str, str | None], transport: str) -> str:
+    """Resolve the pure A2A RPC method, rejecting an unsupported value.
+
+    Pure A2A follows the deployment's A2A-T transport by default: a webhook deployment sends
+    non-streaming ``message/send`` and an SSE deployment streams ``message/stream``, so both
+    request forms of one agent use the same method. The explicit key still overrides it.
+    """
+    default = PURE_MESSAGE_SEND if transport == TRANSPORT_WEBHOOK else DEFAULT_PURE_MESSAGE_MODE
+    value = _env_value(values, PURE_MESSAGE_MODE_ENV_KEY, default).lower()
+    if value not in SUPPORTED_PURE_MESSAGE_MODES:
+        raise ValueError(
+            f"Unsupported {PURE_MESSAGE_MODE_ENV_KEY}: {value}; "
+            f"expected one of {SUPPORTED_PURE_MESSAGE_MODES}"
         )
     return value
 
@@ -648,6 +674,7 @@ class SampleConfig:
     gateway_scenario: str = DEFAULT_GATEWAY_SCENARIO
     runs_dir: str = str(DEFAULT_RUNS_DIR)
     pure_followup: str = PURE_FOLLOWUP_BOTH
+    pure_message_mode: str = DEFAULT_PURE_MESSAGE_MODE
     gateway_task_db_path: str | None = None
     auth_token: str = ""
     server_auth_token: str = ""
@@ -721,8 +748,8 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
     Raises:
         ValueError: when ``A2AT_SAMPLE_MODEL_MODE``, ``A2AT_LANGUAGE``,
             ``ADK_MODEL_OUTPUT_SCHEMA_WITH_TOOLS``, a port, a timeout, the LLM attempt limit, a
-            discovery / transport / intent-mode / protocol-mode key, or ``A2AT_SAMPLE_TASK_DB``
-            carries an unsupported value.
+            discovery / transport / intent-mode / protocol-mode / pure-message-mode key, or
+            ``A2AT_SAMPLE_TASK_DB`` carries an unsupported value.
     """
     resolved = env_path or Path.cwd() / ".env"
     values: dict[str, str | None] = dict(dotenv_values(resolved)) if resolved.exists() else {}
@@ -911,6 +938,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         gateway_scenario=gateway_scenario,
         runs_dir=_resolved_dir(values, RUNS_DIR_ENV_KEY, DEFAULT_RUNS_DIR),
         pure_followup=_pure_followup(values),
+        pure_message_mode=_pure_message_mode(values, transport),
         gateway_task_db_path=_optional_absolute_path(values, GATEWAY_TASK_DB_ENV_KEY),
         auth_token=_env_value(values, AUTH_TOKEN_ENV_KEY, "").strip(),
         server_auth_token=_env_value(values, SERVER_AUTH_TOKEN_ENV_KEY, "").strip(),
