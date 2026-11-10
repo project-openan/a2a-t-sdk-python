@@ -927,6 +927,94 @@ async def test_error_envelope_raises_and_is_written_to_wire_error(tmp_path: Path
     await client.aclose()
 
 
+async def test_a_successful_send_keeps_its_status_headers_and_body(tmp_path: Path) -> None:
+    """A successful response may echo a trace id or request id in its headers."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        return httpx.Response(
+            200,
+            headers={
+                "content-type": "application/json",
+                "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+                "x-request-id": "req-1",
+                "set-cookie": "session=secret",
+            },
+            json={"task": {"id": "task-1", "status": {"state": "TASK_STATE_SUBMITTED"}}},
+        )
+
+    client = _client(httpx.MockTransport(handle))
+    wire_path = tmp_path / "run" / "wire.jsonl"
+    client.set_wire_path(wire_path)
+
+    await client.send_message({"message": {"messageId": "m1"}})
+
+    records = [json.loads(line) for line in wire_path.read_text(encoding="utf-8").splitlines()]
+    inbound = [record for record in records if record["dir"] == "in"][-1]
+    assert inbound["status"] == 200
+    assert inbound["elapsedMs"] >= 0
+    assert inbound["headers"]["traceparent"] == "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+    assert inbound["headers"]["x-request-id"] == "req-1"
+    # Credentials never reach the wire log.
+    assert inbound["headers"]["set-cookie"] == "***"
+    assert inbound["body"]["task"]["id"] == "task-1"
+    await client.aclose()
+
+
+async def test_a_stream_open_keeps_the_success_headers(tmp_path: Path) -> None:
+    """The stream body arrives as line records; the opening response carries the headers."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream", "x-trace-id": "trace-1"},
+            content=b'data: {"task": {"id": "task-1"}}\n\n',
+        )
+
+    client = _client(httpx.MockTransport(handle))
+    wire_path = tmp_path / "run" / "wire.jsonl"
+    client.set_wire_path(wire_path)
+
+    frames = [frame async for frame in client.stream_message({"message": {"messageId": "m1"}})]
+
+    assert frames == [{"task": {"id": "task-1"}}]
+    records = [json.loads(line) for line in wire_path.read_text(encoding="utf-8").splitlines()]
+    opened = [record for record in records if record["dir"] == "in" and record.get("stream")]
+    assert len(opened) == 1
+    assert opened[0]["status"] == 200
+    assert opened[0]["headers"]["x-trace-id"] == "trace-1"
+    await client.aclose()
+
+
+async def test_a_poll_success_header_block_is_recorded_once(tmp_path: Path) -> None:
+    """A long task polls forever; the same header block must not repeat on every poll."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json", "x-request-id": "req-poll"},
+            json={"task": {"id": "task-1", "status": {"state": "TASK_STATE_WORKING"}}},
+        )
+
+    client = _client(httpx.MockTransport(handle))
+    wire_path = tmp_path / "run" / "wire.jsonl"
+    client.set_wire_path(wire_path)
+
+    await client.get_task("task-1")
+    await client.get_task("task-1")
+
+    records = [json.loads(line) for line in wire_path.read_text(encoding="utf-8").splitlines()]
+    polls = [record for record in records if record["dir"] == "in" and record.get("headers")]
+    assert len(polls) == 1
+    assert polls[0]["headers"]["x-request-id"] == "req-poll"
+    await client.aclose()
+
+
 async def test_a_rate_limited_send_keeps_its_status_headers_and_retry_after(tmp_path: Path) -> None:
     """The vendor's 429 body is empty, so the status and headers are the only evidence."""
 
@@ -1176,9 +1264,7 @@ async def test_traceparent_prefers_the_stable_downstream_trace_id() -> None:
     client = _client(httpx.MockTransport(handle))
     run_id = "0123456789abcdef0123456789abcdef"
     stable_trace_id = "fedcba9876543210fedcba9876543210"
-    with trace_scope(run_id=run_id), propagated_trace(
-        run_id=run_id, downstream_trace_id=stable_trace_id
-    ):
+    with trace_scope(run_id=run_id), propagated_trace(run_id=run_id, downstream_trace_id=stable_trace_id):
         await client.send_message({"message": {"messageId": "m1"}})
 
     version, trace_id, span_id, flags = seen[0].split("-")

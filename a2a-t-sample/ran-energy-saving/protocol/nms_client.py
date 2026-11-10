@@ -259,6 +259,9 @@ class NmsClient:
         self._token_lock = asyncio.Lock()
         self._wire_root = wire_root
         self._wire_path: Path | None = None
+        # Polls and picker calls repeat the same success headers; record them once per key so a
+        # long task does not add a full header block to every poll.
+        self._response_header_seen: set[str] = set()
         # One NmsClient is shared by concurrent OSS Agent requests; the context variable keeps
         # each request's wire file private to its own asyncio task.
         self._wire_var: ContextVar[Path | None | object] = ContextVar(f"a2at_nms_wire_{id(self)}", default=_WIRE_UNSET)
@@ -417,6 +420,12 @@ class NmsClient:
                         http_status=response.status_code,
                         retry_after=_retry_after_seconds(response),
                     )
+                self._record_success_response(
+                    response,
+                    url=url,
+                    elapsed_seconds=time.monotonic() - started,
+                    stream=True,
+                )
                 lines = response.aiter_lines()
                 # The NMS emits ``: heartbeat`` every 15 s forever, so an idle window measured
                 # between *any* two lines never expires: the stream hung for minutes after the
@@ -561,7 +570,12 @@ class NmsClient:
         if not isinstance(body, dict):
             self.record_error("ParseError", "NMS response is not a JSON object", body)
             raise NmsProtocolError("NMS A2A response is not a JSON object")
-        self._write_wire("in", body=body)
+        self._record_success_response(
+            response,
+            url=url,
+            elapsed_seconds=time.monotonic() - started,
+            body=body,
+        )
         if "error" in body:
             message = _frame_error_message(body)
             self.record_error("NmsProtocolError", message, body)
@@ -606,6 +620,12 @@ class NmsClient:
         if not isinstance(data, dict):
             raise NmsProtocolError("NMS task response is not a JSON object")
         task = data.get("task")
+        self._record_success_response(
+            response,
+            url=url,
+            elapsed_seconds=time.monotonic() - started,
+            once_key=f"task:{task_id}",
+        )
         return task if isinstance(task, dict) else data
 
     async def list_tasks(self) -> dict[str, object]:
@@ -633,6 +653,12 @@ class NmsClient:
             data = response.json()
         except ValueError as exc:
             raise NmsProtocolError("NMS task list response is not JSON") from exc
+        self._record_success_response(
+            response,
+            url=url,
+            elapsed_seconds=time.monotonic() - started,
+            once_key="tasks",
+        )
         return data if isinstance(data, dict) else {}
 
     async def cancel_task(self, task_id: str) -> bool:
@@ -664,6 +690,12 @@ class NmsClient:
                 title_key="nmsCancel",
                 detail={"taskId": task_id},
             )
+            self._record_success_response(
+                response,
+                url=url,
+                elapsed_seconds=time.monotonic() - started,
+                once_key=f"cancel:{task_id}",
+            )
             return False
         if response.status_code >= 400:
             self._record_failure_response(response, url=url, elapsed_seconds=time.monotonic() - started)
@@ -672,6 +704,12 @@ class NmsClient:
                 http_status=response.status_code,
                 retry_after=_retry_after_seconds(response),
             )
+        self._record_success_response(
+            response,
+            url=url,
+            elapsed_seconds=time.monotonic() - started,
+            once_key=f"cancel:{task_id}",
+        )
         return True
 
     async def wait_for_terminal(self, task_id: str, *, timeout: float | None = None) -> dict[str, object]:
@@ -734,6 +772,49 @@ class NmsClient:
             body=response.text or None,
             elapsedMs=int(elapsed_seconds * 1000),
         )
+
+    def _record_success_response(
+        self,
+        response: httpx.Response,
+        *,
+        url: str,
+        elapsed_seconds: float,
+        body: object | None = None,
+        stream: bool = False,
+        once_key: str = "",
+    ) -> None:
+        """Record one successful NMS response, including its headers, in ``wire.jsonl``.
+
+        A vendor may echo its own trace id, request id or quota state on a successful response; the
+        body alone cannot prove whether it did. Headers are captured in full and credentials are
+        masked by :func:`redact` in ``_append_wire``. ``once_key`` keeps routine polls / task-list
+        calls from adding the same header block to every poll of a long task.
+
+        Args:
+            response: successful HTTP response.
+            url: request URL (the response may not carry a request in tests).
+            elapsed_seconds: time to the response headers.
+            body: parsed body, when the caller already has it.
+            stream: mark the record as the stream opening (the body arrives as line records).
+            once_key: optional key deduplicating repeated calls; empty records every response.
+        """
+        if once_key and once_key in self._response_header_seen:
+            return
+        request = getattr(response, "request", None)
+        fields: dict[str, object] = {
+            "method": getattr(request, "method", ""),
+            "url": url,
+            "status": response.status_code,
+            "headers": _response_headers(response),
+            "elapsedMs": int(elapsed_seconds * 1000),
+        }
+        if body is not None:
+            fields["body"] = body
+        if stream:
+            fields["stream"] = True
+        self._write_wire("in", **fields)
+        if once_key:
+            self._response_header_seen.add(once_key)
 
     def record_inbound(self, frame: Mapping[str, object], *, source: str) -> None:
         """Record one inbound push or poll reply in ``wire.jsonl`` (best effort).
@@ -1234,6 +1315,11 @@ def _excerpt(text: str, limit: int = _ERROR_EXCERPT_LENGTH) -> str:
 def _failure_headers(response: httpx.Response) -> dict[str, str]:
     """Return the whitelisted headers of one failed response (credentials are never included)."""
     return {name: response.headers[name] for name in _FAILURE_HEADER_NAMES if name in response.headers}
+
+
+def _response_headers(response: httpx.Response) -> dict[str, str]:
+    """Return every header of one successful response; :func:`redact` masks credentials."""
+    return {name: value for name, value in response.headers.items()}
 
 
 def _retry_after_seconds(response: httpx.Response) -> float | None:
