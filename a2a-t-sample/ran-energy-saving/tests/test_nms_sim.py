@@ -25,6 +25,7 @@ from demo.nms_sim.config import (
     FIDELITY_FAST,
     FIDELITY_STRICT,
     PURE_FAILURE_RETRY,
+    PURE_QUESTION_CONFIRM,
     RATE_POLICY_OPTIONAL,
     TASK_SHAPE_TOPLEVEL,
     WINDOW_POLICY_ANY,
@@ -441,6 +442,17 @@ def _pure_message(text: str, *, context_id: str | None = None) -> dict[str, obje
     return {"message": message}
 
 
+def _pure_task_message(
+    text: str, *, task_id: str, context_id: str
+) -> dict[str, object]:
+    """Build one plain-A2A message continuing an existing Task (a Modify)."""
+    body = _pure_message(text, context_id=context_id)
+    message = body["message"]
+    assert isinstance(message, dict)
+    message["taskId"] = task_id
+    return body
+
+
 async def test_pure_region_answer_in_the_vendor_phrasing_resolves_the_task() -> None:
     """The vendor asks for a region in plain text and accepts "The region is X." as the answer."""
     async for client in _client():
@@ -468,6 +480,114 @@ async def test_pure_region_answer_in_the_vendor_phrasing_resolves_the_task() -> 
             frame.get("statusUpdate", {}).get("status", {}).get("state")
             == "TASK_STATE_COMPLETED"
             for frame in resumed
+        )
+
+
+async def test_confirm_mode_asks_the_vendor_sentence_before_accepting() -> None:
+    """The real NMS asks the same terse sentence even when the request already validates."""
+    config = SimConfig(
+        fidelity=FIDELITY_FAST,
+        negotiation_carrier=CARRIER_MESSAGE,
+        window_policy=WINDOW_POLICY_ANY,
+        pure_question=PURE_QUESTION_CONFIRM,
+    )
+    async for client in _client(config):
+        token = await _token(client)
+        headers = {"Authorization": f"Bearer {token}"}
+        frames = await _frames(
+            client,
+            _pure_message(
+                "Create a RAN energy saving task in A2ATestRegion for 00:00 to 22:00 at 10Mbps."
+            ),
+            headers,
+        )
+
+        assert frames[0]["message"]["parts"][0]["text"] == "Not feasible, please confirm"
+        assert "task" not in frames[0]
+        context_id = str(frames[0]["message"]["contextId"])
+
+        resumed = await _frames(
+            client,
+            _pure_message("Confirmed. Proceed.", context_id=context_id),
+            headers,
+        )
+
+        assert any(frame.get("artifactUpdate") for frame in resumed)
+
+
+def test_confirm_mode_defaults_to_retry_because_it_may_need_several_rounds() -> None:
+    config = SimConfig(pure_question=PURE_QUESTION_CONFIRM)
+
+    assert config.pure_failure == PURE_FAILURE_RETRY
+
+
+async def test_confirm_mode_converges_a_modify_over_several_answers() -> None:
+    """A Modify starts a new exchange; the outage ladder 10→5→2 converges against it."""
+    config = SimConfig(
+        fidelity=FIDELITY_FAST,
+        negotiation_carrier=CARRIER_MESSAGE,
+        window_policy=WINDOW_POLICY_ANY,
+        rate_policy=RATE_POLICY_OPTIONAL,
+        long_outage_feasibility=True,
+        hold_working=True,
+        pure_question=PURE_QUESTION_CONFIRM,
+    )
+    async for client in _client(config):
+        token = await _token(client)
+        headers = {"Authorization": f"Bearer {token}"}
+        baseline = await _frames(
+            client,
+            _pure_message(
+                "Create an energy saving task for A2ATestRegion: guarantee 2Mbps from 00:00 to "
+                "07:00, 10Mbps from 07:00 to 18:00 and 20Mbps from 18:00 to 24:00."
+            ),
+            headers,
+        )
+        context_id = str(baseline[0]["message"]["contextId"])
+        held = await _frames(
+            client, _pure_message("Confirmed. Proceed.", context_id=context_id), headers
+        )
+        task_id = next(
+            str(frame["statusUpdate"]["taskId"])
+            for frame in held
+            if "statusUpdate" in frame and frame["statusUpdate"]["status"]["state"] == "TASK_STATE_WORKING"
+        )
+
+        modify_text = (
+            "Due to a power outage from 08:00 to 18:00 in the A2ATestRegion region, modify "
+            "their guaranteed throughput to 10 Mbps."
+        )
+        modify = await _frames(
+            client,
+            _pure_task_message(modify_text, task_id=task_id, context_id=context_id),
+            headers,
+        )
+        assert modify[0]["message"]["parts"][0]["text"] == "Not feasible, please confirm"
+
+        first = await _frames(
+            client,
+            _pure_task_message(
+                "OK, lower ... to 5Mbps during the outage.",
+                task_id=task_id,
+                context_id=context_id,
+            ),
+            headers,
+        )
+        assert first[0]["message"]["parts"][0]["text"] == "Not feasible, please confirm"
+
+        second = await _frames(
+            client,
+            _pure_task_message(
+                "OK, lower ... to 2Mbps during the outage.",
+                task_id=task_id,
+                context_id=context_id,
+            ),
+            headers,
+        )
+        assert any(
+            frame.get("statusUpdate", {}).get("status", {}).get("state")
+            == "TASK_STATE_COMPLETED"
+            for frame in second
         )
 
 

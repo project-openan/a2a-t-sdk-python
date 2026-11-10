@@ -31,6 +31,14 @@ SUPPORTED_PURE_FAILURES: Final[tuple[str, ...]] = (
     PURE_FAILURE_REJECTED,
 )
 
+#: Plain-A2A question styles. ``issue`` renders the business issue it found; ``confirm`` asks the
+#: vendor's fixed sentence (``Not feasible, please confirm``) on every new exchange, which is how
+#: the real NMS negotiates and what the OSP P-column answers reply to.
+PURE_QUESTION_ISSUE: Final[str] = "issue"
+PURE_QUESTION_CONFIRM: Final[str] = "confirm"
+SUPPORTED_PURE_QUESTIONS: Final[tuple[str, ...]] = (PURE_QUESTION_ISSUE, PURE_QUESTION_CONFIRM)
+PURE_QUESTION_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION"
+
 #: Window acceptance policies.
 WINDOW_POLICY_EXACT: Final[str] = "exact"
 WINDOW_POLICY_ANY: Final[str] = "any"
@@ -121,6 +129,8 @@ class SimConfig:
         pure_failure: What a plain-A2A follow-up does when it still cannot be served:
             ``completed`` (vendor refusal dressed as success), ``retry`` or ``rejected``.
         window_policy: ``exact`` accepts only ``window``; ``any`` accepts every parsed window.
+        pure_question: ``issue`` renders the business issue it found; ``confirm`` asks the vendor's
+            fixed ``Not feasible, please confirm`` on every new pure exchange.
     """
 
     fidelity: str = FIDELITY_STRICT
@@ -145,6 +155,7 @@ class SimConfig:
     window_policy: str = WINDOW_POLICY_EXACT
     rate_policy: str = RATE_POLICY_REQUIRED
     long_outage_feasibility: bool = False
+    pure_question: str = PURE_QUESTION_ISSUE
 
     def __post_init__(self) -> None:
         """Apply the fast profile to settings built directly, not only through ``from_env``.
@@ -152,11 +163,17 @@ class SimConfig:
         ``fast`` is documented as "finishes immediately"; the environment path already zeroes the
         delays, but a direct ``SimConfig(fidelity=FIDELITY_FAST)`` used to keep the strict 2 s + 4 s
         wall-clock delays. Normalizing here keeps both construction paths identical.
+
+        A ``confirm`` dialogue may need several rounds (the OSP outage cases concede 10→5→2 Mbps);
+        the vendor's default ``completed`` refusal would stop after the first answer, so the
+        replay profile asks again until the round budget is spent.
         """
         if self.fidelity == FIDELITY_FAST:
             object.__setattr__(self, "heartbeat_seconds", 0.0)
             object.__setattr__(self, "working_delay", 0.0)
             object.__setattr__(self, "completion_delay", 0.0)
+        if self.pure_question == PURE_QUESTION_CONFIRM and self.pure_failure == PURE_FAILURE_COMPLETED:
+            object.__setattr__(self, "pure_failure", PURE_FAILURE_RETRY)
 
     @property
     def strict(self) -> bool:
@@ -202,6 +219,12 @@ class SimConfig:
                 f"Unsupported {RATE_POLICY_ENV_KEY}: {rate_policy}; "
                 f"expected one of {SUPPORTED_RATE_POLICIES}"
             )
+        pure_question = os.environ.get(PURE_QUESTION_ENV_KEY, PURE_QUESTION_ISSUE).strip().lower()
+        if pure_question not in SUPPORTED_PURE_QUESTIONS:
+            raise ValueError(
+                f"Unsupported {PURE_QUESTION_ENV_KEY}: {pure_question}; "
+                f"expected one of {SUPPORTED_PURE_QUESTIONS}"
+            )
         kinds = _parse_kinds(os.environ.get(NEGOTIATION_KINDS_ENV_KEY, ""))
         try:
             max_rounds = int(os.environ.get(MAX_ROUNDS_ENV_KEY, str(DEFAULT_MAX_ROUNDS)).strip())
@@ -233,6 +256,7 @@ class SimConfig:
             window_policy=window_policy,
             rate_policy=rate_policy,
             long_outage_feasibility=_truthy(os.environ.get(LONG_OUTAGE_FEASIBILITY_ENV_KEY, "")),
+            pure_question=pure_question,
         )
         # The fast profile keeps the wire contract but removes the wall-clock delays; the dataclass
         # applies that normalization in ``__post_init__``, so ``profile`` is ready as built.

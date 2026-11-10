@@ -1173,6 +1173,23 @@ def test_the_nms_simulator_flag_is_read_from_the_environment(tmp_path: Path) -> 
     assert config.nms_sim is True
 
 
+def test_the_simulator_pure_question_style_is_read_and_validated(tmp_path: Path) -> None:
+    """The tester asserts OSP round counts only when the simulator replays the vendor dialogue."""
+    config = load_config(
+        env_path=_nms_env_file(
+            tmp_path, "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION=confirm\n"
+        )
+    )
+    assert config.nms_sim_pure_question == "confirm"
+
+    with pytest.raises(ValueError, match="A2AT_SAMPLE_NMS_SIM_PURE_QUESTION"):
+        load_config(
+            env_path=_nms_env_file(
+                tmp_path, "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION=unknown\n"
+            )
+        )
+
+
 def test_nms_region_and_sites_can_be_overridden(tmp_path: Path) -> None:
     config = load_config(
         env_path=_nms_env_file(

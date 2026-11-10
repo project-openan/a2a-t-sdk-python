@@ -227,12 +227,23 @@ def extract_content(source: str) -> ExtractedContent:
     )
 
 
-def validate_content(content: ExtractedContent, config: SimConfig) -> NegotiationIssue | None:
+def validate_content(
+    content: ExtractedContent,
+    config: SimConfig,
+    *,
+    effective_rate_only: bool = False,
+) -> NegotiationIssue | None:
     """Return the first business violation of one request, or ``None`` when it is acceptable.
 
     The order is the vendor's own: missing/unknown data first (information), then an unavailable
     window (feasibility), then an unattainable goal (target). One kind per call, so one proposal
     per round.
+
+    Args:
+        content: Values read from the request (and, for an answer, merged with the request).
+        config: Simulator settings.
+        effective_rate_only: Judge the long-outage rule on the merged effective rate only, as the
+            pure-A2A answer path must. A structured Task-T still scans every rate in its text.
     """
     if not content.source.strip() and not content.region and not content.windows and content.rate_mbps is None:
         return NegotiationIssue(KIND_INFORMATION, ("Task content",), "")
@@ -281,7 +292,11 @@ def validate_content(content: ExtractedContent, config: SimConfig) -> Negotiatio
         # guaranteed rate must exceed 2 Mbps. Measuring the outage envelope (not its distinct
         # hours) keeps a gapped outage as long as the vendor sees it.
         outage_hours = energy_rules.outage_duration_hours(content.source)
-        rates = [float(value) for value in _THROUGHPUT_PATTERN.findall(content.source)]
+        rates = (
+            [content.rate_mbps]
+            if effective_rate_only and content.rate_mbps is not None
+            else [float(value) for value in _THROUGHPUT_PATTERN.findall(content.source)]
+        )
         if energy_rules.is_outage_infeasible(outage_hours, rates):
             return NegotiationIssue(
                 KIND_FEASIBILITY,
@@ -300,14 +315,19 @@ def validate_content(content: ExtractedContent, config: SimConfig) -> Negotiatio
     return None
 
 
-def select_issue(content: ExtractedContent, config: SimConfig) -> NegotiationIssue | None:
+def select_issue(
+    content: ExtractedContent,
+    config: SimConfig,
+    *,
+    effective_rate_only: bool = False,
+) -> NegotiationIssue | None:
     """Return the issue to propose for one request, honouring the configured kinds.
 
     Missing information is never suppressed: without the region/window/rate the request cannot be
     executed at all, so a disabled kind falls back to ``information`` instead of silently
     accepting an invalid request.
     """
-    issue = validate_content(content, config)
+    issue = validate_content(content, config, effective_rate_only=effective_rate_only)
     if issue is None or issue.kind in config.negotiation_kinds or issue.kind == KIND_INFORMATION:
         return issue
     return NegotiationIssue(KIND_INFORMATION, issue.items, issue.detail)

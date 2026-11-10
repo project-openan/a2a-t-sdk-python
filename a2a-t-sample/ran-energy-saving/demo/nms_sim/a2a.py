@@ -32,6 +32,7 @@ from demo.nms_sim.config import (
     CARRIER_TASK,
     PURE_FAILURE_COMPLETED,
     PURE_FAILURE_REJECTED,
+    PURE_QUESTION_CONFIRM,
     WINDOW_POLICY_ANY,
     SimConfig,
 )
@@ -81,6 +82,11 @@ _LOGGER = logging.getLogger("ran_energy_saving.nms_sim")
 
 #: SSE media type.
 EVENT_STREAM: str = "text/event-stream"
+
+#: The fixed plain-A2A question the real vendor asks on every negotiation round. Its A2A front
+#: end does not render the business issue: the operator answers in free text and the vendor merges
+#: the reply into its intent before validating again.
+PURE_CONFIRM_TEXT: str = "Not feasible, please confirm"
 
 
 @dataclass
@@ -661,14 +667,25 @@ def build_routes(
             if requested_task_id
             else resolved_store.find_by_context(context_id)
         )
-        is_new = task is None
+        # A Task in INPUT_REQUIRED is waiting for the answer to the question it just asked. Any
+        # other state (including a held WORKING Task) means this message starts a new exchange,
+        # e.g. a standard-A2A Modify. That distinction is what keeps the Modify's own outage
+        # window from being merged into the Create the baseline was built from.
+        is_answer = task is not None and task.state == TASK_INPUT_REQUIRED
         if task is None:
             task = resolved_store.create(context_id=context_id)
             task.pure_text = text
             task.pure_baseline_text = text
-        else:
+            task.pure_hold = config.hold_working
+        elif is_answer:
             task.pure_text = f"{task.pure_text}\n{text}".strip()
             task.pure_round += 1
+            resolved_store.update(task.task_id, state=TASK_SUBMITTED, message="Task creation succeeded")
+        else:
+            task.pure_text = text
+            task.pure_baseline_text = text
+            task.pure_round = 0
+            task.pure_hold = False
             resolved_store.update(task.task_id, state=TASK_SUBMITTED, message="Task creation succeeded")
         task.pure_max_rounds = config.max_rounds
         try:
@@ -680,20 +697,24 @@ def build_routes(
             )
         except PushConfigExistsError as exc:
             return _register_config_error(exc)
-        # Only the latest reply is judged; the original request supplies the fields it did not
-        # repeat. Concatenating and parsing the whole conversation would let the first mention of a
-        # field win, so a corrected region/rate in the answer would be ignored.
+        # Only the latest reply is judged; the request of this exchange supplies the fields it did
+        # not repeat. Concatenating and parsing the whole conversation would let the first mention
+        # of a field win, so a corrected region/rate in the answer would be ignored.
         baseline = extract_content(task.pure_baseline_text)
-        content = extract_content(text).merged_with(baseline) if not is_new else baseline
-        issue = select_issue(content, config)
+        content = extract_content(text).merged_with(baseline) if is_answer else baseline
+        if config.pure_question == PURE_QUESTION_CONFIRM and not is_answer:
+            # The vendor's plain-A2A front end asks the same terse sentence whatever the business
+            # issue is; the caller's free-text answer is merged over this request and re-validated.
+            return _pure_question_response(task, PURE_CONFIRM_TEXT, stream=stream)
+        issue = select_issue(content, config, effective_rate_only=is_answer)
         if issue is not None:
-            return _pure_issue(task, issue, content, stream=stream, is_new=is_new)
+            return _pure_issue(task, issue, content, stream=stream, is_answer=is_answer)
         intent = accepted_intent(content, None, config)
         if stream:
             # The pure stream owns the same rehearsal switch as the webhook path: a held Task must
             # publish its report and stay WORKING so the Modify picker can select it.
-            return _stream_completion(task, intent, hold=config.hold_working and is_new)
-        return _json_completion(task, intent, hold=config.hold_working and is_new, push=push)
+            return _stream_completion(task, intent, hold=task.pure_hold)
+        return _json_completion(task, intent, hold=task.pure_hold, push=push)
 
     def _pure_issue(
         task: SimTask,
@@ -701,7 +722,7 @@ def build_routes(
         content: ExtractedContent,
         *,
         stream: bool,
-        is_new: bool,
+        is_answer: bool,
     ) -> Response:
         """Answer a plain-A2A request that cannot be executed yet.
 
@@ -710,14 +731,14 @@ def build_routes(
         with an error sentence and no artifact -- a refusal that must not be reported as success;
         ``retry`` asks again until the round budget; ``rejected`` ends the Task.
         """
-        if not is_new and config.pure_failure == PURE_FAILURE_COMPLETED:
+        if is_answer and config.pure_failure == PURE_FAILURE_COMPLETED:
             resolved_store.update(
                 task.task_id,
                 state=TASK_COMPLETED,
                 message=_pure_failure_text(issue, content),
             )
             return _pure_task_response(task, stream=stream)
-        if not is_new and config.pure_failure == PURE_FAILURE_REJECTED:
+        if is_answer and config.pure_failure == PURE_FAILURE_REJECTED:
             resolved_store.update(task.task_id, state=TASK_REJECTED, message=issue.body())
             return _pure_task_response(task, stream=stream)
         if task.pure_round >= task.pure_max_rounds:
@@ -727,14 +748,24 @@ def build_routes(
                 message=f"Negotiation did not converge: {issue.body()}",
             )
             return _pure_task_response(task, stream=stream)
-        resolved_store.update(task.task_id, state=TASK_INPUT_REQUIRED, message=issue.body())
-        # The real NMS asks a plain-A2A question as a standalone agent Message with no
-        # negotiation metadata. Returning a Task status here would make the OSS answer it
-        # itself instead of relaying the question to the caller.
+        if config.pure_question == PURE_QUESTION_CONFIRM:
+            # The vendor's front end never renders the business issue: every round is the same
+            # terse sentence, and the answer is merged over the request before re-validating.
+            return _pure_question_response(task, PURE_CONFIRM_TEXT, stream=stream)
+        return _pure_question_response(task, issue.body(), stream=stream)
+
+    def _pure_question_response(task: SimTask, text: str, *, stream: bool) -> Response:
+        """Ask one plain-A2A question as a standalone agent Message.
+
+        The real NMS asks a plain-A2A question as a standalone message with no negotiation
+        metadata, even when it also marks its internal Task ``INPUT_REQUIRED``. Returning a Task
+        status here would make the OSS answer it itself instead of relaying the question.
+        """
+        resolved_store.update(task.task_id, state=TASK_INPUT_REQUIRED, message=text)
         if stream:
             return StreamingResponse(
                 message_stream(
-                    issue.body(),
+                    text,
                     context_id=task.context_id,
                     config=config,
                     structured=False,
@@ -746,7 +777,7 @@ def build_routes(
             {
                 "message": negotiation_message(
                     context_id=task.context_id,
-                    body=issue.body(),
+                    body=text,
                     metadata={},
                 )
             },

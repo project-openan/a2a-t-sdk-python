@@ -249,6 +249,15 @@ def _nms_sim_settings(values: dict[str, str], port: int) -> dict[str, str]:
         "A2AT_SAMPLE_NMS_SIM_WINDOW_POLICY": _env_str(
             values, "A2AT_SAMPLE_NMS_SIM_WINDOW_POLICY", "exact"
         ),
+        "A2AT_SAMPLE_NMS_SIM_RATE_POLICY": _env_str(
+            values, "A2AT_SAMPLE_NMS_SIM_RATE_POLICY", "required"
+        ),
+        "A2AT_SAMPLE_NMS_SIM_LONG_OUTAGE_FEASIBILITY": _env_str(
+            values, "A2AT_SAMPLE_NMS_SIM_LONG_OUTAGE_FEASIBILITY", "0"
+        ),
+        "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION": _env_str(
+            values, "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION", "issue"
+        ),
     }
 
 
@@ -1995,6 +2004,15 @@ def main() -> int:
                     if args.intent_mode
                     else {}
                 ),
+                **(
+                    {
+                        "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION": sim_settings[
+                            "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION"
+                        ]
+                    }
+                    if args.nms_sim
+                    else {}
+                ),
                 **nms_overrides,
                 **oss_trace_env,
                 **oss_webhook_env,
@@ -2043,6 +2061,15 @@ def main() -> int:
                 **(
                     {"A2AT_SAMPLE_WEBHOOK_HOST": args.webhook_host}
                     if args.webhook_host
+                    else {}
+                ),
+                **(
+                    {
+                        "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION": sim_settings[
+                            "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION"
+                        ]
+                    }
+                    if args.nms_sim
                     else {}
                 ),
                 **nms_overrides,

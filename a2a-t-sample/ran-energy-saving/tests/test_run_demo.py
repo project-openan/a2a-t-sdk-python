@@ -1131,6 +1131,9 @@ def test_nms_sim_child_env_carries_every_switch(
         "A2AT_SAMPLE_NMS_SIM_SITES=site-a,site-b",
         "A2AT_SAMPLE_NMS_SIM_PURE_FAILURE=retry",
         "A2AT_SAMPLE_NMS_SIM_WINDOW_POLICY=any",
+        "A2AT_SAMPLE_NMS_SIM_RATE_POLICY=optional",
+        "A2AT_SAMPLE_NMS_SIM_LONG_OUTAGE_FEASIBILITY=1",
+        "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION=confirm",
     )
 
     code, started, _ = _launch_both_nms(
@@ -1153,6 +1156,9 @@ def test_nms_sim_child_env_carries_every_switch(
     assert sim["A2AT_SAMPLE_NMS_SIM_SITES"] == "site-a,site-b"
     assert sim["A2AT_SAMPLE_NMS_SIM_PURE_FAILURE"] == "retry"
     assert sim["A2AT_SAMPLE_NMS_SIM_WINDOW_POLICY"] == "any"
+    assert sim["A2AT_SAMPLE_NMS_SIM_RATE_POLICY"] == "optional"
+    assert sim["A2AT_SAMPLE_NMS_SIM_LONG_OUTAGE_FEASIBILITY"] == "1"
+    assert sim["A2AT_SAMPLE_NMS_SIM_PURE_QUESTION"] == "confirm"
     assert sim["A2AT_SAMPLE_NMS_SIM_FIDELITY"] == "strict"
 
 

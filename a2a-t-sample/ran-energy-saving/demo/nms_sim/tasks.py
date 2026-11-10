@@ -67,6 +67,9 @@ class SimTask:
     pure_baseline_text: str = ""
     pure_round: int = 0
     pure_max_rounds: int = 3
+    #: Whether the current pure exchange should leave this Task WORKING after it completes.
+    #: A Modify starts a new exchange and clears the flag.
+    pure_hold: bool = False
 
     def touch(self) -> None:
         """Refresh the millisecond timestamp."""
