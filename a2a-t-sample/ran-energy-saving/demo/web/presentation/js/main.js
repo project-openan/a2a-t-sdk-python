@@ -2019,15 +2019,18 @@ function renderChoices(card) {
     area.value = ui.counterText;
     area.setAttribute("aria-label", ui.copy.decision.counterLabel);
     area.placeholder = ui.copy.decision.counterPlaceholder;
+    area.disabled = ui.submitting;
     area.addEventListener("input", () => {
       ui.counterText = area.value;
     });
     const row = el("div", "choices");
     const send = el("button", "primary", ui.copy.decision.counterSend);
     send.type = "button";
+    send.disabled = ui.submitting;
     send.addEventListener("click", () => submitDecision("counter", ui.counterText));
     const cancel = el("button", "", ui.copy.decision.cancel);
     cancel.type = "button";
+    cancel.disabled = ui.submitting;
     cancel.addEventListener("click", () => {
       ui.counterOpen = false;
       renderNarrator();

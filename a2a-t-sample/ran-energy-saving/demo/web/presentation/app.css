@@ -908,6 +908,10 @@ body.resizing-y { cursor: row-resize; user-select: none; }
 }
 .choices button.primary { background: var(--black); color: var(--white); }
 .choices button.danger { border-color: var(--red); color: var(--red); }
+/* Submitting disables every action button. Without an explicit disabled style the custom
+   border/colour above hides the UA default, and the hover rule below still highlights it, so a
+   disabled button keeps looking clickable. */
+.choices button:disabled { opacity: .45; cursor: not-allowed; }
 .choices-label {
   flex-basis: 100%;
   font-size: 11px;
@@ -925,8 +929,8 @@ body.resizing-y { cursor: row-resize; user-select: none; }
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-[data-brand="orange"] .choices button:hover { background: var(--g900); color: var(--white); }
-[data-brand="orange"] .choices button.link:hover { background: none; color: var(--black); }
+[data-brand="orange"] .choices button:hover:not(:disabled) { background: var(--g900); color: var(--white); }
+[data-brand="orange"] .choices button.link:hover:not(:disabled) { background: none; color: var(--black); }
 .say.ask .choices button.primary { background: var(--black); color: var(--white); }
 .say.ask .choices button.danger { background: var(--white); border-color: var(--red); color: var(--red); }
 .region-options {
