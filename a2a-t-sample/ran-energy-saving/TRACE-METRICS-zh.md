@@ -28,7 +28,7 @@ RunState / ClientFlow / ServerExecutor / ADK / LangGraph
 | 键 | 含义 | 去向 |
 |---|---|---|
 | `runId` | 一次运行的唯一 id | span、SQLite、Langfuse trace metadata |
-| `traceId` | 网管/下游可见的 32 位 hex；默认等于 runId | Langfuse trace id（每次 attempt 一条） |
+| `traceId` | 网管/下游可见的 32 位 hex；首个 attempt 默认等于其 runId，修正重试沿用 | Langfuse trace id（每条纠错链一条） |
 | `conversationId` | 会话；纠错重试会新建 | 客户端会话/历史 |
 | `chainId` | 一次纠错链（被拦截的 attempt + 其重试）；无重试时等于 conversationId | Langfuse `session.id`、trace metadata |
 | `parentRunId` | 本 attempt 重试的前一条 run | trace metadata |
@@ -214,10 +214,11 @@ root span 上写入（`shared/langfuse_tracing.py::_root_attributes`）：
 
 1. tester 启动 run，写入 `caseId/batchId/receivedAt`；
 2. run 结束读 `run_metrics`（本地，完整 token/accuracy）或 Langfuse trace；
-3. 按 §3 填 AK–BB；U 列填本次 attempt 的 `run.traceId`；
+3. 按 §3 填 AK–BB；U 列填工作流 `traceId`。被拦截的 preflight 与修正重试共享它，
+   `attemptCount`/`attemptRunIds` 列出 attempt；
 4. A2A 与 A2A-T 用同一 `caseId` 对齐比较；
-5. 被拦截后的修正重试每次 attempt 单独一行、单独 U 列，用 `chainId` 归组、`parentRunId`
-   表示先后，不要把多次 attempt 合并成一个 run 的时延/token。
+5. 行内的 token/时延列只来自有效 attempt（真正发出 Task-T 的那次），不是整条 trace 求和；
+   需要看另一个 attempt 时传 `--run-id`。
 
 ### 5.2 Langfuse 批量看板
 

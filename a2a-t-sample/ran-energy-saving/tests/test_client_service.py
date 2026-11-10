@@ -775,6 +775,67 @@ async def test_start_keeps_the_chain_but_not_the_conversation(
     assert stored.conversation_id == "conv-retry"
 
 
+async def test_a_presentation_attempt_owns_the_chain_trace(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """The blocked preflight and its corrected retry resolve to the same trace id."""
+    manager, store, _ = _manager(tmp_path, offline_config)
+    first = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        source={"kind": "presentation"},
+    )
+    workflow = await store.get_workflow_root(first.chain_id)
+    assert workflow is not None
+    assert workflow.trace_id == first.trace_id
+
+    retry = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        source={"kind": "presentation"},
+        chain_id=first.chain_id,
+        parent_run_id=first.run_id,
+        trace_id=first.trace_id,
+    )
+    assert retry.trace_id == first.trace_id
+    assert retry.run_id != first.run_id
+    assert retry.conversation_id != first.conversation_id
+    assert retry.workflow_root_span_id == ""
+
+    await _finish(manager, first.run_id)
+    await _finish(manager, retry.run_id)
+
+
+async def test_a_caller_cannot_move_a_chain_to_another_trace(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """A mismatched explicit trace id is a conflict, not a silent second trace."""
+    from protocol.client_store import WorkflowTraceConflictError
+
+    manager, _, _ = _manager(tmp_path, offline_config)
+    first = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        source={"kind": "presentation"},
+    )
+
+    with pytest.raises(WorkflowTraceConflictError):
+        await manager.start(
+            "information",
+            "auto",
+            "sse",
+            source={"kind": "presentation"},
+            chain_id=first.chain_id,
+            trace_id="a" * 32,
+        )
+    await _finish(manager, first.run_id)
+
+
 async def test_start_defaults_the_chain_to_the_conversation(
     tmp_path: Path,
     offline_config: SampleConfig,

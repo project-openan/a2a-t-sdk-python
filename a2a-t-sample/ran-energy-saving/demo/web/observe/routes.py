@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
@@ -52,7 +52,7 @@ MAX_RUNS_LIMIT: Final[int] = 200
 DEFAULT_JOBS_LIMIT: Final[int] = 20
 MAX_JOBS_LIMIT: Final[int] = 200
 
-LocalRunLookup = Callable[[str], Mapping[str, object] | None]
+LocalRunsLookup = Callable[[str], Sequence[Mapping[str, object]]]
 
 
 def build_observe_routes(
@@ -67,7 +67,7 @@ def build_observe_routes(
     resolved_manager = manager or ObserveJobManager(
         runs_dir=runs_dir,
         exporter=build_exporter(config, env_path, runs_dir),
-        local_run=_local_run_lookup(client_db_path),
+        local_runs=_local_runs_lookup(client_db_path),
     )
 
     async def page(request: Request) -> Response:
@@ -297,36 +297,48 @@ def build_observe_routes(
     ]
 
 
-def _local_run_lookup(path: Path | None) -> LocalRunLookup | None:
-    """Build the H-group join used by the job manager, ``None`` without a client database."""
+def _local_runs_lookup(path: Path | None) -> LocalRunsLookup | None:
+    """Build the H-group join used by the job manager, ``None`` without a client database.
+
+    A shared correction trace has two rows (blocked preflight + retry), so return every candidate
+    and let the job manager pick the primary attempt. The reader orders newest first.
+    """
     if path is None:
         return None
 
-    def lookup(trace_id: str) -> dict[str, object] | None:
+    def lookup(trace_id: str) -> list[Mapping[str, object]]:
         try:
-            rows = read_client_run_summaries(path, limit=1, trace_id=trace_id)
-            if not rows:
-                return None
-            row = rows[0]
-            run_id = str(row.get("runId") or "")
-            accuracy: Mapping[str, object] = {}
-            if run_id:
-                metrics = read_run_metrics(path, run_id)
-                if isinstance(metrics, Mapping):
-                    value = metrics.get("accuracy")
-                    if isinstance(value, Mapping):
-                        accuracy = {str(key): item for key, item in value.items()}
-            return {
-                "runId": run_id,
-                "status": row.get("status"),
-                "finalState": row.get("finalState"),
-                "passed": accuracy.get("passed"),
-                "accuracy": accuracy.get("score"),
-                "startedAt": row.get("createdAt"),
-                "finishedAt": row.get("finishedAt"),
-            }
+            rows = read_client_run_summaries(path, limit=50, trace_id=trace_id)
+            enriched: list[Mapping[str, object]] = []
+            for row in rows:
+                run_id = str(row.get("runId") or "")
+                accuracy: Mapping[str, object] = {}
+                if run_id:
+                    metrics = read_run_metrics(path, run_id)
+                    if isinstance(metrics, Mapping):
+                        value = metrics.get("accuracy")
+                        if isinstance(value, Mapping):
+                            accuracy = {str(key): item for key, item in value.items()}
+                enriched.append(
+                    {
+                        "runId": run_id,
+                        "status": row.get("status"),
+                        "finalState": row.get("finalState"),
+                        "passed": accuracy.get("passed"),
+                        "accuracy": accuracy.get("score"),
+                        "startedAt": row.get("createdAt"),
+                        "finishedAt": row.get("finishedAt"),
+                        "serverTaskId": row.get("serverTaskId"),
+                        "serverContextId": row.get("serverContextId"),
+                        "downstreamTaskId": row.get("downstreamTaskId"),
+                        "downstreamContextId": row.get("downstreamContextId"),
+                        "downstreamHop": row.get("downstreamHop"),
+                        "createdAt": row.get("createdAt"),
+                    }
+                )
+            return enriched
         except Exception:  # noqa: BLE001 - the local join is best effort
-            return None
+            return []
 
     return lookup
 

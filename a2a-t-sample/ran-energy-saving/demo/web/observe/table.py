@@ -17,6 +17,8 @@ MAIN_COLUMNS: tuple[str, ...] = (
     "caseId",
     "batchId",
     "chainId",
+    "attemptCount",
+    "attemptRunIds",
     "protocol",
     "scenario",
     "runMode",
@@ -65,7 +67,14 @@ MAIN_COLUMNS: tuple[str, ...] = (
     "finishedAt",
 )
 
-_IDENTITY_COLUMNS: tuple[str, ...] = ("runId", "caseId", "batchId", "chainId")
+_IDENTITY_COLUMNS: tuple[str, ...] = (
+    "runId",
+    "caseId",
+    "batchId",
+    "chainId",
+    "attemptCount",
+    "attemptRunIds",
+)
 
 
 def _text(value: object) -> str:
@@ -153,7 +162,11 @@ def build_row(
 
     derived_warnings: list[str] = []
     for column in _IDENTITY_COLUMNS:
-        row[column] = _text(metrics.get(column))
+        value = metrics.get(column)
+        if column == "attemptRunIds" and isinstance(value, Sequence) and not isinstance(value, str):
+            row[column] = ", ".join(_text(item) for item in value)
+        else:
+            row[column] = _text(value)
     for column in (
         "protocol",
         "scenario",
@@ -200,9 +213,7 @@ def build_row(
     row["cacheHitRate"] = "" if input_tokens == 0 else f"{cached_tokens / input_tokens:.4f}"
     if cached_tokens > input_tokens:
         row["inputExcludingCached"] = "0"
-        derived_warnings.append(
-            "cachedInput exceeds input; inputExcludingCached clamped to 0"
-        )
+        derived_warnings.append("cachedInput exceeds input; inputExcludingCached clamped to 0")
     else:
         row["inputExcludingCached"] = str(input_tokens - cached_tokens)
 
@@ -228,9 +239,7 @@ def build_row(
             row[column] = _text(local_run.get(column))
         row["passed"] = _bool_text(local_run.get("passed"))
         accuracy = local_run.get("accuracy")
-        row["accuracy"] = (
-            f"{accuracy:.4f}" if isinstance(accuracy, float) else _text(accuracy)
-        )
+        row["accuracy"] = f"{accuracy:.4f}" if isinstance(accuracy, float) else _text(accuracy)
 
     row["warnings"] = "; ".join([*warnings, *derived_warnings])
     return row
@@ -284,10 +293,7 @@ def rounds_csv(
                 [
                     trace_id,
                     _int_text(entry_map.get("round")),
-                    *(
-                        _text(entry_map.get(column))
-                        for column in ROUNDS_COLUMNS[2:]
-                    ),
+                    *(_text(entry_map.get(column)) for column in ROUNDS_COLUMNS[2:]),
                 ]
             )
     if not rows:
@@ -359,6 +365,20 @@ FIELD_NOTES: tuple[FieldNote, ...] = (
         "A 身份",
         "修正链 id，同一 Task-T 的多次重试共享。",
         "metadata.chainId，缺失时回退 trace.sessionId。",
+    ),
+    _note(
+        "attemptCount",
+        "A 身份",
+        "同一条 trace 里的 attempt 数：被拦截的 preflight 与修正后的重试各算一次。",
+        "metrics.json attemptCount，或本地 runs 按 trace_id 反查的行数。",
+        "普通单 attempt trace 为 1。",
+    ),
+    _note(
+        "attemptRunIds",
+        "A 身份",
+        "同一条 trace 内的全部 run id，按新到旧排列。",
+        "metrics.json attemptRunIds，或本地 runs 按 trace_id 反查。",
+        "token/时延列只来自选中的 attempt；其余 attempt 可在 Langfuse 树中查看。",
     ),
     _note(
         "protocol",
@@ -753,8 +773,5 @@ def fields_csv() -> str:
     """Render the field legend as CSV (page legend and fields.csv share FIELD_NOTES)."""
     return _write_csv(
         ("column", "group", "meaningZh", "source", "caveat"),
-        [
-            [note.column, note.group, note.meaning_zh, note.source, note.caveat]
-            for note in FIELD_NOTES
-        ],
+        [[note.column, note.group, note.meaning_zh, note.source, note.caveat] for note in FIELD_NOTES],
     )

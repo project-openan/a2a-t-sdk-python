@@ -112,13 +112,63 @@ def _first_start(rows: list[dict[str, Any]]) -> str | None:
     return _iso(min(times)) if times else None
 
 
-def _client_rows(rows: list[dict[str, Any]], trace_id: str | None) -> list[dict[str, Any]]:
-    """Rows belonging to this run (`metadata.runId == traceId`), not just client side.
+def _distinct_run_ids(rows: list[dict[str, Any]]) -> list[str]:
+    """Return the run ids present in one trace, newest attempt first."""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        run_id = _as_text(_meta(row, "runId"))
+        if run_id:
+            groups.setdefault(run_id, []).append(row)
+
+    def first_start(group: list[dict[str, Any]]) -> float:
+        starts = [parsed.timestamp() for parsed in (_start(row) for row in group) if parsed]
+        return min(starts) if starts else 0.0
+
+    return sorted(groups, key=lambda run_id: first_start(groups[run_id]), reverse=True)
+
+
+def select_run_id(rows: list[dict[str, Any]]) -> str | None:
+    """Choose the effective attempt of a multi-run trace.
+
+    A shared correction trace contains the blocked preflight and the corrected retry. The attempt
+    that actually sent Task-T (``message_sent`` / ``task_created``) is the effective one; among
+    several sent attempts the newest wins. A trace with no run id keeps the legacy behavior.
+    """
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        run_id = _as_text(_meta(row, "runId"))
+        if run_id:
+            groups.setdefault(run_id, []).append(row)
+    if not groups:
+        return None
+
+    def rank(item: tuple[str, list[dict[str, Any]]]) -> tuple[int, float, int]:
+        _, group = item
+        sent = any(_as_text(_meta(row, "kind")) in ("message_sent", "task_created") for row in group)
+        starts = [parsed.timestamp() for parsed in (_start(row) for row in group) if parsed]
+        return (1 if sent else 0, max(starts) if starts else 0.0, len(group))
+
+    return max(groups.items(), key=rank)[0]
+
+
+def _client_rows(
+    rows: list[dict[str, Any]],
+    trace_id: str | None,
+    run_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Rows belonging to one attempt, not just client side.
+
+    With an explicit ``run_id`` the rows are selected by ``metadata.runId``; a shared trace
+    otherwise used to select the blocked attempt because its run id equals the trace id. Without
+    an explicit id the legacy behavior is kept for single-run traces.
 
     `side=server` rows are kept: the only `task_created` / `status` observations may come
     from the server executor, while truly remote spans (no `runId`, e.g. the service-side
     `SendMessage`) must not leak into this run's timeline.
     """
+    if run_id:
+        wanted = run_id.strip()
+        return [row for row in rows if _as_text(_meta(row, "runId")) == wanted]
     matched = [row for row in rows if _as_text(_meta(row, "runId")) == trace_id and trace_id]
     if matched:
         return matched
@@ -126,6 +176,16 @@ def _client_rows(rows: list[dict[str, Any]], trace_id: str | None) -> list[dict[
     if sided:
         return sided
     return [row for row in rows if _meta(row, "kind") or _meta(row, "stage")]
+
+
+def _merged_run_meta(selected: list[dict[str, Any]], all_rows: list[dict[str, Any]]) -> dict[str, str | None]:
+    """Run-level keys from the selected attempt; chain-level keys fall back to the anchor."""
+    primary = _run_meta(selected)
+    fallback = _run_meta(all_rows)
+    for key in RUN_META_KEYS:
+        if not primary.get(key) and fallback.get(key):
+            primary[key] = fallback[key]
+    return primary
 
 
 def _run_meta(rows: list[dict[str, Any]]) -> dict[str, str | None]:
@@ -177,9 +237,7 @@ def _row_side(row: dict[str, Any]) -> str:
     if side:
         return side.lower()
     scope = (
-        _as_text(_meta(row, "scope.name"))
-        or _as_text(_meta(row, "resourceAttributes.service.name"))
-        or ""
+        _as_text(_meta(row, "scope.name")) or _as_text(_meta(row, "resourceAttributes.service.name")) or ""
     ).lower()
     if "server" in scope:
         return "server"
@@ -212,7 +270,9 @@ def _row_usage(row: dict[str, Any]) -> dict[str, int] | None:
     if isinstance(meta, dict):
         input_tokens = _as_int(meta.get("attributes.gen_ai.usage.input_tokens"))
         output_tokens = _as_int(meta.get("attributes.gen_ai.usage.output_tokens"))
-        cached = _as_int(meta.get("attributes.gen_ai.usage.input_cached_tokens")) or _as_int(meta.get("tokens.cached")) or 0
+        cached = (
+            _as_int(meta.get("attributes.gen_ai.usage.input_cached_tokens")) or _as_int(meta.get("tokens.cached")) or 0
+        )
         total = _as_int(meta.get("tokens.total"))
         if input_tokens is not None or output_tokens is not None:
             input_tokens = input_tokens or 0
@@ -485,28 +545,49 @@ def build_metrics(
     rows: list[dict[str, Any]],
     trace_id: str | None = None,
     summary: Any = None,
+    *,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Build the metrics document for one exported trace.
 
     ``rows`` are the API observation rows (the same objects written to
-    ``raw/observations.jsonl``). ``summary`` is optional and only used as a
-    fallback for the end-to-end latency of non-A2A traces.
+    ``raw/observations.jsonl``). ``run_id`` selects one attempt of a shared correction trace;
+    without it a multi-run trace uses :func:`select_run_id` (the attempt that sent Task-T).
+    ``summary`` is optional and only used as a fallback for the end-to-end latency.
     """
     warnings: list[str] = []
-    client = _client_rows(rows, trace_id)
-    if not client:
+    attempt_run_ids = _distinct_run_ids(rows)
+    selected_run_id = (run_id or "").strip()
+    if not selected_run_id and len(attempt_run_ids) > 1:
+        selected_run_id = select_run_id(rows) or ""
+        if selected_run_id:
+            warnings.append(
+                f"trace has {len(attempt_run_ids)} runs; metrics use run {selected_run_id}; "
+                "pass run_id to choose another"
+            )
+    client = _client_rows(rows, trace_id, selected_run_id or None)
+    if selected_run_id and not client:
+        warnings.append(f"no observations found for run {selected_run_id}")
+    elif not client:
         warnings.append("no client-side observations found; A2A fields left null")
-    run_meta = _run_meta(client or rows)
-    attrs = _trace_attrs(client or rows, summary)
+    run_rows = client if selected_run_id else (client or rows)
+    # A single-attempt trace keeps unattributed remote server rows (no runId) in its token and
+    # negotiation audit; a shared trace must not mix the other attempt's rows.
+    audit_rows = rows if len(attempt_run_ids) <= 1 else run_rows
+    run_meta = _merged_run_meta(run_rows, rows)
+    attrs = _trace_attrs(run_rows or rows, summary)
     chain_id = run_meta.get("chainId") or attrs.get("sessionId")
 
-    opened = next((row for row in client if row.get("name") == "trace opened"), None)
+    opened = next((row for row in run_rows if row.get("name") == "trace opened"), None)
+    if opened is None and selected_run_id and run_rows:
+        # A retry has no "trace opened" bootstrap; its run root is the attempt's first row.
+        opened = run_rows[0]
     opened_at = _iso(_start(opened)) if opened is not None else None
     received_at = run_meta.get("receivedAt") or opened_at
 
-    sdk_called_at = _first_start([row for row in client if _meta(row, "kind") == "task_prompt_rendered"])
-    request_sent_at = _first_start([row for row in client if _meta(row, "kind") == "message_sent"])
-    task_created_at = _first_start([row for row in client if _meta(row, "kind") == "task_created"])
+    sdk_called_at = _first_start([row for row in run_rows if _meta(row, "kind") == "task_prompt_rendered"])
+    request_sent_at = _first_start([row for row in run_rows if _meta(row, "kind") == "message_sent"])
+    task_created_at = _first_start([row for row in run_rows if _meta(row, "kind") == "task_created"])
 
     end_to_end_ms: int | None = None
     if received_at and task_created_at:
@@ -519,55 +600,48 @@ def build_metrics(
     if end_to_end_ms is None:
         warnings.append("end-to-end latency unavailable (no task_created/receivedAt)")
 
-    token_data, tokens_found = _token_sums(rows)
+    token_data, tokens_found = _token_sums(audit_rows)
     # "No usage" is data, not absence: keep both side buckets at zero so downstream
     # tables can print 0 instead of blank cells (pure A2A runs have no LLM calls).
     for side in ("client", "server"):
-        token_data["bySide"].setdefault(
-            side, {"input": 0, "cachedInput": 0, "output": 0, "total": 0}
-        )
+        token_data["bySide"].setdefault(side, {"input": 0, "cachedInput": 0, "output": 0, "total": 0})
     tokens = {"input": 0, "cachedInput": 0, "output": 0, "total": 0}
     tokens.update(token_data["**totals**"])
     if not tokens_found:
         warnings.append("no token usage found in observations")
 
     negotiation = _negotiation(
-        client or rows,
+        run_rows,
         _as_bool(run_meta.get("negotiated")),
-        rows,
+        audit_rows,
         _as_int(run_meta.get("rounds")),
     )
     if negotiation["rounds"] and not negotiation["roundsDetail"]:
         warnings.append("negotiation rounds reported by run metadata but no round detail found")
     if any(entry.get("clock") == "server" for entry in negotiation["roundsDetail"]):
-        warnings.append(
-            "negotiationStartedAt filled from a2a-t-server spans (server clock); latencyMs left null"
-        )
+        warnings.append("negotiationStartedAt filled from a2a-t-server spans (server clock); latencyMs left null")
     if negotiation["rounds"] and negotiation["latencyMs"] is None:
         warnings.append("negotiation rounds found but latency could not be computed")
 
-    run_rows = client or rows
     counts = {
         "observations": len(rows),
         "runObservations": len(run_rows),
         "clientObservations": sum(1 for row in run_rows if _as_text(_meta(row, "side")) == "client"),
         "serverObservations": sum(1 for row in run_rows if _as_text(_meta(row, "side")) == "server"),
         "generations": sum(
-            1
-            for row in (client or rows)
-            if str(row.get("type") or "").upper() == "GENERATION" or _meta(row, "kind") == "llm"
+            1 for row in run_rows if str(row.get("type") or "").upper() == "GENERATION" or _meta(row, "kind") == "llm"
         ),
         "toolCalls": sum(
-            1
-            for row in (client or rows)
-            if str(row.get("type") or "").upper() == "TOOL" or _meta(row, "kind") == "tool"
+            1 for row in run_rows if str(row.get("type") or "").upper() == "TOOL" or _meta(row, "kind") == "tool"
         ),
     }
 
     return {
         "schemaVersion": SCHEMA_VERSION,
         "traceId": trace_id or next((row.get("traceId") for row in rows if row.get("traceId")), None),
-        "runId": run_meta.get("runId"),
+        "runId": selected_run_id or run_meta.get("runId"),
+        "attemptCount": len(attempt_run_ids),
+        "attemptRunIds": attempt_run_ids,
         "protocol": run_meta.get("protocol"),
         "scenario": run_meta.get("scenario"),
         "runMode": run_meta.get("runMode"),

@@ -317,9 +317,14 @@ const ui = {
   modifyCancelTimer: null,
 };
 
-/** Return the pending chain when it still belongs to the example on the stage. */
+/** Return the pending chain when it still belongs to the example and run mode on the stage. */
 function pendingChain() {
-  return pendingChainOf(ui.chain, ui.selected, ui.protocol);
+  return pendingChainOf(
+    ui.chain,
+    ui.selected,
+    ui.protocol,
+    ui.targetTask ? "modify" : "create",
+  );
 }
 
 /** Adopt one blocked attempt as the pending chain and persist it across a page reload. */
@@ -500,7 +505,14 @@ async function restoreActiveRun(runId) {
   ui.selected = snapshot.scenario || ui.selected;
   ui.protocol = snapshot.protocol || ui.protocol;
   // A run recovered after a reload can still end blocked; keep the identity needed to chain.
-  ui.currentChain = chainIdentity(runId, snapshot.chainId, ui.selected, ui.protocol);
+  ui.currentChain = chainIdentity(
+    runId,
+    snapshot.chainId,
+    ui.selected,
+    ui.protocol,
+    snapshot.traceId,
+    snapshot.runMode,
+  );
   ui.view.runId = runId;
   ui.view.started = true;
   ui.view.status = "running";
@@ -1309,6 +1321,8 @@ async function startRun() {
           ? {
               chainId: chain.chainId,
               parentRunId: chain.runId,
+              // Same workflow trace as the blocked preflight; the server owns the neutral root.
+              traceId: chain.traceId,
             }
           : {}),
         ...(ui.targetTask
@@ -1336,6 +1350,8 @@ async function startRun() {
       payload.chainId || payload.conversationId,
       ui.selected,
       ui.protocol,
+      payload.traceId,
+      payload.runMode,
     );
     ui.view.runId = payload.runId;
     sessionStorage.setItem(ACTIVE_RUN_KEY, payload.runId);

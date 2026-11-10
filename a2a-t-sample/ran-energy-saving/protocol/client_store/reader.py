@@ -56,7 +56,8 @@ def read_client_run_summaries(
         rows = connection.execute(
             f"""
             SELECT r.run_id, r.conversation_id, r.scenario, r.mode, r.status, r.final_state,
-                   r.protocol, r.trace_id, r.user_request, r.error, r.source_kind, r.source_json,
+                   r.protocol, r.trace_id, r.chain_id, r.parent_run_id, r.user_request, r.error,
+                   r.source_kind, r.source_json, r.server_task_id, r.server_context_id,
                    r.downstream_task_id, r.downstream_context_id, r.downstream_hop,
                    r.created_at, r.updated_at, r.finished_at,
                    m.duration_ms, m.total_tokens, m.prompt_tokens, m.completion_tokens,
@@ -79,6 +80,10 @@ def read_client_run_summaries(
                 "mode": str(row["mode"]),
                 "protocol": str(row["protocol"]),
                 "traceId": str(row["trace_id"] or ""),
+                "chainId": str(row["chain_id"] or ""),
+                "parentRunId": str(row["parent_run_id"] or ""),
+                "serverTaskId": row["server_task_id"],
+                "serverContextId": row["server_context_id"],
                 "status": str(row["status"]),
                 "finalState": row["final_state"],
                 "userRequest": _truncate(str(row["user_request"])),

@@ -21,7 +21,14 @@ const ERROR_LABELS = {
   observe_busy: "已有导出任务在运行",
 };
 
-const IDENTITY_COLUMNS = new Set(["runId", "caseId", "batchId", "chainId"]);
+const IDENTITY_COLUMNS = new Set([
+  "runId",
+  "caseId",
+  "batchId",
+  "chainId",
+  "attemptCount",
+  "attemptRunIds",
+]);
 const RUN_ATTRIBUTE_COLUMNS = new Set([
   "protocol",
   "scenario",
@@ -169,6 +176,13 @@ function rowValue(result, column) {
   if (column === "exportStatus") return result.status || "";
   if (column === "warnings") {
     return (Array.isArray(result.warnings) ? result.warnings : []).join("; ");
+  }
+  if (column === "attemptRunIds") {
+    const value = metrics.attemptRunIds ?? localRun.attemptRunIds;
+    return Array.isArray(value) ? value.join(", ") : textOf(value);
+  }
+  if (column === "attemptCount") {
+    return intText(metrics.attemptCount ?? localRun.attemptCount);
   }
   if (result.status !== "ok") {
     // A failed trace keeps its identity columns only; everything else stays empty (design §5.1).

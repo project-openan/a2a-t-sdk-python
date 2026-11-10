@@ -2433,18 +2433,45 @@ assert.equal(chainIdentity("run-1", "chain-1", "information", "a2a-t").chainId, 
 assert.equal(chainIdentity("run-1", "", "information", "a2a-t").chainId, "run-1");
 assert.equal(chainIdentity("", "chain-1", "information", "a2a-t"), null);
 
-const pending = chainIdentity("run-1", "chain-1", "information", "a2a-t");
+const chainTraceId = "a".repeat(32);
+const pending = chainIdentity(
+  "run-1",
+  "chain-1",
+  "information",
+  "a2a-t",
+  chainTraceId,
+  "create",
+);
+assert.equal(pending.traceId, chainTraceId);
+assert.equal(pending.runMode, "create");
 assert.equal(pendingChain(pending, "information", "a2a-t"), pending);
 // A different example or protocol is a new intent, not a retry.
 assert.equal(pendingChain(pending, "outage", "a2a-t"), null);
 assert.equal(pendingChain(pending, "information", "plain"), null);
 assert.equal(pendingChain(null, "information", "a2a-t"), null);
+// A Modify is a different workflow; it must not inherit a blocked create attempt's trace.
+assert.equal(pendingChain(pending, "information", "a2a-t", "modify"), null);
+assert.equal(pendingChain(pending, "information", "a2a-t", "create"), pending);
 
 const storage = memoryStorage();
 saveChain(storage, pending);
 assert.deepEqual(restoreChain(storage), pending);
 clearChain(storage);
 assert.equal(restoreChain(storage), null);
+
+const legacyRunId = "b".repeat(32);
+storage.setItem(
+  "a2at-ran-correction-chain",
+  JSON.stringify({
+    runId: legacyRunId,
+    chainId: "chain-legacy",
+    scenario: "information",
+    protocol: "a2a-t",
+  }),
+);
+const legacyChain = restoreChain(storage);
+assert.equal(legacyChain.traceId, legacyRunId);
+assert.equal(legacyChain.runMode, "create");
 
 storage.setItem("a2at-ran-correction-chain", "{not json");
 assert.equal(restoreChain(storage), null);

@@ -707,10 +707,10 @@ reaches the server and never starts a negotiation.
 - The presentation page renders the errors inline: negotiable items appear under the intent card,
   blocking items become a validation card that pre-fills the original request and starts a **new**
   run after the engineer edits it. The failed run stays in the history and is linked through
-  `parentRunId`. The retry reuses the blocked run's `chainId` but gets a **new** `runId`,
-  `conversationId` and `traceId`: each attempt's trace stays self-contained (one root per trace),
-  Langfuse groups the attempts by `session.id = chainId`, and the new conversation keeps the
-  blocked text out of the next Task-T prompt. Only an attempt that sent no Task-T continues the
+  `parentRunId`. The retry reuses the blocked run's `chainId` and `traceId` but gets a **new**
+  `runId` and `conversationId`: the first attempt creates one neutral workflow root, each
+  attempt's run root is a child of it, and the new conversation keeps the blocked text out of the
+  next Task-T prompt. Only an attempt that sent no Task-T continues the
   chain; a run that was sent, completed or cancelled ends it. The chain survives a page reload
   through sessionStorage; resolving `parentRunId` and `task_t_sent` on the server is the next
   stage.

@@ -1,30 +1,47 @@
 /** The correction chain shared by one operator's blocked attempt and its retries.
  *
- * Every attempt keeps its own run, conversation and trace. The chain id is the one identity that
- * survives the retry, so Langfuse groups the attempts under one session and the evidence can be
- * followed from the blocked request to the one that was actually sent.
+ * Every attempt keeps its own run and conversation. The chain id groups the attempts in one
+ * Langfuse session, and the trace id is the blocked attempt's vendor-facing id: the corrected
+ * retry reuses it so both attempts land in one workflow trace with a single neutral root.
  */
 
 /** Session key of the pending chain; matches the presentation's other session-scoped state. */
 export const CHAIN_KEY = "a2at-ran-correction-chain";
 
+const HEX32 = /^[0-9a-f]{32}$/;
+
+/** Return a valid lowercase 32-hex trace id, preferring the server value over the run id. */
+function traceIdOf(value, fallback) {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (HEX32.test(raw) && raw !== "0".repeat(32)) return raw;
+  const alt = typeof fallback === "string" ? fallback.trim().toLowerCase() : "";
+  return HEX32.test(alt) && alt !== "0".repeat(32) ? alt : "";
+}
+
 /** Build the chain identity of one attempt from the ``POST /api/runs`` response. */
-export function identity(runId, chainId, scenario, protocol) {
+export function identity(runId, chainId, scenario, protocol, traceId, runMode) {
   if (typeof runId !== "string" || !runId) return null;
   return {
     runId,
     // A server that predates the chain id falls back to the conversation, which it already
     // returns; the retry then still names a parent the operator can follow.
     chainId: typeof chainId === "string" && chainId ? chainId : runId,
+    // The server defaults the first attempt's trace to its run id; persisting that default lets
+    // a reload still pin the retry to the blocked attempt's trace.
+    traceId: traceIdOf(traceId, runId),
     scenario: typeof scenario === "string" ? scenario : null,
     protocol: typeof protocol === "string" ? protocol : null,
+    // A Modify is a different workflow; it must not inherit a blocked create attempt's trace.
+    runMode: runMode === "modify" ? "modify" : "create",
   };
 }
 
-/** Return the pending chain when it still belongs to the example on the stage. */
-export function pending(chain, scenario, protocol) {
+/** Return the pending chain when it still belongs to the example and run mode on the stage. */
+export function pending(chain, scenario, protocol, runMode) {
   if (!chain) return null;
   if (chain.scenario !== scenario || chain.protocol !== protocol) return null;
+  const wanted = runMode === "modify" ? "modify" : "create";
+  if ((chain.runMode || "create") !== wanted) return null;
   return chain;
 }
 
@@ -58,8 +75,12 @@ export function restore(storage) {
     return {
       runId: parsed.runId,
       chainId: parsed.chainId,
+      // Storage written before the trace id existed falls back to the run id, which the server
+      // used as the first attempt's trace.
+      traceId: traceIdOf(parsed.traceId, parsed.runId),
       scenario: typeof parsed.scenario === "string" ? parsed.scenario : null,
       protocol: typeof parsed.protocol === "string" ? parsed.protocol : null,
+      runMode: parsed.runMode === "modify" ? "modify" : "create",
     };
   } catch {
     return null;

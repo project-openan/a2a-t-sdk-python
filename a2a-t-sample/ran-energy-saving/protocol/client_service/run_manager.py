@@ -27,7 +27,11 @@ from shared.config import (
     SUPPORTED_INTENT_MODES,
     SampleConfig,
 )
-from shared.langfuse_tracing import LangfuseRunMetadata, create_langfuse_exporter
+from shared.langfuse_tracing import (
+    LangfuseRunMetadata,
+    create_langfuse_exporter,
+    langfuse_export_active,
+)
 from shared.logging_setup import log_context
 from shared.metrics import (
     CLIENT_RUN_DURATION_SECONDS,
@@ -76,6 +80,9 @@ from protocol.client_store import (
     ClientRunRecord,
     ClientStore,
     RunAlreadyActiveError,
+    WorkflowRootRecord,
+    WorkflowScopeError,
+    WorkflowTraceConflictError,
     now_iso,
 )
 from protocol.client_store.store import _pid_alive
@@ -593,10 +600,13 @@ class RunManager:
 
     async def _rehydrate_run(self, record: ClientRunRecord) -> RunState:
         """Rebuild the in-memory view of one persisted running run."""
+        chain_id = record.chain_id or record.conversation_id or record.run_id
+        workflow = await self._store.get_workflow_root(chain_id) if self._store is not None else None
         run = RunState(
             run_id=record.run_id,
             # Rows written before the trace_id column fall back to the run id.
             trace_id=record.trace_id or record.run_id,
+            workflow_root_span_id=workflow.root_span_id if workflow is not None else "",
             scenario=record.scenario,
             mode=record.mode,
             transport=record.transport,
@@ -606,7 +616,7 @@ class RunManager:
             status=STATUS_RUNNING,
             detached=True,
             conversation_id=record.conversation_id,
-            chain_id=record.chain_id or record.conversation_id or record.run_id,
+            chain_id=chain_id,
             parent_run_id=record.parent_run_id,
             idempotency_key=record.idempotency_key,
             downstream_task_id=record.downstream_task_id,
@@ -675,6 +685,51 @@ class RunManager:
             await self._finalize_persistence(run)
             self._active_by_conversation.pop(run.conversation_id or "", None)
             run.emit_finished()
+
+    async def _resolve_workflow_root(
+        self,
+        *,
+        chain_id: str,
+        candidate_trace_id: str,
+        explicit_trace_id: bool,
+        scenario: str,
+        protocol: str,
+        run_id: str,
+    ) -> tuple[str, str, bool]:
+        """Resolve one chain's trace id and anchor before the run is constructed.
+
+        Returns ``(trace_id, workflow_root_span_id, create_anchor)``. An existing chain owns the
+        trace id; a caller-supplied different id is a conflict rather than a silent second trace.
+        An empty anchor means this is the first live attempt (or the earlier attempts ran without
+        Langfuse), so the exporter may create it.
+        """
+        if self._store is None:
+            return candidate_trace_id, "", False
+        existing = await self._store.get_workflow_root(chain_id)
+        if existing is None:
+            claimed = await self._store.claim_workflow_root(
+                WorkflowRootRecord(
+                    chain_id=chain_id,
+                    trace_id=candidate_trace_id,
+                    scenario=scenario,
+                    protocol=protocol,
+                    root_run_id=run_id,
+                )
+            )
+            if claimed is None:
+                # Persistence is best effort: the run still executes, but it cannot join a
+                # server-owned workflow trace.
+                return candidate_trace_id, "", False
+            existing = claimed
+        if existing.scenario and existing.scenario != scenario:
+            raise WorkflowScopeError(chain_id, "scenario", existing.scenario, scenario)
+        if existing.protocol and existing.protocol != protocol:
+            raise WorkflowScopeError(chain_id, "protocol", existing.protocol, protocol)
+        if explicit_trace_id and existing.trace_id != candidate_trace_id:
+            raise WorkflowTraceConflictError(candidate_trace_id, existing.chain_id)
+        if existing.root_span_id:
+            return existing.trace_id, existing.root_span_id, False
+        return existing.trace_id, "", langfuse_export_active(self._config)
 
     async def start(
         self,
@@ -817,9 +872,32 @@ class RunManager:
         # Modify text, so any A2A-T scenario can target an existing Task.
         raw_request = custom_request or spec.user_request
         run_uuid = uuid.uuid4().hex
+        # Only a presentation run or an explicit correction chain owns a workflow root. Tester,
+        # gateway and API runs keep their historical one-trace-per-run shape.
+        workflow_scope = (
+            str(resolved_source.get("kind") or "") == "presentation"
+            or bool((chain_id or "").strip())
+            or bool(resolved_parent_run_id)
+        )
+        resolved_workflow_root_span_id = ""
+        create_workflow_root = False
+        if self._store is not None and workflow_scope:
+            (
+                resolved_trace_id,
+                resolved_workflow_root_span_id,
+                create_workflow_root,
+            ) = await self._resolve_workflow_root(
+                chain_id=resolved_chain_id,
+                candidate_trace_id=resolved_trace_id or run_uuid,
+                explicit_trace_id=bool(resolved_trace_id),
+                scenario=scenario,
+                protocol=protocol,
+                run_id=run_uuid,
+            )
         run = RunState(
             run_id=run_uuid,
             trace_id=resolved_trace_id or run_uuid,
+            workflow_root_span_id=resolved_workflow_root_span_id,
             chain_id=resolved_chain_id,
             parent_run_id=resolved_parent_run_id,
             scenario=scenario,
@@ -883,12 +961,21 @@ class RunManager:
                 received_at=str(resolved_source.get("receivedAt") or ""),
                 user_request=raw_request or spec.user_request,
             ),
-            # Give the run its own trace id as the Langfuse trace id: a UI-started run is then
-            # findable by run id, and a retry that reuses the id shares one trace. The run trace id
-            # is derived from the caller's traceparent when one is present, so a caller-joined
-            # trace keeps working (it wins inside the exporter; the OTel parent does not).
+            # The chain trace id is both the Langfuse trace id and the vendor-facing id. A retry
+            # adopts the anchor exported by the first attempt; the first live attempt creates it.
             parent_trace_id=run.trace_id,
+            workflow_root_span_id=run.workflow_root_span_id or None,
+            create_workflow_root=create_workflow_root,
         )
+        if run.langfuse_exporter is not None:
+            # A workflow-root run owns the chain's single anchor. Persist it before the run is
+            # scheduled so a retry in another process can adopt it. A test double has no such
+            # property; getattr keeps the existing patch points working.
+            anchor_id = getattr(run.langfuse_exporter, "workflow_root_span_id", "") or ""
+            if anchor_id:
+                run.workflow_root_span_id = anchor_id
+                if workflow_scope and self._store is not None:
+                    await self._store.reserve_workflow_root_span(run.chain_id, anchor_id, run.run_id)
         run.langfuse = run.langfuse_exporter.snapshot() if run.langfuse_exporter is not None else _langfuse_disabled()
         run.emit_run_started(
             description=spec.description,
@@ -989,6 +1076,7 @@ class RunManager:
             conversation_id=run.conversation_id,
             user_id=run.user_id,
             downstream_trace_id=run.trace_id,
+            workflow_trace=bool(run.workflow_root_span_id),
         )
         try:
             await self._run_with_log_context(run)

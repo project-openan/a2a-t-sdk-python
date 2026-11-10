@@ -10,9 +10,11 @@ from shared.trace_propagation import (
     RUN_ID_HEADER,
     TRACEPARENT_HEADER,
     USER_ID_HEADER,
+    WORKFLOW_TRACE_HEADER,
     TracePropagationMiddleware,
     current_downstream_trace_id,
     current_trace_id,
+    current_workflow_trace,
     extract_trace_id,
     extract_traceparent,
     inject_outgoing,
@@ -47,12 +49,7 @@ def test_an_invalid_traceparent_is_not_propagated() -> None:
 
 
 def test_extract_trace_id_is_case_insensitive() -> None:
-    assert (
-        extract_trace_id(
-            {"TraceParent": f"00-{_TRACE_ID}-0123456789abcdef-01"}
-        )
-        == _TRACE_ID
-    )
+    assert extract_trace_id({"TraceParent": f"00-{_TRACE_ID}-0123456789abcdef-01"}) == _TRACE_ID
 
 
 async def test_a_traceparent_falls_back_to_the_run_id_without_langfuse() -> None:
@@ -104,6 +101,44 @@ async def test_a_local_hop_prefers_the_shared_downstream_trace_id() -> None:
     trace_id, span_id = extract_traceparent(request.headers)
     assert trace_id == _TRACE_ID
     assert len(span_id) == 16
+
+
+async def test_a_workflow_trace_marks_its_local_hops() -> None:
+    """The server must know not to overwrite the client-owned trace name/session."""
+    request = httpx.Request("POST", "http://agent.test/a2a/json/message:send")
+    with propagated_trace(run_id="run-1", workflow_trace=True):
+        await inject_outgoing(request)
+
+    assert request.headers[WORKFLOW_TRACE_HEADER] == "1"
+
+    plain = httpx.Request("POST", "http://agent.test/a2a/json/message:send")
+    with propagated_trace(run_id="run-1"):
+        await inject_outgoing(plain)
+    assert WORKFLOW_TRACE_HEADER not in plain.headers
+
+
+async def test_the_middleware_binds_the_workflow_trace_flag() -> None:
+    seen: list[bool] = []
+
+    async def app(scope: dict[str, object], receive: object, send: object) -> None:
+        del scope, receive, send
+        seen.append(current_workflow_trace())
+
+    middleware = TracePropagationMiddleware(app)
+    await middleware(
+        {
+            "type": "http",
+            "headers": [
+                (RUN_ID_HEADER.encode(), b"run-1"),
+                (WORKFLOW_TRACE_HEADER.encode(), b"1"),
+            ],
+        },
+        object(),
+        object(),
+    )
+
+    assert seen == [True]
+    assert current_workflow_trace() is False
 
 
 async def test_the_middleware_binds_the_incoming_downstream_trace_id() -> None:

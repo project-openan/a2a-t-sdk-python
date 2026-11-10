@@ -63,10 +63,12 @@ class FakeExporter:
         self.metrics_by_trace = dict(metrics_by_trace or {})
         self.full_results = dict(full_results or {})
 
-    def metrics(self, trace_id: str) -> tuple[Mapping[str, Any], Sequence[str]]:
+    def metrics(self, trace_id: str, *, run_id: str | None = None) -> tuple[Mapping[str, Any], Sequence[str]]:
+        del run_id
         return self.metrics_by_trace.get(trace_id, {"counts": {"serverObservations": 1}}), []
 
-    def full_export(self, trace_id: str) -> Mapping[str, Any]:
+    def full_export(self, trace_id: str, *, run_id: str | None = None) -> Mapping[str, Any]:
+        del run_id
         return self.full_results.get(
             trace_id,
             {
@@ -90,10 +92,10 @@ class FailingExporter(FakeExporter):
         super().__init__(metrics_by_trace=metrics_by_trace)
         self.failing = failing
 
-    def metrics(self, trace_id: str) -> tuple[Mapping[str, Any], Sequence[str]]:
+    def metrics(self, trace_id: str, *, run_id: str | None = None) -> tuple[Mapping[str, Any], Sequence[str]]:
         if trace_id in self.failing:
             raise RuntimeError(f"cannot export {trace_id}")
-        return super().metrics(trace_id)
+        return super().metrics(trace_id, run_id=run_id)
 
 
 class StubManager:
@@ -484,12 +486,8 @@ async def test_table_xlsx_exports_only_ok_metrics(offline_config: SampleConfig, 
 
     assert response.status_code == 200
     assert response.content.startswith(b"PK")
-    assert response.headers["content-type"] == (
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-    assert response.headers["content-disposition"] == (
-        f'attachment; filename="langfuse-table-{job_id}.xlsx"'
-    )
+    assert response.headers["content-type"] == ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    assert response.headers["content-disposition"] == (f'attachment; filename="langfuse-table-{job_id}.xlsx"')
     assert saved.is_file()
     assert saved.read_bytes().startswith(b"PK")
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:

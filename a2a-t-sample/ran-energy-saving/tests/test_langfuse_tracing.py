@@ -70,6 +70,9 @@ def _exporter(
     capture: bool = True,
     span_level: str = "full",
     parent_trace_id: str | None = None,
+    workflow_root_span_id: str | None = None,
+    create_workflow_root: bool = False,
+    metadata: LangfuseRunMetadata | None = None,
 ) -> tuple[LangfuseSpanExporter, _Runtime]:
     runtime = _Runtime()
     config = replace(
@@ -84,8 +87,10 @@ def _exporter(
         LangfuseSpanExporter(
             runtime=runtime,
             config=config,
-            metadata=_metadata(),
+            metadata=metadata or _metadata(),
             parent_trace_id=parent_trace_id,
+            workflow_root_span_id=workflow_root_span_id,
+            create_workflow_root=create_workflow_root,
         ),
         runtime,
     )
@@ -174,9 +179,7 @@ def test_llm_span_becomes_a_generation_with_usage(offline_config: SampleConfig) 
         "output": 20,
         "total": 50,
     }
-    assert json.loads(attributes["langfuse.observation.input"]) == [
-        {"role": "user", "content": "propose"}
-    ]
+    assert json.loads(attributes["langfuse.observation.input"]) == [{"role": "user", "content": "propose"}]
     assert attributes["langfuse.observation.output"] == '{"ok":true}'
     # The recorded timestamps are replayed exactly.
     started = int(datetime(2026, 11, 5, 10, 0, 0, tzinfo=UTC).timestamp() * 1_000_000_000)
@@ -256,9 +259,7 @@ def test_finish_flushes_and_exposes_the_trace_url(offline_config: SampleConfig) 
 
     assert runtime.client.flushed == 1
     assert snapshot["status"] == "exported"
-    assert snapshot["url"] == (
-        f"https://us.cloud.langfuse.com/project/p1/traces/{snapshot['traceId']}"
-    )
+    assert snapshot["url"] == (f"https://us.cloud.langfuse.com/project/p1/traces/{snapshot['traceId']}")
     assert snapshot["exportedSpans"] == 1
     exporter.finish(result=None, error=None)
     assert runtime.client.flushed == 1  # idempotent
@@ -356,17 +357,13 @@ def test_missing_langfuse_package_is_a_noop(tmp_path, monkeypatch: pytest.Monkey
 
 def test_the_trace_url_uses_the_browser_facing_ui_base(offline_config: SampleConfig) -> None:
     """Reporting may go through a proxy; the reported link must stay on the UI address."""
-    exporter, _runtime = _exporter(
-        replace(offline_config, langfuse_ui_base_url="https://langfuse-ui.example/relay")
-    )
+    exporter, _runtime = _exporter(replace(offline_config, langfuse_ui_base_url="https://langfuse-ui.example/relay"))
 
     exporter(_llm_span())
     exporter.finish(result=None, error=None)
     snapshot = exporter.snapshot(resolve_url=True)
 
-    assert snapshot["url"] == (
-        f"https://langfuse-ui.example/relay/project/p1/traces/{snapshot['traceId']}"
-    )
+    assert snapshot["url"] == (f"https://langfuse-ui.example/relay/project/p1/traces/{snapshot['traceId']}")
 
 
 def test_exporter_joins_the_current_otel_parent(offline_config: SampleConfig) -> None:
@@ -585,12 +582,8 @@ def test_a_correction_chain_is_one_langfuse_session(offline_config: SampleConfig
     first.finish()
     retry.finish()
 
-    first_root = next(
-        span for span in first_runtime.spans.get_finished_spans() if span.name.startswith("run ·")
-    )
-    retry_root = next(
-        span for span in retry_runtime.spans.get_finished_spans() if span.name.startswith("run ·")
-    )
+    first_root = next(span for span in first_runtime.spans.get_finished_spans() if span.name.startswith("run ·"))
+    retry_root = next(span for span in retry_runtime.spans.get_finished_spans() if span.name.startswith("run ·"))
     assert first_root.attributes["session.id"] == "chain-1"
     assert retry_root.attributes["session.id"] == "chain-1"
     assert retry_root.attributes["langfuse.trace.metadata.chainId"] == "chain-1"
@@ -639,3 +632,90 @@ def test_retries_with_the_same_trace_id_share_one_langfuse_trace(
     first_root = _by_name(first_runtime)["run · night · a2a-t"]
     second_root = _by_name(second_runtime)["run · night · a2a-t"]
     assert first_root.context.trace_id == second_root.context.trace_id
+
+
+def test_the_workflow_parent_context_claims_the_trace() -> None:
+    """The anchor context carries the SDK's root-suppression baggage and parent span id."""
+    from opentelemetry import baggage, trace
+    from shared.langfuse_tracing import (
+        LANGFUSE_TRACE_ID_BAGGAGE_KEY,
+        _workflow_parent_context,
+    )
+
+    trace_id = "a" * 32
+    span_id = "b" * 16
+    context = _workflow_parent_context(trace_id, span_id)
+
+    assert baggage.get_baggage(LANGFUSE_TRACE_ID_BAGGAGE_KEY, context=context) == trace_id
+    parent = trace.get_current_span(context=context).get_span_context()
+    assert f"{parent.trace_id:032x}" == trace_id
+    assert f"{parent.span_id:016x}" == span_id
+
+
+def test_a_workflow_root_is_the_only_root_and_the_run_root_is_its_child(
+    offline_config: SampleConfig,
+) -> None:
+    """The chain owns one neutral anchor; the attempt is a child of it."""
+    trace_id = "e" * 32
+    exporter, runtime = _exporter(
+        offline_config,
+        parent_trace_id=trace_id,
+        create_workflow_root=True,
+    )
+
+    exporter.finish()
+
+    spans = {span.name: span for span in runtime.spans.get_finished_spans()}
+    anchor = spans["workflow · night · a2a-t"]
+    run_root = spans["run · night · a2a-t"]
+    opened = spans["trace opened"]
+    assert f"{anchor.context.trace_id:032x}" == trace_id
+    assert anchor.attributes["langfuse.internal.as_root"] is True
+    assert anchor.attributes["session.id"] == "conv-1"
+    assert "langfuse.trace.metadata.runId" not in anchor.attributes
+    assert run_root.parent is not None
+    assert f"{run_root.parent.span_id:016x}" == exporter.workflow_root_span_id
+    assert run_root.attributes.get("langfuse.internal.as_root") is not True
+    assert "langfuse.trace.name" not in run_root.attributes
+    assert run_root.attributes["langfuse.observation.metadata.runId"] == "run-1"
+    assert opened.attributes["langfuse.observation.metadata.runId"] == "run-1"
+    assert exporter.snapshot()["workflowRootSpanId"] == exporter.workflow_root_span_id
+
+
+def test_a_retry_attaches_to_the_workflow_anchor_from_another_process(
+    offline_config: SampleConfig,
+) -> None:
+    """A retry adopts the persisted anchor without creating a second root."""
+    trace_id = "f" * 32
+    first, first_runtime = _exporter(
+        offline_config,
+        parent_trace_id=trace_id,
+        create_workflow_root=True,
+    )
+    first.finish()
+    anchor_id = first.workflow_root_span_id
+
+    retry_metadata = replace(
+        _metadata(),
+        run_id="run-2",
+        parent_run_id="run-1",
+        chain_id="conv-1",
+    )
+    second, second_runtime = _exporter(
+        offline_config,
+        parent_trace_id=trace_id,
+        workflow_root_span_id=anchor_id,
+        metadata=retry_metadata,
+    )
+    second.finish()
+
+    assert second.workflow_root_span_id == anchor_id
+    retry_root = _by_name(second_runtime)["run · night · a2a-t"]
+    assert f"{retry_root.context.trace_id:032x}" == trace_id
+    assert retry_root.parent is not None
+    assert f"{retry_root.parent.span_id:016x}" == anchor_id
+    assert retry_root.attributes.get("langfuse.internal.as_root") is not True
+    assert retry_root.attributes["langfuse.observation.metadata.runId"] == "run-2"
+    assert "langfuse.trace.name" not in retry_root.attributes
+    # No second workflow anchor was created by the retry.
+    assert "workflow · night · a2a-t" not in _by_name(second_runtime)

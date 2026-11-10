@@ -22,6 +22,7 @@ from langfuse_export.cli import export_full, export_metrics
 from langfuse_export.client import AuthError, NetworkError, NotFoundError
 from langfuse_export.config import Config, load_config
 from shared.config import SampleConfig
+from shared.run_constants import FINAL_STATE_INPUT_INVALID, FINAL_STATE_INTENT_NOT_CONFIRMED
 
 TRACE_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
 DEFAULT_MAX_TRACES = 200
@@ -48,9 +49,49 @@ class TooManyTracesError(ValueError):
 class TraceExporter(Protocol):
     """Minimal upstream surface the job manager needs."""
 
-    def metrics(self, trace_id: str) -> tuple[Mapping[str, Any], Sequence[str]]: ...
+    def metrics(self, trace_id: str, *, run_id: str | None = None) -> tuple[Mapping[str, Any], Sequence[str]]: ...
 
-    def full_export(self, trace_id: str) -> Mapping[str, Any]: ...
+    def full_export(self, trace_id: str, *, run_id: str | None = None) -> Mapping[str, Any]: ...
+
+
+_PRE_SEND_BLOCKED_STATES = frozenset({FINAL_STATE_INPUT_INVALID, FINAL_STATE_INTENT_NOT_CONFIRMED})
+
+
+def select_primary_run(
+    runs: Sequence[Mapping[str, object]],
+) -> Mapping[str, object] | None:
+    """Choose the attempt that should represent a shared trace in the observe row.
+
+    A correction trace contains a blocked preflight and the corrected retry. The retry reached
+    the wire (a Task/context or downstream hop) and is not a pre-send block; among candidates the
+    newest wins. Falling back to createdAt keeps two blocked attempts deterministic.
+    """
+    candidates = [run for run in runs if isinstance(run, Mapping)]
+    if not candidates:
+        return None
+
+    def reached_wire(run: Mapping[str, object]) -> bool:
+        return any(
+            str(run.get(key) or "").strip()
+            for key in (
+                "serverTaskId",
+                "serverContextId",
+                "downstreamTaskId",
+                "downstreamContextId",
+                "downstreamHop",
+            )
+        )
+
+    def rank(run: Mapping[str, object]) -> tuple[int, int, str, str]:
+        blocked = str(run.get("finalState") or "") in _PRE_SEND_BLOCKED_STATES
+        return (
+            1 if reached_wire(run) else 0,
+            0 if blocked else 1,
+            str(run.get("createdAt") or ""),
+            str(run.get("runId") or ""),
+        )
+
+    return max(candidates, key=rank)
 
 
 def _langfuse_environ(env_path: Path | None) -> dict[str, str]:
@@ -95,16 +136,17 @@ class LangfuseExporter:
             )
         return self._config
 
-    def metrics(self, trace_id: str) -> tuple[Mapping[str, Any], Sequence[str]]:
-        result = export_metrics(self._get_config(), trace_id)
+    def metrics(self, trace_id: str, *, run_id: str | None = None) -> tuple[Mapping[str, Any], Sequence[str]]:
+        result = export_metrics(self._get_config(), trace_id, run_id=run_id)
         return result["metrics"], tuple(result.get("warnings") or ())
 
-    def full_export(self, trace_id: str) -> Mapping[str, Any]:
+    def full_export(self, trace_id: str, *, run_id: str | None = None) -> Mapping[str, Any]:
         return export_full(
             self._get_config(),
             trace_id,
             self._runs_dir / "observability",
             zip_file=True,
+            run_id=run_id,
         )
 
 
@@ -145,6 +187,7 @@ class ObserveJobManager:
         runs_dir: Path,
         exporter: TraceExporter | None,
         local_run: Callable[[str], Mapping[str, object] | None] | None = None,
+        local_runs: Callable[[str], Sequence[Mapping[str, object]]] | None = None,
         max_traces: int = DEFAULT_MAX_TRACES,
         trace_timeout_seconds: float = DEFAULT_TRACE_TIMEOUT_SECONDS,
         job_timeout_seconds: float = DEFAULT_JOB_TIMEOUT_SECONDS,
@@ -153,6 +196,7 @@ class ObserveJobManager:
         self._runs_dir = runs_dir
         self._exporter = exporter
         self._local_run = local_run
+        self._local_runs = local_runs
         self._max_traces = max_traces
         self._trace_timeout_seconds = trace_timeout_seconds
         self._job_timeout_seconds = job_timeout_seconds
@@ -249,37 +293,36 @@ class ObserveJobManager:
         metrics: Mapping[str, Any] | None = None
         export_dir: str | None = None
         archive: str | None = None
+        candidates = self._lookup_local_runs(trace_id)
+        primary = select_primary_run(candidates)
+        selected_run_id = _text(primary.get("runId")) if primary is not None else None
         try:
             if full:
-                result = self._exporter.full_export(trace_id)
+                result = self._exporter.full_export(trace_id, run_id=selected_run_id)
                 raw_metrics = result.get("metrics")
                 metrics = raw_metrics if isinstance(raw_metrics, Mapping) else None
                 warnings = [str(item) for item in result.get("warnings") or ()]
                 export_dir = _text(result.get("exportDir"))
                 archive = _text(result.get("zip"))
             else:
-                raw_metrics, raw_warnings = self._exporter.metrics(trace_id)
+                raw_metrics, raw_warnings = self._exporter.metrics(trace_id, run_id=selected_run_id)
                 metrics = raw_metrics
                 warnings = [str(item) for item in raw_warnings]
         except NotFoundError as exc:
-            return self._entry(
-                seq, trace_id, "not_found", self._duration_ms(started), _failure_warnings(exc), None
-            )
+            return self._entry(seq, trace_id, "not_found", self._duration_ms(started), _failure_warnings(exc), None)
         except AuthError as exc:
-            return self._entry(
-                seq, trace_id, "auth", self._duration_ms(started), _failure_warnings(exc), None
-            )
+            return self._entry(seq, trace_id, "auth", self._duration_ms(started), _failure_warnings(exc), None)
         except NetworkError as exc:
-            return self._entry(
-                seq, trace_id, "network", self._duration_ms(started), _failure_warnings(exc), None
-            )
+            return self._entry(seq, trace_id, "network", self._duration_ms(started), _failure_warnings(exc), None)
         except Exception as exc:  # noqa: BLE001 - one trace must not abort the job
-            return self._entry(
-                seq, trace_id, "error", self._duration_ms(started), _failure_warnings(exc), None
-            )
+            return self._entry(seq, trace_id, "error", self._duration_ms(started), _failure_warnings(exc), None)
 
         if _server_observations(metrics) == 0:
             warnings.append(_SERVER_SIDE_WARNING)
+        local_run = dict(primary) if primary is not None else None
+        if local_run is not None and len(candidates) > 1:
+            local_run["attemptCount"] = len(candidates)
+            local_run["attemptRunIds"] = [_text(run.get("runId")) for run in candidates if _text(run.get("runId"))]
         return self._entry(
             seq,
             trace_id,
@@ -287,21 +330,24 @@ class ObserveJobManager:
             self._duration_ms(started),
             warnings,
             metrics,
-            local_run=self._lookup_local_run(trace_id),
+            local_run=local_run,
             export_dir=export_dir,
             archive=archive,
         )
 
-    def _lookup_local_run(self, trace_id: str) -> dict[str, Any] | None:
+    def _lookup_local_runs(self, trace_id: str) -> list[dict[str, Any]]:
+        if self._local_runs is not None:
+            try:
+                return [dict(run) for run in self._local_runs(trace_id)]
+            except Exception:
+                return []
         if self._local_run is None:
-            return None
+            return []
         try:
             value = self._local_run(trace_id)
         except Exception:
-            return None
-        if value is None:
-            return None
-        return dict(value)
+            return []
+        return [dict(value)] if value is not None else []
 
     def _duration_ms(self, started: float) -> int:
         return int((self._clock() - started) * 1000)

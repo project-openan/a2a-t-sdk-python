@@ -14,6 +14,8 @@ from protocol.client_store import (
     RunAlreadyActiveError,
     SqliteClientStore,
     TaskSnapshotRecord,
+    WorkflowRootRecord,
+    WorkflowTraceConflictError,
     now_iso,
     read_client_run_detail,
     read_client_run_summaries,
@@ -35,9 +37,7 @@ async def test_conversation_create_update_and_turn_sequence(tmp_path: Path) -> N
     assert created.user_id == "user-1"
 
     first = await store.append_turn(conversation_id="conv-1", role="user", content="first")
-    second = await store.append_turn(
-        conversation_id="conv-1", role="assistant", content="second", run_id="run-1"
-    )
+    second = await store.append_turn(conversation_id="conv-1", role="assistant", content="second", run_id="run-1")
     assert first is not None and first.seq == 1
     assert second is not None and second.seq == 2
 
@@ -64,10 +64,7 @@ async def test_concurrent_turn_appends_keep_unique_sequence(tmp_path: Path) -> N
     store = SqliteClientStore(tmp_path / "client.sqlite3")
     await store.ensure_conversation(conversation_id="conv-1")
     await asyncio.gather(
-        *(
-            store.append_turn(conversation_id="conv-1", role="user", content=f"turn-{index}")
-            for index in range(20)
-        )
+        *(store.append_turn(conversation_id="conv-1", role="user", content=f"turn-{index}") for index in range(20))
     )
     turns = await store.list_turns("conv-1")
     assert [turn.seq for turn in turns] == list(range(1, 21))
@@ -124,9 +121,7 @@ async def test_run_idempotency_update_and_listing(tmp_path: Path) -> None:
         )
     )
     runs = await store.list_runs()
-    assert [item.run_id for item in runs] == ["run-1", "run-2"] or [
-        item.run_id for item in runs
-    ] == ["run-2", "run-1"]
+    assert [item.run_id for item in runs] == ["run-1", "run-2"] or [item.run_id for item in runs] == ["run-2", "run-1"]
     scoped = await store.list_runs(conversation_id="conv-2")
     assert [item.run_id for item in scoped] == ["run-2"]
 
@@ -271,26 +266,22 @@ def test_v2_migration_dedupes_active_runs(tmp_path: Path) -> None:
     # Constructing the store applies the remaining migrations.
     SqliteClientStore(path)
     with connect(path) as connection:
-        assert schema_version(connection) == 9
+        assert schema_version(connection) == len(_MIGRATIONS)
         statuses = {
             str(run_id): str(status)
-            for run_id, status in connection.execute(
-                "SELECT run_id, status FROM runs"
-            ).fetchall()
+            for run_id, status in connection.execute("SELECT run_id, status FROM runs").fetchall()
         }
-        protocols = {
-            str(protocol)
-            for (protocol,) in connection.execute("SELECT protocol FROM runs").fetchall()
-        }
-        source_columns = {
-            str(row[1]) for row in connection.execute("PRAGMA table_info(runs)")
-        }
+        protocols = {str(protocol) for (protocol,) in connection.execute("SELECT protocol FROM runs").fetchall()}
+        source_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)")}
         sources = connection.execute("SELECT source_kind, source_json FROM runs").fetchall()
         downstream = connection.execute(
             "SELECT downstream_task_id, downstream_context_id, downstream_hop FROM runs"
         ).fetchall()
         chains = connection.execute("SELECT chain_id, parent_run_id FROM runs").fetchall()
         trace_ids = connection.execute("SELECT trace_id FROM runs").fetchall()
+        tables = {
+            str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
     assert statuses == {"older": "interrupted", "newer": "running"}
     # Rows written before the switch existed were A2A-T; the migration keeps that history.
     assert protocols == {"a2a-t"}
@@ -306,6 +297,8 @@ def test_v2_migration_dedupes_active_runs(tmp_path: Path) -> None:
     # The vendor trace id column exists; a legacy row has no recorded value.
     assert "trace_id" in source_columns
     assert set(trace_ids) == {("",)}
+    # The chain-scoped workflow root table exists; legacy rows simply have no chain row.
+    assert "workflow_roots" in tables
 
     with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
         with connect(path) as connection:
@@ -463,9 +456,7 @@ async def test_read_only_helpers_and_missing_database(tmp_path: Path) -> None:
             content={"content": "proposal"},
         )
     )
-    await store.save_task_snapshot(
-        TaskSnapshotRecord(run_id="run-1", task_id="task-1", state="TASK_STATE_COMPLETED")
-    )
+    await store.save_task_snapshot(TaskSnapshotRecord(run_id="run-1", task_id="task-1", state="TASK_STATE_COMPLETED"))
 
     summaries = read_client_run_summaries(path)
     assert summaries[0]["runId"] == "run-1"
@@ -721,6 +712,54 @@ async def test_negotiation_events_carry_the_protocol_that_produced_them(
     assert pure[0].kind == "target"
 
 
+async def test_workflow_root_claim_is_first_writer_wins(tmp_path: Path) -> None:
+    """Two attempts of one chain converge on the first trace and anchor."""
+    store = SqliteClientStore(tmp_path / "client.sqlite3")
+
+    first = await store.claim_workflow_root(
+        WorkflowRootRecord(
+            chain_id="chain-1",
+            trace_id="a" * 32,
+            scenario="night",
+            protocol="a2a-t",
+            root_run_id="run-1",
+        )
+    )
+    second = await store.claim_workflow_root(
+        WorkflowRootRecord(
+            chain_id="chain-1",
+            trace_id="b" * 32,
+            scenario="night",
+            protocol="a2a-t",
+            root_run_id="run-2",
+        )
+    )
+
+    assert first is not None and first.trace_id == "a" * 32
+    assert second is not None and second.trace_id == "a" * 32
+    assert second.root_run_id == "run-1"
+
+
+async def test_workflow_root_trace_cannot_move_to_another_chain(tmp_path: Path) -> None:
+    store = SqliteClientStore(tmp_path / "client.sqlite3")
+    await store.claim_workflow_root(WorkflowRootRecord(chain_id="chain-1", trace_id="c" * 32))
+
+    with pytest.raises(WorkflowTraceConflictError):
+        await store.claim_workflow_root(WorkflowRootRecord(chain_id="chain-2", trace_id="c" * 32))
+
+
+async def test_workflow_root_span_is_reserved_once(tmp_path: Path) -> None:
+    store = SqliteClientStore(tmp_path / "client.sqlite3")
+    await store.claim_workflow_root(WorkflowRootRecord(chain_id="chain-1", trace_id="d" * 32))
+
+    first = await store.reserve_workflow_root_span("chain-1", "1" * 16, "run-1")
+    second = await store.reserve_workflow_root_span("chain-1", "2" * 16, "run-2")
+
+    assert first is not None and first.root_span_id == "1" * 16
+    assert second is not None and second.root_span_id == "1" * 16
+    assert second.root_run_id == "run-1"
+
+
 def test_the_protocol_migration_backfills_existing_events(tmp_path: Path) -> None:
     """Rows written before the column existed are A2A-T by definition."""
     from protocol.client_store.store import _MIGRATIONS
@@ -741,8 +780,6 @@ def test_the_protocol_migration_backfills_existing_events(tmp_path: Path) -> Non
 
     with connect(path) as connection:
         assert schema_version(connection) == len(_MIGRATIONS)
-        row = connection.execute(
-            "SELECT protocol FROM negotiation_events WHERE event_id='event-1'"
-        ).fetchone()
+        row = connection.execute("SELECT protocol FROM negotiation_events WHERE event_id='event-1'").fetchone()
     assert row is not None
     assert row[0] == "a2a-t"

@@ -30,7 +30,7 @@ Identity keys (never mix them):
 | Key | Meaning | Where it goes |
 |---|---|---|
 | `runId` | one run | spans, SQLite, Langfuse trace metadata |
-| `traceId` | 32-hex downstream trace id, defaults to `runId` | Langfuse trace id (one per attempt) |
+| `traceId` | 32-hex downstream trace id; the first attempt defaults it to its `runId`, a corrected retry reuses it | Langfuse trace id (one per correction chain) |
 | `conversationId` | conversation; a corrected retry starts a new one | client history/session |
 | `chainId` | one correction chain (blocked attempt + retries); equals `conversationId` without a retry | Langfuse `session.id`, trace metadata |
 | `parentRunId` | previous attempt of the same chain | trace metadata |
@@ -223,10 +223,11 @@ In Langfuse you can therefore filter by `protocol` / `caseId` / `modelMode` and 
 
 1. Start the run from the tester so `caseId/batchId/receivedAt` are recorded.
 2. On finish read `run_metrics` (complete tokens/accuracy) or the Langfuse trace.
-3. Fill AK–BB per §3; put this attempt's `run.traceId` in column U.
+3. Fill AK–BB per §3; put the workflow `traceId` in column U. A blocked preflight and its
+   corrected retry share it; `attemptCount`/`attemptRunIds` expose the attempts.
 4. Compare A2A and A2A-T on the same `caseId`.
-5. A corrected retry is its own row with its own U: group attempts by `chainId`, order them by
-   `parentRunId`, and never merge several attempts into one run's latency/token numbers.
+5. The row's token/latency columns come from the effective attempt (the one that sent Task-T),
+   not from a sum over the trace. Pass `--run-id` to export another attempt.
 
 ### 5.2 Langfuse batch view
 

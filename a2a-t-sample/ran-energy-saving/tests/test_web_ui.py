@@ -627,6 +627,7 @@ async def test_start_run_accepts_a_modify_on_a_selected_task_for_any_scenario(
     tmp_path: Path,
 ) -> None:
     """Any A2A-T scenario can be modified: the operator's Modify text is the Task-T input."""
+
     async def working_task(_config: SampleConfig, task_id: str) -> dict[str, object]:
         del task_id
         return _working_task_row()
@@ -728,6 +729,7 @@ async def test_a_pure_modify_forwards_the_outer_task_ids_to_the_runtime(
     tmp_path: Path,
 ) -> None:
     """The A2A message continues the OSS outer Task, not the vendor Task the picker names."""
+
     async def working_task(_config: SampleConfig, task_id: str) -> dict[str, object]:
         del task_id
         return _working_task_row()
@@ -777,6 +779,7 @@ async def test_a_pure_modify_without_an_outer_task_mapping_is_rejected(
     tmp_path: Path,
 ) -> None:
     """A vendor Task with no pure run of this page cannot be continued over A2A."""
+
     async def working_task(_config: SampleConfig, task_id: str) -> dict[str, object]:
         del task_id
         return _working_task_row()
@@ -815,6 +818,7 @@ async def test_the_task_picker_reports_the_pure_outer_task_ids(
     tmp_path: Path,
 ) -> None:
     """The page needs the A2A peer id next to the vendor id it shows in the picker."""
+
     async def working_task(_config: SampleConfig, task_id: str) -> dict[str, object]:
         del task_id
         return _working_task_row()
@@ -1454,11 +1458,16 @@ async def test_start_defaults_the_trace_id_to_the_run_id(client: httpx.AsyncClie
 
 
 async def test_start_keeps_the_chain_across_a_retry(client: httpx.AsyncClient) -> None:
-    """A retry shares the chain id and names its parent, but gets its own conversation/trace."""
+    """A retry shares the chain and trace, but gets its own conversation and run."""
     first = (
         await client.post(
             "/api/runs",
-            json={"scenario": "information", "mode": "auto", "transport": "sse"},
+            json={
+                "scenario": "information",
+                "mode": "auto",
+                "transport": "sse",
+                "source": {"kind": "presentation"},
+            },
         )
     ).json()
     assert first["chainId"] == first["conversationId"]
@@ -1471,6 +1480,8 @@ async def test_start_keeps_the_chain_across_a_retry(client: httpx.AsyncClient) -
             "transport": "sse",
             "chainId": first["chainId"],
             "parentRunId": first["runId"],
+            "traceId": first["traceId"],
+            "source": {"kind": "presentation"},
         },
     )
 
@@ -1481,11 +1492,13 @@ async def test_start_keeps_the_chain_across_a_retry(client: httpx.AsyncClient) -
     # The corrected attempt is a new execution and a new conversation.
     assert payload["runId"] != first["runId"]
     assert payload["conversationId"] != first["conversationId"]
-    assert payload["traceId"] != first["traceId"]
+    # ...but it is the same workflow trace.
+    assert payload["traceId"] == first["traceId"]
 
     snapshot = (await client.get(f"/api/runs/{payload['runId']}")).json()
     assert snapshot["chainId"] == first["chainId"]
     assert snapshot["parentRunId"] == first["runId"]
+    assert snapshot["traceId"] == first["traceId"]
 
 
 async def test_start_rejects_an_invalid_trace_id(client: httpx.AsyncClient) -> None:
@@ -2220,7 +2233,6 @@ async def test_one_ui_derives_each_request_forms_hop_from_the_protocol(
             "transport": "sse",
         }
         assert meta["mieEnabled"] is True
-
 
         extension = await http_client.post("/api/runs", json={"scenario": "night", "mode": "auto", "protocol": "a2a-t"})
         assert extension.status_code == 202

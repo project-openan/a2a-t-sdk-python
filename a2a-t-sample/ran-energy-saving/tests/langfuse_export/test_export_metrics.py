@@ -74,11 +74,19 @@ def _generation(name, start, input_tokens, cached, output, side="client", stage=
 def _a2a_rows():
     rows = [
         _opened(),
-        _generation("LLM call · task_t_slot_extraction", "2026-11-08T07:00:01.000Z", 100, 20, 50, stage="task_t_slot_extraction"),
+        _generation(
+            "LLM call · task_t_slot_extraction", "2026-11-08T07:00:01.000Z", 100, 20, 50, stage="task_t_slot_extraction"
+        ),
         _row("Task-T prompt rendered", "2026-11-08T07:00:01.000Z", kind="task_prompt_rendered", phase="task_prompt"),
         _row("Task-T sent", "2026-11-08T07:00:02.000Z", kind="message_sent", phase="task_prompt"),
         _row("Propose · create · R1", "2026-11-08T07:00:03.000Z", kind="propose", phase="negotiation", round="1"),
-        _row("Negotiation started · R1", "2026-11-08T07:00:04.000Z", kind="negotiation_started", phase="negotiation", round="1"),
+        _row(
+            "Negotiation started · R1",
+            "2026-11-08T07:00:04.000Z",
+            kind="negotiation_started",
+            phase="negotiation",
+            round="1",
+        ),
         _row("Decision · accept · R1", "2026-11-08T07:00:06.000Z", kind="accept", phase="negotiation", round="1"),
         _generation(
             "LLM call · negotiation_accept_extraction",
@@ -94,6 +102,77 @@ def _a2a_rows():
         _row("Task created", "2026-11-08T07:00:10.000Z", kind="task_created", phase="execution"),
     ]
     return rows
+
+
+def _retry_row(name, start, run_id, kind=None, phase=None, input_tokens=0, output_tokens=0):
+    row = _row(name, start, kind=kind, phase=phase, runId=run_id)
+    row["runId"] = run_id
+    if input_tokens or output_tokens:
+        row["usageDetails"] = {
+            "input": input_tokens,
+            "input_cached": 0,
+            "output": output_tokens,
+            "total": input_tokens + output_tokens,
+        }
+    return row
+
+
+def test_a_shared_correction_trace_selects_the_sent_retry():
+    """The blocked attempt owns the trace id; the export must not report it as the run."""
+    retry_id = "f" * 32
+    blocked = _opened()
+    blocked_generation = _retry_row(
+        "LLM call · blocked_slot_extraction",
+        "2026-11-08T07:00:01.000Z",
+        TRACE,
+        kind="llm",
+        input_tokens=1000,
+        output_tokens=500,
+    )
+    retry_sent = _retry_row(
+        "Task-T sent",
+        "2026-11-08T07:01:02.000Z",
+        retry_id,
+        kind="message_sent",
+        phase="task_prompt",
+    )
+    retry_created = _retry_row(
+        "Task created",
+        "2026-11-08T07:01:10.000Z",
+        retry_id,
+        kind="task_created",
+        phase="execution",
+    )
+    retry_generation = _retry_row(
+        "LLM call · retry_slot_extraction",
+        "2026-11-08T07:01:01.000Z",
+        retry_id,
+        kind="llm",
+        input_tokens=10,
+        output_tokens=5,
+    )
+
+    metrics = build_metrics(
+        [blocked, blocked_generation, retry_sent, retry_created, retry_generation],
+        trace_id=TRACE,
+    )
+
+    assert metrics["traceId"] == TRACE
+    assert metrics["runId"] == retry_id
+    assert metrics["attemptCount"] == 2
+    assert set(metrics["attemptRunIds"]) == {TRACE, retry_id}
+    assert metrics["tokens"]["input"] == 10
+    assert metrics["tokens"]["output"] == 5
+    assert metrics["timeline"]["requestSentAt"] == "2026-11-08T07:01:02.000Z"
+    assert metrics["timeline"]["taskCreatedAt"] == "2026-11-08T07:01:10.000Z"
+
+    blocked_metrics = build_metrics(
+        [blocked, blocked_generation, retry_sent, retry_created, retry_generation],
+        trace_id=TRACE,
+        run_id=TRACE,
+    )
+    assert blocked_metrics["runId"] == TRACE
+    assert blocked_metrics["tokens"]["input"] == 1000
 
 
 def test_metrics_timeline_tokens_and_negotiation():
@@ -139,9 +218,7 @@ def test_metrics_timeline_tokens_and_negotiation():
 
 
 def test_metrics_counts_remote_server_tokens_but_not_its_timeline():
-    server = _generation(
-        "LLM call · planner", "2026-11-08T06:55:00.000Z", 999, 0, 1, side="server", phase="execution"
-    )
+    server = _generation("LLM call · planner", "2026-11-08T06:55:00.000Z", 999, 0, 1, side="server", phase="execution")
     server["runId"] = None
     server["metadata"].pop("runId", None)
     rows = _a2a_rows() + [server]
@@ -272,10 +349,10 @@ def test_metrics_counts_split_server_rows_but_keep_their_timestamps():
 def test_metrics_token_definition_a_cached_is_not_added_to_input_or_total():
     rows = [_generation("LLM call · adk_agent", "2026-11-08T07:00:01.000Z", 631, 630, 2035)]
     metrics = build_metrics(rows, trace_id=TRACE)
-    assert metrics["tokens"]["input"] == 631          # not 1261
+    assert metrics["tokens"]["input"] == 631  # not 1261
     assert metrics["tokens"]["cachedInput"] == 630
     assert metrics["tokens"]["output"] == 2035
-    assert metrics["tokens"]["total"] == 2666         # 631 + 2035, cache not added
+    assert metrics["tokens"]["total"] == 2666  # 631 + 2035, cache not added
     assert metrics["tokens"]["bySide"]["client"]["total"] == 2666
 
 
@@ -334,9 +411,7 @@ def test_metrics_fills_ao_from_server_send_message_but_keeps_latency_null():
     # Remove both client starts (negotiation_started and propose) so AO has to fall
     # back to the server span: P5 only prefers a client propose when one exists.
     rows = [
-        row
-        for row in _a2a_rows()
-        if (row.get("metadata") or {}).get("kind") not in {"negotiation_started", "propose"}
+        row for row in _a2a_rows() if (row.get("metadata") or {}).get("kind") not in {"negotiation_started", "propose"}
     ]
     rows.append(server)
     metrics = build_metrics(rows, trace_id=TRACE)
@@ -471,8 +546,13 @@ def test_metrics_round_detail_reads_flattened_langfuse_detail_keys():
 
 def test_metrics_notified_at_uses_decision_requested_when_available():
     rows = _a2a_rows() + [
-        _row("Decision requested · information · R1", "2026-11-08T07:00:06.000Z",
-             kind="decision_requested", phase="negotiation", round="1"),
+        _row(
+            "Decision requested · information · R1",
+            "2026-11-08T07:00:06.000Z",
+            kind="decision_requested",
+            phase="negotiation",
+            round="1",
+        ),
     ]
     metrics = build_metrics(rows, trace_id=TRACE)
     detail = metrics["negotiation"]["roundsDetail"][0]
@@ -598,9 +678,15 @@ def test_metrics_without_usage_reports_zero_side_buckets():
     assert metrics["tokens"]["input"] == 0
     assert metrics["tokens"]["total"] == 0
     assert metrics["tokens"]["bySide"]["client"] == {
-        "input": 0, "cachedInput": 0, "output": 0, "total": 0,
+        "input": 0,
+        "cachedInput": 0,
+        "output": 0,
+        "total": 0,
     }
     assert metrics["tokens"]["bySide"]["server"] == {
-        "input": 0, "cachedInput": 0, "output": 0, "total": 0,
+        "input": 0,
+        "cachedInput": 0,
+        "output": 0,
+        "total": 0,
     }
     assert any("no token usage" in warning for warning in metrics["warnings"])

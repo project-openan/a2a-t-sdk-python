@@ -94,7 +94,8 @@ CREATE INDEX IF NOT EXISTS idx_run_metrics_group
   ON run_metrics(protocol, scenario, created_at DESC);
 """
 
-_SCHEMA: Final[str] = """
+_SCHEMA: Final[str] = (
+    """
 CREATE TABLE IF NOT EXISTS conversations (
   conversation_id  TEXT PRIMARY KEY,
   external_id      TEXT NOT NULL DEFAULT '',
@@ -176,7 +177,9 @@ CREATE TABLE IF NOT EXISTS task_snapshots (
   updated_at   TEXT NOT NULL,
   payload_json TEXT NOT NULL DEFAULT '{}'
 );
-""" + _RUN_METRICS_SCHEMA
+"""
+    + _RUN_METRICS_SCHEMA
+)
 
 
 def _create_schema(connection: sqlite3.Connection) -> None:
@@ -228,9 +231,7 @@ def _add_run_protocol(connection: sqlite3.Connection) -> None:
     """
     columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)")}
     if "protocol" not in columns:
-        connection.execute(
-            "ALTER TABLE runs ADD COLUMN protocol TEXT NOT NULL DEFAULT 'a2a-t'"
-        )
+        connection.execute("ALTER TABLE runs ADD COLUMN protocol TEXT NOT NULL DEFAULT 'a2a-t'")
 
 
 def _add_run_source(connection: sqlite3.Connection) -> None:
@@ -241,13 +242,9 @@ def _add_run_source(connection: sqlite3.Connection) -> None:
     """
     columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)")}
     if "source_kind" not in columns:
-        connection.execute(
-            "ALTER TABLE runs ADD COLUMN source_kind TEXT NOT NULL DEFAULT ''"
-        )
+        connection.execute("ALTER TABLE runs ADD COLUMN source_kind TEXT NOT NULL DEFAULT ''")
     if "source_json" not in columns:
-        connection.execute(
-            "ALTER TABLE runs ADD COLUMN source_json TEXT NOT NULL DEFAULT '{}'"
-        )
+        connection.execute("ALTER TABLE runs ADD COLUMN source_json TEXT NOT NULL DEFAULT '{}'")
 
 
 def _add_run_downstream(connection: sqlite3.Connection) -> None:
@@ -264,9 +261,7 @@ def _add_run_downstream(connection: sqlite3.Connection) -> None:
     if "downstream_context_id" not in columns:
         connection.execute("ALTER TABLE runs ADD COLUMN downstream_context_id TEXT")
     if "downstream_hop" not in columns:
-        connection.execute(
-            "ALTER TABLE runs ADD COLUMN downstream_hop TEXT NOT NULL DEFAULT ''"
-        )
+        connection.execute("ALTER TABLE runs ADD COLUMN downstream_hop TEXT NOT NULL DEFAULT ''")
 
 
 def _add_run_chain(connection: sqlite3.Connection) -> None:
@@ -281,9 +276,7 @@ def _add_run_chain(connection: sqlite3.Connection) -> None:
     if "chain_id" not in columns:
         connection.execute("ALTER TABLE runs ADD COLUMN chain_id TEXT NOT NULL DEFAULT ''")
     if "parent_run_id" not in columns:
-        connection.execute(
-            "ALTER TABLE runs ADD COLUMN parent_run_id TEXT NOT NULL DEFAULT ''"
-        )
+        connection.execute("ALTER TABLE runs ADD COLUMN parent_run_id TEXT NOT NULL DEFAULT ''")
 
 
 def _add_run_trace_id(connection: sqlite3.Connection) -> None:
@@ -307,9 +300,34 @@ def _add_negotiation_event_protocol(connection: sqlite3.Connection) -> None:
     """
     columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(negotiation_events)")}
     if "protocol" not in columns:
-        connection.execute(
-            "ALTER TABLE negotiation_events ADD COLUMN protocol TEXT NOT NULL DEFAULT 'a2a-t'"
-        )
+        connection.execute("ALTER TABLE negotiation_events ADD COLUMN protocol TEXT NOT NULL DEFAULT 'a2a-t'")
+
+
+def _create_workflow_roots(connection: sqlite3.Connection) -> None:
+    """Create the chain-scoped workflow root table and the trace lookup index.
+
+    One row per correction chain. ``root_span_id`` is the neutral anchor's OTel span id; it stays
+    empty until the first exported attempt creates the anchor, so an offline first attempt and a
+    later live retry still converge on one root. ``trace_id`` is unique so two chains can never
+    merge into one Langfuse trace.
+    """
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS workflow_roots (
+          chain_id       TEXT PRIMARY KEY,
+          trace_id       TEXT NOT NULL,
+          root_span_id   TEXT NOT NULL DEFAULT '',
+          scenario       TEXT NOT NULL DEFAULT '',
+          protocol       TEXT NOT NULL DEFAULT '',
+          root_run_id    TEXT NOT NULL DEFAULT '',
+          created_at     TEXT NOT NULL,
+          updated_at     TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_roots_trace
+          ON workflow_roots(trace_id);
+        CREATE INDEX IF NOT EXISTS idx_runs_trace ON runs(trace_id);
+        """
+    )
 
 
 #: Ordered schema migrations; index ``i`` upgrades version ``i`` to ``i + 1``.
@@ -323,6 +341,7 @@ _MIGRATIONS: Final[tuple[SchemaMigration, ...]] = (
     _add_run_chain,
     _add_run_trace_id,
     _add_negotiation_event_protocol,
+    _create_workflow_roots,
 )
 
 
@@ -487,6 +506,26 @@ class ClientRunRecord:
 
 
 @dataclass(frozen=True)
+class WorkflowRootRecord:
+    """One correction chain's Langfuse workflow root.
+
+    The root is chain-scoped, not run-scoped: every attempt of the chain (the blocked preflight
+    and each corrected retry) attaches its run root under the same 16-hex span id. Keeping it in
+    its own row avoids duplicating the id on every run and leaving ``which run owns the chain``
+    ambiguous.
+    """
+
+    chain_id: str
+    trace_id: str
+    root_span_id: str = ""
+    scenario: str = ""
+    protocol: str = ""
+    root_run_id: str = ""
+    created_at: str = field(default_factory=now_iso)
+    updated_at: str = field(default_factory=now_iso)
+
+
+@dataclass(frozen=True)
 class NegotiationEventRecord:
     """One inbound proposal or outbound decision of a run."""
 
@@ -625,6 +664,18 @@ class ClientStore(Protocol):
         """Upsert the per-run comparison metrics of one run."""
         ...
 
+    async def get_workflow_root(self, chain_id: str) -> WorkflowRootRecord | None:
+        """Read the workflow root of one correction chain."""
+        ...
+
+    async def claim_workflow_root(self, record: WorkflowRootRecord) -> WorkflowRootRecord | None:
+        """Create the chain row first-writer-wins, returning the existing row when present."""
+        ...
+
+    async def reserve_workflow_root_span(self, chain_id: str, span_id: str, run_id: str) -> WorkflowRootRecord | None:
+        """Store the anchor span id if the chain row has none yet."""
+        ...
+
     async def list_running_runs(self) -> builtins.list[ClientRunRecord]: ...
 
     async def mark_run_interrupted(self, run_id: str) -> None: ...
@@ -646,6 +697,26 @@ class RunAlreadyActiveError(RuntimeError):
         self.idempotency_key = idempotency_key
         suffix = f" ({run_id})" if run_id else ""
         super().__init__(f"Conversation {conversation_id} already has an active run{suffix}.")
+
+
+class WorkflowTraceConflictError(ValueError):
+    """Raised when one trace id is already owned by a different correction chain."""
+
+    def __init__(self, trace_id: str, chain_id: str) -> None:
+        self.trace_id = trace_id
+        self.chain_id = chain_id
+        super().__init__(f"Trace {trace_id} is already owned by correction chain {chain_id}.")
+
+
+class WorkflowScopeError(ValueError):
+    """Raised when a retry reuses a chain with a different scenario or protocol."""
+
+    def __init__(self, chain_id: str, field: str, expected: str, actual: str) -> None:
+        self.chain_id = chain_id
+        self.field = field
+        self.expected = expected
+        self.actual = actual
+        super().__init__(f"Correction chain {chain_id} is {expected!r} {field}, not {actual!r}.")
 
 
 class SqliteClientStore:
@@ -770,9 +841,7 @@ class SqliteClientStore:
         try:
             await asyncio.to_thread(self._create_run, record)
         except sqlite3.IntegrityError as exc:
-            existing = await asyncio.to_thread(
-                self._find_active_run, record.conversation_id or ""
-            )
+            existing = await asyncio.to_thread(self._find_active_run, record.conversation_id or "")
             if existing is not None:
                 raise RunAlreadyActiveError(
                     record.conversation_id or "",
@@ -810,9 +879,7 @@ class SqliteClientStore:
         if not idempotency_key:
             return None
         try:
-            return await asyncio.to_thread(
-                self._find_run_by_idempotency, conversation_id, idempotency_key
-            )
+            return await asyncio.to_thread(self._find_run_by_idempotency, conversation_id, idempotency_key)
         except sqlite3.Error as exc:
             _LOGGER.warning("idempotency lookup failed: %s", exc)
             return None
@@ -868,6 +935,30 @@ class SqliteClientStore:
             await asyncio.to_thread(self._save_run_metrics, metrics)
         except sqlite3.Error as exc:
             _LOGGER.warning("run metrics persistence failed for %s: %s", metrics.get("runId"), exc)
+
+    async def get_workflow_root(self, chain_id: str) -> WorkflowRootRecord | None:
+        """Read the workflow root of one correction chain."""
+        try:
+            return await asyncio.to_thread(self._get_workflow_root, chain_id)
+        except sqlite3.Error as exc:
+            _LOGGER.warning("workflow root read failed for %s: %s", chain_id, exc)
+            return None
+
+    async def claim_workflow_root(self, record: WorkflowRootRecord) -> WorkflowRootRecord | None:
+        """Create the chain row first-writer-wins, returning the existing row when present."""
+        try:
+            return await asyncio.to_thread(self._claim_workflow_root, record)
+        except sqlite3.Error as exc:
+            _LOGGER.warning("workflow root claim failed for %s: %s", record.chain_id, exc)
+            return None
+
+    async def reserve_workflow_root_span(self, chain_id: str, span_id: str, run_id: str) -> WorkflowRootRecord | None:
+        """Store the anchor span id if the chain row has none yet."""
+        try:
+            return await asyncio.to_thread(self._reserve_workflow_root_span, chain_id, span_id, run_id)
+        except sqlite3.Error as exc:
+            _LOGGER.warning("workflow root reserve failed for %s: %s", chain_id, exc)
+            return None
 
     async def list_running_runs(self) -> builtins.list[ClientRunRecord]:
         """Return every run still marked ``running`` (oldest first)."""
@@ -1019,8 +1110,7 @@ class SqliteClientStore:
         with self._connection() as connection:
             connection.row_factory = sqlite3.Row
             row = connection.execute(
-                "SELECT * FROM runs WHERE conversation_id=? AND status=? "
-                "ORDER BY created_at DESC LIMIT 1",
+                "SELECT * FROM runs WHERE conversation_id=? AND status=? ORDER BY created_at DESC LIMIT 1",
                 (conversation_id, RUN_STATUS_RUNNING),
             ).fetchone()
         return self._row_to_run(row) if row is not None else None
@@ -1099,16 +1189,10 @@ class SqliteClientStore:
             user_request=str(row["user_request"]),
             status=str(row["status"]),
             final_state=str(row["final_state"]) if row["final_state"] else None,
-            server_context_id=(
-                str(row["server_context_id"]) if row["server_context_id"] else None
-            ),
+            server_context_id=(str(row["server_context_id"]) if row["server_context_id"] else None),
             server_task_id=str(row["server_task_id"]) if row["server_task_id"] else None,
-            downstream_task_id=(
-                str(row["downstream_task_id"]) if row["downstream_task_id"] else None
-            ),
-            downstream_context_id=(
-                str(row["downstream_context_id"]) if row["downstream_context_id"] else None
-            ),
+            downstream_task_id=(str(row["downstream_task_id"]) if row["downstream_task_id"] else None),
+            downstream_context_id=(str(row["downstream_context_id"]) if row["downstream_context_id"] else None),
             downstream_hop=str(row["downstream_hop"] or ""),
             error=str(row["error"]) if row["error"] else None,
             owner_pid=int(row["owner_pid"] or 0),
@@ -1116,9 +1200,7 @@ class SqliteClientStore:
             source_kind=str(row["source_kind"] or ""),
             source=_load_json(row["source_json"]),
             transcript_json=str(row["transcript_json"]) if row["transcript_json"] else None,
-            transcript_markdown=(
-                str(row["transcript_markdown"]) if row["transcript_markdown"] else None
-            ),
+            transcript_markdown=(str(row["transcript_markdown"]) if row["transcript_markdown"] else None),
             trace_json=str(row["trace_json"]) if row["trace_json"] else None,
             chain_id=str(row["chain_id"] or ""),
             parent_run_id=str(row["parent_run_id"] or ""),
@@ -1132,6 +1214,72 @@ class SqliteClientStore:
             connection.row_factory = sqlite3.Row
             row = connection.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
         return self._row_to_run(row) if row is not None else None
+
+    def _get_workflow_root(self, chain_id: str) -> WorkflowRootRecord | None:
+        if not chain_id:
+            return None
+        with self._connection() as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute("SELECT * FROM workflow_roots WHERE chain_id=?", (chain_id,)).fetchone()
+        return self._row_to_workflow_root(row) if row is not None else None
+
+    def _claim_workflow_root(self, record: WorkflowRootRecord) -> WorkflowRootRecord | None:
+        with self._connection() as connection:
+            connection.row_factory = sqlite3.Row
+            existing = connection.execute(
+                "SELECT * FROM workflow_roots WHERE chain_id=?", (record.chain_id,)
+            ).fetchone()
+            if existing is not None:
+                return self._row_to_workflow_root(existing)
+            by_trace = connection.execute(
+                "SELECT * FROM workflow_roots WHERE trace_id=?", (record.trace_id,)
+            ).fetchone()
+            if by_trace is not None:
+                raise WorkflowTraceConflictError(record.trace_id, str(by_trace["chain_id"]))
+            stamp = now_iso()
+            connection.execute(
+                """
+                INSERT INTO workflow_roots
+                    (chain_id, trace_id, root_span_id, scenario, protocol, root_run_id,
+                     created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.chain_id,
+                    record.trace_id,
+                    record.root_span_id,
+                    record.scenario,
+                    record.protocol,
+                    record.root_run_id,
+                    record.created_at or stamp,
+                    stamp,
+                ),
+            )
+            row = connection.execute("SELECT * FROM workflow_roots WHERE chain_id=?", (record.chain_id,)).fetchone()
+        return self._row_to_workflow_root(row) if row is not None else None
+
+    def _reserve_workflow_root_span(self, chain_id: str, span_id: str, run_id: str) -> WorkflowRootRecord | None:
+        with self._connection() as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute(
+                "UPDATE workflow_roots SET root_span_id=?, root_run_id=?, updated_at=? "
+                "WHERE chain_id=? AND root_span_id=''",
+                (span_id, run_id, now_iso(), chain_id),
+            )
+            row = connection.execute("SELECT * FROM workflow_roots WHERE chain_id=?", (chain_id,)).fetchone()
+        return self._row_to_workflow_root(row) if row is not None else None
+
+    def _row_to_workflow_root(self, row: sqlite3.Row) -> WorkflowRootRecord:
+        return WorkflowRootRecord(
+            chain_id=str(row["chain_id"]),
+            trace_id=str(row["trace_id"]),
+            root_span_id=str(row["root_span_id"] or ""),
+            scenario=str(row["scenario"] or ""),
+            protocol=str(row["protocol"] or ""),
+            root_run_id=str(row["root_run_id"] or ""),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+        )
 
     def _find_run_by_idempotency(
         self,
@@ -1203,18 +1351,14 @@ class SqliteClientStore:
                 event_id=str(row["event_id"]),
                 run_id=str(row["run_id"]),
                 seq=int(row["seq"]),
-                negotiation_id=(
-                    str(row["negotiation_id"]) if row["negotiation_id"] else None
-                ),
+                negotiation_id=(str(row["negotiation_id"]) if row["negotiation_id"] else None),
                 kind=str(row["kind"]) if row["kind"] else None,
                 round=int(row["round"]) if row["round"] is not None else None,
                 performative=str(row["performative"]) if row["performative"] else None,
                 direction=str(row["direction"]),
                 actor=str(row["actor"]),
                 content=_load_json(row["content_json"]),
-                decision_action=(
-                    str(row["decision_action"]) if row["decision_action"] else None
-                ),
+                decision_action=(str(row["decision_action"]) if row["decision_action"] else None),
                 rationale=str(row["rationale"]) if row["rationale"] else None,
                 created_at=str(row["created_at"]),
                 protocol=str(row["protocol"] or PROTOCOL_A2A_T),
@@ -1361,21 +1505,15 @@ class SqliteClientStore:
         stamp = now_iso()
         with self._connection() as connection:
             rows = connection.execute(
-                "SELECT run_id, owner_pid FROM runs WHERE status=? "
-                "AND (server_task_id IS NULL OR server_task_id='')",
+                "SELECT run_id, owner_pid FROM runs WHERE status=? AND (server_task_id IS NULL OR server_task_id='')",
                 (RUN_STATUS_RUNNING,),
             ).fetchall()
-            stale = [
-                str(run_id)
-                for run_id, owner_pid in rows
-                if not _pid_alive(int(owner_pid or 0))
-            ]
+            stale = [str(run_id) for run_id, owner_pid in rows if not _pid_alive(int(owner_pid or 0))]
             if not stale:
                 return 0
             placeholders = ",".join("?" for _ in stale)
             cursor = connection.execute(
-                f"UPDATE runs SET status=?, updated_at=?, finished_at=? "
-                f"WHERE run_id IN ({placeholders})",
+                f"UPDATE runs SET status=?, updated_at=?, finished_at=? WHERE run_id IN ({placeholders})",
                 (RUN_STATUS_INTERRUPTED, stamp, stamp, *stale),
             )
             return int(cursor.rowcount)

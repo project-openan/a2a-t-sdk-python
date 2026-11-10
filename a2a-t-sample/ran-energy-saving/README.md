@@ -375,9 +375,9 @@ validation verdict and the approval pair — and drops status noise, phase repre
 debug-only rows. NMS wire evidence uses `kind=transport` and only `full` exports it. `minimal`
 keeps only LLM/tool calls and the run result (about a third of the previous volume); `full`
 exports every span. The Web UI
-timeline always keeps every span, so diagnosis is unaffected. A corrected retry keeps its own
-trace (one root per trace) and is grouped with the blocked attempt by the Langfuse session, which
-uses the shared `chainId`.
+timeline always keeps every span, so diagnosis is unaffected. A corrected retry shares the
+blocked attempt's trace id and the neutral workflow root; the attempts are also grouped by the
+Langfuse session, which uses the shared `chainId`.
 
 ### Langfuse metrics export (`/observe`)
 

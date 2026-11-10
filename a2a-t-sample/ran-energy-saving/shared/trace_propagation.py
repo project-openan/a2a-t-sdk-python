@@ -42,11 +42,15 @@ USER_ID_HEADER: Final[str] = "x-a2at-user-id"
 #: Downstream correlation id carried across local A2A hops and used for the vendor NMS
 #: ``traceparent``. Unlike the run id it can stay the same across a retry run.
 DOWNSTREAM_TRACE_ID_HEADER: Final[str] = "x-a2at-downstream-trace-id"
+#: Marks a hop whose trace is owned by a client workflow root. The server then puts run identity
+#: in observation metadata instead of overwriting the trace name/session owned by the anchor.
+WORKFLOW_TRACE_HEADER: Final[str] = "x-a2at-workflow-trace"
 
 #: Langfuse trace metadata attribute (same contract as :mod:`shared.langfuse_tracing`).
 TRACE_NAME_ATTRIBUTE: Final[str] = "langfuse.trace.name"
 TRACE_METADATA_PREFIX: Final[str] = "langfuse.trace.metadata."
 OBSERVATION_TYPE_ATTRIBUTE: Final[str] = "langfuse.observation.type"
+OBSERVATION_METADATA_PREFIX: Final[str] = "langfuse.observation.metadata."
 SESSION_ID_ATTRIBUTE: Final[str] = "session.id"
 USER_ID_ATTRIBUTE: Final[str] = "user.id"
 
@@ -56,6 +60,7 @@ _RUN_ID: ContextVar[str] = ContextVar("a2at_active_run_id", default="")
 _CONVERSATION_ID: ContextVar[str] = ContextVar("a2at_active_conversation_id", default="")
 _USER_ID: ContextVar[str] = ContextVar("a2at_active_user_id", default="")
 _DOWNSTREAM_TRACE_ID: ContextVar[str] = ContextVar("a2at_downstream_trace_id", default="")
+_WORKFLOW_TRACE: ContextVar[str] = ContextVar("a2at_workflow_trace", default="")
 
 
 def _is_hex(value: str, length: int) -> bool:
@@ -63,7 +68,7 @@ def _is_hex(value: str, length: int) -> bool:
     return len(value) == length and all(char in "0123456789abcdef" for char in value.lower())
 
 
-def _valid_trace_id(value: str) -> bool:
+def _valid_trace_id(value: str) -> str:
     """Return a normalized 32-hex trace id, or ``""`` when it cannot be propagated."""
     trace_id = value.strip().lower()
     if not _is_hex(trace_id, 32) or trace_id == "0" * 32:
@@ -79,7 +84,10 @@ def set_active_trace(
     conversation_id: str | None = None,
     user_id: str | None = None,
     downstream_trace_id: str | None = None,
-) -> tuple[Token[str], Token[str], Token[str], Token[str], Token[str], Token[str]]:
+    workflow_trace: bool = False,
+) -> tuple[
+    Token[str], Token[str], Token[str], Token[str], Token[str], Token[str], Token[str]
+]:
     """Set the correlation values used by outgoing requests; return their reset tokens."""
     return (
         _TRACE_ID.set(trace_id or ""),
@@ -88,20 +96,32 @@ def set_active_trace(
         _CONVERSATION_ID.set(conversation_id or ""),
         _USER_ID.set(user_id or ""),
         _DOWNSTREAM_TRACE_ID.set(downstream_trace_id or ""),
+        _WORKFLOW_TRACE.set("1" if workflow_trace else ""),
     )
 
 
 def reset_active_trace(
-    tokens: tuple[Token[str], Token[str], Token[str], Token[str], Token[str], Token[str]],
+    tokens: tuple[
+        Token[str], Token[str], Token[str], Token[str], Token[str], Token[str], Token[str]
+    ],
 ) -> None:
     """Restore the correlation values saved by :func:`set_active_trace`."""
-    trace_token, parent_token, run_token, conversation_token, user_token, downstream_token = tokens
+    (
+        trace_token,
+        parent_token,
+        run_token,
+        conversation_token,
+        user_token,
+        downstream_token,
+        workflow_token,
+    ) = tokens
     _TRACE_ID.reset(trace_token)
     _PARENT_SPAN_ID.reset(parent_token)
     _RUN_ID.reset(run_token)
     _CONVERSATION_ID.reset(conversation_token)
     _USER_ID.reset(user_token)
     _DOWNSTREAM_TRACE_ID.reset(downstream_token)
+    _WORKFLOW_TRACE.reset(workflow_token)
 
 
 @contextmanager
@@ -113,6 +133,7 @@ def propagated_trace(
     conversation_id: str | None = None,
     user_id: str | None = None,
     downstream_trace_id: str | None = None,
+    workflow_trace: bool = False,
 ) -> Iterator[None]:
     """Bind the correlation values for the duration of one run or request."""
     tokens = set_active_trace(
@@ -122,6 +143,7 @@ def propagated_trace(
         conversation_id=conversation_id,
         user_id=user_id,
         downstream_trace_id=downstream_trace_id,
+        workflow_trace=workflow_trace,
     )
     try:
         yield
@@ -137,6 +159,11 @@ def current_trace_id() -> str:
 def current_run_id() -> str:
     """Return the sample run id carried by the current request, ``""`` when absent."""
     return _RUN_ID.get().strip()
+
+
+def current_workflow_trace() -> bool:
+    """Return whether the current hop belongs to a client-owned workflow trace."""
+    return _WORKFLOW_TRACE.get() == "1"
 
 
 def current_downstream_trace_id() -> str:
@@ -249,13 +276,20 @@ def annotate_run_id(
         span = trace.get_current_span()
         if span is None:
             return
+        if current_workflow_trace():
+            # The client's workflow anchor owns the trace name/session; a per-run value written
+            # here would overwrite it with the retry's new run/conversation.
+            span.set_attribute(f"{OBSERVATION_METADATA_PREFIX}runId", json.dumps(run_id))
+            if conversation_id:
+                span.set_attribute(
+                    f"{OBSERVATION_METADATA_PREFIX}conversationId", json.dumps(conversation_id)
+                )
+            return
         span.set_attribute(f"{TRACE_METADATA_PREFIX}runId", json.dumps(run_id))
         span.set_attribute(TRACE_NAME_ATTRIBUTE, json.dumps(f"server · {run_id[:8]}"))
         if conversation_id:
             span.set_attribute(SESSION_ID_ATTRIBUTE, conversation_id)
-            span.set_attribute(
-                f"{TRACE_METADATA_PREFIX}conversationId", json.dumps(conversation_id)
-            )
+            span.set_attribute(f"{TRACE_METADATA_PREFIX}conversationId", json.dumps(conversation_id))
         if user_id:
             span.set_attribute(USER_ID_ATTRIBUTE, user_id)
     except Exception:  # noqa: BLE001 - tracing must not break the request
@@ -280,16 +314,15 @@ async def inject_outgoing(request: httpx.Request) -> None:
         downstream_trace_id = current_downstream_trace_id()
         if downstream_trace_id:
             request.headers[DOWNSTREAM_TRACE_ID_HEADER] = downstream_trace_id
+        if current_workflow_trace():
+            request.headers[WORKFLOW_TRACE_HEADER] = "1"
     except Exception:  # noqa: BLE001 - propagation never breaks the call
         _LOGGER.debug("traceparent injection failed", exc_info=True)
 
 
 def _lower_headers(raw_headers: list[tuple[bytes, bytes]]) -> dict[str, str]:
     """Decode one ASGI header list into a lowercase mapping."""
-    return {
-        key.decode("latin-1").lower(): value.decode("latin-1")
-        for key, value in raw_headers
-    }
+    return {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in raw_headers}
 
 
 class TracePropagationMiddleware:
@@ -319,6 +352,7 @@ class TracePropagationMiddleware:
             conversation_id=headers.get(CONVERSATION_ID_HEADER, ""),
             user_id=headers.get(USER_ID_HEADER, ""),
             downstream_trace_id=headers.get(DOWNSTREAM_TRACE_ID_HEADER, ""),
+            workflow_trace=headers.get(WORKFLOW_TRACE_HEADER, "").strip() == "1",
         )
         otel_tokens = _attach_otel_context(headers)
         try:
@@ -352,15 +386,25 @@ def _attach_otel_context(headers: Mapping[str, str]) -> tuple[Any, Any, Any] | N
         tracer = trace.get_tracer("a2at.propagation")
         span = tracer.start_span("a2at server request", context=parent)
         attributes: dict[str, Any] = {OBSERVATION_TYPE_ATTRIBUTE: "span"}
-        attributes[f"{TRACE_METADATA_PREFIX}runId"] = json.dumps(run_id)
-        attributes[TRACE_NAME_ATTRIBUTE] = json.dumps(f"server · {run_id[:8]}")
+        workflow_trace = headers.get(WORKFLOW_TRACE_HEADER, "").strip() == "1"
         conversation_id = headers.get(CONVERSATION_ID_HEADER, "").strip()
-        if conversation_id:
-            attributes[SESSION_ID_ATTRIBUTE] = conversation_id
-            attributes[f"{TRACE_METADATA_PREFIX}conversationId"] = json.dumps(conversation_id)
         user_id = headers.get(USER_ID_HEADER, "").strip()
-        if user_id:
-            attributes[USER_ID_ATTRIBUTE] = user_id
+        if workflow_trace:
+            # The shared workflow trace is owned by the client's anchor; keep this hop's run
+            # identity at observation level and never rewrite the trace name/session.
+            attributes[f"{OBSERVATION_METADATA_PREFIX}runId"] = json.dumps(run_id)
+            if conversation_id:
+                attributes[f"{OBSERVATION_METADATA_PREFIX}conversationId"] = json.dumps(
+                    conversation_id
+                )
+        else:
+            attributes[f"{TRACE_METADATA_PREFIX}runId"] = json.dumps(run_id)
+            attributes[TRACE_NAME_ATTRIBUTE] = json.dumps(f"server · {run_id[:8]}")
+            if conversation_id:
+                attributes[SESSION_ID_ATTRIBUTE] = conversation_id
+                attributes[f"{TRACE_METADATA_PREFIX}conversationId"] = json.dumps(conversation_id)
+            if user_id:
+                attributes[USER_ID_ATTRIBUTE] = user_id
         for key, value in attributes.items():
             span.set_attribute(key, value)
         span_token = otel_context.attach(set_span_in_context(span))
@@ -393,11 +437,13 @@ __all__ = [
     "TRACEPARENT_HEADER",
     "TracePropagationMiddleware",
     "USER_ID_HEADER",
+    "WORKFLOW_TRACE_HEADER",
     "annotate_run_id",
     "current_downstream_trace_id",
     "current_parent_span_id",
     "current_run_id",
     "current_trace_id",
+    "current_workflow_trace",
     "current_traceparent",
     "extract_trace_id",
     "extract_traceparent",

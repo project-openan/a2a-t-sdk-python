@@ -69,6 +69,11 @@ OBSERVATION_MODEL_ATTRIBUTE: Final[str] = "langfuse.observation.model.name"
 OBSERVATION_USAGE_ATTRIBUTE: Final[str] = "langfuse.observation.usage_details"
 ROOT_ATTRIBUTE: Final[str] = "langfuse.internal.as_root"
 
+#: Langfuse SDK 5.1.0's internal baggage key. The SDK marks a span whose parent was not exported
+#: in this process as an application root; a retry attaches to a workflow anchor exported by an
+#: earlier attempt, so the anchor context carries this claim to suppress the second root.
+LANGFUSE_TRACE_ID_BAGGAGE_KEY: Final[str] = "langfuse_trace_id"
+
 #: Observations exported under these span kinds.
 OBSERVATION_GENERATION: Final[str] = "generation"
 OBSERVATION_TOOL: Final[str] = "tool"
@@ -222,28 +227,35 @@ def _get_runtime(config: SampleConfig) -> _LangfuseRuntime | None:
         return _RUNTIME
 
 
+def langfuse_export_active(config: SampleConfig) -> bool:
+    """Return whether a live run creates a Langfuse exporter (mirrors the create guard)."""
+    return config.langfuse_configured and not config.is_offline and LANGFUSE_AVAILABLE
+
+
 def create_langfuse_exporter(
     config: SampleConfig,
     metadata: LangfuseRunMetadata,
     *,
     parent_trace_id: str | None = None,
+    workflow_root_span_id: str | None = None,
+    create_workflow_root: bool = False,
 ) -> "LangfuseSpanExporter | None":
     """Build the exporter of one run, or ``None`` when Langfuse is disabled.
 
     Langfuse is active when both keys are configured and the run is live. Offline runs use the
     deterministic model whose token usage is not real, so they stay out of the dashboard.
 
-    ``parent_trace_id`` is the run's explicit (vendor-facing) trace id: a retry that reuses it
-    also reuses the Langfuse trace. Without it the exporter adopts the current OTel parent (an
-    incoming ``traceparent``) or opens a new trace.
+    ``parent_trace_id`` is the correction chain's explicit (vendor-facing) trace id. When
+    ``workflow_root_span_id`` names an already-exported anchor, this run's root attaches under
+    it. Otherwise ``create_workflow_root`` makes this run own the chain's single anchor; the
+    exporter exposes it through :attr:`LangfuseSpanExporter.workflow_root_span_id` so the caller
+    can persist it for every retry.
     """
-    if not config.langfuse_configured:
-        return None
-    if config.is_offline:
-        _LOGGER.info("Langfuse export skipped: offline (scripted) runs are not exported")
-        return None
-    if not LANGFUSE_AVAILABLE:
-        _LOGGER.warning("LANGFUSE_* is configured but the langfuse package is not installed; export disabled")
+    if not langfuse_export_active(config):
+        if config.langfuse_configured and config.is_offline:
+            _LOGGER.info("Langfuse export skipped: offline (scripted) runs are not exported")
+        elif config.langfuse_configured:
+            _LOGGER.warning("LANGFUSE_* is configured but the langfuse package is not installed; export disabled")
         return None
     try:
         runtime = _get_runtime(config)
@@ -254,6 +266,8 @@ def create_langfuse_exporter(
             config=config,
             metadata=metadata,
             parent_trace_id=parent_trace_id,
+            workflow_root_span_id=workflow_root_span_id,
+            create_workflow_root=create_workflow_root,
         )
     except Exception as exc:  # noqa: BLE001 - observability must never break the run
         _LOGGER.warning("Langfuse initialization failed: %s: %s", type(exc).__name__, exc)
@@ -287,21 +301,19 @@ def _root_context(parent_trace_id: str | None) -> Any:
     ingestion) falls back to whatever OTel context is current.
     """
     explicit = (parent_trace_id or "").strip().lower()
-    if len(explicit) == 32 and explicit != "0" * 32 and all(
-        character in "0123456789abcdef" for character in explicit
-    ):
+    if len(explicit) == 32 and explicit != "0" * 32 and all(character in "0123456789abcdef" for character in explicit):
         return _synthetic_parent_context(explicit)
     return _current_parent_context()
 
 
-def _synthetic_parent_context(trace_id: str) -> Any:
+def _synthetic_parent_context(trace_id: str, span_id: str | None = None) -> Any:
     """Return a context whose remote parent carries ``trace_id`` and a fresh span id."""
     try:
         from opentelemetry import trace
 
         context = trace.SpanContext(
             trace_id=int(trace_id, 16),
-            span_id=int(uuid.uuid4().hex[:16], 16),
+            span_id=int(span_id or uuid.uuid4().hex[:16], 16),
             is_remote=True,
             trace_flags=trace.TraceFlags(trace.TraceFlags.SAMPLED),
         )
@@ -309,6 +321,29 @@ def _synthetic_parent_context(trace_id: str) -> Any:
     except Exception:  # noqa: BLE001 - observability must never break the run
         _LOGGER.debug("synthetic parent context failed", exc_info=True)
         return Context()
+
+
+def _workflow_parent_context(trace_id: str, span_id: str) -> Any:
+    """Return a context parented to a workflow anchor, with the SDK's root-suppression claim.
+
+    The anchor was exported by an earlier attempt (possibly another process), so the installed
+    Langfuse SDK would otherwise tag this run's root as an application root. Baggage
+    ``langfuse_trace_id`` is the SDK's own signal that the parent belongs to this trace.
+    """
+    try:
+        from opentelemetry import baggage, trace
+
+        context = trace.SpanContext(
+            trace_id=int(trace_id, 16),
+            span_id=int(span_id, 16),
+            is_remote=True,
+            trace_flags=trace.TraceFlags(trace.TraceFlags.SAMPLED),
+        )
+        anchored = trace.set_span_in_context(trace.NonRecordingSpan(context))
+        return baggage.set_baggage(LANGFUSE_TRACE_ID_BAGGAGE_KEY, trace_id, context=anchored)
+    except Exception:  # noqa: BLE001 - observability must never break the run
+        _LOGGER.debug("workflow parent context failed", exc_info=True)
+        return _synthetic_parent_context(trace_id)
 
 
 class LangfuseSpanExporter:
@@ -321,8 +356,10 @@ class LangfuseSpanExporter:
         config: SampleConfig,
         metadata: LangfuseRunMetadata,
         parent_trace_id: str | None = None,
+        workflow_root_span_id: str | None = None,
+        create_workflow_root: bool = False,
     ) -> None:
-        """Create the run root span and remember the trace id."""
+        """Create the chain/workflow anchor and this run's root span."""
         self._runtime = runtime
         self._config = config
         self._metadata = metadata
@@ -341,30 +378,71 @@ class LangfuseSpanExporter:
         self._saw_terminal_status = False
         self._max_round = 0
         started = _now_ns()
-        self._root = runtime.tracer.start_span(
-            _run_span_name(metadata),
-            context=_root_context(parent_trace_id),
-            start_time=started,
-            attributes=_root_attributes(metadata),
-        )
+        trace_id = _valid_trace_id(parent_trace_id)
+        anchor_id = _valid_span_id(workflow_root_span_id)
+        self._workflow_root_span_id = anchor_id
+        self._uses_workflow_root = bool(trace_id and (anchor_id or create_workflow_root))
+        if self._uses_workflow_root and anchor_id:
+            # A retry in another process attaches to the anchor exported by the first attempt.
+            self._root = runtime.tracer.start_span(
+                _run_span_name(metadata),
+                context=_workflow_parent_context(trace_id, anchor_id),
+                start_time=started,
+                attributes=_run_root_attributes(metadata),
+            )
+        elif self._uses_workflow_root:
+            # The first exported attempt owns the chain's single root. It is a zero-length
+            # anchor: OTel exports a span only on end(), and a retry may run in another process,
+            # so an open anchor could never be the parent it promises to be.
+            anchor = runtime.tracer.start_span(
+                _workflow_span_name(metadata),
+                context=_root_context(trace_id),
+                start_time=started,
+                attributes=_workflow_root_attributes(metadata),
+            )
+            anchor_context = anchor.get_span_context()
+            self._workflow_root_span_id = format_span_id(anchor_context.span_id)
+            trace_id = format_trace_id(anchor_context.trace_id)
+            anchor.end(end_time=started)
+            self._root = runtime.tracer.start_span(
+                _run_span_name(metadata),
+                context=_workflow_parent_context(trace_id, self._workflow_root_span_id),
+                start_time=started,
+                attributes=_run_root_attributes(metadata),
+            )
+            # Name the trace and expose the attempt's runId as early as possible. The anchor
+            # itself stays a zero-length root; this child is its first observation.
+            bootstrap = runtime.tracer.start_span(
+                "trace opened",
+                context=_workflow_parent_context(trace_id, self._workflow_root_span_id),
+                start_time=started,
+                attributes=_trace_opened_attributes(metadata),
+            )
+            bootstrap.end(end_time=started)
+        else:
+            self._root = runtime.tracer.start_span(
+                _run_span_name(metadata),
+                context=_root_context(parent_trace_id),
+                start_time=started,
+                attributes=_root_attributes(metadata),
+            )
+            root_context = self._root.get_span_context()
+            self._trace_id = format_trace_id(root_context.trace_id)
+            self._root_span_id = format_span_id(root_context.span_id)
+            # The root stays open for the whole run, so its trace-level attributes would arrive
+            # only at run end. Export one zero-length child immediately: it is the trace's first
+            # observation, so Langfuse names the trace and fills session/user from the start.
+            bootstrap = runtime.tracer.start_span(
+                "trace opened",
+                context=set_span_in_context(self._root),
+                start_time=started,
+                attributes={key: value for key, value in _root_attributes(metadata).items() if key != ROOT_ATTRIBUTE}
+                | {OBSERVATION_TYPE_ATTRIBUTE: "event"},
+            )
+            bootstrap.end(end_time=started)
         root_context = self._root.get_span_context()
         self._trace_id = format_trace_id(root_context.trace_id)
         self._root_span_id = format_span_id(root_context.span_id)
-        # The root stays open for the whole run, so its trace-level attributes would arrive only
-        # at run end. Export one zero-length child immediately: it is the trace's first
-        # observation, so Langfuse names the trace and fills session/user from the start.
-        bootstrap = runtime.tracer.start_span(
-            "trace opened",
-            context=set_span_in_context(self._root),
-            start_time=started,
-            attributes={
-                key: value
-                for key, value in _root_attributes(metadata).items()
-                if key != ROOT_ATTRIBUTE
-            }
-            | {OBSERVATION_TYPE_ATTRIBUTE: "event"},
-        )
-        bootstrap.end(end_time=started)
 
     @property
     def trace_id(self) -> str:
@@ -373,8 +451,13 @@ class LangfuseSpanExporter:
 
     @property
     def root_span_id(self) -> str:
-        """Return the root span id, used as the parent of outgoing server hops."""
+        """Return this attempt's run-root span id, used as the parent of outgoing server hops."""
         return self._root_span_id
+
+    @property
+    def workflow_root_span_id(self) -> str:
+        """Return the chain's workflow anchor span id, empty outside a workflow-root run."""
+        return self._workflow_root_span_id
 
     def __call__(self, span: Mapping[str, object]) -> None:
         """Export one completed Run Explorer span; failures become a snapshot warning.
@@ -460,10 +543,13 @@ class LangfuseSpanExporter:
             if payload:
                 self._root.set_attribute(OBSERVATION_OUTPUT_ATTRIBUTE, _json_value(payload))
             if self._span_level != TRACE_SPAN_LEVEL_FULL:
-                # The OSP export columns AW/BB: the trace states its own round count.
-                self._root.set_attribute(f"{TRACE_METADATA_PREFIX}rounds", _json_value(self._max_round))
+                # The OSP export columns AW/BB: the run states its own round count. Under a
+                # workflow root this is per-attempt data, so it must not overwrite the chain's
+                # trace-level metadata.
+                metadata_prefix = OBSERVATION_METADATA_PREFIX if self._uses_workflow_root else TRACE_METADATA_PREFIX
+                self._root.set_attribute(f"{metadata_prefix}rounds", _json_value(self._max_round))
                 self._root.set_attribute(
-                    f"{TRACE_METADATA_PREFIX}negotiated",
+                    f"{metadata_prefix}negotiated",
                     _json_value(self._max_round > 0),
                 )
             if error:
@@ -491,6 +577,7 @@ class LangfuseSpanExporter:
             return {
                 "enabled": True,
                 "traceId": self._trace_id,
+                "workflowRootSpanId": self._workflow_root_span_id or None,
                 "url": self._trace_url,
                 "status": self._status,
                 "warning": self._warning,
@@ -581,10 +668,105 @@ class LangfuseSpanExporter:
         return attributes
 
 
+def _valid_trace_id(value: str | None) -> str:
+    """Return a normalized 32-hex trace id, or ``""`` when the value is unusable."""
+    trace_id = (value or "").strip().lower()
+    if len(trace_id) == 32 and trace_id != "0" * 32 and all(character in "0123456789abcdef" for character in trace_id):
+        return trace_id
+    return ""
+
+
+def _valid_span_id(value: str | None) -> str:
+    """Return a normalized 16-hex span id, or ``""`` when the value is unusable."""
+    span_id = (value or "").strip().lower()
+    if len(span_id) == 16 and span_id != "0" * 16 and all(character in "0123456789abcdef" for character in span_id):
+        return span_id
+    return ""
+
+
 def _run_span_name(metadata: LangfuseRunMetadata) -> str:
     """Return the root observation name of one run."""
     protocol = metadata.protocol or "a2a"
     return f"run · {metadata.scenario} · {protocol}"
+
+
+def _workflow_span_name(metadata: LangfuseRunMetadata) -> str:
+    """Return the neutral root observation name of one correction chain."""
+    protocol = metadata.protocol or "a2a"
+    return f"workflow · {metadata.scenario} · {protocol}"
+
+
+def _workflow_root_attributes(metadata: LangfuseRunMetadata) -> dict[str, Any]:
+    """Return the trace-level attributes owned by the chain's single workflow root."""
+    attributes: dict[str, Any] = {
+        TRACE_NAME_ATTRIBUTE: f"{metadata.scenario} · {metadata.protocol or 'a2a'}",
+        OBSERVATION_TYPE_ATTRIBUTE: OBSERVATION_SPAN,
+        ROOT_ATTRIBUTE: True,
+    }
+    session_id = metadata.chain_id or metadata.conversation_id
+    if session_id:
+        attributes[TRACE_SESSION_ATTRIBUTE] = session_id
+    if metadata.user_id:
+        attributes[TRACE_USER_ATTRIBUTE] = metadata.user_id
+    trace_metadata = {
+        "scenario": metadata.scenario,
+        "chainId": metadata.chain_id,
+        "protocol": metadata.protocol,
+        "language": metadata.language,
+        # OSP tester identity: scenario alone is not enough to group the 51 evaluation cases.
+        "caseId": metadata.case_id,
+        "caseName": metadata.case_name,
+        "batchId": metadata.batch_id,
+        "workflow": True,
+    }
+    for key, value in trace_metadata.items():
+        if value:
+            attributes[f"{TRACE_METADATA_PREFIX}{key}"] = _json_value(value)
+    return attributes
+
+
+def _run_root_attributes(metadata: LangfuseRunMetadata) -> dict[str, Any]:
+    """Return the observation-level attributes of one attempt's run root.
+
+    Trace-level identity belongs to the workflow anchor; writing it again from a retry would
+    overwrite the chain's name/session with the attempt's values. ``runId`` and the attempt's
+    request stay on this observation and reach ``langfuse_export`` through observation metadata.
+    """
+    attributes: dict[str, Any] = {OBSERVATION_TYPE_ATTRIBUTE: OBSERVATION_SPAN}
+    run_metadata = {
+        "runId": metadata.run_id,
+        "scenario": metadata.scenario,
+        "chainId": metadata.chain_id,
+        "parentRunId": metadata.parent_run_id,
+        "conversationId": metadata.conversation_id,
+        "language": metadata.language,
+        "mode": metadata.mode,
+        "protocol": metadata.protocol,
+        "transport": metadata.transport,
+        "discovery": metadata.discovery,
+        "intentMode": metadata.intent_mode,
+        "modelMode": metadata.model_mode,
+        "modelLabel": metadata.model_label,
+        "runMode": metadata.run_mode,
+        "sourceKind": metadata.source_kind,
+        "caseId": metadata.case_id,
+        "caseName": metadata.case_name,
+        "batchId": metadata.batch_id,
+        "receivedAt": metadata.received_at,
+        "userRequest": metadata.user_request[:4096],
+    }
+    for key, value in run_metadata.items():
+        if value:
+            attributes[f"{OBSERVATION_METADATA_PREFIX}{key}"] = _json_value(value)
+    return attributes
+
+
+def _trace_opened_attributes(metadata: LangfuseRunMetadata) -> dict[str, Any]:
+    """Return the zero-length first observation that names the workflow trace early."""
+    attributes = {key: value for key, value in _workflow_root_attributes(metadata).items() if key != ROOT_ATTRIBUTE}
+    attributes[OBSERVATION_TYPE_ATTRIBUTE] = "event"
+    attributes[f"{OBSERVATION_METADATA_PREFIX}runId"] = metadata.run_id
+    return attributes
 
 
 def _root_attributes(metadata: LangfuseRunMetadata) -> dict[str, Any]:
@@ -896,4 +1078,5 @@ __all__ = [
     "LangfuseRunMetadata",
     "LangfuseSpanExporter",
     "create_langfuse_exporter",
+    "langfuse_export_active",
 ]

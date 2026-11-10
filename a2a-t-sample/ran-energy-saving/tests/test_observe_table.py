@@ -23,6 +23,8 @@ def test_main_columns_follow_the_contract_order() -> None:
         "caseId",
         "batchId",
         "chainId",
+        "attemptCount",
+        "attemptRunIds",
         "protocol",
         "scenario",
         "runMode",
@@ -277,9 +279,7 @@ def test_cache_hit_rate_zero_denominator_and_clamped_input_excluding_cached() ->
     inflated_row = build_row("t1", "ok", inflated, ["upstream"], None)
     assert inflated_row["cacheHitRate"] == "1.5000"
     assert inflated_row["inputExcludingCached"] == "0"
-    assert inflated_row["warnings"] == (
-        "upstream; cachedInput exceeds input; inputExcludingCached clamped to 0"
-    )
+    assert inflated_row["warnings"] == ("upstream; cachedInput exceeds input; inputExcludingCached clamped to 0")
 
 
 def test_missing_tokens_counts_as_zero_but_missing_by_side_stays_blank() -> None:

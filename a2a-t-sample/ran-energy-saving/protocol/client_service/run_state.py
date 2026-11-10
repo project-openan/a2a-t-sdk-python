@@ -184,6 +184,8 @@ class RunState:
     detached: bool = False
     conversation_id: str | None = None
     trace_id: str = ""
+    #: Chain-scoped neutral anchor span id; empty for a legacy or non-workflow run.
+    workflow_root_span_id: str = ""
     #: Stable id of one operator's correction chain. Every retry of a blocked attempt keeps it
     #: while getting a new run/conversation/trace; Langfuse groups the attempts by this session.
     chain_id: str = ""
@@ -458,6 +460,7 @@ class RunState:
         detail: dict[str, object] = {
             "scenario": self.scenario,
             "traceId": self.trace_id,
+            "workflowRootSpanId": self.workflow_root_span_id or None,
             "chainId": self.chain_id,
             "parentRunId": self.parent_run_id or None,
             "description": description,
@@ -495,6 +498,7 @@ class RunState:
             # The vendor-facing trace id this run injects downstream. It is also the Langfuse
             # trace id when the exporter is enabled, so the page can show it from the start.
             "traceId": self.trace_id,
+            "workflowRootSpanId": self.workflow_root_span_id or None,
             "chainId": self.chain_id,
             "parentRunId": self.parent_run_id or None,
             "scenario": self.scenario,
@@ -688,11 +692,7 @@ class RunState:
             span_detail.update(
                 {
                     "negotiationType": entry.get("negotiationType")
-                    or (
-                        pure_negotiation_kind(pure_detail)
-                        if isinstance(pure_detail, Mapping)
-                        else None
-                    ),
+                    or (pure_negotiation_kind(pure_detail) if isinstance(pure_detail, Mapping) else None),
                     "templateUri": entry.get("templateUri"),
                     "content": entry.get("content"),
                     "hop": detail.get("hop") if isinstance(detail, Mapping) else None,
@@ -1084,6 +1084,8 @@ class RunState:
             "type": "finished",
             "runId": self.run_id,
             "conversationId": self.conversation_id,
+            "traceId": self.trace_id,
+            "workflowRootSpanId": self.workflow_root_span_id or None,
             "chainId": self.chain_id,
             "parentRunId": self.parent_run_id or None,
             "status": self.status,
@@ -1125,6 +1127,7 @@ class RunState:
             "runId": self.run_id,
             "conversationId": self.conversation_id,
             "traceId": self.trace_id,
+            "workflowRootSpanId": self.workflow_root_span_id or None,
             "chainId": self.chain_id,
             "parentRunId": self.parent_run_id or None,
             "externalConversationId": self.external_conversation_id,

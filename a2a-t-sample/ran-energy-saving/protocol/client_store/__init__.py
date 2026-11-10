@@ -35,6 +35,9 @@ from protocol.client_store.store import (
     SqliteClientStore,
     TaskSnapshotRecord,
     TurnRecord,
+    WorkflowRootRecord,
+    WorkflowScopeError,
+    WorkflowTraceConflictError,
     now_iso,
 )
 
@@ -58,6 +61,9 @@ __all__ = [
     "SqliteClientStore",
     "TaskSnapshotRecord",
     "TurnRecord",
+    "WorkflowRootRecord",
+    "WorkflowScopeError",
+    "WorkflowTraceConflictError",
     "count_client_runs",
     "now_iso",
     "read_client_run_detail",

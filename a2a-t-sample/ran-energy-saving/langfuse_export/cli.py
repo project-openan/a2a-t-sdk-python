@@ -33,7 +33,7 @@ from .config import (
     network_summary,
     proxy_label,
 )
-from .metrics import build_metrics
+from .metrics import build_metrics, select_run_id
 from .models import MediaAsset, MediaRef, NetworkInfo, TraceBundle
 from .normalize import (
     apply_legacy_trace,
@@ -123,9 +123,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expand-metadata", help="comma separated top-level metadata keys to expand")
     parser.add_argument("--no-media", action="store_true", help="skip media downloads")
     parser.add_argument("--max-media-bytes", type=int, default=DEFAULT_MAX_MEDIA_BYTES)
-    parser.add_argument("--with-session", action="store_true", help="also dump all observations of the session (raw only)")
+    parser.add_argument(
+        "--with-session", action="store_true", help="also dump all observations of the session (raw only)"
+    )
     parser.add_argument("--zip", action="store_true", help="also produce <export>.zip next to the directory")
     parser.add_argument("--strict", action="store_true", help="exit 1 when warnings were emitted")
+    parser.add_argument(
+        "--run-id",
+        help="select one attempt when the trace contains both a blocked preflight and a retry",
+    )
     parser.add_argument(
         "--metrics",
         action="store_true",
@@ -344,10 +350,7 @@ def _collect(
         config.host = config.host.rstrip("/")[: -len("/api/public")]
         warnings.append("host normalised: dropped /api/public suffix")
     if config.host_source == "default":
-        warnings.append(
-            "host not configured; using default EU host "
-            f"{config.host} (set LANGFUSE_HOST or --host)"
-        )
+        warnings.append(f"host not configured; using default EU host {config.host} (set LANGFUSE_HOST or --host)")
     if url_host and url_host.rstrip("/") != config.host.rstrip("/"):
         warnings.append(f"URL host {url_host} differs from configured host {config.host}; using configured host")
 
@@ -387,9 +390,7 @@ def _collect(
             apply_legacy_trace(summary, legacy_trace)
         metadata_truncated = detect_metadata_truncation(rows)
         if metadata_truncated:
-            warnings.append(
-                "metadata may be truncated by the API; use --expand-metadata key1,key2 to expand"
-            )
+            warnings.append("metadata may be truncated by the API; use --expand-metadata key1,key2 to expand")
         # shell rows are excluded by build_tree; keep raw rows intact for the archive
         media_refs: list[MediaRef] = []
         for obs in observations:
@@ -545,8 +546,14 @@ def run_export(
         if collected.session_rows:
             write_jsonl(export_dir / "raw" / "session-observations.jsonl", collected.session_rows)
         write_json(export_dir / "trace-summary.json", collected.summary.to_dict())
+        selected_run_id = getattr(args, "run_id", None) or select_run_id(collected.rows)
         metrics = (
-            build_metrics(collected.rows, trace_id=trace_id, summary=collected.summary)
+            build_metrics(
+                collected.rows,
+                trace_id=trace_id,
+                summary=collected.summary,
+                run_id=selected_run_id,
+            )
             if (getattr(args, "metrics", False) or getattr(args, "table", False))
             else None
         )
@@ -586,7 +593,9 @@ def run_export(
                 safe_print(json.dumps(result, ensure_ascii=True, indent=2))
             else:
                 safe_print(f"exported {trace_id} -> {export_dir}")
-                safe_print(f"  observations={len(observations)} scores={len(collected.scores)} warnings={len(warnings)}")
+                safe_print(
+                    f"  observations={len(observations)} scores={len(collected.scores)} warnings={len(warnings)}"
+                )
                 for warning in warnings:
                     safe_print(f"  warning: {warning}")
                 if archive:
@@ -597,14 +606,24 @@ def run_export(
             _close_client(collected.client)
 
 
-def export_metrics(config: Config, trace_id: str) -> dict[str, Any]:
+def export_metrics(
+    config: Config,
+    trace_id: str,
+    *,
+    run_id: str | None = None,
+) -> dict[str, Any]:
     """Return ``{"metrics": ..., "warnings": [...]}`` without writing or printing (P3)."""
     trace_id, url_host = parse_trace_input(trace_id)
     args = build_parser().parse_args([trace_id])
     collected = _collect(trace_id, config, args, url_host=url_host, export_dir=None, emit=False)
     try:
         return {
-            "metrics": build_metrics(collected.rows, trace_id=trace_id, summary=collected.summary),
+            "metrics": build_metrics(
+                collected.rows,
+                trace_id=trace_id,
+                summary=collected.summary,
+                run_id=run_id or select_run_id(collected.rows),
+            ),
             "warnings": collected.warnings,
         }
     finally:
@@ -617,9 +636,12 @@ def export_full(
     out_root: str | Path,
     *,
     zip_file: bool = True,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Full export for the server: no output, caller-owned ``Config`` (P3)."""
     argv = [trace_id, "--out", str(out_root), "--metrics", "--no-media"]
+    if run_id:
+        argv.extend(["--run-id", run_id])
     if zip_file:
         argv.append("--zip")
     args = build_parser().parse_args(argv)

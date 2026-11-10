@@ -48,7 +48,8 @@ class FakeExporter:
         self.metrics_calls: list[str] = []
         self.full_calls: list[str] = []
 
-    def metrics(self, trace_id: str) -> tuple[Mapping[str, Any], Sequence[str]]:
+    def metrics(self, trace_id: str, *, run_id: str | None = None) -> tuple[Mapping[str, Any], Sequence[str]]:
+        del run_id
         self.metrics_calls.append(trace_id)
         if self.delay:
             time.sleep(self.delay)
@@ -57,7 +58,8 @@ class FakeExporter:
             raise error
         return self.metrics_by_trace.get(trace_id, {"counts": {"serverObservations": 1}}), []
 
-    def full_export(self, trace_id: str) -> Mapping[str, Any]:
+    def full_export(self, trace_id: str, *, run_id: str | None = None) -> Mapping[str, Any]:
+        del run_id
         self.full_calls.append(trace_id)
         if self.delay:
             time.sleep(self.delay)
@@ -181,9 +183,7 @@ async def test_job_exports_sequentially_and_keeps_partial_failures(tmp_path: Pat
         (ValueError("boom"), "error"),
     ],
 )
-async def test_export_errors_map_to_row_status(
-    tmp_path: Path, error: Exception, expected: str
-) -> None:
+async def test_export_errors_map_to_row_status(tmp_path: Path, error: Exception, expected: str) -> None:
     manager = ObserveJobManager(runs_dir=tmp_path, exporter=FakeExporter(errors={TID_A: error}))
     created = manager.create([TID_A])
     final = await manager.wait(cast(str, created["jobId"]))
@@ -222,9 +222,7 @@ async def test_full_mode_uses_full_export_and_keeps_archive_fields(tmp_path: Pat
 
 
 async def test_missing_server_observations_adds_a_warning(tmp_path: Path) -> None:
-    exporter = FakeExporter(
-        metrics_by_trace={TID_A: {"counts": {"serverObservations": 0}}}
-    )
+    exporter = FakeExporter(metrics_by_trace={TID_A: {"counts": {"serverObservations": 0}}})
     manager = ObserveJobManager(runs_dir=tmp_path, exporter=exporter)
     final = await manager.wait(cast(str, manager.create([TID_A])["jobId"]))
     row = cast(list[dict[str, Any]], final["results"])[0]
@@ -238,18 +236,14 @@ async def test_local_run_is_attached_and_lookup_errors_are_swallowed(tmp_path: P
             return {"runId": "run-a", "status": "completed"}
         raise RuntimeError("database is locked")
 
-    manager = ObserveJobManager(
-        runs_dir=tmp_path, exporter=FakeExporter(), local_run=local_run
-    )
+    manager = ObserveJobManager(runs_dir=tmp_path, exporter=FakeExporter(), local_run=local_run)
     final = await manager.wait(cast(str, manager.create([TID_A, TID_B])["jobId"]))
     rows = cast(list[dict[str, Any]], final["results"])
     assert rows[0]["localRun"] == {"runId": "run-a", "status": "completed"}
     assert rows[1]["localRun"] is None
 
 
-async def test_job_writes_nothing_to_stdout_or_stderr(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+async def test_job_writes_nothing_to_stdout_or_stderr(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     manager = ObserveJobManager(runs_dir=tmp_path, exporter=FakeExporter())
     final = await manager.wait(cast(str, manager.create([TID_A])["jobId"]))
     assert final["status"] == "done"
@@ -373,14 +367,10 @@ def test_build_exporter_requires_credentials(tmp_path: Path) -> None:
     assert isinstance(exporter, service.LangfuseExporter)
 
 
-def test_langfuse_exporter_merges_env_and_uses_runs_dir_as_cwd(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_langfuse_exporter_merges_env_and_uses_runs_dir_as_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env_file = tmp_path / "run.env"
     env_file.write_text(
-        "LANGFUSE_PROXY=http://dotenv.example:1\n"
-        "LANGFUSE_CACERT=/dotenv/ca.pem\n"
-        "SOME_OTHER_KEY=ignored\n",
+        "LANGFUSE_PROXY=http://dotenv.example:1\nLANGFUSE_CACERT=/dotenv/ca.pem\nSOME_OTHER_KEY=ignored\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("LANGFUSE_PROXY", "http://process.example:2")
@@ -391,7 +381,8 @@ def test_langfuse_exporter_merges_env_and_uses_runs_dir_as_cwd(
         captured.update(kwargs)
         return object()
 
-    def fake_export_metrics(config: object, trace_id: str) -> dict[str, Any]:
+    def fake_export_metrics(config: object, trace_id: str, *, run_id: str | None = None) -> dict[str, Any]:
+        del run_id
         assert isinstance(config, object)
         return {"metrics": {"counts": {"serverObservations": 1}}, "warnings": ["upstream"]}
 
