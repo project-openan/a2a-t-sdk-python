@@ -10,10 +10,10 @@ from protocol.pure_answer_guard import sanitize_pure_decision
 from shared.models import NegotiationDecision, NegotiationProposeView
 
 
-def _propose(content: str) -> NegotiationProposeView:
+def _propose(content: str, *, kind: str = "information") -> NegotiationProposeView:
     return NegotiationProposeView(
         negotiation_id="pure-question",
-        kind="information",
+        kind=kind,
         round=1,
         max_rounds=3,
         content=content,
@@ -26,12 +26,13 @@ def _sanitize(
     *,
     request_text: str,
     question: str = "Please provide the correct region name.",
+    kind: str = "information",
     policy: ClientPolicy | None = None,
 ) -> tuple[NegotiationDecision | None, list[str]]:
     return sanitize_pure_decision(
         decision,
         request_text=request_text,
-        propose=_propose(question),
+        propose=_propose(question, kind=kind),
         policy=policy or ClientPolicy(),
     )
 
@@ -182,6 +183,25 @@ async def test_the_live_pure_answer_renders_only_grounded_values() -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_live_pure_answer_relays_a_plan_less_confirmation() -> None:
+    """The OSS must not send "Accepted. Please proceed." when the vendor named no plan."""
+    provider = _PureProvider(
+        NegotiationDecision(action="accept", rationale="Confirmed."),
+        request_text=(
+            "There will be a power outage from 08:00 to 18:00 tomorrow. Set the throughput rate "
+            "guarantee to 10Mbps during the outage."
+        ),
+    )
+    answer = build_live_pure_answer(provider)
+
+    text = await answer(
+        {"kind": "message", "text": "Not feasible, please confirm", "context_id": "c1"}
+    )
+
+    assert text == ""
+
+
+@pytest.mark.asyncio
 async def test_the_live_pure_answer_is_empty_when_nothing_is_grounded() -> None:
     provider = _PureProvider(
         NegotiationDecision(
@@ -204,7 +224,8 @@ async def test_the_live_pure_answer_is_empty_when_nothing_is_grounded() -> None:
     assert text == ""
 
 
-def test_a_confirmation_question_is_answered_without_a_task_t_value() -> None:
+def test_a_plan_less_confirmation_is_relayed_instead_of_being_accepted() -> None:
+    """The real vendor's terse sentence offers nothing to agree to; a bare accept is not an answer."""
     decision, notes = _sanitize(
         NegotiationDecision(action="accept", rationale="Confirmed."),
         request_text=(
@@ -214,9 +235,80 @@ def test_a_confirmation_question_is_answered_without_a_task_t_value() -> None:
         question="Not feasible, please confirm",
     )
 
+    assert decision is None
+    assert notes == [
+        "the confirmation question states no concrete plan; the question is relayed to the "
+        "caller instead of being accepted without a value"
+    ]
+
+
+def test_a_confirmation_that_states_the_revised_rate_is_answered_without_a_value() -> None:
+    decision, notes = _sanitize(
+        NegotiationDecision(action="accept", rationale="Confirmed."),
+        request_text=(
+            "Modify the energy-saving plan for LTE_26441_LNR_OCL. There will be a power outage "
+            "tomorrow. Set the throughput rate guarantee to 10Mbps during the outage."
+        ),
+        question="Reduce the throughput target from 10Mbps to 2Mbps; confirm it.",
+        kind="feasibility",
+    )
+
     assert decision is not None
     assert decision.filled_params is None
     assert notes == ["an affirmative answer to a confirmation question carries no Task-T value"]
+
+
+def test_a_grounded_feasibility_counter_is_sent_as_free_text() -> None:
+    decision, notes = _sanitize(
+        NegotiationDecision(
+            action="counter",
+            rationale="concede",
+            counter_proposal="Lower the guaranteed throughput target to 5Mbps during the outage.",
+        ),
+        request_text=(
+            "There will be a power outage from 08:00 to 18:00 tomorrow. Set the throughput rate "
+            "guarantee to 10Mbps during the outage."
+        ),
+        question="Not feasible, please confirm",
+        kind="feasibility",
+    )
+
+    assert decision is not None
+    assert decision.counter_proposal == "Lower the guaranteed throughput target to 5Mbps during the outage."
+    assert notes == []
+
+
+def test_a_counter_that_raises_the_rate_is_dropped() -> None:
+    decision, notes = _sanitize(
+        NegotiationDecision(
+            action="counter",
+            rationale="raise",
+            counter_proposal="Set the guaranteed throughput target to 20Mbps during the outage.",
+        ),
+        request_text="Set the throughput rate guarantee to 10Mbps during the outage.",
+        question="Not feasible, please confirm",
+        kind="feasibility",
+    )
+
+    assert decision is None
+    assert any("raises the rate above the original request" in note for note in notes)
+
+
+def test_a_counter_below_the_client_floor_is_dropped() -> None:
+    decision, notes = _sanitize(
+        NegotiationDecision(
+            action="counter",
+            rationale="concede too far",
+            counter_proposal="Lower the guaranteed throughput target to 2Mbps during the outage.",
+        ),
+        request_text="Set the throughput rate guarantee to 10Mbps during the outage.",
+        question="Not feasible, please confirm",
+        kind="feasibility",
+        policy=ClientPolicy(min_throughput_mbps=5),
+    )
+
+    assert decision is None
+    assert any("below the client minimum" in note for note in notes)
 
 
 def test_an_information_question_still_needs_a_value() -> None:

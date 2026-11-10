@@ -65,6 +65,7 @@ from shared.config import (
     DISCOVERY_NMS,
     LONG_TASK_MODE_OFF,
     LONG_TASK_MODE_ON,
+    NMS_SIM_PURE_QUESTION_CONFIRM,
     PURE_FOLLOWUP_BOTH,
     TRANSPORT_WEBHOOK,
     SampleConfig,
@@ -2181,8 +2182,12 @@ def main() -> None:
             # The simulator runs offline with the deterministic fake model; a scripted answer
             # keeps the pure round-trip testable without a live endpoint. The simulator serves
             # 00:00~06:00 and accepts a 30% rate, so the answer fills both missing values.
+            # In the vendor-dialogue replay the question is the terse confirmation instead: relay
+            # it so the tester's OSP answer (or the operator) supplies the value.
             def answer(event: dict[str, object]) -> str:
                 del event
+                if config.nms_sim_pure_question == NMS_SIM_PURE_QUESTION_CONFIRM:
+                    return ""
                 return "{00:00~06:00,30Mbps}"
 
         else:
@@ -2333,6 +2338,10 @@ def build_live_pure_answer(
     renders it back to the text the vendor expects. The decision is sanitized first: a value the
     original request or the question does not state is never rendered into the answer, because the
     pure hop has no structured channel to correct it afterwards.
+
+    A terse confirmation that states no plan (``Not feasible, please confirm``) yields ``""``: the
+    returned empty answer is the relay signal of :meth:`_answer_or_relay`, so the caller supplies
+    the concrete values instead of the OSS sending an empty "Accepted. Please proceed.".
     """
     from demo.pure_policy import render_pure_answer
 

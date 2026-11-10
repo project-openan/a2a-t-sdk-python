@@ -6,7 +6,12 @@ decision is sanitized before it is rendered:
 
 * a value must appear in the operator's original request or in an affirmative sentence of the
   vendor's question; anything else is dropped instead of being sent as if the operator had typed it;
-* a counter is not an answer to an information question (the vendor asked for a value, not a plan);
+* a counter is not an answer to an information question (the vendor asked for a value, not a plan).
+  On a feasibility/confirmation question it must state a concrete rate that concedes: no rate above
+  the request's own maximum, and none below the client's floor;
+* a bare "accept" is an answer only when the question itself states a concrete plan. A terse
+  vendor sentence such as ``Not feasible, please confirm`` offers nothing to agree to, so the
+  client must not send an empty affirmative; the question is relayed to the caller instead;
 * a rejection/abort has no value to carry, and the pure hop has no reject performative, so an
   automatic decision that cannot answer sends nothing rather than a rationale the vendor would
   read as its answer;
@@ -23,7 +28,12 @@ from typing import Final
 from shared.models import NegotiationDecision, NegotiationProposeView
 
 from protocol.client_policy import ClientPolicy
-from protocol.grounding import normalize, server_contains, server_entity_values
+from protocol.grounding import (
+    normalize,
+    server_contains,
+    server_entity_values,
+    server_target_rates,
+)
 from protocol.manual_answer import asks_for_confirmation, ungrounded_answer_fields
 
 #: One plain rate in a value.
@@ -32,6 +42,34 @@ _RATE: Final[re.Pattern[str]] = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*Mbps", re.I
 def _asks_for_confirmation(propose: NegotiationProposeView) -> bool:
     """Return whether the proposal asks the client to confirm a plan."""
     return asks_for_confirmation(propose.content)
+
+
+def _rate_values(text: str) -> list[float]:
+    """Return every Mbps value stated in one text, in order."""
+    return [float(match.group(1)) for match in _RATE.finditer(text)]
+
+
+def _counter_problem(
+    counter: str,
+    request_text: str,
+    policy: ClientPolicy,
+) -> str | None:
+    """Return why one free-text counter cannot be sent, or ``None`` when it is acceptable.
+
+    A pure-A2A feasibility answer is prose, so the only machine-checkable constraint is the rate:
+    it must state a concrete value, it may only concede (never exceed the request's own maximum),
+    and it must respect the client floor.
+    """
+    rates = _rate_values(counter)
+    if not rates:
+        return "it states no rate"
+    request_rates = _rate_values(request_text)
+    if request_rates and max(rates) > max(request_rates):
+        return "it raises the rate above the original request"
+    floor = policy.min_throughput_mbps
+    if floor is not None and min(rates) < floor:
+        return f"it goes below the client minimum of {floor:g} Mbps"
+    return None
 
 
 def sanitize_pure_decision(
@@ -61,6 +99,14 @@ def sanitize_pure_decision(
         ]
     if decision.action == "counter" and propose.kind == "information":
         return None, ["a counter is not an answer to an information question"]
+    if decision.action == "counter":
+        counter = decision.counter_proposal
+        if isinstance(counter, str) and counter.strip():
+            problem = _counter_problem(counter, request_text, policy)
+            if problem is None:
+                return decision, notes
+            notes.append(f"dropped the counter proposal ({problem})")
+            decision = decision.model_copy(update={"counter_proposal": None})
 
     filled = {
         name: value
@@ -69,13 +115,21 @@ def sanitize_pure_decision(
     }
     if not filled:
         if decision.action == "accept" and _asks_for_confirmation(propose):
-            # "Not feasible, please confirm" is answered by confirming; that answer carries no
-            # Task-T value. Render the deterministic affirmative instead of the model's rationale
-            # so a negative sentence can never travel as the agreement.
-            return decision.model_copy(update={"filled_params": None, "rationale": ""}), [
-                "an affirmative answer to a confirmation question carries no Task-T value"
+            if server_target_rates(propose):
+                # The question states the revised plan itself ("reduce ... to 2Mbps"), so a plain
+                # affirmative is the complete answer. Render the deterministic affirmative instead
+                # of the model's rationale so a negative sentence cannot travel as the agreement.
+                return decision.model_copy(update={"filled_params": None, "rationale": ""}), [
+                    "an affirmative answer to a confirmation question carries no Task-T value"
+                ]
+            # "Not feasible, please confirm" names no value and no alternative: there is nothing to
+            # agree to. Returning nothing relays the question to the caller (the tester's scripted
+            # answer or the operator's card) instead of sending a useless "Accepted. Please proceed."
+            return None, [
+                "the confirmation question states no concrete plan; the question is relayed to the "
+                "caller instead of being accepted without a value"
             ]
-        return None, ["the decision carries no value to answer the question"]
+        return None, [*notes, "the decision carries no value to answer the question"]
 
     unsupported = set(ungrounded_answer_fields(request_text, filled))
     offered = server_entity_values(propose)
