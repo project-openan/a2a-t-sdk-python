@@ -163,3 +163,39 @@ def test_a_time_only_sentence_is_never_a_repeat() -> None:
         "Background event: Power outage from 08:00 to 18:00 on Day 2.",
         ["Set the guaranteed throughput targets: {08:00~18:00,10Mbps}."],
     ) is False
+
+
+def test_common_vendor_rejection_phrasings_require_the_operator() -> None:
+    """The gate is a denylist of shapes; every known rejection phrasing must be covered."""
+    for content in (
+        "The requested outage window cannot be supported. What would you prefer?",
+        "The requested 10h outage is too long for this cell.",
+        "Please lower the rate for the 08:00-18:00 window.",
+        "Please reduce the outage duration to four hours.",
+        "该停电窗口无法支持，请调整速率。",
+    ):
+        assert requires_operator_decision(content) is True, content
+
+
+def test_an_information_request_without_a_plan_change_stays_automatic() -> None:
+    for content in (
+        "Please provide the region name.",
+        "Which cell should the plan apply to?",
+        "Energy saving region is missing.",
+    ):
+        assert requires_operator_decision(content) is False, content
+
+
+def test_a_vendor_unavailable_window_requires_the_operator() -> None:
+    """The simulator's vendor-shaped wording must not slip through the prose gate."""
+    assert requires_operator_decision(
+        "The activation time 00:00~06:00 is not available. Available test window: 00:00~24:00."
+    ) is True
+
+
+def test_mbit_per_second_rates_are_compared_like_mbps() -> None:
+    """The OSP corpus spells rates as Mbit/s; the same number must count as already sent."""
+    assert repeats_already_sent(
+        "Set the guaranteed throughput targets: {08:00~18:00,10Mbps}.",
+        ["Set the guaranteed throughput targets: {08:00~18:00,10 Mbit/s}."],
+    )

@@ -1465,3 +1465,91 @@ async def test_webhook_transport_stops_after_the_retry_budget() -> None:
         await transport.send(request, context)
 
     assert client.calls == 2
+
+
+async def test_the_webhook_phase_has_no_deadline_while_the_caller_is_attached() -> None:
+    """A live page keeps the task in the foreground: the settle window must not apply."""
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _FakeWebhookClient(
+        {"task": {"id": "task-1", "contextId": "ctx-1", "status": {"state": "TASK_STATE_SUBMITTED"}}}
+    )
+    attached = asyncio.Event()
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="",
+        protocol=PROTOCOL_PURE,
+        idle_timeout=0.01,
+        attached=attached,
+    )
+    request, context = _request()
+
+    task = asyncio.create_task(transport.send(request, context))
+    await asyncio.sleep(0.06)  # far past the settle window
+    assert not task.done()
+
+    await queue.put(
+        {"statusUpdate": {"taskId": "task-1", "status": {"state": "TASK_STATE_INPUT_REQUIRED"}}}
+    )
+    events = await asyncio.wait_for(task, timeout=1.0)
+
+    assert events[-1]["state"] == "TASK_STATE_INPUT_REQUIRED"
+
+
+async def test_a_detached_caller_returns_the_phase_immediately() -> None:
+    """A closed stream is the one signal that hands the task to the background pump."""
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _FakeWebhookClient(
+        {"task": {"id": "task-1", "contextId": "ctx-1", "status": {"state": "TASK_STATE_SUBMITTED"}}}
+    )
+    attached = asyncio.Event()
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="",
+        protocol=PROTOCOL_PURE,
+        idle_timeout=30.0,
+        attached=attached,
+    )
+    request, context = _request()
+
+    task = asyncio.create_task(transport.send(request, context))
+    await asyncio.sleep(0.01)
+    attached.set()
+    events = await asyncio.wait_for(task, timeout=1.0)
+
+    assert len(events) == 1  # only the synchronous reply
+
+
+async def test_the_transport_reports_the_vendor_identity_as_soon_as_it_is_known() -> None:
+    """The outer↔downstream binding must be durable before a long wait."""
+    bound: list[tuple[str, str]] = []
+
+    async def on_task_bound(task_id: str, context_id: str) -> None:
+        bound.append((task_id, context_id))
+
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _FakeWebhookClient(
+        {
+            "task": {
+                "id": "task-9",
+                "contextId": "ctx-9",
+                "status": {"state": "TASK_STATE_INPUT_REQUIRED"},
+            }
+        }
+    )
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="",
+        protocol=PROTOCOL_PURE,
+        on_task_bound=on_task_bound,
+    )
+    request, context = _request()
+
+    await transport.send(request, context)
+
+    assert bound == [("task-9", "ctx-9")]

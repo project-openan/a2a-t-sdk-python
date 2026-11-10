@@ -89,8 +89,15 @@ def asks_for_confirmation(content: str | None) -> bool:
 #: A vendor statement that the requested plan cannot be accepted. It is a business outcome, not a
 #: missing value, so an automatic answer cannot settle it.
 _INFEASIBLE_STATEMENT: Final[re.Pattern[str]] = re.compile(
-    r"not\s+feasible|infeasible|cannot\s+be\s+accepted|not\s+acceptable|"
-    r"不可行|无法满足|不能满足|不可接受",
+    # Real vendors phrase the same rejection many ways; a missing shape silently restores the
+    # original bug (the answer is sent to the vendor instead of the operator). Keep this list
+    # prose-based but broad, and pin every known phrasing in the tests.
+    r"not\s+feasible|infeasible|cannot\s+be\s+(?:accepted|supported|met|achieved|satisfied)|"
+    r"can\s+not\s+be\s+(?:accepted|supported|met|achieved|satisfied)|not\s+acceptable|"
+    r"not\s+available|unavailable|"
+    r"unable\s+to\s+(?:accept|support|meet|achieve)|too\s+(?:long|high|large|short|strict|big)|"
+    r"violates?\b|"
+    r"不可行|无法(?:满足|接受|支持|实现|达到)|不能满足|不可接受|不可用|过长|过高|过低|超出限制",
     re.IGNORECASE,
 )
 
@@ -98,7 +105,7 @@ _INFEASIBLE_STATEMENT: Final[re.Pattern[str]] = re.compile(
 #: breaks a constraint; on its own this can still be an information request, so it is combined
 #: with an alternative/question marker below.
 _LIMIT_COMPARISON: Final[re.Pattern[str]] = re.compile(
-    r"\d+(?:\.\d+)?\s*(?:h|hours?|Mbps)\s*>\s*\d|\bexceeds?\b|超过|超出",
+    r"\d+(?:\.\d+)?\s*(?:h|hours?|Mbps)\s*>\s*\d|\bexceed(?:s|ed)?\b|超过|超出",
     re.IGNORECASE,
 )
 
@@ -107,6 +114,15 @@ _LIMIT_COMPARISON: Final[re.Pattern[str]] = re.compile(
 _ALTERNATIVE_OR_QUESTION: Final[re.Pattern[str]] = re.compile(
     r"\brecommend|\bsuggest|instead|or\s+(?:less|lower)\b|\breduce\b[^.\n]{0,40}\bto\b|"
     r"\?|would\s+you\s+like|建议|改为|降低|或者",
+    re.IGNORECASE,
+)
+
+#: An imperative request to change the plan ("please lower the rate", "shorten the outage").
+#: It changes a target even when the vendor does not phrase it as a question.
+_PLAN_CHANGE_IMPERATIVE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:lower|reduce|increase|raise|shorten|extend|adjust)\b[^.\n]{0,30}"
+    r"\b(?:rate|throughput|window|outage|duration|target|guarantee)\b|"
+    r"(?:降低|提高|缩短|延长|调整)[^。\n]{0,15}(?:速率|带宽|窗口|时长|目标)",
     re.IGNORECASE,
 )
 
@@ -129,6 +145,8 @@ def requires_operator_decision(content: str | None) -> bool:
         return True
     if _INFEASIBLE_STATEMENT.search(content):
         return True
+    if _PLAN_CHANGE_IMPERATIVE.search(content):
+        return True
     return _LIMIT_COMPARISON.search(content) is not None and (
         _ALTERNATIVE_OR_QUESTION.search(content) is not None
     )
@@ -140,8 +158,13 @@ _TIME_TOKEN: Final[re.Pattern[str]] = re.compile(r"\d{1,2}:\d{2}")
 #: One rate token of a structured target segment.
 _RATE_TOKEN: Final[re.Pattern[str]] = re.compile(r"\d+(?:\.\d+)?\s*Mbps", re.IGNORECASE)
 
-#: One rate value, capturing the number so answers can be compared numerically.
-_RATE_VALUE: Final[re.Pattern[str]] = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*Mbps", re.IGNORECASE)
+#: One rate value, capturing the number so answers can be compared numerically. The OSP corpus
+#: writes rates as ``Mbit/s`` as often as ``Mbps``; a spelling the rule cannot see is a rate it
+#: cannot protect.
+_RATE_VALUE: Final[re.Pattern[str]] = re.compile(
+    r"([0-9]+(?:\.[0-9]+)?)\s*(?:Mbps|Mbit/s|Mbit\b|Mb/s)",
+    re.IGNORECASE,
+)
 
 
 def _rate_values(text: str) -> set[float]:

@@ -65,12 +65,18 @@ from shared.config import (
 )
 from shared.run_constants import (
     FINAL_STATE_INCOMPLETE,
+    FINAL_STATE_NEGOTIATION_ENDED,
     FINAL_STATE_TASK_COMPLETED,
     FINAL_STATE_TASK_FAILED,
     LANGUAGE_EN,
     PROTOCOL_PURE,
 )
-from shared.trace_propagation import reset_active_trace, set_active_trace
+from shared.trace_propagation import (
+    current_decision_mode,
+    propagated_trace,
+    reset_active_trace,
+    set_active_trace,
+)
 from tests.integration_helpers import (
     free_tcp_port,
     offline_direct_config,
@@ -1326,12 +1332,41 @@ async def test_the_gate_refuses_instead_of_answering_in_auto_mode() -> None:
 
     tokens = set_active_trace(decision_mode="auto")
     try:
-        text = await executor._answer_or_relay(dict(question))
+        with pytest.raises(_QuestionPendingError):
+            await executor._answer_or_relay(
+                dict(question),
+                sent_texts=("Set the guaranteed throughput targets: {08:00~18:00,10Mbps}.",),
+            )
     finally:
         reset_active_trace(tokens)
 
-    assert "not acceptable" in text
-    assert "10Mbps" not in text
+
+async def test_auto_mode_still_sends_a_grounded_counter_on_a_feasibility_question() -> None:
+    """The tester's OSP batches have no operator; a lower counter is the renegotiation path."""
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "LNR_KPI_7745 and NES_27A_321071 needs 5Mbps.",
+        language=LANGUAGE_EN,
+    )
+    question = {
+        "kind": "status",
+        "state": "TASK_STATE_INPUT_REQUIRED",
+        "text": (
+            "Power outage duration 10h > 4h with rate 10.0Mbps > 2Mbps; recommend 2Mbps or less. "
+            "What rate would you like to use?"
+        ),
+    }
+
+    tokens = set_active_trace(decision_mode="auto")
+    try:
+        text = await executor._decide_answer(
+            dict(question),
+            sent_texts=("LNR_KPI_7745 and NES_27A_321071 needs 10Mbps.",),
+        )
+    finally:
+        reset_active_trace(tokens)
+
+    assert "5Mbps" in text
 
 
 async def test_a_conform_answer_repeating_an_already_sent_rate_is_relayed() -> None:
@@ -1401,6 +1436,16 @@ async def test_a_streaming_caller_keeps_the_task_in_the_foreground(
             final_state=FINAL_STATE_INCOMPLETE,
             task_id="inner-1",
             context_id="inner-ctx",
+            events=[
+                {
+                    "kind": "status",
+                    "state": "TASK_STATE_INPUT_REQUIRED",
+                    "task_id": "inner-1",
+                    "context_id": "inner-ctx",
+                    "text": "Which rate would you like to use?",
+                    "metadata": {},
+                }
+            ],
         )
 
     monkeypatch.setattr("protocol.oss_agent.run_pure_client_flow", fake_flow)
@@ -1408,7 +1453,52 @@ async def test_a_streaming_caller_keeps_the_task_in_the_foreground(
     updater = TaskUpdater(_RecordingQueue(), "outer-1", "outer-ctx")
     attached = asyncio.Event()
 
-    result = await executor._run_ran_webhook(
+    with pytest.raises(_QuestionPendingError):
+        await executor._run_ran_webhook(
+            "request",
+            "run-1",
+            lambda event: None,
+            updater,
+            context.call_context,
+            attached,
+        )
+
+    assert executor._pending_handoffs == {}
+    assert executor._pumps == {}
+    assert router.active_subscriptions == 0
+
+
+async def test_an_attached_flow_with_nothing_left_to_wait_for_is_tracked(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The foreground flow ended without a question: only a tracker can keep the Task alive."""
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    config = replace(
+        offline_direct_config(8000),
+        discovery=DISCOVERY_NMS,
+        transport=TRANSPORT_WEBHOOK,
+    )
+    executor = OSSPureExecutor(config=config, answer=lambda event: "", binding_store=binding_store)
+    router = WebhookRouter()
+    executor._webhook_router = router
+    executor._nms_client = object()  # type: ignore[assignment]
+
+    async def fake_flow(**kwargs: object) -> ClientFlowResult:
+        del kwargs
+        return ClientFlowResult(
+            final_state=FINAL_STATE_INCOMPLETE,
+            task_id="inner-1",
+            context_id="inner-ctx",
+            events=[{"kind": "status", "state": "TASK_STATE_WORKING", "text": "Applying."}],
+        )
+
+    monkeypatch.setattr("protocol.oss_agent.run_pure_client_flow", fake_flow)
+    context = _oss_context()
+    updater = TaskUpdater(_RecordingQueue(), "outer-1", "outer-ctx")
+    attached = asyncio.Event()  # still attached
+
+    await executor._run_ran_webhook(
         "request",
         "run-1",
         lambda event: None,
@@ -1417,10 +1507,9 @@ async def test_a_streaming_caller_keeps_the_task_in_the_foreground(
         attached,
     )
 
-    assert result.final_state == FINAL_STATE_INCOMPLETE
-    assert executor._pending_handoffs == {}
-    assert executor._pumps == {}
-    assert router.active_subscriptions == 0
+    assert "outer-1" in executor._pending_handoffs
+    assert router.active_subscriptions == 1
+    await executor._stop_pumps()
 
 
 async def test_a_detached_streaming_caller_hands_the_task_to_the_pump(
@@ -1467,17 +1556,11 @@ async def test_a_detached_streaming_caller_hands_the_task_to_the_pump(
     await executor._stop_pumps()
 
 
-async def test_the_request_handler_marks_the_caller_gone_on_disconnect(
+async def test_the_request_handler_sets_the_lease_on_disconnect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Closing the response generator is the only disconnect signal the executor can get."""
     from a2a.server.request_handlers import DefaultRequestHandler
-
-    gone: list[str] = []
-
-    class _Executor:
-        def note_caller_gone(self, task_id: str) -> None:
-            gone.append(task_id)
 
     async def fake_stream(
         self: object, params: object, context: ServerCallContext
@@ -1489,7 +1572,6 @@ async def test_the_request_handler_marks_the_caller_gone_on_disconnect(
 
     monkeypatch.setattr(DefaultRequestHandler, "on_message_send_stream", fake_stream)
     handler = _AttachmentAwareRequestHandler.__new__(_AttachmentAwareRequestHandler)
-    handler._oss_executor = _Executor()  # type: ignore[assignment]
     context = ServerCallContext(state={}, user=UnauthenticatedUser(), requested_extensions=set())
     message = Message(message_id="message-1", role=Role.ROLE_USER)
     message.parts.add(text="Start energy saving.")
@@ -1497,29 +1579,35 @@ async def test_the_request_handler_marks_the_caller_gone_on_disconnect(
     stream = handler.on_message_send_stream(SendMessageRequest(message=message), context)
     first = await anext(stream)
     assert isinstance(first, Task)
-    assert context.state["a2at_streaming"] is True
+    lease = context.state["a2at_streaming"]
+    assert isinstance(lease, asyncio.Event)
+    assert lease.is_set() is False
     await stream.aclose()
 
-    assert gone == ["outer-1"]
+    assert lease.is_set() is True
 
 
-async def test_a_disconnect_before_registration_is_remembered() -> None:
-    """The request handler can observe the disconnect before the executor registers its lease."""
+async def test_each_request_owns_its_own_attachment_lease() -> None:
+    """A Modify while the page still reads the first stream must not overwrite its lease."""
     executor = OSSPureExecutor(answer=lambda event: "")
-
-    executor.note_caller_gone("outer-1")
-    lease = executor._attach_lease(
-        "outer-1",
-        ServerCallContext(
-            state={"a2at_streaming": True},
-            user=UnauthenticatedUser(),
-            requested_extensions=set(),
-        ),
+    first = ServerCallContext(
+        state={"a2at_streaming": asyncio.Event()},
+        user=UnauthenticatedUser(),
+        requested_extensions=set(),
+    )
+    second = ServerCallContext(
+        state={"a2at_streaming": asyncio.Event()},
+        user=UnauthenticatedUser(),
+        requested_extensions=set(),
     )
 
-    assert lease is not None
-    assert lease.is_set() is True
-    executor._release_lease("outer-1")
+    first_lease = executor._attach_lease(first)
+    second_lease = executor._attach_lease(second)
+    assert first_lease is not None and second_lease is not None
+    assert first_lease is not second_lease
+
+    second_lease.set()
+    assert first_lease.is_set() is False
 
 
 async def test_an_ungrounded_vendor_question_is_relayed_instead_of_answered() -> None:
@@ -1539,8 +1627,8 @@ async def test_an_ungrounded_vendor_question_is_relayed_instead_of_answered() ->
         reset_active_trace(tokens)
 
 
-async def test_an_ungrounded_question_in_auto_mode_gets_an_explicit_refusal() -> None:
-    """An automatic run has nobody to answer: it must refuse instead of leaving the Task waiting."""
+async def test_an_ungrounded_question_is_relayed_in_auto_mode_too() -> None:
+    """Auto callers answer from the relayed recommendation; the OSS never invents a refusal."""
     executor = OSSPureExecutor(
         config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
         answer=lambda event: "",
@@ -1549,12 +1637,12 @@ async def test_an_ungrounded_question_in_auto_mode_gets_an_explicit_refusal() ->
 
     tokens = set_active_trace(decision_mode="auto")
     try:
-        text = await executor._answer_or_relay(
-            {"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Not feasible, please confirm"}
-        )
+        with pytest.raises(_QuestionPendingError):
+            await executor._answer_or_relay(
+                {"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Not feasible, please confirm"}
+            )
     finally:
         reset_active_trace(tokens)
-    assert "not acceptable" in text
 
 
 async def test_a_grounded_vendor_question_is_answered_without_relaying() -> None:
@@ -1676,3 +1764,514 @@ def test_a_typed_heading_names_the_pure_proposal_kind() -> None:
     )
 
     assert propose.kind == "feasibility"
+
+
+async def test_the_decision_mode_header_reaches_the_oss_executor() -> None:
+    """The OSS gate must know whether the run that opened the Task has an operator.
+
+    The mode travels as sample-local correlation (``x-a2at-decision-mode``) and is read inside
+    ``execute``. This starts the real app so the middleware -> ASGI -> producer-task context chain
+    is exercised, not just the contextvar helper.
+    """
+    oss_port = free_tcp_port()
+    dead_ran = free_tcp_port()
+    seen: list[str] = []
+
+    class _Recorder:
+        async def process(self, request: object) -> ProcessedIntent:
+            seen.append(current_decision_mode())
+            return ProcessedIntent.raw(request.text)  # type: ignore[attr-defined]
+
+    app = build_oss_app(
+        host="127.0.0.1",
+        port=oss_port,
+        ran_url=f"http://127.0.0.1:{dead_ran}",
+        answer=lambda event: "",
+        intent_processor=_Recorder(),
+        language=LANGUAGE_EN,
+    )
+    with running_app_on_port(app, oss_port, label="oss-mode"):
+        config = replace(offline_direct_config(dead_ran), port=oss_port)
+        runtime = await build_demo_runtime(
+            config,
+            "information",
+            "auto",
+            TRANSPORT_SSE,
+            DISCOVERY_DIRECT,
+            protocol=PROTOCOL_PURE,
+        )
+        try:
+            with propagated_trace(run_id="run-confirm", decision_mode="confirm"):
+                await runtime.run()
+        finally:
+            await runtime.aclose()
+
+    assert seen == ["confirm"]
+
+
+async def test_a_completed_flow_retires_the_early_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The binding written as soon as the vendor names the Task must not outlive that Task."""
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    config = replace(
+        offline_direct_config(8000),
+        discovery=DISCOVERY_NMS,
+        transport=TRANSPORT_WEBHOOK,
+    )
+    executor = OSSPureExecutor(config=config, answer=lambda event: "", binding_store=binding_store)
+    router = WebhookRouter()
+    executor._webhook_router = router
+    executor._nms_client = object()  # type: ignore[assignment]
+
+    async def fake_flow(**kwargs: object) -> ClientFlowResult:
+        transport = kwargs["transport"]
+        await transport._on_task_bound("inner-1", "inner-ctx")  # type: ignore[attr-defined]
+        return ClientFlowResult(
+            final_state=FINAL_STATE_TASK_COMPLETED,
+            task_id="inner-1",
+            context_id="inner-ctx",
+        )
+
+    monkeypatch.setattr("protocol.oss_agent.run_pure_client_flow", fake_flow)
+    context = _oss_context()
+    updater = TaskUpdater(_RecordingQueue(), "outer-1", "outer-ctx")
+
+    await executor._run_ran_webhook(
+        "request",
+        "run-1",
+        lambda event: None,
+        updater,
+        context.call_context,
+    )
+
+    binding = await binding_store.get("inner-1", "inner-ctx")
+    assert binding is not None
+    assert binding.terminal is True
+    assert router.active_subscriptions == 0
+
+
+async def test_a_stream_conflict_keeps_the_question_open_with_its_downstream_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retryable conflict must not fail the Task or lose the vendor identity."""
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "",
+        language=LANGUAGE_EN,
+    )
+
+    async def failing_continuation(
+        pending: object,
+        text: str,
+        event_sink: object,
+        updater: TaskUpdater,
+        call_context: object,
+        attached: object = None,
+    ) -> ClientFlowResult:
+        del pending, text, event_sink, updater, call_context, attached
+        raise NmsProtocolError(
+            "HTTP 409: Task already has an active stream (TASK_STREAM_CONFLICT)",
+            http_status=409,
+            retry_after=6.0,
+        )
+
+    monkeypatch.setattr(executor, "_run_question_continuation", failing_continuation)
+    queue = _RecordingQueue()
+    pending = _PendingQuestion(
+        outer_task_id="outer-1",
+        outer_context_id="outer-ctx",
+        run_id="run-1",
+        inner_task_id="nms-task-1",
+        inner_context_id="inner-ctx",
+        round_number=1,
+        user_request="Create a task for Region A.",
+        sent_texts=("Create a task for Region A.",),
+        question_text="Which rate would you like to use?",
+    )
+
+    await executor._continue_downstream(
+        TaskUpdater(queue, "outer-1", "outer-ctx"),
+        pending,
+        "Set the guaranteed throughput targets: {08:00~18:00,10Mbps}.",
+        _oss_context().call_context,
+    )
+
+    input_required = [
+        event
+        for event in queue.events
+        if isinstance(event, TaskStatusUpdateEvent)
+        and event.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+    ]
+    assert input_required
+    metadata = MessageToDict(input_required[-1].metadata)["pure"]
+    assert metadata["conflict"] == "stream_conflict"
+    assert metadata["retryAfterSeconds"] == 6.0
+    registered = executor._pending_questions["outer-1"]
+    assert registered.inner_task_id == "nms-task-1"
+    assert registered.inner_context_id == "inner-ctx"
+
+
+async def test_a_second_question_on_an_attached_continuation_is_relayed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The attached+INCOMPLETE branch must win over the binding retirement."""
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    await binding_store.save(
+        DownstreamBinding(
+            inner_task_id="inner-1",
+            inner_context_id="inner-ctx",
+            outer_task_id="outer-1",
+            run_id="run-1",
+            protocol="pure",
+        )
+    )
+    config = replace(
+        offline_direct_config(8000),
+        discovery=DISCOVERY_NMS,
+        transport=TRANSPORT_WEBHOOK,
+    )
+    executor = OSSPureExecutor(config=config, answer=lambda event: "", binding_store=binding_store)
+    executor._webhook_router = WebhookRouter()
+    executor._nms_client = object()  # type: ignore[assignment]
+
+    async def fake_flow(**kwargs: object) -> ClientFlowResult:
+        del kwargs
+        return ClientFlowResult(
+            final_state=FINAL_STATE_INCOMPLETE,
+            task_id="inner-1",
+            context_id="inner-ctx",
+            events=[
+                {
+                    "kind": "status",
+                    "state": "TASK_STATE_INPUT_REQUIRED",
+                    "task_id": "inner-1",
+                    "context_id": "inner-ctx",
+                    "text": "Which rate would you like to use?",
+                    "metadata": {},
+                }
+            ],
+        )
+
+    monkeypatch.setattr("protocol.oss_agent.continue_pure_client_flow", fake_flow)
+    pending = _PendingQuestion(
+        outer_task_id="outer-1",
+        outer_context_id="outer-ctx",
+        run_id="run-1",
+        inner_task_id="inner-1",
+        inner_context_id="inner-ctx",
+        round_number=1,
+        user_request="Create a task for Region A.",
+    )
+    attached = asyncio.Event()  # unset: the page is still reading
+
+    with pytest.raises(_QuestionPendingError):
+        await executor._run_question_continuation(
+            pending,
+            "Region A",
+            lambda event: None,
+            TaskUpdater(_RecordingQueue(), "outer-1", "outer-ctx"),
+            _oss_context().call_context,
+            attached,
+        )
+
+    binding = await binding_store.get("inner-1", "inner-ctx")
+    assert binding is not None
+    assert binding.terminal is False
+
+
+async def test_the_pump_answer_uses_the_shared_gate() -> None:
+    """The pump must not decide a business question even though it has a non-empty answer."""
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "Set the guaranteed throughput targets: {08:00~18:00,10Mbps}.",
+        language=LANGUAGE_EN,
+    )
+    request = "Set the guaranteed throughput targets: {08:00~18:00,10Mbps}."
+    gated = executor._pump_answer_for_request(request, [request])
+    question = {
+        "kind": "status",
+        "state": "TASK_STATE_INPUT_REQUIRED",
+        "text": (
+            "Power outage duration 10h > 4h with rate 10.0Mbps > 2Mbps; recommend 2Mbps or less, "
+            "or reduce the outage to 4h or less. What rate and outage duration would you like to use?"
+        ),
+    }
+
+    tokens = set_active_trace(decision_mode="confirm")
+    try:
+        assert await gated(dict(question)) == ""
+    finally:
+        reset_active_trace(tokens)
+
+    tokens = set_active_trace(decision_mode="auto")
+    try:
+        assert await gated(dict(question)) == ""
+    finally:
+        reset_active_trace(tokens)
+
+
+async def test_auto_mode_does_not_resend_a_repeated_rate() -> None:
+    """The vendor rejection is not a licence to resend the same value; the caller answers instead."""
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "Set the guaranteed throughput targets: {08:00~18:00,10Mbps}.",
+        language=LANGUAGE_EN,
+    )
+
+    tokens = set_active_trace(decision_mode="auto")
+    try:
+        text = await executor._decide_answer(
+            {"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Which rate?"},
+            sent_texts=("Set the guaranteed throughput targets: {08:00~18:00,10Mbps}.",),
+        )
+    finally:
+        reset_active_trace(tokens)
+
+    assert text == ""
+
+
+async def test_restart_binds_the_persisted_decision_mode_before_reconcile(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A confirm-mode run resumed after a restart must still show the question, not refuse it."""
+    executor, store, binding_store, _nms_client = await _restart_fixture(
+        tmp_path,
+        outer_state=TaskState.TASK_STATE_WORKING,
+        document={
+            "id": "inner-1",
+            "contextId": "inner-ctx",
+            "status": {
+                "state": "TASK_STATE_INPUT_REQUIRED",
+                "message": {"parts": [{"text": "Which region?"}]},
+            },
+        },
+    )
+    context = ServerCallContext(user=UnauthenticatedUser())
+    task = await store.get("outer-1", context)
+    assert task is not None
+    task.metadata["sampleDecisionMode"] = "confirm"
+    await store.save(task, context)
+
+    seen: list[str] = []
+    import protocol.oss_agent as oss_module
+
+    original = oss_module.DownstreamPump.reconcile
+
+    async def recording_reconcile(self: object, document: object) -> None:
+        seen.append(current_decision_mode())
+        await original(self, document)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(oss_module.DownstreamPump, "reconcile", recording_reconcile)
+    binding = await binding_store.get("inner-1", "inner-ctx")
+    assert binding is not None
+
+    await executor._resume_binding(binding)
+
+    assert seen == ["confirm"]
+    await executor._stop_pumps()
+
+
+async def test_a_plain_message_question_at_the_round_budget_is_relayed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A plain-message question ends the flow as negotiation-ended, not incomplete."""
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    config = replace(
+        offline_direct_config(8000),
+        discovery=DISCOVERY_NMS,
+        transport=TRANSPORT_WEBHOOK,
+    )
+    executor = OSSPureExecutor(config=config, answer=lambda event: "", binding_store=binding_store)
+    router = WebhookRouter()
+    executor._webhook_router = router
+    executor._nms_client = object()  # type: ignore[assignment]
+
+    async def fake_flow(**kwargs: object) -> ClientFlowResult:
+        transport = kwargs["transport"]
+        await transport._on_task_bound("inner-1", "inner-ctx")  # type: ignore[attr-defined]
+        return ClientFlowResult(
+            final_state=FINAL_STATE_NEGOTIATION_ENDED,
+            task_id="inner-1",
+            context_id="inner-ctx",
+            events=[
+                {
+                    "kind": "message",
+                    "text": "Which rate would you like to use?",
+                    "context_id": "inner-ctx",
+                    "metadata": {},
+                }
+            ],
+        )
+
+    monkeypatch.setattr("protocol.oss_agent.run_pure_client_flow", fake_flow)
+    context = _oss_context()
+    updater = TaskUpdater(_RecordingQueue(), "outer-1", "outer-ctx")
+    attached = asyncio.Event()  # the page is still reading
+
+    with pytest.raises(_QuestionPendingError):
+        await executor._run_ran_webhook(
+            "request",
+            "run-1",
+            lambda event: None,
+            updater,
+            context.call_context,
+            attached,
+        )
+
+    binding = await binding_store.get("inner-1", "inner-ctx")
+    assert binding is not None
+    assert binding.terminal is False
+
+
+async def test_a_second_stream_conflict_keeps_the_retry_notice_out_of_the_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The conflict notice is not a vendor question; a second 409 must not draft an answer."""
+    drafted: list[object] = []
+
+    async def recommendation(event: dict[str, object]) -> dict[str, object] | None:
+        drafted.append(event)
+        return {
+            "action": "accept",
+            "filledParams": {"guaranteedThroughputTarget": "{08:00~18:00,2Mbps}"},
+        }
+
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "",
+        recommendation=recommendation,  # type: ignore[arg-type]
+        language=LANGUAGE_EN,
+    )
+
+    async def failing_continuation(
+        pending: object,
+        text: str,
+        event_sink: object,
+        updater: TaskUpdater,
+        call_context: object,
+        attached: object = None,
+    ) -> ClientFlowResult:
+        del pending, text, event_sink, updater, call_context, attached
+        raise NmsProtocolError(
+            "HTTP 409: Task already has an active stream (TASK_STREAM_CONFLICT)",
+            http_status=409,
+        )
+
+    monkeypatch.setattr(executor, "_run_question_continuation", failing_continuation)
+    queue = _RecordingQueue()
+    pending = _PendingQuestion(
+        outer_task_id="outer-1",
+        outer_context_id="outer-ctx",
+        run_id="run-1",
+        inner_task_id="nms-task-1",
+        inner_context_id="inner-ctx",
+        round_number=1,
+        user_request="Modify the rate.",
+        sent_texts=("Modify the rate.",),
+    )
+
+    await executor._continue_downstream(
+        TaskUpdater(queue, "outer-1", "outer-ctx"),
+        pending,
+        "Set the guaranteed throughput targets: {08:00~18:00,10Mbps}.",
+        _oss_context().call_context,
+    )
+    first = executor._pending_questions["outer-1"]
+    assert first.retry_notice is True
+
+    await executor._continue_downstream(
+        TaskUpdater(queue, "outer-1", "outer-ctx"),
+        first,
+        "Set the guaranteed throughput targets: {08:00~18:00,10Mbps}.",
+        _oss_context().call_context,
+    )
+
+    assert drafted == []
+    assert executor._pending_questions["outer-1"].retry_notice is True
+
+
+async def test_a_structured_feasibility_proposal_is_relayed_by_its_kind() -> None:
+    """A structured proposal can avoid the prose markers and still be the operator's decision."""
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "Accepted. Please proceed.",
+        language=LANGUAGE_EN,
+    )
+    event = {
+        "kind": "status",
+        "state": "TASK_STATE_INPUT_REQUIRED",
+        "text": "The activation window cannot be honoured as written.",
+        "metadata": {"pure": {"negotiationKind": "feasibility"}},
+    }
+
+    tokens = set_active_trace(decision_mode="confirm")
+    try:
+        with pytest.raises(_QuestionPendingError):
+            await executor._answer_or_relay(dict(event))
+    finally:
+        reset_active_trace(tokens)
+
+
+async def test_only_the_trailing_question_is_relayed_at_the_round_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A question already answered earlier in the same phase must not be re-published."""
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    config = replace(
+        offline_direct_config(8000),
+        discovery=DISCOVERY_NMS,
+        transport=TRANSPORT_WEBHOOK,
+    )
+    executor = OSSPureExecutor(config=config, answer=lambda event: "", binding_store=binding_store)
+    router = WebhookRouter()
+    executor._webhook_router = router
+    executor._nms_client = object()  # type: ignore[assignment]
+
+    async def fake_flow(**kwargs: object) -> ClientFlowResult:
+        del kwargs
+        return ClientFlowResult(
+            final_state=FINAL_STATE_INCOMPLETE,
+            task_id="inner-1",
+            context_id="inner-ctx",
+            events=[
+                {
+                    "kind": "status",
+                    "state": "TASK_STATE_INPUT_REQUIRED",
+                    "task_id": "inner-1",
+                    "context_id": "inner-ctx",
+                    "text": "Which region?",
+                    "metadata": {},
+                },
+                {
+                    "kind": "status",
+                    "state": "TASK_STATE_WORKING",
+                    "task_id": "inner-1",
+                    "context_id": "inner-ctx",
+                    "text": "Applying the plan.",
+                    "metadata": {},
+                },
+            ],
+        )
+
+    monkeypatch.setattr("protocol.oss_agent.run_pure_client_flow", fake_flow)
+    context = _oss_context()
+    updater = TaskUpdater(_RecordingQueue(), "outer-1", "outer-ctx")
+    attached = asyncio.Event()  # the page is still reading
+
+    result = await executor._run_ran_webhook(
+        "request",
+        "run-1",
+        lambda event: None,
+        updater,
+        context.call_context,
+        attached,
+    )
+
+    assert result.final_state == FINAL_STATE_INCOMPLETE
+    assert executor._pending_questions == {}
