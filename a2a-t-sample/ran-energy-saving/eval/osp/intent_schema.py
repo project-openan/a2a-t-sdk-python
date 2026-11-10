@@ -40,11 +40,13 @@ _THROUGHPUT_TARGET_SCHEMA: Final[dict[str, object]] = {
         "Effective time period": {
             "type": "string",
             "description": (
-                "The rate target's own effective window, copied verbatim from the request as "
-                "HH:MM-HH:MM (e.g. '19:00-22:00'; '00:00-24:00' for the full day). Do NOT expand "
-                "it to hour-by-hour intervals and do NOT do endpoint arithmetic — the runner "
-                "expands both sides deterministically. Do not default to the full day when the "
-                "request names an activation period."
+                "The rate target's effective window, copied verbatim from the request as "
+                "HH:MM-HH:MM (e.g. '19:00-22:00'; '00:00-24:00' only when the request states no "
+                "time range). When the request gives ONE time range — even one stated outside the "
+                "rate sentence, e.g. 'the time range is from 00:00 to 22:00; ensure the UX target "
+                "is at least 10' — that single range is this target's period. Do NOT expand it to "
+                "hour-by-hour intervals and do NOT do endpoint arithmetic; the runner expands both "
+                "sides deterministically."
             ),
         },
     },
@@ -150,12 +152,13 @@ OSP_INTENT_SCHEMA: Final[dict[str, object]] = {
             "type": "string",
             "description": (
                 "Daily energy-saving period, copied verbatim as HH:MM-HH:MM (e.g. '19:00-22:00'; "
-                "'00:00-24:00' for the full day). Do NOT expand it to hour-by-hour intervals and "
-                "do NOT do endpoint arithmetic — the runner expands both sides deterministically, "
-                "and the correct expansion of 19:00-22:00 is hours 19-21 only. Extract an "
-                "explicit range even when it sits inside a throughput sentence. For an area-level "
-                "request with no explicit range, use '00:00-24:00'. For a site-level request, "
-                "leave empty and put the outage window in 'Scenario period'."
+                "'00:00-24:00' when the request states no range). Extract an explicit range even "
+                "when it sits inside a throughput sentence: when the request gives ONE time range, "
+                "that range is both this field and every rate target's period. Do NOT expand it to "
+                "hour-by-hour intervals and do NOT do endpoint arithmetic — the runner expands both "
+                "sides deterministically, and the correct expansion of 19:00-22:00 is hours 19-21 "
+                "only. For a site-level request, leave empty and put the outage window in "
+                "'Scenario period'."
             ),
         },
         "Frequencies of carriers that can be shut down": {
