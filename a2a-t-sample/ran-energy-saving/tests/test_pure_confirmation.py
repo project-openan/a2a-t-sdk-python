@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 
-from demo.pure_confirmation import PureConfirmationAnswer
+from demo.pure_confirmation import NO_ADJUSTMENT_TEXT, PureConfirmationAnswer
 from demo.pure_policy import pure_answer_from_recommendation, render_pure_answer
 from protocol.client_runtime import MODE_CONFIRM, MODE_MANUAL
 from protocol.decision_provider import DecisionTimeoutError
@@ -222,3 +222,46 @@ async def test_a_peer_that_does_not_number_its_rounds_gets_a_sequence() -> None:
         await pending
 
     assert rounds == [1, 2]
+
+
+def _vendor_confirmation_question() -> dict[str, object]:
+    """The vendor's pure-A2A question: fixed prose that names no value."""
+    return {
+        "kind": "status",
+        "task_id": "task-1",
+        "context_id": "ctx-1",
+        "state": "TASK_STATE_INPUT_REQUIRED",
+        "text": "Not feasible, please confirm",
+        "metadata": {"pure": {"kind": "negotiation", "phase": "question", "round": 1, "maxRounds": 5}},
+    }
+
+
+async def _accept(answer: PureConfirmationAnswer, question: dict[str, object]) -> str:
+    task = asyncio.create_task(answer(question))
+    await asyncio.sleep(0)
+    answer.submit(NegotiationDecision(action="accept", rationale="ok"))
+    return await task
+
+
+async def test_a_value_less_accept_becomes_an_explicit_refusal_after_the_budget() -> None:
+    """The vendor proposes no value in pure A2A, so a bare accept cannot converge.
+
+    After ``MAX_VALUE_LESS_ACCEPTS`` rounds the client states the refusal in words instead of
+    sending another acceptance the vendor cannot act on.
+    """
+    answer = PureConfirmationAnswer(mode=MODE_CONFIRM, timeout_seconds=1.0)
+    question = _vendor_confirmation_question()
+
+    assert NO_ADJUSTMENT_TEXT not in await _accept(answer, question)
+    assert NO_ADJUSTMENT_TEXT not in await _accept(answer, question)
+    assert await _accept(answer, question) == NO_ADJUSTMENT_TEXT
+
+
+async def test_an_accept_of_a_proposal_that_names_a_rate_stays_an_acceptance() -> None:
+    """A proposal that states its revised plan is accept-worthy without repeating the value."""
+    answer = PureConfirmationAnswer(mode=MODE_CONFIRM, timeout_seconds=1.0)
+    question = dict(_vendor_confirmation_question())
+    question["text"] = "The revised target is 2Mbps during the outage. Please accept this revised plan."
+
+    for _ in range(5):
+        assert await _accept(answer, question) != NO_ADJUSTMENT_TEXT

@@ -9,12 +9,14 @@ or edits it, and only the submitted answer leaves the client.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from typing import Final
 
 from a2a_t.core.metadata import NegotiationContext
 from protocol.client_runtime import MODE_CONFIRM
 from protocol.decision_provider import DEFAULT_MANUAL_TIMEOUT_SECONDS, ManualDecisionProvider
+from protocol.grounding import server_target_rates
 from protocol.pure_client_flow import pure_proposal_view
 from shared.models import NegotiationDecision, NegotiationProposeView
 
@@ -26,6 +28,20 @@ DecisionSink = Callable[[NegotiationDecision, NegotiationProposeView, Negotiatio
 
 #: Metadata key the OSS Agent uses for the relayed question payload.
 _PURE_METADATA_KEY: Final[str] = "pure"
+
+#: How many value-less acceptances the client sends before it refuses the negotiation. The vendor
+#: never stops asking on its own and proposes no value in a pure-A2A round, so a bare "accept"
+#: changes nothing: after this many rounds the client has to terminate explicitly.
+MAX_VALUE_LESS_ACCEPTS: Final[int] = 3
+
+#: Explicit refusal sent when no concrete value is available. It names the conflict so the vendor
+#: can read it as a refusal instead of another acceptance.
+NO_ADJUSTMENT_TEXT: Final[str] = (
+    "No adjustment is possible: the guaranteed rate and the outage duration cannot both be met, "
+    "and no new value is available from this client. Please terminate the task."
+)
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _pure_metadata(event: Mapping[str, object]) -> Mapping[str, object]:
@@ -73,6 +89,8 @@ class PureConfirmationAnswer:
         self._answer_text: str | None = None
         #: Questions answered so far; the fallback round of a peer that does not number them.
         self._rounds = 0
+        #: Consecutive acceptances that carried no value and accepted nothing concrete.
+        self._value_less_accepts = 0
 
     @property
     def last_recommendation_error(self) -> str | None:
@@ -151,7 +169,40 @@ class PureConfirmationAnswer:
             self._decision_sink(decision, propose, session)
         typed = self._answer_text
         self._answer_text = None
-        return typed or render_pure_answer(decision)
+        if typed:
+            self._value_less_accepts = 0
+            return typed
+        if _is_value_less_accept(decision, propose):
+            self._value_less_accepts += 1
+            if self._value_less_accepts >= MAX_VALUE_LESS_ACCEPTS:
+                _LOGGER.warning(
+                    "pure A2A: refusing after %s value-less acceptances; the vendor proposed no "
+                    "value and the client has none to give",
+                    self._value_less_accepts,
+                )
+                return NO_ADJUSTMENT_TEXT
+        else:
+            self._value_less_accepts = 0
+        return render_pure_answer(decision)
 
 
-__all__ = ["PureConfirmationAnswer"]
+def _carries_a_value(decision: NegotiationDecision) -> bool:
+    """Return whether one decision states a concrete value or an explicit refusal."""
+    if decision.action in ("reject", "abort"):
+        return True
+    return bool(decision.filled_params or decision.counter_params or decision.counter_proposal)
+
+
+def _is_value_less_accept(decision: NegotiationDecision, propose: NegotiationProposeView) -> bool:
+    """Return whether one acceptance agrees to something the question never stated.
+
+    The vendor's pure-A2A question is the fixed sentence ``Not feasible, please confirm``: it names
+    no rate and no window, so accepting it changes nothing. A sample-server proposal that states a
+    revised plan is different, and a bare accept of it is a complete answer.
+    """
+    if decision.action != "accept" or _carries_a_value(decision):
+        return False
+    return not server_target_rates(propose)
+
+
+__all__ = ["MAX_VALUE_LESS_ACCEPTS", "NO_ADJUSTMENT_TEXT", "PureConfirmationAnswer"]
