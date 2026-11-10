@@ -43,7 +43,9 @@ from protocol.oss_agent import (
     OSSPureExecutor,
     _build_trace_emitter,
     _PendingQuestion,
+    _pure_proposal,
     _QuestionPendingError,
+    _stream_conflict_failure,
     _terminal_target_failure,
     a2a_request_text,
     build_oss_agent_card,
@@ -1372,3 +1374,35 @@ async def test_a_confirmation_question_is_relayed_even_when_the_model_has_an_ans
         await executor._answer_or_relay(
             {"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Not feasible, please confirm"}
         )
+
+
+def test_a_stream_conflict_is_reported_as_a_busy_downstream() -> None:
+    exc = NmsProtocolError(
+        'NMS A2A request returned HTTP 409: {"error":{"code":409,"message":'
+        '"Task already has an active stream, close it before retrying"}}',
+        http_status=409,
+    )
+
+    message = _stream_conflict_failure(exc)
+
+    assert message is not None
+    assert "TASK_STREAM_CONFLICT" in message
+    assert "Retry the answer later" in message
+    assert _stream_conflict_failure(NmsProtocolError("HTTP 409: conflict", http_status=409)) is None
+
+
+def test_a_typed_heading_names_the_pure_proposal_kind() -> None:
+    """The real NMS omits templateUri; the rendered body still names the negotiation type."""
+    propose, _session = _pure_proposal(
+        {
+            "kind": "status",
+            "state": "TASK_STATE_INPUT_REQUIRED",
+            "context_id": "ctx-1",
+            "text": (
+                "## Feasibility Negotiation\n"
+                "The current rate goal cannot be met. Please confirm."
+            ),
+        }
+    )
+
+    assert propose.kind == "feasibility"

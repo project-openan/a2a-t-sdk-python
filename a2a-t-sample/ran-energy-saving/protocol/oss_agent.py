@@ -99,12 +99,17 @@ from protocol.gateway_push import ValidatingPushConfigStore
 from protocol.intent import IntentProcessor, OperatorRequest, ProcessedIntent
 from protocol.manual_answer import asks_for_confirmation, ungrounded_answer_fields
 from protocol.messages import SAMPLE_RUN_ID_METADATA_KEY, metadata_to_dict
+from protocol.negotiation_policy import (
+    negotiation_kind_for_propose_content,
+    negotiation_kind_for_template_uri,
+)
 from protocol.nms_client import (
     NmsClient,
     NmsConfig,
     NmsProtocolError,
     NmsSseTransport,
     NmsWebhookTransport,
+    is_stream_conflict,
 )
 from protocol.pure_answer_guard import sanitize_pure_decision
 from protocol.pure_client_flow import (
@@ -1135,13 +1140,20 @@ class OSSPureExecutor(AgentExecutor):
         inner_context_id = str(event.get("context_id") or "")
         inner_task_id = str(event.get("task_id") or "")
         hop = self._downstream_hop()
+        # The outer phase describes the hop ("question"); the negotiation kind comes from the
+        # downstream question. A real-NMS question carries no sample metadata, so the typed heading
+        # in its body ("## Feasibility Negotiation") is the only kind signal; without it every
+        # question reached the page as an information proposal.
+        negotiation_kind = pure_negotiation_kind(pure_metadata(event))
+        if negotiation_kind == "information":
+            heading_kind = negotiation_kind_for_propose_content(text)
+            if heading_kind is not None:
+                negotiation_kind = heading_kind.value
         pure: dict[str, object] = {
             "hop": hop,
             "phase": "question",
             "kind": "negotiation",
-            # The outer phase describes the hop ("question"); the negotiation kind comes from the
-            # downstream hop so the client can report it the way A2A-T reports a propose.
-            "negotiationKind": pure_negotiation_kind(pure_metadata(event)),
+            "negotiationKind": negotiation_kind,
             "round": round_number,
             "maxRounds": self._max_rounds,
             "recommendation": recommendation or None,
@@ -1327,6 +1339,15 @@ class OSSPureExecutor(AgentExecutor):
                 )
                 return
             except Exception as exc:  # noqa: BLE001 - the outer Task must reach a terminal state
+                busy = _stream_conflict_failure(exc)
+                if busy is not None:
+                    # The vendor still holds a stream for this Task. The client retried on the
+                    # transport already; say what happened instead of reporting a hop failure.
+                    _LOGGER.info("downstream continuation refused: %s", busy)
+                    events.put_nowait(None)
+                    await consumer
+                    await updater.failed(message=updater.new_agent_message([Part(text=busy)]))
+                    return
                 terminal = _terminal_target_failure(exc)
                 if terminal is not None:
                     # The vendor refused because the target Task is already terminal. This is not
@@ -1911,17 +1932,19 @@ def _pure_proposal(event: Mapping[str, object]) -> tuple[NegotiationProposeView,
     max_rounds = _int(pure.get("maxRounds", nested.get("maxRounds")), 3)
     template_uri = metadata.get("templateUri")
     kind = "information"
-    if isinstance(template_uri, str) and template_uri:
-        from protocol.negotiation_policy import (
-            negotiation_kind_for_propose_content,
-            negotiation_kind_for_template_uri,
-        )
-
-        resolved = negotiation_kind_for_template_uri(template_uri)
-        if resolved is None:
-            resolved = negotiation_kind_for_propose_content(text)
-        if resolved is not None:
-            kind = resolved.value
+    # A conformant propose carries a templateUri; the real NMS omits it on the proposal that
+    # continues a negotiation. The rendered body still opens with a typed heading
+    # ("## Feasibility Negotiation"), so use it instead of labelling every pure question as an
+    # information request (the reported card did exactly that).
+    resolved = (
+        negotiation_kind_for_template_uri(template_uri)
+        if isinstance(template_uri, str) and template_uri
+        else None
+    )
+    if resolved is None:
+        resolved = negotiation_kind_for_propose_content(text)
+    if resolved is not None:
+        kind = resolved.value
     context_id = str(event.get("context_id") or event.get("task_id") or "pure-negotiation")
     propose = NegotiationProposeView(
         negotiation_id=context_id,
@@ -2044,6 +2067,16 @@ def _message_text(message: object) -> str:
         if isinstance(text, str) and text.strip():
             return text.strip()
     return ""
+
+
+def _stream_conflict_failure(exc: BaseException) -> str | None:
+    """Return the operator-facing message when the vendor still holds a Task stream."""
+    if not is_stream_conflict(exc):
+        return None
+    return (
+        "The NMS still has an active stream for this Task (TASK_STREAM_CONFLICT); the answer was "
+        "not accepted. Retry the answer later, or start a new Task."
+    )
 
 
 def _terminal_target_failure(exc: BaseException) -> str | None:

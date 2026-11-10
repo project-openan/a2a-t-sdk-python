@@ -212,3 +212,61 @@ async def test_the_pure_structurer_receives_the_operator_request(offline_config:
 
     assert structurer.request == "Modify the outage target to 10Mbps."
     assert structurer.context == "Earlier turn: create in Region A."
+
+
+class _FakeOuterTaskClient:
+    """Return one outer Task state to the Modify pre-check."""
+
+    def __init__(self, state: object) -> None:
+        self.state = state
+        self.calls: list[str] = []
+
+    async def get_task(self, request: object, context: object = None) -> object:
+        del context
+        from a2a.types import Task, TaskStatus
+
+        self.calls.append(str(getattr(request, "id")))
+        return Task(id="outer-1", context_id="ctx-1", status=TaskStatus(state=self.state))
+
+
+async def test_a_pure_modify_refuses_a_terminal_outer_task(offline_config: SampleConfig) -> None:
+    """A previous Modify can fail the outer Task while the picker's vendor Task looks active."""
+    from a2a.types import TaskState
+    from protocol.client_runtime import ClientRuntimeError
+
+    client = _FakeOuterTaskClient(TaskState.TASK_STATE_FAILED)
+    transport = _FakeTransport([[_completed()]])
+    runtime = ClientRuntime(
+        config=offline_config,
+        run_spec=DemoRunCatalog().spec("information"),
+        mode=MODE_CONFIRM,
+        protocol=PROTOCOL_PURE,
+        transport_name="sse",
+        prompt_client=None,
+        a2a_client=client,  # type: ignore[arg-type]
+        transport=transport,  # type: ignore[arg-type]
+        provider=None,
+        discovered=None,  # type: ignore[arg-type]
+        sdk_env=None,
+        manual_provider=None,
+        _httpx_client=None,
+        pure_answer=lambda event: "",
+    )
+
+    try:
+        await asyncio.wait_for(
+            runtime.run(
+                user_request="Modify the outage target to 10Mbps.",
+                run_mode="modify",
+                target_server_task_id="outer-1",
+                target_server_context_id="ctx-1",
+            ),
+            timeout=5.0,
+        )
+    except ClientRuntimeError as exc:
+        assert "already ended" in str(exc)
+        assert "start a new Task" in str(exc)
+    else:
+        raise AssertionError("a terminal outer Task must not accept a Modify")
+    assert client.calls == ["outer-1"]
+    assert transport.requests == []

@@ -125,6 +125,21 @@ class NmsProtocolError(NmsError):
         self.retry_after = retry_after
 
 
+#: Delays before retrying a follow-up the vendor refused with ``TASK_STREAM_CONFLICT``. The vendor
+#: asks the client to close the previous stream; the webhook path owns no stream, so a short
+#: backoff is the only client-side action. The answer carries the same message id, so a vendor that
+#: deduplicates retries does not apply the answer twice.
+STREAM_CONFLICT_RETRY_DELAYS: Final[tuple[float, ...]] = (2.0, 4.0)
+
+
+def is_stream_conflict(exc: BaseException) -> bool:
+    """Return whether one NMS error is the transient per-Task stream conflict."""
+    if not isinstance(exc, NmsProtocolError) or exc.http_status != 409:
+        return False
+    message = str(exc)
+    return "TASK_STREAM_CONFLICT" in message or "active stream" in message.lower()
+
+
 class NmsTimeoutError(NmsError):
     """Raised when a Task does not reach a terminal state within the budget."""
 
@@ -944,6 +959,7 @@ class NmsWebhookTransport:
         bind: Callable[[str | None, str | None], None] | None = None,
         context_id: str = "",
         register_push_config: bool = True,
+        retry_delays: tuple[float, ...] = STREAM_CONFLICT_RETRY_DELAYS,
     ) -> None:
         """Create one webhook transport.
 
@@ -964,7 +980,10 @@ class NmsWebhookTransport:
             register_push_config: whether a message that names no Task registers the webhook
                 inline. A follow-up that answers a vendor question keeps the registration made by
                 the original request; registering again is rejected by the real NMS.
+            retry_delays: backoff schedule for a transient ``TASK_STREAM_CONFLICT``; tests pass an
+                empty tuple to keep the retry immediate.
         """
+        self._retry_delays = retry_delays
         self._client = client
         self._queue = queue
         self._push_url = push_url
@@ -1026,7 +1045,7 @@ class NmsWebhookTransport:
             extension_header = str(call_context.service_parameters.get("A2A-Extensions", "") or "")
         payload = MessageToDict(request)
         response_mode = _is_negotiation_response(payload)
-        reply = await self._client.send_message(payload, extension_header=extension_header)
+        reply = await self._send_with_stream_conflict_retry(payload, extension_header)
         events: list[dict[str, object]] = []
         reply_event = _reply_event(reply)
         events.append(reply_event)
@@ -1082,6 +1101,35 @@ class NmsWebhookTransport:
                 return events
             if is_stop_event(event) or is_report_artifact(event) or _is_negotiation_event(event):
                 return events
+
+    async def _send_with_stream_conflict_retry(
+        self,
+        payload: Mapping[str, object],
+        extension_header: str,
+    ) -> dict[str, object]:
+        """Send once, retrying the vendor's transient per-Task stream conflict.
+
+        The vendor answers a follow-up while it still considers the Task stream active with HTTP
+        409 ``TASK_STREAM_CONFLICT``. The webhook path owns no stream to close, so the client waits
+        briefly and retries the same message; the message id is unchanged, so a vendor that
+        deduplicates does not apply the answer twice.
+        """
+        attempt = 0
+        while True:
+            try:
+                return await self._client.send_message(payload, extension_header=extension_header)
+            except NmsProtocolError as exc:
+                if attempt >= len(self._retry_delays) or not is_stream_conflict(exc):
+                    raise
+                delay = self._retry_delays[attempt]
+                attempt += 1
+                _LOGGER.warning(
+                    "NMS task stream busy (TASK_STREAM_CONFLICT); retrying in %.0fs (attempt %d/%d)",
+                    delay,
+                    attempt,
+                    len(self._retry_delays),
+                )
+                await asyncio.sleep(delay)
 
     async def cancel(self, task_id: str, call_context: ClientCallContext | None = None) -> None:
         """Cancel one Task; the known HTTP 503 is not an error."""

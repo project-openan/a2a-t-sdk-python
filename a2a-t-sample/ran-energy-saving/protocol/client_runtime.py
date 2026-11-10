@@ -30,6 +30,8 @@ from typing import Any, Final
 
 import httpx
 from a2a.client import ClientConfig, create_client
+from a2a.client.client import ClientCallContext
+from a2a.types import GetTaskRequest, TaskState
 from a2a.utils.constants import TransportProtocol
 from a2a_t.client.a2at_client import A2ATClient
 from a2a_t.core.metadata import NegotiationContext
@@ -122,6 +124,18 @@ DIRECT_SERVER_URL_ENV_KEY: Final[str] = "A2AT_SAMPLE_DIRECT_SERVER_URL"
 
 #: Prefix of the temporary SDK ``.env`` directories.
 _SDK_ENV_PREFIX: Final[str] = "a2at-ran-client-env-"
+
+#: A2A Task states that refuse a further message. A Modify checks the peer's outer Task too: a
+#: previous Modify can fail the outer Task while the vendor Task (the picker's identity) still
+#: looks active.
+_TERMINAL_A2A_STATES: Final[frozenset[TaskState]] = frozenset(
+    {
+        TaskState.TASK_STATE_COMPLETED,
+        TaskState.TASK_STATE_REJECTED,
+        TaskState.TASK_STATE_FAILED,
+        TaskState.TASK_STATE_CANCELED,
+    }
+)
 
 
 class ClientRuntimeError(RuntimeError):
@@ -477,6 +491,35 @@ class ClientRuntime:
             return True
         return False
 
+    async def _ensure_outer_task_active(self, task_id: str) -> None:
+        """Refuse a pure Modify whose peer Task has already ended.
+
+        The picker validates the vendor Task, but a pure Modify continues the A2A peer's outer
+        Task. A previous Modify can fail that outer Task while the vendor Task is still WORKING,
+        and the peer then rejects the message with ``InvalidParamsError: ... terminal state``.
+        Checking here turns that 0.1 s opaque failure into an actionable message before sending.
+
+        A failed read never blocks the run: the send itself surfaces a real peer error.
+        """
+        client = self.a2a_client
+        if client is None or not task_id:
+            return
+        try:
+            task = await client.get_task(
+                GetTaskRequest(id=task_id, history_length=0),
+                context=ClientCallContext(timeout=self.config.http_timeout_seconds),
+            )
+        except Exception as exc:  # noqa: BLE001 - the pre-check is best effort
+            _LOGGER.warning("could not read the target Task %s before the Modify: %s", task_id, exc)
+            return
+        status = getattr(task, "status", None)
+        state = getattr(status, "state", None)
+        if state in _TERMINAL_A2A_STATES:
+            raise ClientRuntimeError(
+                f"The target Task {task_id} has already ended ({state}); start a new Task instead "
+                "of modifying it."
+            )
+
     def _scenario_raw_request(self) -> str:
         """Return the request of the scenario; it is the text the client sends."""
         return self.run_spec.user_request
@@ -624,6 +667,8 @@ class ClientRuntime:
                     # intent layer, so the engineer client sends the raw request to it.
                     # A confirmation answer owns the human moment; hand it the same hooks the
                     # A2A-T decision provider receives.
+                    if modify_mode:
+                        await self._ensure_outer_task_active(target_server_task_id or "")
                     answer = self.pure_answer
                     for setter_name, hook in (
                         ("set_proposal_sink", on_decision_requested),

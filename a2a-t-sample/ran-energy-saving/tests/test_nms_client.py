@@ -1241,3 +1241,71 @@ async def test_an_inbound_push_is_recorded_in_the_wire_log(tmp_path: Path) -> No
     assert records[-1]["source"] == "webhook"
     assert records[-1]["body"]["statusUpdate"]["taskId"] == "task-1"
     await client.aclose()
+
+
+class _ConflictThenReplyClient:
+    """Fail the first sends with TASK_STREAM_CONFLICT, then answer with a completed Task."""
+
+    def __init__(self, failures: int) -> None:
+        self.failures = failures
+        self.calls = 0
+        self.config = _config()
+
+    async def send_message(self, payload: Mapping[str, object], *, extension_header: str = "") -> dict[str, object]:
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise NmsProtocolError(
+                'NMS A2A request returned HTTP 409: {"error":{"code":409,"status":"ABORTED",'
+                '"message":"Task already has an active stream, close it before retrying",'
+                '"details":[{"reason":"TASK_STREAM_CONFLICT"}]}}',
+                http_status=409,
+            )
+        return {
+            "task": {
+                "id": "task-1",
+                "contextId": "ctx-1",
+                "status": {"state": "TASK_STATE_COMPLETED"},
+            }
+        }
+
+    async def cancel_task(self, task_id: str) -> bool:
+        return False
+
+
+async def test_webhook_transport_retries_a_transient_stream_conflict() -> None:
+    """TASK_STREAM_CONFLICT asks the client to retry; the webhook path owns no stream to close."""
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _ConflictThenReplyClient(failures=2)
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        idle_timeout=0.01,
+        retry_delays=(0.0, 0.0),
+    )
+    request, context = _request()
+
+    events = await transport.send(request, context)
+
+    assert client.calls == 3
+    assert events[0]["state"] == "TASK_STATE_COMPLETED"
+
+
+async def test_webhook_transport_stops_after_the_retry_budget() -> None:
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _ConflictThenReplyClient(failures=3)
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        idle_timeout=0.01,
+        retry_delays=(0.0,),
+    )
+    request, context = _request()
+
+    with pytest.raises(NmsProtocolError):
+        await transport.send(request, context)
+
+    assert client.calls == 2
