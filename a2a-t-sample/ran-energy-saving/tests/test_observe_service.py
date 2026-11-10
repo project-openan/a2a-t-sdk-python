@@ -37,7 +37,7 @@ class FakeExporter:
         self,
         *,
         metrics_by_trace: Mapping[str, Mapping[str, Any]] | None = None,
-        errors: Mapping[str, Exception] | None = None,
+        errors: Mapping[str, BaseException] | None = None,
         delay: float = 0.0,
         full_results: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
@@ -47,10 +47,15 @@ class FakeExporter:
         self.full_results = dict(full_results or {})
         self.metrics_calls: list[str] = []
         self.full_calls: list[str] = []
+        self.metrics_round_modes: list[str] = []
+        self.full_round_modes: list[str] = []
 
-    def metrics(self, trace_id: str, *, run_id: str | None = None) -> tuple[Mapping[str, Any], Sequence[str]]:
+    def metrics(
+        self, trace_id: str, *, run_id: str | None = None, round_mode: str = "legacy"
+    ) -> tuple[Mapping[str, Any], Sequence[str]]:
         del run_id
         self.metrics_calls.append(trace_id)
+        self.metrics_round_modes.append(round_mode)
         if self.delay:
             time.sleep(self.delay)
         error = self.errors.get(trace_id)
@@ -58,9 +63,10 @@ class FakeExporter:
             raise error
         return self.metrics_by_trace.get(trace_id, {"counts": {"serverObservations": 1}}), []
 
-    def full_export(self, trace_id: str, *, run_id: str | None = None) -> Mapping[str, Any]:
+    def full_export(self, trace_id: str, *, run_id: str | None = None, round_mode: str = "legacy") -> Mapping[str, Any]:
         del run_id
         self.full_calls.append(trace_id)
+        self.full_round_modes.append(round_mode)
         if self.delay:
             time.sleep(self.delay)
         error = self.errors.get(trace_id)
@@ -318,6 +324,7 @@ async def test_final_job_is_persisted_and_listed_newest_first(tmp_path: Path) ->
         "jobId",
         "createdAt",
         "full",
+        "roundMode",
         "total",
         "done",
         "failed",
@@ -381,8 +388,10 @@ def test_langfuse_exporter_merges_env_and_uses_runs_dir_as_cwd(tmp_path: Path, m
         captured.update(kwargs)
         return object()
 
-    def fake_export_metrics(config: object, trace_id: str, *, run_id: str | None = None) -> dict[str, Any]:
-        del run_id
+    def fake_export_metrics(
+        config: object, trace_id: str, *, run_id: str | None = None, round_mode: str = "legacy"
+    ) -> dict[str, Any]:
+        del run_id, round_mode
         assert isinstance(config, object)
         return {"metrics": {"counts": {"serverObservations": 1}}, "warnings": ["upstream"]}
 
@@ -420,3 +429,43 @@ async def test_running_job_id_follows_the_active_job(tmp_path: Path) -> None:
     assert manager.running_job_id == created["jobId"]
     await manager.wait(cast(str, created["jobId"]))
     assert manager.running_job_id is None
+
+
+async def test_round_mode_reaches_the_exporter(tmp_path: Path) -> None:
+    exporter = FakeExporter()
+    manager = ObserveJobManager(runs_dir=tmp_path, exporter=exporter)
+
+    await manager.wait(cast(str, manager.create([TID_A], round_mode="decision")["jobId"]))
+    assert exporter.metrics_round_modes == ["decision"]
+
+    await manager.wait(cast(str, manager.create([TID_B], full=True, round_mode="decision")["jobId"]))
+    assert exporter.full_round_modes == ["decision"]
+
+
+async def test_the_snapshot_and_job_list_carry_the_round_mode(tmp_path: Path) -> None:
+    """The page and the persisted job history must not lose the selected mode."""
+    manager = ObserveJobManager(runs_dir=tmp_path, exporter=FakeExporter())
+    created = manager.create([TID_A], round_mode="decision")
+    assert created["roundMode"] == "decision"
+
+    await manager.wait(cast(str, created["jobId"]))
+
+    snapshot = manager.get(cast(str, created["jobId"]))
+    assert snapshot is not None
+    assert snapshot["roundMode"] == "decision"
+    assert manager.list_jobs()[0]["roundMode"] == "decision"
+
+
+async def test_a_system_exit_from_one_trace_does_not_kill_the_job(tmp_path: Path) -> None:
+    """argparse raises SystemExit, a BaseException; it must fail one trace, not the server."""
+    exporter = FakeExporter(errors={TID_A: SystemExit(2)})
+    manager = ObserveJobManager(runs_dir=tmp_path, exporter=exporter)
+
+    created = manager.create([TID_A])
+    await manager.wait(cast(str, created["jobId"]))
+
+    job = manager.get(cast(str, created["jobId"]))
+    assert job is not None
+    assert job["status"] == "done"
+    assert job["results"][0]["status"] == "error"
+    assert any("SystemExit" in warning for warning in job["results"][0]["warnings"])

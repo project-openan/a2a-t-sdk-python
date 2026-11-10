@@ -52,6 +52,10 @@ MAX_RUNS_LIMIT: Final[int] = 200
 DEFAULT_JOBS_LIMIT: Final[int] = 20
 MAX_JOBS_LIMIT: Final[int] = 200
 
+#: Negotiation round models accepted by ``POST /api/observe/jobs``.
+DEFAULT_ROUND_MODE: Final[str] = "legacy"
+ROUND_MODES: Final[tuple[str, ...]] = ("legacy", "decision")
+
 LocalRunsLookup = Callable[[str], Sequence[Mapping[str, object]]]
 
 
@@ -166,8 +170,11 @@ def build_observe_routes(
         full = payload.get("full", False)
         if not isinstance(full, bool):
             return _error("invalid_request", "full 必须是布尔值。", 400)
+        round_mode = payload.get("roundMode", DEFAULT_ROUND_MODE)
+        if not isinstance(round_mode, str) or round_mode not in ROUND_MODES:
+            return _error("invalid_request", "roundMode 必须是 legacy 或 decision。", 400)
         try:
-            snapshot = resolved_manager.create(trace_ids, full=full)
+            snapshot = resolved_manager.create(trace_ids, full=full, round_mode=round_mode)
         except InvalidTraceIdError as exc:
             return _error("invalid_trace_id", str(exc), 400)
         except TooManyTracesError as exc:

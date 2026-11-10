@@ -522,6 +522,7 @@ async function startExport(action = "batch") {
     const job = await postJson("/api/observe/jobs", {
       traceIds,
       full: Boolean($("full-export").checked),
+      roundMode: $("round-mode").value,
     });
     adoptJob(job, job?.results);
     if (job?.status !== "done") startPolling();

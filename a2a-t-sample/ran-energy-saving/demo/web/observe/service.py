@@ -49,9 +49,21 @@ class TooManyTracesError(ValueError):
 class TraceExporter(Protocol):
     """Minimal upstream surface the job manager needs."""
 
-    def metrics(self, trace_id: str, *, run_id: str | None = None) -> tuple[Mapping[str, Any], Sequence[str]]: ...
+    def metrics(
+        self,
+        trace_id: str,
+        *,
+        run_id: str | None = None,
+        round_mode: str = "legacy",
+    ) -> tuple[Mapping[str, Any], Sequence[str]]: ...
 
-    def full_export(self, trace_id: str, *, run_id: str | None = None) -> Mapping[str, Any]: ...
+    def full_export(
+        self,
+        trace_id: str,
+        *,
+        run_id: str | None = None,
+        round_mode: str = "legacy",
+    ) -> Mapping[str, Any]: ...
 
 
 _PRE_SEND_BLOCKED_STATES = frozenset({FINAL_STATE_INPUT_INVALID, FINAL_STATE_INTENT_NOT_CONFIRMED})
@@ -136,17 +148,30 @@ class LangfuseExporter:
             )
         return self._config
 
-    def metrics(self, trace_id: str, *, run_id: str | None = None) -> tuple[Mapping[str, Any], Sequence[str]]:
-        result = export_metrics(self._get_config(), trace_id, run_id=run_id)
+    def metrics(
+        self,
+        trace_id: str,
+        *,
+        run_id: str | None = None,
+        round_mode: str = "legacy",
+    ) -> tuple[Mapping[str, Any], Sequence[str]]:
+        result = export_metrics(self._get_config(), trace_id, run_id=run_id, round_mode=round_mode)
         return result["metrics"], tuple(result.get("warnings") or ())
 
-    def full_export(self, trace_id: str, *, run_id: str | None = None) -> Mapping[str, Any]:
+    def full_export(
+        self,
+        trace_id: str,
+        *,
+        run_id: str | None = None,
+        round_mode: str = "legacy",
+    ) -> Mapping[str, Any]:
         return export_full(
             self._get_config(),
             trace_id,
             self._runs_dir / "observability",
             zip_file=True,
             run_id=run_id,
+            round_mode=round_mode,
         )
 
 
@@ -173,6 +198,7 @@ class _Job:
     created_at: str
     full: bool
     trace_ids: list[str]
+    round_mode: str = "legacy"
     status: str = "running"
     results: list[dict[str, Any]] = field(default_factory=list)
     task: asyncio.Task[None] | None = None
@@ -213,7 +239,13 @@ class ObserveJobManager:
         """Return the job the page should resume polling, if one is running."""
         return self._running_job_id
 
-    def create(self, trace_ids: Sequence[str], *, full: bool = False) -> dict[str, object]:
+    def create(
+        self,
+        trace_ids: Sequence[str],
+        *,
+        full: bool = False,
+        round_mode: str = "legacy",
+    ) -> dict[str, object]:
         if self._exporter is None:
             raise RuntimeError("langfuse is not configured")
         stripped = [value.strip() for value in trace_ids]
@@ -233,6 +265,7 @@ class ObserveJobManager:
             created_at=datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             full=full,
             trace_ids=unique,
+            round_mode=round_mode,
         )
         self._jobs[job_id] = job
         self._running_job_id = job_id
@@ -260,7 +293,7 @@ class ObserveJobManager:
                         )
                     )
                     continue
-                job.results.append(await self._run_one(seq, trace_id, job.full))
+                job.results.append(await self._run_one(seq, trace_id, job.full, job.round_mode))
         finally:
             job.status = "done"
             self._running_job_id = None
@@ -269,11 +302,11 @@ class ObserveJobManager:
             except OSError:
                 pass
 
-    async def _run_one(self, seq: int, trace_id: str, full: bool) -> dict[str, Any]:
+    async def _run_one(self, seq: int, trace_id: str, full: bool, round_mode: str) -> dict[str, Any]:
         started = self._clock()
         try:
             entry = await asyncio.wait_for(
-                asyncio.to_thread(self._one, seq, trace_id, full, started),
+                asyncio.to_thread(self._one, seq, trace_id, full, round_mode, started),
                 timeout=self._trace_timeout_seconds,
             )
         except asyncio.TimeoutError:
@@ -287,7 +320,7 @@ class ObserveJobManager:
             )
         return entry
 
-    def _one(self, seq: int, trace_id: str, full: bool, started: float) -> dict[str, Any]:
+    def _one(self, seq: int, trace_id: str, full: bool, round_mode: str, started: float) -> dict[str, Any]:
         assert self._exporter is not None
         warnings: list[str]
         metrics: Mapping[str, Any] | None = None
@@ -298,14 +331,22 @@ class ObserveJobManager:
         selected_run_id = _text(primary.get("runId")) if primary is not None else None
         try:
             if full:
-                result = self._exporter.full_export(trace_id, run_id=selected_run_id)
+                result = self._exporter.full_export(
+                    trace_id,
+                    run_id=selected_run_id,
+                    round_mode=round_mode,
+                )
                 raw_metrics = result.get("metrics")
                 metrics = raw_metrics if isinstance(raw_metrics, Mapping) else None
                 warnings = [str(item) for item in result.get("warnings") or ()]
                 export_dir = _text(result.get("exportDir"))
                 archive = _text(result.get("zip"))
             else:
-                raw_metrics, raw_warnings = self._exporter.metrics(trace_id, run_id=selected_run_id)
+                raw_metrics, raw_warnings = self._exporter.metrics(
+                    trace_id,
+                    run_id=selected_run_id,
+                    round_mode=round_mode,
+                )
                 metrics = raw_metrics
                 warnings = [str(item) for item in raw_warnings]
         except NotFoundError as exc:
@@ -314,6 +355,10 @@ class ObserveJobManager:
             return self._entry(seq, trace_id, "auth", self._duration_ms(started), _failure_warnings(exc), None)
         except NetworkError as exc:
             return self._entry(seq, trace_id, "network", self._duration_ms(started), _failure_warnings(exc), None)
+        except SystemExit as exc:
+            # argparse inside the export wrappers raises SystemExit, a BaseException that
+            # would otherwise escape this thread and kill the whole server.
+            return self._entry(seq, trace_id, "error", self._duration_ms(started), [f"SystemExit: {exc.code}"], None)
         except Exception as exc:  # noqa: BLE001 - one trace must not abort the job
             return self._entry(seq, trace_id, "error", self._duration_ms(started), _failure_warnings(exc), None)
 
@@ -389,6 +434,7 @@ class ObserveJobManager:
             "jobId": job.job_id,
             "createdAt": job.created_at,
             "full": job.full,
+            "roundMode": job.round_mode,
             "status": job.status,
             "total": len(job.trace_ids),
             "done": done,
@@ -453,6 +499,7 @@ class ObserveJobManager:
                     "jobId": payload.get("jobId"),
                     "createdAt": payload.get("createdAt"),
                     "full": payload.get("full"),
+                    "roundMode": payload.get("roundMode", "legacy"),
                     "total": payload.get("total"),
                     "done": payload.get("done"),
                     "failed": payload.get("failed"),

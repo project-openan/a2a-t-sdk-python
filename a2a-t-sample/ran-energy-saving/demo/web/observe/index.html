@@ -51,6 +51,13 @@
             <input id="full-export" type="checkbox">
             同时生成完整导出（raw / transcript / manifest + zip）
           </label>
+          <label class="check">
+            协商轮次模型
+            <select id="round-mode">
+              <option value="legacy" selected>legacy（按行序，默认）</option>
+              <option value="decision">decision（PROPOSE↔DECISION，A2A/pure）</option>
+            </select>
+          </label>
           <span class="spacer"></span>
           <button class="secondary" id="clear-button" type="button">清空</button>
           <button class="primary" id="query-button" type="button" disabled>查询</button>

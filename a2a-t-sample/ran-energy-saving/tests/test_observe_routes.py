@@ -62,13 +62,19 @@ class FakeExporter:
     ) -> None:
         self.metrics_by_trace = dict(metrics_by_trace or {})
         self.full_results = dict(full_results or {})
+        self.metrics_round_modes: list[str] = []
+        self.full_round_modes: list[str] = []
 
-    def metrics(self, trace_id: str, *, run_id: str | None = None) -> tuple[Mapping[str, Any], Sequence[str]]:
+    def metrics(
+        self, trace_id: str, *, run_id: str | None = None, round_mode: str = "legacy"
+    ) -> tuple[Mapping[str, Any], Sequence[str]]:
         del run_id
+        self.metrics_round_modes.append(round_mode)
         return self.metrics_by_trace.get(trace_id, {"counts": {"serverObservations": 1}}), []
 
-    def full_export(self, trace_id: str, *, run_id: str | None = None) -> Mapping[str, Any]:
+    def full_export(self, trace_id: str, *, run_id: str | None = None, round_mode: str = "legacy") -> Mapping[str, Any]:
         del run_id
+        self.full_round_modes.append(round_mode)
         return self.full_results.get(
             trace_id,
             {
@@ -92,10 +98,12 @@ class FailingExporter(FakeExporter):
         super().__init__(metrics_by_trace=metrics_by_trace)
         self.failing = failing
 
-    def metrics(self, trace_id: str, *, run_id: str | None = None) -> tuple[Mapping[str, Any], Sequence[str]]:
+    def metrics(
+        self, trace_id: str, *, run_id: str | None = None, round_mode: str = "legacy"
+    ) -> tuple[Mapping[str, Any], Sequence[str]]:
         if trace_id in self.failing:
             raise RuntimeError(f"cannot export {trace_id}")
-        return super().metrics(trace_id, run_id=run_id)
+        return super().metrics(trace_id, run_id=run_id, round_mode=round_mode)
 
 
 class StubManager:
@@ -123,8 +131,8 @@ class StubManager:
         del job_id, trace_id
         return None
 
-    def create(self, trace_ids: Sequence[str], *, full: bool = False) -> dict[str, object]:
-        del trace_ids, full
+    def create(self, trace_ids: Sequence[str], *, full: bool = False, round_mode: str = "legacy") -> dict[str, object]:
+        del trace_ids, full, round_mode
         raise ObserveBusyError("an observe job is already running")
 
 
@@ -307,6 +315,22 @@ async def test_post_creates_a_job_and_job_get_returns_its_results(offline_config
     assert body["done"] == 1
     assert body["results"][0]["traceId"] == TID_A
     assert body["results"][0]["status"] == "ok"
+
+
+async def test_post_forwards_round_mode_and_rejects_an_unknown_one(
+    offline_config: SampleConfig, tmp_path: Path
+) -> None:
+    exporter = FakeExporter(metrics_by_trace={TID_A: METRICS_A})
+    manager = _manager(tmp_path, exporter)
+    async with _asgi(_routes(offline_config, tmp_path, manager=manager)) as client:
+        created = await client.post("/api/observe/jobs", json={"traceIds": [TID_A], "roundMode": "decision"})
+        assert created.status_code == 201
+        await manager.wait(created.json()["jobId"])
+        bogus = await client.post("/api/observe/jobs", json={"traceIds": [TID_A], "roundMode": "bogus"})
+
+    assert exporter.metrics_round_modes == ["decision"]
+    assert bogus.status_code == 400
+    assert bogus.json()["error"] == "invalid_request"
 
 
 async def test_post_rejects_an_invalid_trace_id(offline_config: SampleConfig, tmp_path: Path) -> None:
@@ -495,6 +519,8 @@ async def test_table_xlsx_exports_only_ok_metrics(offline_config: SampleConfig, 
     assert TID_A in sheet
     assert TID_B in sheet
     assert TID_C not in sheet
+    # The metrics.xlsx carries the 协议 (protocol) column right after the trace id.
+    assert "协议" in sheet
 
 
 async def test_table_xlsx_requires_a_finished_job(offline_config: SampleConfig, tmp_path: Path) -> None:

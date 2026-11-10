@@ -54,6 +54,7 @@ def test_index_exposes_the_required_controls() -> None:
         "tls-hint",
         "trace-input",
         "full-export",
+        "round-mode",
         "query-button",
         "start-button",
         "progress",
@@ -111,6 +112,7 @@ def test_module_contract_for_api_fields_and_downloads() -> None:
         assert url in module, url
     assert "window.location.href" in module
     assert "mainColumns" in module
+    assert "roundMode" in module
     assert "export function mergeResults" in module
     assert "export function pollIntervalMs" in module
     assert "export function statusLabel" in module
