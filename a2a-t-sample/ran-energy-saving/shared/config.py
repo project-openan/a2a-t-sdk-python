@@ -138,6 +138,8 @@ NMS_STATE_POLL_ENV_KEY = "A2AT_SAMPLE_NMS_STATE_POLL_SECONDS"
 CLIENT_DB_ENV_KEY = "A2AT_SAMPLE_CLIENT_DB"
 CLIENT_MEMORY_TURNS_ENV_KEY = "A2AT_SAMPLE_CLIENT_MEMORY_TURNS"
 ADK_SESSION_RETENTION_DAYS_ENV_KEY = "A2AT_SAMPLE_ADK_SESSION_RETENTION_DAYS"
+#: Lowest guaranteed throughput (Mbps) the client accepts without a human. Unset means no floor.
+CLIENT_MIN_THROUGHPUT_ENV_KEY = "A2AT_SAMPLE_CLIENT_MIN_THROUGHPUT_MBPS"
 GATEWAY_HOST_ENV_KEY = "A2AT_SAMPLE_GATEWAY_HOST"
 GATEWAY_PORT_ENV_KEY = "A2AT_SAMPLE_GATEWAY_PORT"
 GATEWAY_REGISTER_ENV_KEY = "A2AT_SAMPLE_GATEWAY_REGISTER"
@@ -470,6 +472,19 @@ def _env_bool(values: dict[str, str | None], key: str, default: bool) -> bool:
     raise ValueError(f"Invalid boolean value for {key}: {raw_value}")
 
 
+def _optional_positive_float(values: dict[str, str | None], key: str) -> float | None:
+    """Resolve an optional strictly positive number; unset means ``None``."""
+    raw_value = os.environ.get(key)
+    if raw_value is None or not str(raw_value).strip():
+        raw_value = values.get(key)
+    if raw_value is None or not str(raw_value).strip():
+        return None
+    value = _env_float(values, key, 0.0)
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"Invalid value for {key}: {value:g}; expected a positive number")
+    return value
+
+
 def _env_optional_bool(values: dict[str, str | None], key: str) -> bool | None:
     """Resolve a tri-state key: unset means "auto", otherwise a validated boolean."""
     raw_value = os.environ.get(key)
@@ -563,6 +578,8 @@ class SampleConfig:
         client_memory_turns: Recent conversation turns injected into the next run's prompts.
         adk_session_retention_days: Days a decision-agent session is kept as an audit record before
             the sweep removes it.
+        client_min_throughput_mbps: Lowest guaranteed throughput the client accepts without a
+            human; ``None`` means no floor.
         gateway_host: bind host of the optional inbound A2A gateway.
         gateway_port: bind port of the optional inbound A2A gateway.
         gateway_register: whether the gateway registers its AgentCard in the registry center.
@@ -668,6 +685,7 @@ class SampleConfig:
     client_db_path: str | None = None
     client_memory_turns: int = DEFAULT_CLIENT_MEMORY_TURNS
     adk_session_retention_days: int = DEFAULT_ADK_SESSION_RETENTION_DAYS
+    client_min_throughput_mbps: float | None = None
     gateway_host: str = DEFAULT_HOST
     gateway_port: int = DEFAULT_GATEWAY_PORT
     gateway_register: bool = False
@@ -932,6 +950,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         adk_session_retention_days=_positive_int(
             values, ADK_SESSION_RETENTION_DAYS_ENV_KEY, DEFAULT_ADK_SESSION_RETENTION_DAYS
         ),
+        client_min_throughput_mbps=_optional_positive_float(values, CLIENT_MIN_THROUGHPUT_ENV_KEY),
         gateway_host=_env_value(values, GATEWAY_HOST_ENV_KEY, DEFAULT_HOST),
         gateway_port=_env_int(values, GATEWAY_PORT_ENV_KEY, DEFAULT_GATEWAY_PORT),
         gateway_register=_env_bool(values, GATEWAY_REGISTER_ENV_KEY, False),

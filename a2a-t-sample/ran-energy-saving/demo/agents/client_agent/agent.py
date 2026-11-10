@@ -6,6 +6,10 @@ and uses the configured OpenAI-compatible endpoint in ``live`` mode.
 
 The agent's structured output is :class:`shared.models.NegotiationDecision`: ADK parses the model
 response into that schema, so the deterministic client flow never parses free text.
+
+The agent's only tool exposes the client's own acceptance policy. It deliberately has no network
+inventory: the server is the authority for region, site and cell names, so a client-side
+``unknown_cell`` would be a judgment the client must not make.
 """
 
 from __future__ import annotations
@@ -14,11 +18,12 @@ from pathlib import Path
 
 from google.adk.agents import LlmAgent
 from google.adk.models.base_llm import BaseLlm
+from protocol.client_policy import ClientPolicy
 from shared.model_factory import build_adk_model
 from shared.models import NegotiationDecision
 
 from demo.adk_fake_model import build_fake_model
-from demo.agents.client_agent.tools import evaluate_proposal_impact, get_sla_policy
+from demo.agents.client_agent.tools import make_get_client_policy
 
 #: Agent name; the offline fake model keys its client script on this name.
 AGENT_NAME = "ran_energy_request_agent"
@@ -30,13 +35,20 @@ INSTRUCTION_PATH = Path(__file__).resolve().parent / "prompts" / "request_instru
 REQUEST_INSTRUCTION = INSTRUCTION_PATH.read_text(encoding="utf-8")
 
 
-def build_client_agent(model: BaseLlm | None = None) -> LlmAgent:
+def build_client_agent(
+    model: BaseLlm | None = None,
+    *,
+    policy: ClientPolicy | None = None,
+) -> LlmAgent:
     """Build the RAN energy-saving client decision agent.
 
     Args:
         model: Model to use; defaults to :func:`shared.model_factory.build_adk_model` (the fake
             model in offline mode, ``LiteLlm`` in live mode).
+        policy: Client acceptance policy exposed by ``get_client_policy``; the default has no
+            throughput floor and never reads the ambient configuration.
     """
+    resolved_policy = policy or ClientPolicy()
     return LlmAgent(
         name=AGENT_NAME,
         model=(
@@ -46,10 +58,10 @@ def build_client_agent(model: BaseLlm | None = None) -> LlmAgent:
         ),
         description=(
             "Decides how the client answers a RAN energy-saving negotiation proposal: accept, "
-            "reject, abort, or counter-propose a plan that keeps the SLA."
+            "reject, abort, or counter-propose a plan that fits the client policy."
         ),
         instruction=REQUEST_INSTRUCTION,
-        tools=[get_sla_policy, evaluate_proposal_impact],
+        tools=[make_get_client_policy(resolved_policy)],
         output_schema=NegotiationDecision,
     )
 

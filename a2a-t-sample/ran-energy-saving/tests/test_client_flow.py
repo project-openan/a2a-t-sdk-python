@@ -67,6 +67,7 @@ from protocol.client_flow import (
     normalize_webhook_payload,
     run_client_flow,
 )
+from protocol.client_policy import ClientPolicy
 from protocol.decision_provider import DecisionTimeoutError, ScriptedDecisionProvider
 from protocol.messages import (
     END_MESSAGE_TEXT,
@@ -756,7 +757,7 @@ async def test_accept_continues_when_the_response_stream_carries_a_new_negotiati
 
 async def test_nms_accept_carries_only_the_negotiation_extension_key() -> None:
     """The vendor rejects an accept whose metadata has more than one ``-T`` key."""
-    result, transport, _prompt_client = await _run(
+    result, transport, prompt_client = await _run(
         INFORMATION_NEGOTIATION_SPEC,
         [[propose_event("information", 1)], _task_completed_batch()],
         INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions,
@@ -768,6 +769,8 @@ async def test_nms_accept_carries_only_the_negotiation_extension_key() -> None:
     assert TASK_T_EXTENSION_URI not in accept_metadata
     assert NEGOTIATION_T_EXTENSION_URI in accept_metadata
     assert NEGOTIATION_CONTEXT_METADATA_KEY in accept_metadata
+    # The refilled Task-T was discarded by the NMS path, so generating it was a pure LLM call.
+    assert prompt_client.refill_data == []
 
 
 async def test_information_accept_uses_the_selected_served_area() -> None:
@@ -1674,14 +1677,13 @@ class _UngroundedProvider:
             action="accept",
             rationale="accept",
             filled_params={
-                "region": "A2ATestRegion",
-                "guaranteedThroughputTarget": "{00:00~07:00,2Mbps}",
+                "guaranteedThroughputTarget": "{00:00~07:00,99Mbps}",
             },
         )
 
 
-async def test_an_ungrounded_auto_accept_is_replaced_by_an_abort() -> None:
-    """The reported bug: the server rejected the operator's region and offered nothing."""
+async def test_an_ungrounded_auto_accept_is_rejected_instead_of_aborted() -> None:
+    """An automatic decision that cannot be grounded refuses; it does not end the negotiation."""
     provider = _UngroundedProvider()
     transport = ScriptedTransport([[propose_event("information", 1)], [end_event()]])
 
@@ -1700,9 +1702,135 @@ async def test_an_ungrounded_auto_accept_is_replaced_by_an_abort() -> None:
 
     assert result.final_state == "decision_ungrounded"
     assert provider.calls == 2
-    assert _client_negotiation_steps(transport.requests) == [("ABORT", 1)]
+    assert _client_negotiation_steps(transport.requests) == [("REJECT", 1)]
+    assert result.error is not None
+    assert "guaranteedThroughputTarget" in result.error
+
+
+class _RegionChangeProvider:
+    """A live automatic decision that tries to replace the operator's region."""
+
+    requires_grounding = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def respond(self, propose: NegotiationProposeView, session: NegotiationContext) -> NegotiationDecision:
+        del propose, session
+        self.calls += 1
+        return NegotiationDecision(
+            action="accept",
+            rationale="accept",
+            filled_params={"region": "A2ATestRegion"},
+        )
+
+
+async def test_a_model_entity_change_is_dropped_and_the_information_accept_is_refused() -> None:
+    """The model may not answer a rejected region with a value the server never offered."""
+    provider = _RegionChangeProvider()
+    transport = ScriptedTransport(
+        [
+            [propose_event("information", 1, content="Please provide the correct region name.")],
+            [end_event()],
+        ]
+    )
+
+    result = await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=transport,
+        user_request="The area is the Songshanhu Administration Committee.",
+        provider=provider,
+        language="en-US",
+        intent_fields={"operationType": "Create", "region": "Songshanhu Administration Committee"},
+    )
+
+    assert result.final_state == "decision_ungrounded"
+    assert provider.calls == 1
+    assert _client_negotiation_steps(transport.requests) == [("REJECT", 1)]
     assert result.error is not None
     assert "region" in result.error
+
+
+class _RejectingProvider:
+    """A live automatic decision that refuses a feasible server alternative."""
+
+    requires_grounding = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def respond(self, propose: NegotiationProposeView, session: NegotiationContext) -> NegotiationDecision:
+        del propose, session
+        self.calls += 1
+        return NegotiationDecision(
+            action="reject",
+            rationale="The region cannot be confirmed.",
+        )
+
+
+_SITE_INTENT = {
+    "operationType": "Modify",
+    "region": "A2ATestRegion",
+    "siteList": '["LNR_KPI_7745","NES_27A_321071"]',
+    "backgroundEvent": "power outage from 08:00 to 18:00",
+    "guaranteedThroughputTarget": "{08:00~18:00,10Mbps}",
+}
+
+
+def _feasibility_transport() -> ScriptedTransport:
+    return ScriptedTransport(
+        [
+            [
+                propose_event(
+                    "feasibility",
+                    1,
+                    content=(
+                        "Reduce rate target to 2Mbps or less. If lowering the rate is unacceptable, "
+                        "reduce power outage duration to 4 hours or less."
+                    ),
+                )
+            ],
+            [end_event()],
+        ]
+    )
+
+
+async def test_a_feasible_alternative_is_accepted_even_when_the_model_rejects() -> None:
+    """Automatic mode accepts the server's feasible alternative by default."""
+    provider = _RejectingProvider()
+    transport = _feasibility_transport()
+    prompt_client = FakePromptClient()
+
+    result = await run_client_flow(
+        prompt_client=prompt_client,
+        transport=transport,
+        user_request="Reduce the guaranteed rate to 10Mbps during the outage.",
+        provider=provider,
+        language="en-US",
+        intent_fields=_SITE_INTENT,
+    )
+
+    assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1)]
+    assert "2Mbps" in prompt_client.accept_texts[-1]
+    assert result.final_state == FINAL_STATE_NEGOTIATION_ENDED
+
+
+async def test_a_server_alternative_below_the_configured_floor_is_not_forced_to_accept() -> None:
+    provider = _RejectingProvider()
+    transport = _feasibility_transport()
+
+    result = await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=transport,
+        user_request="Reduce the guaranteed rate to 10Mbps during the outage.",
+        provider=provider,
+        language="en-US",
+        intent_fields=_SITE_INTENT,
+        client_policy=ClientPolicy(min_throughput_mbps=5),
+    )
+
+    assert _client_negotiation_steps(transport.requests) == [("REJECT", 1)]
+    assert result.final_state == FINAL_STATE_NEGOTIATION_ENDED
 
 
 def _propose_without_template_uri(kind: str, *, content: str) -> dict[str, object]:

@@ -20,7 +20,7 @@ import asyncio
 import logging
 import sqlite3
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Final, Protocol, runtime_checkable
@@ -29,13 +29,10 @@ from a2a_t.core.metadata import NegotiationContext
 from google.adk.apps import App
 from google.adk.events import Event as AdkEvent
 from google.adk.models.base_llm import BaseLlm
-from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.runners import Runner
 from google.adk.sessions.base_session_service import BaseSessionService
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
 from google.adk.sessions.sqlite_session_service import SqliteSessionService
-from google.adk.tools.base_tool import BaseTool
-from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 from shared.adk_tracing import TracePlugin
 from shared.json_text import iter_json_objects
@@ -43,7 +40,6 @@ from shared.model_factory import build_traced_adk_model
 from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.trace import trace_scope
 
-from protocol.grounding import ToolCall
 from protocol.manual_answer import missing_item_labels
 
 _LOGGER = logging.getLogger("ran_energy_saving.decision_provider")
@@ -116,42 +112,6 @@ DEFAULT_SESSION_RETENTION_DAYS = 7
 
 #: Seconds in one day (retention is configured in days, the sweep compares timestamps).
 SECONDS_PER_DAY = 24 * 60 * 60
-
-#: Tool calls of the decision turn running in this asyncio task. Kept out of instance state so one
-#: provider shared by concurrent OSS requests cannot mix another run's tool results into a decision.
-_ACTIVE_TOOL_CALLS: ContextVar[list[ToolCall] | None] = ContextVar(
-    "a2at_active_tool_calls", default=None
-)
-_LAST_TOOL_CALLS: ContextVar[tuple[ToolCall, ...]] = ContextVar("a2at_last_tool_calls", default=())
-
-
-class ToolCallRecorder(BasePlugin):
-    """ADK plugin recording the tool calls of one decision turn for grounding checks.
-
-    The trace plugin remains the observability path; this recorder is deliberately independent of
-    it, so a missing or disabled trace sink cannot change whether a decision is grounded.
-    """
-
-    def __init__(self, *, name: str = "ran_energy_tool_call_recorder") -> None:
-        """Create one tool-call recorder."""
-        super().__init__(name=name)
-
-    async def after_tool_callback(
-        self,
-        *,
-        tool: BaseTool,
-        tool_args: dict[str, Any],
-        tool_context: ToolContext,
-        result: dict[str, Any],
-    ) -> dict[str, Any] | None:
-        """Record one successful tool call; the result is returned unchanged."""
-        del tool_context
-        active = _ACTIVE_TOOL_CALLS.get()
-        if active is None:
-            return None
-        payload: Mapping[str, object] = result if isinstance(result, Mapping) else {"result": result}
-        active.append(ToolCall(name=tool.name, args=dict(tool_args), result=dict(payload)))
-        return None
 
 
 def build_session_service(db_path: str | None) -> tuple[BaseSessionService, bool]:
@@ -289,18 +249,6 @@ def build_decision_prompt(
     if propose.options is not None and propose.options.options:
         values = "; ".join(option.value for option in propose.options.options if option.value)
         options = f"Server options for {propose.options.field}: {values}\n\n"
-    if propose.kind == "information":
-        tool_rule = (
-            "This information proposal does not name a concrete plan. Answer it only from the "
-            "original user request or from the values the proposal itself offers. Call "
-            "get_sla_policy only for a cell the request or proposal names; never use it, a "
-            "configured region, or a default to invent a requested value. "
-        )
-    else:
-        tool_rule = (
-            "Use the tools only when the proposal names a concrete cell, window, or rate; "
-            "otherwise decide from the original request and the proposal. "
-        )
     return (
         "Answer the following A2A-T negotiation proposal.\n"
         f"Negotiation type: {propose.kind}\n"
@@ -311,12 +259,19 @@ def build_decision_prompt(
         "Proposal content:\n"
         f"{propose.content}\n\n"
         f"{options}"
-        f"{tool_rule}"
-        "If the proposal lists Required Information Items, answer every item in filled_params "
-        "using the exact Task-T parameter name; do not omit one. Only put a value in "
-        "filled_params when it is grounded: it must appear in the original request, in this "
-        "proposal, or in a tool result from this turn. On any accept, filled_params is "
-        "authoritative for the client's refilled Task-T; the client rejects ungrounded values.\n"
+        "Rules:\n"
+        "- The server is authoritative for region, site and cell names, and for whether a goal is "
+        "feasible. Never add, rename, correct or reject a region, site or cell on your own. Use the "
+        "value the original request states or a value this proposal offers.\n"
+        "- Call get_client_policy() when you need the client's own acceptance limits.\n"
+        "- If the proposal lists Required Information Items, answer every item in filled_params "
+        "using the exact Task-T parameter name. A value must appear in the original request or in "
+        "this proposal; do not invent one. If an item cannot be answered from those sources, "
+        "return reject and name the missing item in the rationale.\n"
+        "- An accept means the client agrees with the server's proposal. Do not restate values the "
+        "negotiation did not change. On a feasibility proposal, accept the server's feasible "
+        "alternative; the flow renders the agreed value itself.\n"
+        "- Omit fields that do not apply; never pass the string \"None\".\n"
         "Return exactly one NegotiationDecision JSON object and nothing else: no reasoning, "
         "markdown, or prose outside the JSON."
     )
@@ -447,10 +402,9 @@ class AdkDecisionProvider:
                     "agent is part of the demo package."
                 )
             agent = agent_factory(build_traced_adk_model(model=model))
-        # The tool plugins are attached through the ``App`` (the ``plugins=`` runner argument is
-        # deprecated): one records the trace span, one records the deterministic call result the
-        # grounding verifier needs even when tracing is disabled.
-        app = App(name=app_name, root_agent=agent, plugins=[TracePlugin(), ToolCallRecorder()])
+        # The trace plugin is attached through the ``App`` (the ``plugins=`` runner argument is
+        # deprecated). Nothing in the decision path depends on it.
+        app = App(name=app_name, root_agent=agent, plugins=[TracePlugin()])
         session_service, durable = build_session_service(session_db_path)
         # ``auto_create_session`` replaces the previous "remember which ids I created" set: a
         # durable store may already hold the session (a restarted process), and creating it again
@@ -492,6 +446,16 @@ class AdkDecisionProvider:
             return self._conversation_context
         return value if isinstance(value, str) else None
 
+    def grounding_text(self) -> str:
+        """Return the operator text a pure A2A answer may use as a grounding source.
+
+        The pure hop has no structured baseline: the answer is sanitized against the operator's
+        original request and the vendor's question only.
+        """
+        request = self._current_user_request() or ""
+        context = self._current_conversation_context() or ""
+        return "\n".join(part for part in (request, context) if part.strip())
+
     @property
     def runner(self) -> Runner:
         """The ADK runner serving the decision agent (test hook)."""
@@ -507,11 +471,6 @@ class AdkDecisionProvider:
         """Whether this provider serves the deterministic offline demo rather than a live model."""
         return self._offline
 
-    @property
-    def last_tool_calls(self) -> tuple[ToolCall, ...]:
-        """Tool calls recorded during this task's last decision turn."""
-        return _LAST_TOOL_CALLS.get()
-
     async def respond(
         self,
         propose: NegotiationProposeView,
@@ -522,18 +481,12 @@ class AdkDecisionProvider:
         The run is executed under ``trace_scope`` (``client`` role, negotiation context, decision
         agent stage) so its LLM/tool spans are tagged with the negotiation they belong to.
         """
-        calls: list[ToolCall] = []
-        token = _ACTIVE_TOOL_CALLS.set(calls)
-        try:
-            with trace_scope(
-                role="client",
-                context_id=propose.context_id or propose.negotiation_id,
-                stage="client_decision_agent",
-            ):
-                return await self._respond(propose, session)
-        finally:
-            _ACTIVE_TOOL_CALLS.reset(token)
-            _LAST_TOOL_CALLS.set(tuple(calls))
+        with trace_scope(
+            role="client",
+            context_id=propose.context_id or propose.negotiation_id,
+            stage="client_decision_agent",
+        ):
+            return await self._respond(propose, session)
 
     async def _respond(
         self,
@@ -796,7 +749,6 @@ class ConfirmingDecisionProvider:
         self._recommendation_timeout_seconds = recommendation_timeout_seconds
         self._sink: Callable[[NegotiationDecision | None, NegotiationProposeView, Any], None] | None = None
         self._last_recommendation_error: str | None = None
-        self._published_tool_calls: tuple[ToolCall, ...] = ()
 
     @property
     def last_recommendation_error(self) -> str | None:
@@ -822,14 +774,6 @@ class ConfirmingDecisionProvider:
     def structurer(self) -> AdkDecisionProvider | None:
         """The inner ADK provider when this confirmation wraps one, else ``None``."""
         return self._inner if isinstance(self._inner, AdkDecisionProvider) else None
-
-    @property
-    def last_tool_calls(self) -> tuple[ToolCall, ...]:
-        """Tool calls recorded by the inner provider during its recommendation turn."""
-        if self._published_tool_calls:
-            return self._published_tool_calls
-        getter = getattr(self._inner, "last_tool_calls", None)
-        return getter if isinstance(getter, tuple) else ()
 
     def set_recommendation_sink(
         self,
@@ -876,7 +820,6 @@ class ConfirmingDecisionProvider:
         operator keeps the full manual window.
         """
         self._last_recommendation_error = None
-        self._published_tool_calls = ()
         recommendation_task = asyncio.create_task(self._recommend(propose, session))
         submission_task = asyncio.create_task(self._manual.wait_for_operator(propose, session))
         try:
@@ -924,9 +867,6 @@ class ConfirmingDecisionProvider:
             )
             self._last_recommendation_error = f"{type(exc).__name__}: {exc}"
             return None
-        finally:
-            getter = getattr(self._inner, "last_tool_calls", None)
-            self._published_tool_calls = getter if isinstance(getter, tuple) else ()
 
     @staticmethod
     async def _discard(task: asyncio.Task[object]) -> None:

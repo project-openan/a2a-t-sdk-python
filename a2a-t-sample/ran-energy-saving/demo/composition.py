@@ -80,6 +80,8 @@ async def build_demo_runtime(
     pure_answers: Sequence[str] | None = None,
 ) -> Any:
     """Build one client runtime with the demo catalog and offline assets."""
+    from protocol.client_policy import ClientPolicy
+
     from demo.agents.client_agent.agent import build_client_agent
     from demo.catalog import DemoRunCatalog
     from demo.intent import build_demo_intent_processor
@@ -111,6 +113,12 @@ async def build_demo_runtime(
         build_demo_intent_processor if config.intent_mode == INTENT_MODE_PROCESSED else None
     )
     resolved_config = replace(config, discovery=discovery)
+    policy = ClientPolicy.from_config(config)
+
+    def client_agent_factory(model: Any) -> Any:
+        """Build the decision agent with this run's client policy."""
+        return build_client_agent(model, policy=policy)
+
     return await build_client_runtime(
         resolved_config,
         scenario,
@@ -126,7 +134,7 @@ async def build_demo_runtime(
         trace_sink=trace_sink,
         offline_model_factory=offline_model_factory,
         install_offline_provider=install_offline_provider,
-        client_agent_factory=build_client_agent,
+        client_agent_factory=client_agent_factory,
         pure_answer=pure_answer,
         scripted_decisions=scripted_decisions,
         intent_processor_factory=intent_processor_factory,

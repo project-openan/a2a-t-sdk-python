@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from protocol.grounding import ToolCall, find_ungrounded, grounding_reask_text
+from protocol.grounding import find_ungrounded, grounding_reask_text
 from shared.models import NegotiationAreaOption, NegotiationOptions, NegotiationProposeView
 
 _TARGET = "{00:00~07:00,2Mbps}, {07:00~23:00,20Mbps}, {23:00~24:00,2Mbps}"
@@ -35,8 +35,6 @@ def _fields(**overrides: object) -> list[str]:
             baseline=_BASELINE,
             intent=_BASELINE,
             propose=_propose("Region 'Songshanhu Administration Committee' is not recognized."),
-            tool_calls=(),
-            tools_authoritative=False,
         )
     ]
 
@@ -66,8 +64,6 @@ def test_a_server_option_grounds_a_region() -> None:
         baseline=_BASELINE,
         intent=_BASELINE,
         propose=propose,
-        tool_calls=(),
-        tools_authoritative=False,
     )
 
     assert ungrounded == []
@@ -79,8 +75,6 @@ def test_affirmative_server_content_grounds_a_region() -> None:
         baseline=_BASELINE,
         intent=_BASELINE,
         propose=_propose("Available test region: A2ATestRegion."),
-        tool_calls=(),
-        tools_authoritative=False,
     )
 
     assert ungrounded == []
@@ -92,8 +86,6 @@ def test_a_rejected_value_in_negative_context_is_not_grounding() -> None:
         baseline=_BASELINE,
         intent=_BASELINE,
         propose=_propose("Region 'A2ATestRegion' is not recognized."),
-        tool_calls=(),
-        tools_authoritative=False,
     )
 
     assert [item.field for item in ungrounded] == ["region"]
@@ -105,8 +97,6 @@ def test_a_changed_operation_type_is_never_grounded_by_prose() -> None:
         baseline=_BASELINE,
         intent=_BASELINE,
         propose=_propose("Create a task for A2ATestRegion."),
-        tool_calls=(),
-        tools_authoritative=False,
     )
 
     assert [item.field for item in ungrounded] == ["operationType"]
@@ -121,55 +111,30 @@ def test_target_segments_are_checked_one_by_one() -> None:
         baseline=_BASELINE,
         intent=_BASELINE,
         propose=propose,
-        tool_calls=(),
-        tools_authoritative=False,
     )
 
     assert [item.field for item in ungrounded] == ["guaranteedThroughputTarget"]
 
 
-def test_a_tool_result_grounds_a_region_only_in_the_authoritative_domain() -> None:
-    filled = {**_BASELINE, "region": "A2ATestRegion"}
-    tool_calls = (ToolCall(name="get_sla_policy", args={}, result={"ok": True, "region": "A2ATestRegion"}),)
-    propose = _propose("Region 'Songshanhu Administration Committee' is not recognized.")
+def test_a_site_level_filled_without_an_entity_change_is_grounded() -> None:
+    """The reported failure: siteList/backgroundEvent plus the agreed rate, no region/operationType.
 
-    ungrounded = find_ungrounded(
-        filled,
-        baseline=_BASELINE,
-        intent=_BASELINE,
-        propose=propose,
-        tool_calls=tool_calls,
-        tools_authoritative=False,
-    )
-    grounded = find_ungrounded(
-        filled,
-        baseline=_BASELINE,
-        intent=_BASELINE,
-        propose=propose,
-        tool_calls=tool_calls,
-        tools_authoritative=True,
-    )
-
-    assert [item.field for item in ungrounded] == ["region"]
-    assert grounded == []
-
-
-def test_a_missing_required_value_is_reported() -> None:
+    Those fields were already accepted by the server in the initial Task-T; a negotiation that
+    only changes the rate must not re-report them as missing.
+    """
     filled = {
-        "operationType": "Create",
-        "region": "Region A",
-        "siteList": "NRES_XCS_6102937",
+        "siteList": '["LNR_KPI_7745","NES_27A_321071"]',
+        "backgroundEvent": "power outage from 08:00 to 18:00",
+        "guaranteedThroughputTarget": "{08:00~18:00,2Mbps}",
     }
     ungrounded = find_ungrounded(
         filled,
         baseline=filled,
-        intent=filled,
-        propose=_propose("Region 'Region A' is not recognized."),
-        tool_calls=(),
-        tools_authoritative=False,
+        intent={},
+        propose=_propose("Reduce rate target to 2Mbps or less for the outage period.", options=None),
     )
 
-    assert [item.field for item in ungrounded] == ["guaranteedThroughputTarget"]
+    assert ungrounded == []
 
 
 def test_an_area_level_request_may_omit_the_rate_target() -> None:
@@ -180,8 +145,6 @@ def test_an_area_level_request_may_omit_the_rate_target() -> None:
         baseline=filled,
         intent=filled,
         propose=_propose("Region 'Region A' is not recognized."),
-        tool_calls=(),
-        tools_authoritative=False,
     )
 
     assert ungrounded == []
@@ -200,15 +163,13 @@ def test_reask_text_names_the_fields_and_server_options() -> None:
         baseline=_BASELINE,
         intent=_BASELINE,
         propose=propose,
-        tool_calls=(),
-        tools_authoritative=False,
     )
 
     text = grounding_reask_text(propose, ungrounded)
 
     assert "region=OtherRegion" in text
     assert "Server options for region: A2ATestRegion." in text
-    assert "do not accept" in text
+    assert "Do not invent a value" in text
 
 
 def test_a_prose_feasibility_target_grounds_the_accepted_segment() -> None:
@@ -221,8 +182,6 @@ def test_a_prose_feasibility_target_grounds_the_accepted_segment() -> None:
         baseline=_BASELINE,
         intent=_BASELINE,
         propose=propose,
-        tool_calls=(),
-        tools_authoritative=False,
     )
 
     assert ungrounded == []

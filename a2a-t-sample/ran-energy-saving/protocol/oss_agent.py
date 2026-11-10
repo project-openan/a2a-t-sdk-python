@@ -90,6 +90,7 @@ from protocol.client_flow import (
     ClientFlowResult,
     SseClientTransport,
 )
+from protocol.client_policy import ClientPolicy
 from protocol.discovery import DISCOVERY_DIRECT, discover_agent
 from protocol.downstream_binding_store import DownstreamBinding, DownstreamBindingStore
 from protocol.downstream_pump import DownstreamPump, DownstreamPumpContext
@@ -98,6 +99,7 @@ from protocol.intent import IntentProcessor, OperatorRequest, ProcessedIntent
 from protocol.manual_answer import ungrounded_answer_fields
 from protocol.messages import SAMPLE_RUN_ID_METADATA_KEY, metadata_to_dict
 from protocol.nms_client import NmsClient, NmsConfig, NmsSseTransport, NmsWebhookTransport
+from protocol.pure_answer_guard import sanitize_pure_decision
 from protocol.pure_client_flow import (
     continue_pure_client_flow,
     pure_metadata,
@@ -1716,12 +1718,18 @@ def main() -> None:
 
             from protocol.decision_provider import AdkDecisionProvider
 
+            policy = ClientPolicy.from_config(config)
+
+            def agent_factory(model: object) -> object:
+                """Build the decision agent with this process's client policy."""
+                return build_client_agent(model, policy=policy)  # ty: ignore[invalid-argument-type]
+
             decision_provider = AdkDecisionProvider(
-                agent_factory=build_client_agent,
+                agent_factory=agent_factory,
                 offline=False,
             )
-            answer = build_live_pure_answer(decision_provider)
-            recommendation = build_live_pure_recommendation(decision_provider)
+            answer = build_live_pure_answer(decision_provider, policy=policy)
+            recommendation = build_live_pure_recommendation(decision_provider, policy=policy)
     else:
         from demo.pure_policy import pure_answer_from_event
 
@@ -1842,49 +1850,76 @@ def _pure_proposal(event: Mapping[str, object]) -> tuple[NegotiationProposeView,
 
 def build_live_pure_answer(
     provider: _PureDecisionProvider,
+    policy: ClientPolicy | None = None,
 ) -> Callable[[dict[str, object]], Awaitable[str]]:
     """Build the live pure-A2A answer callback around an ADK decision provider.
 
     The vendor's ``INPUT_REQUIRED`` is free text, while the decision agent returns a structured
     :class:`~shared.models.NegotiationDecision`; :func:`~demo.pure_policy.render_pure_answer`
-    renders it back to the text the vendor expects. The executor sets the original normalized
-    request on the provider before every downstream hop.
+    renders it back to the text the vendor expects. The decision is sanitized first: a value the
+    original request or the question does not state is never rendered into the answer, because the
+    pure hop has no structured channel to correct it afterwards.
     """
     from demo.pure_policy import render_pure_answer
 
     async def answer(event: dict[str, object]) -> str:
         propose, session = _pure_proposal(event)
         decision = await provider.respond(propose, session)
-        return render_pure_answer(decision)
+        grounded, notes = sanitize_pure_decision(
+            decision,
+            request_text=_provider_request_text(provider),
+            propose=propose,
+            policy=policy or ClientPolicy(),
+        )
+        if notes:
+            _LOGGER.info("pure answer sanitized: %s", "; ".join(notes))
+        return render_pure_answer(grounded) if grounded is not None else ""
 
     return answer
 
 
 def build_live_pure_recommendation(
     provider: _PureDecisionProvider,
+    policy: ClientPolicy | None = None,
 ) -> Callable[[dict[str, object]], Awaitable[dict[str, object] | None]]:
     """Build the recommendation callback used when the OSS relays a downstream question.
 
     It returns a structured recommendation so the confirmation card can show the model's action
-    (accept/counter) instead of flattening every answer into approval. A rejection or abort is not
-    an answer: the operator gets no recommendation and supplies the text manually.
+    (accept/counter) instead of flattening every answer into approval. The recommendation is
+    sanitized exactly like the automatic answer: the operator may click "use", so the page must
+    not offer a value the request and the question do not state. A rejection or abort is not an
+    answer: the operator gets no recommendation and supplies the text manually.
     """
     from demo.pure_policy import render_pure_answer
 
     async def recommend(event: dict[str, object]) -> dict[str, object] | None:
         propose, session = _pure_proposal(event)
         decision = await provider.respond(propose, session)
-        if decision.action not in ("accept", "counter"):
+        grounded, notes = sanitize_pure_decision(
+            decision,
+            request_text=_provider_request_text(provider),
+            propose=propose,
+            policy=policy or ClientPolicy(),
+        )
+        if notes:
+            _LOGGER.info("pure recommendation sanitized: %s", "; ".join(notes))
+        if grounded is None or grounded.action not in ("accept", "counter"):
             return None
         return {
-            "action": decision.action,
-            "rationale": decision.rationale,
-            "text": render_pure_answer(decision),
-            "filledParams": dict(decision.filled_params or {}),
-            "counterProposal": decision.counter_proposal,
+            "action": grounded.action,
+            "rationale": grounded.rationale,
+            "text": render_pure_answer(grounded),
+            "filledParams": dict(grounded.filled_params or {}),
+            "counterProposal": grounded.counter_proposal,
         }
 
     return recommend
+
+
+def _provider_request_text(provider: _PureDecisionProvider) -> str:
+    """Return the operator's request the provider carries for the current hop."""
+    getter = getattr(provider, "grounding_text", None)
+    return getter() if callable(getter) else ""
 
 
 def a2a_request_text(intent: ProcessedIntent) -> str:

@@ -1,36 +1,29 @@
 """Deterministic grounding checks for an automatic negotiation decision.
 
-The automatic decision agent may only fill a Task-T value when that value is backed by one of:
+The automatic decision agent may only send a Task-T value when that value is backed by one of:
 
 * the operator's original request (the intent fields or the initial Task-T extraction);
-* the current server proposal's structured options or affirmative content;
-* a deterministic tool result from the same decision turn, when that tool's data domain is the
-  same as the server's (local demo only).
+* the current server proposal's structured options or affirmative content.
 
 A model call is not proof: the value must match. This module never calls a model and never reads
 the trace pipeline; the decision flow uses it before sending an ACCEPT.
+
+Grounding is deliberately narrow. It judges only values that actually travel in the message being
+built, and only values that the decision changes. A value the server already accepted in the
+initial Task-T is grounded by construction: the client must not re-prove the operator's own values
+or treat a field this negotiation does not touch as missing. Field completeness is a pre-send
+concern, owned by the caller's required-field gate.
 """
 
 from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
 from shared.models import NegotiationProposeView
-from shared.task_schema import TASK_PARAM_SCHEMA
-
-
-#: One deterministic tool call recorded during a decision turn.
-@dataclass(frozen=True)
-class ToolCall:
-    """One ADK tool invocation with its arguments and JSON result."""
-
-    name: str
-    args: Mapping[str, object]
-    result: Mapping[str, object]
 
 
 #: One Task-T value the automatic decision may not send.
@@ -111,7 +104,7 @@ def normalize(value: object) -> str:
     return text.strip(_TRIM_PUNCTUATION)
 
 
-def _present(value: object) -> bool:
+def present(value: object) -> bool:
     """Return whether one filled value counts as present."""
     return value is not None and normalize(value) != ""
 
@@ -166,7 +159,21 @@ def server_region_values(propose: NegotiationProposeView) -> set[str]:
     return values
 
 
-def _server_target_segments(propose: NegotiationProposeView) -> set[str]:
+def server_entity_values(propose: NegotiationProposeView) -> dict[str, set[str]]:
+    """Return the entity values the proposal itself offers, keyed by Task-T field.
+
+    The server is the only authority for these fields, so this is the only source besides the
+    operator's original request that may answer one. Structured options cover every entity field;
+    free prose is parsed for a region only.
+    """
+    values = dict(_options_values(propose))
+    regions = server_region_values(propose)
+    if regions:
+        values.setdefault("region", set()).update(regions)
+    return values
+
+
+def server_target_segments(propose: NegotiationProposeView) -> set[str]:
     """Return the normalized target segments the proposal offers affirmatively."""
     segments: set[str] = set()
     for sentence in _sentences(propose.content):
@@ -182,7 +189,7 @@ def _server_target_segments(propose: NegotiationProposeView) -> set[str]:
     return segments
 
 
-def _server_target_rates(propose: NegotiationProposeView) -> set[str]:
+def server_target_rates(propose: NegotiationProposeView) -> set[str]:
     """Return the plain Mbps rates an affirmative proposal sentence offers.
 
     A feasibility proposal often states its revised target in prose
@@ -197,7 +204,7 @@ def _server_target_rates(propose: NegotiationProposeView) -> set[str]:
     return rates
 
 
-def _server_contains(propose: NegotiationProposeView, value: object) -> bool:
+def server_contains(propose: NegotiationProposeView, value: object) -> bool:
     """Return whether an affirmative proposal sentence contains the value."""
     wanted = normalize(value)
     if not wanted:
@@ -215,23 +222,6 @@ def _server_contains(propose: NegotiationProposeView, value: object) -> bool:
     return False
 
 
-def _tool_grounds(field: str, value: object, tool_calls: Sequence[ToolCall]) -> bool:
-    """Return whether a deterministic tool result from this turn contains the value."""
-    wanted = normalize(value)
-    if not wanted:
-        return False
-    for call in tool_calls:
-        result = call.result
-        if field == "region" and normalize(result.get("region", "")) == wanted:
-            return True
-        if field == "siteList":
-            sites = result.get("site_list")
-            if isinstance(sites, Sequence) and not isinstance(sites, str):
-                if wanted in {normalize(item) for item in sites}:
-                    return True
-    return False
-
-
 def _target_segments(value: object) -> list[str]:
     """Return the normalized segments of one target value."""
     return [normalize(item) for item in _TARGET_SEGMENT.findall(str(value))]
@@ -243,34 +233,49 @@ def find_ungrounded(
     baseline: Mapping[str, object],
     intent: Mapping[str, object],
     propose: NegotiationProposeView,
-    tool_calls: Sequence[ToolCall],
-    tools_authoritative: bool,
 ) -> list[UngroundedValue]:
-    """Return every value of ``filled`` that no allowed source grounds.
+    """Return every changed value of ``filled`` that no allowed source grounds.
 
-    The baseline is the initial Task-T extraction and the intent is the operator's business
-    reading; a value equal to either one is grounded. A changed value needs the server proposal or
-    an authoritative tool result. Required fields that are absent are reported as ungrounded too.
+    A value equal to the baseline (the Task-T the server already accepted) or to the operator's
+    intent is grounded by construction: the client does not re-prove what it already sent. Only a
+    changed value needs a source, and only the fields this negotiation may change are checked.
+    Completeness of the required fields is not grounded here; the pre-send gate owns it.
+
+    Args:
+        filled: Task-T values the ACCEPT would carry.
+        baseline: Task-T values already accepted by the server.
+        intent: Operator-derived business values (may equal the baseline).
+        propose: Inbound server proposal.
+
+    Returns:
+        One :class:`UngroundedValue` per changed value with no allowed source.
     """
     ungrounded: list[UngroundedValue] = []
-    regions = server_region_values(propose)
-    segments = _server_target_segments(propose)
+    regions = server_entity_values(propose)
+    segments = server_target_segments(propose)
     for name, value in filled.items():
-        if not _present(value):
+        if not present(value):
             continue
         if normalize(value) == normalize(baseline.get(name, "")):
             continue
         if normalize(value) == normalize(intent.get(name, "")):
             continue
         if name == "operationType":
-            ungrounded.append(UngroundedValue(name, str(value), "changed operation type is not grounded"))
+            if normalize(value) in regions.get(name, set()):
+                continue
+            # The operation type is never changed by a negotiation; a different value is either
+            # the operator's own (handled above) or invented.
+            ungrounded.append(UngroundedValue(name, str(value), "changed operation type is not offered by the server"))
             continue
         if name == "region":
-            if normalize(value) in regions:
-                continue
-            if tools_authoritative and _tool_grounds(name, value, tool_calls):
+            if normalize(value) in regions.get(name, set()):
                 continue
             ungrounded.append(UngroundedValue(name, str(value), "region is not offered by the server"))
+            continue
+        if name in ("siteList", "energySavingGoal"):
+            if normalize(value) in regions.get(name, set()) or server_contains(propose, value):
+                continue
+            ungrounded.append(UngroundedValue(name, str(value), f"{name} is not offered by the server"))
             continue
         if name == "guaranteedThroughputTarget":
             value_segments = _target_segments(value)
@@ -285,32 +290,20 @@ def find_ungrounded(
                 for item in value_segments
                 for match in _RATE_VALUE.finditer(item)
             }
-            if value_rates and value_rates <= _server_target_rates(propose):
+            if value_rates and value_rates <= server_target_rates(propose):
                 # The proposal offered the same rate in prose; the segment notation differs.
                 continue
             ungrounded.append(
                 UngroundedValue(name, str(value), "target segments are not offered by the server")
             )
             continue
-        if _server_contains(propose, value):
-            continue
-        if tools_authoritative and _tool_grounds(name, value, tool_calls):
+        if server_contains(propose, value):
             continue
         ungrounded.append(UngroundedValue(name, str(value), "value is not grounded"))
-    required = TASK_PARAM_SCHEMA.get("required")
-    site_level = any(_present(filled.get(field)) for field in ("siteList", "backgroundEvent"))
-    if isinstance(required, list):
-        for name in required:
-            if name == "guaranteedThroughputTarget" and not site_level:
-                # Area-level requests may omit the rate; the server executes the default
-                # no-disruption mode. Site-level requests still need a concrete rate.
-                continue
-            if isinstance(name, str) and not _present(filled.get(name)):
-                ungrounded.append(UngroundedValue(name, "", "required value is missing"))
     return ungrounded
 
 
-def grounding_reask_text(propose: NegotiationProposeView, ungrounded: Sequence[UngroundedValue]) -> str:
+def grounding_reask_text(propose: NegotiationProposeView, ungrounded: list[UngroundedValue]) -> str:
     """Build the corrective proposal text for one grounded decision turn."""
     fields = ", ".join(f"{item.field}={item.value or '<missing>'}" for item in ungrounded)
     options = ""
@@ -320,18 +313,24 @@ def grounding_reask_text(propose: NegotiationProposeView, ungrounded: Sequence[U
     return (
         f"{propose.content}{options}\n\n"
         "## Grounding requirement\n"
-        f"The values {fields} are not grounded. An ACCEPT may only carry values that appear in "
-        "the original user request, in this server proposal, or in a tool result from this turn. "
-        "If no grounded value exists, do not accept; return reject or abort with a clear rationale. "
+        f"The values {fields} do not appear in the original user request or in this server "
+        "proposal. Do not invent a value. Use a value the original request states, a value from "
+        "the server options above, or leave the field out; if an item the server asked for cannot "
+        "be answered from those sources, return reject and name the missing item in the rationale. "
+        "Values this negotiation did not change need no new source. "
         "Return only the NegotiationDecision JSON object."
     )
 
 
 __all__ = [
-    "ToolCall",
     "UngroundedValue",
     "find_ungrounded",
     "grounding_reask_text",
     "normalize",
+    "present",
+    "server_entity_values",
     "server_region_values",
+    "server_target_rates",
+    "server_contains",
+    "server_target_segments",
 ]

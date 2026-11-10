@@ -1091,6 +1091,9 @@ async def _run_client_foreground(
                 trace_sink=trace_sink,
                 run_id=run_id,
                 user_request=user_request,
+                # The CLI is a first-class entry point: without this gate it skipped both the
+                # required-field check and the extraction that the accept baseline needs.
+                enforce_required_fields=True,
             )
         for index, decision in enumerate(result.decisions):
             if index < len(transcript.decisions):

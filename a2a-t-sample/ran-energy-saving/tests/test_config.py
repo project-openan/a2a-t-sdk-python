@@ -18,6 +18,7 @@ from shared.config import (
     APPROVAL_TIMEOUT_ENV_KEY,
     CLIENT_DB_ENV_KEY,
     CLIENT_MEMORY_TURNS_ENV_KEY,
+    CLIENT_MIN_THROUGHPUT_ENV_KEY,
     DECISION_RECOMMENDATION_TIMEOUT_ENV_KEY,
     DEFAULT_ADK_SESSION_RETENTION_DAYS,
     DEFAULT_DECISION_RECOMMENDATION_TIMEOUT_SECONDS,
@@ -341,6 +342,7 @@ def test_client_db_gateway_and_planner_settings(tmp_path: Path) -> None:
             [
                 f"{CLIENT_DB_ENV_KEY}={tmp_path / 'client.sqlite3'}",
                 f"{CLIENT_MEMORY_TURNS_ENV_KEY}=3",
+                f"{CLIENT_MIN_THROUGHPUT_ENV_KEY}=2.5",
                 f"{ADK_SESSION_RETENTION_DAYS_ENV_KEY}=30",
                 f"{GATEWAY_PORT_ENV_KEY}=8101",
                 f"{GATEWAY_REGISTER_ENV_KEY}=yes",
@@ -359,6 +361,7 @@ def test_client_db_gateway_and_planner_settings(tmp_path: Path) -> None:
 
     assert config.client_db_path == str(tmp_path / "client.sqlite3")
     assert config.client_memory_turns == 3
+    assert config.client_min_throughput_mbps == 2.5
     assert config.adk_session_retention_days == 30
     assert config.gateway_port == 8101
     assert config.gateway_register is True
@@ -397,6 +400,7 @@ def test_planner_defaults_follow_the_adk_endpoint(tmp_path: Path) -> None:
     [
         (CLIENT_DB_ENV_KEY, "relative/client.sqlite3"),
         (CLIENT_MEMORY_TURNS_ENV_KEY, "-1"),
+        (CLIENT_MIN_THROUGHPUT_ENV_KEY, "0"),
         (ADK_SESSION_RETENTION_DAYS_ENV_KEY, "0"),
         (GATEWAY_REGISTER_ENV_KEY, "sometimes"),
         (PLANNER_MAX_STEPS_ENV_KEY, "0"),

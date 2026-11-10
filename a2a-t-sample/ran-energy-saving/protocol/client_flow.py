@@ -27,7 +27,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Final, Protocol
 
@@ -95,13 +95,14 @@ from shared.trace import (
     trace_stage,
 )
 
+from protocol.client_policy import ClientPolicy, apply_automated_decision
 from protocol.decision_provider import (
     AdkDecisionProvider,
     DecisionTimeoutError,
     NegotiationDecisionProvider,
     ScriptedDecisionProvider,
 )
-from protocol.grounding import ToolCall, UngroundedValue, find_ungrounded, grounding_reask_text, normalize
+from protocol.grounding import UngroundedValue, find_ungrounded, grounding_reask_text, normalize
 from protocol.messages import (
     END_MESSAGE_TEXT,
     SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
@@ -903,7 +904,7 @@ async def run_client_flow(
     conversation_context: str | None = None,
     single_extension_per_message: bool = False,
     infer_missing_negotiation_kind: bool = False,
-    tools_authoritative: bool = False,
+    client_policy: ClientPolicy | None = None,
     validate_before_send: bool = False,
     enforce_required_fields: bool = False,
     require_rate_target: bool = True,
@@ -958,9 +959,10 @@ async def run_client_flow(
             field on the proposal that continues a negotiation; without this the run fails hard.
             A body without a known heading still fails, because guessing the kind would pick the
             wrong decision prompt and reply template.
-        tools_authoritative: When true, a deterministic client tool result may ground an accept
-            value. Only the local demo server shares the demo dataset; NMS and NMS simulator runs
-            must answer from the operator's request or the server proposal instead.
+        client_policy: Client acceptance limits applied to an automatic decision. The flow never
+            invents an entity value and never accepts a plan below the configured throughput floor;
+            in automatic mode it also accepts a feasible server alternative the model rejected.
+            ``None`` means no floor.
         validate_before_send: Validate each rendered Task-T with the SDK content pipeline before
             sending it. Negotiable errors still go to the server for negotiation; unmapped errors
             end the flow with ``input_invalid`` and no message is sent.
@@ -980,6 +982,8 @@ async def run_client_flow(
         ClientFlowError: when the server sends an unanswerable negotiation message or the stream
             exceeds the exchange budget.
     """
+    policy = client_policy or ClientPolicy()
+    carries_task_t = not single_extension_per_message
     transport_emits_events = False
     if event_sink is not None:
         set_event_sink = getattr(transport, "set_event_sink", None)
@@ -1390,18 +1394,60 @@ async def run_client_flow(
                 # The provider loop normally only notifies the page. Reaching here means the wait
                 # sink was never installed; refuse to send an abort the operator never chose.
                 raise ClientFlowError(_ERROR_DECISION_WAIT) from exc
-            decision, ungrounded = await _ensure_grounded_decision(
-                provider,
-                decision,
-                propose,
-                session,
-                kind=kind,
-                baseline=initial_filled,
-                intent_fields=intent_fields,
-                tools_authoritative=tools_authoritative,
-                reasked=reasked_rounds,
-                trace_sink=trace_sink,
-            )
+            policy_outcome = None
+            if _requires_auto_verification(provider):
+                decision, policy_outcome = apply_automated_decision(
+                    decision,
+                    kind=kind.value,
+                    propose=propose,
+                    baseline=initial_filled,
+                    intent_fields=intent_fields,
+                    policy=policy,
+                )
+                if policy_outcome.notes:
+                    emit_trace(
+                        "decision_policy_applied",
+                        phase=PHASE_NEGOTIATION,
+                        title="Client policy applied to the automatic decision",
+                        round_number=session.round,
+                        context_id=context_id,
+                        detail={
+                            "action": decision.action,
+                            "notes": list(policy_outcome.notes),
+                            "forcedAccept": policy_outcome.forced_accept,
+                            "droppedFields": sorted(policy_outcome.dropped_fields),
+                        },
+                    )
+            if (
+                policy_outcome is not None
+                and decision.action == "accept"
+                and kind is NegotiationKind.INFORMATION
+                and policy_outcome.dropped_fields
+            ):
+                # The server asked for a value and the model supplied one it could not source.
+                # Dropping it silently would send an accept that does not answer the question.
+                ungrounded = [
+                    UngroundedValue(
+                        field,
+                        "",
+                        "the model supplied an entity value neither the server nor the operator states",
+                    )
+                    for field in sorted(policy_outcome.dropped_fields)
+                ]
+                decision = None
+            else:
+                decision, ungrounded = await _ensure_grounded_decision(
+                    provider,
+                    decision,
+                    propose,
+                    session,
+                    kind=kind,
+                    baseline=initial_filled,
+                    intent_fields=intent_fields,
+                    carries_task_t=carries_task_t,
+                    reasked=reasked_rounds,
+                    trace_sink=trace_sink,
+                )
         if decision is None:
             fields = ", ".join(f"{item.field}={item.value or '<missing>'}" for item in ungrounded)
             reason = f"The automatic decision for round {session.round} has no grounded value: {fields}."
@@ -1417,27 +1463,30 @@ async def run_client_flow(
                     "reason": reason,
                 },
             )
-            abort_decision = NegotiationDecision(action="abort", rationale=reason)
+            # An automatic decision that cannot be grounded is a refusal, not a request to end
+            # the negotiation on the operator's behalf. In automatic mode there is no human
+            # channel to surface it, so the client rejects and names the reason.
+            reject_decision = NegotiationDecision(action="reject", rationale=reason)
             request, call_context = await _build_terminal_request(
                 prompt_client=prompt_client,
-                decision=abort_decision,
+                decision=reject_decision,
                 kind=kind,
                 session=session,
                 context_id=context_id,
                 label=resolved_label,
                 propose_content=propose.content,
-                performative=NegotiationPerformative.ABORT,
+                performative=NegotiationPerformative.REJECT,
                 call_timeout_seconds=call_timeout_seconds,
                 task_id=target_task_id if modify_only else None,
             )
             if on_decision_made is not None:
-                on_decision_made(abort_decision, propose, session)
-            result.decisions.append(abort_decision)
+                on_decision_made(reject_decision, propose, session)
+            result.decisions.append(reject_decision)
             emit_message_sent(
                 request,
                 phase=PHASE_RESOLUTION,
-                title="Abort sent",
-                performative=NegotiationPerformative.ABORT.value,
+                title="Reject sent",
+                performative=NegotiationPerformative.REJECT.value,
                 round_number=session.round,
                 context_id=context_id,
             )
@@ -1503,6 +1552,7 @@ async def run_client_flow(
                 context_id=context_id,
                 label=resolved_label,
                 call_timeout_seconds=call_timeout_seconds,
+                include_sample_proposal=carries_task_t,
                 task_id=target_task_id if modify_only else None,
             )
             send_phase = PHASE_NEGOTIATION
@@ -1673,12 +1723,12 @@ def _accept_filled_values(
     return filled
 
 
-def _requires_grounding(provider: NegotiationDecisionProvider) -> bool:
-    """Return whether this provider's ACCEPT must pass the deterministic grounding verifier.
+def _requires_auto_verification(provider: NegotiationDecisionProvider) -> bool:
+    """Return whether this provider's ACCEPT is an automatic decision that must be verified.
 
     A scripted provider is a recorded operator answer. An offline ADK provider is the
     deterministic fake model used by the demo/tests. Manual and confirm providers return the
-    operator's submitted decision. Only a live automatic ADK decision needs verification.
+    operator's submitted decision. Only a live automatic ADK decision is verified.
     """
     if isinstance(provider, ScriptedDecisionProvider):
         return False
@@ -1696,31 +1746,35 @@ async def _ensure_grounded_decision(
     kind: NegotiationKind,
     baseline: Mapping[str, object],
     intent_fields: Mapping[str, object] | None,
-    tools_authoritative: bool,
+    carries_task_t: bool,
     reasked: set[tuple[str, int]],
     trace_sink: Callable[[dict[str, object]], None] | None,
 ) -> tuple[NegotiationDecision | None, list[UngroundedValue]]:
     """Return a grounded decision, or ``None`` and the values that could not be grounded.
 
+    Only values that actually travel are judged. An information accept carries the values in its
+    text; a target/feasibility accept on the real NMS carries no Task-T at all and only agrees with
+    the server's proposal, so there is nothing to ground. The local demo server does carry the
+    refilled Task-T, and then the changed values are checked.
+
     One corrective decision turn per negotiation round is allowed. The corrective turn shows the
     model the server proposal and its options again and states the grounding rule; if the model
     still returns an ungrounded ACCEPT, the flow refuses to send it.
     """
-    if decision.action != "accept" or not _requires_grounding(provider):
+    if decision.action != "accept" or not _requires_auto_verification(provider):
         return decision, []
-    if propose.kind == "information" and not decision.filled_params:
+    if kind is not NegotiationKind.INFORMATION and not carries_task_t:
+        return decision, []
+    if kind is NegotiationKind.INFORMATION and not decision.filled_params:
         return None, [
             UngroundedValue("information", "", "accept does not answer the requested items")
         ]
     filled = _accept_filled_values(kind, decision, baseline, intent_fields)
-    tool_calls: tuple[ToolCall, ...] = tuple(getattr(provider, "last_tool_calls", ()))
     ungrounded = _ungrounded_values(
         filled,
         baseline=baseline,
         intent_fields=intent_fields,
         propose=propose,
-        tool_calls=tool_calls,
-        tools_authoritative=tools_authoritative,
     )
     if not ungrounded:
         return decision, []
@@ -1749,12 +1803,11 @@ async def _ensure_grounded_decision(
     corrected_decision = await provider.respond(corrected, session)
     if corrected_decision.action != "accept":
         return corrected_decision, []
-    if propose.kind == "information" and not corrected_decision.filled_params:
+    if kind is NegotiationKind.INFORMATION and not corrected_decision.filled_params:
         return None, [
             UngroundedValue("information", "", "accept does not answer the requested items")
         ]
     filled = _accept_filled_values(kind, corrected_decision, baseline, intent_fields)
-    tool_calls: tuple[ToolCall, ...] = tuple(getattr(provider, "last_tool_calls", ()))
     still_ungrounded = _ungrounded_values(
         filled,
         baseline=baseline,
@@ -1762,8 +1815,6 @@ async def _ensure_grounded_decision(
         # Verify against the real server proposal, not our corrective instruction: the reask text
         # repeats the ungrounded value and must never become its own grounding source.
         propose=propose,
-        tool_calls=tool_calls,
-        tools_authoritative=tools_authoritative,
     )
     if still_ungrounded:
         return None, still_ungrounded
@@ -1776,8 +1827,6 @@ def _ungrounded_values(
     baseline: Mapping[str, object],
     intent_fields: Mapping[str, object] | None,
     propose: NegotiationProposeView,
-    tool_calls: Sequence[ToolCall],
-    tools_authoritative: bool,
 ) -> list[UngroundedValue]:
     """Run the grounding verifier with the flow's value shapes."""
     return find_ungrounded(
@@ -1785,8 +1834,6 @@ def _ungrounded_values(
         baseline=baseline,
         intent=intent_fields or {},
         propose=propose,
-        tool_calls=tool_calls,
-        tools_authoritative=tools_authoritative,
     )
 
 
@@ -1844,16 +1891,24 @@ async def _build_accept_request(
 ) -> tuple[SendMessageRequest, ClientCallContext]:
     """Refill the Task-T prompt and generate the Negotiation-T accept of the proposal type."""
     filled = _accept_filled_values(kind, decision, baseline, intent_fields)
-    with trace_stage("task_t_slot_extraction_refill"):
-        task_content = await asyncio.to_thread(
-            prompt_client.generate_task_prompt_from_data_with_schema,
-            filled,
-            TASK_PARAM_SCHEMA,
-            task_template_uri,
+    task_content = None
+    task_text = ""
+    if not single_extension_per_message:
+        # Only the local demo server reads a refilled Task-T from the accept. The real NMS rejects
+        # a second ``-T`` key, so it never receives one; generating it there was a pure LLM call
+        # whose result was discarded (and whose failure could abort a valid accept).
+        with trace_stage("task_t_slot_extraction_refill"):
+            task_content = await asyncio.to_thread(
+                prompt_client.generate_task_prompt_from_data_with_schema,
+                filled,
+                TASK_PARAM_SCHEMA,
+                task_template_uri,
+            )
+        task_text = _ensure_agreed_target(
+            _require_prompt_text(task_content, "the refilled Task-T prompt"), filled
         )
-    task_text = _ensure_agreed_target(_require_prompt_text(task_content, "the refilled Task-T prompt"), filled)
 
-    accept_text = _accept_text(kind, filled, decision)
+    accept_text = _accept_text(kind, filled, decision, baseline=baseline)
     accept_context = session.with_performative(NegotiationPerformative.ACCEPT)
     with trace_stage("negotiation_accept_extraction"):
         content = await asyncio.to_thread(
@@ -1865,7 +1920,9 @@ async def _build_accept_request(
     # The real NMS rejects a message whose metadata holds more than one ``-T`` extension key, so
     # the NMS path sends the accept with the negotiation key only; the local demo server reads the
     # refilled Task-T prompt from the accept message and keeps receiving it.
-    metadata = None if single_extension_per_message else {task_content.extension_uri or TASK_T_EXTENSION_URI: task_text}
+    metadata = None if task_content is None else {
+        task_content.extension_uri or TASK_T_EXTENSION_URI: task_text
+    }
     return _negotiation_request(
         prompt_client=prompt_client,
         content=content,
@@ -1887,9 +1944,15 @@ async def _build_counter_request(
     context_id: str,
     label: str,
     call_timeout_seconds: float,
+    include_sample_proposal: bool = True,
     task_id: str | None = None,
 ) -> tuple[SendMessageRequest, ClientCallContext]:
-    """Generate a counter proposal that keeps the inbound round (same-round ``Propose``)."""
+    """Generate a counter proposal that keeps the inbound round (same-round ``Propose``).
+
+    ``include_sample_proposal`` is false on the real NMS path: ``counter_params`` is a sample-only
+    plan over the demo dataset, and sending a fabricated ``{cellId, window, targetRate}`` to a
+    vendor that has no such cell would be exactly the client-side network fact this flow bans.
+    """
     text = decision.counter_proposal or decision.rationale
     if not text.strip():
         raise ClientFlowError("A counter decision carries neither a counter proposal nor a rationale.")
@@ -1902,7 +1965,7 @@ async def _build_counter_request(
             _PROPOSE_TEMPLATE_URI_BY_KIND[kind.value],
         )
     extra: dict[str, object] = {}
-    if decision.counter_params:
+    if include_sample_proposal and decision.counter_params:
         extra[SAMPLE_PROPOSAL_METADATA_KEY] = dict(decision.counter_params)
     return _negotiation_request(
         prompt_client=prompt_client,
@@ -2366,8 +2429,17 @@ def _accept_text(
     kind: NegotiationKind,
     filled: Mapping[str, object],
     decision: NegotiationDecision,
+    *,
+    baseline: Mapping[str, object] | None = None,
 ) -> str:
-    """Render the natural-language input of an accept for the proposal type."""
+    """Render the natural-language input of an accept for the proposal type.
+
+    The agreed values are rendered by the flow, not carried by the model's prose. A real-NMS
+    accept has no Task-T metadata: its text is the only thing the vendor reads, and a feasibility
+    accept that does not name the alternative leaves the vendor executing the pre-negotiation
+    rate. Only values the negotiation actually changed are included, because repeating the whole
+    Task-T makes the Negotiation-T validator treat unrelated text as result content.
+    """
     if kind is NegotiationKind.INFORMATION:
         # The information accept result must answer the requested item only. Repeating every base
         # Task-T field (region, description, ...) makes the Negotiation-T validator treat unrelated
@@ -2380,7 +2452,33 @@ def _accept_text(
         items = " ".join(f"{name}: {filled.get(name, '')}." for name in requested)
         return f"Accept. {items}".strip()
     confirmation = decision.confirmed_intent if kind is NegotiationKind.TARGET else decision.feasibility_summary
-    return f"Accept. {confirmation or decision.rationale}"
+    values = _agreed_values_line(filled, baseline=baseline)
+    body = " ".join(part for part in (values, confirmation or "") if part).strip()
+    return f"Accept. {body}".strip() if body else "Accept."
+
+
+def _agreed_values_line(
+    filled: Mapping[str, object],
+    *,
+    baseline: Mapping[str, object] | None,
+) -> str:
+    """Render the Task-T values the accept changes, as one deterministic sentence group."""
+    parts: list[str] = []
+    target = filled.get("guaranteedThroughputTarget")
+    if isinstance(target, str) and target.strip():
+        parts.append(f"Rate guarantee target: {target.strip()}.")
+    for name, label in (
+        ("region", "Area"),
+        ("siteList", "Site list"),
+        ("backgroundEvent", "Background event"),
+    ):
+        value = filled.get(name)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        if baseline is not None and normalize(value) == normalize(baseline.get(name, "")):
+            continue
+        parts.append(f"{label}: {value.strip()}.")
+    return " ".join(parts)
 
 
 def _reject_text(kind: NegotiationKind, propose_content: str, decision: NegotiationDecision) -> str:

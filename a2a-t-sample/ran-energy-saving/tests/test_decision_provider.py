@@ -87,7 +87,8 @@ def test_build_decision_prompt_requires_answering_required_items() -> None:
 
     assert "Required Information Items" in prompt
     assert "answer every item in filled_params" in prompt
-    assert "Only put a value in" in prompt
+    assert "A value must appear in the original request" in prompt
+    assert "get_client_policy()" in prompt
     assert "Configured NMS region" not in prompt
 
 

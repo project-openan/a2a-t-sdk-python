@@ -81,6 +81,7 @@ from protocol.client_flow import (
     WebhookClientTransport,
     run_client_flow,
 )
+from protocol.client_policy import ClientPolicy
 from protocol.decision_provider import (
     AdkDecisionProvider,
     ConfirmingDecisionProvider,
@@ -754,7 +755,7 @@ class ClientRuntime:
                         self.config.discovery == DISCOVERY_NMS
                         and self.config.nms_infer_negotiation_kind
                     ),
-                    tools_authoritative=(self.config.discovery != DISCOVERY_NMS),
+                    client_policy=ClientPolicy.from_config(self.config),
                     validate_before_send=validate_before_send,
                     enforce_required_fields=enforce_required_fields,
                     require_rate_target=require_rate_target,
