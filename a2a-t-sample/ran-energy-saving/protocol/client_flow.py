@@ -336,45 +336,50 @@ def _required_field_label(
     return labels.get(name, name)
 
 
+#: Caller-schema field a site-level request must state. The Task-T template requires a
+#: time-segmented rate target for a site-level configuration; the caller schema does not list it
+#: in ``required`` because an area-level request may omit it.
+RATE_TARGET_FIELD: Final[str] = "guaranteedThroughputTarget"
+
+
+def _is_missing_value(value: object) -> bool:
+    """Return whether one extracted parameter carries no value."""
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
 def _missing_required_fields(
     data: Mapping[str, object],
     schema: Mapping[str, object],
     language: str,
     *,
-    require_rate_target: bool = True,
     site_level_rate_optional: bool = False,
 ) -> list[dict[str, object]]:
     """Return the caller-schema required fields the OSS agent must ask the operator to supply.
 
-    The SDK content validator treats the Task-T template's optional fields as optional; the OSS
-    agent's own business schema may still require them (for example a guaranteed rate for every
-    energy-saving request). This deterministic check runs on the client side so the OSS agent
-    intercepts its own required gaps before they reach the network. The returned errors use the
-    same ``content.param_missing`` shape as the SDK, including a business ``section_label`` that
-    the presentation and the negotiation proposal can display.
+    The schema's ``required`` list is the only source of mandatory fields. The guaranteed rate is
+    deliberately not on it: an area-level request without one is valid (the vendor treats an empty
+    target list as the default non-disruptive mode, and our Task-T template marks the rate target
+    optional). A site-level request still needs it, because the Task-T template requires a
+    time-segmented rate target for site-level configurations; enforcing that rule here keeps
+    area-level requests sendable while the site-level contract stays intact.
+
+    The returned errors use the same ``content.param_missing`` shape as the SDK, including a
+    business ``section_label`` that the presentation and the negotiation proposal can display.
     """
     required = schema.get("required")
-    if not isinstance(required, list):
-        return []
-    errors: list[dict[str, object]] = []
-    # A rate target is optional for an area-level request (the Task-T template marks it optional
-    # and the server may execute with the default no-disruption mode). Only a site-level request
-    # needs the site list plus a concrete rate. Blocking every rate-less area-level request here
-    # would make the OSP cases that expect a plain Create unsendable.
+    names = [name for name in required if isinstance(name, str)] if isinstance(required, list) else []
     site_level = any(
         data.get(field) not in (None, "")
         for field in ("siteList", "backgroundEvent")
     )
-    for name in required:
-        if not isinstance(name, str):
+    if not site_level_rate_optional and RATE_TARGET_FIELD not in names:
+        names.append(RATE_TARGET_FIELD)
+    errors: list[dict[str, object]] = []
+    for name in names:
+        if name == RATE_TARGET_FIELD and not site_level:
+            # Area-level: the rate guarantee target is optional.
             continue
-        if name == "guaranteedThroughputTarget" and (
-            (not site_level and not require_rate_target)
-            or (site_level and site_level_rate_optional)
-        ):
-            continue
-        value = data.get(name)
-        if value is not None and not (isinstance(value, str) and not value.strip()):
+        if not _is_missing_value(data.get(name)):
             continue
         label = _required_field_label(name, schema, language)
         message = (
@@ -432,7 +437,6 @@ async def _validate_task_prompt(
     *,
     language: str,
     enforce_required_fields: bool = True,
-    require_rate_target: bool = True,
     site_level_rate_optional: bool = False,
 ) -> TaskValidation:
     """Run the SDK content validation without blocking the event loop.
@@ -464,7 +468,6 @@ async def _validate_task_prompt(
                     params,
                     schema,
                     language,
-                    require_rate_target=require_rate_target,
                     site_level_rate_optional=site_level_rate_optional,
                 )
                 if missing:
@@ -498,7 +501,6 @@ async def _validate_task_prompt(
                 data,
                 schema,
                 language,
-                require_rate_target=require_rate_target,
                 site_level_rate_optional=site_level_rate_optional,
             )
             if missing:
@@ -907,7 +909,6 @@ async def run_client_flow(
     client_policy: ClientPolicy | None = None,
     validate_before_send: bool = False,
     enforce_required_fields: bool = False,
-    require_rate_target: bool = True,
     site_level_rate_optional: bool = False,
     run_mode: str = RUN_MODE_CREATE,
     target_task_id: str | None = None,
@@ -1219,7 +1220,6 @@ async def run_client_flow(
             task_template_uri,
             language=language,
             enforce_required_fields=enforce_required_fields,
-            require_rate_target=require_rate_target,
             site_level_rate_optional=site_level_rate_optional,
         )
         initial_filled = _merge_initial_filled(validation, intent_fields)
@@ -1232,7 +1232,6 @@ async def run_client_flow(
                 initial_filled,
                 validation_schema,
                 language,
-                require_rate_target=require_rate_target,
                 site_level_rate_optional=site_level_rate_optional,
             )
             if missing:

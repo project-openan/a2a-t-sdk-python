@@ -81,7 +81,6 @@ class ClientRuntimeLike(Protocol):
         conversation_context: str | None = None,
         validate_before_send: bool = False,
         enforce_required_fields: bool = False,
-        require_rate_target: bool = True,
         site_level_rate_optional: bool = False,
         run_mode: str = RUN_MODE_CREATE,
         target_task_id: str | None = None,

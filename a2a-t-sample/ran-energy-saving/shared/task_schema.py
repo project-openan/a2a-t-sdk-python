@@ -63,5 +63,9 @@ TASK_PARAM_SCHEMA: dict[str, object] = {
             "description": "Optional background event and its period of a site-level task.",
         },
     },
-    "required": ["operationType", "region", "guaranteedThroughputTarget"],
+    # The guaranteed rate is deliberately NOT required: the Task-T template marks the rate
+    # guarantee target optional, and the vendor executes an area-level request without one in its
+    # default non-disruptive mode. A site-level request still needs it; that rule lives in
+    # ``protocol.client_flow._missing_required_fields`` so it can stay conditional.
+    "required": ["operationType", "region"],
 }

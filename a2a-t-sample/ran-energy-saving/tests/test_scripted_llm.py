@@ -407,14 +407,15 @@ def test_information_client_extraction_succeeds_and_server_maps_to_information(
     offline_config: SampleConfig,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The missing throughput target is optional to the client but required by the server.
+    """The missing area is required by both sides and maps to the information negotiation.
 
-    The region stays in the request (the Task-T template marks ``task_object`` required), so the
-    client's ``fromText`` extraction must render a prompt; the omitted ``guaranteedThroughputTarget``
-    (the template's optional ``task_context``) must then make the server report
-    ``content.param_missing`` and map to the information negotiation.
+    The guaranteed rate is optional (the vendor treats an empty target list as its default
+    non-disruptive mode), so the demo's incomplete request now omits the task object instead. The
+    client must still render a prompt from the vague area, and the server must report
+    ``content.param_missing`` for the region and map it to the information negotiation.
     """
-    assert "guaranteedThroughputTarget" in cast(list[str], TASK_PARAM_SCHEMA["required"])
+    assert "guaranteedThroughputTarget" not in cast(list[str], TASK_PARAM_SCHEMA["required"])
+    assert "region" in cast(list[str], TASK_PARAM_SCHEMA["required"])
     register_scripted_provider()
     monkeypatch.setenv("A2AT_LANGUAGE", offline_config.language)
     env_path = prepare_sdk_env_path(offline_config)
@@ -426,7 +427,7 @@ def test_information_client_extraction_succeeds_and_server_maps_to_information(
     prompt_text = content.prompt_text
     assert prompt_text is not None
 
-    assert "Region A" in prompt_text
+    assert "test area" in prompt_text
     assert "07:00~17:30,10Mbps" not in prompt_text
     with pytest.raises(ContentValidationError) as excinfo:
         server.validate_task_prompt_and_data_filling(
@@ -436,7 +437,7 @@ def test_information_client_extraction_succeeds_and_server_maps_to_information(
         )
 
     errors = excinfo.value.errors
-    assert [error.slot_name for error in errors] == ["guaranteedThroughputTarget"]
+    assert [error.slot_name for error in errors] == ["region"]
     assert errors[0].code == "content.param_missing"
     assert negotiation_kind_for_errors(errors) is NegotiationKind.INFORMATION
 

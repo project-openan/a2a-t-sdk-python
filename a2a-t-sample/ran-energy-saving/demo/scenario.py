@@ -69,10 +69,10 @@ EXAMPLE_REQUESTS: dict[str, dict[str, str]] = {
     },
     SCENARIO_INFORMATION: {
         LANGUAGE_EN: (
-            "Create an energy saving task for Region A. "
+            "Create an energy saving task. "
             "Output the wireless network energy saving plan and return the intent report."
         ),
-        LANGUAGE_ZH: "在区域 A 创建节能任务。输出无线网络节能方案并返回意图报告。",
+        LANGUAGE_ZH: "创建节能任务。输出无线网络节能方案并返回意图报告。",
     },
     SCENARIO_UNKNOWN_AREA: {
         LANGUAGE_EN: (
@@ -243,14 +243,16 @@ SCENARIO_INFORMATION_SPEC = Scenario(
     name=SCENARIO_INFORMATION,
     expected_kind=KIND_INFORMATION,
     user_request=EXAMPLE_REQUESTS[SCENARIO_INFORMATION],
-    # The request omits a required Task-T field. The client now catches that locally, so the demo
-    # shows the pre-send gate instead of a server negotiation; no scripted decision is consumed.
+    # The request omits the task object. The client catches that locally, so the demo shows the
+    # pre-send gate instead of a server negotiation; no scripted decision is consumed. The rate
+    # guarantee target is optional (the vendor executes an area-level request without one), so it
+    # can no longer serve as the missing field.
     expected_sequence=(),
     expected_final_state=FINAL_STATE_INPUT_INVALID,
     scripted_client_decisions=(),
     description=(
-        "Task-T misses the guaranteed throughput target; the client blocks the request before "
-        "sending it and asks the operator to edit it."
+        "Task-T misses the area; the client blocks the request before sending it and asks the "
+        "operator to edit it."
     ),
 )
 

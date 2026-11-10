@@ -40,6 +40,7 @@ from shared.agent_card import AGENT_CARD_NAME, AGENT_CARD_ORGANIZATION
 from shared.config import (
     DISCOVERY_NMS,
     INTENT_MODE_PROCESSED,
+    PURE_MESSAGE_AUTO,
     PURE_MESSAGE_SEND,
     SUPPORTED_TRANSPORTS,
     TRANSPORT_SSE,
@@ -178,6 +179,12 @@ def _direct_base_url(config: SampleConfig, env_path: Path | None) -> str:
     """Return the direct-discovery server URL (configured value or the sample bind address)."""
     configured = _env_values(env_path).get(DIRECT_SERVER_URL_ENV_KEY, "").strip()
     return configured or f"http://{config.host}:{config.port}"
+
+
+def _peer_streams(agent_card: object) -> bool:
+    """Return whether one peer AgentCard advertises streaming."""
+    capabilities = getattr(agent_card, "capabilities", None)
+    return bool(getattr(capabilities, "streaming", False))
 
 
 def _server_auth_headers(config: SampleConfig) -> dict[str, str]:
@@ -565,7 +572,6 @@ class ClientRuntime:
         conversation_context: str | None = None,
         validate_before_send: bool = False,
         enforce_required_fields: bool = False,
-        require_rate_target: bool = True,
         site_level_rate_optional: bool = False,
         run_mode: str = RUN_MODE_CREATE,
         target_task_id: str | None = None,
@@ -807,7 +813,6 @@ class ClientRuntime:
                     client_policy=ClientPolicy.from_config(self.config),
                     validate_before_send=validate_before_send,
                     enforce_required_fields=enforce_required_fields,
-                    require_rate_target=require_rate_target,
                     site_level_rate_optional=site_level_rate_optional,
                     run_mode=run_mode,
                     target_task_id=target_task_id,
@@ -994,12 +999,16 @@ async def build_client_runtime(
             # the traceparent header) for the wire inspector.
             event_hooks={"request": [inject_outgoing, wire_log.record_request]},
         )
-        # Pure A2A keeps the deployment's RPC method: a webhook deployment (the real NMS) sends
-        # non-streaming ``message/send`` exactly like the A2A-T hop, while an SSE deployment
-        # streams. The transport decides; the explicit pure mode can still override it.
-        streaming = transport == TRANSPORT_SSE and not (
-            protocol == PROTOCOL_PURE and config.pure_message_mode == PURE_MESSAGE_SEND
-        )
+        # Pick the RPC method from the peer's AgentCard, not from the deployment transport: the
+        # local OSS/RAN Agent advertises streaming and benefits from the live event stream, while a
+        # peer without streaming support gets one non-streaming ``message/send``. ``send`` remains
+        # an explicit conformance override for tests.
+        streaming = transport == TRANSPORT_SSE
+        if protocol == PROTOCOL_PURE:
+            if config.pure_message_mode == PURE_MESSAGE_SEND:
+                streaming = False
+            elif config.pure_message_mode == PURE_MESSAGE_AUTO:
+                streaming = streaming and _peer_streams(discovered.agent_card)
         client_config = ClientConfig(
             streaming=streaming,
             httpx_client=httpx_client,

@@ -281,8 +281,8 @@ async def test_initial_task_with_a_missing_required_field_opens_information_nego
     gate, server = _gate()
     server.task_params = {
         "operationType": "Create",
-        "region": "Region A",
-        "guaranteedThroughputTarget": None,
+        "region": None,
+        "guaranteedThroughputTarget": "{00:00~17:30,10Mbps}",
     }
 
     message = _assert_no_task(await gate.handle(_make_context(_initial_message())))
@@ -295,7 +295,7 @@ async def test_initial_task_with_a_missing_required_field_opens_information_nego
     assert server.propose_generations
     proposal_text = server.propose_generations[0][0]
     assert isinstance(proposal_text, str)
-    assert "guaranteedThroughputTarget" in proposal_text
+    assert "region" in proposal_text
 
 
 async def test_a_proposal_emits_the_server_negotiation_started_span() -> None:
@@ -306,8 +306,8 @@ async def test_a_proposal_emits_the_server_negotiation_started_span() -> None:
         gate, server = _gate()
         server.task_params = {
             "operationType": "Create",
-            "region": "Region A",
-            "guaranteedThroughputTarget": None,
+            "region": None,
+            "guaranteedThroughputTarget": "{00:00~17:30,10Mbps}",
         }
 
         await gate.handle(_make_context(_initial_message()))
@@ -379,8 +379,8 @@ async def test_without_a_precheck_the_handler_trusts_the_sdk_verdict() -> None:
     server = FakePromptServer()
     server.task_params = {
         "operationType": "Create",
-        "region": "Region A",
-        "guaranteedThroughputTarget": None,
+        "region": None,
+        "guaranteedThroughputTarget": "{00:00~17:30,10Mbps}",
     }
     handler = PreTaskNegotiationHandler(server)
     context = _make_context(_initial_message())

@@ -1499,7 +1499,6 @@ class RunManager:
                 conversation_context=run.conversation_context,
                 validate_before_send=run.validate_before_send,
                 enforce_required_fields=_should_enforce_required_fields(run.source),
-                require_rate_target=_requires_rate_target(run.source),
                 site_level_rate_optional=bool(run.source.get("negotiationExpected")),
                 run_mode=run.run_mode,
                 target_task_id=run.target_task_id,
@@ -1971,16 +1970,6 @@ def _should_validate_before_send(
 def _should_enforce_required_fields(source: Mapping[str, object]) -> bool:
     """Return whether this run must satisfy the caller schema's required fields."""
     return str(source.get("kind") or "") in _REQUIRED_FIELD_SOURCE_KINDS
-
-
-def _requires_rate_target(source: Mapping[str, object]) -> bool:
-    """Return whether an area-level request must state its guaranteed rate.
-
-    The interactive demo keeps the historical hard gate (the information scenario demonstrates
-    it). The OSP acceptance runner must send the corpus' area-level requests that omit the rate;
-    site-level requests still require it.
-    """
-    return str(source.get("kind") or "") != "tester"
 
 
 def _input_invalid_summary(run: RunState) -> str:

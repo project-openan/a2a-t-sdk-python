@@ -2,16 +2,16 @@
   "semantic_verdict": false,
   "errors": [
     {
-      "slot_name": "guaranteedThroughputTarget",
+      "slot_name": "region",
       "code": "content.param_missing",
       "facts": {
-        "section_label": "task_context"
+        "section_label": "Area"
       }
     }
   ],
   "params": {
     "operationType": "Create",
-    "region": "Region A",
+    "region": null,
     "energySavingGoal": "Maximize energy saving under the condition that the task context is met.",
     "guaranteedThroughputTarget": null
   }

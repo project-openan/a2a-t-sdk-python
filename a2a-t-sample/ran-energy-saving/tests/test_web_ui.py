@@ -1573,7 +1573,7 @@ def test_the_profiled_catalog_pre_fills_the_vendor_region() -> None:
         sites=("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
     )
 
-    request = _scenario_request(catalog, "information", "en-US")
+    request = _scenario_request(catalog, "night", "en-US")
 
     assert "A2ATestRegion" in request
     assert "Region A" not in request
