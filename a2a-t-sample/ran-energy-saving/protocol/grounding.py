@@ -79,6 +79,12 @@ _AFFIRMATIVE_MARKERS: Final[tuple[str, ...]] = (
     "替代",
 )
 
+#: A sentence that states a requirement as infeasible (the rejected request, not an offer).
+_INFEASIBLE_SENTENCE: Final[re.Pattern[str]] = re.compile(
+    r"infeasible|not feasible|cannot|can ?not|unable|original request|不可行|无法|不能满足|原请求",
+    re.IGNORECASE,
+)
+
 #: A plain rate in affirmative proposal prose ("reduce the target from 10Mbps to 2Mbps").
 _RATE_VALUE: Final[re.Pattern[str]] = re.compile(r"\d+(?:\.\d+)?\s*Mbps", re.IGNORECASE)
 
@@ -195,6 +201,10 @@ def server_target_rates(propose: NegotiationProposeView) -> set[str]:
     for sentence in _sentences(propose.content):
         if _negated(sentence) and not _affirmative(sentence):
             continue
+        if _INFEASIBLE_SENTENCE.search(sentence):
+            # A rate the proposal itself declares infeasible is the rejected baseline, never the
+            # server's alternative; counting it would let the client "agree" to it.
+            continue
         rates.update(normalize(match.group(0)) for match in _RATE_VALUE.finditer(sentence))
     return rates
 
@@ -215,6 +225,21 @@ def server_contains(propose: NegotiationProposeView, value: object) -> bool:
             if normalize(raw) == wanted:
                 return True
     return False
+
+
+def _unchanged(name: str, value: object, other: object) -> bool:
+    """Return whether one value equals another, comparing targets by their notation.
+
+    The accept normalizes a target to ``{HH:MM~HH:MM,NMbps}`` while the baseline may carry the
+    vendor's ``{HH:MM-HH:MM: NMbps}``; a textual comparison would report the unchanged value as a
+    change and demand a source for it.
+    """
+    if name == "guaranteedThroughputTarget":
+        left = sorted(_canonical_segments(value))
+        right = sorted(_canonical_segments(other))
+        if left or right:
+            return left == right
+    return normalize(value) == normalize(other)
 
 
 def _target_segments(value: object) -> list[str]:
@@ -256,9 +281,9 @@ def find_ungrounded(
     for name, value in filled.items():
         if not present(value):
             continue
-        if normalize(value) == normalize(baseline.get(name, "")):
+        if _unchanged(name, value, baseline.get(name, "")):
             continue
-        if normalize(value) == normalize(intent.get(name, "")):
+        if _unchanged(name, value, intent.get(name, "")):
             continue
         if name == "operationType":
             if normalize(value) in regions.get(name, set()):

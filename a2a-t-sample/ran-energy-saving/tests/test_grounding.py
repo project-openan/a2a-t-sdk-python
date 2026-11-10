@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from protocol.grounding import find_ungrounded, grounding_reask_text
+from protocol.grounding import find_ungrounded, grounding_reask_text, server_target_rates
 from shared.models import NegotiationAreaOption, NegotiationOptions, NegotiationProposeView
 
 _TARGET = "{00:00~07:00,2Mbps}, {07:00~23:00,20Mbps}, {23:00~24:00,2Mbps}"
@@ -170,6 +170,32 @@ def test_reask_text_names_the_fields_and_server_options() -> None:
     assert "region=OtherRegion" in text
     assert "Server options for region: A2ATestRegion." in text
     assert "Do not invent a value" in text
+
+
+def test_a_rate_the_proposal_declares_infeasible_is_not_offered() -> None:
+    """The rejected pre-negotiation rate must not count as the server's alternative."""
+    propose = _propose(
+        "Infeasible Evaluation: the original request requires a rate guarantee target of 10Mbps "
+        "during the 08:00-18:00 period, which is infeasible. Proposal: reduce the power outage "
+        "duration to 4 hours or less."
+    )
+
+    assert server_target_rates(propose) == set()
+
+
+def test_a_canonicalized_target_matches_a_vendor_notation_baseline() -> None:
+    """The accept normalizes the target; grounding must not read that as a changed value."""
+    baseline = {**_BASELINE, "guaranteedThroughputTarget": "{08:00-18:00: 10Mbps}"}
+    filled = {**_BASELINE, "guaranteedThroughputTarget": "{08:00~18:00,10Mbps}"}
+
+    ungrounded = find_ungrounded(
+        filled,
+        baseline=baseline,
+        intent=_BASELINE,
+        propose=_propose("Reduce rate target to 2Mbps or less."),
+    )
+
+    assert ungrounded == []
 
 
 def test_a_vendor_notation_target_is_grounded() -> None:

@@ -1539,6 +1539,7 @@ async def run_client_flow(
             raise ClientFlowError(f"The client flow exceeded {max_exchanges} exchanges.")
 
         if decision.action == "accept":
+            dropped_values: list[str] = []
             request, call_context = await _build_accept_request(
                 prompt_client=prompt_client,
                 decision=decision,
@@ -1553,7 +1554,19 @@ async def run_client_flow(
                 call_timeout_seconds=call_timeout_seconds,
                 single_extension_per_message=single_extension_per_message,
                 task_id=target_task_id if modify_only else None,
+                dropped=dropped_values,
             )
+            if dropped_values:
+                # The accept carried values the flow could not send; surface them instead of
+                # letting the difference between the decision and the wire go unrecorded.
+                emit_trace(
+                    "decision_value_dropped",
+                    phase=PHASE_RESOLUTION,
+                    title="Accepted value dropped before sending",
+                    round_number=session.round,
+                    context_id=context_id,
+                    detail={"fields": list(dropped_values), "action": decision.action},
+                )
             send_phase = PHASE_RESOLUTION
             send_performative = NegotiationPerformative.ACCEPT.value
             send_title = "Accept sent"
@@ -1940,7 +1953,7 @@ async def _build_accept_request(
     from-text path stays only as a fallback for content this flow cannot type.
     """
     filled = _accept_filled_values(kind, decision, baseline, intent_fields, dropped=dropped)
-    _prefer_the_agreed_target(kind, filled, decision, propose, baseline)
+    agreed_target = _prefer_the_agreed_target(kind, filled, decision, propose, baseline)
     task_content = None
     task_text = ""
     if not single_extension_per_message:
@@ -1960,7 +1973,7 @@ async def _build_accept_request(
 
     accept_context = session.with_performative(NegotiationPerformative.ACCEPT)
     template_uri = _ACCEPT_REJECT_TEMPLATE_URI_BY_KIND[kind.value]
-    typed = _typed_accept_content(kind, filled, decision, baseline)
+    typed = _typed_accept_content(kind, filled, decision, baseline, agreed_target)
     if typed is not None:
         content = await asyncio.to_thread(
             prompt_client.generate_negotiation_accept_prompt_from_data,
@@ -2490,27 +2503,38 @@ def _prefer_the_agreed_target(
     decision: NegotiationDecision,
     propose: NegotiationProposeView,
     baseline: Mapping[str, object] | None,
-) -> None:
-    """Replace the pre-negotiation target with the value the accept actually agrees to.
+) -> str | None:
+    """Return (and apply) the target the accept actually agrees to.
 
     A feasibility/target accept must name the alternative, not the baseline the server rejected.
-    When the decision supplies no target, the proposal's own alternative plus the operator's
-    windows yields the value deterministically (``agreed_target_value``); when even that fails the
-    stale baseline value is removed rather than reported as agreed.
+    When the decision supplies a target that value wins; otherwise the proposal's own alternative
+    plus the operator's windows yields it deterministically (``agreed_target_value``). When neither
+    names a value the baseline target is left untouched: it is still the task's throughput goal,
+    so the refilled Task-T must keep it, and the accept text must simply not present it as a new
+    agreement (see ``_agreed_values_line``).
     """
     if kind is NegotiationKind.INFORMATION:
-        return
+        return None
     supplied = normalize_text((decision.filled_params or {}).get(RATE_TARGET_FIELD))
     if supplied is not None:
         filled[RATE_TARGET_FIELD] = supplied
-        return
+        return supplied
+    if kind is not NegotiationKind.FEASIBILITY:
+        # ``agreed_target_value`` re-rates the operator's windows from the proposal's prose. That is
+        # a feasibility derivation; a target negotiation's accepted plan must come from the
+        # decision, never from a rate the proposal happened to mention.
+        return None
+    chosen_event = (decision.filled_params or {}).get("backgroundEvent")
+    if isinstance(chosen_event, str) and chosen_event.strip():
+        # The decision took the non-rate alternative (a shorter outage). Naming the rate cut would
+        # claim a choice the client did not make.
+        return None
     agreed = normalize_text(agreed_target_value(propose, filled)) or normalize_text(
         agreed_target_value(propose, {**(baseline or {}), **filled})
     )
     if agreed is not None:
         filled[RATE_TARGET_FIELD] = agreed
-    else:
-        filled.pop(RATE_TARGET_FIELD, None)
+    return agreed
 
 
 def _typed_accept_content(
@@ -2518,6 +2542,7 @@ def _typed_accept_content(
     filled: Mapping[str, object],
     decision: NegotiationDecision,
     baseline: Mapping[str, object] | None,
+    agreed_target: str | None,
 ) -> NegotiationEndingContent | None:
     """Build the typed ending content of an accept, or ``None`` when the flow cannot type it.
 
@@ -2529,38 +2554,106 @@ def _typed_accept_content(
     if kind is NegotiationKind.INFORMATION:
         allowed = TASK_PARAM_SCHEMA.get("properties")
         items: list[NegotiationItem] = []
-        for name in decision.filled_params or {}:
+        for name, raw in (decision.filled_params or {}).items():
             if not isinstance(allowed, Mapping) or name not in allowed:
                 continue
-            value = filled.get(name)
-            if value is None or (isinstance(value, str) and not value.strip()):
+            # The item value is the decision's own answer, never the merged Task-T value: a value
+            # the flow could not refill (for example a loosely written rate) must not be replaced
+            # by the baseline the request already carried.
+            if raw is None or not str(raw).strip():
                 continue
-            items.append(NegotiationItem(name, str(value)))
+            value = normalize_text(raw) if name == RATE_TARGET_FIELD else None
+            items.append(NegotiationItem(name, value or str(raw)))
         return InformationEndingContent(NegotiationConclusion.ACCEPT, items) if items else None
     if kind is NegotiationKind.TARGET:
-        confirmation = (decision.confirmed_intent or "").strip() or _agreed_values_line(
-            filled, baseline=baseline
-        )
+        confirmation = (decision.confirmed_intent or "").strip()
+        if confirmation and _contradicts_agreed_target(confirmation, agreed_target, baseline):
+            _LOGGER.warning(
+                "the confirmed intent names a target the accept does not agree to; using the "
+                "deterministic confirmation instead"
+            )
+            confirmation = ""
+        if confirmation:
+            confirmation = _with_agreed_target(confirmation, agreed_target)
+        else:
+            confirmation = _agreed_values_line(filled, baseline=baseline)
+        if not confirmation and agreed_target is not None:
+            # The decision explicitly named this target even though it equals the baseline; an
+            # accept that names nothing would fall back to a model extraction for no reason.
+            confirmation = f"Rate guarantee target: {agreed_target}."
         if not confirmation:
-            return None
+            # A plain Accept click still confirms the server's proposal: the decision wording is
+            # the confirmation. Never route this through the extractor, which has nothing to read.
+            confirmation = (decision.rationale or "").strip() or "Accept the server's proposed adjustment."
         return TargetEndingContent(NegotiationConclusion.ACCEPT, confirmation, None)
-    summary = (decision.feasibility_summary or "").strip() or _feasibility_accept_summary(
-        filled, baseline
+    supplied_summary = (decision.feasibility_summary or "").strip()
+    if supplied_summary and _contradicts_agreed_target(supplied_summary, agreed_target, baseline):
+        _LOGGER.warning(
+            "the decision summary names a target the accept does not agree to; using the "
+            "deterministic summary instead"
+        )
+        supplied_summary = ""
+    summary = (
+        _with_agreed_target(supplied_summary, agreed_target)
+        if supplied_summary
+        else _feasibility_accept_summary(filled, baseline, agreed_target)
     )
     return FeasibilityEndingContent(NegotiationConclusion.ACCEPT, summary)
+
+
+def _contradicts_agreed_target(
+    text: str,
+    agreed_target: str | None,
+    baseline: Mapping[str, object] | None,
+) -> bool:
+    """Return whether one text names a target segment the accept does not agree to.
+
+    A summary may mention the previous rate ("reduced from 10Mbps to 2Mbps"); that rate is the
+    baseline and is legitimate context. Only a segment in neither the agreement nor the baseline
+    is an invention that must not go out as the result.
+    """
+    if agreed_target is None:
+        return False
+    allowed = {(segment.start, segment.end, segment.rate_mbps) for segment in find_segments(agreed_target)}
+    allowed |= {
+        (segment.start, segment.end, segment.rate_mbps)
+        for segment in find_segments((baseline or {}).get(RATE_TARGET_FIELD))
+    }
+    claimed = {(segment.start, segment.end, segment.rate_mbps) for segment in find_segments(text)}
+    return bool(claimed - allowed)
+
+
+def _with_agreed_target(summary: str, agreed_target: str | None) -> str:
+    """Put the deterministic agreed value in front of a hand-written confirmation.
+
+    The result confirmation is the only thing the vendor reads from an accept; a summary that
+    omits the agreed rate would leave the vendor executing the pre-negotiation rate. A summary
+    that already names every agreed segment is left alone, so the value is never repeated.
+    """
+    if agreed_target is None:
+        return summary
+    agreed = find_segments(agreed_target)
+    rendered = {(segment.start, segment.end, segment.rate_mbps) for segment in find_segments(summary)}
+    if agreed and all((segment.start, segment.end, segment.rate_mbps) in rendered for segment in agreed):
+        return summary
+    return f"Rate guarantee target: {agreed_target}. {summary}"
 
 
 def _feasibility_accept_summary(
     filled: Mapping[str, object],
     baseline: Mapping[str, object] | None,
+    agreed_target: str | None,
 ) -> str:
-    """Render the feasibility result confirmation from the agreed values, never from a model."""
-    target = normalize_text(filled.get(RATE_TARGET_FIELD))
-    if target is not None:
-        return f"Accepted the server's alternative: rate guarantee target {target}."
+    """Render the feasibility result confirmation from the agreed values, never from a model.
+
+    Only a target the accept actually agrees to is named: the untouched baseline rate is the goal
+    the server rejected, so it must not appear as part of the agreement.
+    """
+    if agreed_target is not None:
+        return f"Accepted the server's proposal: rate guarantee target {agreed_target}."
     values = _agreed_values_line(filled, baseline=baseline)
     if values:
-        return f"Accepted the server's alternative: {values}"
+        return f"Accepted the server's proposal: {values}"
     return "Accepted the server's proposed adjustment."
 
 

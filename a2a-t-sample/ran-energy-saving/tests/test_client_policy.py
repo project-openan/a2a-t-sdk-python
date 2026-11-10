@@ -140,6 +140,38 @@ def test_agreed_target_applies_the_alternative_rate_to_the_outage_window() -> No
     assert agreed_target_value(_propose(), _BASELINE) == "{08:00~18:00,2Mbps}"
 
 
+def test_agreed_target_splits_a_window_that_extends_past_the_outage() -> None:
+    """Only the outage portion takes the alternative rate; the rest keeps its own rate."""
+    baseline = {**_BASELINE, "guaranteedThroughputTarget": "{00:00~24:00,10Mbps}"}
+
+    assert agreed_target_value(_propose(), baseline) == (
+        "{00:00~08:00,10Mbps}, {08:00~18:00,2Mbps}, {18:00~24:00,10Mbps}"
+    )
+
+
+def test_agreed_target_keeps_a_window_that_does_not_overlap_the_outage() -> None:
+    baseline = {
+        **_BASELINE,
+        "guaranteedThroughputTarget": "{00:00~07:00,5Mbps}, {08:00~18:00,10Mbps}",
+    }
+
+    assert agreed_target_value(_propose(), baseline) == (
+        "{00:00~07:00,5Mbps}, {08:00~18:00,2Mbps}"
+    )
+
+
+def test_agreed_target_reads_a_chinese_outage_window() -> None:
+    baseline = {
+        **_BASELINE,
+        "backgroundEvent": "停电 08:00到18:00",
+        "guaranteedThroughputTarget": "{00:00~08:00,5Mbps}, {08:00~18:00,10Mbps}",
+    }
+
+    assert agreed_target_value(_propose(), baseline) == (
+        "{00:00~08:00,5Mbps}, {08:00~18:00,2Mbps}"
+    )
+
+
 def test_agreed_target_reads_the_vendor_notation() -> None:
     """A baseline written ``{08:00-18:00: 10Mbps}`` still yields the agreed outage window."""
     baseline = {**_BASELINE, "guaranteedThroughputTarget": "{08:00-18:00: 10Mbps}"}

@@ -20,6 +20,7 @@ from typing import Final
 __all__ = [
     "TargetSegment",
     "find_segments",
+    "find_window",
     "format_segments",
     "has_segment",
     "normalize_text",
@@ -32,10 +33,19 @@ _SEGMENT_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?P<start>\d{1,2}:\d{2})\s*"
     r"(?:~|～|-|–|—|至|到|\bto\b)\s*"
     r"(?P<end>\d{1,2}:\d{2})\s*"
-    r"[,:：，]\s*"
+    r"[,:：，、]\s*"
     r"(?P<rate>\d+(?:\.\d+)?)\s*"
     r"Mbps"
     r"\s*\}?",
+    re.IGNORECASE,
+)
+
+
+#: One clock window without a rate, e.g. the outage window of a background event.
+_WINDOW_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?P<start>\d{1,2}:\d{2})\s*"
+    r"(?:~|～|-|–|—|至|到|\bto\b)\s*"
+    r"(?P<end>\d{1,2}:\d{2})",
     re.IGNORECASE,
 )
 
@@ -108,6 +118,25 @@ def normalize_text(text: object) -> str | None:
 def has_segment(text: object) -> bool:
     """Return whether one text carries at least one valid target segment."""
     return bool(find_segments(text))
+
+
+def find_window(text: object) -> tuple[str, str] | None:
+    """Return the first ``(start, end)`` clock window of one text, in any written notation.
+
+    Background events name their window without a rate ("power outage from 08:00 to 18:00"), so
+    they cannot use :func:`find_segments`; sharing this parser keeps every module reading the same
+    separators (``~ - – — to 至 到``, one- or two-digit hours, optional spaces).
+    """
+    if not isinstance(text, str) or not text.strip():
+        return None
+    match = _WINDOW_PATTERN.search(text)
+    if match is None:
+        return None
+    start = _canonical_clock(match.group("start"))
+    end = _canonical_clock(match.group("end"))
+    if start is None or end is None:
+        return None
+    return start, end
 
 
 def _canonical_clock(value: str) -> str | None:

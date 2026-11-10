@@ -903,6 +903,77 @@ async def test_feasibility_scenario_accepts_the_alternative() -> None:
     assert prompt_client.refill_data[0]["siteList"] == "Station 1,Station 2"
 
 
+async def test_an_operator_summary_still_names_the_agreed_target() -> None:
+    """A hand-written summary must not replace the deterministic agreed-value line."""
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="Accept the reduced rate.",
+        filled_params={"guaranteedThroughputTarget": "{08:00-18:00,2Mbps}"},
+        feasibility_summary="Accepted the proposal.",
+    )
+    prompt_client = FakePromptClient()
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=ScriptedTransport([[propose_event("feasibility", 1)], _task_completed_batch()]),
+        user_request=SCENARIO_FEASIBILITY_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields=_INTENT_FIELDS,
+    )
+
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, FeasibilityEndingContent)
+    assert "{08:00~18:00,2Mbps}" in content.feasibility_summary
+    assert "Accepted the proposal." in content.feasibility_summary
+
+
+async def test_a_summary_that_contradicts_the_agreed_target_is_replaced() -> None:
+    """A hand-written summary naming a different rate must not go out as the agreement."""
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="Accept the reduced rate.",
+        filled_params={"guaranteedThroughputTarget": "{08:00-18:00,2Mbps}"},
+        feasibility_summary="Accepted the rate reduction to {08:00~18:00,10Mbps}.",
+    )
+    prompt_client = FakePromptClient()
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=ScriptedTransport([[propose_event("feasibility", 1)], _task_completed_batch()]),
+        user_request=SCENARIO_FEASIBILITY_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields=_INTENT_FIELDS,
+    )
+
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, FeasibilityEndingContent)
+    assert "10Mbps" not in content.feasibility_summary
+    assert "{08:00~18:00,2Mbps}" in content.feasibility_summary
+
+
+async def test_a_summary_that_already_names_the_target_is_not_duplicated() -> None:
+    """The agreed value is added only when the hand-written summary omits it."""
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="Accept the reduced rate.",
+        filled_params={"guaranteedThroughputTarget": "{08:00-18:00,2Mbps}"},
+        feasibility_summary="Accepted the rate reduction to {08:00~18:00,2Mbps}.",
+    )
+    prompt_client = FakePromptClient()
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=ScriptedTransport([[propose_event("feasibility", 1)], _task_completed_batch()]),
+        user_request=SCENARIO_FEASIBILITY_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields=_INTENT_FIELDS,
+    )
+
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, FeasibilityEndingContent)
+    assert content.feasibility_summary.count("2Mbps") == 1
+
+
 async def test_a_feasibility_accept_is_rendered_from_typed_content() -> None:
     """The accept no longer round-trips through an LLM extraction of the client's own text.
 
@@ -961,6 +1032,130 @@ async def test_a_feasibility_accept_never_echoes_the_pre_negotiation_target() ->
     assert "10Mbps" not in content.feasibility_summary
 
 
+async def test_the_live_task_t_shape_yields_the_canonical_agreed_target() -> None:
+    """The vendor Task-T writes ``{08:00-18:00: 10Mbps}``; the accept must still name 2Mbps.
+
+    This is the exact shape of the failing live run: a colon-form baseline target, a proposal
+    that offers a rate in prose, and an Accept click with no values of its own.
+    """
+    decision = NegotiationDecision(action="accept", rationale="Accept the reduced rate.")
+    prompt_client = FakePromptClient()
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=ScriptedTransport(
+            [
+                [
+                    propose_event(
+                        "feasibility",
+                        1,
+                        content="Proposal: Reduce rate target to 2Mbps or less.",
+                    )
+                ],
+                _task_completed_batch(),
+            ]
+        ),
+        user_request=SCENARIO_FEASIBILITY_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields={
+            "operationType": "Modify",
+            "region": "A2ATestRegion",
+            "guaranteedThroughputTarget": "{08:00-18:00: 10Mbps}",
+        },
+    )
+
+    assert prompt_client.refill_data[0]["guaranteedThroughputTarget"] == "{08:00~18:00,2Mbps}"
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, FeasibilityEndingContent)
+    assert "{08:00~18:00,2Mbps}" in content.feasibility_summary
+    assert "10Mbps" not in content.feasibility_summary
+
+
+async def test_a_feasibility_accept_keeps_an_unchanged_target_in_the_refilled_task_t() -> None:
+    """A proposal that names no rate leaves the agreed target untouched, not deleted.
+
+    Withdrawing the baseline target would send a refilled Task-T without the throughput goal the
+    task already had; the summary must still not claim it as a new agreement.
+    """
+    decision = NegotiationDecision(action="accept", rationale="Accept the adjusted outage window.")
+    prompt_client = FakePromptClient()
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=ScriptedTransport(
+            [
+                [
+                    propose_event(
+                        "feasibility",
+                        1,
+                        content="Proposal: reduce the power outage duration to 4 hours or less.",
+                    )
+                ],
+                _task_completed_batch(),
+            ]
+        ),
+        user_request=SCENARIO_FEASIBILITY_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields={**_INTENT_FIELDS, "guaranteedThroughputTarget": "{08:00~18:00,10Mbps}"},
+    )
+
+    assert prompt_client.refill_data[0]["guaranteedThroughputTarget"] == "{08:00~18:00,10Mbps}"
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, FeasibilityEndingContent)
+    assert "10Mbps" not in content.feasibility_summary
+
+
+async def test_a_dropped_information_answer_is_not_replaced_by_the_baseline() -> None:
+    """The accept must answer with the decision's value, never with the pre-existing baseline."""
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="The operator supplied the rate in their own wording.",
+        filled_params={"guaranteedThroughputTarget": "10 Mbps during the outage"},
+    )
+    prompt_client = FakePromptClient()
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=ScriptedTransport([[propose_event("information", 1)], _task_completed_batch()]),
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields={**_INTENT_FIELDS, "guaranteedThroughputTarget": "{08:00~18:00,5Mbps}"},
+    )
+
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, InformationEndingContent)
+    assert [(item.name, item.value) for item in content.items] == [
+        ("guaranteedThroughputTarget", "10 Mbps during the outage")
+    ]
+
+
+async def test_a_dropped_accept_value_is_traced() -> None:
+    """A value the flow cannot send must appear in the trace, not vanish silently."""
+    spans: list[dict[str, object]] = []
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="Accept the server's alternative.",
+        filled_params={"guaranteedThroughputTarget": "raise the rate as much as possible"},
+    )
+    await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=ScriptedTransport(
+            [[propose_event("feasibility", 1)], _task_completed_batch()]
+        ),
+        user_request=SCENARIO_FEASIBILITY_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields=_INTENT_FIELDS,
+        trace_sink=spans.append,
+    )
+
+    dropped = [span for span in spans if span["kind"] == "decision_value_dropped"]
+    assert dropped, "a dropped accepted value must produce a decision_value_dropped span"
+    detail = dropped[0]["detail"]
+    assert isinstance(detail, dict)
+    assert any("guaranteedThroughputTarget" in item for item in detail["fields"])
+
+
 async def test_a_feasibility_accept_derives_the_agreed_target_from_the_proposal() -> None:
     """The proposal's alternative is the agreement; the client can name it without a model."""
     decision = NegotiationDecision(action="accept", rationale="Accept the reduced rate.")
@@ -991,6 +1186,171 @@ async def test_a_feasibility_accept_derives_the_agreed_target_from_the_proposal(
     content = prompt_client.accept_data[0].content
     assert isinstance(content, FeasibilityEndingContent)
     assert "{08:00~18:00,2Mbps}" in content.feasibility_summary
+
+
+async def test_a_target_accept_does_not_re_rate_the_baseline_from_prose() -> None:
+    """A target negotiation must not invent a rate the decision never accepted.
+
+    ``agreed_target_value`` is a feasibility derivation: it re-rates the operator's windows with
+    the lowest rate the proposal mentions. Applying it to a target negotiation would name a plan
+    the client never agreed to.
+    """
+    decision = NegotiationDecision(action="accept", rationale="Accept the server's adjustment.")
+    prompt_client = FakePromptClient()
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=ScriptedTransport(
+            [
+                [
+                    propose_event(
+                        "target",
+                        1,
+                        content="The windows overlap. Reduce the rate to 2Mbps.",
+                    )
+                ],
+                _task_completed_batch(),
+            ]
+        ),
+        user_request=SCENARIO_TARGET_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields={**_INTENT_FIELDS, "guaranteedThroughputTarget": "{00:00~06:00,10Mbps}"},
+    )
+
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, TargetEndingContent)
+    assert "2Mbps" not in (content.confirmed_intent or "")
+
+
+async def test_a_feasibility_accept_of_the_outage_alternative_does_not_claim_the_rate_cut() -> None:
+    """When the decision takes the non-rate alternative, the summary must not name the rate cut."""
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="Accept the shorter outage.",
+        filled_params={"backgroundEvent": "power outage from 08:00 to 12:00"},
+    )
+    prompt_client = FakePromptClient()
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=ScriptedTransport(
+            [
+                [
+                    propose_event(
+                        "feasibility",
+                        1,
+                        content=(
+                            "Proposal: Reduce rate target to 2Mbps or less. If lowering the rate is "
+                            "unacceptable, reduce power outage duration to 4 hours or less."
+                        ),
+                    )
+                ],
+                _task_completed_batch(),
+            ]
+        ),
+        user_request=SCENARIO_FEASIBILITY_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields={**_INTENT_FIELDS, "guaranteedThroughputTarget": "{08:00~18:00,10Mbps}"},
+    )
+
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, FeasibilityEndingContent)
+    assert "2Mbps" not in content.feasibility_summary
+    assert "power outage from 08:00 to 12:00" in content.feasibility_summary
+
+
+async def test_a_target_accept_without_values_uses_the_decision_wording() -> None:
+    """A plain Accept click on a target proposal must not fall back to a model extraction."""
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="Accept the server's adjusted target.",
+    )
+    prompt_client = FakePromptClient()
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=ScriptedTransport([[propose_event("target", 1)], _task_completed_batch()]),
+        user_request=SCENARIO_TARGET_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields=_INTENT_FIELDS,
+    )
+
+    assert prompt_client.accept_texts == []
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, TargetEndingContent)
+    assert "Accept the server's adjusted target." in (content.confirmed_intent or "")
+
+
+async def test_a_target_confirmation_still_names_the_agreed_target() -> None:
+    """The operator/model intent text must not replace the deterministic agreed-value line."""
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="Confirm the adjusted target.",
+        filled_params={"guaranteedThroughputTarget": "{00:00-06:00,2Mbps}"},
+        confirmed_intent="The client confirms the target reduction.",
+    )
+    prompt_client = FakePromptClient()
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=ScriptedTransport([[propose_event("target", 1)], _task_completed_batch()]),
+        user_request=SCENARIO_TARGET_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields=_INTENT_FIELDS,
+    )
+
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, TargetEndingContent)
+    assert "{00:00~06:00,2Mbps}" in (content.confirmed_intent or "")
+    assert "The client confirms the target reduction." in (content.confirmed_intent or "")
+
+
+async def test_a_target_intent_mentioning_the_baseline_rate_is_kept() -> None:
+    """Naming the previous rate as context is legitimate; only an invented rate is replaced."""
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="Confirm the adjusted target.",
+        filled_params={"guaranteedThroughputTarget": "{00:00-06:00,2Mbps}"},
+        confirmed_intent=(
+            "Reduced the target from {00:00~06:00,10Mbps} to {00:00~06:00,2Mbps}."
+        ),
+    )
+    prompt_client = FakePromptClient()
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=ScriptedTransport([[propose_event("target", 1)], _task_completed_batch()]),
+        user_request=SCENARIO_TARGET_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields={**_INTENT_FIELDS, "guaranteedThroughputTarget": "{00:00~06:00,10Mbps}"},
+    )
+
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, TargetEndingContent)
+    assert "Reduced the target from" in (content.confirmed_intent or "")
+    assert "2Mbps" in (content.confirmed_intent or "")
+
+
+async def test_a_target_accept_names_a_target_that_did_not_change() -> None:
+    """The decision's accepted target is named even when it equals the baseline value."""
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="Confirm the adjusted target.",
+        filled_params={"guaranteedThroughputTarget": "{00:00~06:00,2Mbps}"},
+    )
+    prompt_client = FakePromptClient()
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=ScriptedTransport([[propose_event("target", 1)], _task_completed_batch()]),
+        user_request=SCENARIO_TARGET_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields={**_INTENT_FIELDS, "guaranteedThroughputTarget": "{00:00~06:00,2Mbps}"},
+    )
+
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, TargetEndingContent)
+    assert "{00:00~06:00,2Mbps}" in (content.confirmed_intent or "")
 
 
 async def test_a_target_accept_is_rendered_from_typed_content() -> None:

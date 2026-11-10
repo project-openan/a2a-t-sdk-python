@@ -29,7 +29,7 @@ from typing import Final
 from shared.models import NegotiationAreaOption, NegotiationDecision, NegotiationProposeView
 
 from protocol.grounding import normalize, present, server_entity_values, server_target_rates
-from protocol.target_grammar import find_segments
+from protocol.target_grammar import TargetSegment, find_segments, find_window
 
 #: Task-T fields the server owns. The model may only restate a value the server itself offers, or
 #: a value the operator's own intent already states.
@@ -290,11 +290,47 @@ def agreed_target_value(
     event_window = _event_window(baseline.get("backgroundEvent"))
     agreed: list[str] = []
     for segment in segments:
-        if event_window is None or _overlaps(segment.start, segment.end, *event_window):
-            agreed.append(f"{{{segment.start}~{segment.end},{rate_text}}}")
-        else:
-            agreed.append(f"{{{segment.start}~{segment.end},{segment.rate_mbps:g}Mbps}}")
+        agreed.extend(_apply_alternative_rate(segment, event_window, rate_text))
     return ", ".join(agreed)
+
+
+def _apply_alternative_rate(
+    segment: TargetSegment,
+    event_window: tuple[str, str] | None,
+    rate_text: str,
+) -> list[str]:
+    """Return the canonical segments of one window after applying the alternative rate.
+
+    The proposal's alternative covers the outage window only. A baseline window that spans past
+    the outage is split, so the agreement never claims a rate change for time outside it.
+    """
+    unchanged = f"{{{segment.start}~{segment.end},{segment.rate_mbps:g}Mbps}}"
+    if event_window is None:
+        return [f"{{{segment.start}~{segment.end},{rate_text}}}"]
+    start, end = segment.start_minutes, segment.end_minutes
+    event_start, event_end = _minutes(event_window[0]), _minutes(event_window[1])
+    if end <= start or event_end <= event_start:
+        # A window crossing midnight is left untouched rather than split on the wrong side.
+        return [unchanged]
+    if not _overlaps(segment.start, segment.end, *event_window):
+        return [unchanged]
+    if start >= event_start and end <= event_end:
+        return [f"{{{segment.start}~{segment.end},{rate_text}}}"]
+    parts: list[str] = []
+    if start < event_start:
+        parts.append(f"{{{_clock(start)}~{_clock(event_start)},{segment.rate_mbps:g}Mbps}}")
+    parts.append(
+        f"{{{_clock(max(start, event_start))}~{_clock(min(end, event_end))},{rate_text}}}"
+    )
+    if end > event_end:
+        parts.append(f"{{{_clock(event_end)}~{_clock(end)},{segment.rate_mbps:g}Mbps}}")
+    return parts
+
+
+def _clock(minutes: int) -> str:
+    """Return ``HH:MM`` for one minute offset (``24:00`` for the end of the day)."""
+    hours, rest = divmod(minutes, 60)
+    return f"{hours:02d}:{rest:02d}"
 
 
 def _structured_entity_options(
@@ -333,16 +369,7 @@ def _rate_values(text: str) -> list[float]:
 
 def _event_window(value: object) -> tuple[str, str] | None:
     """Return the ``HH:MM~HH:MM`` window named by a background event, if any."""
-    if not isinstance(value, str):
-        return None
-    match = re.search(
-        r"\b([0-9]{1,2}:[0-9]{2})\s*(?:~|[-–]|to|至)\s*([0-9]{1,2}:[0-9]{2})\b",
-        value,
-        re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    return match.group(1), match.group(2)
+    return find_window(value)
 
 
 def _minutes(clock: str) -> int:
