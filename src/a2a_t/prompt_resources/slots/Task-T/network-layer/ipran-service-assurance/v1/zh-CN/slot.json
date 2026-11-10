@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "任务对象": {
+      "type": "string",
+      "description": "填写受影响的业务列表，支持列表形式，列表中的每一项包含业务标识、业务场景、基站名、基站IP、优先级、业务类型、UNI设备名称、UNI接口、UNI接口IP、客户名等信息。",
+      "examples": [
+        "业务标识：s1-l3vnp；业务场景：ToB；优先级：高；业务类型：L3VPN；UNI设备名称：NE1；UNI接口：Ge1/0/1；客户名：客户1"
+      ],
+      "x-a2at-value-constraint": "业务标识（必填）：业务名称；业务场景（必填）：ToB或ToC；基站名（当业务场景取值为ToC时选填，当业务场景取值为ToB时无需填写）；基站IP（当业务场景取值为ToC时选填，当业务场景取值为ToB时无需填写）；优先级（必填）：高、中、低；业务类型（必填）；UNI设备名称（必填）：网元名称；UNI接口（必填）：接口名称；UNI接口IP（当业务场景取值为ToC时选填，当业务场景取值为ToB时无需填写）；客户名（当业务场景取值为ToB时必填，当业务场景取值为ToC时无需填写）。"
+    },
+    "任务上下文": {
+      "type": "string",
+      "description": "请提供上报受影响业务的incident流水号（CSN）。",
+      "examples": [
+        "incident流水号：1673735459373056"
+      ],
+      "x-a2at-value-constraint": "incident流水号（必填）：填写上报受影响业务的incident的csn。"
+    }
+  },
+  "required": ["任务对象", "任务上下文"]
+}
