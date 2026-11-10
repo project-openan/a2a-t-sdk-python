@@ -168,15 +168,20 @@ def _current_otel_span_id() -> str:
 
 
 def _fallback_trace_id() -> str:
-    """Derive a stable 32-hex trace id from the run id when Langfuse owns no trace.
+    """Derive a stable 32-hex trace id when Langfuse owns no trace.
 
-    A run id is normally already 32 hex digits (``uuid4().hex``), so it can be used directly; any
-    other id is hashed. This keeps the local A2A hops traceable even when the run has no Langfuse
-    exporter, and makes the request carry a valid W3C ``traceparent`` in every mode.
+    The downstream id wins when one is bound: a correction retry reuses the blocked attempt's
+    trace id there, so local A2A hops must carry the same id as the vendor-facing ``traceparent``
+    instead of falling back to the retry's new run id. Without a downstream id, a run id is
+    normally already 32 hex digits (``uuid4().hex``), so it can be used directly; any other id is
+    hashed. The run-id guard stays first: a caller that has no run must not emit a traceparent.
     """
     run_id = current_run_id().lower()
     if not run_id:
         return ""
+    downstream = current_downstream_trace_id()
+    if downstream:
+        return downstream
     if _is_hex(run_id, 32) and run_id != "0" * 32:
         return run_id
     return hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:32]

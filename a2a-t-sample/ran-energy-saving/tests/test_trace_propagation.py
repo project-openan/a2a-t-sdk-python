@@ -95,6 +95,17 @@ async def test_a_downstream_trace_id_travels_on_its_own_header() -> None:
     assert DOWNSTREAM_TRACE_ID_HEADER not in request.headers
 
 
+async def test_a_local_hop_prefers_the_shared_downstream_trace_id() -> None:
+    """A retry's local A2A hop must carry the blocked attempt's trace id, not the new run id."""
+    request = httpx.Request("POST", "http://agent.test/a2a/json/message:send")
+    with propagated_trace(run_id="retry-run", downstream_trace_id=_TRACE_ID):
+        await inject_outgoing(request)
+
+    trace_id, span_id = extract_traceparent(request.headers)
+    assert trace_id == _TRACE_ID
+    assert len(span_id) == 16
+
+
 async def test_the_middleware_binds_the_incoming_downstream_trace_id() -> None:
     seen: list[str] = []
 
