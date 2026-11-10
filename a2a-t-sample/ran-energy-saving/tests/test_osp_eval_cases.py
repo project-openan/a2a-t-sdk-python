@@ -49,6 +49,10 @@ FILENAME_PATTERN = re.compile(
 )
 
 A2AT_NEGOTIATION_IDS = frozenset({32, 34, 35, 36, 37, 38})
+
+#: Cases whose refreshed row comes from the reviewer's blocked-variant supplement rather than
+#: the main sheet, so their ``source.row`` no longer follows the ``id + 1`` mapping.
+_SUPPLEMENT_ROW_IDS = frozenset({37, 38})
 PARTIAL_IDS = frozenset({40, 46})
 ISSUE_IDS = frozenset({20, 21, 28, 34, 40, 46})
 
@@ -275,7 +279,10 @@ def test_top_level_contract(cases: dict[int, dict[str, Any]]) -> None:
         assert document["assert"]["intent"] is (case_id not in {40, 46})
         assert document["source"]["file"] == "OSP-Unified Evaluation Set_v.01.xlsx"
         assert document["source"]["sheet"] == "A2A-T_原始数据"
-        assert document["source"]["row"] == case_id + 1
+        row = document["source"]["row"]
+        assert isinstance(row, int) and row >= 2
+        if case_id not in _SUPPLEMENT_ROW_IDS:
+            assert row == case_id + 1
         runner = document["runner"]
         assert runner["scenario"] == "night"
         assert runner["language"] == "en-US"

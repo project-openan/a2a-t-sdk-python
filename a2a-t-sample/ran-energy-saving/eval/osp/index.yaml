@@ -444,11 +444,11 @@ cases:
     a2a_negotiation_rounds: 3
     a2a_t_negotiation_rounds: 1
   - id: 37
-    file: 37-缺速率目标+可行性协商-[不拦截]-[Modify].yaml
+    file: 37-缺速率目标+可行性协商-[拦截]-[Modify].yaml
     name: 缺速率目标+可行性协商
     operation: Modify
-    validate: pass
-    validate_label: 不拦截
+    validate: blocked
+    validate_label: 拦截
     tags:
       - feasibility-negotiation
       - scenario-based
@@ -457,11 +457,11 @@ cases:
     a2a_negotiation_rounds: 3
     a2a_t_negotiation_rounds: 1
   - id: 38
-    file: 38-LTE_26441_LNR_OCL-NRES_XCS_6102937等站点+可行性协商-[不拦截]-[Modify].yaml
+    file: 38-LTE_26441_LNR_OCL-NRES_XCS_6102937等站点+可行性协商-[拦截]-[Modify].yaml
     name: LTE_26441_LNR_OCL, NRES_XCS_6102937等站点+可行性协商
     operation: Modify
-    validate: pass
-    validate_label: 不拦截
+    validate: blocked
+    validate_label: 拦截
     tags:
       - site
       - feasibility-negotiation

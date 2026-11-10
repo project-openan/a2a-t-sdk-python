@@ -1,17 +1,19 @@
+
 # Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
 # Source: docs-local/osp-eval-cases/*.json (internal).
 schema: osp-eval-case/v1
-id: 37
-name: 缺速率目标+可行性协商
+id: 38
+name: LTE_26441_LNR_OCL, NRES_XCS_6102937等站点+可行性协商
 dimension: D1 意图完备无歧义
 operation: Modify
 tags:
+  - site
   - feasibility-negotiation
   - scenario-based
   - negotiation-a2a
   - negotiation-a2at
 user_input: |-
-  A power outage will occur from 08:00 to 18:00 tomorrow, affecting LTE_26441_LNR_OCL and NRES_XCS_6102937 in A2ATestRegion region. Modify the guaranteed throughput target for both sites during the outage.
+  Modify the energy-saving plan for LTE_26441_LNR_OCL, NRES_XCS_6102937, and a few others in A2ATestRegion region. There will be a power outage from 00:00 to 05:00 tomorrow. Set the throughput rate guarantee to 5Mbps during the outage.
 expect:
   intent:
     Operation type: Modify
@@ -28,16 +30,17 @@ expect:
       - Site list:
           - LTE_26441_LNR_OCL
           - NRES_XCS_6102937
+          - LNR_KPI_7745
         Guaranteed throughput target by site:
           - Guaranteed throughput target: 2Mbps
-            Effective time period: 08:00:00-08:59:59&09:00:00-09:59:59&10:00:00-10:59:59&11:00:00-11:59:59&12:00:00-12:59:59&13:00:00-13:59:59&14:00:00-14:59:59&15:00:00-15:59:59&16:00:00-16:59:59&17:00:00-17:59:59
+            Effective time period: 00:00:00-00:59:59&01:00:00-01:59:59&02:00:00-02:59:59&03:00:00-03:59:59&04:00:00-04:59:59
         Scenario: Power outage
-        Scenario period: 08:00:00-17:59:59
+        Scenario period: 00:00:00-04:59:59
   protocols:
     a2a-t:
-      validate: pass
-      validate_label: 不拦截
-      send: true
+      validate: blocked
+      validate_label: 拦截
+      send: false
       task_t: |-
         ## Operation Type
         Modify
@@ -54,7 +57,7 @@ expect:
         ## Task Target
 
         ## Task Context
-        Site list: ["LTE_26441_LNR_OCL", "NRES_XCS_6102937"], Time-segmented rate guarantee target: {08:00-18:00: 10Mbps}, Background event: power outage from 08:00 to 18:00.
+        Site list: ["LTE_26441_LNR_OCL", "NRES_XCS_6102937", "LNR_KPI_7745"], Time-segmented rate guarantee target: {00:00-05:00: 5Mbps}, Background event: power outage from 00:00 to 05:00.
 
         ## Terminology Explanation
         1. LTE
@@ -106,21 +109,19 @@ expect:
 
             ## Feasibility Negotiation Result in Detail
 
-            Reduce throughput target from 10Mbps to 2Mbps for the power outage period.
-      final_state: task_completed
+            Reduce throughput target from 5Mbps to 2Mbps for the power outage period.
+      final_state: input_invalid
       final_state_derived: true
     a2a:
       negotiation:
         expected: true
-        expected_rounds: 3
+        expected_rounds: 2
         kinds: null
         rounds:
           - |-
-            LTE_26441_LNR_OCL and NRES_XCS_6102937 needs 10Mbps.
+            The sites are LTE_26441_LNR_OCL、NRES_XCS_6102937 and LNR_KPI_7745 in A2ATestRegion area.
           - |-
-            LTE_26441_LNR_OCL and NRES_XCS_6102937 needs 5Mbps.
-          - |-
-            LTE_26441_LNR_OCL and NRES_XCS_6102937 needs 2Mbps.
+            LTE_26441_LNR_OCL、NRES_XCS_6102937 and LNR_KPI_7745 needs 2Mbps.
       final_state: null
 assert:
   intent: true
@@ -133,6 +134,9 @@ assert:
   a2a:
     negotiation: true
     final_state: false
+blocked_followup:
+  input: |-
+    Modify the energy-saving plan for LTE_26441_LNR_OCL, NRES_XCS_6102937, and LNR_KPI_7745 in A2ATestRegion region. There will be a power outage from 00:00 to 05:00 tomorrow. Set the throughput rate guarantee to 5Mbps during the outage.
 baseline:
   # Paired Create: the manual baseline the testers use (A2ATestRegion; 00:00-07:00 2Mbps,
   # 07:00-18:00 10Mbps, 18:00-24:00 20Mbps). It is accepted without a pre-task negotiation.
@@ -149,5 +153,6 @@ runner:
 source:
   file: OSP-Unified Evaluation Set_v.01.xlsx
   sheet: A2A-T_原始数据
-  row: 38
+  row: 3
 known_issue: null
+
