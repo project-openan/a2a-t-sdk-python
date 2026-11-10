@@ -604,6 +604,15 @@ def test_time_ranges_with_seconds_normalize_to_the_same_hours() -> None:
     assert _normalize_time("19:00-22:00") == ("19", "20", "21")
 
 
+def test_an_over_expanded_range_does_not_match_the_shorthand() -> None:
+    """The model used to add the 22:00 hour for '19:00-22:00'; that is a real difference."""
+    from eval.osp.compare import _normalize_time
+
+    assert _normalize_time("19:00-22:00") != _normalize_time(
+        "19:00:00-19:59:59&20:00:00-20:59:59&21:00:00-21:59:59&22:00:00-22:59:59"
+    )
+
+
 def test_task_context_label_separator_is_not_a_business_difference() -> None:
     """'Label: value' and 'Set the label to value' state the same context."""
     from eval.osp.compare import _contexts_match

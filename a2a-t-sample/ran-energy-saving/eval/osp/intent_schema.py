@@ -40,8 +40,11 @@ _THROUGHPUT_TARGET_SCHEMA: Final[dict[str, object]] = {
         "Effective time period": {
             "type": "string",
             "description": (
-                "Hour-by-hour intervals HH:00:00-HH:59:59 joined by '&', e.g. "
-                "'08:00:00-08:59:59&09:00:00-09:59:59'. Use the rate target's own effective window from the request (e.g. 19:00-22:00 -> 19:00:00-19:59:59&20:00:00-20:59:59&21:00:00-21:59:59); do not default to the full day when the request names an activation period."
+                "The rate target's own effective window, copied verbatim from the request as "
+                "HH:MM-HH:MM (e.g. '19:00-22:00'; '00:00-24:00' for the full day). Do NOT expand "
+                "it to hour-by-hour intervals and do NOT do endpoint arithmetic — the runner "
+                "expands both sides deterministically. Do not default to the full day when the "
+                "request names an activation period."
             ),
         },
     },
@@ -73,8 +76,9 @@ _SITE_TARGET_SCHEMA: Final[dict[str, object]] = {
         "Scenario period": {
             "type": "string",
             "description": (
-                "Optional hour-by-hour scenario period, in the same '&'-joined "
-                "HH:00:00-HH:59:59 form."
+                "Optional scenario/outage period, copied verbatim as HH:MM-HH:MM (join several "
+                "windows with '&', e.g. '08:00-10:00&15:00-18:00'). Do NOT expand it to "
+                "hour-by-hour intervals."
             ),
         },
     },
@@ -145,12 +149,12 @@ OSP_INTENT_SCHEMA: Final[dict[str, object]] = {
         "Energy saving time": {
             "type": "string",
             "description": (
-                "Daily energy-saving period, rendered as hour-by-hour intervals "
-                "HH:00:00-HH:59:59 joined by '&'. Extract an explicit range even when it sits "
-                "inside a throughput sentence. A range whose end is HH:00 stops before that hour: "
-                "19:00-22:00 covers 19:00:00-19:59:59, 20:00:00-20:59:59 and 21:00:00-21:59:59; "
-                "never add the 22:00-22:59:59 interval. For an area-level request with no explicit "
-                "range, use the full day (all 24 hourly intervals). For a site-level request, "
+                "Daily energy-saving period, copied verbatim as HH:MM-HH:MM (e.g. '19:00-22:00'; "
+                "'00:00-24:00' for the full day). Do NOT expand it to hour-by-hour intervals and "
+                "do NOT do endpoint arithmetic — the runner expands both sides deterministically, "
+                "and the correct expansion of 19:00-22:00 is hours 19-21 only. Extract an "
+                "explicit range even when it sits inside a throughput sentence. For an area-level "
+                "request with no explicit range, use '00:00-24:00'. For a site-level request, "
                 "leave empty and put the outage window in 'Scenario period'."
             ),
         },
