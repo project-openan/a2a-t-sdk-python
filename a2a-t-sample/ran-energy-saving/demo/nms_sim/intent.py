@@ -16,9 +16,9 @@ from dataclasses import dataclass
 from typing import Final
 
 from a2a_t.core.metadata import NEGOTIATION_T_EXTENSION_URI, TASK_T_EXTENSION_URI
+from shared import energy_rules
 
 from demo.nms_sim.config import (
-    LONG_OUTAGE_HOURS,
     RATE_POLICY_OPTIONAL,
     WINDOW_POLICY_ANY,
     WINDOW_POLICY_EXACT,
@@ -236,11 +236,15 @@ def validate_content(content: ExtractedContent, config: SimConfig) -> Negotiatio
             "The energy-saving region is missing. Please specify the region explicitly.",
         )
     if normalize_region(content.region) != normalize_region(config.region):
+        # The vendor's region check reports only that the name is not recognized and never names
+        # a candidate: its region_check.py deliberately drops the best match so the proposal
+        # cannot read as a recommendation. The simulator must not hand the client a hint the real
+        # network never gives.
         return NegotiationIssue(
             KIND_INFORMATION,
             ("Energy saving region",),
             f'The region name "{content.region}" is not recognized. '
-            f"Available test region: {config.region}.",
+            "Please provide the correct region name.",
         )
     if not content.windows and config.window_policy != WINDOW_POLICY_ANY:
         # The Task-T template makes the activation period optional (full-period default). Under
@@ -266,14 +270,19 @@ def validate_content(content: ExtractedContent, config: SimConfig) -> Negotiatio
             "missing explicit time-segmented rate goals",
         )
     if config.long_outage_feasibility:
-        outage_hours = _outage_hours(content)
-        if outage_hours > LONG_OUTAGE_HOURS:
+        # The vendor's rule is strict on both sides: the outage must exceed four hours AND a
+        # guaranteed rate must exceed 2 Mbps. Measuring the outage envelope (not its distinct
+        # hours) keeps a gapped outage as long as the vendor sees it.
+        outage_hours = energy_rules.outage_duration_hours(content.source)
+        rates = [float(value) for value in _THROUGHPUT_PATTERN.findall(content.source)]
+        if energy_rules.is_outage_infeasible(outage_hours, rates):
             return NegotiationIssue(
                 KIND_FEASIBILITY,
                 ("Guaranteed throughput target",),
-                f"The {outage_hours}-hour power outage exceeds the "
-                f"{LONG_OUTAGE_HOURS}-hour feasibility limit. Reduce the guaranteed throughput "
-                "target for the outage period.",
+                f"The {outage_hours:g}-hour power outage with a rate above "
+                f"{energy_rules.FEASIBILITY_RATE_MBPS:g}Mbps exceeds the "
+                f"{energy_rules.FEASIBILITY_OUTAGE_HOURS}-hour feasibility limit. Reduce the "
+                "guaranteed throughput target for the outage period.",
             )
     if content.percent is not None and content.percent > config.max_saving_rate:
         return NegotiationIssue(
@@ -470,23 +479,6 @@ def _windows(text: str) -> tuple[str, ...]:
     """Return every ``HH:MM~HH:MM`` window found in the text, canonicalized with ``~``."""
     pairs = _WINDOW_PATTERN.findall(text) + _START_END_PATTERN.findall(text)
     return tuple(f"{_clock(start)}~{_clock(end)}" for start, end in pairs)
-
-
-def _outage_hours(content: ExtractedContent) -> int:
-    """Return the number of distinct hours covered by the outage windows in one request."""
-    if "outage" not in content.source.lower():
-        return 0
-    hours: set[int] = set()
-    for window in content.windows:
-        start, end = window.split("~", 1)
-        start_hour = int(start.split(":", 1)[0])
-        end_hour, end_minute = (int(part) for part in end.split(":", 1))
-        if end_hour < start_hour:
-            end_hour += 24
-        last = end_hour if end_minute > 0 else end_hour - 1
-        for hour in range(start_hour, min(last, 23) + 1):
-            hours.add(hour % 24)
-    return len(hours)
 
 
 def _throughput(text: str) -> float | None:

@@ -44,11 +44,10 @@ RATE_POLICY_OPTIONAL: Final[str] = "optional"
 SUPPORTED_RATE_POLICIES: Final[tuple[str, ...]] = (RATE_POLICY_REQUIRED, RATE_POLICY_OPTIONAL)
 RATE_POLICY_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_RATE_POLICY"
 #: Acceptance rehearsal: propose a feasibility negotiation when a power outage lasts longer than
-#: four hours. The vendor's feasibility dialogue covers long outages; short outages (<= 4h) stay
-#: at zero rounds, which is what the OSP corpus expects.
+#: four hours *and* the guaranteed rate exceeds 2 Mbps (``shared.energy_rules`` holds the rule).
+#: The vendor's feasibility dialogue covers long outages; short outages (<= 4h) stay at zero
+#: rounds, which is what the OSP corpus expects.
 LONG_OUTAGE_FEASIBILITY_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_LONG_OUTAGE_FEASIBILITY"
-#: Outage length above which the feasibility rule fires.
-LONG_OUTAGE_HOURS: Final[int] = 4
 
 #: Environment keys read by the standalone simulator entry point.
 FIDELITY_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_FIDELITY"

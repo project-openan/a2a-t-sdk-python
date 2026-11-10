@@ -16,6 +16,7 @@ from typing import Final
 from a2a_t.core.validation_pipeline import FilledParamData
 from protocol.negotiation_policy import NegotiationKind
 from protocol.pre_task_negotiation import PrecheckFinding
+from shared import energy_rules
 
 from demo.served_areas import (
     build_area_options,
@@ -25,18 +26,10 @@ from demo.served_areas import (
     resolve_served_area,
 )
 
-#: One ``HH:MM~HH:MM`` interval in a target or background-event string.
-_TIME_INTERVAL_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"(\d{2}:\d{2})\s*(?:~|to|-)\s*(\d{2}:\d{2})", re.IGNORECASE
-)
-
 #: One ``HH:MM~HH:MM,<rate>Mbps`` target segment.
 _TARGET_SEGMENT_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(\d{2}:\d{2})~(\d{2}:\d{2})\s*,\s*(\d+(?:\.\d+)?)\s*Mbps", re.IGNORECASE
 )
-
-#: Markers of a background outage in the sample's feasibility request.
-_OUTAGE_MARKERS: Final[tuple[str, ...]] = ("outage", "power", "停电")
 
 #: Sentence carrying the background event of a rendered Task-T prompt.
 _OUTAGE_SENTENCE_PATTERN: Final[re.Pattern[str]] = re.compile(r"[^\n。；;]*(?:outage|停电)[^\n。；;]*", re.IGNORECASE)
@@ -85,20 +78,23 @@ def _overlaps(first: tuple[int, int], second: tuple[int, int]) -> bool:
 
 
 def _deterministic_negotiation_kind(data: Mapping[str, object]) -> NegotiationKind | None:
-    """Detect the sample's target/feasibility triggers without relying on a model verdict."""
+    """Detect the sample's target/feasibility triggers without relying on a model verdict.
+
+    Overlapping segments conflict only when their rates differ: the same rate covering an hour
+    twice is harmless and the vendor does not open a negotiation for it. The feasibility rule is
+    the vendor's: an outage strictly longer than four hours with a rate strictly above 2 Mbps.
+    """
     segments = _target_segments(data)
     for index, first in enumerate(segments):
         for second in segments[index + 1 :]:
-            if _overlaps(first[:2], second[:2]):
+            if first[2] != second[2] and _overlaps(first[:2], second[:2]):
                 return NegotiationKind.TARGET
 
     background = data.get("backgroundEvent")
-    if isinstance(background, str) and any(marker in background.lower() for marker in _OUTAGE_MARKERS):
-        outage_match = _TIME_INTERVAL_PATTERN.search(background)
-        if outage_match is not None:
-            outage = _span(outage_match.group(1), outage_match.group(2))
-            if any(_overlaps(segment[:2], outage) and segment[2] > 2.0 for segment in segments):
-                return NegotiationKind.FEASIBILITY
+    if isinstance(background, str):
+        hours = energy_rules.outage_duration_hours(background)
+        if energy_rules.is_outage_infeasible(hours, (segment[2] for segment in segments)):
+            return NegotiationKind.FEASIBILITY
     return None
 
 

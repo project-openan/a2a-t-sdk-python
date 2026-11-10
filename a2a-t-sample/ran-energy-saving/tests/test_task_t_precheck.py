@@ -26,13 +26,60 @@ def _filled(**data: object) -> FilledParamData:
 
 def test_missing_required_fields_open_an_information_negotiation() -> None:
     finding = RanDataTaskTPrecheck()(
-        _filled(operationType="Create", region="Region A"),
+        _filled(operationType="Create", region=None),
         TASK_PARAM_SCHEMA,
     )
 
     assert finding is not None
     assert finding.kind is NegotiationKind.INFORMATION
-    assert finding.missing_items == ("guaranteedThroughputTarget",)
+    assert finding.missing_items == ("region",)
+
+
+def test_a_missing_rate_is_not_a_missing_required_field() -> None:
+    """The vendor treats an empty target list as its default non-disruptive mode."""
+    finding = RanDataTaskTPrecheck()(
+        _filled(operationType="Create", region="Region A"),
+        TASK_PARAM_SCHEMA,
+    )
+
+    assert finding is None
+
+
+def test_the_same_rate_may_cover_an_hour_twice() -> None:
+    """Only windows with different rates conflict; a same-rate repeat is harmless."""
+    kind = _deterministic_negotiation_kind(
+        {
+            "guaranteedThroughputTarget": (
+                "{00:00~07:00,10Mbps}, {06:00~09:00,10Mbps}"
+            )
+        }
+    )
+
+    assert kind is None
+
+
+def test_an_outage_at_or_below_four_hours_is_feasible() -> None:
+    """The vendor's limit is strict: exactly four hours does not trigger a negotiation."""
+    kind = _deterministic_negotiation_kind(
+        {
+            "guaranteedThroughputTarget": "{03:00~07:00,10Mbps}",
+            "backgroundEvent": "power outage from 03:00 to 07:00",
+        }
+    )
+
+    assert kind is None
+
+
+def test_an_outage_at_or_below_two_mbps_is_feasible() -> None:
+    """The other half of the vendor rule: a long outage at 2 Mbps is acceptable."""
+    kind = _deterministic_negotiation_kind(
+        {
+            "guaranteedThroughputTarget": "{00:00~18:00,2Mbps}",
+            "backgroundEvent": "power outage from 00:00 to 18:00",
+        }
+    )
+
+    assert kind is None
 
 
 def test_overlapping_target_segments_open_a_target_negotiation() -> None:

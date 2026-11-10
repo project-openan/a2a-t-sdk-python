@@ -206,7 +206,7 @@ async def test_missing_region_returns_an_information_negotiation_message() -> No
         assert "Energy saving region" in text
 
 
-async def test_unknown_region_is_rejected_with_the_available_test_region() -> None:
+async def test_unknown_region_is_rejected_without_naming_a_candidate() -> None:
     async for client in _client():
         token = await _token(client)
         frames = await _frames(
@@ -217,7 +217,9 @@ async def test_unknown_region_is_rejected_with_the_available_test_region() -> No
 
         text = _message_text(frames[0])
         assert "not recognized" in text
-        assert "A2ATestRegion" in text
+        # The vendor's region check never names a candidate; a hint here would let the client
+        # depend on something the real network never sends.
+        assert "A2ATestRegion" not in text
 
 
 async def test_negotiation_metadata_requires_declaring_the_negotiation_extension() -> None:
@@ -1025,35 +1027,73 @@ async def test_message_stream_task_carrier_closes_after_the_input_required_task(
         assert metadata[NEGOTIATION_CONTEXT_METADATA_KEY]["round"] == 1
 
 
-def test_outage_hours_merges_windows_and_ignores_a_zero_length_tail() -> None:
-    """The long-outage feasibility rule counts distinct outage hours, not window count."""
-    from demo.nms_sim.intent import ExtractedContent, _outage_hours
+def _long_outage_issue(source: str) -> object:
+    """Return the issue the simulator proposes for one request under the rehearsal profile."""
+    from demo.nms_sim.config import RATE_POLICY_OPTIONAL, WINDOW_POLICY_ANY, SimConfig
+    from demo.nms_sim.intent import extract_content, select_issue
 
-    long_outage = ExtractedContent(
-        operation="Modify",
-        region="A2ATestRegion",
-        windows=("08:00~18:00",),
-        rate_mbps=10.0,
-        percent=None,
-        source="A power outage from 08:00 to 18:00 affects the sites.",
+    config = SimConfig(
+        window_policy=WINDOW_POLICY_ANY,
+        rate_policy=RATE_POLICY_OPTIONAL,
+        long_outage_feasibility=True,
     )
-    split_outage = ExtractedContent(
-        operation="Modify",
-        region="A2ATestRegion",
-        windows=("08:00~10:00", "15:00~18:00"),
-        rate_mbps=10.0,
-        percent=None,
-        source="A power outage from 08:00 to 10:00 and from 15:00 to 18:00.",
-    )
-    short_outage = ExtractedContent(
-        operation="Modify",
-        region="A2ATestRegion",
-        windows=("08:00~10:00",),
-        rate_mbps=10.0,
-        percent=None,
-        source="A power outage from 08:00 to 10:00.",
-    )
+    return select_issue(extract_content(source), config)
 
-    assert _outage_hours(long_outage) == 10
-    assert _outage_hours(split_outage) == 5
-    assert _outage_hours(short_outage) == 2
+
+def test_long_outage_feasibility_requires_more_than_four_hours() -> None:
+    """The vendor's rule is strict: an outage ends at 07:00 means exactly four hours."""
+    from demo.nms_sim.negotiation import KIND_FEASIBILITY
+
+    assert _long_outage_issue(
+        "Modify the A2ATestRegion task. Power outage from 03:00 to 07:00. "
+        "Guaranteed throughput 10Mbps."
+    ) is None
+    issue = _long_outage_issue(
+        "Modify the A2ATestRegion task. Power outage from 08:00 to 18:00. "
+        "Guaranteed throughput 10Mbps."
+    )
+    assert getattr(issue, "kind", None) == KIND_FEASIBILITY
+
+
+def test_long_outage_feasibility_requires_more_than_two_mbps() -> None:
+    """The other half of the rule: a long outage at 2 Mbps is acceptable."""
+    from demo.nms_sim.negotiation import KIND_FEASIBILITY
+
+    assert _long_outage_issue(
+        "Modify the A2ATestRegion task. Power outage from 08:00 to 18:00. "
+        "Guaranteed throughput 2Mbps."
+    ) is None
+    issue = _long_outage_issue(
+        "Modify the A2ATestRegion task. Power outage from 08:00 to 18:00. "
+        "Guaranteed throughput 3Mbps."
+    )
+    assert getattr(issue, "kind", None) == KIND_FEASIBILITY
+
+
+def test_a_split_outage_is_measured_across_its_envelope() -> None:
+    """The vendor reads the envelope, so two windows 08:00-10:00 and 15:00-18:00 span 10 hours."""
+    from demo.nms_sim.negotiation import KIND_FEASIBILITY
+    from shared import energy_rules
+
+    assert energy_rules.outage_duration_hours(
+        "A power outage from 08:00 to 10:00 and from 15:00 to 18:00."
+    ) == 10.0
+    issue = _long_outage_issue(
+        "Modify the A2ATestRegion task. Power outage from 08:00 to 10:00 and from "
+        "15:00 to 18:00. Guaranteed throughput 10Mbps."
+    )
+    assert getattr(issue, "kind", None) == KIND_FEASIBILITY
+
+
+def test_an_unknown_region_negotiation_names_no_candidate() -> None:
+    """The vendor never names a candidate region; the simulator must not either."""
+    from demo.nms_sim.config import SimConfig
+    from demo.nms_sim.intent import extract_content, select_issue
+
+    issue = select_issue(
+        extract_content("The area is Region Z. Guaranteed throughput 10Mbps."),
+        SimConfig(),
+    )
+    assert issue is not None
+    assert "not recognized" in issue.detail
+    assert "A2ATestRegion" not in issue.detail
