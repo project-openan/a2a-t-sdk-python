@@ -97,11 +97,17 @@ class AnalysisMessageBuilder:
     def _extract_terminology(template_text: str) -> str:
         """Extract the Terminology Explanation section from the template body.
 
-        Returns the raw section text (header included) or an empty string when
-        the section is absent.
+        Recognizes both the English (``## Terminology Explanation``) and Chinese
+        (``## 术语解释``) headings. Returns the raw section text (header included)
+        or an empty string when the section is absent.
         """
-        marker = "## Terminology Explanation"
-        start = template_text.find(marker)
+        markers = ("## Terminology Explanation", "## 术语解释")
+        start = -1
+        for marker in markers:
+            index = template_text.find(marker)
+            if index != -1:
+                start = index
+                break
         if start == -1:
             return ""
         rest = template_text[start:]
