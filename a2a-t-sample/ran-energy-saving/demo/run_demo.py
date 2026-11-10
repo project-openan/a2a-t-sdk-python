@@ -1232,9 +1232,9 @@ def _build_parser(
         default=_env_str(env, PURE_MESSAGE_MODE_ENV_KEY, "") or None,
         choices=list(SUPPORTED_PURE_MESSAGE_MODES),
         help=(
-            "RPC method of the standard A2A request form (default: follows --transport, so a "
-            "webhook deployment sends message:send and an SSE deployment streams message:stream; "
-            "this flag overrides both protocols' consistency)"
+            "RPC method of the standard A2A request form (default: auto, follows the peer "
+            "AgentCard's streaming capability; send/stream are explicit conformance overrides "
+            "for tests)"
         ),
     )
     parser.add_argument(

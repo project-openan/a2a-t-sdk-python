@@ -63,13 +63,15 @@ PURE_FOLLOWUP_TASK = "task"
 PURE_FOLLOWUP_CONTEXT = "context"
 SUPPORTED_PURE_FOLLOWUPS = (PURE_FOLLOWUP_BOTH, PURE_FOLLOWUP_TASK, PURE_FOLLOWUP_CONTEXT)
 
-#: RPC method of a pure A2A request. ``stream`` sends ``message/stream`` through the a2a-sdk
-#: streaming client; ``send`` sends one non-streaming ``message/send``, the same method the A2A-T
-#: webhook hop uses against a real NMS. The simulator serves both, but only SSE transport.
+#: RPC method of a pure A2A request. ``auto`` follows the peer AgentCard: a peer that advertises
+#: ``capabilities.streaming`` gets ``message/stream`` on an SSE run, everything else gets one
+#: non-streaming ``message/send``. ``stream``/``send`` remain explicit conformance overrides for
+#: tests; the sample itself never needs to set one.
+PURE_MESSAGE_AUTO = "auto"
 PURE_MESSAGE_STREAM = "stream"
 PURE_MESSAGE_SEND = "send"
-SUPPORTED_PURE_MESSAGE_MODES = (PURE_MESSAGE_STREAM, PURE_MESSAGE_SEND)
-DEFAULT_PURE_MESSAGE_MODE = PURE_MESSAGE_STREAM
+SUPPORTED_PURE_MESSAGE_MODES = (PURE_MESSAGE_AUTO, PURE_MESSAGE_STREAM, PURE_MESSAGE_SEND)
+DEFAULT_PURE_MESSAGE_MODE = PURE_MESSAGE_AUTO
 
 #: ``.env`` keys.
 MODEL_MODE_ENV_KEY = "A2AT_SAMPLE_MODEL_MODE"
@@ -364,15 +366,15 @@ def _pure_followup(values: dict[str, str | None]) -> str:
     return value
 
 
-def _pure_message_mode(values: dict[str, str | None], transport: str) -> str:
+def _pure_message_mode(values: dict[str, str | None]) -> str:
     """Resolve the pure A2A RPC method, rejecting an unsupported value.
 
-    Pure A2A follows the deployment's A2A-T transport by default: a webhook deployment sends
-    non-streaming ``message/send`` and an SSE deployment streams ``message/stream``, so both
-    request forms of one agent use the same method. The explicit key still overrides it.
+    ``auto`` is the default: the client picks the method from the peer AgentCard's streaming
+    capability, so a local OSS/RAN Agent streams and a peer without streaming support gets
+    ``message/send``. ``send``/``stream`` exist only as explicit conformance overrides; the
+    deployment transport no longer decides this hop.
     """
-    default = PURE_MESSAGE_SEND if transport == TRANSPORT_WEBHOOK else DEFAULT_PURE_MESSAGE_MODE
-    value = _env_value(values, PURE_MESSAGE_MODE_ENV_KEY, default).lower()
+    value = _env_value(values, PURE_MESSAGE_MODE_ENV_KEY, DEFAULT_PURE_MESSAGE_MODE).lower()
     if value not in SUPPORTED_PURE_MESSAGE_MODES:
         raise ValueError(
             f"Unsupported {PURE_MESSAGE_MODE_ENV_KEY}: {value}; "
@@ -957,7 +959,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         gateway_scenario=gateway_scenario,
         runs_dir=_resolved_dir(values, RUNS_DIR_ENV_KEY, DEFAULT_RUNS_DIR),
         pure_followup=_pure_followup(values),
-        pure_message_mode=_pure_message_mode(values, transport),
+        pure_message_mode=_pure_message_mode(values),
         gateway_task_db_path=_optional_absolute_path(values, GATEWAY_TASK_DB_ENV_KEY),
         auth_token=_env_value(values, AUTH_TOKEN_ENV_KEY, "").strip(),
         server_auth_token=_env_value(values, SERVER_AUTH_TOKEN_ENV_KEY, "").strip(),

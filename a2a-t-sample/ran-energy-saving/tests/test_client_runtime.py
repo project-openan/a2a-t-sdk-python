@@ -599,6 +599,47 @@ async def test_a_pure_runtime_keeps_message_stream_by_default(
         await runtime.aclose()
 
 
+async def test_auto_pure_mode_sends_when_the_peer_has_no_streaming(
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The peer capability, not the deployment transport, decides the pure RPC method."""
+    import protocol.client_runtime as client_runtime
+    from shared.run_constants import PROTOCOL_PURE
+
+    captured: dict[str, object] = {}
+
+    async def fake_discover(**kwargs: object) -> DiscoveredAgent:
+        del kwargs
+        card = build_agent_card(host="127.0.0.1", port=8000)
+        card.capabilities.streaming = False
+        return DiscoveredAgent(agent_card=card, url="http://127.0.0.1:8000")
+
+    async def fake_create(agent: object, client_config: ClientConfig | None = None) -> _FakeA2AClient:
+        del agent
+        captured["client_config"] = client_config
+        return _FakeA2AClient()
+
+    monkeypatch.setattr(client_runtime, "discover_agent", fake_discover)
+    monkeypatch.setattr(client_runtime, "create_client", fake_create)
+    runtime = await build_demo_runtime(
+        offline_config,
+        "outage",
+        "auto",
+        "sse",
+        "direct",
+        protocol=PROTOCOL_PURE,
+        env_path=tmp_path / "missing.env",
+    )
+    try:
+        client_config = captured["client_config"]
+        assert isinstance(client_config, ClientConfig)
+        assert client_config.streaming is False
+    finally:
+        await runtime.aclose()
+
+
 async def test_a_pure_modify_sends_the_outer_task_ids(
     offline_config: SampleConfig,
     monkeypatch: pytest.MonkeyPatch,

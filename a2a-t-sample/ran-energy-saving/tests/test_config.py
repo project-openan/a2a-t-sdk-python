@@ -1031,14 +1031,14 @@ def test_pure_followup_rejects_an_unknown_mode(tmp_path: Path) -> None:
         load_config(env_path=env_file)
 
 
-def test_pure_message_mode_follows_the_a2at_transport(tmp_path: Path) -> None:
-    """Pure A2A uses the same RPC method as A2A-T: webhook sends, SSE streams."""
+def test_pure_message_mode_defaults_to_auto_regardless_of_transport(tmp_path: Path) -> None:
+    """The peer AgentCard, not the deployment transport, picks the pure RPC method."""
     env_file = tmp_path / ".env"
     env_file.write_text("", encoding="utf-8")
-    assert load_config(env_path=env_file).pure_message_mode == "stream"
+    assert load_config(env_path=env_file).pure_message_mode == "auto"
 
     env_file.write_text("A2AT_SAMPLE_TRANSPORT=webhook\n", encoding="utf-8")
-    assert load_config(env_path=env_file).pure_message_mode == "send"
+    assert load_config(env_path=env_file).pure_message_mode == "auto"
 
 
 def test_pure_message_mode_accepts_an_explicit_override(tmp_path: Path) -> None:
