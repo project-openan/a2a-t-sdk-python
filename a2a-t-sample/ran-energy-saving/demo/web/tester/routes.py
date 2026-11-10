@@ -50,6 +50,7 @@ def build_tester_routes(
     runs_dir: Path | None = None,
     nms_enabled: bool = False,
     nms_sim: bool = False,
+    nms_sim_pure_question: str = "issue",
     language: str = "",
     model_mode: str = "",
     model_label: str = "",
@@ -70,6 +71,7 @@ def build_tester_routes(
         server_auth_token=server_auth_token,
         runs_dir=runs_dir,
         nms_sim=nms_sim,
+        nms_sim_pure_question=nms_sim_pure_question,
         language=language,
         model_mode=model_mode,
         model_label=model_label,
@@ -126,6 +128,7 @@ def build_tester_routes(
                 "modelMode": model_mode,
                 "nmsEnabled": nms_enabled,
                 "nmsSim": nms_sim,
+                "nmsSimPureQuestion": nms_sim_pure_question,
                 "advertisedProtocols": list(protocols),
             }
         )

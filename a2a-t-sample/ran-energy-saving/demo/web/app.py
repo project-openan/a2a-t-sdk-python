@@ -550,6 +550,7 @@ def create_app(
         runs_dir=resolved_runs_dir,
         nms_enabled=resolved_nms,
         nms_sim=config.nms_sim,
+        nms_sim_pure_question=config.nms_sim_pure_question,
         language=config.language,
         model_mode=config.model_mode,
         model_label=config.model_label,

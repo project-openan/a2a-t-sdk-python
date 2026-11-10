@@ -215,6 +215,12 @@ _CANCEL_GRACE_SECONDS: Final[float] = 1.0
 #: recorded. The vendor dialogue and round count come from the OSP P column and cannot be
 #: reproduced against nms-sim, so waiting for the workbook's round count would only stall the batch.
 _SIM_PURE_SETTLE_SECONDS: Final[float] = 30.0
+#: Grace before reading the round count in replay mode: the wait returns as soon as the expected
+#: number arrives, and a spurious extra round would otherwise race the assertion.
+_SIM_PURE_ROUND_SETTLE_SECONDS: Final[float] = 0.5
+#: The answer the tester gives the baseline Create's single confirmation round. The paired Create
+#: is complete, so a plain acknowledgement is enough.
+_SIM_PURE_BASELINE_ANSWER: Final[str] = "Confirmed. Proceed with the request as stated."
 
 
 def _now_iso() -> str:
@@ -347,6 +353,7 @@ class EvalBatchManager:
         server_auth_token: str | None,
         runs_dir: Path | None = None,
         nms_sim: bool = False,
+        nms_sim_pure_question: str = "issue",
         language: str = "",
         model_mode: str = "",
         model_label: str = "",
@@ -360,6 +367,9 @@ class EvalBatchManager:
         self._server_auth_token = server_auth_token
         self._history_dir = (Path(runs_dir) / "tester") if runs_dir is not None else None
         self._nms_sim = nms_sim
+        #: ``confirm`` replays the vendor's fixed plain-A2A dialogue, so the OSP round count is
+        #: assertable; ``issue`` renders the historical business issue and is only recorded.
+        self._nms_sim_pure_question = nms_sim_pure_question
         self._language = language
         self._model_mode = model_mode
         self._model_label = model_label
@@ -371,6 +381,10 @@ class EvalBatchManager:
         self._baseline_request = _baseline_request()
         self._sdk_lock = asyncio.Lock()
         self._batches: dict[str, _Batch] = {}
+
+    def _replays_pure_dialogue(self) -> bool:
+        """Return whether the simulator replays the vendor's plain-A2A confirmation dialogue."""
+        return self._nms_sim and self._nms_sim_pure_question == "confirm"
 
     # ------------------------------------------------------------------
     # Catalog and batch lifecycle
@@ -1132,6 +1146,14 @@ class EvalBatchManager:
                 "caseId": item.case_id,
             },
             scripted_decisions=(),
+            # In the vendor-dialogue replay the simulator asks one confirmation question on every
+            # new Create, including the paired baseline. Without an answer the baseline would wait
+            # for a human and the Modify would never start.
+            pure_answers=(
+                (_SIM_PURE_BASELINE_ANSWER,)
+                if protocol == PROTOCOL_PURE and self._replays_pure_dialogue()
+                else None
+            ),
             # Only the A2A-T flow has a Task-T pre-send gate; the pure hop sends raw text.
             validate_before_send=protocol == RUNTIME_A2A_T,
         )
@@ -1147,20 +1169,25 @@ class EvalBatchManager:
         # A Modify needs the Task accepted and still continuable. It must not wait for the
         # baseline run to reach a terminal state: a real NMS keeps the Create Task WORKING for the
         # whole energy-saving window, which made every Modify item time out as a baseline failure.
+        discovery = defaults.get("discovery", "")
         state = await self._wait_for_baseline_acceptance(
             run,
             protocol,
             self._resolved_timeout(batch),
             item=item,
-            discovery=defaults.get("discovery", ""),
+            discovery=discovery,
         )
         task_id = run.remote_task_id or (run.result.task_id if run.result is not None else None)
         context_id = run.remote_context_id or (
             run.result.context_id if run.result is not None else None
         )
-        accepted = state in _baseline_accepted_states(protocol, defaults.get("discovery", ""))
+        accepted = _baseline_continuable(run, protocol, discovery, state) and run.error is None
         if not task_id or not context_id or not accepted:
-            message = run.error or _baseline_failure_message(protocol, state, defaults.get("discovery", ""))
+            message = (
+                run.error
+                or _last_failed_status_text(run)
+                or _baseline_failure_message(protocol, state, discovery)
+            )
             item.baseline = {
                 "runId": run.run_id,
                 "protocol": protocol,
@@ -1169,6 +1196,7 @@ class EvalBatchManager:
                 "finalState": run.result.final_state if run.result is not None else None,
                 "request": request,
                 "error": message,
+                "downstreamTaskId": run.downstream_task_id,
             }
             item.error = message
             return None
@@ -1181,6 +1209,7 @@ class EvalBatchManager:
             "state": state,
             "request": request,
             "finalState": run.result.final_state if run.result is not None else None,
+            "downstreamTaskId": run.downstream_task_id,
         }
         item.baseline = baseline
         return baseline
@@ -1204,7 +1233,6 @@ class EvalBatchManager:
         ``item`` is updated in place on every poll so the batch snapshot (and therefore the tester
         UI) shows the baseline's current state while the Create is still in flight.
         """
-        wanted = _baseline_accepted_states(protocol, discovery)
         deadline = time.monotonic() + max(0.1, timeout_seconds)
         while time.monotonic() < deadline:
             state = run.latest_task_state
@@ -1214,9 +1242,15 @@ class EvalBatchManager:
                     item.baseline["taskId"] = run.remote_task_id
                 if run.remote_context_id:
                     item.baseline["contextId"] = run.remote_context_id
+                if run.downstream_task_id:
+                    item.baseline["downstreamTaskId"] = run.downstream_task_id
+            if run.error is not None:
+                # A failed Create can still have published a transient outer WORKING frame. The
+                # run error is the later, authoritative signal.
+                return state
             if state in _FAILED_TASK_STATES:
                 return state
-            if run.remote_task_id and run.remote_context_id and state in wanted:
+            if _baseline_continuable(run, protocol, discovery, state):
                 return state
             if run.finished():
                 return state
@@ -1273,11 +1307,18 @@ class EvalBatchManager:
         started = time.monotonic()
         if "negotiate" in stages:
             sim_pure = item.protocol == PROTOCOL_A2A and self._nms_sim
+            replay = sim_pure and self._replays_pure_dialogue()
             await self._wait_for_negotiation(
                 run,
-                0 if sim_pure else expected_rounds,
-                min(timeout_seconds, _SIM_PURE_SETTLE_SECONDS) if sim_pure else timeout_seconds,
+                expected_rounds if replay or not sim_pure else 0,
+                timeout_seconds
+                if replay
+                else min(timeout_seconds, _SIM_PURE_SETTLE_SECONDS)
+                if sim_pure
+                else timeout_seconds,
             )
+            if replay:
+                await asyncio.sleep(_SIM_PURE_ROUND_SETTLE_SECONDS)
             actual_rounds = len(run.proposals)
             actual_kinds = [proposal.kind for proposal in run.proposals]
             rounds_ok = actual_rounds == expected_rounds
@@ -1297,9 +1338,10 @@ class EvalBatchManager:
                 negotiate_result = _apply_assertion(
                     case, item.protocol, "negotiation", negotiate_result
                 )
-            if item.protocol == PROTOCOL_A2A and self._nms_sim:
-                # The simulator asks a generic plain-A2A question; the vendor's dialogue and
-                # round count come from the OSP P column and cannot be reproduced offline.
+            if sim_pure and not replay:
+                # The historical simulator asks a generic plain-A2A question; the vendor's
+                # dialogue and round count come from the OSP P column and cannot be reproduced
+                # offline unless ``PURE_QUESTION=confirm`` selects the replay dialogue.
                 negotiate_result.status = STAGE_RECORDED
                 negotiate_result.message = _SIM_PURE_NEGOTIATION_MESSAGE
             item.stages["negotiate"] = negotiate_result
@@ -2028,6 +2070,45 @@ def _baseline_accepted_states(protocol: str, discovery: str = "") -> frozenset[s
     return frozenset({TASK_STATE_WORKING})
 
 
+def _baseline_continuable(
+    run: RunState,
+    protocol: str,
+    discovery: str,
+    state: str | None,
+) -> bool:
+    """Return whether one baseline run has a Task a Modify can really continue.
+
+    On the proxy hop the outer Task reports ``WORKING`` as soon as the OSS Agent acknowledges it,
+    before the downstream Create is sent. A downstream failure (the field's HTTP 500
+    ``Running task limit reached``) then leaves a non-existent Task behind. The outer↔inner
+    binding is the evidence that the downstream actually accepted the Create.
+    """
+    if not run.remote_task_id or not run.remote_context_id:
+        return False
+    if state not in _baseline_accepted_states(protocol, discovery):
+        return False
+    if protocol != RUNTIME_A2A_T and discovery != DISCOVERY_NMS:
+        return bool(run.downstream_task_id)
+    return True
+
+
+def _last_failed_status_text(run: RunState) -> str | None:
+    """Return the latest non-empty status text of one baseline run.
+
+    The status message carries the downstream reason ("Running task limit reached") that the
+    outer Task state alone hides.
+    """
+    if run.result is None:
+        return None
+    for event in reversed(run.result.events):
+        if event.get("kind") != "status":
+            continue
+        text = event.get("text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    return None
+
+
 def _baseline_failure_message(protocol: str, state: str | None, discovery: str = "") -> str:
     """Explain why the paired Create cannot be continued by a Modify."""
     if protocol == RUNTIME_A2A_T or discovery == DISCOVERY_NMS:
@@ -2042,9 +2123,11 @@ def _baseline_failure_message(protocol: str, state: str | None, discovery: str =
             "任务已是终态时服务端会拒绝 Modify。"
         )
     return (
-        f"Modify 基线任务的纯 A2A 外层 Task 未停留在 WORKING（当前 {state or '未观察到状态'}）；"
-        "纯 A2A 只能续传非终态 Task，请使用 --nms-sim + A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1 "
-        "或真实 NMS。"
+        f"Modify 基线任务的纯 A2A 外层 Task 未停留在 WORKING 或下游绑定未建立"
+        f"（当前 {state or '未观察到状态'}）；外层 WORKING 只代表 OSS Agent 已受理，"
+        "下游 Create 仍可能失败（例如 Running task limit）。纯 A2A 只能续传真实存在且非终态的 "
+        "Task，请清空 NMS 任务池后重试，或使用 --nms-sim + "
+        "A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1。"
     )
 
 

@@ -31,6 +31,7 @@ from demo.web.tester.service import (
     EvalBatchManager,
     StageResult,
     _apply_assertion,
+    _Batch,
 )
 from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog
 from eval.osp.followup import followup_input
@@ -42,6 +43,7 @@ from protocol.client_service import RunState
 from shared.run_constants import (
     FINAL_STATE_INPUT_INVALID,
     FINAL_STATE_TASK_COMPLETED,
+    FINAL_STATE_TASK_FAILED,
     PROTOCOL_PURE,
     TASK_STATE_SUBMITTED,
 )
@@ -179,6 +181,7 @@ def _manager(
     *,
     model_mode: str = "offline",
     nms_sim: bool = False,
+    nms_sim_pure_question: str = "issue",
     protocol_defaults: dict[str, dict[str, str]] | None = None,
 ) -> EvalBatchManager:
     return EvalBatchManager(
@@ -189,6 +192,7 @@ def _manager(
         server_auth_token=None,
         runs_dir=tmp_path,
         nms_sim=nms_sim,
+        nms_sim_pure_question=nms_sim_pure_question,
         language="en-US",
         model_mode=model_mode,
         prompt_client=_PromptClient(),
@@ -305,6 +309,69 @@ async def test_negotiation_without_expected_rounds_ends_on_an_unexpected_proposa
     elapsed = time.monotonic() - started
 
     assert elapsed < 1.0
+
+
+async def test_pure_replay_mode_asserts_the_osp_round_count(tmp_path: Path) -> None:
+    """With the vendor dialog replay, one recorded proposal is the case's expected round."""
+    manager = _manager(
+        tmp_path, _FakeRuns(_finish), nms_sim=True, nms_sim_pure_question="confirm"
+    )
+    run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="sse")
+    run.status = "running"
+    run.proposals.append(SimpleNamespace(kind="feasibility"))  # type: ignore[arg-type]
+    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A)
+    batch = _Batch(
+        batch_id="batch",
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A],
+        stop_after="negotiate",
+        approval=None,
+        timeout_seconds=1.0,
+        items=[item],
+        decision_mode=DECISION_MODE_LIVE,
+    )
+
+    await manager._wait_for_stage(
+        run,
+        item,
+        batch,
+        ("negotiate",),
+        case=CASES[1],
+        timeout_seconds=1.0,
+        working_timeout_seconds=1.0,
+    )
+
+    assert item.stages["negotiate"].status == STAGE_PASSED
+
+
+async def test_pure_issue_mode_still_records_the_round_count(tmp_path: Path) -> None:
+    """The historical issue renderer cannot reproduce the workbook dialogue, so it only records."""
+    manager = _manager(tmp_path, _FakeRuns(_finish), nms_sim=True)
+    run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="sse")
+    run.status = "running"
+    run.proposals.append(SimpleNamespace(kind="feasibility"))  # type: ignore[arg-type]
+    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A)
+    batch = _Batch(
+        batch_id="batch",
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A],
+        stop_after="negotiate",
+        approval=None,
+        timeout_seconds=1.0,
+        items=[item],
+    )
+
+    await manager._wait_for_stage(
+        run,
+        item,
+        batch,
+        ("negotiate",),
+        case=CASES[1],
+        timeout_seconds=1.0,
+        working_timeout_seconds=1.0,
+    )
+
+    assert item.stages["negotiate"].status == STAGE_RECORDED
 
 
 async def test_accepted_fails_fast_when_the_run_ended_before_sending(tmp_path: Path) -> None:
@@ -795,6 +862,9 @@ def _seed_then_modify(seed_state: str) -> Callable[[RunState], None]:
         run.remote_context_id = f"ctx-{index}"
         if index == 1:
             run.latest_task_state = seed_state
+            # The proxy hop only proves the downstream accepted the Create through its binding.
+            if seed_state in {TASK_STATE_SUBMITTED, "TASK_STATE_WORKING"}:
+                run.downstream_task_id = "inner-1"
             run.status = (
                 "finished" if seed_state in {"TASK_STATE_COMPLETED", "TASK_STATE_FAILED"} else "running"
             )
@@ -921,6 +991,46 @@ async def test_a_pure_modify_continues_the_outer_task_it_just_created(tmp_path: 
     assert runs.calls[1]["target_task_id"] is None
     assert runs.calls[1]["target_server_task_id"] == "task-1"
     assert runs.calls[1]["target_server_context_id"] == "ctx-1"
+
+
+def _seed_then_fail_downstream(run: RunState) -> None:
+    """A proxy baseline that published outer WORKING, then failed downstream (NMS HTTP 500)."""
+    run.remote_task_id = "task-1"
+    run.remote_context_id = "ctx-1"
+    run.latest_task_state = "TASK_STATE_WORKING"
+    run.status = "finished"
+    run.error = (
+        "NMS A2A request returned HTTP 500: Running task limit reached, please try again later."
+    )
+    run.result = ClientFlowResult(final_state=FINAL_STATE_TASK_FAILED)
+
+
+async def test_a_proxy_baseline_that_failed_downstream_never_becomes_the_modify_target(
+    tmp_path: Path,
+) -> None:
+    """The outer Task was WORKING, but the NMS Create failed; the Modify must not be launched."""
+    runs = _FakeRuns(_seed_then_fail_downstream)
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[18],
+        protocols=[PROTOCOL_A2A],
+        stop_after="send",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    snapshot = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = snapshot["items"][0]
+    assert isinstance(item, Mapping)
+    assert item["status"] == CASE_ERROR
+    assert "Running task limit" in str(item["error"])
+    baseline = item["baseline"]
+    assert isinstance(baseline, Mapping)
+    assert baseline["status"] == "failed"
+    assert "Running task limit" in str(baseline["error"])
+    assert len(runs.calls) == 1
 
 
 async def test_a_direct_pure_modify_continues_the_vendor_task(tmp_path: Path) -> None:
