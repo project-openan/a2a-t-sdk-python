@@ -1359,3 +1359,16 @@ def test_a_terminal_state_400_is_reported_as_a_target_condition() -> None:
 
 def test_an_unrelated_400_keeps_the_generic_hop_failure() -> None:
     assert _terminal_target_failure(NmsProtocolError("HTTP 400: bad request", http_status=400)) is None
+
+
+async def test_a_confirmation_question_is_relayed_even_when_the_model_has_an_answer() -> None:
+    """Accepting the vendor's "not feasible" alternative is the caller's business decision."""
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "Accepted. Please proceed.",
+    )
+
+    with pytest.raises(_QuestionPendingError):
+        await executor._answer_or_relay(
+            {"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Not feasible, please confirm"}
+        )

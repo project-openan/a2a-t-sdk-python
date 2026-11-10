@@ -97,7 +97,7 @@ from protocol.downstream_binding_store import DownstreamBinding, DownstreamBindi
 from protocol.downstream_pump import DownstreamPump, DownstreamPumpContext
 from protocol.gateway_push import ValidatingPushConfigStore
 from protocol.intent import IntentProcessor, OperatorRequest, ProcessedIntent
-from protocol.manual_answer import ungrounded_answer_fields
+from protocol.manual_answer import asks_for_confirmation, ungrounded_answer_fields
 from protocol.messages import SAMPLE_RUN_ID_METADATA_KEY, metadata_to_dict
 from protocol.nms_client import (
     NmsClient,
@@ -1059,13 +1059,20 @@ class OSSPureExecutor(AgentExecutor):
         Agent does not own the business answer; it publishes the question on its own Task and
         resumes the downstream context with the caller's reply.
 
-        A status ``INPUT_REQUIRED`` is attempted first because most vendor questions are
-        information requests the caller may have already answered. When the automatic answer
-        produces no text (the pure guard refused to invent a value), the question is relayed
-        instead: sending nothing would leave the downstream Task waiting while the operator sees no
+        A confirmation question ("Not feasible, please confirm") is always relayed: accepting or
+        rejecting the vendor's alternative is a business decision the caller owns, and a model
+        answer would hide it. Other status ``INPUT_REQUIRED`` events are attempted first because
+        most are information requests the caller may already have answered. When the automatic
+        answer produces no text (the pure guard refused to invent a value), the question is relayed
+        too: sending nothing would leave the downstream Task waiting while the operator sees no
         decision surface.
         """
         if event.get("kind") == "message" and self._nms_mode():
+            raise _QuestionPendingError(event)
+        if self._nms_mode() and asks_for_confirmation(str(event.get("text") or "")):
+            # "Not feasible, please confirm" is a business decision, not missing data: the caller
+            # must decide even when the model can produce a plausible text. Auto-answering it was
+            # what turned a feasible vendor compromise into a non-answer and a FAILED Task.
             raise _QuestionPendingError(event)
         result = self._answer(event)
         if inspect.isawaitable(result):
