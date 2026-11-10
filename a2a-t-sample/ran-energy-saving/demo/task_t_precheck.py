@@ -16,6 +16,7 @@ from typing import Final
 from a2a_t.core.validation_pipeline import FilledParamData
 from protocol.negotiation_policy import NegotiationKind
 from protocol.pre_task_negotiation import PrecheckFinding
+from protocol.target_grammar import find_segments
 from shared import energy_rules
 
 from demo.served_areas import (
@@ -24,11 +25,6 @@ from demo.served_areas import (
     detect_language,
     match_served_areas,
     resolve_served_area,
-)
-
-#: One ``HH:MM~HH:MM,<rate>Mbps`` target segment.
-_TARGET_SEGMENT_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"(\d{2}:\d{2})~(\d{2}:\d{2})\s*,\s*(\d+(?:\.\d+)?)\s*Mbps", re.IGNORECASE
 )
 
 #: Sentence carrying the background event of a rendered Task-T prompt.
@@ -66,8 +62,7 @@ def _target_segments(data: Mapping[str, object]) -> list[tuple[int, int, float]]
     if not isinstance(target, str):
         return []
     segments = [
-        (*_span(match.group(1), match.group(2)), float(match.group(3)))
-        for match in _TARGET_SEGMENT_PATTERN.finditer(target)
+        (*_span(segment.start, segment.end), segment.rate_mbps) for segment in find_segments(target)
     ]
     return list(dict.fromkeys(segments))
 
@@ -115,7 +110,7 @@ def _conflict_data(
     # same segment twice and report a conflict the request does not have. Only fall back to the
     # prompt when the validator nulled the slot (a failed validation does that).
     target = merged.get("guaranteedThroughputTarget")
-    if (not isinstance(target, str) or not target.strip()) and _TARGET_SEGMENT_PATTERN.search(prompt):
+    if (not isinstance(target, str) or not target.strip()) and find_segments(prompt):
         merged["guaranteedThroughputTarget"] = prompt
     # Region and background event are single lines of the rendered prompt and are the deterministic
     # source when the semantic pass filled them from somewhere else (or nulled them).

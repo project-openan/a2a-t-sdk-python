@@ -16,7 +16,6 @@ rules outside this module.
 from __future__ import annotations
 
 import logging
-import re
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -28,12 +27,10 @@ from a2a.types import Message, Task, TaskState, TaskStatus
 
 from protocol.messages import build_agent_message, metadata_to_dict
 from protocol.pre_task_negotiation import NegotiationOutcome
+from protocol.target_grammar import find_segments
 
-#: One ``{HH:MM~HH:MM,<rate>Mbps}`` segment, accepting the ``、`` separator of Chinese requests.
-_TARGET_SEGMENT_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"(\d{2}:\d{2})\s*~\s*(\d{2}:\d{2})\s*[,，、]\s*(\d+(?:\.\d+)?)\s*Mbps",
-    re.IGNORECASE,
-)
+# Target segments are parsed by :mod:`protocol.target_grammar`, which reads every notation the
+# sample and the vendor write (the local copy used to accept only ``HH:MM~HH:MM,<rate>Mbps``).
 
 #: Text of a pure A2A request that carries no text at all.
 EMPTY_REQUEST_TEXT: Final[str] = "The pure A2A request carries no task description."
@@ -354,10 +351,10 @@ class PureTaskHandler:
 
 
 def parse_target_segments(text: str) -> tuple[TargetSegment, ...]:
-    """Extract every ``{HH:MM~HH:MM,<rate>Mbps}`` target segment from ``text``."""
+    """Extract every target segment of ``text``, in any notation the repository writes."""
     return tuple(
-        TargetSegment(start=match.group(1), end=match.group(2), rate=match.group(3))
-        for match in _TARGET_SEGMENT_PATTERN.finditer(text)
+        TargetSegment(start=segment.start, end=segment.end, rate=f"{segment.rate_mbps:g}")
+        for segment in find_segments(text)
     )
 
 

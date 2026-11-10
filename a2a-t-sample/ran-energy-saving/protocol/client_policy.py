@@ -29,6 +29,7 @@ from typing import Final
 from shared.models import NegotiationAreaOption, NegotiationDecision, NegotiationProposeView
 
 from protocol.grounding import normalize, present, server_entity_values, server_target_rates
+from protocol.target_grammar import find_segments
 
 #: Task-T fields the server owns. The model may only restate a value the server itself offers, or
 #: a value the operator's own intent already states.
@@ -36,13 +37,6 @@ ENTITY_FIELDS: Final[tuple[str, ...]] = ("operationType", "region", "siteList")
 
 #: Task-T fields the client may agree to change as part of a plan.
 MUTABLE_FIELDS: Final[tuple[str, ...]] = ("guaranteedThroughputTarget", "backgroundEvent")
-
-#: One ``{HH:MM~HH:MM,NMbps}`` target segment (the workbook also uses a hyphen separator).
-_TARGET_SEGMENT: Final[re.Pattern[str]] = re.compile(
-    r"\{\s*([0-9]{1,2}:[0-9]{2})\s*[-~–]\s*([0-9]{1,2}:[0-9]{2})\s*,\s*"
-    r"([0-9]+(?:\.[0-9]+)?)\s*Mbps\s*\}",
-    re.IGNORECASE,
-)
 
 #: One plain rate in an affirmative sentence.
 _RATE: Final[re.Pattern[str]] = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*Mbps", re.IGNORECASE)
@@ -289,17 +283,17 @@ def agreed_target_value(
         return None
     rate_text = f"{min(rates):g}Mbps"
     target = baseline.get("guaranteedThroughputTarget")
-    segments = _TARGET_SEGMENT.findall(target) if isinstance(target, str) else []
+    segments = find_segments(target)
     if not segments:
-        offered = [match.group(0) for match in _TARGET_SEGMENT.finditer(propose.content)]
+        offered = [segment.canonical() for segment in find_segments(propose.content)]
         return ", ".join(offered) if offered else None
     event_window = _event_window(baseline.get("backgroundEvent"))
     agreed: list[str] = []
-    for start, end, current_rate in segments:
-        if event_window is None or _overlaps(start, end, *event_window):
-            agreed.append(f"{{{start}~{end},{rate_text}}}")
+    for segment in segments:
+        if event_window is None or _overlaps(segment.start, segment.end, *event_window):
+            agreed.append(f"{{{segment.start}~{segment.end},{rate_text}}}")
         else:
-            agreed.append(f"{{{start}~{end},{current_rate}Mbps}}")
+            agreed.append(f"{{{segment.start}~{segment.end},{segment.rate_mbps:g}Mbps}}")
     return ", ".join(agreed)
 
 

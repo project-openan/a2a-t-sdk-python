@@ -23,6 +23,12 @@ COMPLETE_REQUEST = (
 #: The missing-parameter request: no target segment.
 MISSING_REQUEST = "Create a RAN energy saving task in Region A to save energy."
 
+#: Complete plain request written in the notation the English slot overlay and the vendor use.
+VENDOR_NOTATION_REQUEST = (
+    "Create a RAN energy saving task in Region A. The guaranteed throughput target is "
+    "{00:00-06:00: 10Mbps}."
+)
+
 
 def _context(
     text: str | None,
@@ -56,6 +62,16 @@ async def test_a_complete_plain_request_is_handed_to_the_executor() -> None:
 
     assert outcome.short_circuit is False
     assert outcome.task_request is context
+
+
+async def test_a_plain_request_with_the_vendor_target_notation_is_accepted() -> None:
+    """``{00:00-06:00: 10Mbps}`` is a target; the plain gate must not reject it as missing."""
+    handler = PlainTaskHandler()
+
+    outcome = await handler.handle(_context(VENDOR_NOTATION_REQUEST))
+
+    assert outcome.short_circuit is False
+    assert outcome.task_request is not None
 
 
 async def test_a_plain_request_without_a_target_is_rejected() -> None:

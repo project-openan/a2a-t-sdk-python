@@ -172,6 +172,21 @@ def test_reask_text_names_the_fields_and_server_options() -> None:
     assert "Do not invent a value" in text
 
 
+def test_a_vendor_notation_target_is_grounded() -> None:
+    """The Task-T the vendor receives writes ``{08:00-18:00: 10Mbps}``; grounding must read it."""
+    propose = _propose("Reduce the throughput target from 10Mbps to 2Mbps for the outage period.")
+    filled = {**_BASELINE, "guaranteedThroughputTarget": "{08:00-18:00: 2Mbps}"}
+
+    ungrounded = find_ungrounded(
+        filled,
+        baseline=_BASELINE,
+        intent=_BASELINE,
+        propose=propose,
+    )
+
+    assert ungrounded == []
+
+
 def test_a_prose_feasibility_target_grounds_the_accepted_segment() -> None:
     """A feasibility proposal states its revised rate in prose, not in segment notation."""
     propose = _propose("Reduce the throughput target from 10Mbps to 2Mbps for the outage period.")

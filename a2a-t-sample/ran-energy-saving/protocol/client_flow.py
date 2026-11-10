@@ -60,6 +60,15 @@ from a2a_t.core.standard_templates import (
     TARGET_NEGOTIATION_ACCEPT_REJECT_URI,
     TARGET_NEGOTIATION_PROPOSE_URI,
 )
+from a2a_t.negotiation.content import (
+    FeasibilityEndingContent,
+    InformationEndingContent,
+    NegotiationConclusion,
+    NegotiationEndingContent,
+    NegotiationEndingData,
+    NegotiationItem,
+    TargetEndingContent,
+)
 from google.protobuf.json_format import ParseDict
 from shared.config import DEFAULT_HTTP_TIMEOUT_SECONDS, DEFAULT_WEBHOOK_IDLE_TIMEOUT
 from shared.logging_setup import log_context
@@ -95,7 +104,7 @@ from shared.trace import (
     trace_stage,
 )
 
-from protocol.client_policy import ClientPolicy, apply_automated_decision
+from protocol.client_policy import ClientPolicy, agreed_target_value, apply_automated_decision
 from protocol.decision_provider import (
     AdkDecisionProvider,
     DecisionTimeoutError,
@@ -122,6 +131,7 @@ from protocol.negotiation_policy import (
     negotiation_kind_for_propose_content,
     negotiation_kind_for_template_uri,
 )
+from protocol.target_grammar import find_segments, normalize_text
 
 _LOGGER = logging.getLogger("ran_energy_saving.client_flow")
 
@@ -175,10 +185,9 @@ _MISSING_ITEMS_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:missing items?|provide the following items?)\s*:\s*([^.]+)\.", re.IGNORECASE
 )
 
-#: A Task-T throughput target must be time-segmented, for example ``{00:00~07:00,2Mbps}``.
-_TIME_SEGMENTED_TARGET_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"\d{2}:\d{2}~\d{2}:\d{2}\s*,\s*\d+(?:\.\d+)?\s*Mbps", re.IGNORECASE
-)
+# A Task-T throughput target is parsed by :mod:`protocol.target_grammar`. The flow used to own a
+# tilde-only copy here, which silently dropped the hyphen/colon form the English slot overlay and
+# the vendor Task-T actually carry.
 
 #: Heading opening the Task-T context section (the template writes both language labels).
 _CONTEXT_HEADING_PATTERN: Final[re.Pattern[str]] = re.compile(
@@ -609,6 +618,10 @@ class PromptClient(Protocol):
 
     def generate_negotiation_accept_prompt_from_text(
         self, text: str | None, context: NegotiationContext, template_uri: str
+    ) -> MetadataContent: ...
+
+    def generate_negotiation_accept_prompt_from_data(
+        self, data: NegotiationEndingData, template_uri: str
     ) -> MetadataContent: ...
 
     def generate_negotiation_reject_prompt_from_text(
@@ -1531,6 +1544,7 @@ async def run_client_flow(
                 decision=decision,
                 kind=kind,
                 session=session,
+                propose=propose,
                 context_id=context_id,
                 label=resolved_label,
                 task_template_uri=task_template_uri,
@@ -1693,6 +1707,8 @@ def _accept_filled_values(
     decision: NegotiationDecision,
     baseline: Mapping[str, object] | None,
     intent_fields: Mapping[str, object] | None,
+    *,
+    dropped: list[str] | None = None,
 ) -> dict[str, object]:
     """Merge the operator-derived baseline and the decision into the agreed Task-T parameters.
 
@@ -1700,6 +1716,11 @@ def _accept_filled_values(
     not provide. The decision may add or change a value, but the grounding verifier decides
     whether that change is allowed. There is no configured fallback and no default operation type:
     an absent value stays absent and the verifier blocks the ACCEPT.
+
+    A target is normalized to the canonical ``{HH:MM~HH:MM,NMbps}`` form rather than validated
+    against one notation. The old tilde-only filter dropped the hyphen/colon form the English slot
+    overlay and the vendor Task-T use, and did so without a trace; a value that still cannot be
+    parsed is now recorded in ``dropped`` so the caller can surface it.
     """
     del kind
     filled: dict[str, object] = {}
@@ -1711,16 +1732,35 @@ def _accept_filled_values(
     if isinstance(allowed, Mapping):
         for key, value in (decision.filled_params or {}).items():
             if key not in allowed or value is None:
+                _record_dropped(dropped, key, "not a Task-T parameter or empty")
                 continue
             if not (isinstance(value, (str, int, float)) and str(value).strip()):
+                _record_dropped(dropped, key, "empty value")
                 continue
-            if key == "guaranteedThroughputTarget" and not _TIME_SEGMENTED_TARGET_PATTERN.search(str(value)):
+            if key == RATE_TARGET_FIELD:
+                normalized = normalize_text(value)
+                if normalized is None:
+                    _record_dropped(dropped, key, "not a time-segmented target")
+                    continue
+                filled[key] = normalized
                 continue
             filled[key] = value
-    target = filled.get("guaranteedThroughputTarget")
-    if not isinstance(target, str) or not _TIME_SEGMENTED_TARGET_PATTERN.search(target):
-        filled.pop("guaranteedThroughputTarget", None)
+    target = filled.get(RATE_TARGET_FIELD)
+    if isinstance(target, str):
+        normalized = normalize_text(target)
+        if normalized is None:
+            _record_dropped(dropped, RATE_TARGET_FIELD, "baseline target is not time-segmented")
+            filled.pop(RATE_TARGET_FIELD, None)
+        else:
+            filled[RATE_TARGET_FIELD] = normalized
     return filled
+
+
+def _record_dropped(dropped: list[str] | None, field: str, reason: str) -> None:
+    """Record one silently-dropped accept value so the caller can trace it."""
+    _LOGGER.warning("accept value dropped: %s (%s)", field, reason)
+    if dropped is not None:
+        dropped.append(f"{field}: {reason}")
 
 
 def _requires_auto_verification(provider: NegotiationDecisionProvider) -> bool:
@@ -1856,11 +1896,11 @@ def _ensure_agreed_target(task_text: str, filled: Mapping[str, object]) -> str:
     target = filled.get("guaranteedThroughputTarget")
     if not isinstance(target, str) or not target.strip():
         return task_text
-    segments = [re.sub(r"\s+", "", segment) for segment in _TIME_SEGMENTED_TARGET_PATTERN.findall(target)]
+    segments = find_segments(target)
     if not segments:
         return task_text
-    compact_prompt = re.sub(r"\s+", "", task_text)
-    if all(segment in compact_prompt for segment in segments):
+    rendered = {(segment.start, segment.end, segment.rate_mbps) for segment in find_segments(task_text)}
+    if all((segment.start, segment.end, segment.rate_mbps) in rendered for segment in segments):
         return task_text
     _LOGGER.warning("the refilled Task-T prompt dropped the agreed throughput target; writing it into the task context")
     heading = _CONTEXT_HEADING_PATTERN.search(task_text)
@@ -1880,6 +1920,7 @@ async def _build_accept_request(
     decision: NegotiationDecision,
     kind: NegotiationKind,
     session: NegotiationContext,
+    propose: NegotiationProposeView,
     context_id: str,
     label: str,
     task_template_uri: str,
@@ -1888,9 +1929,18 @@ async def _build_accept_request(
     call_timeout_seconds: float,
     single_extension_per_message: bool,
     task_id: str | None = None,
+    dropped: list[str] | None = None,
 ) -> tuple[SendMessageRequest, ClientCallContext]:
-    """Refill the Task-T prompt and generate the Negotiation-T accept of the proposal type."""
-    filled = _accept_filled_values(kind, decision, baseline, intent_fields)
+    """Refill the Task-T prompt and generate the Negotiation-T accept of the proposal type.
+
+    The accept content is built from typed data and rendered deterministically (the SDK
+    ``generate_accept_from_data`` path). The old from-text path ran the client's own accept text
+    through an LLM extraction; a degenerate text made the extraction return an empty required
+    field, which the SDK classifies as a non-retryable failure and which aborted live runs. The
+    from-text path stays only as a fallback for content this flow cannot type.
+    """
+    filled = _accept_filled_values(kind, decision, baseline, intent_fields, dropped=dropped)
+    _prefer_the_agreed_target(kind, filled, decision, propose, baseline)
     task_content = None
     task_text = ""
     if not single_extension_per_message:
@@ -1908,15 +1958,24 @@ async def _build_accept_request(
             _require_prompt_text(task_content, "the refilled Task-T prompt"), filled
         )
 
-    accept_text = _accept_text(kind, filled, decision, baseline=baseline)
     accept_context = session.with_performative(NegotiationPerformative.ACCEPT)
-    with trace_stage("negotiation_accept_extraction"):
+    template_uri = _ACCEPT_REJECT_TEMPLATE_URI_BY_KIND[kind.value]
+    typed = _typed_accept_content(kind, filled, decision, baseline)
+    if typed is not None:
         content = await asyncio.to_thread(
-            prompt_client.generate_negotiation_accept_prompt_from_text,
-            accept_text,
-            accept_context,
-            _ACCEPT_REJECT_TEMPLATE_URI_BY_KIND[kind.value],
+            prompt_client.generate_negotiation_accept_prompt_from_data,
+            NegotiationEndingData(accept_context, typed),
+            template_uri,
         )
+    else:
+        accept_text = _accept_text(kind, filled, decision, baseline=baseline)
+        with trace_stage("negotiation_accept_extraction"):
+            content = await asyncio.to_thread(
+                prompt_client.generate_negotiation_accept_prompt_from_text,
+                accept_text,
+                accept_context,
+                template_uri,
+            )
     # The real NMS rejects a message whose metadata holds more than one ``-T`` extension key, so
     # the NMS path sends the accept with the negotiation key only; the local demo server reads the
     # refilled Task-T prompt from the accept message and keeps receiving it.
@@ -2425,6 +2484,86 @@ def _proposal_options(value: object) -> NegotiationOptions | None:
         return None
 
 
+def _prefer_the_agreed_target(
+    kind: NegotiationKind,
+    filled: dict[str, object],
+    decision: NegotiationDecision,
+    propose: NegotiationProposeView,
+    baseline: Mapping[str, object] | None,
+) -> None:
+    """Replace the pre-negotiation target with the value the accept actually agrees to.
+
+    A feasibility/target accept must name the alternative, not the baseline the server rejected.
+    When the decision supplies no target, the proposal's own alternative plus the operator's
+    windows yields the value deterministically (``agreed_target_value``); when even that fails the
+    stale baseline value is removed rather than reported as agreed.
+    """
+    if kind is NegotiationKind.INFORMATION:
+        return
+    supplied = normalize_text((decision.filled_params or {}).get(RATE_TARGET_FIELD))
+    if supplied is not None:
+        filled[RATE_TARGET_FIELD] = supplied
+        return
+    agreed = normalize_text(agreed_target_value(propose, filled)) or normalize_text(
+        agreed_target_value(propose, {**(baseline or {}), **filled})
+    )
+    if agreed is not None:
+        filled[RATE_TARGET_FIELD] = agreed
+    else:
+        filled.pop(RATE_TARGET_FIELD, None)
+
+
+def _typed_accept_content(
+    kind: NegotiationKind,
+    filled: Mapping[str, object],
+    decision: NegotiationDecision,
+    baseline: Mapping[str, object] | None,
+) -> NegotiationEndingContent | None:
+    """Build the typed ending content of an accept, or ``None`` when the flow cannot type it.
+
+    ``None`` keeps the from-text fallback for content the flow does not own (an operator's free
+    answer the sample cannot map onto Task-T parameters). Every branch here is deterministic: the
+    values come from the decision, the agreed Task-T parameters or the proposal, never from a model
+    re-reading the client's own accept text.
+    """
+    if kind is NegotiationKind.INFORMATION:
+        allowed = TASK_PARAM_SCHEMA.get("properties")
+        items: list[NegotiationItem] = []
+        for name in decision.filled_params or {}:
+            if not isinstance(allowed, Mapping) or name not in allowed:
+                continue
+            value = filled.get(name)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                continue
+            items.append(NegotiationItem(name, str(value)))
+        return InformationEndingContent(NegotiationConclusion.ACCEPT, items) if items else None
+    if kind is NegotiationKind.TARGET:
+        confirmation = (decision.confirmed_intent or "").strip() or _agreed_values_line(
+            filled, baseline=baseline
+        )
+        if not confirmation:
+            return None
+        return TargetEndingContent(NegotiationConclusion.ACCEPT, confirmation, None)
+    summary = (decision.feasibility_summary or "").strip() or _feasibility_accept_summary(
+        filled, baseline
+    )
+    return FeasibilityEndingContent(NegotiationConclusion.ACCEPT, summary)
+
+
+def _feasibility_accept_summary(
+    filled: Mapping[str, object],
+    baseline: Mapping[str, object] | None,
+) -> str:
+    """Render the feasibility result confirmation from the agreed values, never from a model."""
+    target = normalize_text(filled.get(RATE_TARGET_FIELD))
+    if target is not None:
+        return f"Accepted the server's alternative: rate guarantee target {target}."
+    values = _agreed_values_line(filled, baseline=baseline)
+    if values:
+        return f"Accepted the server's alternative: {values}"
+    return "Accepted the server's proposed adjustment."
+
+
 def _accept_text(
     kind: NegotiationKind,
     filled: Mapping[str, object],
@@ -2454,7 +2593,12 @@ def _accept_text(
     confirmation = decision.confirmed_intent if kind is NegotiationKind.TARGET else decision.feasibility_summary
     values = _agreed_values_line(filled, baseline=baseline)
     body = " ".join(part for part in (values, confirmation or "") if part).strip()
-    return f"Accept. {body}".strip() if body else "Accept."
+    if not body:
+        # A bare ``Accept.`` gives the extraction nothing to read and used to kill the run
+        # (D12: the fixed fallback was designed but never implemented). Prefer the decision's own
+        # wording, then the fixed sentence; never the performative alone.
+        body = (decision.rationale or "").strip() or "Accept the server's proposed adjustment."
+    return f"Accept. {body}".strip()
 
 
 def _agreed_values_line(
@@ -2466,7 +2610,11 @@ def _agreed_values_line(
     parts: list[str] = []
     target = filled.get("guaranteedThroughputTarget")
     if isinstance(target, str) and target.strip():
-        parts.append(f"Rate guarantee target: {target.strip()}.")
+        baseline_target = normalize_text((baseline or {}).get("guaranteedThroughputTarget"))
+        # The baseline is what the server rejected; repeating it as the agreed value is worse
+        # than naming nothing.
+        if normalize_text(target) != baseline_target:
+            parts.append(f"Rate guarantee target: {target.strip()}.")
     for name, label in (
         ("region", "Area"),
         ("siteList", "Site list"),

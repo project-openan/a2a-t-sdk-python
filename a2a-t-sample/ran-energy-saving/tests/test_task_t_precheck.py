@@ -202,3 +202,12 @@ def test_a_valid_task_needs_no_negotiation() -> None:
     )
 
     assert finding is None
+
+
+def test_the_vendor_target_notation_drives_the_conflict_check() -> None:
+    """A colon-form target with overlapping windows and different rates is a TARGET conflict."""
+    kind = _deterministic_negotiation_kind(
+        {"guaranteedThroughputTarget": "{00:00-08:00: 5Mbps}, {07:00~09:00,10Mbps}"}
+    )
+
+    assert kind is NegotiationKind.TARGET

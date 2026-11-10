@@ -15,7 +15,6 @@ agreed before the task starts.
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any, Final
 
 from a2a.server.agent_execution.context import RequestContext
@@ -24,11 +23,10 @@ from a2a_t.core.metadata import TASK_T_EXTENSION_URI
 
 from protocol.messages import build_agent_message, metadata_to_dict
 from protocol.pre_task_negotiation import NegotiationOutcome
+from protocol.target_grammar import find_segments
 
-#: One ``HH:MM~HH:MM,<rate>Mbps`` target segment in the natural-language request.
-_TARGET_SEGMENT_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"\d{2}:\d{2}~\d{2}:\d{2}\s*,\s*\d+(?:\.\d+)?\s*Mbps", re.IGNORECASE
-)
+# Target segments are parsed by :mod:`protocol.target_grammar`, which reads every notation the
+# sample and the vendor write (the local copy used to accept only ``HH:MM~HH:MM,<rate>Mbps``).
 
 #: Terminal text of a plain request that carries no time-segmented guaranteed throughput target.
 MISSING_TARGET_TEXT: Final[str] = (
@@ -67,7 +65,7 @@ class PlainTaskHandler:
             return NegotiationOutcome.short(
                 build_agent_message(context_id=context_id, text=EMPTY_REQUEST_TEXT)
             )
-        if _TARGET_SEGMENT_PATTERN.search(text) is None:
+        if not find_segments(text):
             self._logger.info("plain request rejected: no guaranteed throughput target")
             return NegotiationOutcome.rejected(_build_rejected_task(context, MISSING_TARGET_TEXT))
         self._logger.info("plain request accepted; handing it to the deterministic executor")

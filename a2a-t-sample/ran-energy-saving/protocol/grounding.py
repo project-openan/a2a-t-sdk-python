@@ -25,6 +25,8 @@ from typing import Final
 
 from shared.models import NegotiationProposeView
 
+from protocol.target_grammar import find_segments
+
 
 #: One Task-T value the automatic decision may not send.
 @dataclass(frozen=True)
@@ -75,12 +77,6 @@ _AFFIRMATIVE_MARKERS: Final[tuple[str, ...]] = (
     "选择",
     "更正",
     "替代",
-)
-
-#: One ``{HH:MM~HH:MM,NMbps}`` target segment (the workbook also uses a hyphen separator).
-_TARGET_SEGMENT: Final[re.Pattern[str]] = re.compile(
-    r"\{\s*\d{1,2}:\d{2}\s*[-~–]\s*\d{1,2}:\d{2}\s*,\s*\d+(?:\.\d+)?\s*Mbps\s*\}",
-    re.IGNORECASE,
 )
 
 #: A plain rate in affirmative proposal prose ("reduce the target from 10Mbps to 2Mbps").
@@ -179,13 +175,12 @@ def server_target_segments(propose: NegotiationProposeView) -> set[str]:
     for sentence in _sentences(propose.content):
         if _negated(sentence) and not _affirmative(sentence):
             continue
-        for match in _TARGET_SEGMENT.findall(sentence):
-            segments.add(normalize(match))
+        segments.update(_canonical_segments(sentence))
     parameters = propose.parameters
     if isinstance(parameters, Mapping):
         raw = parameters.get("guaranteedThroughputTarget")
         if isinstance(raw, str):
-            segments.update(normalize(item) for item in _TARGET_SEGMENT.findall(raw))
+            segments.update(_canonical_segments(raw))
     return segments
 
 
@@ -224,7 +219,12 @@ def server_contains(propose: NegotiationProposeView, value: object) -> bool:
 
 def _target_segments(value: object) -> list[str]:
     """Return the normalized segments of one target value."""
-    return [normalize(item) for item in _TARGET_SEGMENT.findall(str(value))]
+    return _canonical_segments(value)
+
+
+def _canonical_segments(value: object) -> list[str]:
+    """Return the canonical ``{HH:MM~HH:MM,NMbps}`` segments of one value, in source order."""
+    return [normalize(segment.canonical()) for segment in find_segments(value)]
 
 
 def find_ungrounded(

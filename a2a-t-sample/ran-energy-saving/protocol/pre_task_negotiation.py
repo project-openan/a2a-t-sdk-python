@@ -85,6 +85,7 @@ from protocol.negotiation_policy import (
     negotiation_kind_for_errors,
     negotiation_kind_for_template_uri,
 )
+from protocol.target_grammar import find_segments
 
 #: Caller parameter schema of the Negotiation-T validation steps.
 #:
@@ -455,7 +456,7 @@ class PreTaskNegotiationHandler:
                     )
                     return await self._emit_policy_decision(context_id, self._policy(state))
             verified = False
-            if kind is not NegotiationKind.INFORMATION and _TARGET_SEGMENT_PATTERN.search(prompt):
+            if kind is not NegotiationKind.INFORMATION and find_segments(prompt):
                 # A conflict verdict is model-judged. When the sample's own check of the Task-T
                 # finds no conflict, the request is valid and must run: a live model sometimes
                 # reports an overlap that the prompt does not contain. A prompt without a target
@@ -590,7 +591,7 @@ class PreTaskNegotiationHandler:
             confirmable = (
                 kind is not None
                 and kind is not NegotiationKind.INFORMATION
-                and _TARGET_SEGMENT_PATTERN.search(task_prompt) is not None
+                and bool(find_segments(task_prompt))
             )
             if not confirmable or self._verified_conflict_kind(exc, task_prompt) is not None:
                 return await self._negotiation_failure(context_id, session, f"Accepted Task-T validation failed: {exc}")
@@ -894,10 +895,8 @@ def _missing_slot_names(errors: Sequence[SlotValidationError]) -> tuple[str, ...
     return tuple(names)
 
 
-#: One ``HH:MM~HH:MM,<rate>Mbps`` target segment in a rendered Task-T prompt.
-_TARGET_SEGMENT_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"\d{2}:\d{2}~\d{2}:\d{2}\s*,\s*\d+(?:\.\d+)?\s*Mbps", re.IGNORECASE
-)
+# Target segments are parsed by :mod:`protocol.target_grammar`, which reads every notation the
+# sample and the vendor write (the local copy used to accept only ``HH:MM~HH:MM,<rate>Mbps``).
 
 #: The rendered Task-T's ``Operation Type: Modify`` section, in either template language.
 _MODIFY_OPERATION_PATTERN: Final[re.Pattern[str]] = re.compile(

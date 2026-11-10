@@ -20,7 +20,7 @@ from demo.scenario import (
     SCENARIO_NIGHT,
     SCENARIO_TARGET,
 )
-from protocol.pure_a2a import PureTaskHandler
+from protocol.pure_a2a import PureTaskHandler, parse_target_segments
 from protocol.server_executor import _report_metadata
 from shared.models import NegotiationDecision
 from shared.run_constants import LANGUAGE_EN
@@ -213,3 +213,10 @@ def test_a_reject_decision_renders_its_rationale() -> None:
     decision = NegotiationDecision(action="reject", rationale="The target is not feasible.")
 
     assert render_pure_answer(decision) == "The target is not feasible."
+
+
+def test_the_vendor_target_notation_parses_for_the_overlap_check() -> None:
+    """``{08:00-18:00: 2Mbps}`` is the notation the vendor Task-T carries; it must parse here."""
+    segments = parse_target_segments("Time-segmented rate guarantee target: {08:00-18:00: 2Mbps}.")
+
+    assert [(segment.start, segment.end, segment.rate) for segment in segments] == [("08:00", "18:00", "2")]

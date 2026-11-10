@@ -37,6 +37,13 @@ from a2a_t.core.standard_templates import (
     NEGOTIATION_ABORT_URI,
     TARGET_NEGOTIATION_PROPOSE_URI,
 )
+from a2a_t.negotiation.content import (
+    FeasibilityEndingContent,
+    InformationEndingContent,
+    NegotiationConclusion,
+    NegotiationEndingData,
+    TargetEndingContent,
+)
 from demo.scenario import (
     FINAL_STATE_NEGOTIATION_ABORTED,
     FINAL_STATE_NEGOTIATION_ENDED,
@@ -128,6 +135,7 @@ class FakePromptClient:
 
     task_prompts: list[str] = field(default_factory=list)
     accept_texts: list[str] = field(default_factory=list)
+    accept_data: list[NegotiationEndingData] = field(default_factory=list)
     reject_texts: list[str] = field(default_factory=list)
     abort_texts: list[str] = field(default_factory=list)
     propose_texts: list[str] = field(default_factory=list)
@@ -161,6 +169,12 @@ class FakePromptClient:
         self.accept_texts.append(text or "")
         return _negotiation_content(f"Accept: {text}", context, template_uri)
 
+    def generate_negotiation_accept_prompt_from_data(
+        self, data: NegotiationEndingData, template_uri: str
+    ) -> MetadataContent:
+        self.accept_data.append(data)
+        return _negotiation_content(f"Accept from data: {data.content}", data.context, template_uri)
+
     def generate_negotiation_reject_prompt_from_text(
         self, text: str | None, context: NegotiationContext, template_uri: str
     ) -> MetadataContent:
@@ -193,7 +207,7 @@ class SlowPromptClient(FakePromptClient):
 
 @dataclass(frozen=True)
 class SlowAcceptPromptClient(FakePromptClient):
-    """Fake client that spends wall-clock time in the accept extraction."""
+    """Fake client that spends wall-clock time building the accept message."""
 
     delay_seconds: float = 0.3
 
@@ -202,6 +216,12 @@ class SlowAcceptPromptClient(FakePromptClient):
     ) -> MetadataContent:
         time.sleep(self.delay_seconds)
         return super().generate_negotiation_accept_prompt_from_text(text, context, template_uri)
+
+    def generate_negotiation_accept_prompt_from_data(
+        self, data: NegotiationEndingData, template_uri: str
+    ) -> MetadataContent:
+        time.sleep(self.delay_seconds)
+        return super().generate_negotiation_accept_prompt_from_data(data, template_uri)
 
 
 async def _ticks_while(awaitable: Awaitable[object]) -> int:
@@ -534,7 +554,7 @@ async def test_accept_span_carries_the_refilled_task_t_and_the_negotiation_paylo
     assert isinstance(accept, dict)
     assert accept["performative"] == "ACCEPT"
     assert str(accept["taskT"]).startswith("Refilled Task-T prompt:")
-    assert str(accept["negotiationT"]).startswith("Accept:")
+    assert str(accept["negotiationT"]).startswith("Accept from data:")
     assert str(accept["negotiationUri"]).endswith("/Negotiation-T/v1")
 
 
@@ -868,7 +888,7 @@ async def test_target_scenario_counters_in_round_one_then_accepts_round_two() ->
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
     assert _client_negotiation_steps(transport.requests) == [("PROPOSE", 1), ("ACCEPT", 2)]
     assert len(prompt_client.propose_texts) == 1
-    assert len(prompt_client.accept_texts) == 1
+    assert len(prompt_client.accept_data) == 1
 
 
 async def test_feasibility_scenario_accepts_the_alternative() -> None:
@@ -881,6 +901,134 @@ async def test_feasibility_scenario_accepts_the_alternative() -> None:
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
     assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1)]
     assert prompt_client.refill_data[0]["siteList"] == "Station 1,Station 2"
+
+
+async def test_a_feasibility_accept_is_rendered_from_typed_content() -> None:
+    """The accept no longer round-trips through an LLM extraction of the client's own text.
+
+    The live failure was: a hyphenated agreed value was dropped, the accept text degenerated to
+    bare ``Accept.``, the extraction returned an empty summary and the run died. Building the
+    typed ending content removes that whole path instead of special-casing its symptom.
+    """
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="Accept the server's reduced rate.",
+        filled_params={"guaranteedThroughputTarget": "{08:00-18:00,2Mbps}"},
+    )
+    result, _transport, prompt_client = await _run(
+        SCENARIO_FEASIBILITY_SPEC,
+        [[propose_event("feasibility", 1)], _task_completed_batch()],
+        (decision,),
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert prompt_client.accept_texts == []
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, FeasibilityEndingContent)
+    assert content.conclusion is NegotiationConclusion.ACCEPT
+    assert "{08:00~18:00,2Mbps}" in content.feasibility_summary
+
+
+async def test_a_feasibility_accept_without_values_still_carries_a_summary() -> None:
+    """A bare confirm click must not produce an accept whose summary is empty."""
+    decision = NegotiationDecision(action="accept", rationale="Accept the proposal.")
+    _result, _transport, prompt_client = await _run(
+        SCENARIO_FEASIBILITY_SPEC,
+        [[propose_event("feasibility", 1)], _task_completed_batch()],
+        (decision,),
+    )
+
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, FeasibilityEndingContent)
+    assert content.feasibility_summary.strip()
+
+
+async def test_a_feasibility_accept_never_echoes_the_pre_negotiation_target() -> None:
+    """The baseline target is what the server rejected; it must not be reported as agreed."""
+    decision = NegotiationDecision(action="accept", rationale="Accept the proposal.")
+    prompt_client = FakePromptClient()
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=ScriptedTransport([[propose_event("feasibility", 1)], _task_completed_batch()]),
+        user_request=SCENARIO_FEASIBILITY_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields={**_INTENT_FIELDS, "guaranteedThroughputTarget": "{08:00~18:00,10Mbps}"},
+    )
+
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, FeasibilityEndingContent)
+    assert "10Mbps" not in content.feasibility_summary
+
+
+async def test_a_feasibility_accept_derives_the_agreed_target_from_the_proposal() -> None:
+    """The proposal's alternative is the agreement; the client can name it without a model."""
+    decision = NegotiationDecision(action="accept", rationale="Accept the reduced rate.")
+    prompt_client = FakePromptClient()
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=ScriptedTransport(
+            [
+                [
+                    propose_event(
+                        "feasibility",
+                        1,
+                        content=(
+                            "## Infeasible Evaluation Details and Proposal\n"
+                            "Proposal: Reduce rate target to 2Mbps or less."
+                        ),
+                    )
+                ],
+                _task_completed_batch(),
+            ]
+        ),
+        user_request=SCENARIO_FEASIBILITY_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields={**_INTENT_FIELDS, "guaranteedThroughputTarget": "{08:00~18:00,10Mbps}"},
+    )
+
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, FeasibilityEndingContent)
+    assert "{08:00~18:00,2Mbps}" in content.feasibility_summary
+
+
+async def test_a_target_accept_is_rendered_from_typed_content() -> None:
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="Accept the adjusted target.",
+        filled_params={"guaranteedThroughputTarget": "{00:00-06:00,2Mbps}"},
+    )
+    result, _transport, prompt_client = await _run(
+        SCENARIO_TARGET_SPEC,
+        [[propose_event("target", 1)], _task_completed_batch()],
+        (decision,),
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert prompt_client.accept_texts == []
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, TargetEndingContent)
+    assert "{00:00~06:00,2Mbps}" in (content.confirmed_intent or "")
+
+
+async def test_an_information_accept_is_rendered_from_typed_content() -> None:
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="The engineer supplied the area.",
+        filled_params={"region": "Region B"},
+    )
+    result, _transport, prompt_client = await _run(
+        INFORMATION_NEGOTIATION_SPEC,
+        [[propose_event("information", 1)], _task_completed_batch()],
+        (decision,),
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert prompt_client.accept_texts == []
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, InformationEndingContent)
+    assert [(item.name, item.value) for item in content.items] == [("region", "Region B")]
 
 
 async def test_a_propose_embedded_in_a_status_update_is_answered() -> None:
@@ -1812,7 +1960,9 @@ async def test_a_feasible_alternative_is_accepted_even_when_the_model_rejects() 
     )
 
     assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1)]
-    assert "2Mbps" in prompt_client.accept_texts[-1]
+    content = prompt_client.accept_data[-1].content
+    assert isinstance(content, FeasibilityEndingContent)
+    assert "2Mbps" in content.feasibility_summary
     assert result.final_state == FINAL_STATE_NEGOTIATION_ENDED
 
 

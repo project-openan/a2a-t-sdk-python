@@ -140,6 +140,13 @@ def test_agreed_target_applies_the_alternative_rate_to_the_outage_window() -> No
     assert agreed_target_value(_propose(), _BASELINE) == "{08:00~18:00,2Mbps}"
 
 
+def test_agreed_target_reads_the_vendor_notation() -> None:
+    """A baseline written ``{08:00-18:00: 10Mbps}`` still yields the agreed outage window."""
+    baseline = {**_BASELINE, "guaranteedThroughputTarget": "{08:00-18:00: 10Mbps}"}
+
+    assert agreed_target_value(_propose(), baseline) == "{08:00~18:00,2Mbps}"
+
+
 def test_agreed_target_keeps_a_segment_outside_the_background_event() -> None:
     baseline = {
         **_BASELINE,
