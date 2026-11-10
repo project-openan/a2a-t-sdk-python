@@ -128,10 +128,46 @@ def negotiation_prompt_from_metadata(metadata: Mapping[str, object]) -> str:
 
 
 def is_negotiation_message(metadata: Mapping[str, object] | None) -> bool:
-    """Report whether one message metadata map marks an A2A-T negotiation message."""
+    """Report whether one message metadata map marks an A2A-T negotiation message.
+
+    The vendor NMS also writes the short key ``Negotiation-T`` instead of the extension URI, so a
+    message carrying that spelling is a negotiation message too.
+    """
     if not metadata:
         return False
-    return NEGOTIATION_T_EXTENSION_URI in metadata or NEGOTIATION_CONTEXT_METADATA_KEY in metadata
+    return vendor_negotiation_value(metadata) is not None or NEGOTIATION_CONTEXT_METADATA_KEY in metadata
+
+
+def vendor_negotiation_value(metadata: Mapping[str, object] | None) -> object | None:
+    """Return the Negotiation-T value under the canonical URI or the vendor's short key.
+
+    The vendor writes ``Negotiation-T`` (and, in older captures, a full URI whose last path
+    segment is that name). Both are the same extension, so the value is read from either instead
+    of dropping the message as "not a negotiation".
+    """
+    if not metadata:
+        return None
+    value = metadata.get(NEGOTIATION_T_EXTENSION_URI)
+    if value is not None:
+        return value
+    for key, candidate in metadata.items():
+        if not isinstance(key, str):
+            continue
+        if key.rsplit("/", 1)[-1].strip().lower() == "negotiation-t":
+            return candidate
+    return None
+
+
+def normalize_negotiation_metadata(metadata: Mapping[str, object] | None) -> dict[str, object]:
+    """Return one metadata map with the vendor's short Negotiation-T key mapped to the URI."""
+    if not metadata:
+        return {}
+    normalized = dict(metadata)
+    if NEGOTIATION_T_EXTENSION_URI not in normalized:
+        value = vendor_negotiation_value(metadata)
+        if value is not None:
+            normalized[NEGOTIATION_T_EXTENSION_URI] = value
+    return normalized
 
 
 def parse_negotiation_context(metadata: Mapping[str, object] | None) -> NegotiationContext | None:

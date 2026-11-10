@@ -1391,6 +1391,75 @@ async def test_an_information_accept_is_rendered_from_typed_content() -> None:
     assert [(item.name, item.value) for item in content.items] == [("region", "Region B")]
 
 
+def vendor_propose_event() -> dict[str, object]:
+    """A vendor-shaped Negotiation-T message: short key, JSON envelope, no negotiationContext."""
+    envelope = json.dumps(
+        {
+            "message": [
+                {
+                    "text": (
+                        "## Feasibility Negotiation\n"
+                        "Proposal: Reduce rate target to 2Mbps or less."
+                    ),
+                    "metadata": {
+                        "responseMetadata": {
+                            "performative": "PROPOSE",
+                            "templateUri": "Negotiation-T/feasibility-negotiation/propose/v1",
+                            "negotiationType": "FEASIBILITY",
+                        }
+                    },
+                }
+            ],
+            "messageType": "ASK_USER",
+        },
+        ensure_ascii=False,
+    )
+    return {
+        "kind": "message",
+        "text": envelope,
+        "context_id": CONTEXT_ID,
+        "message_id": "vendor-propose-1",
+        "metadata": {"Negotiation-T": envelope},
+    }
+
+
+async def test_a_vendor_frame_without_a_negotiation_context_is_answered() -> None:
+    """The vendor may send the short key, a JSON envelope and no negotiationContext."""
+    prompt_client = FakePromptClient()
+    transport = ScriptedTransport([[vendor_propose_event()], _task_completed_batch()])
+    result = await run_client_flow(
+        prompt_client=prompt_client,
+        transport=transport,
+        user_request=SCENARIO_FEASIBILITY_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider(SCENARIO_FEASIBILITY_SPEC.scripted_client_decisions),
+        language="en-US",
+        intent_fields=_INTENT_FIELDS,
+        infer_missing_negotiation_kind=True,
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1)]
+    accept = MessageToDict(transport.requests[1].message.metadata)
+    context = accept[NEGOTIATION_CONTEXT_METADATA_KEY]
+    assert context["round"] == 1
+    assert context["id"] == CONTEXT_ID
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, FeasibilityEndingContent)
+
+
+async def test_an_accept_continues_the_task_the_negotiation_belongs_to() -> None:
+    """A negotiation reply names the Task it continues, also when the run created it."""
+    result, transport, _ = await _run(
+        SCENARIO_FEASIBILITY_SPEC,
+        [[status_propose_event("feasibility", 1)], _task_completed_batch()],
+        SCENARIO_FEASIBILITY_SPEC.scripted_client_decisions,
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    accept = transport.requests[1]
+    assert accept.message.task_id == "task-1"
+
+
 async def test_a_propose_embedded_in_a_status_update_is_answered() -> None:
     """The vendor NMS delivers the Negotiation-T propose as ``statusUpdate.status.message``."""
     result, transport, _ = await _run(
@@ -1662,6 +1731,25 @@ async def test_webhook_transport_returns_the_rpc_reply_without_draining_the_queu
 
     assert [event["kind"] for event in events] == ["message"]
     assert queue.qsize() == 1
+
+
+async def test_webhook_transport_registers_push_on_the_send_that_creates_the_local_task() -> None:
+    """Our own server creates the Task when it accepts the negotiation, so that reply registers."""
+    message = Message(message_id="msg-1", role=Role.ROLE_AGENT, context_id=CONTEXT_ID)
+    message.parts.add(text="proposal")
+    client = _FakeA2AClient([StreamResponse(message=message)])
+    transport = WebhookClientTransport(
+        client,
+        queue=asyncio.Queue(),
+        push_url="http://127.0.0.1:9000/webhook",
+        push_token="token",
+    )
+
+    accept = SendMessageRequest()
+    accept.message.metadata[NEGOTIATION_T_EXTENSION_URI] = "content"
+    await transport.send(accept, ClientCallContext())
+
+    assert client.requests[0].configuration.HasField("task_push_notification_config") is True
 
 
 async def test_webhook_transport_keeps_asking_for_an_immediate_reply_on_a_continuation() -> None:

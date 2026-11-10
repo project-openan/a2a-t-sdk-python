@@ -122,7 +122,9 @@ from protocol.messages import (
     is_negotiation_message,
     metadata_to_dict,
     negotiation_context_metadata,
+    normalize_negotiation_metadata,
     parse_negotiation_context,
+    vendor_negotiation_value,
 )
 from protocol.negotiation_policy import (
     NegotiationKind,
@@ -836,6 +838,10 @@ class WebhookClientTransport:
         """Send one non-blocking message, register push inline, and collect its events."""
         self._bind_context(request)
         request.configuration.return_immediately = True
+        # This transport serves our own server, where the Task is created when the negotiation is
+        # accepted: the negotiation reply is the create send and must carry the registration. The
+        # vendor NMS creates the Task on the initial Task-T and rejects a push configuration on a
+        # negotiation reply — that rule lives in ``NmsWebhookTransport``.
         request.configuration.task_push_notification_config.CopyFrom(
             TaskPushNotificationConfig(url=self._push_url, token=self._push_token)
         )
@@ -1315,9 +1321,18 @@ async def run_client_flow(
 
     result = ClientFlowResult()
     context_id: str | None = None
+    # The Task every negotiation reply continues. A Modify run starts from the selected Task; a
+    # create run learns it from the server's own events. A reply without it makes the server open
+    # (or look for) a new Task instead of continuing this one.
+    task_id: str | None = target_task_id if modify_only else None
     exchanges = 0
     # One grounded decision turn per negotiation round; a second ungrounded accept is terminal.
     reasked_rounds: set[tuple[str, int]] = set()
+    # Counts the inbound proposals of this run; a vendor frame without a negotiationContext gets
+    # this number as its round.
+    negotiation_rounds = 0
+    # Only used when a vendor frame names no context either; the reply still needs an id.
+    inferred_negotiation_id = str(uuid.uuid4())
     emit_message_sent(
         initial_request,
         phase=PHASE_TASK_MODIFY if modify_only else PHASE_TASK_VALIDATION,
@@ -1335,6 +1350,7 @@ async def run_client_flow(
     exchanges += 1
     collect(batch)
     context_id = context_id or _context_id_of(batch)
+    task_id = task_id or _task_id_of(batch)
 
     def finish(state: str) -> ClientFlowResult:
         """Record the terminal state, fill the result and log the outcome."""
@@ -1357,7 +1373,15 @@ async def run_client_flow(
 
         event, metadata = inbound
         context_id = context_id or _string_field(event, "context_id")
+        task_id = _string_field(event, "task_id") or task_id
+        negotiation_rounds += 1
         session = parse_negotiation_context(metadata)
+        if session is None:
+            session = _inferred_negotiation_session(
+                metadata,
+                round_number=negotiation_rounds,
+                fallback_id=context_id or inferred_negotiation_id,
+            )
         if session is None:
             raise ClientFlowError(_ERROR_NO_SESSION)
         context_id = context_id or session.id
@@ -1490,7 +1514,7 @@ async def run_client_flow(
                 propose_content=propose.content,
                 performative=NegotiationPerformative.REJECT,
                 call_timeout_seconds=call_timeout_seconds,
-                task_id=target_task_id if modify_only else None,
+                task_id=task_id,
             )
             if on_decision_made is not None:
                 on_decision_made(reject_decision, propose, session)
@@ -1508,6 +1532,7 @@ async def run_client_flow(
             )
             exchanges += 1
             collect(batch)
+            task_id = task_id or _task_id_of(batch)
             result.error = reason
             return finish(FINAL_STATE_DECISION_UNGROUNDED)
         _LOGGER.info("decision made: action=%s round=%s", decision.action, session.round)
@@ -1553,7 +1578,7 @@ async def run_client_flow(
                 intent_fields=intent_fields,
                 call_timeout_seconds=call_timeout_seconds,
                 single_extension_per_message=single_extension_per_message,
-                task_id=target_task_id if modify_only else None,
+                task_id=task_id,
                 dropped=dropped_values,
             )
             if dropped_values:
@@ -1580,7 +1605,7 @@ async def run_client_flow(
                 label=resolved_label,
                 call_timeout_seconds=call_timeout_seconds,
                 include_sample_proposal=carries_task_t,
-                task_id=target_task_id if modify_only else None,
+                task_id=task_id,
             )
             send_phase = PHASE_NEGOTIATION
             send_performative = NegotiationPerformative.PROPOSE.value
@@ -1604,7 +1629,7 @@ async def run_client_flow(
                 propose_content=propose.content,
                 performative=performative,
                 call_timeout_seconds=call_timeout_seconds,
-                task_id=target_task_id if modify_only else None,
+                task_id=task_id,
             )
             send_phase = PHASE_RESOLUTION
             send_performative = performative.value
@@ -1625,6 +1650,7 @@ async def run_client_flow(
         )
         exchanges += 1
         collect(batch)
+        task_id = task_id or _task_id_of(batch)
         if decision.action in ("reject", "abort"):
             return finish(FINAL_STATE_NEGOTIATION_ENDED)
         if decision.action == "accept":
@@ -2135,6 +2161,15 @@ def _task_id_of(events: list[dict[str, object]]) -> str | None:
     return None
 
 
+def _task_id_of(events: list[dict[str, object]]) -> str | None:
+    """Return the first Task id carried by a batch of normalized events."""
+    for event in events:
+        task_id = _string_field(event, "task_id")
+        if task_id:
+            return task_id
+    return None
+
+
 def _context_id_of(events: list[dict[str, object]]) -> str | None:
     """Return the first context id carried by a batch of normalized events."""
     for event in events:
@@ -2147,6 +2182,41 @@ def _context_id_of(events: list[dict[str, object]]) -> str | None:
             if session is not None:
                 return session.id
     return None
+
+
+def _inferred_negotiation_session(
+    metadata: Mapping[str, object],
+    *,
+    round_number: int,
+    fallback_id: str,
+) -> NegotiationContext | None:
+    """Build a session for a vendor frame that carries no ``negotiationContext``.
+
+    The vendor NMS sometimes sends only the Negotiation-T body (short key, JSON envelope) without
+    the context object. The typed performative inside the body is used when present; the round is
+    counted by the caller; the negotiation id falls back to the A2A context id, which is the only
+    identity the server gave us.
+    """
+    value = vendor_negotiation_value(metadata)
+    if value is None:
+        return None
+    performative = NegotiationPerformative.PROPOSE
+    match = _VENDOR_PERFORMATIVE_PATTERN.search(str(value))
+    if match is not None:
+        parsed = NegotiationPerformative.try_parse(match.group(1))
+        if parsed is not None:
+            performative = parsed
+    _LOGGER.warning(
+        "the negotiation frame carries no negotiationContext; inferring performative=%s round=%s",
+        performative.value,
+        round_number,
+    )
+    return NegotiationContext(
+        id=fallback_id,
+        round=round_number,
+        max_rounds=_DEFAULT_INFERRED_MAX_ROUNDS,
+        performative=performative,
+    )
 
 
 def _find_negotiation_message(
@@ -2164,7 +2234,9 @@ def _find_negotiation_message(
         metadata = event.get("metadata")
         if not isinstance(metadata, Mapping):
             continue
-        metadata_dict = metadata_to_dict(metadata)
+        # The vendor writes the short ``Negotiation-T`` key; normalize it so every consumer below
+        # sees the canonical extension URI.
+        metadata_dict = normalize_negotiation_metadata(metadata_to_dict(metadata))
         if not is_negotiation_message(metadata_dict):
             continue
         kind = event.get("kind")
@@ -2186,6 +2258,14 @@ _VENDOR_NEGOTIATION_TYPE_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 _VENDOR_TEMPLATE_URI_PATTERN: Final[re.Pattern[str]] = re.compile(r'"templateUri"\s*:\s*"([^"\\]+)"')
 _VENDOR_TEXT_PATTERN: Final[re.Pattern[str]] = re.compile(r'"text"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+#: The performative typed inside a vendor Negotiation-T body (``responseMetadata``).
+_VENDOR_PERFORMATIVE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r'"performative"\s*:\s*"([A-Za-z]+)"'
+)
+
+#: Round budget of a negotiation whose inbound frame carries no ``negotiationContext``.
+_DEFAULT_INFERRED_MAX_ROUNDS: Final[int] = 5
 
 #: Markers that identify an unparsable value as a vendor message envelope. Reading a field out of
 #: the raw string is only allowed inside the ``responseMetadata`` block of such an envelope, so a
@@ -2733,13 +2813,17 @@ def _reject_text(kind: NegotiationKind, propose_content: str, decision: Negotiat
     return "Reject. " + " ".join(f"{item}: {rationale}" for item in items)
 
 
-def _final_state(batch: list[dict[str, object]]) -> str:
+def _final_state(batch: list[dict[str, object]], *, message_ends_flow: bool = True) -> str:
     """Derive the terminal state from one send phase's events.
 
     Only the last send phase may terminate the flow: scanning every accumulated event would let a
     prior round's ``Propose`` look like the end message after a webhook phase stops at the report
     artifact. A plain non-negotiation message (or the explicit end text) is the negotiation-end
     signal; a negotiation message is not.
+
+    ``message_ends_flow=False`` keeps the explicit end text as an end signal but treats every
+    other plain message as an observation. A direct vendor hop answers a request with a standalone
+    ROLE_AGENT message even while its Task keeps working, so that message must not end the run.
 
     A downstream ``COMPLETED`` is not automatically a success: the vendor NMS reports a refused
     request with ``TASK_STATE_COMPLETED`` plus an error sentence (W-PURE-3). Such an artifact-less
@@ -2756,6 +2840,10 @@ def _final_state(batch: list[dict[str, object]]) -> str:
             metadata = event.get("metadata")
             if text == END_MESSAGE_TEXT:
                 return FINAL_STATE_NEGOTIATION_ENDED
+            if not message_ends_flow:
+                # A direct vendor hop answers with a standalone message while its Task is still
+                # working; only a Task state (or the explicit end text) ends that flow.
+                continue
             if isinstance(metadata, Mapping) and is_negotiation_message(metadata_to_dict(metadata)):
                 continue
             return FINAL_STATE_NEGOTIATION_ENDED

@@ -15,6 +15,7 @@ from a2a.types import Role, SendMessageRequest
 from a2a_t.core.metadata import (
     NEGOTIATION_CONTEXT_METADATA_KEY,
     NEGOTIATION_T_EXTENSION_URI,
+    TASK_T_EXTENSION_URI,
 )
 from protocol.nms_client import (
     NmsClient,
@@ -324,7 +325,8 @@ async def test_webhook_transport_registers_the_push_url_and_returns_a_negotiatio
         idle_timeout=0.05,
     )
     request, context = _request()
-    request.message.metadata[NEGOTIATION_T_EXTENSION_URI] = "task prompt"
+    # The send that creates the Task carries the Task-T extension, not a negotiation reply.
+    request.message.metadata[TASK_T_EXTENSION_URI] = "task prompt"
 
     events = await transport.send(request, context)
 
@@ -1553,3 +1555,52 @@ async def test_the_transport_reports_the_vendor_identity_as_soon_as_it_is_known(
     await transport.send(request, context)
 
     assert bound == [("task-9", "ctx-9")]
+
+
+async def test_webhook_transport_leaves_the_push_configuration_out_of_a_negotiation_reply() -> None:
+    """A Negotiation-T reply creates no Task, so it must carry no push configuration."""
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _FakeWebhookClient(_propose_message("neg-1", "accept"))
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        idle_timeout=0.05,
+    )
+    request, context = _request()
+    request.message.metadata[NEGOTIATION_CONTEXT_METADATA_KEY] = {
+        "id": "neg-1",
+        "round": 1,
+        "maxRounds": 5,
+        "performative": "ACCEPT",
+    }
+
+    await transport.send(request, context)
+
+    assert client.payload is not None
+    configuration = client.payload.get("configuration") or {}
+    assert isinstance(configuration, dict)
+    assert "taskPushNotificationConfig" not in configuration
+
+
+async def test_webhook_transport_keeps_the_push_configuration_out_of_a_task_continuation() -> None:
+    """A Modify continues an existing Task whose registration is still in force."""
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _FakeWebhookClient(_propose_message("neg-1", "modify"))
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        idle_timeout=0.05,
+    )
+    request, context = _request()
+    request.message.task_id = "task-1"
+
+    await transport.send(request, context)
+
+    assert client.payload is not None
+    configuration = client.payload.get("configuration") or {}
+    assert isinstance(configuration, dict)
+    assert "taskPushNotificationConfig" not in configuration

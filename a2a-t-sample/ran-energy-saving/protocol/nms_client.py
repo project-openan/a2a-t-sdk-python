@@ -1127,10 +1127,16 @@ class NmsWebhookTransport:
             metadata_to_dict(request.message.metadata)
         ):
             request.configuration.return_immediately = True
-        if not request.message.task_id and self._register_push_config:
+        if (
+            not request.message.task_id
+            and self._register_push_config
+            and not _is_negotiation_metadata(metadata_to_dict(request.message.metadata))
+        ):
             # Register the webhook only on the message that creates the Task. A Modify send
             # continues an existing Task whose registration is still in force, and the vendor
-            # answers a second registration for that Task with "config already exists".
+            # answers a second registration for that Task with "config already exists". A
+            # Negotiation-T reply creates nothing: the vendor rejects a push configuration on it,
+            # even when the reply carries no task id.
             config = TaskPushNotificationConfig(id=str(uuid.uuid4()), url=self._push_url)
             if self._push_auth_credentials:
                 # The vendor uses Basic authentication for the callback. Sending the SDK token as
