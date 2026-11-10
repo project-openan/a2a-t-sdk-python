@@ -161,6 +161,23 @@ async def test_confirm_mode_reports_a_suppressed_recommendation() -> None:
     assert "already rejected" in answer.last_recommendation_error
 
 
+async def test_a_typed_answer_is_sent_verbatim() -> None:
+    """The pure hop negotiates in prose; re-rendering the preview loses the operator's wording."""
+    answer = PureConfirmationAnswer(mode=MODE_CONFIRM, timeout_seconds=1.0)
+    pending = asyncio.create_task(answer(_question()))
+    await asyncio.sleep(0)
+    answer.set_answer_text("OK, lower to 2Mbps during the outage.")
+    answer.submit(
+        NegotiationDecision(
+            action="accept",
+            rationale="The operator confirmed the lower rate.",
+            filled_params={"guaranteedThroughputTarget": "2Mbps"},
+        )
+    )
+
+    assert await pending == "OK, lower to 2Mbps during the outage."
+
+
 async def test_an_expired_window_is_reported_and_the_wait_continues() -> None:
     """The local window is an observation budget: it must not end the run or answer for the page."""
     answer = PureConfirmationAnswer(mode=MODE_CONFIRM, timeout_seconds=0.01)

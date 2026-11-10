@@ -1349,9 +1349,11 @@ def create_app(
             return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
         try:
             body = await request.json()
-            # ``answerSource`` is page provenance, not a protocol field: read it before validation
-            # because the decision model ignores unknown keys.
+            # ``answerSource``/``answerText`` are page provenance, not protocol fields: read them
+            # before validation because the decision model ignores unknown keys. The text is the
+            # operator's own wording; a pure A2A answer is sent verbatim downstream.
             source = body.get("answerSource") if isinstance(body, dict) else None
+            answer_text = body.get("answerText") if isinstance(body, dict) else None
             decision = NegotiationDecision.model_validate(body)
         except (ValueError, TypeError):
             return JSONResponse(
@@ -1371,6 +1373,9 @@ def create_app(
         run.pending_answer_source = source.strip() if isinstance(source, str) and source.strip() else None
         # OSP `AQ`: the answer moment is here, not when the grounded decision is recorded later.
         run.mark_decision_answered()
+        set_answer_text = getattr(provider, "set_answer_text", None)
+        if callable(set_answer_text):
+            set_answer_text(answer_text if isinstance(answer_text, str) else None)
         provider.submit(decision)
         return JSONResponse({"accepted": True, "runId": run.run_id})
 

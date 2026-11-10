@@ -68,6 +68,9 @@ class PureConfirmationAnswer:
         self._recommendation_sink: RecommendationSink | None = None
         self._decision_sink: DecisionSink | None = None
         self._last_recommendation_error: str | None = None
+        #: The operator's own words for the next answer. A pure A2A answer is one plain text, so a
+        #: typed answer is sent verbatim instead of a re-rendered Task-T summary.
+        self._answer_text: str | None = None
         #: Questions answered so far; the fallback round of a peer that does not number them.
         self._rounds = 0
 
@@ -106,6 +109,16 @@ class PureConfirmationAnswer:
         """Install the expired-window observer of the human wait."""
         self._manual.set_wait_sink(sink)
 
+    def set_answer_text(self, text: str | None) -> None:
+        """Use the operator's typed answer as the next downstream text.
+
+        The structured preview exists to inspect what the model understood; the pure hop still
+        sends one plain message, and the vendor negotiates in prose ("OK, lower to 2Mbps during the
+        outage."). Re-rendering the preview would replace the operator's wording with a Task-T
+        summary the vendor did not ask for.
+        """
+        self._answer_text = text.strip() if isinstance(text, str) and text.strip() else None
+
     async def __call__(self, event: Mapping[str, object]) -> str:
         """Build the proposal view, wait for the operator, and render the answer text."""
         pure = _pure_metadata(event)
@@ -136,7 +149,9 @@ class PureConfirmationAnswer:
             return ""
         if self._decision_sink is not None:
             self._decision_sink(decision, propose, session)
-        return render_pure_answer(decision)
+        typed = self._answer_text
+        self._answer_text = None
+        return typed or render_pure_answer(decision)
 
 
 __all__ = ["PureConfirmationAnswer"]

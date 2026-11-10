@@ -2279,6 +2279,9 @@ async function submitParsedDecision(decision) {
   ui.manualError = "";
   renderNarrator();
   const payload = { ...decision };
+  // The operator's own wording. A pure A2A answer is one plain text, so the backend sends this
+  // verbatim instead of re-rendering the structured preview.
+  payload.answerText = ui.manualText.trim();
   // Provenance: the preview was structured by the model; a clicked served area is operator input.
   const modelRegion = payload.filled_params?.region;
   payload.answerSource =
