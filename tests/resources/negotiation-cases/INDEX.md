@@ -89,8 +89,8 @@ Cells count base records per API and expectation; the `exception` column aggrega
 | API | `success` | `llm.invocation_failed` | `llm.response_invalid` | `negotiation.conclusion_mismatch` | `negotiation.content_extract_failed` | `negotiation.content_invalid` | `negotiation.field_missing` | `negotiation.invalid_input` | `negotiation.rule_violation` | `negotiation.semantic_rejected` | `template.not_found` | `exception` | Total |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | `generateProposeFromText` | 32 | 1 | 3 | - | 4 | - | 1 | 3 | - | - | 1 | 2 | 47 |
-| `generateAcceptFromText` | 20 | 1 | 1 | 2 | 1 | - | 3 | 1 | - | - | 1 | 2 | 32 |
-| `generateRejectFromText` | 10 | 1 | - | 1 | - | - | 1 | - | - | - | 1 | 1 | 15 |
+| `generateAcceptFromText` | 20 | 1 | 1 | 2 | 4 | - | - | 1 | - | - | 1 | 2 | 32 |
+| `generateRejectFromText` | 10 | 1 | - | 1 | 1 | - | - | - | - | - | 1 | 1 | 15 |
 | `generateAbortFromText` | 6 | - | - | - | - | - | 2 | - | - | - | 1 | 1 | 10 |
 | `generateProposeFromData` | 4 | - | - | - | - | 2 | - | - | - | - | - | 6 | 12 |
 | `generateAcceptFromData` | 3 | - | - | 2 | - | 2 | - | - | - | - | - | - | 7 |
@@ -110,15 +110,15 @@ Cells count base records per API and expectation; the `exception` column aggrega
 
 | Id | API | Languages | Priority | Expectation | Summary |
 |---|---|---|---|---|---|
-| FT-EXTRACT-01 | `generateAcceptFromText` | zh-CN | P0 | (NegotiationGenerationException, negotiation.field_missing) | 补数接受消息抽取结果缺少结论字段时生成失败并返回槽位缺失错误码，不发起重试 |
+| FT-EXTRACT-01 | `generateAcceptFromText` | zh-CN | P0 | (NegotiationGenerationException, negotiation.content_extract_failed) | 补数接受消息抽取结果缺少结论字段时按抽取失败重试，耗尽后返回内容抽取失败错误码 |
 | FT-EXTRACT-02 | `generateAcceptFromText` | zh-CN | P0 | (NegotiationGenerationException, negotiation.conclusion_mismatch) | 补数接受消息抽取出的结论为拒绝时判定为结论与阶段不符，立即失败并返回结论不符错误码 |
 | FT-EXTRACT-03 | `generateRejectFromText` | zh-CN | P0 | (NegotiationGenerationException, negotiation.conclusion_mismatch) | 无法提供端口名的拒绝消息抽取出的结论为接受时判定为结论与阶段不符，立即失败并返回结论不符错误码 |
 | FT-EXTRACT-04 | `generateProposeFromText` | zh-CN | P0 | (NegotiationGenerationException, negotiation.field_missing) | 要数提议消息抽取结果缺少信息项列表时生成失败并返回槽位缺失错误码 |
 | FT-EXTRACT-05 | `generateProposeFromText` | en-US | P1 | (NegotiationGenerationException, negotiation.content_extract_failed) | 要数信息项列表被抽取为字符串而非数组时内容抽取失败，单次尝试额度即耗尽并返回抽取失败错误码 |
 | FT-EXTRACT-06 | `generateProposeFromText` | zh-CN | P2 | (NegotiationGenerationException, negotiation.content_extract_failed) | 要数信息项缺少名称字段时内容抽取失败，返回抽取失败错误码 |
 | FT-EXTRACT-07 | `generateAcceptFromText` | zh-CN | P1 | (NegotiationGenerationException, negotiation.content_extract_failed) | 结论字面量大小写错误（ACCEPT 而非 Accept）时内容抽取失败，返回抽取失败错误码 |
-| FT-EXTRACT-08 | `generateAcceptFromText` | zh-CN | P0 | (NegotiationGenerationException, negotiation.field_missing) | 修复目标接受消息抽取结果缺少最终确认意图时生成失败并返回槽位缺失错误码 |
-| FT-EXTRACT-09 | `generateRejectFromText` | zh-CN | P0 | (NegotiationGenerationException, negotiation.field_missing) | 修复目标拒绝消息抽取结果缺少拒绝原因时生成失败并返回槽位缺失错误码 |
+| FT-EXTRACT-08 | `generateAcceptFromText` | zh-CN | P0 | (NegotiationGenerationException, negotiation.content_extract_failed) | 修复目标接受消息抽取结果缺少最终确认意图时按抽取失败重试，耗尽后返回内容抽取失败错误码 |
+| FT-EXTRACT-09 | `generateRejectFromText` | zh-CN | P0 | (NegotiationGenerationException, negotiation.content_extract_failed) | 修复目标拒绝消息抽取结果缺少拒绝原因时按抽取失败重试，耗尽后返回内容抽取失败错误码 |
 | FT-EXTRACT-10 | `generateProposeFromText` | zh-CN | P0 | (NegotiationGenerationException, negotiation.invalid_input) | 端口扩容可行性提议消息抽取结果缺少动作字段时判定为内容矛盾，立即失败并返回输入无效错误码 |
 | FT-EXTRACT-11 | `generateProposeFromText` | zh-CN | P1 | (NegotiationGenerationException, negotiation.content_extract_failed) | 动作字段为未知枚举值时内容抽取失败，单次尝试额度即耗尽并返回抽取失败错误码 |
 | FT-EXTRACT-12 | `generateProposeFromText` | zh-CN | P0 | (NegotiationGenerationException, negotiation.invalid_input) | 请求可行性评估却未抽取到任何待评估内容时判定为内容矛盾，立即失败并返回输入无效错误码 |
@@ -171,7 +171,7 @@ Cells count base records per API and expectation; the `exception` column aggrega
 | FT-RETRY-08 | `generateProposeFromText` | en-US, zh-CN | P0 | success | 首次底层传输异常后第二次抽取成功，重试后生成向工作台补充三项缺失信息的要数提议消息且异常细节不外泄（共享应答单一语种，双语 golden 等值断言降级为内容包含） |
 | FT-RETRY-09 | `generateAcceptFromText` | en-US, zh-CN | P1 | success | 前两次分别出现基础设施错误与不可解析内容，第三次抽取成功，在最后一次尝试额度内恢复生成修复目标接受消息（共享应答单一语种，双语 golden 等值断言降级为内容包含） |
 | FT-RETRY-10 | `generateAbortFromText` | en-US, zh-CN | P1 | success | 协商终止消息首次抽取到空白内容后第二次成功，重试后生成含终止原因的协商终止消息（共享应答单一语种，双语 golden 等值断言降级为内容包含） |
-| FT-RETRY-11 | `generateAcceptFromText` | zh-CN | P0 | (NegotiationGenerationException, negotiation.field_missing) | 抽取结果缺少结论字段属于不可重试错误，即使还有三次尝试额度也只调用一次大模型即失败 |
+| FT-RETRY-11 | `generateAcceptFromText` | zh-CN | P0 | (NegotiationGenerationException, negotiation.content_extract_failed) | 抽取结果缺少结论字段属于抽取失败，按尝试额度重试；耗尽后返回内容抽取失败错误码 |
 | FT-RETRY-12 | `generateAcceptFromText` | zh-CN | P0 | (NegotiationGenerationException, negotiation.conclusion_mismatch) | 结论与阶段矛盾属于不可重试错误，即使还有三次尝试额度也只调用一次大模型即失败 |
 | FT-RETRY-13 | `generateProposeFromText` | zh-CN | P0 | (NegotiationGenerationException, llm.response_invalid) | 两次失败形态不同（基础设施错误后接不可解析内容）时，耗尽后重抛最后一次失败的原始错误码（llm.response_invalid）而非统一的耗尽错误码 |
 

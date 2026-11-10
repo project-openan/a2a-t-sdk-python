@@ -236,17 +236,21 @@
     "api": "generateAcceptFromText",
     "languages": ["zh-CN"],
     "priority": "P0",
-    "tags": ["retry", "non-retryable", "slot-missing"],
-    "summary": "抽取结果缺少结论字段属于不可重试错误，即使还有三次尝试额度也只调用一次大模型即失败",
+    "tags": ["retry", "retryable", "slot-missing"],
+    "summary": "抽取结果缺少结论字段属于抽取失败，按尝试额度重试；耗尽后返回内容抽取失败错误码",
     "context": { "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3", "round": 2, "maxRounds": 5 },
     "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
     "input": { "text": { "zh-CN": "确认补充投诉诊断信息：接入端口名称为P533-珠江旧城-PTN3900-23-TPA1EG24-1，投诉分类为专线质差。" } },
-    "llm": { "maxAttempts": 3, "script": [ { "$ref": "responses/extract.information.accept.missing_conclusion" } ] },
+    "llm": { "maxAttempts": 3, "script": [
+      { "$ref": "responses/extract.information.accept.missing_conclusion" },
+      { "$ref": "responses/extract.information.accept.missing_conclusion" },
+      { "$ref": "responses/extract.information.accept.missing_conclusion" }
+    ] },
     "expect": {
       "outcome": "failure",
       "exception": "NegotiationGenerationException",
-      "code": "negotiation.field_missing",
-      "llmCalls": 1
+      "code": "negotiation.content_extract_failed",
+      "llmCalls": 3
     }
   },
   {

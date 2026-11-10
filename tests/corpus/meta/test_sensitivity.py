@@ -105,6 +105,9 @@ ACCEPT_PAYLOAD: Final[str] = (
 #: ``negotiation.field_missing``).
 SLOTS_MISSING_PAYLOAD: Final[str] = '{"relationship":null}'
 
+#: A terminal payload whose conclusion contradicts the accept phase (a non-retryable verdict).
+MISMATCHED_CONCLUSION_PAYLOAD: Final[str] = '{"conclusion":"Reject","items":[{"name":"accessPort","value":"x"}]}'
+
 #: Semantic verdict payload of a successful validation carrying one business parameter.
 SEMANTIC_ACCEPT_PAYLOAD_WITH_PARAMS: Final[str] = (
     '{"semantic_verdict":true,"negotiation_type":"information","errors":[],"params":'
@@ -154,8 +157,14 @@ _SAMPLED_DIRECTORIES: Final[tuple[str, ...]] = ("from-text", "from-data", "valid
 def test_flipped_error_code_must_fail_the_engine() -> None:
     """A swapped error code fails with the case id and the ``$.expect.code`` JSON path."""
     engine = CaseEngine()
-    engine.run(_from_text_case("FT-SENS-CODE", SLOTS_MISSING_PAYLOAD, _failed("negotiation.field_missing", 1)))
-    flipped = _from_text_case("FT-SENS-CODE-FLIP", SLOTS_MISSING_PAYLOAD, _failed("negotiation.invalid_input", 1))
+    engine.run(
+        _from_text_case(
+            "FT-SENS-CODE", MISMATCHED_CONCLUSION_PAYLOAD, _failed("negotiation.conclusion_mismatch", 1)
+        )
+    )
+    flipped = _from_text_case(
+        "FT-SENS-CODE-FLIP", MISMATCHED_CONCLUSION_PAYLOAD, _failed("negotiation.invalid_input", 1)
+    )
     with pytest.raises(AssertionError) as excinfo:
         engine.run(flipped)
     message = str(excinfo.value)

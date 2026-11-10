@@ -71,7 +71,9 @@ _EXTRACTION_FAILURE_CODES: Final[frozenset[str]] = frozenset(
 )
 
 #: The retryable codes the extraction step retried to exhaustion re-raises unchanged.
-_RETRYABLE_CODES: Final[frozenset[str]] = frozenset({"llm.response_invalid", "llm.invocation_failed"})
+_RETRYABLE_CODES: Final[frozenset[str]] = frozenset(
+    {"llm.response_invalid", "llm.invocation_failed", "negotiation.content_extract_failed"}
+)
 
 #: The non-retryable verdict codes that fail on the first call however much budget is left.
 _NON_RETRYABLE_CODES: Final[frozenset[str]] = frozenset(
@@ -184,11 +186,12 @@ def test_the_extraction_failures_assert_their_contract_codes() -> None:
     assert {case.expect.code for case in extract_cases} == _EXTRACTION_FAILURE_CODES
     for case in extract_cases:
         assert case.expect.success is False
-        assert case.expect.llm_calls == 1, "one extraction call per verdict, no retry of the verdict"
         if case.expect.code == "negotiation.content_extract_failed":
-            assert case.llm is not None and case.llm.max_attempts == 1, (
-                "the retryable shape failures carry a single-attempt budget"
-            )
+            assert case.llm is not None and case.llm.max_attempts is not None
+            # Shape failures pin a single attempt; a terminal-phase miss burns the whole budget.
+            assert case.expect.llm_calls == case.llm.max_attempts
+        else:
+            assert case.expect.llm_calls == 1, "one extraction call per verdict, no retry of the verdict"
 
 
 def test_the_retry_family_counts_every_attempt_exactly() -> None:
