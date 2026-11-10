@@ -464,6 +464,64 @@ async def test_a_raw_run_does_not_call_the_intent_agent(
     assert captured[0]["intent_fields"] == {}
 
 
+@pytest.mark.asyncio
+async def test_processed_intent_overlaps_task_t_generation(
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Without a pre-generation gate the intent read must not serialize the Task-T flow."""
+    import asyncio
+    import inspect
+
+    import protocol.client_runtime as client_runtime
+    from protocol.intent import OperatorRequest, ProcessedIntent
+
+    flow_started = asyncio.Event()
+
+    class GatedIntentProcessor:
+        async def process(self, request: OperatorRequest) -> ProcessedIntent:
+            # Completes only once the flow has started: a runtime that awaits the intent before
+            # calling the flow deadlocks here instead of overlapping the two model turns.
+            await asyncio.wait_for(flow_started.wait(), timeout=2)
+            return ProcessedIntent.raw(request.text)
+
+    async def fake_discover(**kwargs: object) -> DiscoveredAgent:
+        del kwargs
+        return _card()
+
+    async def fake_create(agent: object, client_config: ClientConfig | None = None) -> _FakeA2AClient:
+        del agent, client_config
+        return _FakeA2AClient()
+
+    monkeypatch.setattr(client_runtime, "discover_agent", fake_discover)
+    monkeypatch.setattr(client_runtime, "create_client", fake_create)
+    monkeypatch.setattr(
+        "demo.intent.build_demo_intent_processor",
+        lambda config, run_spec=None: GatedIntentProcessor(),
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_flow(**kwargs: object) -> object:
+        flow_started.set()
+        fields = kwargs["intent_fields"]
+        if inspect.isawaitable(fields):
+            captured["fields"] = await fields
+        return object()
+
+    monkeypatch.setattr(client_runtime, "run_client_flow", fake_flow)
+    config = replace(offline_config, intent_mode="processed")
+    runtime = await build_demo_runtime(
+        config, "information", "manual", "sse", config.discovery, env_path=tmp_path / "missing.env"
+    )
+    try:
+        await asyncio.wait_for(runtime.run(user_request="start an energy saving task"), timeout=5)
+    finally:
+        await runtime.aclose()
+
+    assert captured["fields"] == {}
+
+
 async def test_a_pure_runtime_sends_message_send_when_the_mode_is_send(
     offline_config: SampleConfig,
     monkeypatch: pytest.MonkeyPatch,

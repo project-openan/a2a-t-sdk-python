@@ -21,6 +21,7 @@ terminal Task state. Reject and abort never create a Task.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import re
@@ -515,6 +516,26 @@ async def _validate_task_prompt(
     raise RuntimeError("unreachable")  # pragma: no cover - every loop path returns
 
 
+async def _resolve_intent_fields(
+    intent_fields: Mapping[str, object] | Awaitable[Mapping[str, object]] | None,
+) -> Mapping[str, object] | None:
+    """Resolve the intent layer's fields, awaiting a concurrent intent read when one is passed.
+
+    The intent layer is best effort: a read that failed or timed out leaves the run without
+    intent fields, never with a failed run. The runtime's own processor already degrades to a raw
+    reading, so this guard only covers a task that was cancelled or raised.
+    """
+    if intent_fields is None or isinstance(intent_fields, Mapping):
+        return intent_fields
+    if not inspect.isawaitable(intent_fields):
+        return None
+    try:
+        return await intent_fields
+    except Exception as error:  # noqa: BLE001 - the intent layer must not break the run
+        _LOGGER.warning("intent fields unavailable; continuing without them: %s", error)
+        return None
+
+
 def _merge_initial_filled(
     validation: TaskValidation | None,
     intent_fields: Mapping[str, object] | None,
@@ -871,7 +892,7 @@ async def run_client_flow(
     label: str = TASK_REQUEST_LABEL,
     task_template_uri: str = TASK_TEMPLATE_URI,
     language: str = LANGUAGE_ZH,
-    intent_fields: Mapping[str, object] | None = None,
+    intent_fields: Mapping[str, object] | Awaitable[Mapping[str, object]] | None = None,
     max_exchanges: int = DEFAULT_MAX_EXCHANGES,
     call_timeout_seconds: float = DEFAULT_CALL_TIMEOUT_SECONDS,
     event_sink: Callable[[dict[str, object]], None] | None = None,
@@ -903,7 +924,9 @@ async def run_client_flow(
         language: Process-level language of the refilled Task-T values.
         intent_fields: Business values parsed from the request by the intent layer, keyed by their
             Task-T parameter name. They are the base of an accept refill; a decision's
-            ``filled_params`` overrides them. ``None`` means the run has no intent layer.
+            ``filled_params`` overrides them. ``None`` means the run has no intent layer. An
+            awaitable is also accepted so the runtime can overlap the intent read with Task-T
+            generation; it is resolved once, after the prompt is rendered.
         max_exchanges: Backstop on the number of client sends.
         call_timeout_seconds: HTTP budget of every send, carried in ``ClientCallContext.timeout``.
             It must outlast a live-mode server gate that performs several LLM calls before it
@@ -1163,6 +1186,10 @@ async def run_client_flow(
         _fill_result(blocked, target_context_id if modify_only else None)
         return blocked
     prompt_text = _require_prompt_text(prompt_content, "the initial Task-T prompt")
+    # A concurrent intent read (see the runtime) is awaited here, after generation, so the two
+    # model turns overlap instead of running one after the other. Every later use of the fields
+    # sees a plain mapping.
+    intent_fields = await _resolve_intent_fields(intent_fields)
     emit_trace(
         "task_prompt_rendered",
         phase=initial_phase,

@@ -17,10 +17,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import inspect
 import logging
 import shutil
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextvars import Token
 from dataclasses import dataclass
 from pathlib import Path
@@ -221,6 +223,58 @@ def _emit_intent_span(
         },
     )
     trace_sink(span.to_dict())
+
+
+def _emit_intent_span_from_task(
+    task: asyncio.Task[ProcessedIntent],
+    *,
+    trace_sink: Callable[[dict[str, object]], None] | None,
+    mode: str,
+    scenario: str,
+) -> None:
+    """Publish the intent row of a concurrently running intent read, ignoring a failed one.
+
+    The callback runs in a copy of the run's context (see :meth:`ClientRuntime.run`), so the
+    trace recorder still sees the run id and the task-local sink even though the task finished
+    after the flow moved on.
+    """
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        _LOGGER.warning("intent read failed; no intent row is published: %s", error)
+        return
+    _emit_intent_span(
+        trace_sink=trace_sink,
+        intent=task.result(),
+        mode=mode,
+        scenario=scenario,
+    )
+
+
+class _IntentFieldsAwaitable:
+    """Awaitable adapter turning a concurrent intent task into its Task-T fields.
+
+    A coroutine object would have to be awaited by someone; a run that ends before the flow
+    reaches its merge points would leak it with a "never awaited" warning. This object builds the
+    coroutine only when it is actually awaited.
+    """
+
+    def __init__(self, task: asyncio.Task[ProcessedIntent]) -> None:
+        """Wrap one running intent read."""
+        self._task = task
+
+    def __await__(self) -> Any:
+        """Return the fields read by the wrapped task, ``None`` when the read failed."""
+        return self._resolve().__await__()
+
+    async def _resolve(self) -> Mapping[str, object] | None:
+        try:
+            intent = await self._task
+        except Exception as error:  # noqa: BLE001 - the intent layer must not break the run
+            _LOGGER.warning("intent fields unavailable; continuing without them: %s", error)
+            return None
+        return _intent_fields(intent)
 
 
 def _decision_provider(
@@ -525,6 +579,7 @@ class ClientRuntime:
         activity_token = set_activity_sink(
             activity_sink if activity_sink is not None else self.activity_sink
         )
+        intent_task: asyncio.Task[ProcessedIntent] | None = None
         try:
             with trace_scope(run_id=run_id, role="client"):
                 custom_request = user_request.strip() if isinstance(user_request, str) and user_request.strip() else ""
@@ -592,18 +647,25 @@ class ClientRuntime:
                     # The intent is an ADK/LLM reading of the request for the intent panel and the
                     # approval step. It never rewrites the request: what the operator wrote is what
                     # the client sends. It is opt-in (``A2AT_SAMPLE_INTENT_MODE=processed``) because
-                    # a Modify run pays the same display-only model turn as a Create run.
-                    intent = await self._process_intent(raw_text, custom=bool(custom_request))
-                    _emit_intent_span(
-                        trace_sink=sink,
-                        intent=intent,
-                        mode=self.config.intent_mode,
-                        scenario=self.run_spec.name,
+                    # a Modify run pays the same display-only model turn as a Create run. It starts
+                    # here and is awaited only where its result is needed, so it overlaps Task-T
+                    # generation on runs without a pre-generation approval gate.
+                    intent_task = asyncio.create_task(
+                        self._process_intent(raw_text, custom=bool(custom_request)),
+                        name=f"intent-{run_id or 'run'}",
                     )
                 request_text = raw_text
                 if self.protocol == PROTOCOL_PLAIN:
                     # Plain A2A has no Task-T, no intent gate and no negotiation: one message in,
-                    # task events out.
+                    # task events out. The intent row still describes the request, so wait for it.
+                    if intent_task is not None:
+                        intent = await intent_task
+                        _emit_intent_span(
+                            trace_sink=sink,
+                            intent=intent,
+                            mode=self.config.intent_mode,
+                            scenario=self.run_spec.name,
+                        )
                     return await run_plain_client_flow(
                         transport=self.transport,
                         user_request=request_text,
@@ -628,13 +690,45 @@ class ClientRuntime:
                     if callable(set_structurer_request):
                         set_structurer_request(request_text)
                 flow_on_intent_ready = on_intent_ready
+                # A raw run keeps the historical empty mapping; the parallel path replaces it with
+                # the awaitable before the flow starts.
+                flow_intent_fields: Mapping[str, object] | Awaitable[Mapping[str, object]] | None = (
+                    _intent_fields(None)
+                )
                 if processed and on_intent_ready is not None:
-                    # Approval 1 belongs to the business intent, before the protocol mapping.
+                    # Approval 1 belongs to the business intent, before the protocol mapping, so
+                    # the intent must be ready before the operator is asked. Task-T generation
+                    # still waits for the answer: nobody pays for a prompt they rejected.
+                    if intent_task is None:
+                        raise ClientRuntimeError("Processed intent mode did not start an intent read.")
+                    intent = await intent_task
+                    _emit_intent_span(
+                        trace_sink=sink,
+                        intent=intent,
+                        mode=self.config.intent_mode,
+                        scenario=self.run_spec.name,
+                    )
                     if not await on_intent_ready(request_text):
                         blocked = ClientFlowResult()
                         blocked.final_state = FINAL_STATE_INTENT_NOT_CONFIRMED
                         return blocked
                     flow_on_intent_ready = None
+                    flow_intent_fields = _intent_fields(intent)
+                elif intent_task is not None:
+                    # No pre-generation gate: the intent read and Task-T generation overlap. The
+                    # span is published when the read finishes, and the flow awaits the fields
+                    # after rendering the prompt.
+                    intent_context = contextvars.copy_context()
+                    intent_task.add_done_callback(
+                        lambda task: intent_context.run(
+                            _emit_intent_span_from_task,
+                            task,
+                            trace_sink=sink,
+                            mode=self.config.intent_mode,
+                            scenario=self.run_spec.name,
+                        )
+                    )
+                    flow_intent_fields = _IntentFieldsAwaitable(intent_task)
                 prompt_client = self.prompt_client
                 provider = self.provider
                 if prompt_client is None or provider is None:
@@ -647,7 +741,7 @@ class ClientRuntime:
                     user_request=request_text,
                     provider=provider,
                     language=self.config.language,
-                    intent_fields=_intent_fields(intent),
+                    intent_fields=flow_intent_fields,
                     event_sink=event_sink,
                     on_decision_requested=on_decision_requested,
                     on_decision_made=on_decision_made,
@@ -670,6 +764,14 @@ class ClientRuntime:
                     target_context_id=target_context_id,
                 )
         finally:
+            if intent_task is not None and not intent_task.done():
+                # The run ended before the intent read was consumed (a rejected approval or a
+                # generation failure). Let it finish so its trace row still lands; the processor
+                # degrades to a raw reading instead of raising, so this never masks the outcome.
+                try:
+                    await intent_task
+                except Exception as error:  # noqa: BLE001 - the intent layer is best effort
+                    _LOGGER.warning("intent read failed after the run ended: %s", error)
             reset_activity_sink(activity_token)
             reset_task_sink(sink_token)
 
