@@ -344,10 +344,10 @@ class PreTaskNegotiationHandler:
     async def _handle_follow_up(self, context: RequestContext) -> NegotiationOutcome:
         """Validate a Modify Task-T sent on an existing Task, or keep the legacy no-op.
 
-        A plain follow-up (no ``samplePhase=modify`` marker) keeps the previous behaviour: the
-        executor re-enqueues the Task and starts no second plan. The sample's planned-outage
-        two-phase run marks its second message, so a real A2A continuation can be validated and
-        handed to the modification path.
+        A plain follow-up (no ``Modify`` operation type in the Task-T) keeps the previous
+        behaviour: the executor re-enqueues the Task and starts no second plan. A real A2A
+        continuation whose Task-T renders ``Modify`` is validated and handed to the modification
+        path; the client never sends the sample-only ``samplePhase`` marker.
         """
         current = context.current_task
         message = context.message

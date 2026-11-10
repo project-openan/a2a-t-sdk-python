@@ -2024,7 +2024,9 @@ const secondWire = buildWireModel(
 );
 assert.ok(wireText(firstWire).includes("Create"));
 assert.ok(!wireText(firstWire).includes("Modify"));
-assert.ok(wireText(firstWire).includes('"samplePhase": "baseline"'));
+// ``samplePhase`` is not an A2A-T field and never leaves the process, so the reconstructed
+// request body must not show it even when the trace detail carries it.
+assert.ok(!wireText(firstWire).includes("samplePhase"));
 assert.ok(wireText(firstWire).includes('"sampleRunId": "run-1"'));
 assert.ok(wireText(secondWire).includes("Modify"));
 assert.equal(secondWire.title, copy.wire.modifyTitle);
@@ -2505,14 +2507,14 @@ assert.equal(restoreChain(broken), null);
 
 // OSS-owned statuses are narration to the page, not a message from the OSS to the RAN.
 assert.equal(traceDirection({ detail: { hop: "oss" }, direction: "server->client" }), "OSS internal");
-assert.equal(traceDirection({ detail: { hop: "nms" }, direction: "server->client" }), "NMS → OSS");
-// The OSS->downstream message must name the downstream that actually exists.
+assert.equal(traceDirection({ detail: { hop: "nms" }, direction: "server->client" }), "RAN → OSS");
+// The page names the downstream with the RAN/Oss vocabulary: no third NMS concept.
 assert.equal(
   traceDirection(
     { detail: { hop: "oss", role: "oss", protocol: "pure" }, direction: "client->server" },
     { downstream: "nms" },
   ),
-  "OSS → NMS",
+  "OSS → RAN",
 );
 assert.equal(
   traceDirection(

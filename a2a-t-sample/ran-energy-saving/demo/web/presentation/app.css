@@ -887,6 +887,17 @@ body.resizing-y { cursor: row-resize; user-select: none; }
 .say.ask .manual-preview b { min-width: 128px; }
 .say.ask .manual-error { font-size: 13px; }
 .choices { display: flex; flex-wrap: wrap; gap: 7px; }
+.choices-busy {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+.choices-busy .activity-spinner { width: 11px; height: 11px; flex: none; }
 .choices button {
   border: 2px solid var(--black);
   background: var(--white);

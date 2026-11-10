@@ -54,11 +54,12 @@ SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY: Final[str] = "sampleNegotiationOptions"
 #: without it the server simply emits no trace (the CLI and plain A2A clients keep working).
 SAMPLE_RUN_ID_METADATA_KEY: Final[str] = "sampleRunId"
 
-#: Metadata key carrying the sample-only two-phase marker of a Task-T message.
+#: Metadata key of the legacy sample-only two-phase marker of a Task-T message.
 #:
-#: This is a sample convention, not an A2A-T protocol field. ``baseline`` asks the server to keep
-#: the Task ``WORKING`` after the first report so a real A2A follow-up can modify it; ``modify``
-#: tells the server that the follow-up is the Task-T modification of the existing Task.
+#: This is a sample convention, not an A2A-T protocol field, and the client no longer sends it:
+#: Modify is derived from the Task-T ``Operation Type``. The server still reads it so an older
+#: external client keeps working: ``baseline`` asks the server to keep the Task ``WORKING`` after
+#: the first report, and ``modify`` marks the follow-up as the Task-T modification.
 SAMPLE_PHASE_METADATA_KEY: Final[str] = "samplePhase"
 SAMPLE_PHASE_BASELINE: Final[str] = "baseline"
 SAMPLE_PHASE_MODIFY: Final[str] = "modify"

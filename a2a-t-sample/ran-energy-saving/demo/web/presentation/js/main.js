@@ -1978,6 +1978,14 @@ function renderChoices(card) {
     ui.manualError = "";
     ui.manualText = "";
   }
+  // Anti double-submit: all actions are disabled while the POST is in flight, and the spinner
+  // makes the wait explicit so a slow approval never looks like a click that did nothing.
+  if (ui.submitting) {
+    const busy = el("div", "choices-busy");
+    busy.setAttribute("role", "status");
+    busy.append(el("span", "activity-spinner"), el("span", "", ui.copy.submitting));
+    els.choices.append(busy);
+  }
   if (card.type === "validation") {
     const area = el("textarea", "validation-editor");
     area.value = card.rawRequest;

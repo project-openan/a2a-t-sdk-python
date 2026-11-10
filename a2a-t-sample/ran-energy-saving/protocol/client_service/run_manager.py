@@ -2032,7 +2032,7 @@ def _question_turn(run: RunState) -> str | None:
     """
     if run.protocol != PROTOCOL_PURE or not run.proposals:
         return None
-    downstream = "NMS" if run.discovery == DISCOVERY_NMS else "RAN Agent"
+    downstream = "RAN side" if run.discovery == DISCOVERY_NMS else "RAN Agent"
     questions: list[str] = []
     for propose in run.proposals:
         content = propose.content.strip()

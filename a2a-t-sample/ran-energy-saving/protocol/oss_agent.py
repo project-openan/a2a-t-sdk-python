@@ -794,8 +794,12 @@ class OSSPureExecutor(AgentExecutor):
         return self._config is not None and self._config.discovery == DISCOVERY_NMS
 
     def _downstream_name(self) -> str:
-        """Human name of the downstream system shown on the OSS status messages."""
-        return "NMS" if self._nms_mode() else "RAN Agent"
+        """Human name of the downstream system shown on the OSS status messages.
+
+        The page keeps one vocabulary: OSS and the RAN side. A vendor NMS deployment is still the
+        RAN side to the audience, so the status text never introduces a third role.
+        """
+        return "RAN side" if self._nms_mode() else "RAN Agent"
 
     def _downstream_hop(self) -> str:
         """Hop tag of downstream events: ``nms`` in a vendor run, ``ran`` in the local topology."""

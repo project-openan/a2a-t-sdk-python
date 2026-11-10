@@ -1769,4 +1769,6 @@ def test_the_question_turn_names_the_downstream() -> None:
         )
     ]
 
-    assert _question_turn(run) == ("The NMS asked: Region not recognized. Please provide a valid region name.")
+    assert _question_turn(run) == (
+        "The RAN side asked: Region not recognized. Please provide a valid region name."
+    )

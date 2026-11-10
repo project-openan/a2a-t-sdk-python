@@ -73,7 +73,6 @@ from protocol.messages import (
     END_MESSAGE_TEXT,
     SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
     SAMPLE_PHASE_METADATA_KEY,
-    SAMPLE_PHASE_MODIFY,
     SAMPLE_PROPOSAL_METADATA_KEY,
 )
 from shared.config import SampleConfig
@@ -574,7 +573,9 @@ async def test_modify_only_run_continues_the_selected_task() -> None:
     assert request.message.context_id == "ctx-9"
     assert request.message.parts[0].text == "modify ran energy saving task"
     metadata = MessageToDict(request.message.metadata)
-    assert metadata[SAMPLE_PHASE_METADATA_KEY] == SAMPLE_PHASE_MODIFY
+    # ``samplePhase`` is sample-only bookkeeping, not part of the A2A-T interface: the request to
+    # the OSS Agent must not carry it. Modify is identified from the Task-T operation type.
+    assert SAMPLE_PHASE_METADATA_KEY not in metadata
     # The Modify Task-T is extracted from the operator's own text, not a canned data map.
     assert prompt_client.task_prompts == ["Modify the running task"]
 

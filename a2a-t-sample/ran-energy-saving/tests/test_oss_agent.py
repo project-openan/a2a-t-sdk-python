@@ -401,7 +401,7 @@ async def test_the_receive_status_does_not_announce_forwarding() -> None:
     )
 
     assert at_downstream_start[0] == "OSS Agent received the request and is processing it."
-    assert at_downstream_start[-1] == "OSS Agent is forwarding the request to the NMS."
+    assert at_downstream_start[-1] == "OSS Agent is forwarding the request to the RAN side."
     intent_status = next(
         event
         for event in queue.events

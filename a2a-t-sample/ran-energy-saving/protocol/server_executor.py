@@ -400,7 +400,7 @@ def _emit_execution_span(context: RequestContext, task_id: str) -> str:
             side="server",
             kind="execution",
             stage=EXECUTOR_STAGE,
-            title="RAN NMS task execution",
+            title="RAN task execution",
             purpose="Run the LangGraph ReAct planner over the RAN NMS tools.",
             direction="internal",
         )

@@ -1285,8 +1285,9 @@ async def run_client_flow(
         prompt_content.extension_uri or TASK_T_EXTENSION_URI: prompt_text,
         TEMPLATE_URI_METADATA_KEY: prompt_content.template_uri or task_template_uri,
     }
-    if modify_only:
-        initial_metadata[SAMPLE_PHASE_METADATA_KEY] = SAMPLE_PHASE_MODIFY
+    # ``samplePhase`` is sample-only bookkeeping and is not part of the A2A-T interface, so it
+    # never travels on the wire. The server still derives Modify from the Task-T operation type
+    # and keeps reading the marker for older external clients.
     initial_request = _build_message_request(
         metadata=initial_metadata,
         label=resolved_label,

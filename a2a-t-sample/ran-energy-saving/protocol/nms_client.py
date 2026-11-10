@@ -334,7 +334,7 @@ class NmsClient:
             _LOGGER.info("NMS session token acquired (ttl=%.0fs)", ttl)
             _nms_span(
                 phase=PHASE_DISPATCH,
-                title="NMS session token acquired",
+                title="RAN session token acquired",
                 title_key="nmsToken",
                 detail={"expiresInSeconds": round(ttl)},
             )
@@ -397,7 +397,7 @@ class NmsClient:
         self._write_wire("out", method="POST", url=url, headers=headers, body=dict(payload))
         _nms_span(
             phase=PHASE_DISPATCH,
-            title="NMS A2A stream opened",
+            title="RAN A2A stream opened",
             title_key="nmsStream",
             detail={"url": url, "a2aT": bool(extension_header)},
         )
@@ -444,7 +444,7 @@ class NmsClient:
                         )
                         _nms_span(
                             phase=PHASE_EXECUTION,
-                            title="NMS stream idle; polling the task",
+                            title="RAN stream idle; polling the task",
                             title_key="nmsIdle",
                             detail={"idleSeconds": idle_timeout},
                         )
@@ -485,7 +485,7 @@ class NmsClient:
                         self.record_error("NmsProtocolError", message, frame)
                         _nms_span(
                             phase=PHASE_EXECUTION,
-                            title="NMS returned an error frame",
+                            title="RAN side returned an error frame",
                             title_key="nmsError",
                             detail={"message": message[:1000]},
                         )
@@ -523,7 +523,7 @@ class NmsClient:
         self._write_wire("out", method="POST", url=url, headers=headers, body=dict(payload))
         _nms_span(
             phase=PHASE_DISPATCH,
-            title="NMS A2A message sent",
+            title="RAN A2A message sent",
             title_key="nmsSend",
             detail={"url": url, "a2aT": bool(extension_header)},
         )
@@ -581,7 +581,7 @@ class NmsClient:
             self.record_error("NmsProtocolError", message, body)
             _nms_span(
                 phase=PHASE_EXECUTION,
-                title="NMS returned an error frame",
+                title="RAN side returned an error frame",
                 title_key="nmsError",
                 detail={"message": message[:1000]},
             )
@@ -686,7 +686,7 @@ class NmsClient:
             _LOGGER.warning("NMS cancel is unsupported (HTTP 503) for task %s", task_id)
             _nms_span(
                 phase=PHASE_EXECUTION,
-                title="NMS cancel unavailable (HTTP 503)",
+                title="RAN cancel unavailable (HTTP 503)",
                 title_key="nmsCancel",
                 detail={"taskId": task_id},
             )
@@ -738,7 +738,7 @@ class NmsClient:
             self._write_wire("poll", task_id=task_id, state=last_state)
             _nms_span(
                 phase=PHASE_EXECUTION,
-                title="NMS task polled",
+                title="RAN task polled",
                 title_key="nmsPoll",
                 detail={"taskId": task_id, "state": last_state},
             )
@@ -968,7 +968,7 @@ class NmsSseTransport:
                     self._client.record_error("NmsNegotiationRequiredError", text, frame)
                     _nms_span(
                         phase=PHASE_NEGOTIATION,
-                        title="NMS asked for more information",
+                        title="RAN side asked for more information",
                         title_key="nmsNegotiation",
                         detail={"contextId": context_id, "text": text[:1000]},
                     )

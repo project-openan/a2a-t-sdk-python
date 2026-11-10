@@ -1096,14 +1096,14 @@ function traceTag(entry, protocol) {
 }
 
 function traceTitle(entry, summary, protocol) {
-  if (entry.kind === "propose") return "PROPOSE · NMS";
-  if (entry.kind === "abort") return "ABORT · NMS";
+  if (entry.kind === "propose") return "PROPOSE · RAN";
+  if (entry.kind === "abort") return "ABORT · RAN";
   if (entry.kind === "accept") return "ACCEPT · OSS";
   if (entry.kind === "reject") return "REJECT · OSS";
   if (entry.kind === "counter") return "COUNTER · OSS";
   if (entry.kind === "status") {
     const turn = negotiationTurn(entry);
-    if (turn !== null) return `${turn.performative} · NMS`;
+    if (turn !== null) return `${turn.performative} · RAN`;
     return statusTitle(entry, summary, protocol);
   }
   if (entry.kind === "artifact") return artifactTitle(entry);
@@ -1301,27 +1301,21 @@ export function traceDirection(entry, context = null) {
   const detail = isObject(entry.detail) ? entry.detail : {};
   const hop = typeof detail.hop === "string" ? detail.hop : "";
   const protocol = typeof context?.protocol === "string" ? context.protocol : "";
-  const downstream =
-    typeof context?.downstream === "string" && context.downstream
-      ? context.downstream
-      : typeof detail?.pure?.downstream === "string"
-        ? detail.pure.downstream
-        : "";
   // The OSS Agent's own outbound message is a real hop even though its status narration is not.
   if (entry.direction === "client->server" && detail.role === "oss") {
-    return downstream === "ran" ? "OSS → RAN" : "OSS → NMS";
+    return "OSS → RAN";
   }
   if (hop === "oss") return "OSS internal";
   if (hop === "ran") return "RAN → OSS";
-  if (hop === "nms") return "NMS → OSS";
+  if (hop === "nms") return "RAN → OSS";
   if (hop === "mie") return "MIE ⇄ RAN";
   if (entry.kind === "approval" || entry.actor === "human") return "MIE ⇄ Engineer";
   // A polled Task state is a local observation, not a message from the peer.
   if (entry.direction === "poll" || entry.origin === "poll") return "Local poll";
   // The pure hop is two different links: the engineer client talks to the OSS Agent, and the
-  // OSS Agent talks to the downstream (NMS or local RAN Agent).
+  // OSS Agent talks to the RAN side.
   if (entry.direction === "client->server") {
-    if (detail.role === "oss") return downstream === "ran" ? "OSS → RAN" : "OSS → NMS";
+    if (detail.role === "oss") return "OSS → RAN";
     if (protocol === "pure" || detail.protocol === "pure") return "UI → OSS";
     return "OSS → RAN";
   }
