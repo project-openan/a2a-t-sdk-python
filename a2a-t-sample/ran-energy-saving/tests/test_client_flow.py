@@ -1664,6 +1664,29 @@ async def test_webhook_transport_returns_the_rpc_reply_without_draining_the_queu
     assert queue.qsize() == 1
 
 
+async def test_webhook_transport_keeps_asking_for_an_immediate_reply_on_a_continuation() -> None:
+    """The local server answers each send, so the local transport keeps the non-blocking reply.
+
+    Only the vendor NMS rejects ``returnImmediately`` on a Modify or a negotiation reply
+    (``NmsWebhookTransport``). Our own server leaves a long Task WORKING after its report, so the
+    local transport must not adopt the vendor rule: a blocking send would hold the caller.
+    """
+    message = Message(message_id="msg-1", role=Role.ROLE_AGENT, context_id=CONTEXT_ID)
+    message.parts.add(text="proposal")
+    client = _FakeA2AClient([StreamResponse(message=message)])
+    request = SendMessageRequest()
+    request.message.task_id = "task-1"
+
+    await WebhookClientTransport(
+        client,
+        queue=asyncio.Queue(),
+        push_url="http://127.0.0.1:9000/webhook",
+        push_token="token",
+    ).send(request, ClientCallContext())
+
+    assert client.requests[0].configuration.return_immediately is True
+
+
 async def test_webhook_transport_stamps_and_binds_its_context_before_sending() -> None:
     """A client-assigned context makes every push routable before the Task reply arrives."""
     message = Message(message_id="msg-1", role=Role.ROLE_AGENT, context_id="ctx-run")

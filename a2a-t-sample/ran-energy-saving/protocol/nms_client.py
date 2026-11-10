@@ -57,6 +57,7 @@ from shared.trace import (
 from shared.trace_propagation import current_downstream_trace_id
 
 from protocol.client_flow import is_stop_event, is_terminal_event
+from protocol.messages import metadata_to_dict
 from protocol.wire_log import redact
 
 _LOGGER = logging.getLogger("ran_energy_saving.nms_client")
@@ -1117,7 +1118,15 @@ class NmsWebhookTransport:
     ) -> list[dict[str, object]]:
         """Send one non-streaming message, register the webhook, and collect its events."""
         self._bind_context(request)
-        request.configuration.return_immediately = True
+        # Only the send that creates the Task asks for a non-blocking reply: the webhook contract
+        # depends on it. A Modify (``task_id`` set) continues a Task that already exists, and a
+        # Negotiation-T reply names no Task at all, so there is nothing to return immediately —
+        # the vendor asks for those two to carry no ``returnImmediately`` (their own modify and
+        # negotiation sample messages carry no ``configuration`` at all).
+        if not request.message.task_id and not _is_negotiation_metadata(
+            metadata_to_dict(request.message.metadata)
+        ):
+            request.configuration.return_immediately = True
         if not request.message.task_id and self._register_push_config:
             # Register the webhook only on the message that creates the Task. A Modify send
             # continues an existing Task whose registration is still in force, and the vendor

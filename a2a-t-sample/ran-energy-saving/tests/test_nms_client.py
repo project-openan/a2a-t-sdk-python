@@ -355,9 +355,79 @@ async def test_webhook_transport_does_not_reregister_push_on_a_task_continuation
     await transport.send(request, context)
 
     assert client.payload is not None
+    # The continuation registers nothing: no push config and no returnImmediately, so the whole
+    # ``configuration`` object is absent from the wire.
+    assert "configuration" not in client.payload
+
+
+async def test_webhook_transport_asks_for_an_immediate_reply_on_a_task_creation() -> None:
+    """Only the send that creates a Task needs the non-blocking reply."""
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _FakeWebhookClient(_propose_message("neg-1", "initial proposal"))
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        idle_timeout=0.05,
+    )
+    request, context = _request()
+
+    await transport.send(request, context)
+
+    assert client.payload is not None
     configuration = client.payload["configuration"]
     assert isinstance(configuration, dict)
-    assert "taskPushNotificationConfig" not in configuration
+    assert configuration["returnImmediately"] is True
+
+
+async def test_webhook_transport_leaves_return_immediately_out_of_a_task_continuation() -> None:
+    """The vendor rejects returnImmediately on a Modify; the Task already exists."""
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _FakeWebhookClient(_propose_message("neg-1", "modify proposal"))
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        idle_timeout=0.05,
+    )
+    request, context = _request()
+    request.message.task_id = "task-1"
+
+    await transport.send(request, context)
+
+    assert client.payload is not None
+    configuration = client.payload.get("configuration") or {}
+    assert isinstance(configuration, dict)
+    assert "returnImmediately" not in configuration
+
+
+async def test_webhook_transport_leaves_return_immediately_out_of_a_negotiation_reply() -> None:
+    """A pre-task negotiation reply names no Task, so there is nothing to return immediately."""
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _FakeWebhookClient(_propose_message("neg-1", "counter proposal"))
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        idle_timeout=0.05,
+    )
+    request, context = _request()
+    request.message.metadata[NEGOTIATION_CONTEXT_METADATA_KEY] = {
+        "id": "neg-1",
+        "round": 2,
+        "maxRounds": 3,
+        "performative": "PROPOSE",
+    }
+
+    await transport.send(request, context)
+
+    assert client.payload is not None
+    configuration = client.payload.get("configuration") or {}
+    assert isinstance(configuration, dict)
+    assert "returnImmediately" not in configuration
 
 
 async def test_webhook_transport_binds_the_reply_identity_for_the_router() -> None:
