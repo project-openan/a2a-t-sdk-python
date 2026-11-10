@@ -86,21 +86,58 @@ async def build_demo_runtime(
     from demo.catalog import DemoRunCatalog
     from demo.intent import build_demo_intent_processor
 
+    resolved_config = replace(config, discovery=discovery)
+    policy = ClientPolicy.from_config(config)
+
+    def client_agent_factory(model: Any) -> Any:
+        """Build the decision agent with this run's client policy."""
+        return build_client_agent(model, policy=policy)
+
     if pure_answers is not None:
         pure_answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = _scripted_pure_answer(
             pure_answers
         )
     elif protocol == PROTOCOL_PURE:
-        if mode in (MODE_CONFIRM, MODE_MANUAL) or discovery == DISCOVERY_NMS:
-            # The pure hop has no protocol negotiation: the server asks with a plain text message
-            # and the operator confirms the answer in the same card the A2A-T form uses. A direct
-            # vendor hop carries no AI recommendation (that metadata belongs to the OSS Agent), so
-            # automatic mode degrades to confirmation instead of answering with an empty string.
-            from demo.pure_confirmation import PureConfirmationAnswer
+        from demo.pure_confirmation import PureConfirmationAnswer
 
+        if mode in (MODE_CONFIRM, MODE_MANUAL):
+            # The pure hop has no protocol negotiation: the server asks with a plain text message
+            # and the operator confirms the answer in the same card the A2A-T form uses.
             pure_answer = PureConfirmationAnswer(
-                mode=mode if mode in (MODE_CONFIRM, MODE_MANUAL) else MODE_CONFIRM,
+                mode=mode,
                 timeout_seconds=config.manual_decision_timeout_seconds,
+            )
+        elif discovery == DISCOVERY_NMS:
+            # The direct vendor hop has no OSS Agent to draft a recommendation, so automatic mode
+            # negotiates itself: a deterministic plan when the request implies the value, otherwise
+            # the decision agent, with the confirmation card as the operator fallback.
+            from protocol.decision_provider import AdkDecisionProvider
+            from shared.model_factory import build_traced_adk_model
+
+            from demo.pure_auto import build_auto_pure_answer
+
+            run_spec = DemoRunCatalog.from_config(config).spec(
+                scenario, language=config.language
+            )
+            offline_model = (
+                offline_model_factory(run_spec) if config.is_offline else None
+            )
+            provider = AdkDecisionProvider(
+                model=build_traced_adk_model(config, model=offline_model),
+                offline=config.is_offline or offline_model is not None,
+                user_request=run_spec.user_request,
+                session_db_path=config.client_db_path,
+                agent_factory=client_agent_factory,
+            )
+            fallback = PureConfirmationAnswer(
+                mode=MODE_CONFIRM,
+                timeout_seconds=config.manual_decision_timeout_seconds,
+            )
+            pure_answer = build_auto_pure_answer(
+                provider,
+                policy,
+                request_text=run_spec.user_request,
+                fallback=fallback,
             )
         else:
             from demo.pure_policy import pure_answer_from_recommendation
@@ -117,12 +154,6 @@ async def build_demo_runtime(
     intent_processor_factory = (
         build_demo_intent_processor if config.intent_mode == INTENT_MODE_PROCESSED else None
     )
-    resolved_config = replace(config, discovery=discovery)
-    policy = ClientPolicy.from_config(config)
-
-    def client_agent_factory(model: Any) -> Any:
-        """Build the decision agent with this run's client policy."""
-        return build_client_agent(model, policy=policy)
 
     return await build_client_runtime(
         resolved_config,

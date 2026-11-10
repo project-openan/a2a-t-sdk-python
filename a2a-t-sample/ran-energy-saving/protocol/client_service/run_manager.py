@@ -61,7 +61,7 @@ from shared.trace import (
 from shared.trace_propagation import reset_active_trace, set_active_trace
 
 from protocol.client_flow import ClientFlowResult
-from protocol.client_runtime import MODE_AUTO, MODE_CONFIRM, MODE_MANUAL, build_poll_runtime
+from protocol.client_runtime import MODE_CONFIRM, MODE_MANUAL, build_poll_runtime
 from protocol.client_service.run_state import (
     SESSION_SWEEP_INTERVAL_SECONDS,
     STATUS_FAILED,
@@ -814,11 +814,10 @@ class RunManager:
             ValueError: when ``intent_mode`` is unsupported.
         """
         resolved_source = normalize_run_source(source)
-        if mode == MODE_AUTO and protocol == PROTOCOL_PURE and discovery == DISCOVERY_NMS:
-            # A direct vendor hop cannot ground an automatic answer: the OSS Agent owns the AI
-            # recommendation metadata, and without it the answer policy would send an empty string.
-            # Confirmation keeps the operator in the loop and opens the decision surface.
-            mode = MODE_CONFIRM
+        # A direct pure-A2A run keeps ``auto``: the client now answers the vendor's terse
+        # confirmation with a deterministic free-text plan or the decision agent, and falls back to
+        # the confirmation card when neither can produce a grounded value. The old normalization to
+        # ``confirm`` predates that answer path.
         resolved_target_task = target_task_id.strip() if isinstance(target_task_id, str) else ""
         resolved_target_context = target_context_id.strip() if isinstance(target_context_id, str) else ""
         if bool(resolved_target_task) != bool(resolved_target_context):

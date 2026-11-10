@@ -53,6 +53,24 @@ Follow this order for every server proposal.
 A `counter` is a `Propose` in the same round, never a `Reject`. `reject` and `abort` are terminal
 for the current negotiation step.
 
+## Standard-A2A (plain text) questions
+
+The real NMS negotiates standard A2A in prose: the question body may be the terse sentence
+`Not feasible, please confirm` and carry no structured fields. It names no alternative, so a bare
+accept agrees to nothing. Answer with a concrete value:
+
+- If the original request states the value the question is about (region, sites, RAT, mode, gain,
+  rate, window), return `accept` and put that value in `filled_params` under the exact Task-T
+  parameter name. Use the request's own wording; do not invent or rename anything.
+- If the question objects to the rate during a long outage and the request states a rate, return
+  `counter` with a concrete lower rate in `counter_proposal`
+  (for example `Lower the guaranteed throughput target to 5Mbps during the outage.`). The rate must
+  be lower than the request's rate and not below `get_client_policy().min_throughput_mbps`.
+- If the request states no usable value, return `reject`; the caller asks the operator instead of
+  sending an empty acceptance.
+- Never return an `accept` whose `filled_params` is empty unless the question itself states the
+  agreed plan.
+
 ## Accept values
 
 On an `accept`, `filled_params` is authoritative for any Task-T value the client sends. Put only

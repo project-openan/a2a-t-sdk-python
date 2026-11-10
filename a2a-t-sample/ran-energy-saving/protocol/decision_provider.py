@@ -20,7 +20,7 @@ import asyncio
 import logging
 import sqlite3
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Final, Protocol, runtime_checkable
@@ -249,6 +249,16 @@ def build_decision_prompt(
     if propose.options is not None and propose.options.options:
         values = "; ".join(option.value for option in propose.options.options if option.value)
         options = f"Server options for {propose.options.field}: {values}\n\n"
+    pure_confirmation = _pure_confirmation(propose)
+    pure_rule = (
+        "- This is a terse standard-A2A confirmation question and it names no alternative plan. "
+        "Return accept with every value the original request states that the question asks about "
+        "(exact Task-T parameter names in filled_params), or counter with a concrete revised plan "
+        "in counter_proposal. A bare accept with no value is never an answer; if the request "
+        "states no usable value, return reject so the caller can ask the operator.\n"
+        if pure_confirmation
+        else ""
+    )
     return (
         "Answer the following A2A-T negotiation proposal.\n"
         f"Negotiation type: {propose.kind}\n"
@@ -271,10 +281,17 @@ def build_decision_prompt(
         "- An accept means the client agrees with the server's proposal. Do not restate values the "
         "negotiation did not change. On a feasibility proposal, accept the server's feasible "
         "alternative; the flow renders the agreed value itself.\n"
+        f"{pure_rule}"
         "- Omit fields that do not apply; never pass the string \"None\".\n"
         "Return exactly one NegotiationDecision JSON object and nothing else: no reasoning, "
         "markdown, or prose outside the JSON."
     )
+
+
+def _pure_confirmation(propose: NegotiationProposeView) -> bool:
+    """Return whether the proposal is a plan-less pure-A2A confirmation question."""
+    parameters = propose.parameters
+    return isinstance(parameters, Mapping) and parameters.get("pureConfirmation") is True
 
 
 def build_manual_answer_prompt(

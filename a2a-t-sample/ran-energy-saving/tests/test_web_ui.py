@@ -847,15 +847,16 @@ async def test_a_direct_pure_modify_accepts_the_vendor_pair(
             },
         )
         assert response.status_code == 202, response.text
-        # A direct hop has no OSS recommendation, so automatic mode degrades to confirmation and
-        # the fake runtime waits for a human; the identity is what this test asserts.
+        # A direct hop keeps automatic mode: the pure answer negotiates with a deterministic plan
+        # or the decision agent, and only falls back to the confirmation card. The identity is
+        # what this test asserts.
         run_id = response.json()["runId"]
         for _ in range(500):
             if runtimes:
                 break
             await asyncio.sleep(0.01)
         run = (await http_client.get(f"/api/runs/{run_id}")).json()
-        assert run["mode"] == "confirm"
+        assert run["mode"] == "auto"
         await http_client.post(f"/api/runs/{run_id}/cancel")
 
     assert runtimes[0].target_task_id == "task-9"

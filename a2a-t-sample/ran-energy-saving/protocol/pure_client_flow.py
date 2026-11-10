@@ -31,6 +31,8 @@ from protocol.client_flow import (
     _fill_result,
     _final_state,
 )
+from protocol.grounding import server_target_rates
+from protocol.manual_answer import requires_operator_decision
 from protocol.messages import is_negotiation_message, metadata_to_dict
 
 _LOGGER = logging.getLogger("ran_energy_saving.pure_client_flow")
@@ -433,15 +435,27 @@ def pure_proposal_view(
     context_id = str(event.get("context_id") or event.get("task_id") or "pure-question")
     round_number = _positive_int(pure.get("round"), fallback_round if fallback_round is not None else 1)
     max_rounds = _positive_int(pure.get("maxRounds"), default_max_rounds)
+    kind = pure_negotiation_kind(pure)
+    if kind == "information" and requires_operator_decision(text):
+        # The vendor's plain-A2A front end does not tag its questions. "Not feasible, please
+        # confirm" is a feasibility objection, not a missing-value request: labelling it
+        # information would send the decision agent down the wrong rule set.
+        kind = "feasibility"
     propose = NegotiationProposeView(
         negotiation_id=context_id,
-        kind=pure_negotiation_kind(pure),
+        kind=kind,
         round=round_number,
         max_rounds=max_rounds,
         content=text,
         template_uri=None,
         context_id=context_id,
     )
+    if kind in ("feasibility", "target") and not server_target_rates(propose):
+        # A plan-less confirmation names nothing to agree to. Mark it so the decision prompt asks
+        # for a concrete value instead of following the "accept the server's alternative" rule.
+        propose = propose.model_copy(
+            update={"parameters": {"pureConfirmation": True}}
+        )
     session = NegotiationContext(
         id=context_id,
         round=round_number,

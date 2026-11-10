@@ -393,3 +393,22 @@ def test_an_unknown_phase_is_recorded_as_unknown() -> None:
     propose, _ = pure_proposal_view(event)
 
     assert propose.kind == "unknown"
+
+
+def test_a_terse_vendor_confirmation_is_classified_as_feasibility() -> None:
+    """The vendor's plain message carries no metadata; the wording is the only tag."""
+    event = {"kind": "message", "context_id": "ctx-1", "text": "Not feasible, please confirm"}
+
+    propose, _ = pure_proposal_view(event)
+
+    assert propose.kind == "feasibility"
+    assert propose.parameters == {"pureConfirmation": True}
+
+
+def test_an_information_question_without_metadata_stays_information() -> None:
+    event = {"kind": "message", "context_id": "ctx-1", "text": "Which region?"}
+
+    propose, _ = pure_proposal_view(event)
+
+    assert propose.kind == "information"
+    assert propose.parameters is None

@@ -687,6 +687,13 @@ class ClientRuntime:
                             (target_task_id or "") if direct_hop else (target_server_task_id or "")
                         )
                     answer = self.pure_answer
+                    # An automatic pure answer keeps its decision provider; hand it the operator
+                    # request the run actually executes (the scenario default is only a fallback).
+                    set_answer_request = getattr(answer, "set_user_request", None)
+                    if callable(set_answer_request):
+                        set_answer_request(
+                            raw_text if processed else self._raw_mode_request(custom_request)
+                        )
                     for setter_name, hook in (
                         ("set_proposal_sink", on_decision_requested),
                         ("set_decision_sink", on_decision_made),

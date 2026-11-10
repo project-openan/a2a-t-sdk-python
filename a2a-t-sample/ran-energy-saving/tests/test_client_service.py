@@ -678,8 +678,9 @@ async def test_a_direct_pure_modify_continues_the_vendor_task(
 
     assert second.target_task_id == "task-1"
     assert second.target_server_task_id is None
-    # A direct vendor hop has no OSS recommendation, so automatic answering degrades to confirm.
-    assert second.mode == "confirm"
+    # A direct vendor hop now answers automatically (deterministic plan or decision agent) and
+    # falls back to the confirmation card only when it cannot ground a value.
+    assert second.mode == "auto"
     assert first.finished()
     assert first.error == HANDED_OVER
     hold.set()

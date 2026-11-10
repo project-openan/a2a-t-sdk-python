@@ -561,6 +561,48 @@ async def test_a_pure_runtime_sends_message_send_when_the_mode_is_send(
         await runtime.aclose()
 
 
+async def test_a_direct_pure_auto_run_negotiates_with_the_decision_agent(
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A direct vendor hop no longer degrades auto to confirm; it answers and falls back to a card."""
+    import protocol.client_runtime as client_runtime
+    from demo.pure_auto import AutoPureAnswer
+    from shared.run_constants import PROTOCOL_PURE
+
+    async def fake_discover(**kwargs: object) -> DiscoveredAgent:
+        del kwargs
+        return _card()
+
+    async def fake_create(agent: object, client_config: ClientConfig | None = None) -> _FakeA2AClient:
+        del agent, client_config
+        return _FakeA2AClient()
+
+    monkeypatch.setattr(client_runtime, "discover_agent", fake_discover)
+    monkeypatch.setattr(client_runtime, "create_client", fake_create)
+    runtime = await build_demo_runtime(
+        replace(
+            offline_config,
+            pure_hop="nms",
+            nms_a2a_base="http://127.0.0.1:31127/a2a/json",
+            nms_token_url="http://127.0.0.1:31127/rest/plat/smapp/v1/sessions",
+            nms_token_user="user",
+            nms_token_value="secret",
+        ),
+        "information",
+        "auto",
+        "sse",
+        DISCOVERY_NMS,
+        protocol=PROTOCOL_PURE,
+        env_path=tmp_path / "missing.env",
+    )
+    try:
+        assert isinstance(runtime.pure_answer, AutoPureAnswer)
+    finally:
+        await runtime.aclose()
+
+
 async def test_a_pure_runtime_keeps_message_stream_by_default(
     offline_config: SampleConfig,
     monkeypatch: pytest.MonkeyPatch,
