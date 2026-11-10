@@ -46,6 +46,12 @@ DOWNSTREAM_TRACE_ID_HEADER: Final[str] = "x-a2at-downstream-trace-id"
 #: in observation metadata instead of overwriting the trace name/session owned by the anchor.
 WORKFLOW_TRACE_HEADER: Final[str] = "x-a2at-workflow-trace"
 
+#: Decision mode of the run that opened the outer A2A Task (``auto`` / ``confirm`` / ``manual`` /
+#: ``scripted``). A local hop carries it so the OSS Agent knows whether a downstream question may
+#: be handed to a human. It is sample-local correlation, like the run id: the A2A message and Task
+#: contract are unchanged.
+DECISION_MODE_HEADER: Final[str] = "x-a2at-decision-mode"
+
 #: Langfuse trace metadata attribute (same contract as :mod:`shared.langfuse_tracing`).
 TRACE_NAME_ATTRIBUTE: Final[str] = "langfuse.trace.name"
 TRACE_METADATA_PREFIX: Final[str] = "langfuse.trace.metadata."
@@ -61,6 +67,7 @@ _CONVERSATION_ID: ContextVar[str] = ContextVar("a2at_active_conversation_id", de
 _USER_ID: ContextVar[str] = ContextVar("a2at_active_user_id", default="")
 _DOWNSTREAM_TRACE_ID: ContextVar[str] = ContextVar("a2at_downstream_trace_id", default="")
 _WORKFLOW_TRACE: ContextVar[str] = ContextVar("a2at_workflow_trace", default="")
+_DECISION_MODE: ContextVar[str] = ContextVar("a2at_decision_mode", default="")
 
 
 def _is_hex(value: str, length: int) -> bool:
@@ -85,8 +92,9 @@ def set_active_trace(
     user_id: str | None = None,
     downstream_trace_id: str | None = None,
     workflow_trace: bool = False,
+    decision_mode: str | None = None,
 ) -> tuple[
-    Token[str], Token[str], Token[str], Token[str], Token[str], Token[str], Token[str]
+    Token[str], Token[str], Token[str], Token[str], Token[str], Token[str], Token[str], Token[str]
 ]:
     """Set the correlation values used by outgoing requests; return their reset tokens."""
     return (
@@ -97,12 +105,13 @@ def set_active_trace(
         _USER_ID.set(user_id or ""),
         _DOWNSTREAM_TRACE_ID.set(downstream_trace_id or ""),
         _WORKFLOW_TRACE.set("1" if workflow_trace else ""),
+        _DECISION_MODE.set(decision_mode or ""),
     )
 
 
 def reset_active_trace(
     tokens: tuple[
-        Token[str], Token[str], Token[str], Token[str], Token[str], Token[str], Token[str]
+        Token[str], Token[str], Token[str], Token[str], Token[str], Token[str], Token[str], Token[str]
     ],
 ) -> None:
     """Restore the correlation values saved by :func:`set_active_trace`."""
@@ -114,6 +123,7 @@ def reset_active_trace(
         user_token,
         downstream_token,
         workflow_token,
+        decision_mode_token,
     ) = tokens
     _TRACE_ID.reset(trace_token)
     _PARENT_SPAN_ID.reset(parent_token)
@@ -122,6 +132,22 @@ def reset_active_trace(
     _USER_ID.reset(user_token)
     _DOWNSTREAM_TRACE_ID.reset(downstream_token)
     _WORKFLOW_TRACE.reset(workflow_token)
+    _DECISION_MODE.reset(decision_mode_token)
+
+
+def current_decision_mode() -> str:
+    """Return the decision mode of the inbound run, empty when the caller did not declare one."""
+    return _DECISION_MODE.get().strip().lower()
+
+
+def set_decision_mode(value: str | None) -> Token[str]:
+    """Bind the decision mode for a resumed background pump; return the reset token."""
+    return _DECISION_MODE.set((value or "").strip().lower())
+
+
+def reset_decision_mode(token: Token[str]) -> None:
+    """Restore the decision mode saved by :func:`set_decision_mode`."""
+    _DECISION_MODE.reset(token)
 
 
 @contextmanager
@@ -134,6 +160,7 @@ def propagated_trace(
     user_id: str | None = None,
     downstream_trace_id: str | None = None,
     workflow_trace: bool = False,
+    decision_mode: str | None = None,
 ) -> Iterator[None]:
     """Bind the correlation values for the duration of one run or request."""
     tokens = set_active_trace(
@@ -144,6 +171,7 @@ def propagated_trace(
         user_id=user_id,
         downstream_trace_id=downstream_trace_id,
         workflow_trace=workflow_trace,
+        decision_mode=decision_mode,
     )
     try:
         yield
@@ -316,6 +344,9 @@ async def inject_outgoing(request: httpx.Request) -> None:
             request.headers[DOWNSTREAM_TRACE_ID_HEADER] = downstream_trace_id
         if current_workflow_trace():
             request.headers[WORKFLOW_TRACE_HEADER] = "1"
+        decision_mode = current_decision_mode()
+        if decision_mode:
+            request.headers[DECISION_MODE_HEADER] = decision_mode
     except Exception:  # noqa: BLE001 - propagation never breaks the call
         _LOGGER.debug("traceparent injection failed", exc_info=True)
 
@@ -353,6 +384,7 @@ class TracePropagationMiddleware:
             user_id=headers.get(USER_ID_HEADER, ""),
             downstream_trace_id=headers.get(DOWNSTREAM_TRACE_ID_HEADER, ""),
             workflow_trace=headers.get(WORKFLOW_TRACE_HEADER, "").strip() == "1",
+            decision_mode=headers.get(DECISION_MODE_HEADER, ""),
         )
         otel_tokens = _attach_otel_context(headers)
         try:

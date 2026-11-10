@@ -7,7 +7,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
@@ -41,6 +41,7 @@ from protocol.mie_agent import build_mie_app
 from protocol.nms_client import NmsProtocolError
 from protocol.oss_agent import (
     OSSPureExecutor,
+    _AttachmentAwareRequestHandler,
     _build_trace_emitter,
     _PendingQuestion,
     _pure_proposal,
@@ -69,6 +70,7 @@ from shared.run_constants import (
     LANGUAGE_EN,
     PROTOCOL_PURE,
 )
+from shared.trace_propagation import reset_active_trace, set_active_trace
 from tests.integration_helpers import (
     free_tcp_port,
     offline_direct_config,
@@ -245,8 +247,9 @@ def _fake_downstream(
         event_sink: object,
         updater: object,
         call_context: object,
+        attached: object = None,
     ) -> ClientFlowResult:
-        del user_request, run_id, event_sink, updater, call_context
+        del user_request, run_id, event_sink, updater, call_context, attached
         return ClientFlowResult(final_state=final_state, task_id="nms-task-1")
 
     monkeypatch.setattr(executor, "_run_ran", run)
@@ -617,8 +620,9 @@ async def test_the_operator_answer_resumes_the_downstream_question(
         event_sink: object,
         updater: TaskUpdater,
         call_context: object,
+        attached: object = None,
     ) -> ClientFlowResult:
-        del pending, event_sink, updater, call_context
+        del pending, event_sink, updater, call_context, attached
         captured["text"] = answer_text
         return ClientFlowResult(final_state=FINAL_STATE_TASK_COMPLETED, context_id="inner-ctx")
 
@@ -663,8 +667,9 @@ async def test_a_follow_up_on_a_working_outer_task_reaches_the_bound_downstream(
         event_sink: object,
         updater: TaskUpdater,
         call_context: object,
+        attached: object = None,
     ) -> ClientFlowResult:
-        del event_sink, updater, call_context
+        del event_sink, updater, call_context, attached
         captured["inner"] = (pending.inner_task_id, pending.inner_context_id)
         captured["text"] = text
         return ClientFlowResult(
@@ -773,8 +778,9 @@ async def test_oss_failure_message_carries_the_downstream_refusal(
         event_sink: object,
         updater: object,
         call_context: object,
+        attached: object = None,
     ) -> ClientFlowResult:
-        del user_request, run_id, event_sink, updater, call_context
+        del user_request, run_id, event_sink, updater, call_context, attached
         return ClientFlowResult(
             final_state=FINAL_STATE_TASK_FAILED,
             task_id="nms-task-1",
@@ -1278,6 +1284,244 @@ async def test_the_nms_webhook_flow_hands_the_subscription_to_the_pump(
     assert router.active_subscriptions == 0
 
 
+async def test_the_gate_relays_the_yellow_zone_feasibility_question() -> None:
+    """The exact ASK_USER of run 3a5cf691 must reach the operator, not the model's answer."""
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "Set the guaranteed throughput targets: {08:00~18:00,10Mbps}.",
+        language=LANGUAGE_EN,
+    )
+    question = {
+        "kind": "status",
+        "state": "TASK_STATE_INPUT_REQUIRED",
+        "text": (
+            "Power outage duration 10h > 4h with rate 10.0Mbps > 2Mbps; recommend 2Mbps or less, "
+            "or reduce the outage to 4h or less. What rate and outage duration would you like to use?"
+        ),
+    }
+
+    tokens = set_active_trace(decision_mode="confirm")
+    try:
+        with pytest.raises(_QuestionPendingError):
+            await executor._answer_or_relay(dict(question))
+    finally:
+        reset_active_trace(tokens)
+
+
+async def test_the_gate_refuses_instead_of_answering_in_auto_mode() -> None:
+    """An auto run cannot show a card: a business decision becomes an explicit refusal."""
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "Set the guaranteed throughput targets: {08:00~18:00,10Mbps}.",
+        language=LANGUAGE_EN,
+    )
+    question = {
+        "kind": "status",
+        "state": "TASK_STATE_INPUT_REQUIRED",
+        "text": (
+            "Power outage duration 10h > 4h with rate 10.0Mbps > 2Mbps; recommend 2Mbps or less, "
+            "or reduce the outage to 4h or less. What rate and outage duration would you like to use?"
+        ),
+    }
+
+    tokens = set_active_trace(decision_mode="auto")
+    try:
+        text = await executor._answer_or_relay(dict(question))
+    finally:
+        reset_active_trace(tokens)
+
+    assert "not acceptable" in text
+    assert "10Mbps" not in text
+
+
+async def test_a_conform_answer_repeating_an_already_sent_rate_is_relayed() -> None:
+    """The vendor asked because 10Mbps was rejected; repeating it cannot answer the question."""
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "Set the guaranteed throughput targets: {08:00~18:00,10Mbps}.",
+        language=LANGUAGE_EN,
+    )
+    question = {
+        "kind": "status",
+        "state": "TASK_STATE_INPUT_REQUIRED",
+        "text": "Which rate would you like to use?",
+    }
+
+    tokens = set_active_trace(decision_mode="confirm")
+    try:
+        text = await executor._decide_answer(
+            dict(question),
+            sent_texts=("Set the guaranteed throughput targets: {08:00~18:00,10Mbps}.",),
+        )
+    finally:
+        reset_active_trace(tokens)
+
+    assert text == ""
+
+
+async def test_a_new_rate_is_still_answered_in_auto_mode() -> None:
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "Set the guaranteed throughput targets: {08:00~18:00,2Mbps}.",
+        language=LANGUAGE_EN,
+    )
+    question = {"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Which rate?"}
+
+    tokens = set_active_trace(decision_mode="auto")
+    try:
+        text = await executor._decide_answer(
+            dict(question),
+            sent_texts=("Set the guaranteed throughput targets: {08:00~18:00,10Mbps}.",),
+        )
+    finally:
+        reset_active_trace(tokens)
+
+    assert "2Mbps" in text
+
+
+async def test_a_streaming_caller_keeps_the_task_in_the_foreground(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The page is still reading: the downstream Task must not move to the background pump."""
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    config = replace(
+        offline_direct_config(8000),
+        discovery=DISCOVERY_NMS,
+        transport=TRANSPORT_WEBHOOK,
+    )
+    executor = OSSPureExecutor(config=config, answer=lambda event: "", binding_store=binding_store)
+    router = WebhookRouter()
+    executor._webhook_router = router
+    executor._nms_client = object()  # type: ignore[assignment]
+
+    async def fake_flow(**kwargs: object) -> ClientFlowResult:
+        del kwargs
+        return ClientFlowResult(
+            final_state=FINAL_STATE_INCOMPLETE,
+            task_id="inner-1",
+            context_id="inner-ctx",
+        )
+
+    monkeypatch.setattr("protocol.oss_agent.run_pure_client_flow", fake_flow)
+    context = _oss_context()
+    updater = TaskUpdater(_RecordingQueue(), "outer-1", "outer-ctx")
+    attached = asyncio.Event()
+
+    result = await executor._run_ran_webhook(
+        "request",
+        "run-1",
+        lambda event: None,
+        updater,
+        context.call_context,
+        attached,
+    )
+
+    assert result.final_state == FINAL_STATE_INCOMPLETE
+    assert executor._pending_handoffs == {}
+    assert executor._pumps == {}
+    assert router.active_subscriptions == 0
+
+
+async def test_a_detached_streaming_caller_hands_the_task_to_the_pump(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A closed caller stream is the one automatic handoff trigger."""
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    config = replace(
+        offline_direct_config(8000),
+        discovery=DISCOVERY_NMS,
+        transport=TRANSPORT_WEBHOOK,
+    )
+    executor = OSSPureExecutor(config=config, answer=lambda event: "", binding_store=binding_store)
+    router = WebhookRouter()
+    executor._webhook_router = router
+    executor._nms_client = object()  # type: ignore[assignment]
+
+    async def fake_flow(**kwargs: object) -> ClientFlowResult:
+        del kwargs
+        return ClientFlowResult(
+            final_state=FINAL_STATE_INCOMPLETE,
+            task_id="inner-1",
+            context_id="inner-ctx",
+        )
+
+    monkeypatch.setattr("protocol.oss_agent.run_pure_client_flow", fake_flow)
+    context = _oss_context()
+    updater = TaskUpdater(_RecordingQueue(), "outer-1", "outer-ctx")
+    attached = asyncio.Event()
+    attached.set()
+
+    await executor._run_ran_webhook(
+        "request",
+        "run-1",
+        lambda event: None,
+        updater,
+        context.call_context,
+        attached,
+    )
+
+    assert "outer-1" in executor._pending_handoffs
+    assert router.active_subscriptions == 1
+    await executor._stop_pumps()
+
+
+async def test_the_request_handler_marks_the_caller_gone_on_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Closing the response generator is the only disconnect signal the executor can get."""
+    from a2a.server.request_handlers import DefaultRequestHandler
+
+    gone: list[str] = []
+
+    class _Executor:
+        def note_caller_gone(self, task_id: str) -> None:
+            gone.append(task_id)
+
+    async def fake_stream(
+        self: object, params: object, context: ServerCallContext
+    ) -> AsyncGenerator[object, None]:
+        del self, params
+        task = Task(id="outer-1", context_id="ctx", status=TaskStatus(state=TaskState.TASK_STATE_WORKING))
+        yield task
+        yield task
+
+    monkeypatch.setattr(DefaultRequestHandler, "on_message_send_stream", fake_stream)
+    handler = _AttachmentAwareRequestHandler.__new__(_AttachmentAwareRequestHandler)
+    handler._oss_executor = _Executor()  # type: ignore[assignment]
+    context = ServerCallContext(state={}, user=UnauthenticatedUser(), requested_extensions=set())
+    message = Message(message_id="message-1", role=Role.ROLE_USER)
+    message.parts.add(text="Start energy saving.")
+
+    stream = handler.on_message_send_stream(SendMessageRequest(message=message), context)
+    first = await anext(stream)
+    assert isinstance(first, Task)
+    assert context.state["a2at_streaming"] is True
+    await stream.aclose()
+
+    assert gone == ["outer-1"]
+
+
+async def test_a_disconnect_before_registration_is_remembered() -> None:
+    """The request handler can observe the disconnect before the executor registers its lease."""
+    executor = OSSPureExecutor(answer=lambda event: "")
+
+    executor.note_caller_gone("outer-1")
+    lease = executor._attach_lease(
+        "outer-1",
+        ServerCallContext(
+            state={"a2at_streaming": True},
+            user=UnauthenticatedUser(),
+            requested_extensions=set(),
+        ),
+    )
+
+    assert lease is not None
+    assert lease.is_set() is True
+    executor._release_lease("outer-1")
+
+
 async def test_an_ungrounded_vendor_question_is_relayed_instead_of_answered() -> None:
     """The OSS must not send an empty answer when its own guard refused to invent a value."""
     executor = OSSPureExecutor(
@@ -1285,10 +1529,32 @@ async def test_an_ungrounded_vendor_question_is_relayed_instead_of_answered() ->
         answer=lambda event: "",
     )
 
-    with pytest.raises(_QuestionPendingError):
-        await executor._answer_or_relay(
+    tokens = set_active_trace(decision_mode="confirm")
+    try:
+        with pytest.raises(_QuestionPendingError):
+            await executor._answer_or_relay(
+                {"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Not feasible, please confirm"}
+            )
+    finally:
+        reset_active_trace(tokens)
+
+
+async def test_an_ungrounded_question_in_auto_mode_gets_an_explicit_refusal() -> None:
+    """An automatic run has nobody to answer: it must refuse instead of leaving the Task waiting."""
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "",
+        language=LANGUAGE_EN,
+    )
+
+    tokens = set_active_trace(decision_mode="auto")
+    try:
+        text = await executor._answer_or_relay(
             {"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Not feasible, please confirm"}
         )
+    finally:
+        reset_active_trace(tokens)
+    assert "not acceptable" in text
 
 
 async def test_a_grounded_vendor_question_is_answered_without_relaying() -> None:
@@ -1370,10 +1636,14 @@ async def test_a_confirmation_question_is_relayed_even_when_the_model_has_an_ans
         answer=lambda event: "Accepted. Please proceed.",
     )
 
-    with pytest.raises(_QuestionPendingError):
-        await executor._answer_or_relay(
-            {"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Not feasible, please confirm"}
-        )
+    tokens = set_active_trace(decision_mode="confirm")
+    try:
+        with pytest.raises(_QuestionPendingError):
+            await executor._answer_or_relay(
+                {"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Not feasible, please confirm"}
+            )
+    finally:
+        reset_active_trace(tokens)
 
 
 def test_a_stream_conflict_is_reported_as_a_busy_downstream() -> None:
@@ -1387,7 +1657,7 @@ def test_a_stream_conflict_is_reported_as_a_busy_downstream() -> None:
 
     assert message is not None
     assert "TASK_STREAM_CONFLICT" in message
-    assert "Retry the answer later" in message
+    assert "retry the answer" in message
     assert _stream_conflict_failure(NmsProtocolError("HTTP 409: conflict", http_status=409)) is None
 
 

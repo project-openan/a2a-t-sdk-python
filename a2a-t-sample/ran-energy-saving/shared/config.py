@@ -249,8 +249,10 @@ LONG_TASK_MODE_ON = "on"
 LONG_TASK_MODE_OFF = "off"
 SUPPORTED_LONG_TASK_MODES = (LONG_TASK_MODE_AUTO, LONG_TASK_MODE_ON, LONG_TASK_MODE_OFF)
 DEFAULT_LONG_TASK_MODE = LONG_TASK_MODE_AUTO
-#: A real NMS replies to ``message:send`` with a Task; after this settle window the OSS stops
-#: streaming and hands the subscription to the background pump. It is not a task lifetime.
+#: Settle window of a NON-STREAMING NMS call (``message:send``): after it the OSS stops waiting and
+#: hands the subscription to the background pump. A streaming caller (``message:stream``) has no
+#: deadline: the Task stays in the foreground until the vendor asks a question, reaches a terminal
+#: state, or the caller disconnects. This value is not a task lifetime.
 DEFAULT_LONG_TASK_SETTLE_SECONDS = 5.0
 #: How often the Web UI polls the remote Task while a days-long run is still executing with no
 #: page watching. Two minutes is enough to reattach safely: the run is kept alive by its own
@@ -559,8 +561,8 @@ class SampleConfig:
         http_timeout_seconds: Client HTTP budget of one A2A request, in seconds.
         long_task_mode: OSS long-task tracking (``auto`` / ``on`` / ``off``). ``auto`` enables it
             for the real NMS webhook hop when the OSS Task database is configured.
-        long_task_settle_seconds: Seconds the OSS keeps the initial synchronous stream after the
-            NMS accepts the task before handing it to the background pump.
+        long_task_settle_seconds: Settle window of a non-streaming NMS call after the NMS accepts
+            the task, before the OSS hands it to the background pump. A streaming caller ignores it.
         task_poll_interval_seconds: How often the UI polls a remote Task that is still executing.
         nms_poll_after_silence: Seconds without an NMS status event before the transport hands a
             non-terminal Task to background tracking instead of waiting for its stream.

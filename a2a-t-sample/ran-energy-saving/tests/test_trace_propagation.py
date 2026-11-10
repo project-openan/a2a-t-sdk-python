@@ -6,12 +6,14 @@ import httpx
 import pytest
 from shared.trace_propagation import (
     CONVERSATION_ID_HEADER,
+    DECISION_MODE_HEADER,
     DOWNSTREAM_TRACE_ID_HEADER,
     RUN_ID_HEADER,
     TRACEPARENT_HEADER,
     USER_ID_HEADER,
     WORKFLOW_TRACE_HEADER,
     TracePropagationMiddleware,
+    current_decision_mode,
     current_downstream_trace_id,
     current_trace_id,
     current_workflow_trace,
@@ -280,3 +282,41 @@ def test_current_parent_span_id_normalizes_the_bound_parent() -> None:
         assert current_parent_span_id() == "fedcba9876543210"
     with propagated_trace(parent_span_id="not-hex"):
         assert current_parent_span_id() == ""
+
+
+async def test_the_decision_mode_travels_on_its_own_header() -> None:
+    """The OSS Agent must know whether the run that opened the Task has an operator."""
+    request = httpx.Request("POST", "http://agent.test/a2a/json/message:send")
+    with propagated_trace(run_id="run-1", decision_mode="confirm"):
+        await inject_outgoing(request)
+
+    assert request.headers[DECISION_MODE_HEADER] == "confirm"
+
+    plain = httpx.Request("POST", "http://agent.test/a2a/json/message:send")
+    with propagated_trace(run_id="run-1"):
+        await inject_outgoing(plain)
+    assert DECISION_MODE_HEADER not in plain.headers
+
+
+async def test_the_middleware_binds_the_incoming_decision_mode() -> None:
+    seen: list[str] = []
+
+    async def app(scope: dict[str, object], receive: object, send: object) -> None:
+        del scope, receive, send
+        seen.append(current_decision_mode())
+
+    middleware = TracePropagationMiddleware(app)
+    await middleware(
+        {
+            "type": "http",
+            "headers": [
+                (RUN_ID_HEADER.encode(), b"run-1"),
+                (DECISION_MODE_HEADER.encode(), b"confirm"),
+            ],
+        },
+        object(),
+        object(),
+    )
+
+    assert seen == ["confirm"]
+    assert current_decision_mode() == ""

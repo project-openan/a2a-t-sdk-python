@@ -22,7 +22,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -1041,6 +1041,8 @@ class NmsWebhookTransport:
         context_id: str = "",
         register_push_config: bool = True,
         retry_delays: tuple[float, ...] = STREAM_CONFLICT_RETRY_DELAYS,
+        attached: asyncio.Event | None = None,
+        on_task_bound: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> None:
         """Create one webhook transport.
 
@@ -1063,6 +1065,12 @@ class NmsWebhookTransport:
                 the original request; registering again is rejected by the real NMS.
             retry_delays: backoff schedule for a transient ``TASK_STREAM_CONFLICT``; tests pass an
                 empty tuple to keep the retry immediate.
+            attached: caller-attachment lease. When it is still unset, the phase waits for the
+                next push without an idle deadline: the A2A client's stream is open, so the caller
+                must see the vendor's question on that stream instead of a background handoff. The
+                lease is set by the request handler when the caller disconnects.
+            on_task_bound: called with ``(task_id, context_id)`` as soon as the vendor identity is
+                known, so the outer↔downstream binding is durable before a long wait.
         """
         self._retry_delays = retry_delays
         self._client = client
@@ -1075,6 +1083,8 @@ class NmsWebhookTransport:
         self._bind = bind
         self._context_id = context_id
         self._register_push_config = register_push_config
+        self._attached = attached
+        self._on_task_bound = on_task_bound
         self._event_sink: Any | None = None
 
     def set_event_sink(self, event_sink: Any | None) -> None:
@@ -1132,13 +1142,15 @@ class NmsWebhookTransport:
         events.append(reply_event)
         self._emit(reply_event)
         task_id = _optional_str(reply_event.get("task_id"))
+        event_context_id = _optional_str(reply_event.get("context_id"))
         if self._bind is not None:
             # The vendor ignores the push token, so the task/context identity is the only way to
             # tell this run's pushes from another concurrent run's on the shared callback port.
-            self._bind(
-                task_id,
-                _optional_str(reply_event.get("context_id")),
-            )
+            self._bind(task_id, event_context_id)
+        if self._on_task_bound is not None and task_id:
+            # Persist the outer↔downstream identity before a potentially hours-long wait: an OSS
+            # restart adopts the Task from it.
+            await self._on_task_bound(task_id, event_context_id or "")
         if self._protocol == PROTOCOL_PURE and _is_input_required(reply_event):
             return events
         if _is_negotiation_event(reply_event):
@@ -1158,19 +1170,31 @@ class NmsWebhookTransport:
             else self._idle_timeout
         )
         # One budget per phase, counted from the reply: a vendor that keeps pushing (every 15 s
-        # forever) must not restart the clock, or the phase and its caller never end.
+        # forever) must not restart the clock, or the phase and its caller never end. While the
+        # caller's A2A stream is still attached there is no deadline at all: the caller is reading
+        # this phase and must receive the vendor's next question on its own stream.
         deadline = asyncio.get_running_loop().time() + budget
         while True:
-            remaining = max(deadline - asyncio.get_running_loop().time(), 0.0)
-            try:
-                pushed = await asyncio.wait_for(self._queue.get(), timeout=remaining)
-            except asyncio.TimeoutError:
-                _LOGGER.info(
-                    "NMS webhook phase idle for %.0fs; returning the events received%s",
-                    budget,
-                    " (handing the task to background tracking)" if budget != self._idle_timeout else "",
-                )
-                return events
+            pushed: dict[str, object]
+            if self._attached is not None and not self._attached.is_set():
+                pushed_or_none = await self._wait_attached()
+                if pushed_or_none is None:
+                    # The caller disconnected: return what we have and let the OSS hand the Task
+                    # to the background pump.
+                    _LOGGER.info("caller detached; returning the events received so far")
+                    return events
+                pushed = pushed_or_none
+            else:
+                remaining = max(deadline - asyncio.get_running_loop().time(), 0.0)
+                try:
+                    pushed = await asyncio.wait_for(self._queue.get(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    _LOGGER.info(
+                        "NMS webhook phase idle for %.0fs; returning the events received%s",
+                        budget,
+                        " (handing the task to background tracking)" if budget != self._idle_timeout else "",
+                    )
+                    return events
             recorder = getattr(self._client, "record_inbound", None)
             if callable(recorder):
                 recorder(pushed, source="webhook")
@@ -1182,6 +1206,29 @@ class NmsWebhookTransport:
                 return events
             if is_stop_event(event) or is_report_artifact(event) or _is_negotiation_event(event):
                 return events
+
+    async def _wait_attached(self) -> dict[str, object] | None:
+        """Wait for the next push while the caller is attached; ``None`` when it disconnects.
+
+        No idle deadline applies here: the caller's A2A stream owns the phase, and the A2A client
+        stops its stream at ``INPUT_REQUIRED``, so a question reaches the page directly instead of
+        a background handoff.
+        """
+        assert self._attached is not None
+        push_task = asyncio.create_task(self._queue.get())
+        detach_task = asyncio.create_task(self._attached.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {push_task, detach_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for task in (push_task, detach_task):
+                if not task.done():
+                    task.cancel()
+        if push_task in done:
+            return push_task.result()
+        return None
 
     async def _send_with_stream_conflict_retry(
         self,

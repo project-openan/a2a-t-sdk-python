@@ -19,10 +19,10 @@ import os
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Protocol
+from typing import Any, Final, Protocol
 
 import httpx
 import uvicorn
@@ -32,7 +32,7 @@ from a2a.helpers.proto_helpers import new_task_from_user_message
 from a2a.server.agent_execution.agent_executor import AgentExecutor
 from a2a.server.agent_execution.context import RequestContext
 from a2a.server.context import ServerCallContext, UnauthenticatedUser
-from a2a.server.events.event_queue import EventQueue
+from a2a.server.events.event_queue import Event, EventQueue
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_rest_routes
 from a2a.server.tasks.base_push_notification_sender import BasePushNotificationSender
@@ -50,6 +50,7 @@ from a2a.types import (
     AgentProvider,
     AgentSkill,
     Part,
+    SendMessageRequest,
     Task,
     TaskState,
 )
@@ -75,14 +76,18 @@ from shared.run_constants import (
     FINAL_STATE_INCOMPLETE,
     FINAL_STATE_TASK_COMPLETED,
     FINAL_STATE_TASK_REJECTED,
+    LANGUAGE_EN,
     LANGUAGE_ZH,
     PROTOCOL_PURE,
 )
 from shared.trace import FileTraceEmitter, HttpTraceEmitter, set_global_sink, trace_scope
 from shared.trace_propagation import (
     TracePropagationMiddleware,
+    current_decision_mode,
     current_run_id,
     inject_outgoing,
+    reset_decision_mode,
+    set_decision_mode,
 )
 from shared.webhook_receiver import WebhookReceiver, start_receiver_with_fallback
 from starlette.applications import Starlette
@@ -97,8 +102,16 @@ from protocol.downstream_binding_store import DownstreamBinding, DownstreamBindi
 from protocol.downstream_pump import DownstreamPump, DownstreamPumpContext
 from protocol.gateway_push import ValidatingPushConfigStore
 from protocol.intent import IntentProcessor, OperatorRequest, ProcessedIntent
-from protocol.manual_answer import asks_for_confirmation, ungrounded_answer_fields
-from protocol.messages import SAMPLE_RUN_ID_METADATA_KEY, metadata_to_dict
+from protocol.manual_answer import (
+    repeats_already_sent,
+    requires_operator_decision,
+    ungrounded_answer_fields,
+)
+from protocol.messages import (
+    SAMPLE_DECISION_MODE_METADATA_KEY,
+    SAMPLE_RUN_ID_METADATA_KEY,
+    metadata_to_dict,
+)
 from protocol.negotiation_policy import (
     negotiation_kind_for_propose_content,
     negotiation_kind_for_template_uri,
@@ -113,6 +126,7 @@ from protocol.nms_client import (
 )
 from protocol.pure_answer_guard import sanitize_pure_decision
 from protocol.pure_client_flow import (
+    _pending_negotiation,
     continue_pure_client_flow,
     pure_metadata,
     pure_negotiation_kind,
@@ -176,6 +190,26 @@ _TERMINAL_TASK_STATE_NAMES: Final[frozenset[str]] = frozenset(
     }
 )
 
+#: ``ServerCallContext.state`` key set by the request handler for a ``message:stream`` call. The
+#: A2A server API exposes no subscriber state to the executor; this is the one local signal.
+_STREAMING_STATE_KEY: Final[str] = "a2at_streaming"
+
+#: Decision modes in which the operator can answer a downstream question
+#: (``protocol.client_runtime`` owns the mode vocabulary). ``auto`` and ``scripted`` have no human
+#: on the other side: relaying a question there would strand the vendor Task forever.
+_OPERATOR_DECISION_MODES: Final[frozenset[str]] = frozenset({"confirm", "manual"})
+
+#: Answer sent in an automatic mode when the deterministic guard refuses to accept the vendor's
+#: proposal. A pure A2A hop has no reject performative; an explicit refusal keeps the negotiation
+#: alive instead of silently sending nothing or repeating a rejected value.
+_AUTO_REFUSAL: Final[dict[str, str]] = {
+    LANGUAGE_ZH: "当前方案不可接受，请提出修改后的速率或停电时间窗口。",
+    LANGUAGE_EN: (
+        "This proposal is not acceptable as it stands. Please propose a revised rate or "
+        "outage window."
+    ),
+}
+
 
 class _QuestionPendingError(Exception):
     """The downstream asked for information and the outer caller must answer it."""
@@ -202,6 +236,9 @@ class _PendingQuestion:
     #: Texts already sent downstream in this run, oldest first. A recommendation that repeats one
     #: of them cannot answer the vendor's question.
     sent_texts: tuple[str, ...] = ()
+    #: The vendor question this round is answering. A retryable transport refusal re-publishes it
+    #: instead of failing the outer Task, so the operator keeps a decision surface.
+    question_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -215,6 +252,9 @@ class _PumpHandoff:
     call_context: ServerCallContext
     #: Request that opened the run; a pump resumed after a restart has none.
     user_request: str = ""
+    #: Texts this run already sent downstream, oldest first. The pump must not answer a question
+    #: by repeating one of them.
+    sent_texts: tuple[str, ...] = ()
 
 
 @dataclass
@@ -325,6 +365,46 @@ class OSSPureExecutor(AgentExecutor):
         self._webhook_push_url = ""
         self._webhook_push_token = ""
         self._webhook_idle_timeout = 0.0
+        # Outer Task id → lease of the caller's live A2A stream. A streaming request stays in the
+        # foreground while the lease is unset; the request handler sets it on disconnect.
+        self._attachments: dict[str, asyncio.Event] = {}
+        # Tasks whose caller disconnected before the executor registered its lease.
+        self._detached_tasks: set[str] = set()
+
+    def note_caller_gone(self, task_id: str) -> None:
+        """Mark one outer Task's caller stream as closed.
+
+        Called by the request handler when the ``message:stream`` response generator is cancelled
+        or closed. The A2A server keeps the producer running (and persists its events), so the
+        downstream Task is not lost: the flow returns the events it has and the OSS hands the Task
+        to the background pump, which now tracks without deciding.
+        """
+        lease = self._attachments.get(task_id)
+        if lease is None:
+            self._detached_tasks.add(task_id)
+            return
+        lease.set()
+
+    def _attach_lease(
+        self,
+        task_id: str,
+        call_context: ServerCallContext,
+    ) -> asyncio.Event | None:
+        """Register the caller-attachment lease of one streaming request."""
+        if not task_id or not call_context.state.get(_STREAMING_STATE_KEY):
+            return None
+        lease = asyncio.Event()
+        if task_id in self._detached_tasks:
+            # The caller closed its stream before ``execute`` reached this point.
+            self._detached_tasks.discard(task_id)
+            lease.set()
+        self._attachments[task_id] = lease
+        return lease
+
+    def _release_lease(self, task_id: str) -> None:
+        """Forget one request's lease once its synchronous flow has finished."""
+        self._attachments.pop(task_id, None)
+        self._detached_tasks.discard(task_id)
 
     async def start(self) -> None:
         """Create the long-lived NMS downstream transport, when NMS discovery is configured."""
@@ -440,6 +520,7 @@ class OSSPureExecutor(AgentExecutor):
         """Build one background pump from a handoff; ``None`` without a binding store."""
         if self._binding_store is None:
             return None
+        sent_texts = list(handoff.sent_texts)
         return DownstreamPump(
             context=DownstreamPumpContext(
                 run_id=handoff.binding.run_id,
@@ -453,16 +534,35 @@ class OSSPureExecutor(AgentExecutor):
                 max_rounds=self._max_rounds,
                 call_timeout_seconds=self._timeout_seconds,
                 call_context=handoff.call_context,
+                sent_texts=sent_texts,
             ),
             subscription=handoff.subscription,
             transport=handoff.transport,
             task_store=self._task_store,
             binding_store=self._binding_store,
             push_sender=self._push_sender,
-            answer=self._answer_for_request(handoff.user_request),
+            # The pump answers through the same deterministic gate as the synchronous flow: it
+            # must never take a business decision the operator owns.
+            answer=self._pump_answer_for_request(handoff.user_request, sent_texts),
             recommendation=self._recommendation_for_request(handoff.user_request),
-            on_question=self._question_registrar(handoff),
+            on_question=self._question_registrar(handoff, sent_texts),
         )
+
+    def _pump_answer_for_request(
+        self,
+        user_request: str,
+        sent_texts: list[str],
+    ) -> Callable[[dict[str, object]], Awaitable[str]]:
+        """Wrap the gated answer for the pump so it runs with this run's request and ledger."""
+
+        async def answer(event: dict[str, object]) -> str:
+            self._set_decision_request(user_request)
+            text = await self._decide_answer(event, sent_texts=tuple(sent_texts))
+            if text.strip():
+                sent_texts.append(text)
+            return text
+
+        return answer
 
     def _register_pump(self, handoff: _PumpHandoff, pump: DownstreamPump) -> None:
         """Start one pump and own its subscription for the rest of the process lifetime."""
@@ -563,7 +663,14 @@ class OSSPureExecutor(AgentExecutor):
         if pump.terminal:
             subscription.unsubscribe()
             return
-        self._register_pump(handoff, pump)
+        mode = metadata_to_dict(getattr(outer_task, "metadata", None)).get(
+            SAMPLE_DECISION_MODE_METADATA_KEY
+        )
+        mode_token = set_decision_mode(mode if isinstance(mode, str) else "")
+        try:
+            self._register_pump(handoff, pump)
+        finally:
+            reset_decision_mode(mode_token)
         _LOGGER.info(
             "resumed downstream task: outer=%s inner=%s run=%s",
             binding.outer_task_id,
@@ -573,12 +680,27 @@ class OSSPureExecutor(AgentExecutor):
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Create the outer Task, run the RAN hop, and publish the aggregated result."""
+        outer_id = context.task_id or ""
+        lease = self._attach_lease(outer_id, context.call_context)
+        try:
+            await self._execute_request(context, event_queue, lease)
+        finally:
+            if outer_id:
+                self._release_lease(outer_id)
+
+    async def _execute_request(
+        self,
+        context: RequestContext,
+        event_queue: EventQueue,
+        attached: asyncio.Event | None,
+    ) -> None:
+        """Run one inbound request inside its caller-attachment lease."""
         if context.current_task is not None:
             pending = self._pending_questions.pop(context.task_id or "", None)
             if pending is not None:
-                await self._resume_question(context, event_queue, pending)
+                await self._resume_question(context, event_queue, pending, attached)
                 return
-            await self._continue_running_task(context, event_queue, context.current_task)
+            await self._continue_running_task(context, event_queue, context.current_task, attached)
             return
         message = context.message
         if message is None:
@@ -587,6 +709,11 @@ class OSSPureExecutor(AgentExecutor):
         task = new_task_from_user_message(message)
         task.id = context.task_id or str(uuid.uuid4())
         task.context_id = context.context_id or task.id
+        decision_mode = current_decision_mode()
+        if decision_mode:
+            # Persisted with the Task so a pump resumed after an OSS restart keeps the same
+            # human-decision policy instead of defaulting to automatic.
+            task.metadata[SAMPLE_DECISION_MODE_METADATA_KEY] = decision_mode
         await event_queue.enqueue_event(task)
 
         updater = TaskUpdater(event_queue, task.id, task.context_id)
@@ -616,6 +743,7 @@ class OSSPureExecutor(AgentExecutor):
                     events.put_nowait,
                     updater,
                     context.call_context,
+                    attached,
                 )
         except _QuestionPendingError as question:
             events.put_nowait(None)
@@ -641,6 +769,37 @@ class OSSPureExecutor(AgentExecutor):
         await consumer
         await self._publish_result(updater, result)
         await self._remember_downstream_binding(task, result, run_id, context.call_context)
+
+    async def _save_binding(
+        self,
+        inner_task_id: str,
+        inner_context_id: str,
+        *,
+        outer_task_id: str,
+        run_id: str | None,
+        owner: str,
+    ) -> None:
+        """Write one outer↔downstream binding as soon as the vendor names the Task.
+
+        The binding used to be written only at handoff. A streaming run now stays in the
+        foreground, so the durable identity must exist before the (possibly hours-long) wait;
+        otherwise an OSS restart cannot adopt the Task.
+        """
+        if self._binding_store is None or not inner_task_id:
+            return
+        try:
+            await self._binding_store.save(
+                DownstreamBinding(
+                    inner_task_id=inner_task_id,
+                    inner_context_id=inner_context_id or "",
+                    outer_task_id=outer_task_id,
+                    run_id=run_id or "",
+                    owner=owner,
+                    protocol=PROTOCOL_PURE,
+                )
+            )
+        except Exception:  # noqa: BLE001 - persistence is best effort, never the protocol result
+            _LOGGER.warning("could not persist the downstream binding", exc_info=True)
 
     async def _remember_downstream_binding(
         self,
@@ -856,6 +1015,7 @@ class OSSPureExecutor(AgentExecutor):
         event_sink: Callable[[dict[str, object]], None],
         updater: TaskUpdater,
         call_context: ServerCallContext,
+        attached: asyncio.Event | None = None,
     ) -> ClientFlowResult:
         """Run one inbound request against the NMS over its shared callback port.
 
@@ -863,9 +1023,11 @@ class OSSPureExecutor(AgentExecutor):
         routing by the downstream task/context identity is what keeps concurrent requests from
         consuming each other's events.
 
-        In long-task mode the synchronous flow only stays attached for the settle window. When it
-        ends with a live downstream Task, the subscription is transferred to a background pump and
-        **not** unsubscribed; the outer Task keeps updating after the request returns.
+        A streaming caller stays in the foreground: the transport has no idle deadline while the
+        A2A stream is open, and the flow returns only at a vendor question, a terminal state or the
+        caller's disconnect. The Task is handed to the background pump only after the caller is
+        gone (or in a non-streaming call, which has no stream to return to). The pump tracks; it
+        never decides.
         """
         router = self._webhook_router
         nms_client = self._nms_client
@@ -873,8 +1035,22 @@ class OSSPureExecutor(AgentExecutor):
             raise RuntimeError("The NMS webhook transport is not started.")
         subscription = router.subscribe(run_id or "")
         handed_off = False
+        # The request itself is the first value this run put on the wire. An automatic answer
+        # that only restates it cannot settle a question the vendor asked about that value.
+        sent_texts: list[str] = [user_request]
         try:
             long_mode = self._long_task_enabled()
+
+            async def on_task_bound(inner_task_id: str, inner_context_id: str) -> None:
+                """Persist the identity as soon as the vendor names the Task."""
+                await self._save_binding(
+                    inner_task_id,
+                    inner_context_id,
+                    outer_task_id=updater.task_id,
+                    run_id=run_id,
+                    owner=call_context.user.user_name,
+                )
+
             transport = NmsWebhookTransport(
                 nms_client,
                 queue=subscription.queue,
@@ -887,11 +1063,15 @@ class OSSPureExecutor(AgentExecutor):
                 idle_timeout=self._long_task_settle_seconds if long_mode else self._webhook_idle_timeout,
                 bind=subscription.bind,
                 context_id=subscription.key,
+                attached=attached,
+                on_task_bound=(
+                    on_task_bound if long_mode and self._binding_store is not None else None
+                ),
             )
             result = await run_pure_client_flow(
                 transport=transport,
                 user_request=user_request,
-                answer=self._answer_or_relay,
+                answer=self._answer_callback(sent_texts),
                 on_answer=lambda event, text: self._publish_answer(updater, event, text),
                 max_rounds=self._max_rounds,
                 call_timeout_seconds=self._timeout_seconds,
@@ -900,12 +1080,17 @@ class OSSPureExecutor(AgentExecutor):
                 followup=self._followup,
                 plain_questions=True,
             )
+            detached = attached is None or attached.is_set()
             if (
                 long_mode
                 and self._binding_store is not None
                 and result.task_id
                 and result.final_state == FINAL_STATE_INCOMPLETE
+                and detached
             ):
+                # The caller is gone (or never had a stream). Only then does the Task become a
+                # background tracking job. A streaming page is still reading: handing off here is
+                # what made a vendor question invisible while the operator was on the same page.
                 binding = DownstreamBinding(
                     inner_task_id=result.task_id,
                     inner_context_id=result.context_id or "",
@@ -922,8 +1107,20 @@ class OSSPureExecutor(AgentExecutor):
                     outer_context_id=updater.context_id,
                     call_context=call_context,
                     user_request=user_request,
+                    sent_texts=tuple(sent_texts),
                 )
                 handed_off = True
+            elif (
+                long_mode
+                and attached is not None
+                and not attached.is_set()
+                and result.final_state == FINAL_STATE_INCOMPLETE
+            ):
+                # Still attached but out of rounds: hand the last vendor question to the operator
+                # instead of ending the phase with a WORKING status and no decision surface.
+                question = _pending_negotiation(result.events, allow_plain_question=True)
+                if question is not None:
+                    raise _QuestionPendingError(question)
             return result
         finally:
             if not handed_off:
@@ -965,7 +1162,7 @@ class OSSPureExecutor(AgentExecutor):
         return recommend
 
     def _question_registrar(
-        self, handoff: _PumpHandoff
+        self, handoff: _PumpHandoff, sent_texts: list[str]
     ) -> Callable[[Mapping[str, object], int], None]:
         """Build the hook recording a question the background pump relayed to the operator."""
         outer_task_id = handoff.binding.outer_task_id
@@ -981,6 +1178,8 @@ class OSSPureExecutor(AgentExecutor):
                 ),
                 round_number=round_number,
                 user_request=handoff.user_request,
+                sent_texts=tuple(sent_texts),
+                question_text=str(event.get("text") or ""),
             )
 
         return register
@@ -992,12 +1191,15 @@ class OSSPureExecutor(AgentExecutor):
         event_sink: Callable[[dict[str, object]], None],
         updater: TaskUpdater,
         call_context: ServerCallContext,
+        attached: asyncio.Event | None = None,
     ) -> ClientFlowResult:
         """Run the standard A2A client flow against the configured downstream agent."""
         self._set_decision_request(user_request)
         self._bind_wire_log(run_id)
         if self._webhook_router is not None:
-            return await self._run_ran_webhook(user_request, run_id, event_sink, updater, call_context)
+            return await self._run_ran_webhook(
+                user_request, run_id, event_sink, updater, call_context, attached
+            )
         config = self._config
         if self._nms_client is not None and config is not None:
             # One transport per inbound request: its event sink and frame state must not be shared
@@ -1010,7 +1212,7 @@ class OSSPureExecutor(AgentExecutor):
                     read_after_send=config.nms_read_after_send,
                 ),
                 user_request=user_request,
-                answer=self._answer_or_relay,
+                answer=self._answer_callback([user_request]),
                 on_answer=lambda event, text: self._publish_answer(updater, event, text),
                 max_rounds=self._max_rounds,
                 call_timeout_seconds=self._timeout_seconds,
@@ -1065,31 +1267,80 @@ class OSSPureExecutor(AgentExecutor):
 
         The real NMS negotiates a pure request in text: a plain agent message with no
         ``negotiationContext``, or an ``INPUT_REQUIRED`` status whose body is the question. The OSS
-        Agent does not own the business answer; it publishes the question on its own Task and
-        resumes the downstream context with the caller's reply.
+        Agent does not own the business answer; in a mode with an operator it publishes the
+        question on its own Task and resumes the downstream context with the caller's reply.
 
-        A confirmation question ("Not feasible, please confirm") is always relayed: accepting or
-        rejecting the vendor's alternative is a business decision the caller owns, and a model
-        answer would hide it. Other status ``INPUT_REQUIRED`` events are attempted first because
-        most are information requests the caller may already have answered. When the automatic
-        answer produces no text (the pure guard refused to invent a value), the question is relayed
-        too: sending nothing would leave the downstream Task waiting while the operator sees no
-        decision surface.
+        Relaying is a mode decision, not an unconditional one. ``confirm``/``manual`` runs have a
+        human on the page, so a business decision (feasibility objection, alternative proposal) or
+        an answer that only restates an already-sent rate is handed over. ``auto``/``scripted``
+        runs have nobody to answer: the same input becomes an explicit refusal so the vendor gets a
+        meaningful reply instead of a stranded Task.
         """
-        if event.get("kind") == "message" and self._nms_mode():
+        text = await self._decide_answer(event)
+        if not text.strip() and self._nms_mode() and self._may_relay_to_operator():
             raise _QuestionPendingError(event)
-        if self._nms_mode() and asks_for_confirmation(str(event.get("text") or "")):
-            # "Not feasible, please confirm" is a business decision, not missing data: the caller
-            # must decide even when the model can produce a plausible text. Auto-answering it was
-            # what turned a feasible vendor compromise into a non-answer and a FAILED Task.
-            raise _QuestionPendingError(event)
+        return text
+
+    def _may_relay_to_operator(self) -> bool:
+        """Whether the run that owns this hop has an operator who can answer a question.
+
+        The decision mode travels with the local A2A correlation (``x-a2at-decision-mode``). An
+        external caller that declares nothing is treated as automatic: it has no page to show a
+        card on, and relaying would leave the downstream Task waiting forever.
+        """
+        return current_decision_mode() in _OPERATOR_DECISION_MODES
+
+    def _auto_refusal(self) -> str:
+        """Return the language-matched refusal sent when no human can decide."""
+        return _AUTO_REFUSAL.get(self._language, _AUTO_REFUSAL[LANGUAGE_EN])
+
+    async def _decide_answer(
+        self,
+        event: dict[str, object],
+        *,
+        sent_texts: tuple[str, ...] = (),
+    ) -> str:
+        """Return the answer text one downstream question may receive; empty means "relay".
+
+        This is the single deterministic gate of both answer paths (synchronous flow and
+        background pump). Empty is only returned when a human is available to take the question;
+        otherwise the caller gets an explicit refusal.
+        """
+        raw_text = str(event.get("text") or "")
+        if self._nms_mode():
+            if event.get("kind") == "message" and self._may_relay_to_operator():
+                # A task-scoped plain agent message is the vendor's question channel; a run with
+                # an operator hands it over whatever it asks.
+                return ""
+            if requires_operator_decision(raw_text):
+                # A plan change is never taken by a model answer alone. A run with an operator
+                # shows the card; a run without one refuses and asks the vendor to renegotiate.
+                return "" if self._may_relay_to_operator() else self._auto_refusal()
         result = self._answer(event)
         if inspect.isawaitable(result):
             result = await result
         text = result if isinstance(result, str) else ""
-        if not text.strip() and self._nms_mode():
-            raise _QuestionPendingError(event)
+        if not text.strip():
+            return "" if self._may_relay_to_operator() else self._auto_refusal()
+        if self._nms_mode() and repeats_already_sent(text, sent_texts):
+            # The vendor asked because the value it received was insufficient or rejected;
+            # repeating it cannot answer the question and walks into TASK_STREAM_CONFLICT.
+            return "" if self._may_relay_to_operator() else self._auto_refusal()
         return text
+
+    def _answer_callback(
+        self,
+        sent_texts: list[str],
+    ) -> Callable[[dict[str, object]], Awaitable[str]]:
+        """Build one answer callback that records what this run already sent downstream."""
+
+        async def answer(event: dict[str, object]) -> str:
+            text = await self._decide_answer(event, sent_texts=tuple(sent_texts))
+            if text.strip():
+                sent_texts.append(text)
+            return text
+
+        return answer
 
     async def _draft_answer(
         self,
@@ -1137,6 +1388,8 @@ class OSSPureExecutor(AgentExecutor):
         round_number: int,
         user_request: str = "",
         sent_texts: tuple[str, ...] = (),
+        conflict: str = "",
+        retry_after: float | None = None,
     ) -> None:
         """Publish one downstream text question as an outer ``INPUT_REQUIRED`` status."""
         text = str(event.get("text") or "").strip() or ("The downstream requested additional information.")
@@ -1166,6 +1419,13 @@ class OSSPureExecutor(AgentExecutor):
         }
         if suppressed is not None:
             pure["recommendationSuppressed"] = suppressed
+        if conflict:
+            # The last answer was refused by a still-open vendor stream. The question stays open
+            # and the page can retry it; the outer Task must not become FAILED, otherwise the
+            # operator loses the only surface that can send the retry.
+            pure["conflict"] = conflict
+            if retry_after is not None:
+                pure["retryAfterSeconds"] = retry_after
         metadata = {"pure": pure, "hop": hop}
         await updater.update_status(
             TaskState.TASK_STATE_INPUT_REQUIRED,
@@ -1181,6 +1441,7 @@ class OSSPureExecutor(AgentExecutor):
             round_number=round_number,
             user_request=user_request,
             sent_texts=sent_texts,
+            question_text=text,
         )
         _LOGGER.info(
             "relayed downstream question: outer=%s inner_context=%s round=%s",
@@ -1194,6 +1455,7 @@ class OSSPureExecutor(AgentExecutor):
         context: RequestContext,
         event_queue: EventQueue,
         current_task: Task,
+        attached: asyncio.Event | None = None,
     ) -> None:
         """Forward a follow-up message on a running outer Task to its bound downstream Task.
 
@@ -1269,7 +1531,7 @@ class OSSPureExecutor(AgentExecutor):
             user_request=text,
             sent_texts=(text,),
         )
-        await self._continue_downstream(updater, pending, text, context.call_context)
+        await self._continue_downstream(updater, pending, text, context.call_context, attached)
 
     async def _terminal_inner_state(self, task_id: str) -> str | None:
         """Return the vendor Task's terminal state, or ``None`` when it can still be continued.
@@ -1307,6 +1569,7 @@ class OSSPureExecutor(AgentExecutor):
         pending: _PendingQuestion,
         text: str,
         call_context: ServerCallContext,
+        attached: asyncio.Event | None = None,
     ) -> None:
         """Send one follow-up text downstream and publish what the next phase reports."""
         # Every continuation belongs to the run that sent it: scope its trace and its wire file
@@ -1327,6 +1590,7 @@ class OSSPureExecutor(AgentExecutor):
                     events.put_nowait,
                     updater,
                     call_context,
+                    attached,
                 )
             except _QuestionPendingError as question:
                 events.put_nowait(None)
@@ -1345,12 +1609,26 @@ class OSSPureExecutor(AgentExecutor):
             except Exception as exc:  # noqa: BLE001 - the outer Task must reach a terminal state
                 busy = _stream_conflict_failure(exc)
                 if busy is not None:
-                    # The vendor still holds a stream for this Task. The client retried on the
-                    # transport already; say what happened instead of reporting a hop failure.
+                    # The vendor still holds a stream for this Task. The transport already
+                    # retried; the conflict is per-Task state, not a hop failure, and a FAILED
+                    # outer Task would erase the only surface that can send the retry. Keep the
+                    # question open with the conflict flag and let the operator retry it.
                     _LOGGER.info("downstream continuation refused: %s", busy)
                     events.put_nowait(None)
                     await consumer
-                    await updater.failed(message=updater.new_agent_message([Part(text=busy)]))
+                    retry_after = exc.retry_after if isinstance(exc, NmsProtocolError) else None
+                    await self._relay_question(
+                        updater,
+                        outer_task_id=pending.outer_task_id,
+                        outer_context_id=pending.outer_context_id,
+                        run_id=pending.run_id,
+                        event={"text": pending.question_text or busy},
+                        round_number=pending.round_number,
+                        user_request=pending.user_request,
+                        sent_texts=pending.sent_texts,
+                        conflict="stream_conflict",
+                        retry_after=retry_after,
+                    )
                     return
                 terminal = _terminal_target_failure(exc)
                 if terminal is not None:
@@ -1359,6 +1637,16 @@ class OSSPureExecutor(AgentExecutor):
                     _LOGGER.info("downstream continuation refused: %s", terminal)
                     events.put_nowait(None)
                     await consumer
+                    if self._binding_store is not None:
+                        # The upstream answer can never be delivered: retire the binding so a
+                        # restart does not adopt a Task the vendor already finished.
+                        try:
+                            await self._binding_store.mark_terminal(
+                                pending.inner_task_id,
+                                pending.inner_context_id,
+                            )
+                        except Exception:  # noqa: BLE001 - tracking is best effort
+                            _LOGGER.warning("could not retire the downstream binding", exc_info=True)
                     await updater.failed(
                         message=updater.new_agent_message([Part(text=terminal)])
                     )
@@ -1379,6 +1667,7 @@ class OSSPureExecutor(AgentExecutor):
         context: RequestContext,
         event_queue: EventQueue,
         pending: _PendingQuestion,
+        attached: asyncio.Event | None = None,
     ) -> None:
         """Forward the caller's answer to the downstream and continue the run."""
         updater = TaskUpdater(event_queue, pending.outer_task_id, pending.outer_context_id)
@@ -1406,7 +1695,7 @@ class OSSPureExecutor(AgentExecutor):
             ),
             metadata={"pure": metadata["pure"]},
         )
-        await self._continue_downstream(updater, pending, answer_text, context.call_context)
+        await self._continue_downstream(updater, pending, answer_text, context.call_context, attached)
 
     async def _run_question_continuation(
         self,
@@ -1415,6 +1704,7 @@ class OSSPureExecutor(AgentExecutor):
         event_sink: Callable[[dict[str, object]], None],
         updater: TaskUpdater,
         call_context: ServerCallContext,
+        attached: asyncio.Event | None = None,
     ) -> ClientFlowResult:
         """Send the caller's answer on the downstream context and consume the next phase."""
         if self._webhook_router is not None and self._nms_client is not None:
@@ -1427,6 +1717,24 @@ class OSSPureExecutor(AgentExecutor):
             elif pending.inner_context_id:
                 subscription.bind(None, pending.inner_context_id)
             handed_off = False
+            # The operator's answer is one more text this run put on the wire; the vendor's next
+            # question must not be answered by repeating it.
+            sent_texts = (
+                [*pending.sent_texts, answer_text]
+                if pending.sent_texts
+                else [pending.user_request, answer_text]
+            )
+
+            async def on_task_bound(inner_task_id: str, inner_context_id: str) -> None:
+                """Carry the durable binding over to the run that continues the Task."""
+                await self._save_binding(
+                    inner_task_id,
+                    inner_context_id,
+                    outer_task_id=pending.outer_task_id,
+                    run_id=pending.run_id,
+                    owner=call_context.user.user_name,
+                )
+
             try:
                 transport = NmsWebhookTransport(
                     self._nms_client,
@@ -1447,13 +1755,19 @@ class OSSPureExecutor(AgentExecutor):
                     # The original request already registered the callback for this context; a
                     # second registration is rejected by the real NMS.
                     register_push_config=False,
+                    attached=attached,
+                    on_task_bound=(
+                        on_task_bound
+                        if self._long_task_enabled() and self._binding_store is not None
+                        else None
+                    ),
                 )
                 result = await continue_pure_client_flow(
                     transport=transport,
                     text=answer_text,
                     task_id=pending.inner_task_id or None,
                     context_id=pending.inner_context_id or None,
-                    answer=self._answer_or_relay,
+                    answer=self._answer_callback(sent_texts),
                     on_answer=lambda event, text: self._publish_answer(updater, event, text),
                     max_rounds=self._max_rounds,
                     call_timeout_seconds=self._timeout_seconds,
@@ -1462,14 +1776,16 @@ class OSSPureExecutor(AgentExecutor):
                     followup=self._followup,
                     plain_questions=True,
                 )
+                detached = attached is None or attached.is_set()
                 if (
                     self._long_task_enabled()
                     and self._binding_store is not None
                     and result.task_id
                     and result.final_state == FINAL_STATE_INCOMPLETE
+                    and detached
                 ):
-                    # The answer did not end the vendor Task: hand it back to a fresh pump instead
-                    # of releasing the run's only tracker.
+                    # The caller is gone: hand the Task to a fresh pump instead of releasing the
+                    # run's only tracker. An attached stream keeps the Task in the foreground.
                     binding = DownstreamBinding(
                         inner_task_id=result.task_id,
                         inner_context_id=result.context_id or "",
@@ -1486,6 +1802,7 @@ class OSSPureExecutor(AgentExecutor):
                         outer_context_id=updater.context_id,
                         call_context=call_context,
                         user_request=pending.user_request,
+                        sent_texts=tuple(sent_texts),
                     )
                     handed_off = True
                 elif self._binding_store is not None and result.task_id:
@@ -1498,6 +1815,16 @@ class OSSPureExecutor(AgentExecutor):
                         )
                     except Exception:  # noqa: BLE001 - tracking is best effort
                         _LOGGER.warning("could not retire the downstream binding", exc_info=True)
+                elif (
+                    self._long_task_enabled()
+                    and attached is not None
+                    and not attached.is_set()
+                    and result.final_state == FINAL_STATE_INCOMPLETE
+                ):
+                    # Still attached but out of rounds: keep the decision on the page.
+                    question = _pending_negotiation(result.events, allow_plain_question=True)
+                    if question is not None:
+                        raise _QuestionPendingError(question)
                 return result
             finally:
                 if not handed_off:
@@ -1513,7 +1840,11 @@ class OSSPureExecutor(AgentExecutor):
                 text=answer_text,
                 task_id=pending.inner_task_id or None,
                 context_id=pending.inner_context_id or None,
-                answer=self._answer_or_relay,
+                answer=self._answer_callback(
+                    [*pending.sent_texts, answer_text]
+                    if pending.sent_texts
+                    else [pending.user_request, answer_text]
+                ),
                 on_answer=lambda event, text: self._publish_answer(updater, event, text),
                 max_rounds=self._max_rounds,
                 call_timeout_seconds=self._timeout_seconds,
@@ -1671,6 +2002,47 @@ def build_oss_agent_card(*, host: str, port: int) -> AgentCard:
     return card
 
 
+class _AttachmentAwareRequestHandler(DefaultRequestHandler):
+    """Request handler that tells the executor when a streaming caller disconnects.
+
+    The A2A server runs ``execute`` as an independent producer task; on a client disconnect it
+    starts a background consumer and re-raises instead of cancelling the producer
+    (``a2a.server.request_handlers.default_request_handler.on_message_send_stream``). The executor
+    therefore never learns that nobody reads its stream. This subclass records the streaming call
+    on the shared ``ServerCallContext.state`` and flips the attachment lease when the response
+    generator is cancelled, so the OSS can hand the Task to the background pump only then.
+    """
+
+    def __init__(self, *, executor: OSSPureExecutor, **kwargs: Any) -> None:
+        """Wrap the OSS executor with the attachment lease hook."""
+        super().__init__(agent_executor=executor, **kwargs)
+        self._oss_executor = executor
+
+    async def on_message_send_stream(
+        self,
+        params: SendMessageRequest,
+        context: ServerCallContext,
+    ) -> AsyncGenerator[Event, None]:
+        """Yield the standard stream and mark the caller gone when it is cancelled."""
+        context.state[_STREAMING_STATE_KEY] = True
+        task_id = str(getattr(getattr(params, "message", None), "task_id", "") or "")
+        stream = super().on_message_send_stream(params, context)
+        try:
+            async for event in stream:
+                if not task_id and isinstance(event, Task):
+                    task_id = event.id
+                yield event
+        except (asyncio.CancelledError, GeneratorExit):
+            if task_id:
+                self._oss_executor.note_caller_gone(task_id)
+            raise
+        finally:
+            close = getattr(stream, "aclose", None)
+            if close is not None:
+                with contextlib.suppress(Exception):
+                    await close()
+
+
 def build_oss_app(
     *,
     config: SampleConfig | None = None,
@@ -1785,8 +2157,8 @@ def build_oss_app(
             if owned_push_client is not None:
                 await owned_push_client.aclose()
 
-    request_handler = DefaultRequestHandler(
-        agent_executor=executor,
+    request_handler = _AttachmentAwareRequestHandler(
+        executor=executor,
         task_store=resolved_task_store,
         agent_card=card,
         push_config_store=resolved_push_store,
@@ -2078,8 +2450,8 @@ def _stream_conflict_failure(exc: BaseException) -> str | None:
     if not is_stream_conflict(exc):
         return None
     return (
-        "The NMS still has an active stream for this Task (TASK_STREAM_CONFLICT); the answer was "
-        "not accepted. Retry the answer later, or start a new Task."
+        "The NMS still has an active stream for this Task (TASK_STREAM_CONFLICT); the previous "
+        "answer was not accepted. The question is still open; retry the answer."
     )
 
 

@@ -54,6 +54,14 @@ SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY: Final[str] = "sampleNegotiationOptions"
 #: without it the server simply emits no trace (the CLI and plain A2A clients keep working).
 SAMPLE_RUN_ID_METADATA_KEY: Final[str] = "sampleRunId"
 
+#: Metadata key carrying the decision mode of the run that opened an OSS Task
+#: (``auto`` / ``confirm`` / ``manual`` / ``scripted``).
+#:
+#: The mode travels on ``x-a2at-decision-mode`` for the live request; this copy is what lets a
+#: background pump resumed after an OSS restart keep the same human-decision policy. It is a sample
+#: convention, not an A2A field.
+SAMPLE_DECISION_MODE_METADATA_KEY: Final[str] = "sampleDecisionMode"
+
 #: Metadata key of the legacy sample-only two-phase marker of a Task-T message.
 #:
 #: This is a sample convention, not an A2A-T protocol field, and the client no longer sends it:

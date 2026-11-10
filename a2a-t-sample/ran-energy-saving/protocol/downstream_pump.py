@@ -24,7 +24,7 @@ import logging
 import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Final, Protocol
 
 from a2a.client.client import ClientCallContext
@@ -48,6 +48,9 @@ from shared.trace import infer_event_phase, record_span, trace_scope
 
 from protocol.client_flow import is_report_artifact, normalize_webhook_payload
 from protocol.downstream_binding_store import DownstreamBindingStore
+from protocol.manual_answer import ungrounded_answer_fields
+from protocol.negotiation_policy import negotiation_kind_for_propose_content
+from protocol.nms_client import NmsProtocolError, is_stream_conflict
 from protocol.pure_client_flow import is_plain_question
 
 _LOGGER = logging.getLogger("ran_energy_saving.downstream_pump")
@@ -117,6 +120,9 @@ class DownstreamPumpContext:
     inner_context_id: str = ""
     outer_context_id: str = ""
     downstream_hop: str = "nms"
+    #: Texts this run already sent downstream, oldest first. The pump appends every answer it
+    #: actually sends, so the shared gate can refuse one that only repeats them.
+    sent_texts: list[str] = field(default_factory=list)
 
 
 class DownstreamPump:
@@ -162,6 +168,7 @@ class DownstreamPump:
         self._terminal = False
         self._suspended = False
         self._rounds = 0
+        self._sent_texts = context.sent_texts
         self._recent: deque[str] = deque(maxlen=_RECENT_EVENTS)
         self._manager: TaskManager | None = None
 
@@ -252,20 +259,21 @@ class DownstreamPump:
     async def _answer_input_required(self, event: dict[str, object]) -> None:
         """Answer one delayed negotiation request and send the follow-up.
 
-        No grounded answer is not the same as no configured answer: the operator must still get
-        the decision surface. The question is relayed as ``INPUT_REQUIRED`` and the pump suspends
+        The answer callback is the same deterministic gate the synchronous flow uses: it returns
+        an empty text when the question belongs to the operator (a feasibility decision, or an
+        automatic answer that only repeats an already-sent value). No text is not the same as no
+        configured answer: the question is relayed as ``INPUT_REQUIRED`` and the pump suspends
         until the caller's answer resumes the downstream context.
         """
+        if self._rounds >= self._context.max_rounds:
+            # The budget is exhausted while the vendor still asks. Publishing "answered" and
+            # returning would leave the outer Task WORKING with no decision surface; hand the
+            # question over instead.
+            await self._relay_question(event)
+            return
         text = await _answer_for(event, self._answer)
         if not text.strip():
             await self._relay_question(event)
-            return
-        await self._publish_status(
-            TaskState.TASK_STATE_WORKING,
-            f"OSS Agent answered the {self._context.downstream_name}: {text}",
-            "answer",
-        )
-        if self._rounds >= self._context.max_rounds:
             return
         self._rounds += 1
         request = _follow_up_request(
@@ -274,17 +282,45 @@ class DownstreamPump:
             context_id=_text(event.get("context_id")),
             followup=self._context.followup,
         )
-        batch = await self._transport.send(
-            request,
-            ClientCallContext(
-                timeout=self._context.call_timeout_seconds,
-                service_parameters={"A2A-Extensions": ""},
-            ),
+        try:
+            batch = await self._transport.send(
+                request,
+                ClientCallContext(
+                    timeout=self._context.call_timeout_seconds,
+                    service_parameters={"A2A-Extensions": ""},
+                ),
+            )
+        except NmsProtocolError as exc:
+            if is_stream_conflict(exc):
+                # The vendor still holds a stream for this Task. Keep the question open instead
+                # of failing the outer Task; the operator can retry it.
+                _LOGGER.info("pump answer refused: TASK_STREAM_CONFLICT")
+                self._rounds -= 1
+                await self._relay_question(
+                    event,
+                    conflict="stream_conflict",
+                    retry_after=exc.retry_after,
+                )
+                return
+            raise
+        # The answer only counts once the vendor accepted the send: a refused follow-up must not
+        # make the page claim it was delivered, and must not poison the already-sent ledger.
+        self._sent_texts.append(text)
+        await self._publish_status(
+            TaskState.TASK_STATE_WORKING,
+            f"OSS Agent answered the {self._context.downstream_name}: {text}",
+            "answer",
         )
         for item in batch:
             await self._apply(item)
 
-    async def _relay_question(self, event: Mapping[str, object]) -> None:
+    async def _relay_question(
+        self,
+        event: Mapping[str, object],
+        *,
+        conflict: str = "",
+        retry_after: float | None = None,
+    ) -> None:
         """Publish one vendor text question as an outer ``INPUT_REQUIRED`` and stop the pump.
 
         The operator answer resumes the downstream context in a new request, which creates its own
@@ -298,20 +334,46 @@ class DownstreamPump:
                 recommendation = await self._recommendation(dict(event))
             except Exception:  # noqa: BLE001 - the operator can still answer manually
                 _LOGGER.warning("could not draft an answer to the downstream question", exc_info=True)
+        suppressed = ""
+        if isinstance(recommendation, Mapping):
+            filled = recommendation.get("filledParams")
+            if (
+                isinstance(filled, Mapping)
+                and filled
+                and self._sent_texts
+                and not ungrounded_answer_fields("\n".join(self._sent_texts), dict(filled))
+            ):
+                # The card must not offer a value the vendor already rejected.
+                _LOGGER.info("suppressed a pump recommendation that repeats an already-sent value")
+                recommendation = None
+                suppressed = "already_sent"
         round_number = self._rounds + 1
         metadata = self._metadata(event, "question")
         pure = metadata.get("pure")
         if not isinstance(pure, dict):
             pure = {}
             metadata["pure"] = pure
+        # A real-NMS question carries no Negotiation-T metadata. Its typed heading is the only
+        # kind signal; without this a feasibility card is rendered as an information proposal.
+        kind = str(pure.get("negotiationKind") or "information")
+        heading_kind = negotiation_kind_for_propose_content(text)
+        if heading_kind is not None:
+            kind = heading_kind.value
         pure.update(
             {
                 "kind": "negotiation",
+                "negotiationKind": kind,
                 "round": round_number,
                 "maxRounds": self._context.max_rounds,
                 "recommendation": recommendation or None,
             }
         )
+        if suppressed:
+            pure["recommendationSuppressed"] = suppressed
+        if conflict:
+            pure["conflict"] = conflict
+            if retry_after is not None:
+                pure["retryAfterSeconds"] = retry_after
         outer_event = self._status_message(
             TaskState.TASK_STATE_INPUT_REQUIRED,
             text,
@@ -371,9 +433,18 @@ class DownstreamPump:
         phase: str,
         metadata: dict[str, object] | None = None,
     ) -> TaskStatusUpdateEvent:
-        """Build one outer status event with an agent message."""
+        """Build one outer status event with an agent message.
+
+        The metadata is written on the status Message as well as on the event. ``TaskManager``
+        stores event metadata on ``Task.metadata``, while the client poller reads only
+        ``status.message.metadata`` (``protocol/client_service/run_manager.py``): without the copy a
+        pump-relayed question loses its round/kind on the polling path, and the page's question
+        de-duplication collapses to round 0.
+        """
         message = Message(message_id=str(uuid.uuid4()), role=Role.ROLE_AGENT)
         message.parts.add(text=text)
+        if metadata:
+            ParseDict(dict(metadata), message.metadata)
         status = TaskStatus(state=state)
         status.message.CopyFrom(message)
         return TaskStatusUpdateEvent(

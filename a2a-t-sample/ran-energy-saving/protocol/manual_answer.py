@@ -85,11 +85,87 @@ def asks_for_confirmation(content: str | None) -> bool:
     """Return whether one proposal body asks the client to confirm a plan."""
     return isinstance(content, str) and _CONFIRMATION_QUESTION.search(content) is not None
 
+
+#: A vendor statement that the requested plan cannot be accepted. It is a business outcome, not a
+#: missing value, so an automatic answer cannot settle it.
+_INFEASIBLE_STATEMENT: Final[re.Pattern[str]] = re.compile(
+    r"not\s+feasible|infeasible|cannot\s+be\s+accepted|not\s+acceptable|"
+    r"不可行|无法满足|不能满足|不可接受",
+    re.IGNORECASE,
+)
+
+#: A limit comparison ("10h > 4h", "10.0Mbps > 2Mbps", "exceeds"). The vendor states the request
+#: breaks a constraint; on its own this can still be an information request, so it is combined
+#: with an alternative/question marker below.
+_LIMIT_COMPARISON: Final[re.Pattern[str]] = re.compile(
+    r"\d+(?:\.\d+)?\s*(?:h|hours?|Mbps)\s*>\s*\d|\bexceeds?\b|超过|超出",
+    re.IGNORECASE,
+)
+
+#: The vendor offers a different plan or asks the client to choose one. This is the "business
+#: decision" half of the hybrid ASK_USER shape reported by the yellow zone.
+_ALTERNATIVE_OR_QUESTION: Final[re.Pattern[str]] = re.compile(
+    r"\brecommend|\bsuggest|instead|or\s+(?:less|lower)\b|\breduce\b[^.\n]{0,40}\bto\b|"
+    r"\?|would\s+you\s+like|建议|改为|降低|或者",
+    re.IGNORECASE,
+)
+
+
+def requires_operator_decision(content: str | None) -> bool:
+    """Return whether one vendor question is a business decision the caller must take.
+
+    The pure A2A hop has no structured negotiation channel, so an automatic answer is only
+    acceptable when the question is an information request whose value the caller already stated.
+    A feasibility objection, or a limit comparison together with a proposed alternative, changes
+    the plan itself; answering it automatically (or with the request value the vendor just
+    rejected) hides a decision that belongs to the engineer.
+
+    This is deliberately narrower than "contains a question mark": a plain information request
+    such as "Which region?" stays auto-answerable.
+    """
+    if not isinstance(content, str) or not content.strip():
+        return False
+    if asks_for_confirmation(content):
+        return True
+    if _INFEASIBLE_STATEMENT.search(content):
+        return True
+    return _LIMIT_COMPARISON.search(content) is not None and (
+        _ALTERNATIVE_OR_QUESTION.search(content) is not None
+    )
+
+
 #: One clock token of a structured target segment.
 _TIME_TOKEN: Final[re.Pattern[str]] = re.compile(r"\d{1,2}:\d{2}")
 
 #: One rate token of a structured target segment.
 _RATE_TOKEN: Final[re.Pattern[str]] = re.compile(r"\d+(?:\.\d+)?\s*Mbps", re.IGNORECASE)
+
+#: One rate value, capturing the number so answers can be compared numerically.
+_RATE_VALUE: Final[re.Pattern[str]] = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*Mbps", re.IGNORECASE)
+
+
+def _rate_values(text: str) -> set[float]:
+    """Return every throughput value stated in one text, compared by number."""
+    return {float(match.group(1)) for match in _RATE_VALUE.finditer(text)}
+
+
+def repeats_already_sent(answer: str | None, sent_texts: Iterable[str]) -> bool:
+    """Return whether one automatic answer only restates rates this run already sent.
+
+    The vendor asks because the value it received was insufficient or rejected. Sending the same
+    rate again cannot answer it and, on a real NMS, walks straight into a repeated
+    ``TASK_STREAM_CONFLICT``. Only rates are compared: an answer may legitimately restate the
+    outage window, and a time-only sentence is never treated as a repeat.
+    """
+    if not isinstance(answer, str) or not answer.strip():
+        return False
+    answer_rates = _rate_values(answer)
+    if not answer_rates:
+        return False
+    sent_rates: set[float] = set()
+    for text in sent_texts:
+        sent_rates |= _rate_values(text)
+    return answer_rates <= sent_rates
 
 
 def _compact(value: object) -> str:
@@ -207,4 +283,10 @@ def missing_item_labels(content: str) -> tuple[str, ...]:
     return tuple(labels)
 
 
-__all__ = ["asks_for_confirmation", "missing_item_labels", "ungrounded_answer_fields"]
+__all__ = [
+    "asks_for_confirmation",
+    "missing_item_labels",
+    "repeats_already_sent",
+    "requires_operator_decision",
+    "ungrounded_answer_fields",
+]

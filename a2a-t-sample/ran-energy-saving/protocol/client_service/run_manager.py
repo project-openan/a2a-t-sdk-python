@@ -1077,6 +1077,7 @@ class RunManager:
             user_id=run.user_id,
             downstream_trace_id=run.trace_id,
             workflow_trace=bool(run.workflow_root_span_id),
+            decision_mode=run.mode,
         )
         try:
             await self._run_with_log_context(run)

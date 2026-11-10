@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
 
 from a2a.server.context import ServerCallContext, UnauthenticatedUser
@@ -21,6 +22,7 @@ from a2a.types import (
 from google.protobuf.json_format import MessageToDict
 from protocol.downstream_binding_store import DownstreamBinding, DownstreamBindingStore
 from protocol.downstream_pump import DownstreamPump, DownstreamPumpContext
+from protocol.nms_client import NmsProtocolError
 
 
 def _context() -> ServerCallContext:
@@ -132,6 +134,7 @@ def _pump(
     answer: object = None,
     recommendation: object = None,
     on_question: object = None,
+    sent_texts: list[str] | None = None,
 ) -> DownstreamPump:
     """Build one pump over the shared outer Task."""
     return DownstreamPump(
@@ -147,6 +150,7 @@ def _pump(
             max_rounds=3,
             call_timeout_seconds=10.0,
             call_context=_context(),
+            sent_texts=sent_texts or [],
         ),
         subscription=subscription,
         transport=transport,
@@ -522,3 +526,137 @@ async def test_an_ungrounded_input_required_is_relayed_not_answered(tmp_path: Pa
     outer = await store.get("outer-1", _context())
     assert outer is not None
     assert outer.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+
+
+class _ConflictTransport(_Transport):
+    """A transport whose follow-up is refused by a still-open vendor stream."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts = 0
+
+    async def send(self, request: object, call_context: object) -> list[dict[str, object]]:
+        del call_context
+        self.attempts += 1
+        self.requests.append(request)
+        raise NmsProtocolError(
+            "HTTP 409: Task already has an active stream (TASK_STREAM_CONFLICT)",
+            http_status=409,
+            retry_after=7.0,
+        )
+
+
+async def _pump_over(
+    tmp_path: Path,
+    transport: _Transport,
+    **kwargs: object,
+) -> tuple[DownstreamPump, _Subscription, InMemoryTaskStore]:
+    store = InMemoryTaskStore()
+    await store.save(
+        Task(id="outer-1", context_id="outer-ctx", status=TaskStatus(state=TaskState.TASK_STATE_WORKING)),
+        _context(),
+    )
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    await binding_store.save(
+        DownstreamBinding(
+            inner_task_id="inner-1",
+            inner_context_id="inner-ctx",
+            outer_task_id="outer-1",
+            run_id="run-1",
+            protocol="pure",
+        )
+    )
+    subscription = _Subscription()
+    pump = _pump(
+        store=store,
+        binding_store=binding_store,
+        subscription=subscription,
+        transport=transport,
+        push_sender=_PushSender(),
+        **kwargs,  # type: ignore[arg-type]
+    )
+    return pump, subscription, store
+
+
+async def test_the_pump_reopens_the_question_on_a_stream_conflict(tmp_path: Path) -> None:
+    """A 409 is retryable per-Task state: keep the card open instead of ending the Task."""
+    registered: list[int] = []
+    transport = _ConflictTransport()
+    pump, subscription, store = await _pump_over(
+        tmp_path,
+        transport,
+        answer=lambda event: "Region A",
+        on_question=lambda event, round_number: registered.append(round_number),
+    )
+
+    task = pump.start()
+    await subscription.queue.put(
+        _status_payload("inner-1", "inner-ctx", "TASK_STATE_INPUT_REQUIRED", "Which region?")
+    )
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    assert transport.attempts == 1
+    assert registered == [1]
+    outer = await store.get("outer-1", _context())
+    assert outer is not None
+    assert outer.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+    metadata = MessageToDict(outer.status.message.metadata)
+    assert metadata["pure"]["conflict"] == "stream_conflict"
+    assert metadata["pure"]["retryAfterSeconds"] == 7.0
+
+
+async def test_the_pump_relays_when_the_round_budget_is_exhausted(tmp_path: Path) -> None:
+    """Out of rounds is not an answer: the operator must get the question."""
+    registered: list[int] = []
+    transport = _Transport([])
+    pump, subscription, store = await _pump_over(
+        tmp_path,
+        transport,
+        answer=lambda event: "Region A",
+        on_question=lambda event, round_number: registered.append(round_number),
+    )
+    pump._rounds = 3  # type: ignore[attr-defined]
+
+    task = pump.start()
+    await subscription.queue.put(
+        _status_payload("inner-1", "inner-ctx", "TASK_STATE_INPUT_REQUIRED", "Which region?")
+    )
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    assert transport.requests == []
+    assert registered == [4]
+    outer = await store.get("outer-1", _context())
+    assert outer is not None
+    assert outer.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+
+
+async def test_a_pump_relayed_question_carries_metadata_on_the_status_message(tmp_path: Path) -> None:
+    """The client poller reads ``status.message.metadata``; the event metadata alone is lost."""
+    transport = _Transport([])
+    pump, subscription, store = await _pump_over(tmp_path, transport, answer=lambda event: "")
+
+    task = pump.start()
+    await subscription.queue.put(
+        _status_payload(
+            "inner-1",
+            "inner-ctx",
+            "TASK_STATE_INPUT_REQUIRED",
+            "## Feasibility Negotiation\nNot feasible, please confirm.",
+        )
+    )
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    outer = await store.get("outer-1", _context())
+    assert outer is not None
+    metadata = MessageToDict(outer.status.message.metadata)
+    assert metadata["pure"]["round"] == 1
+    assert metadata["pure"]["negotiationKind"] == "feasibility"

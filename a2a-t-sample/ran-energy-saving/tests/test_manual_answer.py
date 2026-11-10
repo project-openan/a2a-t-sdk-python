@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from protocol.manual_answer import missing_item_labels, ungrounded_answer_fields
+from protocol.manual_answer import (
+    missing_item_labels,
+    repeats_already_sent,
+    requires_operator_decision,
+    ungrounded_answer_fields,
+)
 
 
 def test_inline_missing_items_are_split() -> None:
@@ -105,3 +110,56 @@ def test_the_vendor_missing_item_sentence_is_recognized() -> None:
 
 def test_provide_the_item_name_without_correct_is_recognized() -> None:
     assert missing_item_labels("Please provide the site name.") == ("Site",)
+
+
+#: The exact ASK_USER body of the yellow-zone run ``3a5cf691`` (§2.1 of the evidence file): an
+#: infeasibility comparison, a recommended alternative and a question in one envelope.
+_YELLOW_ASK_USER = (
+    '{"messageType": "ASK_USER", "message": [{"text": "Power outage duration 10h > 4h with '
+    'rate 10.0Mbps > 2Mbps; recommend 2Mbps or less, or reduce the outage to 4h or less. '
+    'What rate and outage duration would you like to use?"}]}'
+)
+
+
+def test_the_hybrid_feasibility_question_requires_the_operator() -> None:
+    """A rejection plus a recommended alternative is a business decision, not missing data."""
+    assert requires_operator_decision(_YELLOW_ASK_USER) is True
+
+
+def test_a_confirmation_question_requires_the_operator() -> None:
+    assert requires_operator_decision("Not feasible, please confirm.") is True
+
+
+def test_a_plain_information_request_stays_automatic() -> None:
+    assert requires_operator_decision("Which region?") is False
+    assert requires_operator_decision(
+        "Energy saving region is missing. Please provide the region name."
+    ) is False
+
+
+def test_a_limit_mention_without_an_alternative_is_not_a_decision() -> None:
+    assert requires_operator_decision(
+        "Rate 10Mbps exceeds the configured limit. Please provide the correct rate."
+    ) is False
+
+
+def test_an_answer_that_only_restates_a_sent_rate_is_a_repeat() -> None:
+    assert repeats_already_sent(
+        "Set the guaranteed throughput targets: {08:00~18:00,10Mbps}.",
+        ["Set the guaranteed throughput targets: {08:00~18:00,10.0Mbps}."],
+    )
+
+
+def test_an_answer_with_a_new_rate_is_not_a_repeat() -> None:
+    assert repeats_already_sent(
+        "Set the guaranteed throughput targets: {08:00~18:00,2Mbps}.",
+        ["Set the guaranteed throughput targets: {08:00~18:00,10Mbps}."],
+    ) is False
+
+
+def test_a_time_only_sentence_is_never_a_repeat() -> None:
+    """The vendor may ask for the window; restating it carries no rejected value."""
+    assert repeats_already_sent(
+        "Background event: Power outage from 08:00 to 18:00 on Day 2.",
+        ["Set the guaranteed throughput targets: {08:00~18:00,10Mbps}."],
+    ) is False
