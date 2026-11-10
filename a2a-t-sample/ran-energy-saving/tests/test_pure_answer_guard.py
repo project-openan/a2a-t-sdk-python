@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
+from a2a_t.core.metadata import NegotiationContext
 from protocol.client_policy import ClientPolicy
+from protocol.oss_agent import build_live_pure_answer
 from protocol.pure_answer_guard import sanitize_pure_decision
 from shared.models import NegotiationDecision, NegotiationProposeView
 
@@ -138,3 +141,64 @@ def test_an_answer_with_no_values_is_not_sent() -> None:
 
     assert decision is None
     assert any("carries no value" in note for note in notes)
+
+
+class _PureProvider:
+    """Decision provider double carrying one decision and the operator request."""
+
+    def __init__(self, decision: NegotiationDecision, request_text: str) -> None:
+        self._decision = decision
+        self._request_text = request_text
+
+    async def respond(
+        self,
+        propose: NegotiationProposeView,
+        session: NegotiationContext,
+    ) -> NegotiationDecision:
+        del propose, session
+        return self._decision
+
+    def grounding_text(self) -> str:
+        return self._request_text
+
+
+@pytest.mark.asyncio
+async def test_the_live_pure_answer_renders_only_grounded_values() -> None:
+    provider = _PureProvider(
+        NegotiationDecision(
+            action="accept",
+            rationale="answer",
+            filled_params={"region": "A2ATestRegion"},
+        ),
+        request_text="Create an energy saving task for A2ATestRegion.",
+    )
+    answer = build_live_pure_answer(provider)
+
+    text = await answer(
+        {"kind": "message", "text": "Please provide the correct region name.", "context_id": "c1"}
+    )
+
+    assert "A2ATestRegion" in text
+
+
+@pytest.mark.asyncio
+async def test_the_live_pure_answer_is_empty_when_nothing_is_grounded() -> None:
+    provider = _PureProvider(
+        NegotiationDecision(
+            action="accept",
+            rationale="answer",
+            filled_params={"region": "A2ATestRegion"},
+        ),
+        request_text="Create an energy saving task in the Songshanhu area.",
+    )
+    answer = build_live_pure_answer(provider)
+
+    text = await answer(
+        {
+            "kind": "message",
+            "text": "The region name 'Songshanhu' is not recognized. Provide the correct region name.",
+            "context_id": "c1",
+        }
+    )
+
+    assert text == ""
