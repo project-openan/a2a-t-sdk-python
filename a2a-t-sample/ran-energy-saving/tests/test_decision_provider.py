@@ -419,6 +419,22 @@ async def test_adk_provider_rejects_an_information_accept_without_values() -> No
     assert decision is None
 
 
+async def test_adk_provider_accepts_a_confirmation_answer_without_values() -> None:
+    """A "please confirm" question is answered by the agreement, which carries no Task-T value."""
+    payload = json.dumps({"action": "accept", "rationale": "Confirmed."})
+    provider = AdkDecisionProvider(agent_factory=build_client_agent, model=_scripted_model(payload))
+
+    decision = await provider.structure_answer(
+        _view(content="Not feasible, please confirm"),
+        _session(),
+        "Confirmed.",
+    )
+
+    assert decision is not None
+    assert decision.action == "accept"
+    assert not decision.filled_params
+
+
 async def test_adk_provider_structures_a_target_counter_plan() -> None:
     payload = json.dumps(
         {

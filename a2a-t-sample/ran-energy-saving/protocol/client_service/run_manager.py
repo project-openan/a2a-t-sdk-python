@@ -1460,9 +1460,18 @@ class RunManager:
                 set_recommendation_sink = getattr(run.runtime, "set_recommendation_sink", None)
                 if callable(set_recommendation_sink):
                     set_recommendation_sink(on_decision_recommended)
-            if run.mode in (MODE_MANUAL, MODE_CONFIRM) and run.protocol == PROTOCOL_A2A_T:
+            if run.mode in (MODE_MANUAL, MODE_CONFIRM):
+                # Both protocols keep waiting after an observation window expires: the A2A-T
+                # provider reports it, and the pure confirmation answer now does the same instead
+                # of ending the flow (which made the pending decision look like a client bug).
                 set_wait_sink = getattr(run.runtime, "set_decision_wait_sink", None)
-                if callable(set_wait_sink) and not set_wait_sink(on_decision_window_expired):
+                if (
+                    callable(set_wait_sink)
+                    and not set_wait_sink(on_decision_window_expired)
+                    and run.protocol == PROTOCOL_A2A_T
+                ):
+                    # A pure run may answer from a script and never wait; only the A2A-T provider
+                    # is expected to report windows unconditionally.
                     _LOGGER.warning(
                         "decision provider of run %s cannot report wait windows; the first expired "
                         "window will fail the run instead of sending an abort",

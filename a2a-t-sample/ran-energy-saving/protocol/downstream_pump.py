@@ -250,14 +250,15 @@ class DownstreamPump:
             await self._mark_terminal(event)
 
     async def _answer_input_required(self, event: dict[str, object]) -> None:
-        """Answer one delayed negotiation request and send the follow-up."""
+        """Answer one delayed negotiation request and send the follow-up.
+
+        No grounded answer is not the same as no configured answer: the operator must still get
+        the decision surface. The question is relayed as ``INPUT_REQUIRED`` and the pump suspends
+        until the caller's answer resumes the downstream context.
+        """
         text = await _answer_for(event, self._answer)
         if not text.strip():
-            await self._publish_status(
-                TaskState.TASK_STATE_WORKING,
-                f"The {self._context.downstream_name} requested input; no answer is configured.",
-                "input_required",
-            )
+            await self._relay_question(event)
             return
         await self._publish_status(
             TaskState.TASK_STATE_WORKING,

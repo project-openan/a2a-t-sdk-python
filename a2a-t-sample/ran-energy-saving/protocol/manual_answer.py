@@ -34,6 +34,18 @@ _CORRECT_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
     re.IGNORECASE,
 )
 
+#: The vendor phrases an information proposal two other ways ("Energy saving region is missing.",
+#: "Please provide the region name"). Both name an item from the same bounded vocabulary, so the
+#: page and the structuring prompt can still say what this round actually asks for.
+_ITEM_IS_MISSING_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"\b([A-Za-z][A-Za-z ]*?)\s+is\s+missing\b",
+    re.IGNORECASE,
+)
+_PROVIDE_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"provide the\s+([A-Za-z][A-Za-z ]*?)\s+name\b",
+    re.IGNORECASE,
+)
+
 #: Canonical item words mapped to the label the card shows. Keep small and explicit.
 _CANONICAL_LABELS: Final[dict[str, str]] = {
     "region": "Region",
@@ -60,6 +72,18 @@ _INLINE_SEPARATOR_PATTERN: Final[re.Pattern[str]] = re.compile(r"\s*(?:,|，|、
 #: Everything that is not a letter, digit or CJK character. Comparing compact forms makes
 #: punctuation and separators (``{00:00~06:00,2Mbps}`` vs ``00:00-06:00 2 Mbps``) irrelevant.
 _COMPACT_STRIP: Final[re.Pattern[str]] = re.compile(r"[^0-9a-z一-鿿]+")
+
+#: A proposal that asks the client to confirm a plan. Such a question is answered by agreeing,
+#: not by carrying a Task-T value; a value-less accept is therefore a complete answer.
+_CONFIRMATION_QUESTION: Final[re.Pattern[str]] = re.compile(
+    r"\bconfirm(?:ation)?\b|确认",
+    re.IGNORECASE,
+)
+
+
+def asks_for_confirmation(content: str | None) -> bool:
+    """Return whether one proposal body asks the client to confirm a plan."""
+    return isinstance(content, str) and _CONFIRMATION_QUESTION.search(content) is not None
 
 #: One clock token of a structured target segment.
 _TIME_TOKEN: Final[re.Pattern[str]] = re.compile(r"\d{1,2}:\d{2}")
@@ -165,6 +189,13 @@ def missing_item_labels(content: str) -> tuple[str, ...]:
             labels.append(label)
     if labels:
         return tuple(labels)
+    for pattern in (_ITEM_IS_MISSING_PATTERN, _PROVIDE_NAME_PATTERN):
+        for match in pattern.finditer(content):
+            label = _canonical_item_label(match.group(1))
+            if label is not None and label not in labels:
+                labels.append(label)
+    if labels:
+        return tuple(labels)
     for pattern in _INLINE_ITEMS_PATTERNS:
         match = pattern.search(content)
         if match is None:
@@ -176,4 +207,4 @@ def missing_item_labels(content: str) -> tuple[str, ...]:
     return tuple(labels)
 
 
-__all__ = ["missing_item_labels", "ungrounded_answer_fields"]
+__all__ = ["asks_for_confirmation", "missing_item_labels", "ungrounded_answer_fields"]

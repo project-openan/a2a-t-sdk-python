@@ -40,7 +40,7 @@ from shared.model_factory import build_traced_adk_model
 from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.trace import trace_scope
 
-from protocol.manual_answer import missing_item_labels
+from protocol.manual_answer import asks_for_confirmation, missing_item_labels
 
 _LOGGER = logging.getLogger("ran_energy_saving.decision_provider")
 
@@ -338,6 +338,8 @@ def build_manual_answer_prompt(
         f"{answer.strip()}\n\n"
         f"{action_rule}\n"
         "Use only values the engineer actually supplied; never invent a missing value. "
+        "The Original user request is context only: never copy a value from it into "
+        "filled_params unless the engineer's manual answer above also states that value. "
         "Return exactly one NegotiationDecision JSON object and nothing else: no reasoning, "
         "markdown, or prose outside the JSON."
     )
@@ -574,7 +576,7 @@ class AdkDecisionProvider:
             retry_event = await self._run_turn(session_id, DECISION_RETRY_PROMPT)
             if retry_event is not None:
                 decision = _decision_from_event(retry_event)
-        return _validated_manual_decision(propose.kind, decision)
+        return _validated_manual_decision(propose, decision)
 
     async def _run_turn(self, session_id: str, text: str) -> AdkEvent | None:
         """Run one user turn in an existing session and return its final event."""
@@ -615,21 +617,28 @@ def _event_text(event: AdkEvent) -> str:
 
 
 def _validated_manual_decision(
-    kind: str,
+    propose: NegotiationProposeView,
     decision: NegotiationDecision | None,
 ) -> NegotiationDecision | None:
     """Return the structured decision only when it can actually answer the proposal kind.
 
     An information answer must become an Accept carrying the supplied values; a counter text is
-    not merged by the sample server, so returning it would loop the negotiation. A target or
-    feasibility counter must carry a concrete plan (or at least the engineer's proposal text).
+    not merged by the sample server, so returning it would loop the negotiation. A question that
+    only asks the client to confirm a plan is the exception: the answer is the agreement itself and
+    carries no Task-T value. A target or feasibility counter must carry a concrete plan (or at
+    least the engineer's proposal text).
     """
     if decision is None:
         return None
+    kind = propose.kind
     if kind == "information":
         if decision.action == "counter":
             return None
-        if decision.action == "accept" and not decision.filled_params:
+        if (
+            decision.action == "accept"
+            and not decision.filled_params
+            and not asks_for_confirmation(propose.content)
+        ):
             return None
     elif kind in {"target", "feasibility"}:
         if decision.action == "counter" and not (decision.counter_params or decision.counter_proposal):

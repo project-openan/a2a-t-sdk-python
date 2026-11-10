@@ -162,3 +162,53 @@ async def test_a_scripted_pure_answer_publishes_the_relayed_question(
     assert proposals[0].content == "Please provide a real region."  # type: ignore[union-attr]
     assert proposals[0].round == 1  # type: ignore[union-attr]
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
+
+
+class _RecordingStructurer:
+    """Minimal manual-answer structurer recording the request it is given."""
+
+    def __init__(self) -> None:
+        self.request: str | None = None
+        self.context: str | None = None
+
+    def set_user_request(self, user_request: str | None) -> None:
+        """Record the operator's request."""
+        self.request = user_request
+
+    def set_conversation_context(self, conversation_context: str | None) -> None:
+        """Record the conversation context."""
+        self.context = conversation_context
+
+
+async def test_the_pure_structurer_receives_the_operator_request(offline_config: SampleConfig) -> None:
+    """A pure run used to leave the scenario's canned request in the structuring prompt."""
+    structurer = _RecordingStructurer()
+    transport = _FakeTransport([[_completed()]])
+    runtime = ClientRuntime(
+        config=offline_config,
+        run_spec=DemoRunCatalog().spec("information"),
+        mode=MODE_CONFIRM,
+        protocol=PROTOCOL_PURE,
+        transport_name="sse",
+        prompt_client=None,
+        a2a_client=None,
+        transport=transport,  # type: ignore[arg-type]
+        provider=None,
+        discovered=None,  # type: ignore[arg-type]
+        sdk_env=None,
+        manual_provider=None,
+        manual_structurer=structurer,
+        _httpx_client=None,
+        pure_answer=lambda event: "",
+    )
+
+    await asyncio.wait_for(
+        runtime.run(
+            user_request="Modify the outage target to 10Mbps.",
+            conversation_context="Earlier turn: create in Region A.",
+        ),
+        timeout=5.0,
+    )
+
+    assert structurer.request == "Modify the outage target to 10Mbps."
+    assert structurer.context == "Earlier turn: create in Region A."

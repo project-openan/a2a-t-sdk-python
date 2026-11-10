@@ -468,7 +468,9 @@ class ClientRuntime:
             ``True`` when the provider accepted the sink. A provider without one must not silently
             keep waiting: its first expired window raises and the run fails without sending.
         """
-        target = self.provider
+        # A pure run has no negotiation provider: its confirmation answer owns the human wait and
+        # reports the same expired windows to the page.
+        target = self.provider if self.provider is not None else self.pure_answer
         setter = getattr(target, "set_wait_sink", None)
         if callable(setter):
             setter(sink)
@@ -605,6 +607,18 @@ class ClientRuntime:
                 elif target_task_id or target_context_id or target_server_task_id or target_server_context_id:
                     raise ClientRuntimeError("A target Task can only be used by a Modify-only run.")
                 raw_text = custom_request or self._scenario_raw_request()
+                # The manual-answer structurer is a separate provider (pure and manual mode build
+                # one only for the preview); it must see the operator's own request, whichever
+                # protocol returns early below. Without this a pure run kept the scenario's canned
+                # example request as "Original user request" and the structurer echoed its values.
+                structurer = self.manual_structurer
+                if structurer is not None:
+                    set_structurer_context = getattr(structurer, "set_conversation_context", None)
+                    if callable(set_structurer_context):
+                        set_structurer_context(conversation_context)
+                    set_structurer_request = getattr(structurer, "set_user_request", None)
+                    if callable(set_structurer_request):
+                        set_structurer_request(raw_text)
                 if self.protocol == PROTOCOL_PURE:
                     # Pure A2A uses standard Task states only: the OSS Agent owns the business
                     # intent layer, so the engineer client sends the raw request to it.
@@ -680,16 +694,6 @@ class ClientRuntime:
                 set_request = getattr(self.provider, "set_user_request", None)
                 if callable(set_request):
                     set_request(request_text)
-                # The manual-answer structurer is a separate provider (manual mode builds one only
-                # for the preview); it needs the same request and conversation context.
-                structurer = self.manual_structurer
-                if structurer is not None:
-                    set_structurer_context = getattr(structurer, "set_conversation_context", None)
-                    if callable(set_structurer_context):
-                        set_structurer_context(conversation_context)
-                    set_structurer_request = getattr(structurer, "set_user_request", None)
-                    if callable(set_structurer_request):
-                        set_structurer_request(request_text)
                 flow_on_intent_ready = on_intent_ready
                 # A raw run keeps the historical empty mapping; the parallel path replaces it with
                 # the awaitable before the flow starts.

@@ -90,3 +90,18 @@ def test_structured_target_notation_matches_its_plain_spelling() -> None:
         )
         == ()
     )
+
+
+def test_the_vendor_missing_item_sentence_is_recognized() -> None:
+    # The reported yellow-zone question: neither "missing items:" nor "provide the correct X name",
+    # so the page and the structuring prompt used to show no asked item at all.
+    content = (
+        "Energy saving region is missing. Please provide the region name for implementing "
+        "energy-saving."
+    )
+
+    assert missing_item_labels(content) == ("Region",)
+
+
+def test_provide_the_item_name_without_correct_is_recognized() -> None:
+    assert missing_item_labels("Please provide the site name.") == ("Site",)

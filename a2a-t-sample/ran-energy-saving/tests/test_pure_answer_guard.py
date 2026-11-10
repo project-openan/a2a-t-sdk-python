@@ -202,3 +202,29 @@ async def test_the_live_pure_answer_is_empty_when_nothing_is_grounded() -> None:
     )
 
     assert text == ""
+
+
+def test_a_confirmation_question_is_answered_without_a_task_t_value() -> None:
+    decision, notes = _sanitize(
+        NegotiationDecision(action="accept", rationale="Confirmed."),
+        request_text=(
+            "Modify the energy-saving plan for LTE_26441_LNR_OCL. There will be a power outage "
+            "tomorrow. Set the throughput rate guarantee to 10Mbps during the outage."
+        ),
+        question="Not feasible, please confirm",
+    )
+
+    assert decision is not None
+    assert decision.filled_params is None
+    assert notes == ["an affirmative answer to a confirmation question carries no Task-T value"]
+
+
+def test_an_information_question_still_needs_a_value() -> None:
+    decision, notes = _sanitize(
+        NegotiationDecision(action="accept", rationale="Confirmed."),
+        request_text="Create an energy saving task in the Songshanhu area.",
+        question="Please provide the correct region name.",
+    )
+
+    assert decision is None
+    assert notes == ["the decision carries no value to answer the question"]

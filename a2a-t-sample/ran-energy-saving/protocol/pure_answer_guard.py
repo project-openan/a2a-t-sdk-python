@@ -24,10 +24,14 @@ from shared.models import NegotiationDecision, NegotiationProposeView
 
 from protocol.client_policy import ClientPolicy
 from protocol.grounding import normalize, server_contains, server_entity_values
-from protocol.manual_answer import ungrounded_answer_fields
+from protocol.manual_answer import asks_for_confirmation, ungrounded_answer_fields
 
 #: One plain rate in a value.
 _RATE: Final[re.Pattern[str]] = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*Mbps", re.IGNORECASE)
+
+def _asks_for_confirmation(propose: NegotiationProposeView) -> bool:
+    """Return whether the proposal asks the client to confirm a plan."""
+    return asks_for_confirmation(propose.content)
 
 
 def sanitize_pure_decision(
@@ -64,6 +68,13 @@ def sanitize_pure_decision(
         if value is not None and not (isinstance(value, str) and not value.strip())
     }
     if not filled:
+        if decision.action == "accept" and _asks_for_confirmation(propose):
+            # "Not feasible, please confirm" is answered by confirming; that answer carries no
+            # Task-T value. Render the deterministic affirmative instead of the model's rationale
+            # so a negative sentence can never travel as the agreement.
+            return decision.model_copy(update={"filled_params": None, "rationale": ""}), [
+                "an affirmative answer to a confirmation question carries no Task-T value"
+            ]
         return None, ["the decision carries no value to answer the question"]
 
     unsupported = set(ungrounded_answer_fields(request_text, filled))

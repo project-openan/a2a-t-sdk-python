@@ -51,10 +51,19 @@ class PureConfirmationAnswer:
         timeout_seconds: float = DEFAULT_MANUAL_TIMEOUT_SECONDS,
         max_rounds: int = 3,
     ) -> None:
-        """Create one confirmation answer for the given run mode."""
+        """Create one confirmation answer for the given run mode.
+
+        The wait follows the same policy as the A2A-T manual provider: an expired observation
+        window is reported to the page and never ends the run or the downstream Task. The pure hop
+        used to keep its legacy single-window abort, which turned an operator still deciding into a
+        failed run.
+        """
         self._mode = mode
         self._max_rounds = max_rounds
-        self._manual = ManualDecisionProvider(timeout_seconds=timeout_seconds)
+        self._manual = ManualDecisionProvider(
+            timeout_seconds=timeout_seconds,
+            keep_waiting=True,
+        )
         self._proposal_sink: ProposalSink | None = None
         self._recommendation_sink: RecommendationSink | None = None
         self._decision_sink: DecisionSink | None = None
@@ -92,6 +101,10 @@ class PureConfirmationAnswer:
     def set_decision_sink(self, sink: DecisionSink | None) -> None:
         """Install the callback that records the submitted decision."""
         self._decision_sink = sink
+
+    def set_wait_sink(self, sink: Callable[[object], None] | None) -> None:
+        """Install the expired-window observer of the human wait."""
+        self._manual.set_wait_sink(sink)
 
     async def __call__(self, event: Mapping[str, object]) -> str:
         """Build the proposal view, wait for the operator, and render the answer text."""

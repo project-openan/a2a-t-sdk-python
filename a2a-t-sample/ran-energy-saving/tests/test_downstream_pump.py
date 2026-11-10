@@ -479,3 +479,46 @@ def test_benign_completed_text_maps_to_completed() -> None:
 
     assert state == TaskState.TASK_STATE_COMPLETED
     assert phase == "report"
+
+
+async def test_an_ungrounded_input_required_is_relayed_not_answered(tmp_path: Path) -> None:
+    """A guard that refuses to invent a value must hand the question to the operator."""
+    store = InMemoryTaskStore()
+    await store.save(
+        Task(id="outer-1", context_id="outer-ctx", status=TaskStatus(state=TaskState.TASK_STATE_WORKING)),
+        _context(),
+    )
+    binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    await binding_store.save(
+        DownstreamBinding(
+            inner_task_id="inner-1",
+            inner_context_id="inner-ctx",
+            outer_task_id="outer-1",
+            run_id="run-1",
+            protocol="pure",
+        )
+    )
+    subscription = _Subscription()
+    transport = _Transport([_completed_event("inner-1", "inner-ctx")])
+    questions: list[dict[str, object]] = []
+    pump = _pump(
+        store=store,
+        binding_store=binding_store,
+        subscription=subscription,
+        transport=transport,
+        push_sender=_PushSender(),
+        answer=lambda event: "",
+        on_question=lambda event, round_number: questions.append(dict(event)),
+    )
+
+    task = pump.start()
+    await subscription.queue.put(
+        _status_payload("inner-1", "inner-ctx", "TASK_STATE_INPUT_REQUIRED", "Not feasible, please confirm")
+    )
+    await asyncio.wait_for(task, timeout=3.0)
+
+    assert transport.requests == []
+    assert questions and questions[0]["text"] == "Not feasible, please confirm"
+    outer = await store.get("outer-1", _context())
+    assert outer is not None
+    assert outer.status.state == TaskState.TASK_STATE_INPUT_REQUIRED

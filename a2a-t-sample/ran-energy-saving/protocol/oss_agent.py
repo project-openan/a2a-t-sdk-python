@@ -16,6 +16,7 @@ import contextlib
 import inspect
 import logging
 import os
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -98,7 +99,13 @@ from protocol.gateway_push import ValidatingPushConfigStore
 from protocol.intent import IntentProcessor, OperatorRequest, ProcessedIntent
 from protocol.manual_answer import ungrounded_answer_fields
 from protocol.messages import SAMPLE_RUN_ID_METADATA_KEY, metadata_to_dict
-from protocol.nms_client import NmsClient, NmsConfig, NmsSseTransport, NmsWebhookTransport
+from protocol.nms_client import (
+    NmsClient,
+    NmsConfig,
+    NmsProtocolError,
+    NmsSseTransport,
+    NmsWebhookTransport,
+)
 from protocol.pure_answer_guard import sanitize_pure_decision
 from protocol.pure_client_flow import (
     continue_pure_client_flow,
@@ -149,6 +156,18 @@ _TERMINAL_TASK_STATES: Final[frozenset[TaskState]] = frozenset(
         TaskState.TASK_STATE_REJECTED,
         TaskState.TASK_STATE_FAILED,
         TaskState.TASK_STATE_CANCELED,
+    }
+)
+
+#: Vendor Task state names that refuse a further message. The picker check runs when the run is
+#: created; the downstream Task can reach a terminal state before the follow-up is forwarded, so
+#: the OSS Agent re-reads it once at the last possible moment.
+_TERMINAL_TASK_STATE_NAMES: Final[frozenset[str]] = frozenset(
+    {
+        "TASK_STATE_COMPLETED",
+        "TASK_STATE_REJECTED",
+        "TASK_STATE_FAILED",
+        "TASK_STATE_CANCELED",
     }
 )
 
@@ -1032,16 +1051,29 @@ class OSSPureExecutor(AgentExecutor):
         finally:
             await httpx_client.aclose()
 
-    def _answer_or_relay(self, event: dict[str, object]) -> str | Awaitable[str]:
-        """Answer a structured negotiation, but relay a plain vendor question to the caller.
+    async def _answer_or_relay(self, event: dict[str, object]) -> str:
+        """Answer a structured negotiation, but relay a vendor question to the caller.
 
         The real NMS negotiates a pure request in text: a plain agent message with no
-        ``negotiationContext``. The OSS Agent does not own the business answer; it publishes the
-        question on its own Task and resumes the downstream context with the caller's reply.
+        ``negotiationContext``, or an ``INPUT_REQUIRED`` status whose body is the question. The OSS
+        Agent does not own the business answer; it publishes the question on its own Task and
+        resumes the downstream context with the caller's reply.
+
+        A status ``INPUT_REQUIRED`` is attempted first because most vendor questions are
+        information requests the caller may have already answered. When the automatic answer
+        produces no text (the pure guard refused to invent a value), the question is relayed
+        instead: sending nothing would leave the downstream Task waiting while the operator sees no
+        decision surface.
         """
         if event.get("kind") == "message" and self._nms_mode():
             raise _QuestionPendingError(event)
-        return self._answer(event)
+        result = self._answer(event)
+        if inspect.isawaitable(result):
+            result = await result
+        text = result if isinstance(result, str) else ""
+        if not text.strip() and self._nms_mode():
+            raise _QuestionPendingError(event)
+        return text
 
     async def _draft_answer(
         self,
@@ -1174,6 +1206,24 @@ class OSSPureExecutor(AgentExecutor):
                 )
             )
             return
+        terminal_state = await self._terminal_inner_state(binding.inner_task_id)
+        if terminal_state is not None:
+            updater = TaskUpdater(event_queue, outer_task_id, outer_context_id)
+            await updater.failed(
+                message=updater.new_agent_message(
+                    [
+                        Part(
+                            text=(
+                                f"The target Task {binding.inner_task_id} has already ended "
+                                f"({terminal_state}); the follow-up was not sent. Start a new "
+                                "Task instead of modifying it."
+                            )
+                        )
+                    ],
+                    metadata=self._oss_metadata("continuation-terminal"),
+                )
+            )
+            return
         await self._take_over_pump(outer_task_id)
         self._set_decision_request(text)
         updater = TaskUpdater(event_queue, outer_task_id, outer_context_id)
@@ -1198,6 +1248,26 @@ class OSSPureExecutor(AgentExecutor):
         )
         await self._continue_downstream(updater, pending, text, context.call_context)
 
+    async def _terminal_inner_state(self, task_id: str) -> str | None:
+        """Return the vendor Task's terminal state, or ``None`` when it can still be continued.
+
+        A failed read never blocks the follow-up: the send itself will surface the vendor error,
+        and a transient quota/network failure must not turn into a client-side refusal.
+        """
+        client = self._nms_client
+        if client is None or not task_id:
+            return None
+        try:
+            task = await client.get_task(task_id)
+        except Exception:  # noqa: BLE001 - the pre-check is best effort
+            _LOGGER.warning("could not re-read target Task %s before forwarding", task_id, exc_info=True)
+            return None
+        status = task.get("status") if isinstance(task, Mapping) else None
+        state = status.get("state") if isinstance(status, Mapping) else None
+        if isinstance(state, str) and state in _TERMINAL_TASK_STATE_NAMES:
+            return state
+        return None
+
     async def _take_over_pump(self, outer_task_id: str) -> None:
         """Stop the background pump of one outer Task before a new continuation writes to it."""
         handle = self._pumps.pop(outer_task_id, None)
@@ -1216,45 +1286,61 @@ class OSSPureExecutor(AgentExecutor):
         call_context: ServerCallContext,
     ) -> None:
         """Send one follow-up text downstream and publish what the next phase reports."""
+        # Every continuation belongs to the run that sent it: scope its trace and its wire file
+        # here. Without this the vendor call inherited the previous run's correlation (or none)
+        # and the downstream exchange was written to the previous run's ``wire-oss.jsonl``.
+        self._bind_wire_log(pending.run_id or None)
         events: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
-        consumer = asyncio.create_task(
-            self._consume(events, updater),
-            name=f"oss-continuation-consumer-{pending.outer_task_id}",
-        )
         hop = self._downstream_hop()
-        try:
-            result = await self._run_question_continuation(
-                pending,
-                text,
-                events.put_nowait,
-                updater,
-                call_context,
+        with trace_scope(run_id=pending.run_id or None, role="oss"):
+            consumer = asyncio.create_task(
+                self._consume(events, updater),
+                name=f"oss-continuation-consumer-{pending.outer_task_id}",
             )
-        except _QuestionPendingError as question:
+            try:
+                result = await self._run_question_continuation(
+                    pending,
+                    text,
+                    events.put_nowait,
+                    updater,
+                    call_context,
+                )
+            except _QuestionPendingError as question:
+                events.put_nowait(None)
+                await consumer
+                await self._relay_question(
+                    updater,
+                    outer_task_id=pending.outer_task_id,
+                    outer_context_id=pending.outer_context_id,
+                    run_id=pending.run_id,
+                    event=question.event,
+                    round_number=pending.round_number + 1,
+                    user_request=pending.user_request,
+                    sent_texts=(*pending.sent_texts, text),
+                )
+                return
+            except Exception as exc:  # noqa: BLE001 - the outer Task must reach a terminal state
+                terminal = _terminal_target_failure(exc)
+                if terminal is not None:
+                    # The vendor refused because the target Task is already terminal. This is not
+                    # a transport failure: say what happened and what the operator should do.
+                    _LOGGER.info("downstream continuation refused: %s", terminal)
+                    events.put_nowait(None)
+                    await consumer
+                    await updater.failed(
+                        message=updater.new_agent_message([Part(text=terminal)])
+                    )
+                    return
+                _LOGGER.exception("OSS downstream continuation failed")
+                events.put_nowait(None)
+                await consumer
+                await updater.failed(
+                    message=updater.new_agent_message([Part(text=f"The {hop} hop failed: {exc}")])
+                )
+                return
             events.put_nowait(None)
             await consumer
-            await self._relay_question(
-                updater,
-                outer_task_id=pending.outer_task_id,
-                outer_context_id=pending.outer_context_id,
-                run_id=pending.run_id,
-                event=question.event,
-                round_number=pending.round_number + 1,
-                user_request=pending.user_request,
-                sent_texts=(*pending.sent_texts, text),
-            )
-            return
-        except Exception as exc:  # noqa: BLE001 - the outer Task must reach a terminal state
-            _LOGGER.exception("OSS downstream continuation failed")
-            events.put_nowait(None)
-            await consumer
-            await updater.failed(
-                message=updater.new_agent_message([Part(text=f"The {hop} hop failed: {exc}")])
-            )
-            return
-        events.put_nowait(None)
-        await consumer
-        await self._publish_result(updater, result)
+            await self._publish_result(updater, result)
 
     async def _resume_question(
         self,
@@ -1951,6 +2037,25 @@ def _message_text(message: object) -> str:
         if isinstance(text, str) and text.strip():
             return text.strip()
     return ""
+
+
+def _terminal_target_failure(exc: BaseException) -> str | None:
+    """Return the operator-facing message when the vendor refused a terminal Task.
+
+    The vendor answers a follow-up to an already-ended Task with HTTP 400 and
+    ``task is in terminal state TASK_STATE_*``. That is a target condition, not a transport
+    failure, so it must not be reported as "the NMS hop failed".
+    """
+    if not isinstance(exc, NmsProtocolError) or exc.http_status != 400:
+        return None
+    if "terminal state" not in str(exc).lower():
+        return None
+    match = re.search(r"terminal state (TASK_STATE_[A-Z]+)", str(exc))
+    state = match.group(1) if match is not None else "a terminal state"
+    return (
+        f"The target Task has already ended ({state}); the follow-up was not sent. "
+        "Start a new Task instead of modifying it."
+    )
 
 
 def _last_status_text(events: list[dict[str, object]]) -> str:

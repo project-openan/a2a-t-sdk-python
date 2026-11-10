@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from demo.pure_confirmation import PureConfirmationAnswer
 from demo.pure_policy import pure_answer_from_recommendation, render_pure_answer
 from protocol.client_runtime import MODE_CONFIRM, MODE_MANUAL
+from protocol.decision_provider import DecisionTimeoutError
 from shared.models import NegotiationDecision
 
 
@@ -143,24 +144,37 @@ async def test_manual_mode_does_not_publish_a_recommendation() -> None:
 
 async def test_confirm_mode_reports_a_suppressed_recommendation() -> None:
     """A suppressed recommendation is not an agent failure; the page must say why it is empty."""
-    answer = PureConfirmationAnswer(mode=MODE_CONFIRM, timeout_seconds=0.01)
+    answer = PureConfirmationAnswer(mode=MODE_CONFIRM, timeout_seconds=1.0)
     recommendations: list[NegotiationDecision | None] = []
     answer.set_recommendation_sink(lambda decision, propose, session: recommendations.append(decision))
     question = _question(recommendation=None)
     pure = question["metadata"]["pure"]  # type: ignore[index]
     pure["recommendationSuppressed"] = "already_sent"
 
-    assert await answer(question) == ""
+    pending = asyncio.create_task(answer(question))
+    await asyncio.sleep(0)
+    answer.submit(NegotiationDecision(action="accept", rationale="Region A", filled_params={"region": "Region A"}))
+    assert await pending == "The region is Region A."
 
     assert recommendations == [None]
     assert answer.last_recommendation_error is not None
     assert "already rejected" in answer.last_recommendation_error
 
 
-async def test_a_confirmation_timeout_sends_nothing() -> None:
+async def test_an_expired_window_is_reported_and_the_wait_continues() -> None:
+    """The local window is an observation budget: it must not end the run or answer for the page."""
     answer = PureConfirmationAnswer(mode=MODE_CONFIRM, timeout_seconds=0.01)
+    expired: list[object] = []
+    answer.set_wait_sink(expired.append)
+    pending = asyncio.create_task(answer(_question()))
+    await asyncio.sleep(0.05)
+    assert not pending.done()
+    assert expired
+    assert isinstance(expired[-1], DecisionTimeoutError)
+    assert expired[-1].expired_windows >= 1
 
-    assert await answer(_question()) == ""
+    answer.submit(NegotiationDecision(action="accept", rationale="Region A", filled_params={"region": "Region A"}))
+    assert await pending == "The region is Region A."
 
 
 def test_the_question_metadata_is_only_sample_local() -> None:
@@ -172,7 +186,7 @@ def test_the_question_metadata_is_only_sample_local() -> None:
 
 async def test_a_peer_that_does_not_number_its_rounds_gets_a_sequence() -> None:
     """Two unlabelled questions are rounds 1 and 2, like the A2A-T propose counter."""
-    answer = PureConfirmationAnswer(mode=MODE_MANUAL, timeout_seconds=0.01)
+    answer = PureConfirmationAnswer(mode=MODE_MANUAL, timeout_seconds=1.0)
     rounds: list[int] = []
     answer.set_proposal_sink(lambda propose, session: rounds.append(session.round))
     question = _question()
@@ -182,7 +196,12 @@ async def test_a_peer_that_does_not_number_its_rounds_gets_a_sequence() -> None:
     assert isinstance(pure, dict)
     pure.pop("round")
 
-    await answer(question)
-    await answer(question)
+    for _ in range(2):
+        pending = asyncio.create_task(answer(question))
+        await asyncio.sleep(0)
+        answer.submit(
+            NegotiationDecision(action="accept", rationale="Region A", filled_params={"region": "Region A"})
+        )
+        await pending
 
     assert rounds == [1, 2]

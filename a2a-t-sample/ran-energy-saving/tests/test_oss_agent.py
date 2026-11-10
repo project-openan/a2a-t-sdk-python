@@ -38,11 +38,13 @@ from protocol.client_flow import ClientFlowResult
 from protocol.downstream_binding_store import DownstreamBinding, DownstreamBindingStore
 from protocol.intent import ProcessedIntent
 from protocol.mie_agent import build_mie_app
+from protocol.nms_client import NmsProtocolError
 from protocol.oss_agent import (
     OSSPureExecutor,
     _build_trace_emitter,
     _PendingQuestion,
     _QuestionPendingError,
+    _terminal_target_failure,
     a2a_request_text,
     build_oss_agent_card,
     build_oss_app,
@@ -589,7 +591,9 @@ async def test_the_continuation_answer_sees_the_original_request(
         call_context: object,
     ) -> ClientFlowResult:
         del pending, answer_text, event_sink, updater, call_context
-        executor._answer_or_relay({"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Which region?"})
+        await executor._answer_or_relay(
+            {"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Which region?"}
+        )
         return ClientFlowResult(final_state=FINAL_STATE_TASK_COMPLETED, context_id="inner-ctx")
 
     monkeypatch.setattr(executor, "_run_question_continuation", fake_continuation)
@@ -1270,3 +1274,88 @@ async def test_the_nms_webhook_flow_hands_the_subscription_to_the_pump(
     assert "outer-1" in executor._pumps
     await executor._stop_pumps()
     assert router.active_subscriptions == 0
+
+
+async def test_an_ungrounded_vendor_question_is_relayed_instead_of_answered() -> None:
+    """The OSS must not send an empty answer when its own guard refused to invent a value."""
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "",
+    )
+
+    with pytest.raises(_QuestionPendingError):
+        await executor._answer_or_relay(
+            {"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Not feasible, please confirm"}
+        )
+
+
+async def test_a_grounded_vendor_question_is_answered_without_relaying() -> None:
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "Region A",
+    )
+
+    assert (
+        await executor._answer_or_relay(
+            {"kind": "status", "state": "TASK_STATE_INPUT_REQUIRED", "text": "Which region?"}
+        )
+        == "Region A"
+    )
+
+
+async def test_a_follow_up_to_a_terminal_target_task_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The picker check is point-in-time; the vendor Task can end before the follow-up is sent."""
+    executor = OSSPureExecutor(
+        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
+        answer=lambda event: "",
+    )
+    executor._binding_store = DownstreamBindingStore(tmp_path / "tasks.sqlite3")
+    await executor._binding_store.save(
+        DownstreamBinding(
+            inner_task_id="nms-task-1",
+            inner_context_id="inner-ctx",
+            outer_task_id="outer-1",
+            protocol=PROTOCOL_PURE,
+        )
+    )
+    nms_client = _FakeNmsClient({"status": {"state": "TASK_STATE_FAILED"}})
+    executor._nms_client = nms_client  # type: ignore[assignment]
+
+    async def fail_if_forwarded(*args: object, **kwargs: object) -> ClientFlowResult:
+        raise AssertionError("a terminal target Task must not receive the follow-up")
+
+    monkeypatch.setattr(executor, "_run_question_continuation", fail_if_forwarded)
+    context = _task_context("Modify the rate to 10 Mbps.", task_id="outer-1")
+    context.current_task.status.state = TaskState.TASK_STATE_WORKING
+    queue = _RecordingQueue()
+
+    await executor.execute(context, queue)
+
+    assert nms_client.calls == ["nms-task-1"]
+    failed = queue.events[-1]
+    assert isinstance(failed, TaskStatusUpdateEvent)
+    assert failed.status.state == TaskState.TASK_STATE_FAILED
+    text = failed.status.message.parts[0].text
+    assert "already ended" in text
+    assert "Start a new Task" in text
+
+
+def test_a_terminal_state_400_is_reported_as_a_target_condition() -> None:
+    exc = NmsProtocolError(
+        'NMS A2A request returned HTTP 400: {"error":{"code":400,"status":"UNIMPLEMENTED",'
+        '"message":"Cannot send message to task t1: task is in terminal state '
+        'TASK_STATE_FAILED and cannot accept further messages"}}',
+        http_status=400,
+    )
+
+    message = _terminal_target_failure(exc)
+
+    assert message is not None
+    assert "(TASK_STATE_FAILED)" in message
+    assert "Start a new Task" in message
+
+
+def test_an_unrelated_400_keeps_the_generic_hop_failure() -> None:
+    assert _terminal_target_failure(NmsProtocolError("HTTP 400: bad request", http_status=400)) is None

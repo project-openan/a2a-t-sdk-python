@@ -96,7 +96,10 @@ async def build_demo_runtime(
             # question and the operator confirms the answer in the same card the A2A-T form uses.
             from demo.pure_confirmation import PureConfirmationAnswer
 
-            pure_answer = PureConfirmationAnswer(mode=mode)
+            pure_answer = PureConfirmationAnswer(
+                mode=mode,
+                timeout_seconds=config.manual_decision_timeout_seconds,
+            )
         else:
             from demo.pure_policy import pure_answer_from_recommendation
 
