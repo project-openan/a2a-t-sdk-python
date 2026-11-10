@@ -5,20 +5,16 @@
     "languages": ["zh-CN"],
     "priority": "P0",
     "tags": ["extraction-failure", "information", "accept", "slot-missing"],
-    "summary": "补数接受消息抽取结果缺少结论字段时按抽取失败重试，耗尽后返回内容抽取失败错误码",
+    "summary": "补数接受消息抽取结果缺少结论字段时生成失败并返回槽位缺失错误码，不发起重试",
     "context": { "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3", "round": 2, "maxRounds": 5 },
     "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
     "input": { "text": { "zh-CN": "确认补充投诉诊断信息：接入端口名称为P533-珠江旧城-PTN3900-23-TPA1EG24-1，投诉分类为专线质差。" } },
-    "llm": { "maxAttempts": 3, "script": [
-      { "$ref": "responses/extract.information.accept.missing_conclusion" },
-      { "$ref": "responses/extract.information.accept.missing_conclusion" },
-      { "$ref": "responses/extract.information.accept.missing_conclusion" }
-    ] },
+    "llm": { "script": [ { "$ref": "responses/extract.information.accept.missing_conclusion" } ] },
     "expect": {
       "outcome": "failure",
       "exception": "NegotiationGenerationException",
-      "code": "negotiation.content_extract_failed",
-      "llmCalls": 3
+      "code": "negotiation.field_missing",
+      "llmCalls": 1
     }
   },
   {
@@ -135,20 +131,16 @@
     "languages": ["zh-CN"],
     "priority": "P0",
     "tags": ["extraction-failure", "target", "accept", "slot-missing"],
-    "summary": "修复目标接受消息抽取结果缺少最终确认意图时按抽取失败重试，耗尽后返回内容抽取失败错误码",
+    "summary": "修复目标接受消息抽取结果缺少最终确认意图时生成失败并返回槽位缺失错误码",
     "context": { "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3", "round": 2, "maxRounds": 5 },
     "templateUri": "Negotiation-T/target-negotiation/accept-reject/v1",
     "input": { "text": { "zh-CN": "最终确认的意图：在2026年5月15日前将深圳至广州专线的平均时延恢复至20ms以内，高峰时段丢包率不高于1%。" } },
-    "llm": { "maxAttempts": 3, "script": [
-      { "$ref": "responses/extract.target.accept.missing_confirmed_intent" },
-      { "$ref": "responses/extract.target.accept.missing_confirmed_intent" },
-      { "$ref": "responses/extract.target.accept.missing_confirmed_intent" }
-    ] },
+    "llm": { "script": [ { "$ref": "responses/extract.target.accept.missing_confirmed_intent" } ] },
     "expect": {
       "outcome": "failure",
       "exception": "NegotiationGenerationException",
-      "code": "negotiation.content_extract_failed",
-      "llmCalls": 3
+      "code": "negotiation.field_missing",
+      "llmCalls": 1
     }
   },
   {
@@ -157,20 +149,16 @@
     "languages": ["zh-CN"],
     "priority": "P0",
     "tags": ["extraction-failure", "target", "reject", "slot-missing"],
-    "summary": "修复目标拒绝消息抽取结果缺少拒绝原因时按抽取失败重试，耗尽后返回内容抽取失败错误码",
+    "summary": "修复目标拒绝消息抽取结果缺少拒绝原因时生成失败并返回槽位缺失错误码",
     "context": { "id": "3dbc13b5-bd57-4c2b-b503-24e381b6c8d3", "round": 2, "maxRounds": 5 },
     "templateUri": "Negotiation-T/target-negotiation/accept-reject/v1",
     "input": { "text": { "zh-CN": "因光缆割接窗口尚未确认，时延目标未能完全澄清，本轮目标协商拒绝。" } },
-    "llm": { "maxAttempts": 3, "script": [
-      { "$ref": "responses/extract.target.reject.missing_failure_reason" },
-      { "$ref": "responses/extract.target.reject.missing_failure_reason" },
-      { "$ref": "responses/extract.target.reject.missing_failure_reason" }
-    ] },
+    "llm": { "script": [ { "$ref": "responses/extract.target.reject.missing_failure_reason" } ] },
     "expect": {
       "outcome": "failure",
       "exception": "NegotiationGenerationException",
-      "code": "negotiation.content_extract_failed",
-      "llmCalls": 3
+      "code": "negotiation.field_missing",
+      "llmCalls": 1
     }
   },
   {

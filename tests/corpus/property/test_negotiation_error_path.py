@@ -23,7 +23,7 @@ from a2a_t.core.errors.exceptions import (
 )
 from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
 from a2a_t.negotiation.generation import NegotiationContentService
-from tests.corpus.llm_stub import LlmScriptStep, ScriptedNegotiationLlmClient
+from tests.corpus.llm_stub import ScriptedNegotiationLlmClient
 from tests.corpus.property.arbitraries import any_session_id, contexts, languages
 from tests.corpus.property.harness import (
     json_payload,
@@ -284,30 +284,13 @@ def test_payload_missing_one_required_field_fails_with_slot_missing(
     context: NegotiationContext,
     field: MissingRequiredField,
 ) -> None:
-    """One dropped required extraction field fails with its family's code and call count.
-
-    A terminal-phase miss is a retryable extraction failure and burns the attempt budget; the
-    propose and abort misses stay non-retryable and stop after one call.
-    """
-    terminal = {
-        MissingRequiredField.ENDING_CONCLUSION,
-        MissingRequiredField.TARGET_ACCEPT_CONFIRMED_INTENT,
-    }
-    payload = json_payload(field.payload)
-    llm = (
-        ScriptedNegotiationLlmClient([LlmScriptStep.Payload(payload)] * 3)
-        if field in terminal
-        else scripted(payload)
-    )
+    """One dropped required extraction field fails with ``negotiation.field_missing``, 1 call."""
+    llm = scripted(json_payload(field.payload))
     wired = service(language, llm)
     with pytest.raises(NegotiationGenerationError) as excinfo:
         field.invoke(wired, context)
-    if field in terminal:
-        assert excinfo.value.code == ErrorCatalog.NEGOTIATION_CONTENT_EXTRACT_FAILED
-        assert llm.call_count == 3
-    else:
-        assert excinfo.value.code == ErrorCatalog.NEGOTIATION_FIELD_MISSING
-        assert llm.call_count == 1
+    assert excinfo.value.code == ErrorCatalog.NEGOTIATION_FIELD_MISSING
+    assert llm.call_count == 1
 
 
 @settings(max_examples=100)

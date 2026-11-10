@@ -715,6 +715,25 @@ def test_maps_shape_failures_of_every_kind(payload: str, expected_message_part: 
             NegotiationPerformative.PROPOSE,
             "target_negotiation_description",
         ),
+        ('{"items":[]}', NegotiationType.INFORMATION, NegotiationPerformative.ACCEPT, "conclusion"),
+        (
+            '{"conclusion":"Accept","confirmed_intent":null,"failure_reason":null}',
+            NegotiationType.TARGET,
+            NegotiationPerformative.ACCEPT,
+            "confirmed_intent",
+        ),
+        (
+            '{"conclusion":"Reject","confirmed_intent":null,"failure_reason":""}',
+            NegotiationType.TARGET,
+            NegotiationPerformative.REJECT,
+            "failure_reason",
+        ),
+        (
+            '{"conclusion":"Accept","feasibility_summary":""}',
+            NegotiationType.FEASIBILITY,
+            NegotiationPerformative.ACCEPT,
+            "feasibility_summary",
+        ),
         (
             '{"termination_reason":""}',
             None,
@@ -748,61 +767,13 @@ def test_empty_information_propose_items_are_a_retryable_extraction_miss() -> No
 
 
 def test_rejects_empty_information_ending_items_before_template_rendering() -> None:
-    llm = ScriptedExtractionClient('{"conclusion":"Reject","items":[]}')
     with pytest.raises(NegotiationGenerationError) as exc_info:
-        extractor(llm).extract(
+        extractor(ScriptedExtractionClient('{"conclusion":"Reject","items":[]}')).extract(
             "拒绝，资源查询服务正在检修。", reference(NegotiationType.INFORMATION, NegotiationPerformative.REJECT)
         )
 
-    assert exc_info.value.code_str == ErrorCatalog.NEGOTIATION_CONTENT_EXTRACT_FAILED.value
+    assert exc_info.value.code_str == ErrorCatalog.NEGOTIATION_FIELD_MISSING.value
     assert "result content" in str(exc_info.value)
-    assert llm.calls == 3
-
-
-@pytest.mark.parametrize(
-    ("payload", "negotiation_type", "performative", "expected_field"),
-    [
-        ('{"items":[]}', NegotiationType.INFORMATION, NegotiationPerformative.ACCEPT, "conclusion"),
-        (
-            '{"conclusion":"Accept","confirmed_intent":null,"failure_reason":null}',
-            NegotiationType.TARGET,
-            NegotiationPerformative.ACCEPT,
-            "confirmed_intent",
-        ),
-        (
-            '{"conclusion":"Reject","confirmed_intent":null,"failure_reason":""}',
-            NegotiationType.TARGET,
-            NegotiationPerformative.REJECT,
-            "failure_reason",
-        ),
-        (
-            '{"conclusion":"Accept","feasibility_summary":""}',
-            NegotiationType.FEASIBILITY,
-            NegotiationPerformative.ACCEPT,
-            "feasibility_summary",
-        ),
-    ],
-)
-def test_an_empty_terminal_field_is_a_retryable_extraction_miss(
-    payload: str,
-    negotiation_type: NegotiationType,
-    performative: NegotiationPerformative,
-    expected_field: str,
-) -> None:
-    """A terminal extraction that returns no content is a model miss, not a client field omission.
-
-    The live failure: a prompt-compliant model returned an empty ``feasibility_summary`` and the
-    non-retryable ``negotiation.field_missing`` killed the run on the first attempt. The field is
-    still named in the facts, but the extraction is retried like any other miss.
-    """
-    llm = ScriptedExtractionClient(payload)
-
-    with pytest.raises(NegotiationGenerationError) as exc_info:
-        extractor(llm).extract("文本", reference(negotiation_type, performative))
-
-    assert exc_info.value.code_str == ErrorCatalog.NEGOTIATION_CONTENT_EXTRACT_FAILED.value
-    assert expected_field in str(exc_info.value)
-    assert llm.calls == 3
 
 
 @pytest.mark.parametrize(

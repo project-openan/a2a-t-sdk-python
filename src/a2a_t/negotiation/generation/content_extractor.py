@@ -18,12 +18,8 @@ narrowed; the loop itself is local because the core helper retries
 Failure mapping (Java parity): a missing LLM client maps to ``llm.not_configured``, transport
 failures map to ``llm.invocation_failed``, responses that violate the response contract (blank or
 not a JSON object) map to the retryable ``llm.response_invalid``, responses that cannot be mapped
-onto the expected content map to the retryable ``negotiation.content_extract_failed``, a missing
-required PROPOSE or ABORT field maps to the non-retryable ``negotiation.field_missing``, a
-terminal (accept/reject) extraction that returns no content for a required field maps to the
-retryable ``negotiation.content_extract_failed`` (deliberate divergence from Java: the extraction
-prompt itself requires an empty value when the input states no content, so retrying the model is
-the recoverable answer and the caller decides the fallback), a conclusion contradicting
+onto the expected content map to the retryable ``negotiation.content_extract_failed``, missing
+required fields map to the non-retryable ``negotiation.field_missing``, a conclusion contradicting
 the addressed performative maps to ``negotiation.conclusion_mismatch``, an oversized input text
 maps to ``input.text_too_long`` (the third D5 access point, checked before any LLM call), and
 content that contradicts the addressed performative or action maps to ``negotiation.invalid_input``
@@ -420,9 +416,7 @@ def _map_ending_content(
     if negotiation_type is NegotiationType.TARGET:
         return _map_target_ending_content(payload, conclusion, language)
     if negotiation_type is NegotiationType.FEASIBILITY:
-        return FeasibilityEndingContent(
-            conclusion, _required_terminal_string(payload, "feasibility_summary", language)
-        )
+        return FeasibilityEndingContent(conclusion, _required_string(payload, "feasibility_summary", language))
     raise TypeError(f"Unsupported negotiation type of a terminal extraction: {negotiation_type!r}")
 
 
@@ -433,9 +427,9 @@ def _map_target_ending_content(
     confirmed_intent = _optional_string(payload, "confirmed_intent", language)
     failure_reason = _optional_string(payload, "failure_reason", language)
     if conclusion is NegotiationConclusion.ACCEPT and (confirmed_intent is None or not confirmed_intent.strip()):
-        raise _terminal_miss(language, "confirmed_intent")
+        raise _slot_missing(language, "confirmed_intent")
     if conclusion is NegotiationConclusion.REJECT and (failure_reason is None or not failure_reason.strip()):
-        raise _terminal_miss(language, "failure_reason")
+        raise _slot_missing(language, "failure_reason")
     return TargetEndingContent(conclusion, confirmed_intent, failure_reason)
 
 
@@ -475,7 +469,7 @@ def _required_conclusion(payload: dict[str, object], language: str) -> Negotiati
     """Read the terminal conclusion of one terminal extraction payload."""
     value = payload.get("conclusion")
     if value is None:
-        raise _terminal_miss(language, "conclusion")
+        raise _slot_missing(language, "conclusion")
     if isinstance(value, str):
         for candidate in NegotiationConclusion:
             if candidate.literal == value:
@@ -534,16 +528,10 @@ def _required_propose_items(
 def _required_non_empty_items(
     payload: dict[str, object], field: str, description: str, language: str
 ) -> list[NegotiationItem]:
-    """Read one mandatory non-empty item-array field of one terminal extraction payload.
-
-    An empty result is an extraction miss, not a client-side field omission: the model failed to
-    copy the items of the terminal message. It is retried like the propose-phase miss and the
-    facts name the schema field rather than a prose description.
-    """
-    value = payload.get(field)
-    items = _items_of(value, field, language) if value is not None else []
+    """Read one mandatory non-empty item-array field of an extraction payload."""
+    items = _required_items(payload, field, language)
     if not items:
-        raise _terminal_miss(language, field, description)
+        raise _slot_missing(language, description)
     return items
 
 
@@ -592,27 +580,6 @@ def _prompt_category(negotiation_type: NegotiationType | None) -> str:
 def _slot_missing(language: str, field: str) -> NegotiationGenerationError:
     """Create the ``negotiation.field_missing`` failure for one missing field."""
     return NegotiationGenerationError(ErrorCatalog.NEGOTIATION_FIELD_MISSING, {"field": field}, language=language)
-
-
-def _required_terminal_string(payload: dict[str, object], field: str, language: str) -> str:
-    """Read one mandatory string field of a terminal extraction payload.
-
-    A blank value is a model miss, not a client field omission: the extraction prompt tells the
-    model to return an empty value when the input states no content, so the terminal leg retries
-    instead of aborting the run on the first attempt.
-    """
-    value = payload.get(field)
-    if value is None or (isinstance(value, str) and not value.strip()):
-        raise _terminal_miss(language, field)
-    if isinstance(value, str):
-        return value
-    raise _extract_failed(language, field, f"Field {field} must be a string")
-
-
-def _terminal_miss(language: str, field: str, description: str | None = None) -> NegotiationGenerationError:
-    """Create the retryable miss of one required terminal-phase field."""
-    detail = f"the extraction returned no {description or field} for the terminal message"
-    return _extract_failed(language, field, detail)
 
 
 def _extract_failed(language: str, field: str, reason: str) -> NegotiationGenerationError:
