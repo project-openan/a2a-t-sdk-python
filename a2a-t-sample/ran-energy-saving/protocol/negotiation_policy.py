@@ -313,9 +313,12 @@ def negotiation_kind_for_template_uri(template_uri: str | None) -> NegotiationKi
 
 
 #: Wire spelling of the type in a vendor ``responseMetadata.negotiationType``.
+#: The vendor's negotiation generator spells the target kind ``CLARIFICATION`` internally and
+#: resolves it to the target-negotiation template URI; accept both spellings as the same kind.
 _KIND_BY_NEGOTIATION_TYPE: Final[dict[str, NegotiationKind]] = {
     "information": NegotiationKind.INFORMATION,
     "target": NegotiationKind.TARGET,
+    "clarification": NegotiationKind.TARGET,
     "feasibility": NegotiationKind.FEASIBILITY,
 }
 

@@ -1975,6 +1975,18 @@ async def test_a_vendor_propose_is_typed_from_its_nested_negotiation_type() -> N
     assert requested == [("information", INFORMATION_NEGOTIATION_PROPOSE_URI)]
 
 
+async def test_a_vendor_propose_typed_as_clarification_is_a_target_negotiation() -> None:
+    """The vendor spells the target kind ``CLARIFICATION`` internally and maps it to the target URI."""
+    requested = await _requested_propose(
+        _vendor_propose_content(
+            negotiation_type="CLARIFICATION",
+            template_uri="Negotiation-T/target-negotiation/propose/v1",
+        )
+    )
+
+    assert requested == [("target", TARGET_NEGOTIATION_PROPOSE_URI)]
+
+
 async def test_a_vendor_propose_falls_back_to_its_nested_template_uri() -> None:
     """Without ``negotiationType``, a recognised nested ``templateUri`` still names the kind."""
     requested = await _requested_propose(
