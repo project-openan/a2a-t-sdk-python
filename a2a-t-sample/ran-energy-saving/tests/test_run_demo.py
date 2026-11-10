@@ -744,6 +744,7 @@ def _resolved_config() -> SimpleNamespace:
         adk_model_provider="litellm",
         discovery="nms",
         transport="webhook",
+        pure_hop="oss",
         pure_message_mode="send",
         intent_mode="processed",
         nms_region="A2ATestRegion",
@@ -1015,6 +1016,52 @@ def test_both_nms_pins_the_topology_env_of_the_ui_and_oss(
     assert oss["A2AT_SAMPLE_DISCOVERY"] == "nms"
     assert oss["A2AT_SAMPLE_TRANSPORT"] == "webhook"
     assert oss["A2AT_SAMPLE_RAN_URL"] == "http://127.0.0.1:8000"
+
+
+def test_pure_hop_nms_skips_the_oss_and_points_the_ui_at_the_nms(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A direct standard-A2A hop calls the vendor itself; no OSS Agent process is needed."""
+
+    def configure(mp: pytest.MonkeyPatch) -> None:
+        direct = _resolved_config()
+        direct.pure_hop = "nms"
+        mp.setattr("shared.config.load_config", lambda **_: direct)
+
+    code, started, _ = _launch_both_nms(
+        monkeypatch,
+        tmp_path,
+        _both_nms_source(),
+        configure=configure,
+        extra_args=["--pure-hop", "nms"],
+    )
+
+    assert code == 0
+    modules = [str(call["command"][2]) for call in started]
+    assert "protocol.oss_agent" not in modules
+    ui = started[modules.index("demo.web.serve")]["env"]
+    assert ui["A2AT_SAMPLE_DISCOVERY"] == "nms"
+    assert ui["A2AT_SAMPLE_PURE_HOP"] == "nms"
+    assert ui["A2AT_SAMPLE_DIRECT_SERVER_URL"] == "https://nms.example/a2a/json"
+    assert "--discovery" not in started[modules.index("demo.web.serve")]["command"]
+
+
+def test_pure_hop_oss_keeps_the_proxy_topology(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The default hop is unchanged: the OSS Agent still owns the standard-A2A downstream."""
+    code, started, _ = _launch_both_nms(
+        monkeypatch,
+        tmp_path,
+        _both_nms_source(),
+        extra_args=["--pure-hop", "oss"],
+    )
+
+    assert code == 0
+    modules = [str(call["command"][2]) for call in started]
+    assert "protocol.oss_agent" in modules
+    ui = started[modules.index("demo.web.serve")]["env"]
+    assert ui["A2AT_SAMPLE_PURE_HOP"] == "oss"
 
 
 def test_both_nms_passes_the_pure_message_mode_override_to_the_ui(

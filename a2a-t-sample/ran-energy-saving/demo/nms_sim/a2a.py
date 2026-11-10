@@ -690,7 +690,9 @@ def build_routes(
             return _pure_issue(task, issue, content, stream=stream, is_new=is_new)
         intent = accepted_intent(content, None, config)
         if stream:
-            return _stream_completion(task, intent)
+            # The pure stream owns the same rehearsal switch as the webhook path: a held Task must
+            # publish its report and stay WORKING so the Modify picker can select it.
+            return _stream_completion(task, intent, hold=config.hold_working and is_new)
         return _json_completion(task, intent, hold=config.hold_working and is_new, push=push)
 
     def _pure_issue(

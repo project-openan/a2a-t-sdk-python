@@ -61,7 +61,7 @@ from shared.trace import (
 from shared.trace_propagation import reset_active_trace, set_active_trace
 
 from protocol.client_flow import ClientFlowResult
-from protocol.client_runtime import MODE_CONFIRM, MODE_MANUAL, build_poll_runtime
+from protocol.client_runtime import MODE_AUTO, MODE_CONFIRM, MODE_MANUAL, build_poll_runtime
 from protocol.client_service.run_state import (
     SESSION_SWEEP_INTERVAL_SECONDS,
     STATUS_FAILED,
@@ -158,12 +158,26 @@ def _cancel_label(run: RunState) -> str:
     return CANCELED_BY_OPERATOR if run.cancel_requested else CANCELED_BY_SHUTDOWN
 
 
+def _long_task_id(run: RunState, result: ClientFlowResult | None) -> str:
+    """Return the Task a run must keep tracking, including a direct Modify's target.
+
+    A Modify response may carry no Task frame at all: the vendor applies the change and keeps the
+    Task working. On the direct hop the Task the run continues is the one to poll; through the OSS
+    Agent the caller's Task is the outer one, so only ``result.task_id`` is authoritative there.
+    """
+    if result is not None and result.task_id:
+        return result.task_id
+    if run.discovery == DISCOVERY_NMS:
+        return run.target_task_id or run.remote_task_id or ""
+    return ""
+
+
 def _should_watch_long_task(run: RunState, result: ClientFlowResult | None) -> bool:
     """Whether a finished client flow really left a remote Task still executing."""
     return (
         result is not None
         and result.final_state == FINAL_STATE_INCOMPLETE
-        and bool(result.task_id)
+        and bool(_long_task_id(run, result))
         and run.protocol in (PROTOCOL_A2A_T, PROTOCOL_PURE)
     )
 
@@ -800,6 +814,11 @@ class RunManager:
             ValueError: when ``intent_mode`` is unsupported.
         """
         resolved_source = normalize_run_source(source)
+        if mode == MODE_AUTO and protocol == PROTOCOL_PURE and discovery == DISCOVERY_NMS:
+            # A direct vendor hop cannot ground an automatic answer: the OSS Agent owns the AI
+            # recommendation metadata, and without it the answer policy would send an empty string.
+            # Confirmation keeps the operator in the loop and opens the decision surface.
+            mode = MODE_CONFIRM
         resolved_target_task = target_task_id.strip() if isinstance(target_task_id, str) else ""
         resolved_target_context = target_context_id.strip() if isinstance(target_context_id, str) else ""
         if bool(resolved_target_task) != bool(resolved_target_context):
@@ -817,9 +836,17 @@ class RunManager:
         run_mode = RUN_MODE_MODIFY if resolved_target_task or resolved_server_task else RUN_MODE_CREATE
         if run_mode == RUN_MODE_MODIFY:
             if protocol == PROTOCOL_PURE:
-                if not resolved_server_task:
+                if discovery == DISCOVERY_NMS:
+                    # The direct hop addresses the vendor Task itself, so the target pair is the
+                    # wire identity and no outer Task exists.
+                    if not resolved_target_task:
+                        raise ValueError(
+                            "A direct standard-A2A Modify needs the vendor Task id and its context id."
+                        )
+                elif not resolved_server_task:
                     raise ValueError(
-                        "A pure A2A Modify needs the outer Task id and context of the A2A peer."
+                        "A pure A2A Modify through the OSS Agent needs the outer Task id and "
+                        "context of the A2A peer."
                     )
             elif protocol != PROTOCOL_A2A_T:
                 raise ValueError("A Modify-only run requires A2A-T or pure A2A.")
@@ -1666,7 +1693,7 @@ class RunManager:
         that is only the start of a task that may run for days, so the UI must not finish the run;
         this watcher polls the authoritative Task and records the terminal status/report.
         """
-        task_id = result.task_id or ""
+        task_id = _long_task_id(run, result)
         # The tracker polls the authoritative Task, so the process-owned webhook subscription is
         # no longer needed. Releasing it stops pushes queueing for a run that may stay active for
         # days; the runtime's aclose() later sees the cleared field and does nothing.
@@ -1891,7 +1918,9 @@ class RunManager:
         runtime = run.runtime
         if runtime is None:
             raise RuntimeError("The run has no runtime to poll.")
-        if run.protocol == PROTOCOL_A2A_T and run.discovery == DISCOVERY_NMS:
+        if run.discovery == DISCOVERY_NMS:
+            # Any protocol that hopped to the vendor owns a vendor Task; the direct standard-A2A
+            # hop is no different from A2A-T here.
             nms_client = getattr(runtime, "nms_client", None)
             if nms_client is None:
                 raise RuntimeError("The run has no NMS client to poll.")
@@ -1961,12 +1990,16 @@ class RunManager:
         if run.status == STATUS_RUNNING:
             run.status = STATUS_INTERRUPTED
         result = run.result
+        # A Modify response may carry no Task frame; keep the identity the run already observed
+        # instead of clearing it, so a restart can still reattach to the vendor Task.
+        task_id = (result.task_id if result is not None else None) or _long_task_id(run, result)
+        context_id = (result.context_id if result is not None else None) or run.remote_context_id
         await self._store.update_run(
             run.run_id,
             status=run.status,
             final_state=result.final_state if result is not None else None,
-            server_context_id=result.context_id if result is not None else None,
-            server_task_id=result.task_id if result is not None else None,
+            server_context_id=context_id or None,
+            server_task_id=task_id or None,
             downstream_task_id=run.downstream_task_id,
             downstream_context_id=run.downstream_context_id,
             downstream_hop=run.downstream_hop,

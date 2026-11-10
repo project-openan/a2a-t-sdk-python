@@ -45,7 +45,7 @@ from protocol.client_store import (
 )
 from protocol.decision_provider import ManualDecisionProvider
 from protocol.sqlite_task_store import SqliteTaskStore
-from shared.config import DISCOVERY_NMS, TRANSPORT_WEBHOOK, SampleConfig
+from shared.config import DISCOVERY_NMS, PURE_HOP_NMS, TRANSPORT_WEBHOOK, SampleConfig
 from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.run_constants import FINAL_STATE_INTENT_NOT_CONFIRMED, PROTOCOL_A2A_T, PROTOCOL_PURE
 from shared.trace import PHASES
@@ -810,6 +810,97 @@ async def test_a_pure_modify_without_an_outer_task_mapping_is_rejected(
 
     assert response.status_code == 409
     assert response.json()["code"] == "target_server_mapping_missing"
+
+
+async def test_a_direct_pure_modify_accepts_the_vendor_pair(
+    offline_config: SampleConfig,
+    factory: Callable[..., Any],
+    runtimes: list[FakeRuntime],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A direct standard-A2A hop addresses the vendor Task, so no outer mapping is needed."""
+
+    async def working_task(_config: SampleConfig, task_id: str) -> dict[str, object]:
+        del task_id
+        return _working_task_row()
+
+    monkeypatch.setattr("demo.web.app.read_task", working_task)
+    app = create_app(
+        replace(_nms_config(offline_config), pure_hop=PURE_HOP_NMS),
+        runs_dir=tmp_path,
+        runtime_factory=factory,
+        finished_grace_seconds=0.0,
+        ui_mode="explorer",
+        protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        response = await http_client.post(
+            "/api/runs",
+            json={
+                "scenario": "outage",
+                "mode": "auto",
+                "protocol": "pure",
+                "targetTaskId": "task-9",
+                "targetContextId": "ctx-9",
+            },
+        )
+        assert response.status_code == 202, response.text
+        # A direct hop has no OSS recommendation, so automatic mode degrades to confirmation and
+        # the fake runtime waits for a human; the identity is what this test asserts.
+        run_id = response.json()["runId"]
+        for _ in range(500):
+            if runtimes:
+                break
+            await asyncio.sleep(0.01)
+        run = (await http_client.get(f"/api/runs/{run_id}")).json()
+        assert run["mode"] == "confirm"
+        await http_client.post(f"/api/runs/{run_id}/cancel")
+
+    assert runtimes[0].target_task_id == "task-9"
+    assert runtimes[0].target_context_id == "ctx-9"
+    assert runtimes[0].target_server_task_id is None
+
+
+async def test_a_direct_pure_modify_rejects_an_outer_pair(
+    offline_config: SampleConfig,
+    factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The direct hop has no outer Task; a caller still sending one gets a precise error."""
+
+    async def working_task(_config: SampleConfig, task_id: str) -> dict[str, object]:
+        del task_id
+        return _working_task_row()
+
+    monkeypatch.setattr("demo.web.app.read_task", working_task)
+    app = create_app(
+        replace(_nms_config(offline_config), pure_hop=PURE_HOP_NMS),
+        runs_dir=tmp_path,
+        runtime_factory=factory,
+        finished_grace_seconds=0.0,
+        ui_mode="explorer",
+        protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        response = await http_client.post(
+            "/api/runs",
+            json={
+                "scenario": "outage",
+                "mode": "auto",
+                "protocol": "pure",
+                "targetTaskId": "task-9",
+                "targetContextId": "ctx-9",
+                "targetServerTaskId": "outer-1",
+                "targetServerContextId": "outer-ctx",
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "target_server_not_used"
 
 
 async def test_the_task_picker_reports_the_pure_outer_task_ids(
@@ -2270,6 +2361,35 @@ async def test_nms_simulator_keeps_the_sse_transport_in_the_meta_defaults(
         meta = (await http_client.get("/api/meta")).json()
 
     assert meta["protocolDefaults"]["a2a-t"] == {
+        "discovery": "nms",
+        "transport": "sse",
+    }
+
+
+async def test_a_direct_pure_hop_is_published_in_the_meta_defaults(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """The page reads the deployment's standard-A2A hop from the meta defaults."""
+    app = create_app(
+        replace(
+            _nms_config(offline_config),
+            pure_hop=PURE_HOP_NMS,
+            transport="sse",
+        ),
+        runs_dir=tmp_path,
+        runtime_factory=lambda *args, **kwargs: FakeRuntime(),  # type: ignore[arg-type,return-value]
+        protocol=PROTOCOL_A2A_T,
+        protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
+        nms_enabled=True,
+        default_transport="sse",
+        finished_grace_seconds=0.0,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+        meta = (await http_client.get("/api/meta")).json()
+
+    assert meta["protocolDefaults"]["pure"] == {
         "discovery": "nms",
         "transport": "sse",
     }

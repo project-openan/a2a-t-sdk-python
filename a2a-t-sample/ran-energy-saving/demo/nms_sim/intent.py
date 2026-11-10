@@ -76,7 +76,8 @@ _REGION_PREFIXES: Final[tuple[str, ...]] = (
 )
 #: Plain-text answers that name the region: "The region is X.", "region: X", "the area is X".
 _REGION_IS_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"(?:the\s+)?(?:energy[-\s]*saving\s+)?(?:region|area|zone)(?:\s+name)?\s*(?:is|=|:)\s*"
+    # ``\b`` keeps "region:" from matching inside the mixed-case region id "A2ATestRegion:".
+    r"(?:the\s+)?(?:energy[-\s]*saving\s+)?\b(?:region|area|zone)(?:\s+name)?\s*(?:is|=|:)\s*"
     r"([^\n,;.。；]+)",
     re.IGNORECASE,
 )
@@ -88,6 +89,12 @@ _REGION_IN_PATTERN: Final[re.Pattern[str]] = re.compile(
 #: "an energy saving task for TestRegion with ...".
 _REGION_FOR_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"\bfor\s+(?:the\s+)?([A-Za-z][A-Za-z0-9_\-]*)\s+(?:with|region|area)\b",
+    re.IGNORECASE,
+)
+#: "Create an energy saving task for A2ATestRegion: ..." -- the prose baseline the tester seeds
+#: and the vendor accepts. The colon keeps this from matching "for each time period".
+_REGION_FOR_COLON_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"\bfor\s+(?:the\s+)?([A-Za-z][A-Za-z0-9_\-]*)\s*:",
     re.IGNORECASE,
 )
 #: Words that describe a region instead of naming it; removed before equality comparison.
@@ -456,7 +463,12 @@ def _region(text: str) -> str:
     if section:
         line = next((item.strip() for item in section.splitlines() if item.strip()), "")
         return _strip_region_line(line)
-    for pattern in (_REGION_IS_PATTERN, _REGION_IN_PATTERN, _REGION_FOR_PATTERN):
+    for pattern in (
+        _REGION_IS_PATTERN,
+        _REGION_IN_PATTERN,
+        _REGION_FOR_PATTERN,
+        _REGION_FOR_COLON_PATTERN,
+    ):
         matches = pattern.findall(text)
         if matches:
             return _strip_region_line(matches[-1])

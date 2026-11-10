@@ -78,6 +78,9 @@ from shared.config import (
     PROTOCOL_MODE_ENV_KEY,
     PURE_APPROVAL_GATE_ENV_KEY,
     PURE_FOLLOWUP_ENV_KEY,
+    PURE_HOP_ENV_KEY,
+    PURE_HOP_NMS,
+    PURE_HOP_OSS,
     PURE_MESSAGE_MODE_ENV_KEY,
     RAN_URL_ENV_KEY,
     RUNS_DIR_ENV_KEY,
@@ -1028,6 +1031,48 @@ def test_pure_followup_rejects_an_unknown_mode(tmp_path: Path) -> None:
     env_file.write_text(f"{PURE_FOLLOWUP_ENV_KEY}=guessed\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match=PURE_FOLLOWUP_ENV_KEY):
+        load_config(env_path=env_file)
+
+
+def test_pure_hop_defaults_to_the_oss_proxy(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+
+    assert load_config(env_path=env_file).pure_hop == PURE_HOP_OSS
+
+
+def test_pure_hop_nms_requires_the_nms_discovery(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{PURE_HOP_ENV_KEY}={PURE_HOP_NMS}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=PURE_HOP_ENV_KEY):
+        load_config(env_path=env_file)
+
+
+def test_pure_hop_nms_loads_with_the_nms_discovery(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_DISCOVERY=nms",
+                f"{PURE_HOP_ENV_KEY}={PURE_HOP_NMS}",
+                f"{NMS_A2A_BASE_ENV_KEY}=https://nms.example:31127/a2a/json",
+                f"{NMS_TOKEN_URL_ENV_KEY}=https://nms.example:27417/rest/plat/smapp/v1/sessions",
+                f"{NMS_TOKEN_USER_ENV_KEY}=northbound",
+                f"{NMS_TOKEN_VALUE_ENV_KEY}=secret",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_config(env_path=env_file).pure_hop == PURE_HOP_NMS
+
+
+def test_pure_hop_rejects_an_unknown_value(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{PURE_HOP_ENV_KEY}=guessed\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=PURE_HOP_ENV_KEY):
         load_config(env_path=env_file)
 
 

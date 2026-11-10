@@ -20,6 +20,7 @@ import {
   negotiationExpected,
   negotiationTurn,
   pendingHuman,
+  protocolHop,
   pushTrace,
   resolutionOf,
   roundInfo,
@@ -102,6 +103,12 @@ assert.equal(canStartModify({ taskId: "task-1" }), true);
 assert.equal(canStartModify({ taskId: "task-1" }, "pure"), false);
 assert.equal(canStartModify({ taskId: "task-1", serverTaskId: "outer-1" }, "pure"), true);
 assert.equal(canStartModify({ taskId: "task-1" }, "a2a-t"), true);
+// A direct pure hop addresses the vendor Task itself, so no outer id is needed.
+assert.equal(canStartModify({ taskId: "task-1" }, "pure", "nms"), true);
+assert.equal(canStartModify({ taskId: "task-1" }, "pure", "oss"), false);
+assert.equal(protocolHop({ protocolDefaults: { pure: { discovery: "nms" } } }, "pure"), "nms");
+assert.equal(protocolHop({ protocolDefaults: { pure: { discovery: "direct" } } }, "pure"), "oss");
+assert.equal(protocolHop(null, "pure"), "oss");
 
 // A retry after a pre-send block keeps the attempt chain (conversation and trace id); a run that
 // reached the server, completed or was cancelled starts a new one.

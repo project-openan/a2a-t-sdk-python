@@ -69,6 +69,7 @@ from shared.config import (
     DISCOVERY_DIRECT,
     DISCOVERY_NMS,
     DISCOVERY_REGISTRY,
+    PURE_HOP_NMS,
     SUPPORTED_DISCOVERY_MODES,
     SUPPORTED_INTENT_MODES,
     SUPPORTED_TRANSPORTS,
@@ -299,7 +300,13 @@ async def _pure_run_mapping(client_store: ClientStore | None) -> dict[str, tuple
         return {}
     mapping: dict[str, tuple[str, str]] = {}
     for run in runs:
-        if run.protocol != PROTOCOL_PURE or not run.downstream_task_id or not run.server_task_id:
+        # A direct standard-A2A run addresses the vendor Task itself; it has no outer Task to map.
+        if (
+            run.protocol != PROTOCOL_PURE
+            or run.discovery == DISCOVERY_NMS
+            or not run.downstream_task_id
+            or not run.server_task_id
+        ):
             continue
         mapping.setdefault(
             run.downstream_task_id,
@@ -460,9 +467,16 @@ def create_app(
         default_discovery, SUPPORTED_DISCOVERY_MODES, config_discovery, "discovery"
     )
     # One agent serves both request forms, but the deployment decides the hop: A2A-T calls the
-    # vendor NMS directly (or discovers the local RAN Agent), while standard A2A always enters
-    # through the OSS Agent over direct discovery.
+    # vendor NMS directly (or discovers the local RAN Agent), while standard A2A enters through
+    # the OSS Agent by default. `A2AT_SAMPLE_PURE_HOP=nms` opts a standard-A2A deployment into
+    # calling the vendor directly; the hop is deployment-level and validated at startup.
     resolved_nms = (config.discovery == DISCOVERY_NMS) if nms_enabled is None else nms_enabled
+    pure_hop_nms = config.pure_hop == PURE_HOP_NMS
+    if pure_hop_nms and not resolved_nms:
+        raise ValueError(
+            "A2AT_SAMPLE_PURE_HOP=nms requires the nms discovery; a direct standard-A2A client "
+            "has no OSS Agent to discover"
+        )
     protocol_defaults: dict[str, dict[str, str]] = {
         PROTOCOL_A2A_T: {
             "discovery": DISCOVERY_NMS if resolved_nms else DISCOVERY_REGISTRY,
@@ -472,8 +486,10 @@ def create_app(
             "transport": resolved_default_transport,
         },
         PROTOCOL_PURE: {
-            "discovery": DISCOVERY_DIRECT,
-            "transport": TRANSPORT_SSE,
+            "discovery": DISCOVERY_NMS if pure_hop_nms else DISCOVERY_DIRECT,
+            # The direct hop talks to the vendor with the deployment transport (webhook on the
+            # real NMS, SSE on the simulator); the proxy hop keeps its historical SSE form.
+            "transport": resolved_default_transport if pure_hop_nms else TRANSPORT_SSE,
         },
     }
     resolved_intent_mode = (
@@ -1144,7 +1160,21 @@ def create_app(
                     },
                     status_code=409,
                 )
-            if protocol == PROTOCOL_PURE:
+            if protocol == PROTOCOL_PURE and discovery == DISCOVERY_NMS:
+                # A direct standard-A2A Modify addresses the vendor Task itself: targetTaskId is
+                # the wire taskId, and there is no OSS outer Task to name.
+                if resolved_server_task:
+                    return JSONResponse(
+                        {
+                            "error": (
+                                "A direct standard-A2A Modify addresses the vendor Task; drop "
+                                "targetServerTaskId/targetServerContextId."
+                            ),
+                            "code": "target_server_not_used",
+                        },
+                        status_code=400,
+                    )
+            elif protocol == PROTOCOL_PURE:
                 # The vendor Task is only the picker's identity. The message must continue the
                 # A2A peer's outer Task, and only a pure run that observed this vendor Task knows
                 # that id. Refuse rather than send a message that OSS would treat as a new Task.

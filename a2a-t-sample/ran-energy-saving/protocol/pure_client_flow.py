@@ -57,6 +57,7 @@ async def run_pure_client_flow(
     trace_sink: Callable[[dict[str, object]], None] | None = None,
     followup: str = PURE_FOLLOWUP_BOTH,
     plain_questions: bool = False,
+    message_ends_flow: bool = True,
     task_id: str | None = None,
     context_id: str | None = None,
 ) -> ClientFlowResult:
@@ -114,6 +115,9 @@ async def run_pure_client_flow(
         followup=followup,
         plain_questions=plain_questions,
         transport_emits_events=transport_emits_events,
+        default_task_id=task_id,
+        default_context_id=context_id,
+        message_ends_flow=message_ends_flow,
     )
 
 
@@ -131,6 +135,7 @@ async def continue_pure_client_flow(
     trace_sink: Callable[[dict[str, object]], None] | None = None,
     followup: str = PURE_FOLLOWUP_BOTH,
     plain_questions: bool = False,
+    message_ends_flow: bool = True,
 ) -> ClientFlowResult:
     """Answer a question the downstream asked after the original request phase ended.
 
@@ -162,6 +167,9 @@ async def continue_pure_client_flow(
         followup=followup,
         plain_questions=plain_questions,
         transport_emits_events=transport_emits_events,
+        default_task_id=task_id,
+        default_context_id=context_id,
+        message_ends_flow=message_ends_flow,
     )
 
 
@@ -206,6 +214,9 @@ async def _drive_negotiation(
     followup: str,
     plain_questions: bool,
     transport_emits_events: bool,
+    default_task_id: str | None = None,
+    default_context_id: str | None = None,
+    message_ends_flow: bool = True,
 ) -> ClientFlowResult:
     """Answer the negotiated rounds of one already-sent pure request."""
     rounds = 0
@@ -218,10 +229,13 @@ async def _drive_negotiation(
             break
         if on_answer is not None:
             await on_answer(pending, text)
+        # A vendor question may carry no conversation ids (a standalone ROLE_AGENT message).
+        # Fall back to the Task this run is continuing so the answer keeps the same identity as
+        # the request that provoked it.
         follow = _follow_up_request(
             text,
-            task_id=_text(pending.get("task_id")),
-            context_id=_text(pending.get("context_id")),
+            task_id=_text(pending.get("task_id")) or default_task_id,
+            context_id=_text(pending.get("context_id")) or default_context_id,
             followup=followup,
         )
         _emit_message_sent(follow, text, trace_sink)
@@ -229,7 +243,10 @@ async def _drive_negotiation(
         _collect(result, batch, event_sink, transport_emits_events)
         rounds += 1
 
-    result.final_state = _final_state(result.events)
+    # Only the last send phase decides the state; a prior round's message must not look like the
+    # end of the flow. A direct vendor hop keeps answering standalone messages, so a plain
+    # message there is a question/observation, not a terminal signal.
+    result.final_state = _final_state(batch, message_ends_flow=message_ends_flow)
     _fill_result(result, _context_id_of(result.events))
     _LOGGER.info(
         "pure client flow finished: state=%s task_id=%s rounds=%s",

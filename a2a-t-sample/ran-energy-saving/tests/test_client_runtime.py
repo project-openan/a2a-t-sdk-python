@@ -28,7 +28,7 @@ from protocol.decision_provider import (
 from protocol.discovery import DiscoveredAgent
 from protocol.server_app import AGENT_CARD_NAME, AGENT_CARD_ORGANIZATION, build_agent_card
 from shared.adk_tracing import TracingLlm
-from shared.config import MODEL_MODE_LIVE, SampleConfig
+from shared.config import DISCOVERY_NMS, MODEL_MODE_LIVE, SampleConfig
 
 
 class _FakeA2AClient:
@@ -690,6 +690,57 @@ async def test_a_pure_modify_sends_the_outer_task_ids(
 
     assert captured["task_id"] == "outer-1"
     assert captured["context_id"] == "outer-ctx"
+
+
+async def test_a_direct_pure_modify_sends_the_vendor_task_ids(
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A direct standard-A2A hop continues the vendor Task and answers plain questions."""
+    import protocol.client_runtime as client_runtime
+    from protocol.client_flow import ClientFlowResult
+    from shared.run_constants import FINAL_STATE_TASK_COMPLETED, PROTOCOL_PURE
+
+    captured: dict[str, object] = {}
+
+    async def fake_pure(**kwargs: object) -> ClientFlowResult:
+        captured.update(kwargs)
+        return ClientFlowResult(final_state=FINAL_STATE_TASK_COMPLETED)
+
+    monkeypatch.setattr(client_runtime, "run_pure_client_flow", fake_pure)
+    direct_config = replace(
+        offline_config,
+        discovery=DISCOVERY_NMS,
+        pure_hop="nms",
+        nms_a2a_base="https://nms.example:31127/a2a/json",
+        nms_token_url="https://nms.example:27417/rest/plat/smapp/v1/sessions",
+        nms_token_user="northbound",
+        nms_token_value="secret",
+    )
+    runtime = await build_demo_runtime(
+        direct_config,
+        "outage",
+        "auto",
+        "webhook",
+        DISCOVERY_NMS,
+        protocol=PROTOCOL_PURE,
+        env_path=tmp_path / "missing.env",
+    )
+    try:
+        await runtime.run(
+            user_request="modify the running task",
+            run_mode="modify",
+            target_task_id="task-1",
+            target_context_id="ctx-1",
+        )
+    finally:
+        await runtime.aclose()
+
+    assert captured["task_id"] == "task-1"
+    assert captured["context_id"] == "ctx-1"
+    assert captured["plain_questions"] is True
+    assert captured["message_ends_flow"] is False
 
 
 async def test_a_pure_modify_without_the_outer_ids_is_refused(

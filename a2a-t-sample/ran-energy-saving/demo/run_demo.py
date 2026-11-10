@@ -58,7 +58,10 @@ from urllib.parse import urlsplit
 
 from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from shared.config import (
+    PURE_HOP_ENV_KEY,
+    PURE_HOP_NMS,
     PURE_MESSAGE_MODE_ENV_KEY,
+    SUPPORTED_PURE_HOPS,
     SUPPORTED_PURE_MESSAGE_MODES,
     merge_sample_process_env,
 )
@@ -468,6 +471,7 @@ def _write_run_env(
     mie_port: int = 8002,
     intent_mode: str | None = None,
     pure_message_mode: str | None = None,
+    pure_hop: str | None = None,
     extra: dict[str, str] | None = None,
 ) -> Path:
     """Write the per-run ``.env`` and return its path."""
@@ -517,6 +521,8 @@ def _write_run_env(
         values["A2AT_SAMPLE_INTENT_MODE"] = intent_mode
     if pure_message_mode:
         values[PURE_MESSAGE_MODE_ENV_KEY] = pure_message_mode
+    if pure_hop:
+        values[PURE_HOP_ENV_KEY] = pure_hop
     if extra:
         values.update(extra)
     for key in _TLS_PATH_KEYS:
@@ -1238,6 +1244,16 @@ def _build_parser(
         ),
     )
     parser.add_argument(
+        "--pure-hop",
+        default=_env_str(env, PURE_HOP_ENV_KEY, "") or None,
+        choices=list(SUPPORTED_PURE_HOPS),
+        help=(
+            "Hop of the standard A2A request form: oss (default, engineer UI -> OSS Agent -> "
+            "downstream) or nms (call the vendor NMS directly, so a plain Create/Modify/answer "
+            "sequence addresses the vendor's own Task); nms requires --nms and is deployment-level"
+        ),
+    )
+    parser.add_argument(
         "--webhook-host",
         default=None,
         help=(
@@ -1426,6 +1442,9 @@ def main() -> int:
         # A CLI choice beats a sourced .env in every child: the launcher environment is inherited
         # and ``shared.config`` reads it before the per-run file.
         os.environ[PURE_MESSAGE_MODE_ENV_KEY] = args.pure_message_mode
+    if args.pure_hop:
+        # Deployment-level standard-A2A hop; validated by load_config against the discovery mode.
+        os.environ[PURE_HOP_ENV_KEY] = args.pure_hop
 
     from shared.logging_setup import configure_logging
 
@@ -1635,7 +1654,7 @@ def main() -> int:
             "A2AT_SAMPLE_NMS_VERIFY_TLS": "false",
             "A2AT_SAMPLE_NMS_REGION": sim_settings["A2AT_SAMPLE_NMS_SIM_REGION"],
             "A2AT_SAMPLE_NMS_SITES": sim_settings["A2AT_SAMPLE_NMS_SIM_SITES"]
-            or "NRES_XCS_6102937,LTE_26441_LNR_OCL",
+            or "NRES_XCS_6102937,NES_27A_321071,LTE_26441_LNR_OCL,LNR_KPI_7745",
             "A2AT_SAMPLE_NMS_WIRE_LOG": "1",
         }
 
@@ -1659,6 +1678,7 @@ def main() -> int:
         mie_port=args.mie_port,
         intent_mode=args.intent_mode,
         pure_message_mode=args.pure_message_mode,
+        pure_hop=args.pure_hop,
         extra=nms_overrides,
     )
 
@@ -1670,11 +1690,13 @@ def main() -> int:
         print(f"[run_demo] {exc}")
         return 1
     _warm_live_model(resolved_config)
+    pure_direct = args.nms and resolved_config.pure_hop == PURE_HOP_NMS
     print(
         f"[run_demo] resolved: model_mode={resolved_config.model_mode}, "
         f"model={resolved_config.model_label}, language={resolved_config.language}, "
         f"provider={resolved_config.adk_model_provider}, discovery={resolved_config.discovery}, "
         f"transport={resolved_config.transport}, "
+        f"pure_hop={resolved_config.pure_hop}, "
         f"pure_message_mode={resolved_config.pure_message_mode}, "
         f"intent_mode={resolved_config.intent_mode}, "
         f"nms_region={resolved_config.nms_region or '-'}, "
@@ -1953,10 +1975,11 @@ def main() -> int:
                 },
             ) is None:
                 return 1
-        elif args.protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH):
+        elif not pure_direct and args.protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH):
             # The NMS deployment keeps the OSS Agent but drops the local RAN Agent and MIE: the OSS
             # Agent forwards the normalized request to the vendor NMS over plain A2A. ``both`` also
-            # serves A2A-T in the UI, which talks to the NMS directly.
+            # serves A2A-T in the UI, which talks to the NMS directly. A direct standard-A2A hop
+            # calls the NMS itself, so no OSS Agent is started at all.
             oss_env = {
                 # ``shared.config`` prefers the process environment over the per-run .env, so a
                 # deployment shell that sourced the source .env would otherwise let a stale
@@ -2002,8 +2025,11 @@ def main() -> int:
             pure_stack = args.protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH)
             ui_topology_env = {
                 "A2AT_SAMPLE_DISCOVERY": "nms" if args.nms else args.discovery,
+                "A2AT_SAMPLE_PURE_HOP": resolved_config.pure_hop,
                 "A2AT_SAMPLE_DIRECT_SERVER_URL": (
-                    f"http://{server_host}:{args.oss_port if pure_stack else server_port}"
+                    resolved_config.nms_a2a_base
+                    if pure_direct
+                    else f"http://{server_host}:{args.oss_port if pure_stack else server_port}"
                 ),
                 "A2AT_SAMPLE_NMS_SIM": "1" if args.nms_sim else "0",
                 # CLI values must win over an exported shell value; shared.config prefers the
@@ -2022,7 +2048,10 @@ def main() -> int:
                 **nms_overrides,
             }
             pure_nms = args.nms and args.protocol == "pure"
-            if pure_nms:
+            if pure_direct:
+                # The direct standard-A2A hop addresses the vendor NMS itself.
+                ui_server_url = args.server_url or resolved_config.nms_a2a_base
+            elif pure_nms:
                 # The engineer client talks to the local OSS Agent; the OSS Agent owns the NMS hop.
                 ui_server_url = args.server_url or f"http://{server_host}:{args.oss_port}"
             elif args.nms:
@@ -2039,7 +2068,8 @@ def main() -> int:
                 else None
             )
             # The UI -> OSS hop is local plain A2A; only the OSS Agent uses the NMS webhook.
-            ui_transport = "sse" if pure_nms else args.transport
+            # A direct pure hop talks to the vendor with the deployment transport.
+            ui_transport = args.transport if pure_direct else ("sse" if pure_nms else args.transport)
             ui_args = [
                 "--env-file",
                 str(env_path),
@@ -2062,7 +2092,7 @@ def main() -> int:
                 "--protocol",
                 args.protocol,
             ]
-            if pure_nms:
+            if pure_nms and not pure_direct:
                 ui_args += ["--discovery", "direct"]
             if args.nms:
                 # The UI derives each protocol's discovery/transport default: A2A-T talks to the
@@ -2135,10 +2165,10 @@ def main() -> int:
                     env_path=env_path,
                     scenario=args.scenario,
                     mode=args.mode,
-                    transport="sse" if pure_nms else args.transport,
+                    transport=args.transport if pure_direct else ("sse" if pure_nms else args.transport),
                     language=args.language,
                     protocol=args.protocol,
-                    discovery="direct" if pure_nms else None,
+                    discovery=None if pure_direct else ("direct" if pure_nms else None),
                     user_request=args.request or None,
                 )
             )

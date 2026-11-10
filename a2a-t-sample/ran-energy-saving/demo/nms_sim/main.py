@@ -22,7 +22,7 @@ def main() -> None:
     port = int(os.environ.get(PORT_ENV_KEY, "18080"))
     _LOGGER.info(
         "NMS simulator starting: host=%s port=%s fidelity=%s transport=stream+webhook "
-        "carrier=%s kinds=%s region=%s window=%s max_rounds=%s task_shape=%s",
+        "carrier=%s kinds=%s region=%s window=%s hold_working=%s max_rounds=%s task_shape=%s",
         host,
         port,
         config.fidelity,
@@ -30,6 +30,7 @@ def main() -> None:
         ",".join(config.negotiation_kinds),
         config.region,
         config.window,
+        config.hold_working,
         config.max_rounds,
         config.task_shape,
     )

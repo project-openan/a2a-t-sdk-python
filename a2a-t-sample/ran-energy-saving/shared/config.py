@@ -63,6 +63,14 @@ PURE_FOLLOWUP_TASK = "task"
 PURE_FOLLOWUP_CONTEXT = "context"
 SUPPORTED_PURE_FOLLOWUPS = (PURE_FOLLOWUP_BOTH, PURE_FOLLOWUP_TASK, PURE_FOLLOWUP_CONTEXT)
 
+#: Hop a standard A2A (``pure``) client takes. ``oss`` keeps the proxy topology (UI -> OSS Agent
+#: -> downstream); ``nms`` calls the vendor directly so a plain Create/Modify/answer sequence
+#: addresses the vendor's own Task. The hop is deployment-level and validated at startup.
+PURE_HOP_OSS = "oss"
+PURE_HOP_NMS = "nms"
+SUPPORTED_PURE_HOPS = (PURE_HOP_OSS, PURE_HOP_NMS)
+DEFAULT_PURE_HOP = PURE_HOP_OSS
+
 #: RPC method of a pure A2A request. ``auto`` follows the peer AgentCard: a peer that advertises
 #: ``capabilities.streaming`` gets ``message/stream`` on an SSE run, everything else gets one
 #: non-streaming ``message/send``. ``stream``/``send`` remain explicit conformance overrides for
@@ -116,6 +124,8 @@ TRACE_SPAN_LEVEL_ENV_KEY = "A2AT_SAMPLE_TRACE_SPAN_LEVEL"
 RUNS_DIR_ENV_KEY = "A2AT_SAMPLE_RUNS_DIR"
 #: Which conversation fields a pure A2A follow-up carries (``both`` / ``task`` / ``context``).
 PURE_FOLLOWUP_ENV_KEY = "A2AT_SAMPLE_PURE_FOLLOWUP"
+#: Hop a standard A2A client takes: ``oss`` (proxy, default) or ``nms`` (vendor direct).
+PURE_HOP_ENV_KEY = "A2AT_SAMPLE_PURE_HOP"
 PURE_MESSAGE_MODE_ENV_KEY = "A2AT_SAMPLE_PURE_MESSAGE_MODE"
 HTTP_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS"
 LLM_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_LLM_TIMEOUT_SECONDS"
@@ -307,9 +317,10 @@ DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS = 120.0
 #: Polling faster than this spends the NMS quota bucket on observations instead of requests.
 DEFAULT_NMS_POLL_INTERVAL_SECONDS = 5.0
 
-#: Region and sites of the 910 test environment are intentionally not defaults. A real-NMS run
-#: must configure them explicitly; the launcher pins them only for the local simulator. This keeps
-#: the sample from hiding a wrong or missing region behind a built-in value.
+#: The region of the 910 test environment is intentionally not a default. A real-NMS run must
+#: configure it explicitly; the launcher pins it only for the local simulator. The example requests
+#: do name sites the vendor serves (``NRES_XCS_6102937``, ``NES_27A_321071``,
+#: ``LTE_26441_LNR_OCL``, ``LNR_KPI_7745``), because the NMS rejects any other site.
 
 #: Standard vendor NMS surface, used to derive both URLs from ``A2AT_SAMPLE_NMS_HOST``.
 DEFAULT_NMS_SCHEME = "https"
@@ -364,6 +375,16 @@ def _pure_followup(values: dict[str, str | None]) -> str:
         raise ValueError(
             f"Unsupported {PURE_FOLLOWUP_ENV_KEY}: {value}; "
             f"expected one of {SUPPORTED_PURE_FOLLOWUPS}"
+        )
+    return value
+
+
+def _pure_hop(values: dict[str, str | None]) -> str:
+    """Resolve the hop of a standard A2A request, rejecting an unsupported value."""
+    value = _env_value(values, PURE_HOP_ENV_KEY, DEFAULT_PURE_HOP).lower()
+    if value not in SUPPORTED_PURE_HOPS:
+        raise ValueError(
+            f"Unsupported {PURE_HOP_ENV_KEY}: {value}; expected one of {SUPPORTED_PURE_HOPS}"
         )
     return value
 
@@ -590,6 +611,7 @@ class SampleConfig:
         gateway_scenario: scenario used for an inbound gateway request.
         runs_dir: directory of run transcripts, NMS wire logs and the UI history.
         pure_followup: conversation fields of a pure A2A follow-up (``both`` / ``task`` / ``context``).
+        pure_hop: hop of a standard A2A request (``oss`` proxy / ``nms`` vendor direct).
         gateway_task_db_path: Absolute SQLite path of the inbound gateway Task store and its push
             notification registrations; ``None`` keeps both in memory.
         auth_token: bearer token required by the Web UI API and the inbound gateway; empty keeps
@@ -696,6 +718,7 @@ class SampleConfig:
     gateway_scenario: str = DEFAULT_GATEWAY_SCENARIO
     runs_dir: str = str(DEFAULT_RUNS_DIR)
     pure_followup: str = PURE_FOLLOWUP_BOTH
+    pure_hop: str = DEFAULT_PURE_HOP
     pure_message_mode: str = DEFAULT_PURE_MESSAGE_MODE
     gateway_task_db_path: str | None = None
     auth_token: str = ""
@@ -787,6 +810,13 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
     discovery = _env_value(values, DISCOVERY_ENV_KEY, DISCOVERY_REGISTRY)
     if discovery not in SUPPORTED_DISCOVERY_MODES:
         raise ValueError(f"Unsupported {DISCOVERY_ENV_KEY}: {discovery}; expected one of {SUPPORTED_DISCOVERY_MODES}")
+
+    pure_hop = _pure_hop(values)
+    if pure_hop == PURE_HOP_NMS and discovery != DISCOVERY_NMS:
+        raise ValueError(
+            f"{PURE_HOP_ENV_KEY}=nms requires {DISCOVERY_ENV_KEY}=nms; a direct standard A2A "
+            "client has no OSS Agent to discover"
+        )
 
     transport = _env_value(values, TRANSPORT_ENV_KEY, TRANSPORT_SSE)
     if transport not in SUPPORTED_TRANSPORTS:
@@ -961,6 +991,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         gateway_scenario=gateway_scenario,
         runs_dir=_resolved_dir(values, RUNS_DIR_ENV_KEY, DEFAULT_RUNS_DIR),
         pure_followup=_pure_followup(values),
+        pure_hop=pure_hop,
         pure_message_mode=_pure_message_mode(values),
         gateway_task_db_path=_optional_absolute_path(values, GATEWAY_TASK_DB_ENV_KEY),
         auth_token=_env_value(values, AUTH_TOKEN_ENV_KEY, "").strip(),

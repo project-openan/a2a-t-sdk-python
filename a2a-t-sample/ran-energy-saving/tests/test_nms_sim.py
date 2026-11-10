@@ -1012,6 +1012,34 @@ async def test_hold_working_webhook_pushes_the_artifact_then_stays_working() -> 
         assert stored["status"]["state"] == "TASK_STATE_WORKING"
 
 
+async def test_hold_working_keeps_a_pure_stream_task_working() -> None:
+    """A plain-A2A create can be rehearsed as a running Task the picker may Modify."""
+    config = SimConfig(fidelity=FIDELITY_FAST, window_policy=WINDOW_POLICY_ANY, hold_working=True)
+    async for client in _client(config):
+        token = await _token(client)
+        frames = await _frames(
+            client,
+            {
+                "message": {
+                    "messageId": "m1",
+                    "role": "ROLE_USER",
+                    "parts": [
+                        {
+                            "text": (
+                                "Implement energy-saving in A2ATestRegion region, and set the "
+                                "guaranteed throughput targets as follows: 00:00-07:00→2Mbps."
+                            )
+                        }
+                    ],
+                }
+            },
+            _headers(token, extension=None),
+        )
+
+        assert frames[0]["task"]["status"]["state"] == "TASK_STATE_SUBMITTED"
+        assert frames[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_WORKING"
+
+
 async def test_message_stream_task_carrier_closes_after_the_input_required_task() -> None:
     config = SimConfig(fidelity=FIDELITY_FAST, negotiation_carrier=CARRIER_TASK)
     async for client in _client(config):
@@ -1083,6 +1111,19 @@ def test_a_split_outage_is_measured_across_its_envelope() -> None:
         "15:00 to 18:00. Guaranteed throughput 10Mbps."
     )
     assert getattr(issue, "kind", None) == KIND_FEASIBILITY
+
+
+def test_the_osp_baseline_prose_names_the_region() -> None:
+    """The tester's seeded Create names the region as "for <Region>:" and must parse."""
+    from demo.nms_sim.intent import extract_content
+
+    content = extract_content(
+        "Create an energy saving task for A2ATestRegion: guarantee 2Mbps from 00:00 to 07:00, "
+        "10Mbps from 07:00 to 18:00 and 20Mbps from 18:00 to 24:00."
+    )
+
+    assert content.region == "A2ATestRegion"
+    assert content.windows == ("00:00~07:00", "07:00~18:00", "18:00~24:00")
 
 
 def test_an_unknown_region_negotiation_names_no_candidate() -> None:

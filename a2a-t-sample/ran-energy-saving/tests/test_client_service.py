@@ -645,6 +645,87 @@ async def test_a_pure_modify_stops_the_run_tracking_the_outer_task(
     await _finish(manager, second.run_id)
 
 
+async def test_a_direct_pure_modify_continues_the_vendor_task(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """On the direct hop the vendor Task is the continuation target, not an outer Task."""
+    hold = asyncio.Event()
+    manager, _, runtimes = _manager(tmp_path, offline_config, hold_decision=hold)
+    first = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        "nms",
+        user_request="create",
+        protocol="pure",
+    )
+    while first.runtime is None:
+        await asyncio.sleep(0.01)
+    await runtimes[0].decision_entered.wait()
+    first.remote_task_id = "task-1"
+
+    second = await manager.start(
+        "information",
+        "auto",
+        "webhook",
+        "nms",
+        user_request="modify",
+        protocol="pure",
+        target_task_id="task-1",
+        target_context_id="ctx-1",
+    )
+
+    assert second.target_task_id == "task-1"
+    assert second.target_server_task_id is None
+    # A direct vendor hop has no OSS recommendation, so automatic answering degrades to confirm.
+    assert second.mode == "confirm"
+    assert first.finished()
+    assert first.error == HANDED_OVER
+    hold.set()
+    await _finish(manager, second.run_id)
+
+
+async def test_a_direct_pure_modify_rejects_a_missing_vendor_pair(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """A direct hop cannot continue anything but the vendor Task pair."""
+    manager, _, _ = _manager(tmp_path, offline_config)
+
+    with pytest.raises(ValueError, match="direct standard-A2A"):
+        await manager.start(
+            "information",
+            "auto",
+            "webhook",
+            "nms",
+            user_request="modify",
+            protocol="pure",
+            target_server_task_id="outer-1",
+            target_server_context_id="outer-ctx",
+        )
+
+
+async def test_a_proxy_pure_modify_still_needs_the_outer_pair(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """The OSS hop only exposes its own outer Task to the caller."""
+    manager, _, _ = _manager(tmp_path, offline_config)
+
+    with pytest.raises(ValueError, match="through the OSS Agent"):
+        await manager.start(
+            "information",
+            "auto",
+            "sse",
+            "direct",
+            user_request="modify",
+            protocol="pure",
+            target_task_id="task-1",
+            target_context_id="ctx-1",
+        )
+
+
 async def test_a_modify_waits_until_the_target_task_has_reached_submitted(
     tmp_path: Path,
     offline_config: SampleConfig,
@@ -1716,6 +1797,37 @@ async def test_the_long_task_watcher_answers_a_polled_question(
 
     assert answered == [("outer-1", "Which region?")]
     assert finished.final_state == FINAL_STATE_TASK_COMPLETED
+
+
+async def test_a_direct_pure_run_polls_the_vendor_task(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """The direct standard-A2A hop owns a vendor Task, so the watcher polls the NMS client."""
+    from protocol.client_service.run_state import RunState
+
+    manager, _store, _runtimes = _manager(tmp_path, offline_config)
+    run = RunState(
+        run_id="run-1",
+        scenario="night",
+        mode="auto",
+        transport="webhook",
+        protocol=PROTOCOL_PURE,
+    )
+    run.discovery = "nms"
+    calls: list[str] = []
+
+    async def get_task(task_id: str) -> dict[str, object]:
+        calls.append(task_id)
+        return {"contextId": "ctx-1", "status": {"state": "TASK_STATE_WORKING"}}
+
+    run.runtime = SimpleNamespace(nms_client=SimpleNamespace(get_task=get_task))
+
+    polled = await manager._poll_remote_task(run, "vendor-1")
+
+    assert calls == ["vendor-1"]
+    assert polled.state_name == "TASK_STATE_WORKING"
+    assert polled.context_id == "ctx-1"
 
 
 async def test_a_polled_question_accepts_a_sync_pure_answer(

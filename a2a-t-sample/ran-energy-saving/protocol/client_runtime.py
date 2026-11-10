@@ -639,12 +639,20 @@ class ClientRuntime:
                 modify_mode = run_mode == RUN_MODE_MODIFY
                 if modify_mode:
                     if self.protocol == PROTOCOL_PURE:
-                        # A pure Modify is a standard A2A continuation of the Task the caller
-                        # owns (the OSS Agent's outer Task), not of the vendor Task the picker
-                        # lists. The two ids travel together.
-                        if not target_server_task_id or not target_server_context_id:
+                        if self.config.discovery == DISCOVERY_NMS:
+                            # The direct hop owns the Task the operator picks, so the vendor pair
+                            # is the wire identity.
+                            if not target_task_id or not target_context_id:
+                                raise ClientRuntimeError(
+                                    "A direct standard-A2A Modify needs the vendor Task id and "
+                                    "its context id."
+                                )
+                        # Through the OSS Agent only the outer Task exists for the caller; the
+                        # vendor Task it forwards to is the OSS hop's own binding.
+                        elif not target_server_task_id or not target_server_context_id:
                             raise ClientRuntimeError(
-                                "A pure A2A Modify needs the outer Task id and context of the A2A peer."
+                                "A pure A2A Modify through the OSS Agent needs the outer Task id "
+                                "and context of the A2A peer."
                             )
                     elif self.protocol == PROTOCOL_A2A_T:
                         if not target_task_id or not target_context_id:
@@ -673,8 +681,11 @@ class ClientRuntime:
                     # intent layer, so the engineer client sends the raw request to it.
                     # A confirmation answer owns the human moment; hand it the same hooks the
                     # A2A-T decision provider receives.
+                    direct_hop = self.config.discovery == DISCOVERY_NMS
                     if modify_mode:
-                        await self._ensure_outer_task_active(target_server_task_id or "")
+                        await self._ensure_outer_task_active(
+                            (target_task_id or "") if direct_hop else (target_server_task_id or "")
+                        )
                     answer = self.pure_answer
                     for setter_name, hook in (
                         ("set_proposal_sink", on_decision_requested),
@@ -705,8 +716,19 @@ class ClientRuntime:
                         call_timeout_seconds=self.config.http_timeout_seconds,
                         event_sink=event_sink,
                         trace_sink=sink,
-                        task_id=target_server_task_id if modify_mode else None,
-                        context_id=target_server_context_id if modify_mode else None,
+                        # A direct hop continues the vendor Task; the proxy hop continues the
+                        # OSS Agent's outer Task and lets it forward to its binding.
+                        task_id=(target_task_id if direct_hop else target_server_task_id)
+                        if modify_mode
+                        else None,
+                        context_id=(target_context_id if direct_hop else target_server_context_id)
+                        if modify_mode
+                        else None,
+                        # The vendor answers a standard-A2A request with a standalone ROLE_AGENT
+                        # message; only a plain-question-aware flow can answer it, and that
+                        # message must not end a Task that is still working.
+                        plain_questions=direct_hop,
+                        message_ends_flow=not direct_hop,
                     )
                 intent: ProcessedIntent | None = None
                 if processed:

@@ -45,7 +45,7 @@ from eval.osp.runner import (
 from protocol.client_runtime import MODE_AUTO, MODE_SCRIPTED
 from protocol.client_service import STATUS_FAILED, RunManager, RunState
 from protocol.run_metrics import build_run_metrics
-from shared.config import MODEL_MODE_LIVE, MODEL_MODE_OFFLINE
+from shared.config import DISCOVERY_NMS, MODEL_MODE_LIVE, MODEL_MODE_OFFLINE
 from shared.run_constants import (
     FINAL_STATE_DECISION_UNGROUNDED,
     FINAL_STATE_INPUT_INVALID,
@@ -895,6 +895,9 @@ class EvalBatchManager:
         target_context_id: str | None = None
         target_server_task_id: str | None = None
         target_server_context_id: str | None = None
+        defaults = self._protocol_defaults.get(runtime_protocol, {})
+        transport = defaults.get("transport", "sse")
+        discovery = defaults.get("discovery", "direct")
         # A blocked A2A-T request never reaches the NMS, so it has nothing to continue; without a
         # follow-up, seeding would only create a Task that the case then refuses to modify.
         blocked_without_followup = (
@@ -905,9 +908,9 @@ class EvalBatchManager:
         if case.get("operation") == "Modify" and not blocked_without_followup:
             # A Modify continues an existing Task. The corpus says nothing about where that Task
             # came from, so the tester pairs every Modify row with one explicit baseline Create
-            # (see ``_baseline_request``) and continues the Task it produced. A2A-T continues the
-            # vendor Task directly; pure A2A continues the OSS Agent's outer Task, which is the
-            # Task id that hop owns.
+            # (see ``_baseline_request``) and continues the Task it produced. A2A-T and a direct
+            # standard-A2A hop both continue the vendor Task; only the proxy hop continues the
+            # OSS Agent's outer Task, which is the Task id that hop owns.
             baseline = await self._seed_baseline(batch, index, item, runtime_protocol, case)
             if baseline is None:
                 for stage in ("send", "negotiate", "accepted", "working", "final"):
@@ -917,7 +920,7 @@ class EvalBatchManager:
                         )
                 item.status = CASE_ERROR
                 return
-            if runtime_protocol == RUNTIME_A2A_T:
+            if runtime_protocol == RUNTIME_A2A_T or discovery == DISCOVERY_NMS:
                 target_task_id = str(baseline["taskId"])
                 target_context_id = str(baseline["contextId"])
             else:
@@ -926,9 +929,6 @@ class EvalBatchManager:
 
         decisions = a2at_decisions(case) if runtime_protocol == RUNTIME_A2A_T else []
         answers = pure_answers(case) if runtime_protocol == PROTOCOL_PURE else []
-        defaults = self._protocol_defaults.get(runtime_protocol, {})
-        transport = defaults.get("transport", "sse")
-        discovery = defaults.get("discovery", "direct")
         conversation_id, idempotency_key = self._run_identity(batch, index, item)
         mode = self._mode_for(batch, item.protocol)
         if runtime_protocol == RUNTIME_A2A_T and _negotiation_expected(case, PROTOCOL_A2A_T):
@@ -1148,15 +1148,19 @@ class EvalBatchManager:
         # baseline run to reach a terminal state: a real NMS keeps the Create Task WORKING for the
         # whole energy-saving window, which made every Modify item time out as a baseline failure.
         state = await self._wait_for_baseline_acceptance(
-            run, protocol, self._resolved_timeout(batch), item=item
+            run,
+            protocol,
+            self._resolved_timeout(batch),
+            item=item,
+            discovery=defaults.get("discovery", ""),
         )
         task_id = run.remote_task_id or (run.result.task_id if run.result is not None else None)
         context_id = run.remote_context_id or (
             run.result.context_id if run.result is not None else None
         )
-        accepted = state in _baseline_accepted_states(protocol)
+        accepted = state in _baseline_accepted_states(protocol, defaults.get("discovery", ""))
         if not task_id or not context_id or not accepted:
-            message = run.error or _baseline_failure_message(protocol, state)
+            message = run.error or _baseline_failure_message(protocol, state, defaults.get("discovery", ""))
             item.baseline = {
                 "runId": run.run_id,
                 "protocol": protocol,
@@ -1188,18 +1192,19 @@ class EvalBatchManager:
         timeout_seconds: float,
         *,
         item: CaseItem | None = None,
+        discovery: str = "",
     ) -> str | None:
         """Poll until the baseline Task reaches the state a Modify can continue from.
 
-        A2A-T can continue any non-terminal Task and reports ``SUBMITTED`` on acceptance. Pure
-        A2A continues the OSS Agent's outer Task, which must be ``WORKING``: ``COMPLETED`` is
-        terminal (the A2A layer rejects the continuation) and ``INPUT_REQUIRED`` would route the
-        Modify text as an answer to the pending question.
+        A2A-T and a direct standard-A2A hop continue the vendor Task, which the vendor reports as
+        ``SUBMITTED`` on acceptance. The proxy hop continues the OSS Agent's outer Task, which must
+        be ``WORKING``: ``COMPLETED`` is terminal (the A2A layer rejects the continuation) and
+        ``INPUT_REQUIRED`` would route the Modify text as an answer to the pending question.
 
         ``item`` is updated in place on every poll so the batch snapshot (and therefore the tester
         UI) shows the baseline's current state while the Create is still in flight.
         """
-        wanted = _baseline_accepted_states(protocol)
+        wanted = _baseline_accepted_states(protocol, discovery)
         deadline = time.monotonic() + max(0.1, timeout_seconds)
         while time.monotonic() < deadline:
             state = run.latest_task_state
@@ -2010,20 +2015,22 @@ def _case_baseline_request(case: Mapping[str, Any] | None) -> str | None:
     return request.strip() if isinstance(request, str) and request.strip() else None
 
 
-def _baseline_accepted_states(protocol: str) -> frozenset[str]:
-    """Return the states a Modify can continue from, for one protocol.
+def _baseline_accepted_states(protocol: str, discovery: str = "") -> frozenset[str]:
+    """Return the states a Modify can continue from, for one protocol and hop.
 
     ``COMPLETED`` is excluded on purpose even though it is an acceptance signal for a Create:
-    the A2A layer rejects a message addressed to a terminal Task.
+    the A2A layer rejects a message addressed to a terminal Task. A direct hop sees the vendor
+    Task itself, so the vendor's ``SUBMITTED`` already means "accepted and continuable"; the
+    proxy hop sees the OSS outer Task, which is ``WORKING`` from the first acknowledgement.
     """
-    if protocol == RUNTIME_A2A_T:
+    if protocol == RUNTIME_A2A_T or discovery == DISCOVERY_NMS:
         return frozenset({TASK_STATE_SUBMITTED, TASK_STATE_WORKING})
     return frozenset({TASK_STATE_WORKING})
 
 
-def _baseline_failure_message(protocol: str, state: str | None) -> str:
+def _baseline_failure_message(protocol: str, state: str | None, discovery: str = "") -> str:
     """Explain why the paired Create cannot be continued by a Modify."""
-    if protocol == RUNTIME_A2A_T:
+    if protocol == RUNTIME_A2A_T or discovery == DISCOVERY_NMS:
         if state == "TASK_STATE_INPUT_REQUIRED":
             return (
                 "Modify 基线 Create 触发了协商（TASK_STATE_INPUT_REQUIRED），不是可续传状态；"

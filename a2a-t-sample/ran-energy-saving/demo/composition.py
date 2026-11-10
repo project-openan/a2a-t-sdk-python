@@ -13,7 +13,7 @@ from typing import Any
 from protocol.client_runtime import MODE_CONFIRM, MODE_MANUAL, build_client_runtime
 from protocol.pre_task_negotiation import TaskTPrecheck
 from protocol.run_spec import RunSpec
-from shared.config import INTENT_MODE_PROCESSED, SampleConfig
+from shared.config import DISCOVERY_NMS, INTENT_MODE_PROCESSED, SampleConfig
 from shared.models import NegotiationDecision
 from shared.run_constants import PROTOCOL_A2A_T, PROTOCOL_PURE
 
@@ -91,13 +91,15 @@ async def build_demo_runtime(
             pure_answers
         )
     elif protocol == PROTOCOL_PURE:
-        if mode in (MODE_CONFIRM, MODE_MANUAL):
-            # The pure hop has no protocol negotiation: the OSS Agent relays the downstream text
-            # question and the operator confirms the answer in the same card the A2A-T form uses.
+        if mode in (MODE_CONFIRM, MODE_MANUAL) or discovery == DISCOVERY_NMS:
+            # The pure hop has no protocol negotiation: the server asks with a plain text message
+            # and the operator confirms the answer in the same card the A2A-T form uses. A direct
+            # vendor hop carries no AI recommendation (that metadata belongs to the OSS Agent), so
+            # automatic mode degrades to confirmation instead of answering with an empty string.
             from demo.pure_confirmation import PureConfirmationAnswer
 
             pure_answer = PureConfirmationAnswer(
-                mode=mode,
+                mode=mode if mode in (MODE_CONFIRM, MODE_MANUAL) else MODE_CONFIRM,
                 timeout_seconds=config.manual_decision_timeout_seconds,
             )
         else:

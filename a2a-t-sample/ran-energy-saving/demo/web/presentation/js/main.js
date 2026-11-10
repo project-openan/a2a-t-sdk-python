@@ -25,6 +25,7 @@ import {
   modifyStateLabel,
   negotiationExpected,
   pendingHuman,
+  protocolHop,
   stageOf,
 } from "./state.js";
 import { STEP_KEYS, sceneFor } from "./scenes.js";
@@ -52,6 +53,9 @@ import {
 import { clear, el } from "./dom.js";
 
 const byId = (id) => document.getElementById(id);
+
+/** Hop of the selected protocol in this deployment; the backend owns it via protocolDefaults. */
+const hopOf = () => protocolHop(ui.meta, ui.protocol);
 
 //: Evidence rows are applied one at a time so a batch of server spans does not flash the panels.
 const EVIDENCE_MS = 60;
@@ -1125,7 +1129,9 @@ function renderModifyActions() {
         ? true
         : (ui.meta?.protocols || ["a2a-t"]).includes("a2a-t");
     const addressable =
-      ui.protocol !== "pure" || (task !== null && Boolean(task.serverTaskId));
+      ui.protocol !== "pure" ||
+      hopOf() === "nms" ||
+      (task !== null && Boolean(task.serverTaskId));
     // A running page does not block a Modify: the backend hands the Task over to the new run.
     els.modifyConfirm.disabled = !modifiable || !protocolAllows || !addressable || cancelling;
     els.modifyConfirm.textContent = ui.copy.modify.confirm;
@@ -1240,7 +1246,7 @@ function applyModifyTarget() {
     els.modifyError.hidden = false;
     return;
   }
-  if (ui.protocol === "pure" && !task.serverTaskId) {
+  if (ui.protocol === "pure" && hopOf() !== "nms" && !task.serverTaskId) {
     els.modifyError.textContent = ui.copy.modify.needsServerTask;
     els.modifyError.hidden = false;
     return;
@@ -1278,11 +1284,11 @@ function applyModifyTarget() {
 async function startRun() {
   // A Modify may start while the page still shows a run: starting it hands the Task over and
   // stops the previous run server-side, instead of refusing and forcing a page reload first.
-  if (ui.busy && !canStartModify(ui.targetTask, ui.protocol)) {
+  if (ui.busy && !canStartModify(ui.targetTask, ui.protocol, hopOf())) {
     showError(ui.copy.running);
     return;
   }
-  if (ui.targetTask && ui.protocol === "pure" && !ui.targetTask.serverTaskId) {
+  if (ui.targetTask && ui.protocol === "pure" && hopOf() !== "nms" && !ui.targetTask.serverTaskId) {
     showError(ui.copy.modify.needsServerTask);
     return;
   }
@@ -1329,7 +1335,7 @@ async function startRun() {
           ? {
               targetTaskId: ui.targetTask.taskId,
               targetContextId: ui.targetTask.contextId,
-              ...(ui.targetTask.serverTaskId
+              ...(hopOf() !== "nms" && ui.targetTask.serverTaskId
                 ? {
                     targetServerTaskId: ui.targetTask.serverTaskId,
                     targetServerContextId: ui.targetTask.serverContextId || "",
@@ -1656,7 +1662,7 @@ function closeStream() {
 function setBusy(busy) {
   // A selected Modify target keeps Start and the request editor usable while a run is on stage:
   // starting it is the handover that replaces that run.
-  const canRun = !busy || canStartModify(ui.targetTask, ui.protocol);
+  const canRun = !busy || canStartModify(ui.targetTask, ui.protocol, hopOf());
   ui.busy = busy;
   els.start.disabled = !canRun;
   els.reset.disabled = busy;
@@ -2490,10 +2496,10 @@ function renderControls() {
   els.pausedTag.hidden = !status.paused;
   els.stage.classList.toggle("paused", status.paused);
   els.start.textContent =
-    ui.busy && !canStartModify(ui.targetTask, ui.protocol) ? ui.copy.running : ui.copy.start;
+    ui.busy && !canStartModify(ui.targetTask, ui.protocol, hopOf()) ? ui.copy.running : ui.copy.start;
   if (els.startQuick) {
     // With a Modify target ready, Start is the handover that replaces the run on stage.
-    const canRun = !ui.busy || canStartModify(ui.targetTask, ui.protocol);
+    const canRun = !ui.busy || canStartModify(ui.targetTask, ui.protocol, hopOf());
     els.startQuick.textContent = canRun ? ui.copy.start : ui.copy.running;
     els.startQuick.disabled = !canRun;
   }
@@ -2617,11 +2623,12 @@ function renderIdentity() {
   const downstream = view.pure || {};
   const ran = downstream.downstreamHop === "ran";
   const taskId = view.taskId || "";
+  const directHop = view.protocol === "pure" && hopOf() === "nms";
   if (view.protocol === "pure") {
-    els.identityTaskLabel.textContent = labels.taskOss;
+    els.identityTaskLabel.textContent = directHop ? labels.taskNms : labels.taskOss;
     els.identityTaskRow.hidden = !taskId;
     els.identityTask.textContent = taskId;
-    const downstreamTask = downstream.downstreamTaskId || "";
+    const downstreamTask = directHop ? "" : downstream.downstreamTaskId || "";
     els.identityTask2Row.hidden = !downstreamTask;
     els.identityTask2Label.textContent = ran ? labels.taskRan : labels.taskNms;
     els.identityTask2.textContent = downstreamTask;
@@ -2789,12 +2796,16 @@ function renderProtocol() {
         : ui.copy.protocol.a2at;
   }
   // The deployment decides the pure-A2A topology: the local demo has three hops (OSS → RAN →
-  // MIE), while the vendor NMS is a black box the OSS Agent addresses directly.
+  // MIE), the vendor NMS is a black box the OSS Agent addresses directly, and the direct pure hop
+  // calls that NMS itself.
   const nms = Boolean(ui.meta?.nmsTasksEnabled);
+  const direct = pure && hopOf() === "nms";
   const hint = pure
-    ? nms
-      ? ui.copy.protocol.pureHintNms
-      : ui.copy.protocol.pureHint
+    ? direct
+      ? ui.copy.protocol.pureHintDirect
+      : nms
+        ? ui.copy.protocol.pureHintNms
+        : ui.copy.protocol.pureHint
     : switchable
       ? ui.copy.protocol.a2atHint
       : "";
@@ -2802,9 +2813,11 @@ function renderProtocol() {
   els.protocolHint.hidden = !hint;
   if (els.badge) {
     els.badge.textContent = pure
-      ? nms
-        ? ui.copy.pure.badgeNms
-        : ui.copy.pure.badge
+      ? direct
+        ? ui.copy.pure.badgeDirect
+        : nms
+          ? ui.copy.pure.badgeNms
+          : ui.copy.pure.badge
       : ui.copy.badge;
   }
   if (els.wireFormat) els.wireFormat.hidden = pure;
@@ -2820,7 +2833,11 @@ function renderProtocol() {
   };
   if (pure) {
     els.brandKicker.textContent = ui.copy.pure.kicker;
-    const pureTitle = nms ? ui.copy.pure.titleNms : ui.copy.pure.title;
+    const pureTitle = direct
+      ? ui.copy.pure.titleDirect
+      : nms
+        ? ui.copy.pure.titleNms
+        : ui.copy.pure.title;
     els.title.textContent = pureTitle;
     document.title = pureTitle;
     setText("brand-mark", "A2A");

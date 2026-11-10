@@ -197,6 +197,8 @@ export function applyFrame(state, frame) {
       if (frame.protocol === "plain") state.protocol = "plain";
       else if (frame.protocol === "pure") state.protocol = "pure";
       else if (frame.protocol === "a2a-t") state.protocol = "a2a-t";
+      // The deployment tells the page which hop a standard-A2A run took (vendor direct or OSS).
+      if (typeof frame.discovery === "string" && frame.discovery) state.discovery = frame.discovery;
       state.runMode = frame.runMode === "modify" ? "modify" : "create";
       // The server/UI that owns the run states whether an execution approval gate exists; a
       // missing key is not an approval.
@@ -877,15 +879,23 @@ export function isModifiableTaskState(stateName) {
   return stateName === "TASK_STATE_SUBMITTED" || stateName === "TASK_STATE_WORKING";
 }
 
+/** Hop of one protocol in this deployment: "nms" (vendor direct) or "oss" (proxy). */
+export function protocolHop(meta, protocol) {
+  const defaults = meta && typeof meta === "object" ? meta.protocolDefaults : null;
+  const entry = defaults && typeof defaults === "object" ? defaults[protocol] : null;
+  return entry && entry.discovery === "nms" ? "nms" : "oss";
+}
+
 /** Whether a selected Modify target may start while another run is still on stage.
  *
  * The server hands the Task over: the new run takes the callback stream and the previous run is
  * stopped, so the page must not block Start behind its own busy flag.
  */
-export function canStartModify(targetTask, protocol = null) {
+export function canStartModify(targetTask, protocol = null, hop = "oss") {
   if (targetTask === null || !targetTask.taskId) return false;
-  // A pure-A2A Modify continues the A2A peer's Task: the vendor id alone is not addressable.
-  if (protocol === "pure") return Boolean(targetTask.serverTaskId);
+  // Through the OSS Agent a pure-A2A Modify continues the peer's outer Task, so the vendor id
+  // alone is not addressable; a direct pure hop addresses the vendor Task itself.
+  if (protocol === "pure" && hop !== "nms") return Boolean(targetTask.serverTaskId);
   return true;
 }
 
@@ -1313,13 +1323,18 @@ export function traceDirection(entry, context = null) {
   // A polled Task state is a local observation, not a message from the peer.
   if (entry.direction === "poll" || entry.origin === "poll") return "Local poll";
   // The pure hop is two different links: the engineer client talks to the OSS Agent, and the
-  // OSS Agent talks to the RAN side.
+  // OSS Agent talks to the RAN side. A direct hop skips the OSS Agent entirely.
+  const directHop = context?.discovery === "nms";
   if (entry.direction === "client->server") {
     if (detail.role === "oss") return "OSS → RAN";
-    if (protocol === "pure" || detail.protocol === "pure") return "UI → OSS";
+    if (protocol === "pure" || detail.protocol === "pure") {
+      return directHop ? "UI → NMS" : "UI → OSS";
+    }
     return "OSS → RAN";
   }
-  if (entry.direction === "server->client") return "RAN → OSS";
+  if (entry.direction === "server->client") {
+    return directHop ? "NMS → UI" : "RAN → OSS";
+  }
   if (entry.side === "server") return "RAN internal";
   if (entry.side === "client") return "OSS internal";
   if (entry.actor === "engineer") return "Engineer";

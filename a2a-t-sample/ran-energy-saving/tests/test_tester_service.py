@@ -42,6 +42,7 @@ from protocol.client_service import RunState
 from shared.run_constants import (
     FINAL_STATE_INPUT_INVALID,
     FINAL_STATE_TASK_COMPLETED,
+    PROTOCOL_PURE,
     TASK_STATE_SUBMITTED,
 )
 
@@ -50,6 +51,10 @@ CASES: dict[int, dict[str, Any]] = {case["id"]: case for case in load_cases()}
 PROTOCOL_DEFAULTS: dict[str, dict[str, str]] = {
     PROTOCOL_A2A_T: {"transport": "sse", "discovery": "direct"},
     PROTOCOL_A2A: {"transport": "sse", "discovery": "direct"},
+}
+DIRECT_PURE_DEFAULTS: dict[str, dict[str, str]] = {
+    PROTOCOL_A2A_T: {"transport": "webhook", "discovery": "nms"},
+    PROTOCOL_PURE: {"transport": "webhook", "discovery": "nms"},
 }
 
 
@@ -174,11 +179,12 @@ def _manager(
     *,
     model_mode: str = "offline",
     nms_sim: bool = False,
+    protocol_defaults: dict[str, dict[str, str]] | None = None,
 ) -> EvalBatchManager:
     return EvalBatchManager(
         runs=runs,  # type: ignore[arg-type]
         catalog=CaseCatalog(),
-        protocol_defaults=PROTOCOL_DEFAULTS,
+        protocol_defaults=protocol_defaults or PROTOCOL_DEFAULTS,
         server_url=None,
         server_auth_token=None,
         runs_dir=tmp_path,
@@ -915,6 +921,53 @@ async def test_a_pure_modify_continues_the_outer_task_it_just_created(tmp_path: 
     assert runs.calls[1]["target_task_id"] is None
     assert runs.calls[1]["target_server_task_id"] == "task-1"
     assert runs.calls[1]["target_server_context_id"] == "ctx-1"
+
+
+async def test_a_direct_pure_modify_continues_the_vendor_task(tmp_path: Path) -> None:
+    """On the direct hop the baseline Task is the vendor's own, so the pair goes to target."""
+    runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED))
+    manager = _manager(tmp_path, runs, protocol_defaults=DIRECT_PURE_DEFAULTS)
+    created = manager.create(
+        case_ids=[18],
+        protocols=[PROTOCOL_A2A],
+        stop_after="send",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    snapshot = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = snapshot["items"][0]
+    assert isinstance(item, Mapping)
+    baseline = item["baseline"]
+    assert isinstance(baseline, Mapping)
+    assert baseline["status"] == "accepted"
+    assert baseline["taskId"] == "task-1"
+    assert runs.calls[1]["discovery"] == "nms"
+    assert runs.calls[1]["target_task_id"] == "task-1"
+    assert runs.calls[1]["target_server_task_id"] is None
+
+
+async def test_a_proxy_pure_modify_still_waits_for_the_outer_working_state(tmp_path: Path) -> None:
+    """The proxy hop owns the outer Task, which is only continuable while WORKING."""
+    runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED))
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[18],
+        protocols=[PROTOCOL_A2A],
+        stop_after="send",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    snapshot = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = snapshot["items"][0]
+    assert isinstance(item, Mapping)
+    assert item["status"] == CASE_ERROR
+    assert len(runs.calls) == 1
 
 
 async def test_a_pure_modify_refuses_a_terminal_baseline_task(tmp_path: Path) -> None:

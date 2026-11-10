@@ -10,6 +10,7 @@ from protocol.pure_client_flow import (
     run_pure_client_flow,
 )
 from shared.run_constants import (
+    FINAL_STATE_INCOMPLETE,
     FINAL_STATE_NEGOTIATION_ENDED,
     FINAL_STATE_TASK_COMPLETED,
 )
@@ -77,6 +78,63 @@ async def test_a_first_message_can_continue_an_existing_task() -> None:
     assert first_request.message.task_id == "outer-1"
     assert first_request.message.context_id == "outer-ctx"
     assert first_request.message.parts[0].text == "Modify the rate to 10 Mbps."
+
+
+async def test_a_plain_question_without_ids_is_answered_on_the_run_target() -> None:
+    """The vendor's standalone question may carry no ids; the answer keeps the Task identity."""
+    question = {"kind": "message", "text": "What rate?", "metadata": {}}
+    transport = _FakeTransport([[question], [_completed()]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Modify the rate.",
+        task_id="vendor-task",
+        context_id="vendor-ctx",
+        plain_questions=True,
+        message_ends_flow=False,
+        answer=lambda event: "2Mbps",
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    answer_request, _ = transport.requests[1]
+    assert answer_request.message.task_id == "vendor-task"
+    assert answer_request.message.context_id == "vendor-ctx"
+
+
+async def test_a_plain_message_does_not_end_a_direct_hop_flow() -> None:
+    """A direct vendor hop keeps working after answering; only a Task state ends the flow."""
+    question = {"kind": "message", "text": "What rate?", "metadata": {}}
+    working = {
+        "kind": "status",
+        "task_id": "vendor-task",
+        "context_id": "vendor-ctx",
+        "state": "TASK_STATE_WORKING",
+    }
+    transport = _FakeTransport([[question], [working]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Modify the rate.",
+        task_id="vendor-task",
+        context_id="vendor-ctx",
+        plain_questions=True,
+        message_ends_flow=False,
+        answer=lambda event: "2Mbps",
+    )
+
+    assert result.final_state == FINAL_STATE_INCOMPLETE
+
+
+async def test_a_plain_message_still_ends_the_proxy_flow() -> None:
+    """The OSS-relayed plain answer keeps its historical negotiation-end meaning."""
+    transport = _FakeTransport([[{"kind": "message", "text": "Done.", "metadata": {}}]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a task.",
+    )
+
+    assert result.final_state == FINAL_STATE_NEGOTIATION_ENDED
 
 
 async def test_the_flow_continues_the_same_task_after_input_required() -> None:
