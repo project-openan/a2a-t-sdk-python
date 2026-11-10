@@ -40,8 +40,9 @@ INTENT_APP_NAME: Final[str] = "ran_energy_intent"
 #: ADK user id used for every intent turn.
 INTENT_USER_ID: Final[str] = "ran-energy-operator"
 
-#: Generic site tokens a raw request may use for the n-th site, per language. The presentation
-#: copy says "Site 1" while a structured intent may say "Station 1"; both must follow the profile.
+#: Generic site tokens a raw request may use for the n-th site, per language. The default example
+#: requests name real vendor sites, but a replayed or structured request may still say "Site 1" or
+#: "Station 1"; both must follow the configured profile.
 _SITE_TOKENS: Final[dict[str, tuple[str, ...]]] = {
     LANGUAGE_EN: ("Station {n}", "station {n}", "Site {n}", "site {n}"),
     LANGUAGE_ZH: ("站点名称{n}", "站点 {n}", "站点{n}"),

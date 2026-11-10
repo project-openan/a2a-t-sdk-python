@@ -900,7 +900,7 @@ async def test_feasibility_scenario_accepts_the_alternative() -> None:
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
     assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1)]
-    assert prompt_client.refill_data[0]["siteList"] == "Station 1,Station 2"
+    assert prompt_client.refill_data[0]["siteList"] == "NRES_XCS_6102937,LTE_26441_LNR_OCL"
 
 
 async def test_an_operator_summary_still_names_the_agreed_target() -> None:

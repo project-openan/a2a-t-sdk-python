@@ -35,10 +35,11 @@ _NEUTRAL_REGIONS: Final[dict[str, dict[str, str]]] = {
     SCENARIO_UNKNOWN_AREA: {LANGUAGE_EN: "Region Z", LANGUAGE_ZH: "未知区域"},
 }
 
-#: Neutral site names the site-level example requests use.
-_NEUTRAL_SITES: Final[dict[str, tuple[str, ...]]] = {
-    LANGUAGE_EN: ("Site 1", "Site 2"),
-    LANGUAGE_ZH: ("站点 1", "站点 2"),
+#: Default site names the site-level example requests use. They are sites the vendor NMS serves
+#: (the NMS rejects any other site), so an unconfigured real-NMS run still sends a valid request.
+_DEFAULT_SITES: Final[dict[str, tuple[str, ...]]] = {
+    LANGUAGE_EN: ("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
+    LANGUAGE_ZH: ("NRES_XCS_6102937", "LTE_26441_LNR_OCL"),
 }
 
 
@@ -61,7 +62,7 @@ def profile_request_text(
         text,
         old_region=neutral_region,
         region=region,
-        old_sites=_NEUTRAL_SITES.get(language, ()),
+        old_sites=_DEFAULT_SITES.get(language, ()),
         sites=sites,
         language=language,
     )

@@ -6,6 +6,6 @@
     "region": "区域 A",
     "energySavingGoal": "在满足任务上下文的前提下最大化节能。",
     "guaranteedThroughputTarget": "{00:00~24:00,10Mbps}",
-    "siteList": "站点1,站点2"
+    "siteList": "NRES_XCS_6102937,LTE_26441_LNR_OCL"
   }
 }

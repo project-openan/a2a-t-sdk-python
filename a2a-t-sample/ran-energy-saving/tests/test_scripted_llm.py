@@ -462,7 +462,7 @@ def test_the_planned_outage_modify_keeps_the_site_list_in_the_task_context(
     prompt_text = content.prompt_text
     assert prompt_text is not None
     context = prompt_text[prompt_text.index("## Task Context") :]
-    assert 'Site list 1: ["Site 1", "Site 2"]' in context
+    assert 'Site list 1: ["NRES_XCS_6102937", "LTE_26441_LNR_OCL"]' in context
 
 
 def test_real_server_validates_accept_offline(real_negotiation_server: A2ATServer) -> None:

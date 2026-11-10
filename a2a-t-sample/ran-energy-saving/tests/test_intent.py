@@ -105,8 +105,8 @@ def test_processed_intent_maps_every_business_field() -> None:
 @pytest.mark.parametrize(
     ("language", "expected_region", "expected_sites"),
     [
-        ("en-US", "A2ATestRegion", ("NRES_XCS_6102937", "LTE_26441_LNR_OCL")),
-        ("zh-CN", "A2ATestRegion", ("NRES_XCS_6102937", "LTE_26441_LNR_OCL")),
+        ("en-US", "A2ATestRegion", ("NES_27A_321071", "LNR_KPI_7745")),
+        ("zh-CN", "A2ATestRegion", ("NES_27A_321071", "LNR_KPI_7745")),
     ],
 )
 def test_the_vendor_profile_rewrites_the_example_request_once(
@@ -118,7 +118,7 @@ def test_the_vendor_profile_rewrites_the_example_request_once(
 
     neutral = EXAMPLE_REQUESTS[SCENARIO_FEASIBILITY][language]
     old_region = "Region A" if language == "en-US" else "区域 A"
-    old_sites = ("Site 1", "Site 2") if language == "en-US" else ("站点 1", "站点 2")
+    old_sites = ("NRES_XCS_6102937", "LTE_26441_LNR_OCL")
 
     profiled = apply_region_profile_text(
         neutral,

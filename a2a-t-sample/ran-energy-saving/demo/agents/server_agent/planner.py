@@ -156,7 +156,14 @@ class ScriptedChatModel(BaseChatModel):
             return "cell-003", "00:00~06:00", "28"
         if "power outage" in lower or "停电" in text:
             return "cell-002", "01:00~05:00", "20"
-        if "site 1" in lower or "site 2" in lower or "站点1" in text or "站点2" in text:
+        if (
+            "site 1" in lower
+            or "site 2" in lower
+            or "站点1" in text
+            or "站点2" in text
+            or "nres_xcs_6102937" in lower
+            or "lte_26441_lnr_ocl" in lower
+        ):
             # The two-site baseline is the micro cell's normal plan; the planned-outage Modify
             # raises the same plan to the cell's maximum saving rate during the outage window.
             return "cell-002", "01:00~05:00", "10"

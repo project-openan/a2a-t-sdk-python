@@ -100,13 +100,15 @@ EXAMPLE_REQUESTS: dict[str, dict[str, str]] = {
     },
     SCENARIO_FEASIBILITY: {
         LANGUAGE_EN: (
-            "Create an energy saving task for Site 1 and Site 2 in Region A with these guaranteed "
-            "throughputs: {00:00~06:00,2Mbps}, {06:00~18:00,10Mbps}. A power outage runs from "
-            "00:00~18:00. Output the wireless network energy saving plan and return the intent report."
+            "Create an energy saving task for NRES_XCS_6102937 and LTE_26441_LNR_OCL in Region A "
+            "with these guaranteed throughputs: {00:00~06:00,2Mbps}, {06:00~18:00,10Mbps}. "
+            "A power outage runs from 00:00~18:00. Output the wireless network energy saving plan "
+            "and return the intent report."
         ),
         LANGUAGE_ZH: (
-            "在区域 A 为站点 1 和站点 2 创建节能任务，保障速率为：{00:00~06:00,2Mbps}、"
-            "{06:00~18:00,10Mbps}；00:00~18:00 有停电事件。输出无线网络节能方案并返回意图报告。"
+            "在区域 A 为 NRES_XCS_6102937 和 LTE_26441_LNR_OCL 创建节能任务，保障速率为："
+            "{00:00~06:00,2Mbps}、{06:00~18:00,10Mbps}；00:00~18:00 有停电事件。"
+            "输出无线网络节能方案并返回意图报告。"
         ),
     },
     SCENARIO_REJECT: {
@@ -125,13 +127,13 @@ EXAMPLE_REQUESTS: dict[str, dict[str, str]] = {
     },
     SCENARIO_OUTAGE: {
         LANGUAGE_EN: (
-            "Create a baseline energy saving task for Site 1 and Site 2 in Region A with these "
-            "guaranteed throughputs: {00:00~24:00,10Mbps}. "
+            "Create a baseline energy saving task for NRES_XCS_6102937 and LTE_26441_LNR_OCL in "
+            "Region A with these guaranteed throughputs: {00:00~24:00,10Mbps}. "
             "Output the wireless network energy saving plan and return the intent report."
         ),
         LANGUAGE_ZH: (
-            "在区域 A 为站点 1 和站点 2 创建节能基线任务，保障速率为：{00:00~24:00,10Mbps}。"
-            "输出无线网络节能方案并返回意图报告。"
+            "在区域 A 为 NRES_XCS_6102937 和 LTE_26441_LNR_OCL 创建节能基线任务，"
+            "保障速率为：{00:00~24:00,10Mbps}。输出无线网络节能方案并返回意图报告。"
         ),
     },
 }
@@ -140,14 +142,15 @@ EXAMPLE_REQUESTS: dict[str, dict[str, str]] = {
 #: Modify-only request: the baseline Task already exists on the NMS.
 MODIFY_REQUEST: dict[str, str] = {
     LANGUAGE_EN: (
-        "Modify the running energy saving task for Site 1 and Site 2 in Region A for the planned "
-        "outage 03:00~05:00: {00:00~03:00,10Mbps}, {03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}. "
+        "Modify the running energy saving task for NRES_XCS_6102937 and LTE_26441_LNR_OCL in "
+        "Region A for the planned outage 03:00~05:00: {00:00~03:00,10Mbps}, "
+        "{03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}. "
         "Output the wireless network energy saving plan and return the intent report."
     ),
     LANGUAGE_ZH: (
-        "在区域 A 为站点 1 和站点 2 修改运行中的节能任务以应对 03:00~05:00 的计划停电："
-        "{00:00~03:00,10Mbps}、{03:00~05:00,2Mbps}、{05:00~24:00,10Mbps}。"
-        "输出无线网络节能方案并返回意图报告。"
+        "在区域 A 为 NRES_XCS_6102937 和 LTE_26441_LNR_OCL 修改运行中的节能任务"
+        "以应对 03:00~05:00 的计划停电：{00:00~03:00,10Mbps}、{03:00~05:00,2Mbps}、"
+        "{05:00~24:00,10Mbps}。输出无线网络节能方案并返回意图报告。"
     ),
 }
 
@@ -168,7 +171,7 @@ UNKNOWN_AREA_TARGET: Final[str] = "{00:00~07:00,2Mbps}, {07:00~23:00,20Mbps}, {2
 
 #: Site context the feasibility accept carries.
 FEASIBILITY_CONTEXT: Final[dict[str, object]] = {
-    "siteList": "Station 1,Station 2",
+    "siteList": "NRES_XCS_6102937,LTE_26441_LNR_OCL",
     "backgroundEvent": "power outage from 00:00 to 18:00",
 }
 
