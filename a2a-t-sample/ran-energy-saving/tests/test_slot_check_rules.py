@@ -41,6 +41,15 @@ def _site_check(language: str) -> Mapping[str, Any]:
     )
 
 
+def _time_check(language: str) -> Mapping[str, Any]:
+    checks = _checks(language)
+    return next(
+        check
+        for check in checks
+        if check.get("source") == "input" and "busy" in str(check.get("when", ""))
+    )
+
+
 def _rate_check(language: str) -> Mapping[str, Any]:
     checks = _checks(language)
     return next(
@@ -144,3 +153,33 @@ def test_the_chinese_overlay_carries_the_same_two_rules() -> None:
     assert not _violates(site, "修改 LTE_A 和 NRES_B 的节能任务。", "")
     assert _violates(rate, "在停电期间修改保障吞吐目标。", "停电 08:00-18:00。")
     assert not _violates(rate, "在停电期间修改保障吞吐目标。", "停电 08:00-18:00，保障速率 10Mbps。")
+
+
+@pytest.mark.parametrize(
+    "user_input",
+    [
+        "Set the guaranteed throughput as follows: idle period: 2M, regular period: 10Mbps, "
+        "Busy period: 20Mbps.",
+        "Guarantee 10Mbps during busy hours and 2Mbps during off-peak.",
+        "在忙时保障 10Mbps，闲时保障 2Mbps。",
+        "高峰时段保障 20Mbps，低谷时段保障 2Mbps。",
+    ],
+)
+def test_a_time_label_without_explicit_hours_is_blocked(user_input: str) -> None:
+    check = _time_check("en-US")
+
+    assert _violates(check, user_input, "")
+
+
+@pytest.mark.parametrize(
+    "user_input",
+    [
+        "Set the guaranteed throughput as follows: 07:00~18:00 -> 10Mbps, 18:00~23:00 -> 20Mbps.",
+        "During busy hours 08:00-12:00 guarantee 10Mbps.",
+        "忙时 08:00-12:00 保障 10Mbps。",
+    ],
+)
+def test_a_time_label_with_explicit_hours_is_not_blocked(user_input: str) -> None:
+    check = _time_check("en-US")
+
+    assert not _violates(check, user_input, "")

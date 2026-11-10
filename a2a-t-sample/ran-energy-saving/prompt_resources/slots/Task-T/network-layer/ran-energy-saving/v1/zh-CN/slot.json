@@ -87,6 +87,14 @@
       "source": "slot",
       "error": "slot.not_provided",
       "slot_label": "保障速率"
+    },
+    {
+      "slot": "任务上下文",
+      "when": "(?:\\b(?:busy|idle|peak|off[- ]?peak|regular)\\s*(?:periods?|hours?|times?|windows?)\\b|\\b(?:busy|idle|off[- ]?peak)\\b|\\u5fd9\\u65f6|\\u95f2\\u65f6|\\u5fd9\\u95f2\\u65f6|\\u9ad8\\u5cf0\\u671f?|\\u4f4e\\u8c37\\u671f?|\\u5cf0\\u65f6|\\u8c37\\u65f6|\\u5fd9\\u5c0f\\u65f6|\\u95f2\\u5c0f\\u65f6)",
+      "require": "\\d{1,2}:\\d{2}",
+      "source": "input",
+      "error": "slot.constraint_violated",
+      "slot_label": "节能时段"
     }
   ],
   "properties": {
