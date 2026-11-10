@@ -1213,7 +1213,7 @@ async def test_the_question_continuation_retires_the_binding_on_a_terminal_resul
     assert binding.terminal is True
 
 
-async def test_the_pump_callbacks_restore_the_request_for_each_decision() -> None:
+async def test_the_pump_recommendation_restores_the_original_request() -> None:
     """A pump started by a later request must see that request, not the last one another task set."""
     provider = _ContextRequestProvider()
     seen: list[str | None] = []
@@ -1222,23 +1222,16 @@ async def test_the_pump_callbacks_restore_the_request_for_each_decision() -> Non
         del event
         seen.append(provider.current())
 
-    def answer(event: dict[str, object]) -> str:
-        del event
-        seen.append(provider.current())
-        return "Region A"
-
     executor = OSSPureExecutor(
-        answer=answer,
+        answer=lambda event: "Region A",
         recommendation=recommendation,  # type: ignore[arg-type]
         decision_provider=provider,
     )
-    wrapped_answer = executor._answer_for_request("Create a task for Region A.")
     wrapped_recommendation = executor._recommendation_for_request("Create a task for Region A.")
 
     assert wrapped_recommendation is not None
     await wrapped_recommendation({})
-    assert wrapped_answer({}) == "Region A"
-    assert seen == ["Create a task for Region A.", "Create a task for Region A."]
+    assert seen == ["Create a task for Region A."]
 
 
 async def test_the_nms_webhook_flow_hands_the_subscription_to_the_pump(
@@ -1982,37 +1975,6 @@ async def test_a_second_question_on_an_attached_continuation_is_relayed(
     assert binding.terminal is False
 
 
-async def test_the_pump_answer_uses_the_shared_gate() -> None:
-    """The pump must not decide a business question even though it has a non-empty answer."""
-    executor = OSSPureExecutor(
-        config=replace(offline_direct_config(8000), discovery=DISCOVERY_NMS),
-        answer=lambda event: "Set the guaranteed throughput targets: {08:00~18:00,10Mbps}.",
-        language=LANGUAGE_EN,
-    )
-    request = "Set the guaranteed throughput targets: {08:00~18:00,10Mbps}."
-    gated = executor._pump_answer_for_request(request, [request])
-    question = {
-        "kind": "status",
-        "state": "TASK_STATE_INPUT_REQUIRED",
-        "text": (
-            "Power outage duration 10h > 4h with rate 10.0Mbps > 2Mbps; recommend 2Mbps or less, "
-            "or reduce the outage to 4h or less. What rate and outage duration would you like to use?"
-        ),
-    }
-
-    tokens = set_active_trace(decision_mode="confirm")
-    try:
-        assert await gated(dict(question)) == ""
-    finally:
-        reset_active_trace(tokens)
-
-    tokens = set_active_trace(decision_mode="auto")
-    try:
-        assert await gated(dict(question)) == ""
-    finally:
-        reset_active_trace(tokens)
-
-
 async def test_auto_mode_does_not_resend_a_repeated_rate() -> None:
     """The vendor rejection is not a licence to resend the same value; the caller answers instead."""
     executor = OSSPureExecutor(
@@ -2031,48 +1993,6 @@ async def test_auto_mode_does_not_resend_a_repeated_rate() -> None:
         reset_active_trace(tokens)
 
     assert text == ""
-
-
-async def test_restart_binds_the_persisted_decision_mode_before_reconcile(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """A confirm-mode run resumed after a restart must still show the question, not refuse it."""
-    executor, store, binding_store, _nms_client = await _restart_fixture(
-        tmp_path,
-        outer_state=TaskState.TASK_STATE_WORKING,
-        document={
-            "id": "inner-1",
-            "contextId": "inner-ctx",
-            "status": {
-                "state": "TASK_STATE_INPUT_REQUIRED",
-                "message": {"parts": [{"text": "Which region?"}]},
-            },
-        },
-    )
-    context = ServerCallContext(user=UnauthenticatedUser())
-    task = await store.get("outer-1", context)
-    assert task is not None
-    task.metadata["sampleDecisionMode"] = "confirm"
-    await store.save(task, context)
-
-    seen: list[str] = []
-    import protocol.oss_agent as oss_module
-
-    original = oss_module.DownstreamPump.reconcile
-
-    async def recording_reconcile(self: object, document: object) -> None:
-        seen.append(current_decision_mode())
-        await original(self, document)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(oss_module.DownstreamPump, "reconcile", recording_reconcile)
-    binding = await binding_store.get("inner-1", "inner-ctx")
-    assert binding is not None
-
-    await executor._resume_binding(binding)
-
-    assert seen == ["confirm"]
-    await executor._stop_pumps()
 
 
 async def test_a_plain_message_question_at_the_round_budget_is_relayed(

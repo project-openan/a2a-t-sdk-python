@@ -85,8 +85,6 @@ from shared.trace_propagation import (
     current_decision_mode,
     current_run_id,
     inject_outgoing,
-    reset_decision_mode,
-    set_decision_mode,
 )
 from shared.webhook_receiver import WebhookReceiver, start_receiver_with_fallback
 from starlette.applications import Starlette
@@ -242,7 +240,6 @@ class _PumpHandoff:
     """One downstream subscription transferred from a request to the background pump."""
 
     subscription: WebhookSubscription
-    transport: NmsWebhookTransport
     binding: DownstreamBinding
     outer_context_id: str
     call_context: ServerCallContext
@@ -496,39 +493,19 @@ class OSSPureExecutor(AgentExecutor):
                 outer_context_id=handoff.outer_context_id,
                 downstream_hop=self._downstream_hop(),
                 downstream_name=self._downstream_name(),
-                followup=self._followup,
                 max_rounds=self._max_rounds,
-                call_timeout_seconds=self._timeout_seconds,
                 call_context=handoff.call_context,
                 sent_texts=sent_texts,
             ),
             subscription=handoff.subscription,
-            transport=handoff.transport,
             task_store=self._task_store,
             binding_store=self._binding_store,
             push_sender=self._push_sender,
-            # The pump answers through the same deterministic gate as the synchronous flow: it
-            # must never take a business decision the operator owns.
-            answer=self._pump_answer_for_request(handoff.user_request, sent_texts),
+            # The pump tracks only: it relays every question and never answers one. The caller
+            # owns the answer (a confirm card or its own automatic policy).
             recommendation=self._recommendation_for_request(handoff.user_request),
             on_question=self._question_registrar(handoff, sent_texts),
         )
-
-    def _pump_answer_for_request(
-        self,
-        user_request: str,
-        sent_texts: list[str],
-    ) -> Callable[[dict[str, object]], Awaitable[str]]:
-        """Wrap the gated answer for the pump so it runs with this run's request and ledger."""
-
-        async def answer(event: dict[str, object]) -> str:
-            self._set_decision_request(user_request)
-            # The pump owns the ledger append: it records an answer only after the vendor accepted
-            # the send, so a refused answer never suppresses a legitimate retry. Returning ""
-            # means "suspend and relay"; the pump does that, and does not raise.
-            return await self._decide_answer(event, sent_texts=tuple(sent_texts))
-
-        return answer
 
     def _register_pump(self, handoff: _PumpHandoff, pump: DownstreamPump) -> None:
         """Start one pump and own its subscription for the rest of the process lifetime."""
@@ -594,22 +571,8 @@ class OSSPureExecutor(AgentExecutor):
 
         subscription = router.subscribe(binding.run_id)
         subscription.bind(task_id=binding.inner_task_id, context_id=binding.inner_context_id)
-        transport = NmsWebhookTransport(
-            nms_client,
-            queue=subscription.queue,
-            push_url=self._webhook_push_url,
-            push_token=self._webhook_push_token,
-            push_auth_credentials=(
-                self._config.webhook_auth_credentials if self._config is not None else ""
-            ),
-            protocol=PROTOCOL_PURE,
-            idle_timeout=self._long_task_settle_seconds,
-            bind=subscription.bind,
-            context_id=subscription.key,
-        )
         handoff = _PumpHandoff(
             subscription=subscription,
-            transport=transport,
             binding=binding,
             outer_context_id=outer_task.context_id,
             call_context=call_context,
@@ -618,30 +581,20 @@ class OSSPureExecutor(AgentExecutor):
         if pump is None:
             subscription.unsubscribe()
             return
-        # Bind the persisted decision mode BEFORE the reconcile poll: an INPUT_REQUIRED document
-        # is applied through the same gated answer path, and a confirm-mode run must not send the
-        # automatic refusal while the operator's card is the correct outcome.
-        mode = metadata_to_dict(getattr(outer_task, "metadata", None)).get(
-            SAMPLE_DECISION_MODE_METADATA_KEY
-        )
-        mode_token = set_decision_mode(mode if isinstance(mode, str) else "")
         try:
-            try:
-                document = await nms_client.get_task(binding.inner_task_id)
-            except Exception:  # noqa: BLE001 - pushes remain the live path; polling is a hint
-                _LOGGER.warning(
-                    "could not reconcile resumed downstream Task %s",
-                    binding.inner_task_id,
-                    exc_info=True,
-                )
-            else:
-                await pump.reconcile(document)
-            if pump.terminal:
-                subscription.unsubscribe()
-                return
-            self._register_pump(handoff, pump)
-        finally:
-            reset_decision_mode(mode_token)
+            document = await nms_client.get_task(binding.inner_task_id)
+        except Exception:  # noqa: BLE001 - pushes remain the live path; polling is a hint
+            _LOGGER.warning(
+                "could not reconcile resumed downstream Task %s",
+                binding.inner_task_id,
+                exc_info=True,
+            )
+        else:
+            await pump.reconcile(document)
+        if pump.terminal:
+            subscription.unsubscribe()
+            return
+        self._register_pump(handoff, pump)
         _LOGGER.info(
             "resumed downstream task: outer=%s inner=%s run=%s",
             binding.outer_task_id,
@@ -1077,7 +1030,6 @@ class OSSPureExecutor(AgentExecutor):
                 await self._binding_store.save(binding)
                 self._pending_handoffs[updater.task_id] = _PumpHandoff(
                     subscription=subscription,
-                    transport=transport,
                     binding=binding,
                     outer_context_id=updater.context_id,
                     call_context=call_context,
@@ -1115,18 +1067,6 @@ class OSSPureExecutor(AgentExecutor):
         setter = getattr(self._decision_provider, "set_user_request", None)
         if callable(setter):
             setter(user_request)
-
-    def _answer_for_request(
-        self, user_request: str
-    ) -> Callable[[dict[str, object]], str | Awaitable[str]]:
-        """Wrap the answer callback so it always runs with the request of this run."""
-        base = self._answer
-
-        def answer(event: dict[str, object]) -> str | Awaitable[str]:
-            self._set_decision_request(user_request)
-            return base(event)
-
-        return answer
 
     def _recommendation_for_request(self, user_request: str) -> RecommendationBuilder | None:
         """Wrap the recommendation callback so it always runs with the request of this run."""
@@ -1840,7 +1780,6 @@ class OSSPureExecutor(AgentExecutor):
                     await self._binding_store.save(binding)
                     self._pending_handoffs[updater.task_id] = _PumpHandoff(
                         subscription=subscription,
-                        transport=transport,
                         binding=binding,
                         outer_context_id=updater.context_id,
                         call_context=call_context,

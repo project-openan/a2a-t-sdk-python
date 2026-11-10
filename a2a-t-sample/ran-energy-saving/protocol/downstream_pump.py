@@ -1,15 +1,20 @@
-"""Background pump of downstream NMS events for a long-running OSS Task.
+"""Background tracker of downstream NMS events for a long-running OSS Task.
 
-The OSS Agent forwards one request to the NMS and then waits for a Task that may run for days. The
-initial synchronous flow only stays attached for a configurable settle window; after it returns,
-this pump keeps consuming the run's webhook queue and applies every later event to the outer A2A
-Task:
+The OSS Agent forwards one request to the NMS and then waits for a Task that may run for days. When
+the synchronous flow cannot stay in the foreground (no stream exists, the caller disconnected, or
+the flow ended with nothing left to read), this pump keeps consuming the run's webhook queue and
+applies every later event to the outer A2A Task:
 
 * the outer Task is persisted through ``TaskManager`` (SQLite in a real run);
 * the client receives the same event as an A2A push notification (polling is the reconnect
   fallback);
 * a Run Explorer span is emitted with the run id so Langfuse keeps the late execution;
-* a delayed ``INPUT_REQUIRED`` is answered with the same decision callback the initial flow uses.
+* a delayed ``INPUT_REQUIRED`` is relayed to the caller and the pump suspends.
+
+The pump never answers a vendor question. It has no decision callback at all: a background tracker
+that answers is how a rejected value gets resent until the vendor returns
+``TASK_STREAM_CONFLICT``. The caller answers (a confirm card, or its own automatic policy) and that
+answer resumes the downstream context in the synchronous flow.
 
 The pump is best effort: a malformed push or a failed push notification never stops the tracking.
 """
@@ -18,16 +23,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import inspect
 import json
 import logging
 import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Final, Protocol
+from typing import Final, Protocol
 
-from a2a.client.client import ClientCallContext
 from a2a.server.context import ServerCallContext
 from a2a.server.tasks.push_notification_sender import PushNotificationSender
 from a2a.server.tasks.task_manager import TaskManager
@@ -50,7 +53,6 @@ from protocol.client_flow import is_report_artifact, normalize_webhook_payload
 from protocol.downstream_binding_store import DownstreamBindingStore
 from protocol.manual_answer import ungrounded_answer_fields
 from protocol.negotiation_policy import negotiation_kind_for_propose_content
-from protocol.nms_client import NmsProtocolError, is_stream_conflict
 from protocol.pure_client_flow import is_plain_question
 
 _LOGGER = logging.getLogger("ran_energy_saving.downstream_pump")
@@ -67,18 +69,6 @@ _TERMINAL_STATES: Final[frozenset[str]] = frozenset(
 
 #: Recent event fingerprints kept for webhook retry deduplication.
 _RECENT_EVENTS: Final[int] = 128
-
-
-class PumpTransport(Protocol):
-    """The one method the pump needs from a downstream transport."""
-
-    async def send(
-        self,
-        request: Any,
-        call_context: ClientCallContext,
-    ) -> list[dict[str, object]]:
-        """Send one follow-up and return its events."""
-        ...
 
 
 class PumpSubscription(Protocol):
@@ -103,9 +93,7 @@ class DownstreamPumpContext:
         outer_context_id: A2A context id of the outer Task.
         downstream_hop: ``nms`` or ``ran`` tag written on every outer event.
         downstream_name: Human name used in the status text.
-        followup: Fields a pure follow-up carries (``both`` / ``task`` / ``context``).
-        max_rounds: Negotiation round budget after the handoff.
-        call_timeout_seconds: HTTP budget of a follow-up send.
+        max_rounds: Negotiation round budget reported on the relayed question.
         call_context: Request context owning the outer Task (for ``TaskManager`` persistence).
     """
 
@@ -113,15 +101,13 @@ class DownstreamPumpContext:
     inner_task_id: str
     outer_task_id: str
     downstream_name: str
-    followup: str
     max_rounds: int
-    call_timeout_seconds: float
     call_context: ServerCallContext
     inner_context_id: str = ""
     outer_context_id: str = ""
     downstream_hop: str = "nms"
-    #: Texts this run already sent downstream, oldest first. The pump appends every answer it
-    #: actually sends, so the shared gate can refuse one that only repeats them.
+    #: Texts this run already sent downstream, oldest first. The relayed card uses it to suppress
+    #: a recommendation that only repeats a value the vendor already rejected.
     sent_texts: list[str] = field(default_factory=list)
 
 
@@ -133,24 +119,25 @@ class DownstreamPump:
         *,
         context: DownstreamPumpContext,
         subscription: PumpSubscription,
-        transport: PumpTransport,
         task_store: TaskStore,
         binding_store: DownstreamBindingStore,
         push_sender: PushNotificationSender | None = None,
-        answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = None,
         recommendation: Callable[[dict[str, object]], Awaitable[dict[str, object] | None]] | None = None,
         on_question: Callable[[Mapping[str, object], int], None] | None = None,
     ) -> None:
         """Create one pump.
 
+        The pump only tracks: it consumes pushes, writes the outer Task and relays every vendor
+        question. It never answers one. The caller owns the answer (a confirm card or its own
+        automatic policy), which is what keeps the tester's OSP batches and the A2A contract
+        intact, and what removes the whole class of ``the pump decided for the operator`` bugs.
+
         Args:
             context: Correlation and policy values of the tracked Task.
             subscription: The run's webhook queue and unsubscribe hook.
-            transport: Downstream transport used to answer a delayed ``INPUT_REQUIRED``.
             task_store: Outer Task store shared with the A2A request handler.
             binding_store: Durable binding used by restart recovery and retention.
             push_sender: Optional A2A push-notification sender.
-            answer: Decision callback answering a downstream ``INPUT_REQUIRED``.
             recommendation: Advisory-answer callback for one vendor text question; ``None`` keeps
                 the question as a plain status update.
             on_question: Hook registering the relayed question so the operator answer can resume
@@ -158,11 +145,9 @@ class DownstreamPump:
         """
         self._context = context
         self._subscription = subscription
-        self._transport = transport
         self._task_store = task_store
         self._binding_store = binding_store
         self._push_sender = push_sender
-        self._answer = answer
         self._recommendation = recommendation
         self._on_question = on_question
         self._terminal = False
@@ -257,62 +242,15 @@ class DownstreamPump:
             await self._mark_terminal(event)
 
     async def _answer_input_required(self, event: dict[str, object]) -> None:
-        """Answer one delayed negotiation request and send the follow-up.
+        """Relay a delayed negotiation request; the pump never answers one.
 
-        The answer callback is the same deterministic gate the synchronous flow uses: it returns
-        an empty text when the question belongs to the operator (a feasibility decision, or an
-        automatic answer that only repeats an already-sent value). No text is not the same as no
-        configured answer: the question is relayed as ``INPUT_REQUIRED`` and the pump suspends
-        until the caller's answer resumes the downstream context.
+        A background tracker has no authority to take a business decision, and an automatic
+        answer it invents is exactly the failure mode this class used to produce (a rejected value
+        resent until the vendor answered ``TASK_STREAM_CONFLICT``). The question becomes an outer
+        ``INPUT_REQUIRED`` and the pump suspends; the caller answers it (a confirm card, or its own
+        automatic policy) and that answer resumes the downstream context in the synchronous flow.
         """
-        if self._rounds >= self._context.max_rounds:
-            # The budget is exhausted while the vendor still asks. Publishing "answered" and
-            # returning would leave the outer Task WORKING with no decision surface; hand the
-            # question over instead.
-            await self._relay_question(event)
-            return
-        text = await _answer_for(event, self._answer)
-        if not text.strip():
-            await self._relay_question(event)
-            return
-        self._rounds += 1
-        request = _follow_up_request(
-            text,
-            task_id=_text(event.get("task_id")),
-            context_id=_text(event.get("context_id")),
-            followup=self._context.followup,
-        )
-        try:
-            batch = await self._transport.send(
-                request,
-                ClientCallContext(
-                    timeout=self._context.call_timeout_seconds,
-                    service_parameters={"A2A-Extensions": ""},
-                ),
-            )
-        except NmsProtocolError as exc:
-            if is_stream_conflict(exc):
-                # The vendor still holds a stream for this Task. Keep the question open instead
-                # of failing the outer Task; the operator can retry it.
-                _LOGGER.info("pump answer refused: TASK_STREAM_CONFLICT")
-                self._rounds -= 1
-                await self._relay_question(
-                    event,
-                    conflict="stream_conflict",
-                    retry_after=exc.retry_after,
-                )
-                return
-            raise
-        # The answer only counts once the vendor accepted the send: a refused follow-up must not
-        # make the page claim it was delivered, and must not poison the already-sent ledger.
-        self._sent_texts.append(text)
-        await self._publish_status(
-            TaskState.TASK_STATE_WORKING,
-            f"OSS Agent answered the {self._context.downstream_name}: {text}",
-            "answer",
-        )
-        for item in batch:
-            await self._apply(item)
+        await self._relay_question(event)
 
     async def _relay_question(
         self,
@@ -625,33 +563,6 @@ def _artifact_event_from_document(
     return event
 
 
-async def _answer_for(
-    event: dict[str, object],
-    answer: Callable[[dict[str, object]], str | Awaitable[str]] | None,
-) -> str:
-    """Return the follow-up text for one negotiation event (sync or async callback)."""
-    if answer is None:
-        proposal = event.get("text")
-        return proposal if isinstance(proposal, str) else ""
-    result = answer(event)
-    if inspect.isawaitable(result):
-        result = await result
-    return result if isinstance(result, str) else ""
-
-
-def _follow_up_request(
-    text: str,
-    *,
-    task_id: str | None,
-    context_id: str | None,
-    followup: str,
-) -> Any:
-    """Build the continuation message of one delayed negotiation."""
-    from protocol.pure_client_flow import _follow_up_request as build_follow_up
-
-    return build_follow_up(text, task_id=task_id, context_id=context_id, followup=followup)
-
-
 def _event_hash(event: Mapping[str, object]) -> str:
     """Return a stable fingerprint of one normalized downstream event."""
     rendered = json.dumps(dict(event), sort_keys=True, default=str, ensure_ascii=False)
@@ -662,5 +573,4 @@ __all__ = [
     "DownstreamPump",
     "DownstreamPumpContext",
     "PumpSubscription",
-    "PumpTransport",
 ]

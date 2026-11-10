@@ -140,16 +140,6 @@ def current_decision_mode() -> str:
     return _DECISION_MODE.get().strip().lower()
 
 
-def set_decision_mode(value: str | None) -> Token[str]:
-    """Bind the decision mode for a resumed background pump; return the reset token."""
-    return _DECISION_MODE.set((value or "").strip().lower())
-
-
-def reset_decision_mode(token: Token[str]) -> None:
-    """Restore the decision mode saved by :func:`set_decision_mode`."""
-    _DECISION_MODE.reset(token)
-
-
 @contextmanager
 def propagated_trace(
     *,
