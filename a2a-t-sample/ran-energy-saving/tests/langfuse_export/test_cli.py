@@ -189,6 +189,50 @@ def test_run_batch_export_writes_one_table_and_batch_summary(monkeypatch):
         shutil.rmtree(out_root, ignore_errors=True)
 
 
+def test_package_version_matches_the_sample_patch_release():
+    from langfuse_export import __version__
+
+    assert __version__ == "0.5.1"
+
+
+def test_cli_forwards_round_mode_to_build_metrics(monkeypatch, sample_rows, sample_scores, tmp_path):
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+    monkeypatch.setenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    monkeypatch.setattr(
+        cli, "select_backend", lambda client, forced: FakeBackend(sample_rows, sample_scores)
+    )
+    captured: list[str] = []
+
+    def fake_build_metrics(rows, trace_id=None, summary=None, round_mode="legacy", *, run_id=None):
+        del rows, trace_id, summary, run_id
+        captured.append(round_mode)
+        return {}
+
+    monkeypatch.setattr(cli, "build_metrics", fake_build_metrics)
+
+    out_root = tmp_path / "round-mode"
+    default_args = cli.build_parser().parse_args(
+        [TRACE, "--out", str(out_root / "legacy"), "--no-media", "--metrics", "--quiet"]
+    )
+    cli.run_export(default_args)
+    decision_args = cli.build_parser().parse_args(
+        [
+            TRACE,
+            "--out",
+            str(out_root / "decision"),
+            "--no-media",
+            "--metrics",
+            "--round-mode",
+            "decision",
+            "--quiet",
+        ]
+    )
+    cli.run_export(decision_args)
+
+    assert captured == ["legacy", "decision"]
+
+
 def test_run_batch_export_keeps_going_after_a_failed_trace(monkeypatch):
     def fake_run_export(args, exported_at=None, print_result=True):
         if args.trace_id == "bad":

@@ -48,6 +48,19 @@ from .writer import build_manifest, make_zip, write_json, write_jsonl, write_tex
 
 TRACE_ID_RE = re.compile(r"^[0-9A-Za-z_-]{1,128}$")
 DEFAULT_MAX_MEDIA_BYTES = 20 * 1024 * 1024
+ROUND_MODES = ("legacy", "decision")
+
+
+def _round_mode(value: str) -> str:
+    """Validate a round mode before it reaches argparse (sample patch P9c).
+
+    ``argparse`` answers an invalid ``--round-mode`` with ``SystemExit``, which is a
+    ``BaseException``: it escapes a caller's ``except Exception`` and can take down a
+    background job. The output-free wrappers therefore reject the value first.
+    """
+    if value not in ROUND_MODES:
+        raise ValueError(f"round_mode must be one of {', '.join(ROUND_MODES)}: {value!r}")
+    return value
 
 
 def safe_print(value: str, file: Any = None) -> None:
@@ -141,6 +154,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--table",
         action="store_true",
         help="also write metrics.xlsx (Issue AF-AW table); implies --metrics",
+    )
+    parser.add_argument(
+        "--round-mode",
+        choices=["legacy", "decision"],
+        default="legacy",
+        help="negotiation round model: legacy (default) or decision (PROPOSE-DECISION pairs, for A2A/pure)",
     )
     parser.add_argument("--json", action="store_true", help="print a machine readable JSON result to stdout")
     parser.add_argument("--quiet", action="store_true")
@@ -553,6 +572,7 @@ def run_export(
                 trace_id=trace_id,
                 summary=collected.summary,
                 run_id=selected_run_id,
+                round_mode=getattr(args, "round_mode", "legacy"),
             )
             if (getattr(args, "metrics", False) or getattr(args, "table", False))
             else None
@@ -611,8 +631,10 @@ def export_metrics(
     trace_id: str,
     *,
     run_id: str | None = None,
+    round_mode: str = "legacy",
 ) -> dict[str, Any]:
     """Return ``{"metrics": ..., "warnings": [...]}`` without writing or printing (P3)."""
+    round_mode = _round_mode(round_mode)
     trace_id, url_host = parse_trace_input(trace_id)
     args = build_parser().parse_args([trace_id])
     collected = _collect(trace_id, config, args, url_host=url_host, export_dir=None, emit=False)
@@ -623,6 +645,7 @@ def export_metrics(
                 trace_id=trace_id,
                 summary=collected.summary,
                 run_id=run_id or select_run_id(collected.rows),
+                round_mode=round_mode,
             ),
             "warnings": collected.warnings,
         }
@@ -637,11 +660,15 @@ def export_full(
     *,
     zip_file: bool = True,
     run_id: str | None = None,
+    round_mode: str = "legacy",
 ) -> dict[str, Any]:
     """Full export for the server: no output, caller-owned ``Config`` (P3)."""
+    round_mode = _round_mode(round_mode)
     argv = [trace_id, "--out", str(out_root), "--metrics", "--no-media"]
     if run_id:
         argv.extend(["--run-id", run_id])
+    if round_mode != "legacy":
+        argv.extend(["--round-mode", round_mode])
     if zip_file:
         argv.append("--zip")
     args = build_parser().parse_args(argv)

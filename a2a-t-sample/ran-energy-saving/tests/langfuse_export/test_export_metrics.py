@@ -201,6 +201,7 @@ def test_metrics_timeline_tokens_and_negotiation():
 
     negotiation = metrics["negotiation"]
     assert negotiation["triggered"] is True
+    assert negotiation["roundMode"] == "legacy"
     assert negotiation["rounds"] == 2
     # round1: decision 06 - started 04 = 2000ms; round2 has no negotiation_started -> not counted
     assert negotiation["latencyMs"] == 2000
@@ -690,3 +691,116 @@ def test_metrics_without_usage_reports_zero_side_buckets():
         "total": 0,
     }
     assert any("no token usage" in warning for warning in metrics["warnings"])
+
+
+def test_decision_round_mode_pairs_propose_with_following_decision():
+    # Raw API order is newest-first; the proposal carries no round metadata.
+    rows = [
+        _row("Decision · accept · R1", "2026-11-10T02:20:21.736Z", kind="accept", phase="resolution", round="1"),
+        _row("Propose · information", "2026-11-10T02:18:51.276Z", kind="propose", phase="negotiation"),
+        _opened("2026-11-10T02:17:43.591Z"),
+    ]
+    legacy = build_metrics(rows, trace_id=TRACE)
+    assert legacy["negotiation"]["rounds"] == 2  # old behaviour: phantom round
+
+    decision = build_metrics(rows, trace_id=TRACE, round_mode="decision")
+    negotiation = decision["negotiation"]
+    assert negotiation["roundMode"] == "decision"
+    assert negotiation["rounds"] == 1
+    entry = negotiation["roundsDetail"][0]
+    assert entry["proposeAt"] == "2026-11-10T02:18:51.276Z"
+    assert entry["decisionAt"] == "2026-11-10T02:20:21.736Z"
+
+
+def test_decision_round_mode_keeps_two_decision_rounds():
+    rows = [
+        _row("Decision · accept · R2", "2026-11-10T02:25:53.564Z", kind="accept", phase="resolution", round="2"),
+        _row("Propose · information", "2026-11-10T02:23:05.775Z", kind="propose", phase="negotiation"),
+        _row("Decision · accept · R1", "2026-11-10T02:22:36.596Z", kind="accept", phase="resolution", round="1"),
+        _row("Propose · information", "2026-11-10T02:21:06.898Z", kind="propose", phase="negotiation"),
+        _opened("2026-11-10T02:20:17.901Z"),
+    ]
+    decision = build_metrics(rows, trace_id=TRACE, round_mode="decision")
+    negotiation = decision["negotiation"]
+    assert negotiation["rounds"] == 2
+    first, second = negotiation["roundsDetail"]
+    assert (first["proposeAt"], first["decisionAt"]) == (
+        "2026-11-10T02:21:06.898Z",
+        "2026-11-10T02:22:36.596Z",
+    )
+    assert (second["proposeAt"], second["decisionAt"]) == (
+        "2026-11-10T02:23:05.775Z",
+        "2026-11-10T02:25:53.564Z",
+    )
+
+
+def test_decision_round_mode_attaches_client_negotiation_started():
+    rows = [
+        _row("Decision · accept · R1", "2026-11-10T02:20:21.736Z", kind="accept", phase="resolution", round="1"),
+        _row("Negotiation started", "2026-11-10T02:18:00.000Z", kind="negotiation_started", phase="negotiation"),
+        _opened("2026-11-10T02:17:43.591Z"),
+    ]
+    decision = build_metrics(rows, trace_id=TRACE, round_mode="decision")
+    entry = decision["negotiation"]["roundsDetail"][0]
+    assert entry["negotiationStartedAt"] == "2026-11-10T02:18:00.000Z"
+    assert entry["clock"] == "client"
+    assert decision["negotiation"]["latencyMs"] == 141736
+
+
+def test_decision_round_mode_carries_negotiation_type_and_hop():
+    rows = [
+        _row(
+            "Propose · information",
+            "2026-11-10T02:18:51.276Z",
+            kind="propose",
+            phase="negotiation",
+            detail={"negotiationType": "information", "hop": "oss"},
+        ),
+        _row("Decision · accept · R1", "2026-11-10T02:20:21.736Z", kind="accept", phase="resolution", round="1"),
+        _opened("2026-11-10T02:17:43.591Z"),
+    ]
+    decision = build_metrics(rows, trace_id=TRACE, round_mode="decision")
+    negotiation = decision["negotiation"]
+    assert negotiation["roundMode"] == "decision"
+    assert negotiation["rounds"] == 1
+    entry = negotiation["roundsDetail"][0]
+    assert entry["negotiationType"] == "information"
+    assert entry["hop"] == "oss"
+    assert entry["proposeAt"] == "2026-11-10T02:18:51.276Z"
+    assert entry["decisionAt"] == "2026-11-10T02:20:21.736Z"
+
+
+def test_decision_round_mode_tolerates_a_missing_start_time():
+    # A row without startTime must not be compared to a datetime (P9b): the proposal
+    # falls back to the run's single rounds bucket instead of crashing the export.
+    rows = [
+        _row("Propose · information", None, kind="propose", phase="negotiation"),
+        _row("Decision · accept · R1", "2026-11-10T02:20:21.736Z", kind="accept", phase="resolution", round="1"),
+        _opened("2026-11-10T02:17:43.591Z"),
+    ]
+    decision = build_metrics(rows, trace_id=TRACE, round_mode="decision")
+    negotiation = decision["negotiation"]
+    assert negotiation["roundMode"] == "decision"
+    assert negotiation["rounds"] == 1
+    entry = negotiation["roundsDetail"][0]
+    assert entry["proposeAt"] is None
+    assert entry["decisionAt"] == "2026-11-10T02:20:21.736Z"
+
+
+def test_decision_round_mode_reads_flattened_langfuse_detail_keys():
+    """Real rows flatten nested attributes: decision mode must read `detail.*` too (P9a)."""
+    rows = [
+        _opened("2026-11-10T02:17:43.591Z"),
+        _row(
+            "Propose · information",
+            "2026-11-10T02:18:51.276Z",
+            kind="propose",
+            phase="negotiation",
+            **{"detail.negotiationType": "information", "detail.hop": "oss"},
+        ),
+        _row("Decision · accept · R1", "2026-11-10T02:20:21.736Z", kind="accept", phase="resolution", round="1"),
+    ]
+    decision = build_metrics(rows, trace_id=TRACE, round_mode="decision")
+    detail = decision["negotiation"]["roundsDetail"][0]
+    assert detail["negotiationType"] == "information"
+    assert detail["hop"] == "oss"

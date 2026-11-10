@@ -29,6 +29,7 @@ def _metrics(rounds=2, triggered=True):
         )
     return {
         "traceId": "0123456789abcdef0123456789abcdef",
+        "protocol": "a2a-t",
         "scenario": "night",
         "runMode": "create",
         "chainId": "conv-1",
@@ -60,8 +61,8 @@ def _metrics(rounds=2, triggered=True):
 
 def test_build_table_expands_each_round_into_columns():
     headers, rows = build_table(_metrics(rounds=2))
-    assert headers[:4] == ["trace ID", "场景", "运行模式", "链 ID"]
-    assert headers[4:13] == [
+    assert headers[:5] == ["trace ID", "协议", "场景", "运行模式", "链 ID"]
+    assert headers[5:14] == [
         "输入token数（客户端）",
         "输入缓存token数（客户端）",
         "输出token数（客户端）",
@@ -72,7 +73,7 @@ def test_build_table_expands_each_round_into_columns():
         "总token数（服务端）",
         "端到端时延(ms)",
     ]
-    assert headers[13:17] == [
+    assert headers[14:18] == [
         "原始意图起始时间点",
         "OSS调用A2A-T SDK时间点",
         "OSS下发请求时间点",
@@ -85,10 +86,11 @@ def test_build_table_expands_each_round_into_columns():
     assert len(rows) == 1
     row = rows[0]
     assert row[0] == "0123456789abcdef0123456789abcdef"
-    assert row[4:13] == [60, 10, 20, 80, 40, 10, 10, 50, 70000]
-    assert row[13] == "2026-11-08T06:59:00.000Z"
-    assert row[17] == "2026-11-08T07:00:01.000Z"  # 第1轮 协商发起
-    assert row[23] == "2026-11-08T07:00:05.000Z"  # 第2轮 协商发起
+    assert row[1] == "a2a-t"
+    assert row[5:14] == [60, 10, 20, 80, 40, 10, 10, 50, 70000]
+    assert row[14] == "2026-11-08T06:59:00.000Z"
+    assert row[18] == "2026-11-08T07:00:01.000Z"  # 第1轮 协商发起
+    assert row[24] == "2026-11-08T07:00:05.000Z"  # 第2轮 协商发起
     assert row[-3:] == [1500, 2, "是"]
 
 
@@ -97,7 +99,7 @@ def test_build_table_without_negotiation_keeps_one_empty_round_group():
     assert "第1轮 协商发起时间点" in headers
     assert "第2轮 协商发起时间点" not in headers
     row = rows[0]
-    assert row[17] is None
+    assert row[18] is None
     assert row[-1] == "否"
 
 
@@ -130,6 +132,6 @@ def test_build_table_many_traces_uses_widest_round_block():
     assert rows[1][0] == "b" * 32
     # First trace has no round 2, so its R2 cells stay empty.
     start = headers.index("第2轮 协商发起时间点")
-    assert start == 23
+    assert start == 24
     assert rows[0][start] is None
     assert rows[1][start] == "2026-11-08T07:00:05.000Z"

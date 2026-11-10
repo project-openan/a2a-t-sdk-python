@@ -399,12 +399,169 @@ def _server_negotiation(rows: list[dict[str, Any]]) -> tuple[dict[int, dict[str,
     return starts, duration
 
 
-def _negotiation(
+def _negotiation_decision(
     rows: list[dict[str, Any]],
     triggered_meta: bool | None,
     all_rows: list[dict[str, Any]] | None = None,
     rounds_meta: int | None = None,
 ) -> dict[str, Any]:
+    """Decision-paired round model (``--round-mode decision``).
+
+    One round is a PROPOSE paired with the DECISION that answers it. Proposals that
+    carry no ``metadata.round`` (pure A2A does this) attach to the next decision in
+    time order instead of inventing a new round, and ``rounds`` is the max round
+    number / run metadata, never the number of detail rows.
+    """
+    def sort_key(row: dict[str, Any]) -> float:
+        # P9b: a row without startTime must not be compared to a datetime (TypeError),
+        # and a naive timestamp must not be mixed with aware ones.
+        parsed = _start(row)
+        if parsed is None:
+            return float("-inf")
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+
+    ordered = sorted(rows, key=sort_key)
+    rounds_map: dict[int, dict[str, Any]] = {}
+
+    def bucket(index: int) -> dict[str, Any]:
+        return rounds_map.setdefault(
+            index,
+            {
+                "round": index,
+                "proposeAt": None,
+                "notifiedAt": None,
+                "notifiedAtSource": None,
+                "negotiationStartedAt": None,
+                "negotiationStartedAtSource": None,
+                "clock": None,
+                "decisionAt": None,
+                "sdkConstructedAt": None,
+                "replySentAt": None,
+                "negotiationType": None,
+                "hop": None,
+            },
+        )
+
+    decisions: list[tuple[datetime | None, int, dict[str, Any]]] = []
+    for row in ordered:
+        kind = _as_text(_meta(row, "kind"))
+        if kind in DECISION_KINDS:
+            explicit = _as_int(_meta(row, "round"))
+            round_no = explicit if explicit is not None else len(decisions) + 1
+            decisions.append((_start(row), round_no, row))
+            entry = bucket(round_no)
+            if entry["decisionAt"] is None:
+                entry["decisionAt"] = _iso(_start(row))
+
+    def next_decision_round(at: datetime | None) -> int | None:
+        if at is None:
+            return None
+        for start, round_no, __ in decisions:
+            if start is not None and start >= at:
+                return round_no
+        return None
+
+    def previous_decision_round(at: datetime | None) -> int | None:
+        current: int | None = None
+        for start, round_no, __ in decisions:
+            if start is not None and at is not None and start <= at:
+                current = round_no
+        return current
+
+    def fallback_round() -> int:
+        return rounds_meta or 1
+
+    for row in ordered:
+        kind = _as_text(_meta(row, "kind"))
+        start = _start(row)
+        at = _iso(start)
+        explicit = _as_int(_meta(row, "round"))
+        if kind == "propose":
+            round_no = explicit or next_decision_round(start) or fallback_round()
+            entry = bucket(round_no)
+            if entry["proposeAt"] is None:
+                entry["proposeAt"] = at
+                # P9a: keep the sample's P6 contract in decision mode too. Langfuse v2
+                # flattens nested OTel attributes, so a real row exposes
+                # ``detail.negotiationType``; unit fixtures may still pass a nested dict.
+                detail = _meta(row, "detail")
+                entry["negotiationType"] = _as_text(_meta(row, "detail.negotiationType")) or (
+                    _as_text(detail.get("negotiationType")) if isinstance(detail, dict) else None
+                )
+                entry["hop"] = _as_text(_meta(row, "detail.hop")) or (
+                    _as_text(detail.get("hop")) if isinstance(detail, dict) else None
+                )
+        elif kind == "negotiation_started":
+            round_no = explicit or next_decision_round(start) or fallback_round()
+            entry = bucket(round_no)
+            if entry["negotiationStartedAt"] is None:
+                entry["negotiationStartedAt"] = at
+                entry["negotiationStartedAtSource"] = "client:negotiation_started"
+                entry["clock"] = "client"
+        elif kind == "llm":
+            stage = _as_text(_meta(row, "stage"))
+            if stage and stage.startswith("negotiation_"):
+                round_no = (
+                    explicit
+                    or previous_decision_round(start)
+                    or next_decision_round(start)
+                    or fallback_round()
+                )
+                entry = bucket(round_no)
+                if entry["sdkConstructedAt"] is None:
+                    entry["sdkConstructedAt"] = at
+        elif kind == "message_sent":
+            phase = _as_text(_meta(row, "phase"))
+            if phase in {"negotiation", "resolution"}:
+                round_no = (
+                    explicit
+                    or previous_decision_round(start)
+                    or next_decision_round(start)
+                    or fallback_round()
+                )
+                entry = bucket(round_no)
+                if entry["replySentAt"] is None:
+                    entry["replySentAt"] = at
+
+    for entry in rounds_map.values():
+        if entry["notifiedAt"] is None and entry["proposeAt"] is not None:
+            entry["notifiedAt"] = entry["proposeAt"]
+            entry["notifiedAtSource"] = "propose"
+
+    detail = [rounds_map[index] for index in sorted(rounds_map)]
+    latencies: list[float] = []
+    for entry in detail:
+        if entry["clock"] == "server":
+            continue
+        begun = entry["negotiationStartedAt"] or entry["proposeAt"]
+        finished = entry["decisionAt"]
+        if begun and finished:
+            start_dt = parse_dt(begun)
+            end_dt = parse_dt(finished)
+            if start_dt and end_dt:
+                latencies.append((end_dt - start_dt).total_seconds() * 1000)
+    __, server_duration = _server_negotiation(all_rows or [])
+    return {
+        "triggered": bool(detail) or bool(triggered_meta) or (rounds_meta or 0) > 0,
+        "rounds": max(len(detail), rounds_meta or 0),
+        "latencyMs": int(round(sum(latencies))) if latencies else None,
+        "serverDurationMs": server_duration,
+        "roundMode": "decision",
+        "roundsDetail": detail,
+    }
+
+
+def _negotiation(
+    rows: list[dict[str, Any]],
+    triggered_meta: bool | None,
+    all_rows: list[dict[str, Any]] | None = None,
+    rounds_meta: int | None = None,
+    mode: str = "legacy",
+) -> dict[str, Any]:
+    if mode == "decision":
+        return _negotiation_decision(rows, triggered_meta, all_rows, rounds_meta)
     kinds = [_as_text(_meta(row, "kind")) for row in rows]
     current_round = 0
     rounds: dict[int, dict[str, Any]] = {}
@@ -537,6 +694,7 @@ def _negotiation(
         "rounds": rounds_total,
         "latencyMs": latency_ms,
         "serverDurationMs": server_duration,
+        "roundMode": "legacy",
         "roundsDetail": ordered,
     }
 
@@ -545,14 +703,17 @@ def build_metrics(
     rows: list[dict[str, Any]],
     trace_id: str | None = None,
     summary: Any = None,
+    round_mode: str = "legacy",
     *,
     run_id: str | None = None,
 ) -> dict[str, Any]:
     """Build the metrics document for one exported trace.
 
     ``rows`` are the API observation rows (the same objects written to
-    ``raw/observations.jsonl``). ``run_id`` selects one attempt of a shared correction trace;
-    without it a multi-run trace uses :func:`select_run_id` (the attempt that sent Task-T).
+    ``raw/observations.jsonl``). ``round_mode`` selects the negotiation round model:
+    ``legacy`` (row order, default) or ``decision`` (PROPOSE-DECISION pairing, for
+    A2A/pure). ``run_id`` selects one attempt of a shared correction trace; without it
+    a multi-run trace uses :func:`select_run_id` (the attempt that sent Task-T).
     ``summary`` is optional and only used as a fallback for the end-to-end latency.
     """
     warnings: list[str] = []
@@ -615,6 +776,7 @@ def build_metrics(
         _as_bool(run_meta.get("negotiated")),
         audit_rows,
         _as_int(run_meta.get("rounds")),
+        round_mode,
     )
     if negotiation["rounds"] and not negotiation["roundsDetail"]:
         warnings.append("negotiation rounds reported by run metadata but no round detail found")

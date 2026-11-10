@@ -36,6 +36,7 @@ def _round_entries(metrics: dict[str, Any]) -> tuple[int, dict[int, dict[str, An
 def _headers(rounds: int) -> list[str]:
     headers: list[str] = [
         "trace ID",
+        "协议",
         "场景",
         "运行模式",
         "链 ID",
@@ -71,6 +72,7 @@ def _row(metrics: dict[str, Any], rounds: int) -> list[Any]:
     server_tokens = by_side.get("server") or {}
     row: list[Any] = [
         metrics.get("traceId"),
+        metrics.get("protocol"),
         metrics.get("scenario"),
         metrics.get("runMode"),
         metrics.get("chainId"),

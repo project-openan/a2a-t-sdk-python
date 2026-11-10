@@ -284,6 +284,38 @@ def test_export_metrics_rejects_invalid_trace_id(monkeypatch: pytest.MonkeyPatch
         cli.export_metrics(_config(), "not a trace id!")
 
 
+def test_export_metrics_forwards_round_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_rows: list[dict[str, Any]],
+    sample_scores: list[dict[str, Any]],
+) -> None:
+    _wire(monkeypatch, FakeBackend(sample_rows, sample_scores), FakeClient())
+
+    legacy = cli.export_metrics(_config(), TRACE)
+    decision = cli.export_metrics(_config(), TRACE, round_mode="decision")
+
+    assert legacy["metrics"]["negotiation"]["roundMode"] == "legacy"
+    assert decision["metrics"]["negotiation"]["roundMode"] == "decision"
+
+
+@pytest.mark.parametrize("wrapper", ["metrics", "full"])
+def test_an_unknown_round_mode_is_rejected_before_argparse(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_rows: list[dict[str, Any]],
+    sample_scores: list[dict[str, Any]],
+    tmp_path: Path,
+    wrapper: str,
+) -> None:
+    """A bad mode must raise ValueError, not argparse's SystemExit (sample patch P9c)."""
+    _wire(monkeypatch, FakeBackend(sample_rows, sample_scores), FakeClient())
+
+    with pytest.raises(ValueError, match="round_mode"):
+        if wrapper == "metrics":
+            cli.export_metrics(_config(), TRACE, round_mode="bogus")
+        else:
+            cli.export_full(_config(), TRACE, tmp_path, round_mode="bogus")
+
+
 def test_export_full_builds_the_expected_namespace(
     monkeypatch: pytest.MonkeyPatch, workdir: Path
 ) -> None:
@@ -316,6 +348,11 @@ def test_export_full_builds_the_expected_namespace(
     assert captured["emit"] is False
     assert captured["print_result"] is True
     assert result == {"traceId": TRACE}
+    # The default stays legacy, so --round-mode is omitted from the argv.
+    assert args.round_mode == "legacy"
+
+    cli.export_full(config, TRACE, workdir / "full", round_mode="decision")
+    assert captured["args"].round_mode == "decision"
 
     cli.export_full(config, TRACE, workdir / "full", zip_file=False)
     assert captured["args"].zip is False

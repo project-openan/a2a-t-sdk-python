@@ -386,7 +386,7 @@ Paste one Langfuse trace id per line (a run's `traceId` equals its run id while 
 can be copied from `/runs`) or pick a recent run from the candidate list. A single id is looked up
 with **查询**; two or more use **批量导出** (the batch mode and its `table.xlsx` are the export
 path). The server fetches each trace and derives the A2A / A2A-T metrics with the vendored
-`langfuse_export` package (`langfuse_export/`, upstream `langfuse-export` 0.4.3).
+`langfuse_export` package (`langfuse_export/`, upstream `langfuse-export` 0.5.1).
 
 - The page shows the per-trace timeline, stage latencies, tokens (total plus client/server split),
   negotiation rounds and observation counts. Downloads: `langfuse-metrics.csv` (UTF-8 BOM, one row
@@ -441,9 +441,10 @@ Required `.env` keys:
 A2AT_SAMPLE_NMS_HOST=<nms-host>
 A2AT_SAMPLE_NMS_TOKEN_USER=<northbound-user>
 A2AT_SAMPLE_NMS_TOKEN_VALUE=<password>
-# Required for a real NMS run; the sample has no built-in region or site default.
+# Required for a real NMS run; the sample has no built-in region default. The example requests
+# already name sites the vendor serves; override only to restrict or extend the list.
 A2AT_SAMPLE_NMS_REGION=A2ATestRegion
-A2AT_SAMPLE_NMS_SITES=NRES_XCS_6102937,LTE_26441_LNR_OCL
+A2AT_SAMPLE_NMS_SITES=NRES_XCS_6102937,NES_27A_321071,LTE_26441_LNR_OCL,LNR_KPI_7745
 A2AT_SAMPLE_NMS_VERIFY_TLS=false
 # The real NMS must be able to reach this address and the webhook port.
 A2AT_SAMPLE_WEBHOOK_HOST=<client-lan-address>

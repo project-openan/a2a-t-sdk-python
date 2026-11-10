@@ -319,7 +319,7 @@ Web UI 时间线始终保留全部 span，不影响排障。修正重试保持�
 启动器会打印 `/observe` 地址。这是一个面向开发和测试团队的中文内部页面：一行粘贴一个
 Langfuse traceId（导出开启时 run 的 `traceId` 等于 run id，可直接从 `/runs` 复制），或从"最近
 run"列表勾选。单个 traceId 用 **查询**；两个及以上用 **批量导出**（批量模式与 `table.xlsx`
-属于导出路径）。服务端用 vendoring 进来的 `langfuse_export` 包（上游 `langfuse-export` 0.4.3）
+属于导出路径）。服务端用 vendoring 进来的 `langfuse_export` 包（上游 `langfuse-export` 0.5.1）
 拉取 trace 并派生 A2A / A2A-T 指标。
 
 - 页面展示每条 trace 的时间线、阶段耗时、token（总数 + client/server 分侧）、协商轮次和
@@ -369,9 +369,9 @@ python run_demo.py --nms --nms-sim --ui --brand huawei
 A2AT_SAMPLE_NMS_HOST=<nms-host>
 A2AT_SAMPLE_NMS_TOKEN_USER=<northbound-user>
 A2AT_SAMPLE_NMS_TOKEN_VALUE=<password>
-# 真机运行必须显式配置；sample 不再提供内置区域/站点默认值
+# 真机运行必须显式配置区域；示例请求已使用网管支持的站点，此列表仅用于收窄或扩展
 A2AT_SAMPLE_NMS_REGION=A2ATestRegion
-A2AT_SAMPLE_NMS_SITES=NRES_XCS_6102937,LTE_26441_LNR_OCL
+A2AT_SAMPLE_NMS_SITES=NRES_XCS_6102937,NES_27A_321071,LTE_26441_LNR_OCL,LNR_KPI_7745
 A2AT_SAMPLE_NMS_VERIFY_TLS=false
 # 真实网管必须能访问这个地址和 webhook 端口
 A2AT_SAMPLE_WEBHOOK_HOST=<客户端局域网地址>
