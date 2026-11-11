@@ -188,8 +188,17 @@ async def test_pure_meta_exposes_its_scenarios_and_mie(
     assert meta["protocol"] == "pure"
     assert meta["protocols"] == ["pure"]
     assert meta["defaultProtocol"] == "pure"
-    assert meta["scenarios"] == ["night", "information", "target"]
-    assert meta["pureScenarios"] == ["night", "information", "target"]
+    assert meta["scenarios"] == [
+        "night",
+        "information",
+        "unknown_area",
+        "target",
+        "feasibility",
+        "reject",
+        "abort",
+        "outage",
+    ]
+    assert meta["pureScenarios"] == meta["scenarios"]
     assert meta["mieEnabled"] is True
     assert 'id="protocol-switch"' in page
 

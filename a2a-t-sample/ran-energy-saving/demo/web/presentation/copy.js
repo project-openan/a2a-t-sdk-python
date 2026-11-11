@@ -821,6 +821,12 @@ const EN = {
   },
   footer:
     "Sequence and message structures follow the customer A2A-T reference demo. Region, sites, IDs, cell counts, suggestion counts and timings are illustrative; long durations are compressed. The radio view illustrates the idea and is not live network data.",
+  scenarioMeta: {
+    useCase: "Use case {n}",
+    complete: "Complete request",
+    negotiation: "Negotiation",
+    ending: "Negotiation ends",
+  },
   scenarios: {
     night: {
       label: "Night-time energy saving",
@@ -1684,6 +1690,12 @@ const ZH = {
   },
   footer:
     "序列与消息结构参考客户 A2A-T 演示页；区域、站点、ID、小区数量、建议数量和时序均为示意，长时间阶段按时间压缩。无线视图只用于说明概念，不是现网数据。",
+  scenarioMeta: {
+    useCase: "用例 {n}",
+    complete: "完整请求",
+    negotiation: "需要协商",
+    ending: "协商终止",
+  },
   scenarios: {
     night: {
       label: "夜间节能",
@@ -1789,6 +1801,19 @@ export function scenarioStory(copy, name) {
 /** Return the tag of one scenario (use case / negotiation / ending). */
 export function scenarioTag(copy, name) {
   return copy.scenarios[name]?.tag || "";
+}
+
+/** Return the use case of one scenario, e.g. "Use case 1"; uc2 is the only second one. */
+export function scenarioUseCase(copy, name) {
+  const kind = copy.scenarios[name]?.kind || "";
+  return format(copy.scenarioMeta?.useCase || "Use case {n}", { n: kind === "uc2" ? 2 : 1 });
+}
+
+/** Return the short behaviour tag of one scenario: complete / negotiation / ending. */
+export function scenarioPhase(copy, name) {
+  const kind = copy.scenarios[name]?.kind || "";
+  const key = kind === "neg" ? "negotiation" : kind === "end" ? "ending" : "complete";
+  return copy.scenarioMeta?.[key] || "";
 }
 
 /** Return the chip mark kind of one scenario. */

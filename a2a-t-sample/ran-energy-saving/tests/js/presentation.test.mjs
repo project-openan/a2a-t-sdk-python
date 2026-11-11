@@ -47,7 +47,7 @@ import {
   pendingDecisionCard,
   validationCard,
 } from "../../demo/web/presentation/js/decisions.js";
-import { copyFor } from "../../demo/web/presentation/copy.js";
+import { copyFor, scenarioPhase, scenarioUseCase } from "../../demo/web/presentation/copy.js";
 import { buildRecord, compareRows, outcomeText } from "../../demo/web/presentation/js/compare.js";
 import { buildWireModel } from "../../demo/web/presentation/js/wire.js";
 
@@ -81,6 +81,15 @@ assert.deepEqual(
   tagOrder.map((name) => copy.scenarios[name].tag),
   ["用例 1", "用例 1 · 协商", "用例 1 · 协商", "用例 1 · 协商", "用例 1 · 协商", "用例 1 · 终止", "用例 1 · 终止", "用例 2"],
 );
+
+// The dropdown keeps the use case and adds one short behaviour tag per scenario.
+assert.equal(scenarioUseCase(copy, "night"), "用例 1");
+assert.equal(scenarioUseCase(copy, "outage"), "用例 2");
+assert.equal(scenarioPhase(copy, "night"), "完整请求");
+assert.equal(scenarioPhase(copy, "information"), "需要协商");
+assert.equal(scenarioPhase(copy, "reject"), "协商终止");
+assert.equal(scenarioUseCase(copyFor("en-US"), "outage"), "Use case 2");
+assert.equal(scenarioPhase(copyFor("en-US"), "abort"), "Negotiation ends");
 
 // The OSS Agent exposes one skill per use case; the tools behind them are not skills.
 assert.deepEqual(copyFor("en-US").roles.ossSkills, ["Skill 1 · Energy saving", "Skill 2 · Planned outage"]);

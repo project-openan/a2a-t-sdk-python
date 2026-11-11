@@ -10,8 +10,9 @@ import {
   format,
   scenarioKind,
   scenarioLabel,
+  scenarioPhase,
   scenarioStory,
-  scenarioTag,
+  scenarioUseCase,
 } from "../copy.js";
 import {
   activityView,
@@ -825,7 +826,11 @@ function renderPresets() {
   // does not offer it (pure A2A).
   if (ui.targetTask && ui.selected && !names.includes(ui.selected)) names.push(ui.selected);
   for (const name of names) {
-    const option = el("option", "", `${scenarioLabel(ui.copy, name)} · ${scenarioTag(ui.copy, name)}`);
+    const option = el(
+      "option",
+      "",
+      `${scenarioLabel(ui.copy, name)} · ${scenarioUseCase(ui.copy, name)} · ${scenarioPhase(ui.copy, name)}`,
+    );
     option.value = name;
     option.title = scenarioStory(ui.copy, name);
     select.append(option);

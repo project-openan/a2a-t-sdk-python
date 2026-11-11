@@ -2315,7 +2315,16 @@ async def test_one_ui_derives_each_request_forms_hop_from_the_protocol(
         meta = (await http_client.get("/api/meta")).json()
         assert meta["protocols"] == ["a2a-t", "pure"]
         assert meta["defaultProtocol"] == "a2a-t"
-        assert meta["scenariosByProtocol"]["pure"] == ["night", "information", "target"]
+        assert meta["scenariosByProtocol"]["pure"] == [
+            "night",
+            "information",
+            "unknown_area",
+            "target",
+            "feasibility",
+            "reject",
+            "abort",
+            "outage",
+        ]
         assert meta["protocolDefaults"]["a2a-t"] == {
             "discovery": "registry",
             "transport": "sse",
