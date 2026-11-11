@@ -459,13 +459,26 @@ function tokenText(tokens) {
   return `${total}`;
 }
 
+function acceptedNote(item) {
+  const accepted = item.stages?.accepted;
+  if (!accepted || accepted.status !== "passed") return "";
+  const actual = accepted.actual && typeof accepted.actual === "object" ? accepted.actual : {};
+  const state = typeof actual.state === "string" && actual.state ? actual.state : "TASK_STATE_SUBMITTED";
+  const recorded = item.serverIntent && typeof item.serverIntent === "object" ? "（服务端意图已记录）" : "";
+  return `已收到 ${state}${recorded}`;
+}
+
 function resultText(item) {
   if (item.error) return item.error;
   const blocked = Object.entries(item.interception?.stages || {}).map(([stage, value]) => [`拦截/${stage}`, value]);
   const all = [...Object.entries(item.stages || {}), ...blocked];
   const failed = all.filter(([, stage]) => stage.status === "failed");
   if (failed.length) {
-    return failed.map(([stage, value]) => `${stage}: ${value.message || "不匹配"}`).join("；");
+    const text = failed.map(([stage, value]) => `${stage}: ${value.message || "不匹配"}`).join("；");
+    // A red row often still received the submission payload; show that next to the failure so the
+    // row is not read as "nothing came back".
+    const note = acceptedNote(item);
+    return note ? `${text}；${note}` : text;
   }
   const waiting = Object.entries(item.stages || {}).filter(([, stage]) => stage.status === "waiting");
   if (waiting.length) {
@@ -652,6 +665,32 @@ function appendContextBlock(body, item) {
   body.append(block);
 }
 
+function appendServerReplyBlock(body, item) {
+  const accepted = item.stages?.accepted;
+  const actual = accepted?.actual && typeof accepted.actual === "object" ? accepted.actual : {};
+  const serverIntent = item.serverIntent && typeof item.serverIntent === "object" ? item.serverIntent : null;
+  const rows = [];
+  if (actual.state) rows.push({ label: "state", value: actual.state });
+  if (serverIntent) {
+    for (const key of ["Operation type", "Energy saving region"]) {
+      if (serverIntent[key] !== undefined && serverIntent[key] !== "") {
+        rows.push({ label: key, value: serverIntent[key] });
+      }
+    }
+  }
+  if (actual.taskId) rows.push({ label: "taskId", value: actual.taskId });
+  if (actual.contextId) rows.push({ label: "contextId", value: actual.contextId });
+  if (!rows.length) return;
+  const block = el("section", "diff-block");
+  const head = el("div", "diff-head");
+  head.append(el("strong", "", "任务受理回包"));
+  if (Array.isArray(item.answer?.exchanges) && item.answer.exchanges.length) {
+    head.append(el("span", "summary", "完整记录见「通信记录」"));
+  }
+  block.append(head, contextTable(rows));
+  body.append(block);
+}
+
 function appendBaselineBlock(body, item) {
   const baseline = item.baseline;
   if (!baseline || typeof baseline !== "object") return;
@@ -757,6 +796,7 @@ function appendIntentCompareTable(body, rows) {
 function renderResultTab(item, body) {
   appendBaselineBlock(body, item);
   appendContextBlock(body, item);
+  appendServerReplyBlock(body, item);
   const stages = item.stages || {};
   if (!Object.keys(stages).length) {
     body.append(el("p", "status-line", "该运行项还没有阶段结果。"));
@@ -1033,6 +1073,7 @@ function drawerSignature(item) {
     item.runId || "",
     baseline,
     item.error || "",
+    `${Array.isArray(item.answer?.exchanges) ? item.answer.exchanges.length : 0}`,
     Object.entries(stages)
       .map(([name, value]) => `${name}:${value?.status || ""}:${value?.message || ""}`)
       .join("|"),
@@ -1139,6 +1180,63 @@ function renderTraceTab(item, body) {
   body.append(list);
 }
 
+function exchangeText(payload) {
+  const message =
+    payload && typeof payload === "object" && payload.message && typeof payload.message === "object"
+      ? payload.message
+      : payload;
+  const parts = message && typeof message === "object" && Array.isArray(message.parts) ? message.parts : [];
+  const text = parts
+    .map((part) => (part && typeof part.text === "string" ? part.text : textBlock(part)))
+    .join("\n");
+  return text || textBlock(payload);
+}
+
+function exchangeMeta(exchange) {
+  const bits = [];
+  if (typeof exchange.round === "number") bits.push(`Round ${exchange.round}`);
+  if (exchange.templateUri) bits.push(String(exchange.templateUri));
+  if (typeof exchange.durationMs === "number" && exchange.durationMs > 0) {
+    bits.push(durationText(exchange.durationMs));
+  }
+  if (exchange.timestamp) bits.push(String(exchange.timestamp));
+  return bits.join(" · ");
+}
+
+function renderExchangesTab(item, body) {
+  const exchanges = Array.isArray(item.answer?.exchanges) ? item.answer.exchanges : [];
+  if (!exchanges.length) {
+    body.append(
+      el("p", "status-line", "该运行项没有通信记录：未生成 answer、运行项提前失败，或来自旧版本批次。"),
+    );
+    return;
+  }
+  body.append(
+    el(
+      "p",
+      "status-line",
+      "规范化记录（来自 session transcript 与 trace span）；逐字原始帧请用表格行的 wire 链接。",
+    ),
+  );
+  for (const exchange of exchanges) {
+    const block = el("section", "diff-block");
+    const head = el("div", "diff-head");
+    const direction = String(exchange.direction || "");
+    head.append(
+      el("strong", "", `${direction || "?"} ${String(exchange.messageType || "")}`),
+      el("span", "summary", exchangeMeta(exchange)),
+    );
+    block.append(head);
+    block.append(el("pre", "mono case-pre", exchangeText(exchange.payload)));
+    const details = document.createElement("details");
+    details.className = "trace-event";
+    details.append(el("summary", "", "完整 payload"));
+    details.append(el("pre", "mono case-pre", textBlock(exchange.payload)));
+    block.append(details);
+    body.append(block);
+  }
+}
+
 function renderDrawer() {
   const drawer = state.drawer;
   const item = drawer.item;
@@ -1158,12 +1256,15 @@ function renderDrawer() {
   $("drawer-tab-result").classList.toggle("active", drawer.tab === "result");
   $("drawer-tab-trace").hidden = drawer.preview === true;
   $("drawer-tab-trace").classList.toggle("active", drawer.tab === "trace");
+  $("drawer-tab-exchanges").hidden = drawer.preview === true;
+  $("drawer-tab-exchanges").classList.toggle("active", drawer.tab === "exchanges");
   $("drawer-tab-case").classList.toggle("active", drawer.tab === "case");
   const body = $("drawer-body");
   const scroll = body.scrollTop;
   clear(body);
   if (drawer.tab === "result") renderResultTab(item, body);
   else if (drawer.tab === "trace") renderTraceTab(item, body);
+  else if (drawer.tab === "exchanges") renderExchangesTab(item, body);
   else renderCaseTab(item, body);
   body.scrollTop = scroll;
 }
@@ -1283,6 +1384,7 @@ function wireEvents() {
   $("drawer-backdrop").addEventListener("click", closeDrawer);
   $("drawer-tab-result").addEventListener("click", () => switchDrawerTab("result"));
   $("drawer-tab-trace").addEventListener("click", () => switchDrawerTab("trace"));
+  $("drawer-tab-exchanges").addEventListener("click", () => switchDrawerTab("exchanges"));
   $("drawer-tab-case").addEventListener("click", () => switchDrawerTab("case"));
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeDrawer();

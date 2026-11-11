@@ -94,12 +94,12 @@ def test_the_trajectory_keeps_milestones_like_the_reference_workbook() -> None:
     exchanges = [
         {"round": 1, "direction": "OUT", "messageType": "Task-T"},
         {"round": 1, "direction": "IN", "messageType": "RESULT"},
-        {"round": 0, "direction": "IN", "messageType": "TASK_STATE_SUBMITTED"},
+        {"round": None, "direction": "IN", "messageType": "TASK_STATE_SUBMITTED"},
     ]
 
     assert render_trajectory(exchanges) == (
         "### Round 1 | Client | Task-T\n\n"
-        "### Round 0 | Server | TASK_STATE_SUBMITTED"
+        "### Server | TASK_STATE_SUBMITTED"
     )
 
 
@@ -109,7 +109,7 @@ def test_the_trajectory_keeps_negotiation_performatives() -> None:
         {"round": 1, "direction": "IN", "messageType": "TARGET"},
         {"round": 1, "direction": "OUT", "messageType": "PROPOSE"},
         {"round": 1, "direction": "IN", "messageType": "ACCEPT"},
-        {"round": 0, "direction": "IN", "messageType": "TASK_STATE_WORKING"},
+        {"round": None, "direction": "IN", "messageType": "TASK_STATE_WORKING"},
     ]
 
     assert render_trajectory(exchanges) == (
@@ -117,7 +117,7 @@ def test_the_trajectory_keeps_negotiation_performatives() -> None:
         "### Round 1 | Server | TARGET\n\n"
         "### Round 1 | Client | PROPOSE\n\n"
         "### Round 1 | Server | ACCEPT\n\n"
-        "### Round 0 | Server | TASK_STATE_WORKING"
+        "### Server | TASK_STATE_WORKING"
     )
 
 
@@ -185,6 +185,8 @@ def test_the_answer_carries_the_reference_workbook_keys() -> None:
         "RESULT",
         "TASK_STATE_SUBMITTED",
     ]
+    # The outbound Task-T falls back to round 1; the submission status carries no round.
+    assert [exchange["round"] for exchange in exchanges] == [1, 1, None]
 
 
 def test_scores_and_labels_follow_the_reference_mapping() -> None:

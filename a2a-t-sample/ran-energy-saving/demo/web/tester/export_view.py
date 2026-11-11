@@ -195,7 +195,9 @@ def _collect_exchanges(run: RunState) -> list[dict[str, object]]:
                 _seq_of(entry, position),
                 position,
                 {
-                    "round": entry.get("round") if isinstance(entry.get("round"), int) else 0,
+                    # A status/artifact row has no negotiation round. ``None`` keeps it out of the
+                    # milestone trajectory instead of pretending it is round 0.
+                    "round": entry.get("round") if isinstance(entry.get("round"), int) else None,
                     "step": f"接收{message_type}",
                     "direction": "IN",
                     "messageType": message_type,
@@ -362,8 +364,10 @@ def render_trajectory(exchanges: Sequence[Mapping[str, object]]) -> str:
         else:
             continue
         round_number = exchange.get("round")
-        resolved_round = round_number if isinstance(round_number, int) else 0
-        lines.append(f"### Round {resolved_round} | {side} | {label}")
+        # A Task state is an observation, not a negotiation round; printing ``Round 0`` for it
+        # would read as a zero-th round in the arbitration workbook.
+        prefix = f"Round {round_number} | " if isinstance(round_number, int) else ""
+        lines.append(f"### {prefix}{side} | {label}")
     return "\n\n".join(lines)
 
 
