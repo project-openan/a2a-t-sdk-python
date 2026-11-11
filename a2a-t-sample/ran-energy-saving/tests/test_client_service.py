@@ -1440,6 +1440,87 @@ async def test_a_restart_recovers_a_run_that_still_has_a_remote_task(
     assert stored.server_task_id == "task-1"
 
 
+async def test_a_restart_skips_a_run_older_than_the_retention_window(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """An old snapshot is not a live run; recovering it surfaced stale terminal states."""
+    store = SqliteClientStore(tmp_path / "client.sqlite3")
+    await store.ensure_conversation(conversation_id="conv-old")
+    await store.create_run(
+        ClientRunRecord(
+            run_id="run-old",
+            conversation_id="conv-old",
+            scenario="information",
+            mode="auto",
+            transport="sse",
+            discovery="direct",
+            user_request="request",
+            server_task_id="task-old",
+            server_context_id="ctx-old",
+            owner_pid=2**31 - 1,
+            source={"kind": "presentation"},
+            updated_at="2000-01-01T00:00:00Z",
+        )
+    )
+    manager = RunManager(
+        config=offline_config,
+        runtime_factory=lambda *args, **kwargs: None,  # type: ignore[arg-type,return-value]
+        catalog=DemoRunCatalog(),
+        runs_dir=tmp_path / "runs",
+        store=store,
+    )
+
+    assert await manager.recover_runs() == 0
+    stored = await store.get_run("run-old")
+    assert stored is not None and stored.status == "interrupted"
+
+
+async def test_a_long_task_stops_after_repeated_poll_failures(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unobservable remote Task must not keep a run running forever."""
+    from types import SimpleNamespace
+
+    from protocol.client_service.run_state import RunState
+
+    config = replace(
+        offline_config,
+        nms_state_poll_interval=0.01,
+        task_poll_interval_seconds=0.01,
+    )
+    manager, _store, _runtimes = _manager(tmp_path, config)
+    run = RunState(
+        run_id="run-1",
+        scenario="night",
+        mode="auto",
+        transport="webhook",
+        protocol=PROTOCOL_PURE,
+    )
+    run.runtime = SimpleNamespace()
+    calls = {"count": 0}
+
+    async def failing_poll(run_arg: RunState, task_id: str) -> object:
+        del run_arg, task_id
+        calls["count"] += 1
+        raise RuntimeError("task not found")
+
+    monkeypatch.setattr(manager, "_poll_remote_task", failing_poll)
+    result = ClientFlowResult(
+        final_state=FINAL_STATE_INCOMPLETE,
+        task_id="task-1",
+        context_id="ctx-1",
+    )
+
+    finished = await asyncio.wait_for(manager._watch_long_task(run, result), timeout=5.0)
+
+    assert finished.final_state == FINAL_STATE_TASK_FAILED
+    assert "could not be observed" in (run.error or "")
+    assert calls["count"] >= 10
+
+
 async def test_a_long_running_run_stays_active_until_the_remote_task_finishes(
     tmp_path: Path,
     offline_config: SampleConfig,
@@ -1744,6 +1825,10 @@ async def test_a_polled_input_required_is_answered_through_the_pure_decision(
 
     assert events[0]["text"] == "Energy saving region is not recognized."
     assert events[0]["metadata"]["pure"]["round"] == 2
+    # A polled question is one pure-A2A negotiation round, exactly like a streamed one; without
+    # this the tester's negotiate stage counted a real vendor question as zero rounds.
+    assert len(run.proposals) == 1
+    assert run.proposals[0].content == "Energy saving region is not recognized."
     request = sent[0]
     assert request.message.parts[0].text == "Region A"
     assert request.message.task_id == "outer-1"

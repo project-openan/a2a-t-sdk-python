@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final, cast
 
@@ -47,6 +48,7 @@ from shared.run_constants import (
     FINAL_STATE_TASK_COMPLETED,
     FINAL_STATE_TASK_FAILED,
     FINAL_STATE_TASK_REJECTED,
+    MAX_ROUNDS,
     PROTOCOL_A2A_T,
     PROTOCOL_PURE,
     RUN_MODE_CREATE,
@@ -88,7 +90,7 @@ from protocol.client_store import (
 from protocol.client_store.store import _pid_alive
 from protocol.decision_provider import DecisionTimeoutError, sweep_stale_sessions
 from protocol.manual_answer import missing_item_labels
-from protocol.pure_client_flow import build_follow_up_request
+from protocol.pure_client_flow import build_follow_up_request, pure_proposal_view
 from protocol.run_metrics import append_metrics_jsonl, build_run_metrics
 from protocol.run_spec import RunCatalog
 from protocol.transcript import DEFAULT_RUNS_DIR, NegotiationTranscript
@@ -198,6 +200,22 @@ def _final_state_for_task_state(
         if reports_failed_completion(text):
             return FINAL_STATE_TASK_FAILED
     return _TASK_STATE_FINAL_STATES.get(state_name)
+
+
+#: Consecutive poll failures after which a long-task or recovered run stops waiting. A Task the
+#: client can no longer observe (404, expired id) must not keep a run ``running`` forever.
+_MAX_CONSECUTIVE_POLL_ERRORS: Final[int] = 10
+
+
+def _run_record_expired(record: ClientRunRecord, retention_days: int) -> bool:
+    """Return whether a persisted running run is older than the recovery window."""
+    try:
+        updated = datetime.fromisoformat(record.updated_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=UTC)
+    return datetime.now(UTC) - updated > timedelta(days=max(1, retention_days))
 
 
 def _question_round(metadata: Mapping[str, object] | None) -> int:
@@ -590,6 +608,12 @@ class RunManager:
                 # Another live client process (UI + gateway, two UIs) owns this run.
                 continue
             if not record.server_task_id:
+                await self._store.mark_run_interrupted(record.run_id)
+                continue
+            if _run_record_expired(record, self._config.task_retention_days):
+                # A snapshot older than the Task retention window is not a run this process can
+                # still observe usefully; surfacing its old terminal state in the current UI was
+                # the reported failure.
                 await self._store.mark_run_interrupted(record.run_id)
                 continue
             try:
@@ -1801,6 +1825,7 @@ class RunManager:
             try:
                 polled = await self._poll_remote_task(run, task_id)
                 poll_count += 1
+                poll_errors = 0
                 if polled.state_name and polled.state_name != last_state:
                     last_state = polled.state_name
                     state_since = now_iso()
@@ -1849,6 +1874,15 @@ class RunManager:
                 _LOGGER.warning("task poll failed for run %s", run.run_id, exc_info=True)
                 # Surface the retry: a silent failure looks exactly like an idle task.
                 publish_wait_state(last_state or "")
+                if poll_errors >= _MAX_CONSECUTIVE_POLL_ERRORS:
+                    # The Task is no longer observable (expired/foreign/404). Keeping the run
+                    # ``running`` forever also kept old recovered snapshots in the current UI.
+                    run.error = (
+                        f"The remote Task {task_id} could not be observed after "
+                        f"{poll_errors} consecutive attempts."
+                    )
+                    publish_wait_state(last_state or "", status="failed")
+                    return replace(result, final_state=FINAL_STATE_TASK_FAILED)
             # Sleep in one-second slices so a disappearing viewer is noticed within the grace
             # window instead of after a full background poll interval.
             deadline = time.monotonic() + interval
@@ -1889,12 +1923,33 @@ class RunManager:
             "text": polled.text,
             "metadata": dict(polled.metadata or {}),
         }
+        # The synchronous pure flow wraps plain answers in ``_announce_pure_proposals``; the polled
+        # path used to call the answer directly, so ``run.proposals`` stayed empty and the tester's
+        # negotiate stage counted a real vendor question as zero rounds. Only record here when the
+        # answer does not publish its own proposal (the confirmation card does).
+        propose: NegotiationProposeView | None = None
+        session: NegotiationContext | None = None
+        if not callable(getattr(answer, "set_proposal_sink", None)):
+            propose, session = pure_proposal_view(
+                event,
+                default_max_rounds=MAX_ROUNDS,
+                fallback_round=len(run.proposals) + 1,
+            )
+            run.record_proposal(propose, session)
+            run.proposals.append(propose)
         answered = answer(event)
         if inspect.isawaitable(answered):
             answered = await answered
         text = answered
         if not isinstance(text, str) or not text.strip():
             return False
+        if propose is not None and session is not None:
+            run.record_decision(
+                NegotiationDecision(action="accept", rationale=text),
+                propose,
+                session=session,
+                decided_by=_decision_origin(run.mode),
+            )
         # This answer resumes the caller→OSS Task, so it must use the streaming path's default
         # (taskId + contextId). ``A2AT_SAMPLE_PURE_FOLLOWUP`` configures the OSS→downstream hop;
         # applying it here drops the taskId the OSS needs to find the INPUT_REQUIRED Task.
