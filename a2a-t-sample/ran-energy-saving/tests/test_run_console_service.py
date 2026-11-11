@@ -260,3 +260,33 @@ async def test_negotiation_returns_transcript_decisions(tmp_path: Path) -> None:
     assert payload is not None
     assert payload["decisions"][0]["action"] == "accept"
     assert payload["decisions"][0]["filledParams"] == {"rate": 2}
+
+
+async def test_a_wire_entry_payload_is_read_from_the_file(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    run_wire = runs_dir / "run-wire"
+    run_wire.mkdir(parents=True)
+    transcript = runs_dir / "transcript.json"
+    transcript.write_text(json.dumps({"events": [], "decisions": []}), encoding="utf-8")
+    (run_wire / "wire.jsonl").write_text(
+        json.dumps(
+            {
+                "ts": "2026-11-11T10:00:01.000Z",
+                "dir": "out",
+                "method": "POST",
+                "url": "http://nms.test/message:stream",
+                "status": 200,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    service = await _service(tmp_path, _record("run-wire", transcript_json=str(transcript)))
+    timeline = service.timeline("run-wire", sources=["wire"])
+    assert timeline is not None
+    entry = timeline["entries"][0]
+
+    payload = service.entry_payload("run-wire", entry["id"])
+
+    assert payload is not None
+    assert "message:stream" in payload["payload"]

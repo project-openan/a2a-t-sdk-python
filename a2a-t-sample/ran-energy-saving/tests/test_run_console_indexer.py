@@ -11,6 +11,7 @@ from demo.web.runs_console.indexer import (
     merge_server_spans,
     read_process_logs,
     read_server_trace_jsonl,
+    read_wire_refs,
     split_transcript,
 )
 from demo.web.runs_console.timeline import TimelineDocument, build_entries
@@ -216,3 +217,34 @@ def test_wire_records_are_capped_at_the_first_and_last_half() -> None:
 
     assert [record["index"] for record in capped] == [0, 1, 2, 7, 8, 9]
     assert warning is not None
+
+
+def test_wire_refs_keep_metadata_without_the_body(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "run-wire"
+    run_dir.mkdir(parents=True)
+    (run_dir / "wire.jsonl").write_text(
+        json.dumps(
+            {
+                "ts": "2026-11-11T10:00:01.000Z",
+                "dir": "out",
+                "method": "POST",
+                "url": "http://nms.test/message:stream",
+                "status": 200,
+                "body": "x" * 5000,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    refs, warnings = read_wire_refs(tmp_path / "runs", "run-wire")
+
+    assert warnings == []
+    assert len(refs) == 1
+    ref = refs[0]
+    assert ref.file == "wire.jsonl"
+    assert ref.line_no == 1
+    assert ref.method == "POST"
+    assert ref.url == "http://nms.test/message:stream"
+    assert len(ref.search_prefix) <= 512
+    assert "body" not in ref.search_prefix or "x" * 600 not in ref.search_prefix

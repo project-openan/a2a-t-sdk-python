@@ -22,21 +22,21 @@ from demo.web.runs_console.indexer import (
     MAX_SERVER_SPANS,
     PROCESS_LOG_NAMES,
     TimelineCache,
-    cap_wire_records,
     merge_server_spans,
     read_process_logs,
     read_server_trace_jsonl,
+    read_wire_refs,
     split_transcript,
 )
 from demo.web.runs_console.timeline import (
     ProcessLine,
     TimelineDocument,
     TimelineEntry,
+    WireRef,
     build_entries,
     filter_entries,
     page_entries,
 )
-from demo.web.wire_records import read_wire_records
 
 _LOGGER = logging.getLogger("ran_energy_saving.run_console")
 
@@ -154,7 +154,7 @@ class RunConsoleService:
         entry = next((candidate for candidate in entries if candidate.id == entry_id), None)
         if entry is None:
             return None
-        payload = _payload_for(entry, document)
+        payload = self._entry_payload(entry, document, run_id)
         if payload is None:
             return {
                 "entry": entry.to_public(),
@@ -268,6 +268,22 @@ class RunConsoleService:
             return None
         return _read_capped(path, MAX_FILE_BYTES)
 
+    def _entry_payload(
+        self,
+        entry: TimelineEntry,
+        document: TimelineDocument,
+        run_id: str,
+    ) -> object | None:
+        if entry.ref.get("collection") == "wire":
+            index = entry.ref.get("index")
+            if not isinstance(index, int) or index >= len(document.wire):
+                return None
+            value = document.wire[index]
+            if isinstance(value, WireRef):
+                return _read_jsonl_line(self.runs_dir / run_id / value.file, value.line_no)
+            return value
+        return _source_payload(entry, document)
+
     def _detail(self, run_id: str) -> Mapping[str, object] | None:
         if self.client_db_path is None:
             return None
@@ -323,17 +339,14 @@ class RunConsoleService:
             [*live_spans, *transcript_server],
             durable_spans,
         )
-        wire_records = read_wire_records(self.runs_dir, run_id)
-        wire_records, wire_warning = cap_wire_records(wire_records)
+        wire_refs, wire_warnings = read_wire_refs(self.runs_dir, run_id)
         process_lines, process_warnings = read_process_logs(self.run_dir, run_id)
-        warnings = [*span_warnings, *process_warnings]
-        if wire_warning is not None:
-            warnings.append(wire_warning)
+        warnings = [*span_warnings, *wire_warnings, *process_warnings]
         return TimelineDocument(
             client_events=tuple(client_events),
             decisions=tuple(decisions),
             server_spans=tuple(server_spans),
-            wire=tuple(wire_records),
+            wire=tuple(wire_refs),
             process=tuple(process_lines),
             warnings=warnings,
             truncated=bool(warnings),
@@ -423,7 +436,7 @@ class RunConsoleService:
         return resolved if resolved.is_file() else None
 
 
-def _payload_for(entry: TimelineEntry, document: TimelineDocument) -> object | None:
+def _source_payload(entry: TimelineEntry, document: TimelineDocument) -> object | None:
     collection = entry.ref.get("collection")
     index = entry.ref.get("index")
     if not isinstance(index, int):
@@ -438,6 +451,22 @@ def _payload_for(entry: TimelineEntry, document: TimelineDocument) -> object | N
         return document.wire[index] if index < len(document.wire) else None
     if collection == "process":
         return document.process[index] if index < len(document.process) else None
+    return None
+
+
+def _read_jsonl_line(path: Path, line_no: int) -> object | None:
+    """Read one JSONL record by line number; ``None`` when the file changed or is unreadable."""
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for index, line in enumerate(handle, start=1):
+                if index != line_no:
+                    continue
+                try:
+                    return json.loads(line)
+                except ValueError:
+                    return None
+    except OSError:
+        return None
     return None
 
 

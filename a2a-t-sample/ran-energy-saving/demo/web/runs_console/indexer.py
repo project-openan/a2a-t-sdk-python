@@ -14,6 +14,7 @@ from demo.web.runs_console.timeline import (
     ProcessLine,
     TimelineDocument,
     TimelineEntry,
+    WireRef,
     build_entries,
     parse_process_log,
 )
@@ -195,6 +196,52 @@ def cap_wire_records(
     return kept, f"wire 记录超过 {limit} 条，仅保留首尾各 {half} 条"
 
 
+def read_wire_refs(
+    runs_dir: Path,
+    run_id: str,
+    *,
+    limit: int = MAX_WIRE_RECORDS,
+) -> tuple[list[WireRef], list[str]]:
+    """Index both wire logs without keeping their payloads in memory."""
+    refs: list[WireRef] = []
+    for name in ("wire.jsonl", "wire-oss.jsonl"):
+        path = runs_dir / run_id / name
+        if not path.is_file():
+            continue
+        try:
+            with path.open(encoding="utf-8") as handle:
+                for line_no, line in enumerate(handle, start=1):
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        record = json.loads(stripped)
+                    except ValueError:
+                        continue
+                    if not isinstance(record, Mapping):
+                        continue
+                    refs.append(
+                        WireRef(
+                            file=name,
+                            line_no=line_no,
+                            ts=_text(record.get("ts")) or None,
+                            dir=_text(record.get("dir")) or _text(record.get("direction")),
+                            method=_text(record.get("method")) or _text(record.get("kind")),
+                            url=_text(record.get("url")) or _text(record.get("path")),
+                            status=record.get("status"),
+                            search_prefix=json.dumps(record, ensure_ascii=False)[:512],
+                        )
+                    )
+        except OSError:
+            continue
+    refs.sort(key=lambda ref: (ref.ts is None, ref.ts or "", ref.file, ref.line_no))
+    if len(refs) <= limit:
+        return refs, []
+    half = max(1, limit // 2)
+    kept = [*refs[:half], *refs[len(refs) - (limit - half) :]]
+    return kept, [f"wire 记录超过 {limit} 条，仅保留首尾各 {half} 条"]
+
+
 def read_process_logs(
     run_dir: Path | None,
     run_id: str,
@@ -232,6 +279,10 @@ def read_process_logs(
     for index, line in enumerate(lines, start=1):
         line.line_no = index
     return lines, warnings
+
+
+def _text(value: object) -> str:
+    return value if isinstance(value, str) else "" if value is None else str(value)
 
 
 def _is_server_trace_row(event: Mapping[str, object]) -> bool:
@@ -284,9 +335,14 @@ def _read_tail(path: Path, window_bytes: int) -> str:
 __all__ = [
     "DEFAULT_CACHE_ENTRIES",
     "DEFAULT_LOG_WINDOW_BYTES",
+    "MAX_SERVER_SPANS",
+    "MAX_WIRE_RECORDS",
     "PROCESS_LOG_NAMES",
     "TimelineCache",
+    "cap_wire_records",
     "merge_server_spans",
     "read_process_logs",
+    "read_server_trace_jsonl",
+    "read_wire_refs",
     "split_transcript",
 ]

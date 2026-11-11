@@ -43,6 +43,20 @@ class ProcessLine:
 
 
 @dataclass(slots=True)
+class WireRef:
+    """A wire record's index metadata; the payload is re-read from the file on demand."""
+
+    file: str
+    line_no: int
+    ts: str | None
+    dir: str
+    method: str
+    url: str
+    status: object
+    search_prefix: str
+
+
+@dataclass(slots=True)
 class TimelineEntry:
     """One normalized log entry; payload is fetched separately through ``ref``."""
 
@@ -80,7 +94,7 @@ class TimelineDocument:
     client_events: Sequence[Mapping[str, object]] = ()
     decisions: Sequence[Mapping[str, object]] = ()
     server_spans: Sequence[Mapping[str, object]] = ()
-    wire: Sequence[Mapping[str, object]] = ()
+    wire: Sequence[Mapping[str, object] | WireRef] = ()
     process: Sequence[ProcessLine | Mapping[str, object]] = ()
     warnings: list[str] = field(default_factory=list)
     truncated: bool = False
@@ -288,26 +302,36 @@ def _server_entries(spans: Sequence[Mapping[str, object]]) -> list[TimelineEntry
     return entries
 
 
-def _wire_entries(records: Sequence[Mapping[str, object]]) -> list[TimelineEntry]:
+def _wire_entries(records: Sequence[Mapping[str, object] | WireRef]) -> list[TimelineEntry]:
     entries: list[TimelineEntry] = []
     for index, record in enumerate(records):
-        method = _text(record.get("method")) or _text(record.get("kind")) or "wire"
-        url = _text(record.get("url")) or _text(record.get("path")) or ""
-        direction = _text(record.get("dir")) or _text(record.get("direction")) or ""
-        status_code = record.get("status")
+        if isinstance(record, WireRef):
+            method = record.method or "wire"
+            url = record.url
+            direction = record.dir
+            status_code: object = record.status
+            ts = record.ts
+            prefix = record.search_prefix
+        else:
+            method = _text(record.get("method")) or _text(record.get("kind")) or "wire"
+            url = _text(record.get("url")) or _text(record.get("path")) or ""
+            direction = _text(record.get("dir")) or _text(record.get("direction")) or ""
+            status_code = record.get("status")
+            ts = _text(record.get("ts")) or None
+            prefix = _payload_prefix(record)
         summary_parts = [direction, str(status_code) if status_code is not None else ""]
         entries.append(
             TimelineEntry(
                 id=f"wire:{index}",
                 source="wire",
-                ts=_text(record.get("ts")) or None,
+                ts=ts,
                 phase=None,
                 phase_inferred=False,
                 status="ok",
                 title=f"{method} {url}".strip(),
                 summary=" · ".join(part for part in summary_parts if part),
                 search_text=_search_text(
-                    [method, url, direction, _payload_prefix(record)],
+                    [method, url, direction, prefix],
                 ),
                 payload_available=True,
                 ref={"collection": "wire", "index": index},
