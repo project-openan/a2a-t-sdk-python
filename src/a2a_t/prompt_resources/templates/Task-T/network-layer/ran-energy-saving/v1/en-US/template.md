@@ -44,14 +44,14 @@ Requirement:
 3. Energy saving cell coverage type (optional); allowed values: indoor, outdoor, all
 4. Whether Lossless Experience Energy Saving is required (optional); allowed values: yes, no
 5. Coverage Layer and Capacity Layer requirements (optional): specify which frequencies are used as the Coverage Layer and which as the Capacity Layer. Example: frequency 1650 serves as the Coverage Layer for carrier shutdown
-6. Carrier frequencies that can be turned off during energy saving (optional); Example: Carrier frequencies 1650 and 1600 can be turned off.
+6. Carrier frequencies that can be turned off during energy saving (optional); Carrier frequencies must be specific numbers. Example: Carrier frequencies 1650 and 1600 can be turned off.
 7. Rate guarantee target (optional): the minimum downlink throughput target that must be guaranteed and its effective time period
     - Supports both area-level and site-level configuration modes, where site-level configuration is supported only when [Operation Type](#operation-type) is set to `Modify`.
     - **For the area-level setting**, the following information needs to be provided:
 
       Option 1: Time-segmented rate guarantee target
         - Time Window (required): Non-overlapping time windows can be configured. Time windows MUST NOT overlap; Specific and explicit time windows must be provided; unclear time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to Lossless Experience Energy Saving. All configured time windows must fall within the active energy-saving execution period;
-        - Rate (required): Specify a target throughput for each time window, e.g., 10 Mbps;
+        - Rate (required): Specify a target throughput for each time window (rate must be a specific value), e.g., 10 Mbps;
         - Example: Time-segmented rate guarantee target: {00:00~06:00, 2Mbps}, {06:00~18:00, 10Mbps}
 
       Option 2: Full-period rate guarantee target
@@ -59,11 +59,11 @@ Requirement:
         - Example: Rate guarantee target: 10Mbps
 
     - **For the site-level setting**, the following information needs to be provided:
-        - Site list (required); 
+        - Site list (required): site names must be concrete and complete; 
         - Time-segmented rate guarantee target:
           - Time Window (required): Non-overlapping time windows can be configured. Time windows MUST NOT overlap; Specific and explicit time windows must be provided; unclear time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to Lossless Experience Energy Saving;
           - Rate (optional): Specify a target throughput for each time window, e.g., 10 Mbps;
-        - Background event and event duration (optional);
+        - Background event and event duration (optional): in outage/modify scenarios, the affected site list and the outage start/end time are required; outage duration must be a specific number;
         - Example:
             - Site list 1: ["Site Name 1", "Site Name 2"], Time-segmented rate guarantee target: {00:00~06:00,2Mbps}, {06:00~18:00,10Mbps}, Background event: power outage from 00:00 to 18:00.
             - Site list 2: ["Site Name 3", "Site Name 4"], Time-segmented rate guarantee target: {01:00~06:00,2Mbps}, {06:00~18:00,10Mbps}, Background event: power outage from 01:00 to 18:00.
