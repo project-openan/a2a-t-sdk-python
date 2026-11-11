@@ -195,6 +195,7 @@ async def test_process_logs_are_served_only_when_run_dir_is_configured(tmp_path:
     assert timeline["total"] == 1
     assert timeline["entries"][0]["source"] == "process"
     assert files is not None
+    assert files["processLogsEnabled"] is True
     names = {item["name"] for item in files["files"]}
     assert "server.log" in names
 

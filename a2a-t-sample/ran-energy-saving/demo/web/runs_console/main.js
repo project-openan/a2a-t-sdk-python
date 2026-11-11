@@ -84,6 +84,7 @@ const state = {
   rawFiles: [],
   rawName: null,
   rawSeq: 0,
+  processLogsEnabled: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -802,13 +803,17 @@ function renderLogs() {
 function renderLogNotice(payload) {
   const notice = $("log-notice");
   const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
-  if (!warnings.length) {
+  const messages = [...warnings];
+  if (payload.processLogsEnabled === false && logSources().includes("process")) {
+    messages.push("进程日志未启用（RUN_DIR 未配置）");
+  }
+  if (!messages.length) {
     notice.hidden = true;
     notice.textContent = "";
     return;
   }
   notice.hidden = false;
-  notice.textContent = warnings.join("；");
+  notice.textContent = messages.join("；");
 }
 
 async function loadLogs({ reset = false } = {}) {
@@ -849,6 +854,9 @@ async function loadLogs({ reset = false } = {}) {
 function renderRawFiles() {
   const list = $("raw-files");
   clear(list);
+  if (state.processLogsEnabled === false) {
+    list.appendChild(el("p", "muted", "进程日志未启用（RUN_DIR 未配置）。"));
+  }
   if (!state.rawFiles.length) {
     list.appendChild(el("p", "muted", "没有可用的原始文件。"));
     return;
@@ -878,6 +886,7 @@ async function loadFiles() {
     );
     if (seq !== state.rawSeq) return;
     state.rawFiles = payload.files || [];
+    state.processLogsEnabled = payload.processLogsEnabled !== false;
     renderRawFiles();
   } catch (error) {
     showNotice(error instanceof Error ? error.message : String(error));
@@ -934,6 +943,7 @@ function resetDetailState() {
   state.payloadCache.clear();
   state.rawFiles = [];
   state.rawName = null;
+  state.processLogsEnabled = null;
   $("log-query").value = "";
   $("log-phase").value = "";
   $("log-list").replaceChildren();

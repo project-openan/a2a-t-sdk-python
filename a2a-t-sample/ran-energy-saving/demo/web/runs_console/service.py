@@ -114,6 +114,7 @@ class RunConsoleService:
             },
             "truncated": document.truncated,
             "warnings": list(document.warnings),
+            "processLogsEnabled": self.run_dir is not None,
         }
 
     def timeline(
@@ -142,6 +143,7 @@ class RunConsoleService:
             "truncated": document.truncated,
             "droppedCount": document.dropped_count,
             "warnings": list(document.warnings),
+            "processLogsEnabled": self.run_dir is not None,
             "builtAt": _now(),
         }
 
@@ -247,7 +249,7 @@ class RunConsoleService:
                         available=True,
                     )
                 )
-        return {"files": files}
+        return {"files": files, "processLogsEnabled": self.run_dir is not None}
 
     def read_file(self, run_id: str, name: str) -> tuple[str, bool] | None:
         """Return one whitelisted raw file, capped, ``None`` when unknown or unavailable."""

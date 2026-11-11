@@ -290,6 +290,7 @@ async def test_the_detail_endpoints_serve_summary_timeline_negotiation_and_files
     assert "chainId" in summary_payload["run"]
     assert summary_payload["counts"]["bySource"]["client"] >= 1
     assert "metrics" in summary_payload
+    assert summary_payload["processLogsEnabled"] is False
 
     timeline = await client.get(f"/api/run-console/runs/{run_id}/timeline?limit=2")
     assert timeline.status_code == 200
