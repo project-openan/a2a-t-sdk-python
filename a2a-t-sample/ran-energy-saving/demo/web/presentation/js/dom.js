@@ -30,3 +30,35 @@ export function clear(node) {
 export function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
+
+/** Copy text to the clipboard, falling back to a hidden textarea on plain-HTTP origins.
+ *
+ * ``navigator.clipboard`` only exists in a secure context; the demo is sometimes opened over
+ * plain HTTP from another host, where the legacy ``execCommand`` path is the only one available.
+ */
+export async function copyText(text) {
+  if (!text) return false;
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // A denied permission falls through to the legacy path.
+    }
+  }
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.top = "-1000px";
+    area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    const copied = document.execCommand("copy");
+    area.remove();
+    return copied;
+  } catch {
+    return false;
+  }
+}

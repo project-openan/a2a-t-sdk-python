@@ -146,6 +146,7 @@ const EN = {
     taskT: "Task-T",
     modifyTaskT: "Modify Task-T",
     plain: "Message",
+    task: "Task",
   },
   compare: {
     title: "Same request, two protocols",
@@ -181,6 +182,7 @@ const EN = {
     plainLabel: "Plain A2A",
   },
   auto: "automatic",
+  clipboard: { copy: "Copy", copied: "Copied", failed: "Copy failed" },
   narration: {
     request:
       "The engineer writes a goal in plain language: an area and a guaranteed rate per time slot.",
@@ -275,6 +277,7 @@ const EN = {
     nmsModifyReadingBubble:
       "RAN Agent receives the Modify Task-T for the same Task and regenerates the strategy.",
     ossWaitingAck: "Waiting for the Task-T check",
+    ossWaitingAccept: "Waiting for the RAN side to accept",
     ossNegotiating: "Negotiating with the RAN Agent",
     ossAsking: "Asking the engineer",
     ossAskingBubble: "The RAN Agent needs a confirmation. Please answer.",
@@ -395,6 +398,7 @@ const EN = {
     question: "Question",
     answer: "Answer",
     clarified: "Clarified Task-T",
+    clarifiedA2a: "Clarified Task",
     wireTitle: "A2A-T message · {kind}",
     filled: "Filled parameters",
     counter: "Counter-proposal parameters",
@@ -774,8 +778,8 @@ const EN = {
     neg: "Question or review to do",
     cfg: "MML sent to the network",
     data: "Measurements back from the network",
+    taskA2a: "Task over A2A",
   },
-  tech: "Technical details",
   below: {
     flowTitle: "When things happen in the PoC",
     flow: [
@@ -908,7 +912,7 @@ const EN = {
       tag: "Use case 2",
       kind: "uc2",
       story:
-        "A planned outage tomorrow on two sites; the RAN Agent creates a baseline task, then sends a Modify Task-T on the same running task, without negotiation.",
+        "A planned outage tomorrow on two sites; the RAN Agent creates a baseline task, then sends a second request that modifies the same running task, without negotiation.",
       proposals: {},
       decisions: {},
     },
@@ -1047,6 +1051,7 @@ const ZH = {
     taskT: "Task-T",
     modifyTaskT: "Modify Task-T",
     plain: "消息",
+    task: "任务",
   },
   compare: {
     title: "同一请求，两种协议",
@@ -1082,6 +1087,7 @@ const ZH = {
     plainLabel: "普通 A2A",
   },
   auto: "自动确认",
+  clipboard: { copy: "复制", copied: "已复制", failed: "复制失败" },
   narration: {
     request: "工程师用自然语言提出目标：区域，以及每个时段要保障的速率。",
     understand: "业务系统先理解操作员请求，生成规范化的业务意图。",
@@ -1160,6 +1166,7 @@ const ZH = {
     ossSent: "Task-T 已发送，等待应答",
     nmsModifyReadingBubble: "RAN Agent 收到同一 Task 的 Modify Task-T，重新生成策略。",
     ossWaitingAck: "等待 Task-T 校验",
+    ossWaitingAccept: "等待 RAN 侧接受",
     ossNegotiating: "与 RAN Agent 协商中",
     ossAsking: "正在询问工程师",
     ossAskingBubble: "RAN Agent 需要确认，请工程师回答。",
@@ -1279,6 +1286,7 @@ const ZH = {
     question: "问题",
     answer: "回答",
     clarified: "澄清后的 Task-T",
+    clarifiedA2a: "澄清后的任务",
     wireTitle: "A2A-T 报文 · {kind}",
     filled: "补齐参数",
     counter: "反提议参数",
@@ -1644,8 +1652,8 @@ const ZH = {
     neg: "问题或待审核",
     cfg: "MML 下发到网络",
     data: "测量数据回传",
+    taskA2a: "A2A 任务消息",
   },
-  tech: "技术详情",
   below: {
     flowTitle: "PoC 中的时间线",
     flow: [
@@ -1776,7 +1784,7 @@ const ZH = {
       label: "计划停电",
       tag: "用例 2",
       kind: "uc2",
-      story: "明天两个站点计划停电；RAN Agent 先创建基线任务，再在同一运行中的 Task 上发送 Modify Task-T，不触发协商。",
+      story: "明天两个站点计划停电；RAN Agent 先创建基线任务，再在同一运行中的 Task 上发送修改请求，不触发协商。",
       proposals: {},
       decisions: {},
     },

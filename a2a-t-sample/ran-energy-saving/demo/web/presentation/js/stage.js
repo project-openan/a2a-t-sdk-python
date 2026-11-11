@@ -426,7 +426,10 @@ export function createStage(els) {
       note("oss", roles.oss, answer, true);
       note("eng", roles.eng, answer, true);
       fly("lane-request", copy.negotiation.answer, "neg", 1000);
-      later(400, () => fly("lane-task", copy.negotiation.clarified, "task", 1400));
+      // Only the A2A-T extension has a "Clarified Task-T" payload; standard A2A returns a Task.
+      const clarified =
+        state.protocol === "a2a-t" ? copy.negotiation.clarified : copy.negotiation.clarifiedA2a;
+      later(400, () => fly("lane-task", clarified, "task", 1400));
       later(900, () => note("nms", roles.nms, copy.states.nmsClarified));
       return;
     }
@@ -755,6 +758,10 @@ export function createStage(els) {
         };
       } else if (state.protocol === "plain") {
         oss = { cls: "active", text: copy.states.ossSendingPlain };
+        nms = { cls: "active", text: copy.states.nmsPlainReading };
+      } else if (state.protocol === "pure") {
+        // Standard A2A has no Task-T to check: the RAN Agent reads the forwarded message.
+        oss = { cls: "active", text: copy.states.ossWaitingAccept };
         nms = { cls: "active", text: copy.states.nmsPlainReading };
       } else {
         // The request is complete: the OSS is only waiting for the Task-T check, and the RAN

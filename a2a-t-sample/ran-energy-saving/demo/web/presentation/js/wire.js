@@ -37,6 +37,7 @@ export function createWire(els, getCopy, getUi) {
       els.title.textContent = copy.wire.emptyTitle;
       els.code.replaceChildren(el("span", "wire-empty", copy.wire.empty));
       els.note.hidden = true;
+      if (els.copyButton) els.copyButton.disabled = true;
       setFormat(copy, "t", false, false);
       return;
     }
@@ -47,6 +48,7 @@ export function createWire(els, getCopy, getUi) {
     els.title.textContent = model.title;
     els.code.replaceChildren(...model.nodes);
     els.code.scrollTop = changed ? 0 : scroll;
+    if (els.copyButton) els.copyButton.disabled = false;
     lastKey = key;
     lastFormat = ui.wireFormat;
     lastSignature = `${key}|${ui.wireFormat}|${state.runId || ""}|${copy.lang}|${
@@ -245,7 +247,9 @@ export function buildWireModel(entry, state, format, copy) {
   }
   if (entry.entryType === "event" && entry.kind === "status") {
     const task = taskPayload(entry);
-    if (task !== null) {
+    // Standard A2A echoes the plain message in the Task history, never a Task-T, so the A2A-T
+    // reading of this payload would describe something the run did not send.
+    if (task !== null && state.protocol !== "pure") {
       // The first status is the Task object the RAN Agent created, or the running Task a
       // Modify-only run continued. Its history carries the accepted Task-T either way.
       const modified = state.runMode === "modify";

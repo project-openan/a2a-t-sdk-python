@@ -309,25 +309,32 @@
             <div class="identity-row">
               <span class="identity-label" id="identity-run-label">Run</span>
               <code id="identity-run"></code>
+              <button class="identity-copy" id="identity-run-copy" type="button">Copy</button>
             </div>
             <div class="identity-row" id="identity-task-row" hidden>
               <span class="identity-label" id="identity-task-label">Task</span>
               <code id="identity-task"></code>
+              <button class="identity-copy" id="identity-task-copy" type="button">Copy</button>
             </div>
             <div class="identity-row" id="identity-task2-row" hidden>
               <span class="identity-label" id="identity-task2-label">Task</span>
               <code id="identity-task2"></code>
+              <button class="identity-copy" id="identity-task2-copy" type="button">Copy</button>
             </div>
             <div class="identity-row">
               <span class="identity-label" id="identity-trace-label">Trace</span>
               <code id="identity-trace"></code>
+              <button class="identity-copy" id="identity-trace-copy" type="button">Copy</button>
             </div>
           </div>
           <div class="wire" id="wire" hidden>
-            <div class="wire-format" id="wire-format" role="group" aria-label="Message format">
-              <button id="wire-t" type="button" aria-pressed="true">A2A-T (Task-T)</button>
-              <button id="wire-x" type="button" aria-pressed="false">Extension</button>
-              <button id="wire-a" type="button" aria-pressed="false">Plain A2A</button>
+            <div class="wire-bar">
+              <div class="wire-format" id="wire-format" role="group" aria-label="Message format">
+                <button id="wire-t" type="button" aria-pressed="true">A2A-T (Task-T)</button>
+                <button id="wire-x" type="button" aria-pressed="false">Extension</button>
+                <button id="wire-a" type="button" aria-pressed="false">Plain A2A</button>
+              </div>
+              <button class="wire-copy" id="wire-copy" type="button">Copy</button>
             </div>
             <p class="wire-title" id="wire-title"></p>
             <pre class="wire-code" id="wire-code"></pre>
@@ -359,11 +366,6 @@
       </section>
     </aside>
   </main>
-
-  <details class="tech" id="tech">
-    <summary id="tech-summary">Technical details</summary>
-    <pre id="tech-log"></pre>
-  </details>
 
   <section class="below" aria-label="Reference">
     <h2 id="below-title">What happens in this demo</h2>

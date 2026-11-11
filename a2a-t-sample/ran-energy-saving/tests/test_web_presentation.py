@@ -262,6 +262,86 @@ def test_the_run_tab_carries_the_identities_inside_the_negotiation_panel() -> No
     assert ".identity-langfuse" in css
 
 
+def test_the_raw_frame_and_the_identities_offer_one_click_copy() -> None:
+    """A large wire frame is pasted, not retyped; the correlation ids are one click too."""
+    page = (PRESENTATION_DIR / "index.html").read_text(encoding="utf-8")
+    main = (PRESENTATION_DIR / "js" / "main.js").read_text(encoding="utf-8")
+    wire = (PRESENTATION_DIR / "js" / "wire.js").read_text(encoding="utf-8")
+    dom = (PRESENTATION_DIR / "js" / "dom.js").read_text(encoding="utf-8")
+    css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")
+
+    copy_ids = (
+        "wire-copy",
+        "identity-run-copy",
+        "identity-task-copy",
+        "identity-task2-copy",
+        "identity-trace-copy",
+    )
+    for element_id in copy_ids:
+        assert f'id="{element_id}"' in page, element_id
+    # The copy source is the rendered frame itself, so what is copied is what is shown.
+    assert "bindCopy(els.wireCopy, () => els.wireCode.textContent)" in main
+    for element_id in ("identityRun", "identityTask", "identityTask2", "identityTrace"):
+        assert f"bindCopy(els.{element_id}Copy" in main
+    # No capture: there is nothing to copy, and the button says so by staying disabled.
+    assert "els.copyButton.disabled" in wire
+    # A plain-HTTP origin has no navigator.clipboard; the legacy path must still work there.
+    assert "export async function copyText" in dom
+    assert "navigator.clipboard" in dom
+    assert "execCommand" in dom
+    assert ".wire-copy" in css
+    assert ".identity-copy" in css
+
+
+def test_pure_a2a_never_names_the_extension() -> None:
+    """Standard A2A has no Task-T: every shared surface must say Task, not the extension.
+
+    The stage, the legend, the step bar and the reference section are shared by both request
+    forms; a pure run must not claim a payload it never sends.
+    """
+    page = (PRESENTATION_DIR / "index.html").read_text(encoding="utf-8")
+    main = (PRESENTATION_DIR / "js" / "main.js").read_text(encoding="utf-8")
+    stage = (PRESENTATION_DIR / "js" / "stage.js").read_text(encoding="utf-8")
+    wire = (PRESENTATION_DIR / "js" / "wire.js").read_text(encoding="utf-8")
+    copy = (PRESENTATION_DIR / "copy.js").read_text(encoding="utf-8")
+
+    # The clarified packet on the decision beat is protocol-aware.
+    assert (
+        'state.protocol === "a2a-t" ? copy.negotiation.clarified : copy.negotiation.clarifiedA2a'
+        in stage
+    )
+    # The waiting fallback distinguishes pure A2A from the A2A-T check.
+    assert "copy.states.ossWaitingAccept" in stage
+    assert 'state.protocol === "pure"' in stage
+    # Step labels are rebuilt when the request form changes (the bar was cached at boot).
+    assert "ui.steps = undefined" in main
+    # The first paint (before run_started) already knows the selected request form.
+    assert "ui.view.protocol = ui.protocol" in main
+    assert "ui.shadow.protocol = ui.protocol" in main
+    # The narrator kicker ("Step 4 · …") uses the same protocol-aware label.
+    assert "function stepLabel(" in main
+    assert "ui.copy.steps[stepKey]" not in main
+    # The legend, the reference section and the footer follow the selected request form.
+    assert "ui.copy.legend.taskA2a" in main
+    assert "els.belowSection.hidden = pure" in main
+    assert "els.footer.hidden = pure" in main
+    assert 'document.querySelector(".below")' in main
+    # The A2A-T task note must not describe a pure status payload.
+    assert 'state.protocol !== "pure"' in wire
+    # Both dictionaries carry the neutral labels.
+    for label in (
+        "clarifiedA2a",
+        "ossWaitingAccept",
+        "taskA2a",
+    ):
+        assert copy.count(label) >= 2, label
+    assert 'clarifiedA2a: "Clarified Task"' in copy
+    assert 'clarifiedA2a: "澄清后的任务"' in copy
+    # The page shell keeps the elements; the protocol switch hides them.
+    assert 'class="below"' in page
+    assert 'id="footer"' in page
+
+
 def test_the_whole_business_intent_block_folds_away() -> None:
     """The request text folds by default; a blocking validation forces the block open."""
     intent = (PRESENTATION_DIR / "js" / "intent.js").read_text(encoding="utf-8")

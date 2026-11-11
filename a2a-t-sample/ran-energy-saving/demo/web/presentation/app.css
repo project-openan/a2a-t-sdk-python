@@ -1083,6 +1083,24 @@ body.resizing-y { cursor: row-resize; user-select: none; }
   color: var(--g900);
   overflow-wrap: anywhere;
 }
+.identity-copy {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--g300);
+  background: var(--white);
+  color: var(--g700);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.7;
+}
+[data-brand="orange"] .identity-copy:hover:not(:disabled) {
+  background: var(--black);
+  border-color: var(--black);
+  color: var(--white);
+}
+.identity-copy[data-copied="1"] { border-color: var(--green); color: var(--green); }
+.identity-copy[data-copied="0"] { border-color: var(--red); color: var(--red); }
+.identity-copy:disabled { border-color: var(--g200); color: var(--g300); cursor: default; }
 .identity-langfuse {
   flex: none;
   margin-left: auto;
@@ -1194,10 +1212,29 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 .badge-confirmed { font-size: 10px; font-weight: 700; color: #fff; background: var(--green); padding: 0 4px; }
 .empty { margin: 0; color: var(--g700); font-size: 12.5px; padding: 10px 0; text-align: center; border: 1px dashed var(--g300); }
 .wire { display: flex; flex-direction: column; gap: 5px; min-height: 0; flex: 1 1 auto; }
+.wire-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; min-width: 0; }
 .wire-format { display: inline-flex; align-self: flex-start; border: 2px solid var(--black); }
 .wire-format button { border: 0; background: var(--white); padding: 2px 8px; font-size: 11px; font-weight: 700; }
 .wire-format button[aria-pressed="true"] { background: var(--black); color: var(--white); }
 .wire-format button:disabled { color: var(--g300); }
+.wire-copy {
+  margin-left: auto;
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--g300);
+  background: var(--white);
+  color: var(--g900);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+[data-brand="orange"] .wire-copy:hover:not(:disabled) {
+  background: var(--black);
+  border-color: var(--black);
+  color: var(--white);
+}
+.wire-copy[data-copied="1"] { border-color: var(--green); color: var(--green); }
+.wire-copy[data-copied="0"] { border-color: var(--red); color: var(--red); }
+.wire-copy:disabled { border-color: var(--g200); color: var(--g300); cursor: default; }
 .wire-title { margin: 0; font-size: 12.5px; font-weight: 700; }
 .wire-request { color: var(--black); font-weight: 700; }
 .wire-head-key { color: var(--g900); font-weight: 700; }
@@ -1375,10 +1412,7 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 .chip.art { background: var(--black); color: var(--white); }
 .chip.no { color: var(--red); border-color: var(--red); }
 
-/* ---------- technical + below the fold ---------- */
-.tech { margin: 0 max(16px, env(safe-area-inset-left, 0px)); border: 1px solid var(--g200); }
-.tech summary { cursor: pointer; padding: 6px 10px; font-size: 12px; font-weight: 700; color: var(--g700); }
-.tech pre { margin: 0; max-height: 220px; overflow: auto; padding: 8px 10px; font-family: var(--mono); font-size: 10.5px; border-top: 1px solid var(--g200); white-space: pre-wrap; }
+/* ---------- below the fold ---------- */
 .below { padding: 22px max(16px, env(safe-area-inset-left, 0px)) 34px; border-top: 1px solid var(--g200); margin-top: 16px; }
 .below h2 { font-size: 19px; margin-bottom: 10px; }
 .below-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--g200); }
@@ -1721,6 +1755,14 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
   background: var(--accent-strong);
   color: var(--on-accent);
 }
+[data-brand="huawei"] .wire-copy,
+[data-brand="huawei"] .identity-copy {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text-secondary);
+}
+[data-brand="huawei"] .wire-copy:disabled,
+[data-brand="huawei"] .identity-copy:disabled { color: var(--text-muted); }
 [data-brand="huawei"] .seg {
   border: 1px solid var(--border-strong);
   border-radius: var(--card-radius);

@@ -50,7 +50,7 @@ import {
   intentCard,
   validationCard,
 } from "./decisions.js";
-import { clear, el } from "./dom.js";
+import { clear, copyText, el } from "./dom.js";
 
 const byId = (id) => document.getElementById(id);
 
@@ -65,6 +65,10 @@ const EVIDENCE_MS = 60;
 const MODIFY_REFRESH_MS = 15000;
 //: How long the destructive action stays armed after the first click.
 const MODIFY_CANCEL_CONFIRM_MS = 5000;
+//: How long a copy button shows the result before its label returns to "Copy".
+const COPY_FLASH_MS = 1400;
+//: Pending restore timer of each copy button, so rapid clicks never stack confirmations.
+const copyFlashTimers = new WeakMap();
 
 //: Story beats that should animate once; a repeat is evidence only.
 const REPEATED_SILENT = new Set([
@@ -200,19 +204,24 @@ const els = {
   runInfo: byId("run-info"),
   identityRun: byId("identity-run"),
   identityRunLabel: byId("identity-run-label"),
+  identityRunCopy: byId("identity-run-copy"),
   identityTaskRow: byId("identity-task-row"),
   identityTask: byId("identity-task"),
   identityTaskLabel: byId("identity-task-label"),
+  identityTaskCopy: byId("identity-task-copy"),
   identityTask2Row: byId("identity-task2-row"),
   identityTask2: byId("identity-task2"),
   identityTask2Label: byId("identity-task2-label"),
+  identityTask2Copy: byId("identity-task2-copy"),
   identityTrace: byId("identity-trace"),
   identityTraceLabel: byId("identity-trace-label"),
+  identityTraceCopy: byId("identity-trace-copy"),
   identityLangfuse: byId("identity-langfuse"),
   wireT: byId("wire-t"),
   wireX: byId("wire-x"),
   wireA: byId("wire-a"),
   wireTitle: byId("wire-title"),
+  wireCopy: byId("wire-copy"),
   wireCode: byId("wire-code"),
   wireNote: byId("wire-note"),
   traceTitle: byId("trace-title"),
@@ -224,9 +233,7 @@ const els = {
   traceDays: byId("trace-days"),
   traceRows: byId("trace-rows"),
   traceEmpty: byId("trace-empty"),
-  tech: byId("tech"),
-  techSummary: byId("tech-summary"),
-  techLog: byId("tech-log"),
+  belowSection: document.querySelector(".below"),
   belowFlow: byId("below-flow"),
   belowTitle: byId("below-title"),
   belowNote: byId("below-note"),
@@ -350,6 +357,7 @@ const wire = createWire(
     formatX: els.wireX,
     formatA: els.wireA,
     title: els.wireTitle,
+    copyButton: els.wireCopy,
     code: els.wireCode,
     note: els.wireNote,
   },
@@ -499,9 +507,13 @@ async function restoreActiveRun(runId) {
     sessionStorage.removeItem(ACTIVE_RUN_KEY);
     return;
   }
-  resetRunState();
+  // Adopt the restored run's request form before the state is created, so the first paint shows
+  // the right protocol labels.
   ui.selected = snapshot.scenario || ui.selected;
   ui.protocol = snapshot.protocol || ui.protocol;
+  // The restored run may use the other request form; rebuild the protocol-specific step labels.
+  ui.steps = undefined;
+  resetRunState();
   // A run recovered after a reload can still end blocked; keep the identity needed to chain.
   ui.currentChain = chainIdentity(
     runId,
@@ -599,6 +611,11 @@ function bindStaticEvents() {
   });
   els.tabRun.addEventListener("click", () => setTab("run"));
   els.tabWire.addEventListener("click", () => setTab("wire"));
+  bindCopy(els.wireCopy, () => els.wireCode.textContent);
+  bindCopy(els.identityRunCopy, () => els.identityRun.textContent);
+  bindCopy(els.identityTaskCopy, () => els.identityTask.textContent);
+  bindCopy(els.identityTask2Copy, () => els.identityTask2.textContent);
+  bindCopy(els.identityTraceCopy, () => els.identityTrace.textContent);
   els.requestText.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
       event.preventDefault();
@@ -665,6 +682,54 @@ function onNext() {
 function setTab(tab) {
   ui.tab = tab;
   render();
+}
+
+/** Bind one copy button to the text it shows; the label flashes the clipboard result. */
+function bindCopy(button, read) {
+  if (!button) return;
+  button.addEventListener("click", async () => {
+    // The identity rows show an em dash for "not known yet"; copying it would be noise.
+    const text = String(read() || "").trim();
+    if (!text || text === "—") return;
+    flashCopyResult(button, await copyText(text));
+  });
+}
+
+/** Show the copy result on one button for a moment, then restore its idle label. */
+function flashCopyResult(button, ok) {
+  const copy = ui.copy.clipboard;
+  const timer = copyFlashTimers.get(button);
+  if (timer) clearTimeout(timer);
+  button.textContent = ok ? copy.copied : copy.failed;
+  button.dataset.copied = ok ? "1" : "0";
+  copyFlashTimers.set(
+    button,
+    setTimeout(() => {
+      button.textContent = ui.copy.clipboard.copy;
+      delete button.dataset.copied;
+      copyFlashTimers.delete(button);
+    }, COPY_FLASH_MS),
+  );
+}
+
+/** Apply the localized label to every copy button, cancelling a pending confirmation. */
+function resetCopyLabels(copy) {
+  for (const button of [
+    els.wireCopy,
+    els.identityRunCopy,
+    els.identityTaskCopy,
+    els.identityTask2Copy,
+    els.identityTraceCopy,
+  ]) {
+    if (!button) continue;
+    const timer = copyFlashTimers.get(button);
+    if (timer) clearTimeout(timer);
+    copyFlashTimers.delete(button);
+    delete button.dataset.copied;
+    button.textContent = copy.clipboard.copy;
+    button.title = copy.clipboard.copy;
+    button.setAttribute("aria-label", copy.clipboard.copy);
+  }
 }
 
 /** Show the selected negotiation tab; the wire tab can be unavailable in a pure A2A run. */
@@ -743,10 +808,10 @@ function applyStaticCopy() {
   els.tabWire.textContent = copy.negotiation.wire;
   els.identityRunLabel.textContent = copy.result.runLabel;
   els.identityTraceLabel.textContent = copy.result.traceLabel;
+  resetCopyLabels(copy);
   els.traceTitle.textContent = copy.trace.title;
   els.traceSub.textContent = copy.trace.sub;
   if (els.traceCallsLabel) els.traceCallsLabel.textContent = copy.trace.callsFilter;
-  els.techSummary.textContent = copy.tech;
   els.legendChat.textContent = copy.legend.chat;
   els.legendTask.textContent = copy.legend.task;
   els.legendStatus.textContent = copy.legend.status;
@@ -805,6 +870,9 @@ function selectProtocol(protocol) {
     ui.selected = scenarios[0] || ui.selected;
   }
   renderPresets();
+  // The step labels are protocol-specific ("Task-T sent" vs "A2A task sent"); drop the cache so
+  // the bar follows the new request form instead of the one it was built for.
+  ui.steps = undefined;
   // Reuse the scenario reset path so no frame from the previous request form stays on stage.
   selectScenario(ui.selected, { keepTarget: true });
   renderProtocol();
@@ -855,6 +923,10 @@ function resetRunState() {
   player.reset();
   ui.view = createState();
   ui.shadow = createState();
+  // The first paint happens before run_started: use the selected request form, not the A2A-T
+  // default, or a standard-A2A run briefly claims a Task-T it never sends.
+  ui.view.protocol = ui.protocol;
+  ui.shadow.protocol = ui.protocol;
   // The UI process knows whether it owns an execution approval gate; the run's own frames may
   // confirm it later. A missing key is not an approval.
   ui.view.approvalGate = ui.meta?.approvalGate === true;
@@ -1292,7 +1364,6 @@ async function startRun() {
   const chain = pendingChain();
   hideError();
   resetRunState();
-  clear(els.techLog);
   setBusy(true);
   // Show the engineer writing immediately. Starting a run can take a few seconds (session claim
   // in live mode); waiting for the first SSE frame made the page look dead.
@@ -1407,7 +1478,6 @@ function subscribe(runId) {
     } catch {
       return;
     }
-    logFrame(frame);
     if (frame.type === "activity") {
       // Liveness is not a story beat: apply it now instead of queueing it behind the animation,
       // and keep it out of the rewind log so stepping back does not replay a wait.
@@ -1771,10 +1841,15 @@ function renderIntentPanel() {
   }
 }
 
+/** Label of one story step; standard A2A renames the send and approval beats. */
+function stepLabel(copy, key, protocol) {
+  const pureSteps = protocol === "pure" ? copy.pure?.steps || {} : {};
+  return pureSteps[key] || copy.steps[key] || key;
+}
+
 function renderSteps() {
   if (ui.steps === undefined) {
     els.steps.replaceChildren();
-    const pureSteps = ui.protocol === "pure" ? ui.copy.pure?.steps || {} : {};
     for (const key of STEP_KEYS) {
       const item = el("li");
       const button = el("button");
@@ -1782,7 +1857,7 @@ function renderSteps() {
       button.dataset.step = key;
       button.append(
         el("b", "", String(STEP_KEYS.indexOf(key) + 1)),
-        el("span", "", pureSteps[key] || ui.copy.steps[key] || key),
+        el("span", "", stepLabel(ui.copy, key, ui.protocol)),
         el("em", "", ui.copy.stepWhen[key] || ""),
       );
       button.addEventListener("click", () => {
@@ -1921,7 +1996,12 @@ function renderNarrator() {
     els.sayText.textContent = ui.copy.readyHint;
   } else {
     const stepKey = STEP_KEYS[scene.step] || "request";
-    els.sayKicker.textContent = `Step ${scene.step + 1} · ${ui.copy.steps[stepKey]}`;
+    const protocol = ui.view.protocol || ui.protocol;
+    els.sayKicker.textContent = `Step ${scene.step + 1} · ${stepLabel(
+      ui.copy,
+      stepKey,
+      protocol,
+    )}`;
     els.sayText.textContent = narration(scene, stepKey);
   }
   renderResult();
@@ -2355,6 +2435,7 @@ function renderIdentity() {
   const labels = ui.copy.result;
   els.identityRun.textContent = view.runId || "—";
   els.identityRun.title = view.runId || "";
+  if (els.identityRunCopy) els.identityRunCopy.disabled = !view.runId;
   const nms = Boolean(ui.meta?.nmsTasksEnabled);
   const downstream = view.pure || {};
   const ran = downstream.downstreamHop === "ran";
@@ -2374,10 +2455,15 @@ function renderIdentity() {
     els.identityTaskRow.hidden = !taskId;
     els.identityTask.textContent = taskId;
   }
+  if (els.identityTaskCopy) els.identityTaskCopy.disabled = !taskId;
+  if (els.identityTask2Copy) {
+    els.identityTask2Copy.disabled = !els.identityTask2.textContent;
+  }
   const langfuse = view.langfuse;
   const traceId = view.traceId || (langfuse && langfuse.traceId) || "";
   els.identityTrace.textContent = traceId || "—";
   els.identityTrace.title = traceId;
+  if (els.identityTraceCopy) els.identityTraceCopy.disabled = !traceId;
   const link = els.identityLangfuse;
   const exporting = Boolean(langfuse && langfuse.enabled && langfuse.traceId);
   link.hidden = !exporting;
@@ -2597,6 +2683,13 @@ function renderProtocol() {
     setText("approval-org", ui.copy.roles.approvalOrg);
     setText("nms-note", ui.copy.roles.nmsNote);
   }
+  // The lane legend and the reference section below the fold describe the A2A-T extension; a
+  // standard-A2A run must not claim a Task-T it never sends.
+  if (els.legendTask) {
+    els.legendTask.textContent = pure ? ui.copy.legend.taskA2a : ui.copy.legend.task;
+  }
+  if (els.belowSection) els.belowSection.hidden = pure;
+  if (els.footer) els.footer.hidden = pure;
   renderModifyButton();
 }
 
@@ -2640,13 +2733,6 @@ function isTerminalFrame(frame) {
     "TASK_STATE_FAILED",
     "TASK_STATE_CANCELED",
   ].includes(entry.state);
-}
-
-function logFrame(frame) {
-  if (els.techLog.childElementCount > 600) return;
-  const line = document.createElement("span");
-  line.textContent = JSON.stringify(frame);
-  els.techLog.append(line, document.createTextNode("\n"));
 }
 
 function showError(message) {
