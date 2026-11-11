@@ -1,6 +1,6 @@
 /** The three human moments of the demo: intent review, negotiation decision and MML review. */
 
-import { actionLabel, format, proposalLine } from "../copy.js";
+import { format } from "../copy.js";
 
 /** Build approval 1: the engineer confirms the structured intent before the Task-T is sent. */
 export function intentCard(state, copy) {
@@ -41,215 +41,52 @@ export function validationCard(state, copy) {
   };
 }
 
-/** Build the negotiation decision card, or ``null`` when no decision is pending. */
+/** Build the one negotiation card: server prompt, one answer box, send and More actions. */
 export function decisionCard(state, copy) {
-  const decision = state.decision;
-  if (decision === null || decision.resolved || state.finished) return null;
+  const decision = activeDecision(state);
+  if (decision === null) return null;
   const round = decision.round ?? decision.proposal?.round ?? 1;
   const maxRounds = decision.maxRounds ?? decision.proposal?.max_rounds ?? 1;
   const kind = decision.proposal?.kind || "";
-  const recommendation = decision.recommendation;
-  const recommendedAction = recommendation?.action || null;
-  // In confirm mode the OSS Agent is still thinking: do not offer a decision before its
-  // recommendation arrives, otherwise the engineer could answer without the agent's input.
-  // A failed recommendation is published as unavailable; the engineer must still be able to
-  // decide, so that frame opens the same card without a recommended action.
-  const recommendationUnavailable = decision.recommendationUnavailable === true;
-  if (state.mode === "confirm" && !recommendation && !recommendationUnavailable) return null;
-  const regionOptions = areaOptions(decision.proposal?.options, copy);
-  const missingItems = Array.isArray(decision.missingItems)
-    ? decision.missingItems.filter((item) => typeof item === "string")
-    : [];
-  const proposalText =
-    proposalItemText(decision.proposal?.content, "region") ||
-    proposalLine(copy, state.scenario, round) ||
-    firstLine(decision.proposal?.content) ||
-    copy.negotiation.generic;
-  // An information proposal is a vendor question: show what it actually asked for instead of the
-  // generic scenario line. Without parsed items the proposal text is still the fallback.
-  const text =
-    kind === "information" && missingItems.length > 0
-      ? format(copy.decision.askedItems, { items: missingItems.join(", ") })
-      : proposalText;
-
-  // A deterministic recommendation is the only case where the card offers a recommended action.
-  // Without it the RAN Agent is asking for information (or the OSS Agent could not decide), so the
-  // card drops to its escape actions and lets the manual area carry the answer.
-  const hasRecommendation = Boolean(recommendation);
-  const options = [];
-  if (hasRecommendation) {
-    options.push({
-      action: "confirm",
-      label:
-        kind === "information" && copy.decision.confirmInformation
-          ? copy.decision.confirmInformation
-          : confirmLabel(copy, recommendedAction),
-      primary: true,
-    });
-    if (kind === "information") {
-      // The NMS asked a question, not for an accept: the only shortcuts are the recommendation
-      // (confirm) and the escape. The operator's value still goes through the manual box.
-      if (recommendedAction !== "reject") {
-        options.push({ action: "reject", label: copy.decision.reject, danger: true });
-      }
-    } else {
-      if (recommendedAction !== "accept") {
-        options.push({ action: "accept", label: copy.decision.acceptNms });
-      }
-      // Keep a counter path in every target/feasibility case: it lets the engineer disagree with an
-      // accept recommendation and edit a recommended counter before sending it.
-      options.push({ action: "counter", label: copy.decision.editCounter });
-      if (recommendedAction !== "reject") {
-        options.push({ action: "reject", label: copy.decision.reject, danger: true });
-      }
-    }
-  } else if (kind === "information") {
-    // There is no RAN proposal to accept: the engineer must supply the value, so only the reject
-    // escape action remains beside the manual editor.
-    options.push({ action: "reject", label: copy.decision.reject, danger: true });
-  } else {
-    options.push({ action: "accept", label: copy.decision.acceptNms, primary: true });
-    options.push({ action: "reject", label: copy.decision.reject, danger: true });
-  }
-
-  const detail = recommendation
-    ? `${format(copy.decision.recommendation, {
-        action: actionLabel(copy, recommendedAction),
-      })}${recommendation.rationale ? ` — ${recommendation.rationale}` : ""}`
-    : recommendationUnavailable
-      ? `${copy.decision.recommendationUnavailable}${
-          decision.recommendationError ? ` — ${decision.recommendationError}` : ""
-        }`
-      : copy.decision.question;
-
+  const protocol = state.protocol || "a2a-t";
+  const content =
+    typeof decision.proposal?.content === "string" ? decision.proposal.content.trim() : "";
+  const pure = protocol === "pure";
+  const prefilled = pure && (kind === "target" || kind === "feasibility");
   return {
     type: "decision",
+    negotiationId: decision.proposal?.negotiation_id || decision.proposal?.context_id || "",
+    round,
+    maxRounds,
+    kind,
+    protocol,
     kicker: copy.decision.kicker,
     title: format(copy.decision.title, { round, maxRounds }),
-    text,
-    detail,
-    kind,
-    hasRecommendation,
-    recommendedAction,
-    recommendation,
-    // The confirm button sends these values verbatim; show them instead of hiding the concrete
-    // answer behind an action label.
-    recommendationFields: recommendationFields(recommendation),
-    missingItems,
-    manualExample: manualExampleFor(copy, missingItems),
-    // Without a deterministic recommendation the manual area is the primary answer surface, so it
-    // opens by default; with one, the action row leads and the manual area stays collapsed.
-    manualOpen: !hasRecommendation,
-    counterText: recommendation?.counter_proposal || "",
-    regionOptions,
-    requestedRegion: decision.proposal?.options?.requested || "",
-    options,
+    text: content || copy.negotiation.generic,
+    detail: null,
+    // An information question asks for a value; a pure target/feasibility proposal is prefilled,
+    // so clearing it is an explicit edit that must still be sent.
+    inputRequired: kind === "information" || prefilled,
+    prefill: prefilled ? prefillFromProposal(content) : "",
+    options: [
+      { action: "reject", label: copy.decision.reject, danger: true },
+      { action: "abort", label: copy.decision.abort, danger: true },
+    ],
   };
 }
 
-/**
- * Build the early confirm-mode decision card, or ``null`` when none is pending.
- *
- * The agent recommendation may take longer than the operator is willing to wait. This card opens
- * the manual surface immediately; when the recommendation arrives the server publishes the normal
- * card, unless the operator already answered.
- */
-export function pendingDecisionCard(state, copy) {
-  const pending = state.decisionPending;
-  if (!isObject(pending) || pending.resolved || state.finished) return null;
-  if (state.mode !== "confirm" || state.protocol === "pure") return null;
-  if (state.decision !== null && !state.decision.resolved) return null;
-  const round = pending.round ?? pending.proposal?.round ?? 1;
-  const maxRounds = pending.maxRounds ?? pending.proposal?.max_rounds ?? 1;
-  const kind = pending.proposal?.kind || "";
-  const missingItems = Array.isArray(pending.missingItems)
-    ? pending.missingItems.filter((item) => typeof item === "string")
-    : [];
-  const proposalText =
-    proposalItemText(pending.proposal?.content, "region") ||
-    proposalLine(copy, state.scenario, round) ||
-    firstLine(pending.proposal?.content) ||
-    copy.negotiation.generic;
-  const text =
-    kind === "information" && missingItems.length > 0
-      ? format(copy.decision.askedItems, { items: missingItems.join(", ") })
-      : proposalText;
-  const seconds = pending.recommendationTimeoutSeconds;
-  const detail = seconds
-    ? format(copy.decision.pendingDetail, { seconds })
-    : copy.decision.pendingDetailNoTimeout;
-  return {
-    type: "decision",
-    pendingRecommendation: true,
-    round,
-    kicker: copy.decision.kicker,
-    title: format(copy.decision.pendingTitle, { round, maxRounds }),
-    text,
-    detail,
-    kind,
-    hasRecommendation: false,
-    recommendedAction: null,
-    recommendation: null,
-    recommendationFields: [],
-    missingItems,
-    manualExample: manualExampleFor(copy, missingItems),
-    manualOpen: true,
-    counterText: "",
-    regionOptions: areaOptions(pending.proposal?.options, copy),
-    requestedRegion: pending.proposal?.options?.requested || "",
-    options:
-      kind === "information"
-        ? [{ action: "reject", label: copy.decision.reject, danger: true }]
-        : [
-            { action: "accept", label: copy.decision.acceptNms, primary: true },
-            { action: "reject", label: copy.decision.reject, danger: true },
-          ],
-  };
+/** Return the pending decision of either the early or the answered frame. */
+function activeDecision(state) {
+  if (state.finished) return null;
+  if (state.decision !== null && !state.decision.resolved) return state.decision;
+  if (state.decisionPending !== null && !state.decisionPending.resolved) return state.decisionPending;
+  return null;
 }
 
-/** List the concrete values a recommendation would send, for the confirmation card. */
-function recommendationFields(recommendation) {
-  const filled = isObject(recommendation?.filled_params) ? recommendation.filled_params : null;
-  if (filled === null) return [];
-  return Object.entries(filled)
-    .map(([name, value]) => ({ name, value: fieldText(value) }))
-    .filter((field) => field.value !== "");
-}
-
-/** Render one recommended field value without dropping list/object values. */
-function fieldText(value) {
-  if (Array.isArray(value)) return value.map((item) => fieldText(item)).filter(Boolean).join(", ");
-  if (isObject(value)) return JSON.stringify(value);
-  if (value === null || value === undefined) return "";
-  return String(value);
-}
-
-/** Label the primary button with the action it actually sends. */
-function confirmLabel(copy, action) {
-  if (action === "counter") return copy.decision.confirmCounter;
-  if (action === "reject") return copy.decision.confirmReject;
-  if (action === "abort") return copy.decision.confirmAbort;
-  return copy.decision.confirmAccept;
-}
-
-/** Pick the manual example that matches the first asked item, or the generic sentence. */
-function manualExampleFor(copy, missingItems) {
-  const examples = copy.decision.manualExamples || {};
-  const fallback = examples.default || copy.decision.manualExample || "";
-  for (const item of missingItems) {
-    const key = manualExampleKey(item);
-    if (key && examples[key]) return examples[key];
-  }
-  return fallback;
-}
-
-/** Map one asked-item label to a bounded example key. */
-function manualExampleKey(item) {
-  const text = String(item).toLowerCase();
-  if (/region|区域/.test(text)) return "region";
-  if (/throughput|吞吐/.test(text)) return "throughput";
-  if (/rate|速率|带宽/.test(text)) return "rate";
-  return "";
+/** Prefill a pure target/feasibility answer with the proposal's own segments, else its text. */
+function prefillFromProposal(content) {
+  const segments = String(content || "").match(/\{[^{}]*\d+\s*Mbps[^{}]*\}/gi) || [];
+  return segments.length > 0 ? segments.join(", ") : String(content || "").trim();
 }
 
 /** Build approval 2 (the MIE MML review), or ``null`` when no review is pending. */
@@ -317,89 +154,46 @@ export function approvalCard(state, copy) {
   };
 }
 
-/** Build the ``NegotiationDecision`` payload of one click. */
-export function decisionPayload(card, action, copy, counterText, selectedArea) {
-  const areaParams = selectedArea ? { region: selectedArea } : null;
-  if (action === "confirm" && card.recommendation) {
-    const mergeArea =
-      areaParams !== null && card.recommendation.action === "accept"
-        ? { ...(card.recommendation.filled_params || {}), ...areaParams }
-        : card.recommendation.filled_params ?? null;
-    return clean({
-      action: card.recommendation.action,
-      rationale: card.recommendation.rationale || copy.decision.acceptRationale,
-      filled_params: mergeArea,
-      counter_proposal: card.recommendation.counter_proposal ?? null,
-      counter_params: card.recommendation.counter_params ?? null,
-      confirmed_intent: card.recommendation.confirmed_intent ?? null,
-      feasibility_summary: card.recommendation.feasibility_summary ?? null,
-      // The trace records where the concrete values came from: the AI suggestion the operator
-      // confirmed (even after picking a served area) is not the same fact as an operator answer.
-      answerSource: areaParams === null ? "ai_recommendation" : "operator_edited",
-    });
-  }
-  if (action === "counter") {
-    return clean({
-      action: "counter",
-      rationale: copy.decision.counterRationale,
-      counter_proposal: (counterText || "").trim() || card.counterText,
-      answerSource: "operator_edited",
-    });
-  }
+/** Build the decision payload of one Send / Reject / Abort click. */
+export function decisionPayload(card, action, copy, text = "") {
+  const answer = String(text || "").trim();
   if (action === "reject") {
-    return { action: "reject", rationale: copy.decision.rejectRationale, answerSource: "operator" };
+    return pureTerminal(
+      card,
+      {
+        action: "reject",
+        rationale: copy.decision.rejectRationale,
+        answerSource: "operator",
+      },
+      copy.decision.pureRejectText,
+    );
   }
   if (action === "abort") {
-    return { action: "abort", rationale: copy.decision.abortRationale, answerSource: "operator" };
+    return pureTerminal(
+      card,
+      {
+        action: "abort",
+        rationale: copy.decision.abortRationale,
+        answerSource: "operator",
+      },
+      copy.decision.pureAbortText,
+    );
   }
-  return clean({
+  const payload = {
     action: "accept",
-    rationale: copy.decision.acceptRationale,
-    filled_params: areaParams,
+    rationale: answer || copy.decision.acceptRationale,
     answerSource: "operator",
-  });
+  };
+  if (answer) payload.answerText = answer;
+  if (answer && card.kind === "target") payload.confirmed_intent = answer;
+  if (answer && card.kind === "feasibility") payload.feasibility_summary = answer;
+  return payload;
 }
 
-function firstLine(content) {
-  if (typeof content !== "string") return "";
-  const line = content
-    .split(/\r?\n/)
-    .map((item) => item.replace(/^#+\s*/, "").replace(/\*\*/g, "").trim())
-    .find((item) => item !== "");
-  return line ? line.slice(0, 180) : "";
-}
-
-/** Return the value of one numbered item of a rendered information proposal. */
-function proposalItemText(content, field) {
-  if (typeof content !== "string") return "";
-  const pattern = new RegExp(`^\\s*(?:\\d+\\.\\s*)?${field}\\s*:\\s*(.+)$`, "im");
-  const match = content.match(pattern);
-  return match ? match[1].trim() : "";
-}
-
-/** Build the localized selectable areas of one information proposal. */
-function areaOptions(options, copy) {
-  const entries = Array.isArray(options?.options) ? options.options : [];
-  return entries
-    .map((option) => {
-      const labels = isObject(option?.labels) ? option.labels : {};
-      const value = labels[copy.lang] || option?.value || "";
-      return {
-        value,
-        label: value,
-        score: Number(option?.score) || 0,
-        recommended: option?.recommended === true,
-      };
-    })
-    .filter((option) => option.value !== "");
-}
-
-function clean(payload) {
-  const result = {};
-  for (const [key, value] of Object.entries(payload)) {
-    if (value !== null && value !== undefined && value !== "") result[key] = value;
-  }
-  return result;
+/** A pure run sends one plain text; a fixed refusal is that text, an A2A-T run uses the action. */
+function pureTerminal(card, payload, text) {
+  if (card.protocol === "pure" && text) payload.answerText = text;
+  return payload;
 }
 
 function isObject(value) {

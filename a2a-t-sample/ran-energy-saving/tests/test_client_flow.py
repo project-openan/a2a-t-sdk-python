@@ -810,6 +810,52 @@ async def test_information_accept_uses_the_selected_served_area() -> None:
     assert prompt_client.refill_data[0]["region"] == "Region B"
 
 
+async def test_information_accept_maps_the_single_operator_answer_to_the_server_option() -> None:
+    """The simplified card sends one text; a served area it names fills the refilled Task-T."""
+    event = propose_event(
+        "information",
+        1,
+        content='The requested area "Region Z" is not recognized. Served areas: Region A; Region B.',
+    )
+    metadata = event["metadata"]
+    assert isinstance(metadata, dict)
+    metadata[SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY] = {
+        "field": "region",
+        "requested": "Region Z",
+        "options": [
+            {"value": "Region A", "labels": {"en-US": "Region A", "zh-CN": "区域 A"}},
+            {"value": "Region B", "labels": {"en-US": "Region B", "zh-CN": "区域 B"}},
+        ],
+    }
+    decision = NegotiationDecision(action="accept", rationale="Region B")
+
+    result, _transport, prompt_client = await _run(
+        INFORMATION_NEGOTIATION_SPEC,
+        [[event], _task_completed_batch()],
+        (decision,),
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert prompt_client.refill_data[0]["region"] == "Region B"
+    assert "Region B" in prompt_client.accept_data[0].content.items[0].value
+
+
+async def test_information_accept_falls_back_to_the_sdk_text_extraction() -> None:
+    """With no server option the one operator text still becomes a Task-T locally."""
+    decision = NegotiationDecision(action="accept", rationale="Region B")
+
+    result, _transport, prompt_client = await _run(
+        INFORMATION_NEGOTIATION_SPEC,
+        [[propose_event("information", 1)], _task_completed_batch()],
+        (decision,),
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert prompt_client.task_prompts[-1] == "Region B"
+    assert prompt_client.refill_data == []
+    assert "Region B" in prompt_client.accept_texts[0]
+
+
 async def test_information_accept_discards_an_invalid_model_filled_target() -> None:
     """A live model must not put per-cell SLA floors into the agreed segmented target.
 

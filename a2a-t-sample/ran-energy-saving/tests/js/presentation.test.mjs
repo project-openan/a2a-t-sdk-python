@@ -44,7 +44,6 @@ import {
   decisionCard,
   decisionPayload,
   intentCard,
-  pendingDecisionCard,
   validationCard,
 } from "../../demo/web/presentation/js/decisions.js";
 import { copyFor, scenarioPhase, scenarioUseCase } from "../../demo/web/presentation/copy.js";
@@ -378,262 +377,154 @@ applyFrame(canceled, {
 assert.equal(canceled.status, STATUS.CANCELED);
 assert.equal(stageOf(canceled), "canceled");
 
-// --- Confirm mode: the decision frame carries the recommendation --------
+// --- The simplified negotiation card ------------------------------------
 
-const confirming = createState();
-applyFrame(confirming, { type: "run_started", runId: "r5", scenario: "target", mode: "confirm" });
-applyFrame(confirming, proposal(1, 1));
-applyFrame(confirming, {
+// A2A-T target: the card is the server prompt plus one answer box; send is always an accept.
+const targetNegotiation = createState();
+applyFrame(targetNegotiation, { type: "run_started", runId: "r5", scenario: "target", mode: "confirm" });
+applyFrame(targetNegotiation, {
   type: "decision_requested",
   round: 1,
   maxRounds: 3,
-  proposal: { kind: "target", round: 1 },
-  recommendation: {
-    action: "counter",
-    rationale: "overlap",
-    counter_proposal: "keep 17:30~20:00",
+  proposal: {
+    kind: "target",
+    round: 1,
+    content: "Two guaranteed-rate windows overlap: 17:30~23:00 and 20:00~00:00.",
   },
-  timeoutSeconds: 300,
   requestedAt: new Date().toISOString(),
 });
-assert.equal(pendingHuman(confirming), "decision");
-assert.equal(confirming.decision.recommendation.action, "counter");
-const card = decisionCard(confirming, copy);
-assert.ok(card);
-assert.deepEqual(
-  card.options.map((option) => option.action),
-  ["confirm", "accept", "counter", "reject"],
-);
-assert.equal(card.options[0].label, copy.decision.confirmCounter);
-assert.equal(card.manualOpen, false);
-assert.ok(card.options.length <= 4);
-assert.equal(decisionPayload(card, "confirm", copy).action, "counter");
-assert.equal(decisionPayload(card, "counter", copy, "new text").counter_proposal, "new text");
-assert.equal(decisionPayload(card, "reject", copy).action, "reject");
-
-// In confirm mode a decision without a recommendation is not offered yet.
-const thinking = createState();
-applyFrame(thinking, { type: "run_started", runId: "r6", scenario: "target", mode: "confirm" });
-applyFrame(thinking, {
-  type: "decision_requested",
-  round: 1,
-  maxRounds: 3,
-  proposal: { kind: "target" },
+assert.equal(pendingHuman(targetNegotiation), "decision");
+const targetCard = decisionCard(targetNegotiation, copy);
+assert.ok(targetCard);
+assert.equal(targetCard.text, targetNegotiation.decision.proposal.content);
+assert.equal(targetCard.inputRequired, false);
+assert.equal(targetCard.prefill, "");
+assert.deepEqual(targetCard.options.map((option) => option.action), ["reject", "abort"]);
+assert.deepEqual(decisionPayload(targetCard, "accept", copy, ""), {
+  action: "accept",
+  rationale: copy.decision.acceptRationale,
+  answerSource: "operator",
 });
-assert.equal(decisionCard(thinking, copy), null);
+const typedAccept = decisionPayload(targetCard, "accept", copy, "Accept the revised plan.");
+assert.equal(typedAccept.action, "accept");
+assert.equal(typedAccept.rationale, "Accept the revised plan.");
+assert.equal(typedAccept.answerText, "Accept the revised plan.");
+assert.equal(typedAccept.confirmed_intent, "Accept the revised plan.");
+assert.equal(typedAccept.feasibility_summary, undefined);
+assert.deepEqual(decisionPayload(targetCard, "reject", copy, "ignored"), {
+  action: "reject",
+  rationale: copy.decision.rejectRationale,
+  answerSource: "operator",
+});
+assert.deepEqual(decisionPayload(targetCard, "abort", copy, "ignored"), {
+  action: "abort",
+  rationale: copy.decision.abortRationale,
+  answerSource: "operator",
+});
 
-// A failed recommendation is published as unavailable: the engineer still decides.
-const unavailable = createState();
-applyFrame(unavailable, { type: "run_started", runId: "r7", scenario: "target", mode: "confirm" });
-applyFrame(unavailable, {
-  type: "decision_requested",
+// The early confirm frame opens the same card without waiting for a recommendation.
+const earlyDecision = createState();
+applyFrame(earlyDecision, { type: "run_started", runId: "r-early", scenario: "target", mode: "confirm" });
+applyFrame(earlyDecision, {
+  type: "decision_pending",
   round: 1,
   maxRounds: 3,
-  proposal: { kind: "target", round: 1 },
-  recommendationUnavailable: true,
-  recommendationError: "DecisionProviderError: no parseable decision",
-  timeoutSeconds: 300,
+  proposal: { kind: "target", round: 1, content: "Please confirm the revised windows." },
   requestedAt: new Date().toISOString(),
 });
-assert.equal(unavailable.decision.recommendationUnavailable, true);
-const unavailableCard = decisionCard(unavailable, copy);
-assert.ok(unavailableCard);
-assert.deepEqual(
-  unavailableCard.options.map((option) => option.action),
-  ["accept", "reject"],
-);
-assert.equal(unavailableCard.manualOpen, true);
-assert.match(unavailableCard.detail, /OSS Agent/);
-assert.equal(decisionPayload(unavailableCard, "accept", copy).action, "accept");
+const earlyCard = decisionCard(earlyDecision, copy);
+assert.ok(earlyCard);
+assert.equal(earlyCard.text, "Please confirm the revised windows.");
+assert.equal(earlyCard.inputRequired, false);
 
-// An information proposal has no counter action; its answer goes through the free-text box.
-const unavailableInfo = createState();
-applyFrame(unavailableInfo, { type: "run_started", runId: "r8", scenario: "information", mode: "confirm" });
-applyFrame(unavailableInfo, {
-  type: "decision_requested",
-  round: 1,
-  maxRounds: 3,
-  proposal: { kind: "information", round: 1 },
-  recommendationUnavailable: true,
-  requestedAt: new Date().toISOString(),
-});
-const unavailableInfoCard = decisionCard(unavailableInfo, copy);
-assert.ok(unavailableInfoCard);
-assert.deepEqual(
-  unavailableInfoCard.options.map((option) => option.action),
-  ["reject"],
-);
-assert.equal(unavailableInfoCard.manualOpen, true);
-assert.ok(!unavailableInfoCard.options.some((option) => option.action === "counter"));
-assert.ok(!unavailableInfoCard.options.some((option) => option.action === "accept"));
-assert.ok(copy.decision.manualExample);
-assert.ok(copy.decision.manualUseExample);
-
-// The vendor question drives the card text and the manual example: asking for a region must not
-// suggest a throughput answer. With no recommendation only the reject escape action remains.
-const regionQuestion = createState();
-applyFrame(regionQuestion, {
+// A2A-T information: a value is required, and the operator's text is the answer.
+const infoNegotiation = createState();
+applyFrame(infoNegotiation, {
   type: "run_started",
-  runId: "r-region-question",
-  scenario: "information",
-  mode: "confirm",
+  runId: "r-info",
+  scenario: "unknown_area",
+  mode: "manual",
 });
-applyFrame(regionQuestion, {
+applyFrame(infoNegotiation, {
   type: "decision_requested",
   round: 1,
   maxRounds: 3,
   proposal: {
     kind: "information",
     round: 1,
-    content: "Energy saving region is not recognized. Please provide the correct region name.",
+    content: "The requested area is not recognized. Choose Region A or Region B.",
   },
-  missingItems: ["Region"],
-  recommendationUnavailable: true,
   requestedAt: new Date().toISOString(),
 });
-assert.deepEqual(regionQuestion.decision.missingItems, ["Region"]);
-const regionQuestionCard = decisionCard(regionQuestion, copy);
-assert.ok(regionQuestionCard);
-assert.equal(regionQuestionCard.manualOpen, true);
-assert.deepEqual(
-  regionQuestionCard.options.map((option) => option.action),
-  ["reject"],
-);
-assert.equal(regionQuestionCard.text, copy.decision.askedItems.replace("{items}", "Region"));
-assert.equal(regionQuestionCard.manualExample, copy.decision.manualExamples.region);
-assert.notEqual(regionQuestionCard.manualExample, copy.decision.manualExample);
+const infoCard = decisionCard(infoNegotiation, copy);
+assert.ok(infoCard);
+assert.equal(infoCard.inputRequired, true);
+assert.equal(infoCard.text, infoNegotiation.decision.proposal.content);
+assert.ok(!infoCard.options.some((option) => option.action === "counter"));
+const infoAccept = decisionPayload(infoCard, "accept", copy, "Region B");
+assert.equal(infoAccept.answerText, "Region B");
+assert.equal(infoAccept.confirmed_intent, undefined);
+assert.equal(infoAccept.feasibility_summary, undefined);
 
-// An information proposal that does carry a recommendation offers confirm and reject only: the
-// "accept RAN proposal" shortcut is meaningless when the NMS asked a question.
-const recommendedInfo = createState();
-applyFrame(recommendedInfo, {
-  type: "run_started",
-  runId: "r-recommended-info",
-  scenario: "information",
-  mode: "confirm",
+// A2A-T feasibility: the operator's text is the feasibility summary.
+const feasible = createState();
+applyFrame(feasible, { type: "run_started", runId: "r-feas", scenario: "feasibility", mode: "confirm" });
+applyFrame(feasible, {
+  type: "decision_requested",
+  round: 1,
+  maxRounds: 3,
+  proposal: { kind: "feasibility", round: 1, content: "Lower 06:00~18:00 to 2Mbps." },
+  requestedAt: new Date().toISOString(),
 });
-applyFrame(recommendedInfo, {
+const feasibleCard = decisionCard(feasible, copy);
+assert.ok(feasibleCard);
+const feasibleAccept = decisionPayload(feasibleCard, "accept", copy, "Accept the lower rate.");
+assert.equal(feasibleAccept.feasibility_summary, "Accept the lower rate.");
+
+// pure target/feasibility: the box is prefilled with the server's own segments.
+const pureTarget = createState();
+applyFrame(pureTarget, {
+  type: "run_started",
+  runId: "r-pure-target",
+  scenario: "target",
+  mode: "confirm",
+  protocol: "pure",
+});
+applyFrame(pureTarget, {
   type: "decision_requested",
   round: 1,
   maxRounds: 3,
   proposal: {
-    kind: "information",
+    kind: "target",
     round: 1,
-    content: "Energy saving region is not recognized. Please provide the correct region name.",
-  },
-  missingItems: ["Region"],
-  recommendation: { action: "accept", rationale: "use Region A", filled_params: { region: "Region A" } },
-  requestedAt: new Date().toISOString(),
-});
-const recommendedInfoCard = decisionCard(recommendedInfo, copy);
-assert.ok(recommendedInfoCard);
-assert.deepEqual(
-  recommendedInfoCard.options.map((option) => option.action),
-  ["confirm", "reject"],
-);
-assert.equal(recommendedInfoCard.options[0].label, copy.decision.confirmInformation);
-assert.equal(recommendedInfoCard.manualExample, copy.decision.manualExamples.region);
-
-// A recommendation to accept still leaves a counter path and keeps the manual area collapsed.
-const acceptDecision = createState();
-applyFrame(acceptDecision, {
-  type: "run_started",
-  runId: "r-accept",
-  scenario: "target",
-  mode: "confirm",
-});
-applyFrame(acceptDecision, {
-  type: "decision_requested",
-  round: 1,
-  maxRounds: 3,
-  proposal: { kind: "target", round: 1 },
-  recommendation: { action: "accept", rationale: "feasible", filled_params: {} },
-  requestedAt: new Date().toISOString(),
-});
-const acceptCard = decisionCard(acceptDecision, copy);
-assert.ok(acceptCard);
-assert.deepEqual(
-  acceptCard.options.map((option) => option.action),
-  ["confirm", "counter", "reject"],
-);
-assert.equal(acceptCard.options[0].label, copy.decision.confirmAccept);
-assert.equal(acceptCard.manualOpen, false);
-assert.ok(acceptCard.options.length <= 4);
-
-// A recommendation to reject does not duplicate the reject action.
-const rejectDecision = createState();
-applyFrame(rejectDecision, {
-  type: "run_started",
-  runId: "r-reject",
-  scenario: "target",
-  mode: "confirm",
-});
-applyFrame(rejectDecision, {
-  type: "decision_requested",
-  round: 1,
-  maxRounds: 3,
-  proposal: { kind: "target", round: 1 },
-  recommendation: { action: "reject", rationale: "not available" },
-  requestedAt: new Date().toISOString(),
-});
-const rejectCard = decisionCard(rejectDecision, copy);
-assert.ok(rejectCard);
-assert.deepEqual(
-  rejectCard.options.map((option) => option.action),
-  ["confirm", "accept", "counter"],
-);
-assert.equal(rejectCard.options[0].label, copy.decision.confirmReject);
-assert.equal(rejectCard.manualOpen, false);
-assert.ok(rejectCard.options.length <= 4);
-
-applyFrame(confirming, decision(2, "counter", 1));
-assert.equal(pendingHuman(confirming), null);
-
-// --- Unknown area: choose one of the served areas -----------------------
-const areaDecision = createState();
-applyFrame(areaDecision, { type: "run_started", runId: "r-area", scenario: "unknown_area", mode: "manual" });
-applyFrame(areaDecision, {
-  type: "decision_requested",
-  round: 1,
-  maxRounds: 3,
-  proposal: {
-    kind: "information",
     content:
-      '## Information Negotiation\n\n## Required Information Items\n' +
-      '1. region: The requested area "Region Z" is not recognized by the RAN. ' +
-      "Served areas: Region A; Region B.",
-    options: {
-      field: "region",
-      requested: "Region Z",
-      keep: ["guaranteedThroughputTarget"],
-      options: [
-        {
-          value: "Region A",
-          labels: { "en-US": "Region A", "zh-CN": "区域 A" },
-          score: 0,
-          recommended: false,
-        },
-        {
-          value: "Region B",
-          labels: { "en-US": "Region B", "zh-CN": "区域 B" },
-          score: 0,
-          recommended: false,
-        },
-      ],
-    },
+      "I propose: {00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}. Do you accept?",
   },
-  timeoutSeconds: 300,
   requestedAt: new Date().toISOString(),
 });
-const areaCard = decisionCard(areaDecision, copy);
-assert.ok(areaCard);
-assert.equal(areaCard.regionOptions.length, 2);
-assert.equal(areaCard.regionOptions[0].label, "区域 A");
-assert.ok(areaCard.text.includes("Region Z"));
-assert.deepEqual(decisionPayload(areaCard, "accept", copy, "", "区域 B").filled_params, {
-  region: "区域 B",
+const pureTargetCard = decisionCard(pureTarget, copy);
+assert.ok(pureTargetCard);
+assert.equal(pureTargetCard.protocol, "pure");
+assert.equal(pureTargetCard.inputRequired, true);
+assert.ok(pureTargetCard.prefill.includes("{17:30~23:00,20Mbps}"));
+const pureAccept = decisionPayload(pureTargetCard, "accept", copy, pureTargetCard.prefill);
+assert.equal(pureAccept.action, "accept");
+assert.equal(pureAccept.answerText, pureTargetCard.prefill);
+assert.deepEqual(decisionPayload(pureTargetCard, "reject", copy, ""), {
+  action: "reject",
+  rationale: copy.decision.rejectRationale,
+  answerSource: "operator",
+  answerText: copy.decision.pureRejectText,
 });
-assert.equal(decisionPayload(areaCard, "reject", copy, "", "区域 B").filled_params, undefined);
+assert.deepEqual(decisionPayload(pureTargetCard, "abort", copy, ""), {
+  action: "abort",
+  rationale: copy.decision.abortRationale,
+  answerSource: "operator",
+  answerText: copy.decision.pureAbortText,
+});
+
+applyFrame(targetNegotiation, decision(2, "counter", 1));
+assert.equal(pendingHuman(targetNegotiation), null);
 
 // --- Approval 1: intent review ------------------------------------------
 
@@ -917,16 +808,15 @@ assert.equal(
   null,
 );
 
-// Confirm mode opens the decision surface before the recommendation. The operator can answer;
-// the later recommendation must not reopen the card.
-const earlyDecision = createState();
-applyFrame(earlyDecision, {
+// A decision_pending frame opens the same card immediately; a later round frame keeps it open.
+const earlyCardState = createState();
+applyFrame(earlyCardState, {
   type: "run_started",
   runId: "r75",
   scenario: "feasibility",
   mode: "confirm",
 });
-applyFrame(earlyDecision, {
+applyFrame(earlyCardState, {
   type: "decision_pending",
   mode: "confirm",
   round: 1,
@@ -936,25 +826,19 @@ applyFrame(earlyDecision, {
   requestedAt: "2026-11-09T02:29:45.000Z",
   proposal: { kind: "feasibility", content: "10 Mbps and a 10 h outage conflict." },
 });
-assert.equal(earlyDecision.decision, null);
-assert.equal(earlyDecision.decisionPending.round, 1);
-assert.equal(earlyDecision.decisionPending.recommendationTimeoutSeconds, 120);
-assert.equal(pendingHuman(earlyDecision), "decision");
-assert.equal(decisionCard(earlyDecision, copy), null);
-const earlyCard = pendingDecisionCard(earlyDecision, copy);
-assert.ok(earlyCard);
-assert.equal(earlyCard.pendingRecommendation, true);
-assert.equal(earlyCard.manualOpen, true);
-assert.equal(earlyCard.recommendation, null);
-assert.equal(earlyCard.options.some((option) => option.action === "accept"), true);
+assert.equal(earlyCardState.decision, null);
+assert.equal(earlyCardState.decisionPending.round, 1);
+assert.equal(pendingHuman(earlyCardState), "decision");
+assert.ok(decisionCard(earlyCardState, copy));
+assert.equal(decisionCard(earlyCardState, copy).text, "10 Mbps and a 10 h outage conflict.");
 assert.equal(
-  sceneFor({ type: "decision_pending", round: 1 }, earlyDecision).key,
+  sceneFor({ type: "decision_pending", round: 1 }, earlyCardState).key,
   "decision-pending",
 );
-assert.equal(sceneFor({ type: "decision_pending", round: 1 }, earlyDecision).hold, true);
+assert.equal(sceneFor({ type: "decision_pending", round: 1 }, earlyCardState).hold, true);
 
-// The recommendation for the same round replaces the early card.
-applyFrame(earlyDecision, {
+// The decision frame for the same round replaces the early one; the card keeps the same shape.
+applyFrame(earlyCardState, {
   type: "decision_requested",
   mode: "confirm",
   round: 1,
@@ -962,15 +846,14 @@ applyFrame(earlyDecision, {
   performative: "PROPOSE",
   requestedAt: "2026-11-09T02:31:00.000Z",
   proposal: { kind: "feasibility", content: "10 Mbps and a 10 h outage conflict." },
-  recommendation: { action: "accept", rationale: "reduce to 2 Mbps", filled_params: {} },
 });
-assert.equal(earlyDecision.decisionPending, null);
-assert.ok(decisionCard(earlyDecision, copy));
-assert.equal(decisionCard(earlyDecision, copy).hasRecommendation, true);
+assert.equal(earlyCardState.decisionPending, null);
+assert.ok(decisionCard(earlyCardState, copy));
+assert.equal(decisionCard(earlyCardState, copy).kind, "feasibility");
 
-// A resolved decision is not reopened by a late/replayed recommendation.
-earlyDecision.decision.resolved = true;
-applyFrame(earlyDecision, {
+// A resolved decision is not reopened by a late/replayed frame.
+earlyCardState.decision.resolved = true;
+applyFrame(earlyCardState, {
   type: "decision_requested",
   mode: "confirm",
   round: 1,
@@ -978,10 +861,9 @@ applyFrame(earlyDecision, {
   performative: "PROPOSE",
   requestedAt: "2026-11-09T02:32:00.000Z",
   proposal: { kind: "feasibility" },
-  recommendation: { action: "reject", rationale: "late" },
 });
-assert.equal(earlyDecision.decision.resolved, true);
-assert.equal(decisionCard(earlyDecision, copy), null);
+assert.equal(earlyCardState.decision.resolved, true);
+assert.equal(decisionCard(earlyCardState, copy), null);
 
 const notApplied = createState();
 applyFrame(notApplied, { type: "run_started", runId: "r8", scenario: "information", mode: "confirm" });
@@ -2620,7 +2502,8 @@ assert.equal(pureRow.title, "OSS Agent answered the NMS: The region is Region A.
 assert.equal(pureRow.dir, "OSS internal");
 assert.equal(pureStatus.downstream, "nms");
 
-// The confirmation card shows the concrete AI-suggested values, not only the action.
+// A recommendation frame is ignored by the simplified card: the prompt and the operator's text
+// are the whole interaction.
 const suggestion = createState();
 applyFrame(suggestion, { type: "run_started", runId: "r9", scenario: "night", mode: "confirm", protocol: "pure" });
 applyFrame(suggestion, {
@@ -2636,6 +2519,7 @@ applyFrame(suggestion, {
   requestedAt: new Date().toISOString(),
 });
 const suggestionCard = decisionCard(suggestion, copy);
-assert.deepEqual(suggestionCard.recommendationFields, [{ name: "region", value: "Region A" }]);
-assert.equal(decisionPayload(suggestionCard, "confirm", copy).answerSource, "ai_recommendation");
-assert.equal(decisionPayload(suggestionCard, "reject", copy).answerSource, "operator");
+assert.ok(suggestionCard);
+assert.equal(suggestionCard.text, "Region not recognized.");
+assert.equal(suggestionCard.recommendationFields, undefined);
+assert.equal(decisionPayload(suggestionCard, "accept", copy, "Region A").answerSource, "operator");

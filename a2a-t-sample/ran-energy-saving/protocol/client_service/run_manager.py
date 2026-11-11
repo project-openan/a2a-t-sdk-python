@@ -406,10 +406,12 @@ def _decision_origin(mode: str) -> str:
 def _waits_for_recommendation(run: RunState) -> bool:
     """Whether this run's confirmation waits for an agent recommendation before the page.
 
-    A pure confirmation owns its own answer surface and publishes synchronously, so it must not
-    receive the A2A-T pending frame.
+    The confirmation card now opens on the server prompt and sends the operator's text directly;
+    no run waits for an advisory model answer. The helper stays so the dormant recommendation
+    plumbing keeps a single, explicit predicate.
     """
-    return run.mode == MODE_CONFIRM and run.protocol != PROTOCOL_PURE
+    del run
+    return False
 
 
 class RunManager:
@@ -1442,7 +1444,7 @@ class RunManager:
                     else None,
                 )
                 return
-            if run.mode != MODE_MANUAL:
+            if run.mode not in (MODE_MANUAL, MODE_CONFIRM):
                 return
             run.pending_decision = True
             timeout_seconds = getattr(run.manual_provider, "timeout_seconds", None)
@@ -1595,7 +1597,7 @@ class RunManager:
             )
             discovered = getattr(run.runtime, "discovered", None)
             card = getattr(discovered, "agent_card", None)
-            if run.mode == MODE_CONFIRM:
+            if _waits_for_recommendation(run):
                 set_recommendation_sink = getattr(run.runtime, "set_recommendation_sink", None)
                 if callable(set_recommendation_sink):
                     set_recommendation_sink(on_decision_recommended)

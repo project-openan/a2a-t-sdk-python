@@ -1403,10 +1403,11 @@ async def test_manual_run_publishes_a_manual_decision_request(
     await _wait_status(client, run_id, lambda data: data["status"] != "running")
 
 
-async def test_confirm_run_publishes_the_recommendation_with_the_decision(
+async def test_confirm_run_opens_the_same_decision_surface_without_a_recommendation(
     client: httpx.AsyncClient,
     runtimes: list[FakeRuntime],
 ) -> None:
+    """Confirm and manual share one card: the server prompt, no advisory model answer."""
     start = await client.post(
         "/api/runs",
         json={"scenario": "information", "mode": "confirm", "transport": "sse"},
@@ -1420,14 +1421,14 @@ async def test_confirm_run_publishes_the_recommendation_with_the_decision(
 
     response = await client.post(
         f"/api/runs/{run_id}/decisions",
-        json={"action": "accept", "rationale": "The engineer confirmed the recommendation."},
+        json={"action": "accept", "rationale": "The engineer typed the answer."},
     )
     assert response.status_code == 200
     events = await asyncio.wait_for(events_task, timeout=5)
     requests = [payload for payload in _sse_payloads(events.text) if payload["type"] == "decision_requested"]
     assert len(requests) == 1
     assert requests[0]["mode"] == "confirm"
-    assert requests[0]["recommendation"]["action"] == "accept"
+    assert "recommendation" not in requests[0]
     assert requests[0]["proposal"]["kind"] == "information"
     assert requests[0]["timeoutSeconds"] == 5.0
     await _wait_status(client, run_id, lambda data: data["status"] != "running")

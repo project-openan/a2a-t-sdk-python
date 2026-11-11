@@ -1281,6 +1281,7 @@ h5.content-heading { font-size: 12px; color: var(--g700); }
 .validation-errors code { font-size: 10px; color: var(--g700); }
 .validation-errors .validation-hint { color: var(--red); font-weight: 600; }
 .validation-editor { width: 100%; min-height: 84px; resize: vertical; padding: 8px; border: 1px solid var(--g300); border-radius: 6px; font-size: 12px; line-height: 1.4; }
+.decision-input { width: 100%; min-height: 84px; resize: vertical; padding: 8px; border: 1px solid var(--g300); border-radius: 6px; font-size: 12px; line-height: 1.4; }
 .chart { width: 100%; height: auto; max-height: 170px; display: block; }
 .ch-axis { stroke: #000; stroke-width: 1; }
 .ch-grid { stroke: #eee; stroke-width: 1; }

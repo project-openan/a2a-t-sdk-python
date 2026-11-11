@@ -72,7 +72,12 @@ from a2a_t.negotiation.content import (
 from google.protobuf.json_format import ParseDict
 from shared.config import DEFAULT_HTTP_TIMEOUT_SECONDS, DEFAULT_WEBHOOK_IDLE_TIMEOUT
 from shared.logging_setup import log_context
-from shared.models import NegotiationDecision, NegotiationOptions, NegotiationProposeView
+from shared.models import (
+    NegotiationAreaOption,
+    NegotiationDecision,
+    NegotiationOptions,
+    NegotiationProposeView,
+)
 from shared.run_constants import (
     FINAL_STATE_DECISION_UNGROUNDED,
     FINAL_STATE_INPUT_INVALID,
@@ -1812,6 +1817,53 @@ def _record_dropped(dropped: list[str] | None, field: str, reason: str) -> None:
         dropped.append(f"{field}: {reason}")
 
 
+def _merge_operator_answer(
+    filled: dict[str, object],
+    propose: NegotiationProposeView,
+    text: str,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Map one operator answer onto the Task-T fields the server asked for.
+
+    The page sends one text, not structured params. This deterministic bridge is only for the
+    local demo hop, whose accept carries a refilled Task-T: take a value the server itself offered
+    (``propose.options``) or a canonical time-segmented target from the text. It never guesses a
+    network fact; when nothing matches, the caller falls back to the SDK from-text extraction.
+    """
+    answer = (text or "").strip()
+    if not answer:
+        return filled, {}
+    fields: dict[str, object] = {}
+    options = propose.options
+    if options is not None:
+        match = _match_area_option(options, answer)
+        if match is not None:
+            fields[options.field] = match.value
+    target = normalize_text(answer)
+    properties = TASK_PARAM_SCHEMA.get("properties")
+    if target is not None and isinstance(properties, Mapping) and RATE_TARGET_FIELD in properties:
+        fields[RATE_TARGET_FIELD] = target
+    return {**filled, **fields}, fields
+
+
+def _match_area_option(
+    options: NegotiationOptions,
+    text: str,
+) -> NegotiationAreaOption | None:
+    """Return the server option the operator named, exact match first, containment second."""
+    answer = text.casefold().strip()
+    contained: NegotiationAreaOption | None = None
+    for option in options.options:
+        for form in (option.value, *option.labels.values(), *option.aliases):
+            if not isinstance(form, str) or not form.strip():
+                continue
+            folded = form.casefold().strip()
+            if folded == answer:
+                return option
+            if contained is None and folded in answer:
+                contained = option
+    return contained
+
+
 def _requires_auto_verification(provider: NegotiationDecisionProvider) -> bool:
     """Return whether this provider's ACCEPT is an automatic decision that must be verified.
 
@@ -1989,6 +2041,12 @@ async def _build_accept_request(
     from-text path stays only as a fallback for content this flow cannot type.
     """
     filled = _accept_filled_values(kind, decision, baseline, intent_fields, dropped=dropped)
+    # The interactive page sends one operator text, not structured params. On the local demo hop
+    # the accept must also carry an agreed Task-T, so map the answer onto the fields the server
+    # itself offered (or a canonical target the operator typed); never invent a value.
+    operator_fields: dict[str, object] = {}
+    if kind is NegotiationKind.INFORMATION and not single_extension_per_message:
+        filled, operator_fields = _merge_operator_answer(filled, propose, decision.rationale)
     agreed_target = _prefer_the_agreed_target(kind, filled, decision, propose, baseline)
     task_content = None
     task_text = ""
@@ -1996,20 +2054,45 @@ async def _build_accept_request(
         # Only the local demo server reads a refilled Task-T from the accept. The real NMS rejects
         # a second ``-T`` key, so it never receives one; generating it there was a pure LLM call
         # whose result was discarded (and whose failure could abort a valid accept).
-        with trace_stage("task_t_slot_extraction_refill"):
-            task_content = await asyncio.to_thread(
-                prompt_client.generate_task_prompt_from_data_with_schema,
-                filled,
-                TASK_PARAM_SCHEMA,
-                task_template_uri,
-            )
+        answer_text = (decision.rationale or "").strip()
+        if (
+            kind is NegotiationKind.INFORMATION
+            and answer_text
+            and not operator_fields
+            and not decision.filled_params
+        ):
+            # The deterministic mapping found no field. The SDK's own from-text extraction is the
+            # single fallback; it is not the OSS Agent decision parser.
+            try:
+                with trace_stage("task_t_operator_text"):
+                    task_content = await asyncio.to_thread(
+                        prompt_client.generate_task_prompt_from_text,
+                        answer_text,
+                        task_template_uri,
+                    )
+            except Exception as exc:  # noqa: BLE001 - fall back to the baseline refill
+                _LOGGER.warning("operator-text Task-T fallback failed: %s", exc)
+        if task_content is None:
+            with trace_stage("task_t_slot_extraction_refill"):
+                task_content = await asyncio.to_thread(
+                    prompt_client.generate_task_prompt_from_data_with_schema,
+                    filled,
+                    TASK_PARAM_SCHEMA,
+                    task_template_uri,
+                )
         task_text = _ensure_agreed_target(
             _require_prompt_text(task_content, "the refilled Task-T prompt"), filled
         )
 
     accept_context = session.with_performative(NegotiationPerformative.ACCEPT)
     template_uri = _ACCEPT_REJECT_TEMPLATE_URI_BY_KIND[kind.value]
-    typed = _typed_accept_content(kind, filled, decision, baseline, agreed_target)
+    accept_decision = decision
+    if operator_fields:
+        # The accept text names the same value the refilled Task-T carries.
+        accept_decision = decision.model_copy(
+            update={"filled_params": {**(decision.filled_params or {}), **operator_fields}}
+        )
+    typed = _typed_accept_content(kind, filled, accept_decision, baseline, agreed_target)
     if typed is not None:
         content = await asyncio.to_thread(
             prompt_client.generate_negotiation_accept_prompt_from_data,
@@ -2017,7 +2100,7 @@ async def _build_accept_request(
             template_uri,
         )
     else:
-        accept_text = _accept_text(kind, filled, decision, baseline=baseline)
+        accept_text = _accept_text(kind, filled, accept_decision, baseline=baseline)
         with trace_stage("negotiation_accept_extraction"):
             content = await asyncio.to_thread(
                 prompt_client.generate_negotiation_accept_prompt_from_text,
@@ -2771,8 +2854,12 @@ def _accept_text(
         requested = [
             name for name in (decision.filled_params or {}) if isinstance(allowed, Mapping) and name in allowed
         ]
-        items = " ".join(f"{name}: {filled.get(name, '')}." for name in requested)
-        return f"Accept. {items}".strip()
+        if requested:
+            items = " ".join(f"{name}: {filled.get(name, '')}." for name in requested)
+            return f"Accept. {items}".strip()
+        # A single-input answer that the deterministic bridge could not map still needs to reach
+        # the peer as the accept content: the operator's own text is the answer.
+        return f"Accept. {(decision.rationale or '').strip()}".strip()
     confirmation = decision.confirmed_intent if kind is NegotiationKind.TARGET else decision.feasibility_summary
     values = _agreed_values_line(filled, baseline=baseline)
     body = " ".join(part for part in (values, confirmation or "") if part).strip()

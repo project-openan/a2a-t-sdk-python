@@ -48,7 +48,6 @@ import {
   decisionCard,
   decisionPayload,
   intentCard,
-  pendingDecisionCard,
   validationCard,
 } from "./decisions.js";
 import { clear, el } from "./dom.js";
@@ -289,18 +288,12 @@ const ui = {
   wirePinned: false,
   showCalls: false,
   submitting: false,
-  counterOpen: false,
-  counterText: "",
-  //: Whether the manual-answer editor replaces the action row on the current decision card.
-  manualOpen: false,
-  //: Card key that set ``manualOpen``; a new card restores its own default.
-  manualCardKey: null,
-  manualText: "",
-  manualPreview: null,
-  manualMissing: [],
-  manualError: "",
-  manualParsing: false,
-  selectedRegion: "",
+  //: The operator's answer of the current negotiation card; kept across re-renders.
+  decisionText: "",
+  //: Card identity that last initialized ``decisionText``; a new round resets the box.
+  decisionCardKey: null,
+  //: Whether the More-actions row (reject / abort) is open.
+  moreOpen: false,
   cardKey: null,
   cardError: "",
   rendering: false,
@@ -876,16 +869,9 @@ function resetRunState() {
   ui.wireEntry = null;
   ui.wireFormat = "t";
   ui.wirePinned = false;
-  ui.counterOpen = false;
-  ui.counterText = "";
-  ui.manualOpen = false;
-  ui.manualCardKey = null;
-  ui.manualText = "";
-  ui.manualPreview = null;
-  ui.manualMissing = [];
-  ui.manualError = "";
-  ui.manualParsing = false;
-  ui.selectedRegion = "";
+  ui.decisionText = "";
+  ui.decisionCardKey = null;
+  ui.moreOpen = false;
   ui.submitting = false;
   ui.cancelling = false;
   ui.looping = false;
@@ -1593,12 +1579,8 @@ function enqueueFrame(frame) {
     ui.view.decisionPending !== null &&
     ui.view.decisionPending.round === frame.round;
   if (frame.type === "decision_pending" || (frame.type === "decision_requested" && !samePendingRound)) {
-    ui.selectedRegion = "";
-    ui.manualText = "";
-    ui.manualPreview = null;
-    ui.manualMissing = [];
-    ui.manualError = "";
-    ui.manualParsing = false;
+    ui.decisionText = "";
+    ui.moreOpen = false;
   }
   applyFrame(ui.shadow, frame);
   ui.frameLog.push(frame);
@@ -1905,18 +1887,6 @@ function renderNarrator() {
     els.sayDetail.replaceChildren();
     els.sayDetail.append(el("span", "", card.text));
     if (card.detail) els.sayDetail.append(el("span", "reason", card.detail));
-    if (Array.isArray(card.recommendationFields) && card.recommendationFields.length > 0) {
-      const block = el("div", "ai-suggestion");
-      block.append(el("span", "ai-suggestion-label", ui.copy.decision.aiSuggestion));
-      const list = el("ul");
-      for (const field of card.recommendationFields) {
-        const item = el("li");
-        item.append(el("b", "", field.name), el("span", "", field.value));
-        list.append(item);
-      }
-      block.append(list);
-      els.sayDetail.append(block);
-    }
     if (card.validation) {
       const block = validationBlock(card.validation, ui.copy);
       if (block) els.sayDetail.append(block);
@@ -1940,9 +1910,8 @@ function renderNarrator() {
   els.say.classList.remove("ask");
   els.choices.hidden = true;
   clear(els.choices);
-  ui.counterOpen = false;
-  ui.manualOpen = false;
-  ui.manualCardKey = null;
+  ui.decisionCardKey = null;
+  ui.moreOpen = false;
   els.sayDetail.hidden = true;
   els.sayDetail.replaceChildren();
 
@@ -1983,7 +1952,6 @@ function pendingCard() {
   return (
     intentCard(ui.view, ui.copy) ||
     decisionCard(ui.view, ui.copy) ||
-    pendingDecisionCard(ui.view, ui.copy) ||
     approvalCard(ui.view, ui.copy) ||
     validationCard(ui.view, ui.copy)
   );
@@ -1992,18 +1960,14 @@ function pendingCard() {
 function renderChoices(card) {
   els.choices.hidden = false;
   els.choices.replaceChildren();
-  // A new human card restores its own default surface; a re-render of the same card keeps the
-  // engineer's open/collapsed choice and typed text.
-  const cardKey = `${card.type}:${card.title}:${card.options.map((option) => option.action).join(",")}`;
-  if (ui.manualCardKey !== cardKey) {
-    ui.manualCardKey = cardKey;
-    ui.counterOpen = false;
-    ui.counterText = "";
-    ui.manualOpen = card.manualOpen === true;
-    ui.manualPreview = null;
-    ui.manualMissing = [];
-    ui.manualError = "";
-    ui.manualText = "";
+  // A new decision card initializes its own answer box; a re-render of the same round keeps the
+  // operator's text and the More-actions state.
+  const cardKey = decisionCardKey(card);
+  const fresh = card.type === "decision" && ui.decisionCardKey !== cardKey;
+  if (fresh) {
+    ui.decisionCardKey = cardKey;
+    ui.decisionText = card.prefill || "";
+    ui.moreOpen = false;
   }
   // Anti double-submit: all actions are disabled while the POST is in flight, and the spinner
   // makes the wait explicit so a slow approval never looks like a click that did nothing.
@@ -2040,89 +2004,72 @@ function renderChoices(card) {
     els.choices.append(area, row);
     return;
   }
-  if (ui.counterOpen) {
-    const editor = el("div", "counter-editor");
-    const area = el("textarea");
-    area.value = ui.counterText;
-    area.setAttribute("aria-label", ui.copy.decision.counterLabel);
-    area.placeholder = ui.copy.decision.counterPlaceholder;
-    area.disabled = ui.submitting;
-    area.addEventListener("input", () => {
-      ui.counterText = area.value;
-    });
-    const row = el("div", "choices");
-    const send = el("button", "primary", ui.copy.decision.counterSend);
-    send.type = "button";
-    send.disabled = ui.submitting;
-    send.addEventListener("click", () => submitDecision("counter", ui.counterText));
-    const cancel = el("button", "", ui.copy.decision.cancel);
-    cancel.type = "button";
-    cancel.disabled = ui.submitting;
-    cancel.addEventListener("click", () => {
-      ui.counterOpen = false;
-      renderNarrator();
-    });
-    row.append(send, cancel);
-    editor.append(area, row);
-    els.choices.append(editor);
-    area.focus();
-    return;
-  }
-
-  const regionOptions = Array.isArray(card.regionOptions) ? card.regionOptions : [];
-  if (regionOptions.length === 0) {
-    ui.selectedRegion = "";
-  } else {
-    if (!regionOptions.some((option) => option.value === ui.selectedRegion)) {
-      const recommendedRegion = card.recommendation?.filled_params?.region;
-      const preferred =
-        regionOptions.find((option) => option.value === recommendedRegion) ||
-        regionOptions.find((option) => option.recommended) ||
-        regionOptions[0];
-      ui.selectedRegion = preferred.value;
-    }
-    const group = el("div", "region-options");
-    group.append(el("span", "region-label", ui.copy.decision.servedArea));
-    for (const option of regionOptions) {
-      const choice = el(
-        "button",
-        option.value === ui.selectedRegion ? "region-choice selected" : "region-choice",
-        option.label,
-      );
-      choice.type = "button";
-      choice.disabled = ui.submitting;
-      choice.addEventListener("click", () => {
-        ui.selectedRegion = option.value;
-        renderNarrator();
-      });
-      group.append(choice);
-    }
-    els.choices.append(group);
-  }
-
-  // One decision surface at a time: the manual editor replaces the action row. Without a
-  // recommendation it also keeps its escape action(s) visible as a compact quick-action row.
-  if (card.type === "decision" && ui.manualOpen) {
-    renderManualAnswer(card);
-    if (!card.hasRecommendation) {
-      appendActionRow(card, ui.copy.decision.quickActions);
-    }
-    appendManualToggle(true);
+  if (card.type === "decision") {
+    renderDecisionAnswer(card, fresh);
     return;
   }
 
   appendActionRow(card);
-  if (card.type === "decision") appendManualToggle(false);
 }
 
-/** Append the action buttons of one card; ``label`` wraps them in a titled row. */
-function appendActionRow(card, label = "") {
-  const row = label ? el("div", "choices") : els.choices;
-  if (label) els.choices.append(el("span", "choices-label", label));
+/** Stable identity of one decision card; a new round starts with a fresh answer box. */
+function decisionCardKey(card) {
+  if (card.type !== "decision") return `${card.type}:${card.title}`;
+  return `decision:${card.round}:${card.kind}:${card.negotiationId || ""}`;
+}
+
+/** Render the one answer surface of a negotiation round: prompt is already in the narrator. */
+function renderDecisionAnswer(card, fresh) {
+  const labels = ui.copy.decision;
+  const area = el("textarea", "decision-input");
+  area.value = ui.decisionText;
+  area.placeholder = labels.inputPlaceholder;
+  area.setAttribute("aria-label", labels.inputLabel);
+  area.rows = 4;
+  area.disabled = ui.submitting;
+  const send = el("button", "primary", labels.send);
+  send.type = "button";
+  const syncSend = () => {
+    send.disabled = ui.submitting || (card.inputRequired && !ui.decisionText.trim());
+  };
+  area.addEventListener("input", () => {
+    ui.decisionText = area.value;
+    syncSend();
+  });
+  syncSend();
+  send.addEventListener("click", () => {
+    if (card.inputRequired && !ui.decisionText.trim()) return;
+    submitDecision(card, "accept");
+  });
+  const more = el("button", "link", labels.moreActions);
+  more.type = "button";
+  more.disabled = ui.submitting;
+  more.setAttribute("aria-expanded", String(ui.moreOpen));
+  more.addEventListener("click", () => {
+    ui.moreOpen = !ui.moreOpen;
+    renderNarrator();
+  });
+  const row = el("div", "choices");
+  row.append(send, more);
+  els.choices.append(area, row);
+  if (ui.moreOpen) {
+    const actions = el("div", "choices");
+    for (const option of card.options) {
+      const button = el("button", option.danger ? "danger" : "", option.label);
+      button.type = "button";
+      button.disabled = ui.submitting;
+      button.addEventListener("click", () => submitDecision(card, option.action));
+      actions.append(button);
+    }
+    els.choices.append(actions);
+  }
+  if (fresh) area.focus();
+}
+
+/** Append the action buttons of an intent or approval card. */
+function appendActionRow(card) {
   for (const option of card.options) {
-    // A quick-action row is secondary: the manual area's parse/send button is the primary there.
-    const variant = !label && option.primary ? "primary" : option.danger ? "danger" : "";
-    const button = el("button", variant, option.label);
+    const button = el("button", option.primary ? "primary" : option.danger ? "danger" : "", option.label);
     button.type = "button";
     button.disabled = ui.submitting;
     button.addEventListener("click", () => {
@@ -2130,235 +2077,18 @@ function appendActionRow(card, label = "") {
         submitIntent(option.action);
         return;
       }
-      if (card.type === "approval") {
-        submitApproval(option.action === "approve");
-        return;
-      }
-      if (option.action === "counter") {
-        ui.counterOpen = true;
-        ui.manualOpen = false;
-        ui.counterText = card.counterText || "";
-        renderNarrator();
-        return;
-      }
-      submitDecision(option.action);
+      if (card.type === "approval") submitApproval(option.action === "approve");
     });
-    row.append(button);
-  }
-  if (label) els.choices.append(row);
-}
-
-/** Toggle the manual-answer editor on a decision card. */
-function appendManualToggle(open) {
-  const button = el(
-    "button",
-    "link",
-    open ? ui.copy.decision.manualCollapse : ui.copy.decision.manualToggle,
-  );
-  button.type = "button";
-  button.disabled = ui.submitting;
-  button.addEventListener("click", () => {
-    ui.manualOpen = !ui.manualOpen;
-    ui.counterOpen = false;
-    if (!ui.manualOpen) {
-      ui.manualPreview = null;
-      ui.manualError = "";
-    }
-    renderNarrator();
-  });
-  els.choices.append(button);
-}
-
-/** Render the free-text manual-answer box and its parsed preview.
- *
- * The box is the primary surface when the OSS Agent has no deterministic recommendation, and a
- * deliberate override when it has one. Parsing is explicit: the engineer sees the structured
- * decision and confirms it before anything is submitted.
- */
-function renderManualAnswer(card = null) {
-  const labels = ui.copy.decision;
-  // The decision card picks an example that matches the asked item (for example a region answer
-  // for a region question); the static copy value is only the fallback.
-  const exampleText = card?.manualExample || labels.manualExample;
-  const section = el("div", "manual-answer");
-  section.append(el("span", "micro-label", labels.manualLabel));
-  if (ui.manualPreview === null) {
-    // The example is a selectable hint, not a textarea placeholder: placeholder text cannot be
-    // selected or copied. The button also fills it in for the engineer.
-    if (exampleText) {
-      const example = el("p", "manual-example");
-      example.append(
-        el("span", "manual-example-label", `${labels.manualExampleLabel || "Example"}: `),
-        el("code", "", exampleText),
-      );
-      section.append(example);
-    }
-    const area = el("textarea");
-    area.value = ui.manualText;
-    area.placeholder = labels.manualPlaceholder;
-    area.setAttribute("aria-label", labels.manualLabel);
-    area.disabled = ui.manualParsing || ui.submitting;
-    area.addEventListener("input", () => {
-      ui.manualText = area.value;
-    });
-    const row = el("div", "choices");
-    const parse = el(
-      "button",
-      "primary",
-      ui.manualParsing ? labels.manualParsing : labels.manualParse,
-    );
-    parse.type = "button";
-    parse.disabled = ui.manualParsing || ui.submitting;
-    parse.addEventListener("click", () => parseManualAnswer());
-    row.append(parse);
-    if (exampleText && labels.manualUseExample) {
-      const useExample = el("button", "", labels.manualUseExample);
-      useExample.type = "button";
-      useExample.disabled = ui.manualParsing || ui.submitting;
-      useExample.addEventListener("click", () => {
-        ui.manualText = exampleText;
-        area.value = exampleText;
-        area.focus();
-        area.setSelectionRange(area.value.length, area.value.length);
-      });
-      row.append(useExample);
-    }
-    section.append(area, row);
-    if (ui.manualError) section.append(el("p", "manual-error", ui.manualError));
-  } else {
-    section.append(el("span", "micro-label", labels.manualPreview));
-    section.append(manualPreview(ui.manualPreview, ui.manualMissing, labels));
-    const row = el("div", "choices");
-    const confirm = el("button", "primary", labels.manualSend);
-    confirm.type = "button";
-    confirm.disabled = ui.submitting;
-    confirm.addEventListener("click", () => submitParsedDecision(ui.manualPreview));
-    const back = el("button", "", labels.manualBack);
-    back.type = "button";
-    back.disabled = ui.submitting;
-    back.addEventListener("click", () => {
-      ui.manualPreview = null;
-      ui.manualError = "";
-      renderNarrator();
-    });
-    row.append(confirm, back);
-    section.append(row);
-  }
-  els.choices.append(section);
-}
-
-/** Render the structured decision returned by the parse endpoint. */
-function manualPreview(decision, missing, labels) {
-  const box = el("div", "manual-preview");
-  if (decision.action) {
-    box.append(el("p", "", `${labels.manualAction}: ${decision.action}`));
-  }
-  if (Array.isArray(missing) && missing.length > 0) {
-    const asked = el("p", "", `${labels.manualMissing}: ${missing.join(", ")}`);
-    box.append(asked);
-  }
-  const filled =
-    decision.filled_params && Object.keys(decision.filled_params).length > 0
-      ? decision.filled_params
-      : null;
-  const counter =
-    decision.counter_params && Object.keys(decision.counter_params).length > 0
-      ? decision.counter_params
-      : null;
-  const fields = filled || counter;
-  if (fields !== null) {
-    box.append(el("p", "", labels.manualFields));
-    const list = el("ul");
-    for (const [key, value] of Object.entries(fields)) {
-      const item = el("li");
-      item.append(el("b", "", key), el("span", "", String(value)));
-      list.append(item);
-    }
-    box.append(list);
-  }
-  if (decision.rationale) box.append(el("p", "", decision.rationale));
-  return box;
-}
-
-async function parseManualAnswer() {
-  const text = ui.manualText.trim();
-  if (text === "" || ui.manualParsing || ui.submitting) return;
-  ui.manualParsing = true;
-  ui.manualError = "";
-  renderNarrator();
-  try {
-    const response = await fetch(`/api/runs/${encodeURIComponent(ui.view.runId)}/decisions/parse`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      // The clicked served-area option is operator input too: send it so the server's grounding
-      // check accepts it even when the typed answer does not repeat the area name.
-      body: JSON.stringify({ text, region: ui.selectedRegion || "" }),
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(payload.error || `HTTP ${response.status}`);
-    }
-    if (!payload.decision) throw new Error(ui.copy.decision.manualParseFailed);
-    ui.manualPreview = payload.decision;
-    ui.manualMissing = Array.isArray(payload.missingItems) ? payload.missingItems : [];
-  } catch (error) {
-    ui.manualError = `${ui.copy.decision.manualParseFailed} ${
-      error instanceof Error ? error.message : String(error)
-    }`;
-  } finally {
-    ui.manualParsing = false;
-    renderNarrator();
+    els.choices.append(button);
   }
 }
 
-async function submitParsedDecision(decision) {
-  if (decision === null || ui.submitting) return;
-  ui.submitting = true;
-  ui.manualError = "";
-  renderNarrator();
-  const payload = { ...decision };
-  // The operator's own wording. A pure A2A answer is one plain text, so the backend sends this
-  // verbatim instead of re-rendering the structured preview.
-  payload.answerText = ui.manualText.trim();
-  // Provenance: the preview was structured by the model; a clicked served area is operator input.
-  const modelRegion = payload.filled_params?.region;
-  payload.answerSource =
-    ui.selectedRegion && ui.selectedRegion !== modelRegion ? "operator_edited" : "ai_structured";
-  if (ui.selectedRegion) {
-    payload.filled_params = { ...(payload.filled_params || {}), region: ui.selectedRegion };
-  }
-  try {
-    const response = await fetch(`/api/runs/${encodeURIComponent(ui.view.runId)}/decisions`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.error || `HTTP ${response.status}`);
-    }
-    ui.manualText = "";
-    ui.manualPreview = null;
-    ui.manualMissing = [];
-    if (ui.view.decision !== null) ui.view.decision.resolved = true;
-    if (ui.view.decisionPending !== null) ui.view.decisionPending.resolved = true;
-    ui.submitting = false;
-    player.release();
-    render();
-  } catch (error) {
-    ui.submitting = false;
-    ui.manualError = error instanceof Error ? error.message : String(error);
-    renderNarrator();
-  }
-}
-
-async function submitDecision(action, counterText = "") {
-  if (ui.submitting) return;
-  const card = decisionCard(ui.view, ui.copy) || pendingDecisionCard(ui.view, ui.copy);
-  if (card === null) return;
+async function submitDecision(card, action) {
+  if (ui.submitting || card === null) return;
+  if (action === "accept" && card.inputRequired && !ui.decisionText.trim()) return;
   ui.submitting = true;
   renderChoices(card);
-  const payload = decisionPayload(card, action, ui.copy, counterText, ui.selectedRegion);
+  const payload = decisionPayload(card, action, ui.copy, ui.decisionText);
   try {
     const response = await fetch(`/api/runs/${encodeURIComponent(ui.view.runId)}/decisions`, {
       method: "POST",
@@ -2370,8 +2100,9 @@ async function submitDecision(action, counterText = "") {
       throw new Error(detail.error || `HTTP ${response.status}`);
     }
     ui.submitting = false;
-    ui.counterOpen = false;
-    ui.selectedRegion = "";
+    ui.decisionText = "";
+    ui.moreOpen = false;
+    ui.decisionCardKey = null;
     if (ui.view.decision !== null) ui.view.decision.resolved = true;
     if (ui.view.decisionPending !== null) ui.view.decisionPending.resolved = true;
     player.release();

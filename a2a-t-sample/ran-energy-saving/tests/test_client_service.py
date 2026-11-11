@@ -346,7 +346,7 @@ async def test_a_pure_waiting_decision_keeps_the_run_running(
     assert run.status == "finished"
 
 
-async def test_confirm_opens_the_decision_surface_before_the_recommendation(
+async def test_confirm_opens_the_decision_surface_without_a_recommendation(
     tmp_path: Path,
     offline_config: SampleConfig,
 ) -> None:
@@ -362,12 +362,12 @@ async def test_confirm_opens_the_decision_surface_before_the_recommendation(
         await asyncio.sleep(0)
 
         assert run.pending_decision is True
-        pending = [frame for frame in run.messages if frame.get("type") == "decision_pending"]
-        assert len(pending) == 1
-        assert pending[0]["round"] == 1
-        assert isinstance(pending[0]["missingItems"], list)
-        assert "recommendationTimeoutSeconds" in pending[0]
-        assert not any(frame.get("type") == "decision_requested" for frame in run.messages)
+        requested = [frame for frame in run.messages if frame.get("type") == "decision_requested"]
+        assert len(requested) == 1
+        assert requested[0]["round"] == 1
+        assert "recommendation" not in requested[0]
+        assert "timeoutSeconds" in requested[0]
+        assert not any(frame.get("type") == "decision_pending" for frame in run.messages)
     finally:
         hold.set()
     await _finish(manager, run.run_id)
