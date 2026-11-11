@@ -83,7 +83,7 @@ from protocol.messages import (
 )
 from shared.config import SampleConfig
 from shared.models import NegotiationDecision, NegotiationProposeView
-from shared.run_constants import FINAL_STATE_INTENT_NOT_CONFIRMED
+from shared.run_constants import FINAL_STATE_INTENT_NOT_CONFIRMED, FINAL_STATE_NEGOTIATION_ABORTED
 from shared.trace import (
     PHASE_NEGOTIATION,
     PHASE_RESOLUTION,
@@ -3021,3 +3021,434 @@ async def test_an_untyped_propose_names_what_the_frame_carried() -> None:
     message = str(raised.value)
     assert "metadata keys:" in message
     assert "Negotiation-T value: json" in message
+
+
+# --- Vendor metadata tolerance -------------------------------------------------------------
+#
+# The real NMS generates its Negotiation-T value with a model, so the JSON may arrive with an
+# extra encoding layer, a code fence, leading prose, A2A-shaped parts, or near-miss typed fields.
+# Every repair below is deterministic and lossless; none of them guesses a negotiation kind.
+
+_VENDOR_AGNOSTIC_URI = "Negotiation-T/network-layer/ran-energy-saving/v1/region-negotiation/propose/v1"
+
+
+def _vendor_frame_with(
+    response_metadata: object, *, text: str | None = "Please provide the region."
+) -> str:
+    """Build a vendor envelope whose ``responseMetadata`` is whatever the caller supplies."""
+    entry: dict[str, object] = {"metadata": {"responseMetadata": response_metadata}}
+    if text is not None:
+        entry["text"] = text
+    return json.dumps({"message": [entry], "messageType": "ASK_USER"})
+
+
+async def test_a_double_encoded_vendor_envelope_is_unwrapped() -> None:
+    """A model may JSON-encode its own JSON string; the body is still losslessly readable."""
+    text = "## Feasibility Negotiation\nThe rate cannot be met during the outage."
+    content = json.dumps(
+        _vendor_propose_content(
+            negotiation_type="FEASIBILITY",
+            template_uri="Negotiation-T/feasibility-negotiation/propose/v1",
+            text=text,
+        )
+    )
+
+    propose = await _seen_propose(content)
+
+    assert (propose.kind, propose.content, propose.template_uri) == (
+        "feasibility",
+        text,
+        FEASIBILITY_NEGOTIATION_PROPOSE_URI,
+    )
+
+
+async def test_a_double_encoded_prose_body_is_unwrapped() -> None:
+    """The value may be a JSON string literal holding rendered prose, not an envelope."""
+    text = "## Information Negotiation\nPlease provide the region."
+    content = json.dumps(text)
+
+    propose = await _seen_propose(content)
+
+    assert (propose.kind, propose.content) == ("information", text)
+
+
+async def test_a_double_encoded_response_metadata_is_typed() -> None:
+    """The nested block may itself be encoded twice by the model."""
+    content = _vendor_frame_with(
+        json.dumps(json.dumps({"performative": "PROPOSE", "negotiationType": "INFORMATION"})),
+        text="Please continue.",
+    )
+
+    requested = await _requested_propose(content)
+
+    assert requested == [("information", INFORMATION_NEGOTIATION_PROPOSE_URI)]
+
+
+async def test_a_fenced_vendor_envelope_is_unwrapped() -> None:
+    """A model may wrap the envelope in a markdown code fence."""
+    text = "Region 'ZZRegion' is not recognized. Please provide the correct region name."
+    content = "```json\n" + _vendor_propose_content(text=text) + "\n```"
+
+    propose = await _seen_propose(content)
+
+    assert (propose.kind, propose.content) == ("information", text)
+
+
+async def test_a_prefixed_vendor_envelope_is_unwrapped() -> None:
+    """A model may add a sentence before the JSON document."""
+    text = "Region 'ZZRegion' is not recognized. Please provide the correct region name."
+    content = "Here is the proposal:\n" + _vendor_propose_content(text=text) + "\nThanks."
+
+    propose = await _seen_propose(content)
+
+    assert (propose.kind, propose.content) == ("information", text)
+
+
+async def test_an_array_of_json_strings_is_unwrapped() -> None:
+    """The list root may hold the envelope as a JSON string instead of an object."""
+    text = "Reduce the rate target to 2Mbps or less."
+    content = json.dumps(
+        [
+            _vendor_propose_content(
+                negotiation_type="FEASIBILITY",
+                template_uri="Negotiation-T/feasibility-negotiation/propose/v1",
+                text=text,
+            )
+        ]
+    )
+
+    propose = await _seen_propose(content)
+
+    assert (propose.kind, propose.content) == ("feasibility", text)
+
+
+async def test_a2a_parts_text_reaches_the_decision_provider() -> None:
+    """A model may emit an A2A-shaped message; its prose lives in ``parts[*].text``."""
+    text = "Region 'ZZRegion' is not recognized. Please provide the correct region name."
+    content = json.dumps(
+        {
+            "message": [
+                {
+                    "parts": [{"kind": "text", "text": text}],
+                    "metadata": {
+                        "responseMetadata": {
+                            "performative": "PROPOSE",
+                            "templateUri": "Negotiation-T/info-negotiation/propose/v1",
+                            "negotiationType": "INFORMATION",
+                        }
+                    },
+                }
+            ],
+            "messageType": "ASK_USER",
+        }
+    )
+
+    propose = await _seen_propose(content)
+
+    assert (propose.kind, propose.content) == ("information", text)
+
+
+async def test_a_content_field_reaches_the_decision_provider() -> None:
+    """A model may name the prose field ``content`` instead of ``text``."""
+    text = "Region 'ZZRegion' is not recognized. Please provide the correct region name."
+    content = json.dumps(
+        {
+            "message": [
+                {
+                    "content": text,
+                    "metadata": {
+                        "responseMetadata": {
+                            "performative": "PROPOSE",
+                            "templateUri": "Negotiation-T/info-negotiation/propose/v1",
+                            "negotiationType": "INFORMATION",
+                        }
+                    },
+                }
+            ],
+            "messageType": "ASK_USER",
+        }
+    )
+
+    propose = await _seen_propose(content)
+
+    assert (propose.kind, propose.content) == ("information", text)
+
+
+async def test_prose_quoting_a_complete_envelope_example_does_not_type_the_proposal() -> None:
+    """A quoted complete example is still an example; the heading outside it is the proposal."""
+    example = _vendor_propose_content(
+        negotiation_type="TARGET",
+        template_uri="Negotiation-T/target-negotiation/propose/v1",
+        text="dummy",
+    )
+    content = (
+        "Example of a frame:\n"
+        + example
+        + "\n\n## Information Negotiation\nPlease provide the correct region name."
+    )
+
+    propose = await _seen_propose(content)
+
+    assert propose.kind == "information"
+    assert propose.content != "dummy"
+    assert "## Information Negotiation" in propose.content
+
+
+async def test_prose_quoting_a_same_kind_example_still_keeps_its_own_body() -> None:
+    """Agreement on the kind does not make a quoted example the proposal body."""
+    example = _vendor_propose_content(
+        negotiation_type="INFORMATION",
+        template_uri="Negotiation-T/info-negotiation/propose/v1",
+        text="dummy",
+    )
+    content = (
+        "## Information Negotiation\n"
+        "Please provide the correct region name.\n\nExample:\n" + example
+    )
+
+    propose = await _seen_propose(content)
+
+    assert propose.content != "dummy"
+    assert "Please provide the correct region name." in propose.content
+
+
+async def test_prose_quoting_a_response_metadata_json_example_does_not_type_the_proposal() -> None:
+    """Only a full message envelope found in prose may type; a quoted block is an example."""
+    content = (
+        "## Information Negotiation\n"
+        'Example: {"responseMetadata": {"negotiationType": "TARGET"}}. Please provide the region.'
+    )
+
+    requested = await _requested_propose(content)
+
+    assert requested == [("information", INFORMATION_NEGOTIATION_PROPOSE_URI)]
+
+
+async def test_a_response_metadata_json_string_is_typed() -> None:
+    """The nested ``responseMetadata`` may itself be a JSON string."""
+    content = _vendor_frame_with(
+        json.dumps({"performative": "PROPOSE", "negotiationType": "INFORMATION"}),
+        text="Please continue.",
+    )
+
+    requested = await _requested_propose(content)
+
+    assert requested == [("information", INFORMATION_NEGOTIATION_PROPOSE_URI)]
+
+
+@pytest.mark.parametrize(
+    ("negotiation_type", "expected_kind"),
+    [
+        ("Information Negotiation", "information"),
+        ("INFORMATION_NEGOTIATION", "information"),
+        ("Info", "information"),
+        ("FEASIBILITY_NEGOTIATION", "feasibility"),
+        ("Target Negotiation", "target"),
+    ],
+)
+async def test_a_spelled_out_negotiation_type_is_typed(
+    negotiation_type: str, expected_kind: str
+) -> None:
+    """Typed fields may be spelled with spaces, underscores, or short names."""
+    content = _vendor_propose_content(
+        negotiation_type=negotiation_type, template_uri=_VENDOR_AGNOSTIC_URI
+    )
+
+    requested = await _requested_propose(content)
+
+    assert requested[0][0] == expected_kind
+
+
+@pytest.mark.parametrize(
+    ("template_uri", "expected_kind"),
+    [
+        ("Negotiation-T/Information-Negotiation/propose/v1", "information"),
+        ("https://nms.example/Negotiation-T/feasibility-negotiation/propose/v1", "feasibility"),
+        ("/Negotiation-T/target_negotiation/propose/v1", "target"),
+    ],
+)
+async def test_a_decorated_template_uri_is_typed(template_uri: str, expected_kind: str) -> None:
+    """A template URI may carry a URL, a leading slash, casing, or underscores."""
+    content = _vendor_propose_content(negotiation_type=None, template_uri=template_uri)
+
+    requested = await _requested_propose(content)
+
+    assert requested[0][0] == expected_kind
+
+
+def _require_context(metadata: object) -> dict[str, object]:
+    """Return the ``negotiationContext`` mapping of one test-built metadata map."""
+    assert isinstance(metadata, dict)
+    context = metadata[NEGOTIATION_CONTEXT_METADATA_KEY]
+    assert isinstance(context, dict)
+    return context
+
+
+async def test_a_lowercase_abort_context_still_aborts() -> None:
+    """A lower-case performative must not turn an abort into a proposal."""
+    event = abort_event(1)
+    _require_context(event["metadata"])["performative"] = "abort"
+    transport = ScriptedTransport([[event]])
+
+    result = await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=transport,
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+        language="en-US",
+        infer_missing_negotiation_kind=True,
+    )
+
+    assert result.final_state == FINAL_STATE_NEGOTIATION_ABORTED
+
+
+async def test_a_decimal_string_round_keeps_the_vendor_negotiation_id() -> None:
+    """A malformed round must not discard the vendor id its reply has to echo."""
+    event = _propose_without_template_uri("information", content="## Information Negotiation")
+    context = _require_context(event["metadata"])
+    context["round"] = "1.0"
+    context["id"] = "vendor-neg-1"
+    transport = ScriptedTransport([[event], [end_event()]])
+
+    await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=transport,
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+        language="en-US",
+        infer_missing_negotiation_kind=True,
+    )
+
+    reply = MessageToDict(transport.requests[1].message.metadata)
+    assert reply[NEGOTIATION_CONTEXT_METADATA_KEY]["id"] == "vendor-neg-1"
+    assert reply[NEGOTIATION_CONTEXT_METADATA_KEY]["round"] == 1
+
+
+async def test_a_numeric_negotiation_id_is_echoed_verbatim() -> None:
+    """A model may emit a numeric id; it is still the vendor's handle and must be echoed."""
+    event = _propose_without_template_uri("information", content="## Information Negotiation")
+    _require_context(event["metadata"])["id"] = 123
+    transport = ScriptedTransport([[event], [end_event()]])
+
+    await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=transport,
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+        language="en-US",
+        infer_missing_negotiation_kind=True,
+    )
+
+    reply = MessageToDict(transport.requests[1].message.metadata)
+    assert reply[NEGOTIATION_CONTEXT_METADATA_KEY]["id"] == "123"
+
+
+async def test_a_partial_context_keeps_its_id_and_defaults_the_rest() -> None:
+    """Missing round/maxRounds must not discard the id or send zeros back."""
+    event = _propose_without_template_uri("information", content="## Information Negotiation")
+    metadata = event["metadata"]
+    assert isinstance(metadata, dict)
+    metadata[NEGOTIATION_CONTEXT_METADATA_KEY] = {
+        "id": "vendor-neg-2",
+        "performative": "PROPOSE",
+    }
+    transport = ScriptedTransport([[event], [end_event()]])
+
+    await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=transport,
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+        language="en-US",
+        infer_missing_negotiation_kind=True,
+    )
+
+    reply = MessageToDict(transport.requests[1].message.metadata)
+    assert reply[NEGOTIATION_CONTEXT_METADATA_KEY]["id"] == "vendor-neg-2"
+    assert reply[NEGOTIATION_CONTEXT_METADATA_KEY]["round"] == 1
+    assert reply[NEGOTIATION_CONTEXT_METADATA_KEY]["maxRounds"] == 5
+
+
+async def test_a_nested_negotiation_context_is_used() -> None:
+    """A context written inside the envelope is the vendor's own id; do not replace it."""
+    text = "## Information Negotiation\nPlease provide the correct region name."
+    extension = json.dumps(
+        {
+            "message": [
+                {
+                    "text": text,
+                    "metadata": {
+                        "responseMetadata": {
+                            "performative": "PROPOSE",
+                            "templateUri": "Negotiation-T/info-negotiation/propose/v1",
+                            "negotiationType": "INFORMATION",
+                            "negotiationContext": {
+                                "id": "vendor-neg-3",
+                                "round": 2,
+                                "maxRounds": 4,
+                                "performative": "PROPOSE",
+                            },
+                        }
+                    },
+                }
+            ],
+            "messageType": "ASK_USER",
+        }
+    )
+    event = _propose_without_template_uri("information", content=extension)
+    metadata = event["metadata"]
+    assert isinstance(metadata, dict)
+    metadata.pop(NEGOTIATION_CONTEXT_METADATA_KEY)
+    transport = ScriptedTransport([[event], [end_event()]])
+
+    await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=transport,
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+        language="en-US",
+        infer_missing_negotiation_kind=True,
+    )
+
+    reply = MessageToDict(transport.requests[1].message.metadata)
+    assert reply[NEGOTIATION_CONTEXT_METADATA_KEY]["id"] == "vendor-neg-3"
+    assert reply[NEGOTIATION_CONTEXT_METADATA_KEY]["round"] == 2
+    assert reply[NEGOTIATION_CONTEXT_METADATA_KEY]["maxRounds"] == 4
+
+
+async def test_a_typed_envelope_without_prose_falls_back_to_the_raw_body() -> None:
+    """A typed body with no ``text`` must not give the provider an empty proposal."""
+    content = _vendor_frame_with(
+        {
+            "performative": "PROPOSE",
+            "negotiationType": "INFORMATION",
+            "templateUri": "Negotiation-T/info-negotiation/propose/v1",
+        },
+        text=None,
+    )
+
+    propose = await _seen_propose(content)
+
+    assert propose.kind == "information"
+    assert propose.content == content
+
+
+async def test_metadata_normalizations_are_recorded_in_the_trace() -> None:
+    """Every repair is named in the trace so a field report can be triaged without the wire."""
+    spans: list[dict[str, object]] = []
+    content = "```json\n" + _vendor_propose_content() + "\n```"
+
+    await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=ScriptedTransport(
+            [[_propose_without_template_uri("information", content=content)], [end_event()]]
+        ),
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+        language="en-US",
+        infer_missing_negotiation_kind=True,
+        trace_sink=spans.append,
+    )
+
+    detail = next(span["detail"] for span in spans if span["kind"] == "decision_requested")
+    assert "decode.embedded" in detail["metadataNormalizations"]

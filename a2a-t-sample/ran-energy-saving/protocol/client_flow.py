@@ -29,7 +29,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Final, Protocol
 
@@ -1391,13 +1391,13 @@ async def run_client_flow(
         context_id = context_id or _string_field(event, "context_id")
         task_id = _string_field(event, "task_id") or task_id
         negotiation_rounds += 1
-        session = parse_negotiation_context(metadata)
-        if session is None:
-            session = _inferred_negotiation_session(
-                metadata,
-                round_number=negotiation_rounds,
-                fallback_id=context_id or inferred_negotiation_id,
-            )
+        frame = _read_vendor_frame(metadata)
+        session, context_rules = _vendor_negotiation_session(
+            metadata,
+            frame,
+            round_number=negotiation_rounds,
+            fallback_id=context_id or inferred_negotiation_id,
+        )
         if session is None:
             raise ClientFlowError(_ERROR_NO_SESSION)
         context_id = context_id or session.id
@@ -1409,9 +1409,16 @@ async def run_client_flow(
             raise ClientFlowError(_ERROR_NO_PROPOSE)
 
         template_uri, kind, inferred_kind = _resolve_propose_template(
-            metadata, infer_missing_template_uri=infer_missing_negotiation_kind
+            metadata, frame, infer_missing_template_uri=infer_missing_negotiation_kind
         )
-        propose = _propose_view(event, metadata, session, kind, template_uri, context_id)
+        propose, body_rules = _propose_view(
+            event, metadata, session, kind, template_uri, context_id, frame
+        )
+        normalizations = tuple(dict.fromkeys((*frame.rules, *context_rules, *body_rules)))
+        if normalizations:
+            _LOGGER.warning(
+                "negotiation frame repaired before reading: %s", ", ".join(normalizations)
+            )
         emit_trace(
             "decision_requested",
             phase=PHASE_NEGOTIATION,
@@ -1426,6 +1433,7 @@ async def run_client_flow(
                 "content": propose.content,
                 # Only the inferred case is flagged; a conformant propose keeps its frame unchanged.
                 **({"templateUriInferred": True} if inferred_kind else {}),
+                **({"metadataNormalizations": list(normalizations)} if normalizations else {}),
             },
         )
         _LOGGER.info(
@@ -2253,38 +2261,112 @@ def _context_id_of(events: list[dict[str, object]]) -> str | None:
     return None
 
 
-def _inferred_negotiation_session(
+def _vendor_performative(value: object) -> NegotiationPerformative | None:
+    """Parse a wire performative case-insensitively."""
+    if not isinstance(value, str):
+        return None
+    return NegotiationPerformative.try_parse(value.strip().upper())
+
+
+def _vendor_identity(value: object) -> str | None:
+    """Return the vendor's negotiation id as the exact string its reply must echo.
+
+    A model may emit a numeric id, and a protobuf ``Struct`` returns numbers as floats; both are
+    the vendor's handle, so they are coerced the same way the strict parser always did instead of
+    being replaced by the A2A context id.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    text = value if isinstance(value, str) else str(value)
+    return text if text.strip() else None
+
+
+def _positive_round(value: object) -> int | None:
+    """Return a positive round/maxRounds number from an int, float or numeric string."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 1 else None
+    if isinstance(value, float):
+        return int(value) if value.is_integer() and value >= 1 else None
+    if isinstance(value, str):
+        try:
+            number = float(value.strip())
+        except ValueError:
+            return None
+        return int(number) if number.is_integer() and number >= 1 else None
+    return None
+
+
+def _frame_performative(frame: _VendorFrame) -> NegotiationPerformative | None:
+    """Return the typed performative inside the decoded body, if any."""
+    for response_metadata in frame.response_metadatas:
+        performative = _vendor_performative(response_metadata.get("performative"))
+        if performative is not None:
+            return performative
+    if isinstance(frame.raw, str):
+        match = _VENDOR_PERFORMATIVE_PATTERN.search(frame.raw)
+        if match is not None:
+            return _vendor_performative(match.group(1))
+    return None
+
+
+def _vendor_negotiation_session(
     metadata: Mapping[str, object],
+    frame: _VendorFrame,
     *,
     round_number: int,
     fallback_id: str,
-) -> NegotiationContext | None:
-    """Build a session for a vendor frame that carries no ``negotiationContext``.
+) -> tuple[NegotiationContext | None, tuple[str, ...]]:
+    """Build a session from every usable field of a possibly damaged ``negotiationContext``.
 
-    The vendor NMS sometimes sends only the Negotiation-T body (short key, JSON envelope) without
-    the context object. The typed performative inside the body is used when present; the round is
-    counted by the caller; the negotiation id falls back to the A2A context id, which is the only
-    identity the server gave us.
+    Each field is salvaged independently: a malformed round no longer discards the vendor's
+    negotiation id (the reply must echo it), and a lower-case performative no longer turns an
+    abort into a proposal. The caller's counted round and the default budget cover the fields the
+    vendor left out.
     """
-    value = vendor_negotiation_value(metadata)
-    if value is None:
-        return None
-    performative = NegotiationPerformative.PROPOSE
-    match = _VENDOR_PERFORMATIVE_PATTERN.search(str(value))
-    if match is not None:
-        parsed = NegotiationPerformative.try_parse(match.group(1))
-        if parsed is not None:
-            performative = parsed
-    _LOGGER.warning(
-        "the negotiation frame carries no negotiationContext; inferring performative=%s round=%s",
-        performative.value,
-        round_number,
-    )
-    return NegotiationContext(
-        id=fallback_id,
-        round=round_number,
-        max_rounds=_DEFAULT_INFERRED_MAX_ROUNDS,
-        performative=performative,
+    if frame.raw is None and not frame.contexts:
+        return None, ()
+    rules: list[str] = []
+    outer_present = metadata.get(NEGOTIATION_CONTEXT_METADATA_KEY) is not None
+    if outer_present:
+        if parse_negotiation_context(metadata) is None:
+            rules.append("context.salvaged")
+    else:
+        rules.append("context.nested" if frame.contexts else "context.inferred")
+    negotiation_id: str | None = None
+    performative: NegotiationPerformative | None = None
+    round_value: int | None = None
+    max_rounds: int | None = None
+    for context in frame.contexts:
+        if negotiation_id is None:
+            negotiation_id = _vendor_identity(context.get("id"))
+        if performative is None:
+            performative = _vendor_performative(context.get("performative"))
+        if round_value is None:
+            round_value = _positive_round(context.get("round"))
+        if max_rounds is None:
+            max_rounds = _positive_round(context.get("maxRounds"))
+    if performative is None:
+        performative = _frame_performative(frame)
+    if performative is None:
+        performative = NegotiationPerformative.PROPOSE
+    if not outer_present:
+        _LOGGER.warning(
+            "the negotiation frame carries no usable negotiationContext; inferring "
+            "performative=%s round=%s id=%s",
+            performative.value,
+            round_value or round_number,
+            negotiation_id or fallback_id,
+        )
+    return (
+        NegotiationContext(
+            id=negotiation_id or fallback_id,
+            round=round_value or max(round_number, 1),
+            max_rounds=max_rounds or _DEFAULT_INFERRED_MAX_ROUNDS,
+            performative=performative,
+        ),
+        tuple(dict.fromkeys(rules)),
     )
 
 
@@ -2316,9 +2398,6 @@ def _find_negotiation_message(
     return None
 
 
-#: Key of the vendor's nested typed metadata inside a Negotiation-T JSON body.
-_RESPONSE_METADATA_KEY: Final[str] = "responseMetadata"
-
 #: Typed fields a vendor Negotiation-T body spells on the wire. A body whose envelope the client
 #: cannot parse still contains them verbatim, so reading them from the raw value is the last-resort
 #: signal. They are only ever read, never interpreted here.
@@ -2339,58 +2418,345 @@ _DEFAULT_INFERRED_MAX_ROUNDS: Final[int] = 5
 #: Markers that identify an unparsable value as a vendor message envelope. Reading a field out of
 #: the raw string is only allowed inside the ``responseMetadata`` block of such an envelope, so a
 #: field quoted in prose or under an unrelated sibling key can never type the proposal.
-_VENDOR_MESSAGE_PATTERN: Final[re.Pattern[str]] = re.compile(r'"message"\s*:')
+_VENDOR_MESSAGE_PATTERN: Final[re.Pattern[str]] = re.compile(r'"(?:message|messages)"\s*:')
 _VENDOR_RESPONSE_METADATA_PATTERN: Final[re.Pattern[str]] = re.compile(r'"responseMetadata"\s*:\s*\{')
 
 #: Characters that open a JSON document; anything else is rendered text the heading fallback reads.
 _JSON_OPENERS: Final[frozenset[str]] = frozenset({"{", "["})
 
+#: Keys that carry the message entries of one vendor envelope.
+_ENVELOPE_KEYS: Final[tuple[str, ...]] = ("message", "messages")
+
+#: Spellings of the nested typed metadata key a model may produce.
+_RESPONSE_METADATA_KEYS: Final[tuple[str, ...]] = ("responseMetadata", "response_metadata")
+
+#: How many extra JSON layers a double-encoded value may carry before the client stops unwrapping.
+_MAX_NESTED_DECODE_DEPTH: Final[int] = 2
+
+#: How many embedded JSON candidates one prose value may be scanned for.
+_MAX_EMBEDDED_CANDIDATES: Final[int] = 5
+
+#: How many opening braces one prose value may be tried against, before the scan gives up.
+_MAX_EMBEDDED_ATTEMPTS: Final[int] = 32
+
+#: Longest value scanned for an embedded JSON document; vendor bodies are far smaller.
+_MAX_EMBEDDED_SCAN_LENGTH: Final[int] = 200_000
+
+
+@dataclass(frozen=True, slots=True)
+class _VendorFrame:
+    """One inbound Negotiation-T value decoded once, with every repair it needed.
+
+    Building this once keeps typing, prose extraction and context salvage on the same decoded
+    document instead of each helper decoding the value again with slightly different rules.
+    """
+
+    raw: object
+    documents: tuple[Mapping[str, object], ...]
+    response_metadatas: tuple[Mapping[str, object], ...]
+    raw_typed_fields: tuple[str | None, str | None]
+    text: str | None
+    contexts: tuple[Mapping[str, object], ...]
+    rules: tuple[str, ...]
+
+
+def _looks_like_envelope(value: object) -> bool:
+    """Report whether a decoded JSON value carries a vendor message envelope.
+
+    Only ``message`` / ``messages`` counts: a bare ``responseMetadata`` object quoted as an example
+    in prose is not a proposal, so it must not type one.
+    """
+    if isinstance(value, Mapping):
+        return any(key in value for key in _ENVELOPE_KEYS)
+    if isinstance(value, list):
+        return any(_looks_like_envelope(item) for item in value)
+    return False
+
+
+def _balanced_json_end(text: str, start: int) -> int | None:
+    """Return the end index (exclusive) of the JSON document opening at ``start``, if balanced."""
+    opener = text[start]
+    closers = ["}" if opener == "{" else "]"]
+    in_string = False
+    escape = False
+    for index in range(start + 1, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            closers.append("}" if char == "{" else "]")
+        elif char in "}]":
+            if not closers or char != closers[-1]:
+                return None
+            closers.pop()
+            if not closers:
+                return index + 1
+    return None
+
+
+def _embedded_json_candidates(text: str) -> Iterator[str]:
+    """Yield balanced JSON documents embedded in prose, in the order they open."""
+    if len(text) > _MAX_EMBEDDED_SCAN_LENGTH:
+        return
+    yielded = 0
+    attempts = 0
+    for start, char in enumerate(text):
+        if char not in _JSON_OPENERS:
+            continue
+        attempts += 1
+        if attempts > _MAX_EMBEDDED_ATTEMPTS:
+            # An unbalanced-brace value would otherwise rescan the tail once per opener.
+            return
+        end = _balanced_json_end(text, start)
+        if end is None:
+            continue
+        yield text[start:end]
+        yielded += 1
+        if yielded >= _MAX_EMBEDDED_CANDIDATES:
+            return
+
+
+def _decode_one_json_layer(value: str) -> object:
+    """Decode one JSON layer, also accepting a bare JSON string literal as the whole value."""
+    decoded = decode_extension_value(value)
+    if decoded is not value:
+        return decoded
+    stripped = value.strip()
+    if len(stripped) >= 2 and stripped[0] == '"' and stripped[-1] == '"':
+        try:
+            parsed = json.loads(stripped)
+        except (ValueError, RecursionError):
+            return value
+        return parsed if isinstance(parsed, str) else value
+    return value
+
+
+def _decoded_mapping(value: object) -> Mapping[str, object] | None:
+    """Return a JSON object from a value that may be encoded more than once."""
+    for _ in range(_MAX_NESTED_DECODE_DEPTH + 1):
+        if isinstance(value, Mapping):
+            return value
+        if not isinstance(value, str):
+            return None
+        decoded = _decode_one_json_layer(value)
+        if decoded is value:
+            return None
+        value = decoded
+    return None
+
+
+def _decode_documents(
+    value: object,
+) -> tuple[list[Mapping[str, object]], object, list[str]]:
+    """Decode one extension value into vendor envelopes, recording every repair used.
+
+    A model-generated value may arrive as a JSON string, as a JSON string containing another JSON
+    string, or as a JSON document wrapped in a code fence or prose. Only a document that carries a
+    vendor message envelope is accepted from a prose scan, so JSON quoted as an example is never
+    mistaken for the proposal.
+    """
+    rules: list[str] = []
+    current = value
+    for depth in range(_MAX_NESTED_DECODE_DEPTH + 1):
+        if not isinstance(current, str):
+            break
+        decoded = _decode_one_json_layer(current)
+        if decoded is current:
+            break
+        if isinstance(decoded, (Mapping, list)):
+            # A JSON string is the vendor's normal encoding, not a repair. Only an extra layer is
+            # worth naming; logging every normal round as repaired would drown the real cases.
+            if depth > 0:
+                rules.append("decode.nested")
+            current = decoded
+            break
+        if not isinstance(decoded, str):
+            break
+        rules.append("decode.nested")
+        current = decoded
+    if isinstance(current, str) and current.lstrip()[:1] not in (*_JSON_OPENERS, '"'):
+        # Embedded extraction is for prose and code fences. A value that already opens as JSON
+        # (or a string literal) is truncated or malformed; scanning inside it would lift a nested
+        # fragment out of context and call it the document.
+        for candidate in _embedded_json_candidates(current):
+            decoded = decode_extension_value(candidate)
+            if not isinstance(decoded, (Mapping, list)) or not _looks_like_envelope(decoded):
+                continue
+            rules.append("decode.embedded")
+            current = decoded
+            break
+    documents: list[Mapping[str, object]] = []
+    if isinstance(current, Mapping):
+        documents.append(current)
+    elif isinstance(current, list):
+        for item in current:
+            if isinstance(item, Mapping):
+                documents.append(item)
+                continue
+            decoded = _decode_one_json_layer(item) if isinstance(item, str) else item
+            if isinstance(decoded, Mapping):
+                documents.append(decoded)
+                rules.append("decode.listItem")
+            elif isinstance(decoded, list):
+                nested = [entry for entry in decoded if isinstance(entry, Mapping)]
+                if nested:
+                    documents.extend(nested)
+                    rules.append("decode.listItem")
+    return documents, current, list(dict.fromkeys(rules))
+
 
 def _vendor_documents(content: object) -> list[Mapping[str, object]]:
-    """Return the envelope objects of one vendor Negotiation-T value, whatever its wrapper.
-
-    The vendor sends the value as a JSON string. Depending on the endpoint it decodes to a bare
-    object or to a one-element list of objects, so both roots are accepted, as is a value a peer
-    already delivered structured. Anything else yields an empty list.
-    """
-    decoded = decode_extension_value(content)
-    if isinstance(decoded, Mapping):
-        return [decoded]
-    if isinstance(decoded, list):
-        return [item for item in decoded if isinstance(item, Mapping)]
-    return []
+    """Return the envelope objects of one vendor Negotiation-T value, whatever its wrapper."""
+    documents, _, _ = _decode_documents(content)
+    return documents
 
 
 def _vendor_message_entries(document: Mapping[str, object]) -> list[Mapping[str, object]]:
     """Return the message entries of one vendor envelope (``message`` is a list on the wire)."""
-    message = document.get("message")
-    if isinstance(message, list):
-        return [entry for entry in message if isinstance(entry, Mapping)]
-    if isinstance(message, Mapping):
-        return [message]
+    for key in _ENVELOPE_KEYS:
+        message = document.get(key)
+        if isinstance(message, list):
+            return [entry for entry in message if isinstance(entry, Mapping)]
+        if isinstance(message, Mapping):
+            return [message]
     return []
 
 
-def _vendor_response_metadatas(content: object) -> list[Mapping[str, object]]:
-    """Return every ``responseMetadata`` mapping of one vendor Negotiation-T JSON body.
+def _response_metadata_mapping(container: Mapping[str, object]) -> Mapping[str, object] | None:
+    """Return one container's ``responseMetadata`` block, decoding a JSON-string block."""
+    for key in _RESPONSE_METADATA_KEYS:
+        decoded = _decoded_mapping(container.get(key))
+        if decoded is not None:
+            return decoded
+    return None
 
-    The vendor NMS sends the extension value as a JSON string, not rendered markdown:
-    ``{"message": [{"metadata": {"responseMetadata": {...}}}]}``, wrapped in a list on some
-    endpoints. The document root and every message entry are inspected. All matches are returned so
-    the caller can skip an empty block instead of letting it shadow a later typed one; a value that
-    is not a readable document yields an empty list.
+
+def _context_mapping(value: object) -> Mapping[str, object] | None:
+    """Return one ``negotiationContext`` mapping, decoding a JSON-string context."""
+    return _decoded_mapping(value)
+
+
+def _vendor_blocks(document: Mapping[str, object]) -> list[Mapping[str, object]]:
+    """Return every metadata-bearing block of one vendor envelope."""
+    blocks: list[Mapping[str, object]] = [document]
+    for entry in _vendor_message_entries(document):
+        blocks.append(entry)
+        metadata = entry.get("metadata")
+        if isinstance(metadata, Mapping):
+            blocks.append(metadata)
+        parts = entry.get("parts")
+        if isinstance(parts, Mapping):
+            blocks.append(parts)
+        elif isinstance(parts, list):
+            blocks.extend(part for part in parts if isinstance(part, Mapping))
+    return blocks
+
+
+def _vendor_response_metadatas(documents: list[Mapping[str, object]]) -> list[Mapping[str, object]]:
+    """Return every ``responseMetadata`` mapping of the decoded vendor documents.
+
+    The vendor NMS nests it under ``message[*].metadata``; a model may also put it on the document
+    root, on a message entry, or on an A2A part, and may serialize the block itself as a JSON
+    string. All matches are returned so an empty block cannot shadow a later typed one.
     """
     found: list[Mapping[str, object]] = []
-    for document in _vendor_documents(content):
-        candidates: list[object] = [document]
-        candidates.extend(entry.get("metadata") for entry in _vendor_message_entries(document))
-        for candidate in candidates:
-            if not isinstance(candidate, Mapping):
-                continue
-            response_metadata = candidate.get(_RESPONSE_METADATA_KEY)
-            if isinstance(response_metadata, Mapping):
+    for document in documents:
+        for block in _vendor_blocks(document):
+            response_metadata = _response_metadata_mapping(block)
+            if response_metadata is not None and response_metadata not in found:
                 found.append(response_metadata)
     return found
+
+
+def _entry_text(entry: Mapping[str, object]) -> str | None:
+    """Return one message entry's prose, accepting the A2A ``parts`` and ``content`` spellings."""
+    text = entry.get("text")
+    if isinstance(text, str) and text.strip():
+        return text
+    parts = entry.get("parts")
+    if isinstance(parts, Mapping):
+        parts = [parts]
+    if isinstance(parts, list):
+        for part in parts:
+            if not isinstance(part, Mapping):
+                continue
+            part_text = part.get("text")
+            if isinstance(part_text, str) and part_text.strip():
+                return part_text
+    content = entry.get("content")
+    if isinstance(content, str) and content.strip():
+        return content
+    return None
+
+
+def _vendor_text_from_documents(documents: list[Mapping[str, object]]) -> str | None:
+    """Return the first non-empty message prose of the decoded vendor documents."""
+    for document in documents:
+        for entry in _vendor_message_entries(document):
+            text = _entry_text(entry)
+            if text is not None:
+                return text
+    return None
+
+
+def _vendor_text_from_raw(value: object) -> str | None:
+    """Return the prose of a value that did not decode into an envelope."""
+    if not isinstance(value, str):
+        return None
+    if value.lstrip()[:1] in _JSON_OPENERS and _VENDOR_MESSAGE_PATTERN.search(value):
+        return _vendor_raw_text(value)
+    return value
+
+
+def _read_vendor_frame(metadata: Mapping[str, object]) -> _VendorFrame:
+    """Decode one inbound Negotiation-T metadata map once, recording the repairs it needed."""
+    raw = vendor_negotiation_value(metadata)
+    documents, flattened, rules = _decode_documents(raw)
+    if "decode.embedded" in rules and isinstance(raw, str):
+        # A rendered proposal body that carries its own heading must not be replaced by a complete
+        # example envelope quoted in the same prose, even when both name the same kind.
+        if negotiation_kind_for_propose_content(raw) is not None:
+            documents = []
+            rules = [rule for rule in rules if rule != "decode.embedded"]
+            rules.append("decode.embeddedRejected")
+    if documents:
+        text = _vendor_text_from_documents(documents)
+        raw_typed_fields: tuple[str | None, str | None] = (None, None)
+    else:
+        # A JSON-string value may hold rendered prose rather than an envelope; read the decoded
+        # string, not the original encoding. A rejected embedded example leaves the raw prose.
+        prose_value = flattened if isinstance(flattened, str) else raw
+        text = _vendor_text_from_raw(prose_value)
+        raw_typed_fields = _vendor_typed_fields(prose_value)
+    contexts: list[Mapping[str, object]] = []
+    outer = _context_mapping(metadata.get(NEGOTIATION_CONTEXT_METADATA_KEY))
+    if outer is not None:
+        contexts.append(outer)
+    for document in documents:
+        for block in _vendor_blocks(document):
+            for container in (block, _response_metadata_mapping(block)):
+                if not isinstance(container, Mapping):
+                    continue
+                nested = _context_mapping(container.get(NEGOTIATION_CONTEXT_METADATA_KEY))
+                if nested is not None and nested not in contexts:
+                    contexts.append(nested)
+    return _VendorFrame(
+        raw=raw,
+        documents=tuple(documents),
+        response_metadatas=tuple(_vendor_response_metadatas(documents)),
+        raw_typed_fields=raw_typed_fields,
+        text=text,
+        contexts=tuple(contexts),
+        rules=tuple(rules),
+    )
 
 
 def _vendor_typed_fields(content: object) -> tuple[str | None, str | None]:
@@ -2419,6 +2785,67 @@ def _vendor_typed_fields(content: object) -> tuple[str | None, str | None]:
     )
 
 
+#: Near-miss spellings of ``responseMetadata.negotiationType``.
+_NEGOTIATION_TYPE_ALIASES: Final[dict[str, str]] = {
+    "information": "information",
+    "info": "information",
+    "informationnegotiation": "information",
+    "target": "target",
+    "targetnegotiation": "target",
+    "clarification": "clarification",
+    "clarificationnegotiation": "clarification",
+    "feasibility": "feasibility",
+    "feasibilitynegotiation": "feasibility",
+}
+
+#: Near-miss spellings of a ``Negotiation-T`` template kind segment.
+_TEMPLATE_SEGMENT_ALIASES: Final[dict[str, str]] = {
+    "info": "information-negotiation",
+    "information": "information-negotiation",
+    "informationnegotiation": "information-negotiation",
+    "target": "target-negotiation",
+    "targetnegotiation": "target-negotiation",
+    "clarification": "target-negotiation",
+    "clarificationnegotiation": "target-negotiation",
+    "feasibility": "feasibility-negotiation",
+    "feasibilitynegotiation": "feasibility-negotiation",
+}
+
+
+def _vendor_kind_for_negotiation_type(value: object) -> NegotiationKind | None:
+    """Return the kind named by a ``negotiationType`` in any near-miss spelling."""
+    kind = negotiation_kind_for_negotiation_type(value)
+    if kind is not None or not isinstance(value, str):
+        return kind
+    alias = _NEGOTIATION_TYPE_ALIASES.get(re.sub(r"[^a-z]", "", value.lower()))
+    return negotiation_kind_for_negotiation_type(alias) if alias is not None else None
+
+
+def _normalized_template_uri(value: str) -> str:
+    """Return one template URI without URL decoration, casing or underscore spelling."""
+    text = value.strip().strip("\"'")
+    if "://" in text:
+        text = text.split("://", 1)[1]
+        text = text.split("/", 1)[1] if "/" in text else ""
+    parts = [segment.strip() for segment in text.split("/") if segment.strip()]
+    if parts and parts[0].lower() in {"negotiation-t", "negotiationt"}:
+        parts[0] = "Negotiation-T"
+    if len(parts) > 1:
+        segment = parts[1].lower().replace("_", "-")
+        parts[1] = _TEMPLATE_SEGMENT_ALIASES.get(segment, segment)
+    return "/".join(parts)
+
+
+def _vendor_kind_for_template_uri(value: object) -> NegotiationKind | None:
+    """Return the kind named by a template URI in any near-miss spelling."""
+    if not isinstance(value, str):
+        return None
+    kind = negotiation_kind_for_template_uri(value)
+    if kind is not None:
+        return kind
+    return negotiation_kind_for_template_uri(_normalized_template_uri(value))
+
+
 def _kind_from_vendor_fields(negotiation_type: object, template_uri: object) -> NegotiationKind | None:
     """Return the kind named by a vendor ``negotiationType`` or nested ``templateUri``.
 
@@ -2426,8 +2853,8 @@ def _kind_from_vendor_fields(negotiation_type: object, template_uri: object) -> 
     does not follow the sample's template naming. A disagreement is logged, never silently
     resolved.
     """
-    kind = negotiation_kind_for_negotiation_type(negotiation_type)
-    uri_kind = negotiation_kind_for_template_uri(template_uri if isinstance(template_uri, str) else None)
+    kind = _vendor_kind_for_negotiation_type(negotiation_type)
+    uri_kind = _vendor_kind_for_template_uri(template_uri)
     if kind is not None:
         if uri_kind is not None and uri_kind is not kind:
             _LOGGER.warning(
@@ -2440,7 +2867,24 @@ def _kind_from_vendor_fields(negotiation_type: object, template_uri: object) -> 
     return uri_kind
 
 
-def _vendor_propose_kind(content: object) -> NegotiationKind | None:
+def _kind_from_documents(documents: list[Mapping[str, object]]) -> NegotiationKind | None:
+    """Return the kind named by the ``responseMetadata`` blocks of decoded documents."""
+    kinds: list[NegotiationKind] = []
+    for response_metadata in _vendor_response_metadatas(documents):
+        kind = _kind_from_vendor_fields(
+            response_metadata.get("negotiationType"), response_metadata.get("templateUri")
+        )
+        if kind is not None:
+            kinds.append(kind)
+    if len(set(kinds)) > 1:
+        _LOGGER.warning(
+            "vendor propose carries disagreeing typed metadata (%s); keeping the first",
+            ", ".join(kind.value for kind in kinds),
+        )
+    return kinds[0] if kinds else None
+
+
+def _vendor_propose_kind(frame: _VendorFrame) -> NegotiationKind | None:
     """Return the kind named by a vendor propose body, or ``None`` when it names none.
 
     A readable document is typed only by its own ``responseMetadata`` blocks, never by a field
@@ -2449,22 +2893,9 @@ def _vendor_propose_kind(content: object) -> NegotiationKind | None:
     its ``responseMetadata`` block, so a typed proposal is still typed instead of guessed from
     prose. ``None`` keeps the caller on its heading fallback or its loud failure.
     """
-    decoded = decode_extension_value(content)
-    if isinstance(decoded, (Mapping, list)):
-        kinds: list[NegotiationKind] = []
-        for response_metadata in _vendor_response_metadatas(content):
-            kind = _kind_from_vendor_fields(
-                response_metadata.get("negotiationType"), response_metadata.get("templateUri")
-            )
-            if kind is not None:
-                kinds.append(kind)
-        if len(set(kinds)) > 1:
-            _LOGGER.warning(
-                "vendor propose carries disagreeing typed metadata (%s); keeping the first",
-                ", ".join(kind.value for kind in kinds),
-            )
-        return kinds[0] if kinds else None
-    negotiation_type, template_uri = _vendor_typed_fields(content)
+    if frame.documents:
+        return _kind_from_documents(list(frame.documents))
+    negotiation_type, template_uri = frame.raw_typed_fields
     if negotiation_type is None and template_uri is None:
         return None
     _LOGGER.warning(
@@ -2474,30 +2905,6 @@ def _vendor_propose_kind(content: object) -> NegotiationKind | None:
         template_uri or "-",
     )
     return _kind_from_vendor_fields(negotiation_type, template_uri)
-
-
-def _vendor_message_text(content: object) -> str | None:
-    """Return the rendered prose of one Negotiation-T value, or ``None`` when it carries none.
-
-    A readable document is unwrapped to its first non-empty ``message[*].text``. A value that is
-    not a document is returned unchanged: rendered prose is prose even when it happens to start
-    with ``[`` or ``{``. Only a JSON-looking value that also carries a ``message`` envelope is read
-    from the raw string, which covers a truncated vendor body. ``None`` means "no prose": callers
-    must not read a JSON envelope as if it were a proposal body.
-    """
-    decoded = decode_extension_value(content)
-    if isinstance(decoded, (Mapping, list)):
-        for document in _vendor_documents(content):
-            for entry in _vendor_message_entries(document):
-                text = entry.get("text")
-                if isinstance(text, str) and text.strip():
-                    return text
-        return None
-    if isinstance(content, str):
-        if content.lstrip()[:1] in _JSON_OPENERS and _VENDOR_MESSAGE_PATTERN.search(content):
-            return _vendor_raw_text(content)
-        return content
-    return None
 
 
 def _vendor_raw_text(content: str) -> str | None:
@@ -2519,11 +2926,14 @@ def _propose_diagnostics(
     metadata: Mapping[str, object],
     *,
     outer_template_uri: object = None,
+    frame: _VendorFrame | None = None,
 ) -> str:
     """Describe what one inbound propose actually carried, for the log and the raised error."""
     keys = ", ".join(sorted(str(key) for key in metadata)) or "<none>"
     content = metadata.get(NEGOTIATION_T_EXTENSION_URI)
-    if isinstance(content, str):
+    if frame is not None and frame.documents:
+        shape = "json"
+    elif isinstance(content, str):
         shape = "json" if content.strip()[:1] in _JSON_OPENERS else "text"
     elif isinstance(content, Mapping):
         shape = "mapping"
@@ -2534,11 +2944,14 @@ def _propose_diagnostics(
     parts = [f"metadata keys: {keys}", f"Negotiation-T value: {shape}"]
     if outer_template_uri is not None:
         parts.append(f"outer templateUri: {outer_template_uri!r}")
+    if frame is not None and frame.rules:
+        parts.append(f"repairs: {', '.join(frame.rules)}")
     return "; ".join(parts)
 
 
 def _resolve_propose_template(
     metadata: Mapping[str, object],
+    frame: _VendorFrame,
     *,
     infer_missing_template_uri: bool,
 ) -> tuple[str, NegotiationKind, bool]:
@@ -2554,6 +2967,7 @@ def _resolve_propose_template(
 
     Args:
         metadata: A2A metadata map of the inbound propose.
+        frame: the decoded inbound Negotiation-T value.
         infer_missing_template_uri: whether an unusable ``templateUri`` may be recovered from the
             propose body. Only the real-NMS client path turns this on.
 
@@ -2567,13 +2981,13 @@ def _resolve_propose_template(
     """
     value = metadata.get(TEMPLATE_URI_METADATA_KEY)
     if isinstance(value, str) and value.strip():
-        kind = negotiation_kind_for_template_uri(value)
+        kind = _vendor_kind_for_template_uri(value)
         if kind is not None:
             return value, kind, False
         if not infer_missing_template_uri:
             raise ClientFlowError(
                 f"{_ERROR_UNKNOWN_KIND} templateUri={value} "
-                f"({_propose_diagnostics(metadata, outer_template_uri=value)})"
+                f"({_propose_diagnostics(metadata, outer_template_uri=value, frame=frame)})"
             )
         _LOGGER.warning(
             "the negotiation propose template %r is not a sample negotiation template; "
@@ -2581,12 +2995,13 @@ def _resolve_propose_template(
             value,
         )
     elif not infer_missing_template_uri:
-        raise ClientFlowError(f"{_ERROR_NO_TEMPLATE_URI} ({_propose_diagnostics(metadata)})")
+        raise ClientFlowError(
+            f"{_ERROR_NO_TEMPLATE_URI} ({_propose_diagnostics(metadata, frame=frame)})"
+        )
 
-    content = metadata.get(NEGOTIATION_T_EXTENSION_URI)
-    kind = _vendor_propose_kind(content)
+    kind = _vendor_propose_kind(frame)
     if kind is None:
-        kind = negotiation_kind_for_propose_content(_vendor_message_text(content))
+        kind = negotiation_kind_for_propose_content(frame.text)
     if kind is not None:
         _LOGGER.warning(
             "the negotiation propose carries no usable outer template URI; inferred kind=%s "
@@ -2594,7 +3009,7 @@ def _resolve_propose_template(
             kind.value,
         )
         return _PROPOSE_TEMPLATE_URI_BY_KIND[kind.value], kind, True
-    diagnostics = _propose_diagnostics(metadata, outer_template_uri=value)
+    diagnostics = _propose_diagnostics(metadata, outer_template_uri=value, frame=frame)
     if isinstance(value, str) and value.strip():
         # The frame did carry a template URI; inference just could not type it. Reporting "no
         # template URI" here would misdirect the field investigation.
@@ -2608,6 +3023,20 @@ def _resolve_propose_template(
     raise ClientFlowError(f"{_ERROR_NO_TEMPLATE_URI} ({diagnostics})")
 
 
+def _propose_content(frame: _VendorFrame) -> tuple[str, tuple[str, ...]]:
+    """Return the proposal prose, falling back to the raw value instead of an empty body."""
+    if frame.text is not None:
+        return frame.text, ()
+    if not isinstance(frame.raw, str):
+        if isinstance(frame.raw, (Mapping, list)):
+            try:
+                return json.dumps(frame.raw, ensure_ascii=False), ("body.raw",)
+            except (TypeError, ValueError):
+                return str(frame.raw), ("body.raw",)
+        return "", ()
+    return (frame.raw, ("body.raw",)) if frame.raw.strip() else ("", ())
+
+
 def _propose_view(
     event: Mapping[str, object],
     metadata: Mapping[str, object],
@@ -2615,15 +3044,17 @@ def _propose_view(
     kind: NegotiationKind,
     template_uri: str,
     context_id: str,
-) -> NegotiationProposeView:
+    frame: _VendorFrame,
+) -> tuple[NegotiationProposeView, tuple[str, ...]]:
     """Build the provider-facing view of one inbound server proposal.
 
     ``content`` is the rendered prose of the proposal, never the vendor's JSON envelope: the
     decision prompt, the grounding checks, the transcript and the approval card all consume it as
-    the human-readable proposal body.
+    the human-readable proposal body. When no prose can be read, the raw value is handed over
+    instead of an empty string, and the fallback is named for the trace.
     """
-    content = _vendor_message_text(metadata.get(NEGOTIATION_T_EXTENSION_URI)) or ""
-    return NegotiationProposeView(
+    content, rules = _propose_content(frame)
+    view = NegotiationProposeView(
         negotiation_id=session.id,
         kind=kind.value,
         round=session.round,
@@ -2634,6 +3065,7 @@ def _propose_view(
         context_id=_string_field(event, "context_id") or context_id,
         options=_proposal_options(metadata.get(SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY)),
     )
+    return view, rules
 
 
 def _proposal_options(value: object) -> NegotiationOptions | None:
