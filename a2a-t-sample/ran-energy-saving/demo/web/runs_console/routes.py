@@ -61,17 +61,28 @@ def build_run_console_routes(
     async def page(request: Request) -> Response:
         """Serve the run-console shell."""
         del request
-        return FileResponse(RUN_CONSOLE_DIR / "index.html")
+        return FileResponse(
+            RUN_CONSOLE_DIR / "index.html",
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def stylesheet(request: Request) -> Response:
         """Serve the console stylesheet."""
         del request
-        return FileResponse(RUN_CONSOLE_DIR / "app.css", media_type="text/css")
+        return FileResponse(
+            RUN_CONSOLE_DIR / "app.css",
+            media_type="text/css",
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def script(request: Request) -> Response:
         """Serve the console module."""
         del request
-        return FileResponse(RUN_CONSOLE_DIR / "main.js", media_type="text/javascript")
+        return FileResponse(
+            RUN_CONSOLE_DIR / "main.js",
+            media_type="text/javascript",
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def meta(request: Request) -> Response:
         """Describe what the console may offer."""

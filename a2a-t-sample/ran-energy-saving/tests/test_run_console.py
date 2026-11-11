@@ -114,6 +114,10 @@ async def test_the_console_page_and_assets_are_served(
     script = await client.get("/runs/main.js")
     assert css.status_code == 200
     assert script.status_code == 200
+    # The shell and its module are a coupled pair. A stale cached module after an update raises
+    # on a null element before the page can render, so every asset must revalidate.
+    for response in (page, css, script):
+        assert "no-store" in response.headers.get("cache-control", "")
 
     meta = await client.get("/api/run-console/meta")
     assert meta.status_code == 200
