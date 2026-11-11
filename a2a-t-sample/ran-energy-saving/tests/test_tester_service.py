@@ -112,6 +112,7 @@ class _FakeRuns:
         self._builder = builder
         self.calls: list[dict[str, object]] = []
         self.cancelled: list[str] = []
+        self.runs: dict[str, RunState] = {}
 
     async def start(
         self,
@@ -139,8 +140,12 @@ class _FakeRuns:
             transport=transport,
             discovery=discovery,
         )
+        self.runs[run.run_id] = run
         self._builder(run)
         return run
+
+    def get(self, run_id: str) -> RunState | None:
+        return self.runs.get(run_id)
 
     async def cancel(self, run_id: str) -> bool:
         self.cancelled.append(run_id)
@@ -1335,6 +1340,55 @@ async def test_the_serialized_intent_comparison_lists_every_nested_leaf(
     )
     assert "intent.Operation type" in paths
     assert all(row["status"] == "same" for row in rows)
+
+
+async def test_the_item_snapshot_carries_the_langfuse_trace_url(tmp_path: Path) -> None:
+    url = "https://langfuse.example/project/p1/traces/trace-1"
+
+    def builder(run: RunState) -> None:
+        _finish(run)
+        run.langfuse = {"enabled": True, "traceId": "trace-1", "url": url}
+
+    runs = _FakeRuns(builder)
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=None,
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_status(manager, batch_id, "finished")
+
+    item = manager.get(batch_id)["items"][0]
+    assert item["langfuseUrl"] == url
+    assert manager._batches[batch_id].items[0].to_dict()["langfuseUrl"] == url
+
+
+async def test_the_langfuse_url_is_recovered_from_the_live_run_after_the_evidence(
+    tmp_path: Path,
+) -> None:
+    """The background URL lookup may finish after the tester collected its evidence."""
+    url = "https://langfuse.example/project/p1/traces/trace-late"
+
+    runs = _FakeRuns(_finish)
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=None,
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_status(manager, batch_id, "finished")
+
+    runs.runs["run-1"].langfuse = {"enabled": True, "traceId": "trace-late", "url": url}
+
+    assert manager.get(batch_id)["items"][0]["langfuseUrl"] == url
 
 
 async def test_a_working_item_releases_its_remote_task_after_the_evidence(

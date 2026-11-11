@@ -1145,6 +1145,15 @@ function renderDrawer() {
   if (!item) return;
   const protocol = item.protocol === "a2a-t" ? "A2A-T" : "A2A";
   $("drawer-title").textContent = `#${String(item.caseId).padStart(2, "0")} ${item.name} · ${protocol}`;
+  const langfuseLink = $("drawer-langfuse");
+  const langfuseUrl = typeof item.langfuseUrl === "string" ? item.langfuseUrl : "";
+  if (langfuseUrl) {
+    langfuseLink.href = langfuseUrl;
+    langfuseLink.hidden = false;
+  } else {
+    langfuseLink.removeAttribute("href");
+    langfuseLink.hidden = true;
+  }
   $("drawer-tab-result").hidden = drawer.preview === true;
   $("drawer-tab-result").classList.toggle("active", drawer.tab === "result");
   $("drawer-tab-trace").hidden = drawer.preview === true;

@@ -278,6 +278,8 @@ class CaseItem:
     attempts: list[dict[str, object]] = field(default_factory=list)
     #: Vendor-facing trace id of the run (``run.trace_id``, 32 lowercase hex digits).
     trace_id: str = ""
+    #: Clickable Langfuse trace URL of the run, empty when observability is off or unresolved.
+    langfuse_url: str = ""
     #: OSP 11-key structured intent extracted by the tester's SDK ``intent`` stage.
     intent: dict[str, object] | None = None
     #: Structured Task payload the downstream returned with ``TASK_STATE_SUBMITTED``: the
@@ -315,6 +317,7 @@ class CaseItem:
             "scratch": self.scratch,
             "attempts": [dict(attempt) for attempt in self.attempts],
             "traceId": self.trace_id,
+            "langfuseUrl": self.langfuse_url,
             "intent": self.intent,
             "serverIntent": self.server_intent,
             "intentCompare": self.intent_comparison(),
@@ -1708,6 +1711,9 @@ class EvalBatchManager:
         """Collect the trace id, the operator request and the reference answer of one run."""
         try:
             item.trace_id = run.trace_id or run.run_id
+            langfuse_url = _langfuse_url(run)
+            if langfuse_url:
+                item.langfuse_url = langfuse_url
             self._collect_reference(item, case)
             raw_request = run.raw_request or str(item.refs.get("userInput") or "")
             item.intent_meta["rawRequest"] = raw_request
@@ -1943,6 +1949,9 @@ class EvalBatchManager:
                 scratch=item.get("scratch") if isinstance(item.get("scratch"), str) else None,
                 attempts=_load_attempts(item.get("attempts")),
                 trace_id=item.get("traceId") if isinstance(item.get("traceId"), str) else "",
+                langfuse_url=(
+                    item.get("langfuseUrl") if isinstance(item.get("langfuseUrl"), str) else ""
+                ),
                 intent=_optional_mapping(item.get("intent")),
                 server_intent=_optional_mapping(item.get("serverIntent")),
                 intent_meta=_mapping_or_empty(item.get("intentMeta")),
@@ -1983,8 +1992,23 @@ class EvalBatchManager:
         self._batches[batch_id] = batch
         return batch
 
+    def _item_snapshot(self, item: CaseItem) -> dict[str, object]:
+        """Return one item, recovering a Langfuse URL that resolved after the evidence pass."""
+        data = item.to_dict()
+        if data.get("langfuseUrl") or not item.run_id:
+            return data
+        getter = getattr(self._runs, "get", None)
+        run = getter(item.run_id) if callable(getter) else None
+        if run is None:
+            return data
+        url = _langfuse_url(run)
+        if url:
+            item.langfuse_url = url
+            data["langfuseUrl"] = url
+        return data
+
     def _snapshot(self, batch: _Batch) -> dict[str, object]:
-        items = [item.to_dict() for item in batch.items]
+        items = [self._item_snapshot(item) for item in batch.items]
         return {
             "schema": SCHEMA,
             "batchId": batch.batch_id,
@@ -2236,6 +2260,13 @@ def _interception_statuses(record: Mapping[str, object]) -> list[str]:
         for stage in stages.values()
         if isinstance(stage, Mapping) and stage.get("status")
     ]
+
+
+def _langfuse_url(run: RunState) -> str:
+    """Return the clickable Langfuse trace URL of one run, empty when it is unresolved."""
+    snapshot = run.langfuse if isinstance(run.langfuse, Mapping) else {}
+    url = snapshot.get("url")
+    return url if isinstance(url, str) else ""
 
 
 def _baseline_run_id(item: CaseItem) -> str | None:

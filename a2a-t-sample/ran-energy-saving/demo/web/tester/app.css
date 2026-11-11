@@ -562,6 +562,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .intent-diff-table tr.intent-same td { color: var(--g700); }
 
 .drawer-tools { display: flex; align-items: center; gap: 6px; }
+.drawer-langfuse { white-space: nowrap; font-size: 12px; }
 .tab.small { padding: 4px 10px; font-size: 12px; border-bottom-width: 1px; }
 .case-meta { display: flex; flex-wrap: wrap; gap: 6px; }
 .protocol-switch { display: flex; gap: 4px; border-bottom: 1px solid var(--g200); }
