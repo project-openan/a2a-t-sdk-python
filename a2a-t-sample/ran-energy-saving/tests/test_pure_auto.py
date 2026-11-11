@@ -1,12 +1,16 @@
-"""Automatic pure-A2A answer: deterministic plan, grounded model answer, operator fallback."""
+"""Automatic pure-A2A answer: deterministic plan, grounded model answer, server-owned values."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 import pytest
 from a2a_t.core.metadata import NegotiationContext
-from demo.pure_auto import AutoPureAnswer, build_auto_pure_answer
+from demo.pure_auto import (
+    ASK_TEMPLATE,
+    MAX_SERVER_ASKS,
+    REJECT_TEMPLATE,
+    AutoPureAnswer,
+    build_auto_pure_answer,
+)
 from protocol.client_policy import ClientPolicy
 from shared.models import NegotiationDecision, NegotiationProposeView
 
@@ -33,19 +37,6 @@ class _Provider:
 
     def grounding_text(self) -> str:
         return self.request_text
-
-
-class _Fallback:
-    """Confirmation-card double."""
-
-    def __init__(self, text: str = "OPERATOR ANSWER") -> None:
-        self.text = text
-        self.calls = 0
-
-    async def __call__(self, event: Mapping[str, object]) -> str:
-        del event
-        self.calls += 1
-        return self.text
 
 
 def _event(text: str = "Not feasible, please confirm") -> dict[str, object]:
@@ -86,39 +77,67 @@ async def test_the_model_answer_is_rendered_as_free_text() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_bare_accept_falls_back_to_the_operator() -> None:
-    provider = _Provider(NegotiationDecision(action="accept", rationale="Confirmed."))
-    fallback = _Fallback()
-    answer = build_auto_pure_answer(provider, ClientPolicy(), fallback=fallback)
-    answer.set_user_request(
-        "Implement energy saving in A2ATestRegion region. Set the gain target to 20% - 30%."
+async def test_a_server_owned_value_the_client_cannot_ground_is_requested_from_the_server() -> None:
+    """The NMS owns the inventory; automatic mode has no operator to hand the question to."""
+    provider = _Provider(
+        NegotiationDecision(
+            action="reject",
+            rationale="The request names no concrete site list.",
+        )
     )
-
-    text = await answer(_event())
-
-    assert text == "OPERATOR ANSWER"
-    assert fallback.calls == 1
-
-
-@pytest.mark.asyncio
-async def test_the_fallback_is_used_when_the_model_cannot_answer() -> None:
-    provider = _Provider(NegotiationDecision(action="reject", rationale="cannot answer"))
-    fallback = _Fallback()
-    answer = build_auto_pure_answer(provider, ClientPolicy(), fallback=fallback)
-    answer.set_user_request("Create an energy saving task with no usable value.")
-
-    text = await answer(_event())
-
-    assert text == "OPERATOR ANSWER"
-
-
-@pytest.mark.asyncio
-async def test_without_a_fallback_the_answer_is_empty_so_the_flow_relays() -> None:
-    provider = _Provider(NegotiationDecision(action="reject", rationale="cannot answer"))
     answer = build_auto_pure_answer(provider, ClientPolicy())
     answer.set_user_request("Create an energy saving task with no usable value.")
 
-    assert await answer(_event()) == ""
+    text = await answer(_event())
+
+    assert text == ASK_TEMPLATE.format(item="The request names no concrete site list.")
+
+
+@pytest.mark.asyncio
+async def test_the_client_rejects_after_the_server_ask_budget() -> None:
+    provider = _Provider(
+        NegotiationDecision(action="reject", rationale="the region is missing")
+    )
+    answer = build_auto_pure_answer(provider, ClientPolicy())
+    answer.set_user_request("Create an energy saving task with no usable value.")
+
+    texts = [await answer(_event()) for _ in range(MAX_SERVER_ASKS)]
+
+    assert all(text == ASK_TEMPLATE.format(item="the region is missing") for text in texts[:-1])
+    assert texts[-1] == REJECT_TEMPLATE.format(item="the region is missing")
+
+
+@pytest.mark.asyncio
+async def test_a_grounded_answer_resets_the_ask_budget() -> None:
+    provider = _Provider(NegotiationDecision(action="reject", rationale="missing value"))
+    answer = build_auto_pure_answer(provider, ClientPolicy())
+    answer.set_user_request("Create an energy saving task with no usable value.")
+    for _ in range(MAX_SERVER_ASKS - 1):
+        await answer(_event())
+
+    provider.decision = NegotiationDecision(
+        action="accept",
+        rationale="answer",
+        filled_params={"region": "A2ATestRegion"},
+    )
+    answer.set_user_request("Create an energy saving task for A2ATestRegion.")
+    assert await answer(_event("Which region?")) == "The region is A2ATestRegion."
+
+    provider.decision = NegotiationDecision(action="reject", rationale="missing value")
+    provider.request_text = "Create an energy saving task with no usable value."
+    answer.set_user_request(provider.request_text)
+    assert await answer(_event()) == ASK_TEMPLATE.format(item="missing value")
+
+
+@pytest.mark.asyncio
+async def test_an_information_question_names_the_required_item() -> None:
+    provider = _Provider(NegotiationDecision(action="reject", rationale="cannot answer"))
+    answer = build_auto_pure_answer(provider, ClientPolicy())
+    answer.set_user_request("Create an energy saving task.")
+
+    text = await answer(_event("Please provide the correct region name."))
+
+    assert text == ASK_TEMPLATE.format(item="Region")
 
 
 @pytest.mark.asyncio
@@ -138,7 +157,6 @@ def test_the_answer_object_exposes_the_runtime_hooks() -> None:
     answer = build_auto_pure_answer(
         _Provider(NegotiationDecision(action="accept", rationale="x")),
         ClientPolicy(),
-        fallback=_Fallback(),
     )
 
     assert isinstance(answer, AutoPureAnswer)

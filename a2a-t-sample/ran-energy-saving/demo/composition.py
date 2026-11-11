@@ -129,15 +129,13 @@ async def build_demo_runtime(
                 session_db_path=config.client_db_path,
                 agent_factory=client_agent_factory,
             )
-            fallback = PureConfirmationAnswer(
-                mode=MODE_CONFIRM,
-                timeout_seconds=config.manual_decision_timeout_seconds,
-            )
+            # Automatic mode has no operator to hand the question to. A value the client cannot
+            # ground is asked of the NMS (which owns the inventory) and refused after three
+            # unanswered questions; the pure answer object owns that budget.
             pure_answer = build_auto_pure_answer(
                 provider,
                 policy,
                 request_text=run_spec.user_request,
-                fallback=fallback,
             )
         else:
             from demo.pure_policy import pure_answer_from_recommendation

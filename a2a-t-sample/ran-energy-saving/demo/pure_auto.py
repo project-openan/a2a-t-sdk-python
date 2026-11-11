@@ -8,18 +8,22 @@ vendor negotiates in prose. The answer is built in two tiers:
 2. the ADK decision agent for everything else, sanitized by
    :func:`protocol.pure_answer_guard.sanitize_pure_decision` and rendered as free text.
 
-When neither produces an answer, the optional fallback (the confirmation card) asks the operator.
-A bare "Accepted. Please proceed." is never sent: the real vendor cannot act on it.
+A value the client does not own is never invented. The NMS owns the network inventory (regions,
+sites, RAT capabilities, frequencies), so when a question asks for one and neither tier can ground
+it, the client asks the server to provide the value. The exchange is bounded to
+:data:`MAX_SERVER_ASKS` questions; a server that still has not provided the value after that gets an
+explicit rejection. Automatic mode has no operator to hand the question to.
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any
+from typing import Any, Final
 
 from protocol.client_policy import ClientPolicy
 from protocol.decision_provider import NegotiationDecisionProvider
 from protocol.grounding import server_target_rates
+from protocol.manual_answer import missing_item_labels
 from protocol.pure_answer_guard import sanitize_pure_decision
 from protocol.pure_client_flow import pure_proposal_view
 from shared.models import NegotiationDecision
@@ -29,9 +33,22 @@ from demo.pure_policy import render_pure_answer
 
 PureAnswer = Callable[[Mapping[str, object]], str | Awaitable[str]]
 
+#: Questions the client may answer with "please provide the value" before it rejects.
+MAX_SERVER_ASKS: Final[int] = 3
+
+#: Free-text request for a value only the server owns.
+ASK_TEMPLATE: Final[str] = (
+    "Please provide the available value for {item}; the original request does not state it."
+)
+
+#: Explicit refusal after the server kept asking without providing the value.
+REJECT_TEMPLATE: Final[str] = (
+    "Reject: {item} is still missing and the server did not provide a usable value."
+)
+
 
 class AutoPureAnswer:
-    """Answer pure-A2A questions automatically, with an optional operator fallback.
+    """Answer pure-A2A questions automatically, asking the server for server-owned values.
 
     The object is the runtime's ``pure_answer`` callback. It also carries the provider hooks the
     runtime uses for the manual preview and for the run's request text, so the ADK prompt and the
@@ -44,7 +61,7 @@ class AutoPureAnswer:
         policy: ClientPolicy,
         *,
         request_text: str = "",
-        fallback: PureAnswer | None = None,
+        max_server_asks: int = MAX_SERVER_ASKS,
     ) -> None:
         """Create one automatic answer.
 
@@ -52,12 +69,13 @@ class AutoPureAnswer:
             provider: ADK decision provider used when no deterministic plan applies.
             policy: Client acceptance limits.
             request_text: Operator request used for grounding; the runtime keeps it current.
-            fallback: Optional confirmation card used when the client cannot decide on its own.
+            max_server_asks: Questions answered with "please provide" before the client rejects.
         """
         self._provider = provider
         self._policy = policy
         self._request_text = request_text
-        self._fallback = fallback
+        self._max_server_asks = max(1, max_server_asks)
+        self._server_asks = 0
         self._proposal_sink: Callable[..., None] | None = None
         self._decision_sink: Callable[..., None] | None = None
 
@@ -75,19 +93,12 @@ class AutoPureAnswer:
             setter(context)
 
     def set_proposal_sink(self, sink: Callable[..., None] | None) -> None:
-        """Keep the proposal observer; every question is announced here.
-
-        The fallback card is not given this sink as well: this object announces the question
-        before deciding, so forwarding would duplicate the event when the card is used.
-        """
+        """Keep the proposal observer; every question is announced here."""
         self._proposal_sink = sink
 
     def set_decision_sink(self, sink: Callable[..., None] | None) -> None:
-        """Keep the decision observer and let the fallback record the operator's own decision."""
+        """Keep the decision observer for automatic decisions and refusals."""
         self._decision_sink = sink
-        setter = getattr(self._fallback, "set_decision_sink", None)
-        if callable(setter):
-            setter(sink)
 
     async def __call__(self, event: Mapping[str, object]) -> str:
         """Return the free-text answer of one pure-A2A question."""
@@ -98,6 +109,7 @@ class AutoPureAnswer:
         if propose.kind in ("feasibility", "target") and not server_target_rates(propose):
             plan = plan_pure_answer(request_text, propose, self._policy)
             if plan is not None:
+                self._server_asks = 0
                 self._announce(
                     NegotiationDecision(
                         action="counter",
@@ -116,14 +128,39 @@ class AutoPureAnswer:
             policy=self._policy,
         )
         if grounded is not None:
+            self._server_asks = 0
             self._announce(grounded, propose, session)
             return _render(grounded)
-        if self._fallback is not None:
-            result = self._fallback(event)
-            if isinstance(result, str):
-                return result
-            return await result
-        return ""
+        return self._ask_or_reject(propose, session, decision)
+
+    def _ask_or_reject(
+        self,
+        propose: Any,
+        session: Any,
+        decision: NegotiationDecision,
+    ) -> str:
+        """Ask the server for the missing value, or refuse after the ask budget.
+
+        The NMS owns the network inventory; the client cannot invent a region, site, RAT or
+        frequency. In automatic mode there is no operator to transfer the question to, so the
+        client asks the server and, after :data:`MAX_SERVER_ASKS` unanswered questions, refuses
+        instead of looping until the run timeout.
+        """
+        item = _missing_item(propose, decision)
+        self._server_asks += 1
+        if self._server_asks < self._max_server_asks:
+            text = ASK_TEMPLATE.format(item=item)
+            self._announce(
+                NegotiationDecision(action="counter", rationale=text, counter_proposal=text),
+                propose,
+                session,
+            )
+            return text
+        text = REJECT_TEMPLATE.format(item=item)
+        self._announce(
+            NegotiationDecision(action="reject", rationale=text), propose, session
+        )
+        return text
 
     def _announce(
         self,
@@ -141,15 +178,26 @@ def build_auto_pure_answer(
     policy: ClientPolicy,
     *,
     request_text: str = "",
-    fallback: PureAnswer | None = None,
+    max_server_asks: int = MAX_SERVER_ASKS,
 ) -> AutoPureAnswer:
     """Build the automatic pure-A2A answer callback."""
     return AutoPureAnswer(
         provider,
         policy,
         request_text=request_text,
-        fallback=fallback,
+        max_server_asks=max_server_asks,
     )
+
+
+def _missing_item(propose: Any, decision: NegotiationDecision) -> str:
+    """Return the item the client needs the server to provide, in human-readable form."""
+    labels = missing_item_labels(propose.content)
+    if labels:
+        return ", ".join(labels)
+    rationale = (decision.rationale or "").strip()
+    if rationale:
+        return rationale[:160]
+    return "the value the request does not state"
 
 
 def _provider_text(provider: Any) -> str:
@@ -163,4 +211,10 @@ def _render(decision: NegotiationDecision) -> str:
     return render_pure_answer(decision)
 
 
-__all__ = ["AutoPureAnswer", "build_auto_pure_answer"]
+__all__ = [
+    "ASK_TEMPLATE",
+    "MAX_SERVER_ASKS",
+    "REJECT_TEMPLATE",
+    "AutoPureAnswer",
+    "build_auto_pure_answer",
+]
