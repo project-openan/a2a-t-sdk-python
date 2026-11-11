@@ -197,7 +197,7 @@ def parse_negotiation_context(metadata: Mapping[str, object] | None) -> Negotiat
             max_rounds=int(raw.get("maxRounds", 0)),
             performative=performative,
         )
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return None
 
 

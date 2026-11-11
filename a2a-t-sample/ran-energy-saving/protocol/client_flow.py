@@ -26,6 +26,7 @@ import asyncio
 import inspect
 import json
 import logging
+import math
 import re
 import time
 import uuid
@@ -2273,11 +2274,17 @@ def _vendor_identity(value: object) -> str | None:
 
     A model may emit a numeric id, and a protobuf ``Struct`` returns numbers as floats; both are
     the vendor's handle, so they are coerced the same way the strict parser always did instead of
-    being replaced by the A2A context id.
+    being replaced by the A2A context id. A non-finite number, a container or bytes is not a handle
+    and must not shadow a later usable id.
     """
-    if value is None or isinstance(value, bool):
+    if isinstance(value, str):
+        text = value
+    elif isinstance(value, int) and not isinstance(value, bool):
+        text = str(value)
+    elif isinstance(value, float) and math.isfinite(value):
+        text = str(value)
+    else:
         return None
-    text = value if isinstance(value, str) else str(value)
     return text if text.strip() else None
 
 
@@ -2299,11 +2306,21 @@ def _positive_round(value: object) -> int | None:
 
 
 def _frame_performative(frame: _VendorFrame) -> NegotiationPerformative | None:
-    """Return the typed performative inside the decoded body, if any."""
-    for response_metadata in frame.response_metadatas:
-        performative = _vendor_performative(response_metadata.get("performative"))
-        if performative is not None:
-            return performative
+    """Return the typed performative inside the decoded body, if any.
+
+    A readable document is read block by block. The raw-string scan only remains for a body that
+    did not decode at all (truncated JSON); it must never run over a rejected example envelope.
+    """
+    for document in frame.documents:
+        for block in _vendor_blocks(document):
+            for container in (block, _response_metadata_mapping(block)):
+                if not isinstance(container, Mapping):
+                    continue
+                performative = _vendor_performative(container.get("performative"))
+                if performative is not None:
+                    return performative
+    if frame.documents or "decode.embeddedRejected" in frame.rules:
+        return None
     if isinstance(frame.raw, str):
         match = _VENDOR_PERFORMATIVE_PATTERN.search(frame.raw)
         if match is not None:
@@ -2325,7 +2342,7 @@ def _vendor_negotiation_session(
     abort into a proposal. The caller's counted round and the default budget cover the fields the
     vendor left out.
     """
-    if frame.raw is None and not frame.contexts:
+    if not isinstance(metadata, Mapping) or (frame.raw is None and not frame.contexts):
         return None, ()
     rules: list[str] = []
     outer_present = metadata.get(NEGOTIATION_CONTEXT_METADATA_KEY) is not None
@@ -2350,6 +2367,10 @@ def _vendor_negotiation_session(
     if performative is None:
         performative = _frame_performative(frame)
     if performative is None:
+        if frame.raw is None:
+            # No body and no performative is not a proposal; keep the baseline session error
+            # instead of asking for a decision on an empty body.
+            return None, tuple(dict.fromkeys(rules))
         performative = NegotiationPerformative.PROPOSE
     if not outer_present:
         _LOGGER.warning(
@@ -2418,8 +2439,10 @@ _DEFAULT_INFERRED_MAX_ROUNDS: Final[int] = 5
 #: Markers that identify an unparsable value as a vendor message envelope. Reading a field out of
 #: the raw string is only allowed inside the ``responseMetadata`` block of such an envelope, so a
 #: field quoted in prose or under an unrelated sibling key can never type the proposal.
-_VENDOR_MESSAGE_PATTERN: Final[re.Pattern[str]] = re.compile(r'"(?:message|messages)"\s*:')
-_VENDOR_RESPONSE_METADATA_PATTERN: Final[re.Pattern[str]] = re.compile(r'"responseMetadata"\s*:\s*\{')
+_VENDOR_MESSAGE_PATTERN: Final[re.Pattern[str]] = re.compile(r'[{,]\s*"(?:message|messages)"\s*:')
+_VENDOR_RESPONSE_METADATA_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r'[{,]\s*"responseMetadata"\s*:\s*\{'
+)
 
 #: Characters that open a JSON document; anything else is rendered text the heading fallback reads.
 _JSON_OPENERS: Final[frozenset[str]] = frozenset({"{", "["})
@@ -2441,6 +2464,17 @@ _MAX_EMBEDDED_ATTEMPTS: Final[int] = 32
 
 #: Longest value scanned for an embedded JSON document; vendor bodies are far smaller.
 _MAX_EMBEDDED_SCAN_LENGTH: Final[int] = 200_000
+
+#: Most JSON nodes inspected when looking for an envelope; a proposal is near the root.
+_MAX_ENVELOPE_NODES: Final[int] = 10_000
+
+#: Markers that identify a quoted example rather than a wrapper around the real document.
+_EXAMPLE_MARKERS: Final[tuple[str, ...]] = ("example", "sample", "e.g.", "for instance")
+
+#: Code-fence markers around an embedded document (the optional language tag is dropped too).
+_FENCE_MARKER_PATTERN: Final[re.Pattern[str]] = re.compile(r"```[A-Za-z0-9_-]*")
+_SENTENCE_END_PATTERN: Final[re.Pattern[str]] = re.compile(r"[.!?](?:\s|$)")
+_HEADING_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(r"\s{0,3}#{1,6}\s+\S.*")
 
 
 @dataclass(frozen=True, slots=True)
@@ -2464,12 +2498,23 @@ def _looks_like_envelope(value: object) -> bool:
     """Report whether a decoded JSON value carries a vendor message envelope.
 
     Only ``message`` / ``messages`` counts: a bare ``responseMetadata`` object quoted as an example
-    in prose is not a proposal, so it must not type one.
+    in prose is not a proposal, so it must not type one. The walk is iterative because a
+    model-generated value can nest lists deeply enough to exhaust the Python stack.
     """
-    if isinstance(value, Mapping):
-        return any(key in value for key in _ENVELOPE_KEYS)
-    if isinstance(value, list):
-        return any(_looks_like_envelope(item) for item in value)
+    stack: list[object] = [value]
+    visited = 0
+    while stack:
+        item = stack.pop()
+        if isinstance(item, Mapping):
+            if any(key in item for key in _ENVELOPE_KEYS):
+                return True
+            continue
+        if not isinstance(item, list):
+            continue
+        visited += 1
+        if visited > _MAX_ENVELOPE_NODES:
+            return False
+        stack.extend(item)
     return False
 
 
@@ -2502,8 +2547,8 @@ def _balanced_json_end(text: str, start: int) -> int | None:
     return None
 
 
-def _embedded_json_candidates(text: str) -> Iterator[str]:
-    """Yield balanced JSON documents embedded in prose, in the order they open."""
+def _embedded_json_candidates(text: str) -> Iterator[tuple[int, int]]:
+    """Yield the span of each balanced JSON document embedded in prose, in opening order."""
     if len(text) > _MAX_EMBEDDED_SCAN_LENGTH:
         return
     yielded = 0
@@ -2518,10 +2563,34 @@ def _embedded_json_candidates(text: str) -> Iterator[str]:
         end = _balanced_json_end(text, start)
         if end is None:
             continue
-        yield text[start:end]
+        yield start, end
         yielded += 1
         if yielded >= _MAX_EMBEDDED_CANDIDATES:
             return
+
+
+def _embedded_is_wrapper(outside: str) -> bool:
+    """Report whether the prose around an embedded document is only a wrapper.
+
+    A code fence, a short lead-in ("Here is the proposal:") or a short sign-off is a wrapper, so
+    the embedded document is the body. Substantive prose, a heading followed by prose, or an
+    explicit example marker means the document is quoted inside the proposal, not the proposal.
+    """
+    text = _FENCE_MARKER_PATTERN.sub(" ", outside)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return True
+    joined = " ".join(lines)
+    lowered = joined.lower()
+    if any(marker in lowered for marker in _EXAMPLE_MARKERS):
+        return False
+    if len(lines) == 1 and _HEADING_LINE_PATTERN.fullmatch(lines[0]):
+        return True
+    if len(lines) > 2:
+        return False
+    if len(_SENTENCE_END_PATTERN.findall(joined)) > 1:
+        return False
+    return all(line.endswith(":") or len(line) <= 40 for line in lines)
 
 
 def _decode_one_json_layer(value: str) -> object:
@@ -2586,9 +2655,12 @@ def _decode_documents(
         # Embedded extraction is for prose and code fences. A value that already opens as JSON
         # (or a string literal) is truncated or malformed; scanning inside it would lift a nested
         # fragment out of context and call it the document.
-        for candidate in _embedded_json_candidates(current):
-            decoded = decode_extension_value(candidate)
+        for start, end in _embedded_json_candidates(current):
+            decoded = decode_extension_value(current[start:end])
             if not isinstance(decoded, (Mapping, list)) or not _looks_like_envelope(decoded):
+                continue
+            if not _embedded_is_wrapper(current[:start] + current[end:]):
+                rules.append("decode.embeddedRejected")
                 continue
             rules.append("decode.embedded")
             current = decoded
@@ -2668,11 +2740,14 @@ def _vendor_response_metadatas(documents: list[Mapping[str, object]]) -> list[Ma
     string. All matches are returned so an empty block cannot shadow a later typed one.
     """
     found: list[Mapping[str, object]] = []
+    seen: set[int] = set()
     for document in documents:
         for block in _vendor_blocks(document):
             response_metadata = _response_metadata_mapping(block)
-            if response_metadata is not None and response_metadata not in found:
-                found.append(response_metadata)
+            if response_metadata is None or id(response_metadata) in seen:
+                continue
+            seen.add(id(response_metadata))
+            found.append(response_metadata)
     return found
 
 
@@ -2718,15 +2793,10 @@ def _vendor_text_from_raw(value: object) -> str | None:
 
 def _read_vendor_frame(metadata: Mapping[str, object]) -> _VendorFrame:
     """Decode one inbound Negotiation-T metadata map once, recording the repairs it needed."""
+    if not isinstance(metadata, Mapping):
+        return _VendorFrame(None, (), (), (None, None), None, (), ())
     raw = vendor_negotiation_value(metadata)
     documents, flattened, rules = _decode_documents(raw)
-    if "decode.embedded" in rules and isinstance(raw, str):
-        # A rendered proposal body that carries its own heading must not be replaced by a complete
-        # example envelope quoted in the same prose, even when both name the same kind.
-        if negotiation_kind_for_propose_content(raw) is not None:
-            documents = []
-            rules = [rule for rule in rules if rule != "decode.embedded"]
-            rules.append("decode.embeddedRejected")
     if documents:
         text = _vendor_text_from_documents(documents)
         raw_typed_fields: tuple[str | None, str | None] = (None, None)
@@ -2737,17 +2807,23 @@ def _read_vendor_frame(metadata: Mapping[str, object]) -> _VendorFrame:
         text = _vendor_text_from_raw(prose_value)
         raw_typed_fields = _vendor_typed_fields(prose_value)
     contexts: list[Mapping[str, object]] = []
-    outer = _context_mapping(metadata.get(NEGOTIATION_CONTEXT_METADATA_KEY))
-    if outer is not None:
-        contexts.append(outer)
+    seen_contexts: set[int] = set()
+
+    def add_context(candidate: object) -> None:
+        """Append one usable context mapping, deduplicated by identity."""
+        mapping = _context_mapping(candidate)
+        if mapping is None or id(mapping) in seen_contexts:
+            return
+        seen_contexts.add(id(mapping))
+        contexts.append(mapping)
+
+    add_context(metadata.get(NEGOTIATION_CONTEXT_METADATA_KEY))
     for document in documents:
         for block in _vendor_blocks(document):
-            for container in (block, _response_metadata_mapping(block)):
-                if not isinstance(container, Mapping):
-                    continue
-                nested = _context_mapping(container.get(NEGOTIATION_CONTEXT_METADATA_KEY))
-                if nested is not None and nested not in contexts:
-                    contexts.append(nested)
+            add_context(block.get(NEGOTIATION_CONTEXT_METADATA_KEY))
+            response_metadata = _response_metadata_mapping(block)
+            if response_metadata is not None:
+                add_context(response_metadata.get(NEGOTIATION_CONTEXT_METADATA_KEY))
     return _VendorFrame(
         raw=raw,
         documents=tuple(documents),
@@ -3031,7 +3107,7 @@ def _propose_content(frame: _VendorFrame) -> tuple[str, tuple[str, ...]]:
         if isinstance(frame.raw, (Mapping, list)):
             try:
                 return json.dumps(frame.raw, ensure_ascii=False), ("body.raw",)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, RecursionError):
                 return str(frame.raw), ("body.raw",)
         return "", ()
     return (frame.raw, ("body.raw",)) if frame.raw.strip() else ("", ())
