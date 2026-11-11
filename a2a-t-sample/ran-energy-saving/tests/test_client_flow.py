@@ -45,7 +45,6 @@ from a2a_t.negotiation.content import (
     TargetEndingContent,
 )
 from demo.scenario import (
-    FINAL_STATE_NEGOTIATION_ABORTED,
     FINAL_STATE_NEGOTIATION_ENDED,
     FINAL_STATE_TASK_COMPLETED,
     SCENARIO_ABORT_SPEC,
@@ -924,16 +923,16 @@ async def test_accept_rewrites_a_refill_that_dropped_the_agreed_target() -> None
     assert "{23:00~24:00,10Mbps}" in task_text
 
 
-async def test_target_scenario_counters_in_round_one_then_accepts_round_two() -> None:
+async def test_target_scenario_corrects_the_target_in_one_accept() -> None:
     result, transport, prompt_client = await _run(
         SCENARIO_TARGET_SPEC,
-        [[propose_event("target", 1)], [propose_event("target", 2)], _task_completed_batch()],
+        [[propose_event("target", 1)], _task_completed_batch()],
         SCENARIO_TARGET_SPEC.scripted_client_decisions,
     )
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
-    assert _client_negotiation_steps(transport.requests) == [("PROPOSE", 1), ("ACCEPT", 2)]
-    assert len(prompt_client.propose_texts) == 1
+    assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1)]
+    assert prompt_client.propose_texts == []
     assert len(prompt_client.accept_data) == 1
 
 
@@ -1556,37 +1555,28 @@ async def test_reject_scenario_ends_without_a_task() -> None:
     assert prompt_client.refill_data == []
 
 
-async def test_abort_scenario_keeps_countering_until_the_server_aborts() -> None:
+async def test_abort_scenario_ends_with_the_client_abort() -> None:
     result, transport, prompt_client = await _run(
         SCENARIO_ABORT_SPEC,
-        [
-            [propose_event("target", 1)],
-            [propose_event("target", 2)],
-            [propose_event("target", 3)],
-            [abort_event(3)],
-        ],
+        [[propose_event("information", 1)], [end_event()]],
         SCENARIO_ABORT_SPEC.scripted_client_decisions,
     )
 
-    assert result.final_state == FINAL_STATE_NEGOTIATION_ABORTED
+    assert result.final_state == FINAL_STATE_NEGOTIATION_ENDED
     assert result.task_id is None
-    assert _client_negotiation_steps(transport.requests) == [
-        ("PROPOSE", 1),
-        ("PROPOSE", 2),
-        ("PROPOSE", 3),
-    ]
-    assert len(prompt_client.propose_texts) == 3
+    assert _client_negotiation_steps(transport.requests) == [("ABORT", 1)]
+    assert prompt_client.abort_texts and "cannot choose" in prompt_client.abort_texts[0]
     assert prompt_client.refill_data == []
 
 
-async def test_counter_carries_the_sample_proposal() -> None:
+async def test_a_counter_decision_is_sent_as_an_accept() -> None:
     decision = NegotiationDecision(
         action="counter",
-        rationale="Move the window.",
-        counter_proposal="Use cell-001 00:00~06:00 at 30%.",
+        rationale="Use a non-overlapping target.",
+        counter_proposal="Accept {00:00~06:00,2Mbps}.",
         counter_params={"cellId": "cell-001", "window": "00:00~06:00", "targetRate": "30"},
     )
-    transport = ScriptedTransport([[propose_event("target", 1)], [abort_event(1)]])
+    transport = ScriptedTransport([[propose_event("target", 1)], _task_completed_batch()])
 
     result = await run_client_flow(
         prompt_client=FakePromptClient(),
@@ -1597,14 +1587,12 @@ async def test_counter_carries_the_sample_proposal() -> None:
         intent_fields=_INTENT_FIELDS,
     )
 
-    counter_metadata = MessageToDict(transport.requests[1].message.metadata)
-    assert counter_metadata[SAMPLE_PROPOSAL_METADATA_KEY] == {
-        "cellId": "cell-001",
-        "window": "00:00~06:00",
-        "targetRate": "30",
-    }
-    assert counter_metadata[NEGOTIATION_CONTEXT_METADATA_KEY]["round"] == 1
-    assert result.final_state == FINAL_STATE_NEGOTIATION_ABORTED
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1)]
+    accept_metadata = MessageToDict(transport.requests[1].message.metadata)
+    assert accept_metadata[NEGOTIATION_CONTEXT_METADATA_KEY]["performative"] == "ACCEPT"
+    assert SAMPLE_PROPOSAL_METADATA_KEY not in accept_metadata
+    assert result.decisions[0].action == "accept"
 
 
 async def test_initial_request_matches_the_old_message_shape() -> None:
@@ -1631,13 +1619,7 @@ async def test_initial_request_matches_the_old_message_shape() -> None:
 
 async def test_every_send_carries_the_configured_call_timeout() -> None:
     """The flow must set ``ClientCallContext.timeout`` on the initial and every follow-up send."""
-    transport = ScriptedTransport(
-        [
-            [propose_event("target", 1)],
-            [propose_event("target", 2)],
-            _task_completed_batch(),
-        ]
-    )
+    transport = ScriptedTransport([[propose_event("target", 1)], _task_completed_batch()])
 
     await run_client_flow(
         prompt_client=FakePromptClient(),
@@ -1649,8 +1631,8 @@ async def test_every_send_carries_the_configured_call_timeout() -> None:
         call_timeout_seconds=123.0,
     )
 
-    assert len(transport.call_contexts) == 3  # TASK_T, counter PROPOSE, ACCEPT
-    assert [context.timeout for context in transport.call_contexts] == [123.0, 123.0, 123.0]
+    assert len(transport.call_contexts) == 2  # TASK_T, ACCEPT
+    assert [context.timeout for context in transport.call_contexts] == [123.0, 123.0]
 
 
 @pytest.mark.parametrize("terminal", ["reject", "abort"])
@@ -2205,11 +2187,7 @@ def _scenario_batches(scenario_name: str) -> list[list[dict[str, object]]]:
     if scenario_name in {"information", "unknown_area"}:
         return [[propose_event("information", 1)], _task_completed_batch()]
     if scenario_name == "target":
-        return [
-            [propose_event("target", 1)],
-            [propose_event("target", 2)],
-            _task_completed_batch(),
-        ]
+        return [[propose_event("target", 1)], _task_completed_batch()]
     if scenario_name == "feasibility":
         return [[propose_event("feasibility", 1)], _task_completed_batch()]
     if scenario_name == "reject":
@@ -2224,12 +2202,7 @@ def _scenario_batches(scenario_name: str) -> list[list[dict[str, object]]]:
             [end_event()],
         ]
     if scenario_name == "abort":
-        return [
-            [propose_event("target", 1)],
-            [propose_event("target", 2)],
-            [propose_event("target", 3)],
-            [abort_event(3)],
-        ]
+        return [[propose_event("information", 1)], [end_event()]]
     raise AssertionError(f"Unsupported scenario: {scenario_name}")
 
 
@@ -2262,7 +2235,7 @@ async def test_trace_phases_and_steps_for_every_scenario(scenario_name: str) -> 
         expected_phases.add(PHASE_TASK_VALIDATION)
     if scenario.expected_sequence:
         expected_phases.add(PHASE_NEGOTIATION)
-    if scenario_name != "abort" and scenario.expected_sequence:
+    if scenario.expected_sequence:
         expected_phases.add(PHASE_RESOLUTION)
     assert {str(span["phase"]) for span in spans} == expected_phases
 
@@ -2280,25 +2253,35 @@ async def test_trace_phases_and_steps_for_every_scenario(scenario_name: str) -> 
         assert steps == list(range(1, len(steps) + 1))
 
 
-async def test_counter_decision_stays_in_the_negotiation_phase() -> None:
+async def test_a_counter_decision_is_recorded_as_the_accept_it_becomes() -> None:
     spans: list[dict[str, object]] = []
 
     await run_client_flow(
         prompt_client=FakePromptClient(),
-        transport=ScriptedTransport([[propose_event("target", 1)], [abort_event(1)]]),
+        transport=ScriptedTransport([[propose_event("target", 1)], _task_completed_batch()]),
         user_request="request",
-        provider=ScriptedDecisionProvider([SCENARIO_TARGET_SPEC.scripted_client_decisions[0]]),
+        provider=ScriptedDecisionProvider(
+            [
+                NegotiationDecision(
+                    action="counter",
+                    rationale="Use a non-overlapping target.",
+                    counter_proposal="Accept {00:00~06:00,2Mbps}.",
+                )
+            ]
+        ),
         language="en-US",
         trace_sink=spans.append,
     )
 
     decision_made = next(span for span in spans if span["kind"] == "decision_made")
-    counter_sent = [span for span in spans if span["kind"] == "message_sent"][-1]
-    assert decision_made["phase"] == "negotiation"
-    assert counter_sent["phase"] == "negotiation"
-    counter_detail = counter_sent["detail"]
-    assert isinstance(counter_detail, dict)
-    assert counter_detail["performative"] == "PROPOSE"
+    sent = [span for span in spans if span["kind"] == "message_sent"][-1]
+    assert decision_made["phase"] == "resolution"
+    assert sent["phase"] == "resolution"
+    sent_detail = sent["detail"]
+    assert isinstance(sent_detail, dict)
+    assert sent_detail["performative"] == "ACCEPT"
+    conversion = next(span for span in spans if span["kind"] == "counter_converted_to_accept")
+    assert conversion["detail"]["action"] == "accept"
 
 
 async def test_sse_transport_forwards_events_to_its_sink_as_they_arrive() -> None:

@@ -9,8 +9,10 @@ The flow owns the protocol correctness of the client side:
 * whenever the server sends a pre-task ``Propose``, it asks the configured
   :class:`~protocol.decision_provider.NegotiationDecisionProvider` for a decision and renders the
   matching protocol message with the SDK ``fromText`` generators;
-* an ``accept`` refills the Task-T prompt with ``fromDataWithSchema``, a ``counter`` keeps the
-  inbound round and carries ``metadata["sampleProposal"]``, and ``reject`` / ``abort`` are terminal;
+* an ``accept`` refills the Task-T prompt with ``fromDataWithSchema`` and, on a target or
+  feasibility negotiation, carries the corrected value in its accept content; ``reject`` /
+  ``abort`` are terminal. A2A-T has no counter performative: a sample-level ``counter`` decision is
+  converted to an accept (target/feasibility) or a reject (information) before it is sent;
 * the server owns round counting: the client always uses ``session.with_performative(...)`` and
   never calls ``next_round()``.
 
@@ -126,7 +128,6 @@ from protocol.messages import (
     SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
     SAMPLE_PHASE_METADATA_KEY,
     SAMPLE_PHASE_MODIFY,
-    SAMPLE_PROPOSAL_METADATA_KEY,
     TASK_TEMPLATE_URI,
     is_negotiation_message,
     metadata_to_dict,
@@ -1500,6 +1501,40 @@ async def run_client_flow(
                     reasked=reasked_rounds,
                     trace_sink=trace_sink,
                 )
+        if decision is not None and decision.action == "counter":
+            # A2A-T has no counter performative: a target/feasibility answer is an ACCEPT whose
+            # result content names the corrected target, and an information answer is an ACCEPT
+            # with values or a REJECT. Convert the sample-level action before anything is sent.
+            text = (decision.counter_proposal or decision.rationale or "").strip()
+            filled = dict(decision.filled_params or {})
+            target = normalize_text(decision.counter_proposal) or normalize_text(decision.rationale)
+            if target is not None and RATE_TARGET_FIELD not in filled:
+                filled[RATE_TARGET_FIELD] = target
+            update: dict[str, object] = {
+                "action": "accept" if kind is not NegotiationKind.INFORMATION else "reject",
+                "rationale": text or decision.rationale,
+                "counter_proposal": None,
+                "counter_params": None,
+            }
+            if filled:
+                update["filled_params"] = filled
+            if kind is NegotiationKind.TARGET:
+                update["confirmed_intent"] = text or decision.rationale
+            elif kind is NegotiationKind.FEASIBILITY:
+                update["feasibility_summary"] = text or decision.rationale
+            emit_trace(
+                "counter_converted_to_accept",
+                phase=PHASE_NEGOTIATION,
+                title="Counter proposal converted to the A2A-T answer",
+                round_number=session.round,
+                context_id=context_id,
+                detail={
+                    "action": update["action"],
+                    "kind": kind.value,
+                    "target": target,
+                },
+            )
+            decision = decision.model_copy(update=update)
         if decision is None:
             fields = ", ".join(f"{item.field}={item.value or '<missing>'}" for item in ungrounded)
             reason = f"The automatic decision for round {session.round} has no grounded value: {fields}."
@@ -1610,21 +1645,6 @@ async def run_client_flow(
             send_phase = PHASE_RESOLUTION
             send_performative = NegotiationPerformative.ACCEPT.value
             send_title = "Accept sent"
-        elif decision.action == "counter":
-            request, call_context = await _build_counter_request(
-                prompt_client=prompt_client,
-                decision=decision,
-                kind=kind,
-                session=session,
-                context_id=context_id,
-                label=resolved_label,
-                call_timeout_seconds=call_timeout_seconds,
-                include_sample_proposal=carries_task_t,
-                task_id=task_id,
-            )
-            send_phase = PHASE_NEGOTIATION
-            send_performative = NegotiationPerformative.PROPOSE.value
-            send_title = f"Counter proposal sent · R{session.round}"
         elif decision.action in ("reject", "abort"):
             # Only an explicit operator/agent decision may end the negotiation. Any other action
             # is a wiring error: sending ABORT as the fallback would terminate the remote Task on
@@ -2122,50 +2142,6 @@ async def _build_accept_request(
         session=accept_context,
         call_timeout_seconds=call_timeout_seconds,
         extra_metadata=metadata,
-        task_id=task_id,
-    )
-
-
-async def _build_counter_request(
-    *,
-    prompt_client: PromptClient,
-    decision: NegotiationDecision,
-    kind: NegotiationKind,
-    session: NegotiationContext,
-    context_id: str,
-    label: str,
-    call_timeout_seconds: float,
-    include_sample_proposal: bool = True,
-    task_id: str | None = None,
-) -> tuple[SendMessageRequest, ClientCallContext]:
-    """Generate a counter proposal that keeps the inbound round (same-round ``Propose``).
-
-    ``include_sample_proposal`` is false on the real NMS path: ``counter_params`` is a sample-only
-    plan over the demo dataset, and sending a fabricated ``{cellId, window, targetRate}`` to a
-    vendor that has no such cell would be exactly the client-side network fact this flow bans.
-    """
-    text = decision.counter_proposal or decision.rationale
-    if not text.strip():
-        raise ClientFlowError("A counter decision carries neither a counter proposal nor a rationale.")
-    propose_context = session.with_performative(NegotiationPerformative.PROPOSE)
-    with trace_stage("negotiation_propose_extraction"):
-        content = await asyncio.to_thread(
-            prompt_client.generate_negotiation_propose_prompt_from_text,
-            text,
-            propose_context,
-            _PROPOSE_TEMPLATE_URI_BY_KIND[kind.value],
-        )
-    extra: dict[str, object] = {}
-    if include_sample_proposal and decision.counter_params:
-        extra[SAMPLE_PROPOSAL_METADATA_KEY] = dict(decision.counter_params)
-    return _negotiation_request(
-        prompt_client=prompt_client,
-        content=content,
-        label=label,
-        context_id=context_id,
-        session=propose_context,
-        call_timeout_seconds=call_timeout_seconds,
-        extra_metadata=extra or None,
         task_id=task_id,
     )
 

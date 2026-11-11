@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from demo.scenario import (
-    FINAL_STATE_NEGOTIATION_ABORTED,
     FINAL_STATE_NEGOTIATION_ENDED,
     FINAL_STATE_TASK_COMPLETED,
     MODIFY_REQUEST,
@@ -69,20 +68,19 @@ def test_information_sequence_blocks_the_missing_required_field() -> None:
     assert scenario.expected_final_state == FINAL_STATE_INPUT_INVALID
 
 
-def test_target_sequence_keeps_counter_propose_in_round_one() -> None:
+def test_target_sequence_corrects_the_target_in_accept() -> None:
     scenario = SCENARIOS["target"]
 
     assert scenario.expected_kind == "target"
     assert _sequence("target") == (
         ("server", "PROPOSE", 1),
-        ("client", "PROPOSE", 1),
-        ("server", "PROPOSE", 2),
-        ("client", "ACCEPT", 2),
+        ("client", "ACCEPT", 1),
     )
     assert scenario.expected_final_state == FINAL_STATE_TASK_COMPLETED
-    assert [decision.action for decision in scenario.scripted_client_decisions] == ["counter", "accept"]
-    accept = scenario.scripted_client_decisions[-1]
+    assert [decision.action for decision in scenario.scripted_client_decisions] == ["accept"]
+    accept = scenario.scripted_client_decisions[0]
     assert accept.filled_params and accept.filled_params.get("guaranteedThroughputTarget")
+    assert accept.confirmed_intent
 
 
 def test_feasibility_sequence() -> None:
@@ -110,22 +108,16 @@ def test_reject_sequence_ends_with_plain_message() -> None:
     assert [decision.action for decision in scenario.scripted_client_decisions] == ["reject"]
 
 
-def test_abort_sequence_aborts_at_max_rounds() -> None:
+def test_abort_sequence_ends_with_the_client_abort() -> None:
     scenario = SCENARIOS["abort"]
-    sequence = _sequence("abort")
 
-    assert sequence[-1] == ("server", "ABORT", MAX_ROUNDS)
-    assert sequence == (
+    assert _sequence("abort") == (
         ("server", "PROPOSE", 1),
-        ("client", "PROPOSE", 1),
-        ("server", "PROPOSE", 2),
-        ("client", "PROPOSE", 2),
-        ("server", "PROPOSE", 3),
-        ("client", "PROPOSE", 3),
-        ("server", "ABORT", 3),
+        ("client", "ABORT", 1),
+        ("server", "MESSAGE", None),
     )
-    assert scenario.expected_final_state == FINAL_STATE_NEGOTIATION_ABORTED
-    assert [decision.action for decision in scenario.scripted_client_decisions] == ["counter", "counter", "counter"]
+    assert scenario.expected_final_state == FINAL_STATE_NEGOTIATION_ENDED
+    assert [decision.action for decision in scenario.scripted_client_decisions] == ["abort"]
 
 
 def test_expected_step_is_hashable_frozen_dataclass() -> None:

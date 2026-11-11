@@ -266,26 +266,19 @@ async def test_accept_scenarios_complete_in_chinese(
     assert result.report
 
 
-@pytest.mark.parametrize(
-    ("scenario_name", "expected_tail"),
-    [
-        ("reject", ("server", "MESSAGE", None)),
-        ("abort", ("server", "ABORT", 3)),
-    ],
-)
-async def test_no_task_scenarios_end_with_the_plain_end_or_abort(
+@pytest.mark.parametrize("scenario_name", ("reject", "abort"))
+async def test_no_task_scenarios_end_with_the_plain_end_message(
     scenario_name: str,
-    expected_tail: tuple[str, str, int | None],
     english_language: None,
 ) -> None:
-    """Reject ends with a plain end message; abort ends with ``S:Abort(3)`` and no Task."""
+    """Both terminals end with the server's plain end message and no Task."""
     config = offline_direct_config(free_tcp_port())
 
     with running_server(config):
         result, exchange = await run_scenario_flow(config, scenario_name, "sse")
 
     last = exchange.steps[-1]
-    assert (last.actor, last.performative, last.round) == expected_tail
+    assert (last.actor, last.performative, last.round) == ("server", "MESSAGE", None)
     assert result.final_state == get_scenario(scenario_name).expected_final_state
     assert result.task_id is None
     assert result.report is None
@@ -306,38 +299,33 @@ async def test_information_scenario_is_blocked_before_any_send(
     assert result.final_state == FINAL_STATE_INPUT_INVALID
 
 
-async def test_target_round_two_content_is_revised(english_language: None) -> None:
-    """The offline scripted extraction must render a different proposal in round 2 than round 1."""
+async def test_target_accept_carries_the_corrected_target(english_language: None) -> None:
+    """A target negotiation is answered by one Accept carrying the corrected target."""
     config = offline_direct_config(free_tcp_port())
 
     with running_server(config):
-        result, _ = await run_scenario_flow(config, "target", "sse")
+        result, exchange = await run_scenario_flow(config, "target", "sse")
 
-    proposals = _negotiation_contents(result.events, "PROPOSE")
-    assert [round_number for round_number, _ in proposals] == [1, 2]
-    assert proposals[0][1] != proposals[1][1]
-    assert "Revised proposal for round 2" in proposals[1][1]
+    assert exchange.steps == list(get_scenario("target").expected_sequence)
+    assert len(result.decisions) == 1
+    decision = result.decisions[0]
+    assert decision.action == "accept"
+    assert decision.filled_params
+    assert "{17:30~23:00,20Mbps}" in str(decision.filled_params["guaranteedThroughputTarget"])
+    assert "{23:00~24:00,10Mbps}" in str(decision.filled_params["guaranteedThroughputTarget"])
 
 
-async def test_server_abort_reason_names_the_server_and_the_round_limit(
-    english_language: None,
-) -> None:
-    """The abort scenario's server abort must not borrow the canned client-abort reason."""
+async def test_abort_scenario_uses_the_client_abort_primitive(english_language: None) -> None:
+    """The abort scenario sends the A2A-T ABORT primitive, not a server round-limit abort."""
     config = offline_direct_config(free_tcp_port())
 
     with running_server(config):
-        result, _ = await run_scenario_flow(config, "abort", "sse")
+        result, exchange = await run_scenario_flow(config, "abort", "sse")
 
-    proposals = _negotiation_contents(result.events, "PROPOSE")
-    assert [round_number for round_number, _ in proposals] == [1, 2, 3]
-    assert all("Information Negotiation" in content for _, content in proposals)
-
-    aborts = _negotiation_contents(result.events, "ABORT")
-    assert len(aborts) == 1
-    reason = aborts[0][1]
-    assert "The server ended the negotiation" in reason
-    assert "maximum number of rounds (3)" in reason
-    assert "client aborted" not in reason.lower()
+    assert exchange.steps == list(get_scenario("abort").expected_sequence)
+    assert len(result.decisions) == 1
+    assert result.decisions[0].action == "abort"
+    assert "cannot choose a served area" in result.decisions[0].rationale
 
 
 async def test_a_secured_server_completes_the_night_scenario(

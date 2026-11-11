@@ -19,7 +19,7 @@ from demo.adk_fake_model import (
     build_fake_model,
 )
 from demo.agents.client_agent.agent import build_client_agent
-from demo.scenario import SCENARIO_INFORMATION, SCENARIO_TARGET, get_scenario
+from demo.scenario import SCENARIO_INFORMATION, get_scenario
 from google.adk.sessions.sqlite_session_service import SqliteSessionService
 from protocol.decision_provider import (
     CLIENT_APP_NAME,
@@ -119,14 +119,19 @@ def test_build_decision_prompt_carries_the_original_request() -> None:
 
 
 async def test_scripted_provider_returns_decisions_in_order_and_then_raises() -> None:
-    provider = ScriptedDecisionProvider(get_scenario(SCENARIO_TARGET).scripted_client_decisions)
+    provider = ScriptedDecisionProvider(
+        (
+            NegotiationDecision(action="accept", rationale="first"),
+            NegotiationDecision(action="reject", rationale="second"),
+        )
+    )
     session = _session()
 
     first = await provider.respond(_view("target"), session)
     second = await provider.respond(_view("target"), session)
 
-    assert first.action == "counter"
-    assert second.action == "accept"
+    assert first.action == "accept"
+    assert second.action == "reject"
     assert provider.remaining == 0
     with pytest.raises(DecisionProviderError, match="exhausted"):
         await provider.respond(_view("target"), session)

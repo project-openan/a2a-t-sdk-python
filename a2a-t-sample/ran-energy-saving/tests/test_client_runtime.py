@@ -133,7 +133,7 @@ async def test_scripted_mode_uses_the_scenario_decisions(
     )
 
     assert isinstance(runtime.provider, ScriptedDecisionProvider)
-    assert runtime.provider.remaining == 2
+    assert runtime.provider.remaining == 1
     await runtime.aclose()
 
 
@@ -179,8 +179,8 @@ async def test_auto_live_mode_uses_the_live_decision_model(
 @pytest.mark.parametrize(
     ("scenario_name", "expected_actions"),
     [
-        (SCENARIO_TARGET, ["counter", "accept"]),
-        (SCENARIO_ABORT, ["counter", "counter", "counter"]),
+        (SCENARIO_TARGET, ["accept"]),
+        (SCENARIO_ABORT, ["abort"]),
     ],
 )
 async def test_auto_offline_mode_scripts_the_scenario_decisions(

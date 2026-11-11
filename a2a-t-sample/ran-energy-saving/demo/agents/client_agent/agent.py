@@ -57,8 +57,8 @@ def build_client_agent(
             else build_adk_model(offline_model_factory=build_fake_model)
         ),
         description=(
-            "Decides how the client answers a RAN energy-saving negotiation proposal: accept, "
-            "reject, abort, or counter-propose a plan that fits the client policy."
+            "Decides how the client answers a RAN energy-saving negotiation proposal: accept "
+            "(with the corrected target in the accept content), reject, or abort."
         ),
         instruction=REQUEST_INSTRUCTION,
         tools=[make_get_client_policy(resolved_policy)],

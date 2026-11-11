@@ -867,15 +867,12 @@ const EN = {
       label: "Overlapping windows",
       tag: "Use case 1 · negotiation",
       kind: "neg",
-      story: "Two guaranteed-rate windows overlap; the RAN Agent proposes a correction before executing.",
+      story: "Two guaranteed-rate windows overlap; the client corrects the target inside its Accept.",
       proposals: {
-        1: "Two guaranteed-rate windows overlap: 17:30~23:00 and 20:00~00:00.",
-        2: "Revised with non-overlapping windows — please confirm.",
-        3: "The segments still cannot be applied — please adjust once more.",
+        1: "Two guaranteed-rate windows overlap: 17:30~23:00 and 20:00~00:00. Please provide a non-overlapping target.",
       },
       decisions: {
-        1: "Counter-proposal: move the windows to 17:30~20:00 and 20:00~00:00.",
-        2: "Accept the revised plan.",
+        1: "Accept with the corrected non-overlapping windows.",
       },
     },
     feasibility: {
@@ -895,19 +892,15 @@ const EN = {
       decisions: { 1: "Reject: the guaranteed throughput target is not available." },
     },
     abort: {
-      label: "Round limit",
+      label: "Client abort",
       tag: "Use case 1 · ending",
       kind: "end",
-      story: "Counter-proposals never converge; the RAN Agent aborts at the round limit.",
+      story: "The server asks for a served area; the client ends the negotiation with ABORT.",
       proposals: {
-        1: "Two guaranteed-rate windows overlap: 17:30~23:00 and 20:00~00:00.",
-        2: "Revised with non-overlapping windows — please confirm.",
-        3: "The segments still cannot be applied — please adjust once more.",
+        1: "The requested area is not recognized. Choose a served area: Region A or Region B.",
       },
       decisions: {
-        1: "Counter-proposal: keep the 20:00~00:00 window.",
-        2: "Counter-proposal: keep both original high-throughput windows.",
-        3: "Counter-proposal: keep the original request unchanged.",
+        1: "Abort: the client cannot choose a served area.",
       },
     },
     outage: {
@@ -1743,15 +1736,12 @@ const ZH = {
       label: "时段重叠",
       tag: "用例 1 · 协商",
       kind: "neg",
-      story: "两个保障时段重叠，RAN Agent 先提议修正，达成一致后再执行。",
+      story: "两个保障时段重叠，客户端在 Accept 中修正目标后执行。",
       proposals: {
-        1: "两个保障时段重叠：17:30~23:00 与 20:00~00:00。",
-        2: "已按不重叠的时段修订，请确认。",
-        3: "仍未满足可执行条件，请再调整一次。",
+        1: "两个保障时段重叠：17:30~23:00 与 20:00~00:00，请给出不重叠的目标。",
       },
       decisions: {
-        1: "反提议：把时段改为 17:30~20:00 与 20:00~00:00，消除重叠。",
-        2: "接受修订后的方案。",
+        1: "接受，并在结果内容中给出修正后的不重叠时段。",
       },
     },
     feasibility: {
@@ -1771,19 +1761,15 @@ const ZH = {
       decisions: { 1: "拒绝：无法提供该保障速率。" },
     },
     abort: {
-      label: "轮次超限",
+      label: "客户端中止",
       tag: "用例 1 · 终止",
       kind: "end",
-      story: "多轮反提议仍不收敛，RAN Agent 在轮次上限时中止。",
+      story: "网管要求选择可用区域，客户端用 ABORT 结束本次协商。",
       proposals: {
-        1: "两个保障时段重叠：17:30~23:00 与 20:00~00:00。",
-        2: "已按不重叠的时段修订，请确认。",
-        3: "仍未满足可执行条件，请再调整一次。",
+        1: "无法识别请求中的区域，请选择可用区域：区域 A 或区域 B。",
       },
       decisions: {
-        1: "反提议：坚持保留 20:00~00:00 时段。",
-        2: "反提议：保留原有两个高保障时段。",
-        3: "反提议：维持原请求不变。",
+        1: "中止：客户端无法选择可用区域。",
       },
     },
     outage: {

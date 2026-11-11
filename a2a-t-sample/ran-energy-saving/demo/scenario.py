@@ -29,7 +29,7 @@ from typing import Final, Literal
 from shared.models import NegotiationDecision
 from shared.run_constants import (
     FINAL_STATE_INPUT_INVALID,
-    FINAL_STATE_NEGOTIATION_ABORTED,
+    FINAL_STATE_NEGOTIATION_ABORTED,  # noqa: F401 - re-exported for the scenario tests
     FINAL_STATE_NEGOTIATION_ENDED,
     FINAL_STATE_TASK_COMPLETED,
     LANGUAGE_EN,
@@ -175,10 +175,10 @@ FEASIBILITY_CONTEXT: Final[dict[str, object]] = {
     "backgroundEvent": "power outage from 00:00 to 18:00",
 }
 
-#: Confirmed intent of the target negotiation accept.
+#: Confirmed intent of the target negotiation accept. A2A-T answers a target proposal with
+#: Accept, so the corrected target is the accept content, not a client counter proposal.
 TARGET_ACCEPT_CONFIRMATION: Final[str] = (
-    "The energy saving target is corrected to {00:00~07:00,2Mbps}, {07:00~09:00,10Mbps}, "
-    "{09:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~00:00,10Mbps}."
+    f"The energy saving target is corrected to {TARGET_TARGET}."
 )
 
 #: Feasibility summary of the feasibility negotiation accept.
@@ -289,20 +289,10 @@ SCENARIO_TARGET_SPEC = Scenario(
     user_request=EXAMPLE_REQUESTS[SCENARIO_TARGET],
     expected_sequence=(
         ExpectedStep(actor="server", performative="PROPOSE", round=1),
-        ExpectedStep(actor="client", performative="PROPOSE", round=1),
-        ExpectedStep(actor="server", performative="PROPOSE", round=2),
-        ExpectedStep(actor="client", performative="ACCEPT", round=2),
+        ExpectedStep(actor="client", performative="ACCEPT", round=1),
     ),
     expected_final_state=FINAL_STATE_TASK_COMPLETED,
     scripted_client_decisions=(
-        NegotiationDecision(
-            action="counter",
-            rationale="The first revision still overlaps the 17:30~23:00 segment.",
-            counter_proposal=(
-                "Move the extra capacity to a non-overlapping window: keep {17:30~20:00,20Mbps} "
-                "and {20:00~00:00,10Mbps}."
-            ),
-        ),
         NegotiationDecision(
             action="accept",
             rationale="The revised plan has non-overlapping segments and meets the throughput target.",
@@ -310,7 +300,9 @@ SCENARIO_TARGET_SPEC = Scenario(
             confirmed_intent=TARGET_ACCEPT_CONFIRMATION,
         ),
     ),
-    description="Overlapping throughput segments; the client counter-proposes once, then accepts the revision.",
+    description=(
+        "Overlapping throughput segments; the client corrects the target inside its Accept."
+    ),
 )
 
 SCENARIO_FEASIBILITY_SPEC = Scenario(
@@ -357,40 +349,23 @@ SCENARIO_REJECT_SPEC = Scenario(
 SCENARIO_ABORT_SPEC = Scenario(
     name=SCENARIO_ABORT,
     # A complete Task-T with an unserved area. The server opens an information negotiation; the
-    # client keeps countering with the same region instead of confirming a served one, and the
-    # server aborts at maxRounds. This matches the real NMS behavior.
+    # client ends it with the A2A-T ABORT primitive instead of a counter-Propose loop.
     expected_kind=KIND_INFORMATION,
     user_request=EXAMPLE_REQUESTS[SCENARIO_UNKNOWN_AREA],
     expected_sequence=(
         ExpectedStep(actor="server", performative="PROPOSE", round=1),
-        ExpectedStep(actor="client", performative="PROPOSE", round=1),
-        ExpectedStep(actor="server", performative="PROPOSE", round=2),
-        ExpectedStep(actor="client", performative="PROPOSE", round=2),
-        ExpectedStep(actor="server", performative="PROPOSE", round=3),
-        ExpectedStep(actor="client", performative="PROPOSE", round=3),
-        ExpectedStep(actor="server", performative="ABORT", round=3),
+        ExpectedStep(actor="client", performative="ABORT", round=1),
+        ExpectedStep(actor="server", performative="MESSAGE", round=None),
     ),
-    expected_final_state=FINAL_STATE_NEGOTIATION_ABORTED,
+    expected_final_state=FINAL_STATE_NEGOTIATION_ENDED,
     scripted_client_decisions=(
         NegotiationDecision(
-            action="counter",
-            rationale="The client repeats the requested region instead of confirming a served one.",
-            counter_proposal="region: Region Z",
-        ),
-        NegotiationDecision(
-            action="counter",
-            rationale="The client still cannot confirm a served area and repeats its region.",
-            counter_proposal="region: Region Z",
-        ),
-        NegotiationDecision(
-            action="counter",
-            rationale="No further information is available; the client repeats its position.",
-            counter_proposal="region: Region Z",
+            action="abort",
+            rationale="The client cannot choose a served area; the negotiation is aborted.",
         ),
     ),
     description=(
-        "The information negotiation does not converge because the client keeps countering with "
-        "the requested region instead of the missing target; the server aborts at maxRounds."
+        "The client ends the information negotiation with ABORT when it cannot provide a served area."
     ),
 )
 

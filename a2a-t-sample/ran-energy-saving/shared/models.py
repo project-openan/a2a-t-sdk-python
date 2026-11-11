@@ -23,11 +23,11 @@ class NegotiationDecision(BaseModel):
         action: Intent of the decision.
         rationale: Human-readable reason shown in the CLI, the Web UI, and the transcript.
         filled_params: Task-T parameters to fill on ``accept`` (missing-information negotiation).
-        counter_proposal: Natural-language counter proposal on ``counter``; the flow layer turns it
-            into protocol content with the SDK ``fromText`` generator.
-        counter_params: On ``counter``, the sample-only ``{cellId, window, targetRate}`` plan the
-            flow attaches as ``metadata["sampleProposal"]`` so the server policy can evaluate the
-            counter proposal deterministically.
+        counter_proposal: Natural-language revised answer on ``counter``. A2A-T has no counter
+            performative, so the flow converts this to an Accept (target/feasibility) or Reject
+            (information) before sending. Pure A2A renders it as free text.
+        counter_params: Sample-only ``{cellId, window, targetRate}`` plan accompanying a sample
+            ``counter`` decision. It is not an A2A-T wire field and is never sent to the vendor.
         confirmed_intent: On ``accept``, the task intent the client confirms, when the negotiation
             type requires one.
         feasibility_summary: On ``accept``, the client's feasibility summary, when the negotiation

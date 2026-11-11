@@ -281,6 +281,10 @@ def build_decision_prompt(
         "- An accept means the client agrees with the server's proposal. Do not restate values the "
         "negotiation did not change. On a feasibility proposal, accept the server's feasible "
         "alternative; the flow renders the agreed value itself.\n"
+        "- A2A-T has no counter performative. On a target proposal, return accept with the corrected "
+        "target in confirmed_intent and filled_params.guaranteedThroughputTarget. On a feasibility "
+        "proposal, return accept with the accepted target in filled_params.guaranteedThroughputTarget "
+        "and feasibility_summary. Reject only when the request cannot be clarified or accepted.\n"
         f"{pure_rule}"
         "- Omit fields that do not apply; never pass the string \"None\".\n"
         "Return exactly one NegotiationDecision JSON object and nothing else: no reasoning, "
@@ -307,8 +311,9 @@ def build_manual_answer_prompt(
     The engineer's words are the source of truth; the model only maps them onto the proposal's
     negotiation shape. For an information proposal it must put every supplied value into
     ``filled_params`` under the exact Task-T parameter name (the client flow merges them into the
-    agreed Task-T on Accept). For target/feasibility it must put a revised plan into
-    ``counter_params`` as ``{cellId, window, targetRate}`` so the server policy can evaluate it.
+    agreed Task-T on Accept). For target/feasibility it uses an Accept whose
+    ``confirmed_intent`` / ``feasibility_summary`` carries the engineer's wording and whose
+    ``filled_params`` carries any new target. A2A-T has no counter performative.
     """
     original = f"Original user request:\n{user_request}\n\n" if user_request else ""
     history = (
@@ -333,13 +338,11 @@ def build_manual_answer_prompt(
         )
     else:
         action_rule = (
-            "The engineer is answering a target/feasibility proposal. If the answer accepts the "
-            "proposal, use action=accept. If it proposes a revised plan, use action=counter. The "
-            "sample plan convention is counter_params={cellId, window, targetRate}, where "
-            'targetRate is the energy-saving target percentage as a string (for example "30" for '
-            "30%). If the engineer gives a throughput rate instead of a percentage, keep it in "
-            "counter_proposal and do not invent a targetRate. Keep the engineer's wording in "
-            "counter_proposal. If the engineer refuses, use action=reject."
+            "The engineer is answering a target/feasibility proposal. Use action=accept with the "
+            "engineer's wording in confirmed_intent for a target proposal or feasibility_summary for "
+            "a feasibility proposal. Put any new guaranteedThroughputTarget in filled_params. There "
+            "is no counter action in A2A-T: a revised plan is still an accept. If the engineer "
+            "refuses, use action=reject."
         )
     return (
         "Structure the engineer's manual answer to an A2A-T negotiation proposal.\n"
