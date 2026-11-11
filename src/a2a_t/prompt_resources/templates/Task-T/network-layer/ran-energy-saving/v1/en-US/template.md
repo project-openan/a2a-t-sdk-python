@@ -62,7 +62,7 @@ Requirement:
         - Time-segmented rate guarantee target:
           - Time Window (required): Time windows MUST NOT overlap; Specific and explicit time windows must be provided; unclear time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to Lossless Experience Energy Saving;
           - Rate (optional): Specify a target throughput for each time window, e.g., 10 Mbps;
-        - Background event and event duration (optional): for an outage scenario where the operation type is Modify, the affected site list and the outage start/end time are required; outage duration must be a specific number;
+        - Background event and event duration (optional): for a power outage scenario where the operation type is Modify, the affected site list and the outage start/end time are required; outage duration must be a specific number;
         - Example:
             - Site list 1: ["Site Name 1", "Site Name 2"], Time-segmented rate guarantee target: {00:00-06:00,2Mbps}, {06:00-18:00,10Mbps}, Background event: power outage from 00:00 to 18:00.
             - Site list 2: ["Site Name 3", "Site Name 4"], Time-segmented rate guarantee target: {01:00-06:00,2Mbps}, {06:00-18:00,10Mbps}, Background event: power outage from 01:00 to 18:00.
