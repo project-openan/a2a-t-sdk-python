@@ -515,6 +515,41 @@ async def test_confirm_mode_asks_the_vendor_sentence_before_accepting() -> None:
         assert any(frame.get("artifactUpdate") for frame in resumed)
 
 
+async def test_an_explicit_rejection_terminates_the_pure_task() -> None:
+    """A client that cannot obtain a server-owned value refuses; the vendor skill terminates."""
+    config = SimConfig(
+        fidelity=FIDELITY_FAST,
+        negotiation_carrier=CARRIER_MESSAGE,
+        window_policy=WINDOW_POLICY_ANY,
+        pure_question=PURE_QUESTION_CONFIRM,
+    )
+    async for client in _client(config):
+        token = await _token(client)
+        headers = {"Authorization": f"Bearer {token}"}
+        frames = await _frames(
+            client,
+            _pure_message("Create a RAN energy saving task for 00:00 to 22:00 at 10Mbps."),
+            headers,
+        )
+        context_id = str(frames[0]["message"]["contextId"])
+
+        resumed = await _frames(
+            client,
+            _pure_message(
+                "Reject: the energy saving region is still missing and the server did not "
+                "provide a usable value.",
+                context_id=context_id,
+            ),
+            headers,
+        )
+
+        assert any(
+            frame.get("statusUpdate", {}).get("status", {}).get("state")
+            == "TASK_STATE_REJECTED"
+            for frame in resumed
+        )
+
+
 def test_confirm_mode_defaults_to_retry_because_it_may_need_several_rounds() -> None:
     config = SimConfig(pure_question=PURE_QUESTION_CONFIRM)
 

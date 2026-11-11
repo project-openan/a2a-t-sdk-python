@@ -33,6 +33,7 @@ from shared.models import NegotiationDecision
 from shared.run_constants import (
     FINAL_STATE_TASK_COMPLETED,
     FINAL_STATE_TASK_FAILED,
+    FINAL_STATE_TASK_REJECTED,
     PROTOCOL_PURE,
 )
 
@@ -212,6 +213,49 @@ def test_the_region_cases_still_expect_a_plain_a2a_answer(case_id: int) -> None:
     case = _case(case_id)
 
     assert _expected_answer(case).startswith("The region is ")
+
+
+async def test_auto_mode_asks_the_server_then_rejects_a_value_it_cannot_ground() -> None:
+    """Automatic mode has no operator: ask the NMS for an owned value, then refuse."""
+    from a2a_t.core.metadata import NegotiationContext
+    from demo.nms_sim.config import PURE_QUESTION_CONFIRM
+    from demo.pure_auto import ASK_TEMPLATE, REJECT_TEMPLATE, build_auto_pure_answer
+    from protocol.client_policy import ClientPolicy
+    from shared.models import NegotiationProposeView
+
+    request = "Create a RAN energy saving task for 00:00 to 22:00 at 10Mbps."
+
+    class _Provider:
+        async def respond(
+            self, propose: NegotiationProposeView, session: NegotiationContext
+        ) -> NegotiationDecision:
+            del propose, session
+            return NegotiationDecision(
+                action="reject", rationale="the energy saving region is missing"
+            )
+
+        def grounding_text(self) -> str:
+            return request
+
+    config = SimConfig(
+        fidelity=FIDELITY_FAST,
+        negotiation_carrier=CARRIER_MESSAGE,
+        window_policy=WINDOW_POLICY_ANY,
+        pure_question=PURE_QUESTION_CONFIRM,
+        max_rounds=5,
+    )
+    answer = build_auto_pure_answer(_Provider(), ClientPolicy(), request_text=request)
+
+    result, answered = await _run_pure(request, answer, sim_app=build_sim_app(config))
+
+    item = "the energy saving region is missing"
+    texts = [text for _event, text in answered]
+    assert texts == [
+        ASK_TEMPLATE.format(item=item),
+        ASK_TEMPLATE.format(item=item),
+        REJECT_TEMPLATE.format(item=item),
+    ]
+    assert result.final_state == FINAL_STATE_TASK_REJECTED
 
 
 async def test_a_vendor_question_without_round_metadata_is_recorded_as_round_one() -> None:

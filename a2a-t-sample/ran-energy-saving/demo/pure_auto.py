@@ -38,12 +38,12 @@ MAX_SERVER_ASKS: Final[int] = 3
 
 #: Free-text request for a value only the server owns.
 ASK_TEMPLATE: Final[str] = (
-    "Please provide the available value for {item}; the original request does not state it."
+    "Please provide the available value; the request does not state it ({item})."
 )
 
 #: Explicit refusal after the server kept asking without providing the value.
 REJECT_TEMPLATE: Final[str] = (
-    "Reject: {item} is still missing and the server did not provide a usable value."
+    "Reject: {item}; the server did not provide a usable value."
 )
 
 

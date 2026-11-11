@@ -13,9 +13,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
+from typing import Final
 
 import httpx
 from a2a_t.core.metadata import (
@@ -87,6 +89,14 @@ EVENT_STREAM: str = "text/event-stream"
 #: end does not render the business issue: the operator answers in free text and the vendor merges
 #: the reply into its intent before validating again.
 PURE_CONFIRM_TEXT: str = "Not feasible, please confirm"
+
+#: Explicit refusal in a plain-A2A answer. The vendor skill terminates only on a clear refusal;
+#: the simulator must do the same, otherwise an automatic client's "Reject: ..." would be read as
+#: another answer and the Task would keep asking until the round budget ran out.
+PURE_REJECTION: Final[re.Pattern[str]] = re.compile(
+    r"^\s*(?:reject|rejected|refuse|decline)\b|\bnot\s+acceptable\b|拒绝|不接受",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -702,6 +712,12 @@ def build_routes(
         # of a field win, so a corrected region/rate in the answer would be ignored.
         baseline = extract_content(task.pure_baseline_text)
         content = extract_content(text).merged_with(baseline) if is_answer else baseline
+        if is_answer and PURE_REJECTION.search(text):
+            # The vendor skill terminates on a clear refusal. Without this the simulator would
+            # treat the client's "Reject: ..." as another answer and keep asking until the round
+            # budget ran out, leaving the flow without a terminal state.
+            resolved_store.update(task.task_id, state=TASK_REJECTED, message=text)
+            return _pure_task_response(task, stream=stream)
         if config.pure_question == PURE_QUESTION_CONFIRM and not is_answer:
             # The vendor's plain-A2A front end asks the same terse sentence whatever the business
             # issue is; the caller's free-text answer is merged over this request and re-validated.
