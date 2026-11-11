@@ -20,7 +20,7 @@ Requirement:
 {{task_object}} (required)
 
 Requirement:
-1. Area name: (required)
+1. Area name (required):
     - Explicitly specify the energy saving coverage scope information, a geographic or logical area (e.g., district-level administrative unit)
     - Must be a concrete area name (e.g., "Region A"), and must not be a non-specific designation such as "all cells", "indoor cells", or "outdoor cells".
     - Only one area name is allowed
@@ -50,26 +50,25 @@ Requirement:
     - **For the area-level setting**, the following information needs to be provided:
 
       Option 1: Time-segmented rate guarantee target
-        - Time Window: Non-overlapping time windows can be configured. Time windows MUST NOT overlap; if overlapping time windows are provided, they are a violation and the configuration is invalid. Specific and explicit time windows must be provided; vague time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to a non-disruptive user experience mode. All configured time windows must fall within the active energy-saving execution period; (required)
-        - Rate: Specify a target throughput for each time window, e.g., 10 Mbps; (required)
+        - Time Window (required): Non-overlapping time windows can be configured. Time windows MUST NOT overlap; Specific and explicit time windows must be provided; unclear time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to Lossless Experience Energy Saving. All configured time windows must fall within the active energy-saving execution period;
+        - Rate (required): Specify a target throughput for each time window, e.g., 10 Mbps;
         - Example: Time-segmented rate guarantee target: {00:00~06:00, 2Mbps}, {06:00~18:00, 10Mbps}
 
       Option 2: Full-period rate guarantee target
-        - Rate: If no throughput guarantee target is configured, energy saving will default to a non-disruptive user experience mode; (optional)
+        - Rate (optional): If no throughput guarantee target is configured, energy saving will default to Lossless Experience Energy Saving;
         - Example: Rate guarantee target: 10Mbps
 
     - **For the site-level setting**, the following information needs to be provided:
-        - Site list; (required)
+        - Site list (required); 
         - Time-segmented rate guarantee target:
-          - Time Window: Non-overlapping time windows can be configured. Time windows MUST NOT overlap; if overlapping time windows are provided, they are a violation and the configuration is invalid. Specific and explicit time windows must be provided; vague time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to a non-disruptive user experience mode; (required)
-          - Rate: Specify a target throughput for each time window, e.g., 10 Mbps; (required)
-        - Background event and event duration; (optional)
+          - Time Window (required): Non-overlapping time windows can be configured. Time windows MUST NOT overlap; Specific and explicit time windows must be provided; unclear time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to Lossless Experience Energy Saving;
+          - Rate (optional): Specify a target throughput for each time window, e.g., 10 Mbps;
+        - Background event and event duration (optional);
         - Example:
             - Site list 1: ["Site Name 1", "Site Name 2"], Time-segmented rate guarantee target: {00:00~06:00,2Mbps}, {06:00~18:00,10Mbps}, Background event: power outage from 00:00 to 18:00.
             - Site list 2: ["Site Name 3", "Site Name 4"], Time-segmented rate guarantee target: {01:00~06:00,2Mbps}, {06:00~18:00,10Mbps}, Background event: power outage from 01:00 to 18:00.
-8. When [Operation Type](#operation-type) is set to `Modify`, the configurable parameter is: Rate guarantee target.
-9. Cross-task reference: when the input inherits context parameters by referencing an earlier/previous task, the reference must be unambiguous. If multiple earlier tasks are mentioned and the reference does not specify which one to inherit from, the input is ambiguous and the configuration is invalid. Do not silently pick one of the candidate tasks.
-
+8. When [Operation Type](#operation-type) is set to `Modify`, the only configurable parameter is: Rate guarantee target.
+9. Cross-task reference: when the input inherits parameters by referencing earlier tasks, if multiple earlier tasks exist and the reference does not specify which one (e.g. 'same as the previous task'), the reference is considered ambiguous, and the configuration is invalid.
 ## Expected Output
 {{expected_output}} (optional)
 
