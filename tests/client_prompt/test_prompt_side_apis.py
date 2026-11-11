@@ -113,9 +113,12 @@ def _build_orchestrator(
     slot_extractor: Any,
     resource_access: FakePromptResourceAccess | None = None,
     provider: str = "",
+    config: PromptRuntimeConfig | None = None,
 ) -> PromptGenerationOrchestrator:
+    # The validation tests opt in explicitly: constraint inspection is off by default.
     return PromptGenerationOrchestrator(
-        config=PromptRuntimeConfig(language="en-US", source_type="packaged"),
+        config=config
+        or PromptRuntimeConfig(language="en-US", source_type="packaged", validate_slot_constraints=True),
         provider=provider,
         resource_access=resource_access
         or FakePromptResourceAccess(
@@ -603,6 +606,63 @@ def test_declarative_check_passes_when_require_matches() -> None:
     content = orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
 
     assert content.prompt_text == "Site: Site A"
+
+
+def test_slot_constraint_inspection_is_off_by_default() -> None:
+    """Schema and declarative checks are opt-in; the model's slot errors are the only verdict."""
+    schema: dict[str, object] = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "site": {"type": "string", "description": "Site name"},
+            "task_context": {"type": "string", "description": "Task context"},
+        },
+        "required": ["site"],
+        "x-a2at-checks": [
+            {
+                "slot": "task_context",
+                "when": "power outage",
+                "require": "site list\\s*:",
+                "error": "slot.not_provided",
+                "slot_label": "Site list",
+            }
+        ],
+    }
+    extraction = SlotExtractionResult(
+        slots={"site": "", "task_context": "Background event: power outage from 08:00 to 12:00."},
+        slot_errors=[],
+    )
+    orchestrator = _build_orchestrator(
+        slot_extractor=RecordingSlotExtractor(extraction),
+        resource_access=FakePromptResourceAccess(
+            template_text="Site: {site}",
+            slot_json_schema=schema,
+            system_prompt="Extract slots.",
+            user_prompt="Return slots.",
+        ),
+        config=PromptRuntimeConfig(language="en-US", source_type="packaged"),
+    )
+
+    content = orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert content.prompt_text == "Site: "
+
+
+def test_slot_errors_still_block_when_constraint_inspection_is_off() -> None:
+    """The extraction model's own errors stay blocking without the inspection switch."""
+    extraction = SlotExtractionResult(
+        slots={"site": "Site A", "additional_notes": None},
+        slot_errors=[SlotValidationError(slot_name="site", code="slot.not_provided", message="missing")],
+    )
+    orchestrator = _build_orchestrator(
+        slot_extractor=RecordingSlotExtractor(extraction),
+        config=PromptRuntimeConfig(language="en-US", source_type="packaged"),
+    )
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert exc_info.value.code_str == "slot.not_provided"
 
 
 def test_render_failure_surfaces_render_failed_with_template_uri_fact() -> None:

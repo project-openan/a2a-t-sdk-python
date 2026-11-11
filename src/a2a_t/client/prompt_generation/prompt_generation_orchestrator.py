@@ -410,7 +410,8 @@ class PromptGenerationOrchestrator:
         """Generate one ``MetadataContent`` for the addressed template (Java ``generateWithMetadata``).
 
         Stage order: load the template text, run the template-directed slot extraction, map the
-        reported slot errors, validate the schema-required slots, render the prompt — each stage
+        reported slot errors, optionally inspect the extracted slots against the slot schema
+        (``A2AT_VALIDATE_SLOT_CONSTRAINTS``, off by default), render the prompt — each stage
         translating its failure to the Java catch-point catalog code.
         """
         language = self._config.language
@@ -444,7 +445,11 @@ class PromptGenerationOrchestrator:
         if extraction_errors:
             raise self._slot_errors_exception(extraction_errors)
         slots = extraction_result.slots
-        self._validate_slot_constraints(slots, template_identifier, language, user_input)
+        # The model-reported slot errors above are the sole business verdict by default. The
+        # schema/declarative inspection is opt-in (``A2AT_VALIDATE_SLOT_CONSTRAINTS``) because a
+        # heuristic overlay rule must not veto an extraction the model considers complete.
+        if self._config.validate_slot_constraints:
+            self._validate_slot_constraints(slots, template_identifier, language, user_input)
 
         rendered_prompt_text, render_failure_reason = self._render_prompt_text(
             template_text=template_text,
@@ -594,6 +599,9 @@ class PromptGenerationOrchestrator:
         user_input: object = None,
     ) -> None:
         """Fail with ``slot.*`` when a machine-readable schema constraint is violated.
+
+        Opt-in through ``A2AT_VALIDATE_SLOT_CONSTRAINTS`` (default off): the extraction model's
+        reported ``slot_errors`` are the default business verdict.
 
         The slot schema is resolved through the same access seam as the extraction step; a miss
         surfaces as ``slot.schema_not_found`` before the inspection runs. A blank required slot is

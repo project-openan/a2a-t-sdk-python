@@ -30,6 +30,16 @@ def _config(local_root_dir: str, *, language: str = "en-US", source_type: str = 
     )
 
 
+def test_slot_constraint_validation_is_off_by_default() -> None:
+    """The schema/declarative inspection is opt-in through ``A2AT_VALIDATE_SLOT_CONSTRAINTS``."""
+    assert PromptRuntimeConfig().validate_slot_constraints is False
+    assert PromptRuntimeConfig.from_mapping({}).validate_slot_constraints is False
+    assert (
+        PromptRuntimeConfig.from_mapping({"A2AT_VALIDATE_SLOT_CONSTRAINTS": "true"}).validate_slot_constraints
+        is True
+    )
+
+
 def test_components_builder_creates_the_resource_access_from_the_config(tmp_path: Path) -> None:
     components = PromptRuntimeComponentsBuilder().build(config=_config(str(tmp_path)))
 
