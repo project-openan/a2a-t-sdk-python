@@ -28,7 +28,7 @@ from protocol.nms_client import (
     _frame_to_event,
 )
 from shared.config import SampleConfig
-from shared.run_constants import PROTOCOL_PURE
+from shared.run_constants import PROTOCOL_A2A_T, PROTOCOL_PURE
 from shared.trace import trace_scope
 from shared.trace_propagation import propagated_trace
 
@@ -316,6 +316,150 @@ def _propose_message(negotiation_id: str, text: str) -> dict[str, object]:
             },
         }
     }
+
+
+class _RecordingWebhookClient(_FakeWebhookClient):
+    """A fake that also captures what the transport writes to the wire log."""
+
+    def __init__(self, reply: Mapping[str, object]) -> None:
+        super().__init__(reply)
+        self.inbound: list[tuple[dict[str, object], str, str]] = []
+
+    def record_inbound(
+        self,
+        frame: Mapping[str, object],
+        *,
+        source: str,
+        dropped: str = "",
+    ) -> None:
+        self.inbound.append((dict(frame), source, dropped))
+
+
+def _status_update(
+    state: str,
+    message_id: str,
+    text: str = "",
+    metadata: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Build one vendor push body (``statusUpdate`` carrying its status message)."""
+    message: dict[str, object] = {
+        "messageId": message_id,
+        "role": "ROLE_AGENT",
+        "parts": [{"text": text}],
+    }
+    if metadata:
+        message["metadata"] = dict(metadata)
+    return {
+        "statusUpdate": {
+            "taskId": "task-1",
+            "contextId": "ctx-1",
+            "status": {"state": state, "message": message},
+        }
+    }
+
+
+def _task_reply(
+    state: str,
+    message_id: str,
+    text: str = "",
+    metadata: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Build one synchronous ``message:send`` reply carrying the same status shape."""
+    push = _status_update(state, message_id, text, metadata)["statusUpdate"]
+    assert isinstance(push, dict)
+    return {"task": {"id": "task-1", "contextId": "ctx-1", "status": push["status"]}}
+
+
+async def test_webhook_transport_does_not_replay_a_push_of_a_status_it_already_returned() -> None:
+    """The NMS reports each status on both channels; the pushed twin must not re-open a round."""
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _RecordingWebhookClient(
+        _task_reply("TASK_STATE_INPUT_REQUIRED", "m-question", "Not feasible, please confirm")
+    )
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        protocol=PROTOCOL_PURE,
+        idle_timeout=0.05,
+    )
+
+    first = await transport.send(*_request())
+
+    assert [event.get("state") for event in first] == ["TASK_STATE_INPUT_REQUIRED"]
+
+    # The webhook twin arrived while the first phase returned at INPUT_REQUIRED, so it is still
+    # queued when the next send waits for progress — the incident this test pins.
+    await queue.put(_status_update("TASK_STATE_INPUT_REQUIRED", "m-question", "Not feasible, please confirm"))
+    client.reply = _task_reply("TASK_STATE_WORKING", "m-success", "Task modification succeeded")
+
+    second = await transport.send(*_request())
+
+    assert [event.get("state") for event in second] == ["TASK_STATE_WORKING"]
+    # The duplicate is still recorded verbatim on the wire: evidence is never dropped with it.
+    assert [(source, dropped) for _, source, dropped in client.inbound] == [("webhook", "duplicate")]
+    assert client.inbound[0][0]["statusUpdate"]["status"]["message"]["messageId"] == "m-question"
+
+
+async def test_webhook_transport_still_delivers_a_new_status_after_the_duplicate() -> None:
+    """Deduplication keys on the peer message id, not on the state or the text."""
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    client = _RecordingWebhookClient(_task_reply("TASK_STATE_WORKING", "m-working"))
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        protocol=PROTOCOL_PURE,
+        idle_timeout=0.5,
+    )
+    await queue.put(_status_update("TASK_STATE_WORKING", "m-working"))
+    await queue.put(_status_update("TASK_STATE_INPUT_REQUIRED", "m-question-2", "Please confirm"))
+
+    events = await transport.send(*_request())
+
+    assert [event.get("state") for event in events] == ["TASK_STATE_WORKING", "TASK_STATE_INPUT_REQUIRED"]
+    assert events[-1]["message_id"] == "m-question-2"
+
+
+async def test_webhook_transport_drops_a_replayed_negotiation_status() -> None:
+    """A2A-T rides the same server and the same dual-channel delivery: the twin must not re-ask."""
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    negotiation = {
+        NEGOTIATION_CONTEXT_METADATA_KEY: {
+            "id": "neg-1",
+            "round": 1,
+            "maxRounds": 3,
+            "performative": "PROPOSE",
+        }
+    }
+    client = _RecordingWebhookClient(
+        _task_reply("TASK_STATE_INPUT_REQUIRED", "m-propose", "Please lower the rate", negotiation)
+    )
+    transport = NmsWebhookTransport(
+        client,  # ty: ignore[invalid-argument-type]
+        queue=queue,
+        push_url="http://host:9000/webhook",
+        push_token="push-token",
+        protocol=PROTOCOL_A2A_T,
+        idle_timeout=0.05,
+    )
+    initial, context = _request()
+    initial.message.metadata[TASK_T_EXTENSION_URI] = "task prompt"
+    first = await transport.send(initial, context)
+
+    assert [event.get("state") for event in first] == ["TASK_STATE_INPUT_REQUIRED"]
+
+    # The accept phase would otherwise read the replayed PROPOSE as a new negotiation round.
+    await queue.put(_status_update("TASK_STATE_INPUT_REQUIRED", "m-propose", "Please lower the rate", negotiation))
+    client.reply = _task_reply("TASK_STATE_WORKING", "m-accepted", "Task modification succeeded")
+    accept, context = _request()
+    accept.message.metadata[NEGOTIATION_CONTEXT_METADATA_KEY] = negotiation[NEGOTIATION_CONTEXT_METADATA_KEY]
+    events = await transport.send(accept, context)
+
+    assert [event.get("state") for event in events] == ["TASK_STATE_WORKING"]
+    assert [(source, dropped) for _, source, dropped in client.inbound] == [("webhook", "duplicate")]
 
 
 async def test_webhook_transport_registers_the_push_url_and_returns_a_negotiation_reply() -> None:

@@ -77,6 +77,11 @@ def normalize_event(stream_response: StreamResponse) -> dict[str, object]:
             "state": state_name,
             "text": text,
         }
+        # The vendor reports one status on both channels: the ``message:send`` reply and a webhook
+        # push carry the same status message id. Keep it so the transport can drop the second copy
+        # instead of treating a replayed question as a new turn.
+        if status.HasField("message") and status.message.message_id:
+            event["message_id"] = status.message.message_id
         # The vendor often reuses an older status snapshot. Keep its own timestamp so the client
         # can tell a late replay from a fresh transition instead of trusting arrival order.
         if status.HasField("timestamp") and (status.timestamp.seconds or status.timestamp.nanos):
@@ -159,6 +164,10 @@ def normalize_event(stream_response: StreamResponse) -> dict[str, object]:
         }
         if text:
             event["text"] = text
+        if task.HasField("status") and task.status.HasField("message") and task.status.message.message_id:
+            # The synchronous reply is a ``task`` document; the webhook twin is a ``statusUpdate``.
+            # The same status message id on both is what lets the transport keep only one turn.
+            event["message_id"] = task.status.message.message_id
         if message_metadata is not None:
             event["metadata"] = message_metadata
         # The Task envelope is itself the creation payload: its history carries the original user

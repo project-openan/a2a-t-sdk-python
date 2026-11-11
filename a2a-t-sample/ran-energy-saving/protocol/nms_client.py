@@ -831,14 +831,24 @@ class NmsClient:
         if once_key:
             self._response_header_seen.add(once_key)
 
-    def record_inbound(self, frame: Mapping[str, object], *, source: str) -> None:
+    def record_inbound(
+        self,
+        frame: Mapping[str, object],
+        *,
+        source: str,
+        dropped: str = "",
+    ) -> None:
         """Record one inbound push or poll reply in ``wire.jsonl`` (best effort).
 
         A vendor push never passes through ``message:send``, so without this the wire log proves
-        only what the client sent. Failing to record must not change the protocol result.
+        only what the client sent. Failing to record must not change the protocol result. A frame
+        the flow ignores is still recorded verbatim; ``dropped`` explains why it did not run.
         """
         try:
-            self._write_wire("in", source=source, body=dict(frame))
+            fields: dict[str, object] = {"source": source}
+            if dropped:
+                fields["dropped"] = dropped
+            self._write_wire("in", **fields, body=dict(frame))
         except Exception:  # noqa: BLE001 - observability must never change the protocol result
             _LOGGER.warning("failed to record an inbound %s frame in the wire log", source, exc_info=True)
 
@@ -1101,6 +1111,11 @@ class NmsWebhookTransport:
         self._attached = attached
         self._on_task_bound = on_task_bound
         self._event_sink: Any | None = None
+        #: Status message ids already returned by a synchronous reply or consumed from a push.
+        #: The NMS reports every status on both channels with one id, and its webhook retry sender
+        #: may deliver it more than once; the phase-level dedupe lives here so every protocol and
+        #: every round of the same run shares it.
+        self._seen_message_ids: set[str] = set()
 
     def set_event_sink(self, event_sink: Any | None) -> None:
         """Attach the live event sink used by ``run_client_flow``."""
@@ -1110,6 +1125,21 @@ class NmsWebhookTransport:
         """Forward one normalized event to the attached sink, when any."""
         if self._event_sink is not None:
             self._event_sink(event)
+
+    def _remember_message(self, event: Mapping[str, object]) -> bool:
+        """Record one inbound status message id; ``True`` when it was already seen.
+
+        Only a push is dropped on a repeat. The synchronous reply of the current send is the
+        authoritative answer to that request even when the same status was observed earlier, so a
+        repeated id there must not swallow the phase's only event.
+        """
+        message_id = _optional_str(event.get("message_id"))
+        if not message_id:
+            return False
+        if message_id in self._seen_message_ids:
+            return True
+        self._seen_message_ids.add(message_id)
+        return False
 
     def _bind_context(self, request: SendMessageRequest) -> None:
         """Stamp and bind the run's A2A context before the request leaves the process.
@@ -1168,6 +1198,9 @@ class NmsWebhookTransport:
         reply = await self._send_with_stream_conflict_retry(payload, extension_header)
         events: list[dict[str, object]] = []
         reply_event = _reply_event(reply)
+        # The vendor also pushes this same status; remember the reply's id before waiting so the
+        # queued twin is recognised regardless of which channel arrives first.
+        self._remember_message(reply_event)
         events.append(reply_event)
         self._emit(reply_event)
         task_id = _optional_str(reply_event.get("task_id"))
@@ -1224,10 +1257,20 @@ class NmsWebhookTransport:
                         " (handing the task to background tracking)" if budget != self._idle_timeout else "",
                     )
                     return events
+            event = _frame_to_event(pushed)
+            duplicate = self._remember_message(event)
+            # Record the frame even when the flow ignores it: wire.jsonl is evidence, and a
+            # dropped duplicate must stay visible (with its reason) rather than disappear.
             recorder = getattr(self._client, "record_inbound", None)
             if callable(recorder):
-                recorder(pushed, source="webhook")
-            event = _frame_to_event(pushed)
+                recorder(pushed, source="webhook", dropped="duplicate" if duplicate else "")
+            if duplicate:
+                _LOGGER.info(
+                    "ignoring a duplicate webhook push: message_id=%s state=%s",
+                    event.get("message_id"),
+                    event.get("state"),
+                )
+                continue
             events.append(event)
             self._emit(event)
             task_id = _optional_str(event.get("task_id")) or task_id

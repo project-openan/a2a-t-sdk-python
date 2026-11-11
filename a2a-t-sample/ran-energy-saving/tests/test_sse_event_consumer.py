@@ -95,6 +95,39 @@ def test_artifact_update_keeps_the_event_metadata() -> None:
     assert metadata[TASK_T_EXTENSION_URI] == "report metadata"
 
 
+def test_a_status_update_keeps_the_peer_message_id() -> None:
+    """The NMS reports one status on both channels; the id is what proves the copies are one."""
+    message = Message(role=Role.ROLE_AGENT, message_id="message-2")
+    message.parts.add(text="Not feasible, please confirm")
+    status = TaskStatus(state=TaskState.TASK_STATE_INPUT_REQUIRED)
+    status.message.CopyFrom(message)
+    response = StreamResponse(
+        status_update=TaskStatusUpdateEvent(
+            task_id="task-1",
+            context_id="context-1",
+            status=status,
+        )
+    )
+
+    event = normalize_event(response)
+
+    assert event["message_id"] == "message-2"
+
+
+def test_a_task_envelope_keeps_the_peer_status_message_id() -> None:
+    """The synchronous reply is a ``task`` document; its status message is the same one pushed."""
+    task = new_task_from_user_message(_user_message())
+    task.id = "task-1"
+    task.status.state = TaskState.TASK_STATE_INPUT_REQUIRED
+    message = Message(role=Role.ROLE_AGENT, message_id="message-3")
+    message.parts.add(text="Not feasible, please confirm")
+    task.status.message.CopyFrom(message)
+
+    event = normalize_event(StreamResponse(task=task))
+
+    assert event["message_id"] == "message-3"
+
+
 def test_a_status_update_keeps_the_peer_timestamp() -> None:
     """The peer's status time must survive so a replayed snapshot is distinguishable."""
     from google.protobuf.timestamp_pb2 import Timestamp
