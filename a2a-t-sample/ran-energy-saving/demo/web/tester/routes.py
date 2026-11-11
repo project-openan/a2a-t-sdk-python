@@ -6,13 +6,14 @@ The console is now catalog-driven: it lists the OSP YAML cases, starts one batch
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final
 
-from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog
+from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog, CatalogReloadError
 from protocol.client_service import RunManager
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
@@ -137,6 +138,21 @@ def build_tester_routes(
         """Return the whole case catalog; the page filters it client-side."""
         del request
         return JSONResponse({"cases": batches.catalog(), "count": resolved_catalog.count})
+
+    async def catalog_reload(request: Request) -> Response:
+        """Re-read the case YAML directory without restarting the UI process.
+
+        A malformed file rejects the whole reload: the catalog keeps serving the previous
+        snapshot, so one broken edit cannot empty the console mid-acceptance.
+        """
+        del request
+        try:
+            outcome = await asyncio.to_thread(resolved_catalog.reload)
+        except CatalogReloadError as exc:
+            return JSONResponse(
+                {"error": str(exc), "code": "catalog_reload_failed"}, status_code=422
+            )
+        return JSONResponse(outcome.to_dict())
 
     async def catalog_detail(request: Request) -> Response:
         """Return one case's summary and its full YAML document (read-only)."""
@@ -295,6 +311,9 @@ def build_tester_routes(
         Route("/tester/main.js", script),
         Route("/api/tester/meta", meta),
         Route("/api/tester/catalog", catalog_rows),
+        # Must precede the ``{case_id}`` route: Starlette matches in declaration order and would
+        # otherwise read "reload" as a case id.
+        Route("/api/tester/catalog/reload", catalog_reload, methods=["POST"]),
         Route("/api/tester/catalog/{case_id}", catalog_detail),
         Route("/api/tester/batches", list_batches),
         Route("/api/tester/batches", create_batch, methods=["POST"]),

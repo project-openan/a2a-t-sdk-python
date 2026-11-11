@@ -187,6 +187,19 @@ async def test_the_catalog_lists_the_51_osp_cases(client: httpx.AsyncClient) -> 
     assert first["protocols"] == ["a2a-t", "a2a"]
 
 
+async def test_the_catalog_reload_endpoint_reloads_without_a_restart(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post("/api/tester/catalog/reload")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 51
+    assert payload["added"] == []
+    assert payload["removed"] == []
+    assert payload["version"]
+    assert payload["loadedAt"]
+
+
 async def test_the_meta_lists_the_stage_chain(client: httpx.AsyncClient) -> None:
     response = await client.get("/api/tester/meta")
     assert response.status_code == 200
