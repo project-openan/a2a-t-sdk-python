@@ -9,7 +9,7 @@ section, leaving the raw values in the report for inspection.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
@@ -78,6 +78,27 @@ _RAT_ALIASES: Final[dict[str, str]] = {
 
 _SITE_PREFIXES: Final[tuple[str, ...]] = ("ne ", "base station ", "site ")
 
+#: Leaf fields of one area-level zone target, in display order.
+_ZONE_FIELDS: Final[tuple[str, ...]] = (
+    "Guaranteed throughput target",
+    "Effective time period",
+)
+
+#: Leaf fields of one site-level scenario entry, in display order.
+_SCENARIO_FIELDS: Final[tuple[str, ...]] = (
+    "Site list",
+    "Guaranteed throughput target by site",
+    "Scenario",
+    "Scenario period",
+)
+
+
+#: Status of one flattened intent leaf.
+INTENT_ROW_SAME: Final[str] = "same"
+INTENT_ROW_CHANGED: Final[str] = "changed"
+INTENT_ROW_MISSING: Final[str] = "missing"
+INTENT_ROW_ADDED: Final[str] = "added"
+
 
 @dataclass(frozen=True)
 class Diff:
@@ -98,6 +119,27 @@ class Diff:
         }
 
 
+@dataclass(frozen=True)
+class IntentRow:
+    """One flattened leaf of the 11-key intent and its comparison status."""
+
+    path: str
+    expected: object
+    actual: object
+    status: str
+    reason: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the JSON-friendly representation used by the tester table."""
+        return {
+            "path": self.path,
+            "expected": self.expected,
+            "actual": self.actual,
+            "status": self.status,
+            "reason": self.reason,
+        }
+
+
 def parse_sections(text: str) -> dict[str, str]:
     """Split one Task-T prompt into ``## Heading`` sections."""
     matches = list(_SECTION_RE.finditer(text))
@@ -109,24 +151,261 @@ def parse_sections(text: str) -> dict[str, str]:
     return sections
 
 
+def flatten_intent(
+    expected: Mapping[str, object],
+    actual: Mapping[str, object],
+) -> list[IntentRow]:
+    """Return every leaf of the 11-key intent as one comparison row.
+
+    Scalar keys stay one row. The two nested arrays (area-level zone targets and site-level
+    scenario targets) are flattened to their leaf fields, so a changed rate inside one segment is
+    reported at ``...by zone[0].Guaranteed throughput target`` instead of hiding inside the whole
+    array. Entries are paired after sorting by their business identity (effective period, site
+    list), which keeps the comparison insensitive to array order.
+    """
+    rows: list[IntentRow] = []
+    for key in OSP_INTENT_KEYS:
+        rows.extend(_intent_key_rows(key, expected.get(key), actual.get(key)))
+    return rows
+
+
 def compare_intent(
     expected: Mapping[str, object],
     actual: Mapping[str, object],
 ) -> list[Diff]:
-    """Compare the 11 expected intent keys after per-key normalization."""
-    diffs: list[Diff] = []
-    for key in OSP_INTENT_KEYS:
-        expected_value = expected.get(key)
-        actual_value = actual.get(key)
-        if _normalize_intent_value(key, expected_value) != _normalize_intent_value(key, actual_value):
-            diffs.append(
-                Diff(
-                    path=f"intent.{key}",
-                    expected=expected_value,
-                    actual=actual_value,
-                )
+    """Compare the 11 expected intent keys leaf by leaf after normalization."""
+    return [
+        Diff(
+            path=row.path,
+            expected=row.expected,
+            actual=row.actual,
+            reason=row.reason,
+        )
+        for row in flatten_intent(expected, actual)
+        if row.status != INTENT_ROW_SAME
+    ]
+
+
+def _intent_key_rows(key: str, expected: object, actual: object) -> list[IntentRow]:
+    """Flatten one top-level intent key."""
+    path = f"intent.{key}"
+    if key == "Guaranteed throughput target by zone":
+        return _zone_list_rows(path, expected, actual)
+    if key == "Scenario-based energy saving":
+        return _scenario_list_rows(path, expected, actual)
+    return [_intent_row(path, expected, actual, lambda value: _normalize_intent_value(key, value))]
+
+
+def _intent_row(
+    path: str,
+    expected: object,
+    actual: object,
+    normalizer: Callable[[object], object],
+    *,
+    forced: str | None = None,
+) -> IntentRow:
+    """Build one row, deciding its status from normalized values unless ``forced`` states it."""
+    expected_normalized = normalizer(expected)
+    actual_normalized = normalizer(actual)
+    if forced == INTENT_ROW_MISSING:
+        status, reason = INTENT_ROW_MISSING, "实际缺失"
+    elif forced == INTENT_ROW_ADDED:
+        status, reason = INTENT_ROW_ADDED, "实际新增"
+    elif expected_normalized == actual_normalized:
+        status = INTENT_ROW_SAME
+        reason = "归一化后一致" if expected != actual else ""
+    elif actual is None:
+        status, reason = INTENT_ROW_MISSING, "实际缺失"
+    elif expected is None:
+        status, reason = INTENT_ROW_ADDED, "实际新增"
+    else:
+        status, reason = INTENT_ROW_CHANGED, "归一化后不同"
+    return IntentRow(path, expected, actual, status, reason)
+
+
+def _zone_list_rows(path: str, expected: object, actual: object) -> list[IntentRow]:
+    """Flatten the area-level zone target array (each entry has a rate and a period)."""
+    expected_entries = _sorted_entries(expected, _zone_sort_key)
+    actual_entries = _sorted_entries(actual, _zone_sort_key)
+    if not expected_entries and not actual_entries:
+        return [
+            _intent_row(
+                path,
+                expected if expected is not None else [],
+                actual if actual is not None else [],
+                _normalize_zone_targets,
             )
-    return diffs
+        ]
+    rows: list[IntentRow] = []
+    for index in range(max(len(expected_entries), len(actual_entries))):
+        expected_entry = expected_entries[index] if index < len(expected_entries) else None
+        actual_entry = actual_entries[index] if index < len(actual_entries) else None
+        entry_path = f"{path}[{index}]"
+        if expected_entry is None:
+            rows.extend(_zone_entry_rows(entry_path, None, actual_entry, forced=INTENT_ROW_ADDED))
+        elif actual_entry is None:
+            rows.extend(
+                _zone_entry_rows(entry_path, expected_entry, None, forced=INTENT_ROW_MISSING)
+            )
+        else:
+            rows.extend(_zone_entry_rows(entry_path, expected_entry, actual_entry))
+    return rows
+
+
+def _zone_entry_rows(
+    path: str,
+    expected: object,
+    actual: object,
+    *,
+    forced: str | None = None,
+) -> list[IntentRow]:
+    """Flatten one zone entry (or one non-mapping item)."""
+    if not isinstance(expected, Mapping) and not isinstance(actual, Mapping):
+        return [_intent_row(path, expected, actual, _normalize_generic, forced=forced)]
+    expected_map = expected if isinstance(expected, Mapping) else {}
+    actual_map = actual if isinstance(actual, Mapping) else {}
+    fields = _ordered_fields(
+        expected_map, actual_map, _ZONE_FIELDS, include_empty=forced is None
+    )
+    return [
+        _intent_row(
+            f"{path}.{field}",
+            expected_map.get(field),
+            actual_map.get(field),
+            _zone_field_normalizer(field),
+            forced=forced,
+        )
+        for field in fields
+    ]
+
+
+def _scenario_list_rows(path: str, expected: object, actual: object) -> list[IntentRow]:
+    """Flatten the site-level scenario array, including its nested per-site targets."""
+    expected_entries = _sorted_entries(expected, _scenario_sort_key)
+    actual_entries = _sorted_entries(actual, _scenario_sort_key)
+    if not expected_entries and not actual_entries:
+        return [
+            _intent_row(
+                path,
+                expected if expected is not None else [],
+                actual if actual is not None else [],
+                _normalize_scenario_based,
+            )
+        ]
+    rows: list[IntentRow] = []
+    for index in range(max(len(expected_entries), len(actual_entries))):
+        expected_entry = expected_entries[index] if index < len(expected_entries) else None
+        actual_entry = actual_entries[index] if index < len(actual_entries) else None
+        entry_path = f"{path}[{index}]"
+        if expected_entry is None:
+            rows.extend(
+                _scenario_entry_rows(entry_path, None, actual_entry, forced=INTENT_ROW_ADDED)
+            )
+        elif actual_entry is None:
+            rows.extend(
+                _scenario_entry_rows(entry_path, expected_entry, None, forced=INTENT_ROW_MISSING)
+            )
+        else:
+            rows.extend(_scenario_entry_rows(entry_path, expected_entry, actual_entry))
+    return rows
+
+
+def _scenario_entry_rows(
+    path: str,
+    expected: object,
+    actual: object,
+    *,
+    forced: str | None = None,
+) -> list[IntentRow]:
+    """Flatten one scenario entry (or one non-mapping item)."""
+    if not isinstance(expected, Mapping) and not isinstance(actual, Mapping):
+        return [_intent_row(path, expected, actual, _normalize_generic, forced=forced)]
+    expected_map = expected if isinstance(expected, Mapping) else {}
+    actual_map = actual if isinstance(actual, Mapping) else {}
+    fields = _ordered_fields(
+        expected_map, actual_map, _SCENARIO_FIELDS, include_empty=forced is None
+    )
+    rows: list[IntentRow] = []
+    for field in fields:
+        expected_value = expected_map.get(field)
+        actual_value = actual_map.get(field)
+        if field == "Guaranteed throughput target by site":
+            rows.extend(_zone_list_rows(f"{path}.{field}", expected_value, actual_value))
+            continue
+        rows.append(
+            _intent_row(
+                f"{path}.{field}",
+                expected_value,
+                actual_value,
+                _scenario_field_normalizer(field),
+                forced=forced,
+            )
+        )
+    return rows
+
+
+def _ordered_fields(
+    expected: Mapping[str, object],
+    actual: Mapping[str, object],
+    preferred: tuple[str, ...],
+    *,
+    include_empty: bool,
+) -> tuple[str, ...]:
+    """Return the preferred fields first, then any extra field either side carries.
+
+    ``include_empty`` keeps the schema's preferred leaf even when neither side carries it, so a
+    matched entry always shows the full shape. An unmatched entry passes ``False``: listing fields
+    neither side has would report a missing value that the entry never claimed.
+    """
+    keys = set(expected) | set(actual)
+    ordered = tuple(field for field in preferred if include_empty or field in keys)
+    extras = sorted(keys - set(preferred))
+    return (*ordered, *extras)
+
+
+def _sorted_entries(value: object, sort_key: Callable[[object], tuple[str, ...]]) -> list[object]:
+    """Return the list entries sorted by their business identity."""
+    if value is None:
+        return []
+    entries = list(value) if isinstance(value, list | tuple) else [value]
+    return sorted(entries, key=sort_key)
+
+
+def _zone_sort_key(entry: object) -> tuple[str, ...]:
+    if not isinstance(entry, Mapping):
+        return (repr(_normalize_generic(entry)),)
+    return (
+        repr(_normalize_time(entry.get("Effective time period"))),
+        repr(_normalize_rate(entry.get("Guaranteed throughput target"))),
+    )
+
+
+def _scenario_sort_key(entry: object) -> tuple[str, ...]:
+    if not isinstance(entry, Mapping):
+        return (repr(_normalize_generic(entry)),)
+    return (
+        repr(_normalize_sites(entry.get("Site list"))),
+        repr(_normalize_scenario_value(entry.get("Scenario"))),
+        repr(_normalize_time(entry.get("Scenario period"))),
+    )
+
+
+def _zone_field_normalizer(field: str) -> Callable[[object], object]:
+    if field == "Guaranteed throughput target":
+        return _normalize_rate
+    if field == "Effective time period":
+        return _normalize_time
+    return _normalize_generic
+
+
+def _scenario_field_normalizer(field: str) -> Callable[[object], object]:
+    if field == "Site list":
+        return _normalize_sites
+    if field == "Scenario":
+        return _normalize_scenario_value
+    if field == "Scenario period":
+        return _normalize_time
+    return _normalize_generic
 
 
 def compare_task_t(expected_text: str, actual_text: str) -> list[Diff]:
@@ -512,13 +791,18 @@ def _normalize_scenario_based(value: object) -> tuple[object, ...]:
             continue
         sites = _normalize_sites(item.get("Site list"))
         targets = _normalize_zone_targets(item.get("Guaranteed throughput target by site"))
-        scenario = _clean_text(str(item.get("Scenario") or "")).lower()
-        if scenario in {"outage", "power cut", "power outage"}:
-            # "Outage" and "power outage" name the same background event.
-            scenario = "power outage"
+        scenario = _normalize_scenario_value(item.get("Scenario"))
         period = _normalize_time(item.get("Scenario period"))
         entries.append((sites, targets, scenario, period))
     return tuple(sorted(entries, key=repr))
+
+
+def _normalize_scenario_value(value: object) -> str:
+    text = _clean_text(str(value or "")).lower()
+    if text in {"outage", "power cut", "power outage"}:
+        # "Outage" and "power outage" name the same background event.
+        return "power outage"
+    return text
 
 
 def _normalize_sites(value: object) -> tuple[str, ...]:

@@ -678,12 +678,12 @@ function appendBaselineBlock(body, item) {
   body.append(block);
 }
 
-function appendStageBlock(body, label, result) {
+function appendStageBlock(body, label, result, skipDetails = false) {
   const block = el("section", "diff-block");
   const head = el("div", "diff-head");
   head.append(el("strong", "", label), badge(result.status), el("span", "summary", result.message || ""));
   block.append(head);
-  if (result.expected !== undefined || result.actual !== undefined) {
+  if (!skipDetails && (result.expected !== undefined || result.actual !== undefined)) {
     const summary = el("div", "diff-summary");
     summary.append(
       el("div", "", `预期：${textBlock(result.expected)}`),
@@ -692,7 +692,7 @@ function appendStageBlock(body, label, result) {
     block.append(summary);
   }
   const diffs = Array.isArray(result.diffs) ? result.diffs : [];
-  if (diffs.length) {
+  if (!skipDetails && diffs.length) {
     const table = el("table", "grid diff-table");
     const thead = document.createElement("thead");
     const headRow = document.createElement("tr");
@@ -715,6 +715,45 @@ function appendStageBlock(body, label, result) {
   body.append(block);
 }
 
+const INTENT_ROW_LABELS = {
+  same: "一致",
+  changed: "不同",
+  missing: "缺失",
+  added: "新增",
+};
+
+function appendIntentCompareTable(body, rows) {
+  const block = el("section", "diff-block");
+  const head = el("div", "diff-head");
+  const differing = rows.filter((row) => row.status && row.status !== "same").length;
+  head.append(
+    el("strong", "", "意图逐字段对比"),
+    el("span", "summary", differing ? `${differing} 个字段有差异` : "全部字段一致"),
+  );
+  block.append(head);
+  const table = el("table", "grid diff-table intent-diff-table");
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const title of ["字段", "期望", "实际", "状态", "说明"]) headRow.append(el("th", "", title));
+  thead.append(headRow);
+  const tbody = document.createElement("tbody");
+  for (const row of rows) {
+    const status = String(row.status || "same");
+    const tr = el("tr", `intent-${status}`);
+    tr.append(
+      el("td", "mono", row.path || ""),
+      el("td", "mono pre", textBlock(row.expected)),
+      el("td", "mono pre", textBlock(row.actual)),
+      el("td", "", INTENT_ROW_LABELS[status] || status),
+      el("td", "", row.reason || ""),
+    );
+    tbody.append(tr);
+  }
+  table.append(thead, tbody);
+  block.append(table);
+  body.append(block);
+}
+
 function renderResultTab(item, body) {
   appendBaselineBlock(body, item);
   appendContextBlock(body, item);
@@ -734,17 +773,31 @@ function renderResultTab(item, body) {
       if (result) appendStageBlock(body, `拦截/${STAGE_LABELS[stage] || stage}`, result);
     }
   }
+  const intentRows = Array.isArray(item.intentCompare) ? item.intentCompare : [];
+  let intentTableRendered = false;
   for (const stage of STAGE_ORDER) {
     const result = stages[stage];
     if (!result) continue;
-    appendStageBlock(body, STAGE_LABELS[stage] || stage, result);
+    const hasIntentTable = stage === "intent" && intentRows.length > 0;
+    appendStageBlock(body, STAGE_LABELS[stage] || stage, result, hasIntentTable);
+    if (hasIntentTable) {
+      appendIntentCompareTable(body, intentRows);
+      intentTableRendered = true;
+    }
   }
-  if (item.serverIntent && typeof item.serverIntent === "object") {
-    body.append(caseSection("意图理解结果（服务端）", item.serverIntent));
+  if (!intentTableRendered && intentRows.length) {
+    appendIntentCompareTable(body, intentRows);
   }
-  const expectedIntent = item.refs?.expectedIntent;
-  if (expectedIntent && typeof expectedIntent === "object") {
-    body.append(caseSection("期望意图", expectedIntent));
+  if (!intentRows.length) {
+    // No comparable server payload (proxy hop, simulator, or a run that stopped early): keep the
+    // raw evidence instead of inventing a comparison.
+    if (item.serverIntent && typeof item.serverIntent === "object") {
+      body.append(caseSection("意图理解结果（服务端）", item.serverIntent));
+    }
+    const expectedIntent = item.refs?.expectedIntent;
+    if (expectedIntent && typeof expectedIntent === "object") {
+      body.append(caseSection("期望意图", expectedIntent));
+    }
   }
   if (item.intent && typeof item.intent === "object") {
     body.append(caseSection("SDK 抽取意图（辅助证据）", item.intent));

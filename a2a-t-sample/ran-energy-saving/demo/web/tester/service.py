@@ -29,7 +29,7 @@ from typing import Any, Final
 
 import httpx
 from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog
-from eval.osp.compare import compare_intent
+from eval.osp.compare import compare_intent, flatten_intent
 from eval.osp.followup import followup_case, followup_input, has_followup, is_blocked_case
 from eval.osp.runner import (
     STAGE_ERROR,
@@ -167,6 +167,12 @@ _SIM_SERVER_INTENT_MESSAGE: Final[str] = (
     "模拟器返回的意图键集与厂商不同，只记录，不据此判定。"
 )
 
+#: Message of the intent stage on a pure-A2A proxy hop: the OSS Agent owns the outer Task and
+#: its business intent payload has a different key set, so only a direct vendor payload is judged.
+_A2A_PROXY_SERVER_INTENT_MESSAGE: Final[str] = (
+    "A2A 非直连厂商链路返回的意图只记录，不据此判定。"
+)
+
 #: Message of the intent stage when the case carries no expectation to compare with.
 _NO_EXPECTED_INTENT_MESSAGE: Final[str] = "用例没有期望意图，只记录。"
 
@@ -286,6 +292,13 @@ class CaseItem:
     #: The interception the case expects before its follow-up request (``blocked_followup``).
     interception: dict[str, object] | None = None
 
+    def intent_comparison(self) -> list[dict[str, object]]:
+        """Return the flattened expected-vs-server intent rows, empty when one side is absent."""
+        expected = self.refs.get("expectedIntent")
+        if not isinstance(expected, Mapping) or not isinstance(self.server_intent, Mapping):
+            return []
+        return [row.to_dict() for row in flatten_intent(expected, self.server_intent)]
+
     def to_dict(self) -> dict[str, object]:
         """Return the JSON-friendly representation."""
         return {
@@ -304,6 +317,7 @@ class CaseItem:
             "traceId": self.trace_id,
             "intent": self.intent,
             "serverIntent": self.server_intent,
+            "intentCompare": self.intent_comparison(),
             "intentMeta": dict(self.intent_meta),
             "refs": dict(self.refs),
             "answer": self.answer,
@@ -1671,7 +1685,13 @@ class EvalBatchManager:
             "expectedFinalState": block.get("final_state"),
         }
         stage = item.stages.get("intent")
-        if stage is not None and isinstance(stage.actual, Mapping):
+        # Only the A2A-T SDK stage is our own extraction. A pure-A2A intent stage holds the
+        # downstream's payload, which the ``serverIntent`` column already owns.
+        if (
+            item.protocol != PROTOCOL_A2A
+            and stage is not None
+            and isinstance(stage.actual, Mapping)
+        ):
             item.intent = {str(key): value for key, value in stage.actual.items()}
         if not item.intent_meta.get("rawRequest"):
             item.intent_meta["rawRequest"] = str(item.refs.get("userInput") or "")
@@ -1727,6 +1747,15 @@ class EvalBatchManager:
         payload = run.server_intent
         item.server_intent = dict(payload) if isinstance(payload, Mapping) else None
         stage = item.stages.get("intent")
+        if (
+            stage is None
+            and item.protocol == PROTOCOL_A2A
+            and item.server_intent is not None
+        ):
+            # Pure A2A runs no SDK stages, but a direct vendor payload is still the downstream's
+            # own reading. Give that payload a comparison stage; no payload keeps the old shape.
+            stage = StageResult(stage="intent", status=STAGE_RECORDED)
+            item.stages["intent"] = stage
         if stage is None or case is None:
             return
         if item.server_intent is None:
@@ -1738,18 +1767,30 @@ class EvalBatchManager:
             stage.message = _NO_SERVER_INTENT_MESSAGE
             return
         stage.actual = dict(item.server_intent)
-        stage.diffs = []
+        expected = item.refs.get("expectedIntent")
+        has_expected = isinstance(expected, Mapping) and bool(expected)
+        if has_expected and stage.expected is None:
+            stage.expected = dict(expected)
+        stage.diffs = (
+            [diff.to_dict() for diff in compare_intent(expected, item.server_intent)]
+            if has_expected
+            else []
+        )
         if self._nms_sim:
             stage.status = STAGE_RECORDED
             stage.message = _SIM_SERVER_INTENT_MESSAGE
             return
-        expected = item.refs.get("expectedIntent")
-        if not isinstance(expected, Mapping) or not expected:
+        if item.protocol == PROTOCOL_A2A and run.discovery != DISCOVERY_NMS:
+            # The OSS proxy owns a different business-intent payload; judge only a direct vendor
+            # payload so a proxy hop never turns a case red on a key set it cannot reproduce.
+            stage.status = STAGE_RECORDED
+            stage.message = _A2A_PROXY_SERVER_INTENT_MESSAGE
+            return
+        if not has_expected:
             stage.status = STAGE_RECORDED
             stage.message = _NO_EXPECTED_INTENT_MESSAGE
             return
-        diffs = compare_intent(expected, item.server_intent)
-        stage.diffs = [diff.to_dict() for diff in diffs]
+        diffs = stage.diffs
         if not _assertion_enabled(case, "", "intent"):
             stage.status = STAGE_RECORDED
             stage.message = _ASSERTION_OFF_MESSAGE

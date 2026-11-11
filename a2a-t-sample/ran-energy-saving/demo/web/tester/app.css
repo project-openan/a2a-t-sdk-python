@@ -556,6 +556,10 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .diff-table { width: 100%; }
 .diff-table td.mono { font-family: var(--mono); font-size: 11px; }
 .diff-table td.pre { white-space: pre-wrap; word-break: break-word; max-width: 220px; }
+.intent-diff-table tr.intent-changed td { background: var(--yellow-soft); }
+.intent-diff-table tr.intent-missing td { background: var(--red-soft); }
+.intent-diff-table tr.intent-added td { background: var(--green-soft); }
+.intent-diff-table tr.intent-same td { color: var(--g700); }
 
 .drawer-tools { display: flex; align-items: center; gap: 6px; }
 .tab.small { padding: 4px 10px; font-size: 12px; border-bottom-width: 1px; }

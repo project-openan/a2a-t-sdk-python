@@ -1178,6 +1178,8 @@ async def _run_item_with_server_intent(
     payload: Mapping[str, object] | None,
     *,
     nms_sim: bool = False,
+    protocol: str = PROTOCOL_A2A_T,
+    protocol_defaults: dict[str, dict[str, str]] | None = None,
 ) -> CaseItem:
     """Run case 1 to ``final`` against a fake run carrying one downstream payload."""
 
@@ -1185,10 +1187,15 @@ async def _run_item_with_server_intent(
         _finish(run)
         run.server_intent = dict(payload) if payload is not None else None
 
-    manager = _manager(tmp_path, _FakeRuns(builder), nms_sim=nms_sim)
+    manager = _manager(
+        tmp_path,
+        _FakeRuns(builder),
+        nms_sim=nms_sim,
+        protocol_defaults=protocol_defaults,
+    )
     created = manager.create(
         case_ids=[1],
-        protocols=[PROTOCOL_A2A_T],
+        protocols=[protocol],
         stop_after="final",
         approval=None,
         timeout_seconds=None,
@@ -1254,6 +1261,80 @@ async def test_the_simulator_payload_is_recorded_not_judged(tmp_path: Path) -> N
         "Operation type": "Create",
         "Energy saving region": "A2ATestRegion",
     }
+
+
+async def test_a_direct_pure_a2a_run_judges_the_vendor_intent(tmp_path: Path) -> None:
+    item = await _run_item_with_server_intent(
+        tmp_path,
+        CASES[1]["expect"]["intent"],
+        protocol=PROTOCOL_A2A,
+        protocol_defaults=DIRECT_PURE_DEFAULTS,
+    )
+
+    stage = item.stages["intent"]
+    assert stage.status == STAGE_PASSED
+    assert stage.actual == CASES[1]["expect"]["intent"]
+    assert stage.diffs == []
+
+
+async def test_a_direct_pure_a2a_intent_mismatch_fails_the_stage(tmp_path: Path) -> None:
+    payload = dict(CASES[1]["expect"]["intent"])
+    payload["Energy saving region"] = "OtherRegion"
+    item = await _run_item_with_server_intent(
+        tmp_path,
+        payload,
+        protocol=PROTOCOL_A2A,
+        protocol_defaults=DIRECT_PURE_DEFAULTS,
+    )
+
+    stage = item.stages["intent"]
+    assert stage.status == STAGE_FAILED
+    assert any(diff["path"] == "intent.Energy saving region" for diff in stage.diffs)
+    assert item.status == "failed"
+
+
+async def test_a_proxy_pure_a2a_intent_is_recorded_not_judged(tmp_path: Path) -> None:
+    payload = dict(CASES[1]["expect"]["intent"])
+    payload["Energy saving region"] = "OtherRegion"
+    item = await _run_item_with_server_intent(
+        tmp_path,
+        payload,
+        protocol=PROTOCOL_A2A,
+    )
+
+    stage = item.stages["intent"]
+    assert stage.status == STAGE_RECORDED
+    assert stage.diffs
+
+
+async def test_a_pure_a2a_sim_intent_is_recorded_not_judged(tmp_path: Path) -> None:
+    payload = dict(CASES[1]["expect"]["intent"])
+    payload["Energy saving region"] = "OtherRegion"
+    item = await _run_item_with_server_intent(
+        tmp_path,
+        payload,
+        protocol=PROTOCOL_A2A,
+        protocol_defaults=DIRECT_PURE_DEFAULTS,
+        nms_sim=True,
+    )
+
+    assert item.stages["intent"].status == STAGE_RECORDED
+
+
+async def test_the_serialized_intent_comparison_lists_every_nested_leaf(
+    tmp_path: Path,
+) -> None:
+    item = await _run_item_with_server_intent(tmp_path, CASES[1]["expect"]["intent"])
+
+    rows = item.to_dict()["intentCompare"]
+
+    paths = {row["path"] for row in rows}
+    assert (
+        "intent.Guaranteed throughput target by zone[0].Guaranteed throughput target"
+        in paths
+    )
+    assert "intent.Operation type" in paths
+    assert all(row["status"] == "same" for row in rows)
 
 
 async def test_a_working_item_releases_its_remote_task_after_the_evidence(

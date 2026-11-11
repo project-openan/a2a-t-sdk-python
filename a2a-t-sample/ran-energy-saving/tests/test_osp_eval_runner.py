@@ -15,7 +15,15 @@ from a2a_t.core.errors.exceptions import (
     PromptGenerationError,
     SlotValidationError,
 )
-from eval.osp.compare import compare_intent, compare_task_t
+from eval.osp.compare import (
+    INTENT_ROW_ADDED,
+    INTENT_ROW_CHANGED,
+    INTENT_ROW_MISSING,
+    INTENT_ROW_SAME,
+    compare_intent,
+    compare_task_t,
+    flatten_intent,
+)
 from eval.osp.followup import followup_input
 from eval.osp.intent_schema import OSP_INTENT_SCHEMA
 from eval.osp.runner import (
@@ -285,6 +293,127 @@ def test_compare_intent_treats_null_and_empty_lists_as_equal() -> None:
         "Scenario-based energy saving": None,
     }
     assert compare_intent(expected, actual) == []
+
+
+def test_flatten_intent_compares_nested_zone_fields_leaf_by_leaf() -> None:
+    expected = {
+        "Operation type": "Create",
+        "Guaranteed throughput target by zone": [
+            {"Guaranteed throughput target": "10Mbps", "Effective time period": "19:00-22:00"}
+        ],
+    }
+    actual = {
+        "Operation type": "Create",
+        "Guaranteed throughput target by zone": [
+            {"Guaranteed throughput target": "5Mbps", "Effective time period": "19:00-22:00"}
+        ],
+    }
+
+    rows = {row.path: row for row in flatten_intent(expected, actual)}
+
+    assert rows["intent.Operation type"].status == INTENT_ROW_SAME
+    rate = rows[
+        "intent.Guaranteed throughput target by zone[0].Guaranteed throughput target"
+    ]
+    assert rate.status == INTENT_ROW_CHANGED
+    assert rate.expected == "10Mbps"
+    assert rate.actual == "5Mbps"
+    period = rows["intent.Guaranteed throughput target by zone[0].Effective time period"]
+    assert period.status == INTENT_ROW_SAME
+
+
+def test_flatten_intent_marks_normalized_equality_with_a_reason() -> None:
+    expected = {"Energy saving time": "19:00-22:00", "Gain target": "10"}
+    actual = {
+        "Energy saving time": (
+            "19:00:00-19:59:59&20:00:00-20:59:59&21:00:00-21:59:59"
+        ),
+        "Gain target": "10%",
+    }
+
+    rows = {row.path: row for row in flatten_intent(expected, actual)}
+
+    assert rows["intent.Energy saving time"].status == INTENT_ROW_SAME
+    assert rows["intent.Energy saving time"].reason == "归一化后一致"
+    assert rows["intent.Gain target"].status == INTENT_ROW_SAME
+
+
+def test_flatten_intent_pairs_scenario_entries_by_site_list() -> None:
+    expected = {
+        "Scenario-based energy saving": [
+            {"Site list": ["NE 1"], "Scenario period": "08:00-10:00"},
+            {"Site list": ["NE 2"], "Scenario period": "08:00-10:00"},
+        ]
+    }
+    actual = {
+        "Scenario-based energy saving": [
+            {"Site list": ["NE 2"], "Scenario period": "08:00-10:00"},
+            {"Site list": ["NE 1"], "Scenario period": "08:00-10:00"},
+        ]
+    }
+
+    rows = flatten_intent(expected, actual)
+
+    assert [row.status for row in rows if ".Site list" in row.path] == [
+        INTENT_ROW_SAME,
+        INTENT_ROW_SAME,
+    ]
+
+
+def test_flatten_intent_reports_a_missing_nested_entry_as_missing_leaves() -> None:
+    expected = {
+        "Guaranteed throughput target by zone": [
+            {"Guaranteed throughput target": "10Mbps", "Effective time period": "01:00-02:00"},
+            {"Guaranteed throughput target": "5Mbps", "Effective time period": "03:00-04:00"},
+        ]
+    }
+    actual = {
+        "Guaranteed throughput target by zone": [
+            {"Guaranteed throughput target": "10Mbps", "Effective time period": "01:00-02:00"}
+        ]
+    }
+
+    rows = {row.path: row for row in flatten_intent(expected, actual)}
+
+    missing = rows[
+        "intent.Guaranteed throughput target by zone[1].Guaranteed throughput target"
+    ]
+    assert missing.status == INTENT_ROW_MISSING
+    assert missing.expected == "5Mbps"
+
+
+def test_compare_intent_reports_nested_leaf_paths() -> None:
+    expected = {
+        "Guaranteed throughput target by zone": [
+            {"Guaranteed throughput target": "10Mbps", "Effective time period": "19:00-22:00"}
+        ]
+    }
+    actual = {
+        "Guaranteed throughput target by zone": [
+            {"Guaranteed throughput target": "5Mbps", "Effective time period": "19:00-22:00"}
+        ]
+    }
+
+    diffs = compare_intent(expected, actual)
+
+    assert [diff.path for diff in diffs] == [
+        "intent.Guaranteed throughput target by zone[0].Guaranteed throughput target"
+    ]
+
+
+def test_flatten_intent_reports_an_added_leaf_inside_a_nested_entry() -> None:
+    expected = {"Scenario-based energy saving": [{"Site list": ["NE 1"]}]}
+    actual = {
+        "Scenario-based energy saving": [
+            {"Site list": ["NE 1"], "Scenario": "Power outage"}
+        ]
+    }
+
+    rows = {row.path: row for row in flatten_intent(expected, actual)}
+
+    added = rows["intent.Scenario-based energy saving[0].Scenario"]
+    assert added.status == INTENT_ROW_ADDED
+    assert added.actual == "Power outage"
 
 
 def test_runner_passes_a_clean_case() -> None:
