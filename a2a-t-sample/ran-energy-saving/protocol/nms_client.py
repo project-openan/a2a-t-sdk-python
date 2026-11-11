@@ -42,6 +42,7 @@ from shared.config import (
     DEFAULT_NMS_POLL_AFTER_SECONDS,
     DEFAULT_NMS_POLL_INTERVAL_SECONDS,
     DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS,
+    DEFAULT_NMS_SEND_TIMEOUT_SECONDS,
     SampleConfig,
 )
 from shared.run_constants import PROTOCOL_A2A_T, PROTOCOL_PURE
@@ -141,6 +142,17 @@ def is_stream_conflict(exc: BaseException) -> bool:
     return "TASK_STREAM_CONFLICT" in message or "active stream" in message.lower()
 
 
+def _http_error_detail(exc: httpx.HTTPError) -> str:
+    """Return a self-describing HTTP error string.
+
+    ``str(httpx.ReadTimeout())`` is empty, so the field UI showed a bare
+    ``NMS A2A request failed:`` and the operator could not tell a timeout from a protocol error.
+    """
+    text = str(exc).strip()
+    name = type(exc).__name__
+    return f"{name}: {text}" if text else name
+
+
 class NmsTimeoutError(NmsError):
     """Raised when a Task does not reach a terminal state within the budget."""
 
@@ -190,6 +202,7 @@ class NmsConfig:
     idle_timeout: float = DEFAULT_NMS_IDLE_TIMEOUT_SECONDS
     read_after_send: bool = True
     request_timeout: float = DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS
+    send_timeout: float = DEFAULT_NMS_SEND_TIMEOUT_SECONDS
     poll_interval: float = DEFAULT_NMS_POLL_INTERVAL_SECONDS
     poll_after_silence: float = DEFAULT_NMS_POLL_AFTER_SECONDS
     defer_to_tracker: bool = False
@@ -224,6 +237,7 @@ class NmsConfig:
             idle_timeout=config.nms_idle_timeout,
             read_after_send=config.nms_read_after_send,
             request_timeout=config.nms_request_timeout,
+            send_timeout=config.nms_send_timeout,
             poll_interval=config.nms_poll_interval,
             poll_after_silence=config.nms_poll_after_silence,
             defer_to_tracker=config.defer_to_tracker,
@@ -318,7 +332,7 @@ class NmsClient:
                     timeout=self._config.request_timeout,
                 )
             except httpx.HTTPError as exc:
-                raise NmsAuthError(f"NMS token request failed: {exc}") from exc
+                raise NmsAuthError(f"NMS token request failed: {_http_error_detail(exc)}") from exc
             if response.status_code != 200:
                 raise NmsAuthError(f"NMS token request returned HTTP {response.status_code}: {_excerpt(response.text)}")
             try:
@@ -403,8 +417,8 @@ class NmsClient:
             detail={"url": url, "a2aT": bool(extension_header)},
         )
         timeout = httpx.Timeout(
-            self._config.request_timeout,
-            connect=min(DEFAULT_NMS_CONNECT_TIMEOUT_SECONDS, self._config.request_timeout),
+            self._config.send_timeout,
+            connect=min(DEFAULT_NMS_CONNECT_TIMEOUT_SECONDS, self._config.send_timeout),
         )
         started = time.monotonic()
         try:
@@ -500,7 +514,7 @@ class NmsClient:
                             idle_deadline = time.monotonic() + idle_timeout
                     yield frame
         except httpx.HTTPError as exc:
-            raise NmsProtocolError(f"NMS A2A request failed: {exc}") from exc
+            raise NmsProtocolError(f"NMS A2A request failed: {_http_error_detail(exc)}") from exc
 
     async def send_message(
         self,
@@ -529,8 +543,8 @@ class NmsClient:
             detail={"url": url, "a2aT": bool(extension_header)},
         )
         timeout = httpx.Timeout(
-            self._config.request_timeout,
-            connect=min(DEFAULT_NMS_CONNECT_TIMEOUT_SECONDS, self._config.request_timeout),
+            self._config.send_timeout,
+            connect=min(DEFAULT_NMS_CONNECT_TIMEOUT_SECONDS, self._config.send_timeout),
         )
         started = time.monotonic()
         try:
@@ -541,7 +555,7 @@ class NmsClient:
                 timeout=timeout,
             )
         except httpx.HTTPError as exc:
-            raise NmsProtocolError(f"NMS A2A request failed: {exc}") from exc
+            raise NmsProtocolError(f"NMS A2A request failed: {_http_error_detail(exc)}") from exc
         if response.status_code != 200:
             body = response.text
             headers_seen = _failure_headers(response)
@@ -606,7 +620,7 @@ class NmsClient:
         try:
             response = await self._http.get(url, headers=headers, timeout=self._config.request_timeout)
         except httpx.HTTPError as exc:
-            raise NmsProtocolError(f"NMS task request failed: {exc}") from exc
+            raise NmsProtocolError(f"NMS task request failed: {_http_error_detail(exc)}") from exc
         if response.status_code != 200:
             self._record_failure_response(response, url=url, elapsed_seconds=time.monotonic() - started)
             raise NmsProtocolError(
@@ -642,7 +656,7 @@ class NmsClient:
         try:
             response = await self._http.get(url, headers=headers, timeout=self._config.request_timeout)
         except httpx.HTTPError as exc:
-            raise NmsProtocolError(f"NMS task list request failed: {exc}") from exc
+            raise NmsProtocolError(f"NMS task list request failed: {_http_error_detail(exc)}") from exc
         if response.status_code != 200:
             self._record_failure_response(response, url=url, elapsed_seconds=time.monotonic() - started)
             raise NmsProtocolError(
@@ -682,7 +696,7 @@ class NmsClient:
                 url, headers=headers, json={"id": task_id}, timeout=self._config.request_timeout
             )
         except httpx.HTTPError as exc:
-            raise NmsProtocolError(f"NMS cancel request failed: {exc}") from exc
+            raise NmsProtocolError(f"NMS cancel request failed: {_http_error_detail(exc)}") from exc
         if response.status_code == 503:
             _LOGGER.warning("NMS cancel is unsupported (HTTP 503) for task %s", task_id)
             _nms_span(

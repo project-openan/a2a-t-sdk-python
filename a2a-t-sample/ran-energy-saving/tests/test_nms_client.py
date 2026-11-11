@@ -27,6 +27,7 @@ from protocol.nms_client import (
     NmsWebhookTransport,
     _frame_to_event,
 )
+from shared.config import SampleConfig
 from shared.run_constants import PROTOCOL_PURE
 from shared.trace import trace_scope
 from shared.trace_propagation import propagated_trace
@@ -1604,3 +1605,44 @@ async def test_webhook_transport_keeps_the_push_configuration_out_of_a_task_cont
     configuration = client.payload.get("configuration") or {}
     assert isinstance(configuration, dict)
     assert "taskPushNotificationConfig" not in configuration
+
+
+def test_a_timeout_error_is_self_describing() -> None:
+    """``str(ReadTimeout())`` is empty; the field UI must still show why the hop failed."""
+    from protocol.nms_client import _http_error_detail
+
+    assert _http_error_detail(httpx.ReadTimeout("")) == "ReadTimeout"
+    assert (
+        _http_error_detail(httpx.ConnectError("connection refused"))
+        == "ConnectError: connection refused"
+    )
+
+
+def test_the_send_timeout_is_mapped_from_the_sample_config() -> None:
+    """``message:send`` gets its own budget; GET/poll keeps the shorter request timeout."""
+    config = SampleConfig(
+        model_mode="offline",
+        language="en-US",
+        host="127.0.0.1",
+        port=8000,
+        registry_url="http://127.0.0.1:5001",
+        webhook_port=9000,
+        webhook_token="token",
+        webhook_idle_timeout=30,
+        adk_model_provider="litellm",
+        adk_model_name="model",
+        adk_model_api_base="http://127.0.0.1:1/v1",
+        adk_model_api_key="none",
+        discovery="nms",
+        nms_a2a_base="https://nms.example/a2a/json",
+        nms_token_url="https://nms.example/sessions",
+        nms_token_user="user",
+        nms_token_value="secret",
+        nms_request_timeout=120.0,
+        nms_send_timeout=300.0,
+    )
+
+    nms = NmsConfig.from_config(config)
+
+    assert nms.request_timeout == 120.0
+    assert nms.send_timeout == 300.0

@@ -421,8 +421,12 @@ path). The server fetches each trace and derives the A2A / A2A-T metrics with th
 
 The sample can also act as the OSS client of a real vendor NMS. With `--nms`, the launcher starts
 no local registry, RAN Agent or MIE: the A2A-T client obtains a session token from the NMS token
-endpoint and calls its A2A surface directly. `--nms --protocol a2a` keeps the local OSS Agent
-(engineer UI → OSS Agent → NMS) and drops only the RAN Agent and MIE.
+endpoint and calls its A2A surface directly. Standard A2A (`--nms --protocol a2a`) uses the same
+**direct hop**: the `taskId`/`contextId` on the wire are the vendor's own Task, so Create, Modify
+and the negotiation answer are 1:1 with the vendor contract. The old
+`UI → OSS Agent → NMS` proxy is still available with `--pure-hop oss`, but it is intended for the
+local three-hop demo; the combination with a real NMS is deprecated because it adds an outer Task
+and a downstream binding the vendor contract does not need.
 
 A real `--nms` run uses **`POST /a2a/json/message:send` plus a webhook** (the vendor's direct
 machine-to-machine mode). The local NMS simulator keeps the SSE `message:stream` contract.
@@ -518,9 +522,10 @@ collide with another instance; it must differ from the UI port. The OSS Agent is
 port is already held by a previously recorded OSS process, so callback changes never reuse stale
 configuration.
 
-In A2A + `--nms` the OSS Agent posts its NMS token/send/poll spans into the same run, so the session
-trace shows `NMS session token acquired`, `NMS A2A stream opened` and the rest of the real
-downstream hop, and status text distinguishes `NMS` from the local `RAN Agent`. Use `--ui --mode confirm` for the send-time intent
+In A2A + `--nms` the direct client posts its NMS token/send/poll spans into the same run, so the
+session trace shows `NMS session token acquired`, `NMS A2A stream opened` and the rest of the real
+hop. With the optional `--pure-hop oss` proxy, the OSS Agent posts them instead, and status text
+distinguishes `NMS` from the local `RAN Agent`. Use `--ui --mode confirm` for the send-time intent
 review; server-side approval 2 does not exist in NMS mode because the vendor owns execution.
 
 The launcher also pins the topology it selected in each child's environment. The UI receives the
@@ -550,7 +555,7 @@ instance needs its own launcher state, data directory, UI port and webhook port:
 |---|---|---|
 | UI | 8080 | 8081 |
 | Webhook | 9000 | 9001 |
-| OSS Agent | not started | 8011 |
+| OSS Agent | not started | not started (only with the optional `--pure-hop oss` proxy) |
 | `A2AT_SAMPLE_RUN_DIR` | `%TEMP%/a2at-ran-energy-saving-adk` | `%TEMP%/a2at-ran-energy-saving-adk-a2a` |
 | `A2AT_SAMPLE_RUNS_DIR` | `runs` | `runs-a2a` |
 
@@ -562,19 +567,22 @@ A2AT_SAMPLE_UI_PORT=8080 \
 A2AT_SAMPLE_WEBHOOK_PORT=9000 \
 python run_demo.py --nms --ui --brand huawei
 
-# Instance B (A2A: UI -> local OSS Agent -> NMS)
+# Instance B (A2A: UI -> NMS direct by default)
 A2AT_SAMPLE_RUN_DIR=/tmp/a2at-adk-a2a \
 A2AT_SAMPLE_RUNS_DIR=runs-a2a \
 A2AT_SAMPLE_UI_PORT=8081 \
 A2AT_SAMPLE_WEBHOOK_PORT=9001 \
-python run_demo.py --nms --protocol a2a --ui --brand huawei --oss-port 8011
+python run_demo.py --nms --protocol a2a --ui --brand huawei
+
+# Legacy proxy topology (optional; local demo / product-topology experiments only)
+python run_demo.py --nms --protocol a2a --pure-hop oss --ui --brand huawei --oss-port 8011
 ```
 
 `--stop` reads only that instance's `A2AT_SAMPLE_RUN_DIR/pids.json`, so stopping B leaves A
-running. In A2A + NMS the UI talks to the local OSS Agent over direct A2A/SSE; the OSS Agent talks
-to the NMS over plain A2A (webhook, or SSE for `--nms-sim`). The OSS Agent answers the NMS's
-`INPUT_REQUIRED` with the same ADK decision agent used by the A2A-T client and renders the decision
-as natural-language text.
+running. In A2A + NMS the UI calls the vendor NMS directly: the Task on the wire is the vendor's
+Task, and the same ADK decision agent answers the vendor's plain-text questions. With the explicit
+`--pure-hop oss` proxy, the UI talks to the local OSS Agent and the OSS Agent talks to the NMS; the
+outer Task and downstream binding then exist, which is why the direct hop is the default.
 
 If the NMS rejects a A2A follow-up that carries `taskId`, set
 `A2AT_SAMPLE_PURE_FOLLOWUP=context` (or `task` for `taskId` only) and retry; the default is `both`.

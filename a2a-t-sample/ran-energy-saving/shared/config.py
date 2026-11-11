@@ -9,6 +9,7 @@ object.
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 from collections.abc import Mapping
@@ -19,6 +20,8 @@ from typing import Literal
 from dotenv import dotenv_values
 
 from shared.run_constants import LANGUAGE_ZH, PROTOCOL_A2A_T, SERVER_PROTOCOL_MODES, SUPPORTED_LANGUAGES
+
+_LOGGER = logging.getLogger(__name__)
 
 #: Model modes.
 MODEL_MODE_LIVE = "live"
@@ -210,6 +213,9 @@ NMS_READ_AFTER_SEND_ENV_KEY = "A2AT_SAMPLE_NMS_READ_AFTER_SEND"
 #: omits the field on the proposal that continues a negotiation; without this the run fails hard.
 NMS_INFER_NEGOTIATION_KIND_ENV_KEY = "A2AT_SAMPLE_NMS_INFER_NEGOTIATION_KIND"
 NMS_REQUEST_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_NMS_REQUEST_TIMEOUT_SECONDS"
+#: Budget of one ``message:send`` (Create / Modify / negotiation answer). The vendor's Create can
+#: take 200+ seconds; GET/poll/cancel keep the shorter request timeout.
+NMS_SEND_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_NMS_SEND_TIMEOUT_SECONDS"
 #: Region the vendor NMS serves. When set, ``--nms`` overrides the scenario region with it.
 NMS_REGION_ENV_KEY = "A2AT_SAMPLE_NMS_REGION"
 #: Whether the A2A-T hop targets the local simulator. The tester records (instead of asserting)
@@ -321,8 +327,12 @@ DEFAULT_GATEWAY_SCENARIO = "information"
 #: heartbeats do not count as progress.
 DEFAULT_NMS_IDLE_TIMEOUT_SECONDS = 120.0
 DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS = 120.0
+#: A vendor Create has been observed at 200+ seconds; the send budget is separate from polling.
+DEFAULT_NMS_SEND_TIMEOUT_SECONDS = 300.0
 #: Polling faster than this spends the NMS quota bucket on observations instead of requests.
-DEFAULT_NMS_POLL_INTERVAL_SECONDS = 5.0
+#: The vendor's request handling is slow (Create has been observed at 200+ seconds); a 30 s poll
+#: cadence avoids piling requests onto a busy NMS while a long task runs.
+DEFAULT_NMS_POLL_INTERVAL_SECONDS = 30.0
 
 #: The region of the 910 test environment is intentionally not a default. A real-NMS run must
 #: configure it explicitly; the launcher pins it only for the local simulator. The example requests
@@ -386,9 +396,20 @@ def _pure_followup(values: dict[str, str | None]) -> str:
     return value
 
 
-def _pure_hop(values: dict[str, str | None]) -> str:
-    """Resolve the hop of a standard A2A request, rejecting an unsupported value."""
-    value = _env_value(values, PURE_HOP_ENV_KEY, DEFAULT_PURE_HOP).lower()
+def _pure_hop(values: dict[str, str | None], discovery: str) -> str:
+    """Resolve the hop of a standard A2A request, rejecting an unsupported value.
+
+    A vendor-NMS deployment defaults to the direct hop: the OSS role is the client, so the NMS
+    Task is the only Task. The OSS Agent proxy remains the default for the local three-hop demo
+    (there is no NMS endpoint there).
+    """
+    explicit = _env_value(values, PURE_HOP_ENV_KEY, "").strip().lower()
+    if explicit:
+        value = explicit
+    elif discovery == DISCOVERY_NMS:
+        value = PURE_HOP_NMS
+    else:
+        value = PURE_HOP_OSS
     if value not in SUPPORTED_PURE_HOPS:
         raise ValueError(
             f"Unsupported {PURE_HOP_ENV_KEY}: {value}; expected one of {SUPPORTED_PURE_HOPS}"
@@ -667,7 +688,9 @@ class SampleConfig:
         nms_infer_negotiation_kind: whether a real-NMS propose without ``templateUri`` is typed
             from the opening heading of its body (the vendor omits the field on a continuation
             proposal). A body without a known heading still fails.
-        nms_request_timeout: per-request budget of one NMS A2A call.
+        nms_request_timeout: per-request budget of one NMS GET/poll/cancel/token call.
+        nms_send_timeout: budget of one ``message:send`` (Create / Modify / answer); the vendor's
+            Create has been observed at 200+ seconds.
         nms_poll_interval: seconds between task polls while waiting for a terminal state.
         nms_region: region the vendor NMS serves; when set, ``--nms`` overrides the scenario
             region with it.
@@ -765,6 +788,7 @@ class SampleConfig:
     nms_read_after_send: bool = True
     nms_infer_negotiation_kind: bool = True
     nms_request_timeout: float = DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS
+    nms_send_timeout: float = DEFAULT_NMS_SEND_TIMEOUT_SECONDS
     nms_poll_interval: float = DEFAULT_NMS_POLL_INTERVAL_SECONDS
     nms_region: str = ""
     nms_sites: tuple[str, ...] = ()
@@ -831,11 +855,21 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
     if discovery not in SUPPORTED_DISCOVERY_MODES:
         raise ValueError(f"Unsupported {DISCOVERY_ENV_KEY}: {discovery}; expected one of {SUPPORTED_DISCOVERY_MODES}")
 
-    pure_hop = _pure_hop(values)
+    pure_hop = _pure_hop(values, discovery)
     if pure_hop == PURE_HOP_NMS and discovery != DISCOVERY_NMS:
         raise ValueError(
             f"{PURE_HOP_ENV_KEY}=nms requires {DISCOVERY_ENV_KEY}=nms; a direct standard A2A "
             "client has no OSS Agent to discover"
+        )
+    if pure_hop == PURE_HOP_OSS and discovery == DISCOVERY_NMS:
+        # The proxy combined with a real NMS is the topology that produced the outer Task,
+        # downstream binding and baseline races. Keep it available for explicitly reproducing the
+        # old demo, but never select it by default.
+        _LOGGER.warning(
+            "%s=oss with %s=nms keeps the deprecated OSS proxy in front of the vendor NMS; "
+            "use the direct hop (omit the key) for vendor acceptance",
+            PURE_HOP_ENV_KEY,
+            DISCOVERY_ENV_KEY,
         )
 
     transport = _env_value(values, TRANSPORT_ENV_KEY, TRANSPORT_SSE)
@@ -1043,6 +1077,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         nms_read_after_send=_env_bool(values, NMS_READ_AFTER_SEND_ENV_KEY, True),
         nms_infer_negotiation_kind=_env_bool(values, NMS_INFER_NEGOTIATION_KIND_ENV_KEY, True),
         nms_request_timeout=_positive_seconds(values, NMS_REQUEST_TIMEOUT_ENV_KEY, DEFAULT_NMS_REQUEST_TIMEOUT_SECONDS),
+        nms_send_timeout=_positive_seconds(values, NMS_SEND_TIMEOUT_ENV_KEY, DEFAULT_NMS_SEND_TIMEOUT_SECONDS),
         nms_region=_env_value(values, NMS_REGION_ENV_KEY, "").strip(),
         nms_sites=_nms_sites(values, ()),
         nms_sim=_env_bool(values, NMS_SIM_ENV_KEY, False),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -61,6 +62,7 @@ from shared.config import (
     NMS_REGION_ENV_KEY,
     NMS_REQUEST_TIMEOUT_ENV_KEY,
     NMS_SCHEME_ENV_KEY,
+    NMS_SEND_TIMEOUT_ENV_KEY,
     NMS_SITES_ENV_KEY,
     NMS_STATE_POLL_ENV_KEY,
     NMS_TOKEN_PORT_ENV_KEY,
@@ -698,6 +700,30 @@ def test_nms_discovery_loads_the_vendor_connection_settings(tmp_path: Path) -> N
     assert config.nms_request_timeout == 90.0
 
 
+def test_the_nms_send_timeout_defaults_to_300_and_can_be_overridden(tmp_path: Path) -> None:
+    """The vendor's Create has been observed at 200+ seconds; sends get a separate budget."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_DISCOVERY=nms",
+                f"{NMS_A2A_BASE_ENV_KEY}=https://nms.example:31127/a2a/json",
+                f"{NMS_TOKEN_URL_ENV_KEY}=https://nms.example:27417/rest/plat/smapp/v1/sessions",
+                f"{NMS_TOKEN_USER_ENV_KEY}=northbound",
+                f"{NMS_TOKEN_VALUE_ENV_KEY}=secret",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert load_config(env_path=env_file).nms_send_timeout == 300.0
+
+    env_file.write_text(
+        env_file.read_text(encoding="utf-8") + f"\n{NMS_SEND_TIMEOUT_ENV_KEY}=450\n",
+        encoding="utf-8",
+    )
+    assert load_config(env_path=env_file).nms_send_timeout == 450.0
+
+
 def test_nms_host_alone_derives_both_standard_urls(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -1066,6 +1092,51 @@ def test_pure_hop_nms_loads_with_the_nms_discovery(tmp_path: Path) -> None:
     )
 
     assert load_config(env_path=env_file).pure_hop == PURE_HOP_NMS
+
+
+def test_the_nms_discovery_defaults_to_the_direct_hop(tmp_path: Path) -> None:
+    """A vendor-NMS deployment uses the direct hop unless it explicitly asks for the proxy."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_DISCOVERY=nms",
+                f"{NMS_A2A_BASE_ENV_KEY}=https://nms.example:31127/a2a/json",
+                f"{NMS_TOKEN_URL_ENV_KEY}=https://nms.example:27417/rest/plat/smapp/v1/sessions",
+                f"{NMS_TOKEN_USER_ENV_KEY}=northbound",
+                f"{NMS_TOKEN_VALUE_ENV_KEY}=secret",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_config(env_path=env_file).pure_hop == PURE_HOP_NMS
+
+
+def test_the_proxy_hop_with_a_vendor_nms_loads_but_is_deprecated(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The old proxy+NMS topology is explicit only; the local three-hop demo keeps it by default."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_DISCOVERY=nms",
+                f"{PURE_HOP_ENV_KEY}={PURE_HOP_OSS}",
+                f"{NMS_A2A_BASE_ENV_KEY}=https://nms.example:31127/a2a/json",
+                f"{NMS_TOKEN_URL_ENV_KEY}=https://nms.example:27417/rest/plat/smapp/v1/sessions",
+                f"{NMS_TOKEN_USER_ENV_KEY}=northbound",
+                f"{NMS_TOKEN_VALUE_ENV_KEY}=secret",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="shared.config"):
+        config = load_config(env_path=env_file)
+
+    assert config.pure_hop == PURE_HOP_OSS
+    assert "deprecated" in caplog.text
 
 
 def test_pure_hop_rejects_an_unknown_value(tmp_path: Path) -> None:
