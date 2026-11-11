@@ -1176,3 +1176,15 @@ def test_a_real_nms_run_still_requires_the_webhook_transport(
     with pytest.raises(SystemExit) as error:
         run_demo.main()
     assert error.value.code == 2
+
+
+def test_child_env_pins_the_launcher_run_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The web process must read the same launcher log directory the console indexes."""
+    monkeypatch.setattr(run_demo, "RUN_DIR", tmp_path / "state")
+    monkeypatch.setenv("A2AT_SAMPLE_RUN_DIR", "/inherited/elsewhere")
+
+    env = run_demo._child_env("en-US")
+
+    assert env["A2AT_SAMPLE_RUN_DIR"] == str(tmp_path / "state")

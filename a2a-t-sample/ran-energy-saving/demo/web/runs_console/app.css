@@ -244,6 +244,99 @@ table.grid tr:last-child td { border-bottom: 0; }
 .wire .method { font-family: var(--mono); font-weight: 600; }
 .raw pre { max-height: none; }
 
+/* ---------- summary ---------- */
+.summary { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.summary-status { font-size: 15px; font-weight: 600; }
+.summary-status .failed, .summary-status .interrupted { color: var(--bad); }
+.summary-status .running { color: var(--warn); }
+.summary-status .finished { color: var(--ok); }
+.summary-line { color: var(--muted); font-size: 12px; }
+.summary-identity { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; }
+.summary-identity .id { display: inline-flex; align-items: center; gap: 4px; }
+.summary-identity a { color: var(--accent); }
+.summary-all { margin-top: 4px; }
+.summary-all summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.summary-all .kv { grid-template-columns: 150px 1fr; margin-top: 8px; }
+
+/* ---------- log stream ---------- */
+.log-toolbar {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.source-toggles { display: flex; gap: 10px; align-items: center; font-size: 12px; color: var(--muted); }
+.source-toggles label { display: inline-flex; gap: 4px; align-items: center; }
+.compact { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--muted); }
+.compact.grow { flex: 1; min-width: 180px; }
+.compact input[type="search"] { min-width: 180px; }
+.notice.small { margin: 0; padding: 6px 10px; font-size: 12px; }
+.log-list { display: flex; flex-direction: column; gap: 2px; }
+.log-entry { border: 1px solid var(--line); border-radius: 6px; background: #fcfcfa; }
+.log-entry summary {
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 86px 92px 58px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 9px;
+  list-style: none;
+}
+.log-entry summary::-webkit-details-marker { display: none; }
+.log-time { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+.log-phase {
+  font-size: 11px;
+  color: var(--accent);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 6px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.log-phase.inferred { color: var(--muted); border-style: dashed; }
+.log-source { font-size: 11px; font-weight: 600; color: var(--g700); }
+.log-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-title .muted { margin-left: 6px; font-size: 11px; }
+.log-entry pre {
+  margin: 0;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  background: #f7f7f4;
+  max-height: 420px;
+  overflow: auto;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.log-footer { display: flex; align-items: center; gap: 12px; padding: 4px 2px; }
+.log-empty { padding: 18px 12px; text-align: center; color: var(--muted); }
+
+/* ---------- raw files ---------- */
+.raw-layout { display: grid; grid-template-columns: minmax(160px, 220px) minmax(0, 1fr); gap: 10px; align-items: start; }
+.raw-files { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 6px; }
+.raw-file {
+  text-align: left;
+  border: 0;
+  background: transparent;
+  border-radius: 5px;
+  padding: 5px 7px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--ink);
+}
+.raw-file:hover { background: #fbf7f2; }
+.raw-file.active { background: var(--accent-soft); color: var(--accent); }
+.raw-file.unavailable { color: var(--muted); cursor: not-allowed; text-decoration: line-through; }
+.raw-view { min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 8px 10px; }
+.raw-view pre { margin: 8px 0 0; max-height: 65vh; overflow: auto; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 .footer {
   display: flex;
   justify-content: space-between;

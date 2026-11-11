@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
@@ -254,3 +256,122 @@ async def test_the_console_exposes_the_downstream_task_of_a_two_hop_run(
     assert detail["serverContextId"] == "outer-ctx"
     assert detail["downstreamContextId"] == "nms-ctx"
     assert detail["downstreamTaskId"] == "nms-task"
+
+
+async def _start_finished_page_run(client: httpx.AsyncClient) -> str:
+    """Start one page run and wait until its transcript is persisted."""
+    started = await client.post(
+        "/api/runs",
+        json={
+            "scenario": "night",
+            "mode": "auto",
+            "protocol": PROTOCOL_A2A_T,
+            "userRequest": "timeline API run",
+            "source": "presentation",
+        },
+    )
+    assert started.status_code in (200, 202)
+    run_id = started.json()["runId"]
+    await _wait_finished(client, run_id)
+    return run_id
+
+
+async def test_the_detail_endpoints_serve_summary_timeline_negotiation_and_files(
+    console_client: tuple[httpx.AsyncClient, SqliteClientStore],
+) -> None:
+    client, _store = console_client
+    run_id = await _start_finished_page_run(client)
+
+    summary = await client.get(f"/api/run-console/runs/{run_id}/summary")
+    assert summary.status_code == 200
+    summary_payload = summary.json()
+    assert summary_payload["run"]["runId"] == run_id
+    assert "traceId" in summary_payload["run"]
+    assert "chainId" in summary_payload["run"]
+    assert summary_payload["counts"]["bySource"]["client"] >= 1
+    assert "metrics" in summary_payload
+
+    timeline = await client.get(f"/api/run-console/runs/{run_id}/timeline?limit=2")
+    assert timeline.status_code == 200
+    timeline_payload = timeline.json()
+    assert timeline_payload["total"] >= 1
+    assert len(timeline_payload["entries"]) <= 2
+    entry = timeline_payload["entries"][0]
+    assert {"id", "source", "phase", "title", "payloadAvailable"} <= set(entry)
+    assert "payload" not in entry
+
+    one_entry = await client.get(
+        f"/api/run-console/runs/{run_id}/timeline/{entry['id']}"
+    )
+    assert one_entry.status_code == 200
+    assert "payload" in one_entry.json()
+
+    negotiation = await client.get(f"/api/run-console/runs/{run_id}/negotiation")
+    assert negotiation.status_code == 200
+    assert "turns" in negotiation.json()
+    assert "negotiationEvents" in negotiation.json()
+
+    files = await client.get(f"/api/run-console/runs/{run_id}/files")
+    assert files.status_code == 200
+    by_name = {item["name"]: item for item in files.json()["files"]}
+    assert by_name["transcript.json"]["available"] is True
+    assert by_name["metrics.json"]["available"] is True
+
+    transcript = await client.get(
+        f"/api/run-console/runs/{run_id}/files/transcript.json"
+    )
+    assert transcript.status_code == 200
+    assert '"scenario"' in transcript.text
+
+
+async def test_the_timeline_filters_by_source_and_keyword(
+    console_client: tuple[httpx.AsyncClient, SqliteClientStore],
+) -> None:
+    client, _store = console_client
+    run_id = await _start_finished_page_run(client)
+
+    clients_only = await client.get(
+        f"/api/run-console/runs/{run_id}/timeline?source=client"
+    )
+    assert clients_only.status_code == 200
+    assert clients_only.json()["total"] >= 1
+    assert {entry["source"] for entry in clients_only.json()["entries"]} == {"client"}
+
+    wires_only = await client.get(
+        f"/api/run-console/runs/{run_id}/timeline?source=wire"
+    )
+    assert wires_only.status_code == 200
+    assert wires_only.json()["total"] == 0
+
+    missing = await client.get(
+        f"/api/run-console/runs/{run_id}/timeline?q=no-such-log-text"
+    )
+    assert missing.status_code == 200
+    assert missing.json()["total"] == 0
+
+
+async def test_unknown_runs_and_unsafe_file_names_are_rejected(
+    console_client: tuple[httpx.AsyncClient, SqliteClientStore],
+) -> None:
+    client, _store = console_client
+
+    for suffix in ("summary", "timeline", "negotiation", "files"):
+        response = await client.get(f"/api/run-console/runs/no-such-run/{suffix}")
+        assert response.status_code == 404, suffix
+
+    unsafe = await client.get("/api/run-console/runs/no-such-run/files/..%2F.env")
+    assert unsafe.status_code in (400, 404)
+
+
+def test_the_run_console_js_helpers_pass_node() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    harness = Path(__file__).resolve().parent / "js" / "run_console.test.mjs"
+    completed = subprocess.run(
+        [node, str(harness)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr

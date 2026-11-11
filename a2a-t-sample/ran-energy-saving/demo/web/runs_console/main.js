@@ -1,22 +1,10 @@
 /**
  * Internal run console.
  *
- * Lists persisted client runs and renders one run's metrics, timeline, negotiation events, wire
- * payloads and request source. Everything is built with textContent: run data is untrusted and
- * must never become markup.
+ * Lists persisted client runs and renders one run as a compact summary plus one merged, filtered
+ * log stream. Payloads and raw files are fetched on demand so a long run never ships as one dump.
+ * Everything is built with textContent: run data is untrusted and must never become markup.
  */
-
-const state = {
-  meta: null,
-  runs: [],
-  total: 0,
-  selectedRunId: null,
-  detail: null,
-  tab: "overview",
-  refreshTimer: null,
-  loading: false,
-  detailSeq: 0,
-};
 
 const PROTOCOL_LABELS = { "a2a-t": "A2A-T", pure: "A2A", plain: "plain" };
 const STATUS_LABELS = {
@@ -42,28 +30,61 @@ const SOURCE_LABELS = {
   api: "API",
   cli: "CLI",
 };
-const SOURCE_FIELDS = [
-  ["kind", "来源类型"],
-  ["channel", "入口通道"],
-  ["remoteAddress", "客户端地址"],
-  ["realIp", "X-Real-IP"],
-  ["forwardedFor", "X-Forwarded-For"],
-  ["host", "Host"],
-  ["origin", "Origin"],
-  ["referer", "Referer"],
-  ["userAgent", "User-Agent"],
-  ["acceptLanguage", "Accept-Language"],
-  ["requestId", "请求 ID"],
-  ["entryPath", "入口路径"],
-  ["receivedAt", "接收时间"],
-  ["batchId", "测试批次"],
-  ["batchName", "批次文件"],
-  ["caseId", "用例编号"],
-  ["caseName", "用例名称"],
-  ["taskId", "网关 Task"],
-  ["contextId", "网关 Context"],
-  ["messageId", "网关消息"],
+const LOG_SOURCE_LABELS = {
+  wire: "wire",
+  client: "client",
+  server: "server",
+  process: "进程",
+};
+const PHASE_LABELS = {
+  dispatch: "预检",
+  task_prompt: "Task-T",
+  task_validation: "校验",
+  task_modify: "Modify",
+  negotiation: "协商",
+  resolution: "决策",
+  execution: "执行",
+  report: "回调",
+  done: "结束",
+  unknown: "未知",
+};
+const PHASE_ORDER = [
+  "dispatch",
+  "task_prompt",
+  "task_validation",
+  "task_modify",
+  "negotiation",
+  "resolution",
+  "execution",
+  "report",
+  "done",
+  "unknown",
 ];
+const PAGE_SIZE = 200;
+const PAYLOAD_CACHE_LIMIT = 50;
+
+const state = {
+  meta: null,
+  runs: [],
+  total: 0,
+  selectedRunId: null,
+  summary: null,
+  tab: "logs",
+  loading: false,
+  log: {
+    entries: [],
+    total: 0,
+    nextOffset: null,
+    phase: "",
+    query: "",
+    loading: false,
+    requestSeq: 0,
+  },
+  payloadCache: new Map(),
+  rawFiles: [],
+  rawName: null,
+  rawSeq: 0,
+};
 
 const $ = (id) => document.getElementById(id);
 
@@ -125,7 +146,15 @@ function formatTime(value) {
     + `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-function formatDuration(ms) {
+function formatClock(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+export function formatDuration(ms) {
   if (typeof ms !== "number" || Number.isNaN(ms)) return "—";
   if (ms < 1000) return `${Math.round(ms)} ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(1)} s`;
@@ -160,6 +189,10 @@ function sourceLabel(value) {
   return SOURCE_LABELS[value] || (value ? value : "未知");
 }
 
+export function phaseLabel(value) {
+  return PHASE_LABELS[value] || value || "未知";
+}
+
 async function fetchJson(url) {
   const response = await fetch(url, { headers: { accept: "application/json" } });
   if (response.status === 401 || response.status === 403) {
@@ -183,6 +216,8 @@ function showNotice(message) {
   notice.hidden = false;
 }
 
+/* ---------------------------------------------------------------- run list */
+
 function filters() {
   const params = new URLSearchParams();
   const pairs = [
@@ -203,31 +238,6 @@ function sourceBadge(kind, channel) {
   const badge = el("span", "source-badge", sourceLabel(kind));
   if (channel) badge.title = channel;
   return badge;
-}
-
-/** Human name of the far side this run's server forwarded the task to. */
-function targetName(run) {
-  const hop = run.downstreamHop || (run.discovery === "nms" ? "nms" : "ran");
-  return hop === "ran" ? "RAN Agent" : "NMS";
-}
-
-/** Label the contexts by the hop each one belongs to.
- *
- * A2A-T and the gateway talk to the RAN/NMS directly, so their server context is the target's.
- * A pure client run talks to the OSS Agent first; its server context belongs to that hop and the
- * downstream fields carry the NMS/RAN Task the OSS continued on its own side.
- */
-function contextLabels(run) {
-  const target = targetName(run);
-  if (run.protocol === "a2a-t" || run.sourceKind === "gateway") {
-    return { server: `${target} Context`, serverTask: `${target} Task`, downstream: null };
-  }
-  return {
-    server: "OSS Context",
-    serverTask: "OSS Task",
-    downstream: `${target} Context`,
-    downstreamTask: `${target} Task`,
-  };
 }
 
 function statusNode(value) {
@@ -272,9 +282,7 @@ function renderRows() {
       "mono",
       run.downstreamContextId ? shortId(run.downstreamContextId) : "—",
     );
-    if (run.downstreamContextId) {
-      downstreamCell.title = `${contextLabels(run).downstream} ${run.downstreamContextId}`;
-    }
+    if (run.downstreamContextId) downstreamCell.title = run.downstreamContextId;
     append(row, downstreamCell);
     const requestCell = el("td", "request");
     const request = el("div", "request-text", run.userRequest || "—");
@@ -359,6 +367,101 @@ function refreshScenarios() {
   }
 }
 
+/* ----------------------------------------------------------------- summary */
+
+function idItem(label, value, { mono = true } = {}) {
+  const wrap = el("span", "id");
+  wrap.title = value || "";
+  append(wrap, el("span", "muted", `${label} `), el("span", mono ? "mono" : "", shortId(value)));
+  return wrap;
+}
+
+function renderSummary() {
+  const payload = state.summary;
+  if (!payload) return;
+  const run = payload.run || {};
+  $("detail-run-id").textContent = run.runId || "";
+
+  const status = $("summary-status");
+  clear(status);
+  const statusClass = run.status === "finished" ? "finished" : run.status || "";
+  append(
+    status,
+    el("span", statusClass, statusLabel(run.status)),
+    el("span", "muted", " · "),
+    el("span", "", finalStateLabel(run.finalState)),
+  );
+  if (run.error) append(status, el("span", " failed", ` · ${run.error}`));
+
+  const metrics = payload.metrics || {};
+  const latency = metrics.latency || {};
+  const negotiation = metrics.negotiation || {};
+  const metricParts = [
+    protocolLabel(run.protocol),
+    run.scenario,
+    sourceLabel(run.sourceKind),
+    formatDuration(run.durationMs ?? latency.totalMs),
+    negotiation.rounds !== undefined ? `协商 ${negotiation.rounds} 轮` : "",
+  ].filter(Boolean);
+  $("summary-metrics").textContent = metricParts.join(" · ");
+
+  const identity = $("summary-identity");
+  clear(identity);
+  append(
+    identity,
+    idItem("Run", run.runId),
+    idItem("Conv", run.conversationId),
+    idItem("trace", run.traceId),
+  );
+  if (run.serverTaskId) append(identity, idItem("Task", run.serverTaskId));
+  if (run.serverContextId) append(identity, idItem("Context", run.serverContextId));
+  if (run.downstreamTaskId) append(identity, idItem("下游 Task", run.downstreamTaskId));
+  if (run.downstreamContextId) append(identity, idItem("下游 Context", run.downstreamContextId));
+
+  const all = $("summary-all-body");
+  clear(all);
+  const list = el("dl", "kv");
+  for (const [key, value] of Object.entries(run)) {
+    if (value === null || value === undefined || value === "") continue;
+    append(list, el("dt", "", key), el("dd", key === "runId" ? "mono" : "", valueText(value)));
+  }
+  all.appendChild(list);
+
+  const links = $("detail-links");
+  clear(links);
+  const consoleBase = `/api/run-console/runs/${encodeURIComponent(run.runId)}`;
+  for (const [label, href] of [
+    ["transcript.json", `${consoleBase}/transcript.json`],
+    ["transcript.md", `${consoleBase}/transcript.md`],
+    ["Langfuse 导出", "/observe"],
+  ]) {
+    const link = el("a", "", label);
+    link.href = href;
+    link.target = "_blank";
+    link.rel = "noopener";
+    links.appendChild(link);
+  }
+}
+
+async function loadSummary() {
+  if (!state.selectedRunId) return;
+  const payload = await fetchJson(
+    `/api/run-console/runs/${encodeURIComponent(state.selectedRunId)}/summary`,
+  );
+  state.summary = payload;
+  renderSummary();
+  renderPhaseOptions();
+}
+
+/* ------------------------------------------------------------------ metrics */
+
+function metricCard(label, value, hint) {
+  const card = el("div", "metric");
+  append(card, el("div", "label", label), el("div", "value", value));
+  if (hint) append(card, el("div", "muted", hint));
+  return card;
+}
+
 function kvCard(title, pairs) {
   const card = el("section", "card");
   append(card, el("h3", "", title));
@@ -368,74 +471,6 @@ function kvCard(title, pairs) {
   }
   append(card, list);
   return card;
-}
-
-function metricCard(label, value, hint) {
-  const card = el("div", "metric");
-  append(card, el("div", "label", label), el("div", "value", value));
-  if (hint) append(card, el("div", "muted", hint));
-  return card;
-}
-
-function detailStatus(detail) {
-  return (detail.live && detail.live.status) || detail.status || "";
-}
-
-function renderOverview(detail) {
-  const panel = $("tab-overview");
-  clear(panel);
-  const source = detail.source && typeof detail.source === "object" ? detail.source : {};
-  const live = detail.live || {};
-  const task = detail.taskSnapshot || {};
-  const sourcePairs = SOURCE_FIELDS
-    .filter(([key]) => source[key] !== undefined && source[key] !== null && source[key] !== "")
-    .map(([key, label]) => [label, source[key], ["remoteAddress", "receivedAt"].includes(key)]);
-  if (!sourcePairs.length) sourcePairs.push(["来源", "旧运行未记录来源", false]);
-
-  append(
-    panel,
-    kvCard("基本", [
-      ["Run ID", detail.runId, true],
-      ["Conversation", detail.conversationId, true],
-      ["Turn", detail.turnId, true],
-      ["外部会话", detail.externalConversationId, true],
-      ["调用方", detail.userId, false],
-      ["协议", protocolLabel(detail.protocol), false],
-      ["场景", detail.scenario, false],
-      ["模式", detail.mode, false],
-      ["传输", detail.transport, false],
-      ["发现", detail.discovery, false],
-      ["意图模式", detail.intentMode, false],
-      ["状态", statusLabel(live.status || detail.status), false],
-      ["最终状态", finalStateLabel(detail.finalState), false],
-      ["错误", detail.error, false],
-      ["创建", formatTime(detail.createdAt), false],
-      ["更新", formatTime(detail.updatedAt), false],
-      ["完成", formatTime(detail.finishedAt), false],
-      ["幂等键", detail.idempotencyKey, true],
-    ]),
-    kvCard("请求", [
-      ["用户请求", detail.userRequest, false],
-      ...contextRows(detail),
-      ["Task 快照状态", task.state, false],
-      ["Task 快照更新", formatTime(task.updatedAt), false],
-    ]),
-    kvCard("请求来源", sourcePairs),
-  );
-}
-
-/** Context/Task rows of one run, labelled by hop so two A2A contexts are never conflated. */
-function contextRows(detail) {
-  const labels = contextLabels(detail);
-  const rows = [
-    [labels.server, detail.serverContextId, true],
-    [labels.serverTask, detail.serverTaskId, true],
-  ];
-  if (labels.downstream) {
-    rows.push([labels.downstream, detail.downstreamContextId, true]);
-    rows.push([labels.downstreamTask, detail.downstreamTaskId, true]);
-  }
-  return rows;
 }
 
 function renderTokens(tokens) {
@@ -538,12 +573,16 @@ function renderAccuracy(accuracy) {
     if (check === null || typeof check !== "object") {
       append(row, el("td", "", name), el("td", "", "不适用"), el("td", "", "—"), el("td", "", "—"));
     } else {
+      const expected = el("td", "wrap-code");
+      expected.appendChild(objectCell(check.expected));
+      const actual = el("td", "wrap-code");
+      actual.appendChild(objectCell(check.actual));
       append(
         row,
         el("td", "", name),
         el("td", check.passed === true ? "status finished" : "status failed", check.passed === true ? "通过" : "未通过"),
-        el("td", "wrap-code", pretty(check.expected)),
-        el("td", "wrap-code", pretty(check.actual)),
+        expected,
+        actual,
       );
     }
     body.appendChild(row);
@@ -553,10 +592,10 @@ function renderAccuracy(accuracy) {
   return card;
 }
 
-function renderMetrics(detail) {
+function renderMetrics() {
   const panel = $("tab-metrics");
   clear(panel);
-  const metrics = detail.metrics;
+  const metrics = state.summary ? state.summary.metrics : null;
   if (!metrics) {
     append(panel, el("p", "muted", "这次运行还没有持久化指标（运行中或数据库写入失败）。"));
     return;
@@ -578,42 +617,21 @@ function renderMetrics(detail) {
   );
 }
 
-function transcriptOf(detail) {
-  return detail.transcript || (detail.live && detail.live.transcript) || {};
+/* -------------------------------------------------------------- negotiation */
+
+export function compactObject(value) {
+  if (value === null || value === undefined) return "—";
+  if (Array.isArray(value)) return `数组 · ${value.length} 项`;
+  if (typeof value === "object") return `对象 · ${Object.keys(value).length} 个字段`;
+  return valueText(value);
 }
 
-function eventNode(event, index) {
-  const details = el("details", "event");
-  const summary = el("summary");
-  const seq = event.seq !== undefined ? `#${event.seq}` : `#${index + 1}`;
-  append(
-    summary,
-    el("span", "seq", seq),
-    el("span", "kind", event.kind || event.performative || "event"),
-    el("span", "", event.phase || ""),
-    el("span", "", event.title || event.summary || ""),
-    event.status ? el("span", `status ${event.status}`, event.status) : null,
-    event.durationMs !== undefined ? el("span", "muted", formatDuration(event.durationMs)) : null,
-    event.model ? el("span", "muted", event.model) : null,
-    event.tokens && typeof event.tokens.total === "number"
-      ? el("span", "muted", `${event.tokens.total} tok`)
-      : null,
-  );
-  append(details, summary, el("pre", "", cap(pretty(event), 20000)));
+function objectCell(value) {
+  if (value === null || value === undefined) return el("span", "", "—");
+  if (typeof value !== "object") return el("span", "", valueText(value));
+  const details = el("details", "cell-json");
+  append(details, el("summary", "", compactObject(value)), el("pre", "", cap(pretty(value), 20000)));
   return details;
-}
-
-function renderTimeline(detail) {
-  const panel = $("tab-timeline");
-  clear(panel);
-  const events = transcriptOf(detail).events || [];
-  if (!events.length) {
-    append(panel, el("p", "muted", "没有可展示的时间线事件。"));
-    return;
-  }
-  for (const [index, event] of events.entries()) {
-    append(panel, eventNode(event, index));
-  }
 }
 
 function jsonTable(title, rows, columns) {
@@ -631,9 +649,8 @@ function jsonTable(title, rows, columns) {
   for (const row of rows) {
     const tr = el("tr");
     for (const [, , getter] of columns) {
-      const value = getter(row);
-      const cell = el("td", "", typeof value === "object" && value !== null ? pretty(value) : valueText(value));
-      cell.classList.add("wrap-code");
+      const cell = el("td", "wrap-code");
+      cell.appendChild(objectCell(getter(row)));
       tr.appendChild(cell);
     }
     body.appendChild(tr);
@@ -643,13 +660,13 @@ function jsonTable(title, rows, columns) {
   return card;
 }
 
-function renderNegotiation(detail) {
+function renderNegotiation() {
   const panel = $("tab-negotiation");
   clear(panel);
-  const transcript = transcriptOf(detail);
+  const payload = state.negotiation || {};
   append(
     panel,
-    jsonTable("协议事件", detail.negotiationEvents || [], [
+    jsonTable("协议事件", payload.negotiationEvents || [], [
       ["序号", "num", (row) => row.seq],
       ["方向", "", (row) => row.direction],
       ["角色", "", (row) => row.actor],
@@ -658,15 +675,14 @@ function renderNegotiation(detail) {
       ["协商 ID", "", (row) => row.negotiationId],
       ["摘要", "", (row) => row.content],
     ]),
-    jsonTable("客户端决策", transcript.decisions || [], [
+    jsonTable("客户端决策", payload.decisions || [], [
       ["序号", "num", (row) => row.seq],
       ["动作", "", (row) => row.action],
       ["轮次", "num", (row) => row.round],
-      ["动作类型", "", (row) => row.performative],
       ["理由", "", (row) => row.rationale],
       ["补全参数", "", (row) => row.filledParams],
     ]),
-    jsonTable("会话轮次", detail.turns || [], [
+    jsonTable("会话轮次", payload.turns || [], [
       ["序号", "num", (row) => row.seq],
       ["角色", "", (row) => row.role],
       ["时间", "", (row) => formatTime(row.createdAt)],
@@ -675,131 +691,299 @@ function renderNegotiation(detail) {
   );
 }
 
-function renderWire(detail) {
-  const panel = $("tab-wire");
-  clear(panel);
-  const records = detail.wire || [];
-  if (!records.length) {
-    append(panel, el("p", "muted", "这次运行没有捕获到报文（wire.jsonl 为空）。"));
+async function loadNegotiation() {
+  if (!state.selectedRunId) return;
+  state.negotiation = await fetchJson(
+    `/api/run-console/runs/${encodeURIComponent(state.selectedRunId)}/negotiation`,
+  );
+  renderNegotiation();
+}
+
+/* -------------------------------------------------------------------- logs */
+
+function logSources() {
+  return [...document.querySelectorAll(".source-toggles input:checked")].map(
+    (input) => input.dataset.source,
+  );
+}
+
+function renderPhaseOptions() {
+  const select = $("log-phase");
+  const selected = state.log.phase;
+  clear(select);
+  const any = el("option", "", "全部");
+  any.value = "";
+  select.appendChild(any);
+  const counts = (state.summary && state.summary.counts && state.summary.counts.byPhase) || {};
+  const phases = Object.keys(counts).sort((left, right) => {
+    const leftIndex = PHASE_ORDER.indexOf(left);
+    const rightIndex = PHASE_ORDER.indexOf(right);
+    return (leftIndex < 0 ? 99 : leftIndex) - (rightIndex < 0 ? 99 : rightIndex);
+  });
+  for (const phase of phases) {
+    const option = el("option", "", `${phaseLabel(phase)} (${counts[phase]})`);
+    option.value = phase;
+    select.appendChild(option);
+  }
+  if ([...select.options].some((option) => option.value === selected)) {
+    select.value = selected;
+  } else {
+    state.log.phase = "";
+  }
+}
+
+function logEntryNode(entry) {
+  const details = el("details", "log-entry");
+  const summary = el("summary");
+  const phase = el(
+    "span",
+    `log-phase${entry.phaseInferred ? " inferred" : ""}`,
+    phaseLabel(entry.phase),
+  );
+  phase.title = entry.phaseInferred ? `${entry.phase}（推断）` : entry.phase || "";
+  append(
+    summary,
+    el("span", "log-time", formatClock(entry.ts)),
+    phase,
+    el("span", "log-source", LOG_SOURCE_LABELS[entry.source] || entry.source),
+    (() => {
+      const title = el("span", "log-title", entry.title || "—");
+      if (entry.summary) title.appendChild(el("span", "muted", entry.summary));
+      return title;
+    })(),
+  );
+  const pre = el("pre", "", "");
+  append(details, summary, pre);
+  details.addEventListener("toggle", () => {
+    if (details.open && entry.payloadAvailable) void fillPayload(entry, pre);
+  });
+  return details;
+}
+
+async function fillPayload(entry, pre) {
+  if (pre.dataset.loaded === "1") return;
+  const key = `${state.selectedRunId}:${entry.id}`;
+  let payload = state.payloadCache.get(key);
+  if (payload === undefined) {
+    try {
+      const response = await fetchJson(
+        `/api/run-console/runs/${encodeURIComponent(state.selectedRunId)}/timeline/${encodeURIComponent(entry.id)}`,
+      );
+      payload = response;
+      state.payloadCache.set(key, payload);
+      if (state.payloadCache.size > PAYLOAD_CACHE_LIMIT) {
+        const oldest = state.payloadCache.keys().next().value;
+        state.payloadCache.delete(oldest);
+      }
+    } catch (error) {
+      pre.textContent = `读取失败：${error instanceof Error ? error.message : String(error)}`;
+      pre.dataset.loaded = "1";
+      return;
+    }
+  }
+  const text = payload.payload || "（无 payload）";
+  pre.textContent = payload.payloadTruncated ? `${text}\n\n… 已截断（${payload.payloadBytes} 字节）` : text;
+  pre.dataset.loaded = "1";
+}
+
+function renderLogs() {
+  const list = $("log-list");
+  clear(list);
+  if (!state.log.entries.length) {
+    list.appendChild(el("p", "log-empty", "没有匹配的日志。"));
+  } else {
+    for (const entry of state.log.entries) list.appendChild(logEntryNode(entry));
+  }
+  $("log-count").textContent = `显示 ${state.log.entries.length} / 共 ${state.log.total} 条`;
+  $("log-total").textContent = state.log.nextOffset === null ? "已到末尾" : "还有更多";
+  $("log-more").hidden = state.log.nextOffset === null;
+}
+
+function renderLogNotice(payload) {
+  const notice = $("log-notice");
+  const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+  if (!warnings.length) {
+    notice.hidden = true;
+    notice.textContent = "";
     return;
   }
-  for (const record of records) {
-    const details = el("details", "wire");
-    const summary = el("summary");
-    append(
-      summary,
-      el("span", "muted", valueText(record.ts)),
-      el("span", "method", valueText(record.method || record.kind)),
-      el("span", "", valueText(record.path || record.url || record.summary || "")),
+  notice.hidden = false;
+  notice.textContent = warnings.join("；");
+}
+
+async function loadLogs({ reset = false } = {}) {
+  if (!state.selectedRunId) return;
+  if (state.log.loading && !reset) return;
+  const offset = reset ? 0 : state.log.nextOffset;
+  if (offset === null && !reset) return;
+  state.log.loading = true;
+  const seq = ++state.log.requestSeq;
+  const params = new URLSearchParams();
+  const sources = logSources();
+  if (sources.length) params.set("source", sources.join(","));
+  if (state.log.phase) params.set("phase", state.log.phase);
+  if (state.log.query) params.set("q", state.log.query);
+  params.set("offset", String(offset || 0));
+  params.set("limit", String(PAGE_SIZE));
+  try {
+    const payload = await fetchJson(
+      `/api/run-console/runs/${encodeURIComponent(state.selectedRunId)}/timeline?${params}`,
     );
-    append(details, summary, el("pre", "", cap(pretty(record), 50000)));
-    append(panel, details);
+    if (seq !== state.log.requestSeq) return;
+    if (reset) state.log.entries = [];
+    state.log.entries = state.log.entries.concat(payload.entries || []);
+    state.log.total = payload.total || 0;
+    state.log.nextOffset = payload.nextOffset ?? null;
+    renderLogNotice(payload);
+    renderLogs();
+    showNotice("");
+  } catch (error) {
+    showNotice(error instanceof Error ? error.message : String(error));
+  } finally {
+    state.log.loading = false;
   }
 }
 
-function renderRaw(detail) {
-  const panel = $("tab-raw");
-  clear(panel);
-  append(panel, el("pre", "", cap(pretty(detail))));
-}
+/* --------------------------------------------------------------- raw files */
 
-function renderDetail() {
-  const detail = state.detail;
-  if (!detail) return;
-  $("detail-empty").hidden = true;
-  $("detail").hidden = false;
-  $("detail-run-id").textContent = detail.runId || "";
-  $("detail-subtitle").textContent = [
-    protocolLabel(detail.protocol),
-    detail.scenario,
-    statusLabel(detailStatus(detail)),
-    finalStateLabel(detail.finalState),
-    sourceLabel(detail.source ? detail.source.kind : ""),
-    `创建 ${formatTime(detail.createdAt)}`,
-  ].filter(Boolean).join(" · ");
-
-  const links = $("detail-links");
-  clear(links);
-  const liveBase = `/api/runs/${encodeURIComponent(detail.runId)}`;
-  const consoleBase = `/api/run-console/runs/${encodeURIComponent(detail.runId)}`;
-  const entries = [
-    ["transcript.json", `${consoleBase}/transcript.json`],
-    ["transcript.md", `${consoleBase}/transcript.md`],
-    ["wire", `${liveBase}/wire`],
-  ];
-  if (detail.live) entries.push(["trace.json", `${liveBase}/trace.json`]);
-  for (const [label, href] of entries) {
-    const link = el("a", "", label);
-    link.href = href;
-    link.target = "_blank";
-    link.rel = "noopener";
-    links.appendChild(link);
+function renderRawFiles() {
+  const list = $("raw-files");
+  clear(list);
+  if (!state.rawFiles.length) {
+    list.appendChild(el("p", "muted", "没有可用的原始文件。"));
+    return;
   }
-
-  renderOverview(detail);
-  renderMetrics(detail);
-  renderTimeline(detail);
-  renderNegotiation(detail);
-  renderWire(detail);
-  renderRaw(detail);
-  selectTab(state.tab);
+  for (const file of state.rawFiles) {
+    const button = el("button", "raw-file", file.name);
+    button.type = "button";
+    if (file.name === state.rawName) button.classList.add("active");
+    if (!file.available) {
+      button.classList.add("unavailable");
+      button.disabled = true;
+      button.title = file.reason || "不可用";
+    } else {
+      button.title = `${file.name} · ${formatNumber(file.size)} 字节`;
+      button.addEventListener("click", () => void selectRawFile(file.name));
+    }
+    list.appendChild(button);
+  }
 }
+
+async function loadFiles() {
+  if (!state.selectedRunId) return;
+  const seq = ++state.rawSeq;
+  try {
+    const payload = await fetchJson(
+      `/api/run-console/runs/${encodeURIComponent(state.selectedRunId)}/files`,
+    );
+    if (seq !== state.rawSeq) return;
+    state.rawFiles = payload.files || [];
+    renderRawFiles();
+  } catch (error) {
+    showNotice(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function selectRawFile(name) {
+  if (!state.selectedRunId) return;
+  state.rawName = name;
+  renderRawFiles();
+  $("raw-title").textContent = name;
+  $("raw-content").textContent = "读取中…";
+  try {
+    const response = await fetch(
+      `/api/run-console/runs/${encodeURIComponent(state.selectedRunId)}/files/${encodeURIComponent(name)}`,
+    );
+    const text = await response.text();
+    if (!response.ok) throw new Error(text || `HTTP ${response.status}`);
+    const truncated = response.headers.get("X-Truncated") === "true";
+    $("raw-title").textContent = truncated ? `${name}（已截断）` : name;
+    $("raw-content").textContent = text;
+  } catch (error) {
+    $("raw-content").textContent = `读取失败：${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+/* -------------------------------------------------------------------- tabs */
 
 function selectTab(tab) {
   state.tab = tab;
   for (const button of document.querySelectorAll("#tabs .tab")) {
     button.classList.toggle("active", button.dataset.tab === tab);
   }
-  for (const name of ["overview", "metrics", "timeline", "negotiation", "wire", "raw"]) {
+  for (const name of ["logs", "metrics", "negotiation", "raw"]) {
     $(`tab-${name}`).hidden = name !== tab;
   }
+  if (tab === "metrics") renderMetrics();
+  if (tab === "negotiation") void loadNegotiation();
+  if (tab === "raw" && !state.rawFiles.length) void loadFiles();
 }
 
-async function loadDetail(runId) {
-  const seq = ++state.detailSeq;
-  try {
-    const detail = await fetchJson(`/api/run-console/runs/${encodeURIComponent(runId)}`);
-    if (seq !== state.detailSeq) return;
-    state.detail = detail;
-    renderDetail();
-    showNotice("");
-  } catch (error) {
-    if (seq !== state.detailSeq) return;
-    showNotice(error instanceof Error ? error.message : String(error));
-  }
+/* --------------------------------------------------------------- selection */
+
+function resetDetailState() {
+  state.summary = null;
+  state.negotiation = null;
+  state.log.entries = [];
+  state.log.total = 0;
+  state.log.nextOffset = null;
+  state.log.phase = "";
+  state.log.query = "";
+  state.log.requestSeq += 1;
+  state.log.loading = false;
+  state.payloadCache.clear();
+  state.rawFiles = [];
+  state.rawName = null;
+  $("log-query").value = "";
+  $("log-phase").value = "";
+  $("log-list").replaceChildren();
+  $("log-notice").hidden = true;
+  $("raw-files").replaceChildren();
+  $("raw-title").textContent = "选择一个文件";
+  $("raw-content").textContent = "";
+  $("tab-metrics").replaceChildren();
+  $("tab-negotiation").replaceChildren();
 }
 
 async function selectRun(runId) {
   state.selectedRunId = runId;
   renderRows();
   window.history.replaceState(null, "", `#run=${encodeURIComponent(runId)}`);
-  await loadDetail(runId);
+  $("detail-empty").hidden = true;
+  $("detail").hidden = false;
+  resetDetailState();
+  try {
+    await loadSummary();
+    await loadLogs({ reset: true });
+    if (state.tab === "metrics") renderMetrics();
+    if (state.tab === "negotiation") await loadNegotiation();
+    if (state.tab === "raw") await loadFiles();
+  } catch (error) {
+    showNotice(error instanceof Error ? error.message : String(error));
+  }
 }
 
-function selectedRunIsLive() {
-  const detail = state.detail;
-  if (!detail) return false;
-  const status = detailStatus(detail);
-  return status === "running" || Boolean(detail.live);
+async function refreshAll() {
+  await loadRuns();
+  if (!state.selectedRunId) return;
+  try {
+    await loadSummary();
+    await loadLogs({ reset: true });
+    if (state.tab === "metrics") renderMetrics();
+    if (state.tab === "negotiation") await loadNegotiation();
+    if (state.tab === "raw") await loadFiles();
+  } catch (error) {
+    showNotice(error instanceof Error ? error.message : String(error));
+  }
 }
 
-function scheduleRefresh() {
-  if (state.refreshTimer) window.clearInterval(state.refreshTimer);
-  state.refreshTimer = null;
-  if (!$("auto-refresh").checked) return;
-  state.refreshTimer = window.setInterval(async () => {
-    await loadRuns();
-    if (state.selectedRunId && selectedRunIsLive()) {
-      await loadDetail(state.selectedRunId);
-    }
-  }, 5000);
-}
+/* --------------------------------------------------------------------- boot */
 
 function bindEvents() {
   for (const id of ["filter-protocol", "filter-status", "filter-source", "filter-scenario", "filter-limit"]) {
     $(id).addEventListener("change", () => {
       if (id === "filter-protocol") refreshScenarios();
-      loadRuns();
+      void loadRuns();
     });
   }
   let queryTimer = null;
@@ -807,8 +991,7 @@ function bindEvents() {
     window.clearTimeout(queryTimer);
     queryTimer = window.setTimeout(loadRuns, 250);
   });
-  $("refresh").addEventListener("click", () => loadRuns());
-  $("auto-refresh").addEventListener("change", scheduleRefresh);
+  $("refresh").addEventListener("click", () => void refreshAll());
   $("copy-run-id").addEventListener("click", async () => {
     if (!state.selectedRunId) return;
     try {
@@ -822,6 +1005,22 @@ function bindEvents() {
   for (const button of document.querySelectorAll("#tabs .tab")) {
     button.addEventListener("click", () => selectTab(button.dataset.tab));
   }
+  for (const input of document.querySelectorAll(".source-toggles input")) {
+    input.addEventListener("change", () => void loadLogs({ reset: true }));
+  }
+  $("log-phase").addEventListener("change", () => {
+    state.log.phase = $("log-phase").value;
+    void loadLogs({ reset: true });
+  });
+  let logTimer = null;
+  $("log-query").addEventListener("input", () => {
+    window.clearTimeout(logTimer);
+    logTimer = window.setTimeout(() => {
+      state.log.query = $("log-query").value.trim();
+      void loadLogs({ reset: true });
+    }, 250);
+  });
+  $("log-more").addEventListener("click", () => void loadLogs());
 }
 
 async function main() {
@@ -836,7 +1035,8 @@ async function main() {
   const hash = new URLSearchParams(window.location.hash.slice(1));
   const initial = hash.get("run");
   if (initial) await selectRun(initial);
-  scheduleRefresh();
 }
 
-main();
+if (typeof document !== "undefined") {
+  main();
+}

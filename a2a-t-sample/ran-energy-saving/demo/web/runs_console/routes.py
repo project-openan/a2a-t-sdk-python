@@ -27,6 +27,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
+from demo.web.runs_console.service import RunConsoleService
 from demo.web.wire_records import read_wire_records
 
 #: Directory of the console page assets.
@@ -47,8 +48,15 @@ def build_run_console_routes(
     protocols: Sequence[str],
     scenarios_by_protocol: Mapping[str, Sequence[str]],
     language: str,
+    run_dir: Path | None = None,
 ) -> list[Route]:
     """Build the internal run-console routes."""
+    service = RunConsoleService(
+        client_db_path=client_db_path,
+        runs_dir=runs_dir,
+        run_dir=run_dir,
+        runs=runs,
+    )
 
     async def page(request: Request) -> Response:
         """Serve the run-console shell."""
@@ -164,6 +172,82 @@ def build_run_console_routes(
             detail["live"] = live.snapshot()
         return JSONResponse(detail)
 
+    async def summary(request: Request) -> Response:
+        """Return the conclusion/identity/metrics block of one run."""
+        payload = await asyncio.to_thread(service.summary, request.path_params["run_id"])
+        if payload is None:
+            return _unknown_run(request.path_params["run_id"])
+        return JSONResponse(payload)
+
+    async def timeline(request: Request) -> Response:
+        """Return one filtered page of the merged log stream."""
+        sources = _csv_param(request, "source")
+        phase = _text_param(request, "phase")
+        query = _text_param(request, "q") or _text_param(request, "query")
+        offset = _int_param(request, "offset", 0, minimum=0, maximum=1_000_000)
+        limit = _int_param(request, "limit", 200, minimum=1, maximum=500)
+        payload = await asyncio.to_thread(
+            service.timeline,
+            request.path_params["run_id"],
+            sources=sources,
+            phase=phase,
+            query=query,
+            offset=offset,
+            limit=limit,
+        )
+        if payload is None:
+            return _unknown_run(request.path_params["run_id"])
+        return JSONResponse(payload)
+
+    async def timeline_entry(request: Request) -> Response:
+        """Return one timeline entry and its payload."""
+        payload = await asyncio.to_thread(
+            service.entry_payload,
+            request.path_params["run_id"],
+            request.path_params["entry_id"],
+        )
+        if payload is None:
+            return JSONResponse(
+                {"error": "Unknown run or entry.", "code": "entry_not_found"},
+                status_code=404,
+            )
+        return JSONResponse(payload)
+
+    async def negotiation(request: Request) -> Response:
+        """Return the structured turns and negotiation events of one run."""
+        payload = await asyncio.to_thread(
+            service.negotiation, request.path_params["run_id"]
+        )
+        if payload is None:
+            return _unknown_run(request.path_params["run_id"])
+        return JSONResponse(payload)
+
+    async def files(request: Request) -> Response:
+        """Return the logical raw-file list of one run."""
+        payload = await asyncio.to_thread(service.files, request.path_params["run_id"])
+        if payload is None:
+            return _unknown_run(request.path_params["run_id"])
+        return JSONResponse(payload)
+
+    async def raw_file(request: Request) -> Response:
+        """Return one whitelisted raw file as text."""
+        result = await asyncio.to_thread(
+            service.read_file,
+            request.path_params["run_id"],
+            request.path_params["name"],
+        )
+        if result is None:
+            return JSONResponse(
+                {"error": "Unknown or unavailable file.", "code": "file_not_found"},
+                status_code=404,
+            )
+        text, truncated = result
+        return Response(
+            text,
+            media_type="text/plain; charset=utf-8",
+            headers={"X-Truncated": "true" if truncated else "false"},
+        )
+
     return [
         Route("/runs", page),
         Route("/runs/", page),
@@ -173,6 +257,12 @@ def build_run_console_routes(
         Route("/api/run-console/runs", list_runs),
         Route("/api/run-console/runs/{run_id}/transcript.json", transcript_download),
         Route("/api/run-console/runs/{run_id}/transcript.md", transcript_download),
+        Route("/api/run-console/runs/{run_id}/summary", summary),
+        Route("/api/run-console/runs/{run_id}/timeline", timeline),
+        Route("/api/run-console/runs/{run_id}/timeline/{entry_id}", timeline_entry),
+        Route("/api/run-console/runs/{run_id}/negotiation", negotiation),
+        Route("/api/run-console/runs/{run_id}/files", files),
+        Route("/api/run-console/runs/{run_id}/files/{name}", raw_file),
         Route("/api/run-console/runs/{run_id}", run_detail),
     ]
 
@@ -184,6 +274,22 @@ def _text_param(request: Request, name: str) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
+
+
+def _csv_param(request: Request, name: str) -> list[str]:
+    """Return one comma-separated query parameter as trimmed values."""
+    value = request.query_params.get(name)
+    if value is None:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _unknown_run(run_id: str) -> JSONResponse:
+    """Build the shared unknown-run error response."""
+    return JSONResponse(
+        {"error": f"Unknown run: {run_id}", "code": "unknown_run"},
+        status_code=404,
+    )
 
 
 def _int_param(request: Request, name: str, default: int, *, minimum: int, maximum: int) -> int:

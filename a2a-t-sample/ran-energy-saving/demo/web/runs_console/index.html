@@ -27,7 +27,6 @@
     </div>
     <div class="topbar-actions">
       <span id="db-state" class="pill">数据库：读取中…</span>
-      <label class="toggle"><input id="auto-refresh" type="checkbox" checked> 自动刷新</label>
       <button id="refresh" class="button" type="button">刷新</button>
       <a class="button link" href="/" target="_blank" rel="noopener">演示页</a>
       <a class="button link" href="/tester" target="_blank" rel="noopener">测试页</a>
@@ -91,39 +90,71 @@
     <section class="detail-pane" aria-label="运行详情">
       <div id="detail-empty" class="empty-detail">
         <h2>选择一条运行</h2>
-        <p>左侧列表来自客户端 SQLite；点击一行查看指标、时间线、协商记录、报文和请求来源。</p>
+        <p>左侧列表来自客户端 SQLite；点击一行查看摘要、关联日志、指标、协商和原始数据。</p>
       </div>
       <article id="detail" hidden>
         <header class="detail-head">
-          <div>
+          <div class="summary">
             <div class="detail-title">
               <code id="detail-run-id"></code>
               <button id="copy-run-id" class="button small" type="button">复制</button>
             </div>
-            <div id="detail-subtitle" class="muted"></div>
+            <div id="summary-status" class="summary-status"></div>
+            <div id="summary-metrics" class="summary-line"></div>
+            <div id="summary-identity" class="summary-identity"></div>
+            <details id="summary-all" class="summary-all">
+              <summary>全部字段</summary>
+              <div id="summary-all-body"></div>
+            </details>
           </div>
           <div id="detail-links" class="detail-links"></div>
         </header>
         <nav id="tabs" class="tabs" aria-label="详情分区">
-          <button data-tab="overview" class="tab active" type="button">概览</button>
+          <button data-tab="logs" class="tab active" type="button">日志流</button>
           <button data-tab="metrics" class="tab" type="button">指标</button>
-          <button data-tab="timeline" class="tab" type="button">时间线</button>
           <button data-tab="negotiation" class="tab" type="button">协商</button>
-          <button data-tab="wire" class="tab" type="button">报文</button>
-          <button data-tab="raw" class="tab" type="button">原始 JSON</button>
+          <button data-tab="raw" class="tab" type="button">原始数据</button>
         </nav>
-        <div id="tab-overview" class="tab-panel"></div>
+        <div id="tab-logs" class="tab-panel">
+          <div class="log-toolbar">
+            <div class="source-toggles" aria-label="日志来源">
+              <label><input type="checkbox" data-source="wire" checked> wire</label>
+              <label><input type="checkbox" data-source="client" checked> client</label>
+              <label><input type="checkbox" data-source="server" checked> server</label>
+              <label><input type="checkbox" data-source="process" checked> 进程</label>
+            </div>
+            <label class="compact">阶段
+              <select id="log-phase"><option value="">全部</option></select>
+            </label>
+            <label class="grow compact">关键词
+              <input id="log-query" type="search" placeholder="消息 / URL / taskId / 错误">
+            </label>
+            <span id="log-count" class="muted">—</span>
+          </div>
+          <div id="log-notice" class="notice small" hidden></div>
+          <div id="log-list" class="log-list"></div>
+          <div class="log-footer">
+            <button id="log-more" class="button" type="button" hidden>加载更多</button>
+            <span id="log-total" class="muted"></span>
+          </div>
+        </div>
         <div id="tab-metrics" class="tab-panel" hidden></div>
-        <div id="tab-timeline" class="tab-panel" hidden></div>
         <div id="tab-negotiation" class="tab-panel" hidden></div>
-        <div id="tab-wire" class="tab-panel" hidden></div>
-        <div id="tab-raw" class="tab-panel" hidden></div>
+        <div id="tab-raw" class="tab-panel" hidden>
+          <div class="raw-layout">
+            <div id="raw-files" class="raw-files"></div>
+            <div class="raw-view">
+              <div id="raw-title" class="muted">选择一个文件</div>
+              <pre id="raw-content"></pre>
+            </div>
+          </div>
+        </div>
       </article>
     </section>
   </main>
 
   <footer class="footer">
-    <span>数据源：客户端 SQLite + <code>runs/</code> 下的 transcript / wire / server-trace。</span>
+    <span>数据源：客户端 SQLite + <code>runs/</code> 下的 transcript / wire / server-trace + <code>RUN_DIR</code> 进程日志。</span>
     <span id="meta-path" class="muted"></span>
   </footer>
 

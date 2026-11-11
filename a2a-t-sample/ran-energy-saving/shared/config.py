@@ -125,6 +125,8 @@ DEFAULT_TRACE_SPAN_LEVEL = TRACE_SPAN_LEVEL_PHASE
 TRACE_SPAN_LEVEL_ENV_KEY = "A2AT_SAMPLE_TRACE_SPAN_LEVEL"
 #: Directory of the run transcripts, NMS wire logs and the UI/SQLite history.
 RUNS_DIR_ENV_KEY = "A2AT_SAMPLE_RUNS_DIR"
+#: Launcher-owned directory with the child-process logs (``ui.log``, ``server.log``, ...).
+RUN_DIR_ENV_KEY = "A2AT_SAMPLE_RUN_DIR"
 #: Which conversation fields a pure A2A follow-up carries (``both`` / ``task`` / ``context``).
 PURE_FOLLOWUP_ENV_KEY = "A2AT_SAMPLE_PURE_FOLLOWUP"
 #: Hop a standard A2A client takes: ``oss`` (proxy, default) or ``nms`` (vendor direct).
@@ -379,6 +381,17 @@ DEFAULT_RUNS_DIR = SAMPLE_ROOT / "runs"
 def _resolved_dir(values: dict[str, str | None], key: str, default: Path) -> str:
     """Resolve one directory key; a relative value is relative to the sample root."""
     raw_value = _env_value(values, key, str(default))
+    path = Path(raw_value).expanduser()
+    if not path.is_absolute():
+        path = SAMPLE_ROOT / path
+    return str(path.resolve())
+
+
+def _optional_resolved_dir(values: dict[str, str | None], key: str) -> str:
+    """Resolve an optional directory key; empty means the feature is disabled."""
+    raw_value = _env_value(values, key, "").strip()
+    if not raw_value:
+        return ""
     path = Path(raw_value).expanduser()
     if not path.is_absolute():
         path = SAMPLE_ROOT / path
@@ -650,6 +663,8 @@ class SampleConfig:
         gateway_register: whether the gateway registers its AgentCard in the registry center.
         gateway_scenario: scenario used for an inbound gateway request.
         runs_dir: directory of run transcripts, NMS wire logs and the UI history.
+        run_dir: launcher-owned directory with the child-process logs; empty disables the console's
+            process-log source.
         pure_followup: conversation fields of a pure A2A follow-up (``both`` / ``task`` / ``context``).
         pure_hop: hop of a standard A2A request (``oss`` proxy / ``nms`` vendor direct).
         gateway_task_db_path: Absolute SQLite path of the inbound gateway Task store and its push
@@ -759,6 +774,7 @@ class SampleConfig:
     gateway_register: bool = False
     gateway_scenario: str = DEFAULT_GATEWAY_SCENARIO
     runs_dir: str = str(DEFAULT_RUNS_DIR)
+    run_dir: str = ""
     pure_followup: str = PURE_FOLLOWUP_BOTH
     pure_hop: str = DEFAULT_PURE_HOP
     pure_message_mode: str = DEFAULT_PURE_MESSAGE_MODE
@@ -1044,6 +1060,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         gateway_register=_env_bool(values, GATEWAY_REGISTER_ENV_KEY, False),
         gateway_scenario=gateway_scenario,
         runs_dir=_resolved_dir(values, RUNS_DIR_ENV_KEY, DEFAULT_RUNS_DIR),
+        run_dir=_optional_resolved_dir(values, RUN_DIR_ENV_KEY),
         pure_followup=_pure_followup(values),
         pure_hop=pure_hop,
         pure_message_mode=_pure_message_mode(values),

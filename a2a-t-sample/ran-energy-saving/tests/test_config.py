@@ -85,6 +85,7 @@ from shared.config import (
     PURE_HOP_OSS,
     PURE_MESSAGE_MODE_ENV_KEY,
     RAN_URL_ENV_KEY,
+    RUN_DIR_ENV_KEY,
     RUNS_DIR_ENV_KEY,
     SERVER_AUTH_TOKEN_ENV_KEY,
     TASK_DB_ENV_KEY,
@@ -1040,6 +1041,31 @@ def test_runs_dir_accepts_an_absolute_value(tmp_path: Path) -> None:
     env_file.write_text(f"{RUNS_DIR_ENV_KEY}={target}\n", encoding="utf-8")
 
     assert Path(load_config(env_path=env_file).runs_dir) == target
+
+
+def test_run_dir_is_empty_by_default(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+
+    assert load_config(env_path=env_file).run_dir == ""
+
+
+def test_run_dir_resolves_a_relative_value_against_the_sample_root(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{RUN_DIR_ENV_KEY}=launcher-state\n", encoding="utf-8")
+
+    resolved = Path(load_config(env_path=env_file).run_dir)
+
+    assert resolved.is_absolute()
+    assert resolved.name == "launcher-state"
+
+
+def test_run_dir_accepts_an_absolute_value(tmp_path: Path) -> None:
+    target = tmp_path / "launcher-state"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{RUN_DIR_ENV_KEY}={target}\n", encoding="utf-8")
+
+    assert Path(load_config(env_path=env_file).run_dir) == target
 
 
 def test_pure_followup_defaults_to_both_and_accepts_the_three_modes(tmp_path: Path) -> None:

@@ -365,6 +365,7 @@ def _child_env(
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUNBUFFERED"] = "1"
     env["A2AT_LANGUAGE"] = language
+    env["A2AT_SAMPLE_RUN_DIR"] = str(RUN_DIR)
     if extra:
         env.update(extra)
     return env
@@ -515,6 +516,7 @@ def _write_run_env(
             "A2AT_SAMPLE_MIE_URL": f"http://{server_host}:{mie_port}",
             "A2AT_SAMPLE_MIE_PORT": str(mie_port),
             "A2AT_SAMPLE_RUNS_DIR": str(RUNS_DIR),
+            "A2AT_SAMPLE_RUN_DIR": str(RUN_DIR),
             "A2AT_SAMPLE_TASK_DB": str(TASK_DB_PATH),
             "A2AT_SAMPLE_OSS_TASK_DB": str(OSS_TASK_DB_PATH),
             "A2AT_SAMPLE_CLIENT_DB": str(CLIENT_DB_PATH),

@@ -564,6 +564,7 @@ def create_app(
         protocols=advertised_protocols,
         scenarios_by_protocol=scenarios_by_protocol,
         language=config.language,
+        run_dir=Path(config.run_dir) if config.run_dir else None,
     )
     observe_routes = build_observe_routes(
         config=config,
