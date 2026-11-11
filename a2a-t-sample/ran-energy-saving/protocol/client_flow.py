@@ -86,7 +86,11 @@ from shared.run_constants import (
     reports_failed_completion,
 )
 from shared.run_source import now_iso
-from shared.sse_event_consumer import normalize_event, stream_response_payload
+from shared.sse_event_consumer import (
+    normalize_event,
+    stream_response_body,
+    stream_response_payload,
+)
 from shared.task_schema import TASK_PARAM_SCHEMA
 from shared.trace import (
     PHASE_NEGOTIATION,
@@ -717,7 +721,11 @@ def normalize_webhook_payload(payload: Mapping[str, object]) -> dict[str, object
     try:
         stream_response = StreamResponse()
         ParseDict(stream_response_payload(payload), stream_response)
-        return normalize_event(stream_response)
+        event = normalize_event(stream_response)
+        # Keep the pushed frame itself for the On-the-wire panel; normalization intentionally
+        # drops fields the flow does not read.
+        event["wireBody"] = dict(payload)
+        return event
     except Exception as exc:
         raise ClientFlowError(f"Unsupported webhook payload: {exc}") from exc
 
@@ -752,6 +760,7 @@ class SseClientTransport:
         events: list[dict[str, object]] = []
         async for stream_response in self._client.send_message(request, context=call_context):
             event = normalize_event(stream_response)
+            event["wireBody"] = stream_response_body(stream_response)
             events.append(event)
             self._emit(event)
             if is_stop_event(event):
@@ -857,6 +866,7 @@ class WebhookClientTransport:
         phase_started = loop.time() if reply is not None else send_started
         if reply is not None:
             reply_event = normalize_event(reply)
+            reply_event["wireBody"] = stream_response_body(reply)
             events.append(reply_event)
             self._emit(reply_event)
             if self._bind is not None:

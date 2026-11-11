@@ -45,12 +45,13 @@ export function createTrace(els, getCopy, onSelect, getShowCalls = () => true) {
   function render(state) {
     lastState = state;
     const copy = getCopy();
-    const source = state.trace.slice(-200);
-    const offset = state.trace.length - source.length;
+    // The session trace is evidence: never drop the first rows. An early request is exactly what
+    // an operator opens the trace to inspect after a long negotiation or task poll.
+    const source = state.trace;
     const rows = getShowCalls()
       ? source
       : source.filter((row) => row.tag !== "llm" && row.tag !== "nms");
-    const keys = rows.map((row, index) => rowKey(row, offset + index));
+    const keys = rows.map((row, index) => rowKey(row, index));
     renderDays(els, rows, copy);
     const appendOnly =
       renderedKeys.length <= keys.length &&

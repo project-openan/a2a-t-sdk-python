@@ -150,6 +150,16 @@ export function buildWireModel(entry, state, format, copy) {
       nodes: jsonNodes(payload, 0),
     };
   }
+  // A server event carries the response frame the peer actually sent. Show it verbatim: the
+  // reconstructed status/artifact model below exists only for older runs without a capture.
+  if (entry.entryType === "event" && isObject(entry.wireBody)) {
+    return {
+      title: copy.wire.responseTitle,
+      alternate: false,
+      note: copy.wire.responseNote,
+      nodes: jsonNodes(entry.wireBody, 0),
+    };
+  }
   if (entry.kind === "message_sent") {
     const detail = isObject(entry.detail) ? entry.detail : {};
     // What actually left the process wins over anything rebuilt from the span. The SDK sends a

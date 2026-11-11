@@ -224,6 +224,9 @@ def test_a_status_update_with_the_vendor_wrapper_field_is_normalized() -> None:
     assert event["kind"] == "status"
     assert event["state"] == "TASK_STATE_SUBMITTED"
     assert event["text"] == "Task modification succeeded"
+    # The inspector shows the whole vendor frame, including the wrapper field ParseDict drops.
+    assert event["wireBody"]["contextId"] == "ctx-1"
+    assert event["wireBody"]["statusUpdate"]["taskId"] == "task-1"
 
 
 def test_status_update_frame_is_normalized() -> None:

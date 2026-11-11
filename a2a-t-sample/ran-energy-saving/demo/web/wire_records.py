@@ -9,19 +9,19 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Final
-
-#: Newest records kept by the inspectors (a long run must not return an unbounded body).
-WIRE_RECORD_LIMIT: Final[int] = 200
 
 
 def read_wire_records(runs_dir: Path, run_id: str) -> list[dict[str, object]]:
-    """Return the redacted wire records of one run, bounded and in event order."""
+    """Return every redacted wire record of one run, in event order.
+
+    The inspector must show the complete raw exchange: an early ``message:send`` is exactly what a
+    long polling run is investigated for, so no head or tail record may be dropped.
+    """
     records: list[dict[str, object]] = []
     for name in ("wire.jsonl", "wire-oss.jsonl"):
         records.extend(_read_wire_file(Path(runs_dir) / run_id / name))
     records.sort(key=lambda record: str(record.get("ts") or ""))
-    return records[-WIRE_RECORD_LIMIT:]
+    return records
 
 
 def _read_wire_file(path: Path) -> list[dict[str, object]]:
@@ -46,4 +46,4 @@ def _read_wire_file(path: Path) -> list[dict[str, object]]:
     return records
 
 
-__all__ = ["WIRE_RECORD_LIMIT", "read_wire_records"]
+__all__ = ["read_wire_records"]

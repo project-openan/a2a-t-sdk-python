@@ -1296,13 +1296,19 @@ class NmsWebhookTransport:
 
 def _reply_event(reply: Mapping[str, object]) -> dict[str, object]:
     """Normalize one ``message:send`` reply into the shared event shape."""
+    raw = dict(reply)
     if "task" in reply or "message" in reply:
-        return _frame_to_event(reply)
-    if isinstance(reply.get("id"), str) and "status" in reply:
-        return _frame_to_event({"task": reply})
-    if isinstance(reply.get("messageId"), str):
-        return _frame_to_event({"message": reply})
-    return _frame_to_event(reply)
+        event = _frame_to_event(reply)
+    elif isinstance(reply.get("id"), str) and "status" in reply:
+        event = _frame_to_event({"task": reply})
+    elif isinstance(reply.get("messageId"), str):
+        event = _frame_to_event({"message": reply})
+    else:
+        event = _frame_to_event(reply)
+    # The reply the vendor sent, before templateSpecific shaping: this is the raw response the
+    # On-the-wire panel must show.
+    event["wireBody"] = raw
+    return event
 
 
 def _is_negotiation_event(event: Mapping[str, object]) -> bool:
@@ -1313,12 +1319,15 @@ def _is_negotiation_event(event: Mapping[str, object]) -> bool:
 
 def _frame_to_event(frame: Mapping[str, object]) -> dict[str, object]:
     """Convert one raw JSON frame into the normalized event shape."""
+    raw = dict(frame)
     try:
         response = StreamResponse()
         ParseDict(stream_response_payload(frame), response)
-        return normalize_event(response)
+        event = normalize_event(response)
     except (ParseError, TypeError, ValueError):
-        return {"kind": "raw", "frame": dict(frame)}
+        return {"kind": "raw", "frame": raw, "wireBody": raw}
+    event["wireBody"] = raw
+    return event
 
 
 def _task_state(task: Mapping[str, object]) -> str:

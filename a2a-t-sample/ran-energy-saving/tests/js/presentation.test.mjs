@@ -1440,6 +1440,30 @@ assert.ok(acceptText.includes("Accept. target: 00:00~06:00."));
 assert.ok(acceptText.includes("Refilled Task-T"));
 assert.ok(acceptText.includes("urn:accept-template"));
 
+// A captured response frame wins over the reconstructed status model and keeps vendor fields.
+const rawResponseModel = buildWireModel(
+  {
+    entryType: "event",
+    kind: "status",
+    state: "TASK_STATE_WORKING",
+    summary: "Region: Region A; Progress: strategy ready.",
+    wireBody: {
+      statusUpdate: {
+        taskId: "task-1",
+        contextId: "ctx-1",
+        unexpectedVendorField: "kept",
+      },
+    },
+  },
+  { runId: "run-wire" },
+  "t",
+  copy,
+);
+const rawResponseText = wireText(rawResponseModel);
+assert.equal(rawResponseModel.title, copy.wire.responseTitle);
+assert.ok(rawResponseText.includes('"unexpectedVendorField": "kept"'));
+assert.ok(!rawResponseText.includes('"message"'));
+
 const creationModel = buildWireModel(
   {
     entryType: "event",

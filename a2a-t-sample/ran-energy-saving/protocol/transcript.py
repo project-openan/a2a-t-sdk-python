@@ -284,6 +284,11 @@ class NegotiationTranscript:
             "durationMs": duration_ms,
             "detail": dict(explicit_detail) if explicit_detail is not None else None,
         }
+        # The peer's complete response frame, not the fields the flow happened to read. The
+        # On-the-wire panel renders it verbatim; dropping it would force a reconstruction.
+        wire_body = event.get("wireBody")
+        if isinstance(wire_body, Mapping) and wire_body:
+            entry["wireBody"] = dict(wire_body)
         if _text(event.get("kind")) == "artifact" and is_report_artifact(event):
             # The UI can render the report as soon as the artifact arrives instead of waiting for
             # the terminal frame, which live models can delay by many seconds.

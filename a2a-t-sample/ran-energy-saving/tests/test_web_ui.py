@@ -2426,6 +2426,30 @@ async def test_wire_endpoint_returns_the_captured_exchange(client: httpx.AsyncCl
     assert payload["records"] == [record]
 
 
+async def test_wire_endpoint_returns_the_complete_capture(client: httpx.AsyncClient, tmp_path: Path) -> None:
+    """A long run keeps its first ``message:send``; the inspector must not return only the tail."""
+    run_dir = tmp_path / "run-wire-long"
+    run_dir.mkdir()
+    records = [
+        {
+            "ts": f"2026-11-11T00:00:00.{index:06d}+00:00",
+            "dir": "out",
+            "body": {"n": index},
+        }
+        for index in range(250)
+    ]
+    (run_dir / "wire.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+
+    response = await client.get("/api/runs/run-wire-long/wire")
+
+    payload = response.json()
+    assert len(payload["records"]) == 250
+    assert payload["records"][0]["body"] == {"n": 0}
+    assert payload["records"][-1]["body"] == {"n": 249}
+
+
 async def test_wire_endpoint_reports_no_capture_instead_of_inventing_one(
     client: httpx.AsyncClient,
 ) -> None:

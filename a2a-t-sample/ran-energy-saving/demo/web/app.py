@@ -1928,10 +1928,6 @@ def _scenario_request(catalog: RunCatalog, name: str, language: str) -> str:
         return resolve_example_request(name, language)
 
 
-#: Cap on the wire records returned to the detail view; a long run appends one per exchange.
-_WIRE_RECORD_LIMIT = 200
-
-
 def _sse_data(message: dict[str, object]) -> dict[str, str]:
     """Render one SSE message payload."""
     return {"data": json.dumps(message, ensure_ascii=False)}

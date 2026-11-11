@@ -687,7 +687,11 @@ class RunState:
         if span_kind != "propose" and isinstance(pure_detail, Mapping) and pure_detail.get("kind") == "negotiation":
             # The same span kind the A2A-T propose gets: both protocols then export the same round.
             span_kind = "propose"
-        span_detail: dict[str, object] = {"event": dict(event)}
+        # ``wireBody`` is the raw response the On-the-wire panel shows from the transcript entry;
+        # keeping it in the span would duplicate the whole frame in every trace export.
+        span_detail: dict[str, object] = {
+            "event": {key: value for key, value in event.items() if key != "wireBody"}
+        }
         if span_kind == "propose":
             span_detail.update(
                 {

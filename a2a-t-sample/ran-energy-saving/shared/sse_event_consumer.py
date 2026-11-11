@@ -32,6 +32,18 @@ def stream_response_payload(payload: Mapping[str, object]) -> dict[str, object]:
     return selected or dict(payload)
 
 
+def stream_response_body(stream_response: StreamResponse) -> dict[str, object]:
+    """Return the JSON body of one response frame, keeping every field the peer sent.
+
+    The inspector shows this body as the raw response. It is never truncated or reduced to the
+    fields the client flow reads, so an unexpected vendor field stays diagnosable.
+    """
+    try:
+        return MessageToDict(stream_response)
+    except Exception:  # noqa: BLE001 - evidence capture must not change the protocol result
+        return {}
+
+
 def _status_message_metadata(status: TaskStatus) -> dict[str, object] | None:
     """Return the status message's metadata map, ``None`` when the message carries none."""
     if not status.HasField("message"):

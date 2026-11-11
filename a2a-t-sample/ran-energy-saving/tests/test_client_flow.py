@@ -1683,6 +1683,8 @@ def test_webhook_payload_normalization_matches_sse_shape() -> None:
         "context_id": CONTEXT_ID,
         "message_id": "msg-1",
         "metadata": {NEGOTIATION_T_EXTENSION_URI: "content"},
+        # The panel shows this body, so normalization must carry the pushed frame unchanged.
+        "wireBody": payload,
     }
 
 
@@ -1713,6 +1715,8 @@ async def test_sse_transport_stops_at_the_first_message() -> None:
     events = await SseClientTransport(client).send(SendMessageRequest(), ClientCallContext())
 
     assert [event["kind"] for event in events] == ["message"]
+    # The response body is kept whole for the On-the-wire panel, not rebuilt from the event.
+    assert events[0]["wireBody"]["message"]["messageId"] == "msg-1"
 
 
 async def test_webhook_transport_returns_the_rpc_reply_without_draining_the_queue() -> None:

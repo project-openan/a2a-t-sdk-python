@@ -349,6 +349,24 @@ def test_record_event_carries_the_task_payload_and_the_extension_metadata() -> N
     assert entry["metadata"] == {TASK_T_EXTENSION_URI: "1. Basic information\n- Region: Region A"}
 
 
+def test_record_event_keeps_the_raw_response_frame() -> None:
+    """The transcript carries the peer's response body so the inspector never reconstructs it."""
+    transcript = _transcript()
+    raw = {
+        "statusUpdate": {
+            "taskId": "task-1",
+            "contextId": CONTEXT_ID,
+            "status": {"state": "TASK_STATE_COMPLETED"},
+            "unexpectedVendorField": "kept",
+        }
+    }
+    event = {**_status_event(), "wireBody": raw}
+
+    entry = transcript.record_event(event)
+
+    assert entry["wireBody"] == raw
+
+
 def test_record_error_marks_the_run_failed() -> None:
     transcript = _transcript()
 
