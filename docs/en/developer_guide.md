@@ -344,7 +344,7 @@ Sample client AgentCard definition reference:
       "description": "Transmission network O&M management agent, providing O&M capabilities such as circuit recovery verification, base station outage root cause analysis, and network element hidden danger inspection",
       "supportedInterfaces": [
         {
-          "url": "http://10.xx.xx.xx:26335/a2a/v1",
+          "url": "http://10.xx.xx.xx:26335/a2a/json",
           "protocolBinding": "HTTP+JSON",
           "protocolVersion": "1.0"
         }
