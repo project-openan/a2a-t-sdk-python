@@ -380,6 +380,10 @@ class LangfuseSpanExporter:
         #: Span id of the early zero-length anchor every observation is parented to.
         self._visible_span_id: str = ""
         self._visible_context: Any = None
+        #: Open "creation" span; observations hang under it until the Task is accepted.
+        self._creation_span: Any = None
+        #: Context used for new observations and phase/round spans (creation, then the anchor).
+        self._child_context: Any = None
         started = _now_ns()
         trace_id = _valid_trace_id(parent_trace_id)
         anchor_id = _valid_span_id(workflow_root_span_id)
@@ -415,11 +419,12 @@ class LangfuseSpanExporter:
                 attributes=_run_root_attributes(metadata),
             )
             self._start_run_anchor(started)
+            self._start_creation(started)
             # Name the trace and expose the attempt's runId as early as possible. The anchor
             # itself stays a zero-length root; this child is its first observation.
             bootstrap = runtime.tracer.start_span(
                 "trace opened",
-                context=self._visible_context,
+                context=self._child_context,
                 start_time=started,
                 attributes=_trace_opened_attributes(metadata),
             )
@@ -435,12 +440,13 @@ class LangfuseSpanExporter:
             self._trace_id = format_trace_id(root_context.trace_id)
             self._root_span_id = format_span_id(root_context.span_id)
             self._start_run_anchor(started)
+            self._start_creation(started)
             # The root stays open for the whole run, so its trace-level attributes would arrive
             # only at run end. Export one zero-length child immediately: it is the trace's first
             # observation, so Langfuse names the trace and fills session/user from the start.
             bootstrap = runtime.tracer.start_span(
                 "trace opened",
-                context=self._visible_context,
+                context=self._child_context,
                 start_time=started,
                 attributes={key: value for key, value in _root_attributes(metadata).items() if key != ROOT_ATTRIBUTE}
                 | {OBSERVATION_TYPE_ATTRIBUTE: "event"},
@@ -473,7 +479,47 @@ class LangfuseSpanExporter:
         )
         self._visible_span_id = format_span_id(anchor.get_span_context().span_id)
         self._visible_context = set_span_in_context(anchor)
+        self._child_context = self._visible_context
         anchor.end(end_time=started)
+
+    def _start_creation(self, started: int) -> None:
+        """Open the creation stage: intent, Task-T, validation, send and acceptance.
+
+        The span ends when the remote Task is accepted (SUBMITTED/WORKING), so a long-running
+        Task still has one closed span for the creation stage instead of an open-ended root.
+        Observations created before that moment hang under it; later ones hang under the anchor.
+        The name is new: ``run ·`` / ``phase ·`` / round names stay exactly as the statistics
+        tools expect them.
+        """
+        self._creation_span = self._runtime.tracer.start_span(
+            _creation_span_name(self._metadata),
+            context=self._visible_context,
+            start_time=started,
+            attributes={
+                OBSERVATION_TYPE_ATTRIBUTE: OBSERVATION_SPAN,
+                "stage": "creation",
+            },
+        )
+        self._child_context = set_span_in_context(self._creation_span)
+
+    def _close_creation(self, ended: int) -> None:
+        """End the creation stage and move later observations back under the anchor."""
+        span = self._creation_span
+        if span is None:
+            return
+        self._creation_span = None
+        self._child_context = self._visible_context
+        span.end(end_time=ended)
+
+    def _is_acceptance(self, span: Mapping[str, object]) -> bool:
+        """Whether one recorded span proves the remote Task was accepted."""
+        kind = _as_str(span.get("kind"))
+        if kind == "task_created":
+            return True
+        return kind == "status" and _status_state(span) in (
+            "TASK_STATE_SUBMITTED",
+            "TASK_STATE_WORKING",
+        )
 
     @property
     def trace_id(self) -> str:
@@ -503,7 +549,7 @@ class LangfuseSpanExporter:
         """
         return self._runtime.tracer.start_span(
             name,
-            context=self._visible_context,
+            context=self._child_context,
             attributes={str(key): value for key, value in attributes.items()},
         )
 
@@ -520,6 +566,11 @@ class LangfuseSpanExporter:
                 self._observe(span)
                 if self._should_export(span):
                     self._export(span)
+                elif self._creation_span is not None and self._is_acceptance(span):
+                    # A reduced level may not export the accepting row (a bare status or a
+                    # terminal), but the creation stage must still close at acceptance.
+                    started = _iso_to_ns(span.get("startedAt"), default=_now_ns())
+                    self._close_creation(_span_end_ns(span, started))
         except Exception as exc:  # noqa: BLE001 - observability must never break the run
             self._warning = f"{type(exc).__name__}: {exc}"
             _LOGGER.warning("Langfuse span export failed: %s", exc)
@@ -583,6 +634,8 @@ class LangfuseSpanExporter:
                     _LOGGER.warning("Langfuse final status export failed: %s", exc)
             self._last_status_span = None
             ended = _now_ns()
+            # A run that never reached acceptance still closes its creation stage at the end.
+            self._close_creation(ended)
             for span in self._round_spans.values():
                 span.end(end_time=ended)
             for span in self._phase_spans.values():
@@ -649,13 +702,17 @@ class LangfuseSpanExporter:
         if isinstance(span_id, str) and span_id:
             self._span_map[span_id] = observation
         self._exported += 1
+        if self._creation_span is not None and self._is_acceptance(span):
+            # The Task was accepted: close the creation stage right after the accepting row, so
+            # the trace shows one finished stage even while the Task keeps running.
+            self._close_creation(ended)
 
     def _parent_context(self, span: Mapping[str, object], phase: str, started: int) -> Any:
         """Attach one span to its recorded parent, its negotiation round, or its phase."""
         if self._span_level != TRACE_SPAN_LEVEL_FULL:
             # Reduced levels stay flat: phase/round grouping spans would double the observation
             # count, and the phase is still recorded as metadata on every observation.
-            return self._visible_context
+            return self._child_context
         parent_id = span.get("parentSpanId")
         if isinstance(parent_id, str) and parent_id in self._span_map:
             return set_span_in_context(self._span_map[parent_id])
@@ -663,7 +720,7 @@ class LangfuseSpanExporter:
         if phase_span is None:
             phase_span = self._runtime.tracer.start_span(
                 f"phase · {phase}",
-                context=self._visible_context,
+                context=self._child_context,
                 start_time=started,
                 attributes={OBSERVATION_TYPE_ATTRIBUTE: OBSERVATION_SPAN, "phase": phase},
             )
@@ -736,6 +793,12 @@ def _run_span_name(metadata: LangfuseRunMetadata) -> str:
     """Return the root observation name of one run."""
     protocol = metadata.protocol or "a2a"
     return f"run · {metadata.scenario} · {protocol}"
+
+
+def _creation_span_name(metadata: LangfuseRunMetadata) -> str:
+    """Return the name of the creation stage span (new; existing names stay unchanged)."""
+    protocol = metadata.protocol or "a2a"
+    return f"creation · {metadata.scenario} · {protocol}"
 
 
 def _workflow_span_name(metadata: LangfuseRunMetadata) -> str:

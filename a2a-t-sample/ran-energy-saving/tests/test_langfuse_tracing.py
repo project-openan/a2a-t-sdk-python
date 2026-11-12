@@ -118,6 +118,23 @@ def _llm_span(**overrides: object) -> dict[str, object]:
     return span
 
 
+def _created_span(**overrides: object) -> dict[str, object]:
+    """One ``task_created`` row: the acceptance signal of a Create/Modify run."""
+    span: dict[str, object] = {
+        "kind": "task_created",
+        "phase": "execution",
+        "title": "Task created",
+        "status": "ok",
+        "startedAt": "2026-11-05T10:00:02.000Z",
+        "endedAt": "2026-11-05T10:00:02.000Z",
+        "durationMs": 0,
+        "spanId": "created_0001",
+        "detail": {"state": "TASK_STATE_SUBMITTED"},
+    }
+    span.update(overrides)
+    return span
+
+
 def _by_name(runtime: _Runtime) -> dict[str, Any]:
     return {span.name: span for span in runtime.spans.get_finished_spans()}
 
@@ -563,12 +580,60 @@ def test_observations_hang_under_an_anchor_exported_before_the_root(
 
     exported = runtime.spans.get_finished_spans()
     anchor = next(span for span in exported if span.name == "run opened")
+    creation = exporter._creation_span
     observation = next(span for span in exported if span.name.startswith("LLM call"))
     # The anchor exists while the run is open, so it is the parent the backend can resolve.
     assert f"{anchor.context.span_id:016x}" == exporter.root_span_id
+    assert creation is not None
+    assert creation.parent is not None and creation.parent.span_id == anchor.context.span_id
     assert observation.parent is not None
-    assert observation.parent.span_id == anchor.context.span_id
+    assert observation.parent.span_id == creation.get_span_context().span_id
     assert all(not span.name.startswith("run ·") for span in exported)
+
+
+def test_the_creation_stage_closes_when_the_task_is_accepted(
+    offline_config: SampleConfig,
+) -> None:
+    """The creation stage gets one closed span at SUBMITTED; later observations sit under it."""
+    exporter, runtime = _exporter(offline_config, span_level="phase")
+
+    exporter(_llm_span())
+    exporter(_created_span())
+    exporter(_llm_span(spanId="llm_0002", title="LLM call · after acceptance"))
+
+    exported = runtime.spans.get_finished_spans()
+    creation = next(span for span in exported if span.name.startswith("creation ·"))
+    # Creation ends with the accepting row, not at run end.
+    created = next(span for span in exported if span.name == "Task created")
+    assert creation.end_time == created.end_time
+    assert created.parent is not None
+    assert created.parent.span_id == creation.context.span_id
+    later = next(span for span in exported if span.name == "LLM call · after acceptance")
+    assert later.parent is not None
+    assert later.parent.span_id == creation.parent.span_id  # back under the anchor
+    # The span names the statistics tools rely on are untouched.
+    assert all(not span.name.startswith("run ·") for span in exported)
+
+
+def test_a_minimal_export_still_closes_the_creation_stage(offline_config: SampleConfig) -> None:
+    """A level that does not export the accepting row must still end the creation stage."""
+    exporter, _runtime = _exporter(offline_config, span_level="minimal")
+
+    exporter(
+        {
+            "kind": "status",
+            "phase": "execution",
+            "title": "Working",
+            "status": "ok",
+            "startedAt": "2026-11-05T10:00:03.000Z",
+            "endedAt": "2026-11-05T10:00:03.000Z",
+            "durationMs": 0,
+            "spanId": "status_0001",
+            "detail": {"event": {"state": "TASK_STATE_WORKING"}},
+        }
+    )
+
+    assert exporter._creation_span is None
 
 
 def test_a_vendor_request_span_is_exported_under_the_run_root(offline_config: SampleConfig) -> None:
@@ -581,9 +646,11 @@ def test_a_vendor_request_span_is_exported_under_the_run_root(offline_config: Sa
 
     exported = runtime.spans.get_finished_spans()
     vendor = next(item for item in exported if item.context.span_id == context.span_id)
+    creation = exporter._creation_span
     assert f"{context.trace_id:032x}" == exporter.trace_id
+    assert creation is not None
     assert vendor.parent is not None
-    assert f"{vendor.parent.span_id:016x}" == exporter.root_span_id
+    assert vendor.parent.span_id == creation.get_span_context().span_id
     assert vendor.attributes["url"] == "https://nms/a2a/json/message:send"
 
 
