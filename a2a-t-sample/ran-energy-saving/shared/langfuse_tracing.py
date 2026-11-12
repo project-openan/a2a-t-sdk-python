@@ -377,6 +377,9 @@ class LangfuseSpanExporter:
         self._last_status_span: Mapping[str, object] | None = None
         self._saw_terminal_status = False
         self._max_round = 0
+        #: Span id of the early zero-length anchor every observation is parented to.
+        self._visible_span_id: str = ""
+        self._visible_context: Any = None
         started = _now_ns()
         trace_id = _valid_trace_id(parent_trace_id)
         anchor_id = _valid_span_id(workflow_root_span_id)
@@ -390,6 +393,7 @@ class LangfuseSpanExporter:
                 start_time=started,
                 attributes=_run_root_attributes(metadata),
             )
+            self._start_run_anchor(started)
         elif self._uses_workflow_root:
             # The first exported attempt owns the chain's single root. It is a zero-length
             # anchor: OTel exports a span only on end(), and a retry may run in another process,
@@ -410,11 +414,12 @@ class LangfuseSpanExporter:
                 start_time=started,
                 attributes=_run_root_attributes(metadata),
             )
+            self._start_run_anchor(started)
             # Name the trace and expose the attempt's runId as early as possible. The anchor
             # itself stays a zero-length root; this child is its first observation.
             bootstrap = runtime.tracer.start_span(
                 "trace opened",
-                context=_workflow_parent_context(trace_id, self._workflow_root_span_id),
+                context=self._visible_context,
                 start_time=started,
                 attributes=_trace_opened_attributes(metadata),
             )
@@ -429,12 +434,13 @@ class LangfuseSpanExporter:
             root_context = self._root.get_span_context()
             self._trace_id = format_trace_id(root_context.trace_id)
             self._root_span_id = format_span_id(root_context.span_id)
+            self._start_run_anchor(started)
             # The root stays open for the whole run, so its trace-level attributes would arrive
             # only at run end. Export one zero-length child immediately: it is the trace's first
             # observation, so Langfuse names the trace and fills session/user from the start.
             bootstrap = runtime.tracer.start_span(
                 "trace opened",
-                context=set_span_in_context(self._root),
+                context=self._visible_context,
                 start_time=started,
                 attributes={key: value for key, value in _root_attributes(metadata).items() if key != ROOT_ATTRIBUTE}
                 | {OBSERVATION_TYPE_ATTRIBUTE: "event"},
@@ -444,6 +450,31 @@ class LangfuseSpanExporter:
         self._trace_id = format_trace_id(root_context.trace_id)
         self._root_span_id = format_span_id(root_context.span_id)
 
+    def _start_run_anchor(self, started: int) -> None:
+        """Export one zero-length child of the run root and parent observations to it.
+
+        OTel exports a span only when it ends, so the long-lived root reaches Langfuse at run end
+        — or never, if the process stops first. Every observation would then name a parent the
+        backend has not received, and the trace renders as a flat list of unrelated rows. The
+        anchor ends immediately, so it exists from the first seconds of the run; the observations
+        (and the root, when it finally arrives) attach to it.
+        """
+        attributes = {
+            key: value
+            for key, value in _root_attributes(self._metadata).items()
+            if key != ROOT_ATTRIBUTE
+        }
+        attributes[OBSERVATION_TYPE_ATTRIBUTE] = OBSERVATION_SPAN
+        anchor = self._runtime.tracer.start_span(
+            "run opened",
+            context=set_span_in_context(self._root),
+            start_time=started,
+            attributes=attributes,
+        )
+        self._visible_span_id = format_span_id(anchor.get_span_context().span_id)
+        self._visible_context = set_span_in_context(anchor)
+        anchor.end(end_time=started)
+
     @property
     def trace_id(self) -> str:
         """Return the Langfuse trace id (the OTel trace id)."""
@@ -451,8 +482,12 @@ class LangfuseSpanExporter:
 
     @property
     def root_span_id(self) -> str:
-        """Return this attempt's run-root span id, used as the parent of outgoing server hops."""
-        return self._root_span_id
+        """Return the exported run anchor, used as the parent of outgoing server hops.
+
+        It is the visible node of the trace: the run root itself stays open for the whole run and
+        is exported only at ``finish``, so naming the root would leave every child dangling.
+        """
+        return self._visible_span_id or self._root_span_id
 
     @property
     def workflow_root_span_id(self) -> str:
@@ -466,11 +501,9 @@ class LangfuseSpanExporter:
         span that exists in our trace. Started through this exporter's tracer, the span lands in
         the run's Langfuse trace under the run root and ends with the request.
         """
-        from opentelemetry.trace import set_span_in_context
-
         return self._runtime.tracer.start_span(
             name,
-            context=set_span_in_context(self._root),
+            context=self._visible_context,
             attributes={str(key): value for key, value in attributes.items()},
         )
 
@@ -622,7 +655,7 @@ class LangfuseSpanExporter:
         if self._span_level != TRACE_SPAN_LEVEL_FULL:
             # Reduced levels stay flat: phase/round grouping spans would double the observation
             # count, and the phase is still recorded as metadata on every observation.
-            return set_span_in_context(self._root)
+            return self._visible_context
         parent_id = span.get("parentSpanId")
         if isinstance(parent_id, str) and parent_id in self._span_map:
             return set_span_in_context(self._span_map[parent_id])
@@ -630,7 +663,7 @@ class LangfuseSpanExporter:
         if phase_span is None:
             phase_span = self._runtime.tracer.start_span(
                 f"phase · {phase}",
-                context=set_span_in_context(self._root),
+                context=self._visible_context,
                 start_time=started,
                 attributes={OBSERVATION_TYPE_ATTRIBUTE: OBSERVATION_SPAN, "phase": phase},
             )

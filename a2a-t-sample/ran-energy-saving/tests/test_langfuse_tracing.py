@@ -553,6 +553,24 @@ def test_trace_metadata_carries_the_osp_case_and_the_round_count(
     assert root.attributes["langfuse.trace.metadata.negotiated"] == "true"
 
 
+def test_observations_hang_under_an_anchor_exported_before_the_root(
+    offline_config: SampleConfig,
+) -> None:
+    """An unfinished run must still show a tree: the open root is exported only at finish."""
+    exporter, runtime = _exporter(offline_config, span_level="phase")
+
+    exporter(_llm_span())
+
+    exported = runtime.spans.get_finished_spans()
+    anchor = next(span for span in exported if span.name == "run opened")
+    observation = next(span for span in exported if span.name.startswith("LLM call"))
+    # The anchor exists while the run is open, so it is the parent the backend can resolve.
+    assert f"{anchor.context.span_id:016x}" == exporter.root_span_id
+    assert observation.parent is not None
+    assert observation.parent.span_id == anchor.context.span_id
+    assert all(not span.name.startswith("run ·") for span in exported)
+
+
 def test_a_vendor_request_span_is_exported_under_the_run_root(offline_config: SampleConfig) -> None:
     """The traceparent span-id must name a span that exists in the run's Langfuse trace."""
     exporter, runtime = _exporter(offline_config)
