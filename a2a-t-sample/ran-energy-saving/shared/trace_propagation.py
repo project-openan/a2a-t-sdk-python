@@ -23,7 +23,7 @@ import hashlib
 import json
 import logging
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import Any, Final
@@ -68,6 +68,13 @@ _USER_ID: ContextVar[str] = ContextVar("a2at_active_user_id", default="")
 _DOWNSTREAM_TRACE_ID: ContextVar[str] = ContextVar("a2at_downstream_trace_id", default="")
 _WORKFLOW_TRACE: ContextVar[str] = ContextVar("a2at_workflow_trace", default="")
 _DECISION_MODE: ContextVar[str] = ContextVar("a2at_decision_mode", default="")
+
+#: Starts one real OTel span for an outbound vendor request. The run binds its Langfuse exporter
+#: here so the W3C ``span-id`` names a span that exists in our trace instead of a generated id.
+_VendorSpanStarter = Callable[[str, dict[str, object]], Any]
+_VENDOR_SPAN_STARTER: ContextVar[_VendorSpanStarter | None] = ContextVar(
+    "a2at_vendor_span_starter", default=None
+)
 
 
 def _is_hex(value: str, length: int) -> bool:
@@ -151,7 +158,7 @@ def propagated_trace(
     downstream_trace_id: str | None = None,
     workflow_trace: bool = False,
     decision_mode: str | None = None,
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     """Bind the correlation values for the duration of one run or request."""
     tokens = set_active_trace(
         trace_id=trace_id,
@@ -248,6 +255,59 @@ def current_traceparent() -> str:
     root_parent = parent if _is_hex(parent, 16) and parent != "0" * 16 else ""
     span_id = _current_otel_span_id() or root_parent or uuid.uuid4().hex[:16]
     return f"00-{trace_id}-{span_id}-01"
+
+
+def span_traceparent(span: Any | None) -> str:
+    """Return the W3C ``traceparent`` of one OTel span, ``""`` without a valid context.
+
+    The vendor NMS joins its backend trace to the *span that sent the request*. A generated id
+    names nothing, so the header must carry this span's own trace/span ids.
+    """
+    if span is None:
+        return ""
+    try:
+        context = span.get_span_context()
+    except Exception:  # noqa: BLE001 - propagation must never break the call
+        _LOGGER.debug("span context lookup failed", exc_info=True)
+        return ""
+    if context is None or not context.is_valid:
+        return ""
+    return f"00-{context.trace_id:032x}-{context.span_id:016x}-01"
+
+
+def set_vendor_span_starter(starter: _VendorSpanStarter | None) -> Token[Any]:
+    """Bind the span factory used by :func:`vendor_request_span`; return its reset token."""
+    return _VENDOR_SPAN_STARTER.set(starter)
+
+
+def reset_vendor_span_starter(token: Token[Any]) -> None:
+    """Restore the span factory saved by :func:`set_vendor_span_starter`."""
+    _VENDOR_SPAN_STARTER.reset(token)
+
+
+@contextmanager
+def vendor_request_span(
+    name: str,
+    *,
+    attributes: Mapping[str, object] | None = None,
+) -> Generator[Any | None, None, None]:
+    """Start one exported span for an outbound vendor request and end it on exit.
+
+    Yields ``None`` when the run has no exporter: the caller then falls back to the bound run
+    root span, or to the legacy generated id when there is no trace context at all.
+    """
+    starter = _VENDOR_SPAN_STARTER.get()
+    if starter is None:
+        yield None
+        return
+    span = starter(name, dict(attributes or {}))
+    try:
+        yield span
+    finally:
+        try:
+            span.end()
+        except Exception:  # noqa: BLE001 - observability must not change the call result
+            _LOGGER.debug("vendor span end failed", exc_info=True)
 
 
 def extract_traceparent(headers: Mapping[str, str]) -> tuple[str, str]:
@@ -472,5 +532,9 @@ __all__ = [
     "inject_outgoing",
     "propagated_trace",
     "reset_active_trace",
+    "reset_vendor_span_starter",
     "set_active_trace",
+    "set_vendor_span_starter",
+    "span_traceparent",
+    "vendor_request_span",
 ]

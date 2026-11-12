@@ -459,6 +459,21 @@ class LangfuseSpanExporter:
         """Return the chain's workflow anchor span id, empty outside a workflow-root run."""
         return self._workflow_root_span_id
 
+    def start_vendor_span(self, name: str, attributes: Mapping[str, object]) -> Any:
+        """Start one exported child of the run root for an outbound vendor request.
+
+        The vendor NMS joins its backend trace to the ``span-id`` we send, so that id must name a
+        span that exists in our trace. Started through this exporter's tracer, the span lands in
+        the run's Langfuse trace under the run root and ends with the request.
+        """
+        from opentelemetry.trace import set_span_in_context
+
+        return self._runtime.tracer.start_span(
+            name,
+            context=set_span_in_context(self._root),
+            attributes={str(key): value for key, value in attributes.items()},
+        )
+
     def __call__(self, span: Mapping[str, object]) -> None:
         """Export one completed Run Explorer span; failures become a snapshot warning.
 

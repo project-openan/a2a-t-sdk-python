@@ -55,7 +55,12 @@ from shared.trace import (
     is_report_artifact,
     record_span,
 )
-from shared.trace_propagation import current_downstream_trace_id
+from shared.trace_propagation import (
+    current_downstream_trace_id,
+    current_parent_span_id,
+    span_traceparent,
+    vendor_request_span,
+)
 
 from protocol.client_flow import is_stop_event, is_terminal_event
 from protocol.messages import metadata_to_dict
@@ -326,11 +331,13 @@ class NmsClient:
                 "value": self._config.token_value,
             }
             try:
-                response = await self._http.put(
-                    self._config.token_url,
-                    json=payload,
-                    timeout=self._config.request_timeout,
-                )
+                with vendor_request_span("NMS session token", attributes={"url": self._config.token_url}) as span:
+                    response = await self._http.put(
+                        self._config.token_url,
+                        json=payload,
+                        headers=self._traceparent_headers(span),
+                        timeout=self._config.request_timeout,
+                    )
             except httpx.HTTPError as exc:
                 raise NmsAuthError(f"NMS token request failed: {_http_error_detail(exc)}") from exc
             if response.status_code != 200:
@@ -355,7 +362,13 @@ class NmsClient:
             )
             return self._token
 
-    def _headers(self, token: str, extension_header: str) -> dict[str, str]:
+    def _headers(
+        self,
+        token: str,
+        extension_header: str,
+        *,
+        span: object | None = None,
+    ) -> dict[str, str]:
         """Return the headers of one A2A call."""
         headers = {
             "Content-Type": "application/json",
@@ -364,27 +377,34 @@ class NmsClient:
             "X-Auth-Token": token,
             "A2A-Version": "1.0",
         }
-        traceparent = self._traceparent()
-        if traceparent:
-            headers["traceparent"] = traceparent
+        headers.update(self._traceparent_headers(span))
         if extension_header:
             headers["A2A-Extensions"] = extension_header
             headers["X-A2A-Extensions"] = extension_header
         return headers
 
-    def _traceparent(self) -> str:
+    def _traceparent_headers(self, span: object | None = None) -> dict[str, str]:
+        """Return the W3C header of the request span, empty when the call is not traced."""
+        traceparent = self._traceparent(span)
+        return {"traceparent": traceparent} if traceparent else {}
+
+    def _traceparent(self, span: object | None = None) -> str:
         """Return the W3C ``traceparent`` correlating this call with the sample run.
 
-        The stable downstream trace id is preferred so a blocked run and its retry carry the same
-        vendor-facing trace. Without one, the run id (already 32 hex digits) is the trace-id: a
-        vendor that keeps the header can join its own logs to one run. The span-id is generated
-        here because the sample's own span ids are not 16 hex digits. Empty when the call runs
+        The header names the span created for *this* request: the vendor joins its backend trace
+        to that ``span-id``, so a generated id would leave the parent dangling. Without an
+        exporter span the run root (or the downstream id's stable parent) is used; only a call
+        with no span and no bound parent falls back to a generated id. Empty when the call runs
         outside a traced run.
         """
+        span_header = span_traceparent(span)
+        if span_header:
+            _LOGGER.info("NMS call traceparent=%s", span_header)
+            return span_header
         trace_id = current_downstream_trace_id() or str(current_trace().run_id or "").strip().lower()
         if not _is_hex(trace_id, 32) or trace_id == "0" * 32:
             return ""
-        span_id = uuid.uuid4().hex[:16]
+        span_id = current_parent_span_id() or uuid.uuid4().hex[:16]
         injected = f"00-{trace_id}-{span_id}-01"
         # Print the id the vendor actually receives: this log can belong to another process
         # (UI vs OSS), and without it the Langfuse trace id cannot be matched to a hop.
@@ -408,113 +428,118 @@ class NmsClient:
         """
         token = await self.token()
         url = f"{self._config.a2a_base}/message:stream"
-        headers = self._headers(token, extension_header)
-        self._write_wire("out", method="POST", url=url, headers=headers, body=dict(payload))
-        _nms_span(
-            phase=PHASE_DISPATCH,
-            title="RAN A2A stream opened",
-            title_key="nmsStream",
-            detail={"url": url, "a2aT": bool(extension_header)},
-        )
-        timeout = httpx.Timeout(
-            self._config.send_timeout,
-            connect=min(DEFAULT_NMS_CONNECT_TIMEOUT_SECONDS, self._config.send_timeout),
-        )
-        started = time.monotonic()
-        try:
-            async with self._http.stream("POST", url, json=dict(payload), headers=headers, timeout=timeout) as response:
-                if response.status_code != 200:
-                    body = (await response.aread()).decode("utf-8", "replace")
-                    self._record_failure_response(
+        # The span covers the whole A2A stream exchange. Its id is what the vendor receives in
+        # ``traceparent``; a span created after the header was built could not name the request.
+        with vendor_request_span("NMS message:stream", attributes={"url": url}) as span:
+            headers = self._headers(token, extension_header, span=span)
+            self._write_wire("out", method="POST", url=url, headers=headers, body=dict(payload))
+            _nms_span(
+                phase=PHASE_DISPATCH,
+                title="RAN A2A stream opened",
+                title_key="nmsStream",
+                detail={"url": url, "a2aT": bool(extension_header)},
+            )
+            timeout = httpx.Timeout(
+                self._config.send_timeout,
+                connect=min(DEFAULT_NMS_CONNECT_TIMEOUT_SECONDS, self._config.send_timeout),
+            )
+            started = time.monotonic()
+            try:
+                async with self._http.stream(
+                    "POST", url, json=dict(payload), headers=headers, timeout=timeout
+                ) as response:
+                    if response.status_code != 200:
+                        body = (await response.aread()).decode("utf-8", "replace")
+                        self._record_failure_response(
+                            response,
+                            url=url,
+                            elapsed_seconds=time.monotonic() - started,
+                        )
+                        raise NmsProtocolError(
+                            f"NMS A2A request returned HTTP {response.status_code}: {_excerpt(body)}",
+                            http_status=response.status_code,
+                            retry_after=_retry_after_seconds(response),
+                        )
+                    self._record_success_response(
                         response,
                         url=url,
                         elapsed_seconds=time.monotonic() - started,
+                        stream=True,
                     )
-                    raise NmsProtocolError(
-                        f"NMS A2A request returned HTTP {response.status_code}: {_excerpt(body)}",
-                        http_status=response.status_code,
-                        retry_after=_retry_after_seconds(response),
-                    )
-                self._record_success_response(
-                    response,
-                    url=url,
-                    elapsed_seconds=time.monotonic() - started,
-                    stream=True,
-                )
-                lines = response.aiter_lines()
-                # The NMS emits ``: heartbeat`` every 15 s forever, so an idle window measured
-                # between *any* two lines never expires: the stream hung for minutes after the
-                # Task went to WORKING and never reached polling. Only a ``data:`` frame proves
-                # progress; heartbeats are skipped without moving ``idle_deadline``. Once a Task
-                # is known, a process with a background tracker leaves the stream sooner and
-                # hands that Task over; a negotiation without a Task keeps the normal window.
-                idle_timeout = self._config.idle_timeout
-                idle_deadline = time.monotonic() + idle_timeout
-                while True:
-                    remaining = idle_deadline - time.monotonic()
-                    if remaining <= 0:
-                        self._write_wire(
-                            "in",
-                            line=f": idle {idle_timeout:g}s without a data frame; polling",
-                        )
-                        _nms_span(
-                            phase=PHASE_EXECUTION,
-                            title="RAN stream idle; polling the task",
-                            title_key="nmsIdle",
-                            detail={"idleSeconds": idle_timeout},
-                        )
-                        break
-                    try:
-                        line = await asyncio.wait_for(anext(lines), timeout=remaining)
-                    except StopAsyncIteration:
-                        break
-                    except asyncio.TimeoutError:
-                        continue
-                    self._write_wire("in", line=line)
-                    if not line.startswith("data:"):
-                        # ``: heartbeat`` comments and blank separator lines; they do not reset
-                        # the deadline.
-                        continue
-                    raw = line[5:].strip()
-                    if not raw:
-                        continue
+                    lines = response.aiter_lines()
+                    # The NMS emits ``: heartbeat`` every 15 s forever, so an idle window measured
+                    # between *any* two lines never expires: the stream hung for minutes after the
+                    # Task went to WORKING and never reached polling. Only a ``data:`` frame proves
+                    # progress; heartbeats are skipped without moving ``idle_deadline``. Once a Task
+                    # is known, a process with a background tracker leaves the stream sooner and
+                    # hands that Task over; a negotiation without a Task keeps the normal window.
+                    idle_timeout = self._config.idle_timeout
                     idle_deadline = time.monotonic() + idle_timeout
-                    try:
-                        frame = json.loads(raw)
-                    except json.JSONDecodeError as exc:
-                        self.record_error(
-                            "ParseError",
-                            f"Invalid SSE data frame: {_excerpt(raw)}",
-                            {"line": line},
-                        )
-                        raise NmsProtocolError(f"Invalid SSE data frame: {_excerpt(raw)}") from exc
-                    if not isinstance(frame, dict):
-                        self.record_error(
-                            "ParseError",
-                            "SSE data frame is not a JSON object",
-                            frame,
-                        )
-                        raise NmsProtocolError("SSE data frame is not a JSON object")
-                    if "error" in frame:
-                        message = _frame_error_message(frame)
-                        self.record_error("NmsProtocolError", message, frame)
-                        _nms_span(
-                            phase=PHASE_EXECUTION,
-                            title="RAN side returned an error frame",
-                            title_key="nmsError",
-                            detail={"message": message[:1000]},
-                        )
-                        raise NmsProtocolError(message)
-                    if self._config.defer_to_tracker and "task" in frame:
-                        task = frame.get("task")
-                        if isinstance(task, Mapping) and isinstance(task.get("id"), str):
-                            # The Task is now known: a process-owned tracker can take over after
-                            # the shorter silence instead of occupying this stream for the budget.
-                            idle_timeout = self._config.poll_after_silence
-                            idle_deadline = time.monotonic() + idle_timeout
-                    yield frame
-        except httpx.HTTPError as exc:
-            raise NmsProtocolError(f"NMS A2A request failed: {_http_error_detail(exc)}") from exc
+                    while True:
+                        remaining = idle_deadline - time.monotonic()
+                        if remaining <= 0:
+                            self._write_wire(
+                                "in",
+                                line=f": idle {idle_timeout:g}s without a data frame; polling",
+                            )
+                            _nms_span(
+                                phase=PHASE_EXECUTION,
+                                title="RAN stream idle; polling the task",
+                                title_key="nmsIdle",
+                                detail={"idleSeconds": idle_timeout},
+                            )
+                            break
+                        try:
+                            line = await asyncio.wait_for(anext(lines), timeout=remaining)
+                        except StopAsyncIteration:
+                            break
+                        except asyncio.TimeoutError:
+                            continue
+                        self._write_wire("in", line=line)
+                        if not line.startswith("data:"):
+                            # ``: heartbeat`` comments and blank separator lines; they do not reset
+                            # the deadline.
+                            continue
+                        raw = line[5:].strip()
+                        if not raw:
+                            continue
+                        idle_deadline = time.monotonic() + idle_timeout
+                        try:
+                            frame = json.loads(raw)
+                        except json.JSONDecodeError as exc:
+                            self.record_error(
+                                "ParseError",
+                                f"Invalid SSE data frame: {_excerpt(raw)}",
+                                {"line": line},
+                            )
+                            raise NmsProtocolError(f"Invalid SSE data frame: {_excerpt(raw)}") from exc
+                        if not isinstance(frame, dict):
+                            self.record_error(
+                                "ParseError",
+                                "SSE data frame is not a JSON object",
+                                frame,
+                            )
+                            raise NmsProtocolError("SSE data frame is not a JSON object")
+                        if "error" in frame:
+                            message = _frame_error_message(frame)
+                            self.record_error("NmsProtocolError", message, frame)
+                            _nms_span(
+                                phase=PHASE_EXECUTION,
+                                title="RAN side returned an error frame",
+                                title_key="nmsError",
+                                detail={"message": message[:1000]},
+                            )
+                            raise NmsProtocolError(message)
+                        if self._config.defer_to_tracker and "task" in frame:
+                            task = frame.get("task")
+                            if isinstance(task, Mapping) and isinstance(task.get("id"), str):
+                                # The Task is now known: a process-owned tracker can take over after
+                                # the shorter silence instead of occupying this stream for the budget.
+                                idle_timeout = self._config.poll_after_silence
+                                idle_deadline = time.monotonic() + idle_timeout
+                        yield frame
+            except httpx.HTTPError as exc:
+                raise NmsProtocolError(f"NMS A2A request failed: {_http_error_detail(exc)}") from exc
 
     async def send_message(
         self,
@@ -533,29 +558,32 @@ class NmsClient:
         """
         token = await self.token()
         url = f"{self._config.a2a_base}/message:send"
-        headers = self._headers(token, extension_header)
-        headers["Accept"] = "application/json"
-        self._write_wire("out", method="POST", url=url, headers=headers, body=dict(payload))
-        _nms_span(
-            phase=PHASE_DISPATCH,
-            title="RAN A2A message sent",
-            title_key="nmsSend",
-            detail={"url": url, "a2aT": bool(extension_header)},
-        )
-        timeout = httpx.Timeout(
-            self._config.send_timeout,
-            connect=min(DEFAULT_NMS_CONNECT_TIMEOUT_SECONDS, self._config.send_timeout),
-        )
-        started = time.monotonic()
-        try:
-            response = await self._http.post(
-                url,
-                json=dict(payload),
-                headers=headers,
-                timeout=timeout,
+        # The request span is the parent the vendor's backend joins to; it must exist before
+        # the header is built and cover the actual send.
+        with vendor_request_span("NMS message:send", attributes={"url": url}) as span:
+            headers = self._headers(token, extension_header, span=span)
+            headers["Accept"] = "application/json"
+            self._write_wire("out", method="POST", url=url, headers=headers, body=dict(payload))
+            _nms_span(
+                phase=PHASE_DISPATCH,
+                title="RAN A2A message sent",
+                title_key="nmsSend",
+                detail={"url": url, "a2aT": bool(extension_header)},
             )
-        except httpx.HTTPError as exc:
-            raise NmsProtocolError(f"NMS A2A request failed: {_http_error_detail(exc)}") from exc
+            timeout = httpx.Timeout(
+                self._config.send_timeout,
+                connect=min(DEFAULT_NMS_CONNECT_TIMEOUT_SECONDS, self._config.send_timeout),
+            )
+            started = time.monotonic()
+            try:
+                response = await self._http.post(
+                    url,
+                    json=dict(payload),
+                    headers=headers,
+                    timeout=timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise NmsProtocolError(f"NMS A2A request failed: {_http_error_detail(exc)}") from exc
         if response.status_code != 200:
             body = response.text
             headers_seen = _failure_headers(response)
@@ -611,12 +639,15 @@ class NmsClient:
         """
         token = await self.token()
         url = f"{self._config.a2a_base}/tasks/{task_id}"
+        started = time.monotonic()
+        # A Task read is the polling channel: it carries the run context but gets no dedicated
+        # span, because long tasks poll for days and a span per poll would flood the trace.
         headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {token}",
             "X-Auth-Token": token,
+            **self._traceparent_headers(),
         }
-        started = time.monotonic()
         try:
             response = await self._http.get(url, headers=headers, timeout=self._config.request_timeout)
         except httpx.HTTPError as exc:
@@ -647,16 +678,18 @@ class NmsClient:
         """Return the NMS task list document (the NMS keeps the latest 50)."""
         token = await self.token()
         url = f"{self._config.a2a_base}/tasks"
-        headers = {
-            "Accept": "application/json",
-            "Authorization": f"Bearer {token}",
-            "X-Auth-Token": token,
-        }
         started = time.monotonic()
-        try:
-            response = await self._http.get(url, headers=headers, timeout=self._config.request_timeout)
-        except httpx.HTTPError as exc:
-            raise NmsProtocolError(f"NMS task list request failed: {_http_error_detail(exc)}") from exc
+        with vendor_request_span("NMS task:list", attributes={"url": url}) as span:
+            headers = {
+                "Accept": "application/json",
+                "Authorization": f"Bearer {token}",
+                "X-Auth-Token": token,
+                **self._traceparent_headers(span),
+            }
+            try:
+                response = await self._http.get(url, headers=headers, timeout=self._config.request_timeout)
+            except httpx.HTTPError as exc:
+                raise NmsProtocolError(f"NMS task list request failed: {_http_error_detail(exc)}") from exc
         if response.status_code != 200:
             self._record_failure_response(response, url=url, elapsed_seconds=time.monotonic() - started)
             raise NmsProtocolError(
@@ -684,19 +717,21 @@ class NmsClient:
         """
         token = await self.token()
         url = f"{self._config.a2a_base}/tasks/{task_id}:cancel"
-        headers = {
-            "Accept": "application/json",
-            "Authorization": f"Bearer {token}",
-            "X-Auth-Token": token,
-        }
         started = time.monotonic()
-        try:
-            # The NMS answers 500 INTERNAL for an empty or ``{"taskId": …}`` body.
-            response = await self._http.post(
-                url, headers=headers, json={"id": task_id}, timeout=self._config.request_timeout
-            )
-        except httpx.HTTPError as exc:
-            raise NmsProtocolError(f"NMS cancel request failed: {_http_error_detail(exc)}") from exc
+        with vendor_request_span("NMS task:cancel", attributes={"taskId": task_id}) as span:
+            headers = {
+                "Accept": "application/json",
+                "Authorization": f"Bearer {token}",
+                "X-Auth-Token": token,
+                **self._traceparent_headers(span),
+            }
+            try:
+                # The NMS answers 500 INTERNAL for an empty or ``{"taskId": …}`` body.
+                response = await self._http.post(
+                    url, headers=headers, json={"id": task_id}, timeout=self._config.request_timeout
+                )
+            except httpx.HTTPError as exc:
+                raise NmsProtocolError(f"NMS cancel request failed: {_http_error_detail(exc)}") from exc
         if response.status_code == 503:
             _LOGGER.warning("NMS cancel is unsupported (HTTP 503) for task %s", task_id)
             _nms_span(
@@ -750,13 +785,10 @@ class NmsClient:
                     f"Task {task_id} did not reach a terminal state within {budget:g}s "
                     f"(last state: {last_state or 'unknown'})"
                 )
+            # Polling is the backup channel: the observation stays in the wire log and the debug
+            # log, never in the session trace or the demo state.
             self._write_wire("poll", task_id=task_id, state=last_state)
-            _nms_span(
-                phase=PHASE_EXECUTION,
-                title="RAN task polled",
-                title_key="nmsPoll",
-                detail={"taskId": task_id, "state": last_state},
-            )
+            _LOGGER.debug("RAN task %s polled: %s", task_id, last_state or "unknown")
             await asyncio.sleep(self._config.poll_interval)
 
     async def aclose(self) -> None:

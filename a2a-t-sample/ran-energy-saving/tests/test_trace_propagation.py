@@ -21,9 +21,32 @@ from shared.trace_propagation import (
     extract_traceparent,
     inject_outgoing,
     propagated_trace,
+    reset_vendor_span_starter,
+    set_vendor_span_starter,
+    span_traceparent,
+    vendor_request_span,
 )
 
 _TRACE_ID = "0123456789abcdef0123456789abcdef"
+
+
+class _FakeSpanContext:
+    def __init__(self, *, trace_id: int, span_id: int) -> None:
+        self.trace_id = trace_id
+        self.span_id = span_id
+        self.is_valid = True
+
+
+class _FakeSpan:
+    def __init__(self, *, trace_id: int, span_id: int) -> None:
+        self._context = _FakeSpanContext(trace_id=trace_id, span_id=span_id)
+        self.ended = False
+
+    def get_span_context(self) -> _FakeSpanContext:
+        return self._context
+
+    def end(self) -> None:
+        self.ended = True
 
 
 async def test_a_traceparent_is_built_from_the_active_trace_id() -> None:
@@ -273,6 +296,38 @@ async def test_a_traceparent_uses_the_current_otel_span_id(
         await inject_outgoing(request)
 
     assert request.headers[TRACEPARENT_HEADER] == f"00-{_TRACE_ID}-0123456789abcdef-01"
+
+
+def test_span_traceparent_names_one_real_otel_span() -> None:
+    """The vendor joins its trace by the span that sent the request, not a generated id."""
+    span = _FakeSpan(trace_id=int(_TRACE_ID, 16), span_id=0xFEDCBA9876543210)
+
+    assert span_traceparent(span) == f"00-{_TRACE_ID}-fedcba9876543210-01"
+    assert span_traceparent(None) == ""
+
+
+def test_a_vendor_request_span_uses_the_starter_and_ends_it() -> None:
+    span = _FakeSpan(trace_id=int(_TRACE_ID, 16), span_id=0x0123456789ABCDEF)
+    created: list[tuple[str, dict[str, object]]] = []
+
+    def starter(name: str, attributes: dict[str, object]) -> _FakeSpan:
+        created.append((name, attributes))
+        return span
+
+    token = set_vendor_span_starter(starter)
+    try:
+        with vendor_request_span("NMS task poll", attributes={"taskId": "task-1"}) as active:
+            assert active is span
+        assert span.ended is True
+    finally:
+        reset_vendor_span_starter(token)
+
+    assert created == [("NMS task poll", {"taskId": "task-1"})]
+
+
+def test_a_vendor_request_span_is_transparent_without_a_starter() -> None:
+    with vendor_request_span("NMS token") as active:
+        assert active is None
 
 
 def test_current_parent_span_id_normalizes_the_bound_parent() -> None:

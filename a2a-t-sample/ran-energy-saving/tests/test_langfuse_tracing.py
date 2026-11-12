@@ -553,6 +553,22 @@ def test_trace_metadata_carries_the_osp_case_and_the_round_count(
     assert root.attributes["langfuse.trace.metadata.negotiated"] == "true"
 
 
+def test_a_vendor_request_span_is_exported_under_the_run_root(offline_config: SampleConfig) -> None:
+    """The traceparent span-id must name a span that exists in the run's Langfuse trace."""
+    exporter, runtime = _exporter(offline_config)
+
+    span = exporter.start_vendor_span("NMS message:send", {"url": "https://nms/a2a/json/message:send"})
+    context = span.get_span_context()
+    span.end()
+
+    exported = runtime.spans.get_finished_spans()
+    vendor = next(item for item in exported if item.context.span_id == context.span_id)
+    assert f"{context.trace_id:032x}" == exporter.trace_id
+    assert vendor.parent is not None
+    assert f"{vendor.parent.span_id:016x}" == exporter.root_span_id
+    assert vendor.attributes["url"] == "https://nms/a2a/json/message:send"
+
+
 def test_a_correction_chain_is_one_langfuse_session(offline_config: SampleConfig) -> None:
     """A retry opens its own trace but stays under the parent attempt's Langfuse session."""
     config = replace(

@@ -30,7 +30,11 @@ from protocol.nms_client import (
 from shared.config import SampleConfig
 from shared.run_constants import PROTOCOL_A2A_T, PROTOCOL_PURE
 from shared.trace import trace_scope
-from shared.trace_propagation import propagated_trace
+from shared.trace_propagation import (
+    propagated_trace,
+    reset_vendor_span_starter,
+    set_vendor_span_starter,
+)
 
 TOKEN_URL = "https://nms.example:27417/rest/plat/smapp/v1/sessions"
 A2A_BASE = "https://nms.example:31127/a2a/json"
@@ -1491,6 +1495,153 @@ async def test_traceparent_prefers_the_stable_downstream_trace_id() -> None:
     assert (version, trace_id, flags) == ("00", stable_trace_id, "01")
     assert len(span_id) == 16 and all(char in "0123456789abcdef" for char in span_id)
     await client.aclose()
+
+
+class _RecordedSpanContext:
+    def __init__(self, *, trace_id: int, span_id: int) -> None:
+        self.trace_id = trace_id
+        self.span_id = span_id
+        self.is_valid = True
+
+
+class _RecordedSpan:
+    """Minimal OTel span double: an id pair plus whether the call ended it."""
+
+    def __init__(self, *, trace_id: int, span_id: int) -> None:
+        self._context = _RecordedSpanContext(trace_id=trace_id, span_id=span_id)
+        self.ended = False
+
+    @property
+    def span_id(self) -> int:
+        return self._context.span_id
+
+    def get_span_context(self) -> _RecordedSpanContext:
+        return self._context
+
+    def end(self) -> None:
+        self.ended = True
+
+
+async def test_the_traceparent_names_the_span_created_for_the_request() -> None:
+    """The vendor joins the request span it sees, so the header must carry that span id."""
+    seen: list[str] = []
+    spans: list[_RecordedSpan] = []
+    run_id = "0123456789abcdef0123456789abcdef"
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        seen.append(request.headers["traceparent"])
+        return httpx.Response(200, json={"task": {"id": "task-1"}})
+
+    def starter(name: str, attributes: dict[str, object]) -> _RecordedSpan:
+        span = _RecordedSpan(trace_id=int(run_id, 16), span_id=0x1000 + len(spans))
+        spans.append(span)
+        return span
+
+    client = _client(httpx.MockTransport(handle))
+    token = set_vendor_span_starter(starter)
+    try:
+        with propagated_trace(run_id=run_id, downstream_trace_id=run_id):
+            await client.send_message({"message": {"messageId": "m1"}})
+    finally:
+        reset_vendor_span_starter(token)
+        await client.aclose()
+
+    send_span = spans[-1]
+    assert seen[-1] == f"00-{run_id}-{send_span.span_id:016x}-01"
+    assert all(span.ended for span in spans)
+
+
+async def test_every_vendor_call_carries_the_run_trace_context() -> None:
+    """Token, message, task and cancel calls all join the same trace, not just message:send."""
+    seen: dict[str, str] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen[f"{request.method} {request.url.path}"] = request.headers.get("traceparent", "")
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        if str(request.url).endswith(":cancel"):
+            return httpx.Response(503, text="cancel unsupported")
+        if str(request.url).endswith("/tasks"):
+            return httpx.Response(200, json={"tasks": []})
+        return httpx.Response(200, json={"task": {"id": "task-1"}})
+
+    client = _client(httpx.MockTransport(handle))
+    run_id = "fedcba9876543210fedcba9876543210"
+    try:
+        with propagated_trace(run_id=run_id, downstream_trace_id=run_id):
+            await client.token()
+            await client.send_message({"message": {"messageId": "m1"}})
+            await client.list_tasks()
+            await client.get_task("task-1")
+            await client.cancel_task("task-1")
+    finally:
+        await client.aclose()
+
+    assert set(seen) == {
+        "PUT /rest/plat/smapp/v1/sessions",
+        "POST /a2a/json/message:send",
+        "GET /a2a/json/tasks",
+        "GET /a2a/json/tasks/task-1",
+        "POST /a2a/json/tasks/task-1:cancel",
+    }
+    for header in seen.values():
+        assert header.startswith(f"00-{run_id}-")
+
+
+async def test_a_task_poll_carries_the_context_without_opening_a_span() -> None:
+    """A days-long Task polls often; the poll joins the trace but must not add a span each time."""
+    names: list[str] = []
+    seen: dict[str, str] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        seen.update(request.headers)
+        return httpx.Response(200, json={"task": {"id": "task-1"}})
+
+    def starter(name: str, attributes: dict[str, object]) -> _RecordedSpan:
+        names.append(name)
+        return _RecordedSpan(trace_id=1, span_id=0x1000)
+
+    client = _client(httpx.MockTransport(handle))
+    run_id = "0123456789abcdef0123456789abcdef"
+    token = set_vendor_span_starter(starter)
+    try:
+        with propagated_trace(run_id=run_id, downstream_trace_id=run_id, parent_span_id="0f0e0d0c0b0a0908"):
+            await client.get_task("task-1")
+    finally:
+        reset_vendor_span_starter(token)
+        await client.aclose()
+
+    assert "NMS task:get" not in names
+    assert seen["traceparent"] == f"00-{run_id}-0f0e0d0c0b0a0908-01"
+
+
+async def test_without_an_exporter_span_the_run_root_is_the_parent() -> None:
+    """A random id names nothing; the bound run root is a span the vendor can attach to."""
+    seen: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        seen.append(request.headers["traceparent"])
+        return httpx.Response(200, json={"task": {"id": "task-1"}})
+
+    client = _client(httpx.MockTransport(handle))
+    run_id = "0123456789abcdef0123456789abcdef"
+    try:
+        with propagated_trace(
+            run_id=run_id,
+            downstream_trace_id=run_id,
+            parent_span_id="0f0e0d0c0b0a0908",
+        ):
+            await client.send_message({"message": {"messageId": "m1"}})
+    finally:
+        await client.aclose()
+
+    assert seen[-1] == f"00-{run_id}-0f0e0d0c0b0a0908-01"
 
 
 async def test_a_request_outside_a_traced_run_carries_no_traceparent() -> None:
