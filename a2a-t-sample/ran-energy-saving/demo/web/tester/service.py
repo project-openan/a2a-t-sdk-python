@@ -340,6 +340,9 @@ class _Batch:
     approval: str | None
     timeout_seconds: float | None
     items: list[CaseItem]
+    #: Cases dropped because a paired batch cannot compare them (a blocked case sends a different
+    #: request on each protocol side). They are reported instead of silently disappearing.
+    excluded_case_ids: list[int] = field(default_factory=list)
     working_timeout_seconds: float | None = None
     decision_mode: str = DECISION_MODE_SCRIPTED
     #: Keep every Task this batch created alive after its item ends. Off by default: a finished
@@ -446,10 +449,18 @@ class EvalBatchManager:
             raise ValueError(
                 "A2A 协议没有 SDK 阶段；请把执行到设为 send / negotiate / accepted / working / final。"
             )
+        paired = len(selected_protocols) > 1
         items: list[CaseItem] = []
+        excluded: list[int] = []
         for case_id in case_ids:
             case = self._catalog.get(case_id)
             if case is None:
+                continue
+            if paired and is_blocked_case(case):
+                # The A2A-T row runs the interception and then sends the replacement request while
+                # the A2A row sends the original text; the two rows are not the same input, so a
+                # paired comparison of them would report a difference the protocol did not cause.
+                excluded.append(case_id)
                 continue
             for protocol in selected_protocols:
                 items.append(CaseItem(case_id=case_id, name=str(case["name"]), protocol=protocol))
@@ -469,6 +480,7 @@ class EvalBatchManager:
             transport=defaults.get("transport", "sse"),
             discovery=defaults.get("discovery", "direct"),
             items=items,
+            excluded_case_ids=excluded,
             owner_id=owner,
         )
         self._batches[batch.batch_id] = batch
@@ -1986,6 +1998,11 @@ class EvalBatchManager:
             transport=str(document.get("transport") or defaults.get("transport", "sse")),
             discovery=str(document.get("discovery") or defaults.get("discovery", "direct")),
             items=items,
+            excluded_case_ids=[
+                int(value)
+                for value in document.get("excludedCaseIds", [])
+                if isinstance(value, int)
+            ],
             owner_id=str(document.get("ownerId") or ""),
             status=str(document.get("status") or BATCH_DRAFT),
             created_at=str(document.get("createdAt") or _now_iso()),
@@ -2024,6 +2041,7 @@ class EvalBatchManager:
             "batchId": batch.batch_id,
             "status": batch.status,
             "caseIds": list(batch.case_ids),
+            "excludedCaseIds": list(batch.excluded_case_ids),
             "protocols": list(batch.protocols),
             "stopAfter": batch.stop_after,
             "approval": batch.approval,

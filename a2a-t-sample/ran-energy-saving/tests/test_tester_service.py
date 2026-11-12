@@ -36,7 +36,7 @@ from demo.web.tester.service import (
     _pairs,
 )
 from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog
-from eval.osp.followup import followup_input
+from eval.osp.followup import followup_input, is_blocked_case
 from eval.osp.intent_schema import OSP_INTENT_SCHEMA
 from eval.osp.runner import load_cases
 from protocol.client_flow import ClientFlowResult
@@ -1860,3 +1860,37 @@ def test_pairs_skip_cases_that_ran_under_one_protocol() -> None:
     only = CaseItem(case_id=9, name="case-9", protocol=PROTOCOL_A2A_T)
 
     assert _pairs([only]) == []
+
+
+def test_a_paired_batch_excludes_blocked_cases(tmp_path: Path) -> None:
+    """A blocked case sends different text per protocol, so it cannot be a paired row."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    case = manager._catalog.get(22)
+    assert case is not None and is_blocked_case(case)
+
+    created = manager.create(
+        case_ids=[1, 22],
+        protocols=[PROTOCOL_A2A_T, PROTOCOL_A2A],
+        stop_after="send",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    assert created["excludedCaseIds"] == [22]
+    assert all(item["caseId"] != 22 for item in created["items"])
+
+
+def test_a_single_protocol_batch_keeps_blocked_cases(tmp_path: Path) -> None:
+    """Blocked cases are the point of an A2A-T interception run; only paired batches drop them."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+
+    created = manager.create(
+        case_ids=[22],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    assert created["excludedCaseIds"] == []
+    assert [item["caseId"] for item in created["items"]] == [22]
