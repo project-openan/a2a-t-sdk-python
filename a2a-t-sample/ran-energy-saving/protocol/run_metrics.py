@@ -483,6 +483,7 @@ def _negotiation(
     return {
         "rounds": rounds,
         "expectedRounds": expected_rounds,
+        "roundsSource": _pure_rounds_source(result) if protocol == "pure" else "metadata",
         "messages": len(observed),
         "observedSequence": observed,
         "outcome": result.final_state if result is not None else None,
@@ -614,27 +615,69 @@ def _observed_sequence(
 
 
 def _pure_sequence(result: ClientFlowResult | None) -> list[dict[str, object]]:
-    """Return the pure A2A propose/answer steps."""
+    """Return the pure A2A propose/answer steps.
+
+    The sample tags its own pure negotiation with ``metadata.pure``. A vendor NMS does not, so the
+    same steps are reconstructed from the event shape: an ``INPUT_REQUIRED`` status or a plain
+    agent message is one vendor question and therefore one round. Answers we send are not part of
+    the received events; the round count is what the comparison needs.
+    """
     if result is None:
         return []
     steps: list[tuple[int, dict[str, object]]] = []
+    inferred_round = 0
     for index, event in enumerate(result.events):
         pure = _pure_meta(event)
         kind = pure.get("kind")
-        if kind not in ("negotiation", "answer"):
-            continue
-        round_number = pure.get("round")
-        steps.append(
-            (
-                index,
-                {
-                    "actor": "client" if kind == "answer" else "server",
-                    "performative": "ANSWER" if kind == "answer" else "PROPOSE",
-                    "round": int(round_number) if isinstance(round_number, (int, float)) else None,
-                },
+        if kind in ("negotiation", "answer"):
+            round_number = pure.get("round")
+            steps.append(
+                (
+                    index,
+                    {
+                        "actor": "client" if kind == "answer" else "server",
+                        "performative": "ANSWER" if kind == "answer" else "PROPOSE",
+                        "round": int(round_number) if isinstance(round_number, (int, float)) else None,
+                    },
+                )
             )
-        )
+            continue
+        if _pure_question_event(event):
+            inferred_round += 1
+            steps.append(
+                (
+                    index,
+                    {"actor": "server", "performative": "PROPOSE", "round": inferred_round},
+                )
+            )
     return [step for _, step in steps]
+
+
+def _pure_question_event(event: Mapping[str, object]) -> bool:
+    """Return whether one received event is a vendor question on a direct pure-A2A hop."""
+    if event.get("kind") == "status":
+        return event.get("state") == "TASK_STATE_INPUT_REQUIRED"
+    if event.get("kind") != "message":
+        return False
+    text = event.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return False
+    # A message that belongs to a Task is an observation: the Task state carries the meaning.
+    return not event.get("taskId")
+
+
+def _pure_rounds_source(result: ClientFlowResult | None) -> str:
+    """Return where the pure round count came from: sample metadata, wire events, or nowhere."""
+    if result is None:
+        return "none"
+    if any(
+        _pure_meta(event).get("kind") in ("negotiation", "answer")
+        for event in result.events
+    ):
+        return "metadata"
+    if any(_pure_question_event(event) for event in result.events):
+        return "events"
+    return "none"
 
 
 def _observed_target(

@@ -77,7 +77,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "the deployment uses the vendor NMS; the standard-A2A hop is owned by "
-            "A2AT_SAMPLE_PURE_HOP (oss proxy by default, nms vendor direct)"
+            "A2AT_SAMPLE_PURE_HOP (nms vendor direct by default, oss proxy only if set)"
         ),
     )
     parser.add_argument("--mie-url", default=None)

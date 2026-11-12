@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 
 #: Token fields summarized per group. ``cached`` is ``None`` for providers that never report it.
 TOKEN_FIELDS: tuple[str, ...] = ("prompt", "completion", "total", "cached")
@@ -73,6 +73,7 @@ def _group_summary(rows: list[Mapping[str, object]]) -> dict[str, object]:
         for value in (_number(_negotiation(row).get("rounds")) for row in rows)
         if value is not None
     ]
+    cached_sum, cached_prompt_sum, cache_reporting = _cache_totals(rows)
     return {
         "runs": total,
         "passed": passed,
@@ -80,6 +81,20 @@ def _group_summary(rows: list[Mapping[str, object]]) -> dict[str, object]:
         "accuracy": round(sum(scores) / len(scores), 4) if scores else None,
         "tokenAvailableRuns": token_available,
         "cacheHitRate": _avg(_cache_hit_rates(rows)),
+        # A token-weighted rate: the per-run average above is dominated by runs that made a
+        # single cache-reporting call.
+        "cacheHitRateWeighted": (
+            round(cached_sum / cached_prompt_sum, 4) if cached_prompt_sum else None
+        ),
+        "cacheReportingRuns": cache_reporting,
+        # Cost per outcome. ``success`` uses the accuracy check when the row has one; the tester
+        # passes no expectation, so a second figure keyed on the task terminal state is reported
+        # alongside it rather than silently mixing the two definitions.
+        "tokensPerSuccess": _tokens_per(rows, _accuracy_passed),
+        "tokensPerCompleted": _tokens_per(rows, _task_completed),
+        # ``side:stage`` buckets were computed per run but never surfaced; a protocol comparison
+        # needs them to show which component actually paid for the difference.
+        "components": _component_summary(rows),
         "tokens": {
             field: {
                 "avg": _avg(values),
@@ -158,6 +173,95 @@ def _cache_hit_rates(rows: Iterable[Mapping[str, object]]) -> list[float]:
         if value is not None:
             values.append(value)
     return values
+
+
+def _cache_totals(rows: Iterable[Mapping[str, object]]) -> tuple[float, float, int]:
+    """Return ``(cached, prompt, runs)`` over the runs that reported a cache field.
+
+    A run that never reported ``cached`` is excluded from both sides, otherwise an unreported
+    cache would look like a miss and drag the weighted rate down.
+    """
+    cached_total = 0.0
+    prompt_total = 0.0
+    reporting = 0
+    for row in rows:
+        tokens = _tokens(row)
+        if tokens.get("available") is not True:
+            continue
+        cached = _number(tokens.get("cached"))
+        prompt = _number(tokens.get("prompt"))
+        if cached is None or prompt is None:
+            continue
+        cached_total += cached
+        prompt_total += prompt
+        reporting += 1
+    return cached_total, prompt_total, reporting
+
+
+def _component_summary(rows: Iterable[Mapping[str, object]]) -> dict[str, dict[str, object]]:
+    """Sum the per-run ``side:stage`` token buckets across the group."""
+    totals: dict[str, dict[str, float]] = defaultdict(
+        lambda: {"prompt": 0.0, "completion": 0.0, "total": 0.0, "cached": 0.0, "calls": 0.0}
+    )
+    for row in rows:
+        tokens = _tokens(row)
+        components = tokens.get("byComponent")
+        if not isinstance(components, Mapping):
+            continue
+        for key, bucket in components.items():
+            if not isinstance(bucket, Mapping):
+                continue
+            target = totals[str(key)]
+            for field in ("prompt", "completion", "total", "cached", "calls"):
+                value = _number(bucket.get(field))
+                if value is not None:
+                    target[field] += value
+    summary: dict[str, dict[str, object]] = {}
+    for key in sorted(totals):
+        bucket = totals[key]
+        prompt = bucket["prompt"]
+        summary[key] = {
+            "prompt": int(bucket["prompt"]),
+            "completion": int(bucket["completion"]),
+            "total": int(bucket["total"]),
+            "cached": int(bucket["cached"]),
+            "calls": int(bucket["calls"]),
+            "cacheHitRate": round(bucket["cached"] / prompt, 4) if prompt else None,
+        }
+    return summary
+
+
+def _accuracy_passed(row: Mapping[str, object]) -> bool:
+    """Return whether one row's accuracy section explicitly passed."""
+    return _accuracy(row).get("passed") is True
+
+
+def _task_completed(row: Mapping[str, object]) -> bool:
+    """Return whether one row reached the completed task terminal state."""
+    return row.get("finalState") == "task_completed"
+
+
+def _tokens_per(
+    rows: list[Mapping[str, object]], succeeded: Callable[[Mapping[str, object]], bool]
+) -> dict[str, object]:
+    """Return total tokens divided by the number of rows that met ``succeeded``."""
+    winners = [row for row in rows if succeeded(row)]
+    spent = 0.0
+    counted = 0
+    for row in winners:
+        tokens = _tokens(row)
+        if tokens.get("available") is not True:
+            continue
+        total = _number(tokens.get("total"))
+        if total is None:
+            continue
+        spent += total
+        counted += 1
+    return {
+        "tokens": round(spent / len(winners), 1) if winners and counted else None,
+        "successes": len(winners),
+        "tokenReportingSuccesses": counted,
+    }
 
 
 def _number(value: object) -> float | None:

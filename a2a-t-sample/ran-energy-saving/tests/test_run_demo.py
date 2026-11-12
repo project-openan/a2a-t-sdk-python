@@ -95,7 +95,11 @@ def test_write_run_env_carries_the_pure_message_mode_override(
 
 
 def test_write_run_env_keeps_nms_discovery_for_pure_nms(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The OSS Agent reads the same .env; pure + NMS must keep nms discovery for it."""
+    """pure + NMS must keep nms discovery; the direct URL stays the local RAN fallback.
+
+    The UI pins ``A2AT_SAMPLE_DIRECT_SERVER_URL`` to the vendor endpoint for a direct hop, so the
+    value written here must not silently point at the OSS port.
+    """
     monkeypatch.setattr(run_demo, "RUN_DIR", tmp_path)
     env_path = run_demo._write_run_env(
         source=None,
@@ -116,7 +120,7 @@ def test_write_run_env_keeps_nms_discovery_for_pure_nms(monkeypatch: pytest.Monk
     values = dotenv_values(env_path)
     assert values["A2AT_SAMPLE_DISCOVERY"] == "nms"
     assert values["A2AT_SAMPLE_TRANSPORT"] == "webhook"
-    assert values["A2AT_SAMPLE_DIRECT_SERVER_URL"] == "http://127.0.0.1:8011"
+    assert values["A2AT_SAMPLE_DIRECT_SERVER_URL"] == "http://127.0.0.1:8000"
     assert values["A2AT_SAMPLE_OSS_PORT"] == "8011"
 
 
@@ -759,8 +763,13 @@ def _launch_both_nms(
     source_lines: list[str],
     configure: Callable[[pytest.MonkeyPatch], None] | None = None,
     extra_args: list[str] | None = None,
+    pure_hop: str | None = "oss",
 ) -> tuple[int, list[dict[str, object]], list[int]]:
-    """Run ``main`` for ``--protocol both --nms`` with every child process stubbed out."""
+    """Run ``main`` for ``--protocol both --nms`` with every child process stubbed out.
+
+    ``pure_hop`` defaults to the explicit deprecated proxy so the OSS-specific assertions keep
+    their subject; pass ``None`` to exercise the deployment default (direct NMS hop).
+    """
     env_file = tmp_path / "source.env"
     env_file.write_text("\n".join(source_lines), encoding="utf-8")
     run_dir = tmp_path / "run"
@@ -784,6 +793,7 @@ def _launch_both_nms(
         "18080",
         "--oss-port",
         "18011",
+        *(("--pure-hop", pure_hop) if pure_hop else ()),
         *(extra_args or []),
     ])
     monkeypatch.setattr(run_demo, "_preflight", lambda *_: True)
@@ -1033,7 +1043,7 @@ def test_pure_hop_nms_skips_the_oss_and_points_the_ui_at_the_nms(
         tmp_path,
         _both_nms_source(),
         configure=configure,
-        extra_args=["--pure-hop", "nms"],
+        pure_hop="nms",
     )
 
     assert code == 0
@@ -1054,7 +1064,7 @@ def test_pure_hop_oss_keeps_the_proxy_topology(
         monkeypatch,
         tmp_path,
         _both_nms_source(),
-        extra_args=["--pure-hop", "oss"],
+        pure_hop="oss",
     )
 
     assert code == 0
@@ -1062,6 +1072,87 @@ def test_pure_hop_oss_keeps_the_proxy_topology(
     assert "protocol.oss_agent" in modules
     ui = started[modules.index("demo.web.serve")]["env"]
     assert ui["A2AT_SAMPLE_PURE_HOP"] == "oss"
+
+
+def test_both_nms_defaults_to_the_direct_hop_without_the_oss_callback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The deployment default is the NMS hop: no OSS process, no OSS callback requirement."""
+
+    def configure(mp: pytest.MonkeyPatch) -> None:
+        direct = _resolved_config()
+        direct.pure_hop = "nms"
+        mp.setattr("shared.config.load_config", lambda **_: direct)
+
+    source = [
+        "A2AT_SAMPLE_WEBHOOK_PORT=9000",
+        "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL=https://nms.example:9000/webhook",
+    ]
+
+    code, started, _ = _launch_both_nms(
+        monkeypatch, tmp_path, source, configure=configure, pure_hop=None
+    )
+
+    assert code == 0
+    modules = [str(call["command"][2]) for call in started]
+    assert "protocol.oss_agent" not in modules
+    ui = started[modules.index("demo.web.serve")]["env"]
+    assert ui["A2AT_SAMPLE_PURE_HOP"] == "nms"
+    assert ui["A2AT_SAMPLE_DIRECT_SERVER_URL"] == "https://nms.example/a2a/json"
+
+
+def test_local_both_defaults_to_the_direct_ran_hop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A local ``--protocol both`` deployment keeps the UI as the only agent layer."""
+    env_file = tmp_path / "source.env"
+    env_file.write_text("A2AT_SAMPLE_WEBHOOK_PORT=9000\n", encoding="utf-8")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _FakeChild.started = []
+
+    def configure(mp: pytest.MonkeyPatch) -> None:
+        local = _resolved_config()
+        local.discovery = "registry"
+        local.transport = "sse"
+        local.pure_hop = "direct"
+        local.nms_region = None
+        local.nms_sites = []
+        local.nms_a2a_base = ""
+        mp.setattr("shared.config.load_config", lambda **_: local)
+
+    monkeypatch.setattr(run_demo, "RUN_DIR", run_dir)
+    monkeypatch.setattr(run_demo, "PID_FILE", run_dir / "pids.json")
+    monkeypatch.setattr(sys, "argv", [
+        "run_demo.py",
+        "--env-file",
+        str(env_file),
+        "--protocol",
+        "both",
+        "--ui",
+        "--ui-port",
+        "18080",
+        "--oss-port",
+        "18011",
+    ])
+    monkeypatch.setattr(run_demo, "_preflight", lambda *_: True)
+    monkeypatch.setattr(run_demo, "_warm_live_model", lambda _config: None)
+    monkeypatch.setattr(run_demo, "_port_open", lambda *a, **k: False)
+    monkeypatch.setattr(run_demo, "_wait_port", lambda *a, **k: True)
+    monkeypatch.setattr(run_demo, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(run_demo, "_stop_pids", lambda pids: len(pids))
+    monkeypatch.setattr(run_demo.subprocess, "Popen", _FakeChild)
+    configure(monkeypatch)
+
+    code = run_demo.main()
+
+    assert code == 0
+    modules = [str(call["command"][2]) for call in _FakeChild.started]
+    assert "protocol.oss_agent" not in modules
+    assert "protocol.server_app" in modules
+    ui = _FakeChild.started[modules.index("demo.web.serve")]["env"]
+    assert ui["A2AT_SAMPLE_PURE_HOP"] == "direct"
+    assert ui["A2AT_SAMPLE_DIRECT_SERVER_URL"] == "http://127.0.0.1:8000"
 
 
 def test_both_nms_passes_the_pure_message_mode_override_to_the_ui(

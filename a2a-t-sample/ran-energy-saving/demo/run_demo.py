@@ -60,6 +60,7 @@ from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from shared.config import (
     PURE_HOP_ENV_KEY,
     PURE_HOP_NMS,
+    PURE_HOP_OSS,
     PURE_MESSAGE_MODE_ENV_KEY,
     SUPPORTED_PURE_HOPS,
     SUPPORTED_PURE_MESSAGE_MODES,
@@ -491,7 +492,11 @@ def _write_run_env(
     # (model endpoints included) survives into the per-run file read by the children and the SDK.
     values = merge_sample_process_env(values)
     pure_stack = protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH)
-    direct_port = oss_port if pure_stack else server_port
+    # ``direct`` is the local RAN Agent hop. Only the explicit, deprecated OSS proxy moves it to
+    # the OSS Agent port; everything else keeps the RAN Agent so the UI is the only agent layer.
+    configured_hop = (pure_hop or values.get(PURE_HOP_ENV_KEY, "")).strip().lower()
+    uses_oss_proxy = pure_stack and configured_hop == PURE_HOP_OSS
+    direct_port = oss_port if uses_oss_proxy else server_port
     # The pure engineer client must discover the OSS Agent, not the RAN Agent. The OSS card is
     # not registered under the RAN card's name, so direct discovery of its URL is the only path.
     # In pure + NMS the same .env is also read by the OSS Agent: it must keep ``nms`` for its
@@ -1259,9 +1264,10 @@ def _build_parser(
         default=_env_str(env, PURE_HOP_ENV_KEY, "") or None,
         choices=list(SUPPORTED_PURE_HOPS),
         help=(
-            "Hop of the standard A2A request form: oss (default, engineer UI -> OSS Agent -> "
-            "downstream) or nms (call the vendor NMS directly, so a plain Create/Modify/answer "
-            "sequence addresses the vendor's own Task); nms requires --nms and is deployment-level"
+            "Hop of the standard A2A request form: direct (default locally, engineer UI -> RAN "
+            "Agent), nms (call the vendor NMS directly, so a plain Create/Modify/answer sequence "
+            "addresses the vendor's own Task; requires --nms), or oss (deprecated proxy: UI -> "
+            "OSS Agent -> downstream); deployment-level"
         ),
     )
     parser.add_argument(
@@ -1456,6 +1462,12 @@ def main() -> int:
     if args.pure_hop:
         # Deployment-level standard-A2A hop; validated by load_config against the discovery mode.
         os.environ[PURE_HOP_ENV_KEY] = args.pure_hop
+    # Only an explicit proxy hop starts the OSS Agent. The default local hop is the RAN Agent and
+    # the default vendor hop is the NMS, so neither needs the proxy process or its callback.
+    requested_pure_hop = (
+        args.pure_hop or source_values.get(PURE_HOP_ENV_KEY, "")
+    ).strip().lower()
+    uses_oss_proxy = requested_pure_hop == PURE_HOP_OSS
 
     from shared.logging_setup import configure_logging
 
@@ -1575,7 +1587,7 @@ def main() -> int:
     # A2AT_SAMPLE_OSS_WEBHOOK_PORT overrides it for deployments where +1 collides or NAT remaps it.
     oss_webhook_env: dict[str, str] = {}
     oss_webhook_keys: tuple[str, ...] = ()
-    if args.protocol == PROTOCOL_MODE_BOTH and args.nms:
+    if args.protocol == PROTOCOL_MODE_BOTH and args.nms and uses_oss_proxy:
         # The OSS Agent owns this receiver. Never let the launcher's UI callback keys reach it:
         # process env wins over the per-run .env, so an inherited UI public URL would silently
         # replace the OSS address while the process still binds the OSS port.
@@ -1945,7 +1957,7 @@ def main() -> int:
                     server_env["A2AT_SAMPLE_APPROVAL_TIMEOUT_SECONDS"] = str(args.approval_timeout)
             if start("server", SERVER_MODULE, server_port, server_env) is None:
                 return 1
-            if needs_pure_stack:
+            if needs_pure_stack and uses_oss_proxy:
                 oss_env = {
                     # The OSS hop is direct in the local topology; pin it so a sourced .env in the
                     # launch shell cannot turn this process into an NMS client.
@@ -1986,7 +1998,7 @@ def main() -> int:
                 },
             ) is None:
                 return 1
-        elif not pure_direct and args.protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH):
+        elif uses_oss_proxy and args.protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH):
             # The NMS deployment keeps the OSS Agent but drops the local RAN Agent and MIE: the OSS
             # Agent forwards the normalized request to the vendor NMS over plain A2A. ``both`` also
             # serves A2A-T in the UI, which talks to the NMS directly. A direct standard-A2A hop
@@ -2049,7 +2061,8 @@ def main() -> int:
                 "A2AT_SAMPLE_DIRECT_SERVER_URL": (
                     resolved_config.nms_a2a_base
                     if pure_direct
-                    else f"http://{server_host}:{args.oss_port if pure_stack else server_port}"
+                    else f"http://{server_host}:"
+                    f"{args.oss_port if pure_stack and uses_oss_proxy else server_port}"
                 ),
                 "A2AT_SAMPLE_NMS_SIM": "1" if args.nms_sim else "0",
                 # CLI values must win over an exported shell value; shared.config prefers the

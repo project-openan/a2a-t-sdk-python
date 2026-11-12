@@ -2036,7 +2036,85 @@ class EvalBatchManager:
             "error": batch.error,
             "items": items,
             "summary": _summary(batch.items),
+            # A paired batch exists to compare the two protocols case by case; the flat item list
+            # makes that join manual, so the snapshot carries it ready-made.
+            "pairs": _pairs(batch.items),
         }
+
+
+def _pairs(items: Sequence[CaseItem]) -> list[dict[str, object]]:
+    """Join the per-protocol items of the same case into one comparable row."""
+    by_case: dict[int, dict[str, CaseItem]] = {}
+    for item in items:
+        by_case.setdefault(item.case_id, {})[item.protocol] = item
+    rows: list[dict[str, object]] = []
+    for case_id in sorted(by_case):
+        runs = by_case[case_id]
+        if len(runs) < 2:
+            continue
+        entries = {
+            protocol: _pair_entry(item) for protocol, item in sorted(runs.items())
+        }
+        a2at = entries.get(PROTOCOL_A2A_T)
+        pure = entries.get(PROTOCOL_A2A)
+        if a2at is None or pure is None:
+            continue
+        # Every delta is (A2A-T - A2A): negative rounds/tokens mean A2A-T was cheaper.
+        rows.append(
+            {
+                "caseId": case_id,
+                "name": next(iter(runs.values())).name,
+                "protocols": entries,
+                "roundsDelta": _delta(a2at["rounds"], pure["rounds"]),
+                "durationDeltaMs": _delta(a2at["durationMs"], pure["durationMs"]),
+                "tokensDelta": _delta(a2at["tokensTotal"], pure["tokensTotal"]),
+                "sameStatus": a2at["status"] == pure["status"],
+                # A blocked case sends the follow-up text on the A2A-T side and the original text
+                # on the A2A side, so the two rows are not the same request.
+                "comparable": not any(
+                    entry["blocked"] for entry in entries.values()
+                ),
+            }
+        )
+    return rows
+
+
+def _pair_entry(item: CaseItem) -> dict[str, object]:
+    """Return the comparable fields of one item in a paired row."""
+    return {
+        "status": item.status,
+        "rounds": _item_rounds(item),
+        "durationMs": item.duration_ms,
+        "tokensTotal": _item_tokens_total(item),
+        "runId": item.run_id,
+        "error": item.error,
+        "blocked": bool(item.interception),
+    }
+
+
+def _item_rounds(item: CaseItem) -> int | None:
+    """Return the observed negotiation rounds recorded by the ``negotiate`` stage."""
+    stage = item.stages.get("negotiate")
+    actual = getattr(stage, "actual", None)
+    if not isinstance(actual, Mapping):
+        return None
+    rounds = actual.get("rounds")
+    return rounds if isinstance(rounds, int) and not isinstance(rounds, bool) else None
+
+
+def _item_tokens_total(item: CaseItem) -> float | None:
+    """Return the item's reported total token count, when the run reported one."""
+    total = item.tokens.get("total")
+    return float(total) if isinstance(total, (int, float)) and not isinstance(total, bool) else None
+
+
+def _delta(later: object, earlier: object) -> float | None:
+    """Return ``later - earlier`` when both sides are numeric."""
+    if isinstance(later, bool) or isinstance(earlier, bool):
+        return None
+    if isinstance(later, (int, float)) and isinstance(earlier, (int, float)):
+        return float(later) - float(earlier)
+    return None
 
 
 def _summary(items: Sequence[CaseItem]) -> dict[str, int]:

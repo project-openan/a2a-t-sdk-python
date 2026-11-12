@@ -66,13 +66,15 @@ PURE_FOLLOWUP_TASK = "task"
 PURE_FOLLOWUP_CONTEXT = "context"
 SUPPORTED_PURE_FOLLOWUPS = (PURE_FOLLOWUP_BOTH, PURE_FOLLOWUP_TASK, PURE_FOLLOWUP_CONTEXT)
 
-#: Hop a standard A2A (``pure``) client takes. ``oss`` keeps the proxy topology (UI -> OSS Agent
-#: -> downstream); ``nms`` calls the vendor directly so a plain Create/Modify/answer sequence
-#: addresses the vendor's own Task. The hop is deployment-level and validated at startup.
+#: Hop a standard A2A (``pure``) client takes. ``direct`` calls the local RAN Agent; ``nms``
+#: calls the vendor directly so a plain Create/Modify/answer sequence addresses the vendor's own
+#: Task; ``oss`` keeps the deprecated proxy topology (UI -> OSS Agent -> downstream) as an
+#: explicit opt-in. The hop is deployment-level and validated at startup.
+PURE_HOP_DIRECT = "direct"
 PURE_HOP_OSS = "oss"
 PURE_HOP_NMS = "nms"
-SUPPORTED_PURE_HOPS = (PURE_HOP_OSS, PURE_HOP_NMS)
-DEFAULT_PURE_HOP = PURE_HOP_OSS
+SUPPORTED_PURE_HOPS = (PURE_HOP_DIRECT, PURE_HOP_OSS, PURE_HOP_NMS)
+DEFAULT_PURE_HOP = PURE_HOP_DIRECT
 
 #: RPC method of a pure A2A request. ``auto`` follows the peer AgentCard: a peer that advertises
 #: ``capabilities.streaming`` gets ``message/stream`` on an SSE run, everything else gets one
@@ -413,8 +415,9 @@ def _pure_hop(values: dict[str, str | None], discovery: str) -> str:
     """Resolve the hop of a standard A2A request, rejecting an unsupported value.
 
     A vendor-NMS deployment defaults to the direct hop: the OSS role is the client, so the NMS
-    Task is the only Task. The OSS Agent proxy remains the default for the local three-hop demo
-    (there is no NMS endpoint there).
+    Task is the only Task. A local deployment defaults to the direct RAN Agent hop: the UI is the
+    agent layer, so adding the OSS proxy would measure the proxy rather than the protocol. The
+    OSS hop stays available as an explicit, deprecated opt-in.
     """
     explicit = _env_value(values, PURE_HOP_ENV_KEY, "").strip().lower()
     if explicit:
@@ -422,7 +425,7 @@ def _pure_hop(values: dict[str, str | None], discovery: str) -> str:
     elif discovery == DISCOVERY_NMS:
         value = PURE_HOP_NMS
     else:
-        value = PURE_HOP_OSS
+        value = PURE_HOP_DIRECT
     if value not in SUPPORTED_PURE_HOPS:
         raise ValueError(
             f"Unsupported {PURE_HOP_ENV_KEY}: {value}; expected one of {SUPPORTED_PURE_HOPS}"
@@ -876,6 +879,11 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         raise ValueError(
             f"{PURE_HOP_ENV_KEY}=nms requires {DISCOVERY_ENV_KEY}=nms; a direct standard A2A "
             "client has no OSS Agent to discover"
+        )
+    if pure_hop == PURE_HOP_DIRECT and discovery == DISCOVERY_NMS:
+        raise ValueError(
+            f"{PURE_HOP_ENV_KEY}=direct is the local RAN Agent hop and cannot be combined with "
+            f"{DISCOVERY_ENV_KEY}=nms; omit the key to call the vendor directly"
         )
     if pure_hop == PURE_HOP_OSS and discovery == DISCOVERY_NMS:
         # The proxy combined with a real NMS is the topology that produced the outer Task,

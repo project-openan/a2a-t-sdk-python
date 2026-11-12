@@ -317,6 +317,51 @@ def test_pure_accuracy_uses_the_answer_and_rounds() -> None:
     assert accuracy["checks"]["target"]["passed"] is True
 
 
+def test_pure_rounds_fall_back_to_the_event_stream_on_a_direct_hop() -> None:
+    """A vendor NMS sends no sample metadata, so the rounds must come from the wire events."""
+    result = ClientFlowResult(
+        final_state=FINAL_STATE_TASK_COMPLETED,
+        events=[
+            {
+                "kind": "status",
+                "state": "TASK_STATE_INPUT_REQUIRED",
+                "text": "Not feasible, please confirm",
+            },
+            {
+                "kind": "message",
+                "role": "ROLE_AGENT",
+                "taskId": "",
+                "text": "Please confirm the target rate",
+            },
+        ],
+        report={"cell_id": "cell-001", "target_rate": 30},
+    )
+    metrics = build_run_metrics(
+        run_id="run-1",
+        conversation_id=None,
+        protocol=PROTOCOL_PURE,
+        scenario="information",
+        mode="auto",
+        transport="webhook",
+        language=LANGUAGE_ZH,
+        model_mode="live",
+        model_label="test",
+        status="finished",
+        transcript=_transcript(),
+        result=result,
+        spans=[],
+        expected=_complete_negotiation_spec(),
+    )
+    negotiation = metrics["negotiation"]
+    assert isinstance(negotiation, dict)
+    assert negotiation["rounds"] == 2
+    assert negotiation["roundsSource"] == "events"
+    assert [step["performative"] for step in negotiation["observedSequence"]] == [
+        "PROPOSE",
+        "PROPOSE",
+    ]
+
+
 def test_cached_tokens_are_summed_only_over_reporting_calls() -> None:
     """An unreported cache is ``None`` and must neither add to the sum nor to the rate."""
     spans = [

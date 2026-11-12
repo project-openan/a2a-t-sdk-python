@@ -80,6 +80,7 @@ from shared.config import (
     PROTOCOL_MODE_ENV_KEY,
     PURE_APPROVAL_GATE_ENV_KEY,
     PURE_FOLLOWUP_ENV_KEY,
+    PURE_HOP_DIRECT,
     PURE_HOP_ENV_KEY,
     PURE_HOP_NMS,
     PURE_HOP_OSS,
@@ -1086,11 +1087,33 @@ def test_pure_followup_rejects_an_unknown_mode(tmp_path: Path) -> None:
         load_config(env_path=env_file)
 
 
-def test_pure_hop_defaults_to_the_oss_proxy(tmp_path: Path) -> None:
+def test_pure_hop_defaults_to_the_direct_ran_hop(tmp_path: Path) -> None:
+    """A local deployment sends standard A2A straight to the RAN Agent; no OSS hop by default."""
     env_file = tmp_path / ".env"
     env_file.write_text("", encoding="utf-8")
 
-    assert load_config(env_path=env_file).pure_hop == PURE_HOP_OSS
+    assert load_config(env_path=env_file).pure_hop == PURE_HOP_DIRECT
+
+
+def test_pure_hop_direct_requires_a_local_discovery(tmp_path: Path) -> None:
+    """The direct local hop has no NMS endpoint to call, so the pairing is rejected."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_DISCOVERY=nms",
+                f"{PURE_HOP_ENV_KEY}={PURE_HOP_DIRECT}",
+                f"{NMS_A2A_BASE_ENV_KEY}=https://nms.example:31127/a2a/json",
+                f"{NMS_TOKEN_URL_ENV_KEY}=https://nms.example:27417/rest/plat/smapp/v1/sessions",
+                f"{NMS_TOKEN_USER_ENV_KEY}=northbound",
+                f"{NMS_TOKEN_VALUE_ENV_KEY}=secret",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=PURE_HOP_ENV_KEY):
+        load_config(env_path=env_file)
 
 
 def test_pure_hop_nms_requires_the_nms_discovery(tmp_path: Path) -> None:

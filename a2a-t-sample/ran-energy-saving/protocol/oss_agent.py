@@ -55,7 +55,12 @@ from a2a.types import (
     TaskState,
 )
 from a2a.utils.constants import TransportProtocol
-from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
+from a2a_t.core.metadata import (
+    NEGOTIATION_T_EXTENSION_URI,
+    TASK_T_EXTENSION_URI,
+    NegotiationContext,
+    NegotiationPerformative,
+)
 from google.protobuf.json_format import ParseDict
 from shared.agent_card import AGENT_CARD_NAME, AGENT_CARD_ORGANIZATION
 from shared.config import (
@@ -650,7 +655,18 @@ class OSSPureExecutor(AgentExecutor):
         consumer = asyncio.create_task(self._consume(events, updater), name=f"oss-ran-consumer-{task.id}")
         run_id = _run_id_of(message)
         raw_text = _message_text(message)
-        intent = await self._process_intent(raw_text)
+        if _carries_extension_metadata(message):
+            # This process only speaks standard A2A. An A2A-T request reaching it means the hop
+            # was misconfigured; say so loudly instead of silently degrading into plain text.
+            _LOGGER.warning(
+                "OSS Agent received an A2A-T request (Task-T/Negotiation-T metadata); the "
+                "extension is not served on this hop and will be ignored. Check "
+                "A2AT_SAMPLE_PURE_HOP and the per-run discovery."
+            )
+        # The intent turn is a real model cost of the proxy hop. Run it inside the run scope so its
+        # span is attributed to the run instead of being dropped for carrying no run id.
+        with trace_scope(run_id=run_id, role="oss", stage="oss_intent"):
+            intent = await self._process_intent(raw_text)
         await self._publish_intent(updater, intent)
         try:
             with trace_scope(run_id=run_id, role="oss"):
@@ -2425,6 +2441,14 @@ def _run_id_of(message: object) -> str | None:
     if isinstance(value, str) and value:
         return value
     return current_run_id() or None
+
+
+def _carries_extension_metadata(message: object) -> bool:
+    """Return whether one inbound message carries an A2A-T extension payload."""
+    metadata = getattr(message, "metadata", None)
+    if not isinstance(metadata, Mapping):
+        return False
+    return TASK_T_EXTENSION_URI in metadata or NEGOTIATION_T_EXTENSION_URI in metadata
 
 
 def _message_text(message: object) -> str:

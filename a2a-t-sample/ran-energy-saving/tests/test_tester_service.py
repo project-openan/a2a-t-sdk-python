@@ -18,6 +18,7 @@ from demo.web.tester.service import (
     ALL_STAGES,
     CASE_CANCELLED,
     CASE_ERROR,
+    CASE_FAILED,
     CASE_PARTIAL,
     CASE_PASSED,
     DECISION_MODE_LIVE,
@@ -32,6 +33,7 @@ from demo.web.tester.service import (
     StageResult,
     _apply_assertion,
     _Batch,
+    _pairs,
 )
 from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog
 from eval.osp.followup import followup_input
@@ -1780,3 +1782,54 @@ async def test_a_case_file_followup_is_used_without_test_injection(tmp_path: Pat
     assert isinstance(blocked, Mapping)
     assert blocked["validate"]["status"] == STAGE_PASSED
     assert item["status"] == CASE_PASSED
+
+
+def test_pairs_join_the_two_protocol_rows_of_one_case() -> None:
+    """The acceptance report needs the per-case A2A-T vs A2A join, not two flat rows."""
+    a2at = CaseItem(case_id=7, name="case-7", protocol=PROTOCOL_A2A_T)
+    a2at.status = CASE_PASSED
+    a2at.duration_ms = 1200
+    a2at.tokens = {"total": 900}
+    a2at.stages["negotiate"] = StageResult(
+        "negotiate", STAGE_PASSED, actual={"rounds": 1, "kinds": []}
+    )
+    pure = CaseItem(case_id=7, name="case-7", protocol=PROTOCOL_A2A)
+    pure.status = CASE_FAILED
+    pure.duration_ms = 4200
+    pure.tokens = {"total": 300}
+    pure.stages["negotiate"] = StageResult(
+        "negotiate", STAGE_FAILED, actual={"rounds": 3, "kinds": []}
+    )
+
+    pairs = _pairs([a2at, pure])
+
+    assert len(pairs) == 1
+    row = pairs[0]
+    assert row["caseId"] == 7
+    # Every delta is (A2A-T - A2A).
+    assert row["roundsDelta"] == -2.0
+    assert row["durationDeltaMs"] == -3000.0
+    assert row["tokensDelta"] == 600.0
+    assert row["sameStatus"] is False
+    assert row["protocols"][PROTOCOL_A2A_T]["rounds"] == 1
+    assert row["protocols"][PROTOCOL_A2A]["rounds"] == 3
+    assert row["comparable"] is True
+
+
+def test_pairs_flag_a_blocked_case_as_not_comparable() -> None:
+    """The two rows of a blocked case send different request text, so the delta is not a delta."""
+    a2at = CaseItem(case_id=12, name="case-12", protocol=PROTOCOL_A2A_T)
+    a2at.interception = {"followupInput": "retry with the agreed values"}
+    pure = CaseItem(case_id=12, name="case-12", protocol=PROTOCOL_A2A)
+
+    row = _pairs([a2at, pure])[0]
+
+    assert row["comparable"] is False
+    assert row["protocols"][PROTOCOL_A2A_T]["blocked"] is True
+    assert row["protocols"][PROTOCOL_A2A]["blocked"] is False
+
+
+def test_pairs_skip_cases_that_ran_under_one_protocol() -> None:
+    only = CaseItem(case_id=9, name="case-9", protocol=PROTOCOL_A2A_T)
+
+    assert _pairs([only]) == []
