@@ -180,7 +180,7 @@ class DownstreamPump:
             for raw in artifacts:
                 event = _artifact_event_from_document(raw, task_id=task_id, context_id=context_id)
                 if event is not None:
-                    await self._apply(event)
+                    await self._apply(event, publish_trace=False)
         if self._terminal or not state_name:
             return
         await self._apply(
@@ -190,7 +190,8 @@ class DownstreamPump:
                 "context_id": context_id,
                 "state": state_name,
                 "text": _status_text(status),
-            }
+            },
+            publish_trace=False,
         )
 
     def start(self) -> asyncio.Task[None]:
@@ -215,20 +216,24 @@ class DownstreamPump:
             finally:
                 self._subscription.unsubscribe()
 
-    async def _apply(self, event: dict[str, object]) -> None:
-        """Apply one normalized downstream event to the outer Task."""
+    async def _apply(self, event: dict[str, object], *, publish_trace: bool = True) -> None:
+        """Apply one normalized downstream event to the outer Task.
+
+        ``publish_trace`` is false for a polled document: polling is the backup channel and its
+        (often stale) observation must not enter the session trace.
+        """
         if self._terminal or self._is_duplicate(event):
             return
         kind = str(event.get("kind") or "")
         if kind == "status" and event.get("state") == "TASK_STATE_INPUT_REQUIRED":
-            await self._answer_input_required(event)
+            await self._answer_input_required(event, publish_trace=publish_trace)
             return
         # The recommendation is advisory card text, not a precondition: an offline or restarted
         # OSS has no recommendation builder, and the vendor question must still reach the caller.
         if is_plain_question(event) and self._on_question is not None:
-            await self._relay_question(event)
+            await self._relay_question(event, publish_trace=publish_trace)
             return
-        await self._publish_outer(event)
+        await self._publish_outer(event, publish_trace=publish_trace)
         if self._is_terminal_event(event):
             if kind == "artifact":
                 # The sample treats the report artifact as the end of the execution; the vendor
@@ -241,7 +246,12 @@ class DownstreamPump:
             self._terminal = True
             await self._mark_terminal(event)
 
-    async def _answer_input_required(self, event: dict[str, object]) -> None:
+    async def _answer_input_required(
+        self,
+        event: dict[str, object],
+        *,
+        publish_trace: bool = True,
+    ) -> None:
         """Relay a delayed negotiation request; the pump never answers one.
 
         A background tracker has no authority to take a business decision, and an automatic
@@ -250,7 +260,7 @@ class DownstreamPump:
         ``INPUT_REQUIRED`` and the pump suspends; the caller answers it (a confirm card, or its own
         automatic policy) and that answer resumes the downstream context in the synchronous flow.
         """
-        await self._relay_question(event)
+        await self._relay_question(event, publish_trace=publish_trace)
 
     async def _relay_question(
         self,
@@ -258,6 +268,7 @@ class DownstreamPump:
         *,
         conflict: str = "",
         retry_after: float | None = None,
+        publish_trace: bool = True,
     ) -> None:
         """Publish one vendor text question as an outer ``INPUT_REQUIRED`` and stop the pump.
 
@@ -320,14 +331,15 @@ class DownstreamPump:
         )
         await self._persist(outer_event)
         await self._push(outer_event)
-        self._trace(event)
+        if publish_trace:
+            self._trace(event)
         self._rounds = round_number
         if self._on_question is not None:
             self._on_question(dict(event), round_number)
         self._suspended = True
 
-    async def _publish_outer(self, event: dict[str, object]) -> None:
-        """Persist one outer Task event, push it, and trace it."""
+    async def _publish_outer(self, event: dict[str, object], *, publish_trace: bool = True) -> None:
+        """Persist one outer Task event, push it, and (unless it was polled) trace it."""
         kind = str(event.get("kind") or "")
         outer_event: TaskStatusUpdateEvent | TaskArtifactUpdateEvent | None
         if kind == "artifact":
@@ -344,7 +356,8 @@ class DownstreamPump:
             return
         await self._persist(outer_event)
         await self._push(outer_event)
-        self._trace(event)
+        if publish_trace:
+            self._trace(event)
 
     def _status_event(
         self,

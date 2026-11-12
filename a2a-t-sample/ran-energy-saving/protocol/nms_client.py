@@ -478,15 +478,14 @@ class NmsClient:
                     while True:
                         remaining = idle_deadline - time.monotonic()
                         if remaining <= 0:
+                            # The switch to polling is a poll operation: the wire log keeps it,
+                            # the session trace does not.
                             self._write_wire(
                                 "in",
                                 line=f": idle {idle_timeout:g}s without a data frame; polling",
                             )
-                            _nms_span(
-                                phase=PHASE_EXECUTION,
-                                title="RAN stream idle; polling the task",
-                                title_key="nmsIdle",
-                                detail={"idleSeconds": idle_timeout},
+                            _LOGGER.debug(
+                                "RAN stream idle for %gs; switching to task polling", idle_timeout
                             )
                             break
                         try:
@@ -1064,9 +1063,9 @@ class NmsSseTransport:
                     self._request_timeout,
                 )
             else:
-                event = _frame_to_event({"task": task})
-                events.append(event)
-                self._emit(event)
+                # The terminal comes from the poll fallback, not from a wire frame: it ends the
+                # call for the caller but stays out of the event stream (trace / demo state).
+                events.append(_frame_to_event({"task": task}))
         return events
 
     async def cancel(self, task_id: str, call_context: ClientCallContext | None = None) -> None:

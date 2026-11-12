@@ -21,6 +21,7 @@ from a2a.types import (
 from google.protobuf.json_format import MessageToDict
 from protocol.downstream_binding_store import DownstreamBinding, DownstreamBindingStore
 from protocol.downstream_pump import DownstreamPump, DownstreamPumpContext
+from shared.trace import set_global_sink
 
 
 def _context() -> ServerCallContext:
@@ -228,21 +229,25 @@ async def test_reconcile_applies_a_terminal_task_polled_after_restart(tmp_path: 
         subscription=subscription,
         push_sender=push_sender,
     )
-
-    await pump.reconcile(
-        {
-            "id": "inner-1",
-            "contextId": "inner-ctx",
-            "status": {"state": "TASK_STATE_COMPLETED"},
-            "artifacts": [
-                {
-                    "artifactId": "artifact-1",
-                    "name": "energy saving report",
-                    "parts": [{"text": "Done after restart."}],
-                }
-            ],
-        }
-    )
+    spans: list[object] = []
+    set_global_sink(spans.append)
+    try:
+        await pump.reconcile(
+            {
+                "id": "inner-1",
+                "contextId": "inner-ctx",
+                "status": {"state": "TASK_STATE_COMPLETED"},
+                "artifacts": [
+                    {
+                        "artifactId": "artifact-1",
+                        "name": "energy saving report",
+                        "parts": [{"text": "Done after restart."}],
+                    }
+                ],
+            }
+        )
+    finally:
+        set_global_sink(None)
 
     outer = await store.get("outer-1", _context())
     assert outer is not None
@@ -252,6 +257,8 @@ async def test_reconcile_applies_a_terminal_task_polled_after_restart(tmp_path: 
     assert binding is not None
     assert binding.terminal is True
     assert pump.terminal is True
+    # The recovered state came from a poll: it must not enter the session trace.
+    assert spans == []
 
 
 async def test_reconcile_keeps_a_working_task_active(tmp_path: Path) -> None:
