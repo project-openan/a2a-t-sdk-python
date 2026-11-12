@@ -226,7 +226,18 @@ function renderCatalog() {
 
 function updateSelectionSummary() {
   const count = state.selected.size;
-  $("selection-summary").textContent = count ? `已选择 ${count} 条用例` : "未选择用例";
+  let text = count ? `已选择 ${count} 条用例` : "未选择用例";
+  // A paired batch drops the interception cases: the A2A-T row sends the replacement text while
+  // the A2A row sends the original, so the two rows are not comparable. Say so before start.
+  if (count && $("protocol-a2at").checked && $("protocol-a2a").checked) {
+    const blocked = state.catalog.filter(
+      (item) => state.selected.has(item.id) && item.validate === "blocked",
+    ).length;
+    if (blocked) {
+      text += ` · 配对模式会跳过 ${blocked} 条拦截用例（只能单独跑 A2A-T）`;
+    }
+  }
+  $("selection-summary").textContent = text;
 }
 
 /* ------------------------------------------------------------------- batch */
@@ -1373,6 +1384,10 @@ function wireEvents() {
     state.selected.clear();
     renderCatalog();
   });
+  // The protocol choice decides whether the paired-mode skip applies; refresh the summary.
+  for (const id of ["protocol-a2at", "protocol-a2a"]) {
+    $(id).addEventListener("change", updateSelectionSummary);
+  }
   $("start-button").addEventListener("click", startBatch);
   $("cancel-button").addEventListener("click", cancelBatch);
   $("retry-button").addEventListener("click", retryBatch);

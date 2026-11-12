@@ -465,6 +465,13 @@ class EvalBatchManager:
             for protocol in selected_protocols:
                 items.append(CaseItem(case_id=case_id, name=str(case["name"]), protocol=protocol))
         if not items:
+            if excluded:
+                listed = "、".join(str(case_id) for case_id in excluded)
+                raise ValueError(
+                    f"选中的用例都是拦截用例（{listed}）：配对模式（同时选 A2A-T 和 A2A）会跳过它们，"
+                    "因为 A2A-T 行会拦截并改发替换文本，A2A 行发送原文，两行不可比。"
+                    "请只选 A2A-T 单独运行这些拦截用例，或改选非拦截用例做配对。"
+                )
             raise ValueError("没有可执行的用例。")
         defaults = self._protocol_defaults.get(PROTOCOL_A2A_T, {})
         batch = _Batch(

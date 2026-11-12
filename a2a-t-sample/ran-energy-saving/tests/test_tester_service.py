@@ -1880,6 +1880,25 @@ def test_a_paired_batch_excludes_blocked_cases(tmp_path: Path) -> None:
     assert all(item["caseId"] != 22 for item in created["items"])
 
 
+def test_a_paired_batch_of_only_blocked_cases_explains_the_skip(tmp_path: Path) -> None:
+    """Refusing the batch must say which cases were skipped and what to do instead."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+
+    with pytest.raises(ValueError) as excinfo:
+        manager.create(
+            case_ids=[22],
+            protocols=[PROTOCOL_A2A_T, PROTOCOL_A2A],
+            stop_after="send",
+            approval=None,
+            timeout_seconds=2,
+        )
+
+    message = str(excinfo.value)
+    assert "22" in message
+    assert "拦截用例" in message
+    assert "只选 A2A-T" in message
+
+
 def test_a_single_protocol_batch_keeps_blocked_cases(tmp_path: Path) -> None:
     """Blocked cases are the point of an A2A-T interception run; only paired batches drop them."""
     manager = _manager(tmp_path, _FakeRuns(_finish))
