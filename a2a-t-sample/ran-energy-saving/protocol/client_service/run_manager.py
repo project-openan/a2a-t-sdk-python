@@ -695,11 +695,16 @@ class RunManager:
         return run
 
     async def _resume_run(self, run: RunState) -> None:
-        """Poll a recovered run until its remote Task reaches a terminal state."""
+        """Finish a recovered run: keep polling only when long-task tracking is enabled."""
         transcript = run.transcript
         assert transcript is not None
         try:
-            result = await self._watch_long_task(run, run.result or ClientFlowResult())
+            if self._config.long_task_tracking:
+                result = await self._watch_long_task(run, run.result or ClientFlowResult())
+            else:
+                # Recovery is the same poll as long-task tracking; with tracking off the run
+                # ends where the process found it instead of starting a new poll loop.
+                result = run.result or ClientFlowResult(final_state=FINAL_STATE_INCOMPLETE)
             run.result = result
             transcript.record_final(result)
             run.status = STATUS_FINISHED
@@ -1670,7 +1675,7 @@ class RunManager:
                 run.error = _input_invalid_summary(run)
             elif result.final_state == FINAL_STATE_DECISION_UNGROUNDED:
                 run.error = result.error or "The client decision had no grounded value."
-            if _should_watch_long_task(run, result):
+            if self._config.long_task_tracking and _should_watch_long_task(run, result):
                 result = await self._watch_long_task(run, result)
                 run.result = result
             # Decisions are normally recorded live by ``on_decision_made``; the late loop is only

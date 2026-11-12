@@ -154,6 +154,8 @@ TASK_POLL_INTERVAL_ENV_KEY = "A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS"
 NMS_POLL_AFTER_ENV_KEY = "A2AT_SAMPLE_NMS_POLL_AFTER_SECONDS"
 #: Faster poll interval while the engineer page still watches the run.
 NMS_STATE_POLL_ENV_KEY = "A2AT_SAMPLE_NMS_STATE_POLL_SECONDS"
+#: Whether a client run keeps polling a Task the flow left incomplete (off by default).
+LONG_TASK_TRACKING_ENV_KEY = "A2AT_SAMPLE_LONG_TASK_TRACKING"
 CLIENT_DB_ENV_KEY = "A2AT_SAMPLE_CLIENT_DB"
 CLIENT_MEMORY_TURNS_ENV_KEY = "A2AT_SAMPLE_CLIENT_MEMORY_TURNS"
 ADK_SESSION_RETENTION_DAYS_ENV_KEY = "A2AT_SAMPLE_ADK_SESSION_RETENTION_DAYS"
@@ -640,6 +642,9 @@ class SampleConfig:
             for the real NMS webhook hop when the OSS Task database is configured.
         long_task_settle_seconds: Settle window of a non-streaming NMS call after the NMS accepts
             the task, before the OSS hands it to the background pump. A streaming caller ignores it.
+        long_task_tracking: Whether a client run keeps polling a Task the flow left incomplete
+            (``A2AT_SAMPLE_LONG_TASK_TRACKING``). Off by default: the run then ends as
+            ``incomplete`` at the flow boundary instead of polling the remote agent.
         task_poll_interval_seconds: How often the UI polls a remote Task that is still executing.
         nms_poll_after_silence: Seconds without an NMS status event before the transport hands a
             non-terminal Task to background tracking instead of waiting for its stream.
@@ -758,6 +763,7 @@ class SampleConfig:
     http_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS
     long_task_mode: str = DEFAULT_LONG_TASK_MODE
     long_task_settle_seconds: float = DEFAULT_LONG_TASK_SETTLE_SECONDS
+    long_task_tracking: bool = False
     task_poll_interval_seconds: float = DEFAULT_TASK_POLL_INTERVAL_SECONDS
     nms_poll_after_silence: float = DEFAULT_NMS_POLL_AFTER_SECONDS
     nms_state_poll_interval: float = DEFAULT_NMS_STATE_POLL_SECONDS
@@ -1042,6 +1048,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         long_task_settle_seconds=_positive_seconds(
             values, LONG_TASK_SETTLE_ENV_KEY, DEFAULT_LONG_TASK_SETTLE_SECONDS
         ),
+        long_task_tracking=_env_bool(values, LONG_TASK_TRACKING_ENV_KEY, False),
         task_poll_interval_seconds=_positive_seconds(
             values, TASK_POLL_INTERVAL_ENV_KEY, DEFAULT_TASK_POLL_INTERVAL_SECONDS
         ),

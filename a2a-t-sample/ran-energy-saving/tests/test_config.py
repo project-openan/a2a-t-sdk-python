@@ -46,6 +46,7 @@ from shared.config import (
     LLM_TIMEOUT_ENV_KEY,
     LONG_TASK_MODE_ENV_KEY,
     LONG_TASK_SETTLE_ENV_KEY,
+    LONG_TASK_TRACKING_ENV_KEY,
     MANUAL_DECISION_TIMEOUT_ENV_KEY,
     MIE_HOST_ENV_KEY,
     MIE_PORT_ENV_KEY,
@@ -114,6 +115,7 @@ _ENV_KEYS = (
     LLM_MAX_ATTEMPTS_ENV_KEY,
     LONG_TASK_MODE_ENV_KEY,
     LONG_TASK_SETTLE_ENV_KEY,
+    LONG_TASK_TRACKING_ENV_KEY,
     TASK_POLL_INTERVAL_ENV_KEY,
     NMS_POLL_AFTER_ENV_KEY,
     NMS_STATE_POLL_ENV_KEY,
@@ -323,11 +325,14 @@ def test_long_task_mode_defaults_and_overrides(tmp_path: Path) -> None:
     # cadence exhausted it (docs-local/nms-真机-429问题.md).
     assert config.nms_state_poll_interval == 15.0
     assert config.defer_to_tracker is False
+    # Polling a Task the flow left incomplete is opt-in; the default run ends at the flow
+    # boundary instead of sending repeated tasks/get requests to the RAN agent.
+    assert config.long_task_tracking is False
 
     env_file.write_text(
         f"{LONG_TASK_MODE_ENV_KEY}=off\n{LONG_TASK_SETTLE_ENV_KEY}=12\n"
         f"{TASK_POLL_INTERVAL_ENV_KEY}=7\n{NMS_POLL_AFTER_ENV_KEY}=9\n"
-        f"{NMS_STATE_POLL_ENV_KEY}=2\n",
+        f"{NMS_STATE_POLL_ENV_KEY}=2\n{LONG_TASK_TRACKING_ENV_KEY}=1\n",
         encoding="utf-8",
     )
     config = load_config(env_path=env_file)
@@ -336,6 +341,7 @@ def test_long_task_mode_defaults_and_overrides(tmp_path: Path) -> None:
     assert config.task_poll_interval_seconds == 7.0
     assert config.nms_poll_after_silence == 9.0
     assert config.nms_state_poll_interval == 2.0
+    assert config.long_task_tracking is True
 
     env_file.write_text(f"{LONG_TASK_MODE_ENV_KEY}=nope\n", encoding="utf-8")
     with pytest.raises(ValueError, match=LONG_TASK_MODE_ENV_KEY):

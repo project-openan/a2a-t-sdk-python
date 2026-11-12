@@ -1197,6 +1197,7 @@ async def test_long_task_does_not_publish_polled_states(
     manager = RunManager(
         config=replace(
             offline_config,
+            long_task_tracking=True,
             task_poll_interval_seconds=0.01,
             nms_state_poll_interval=0.01,
         ),
@@ -1238,6 +1239,47 @@ async def test_long_task_does_not_publish_polled_states(
     assert run.activity is None
 
 
+async def test_a_run_does_not_poll_a_task_left_running_by_default(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """Long-task tracking is opt-in: the default run ends at the flow boundary, no tasks/get."""
+    runtime = _LongRunningRuntime()
+
+    async def factory(
+        resolved_config: SampleConfig,
+        scenario: str,
+        mode: str,
+        transport: str,
+        discovery: str,
+        *,
+        protocol: str = PROTOCOL_A2A_T,
+        run_id: str = "",
+    ) -> _LongRunningRuntime:
+        del resolved_config, scenario, mode, transport, discovery, protocol, run_id
+        return runtime
+
+    manager = RunManager(
+        config=replace(offline_config, task_poll_interval_seconds=0.01),
+        runtime_factory=factory,
+        catalog=DemoRunCatalog(),
+        runs_dir=tmp_path / "runs",
+    )
+    run = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        protocol=PROTOCOL_PURE,
+        source={"kind": "presentation"},
+    )
+
+    await _finish(manager, run.run_id)
+
+    assert run.result is not None
+    assert run.result.final_state == FINAL_STATE_INCOMPLETE
+    assert runtime.a2a_client.calls == 0
+
+
 async def test_a_presentation_run_keeps_tracking_without_a_viewer(
     tmp_path: Path,
     offline_config: SampleConfig,
@@ -1265,6 +1307,7 @@ async def test_a_presentation_run_keeps_tracking_without_a_viewer(
     manager = RunManager(
         config=replace(
             offline_config,
+            long_task_tracking=True,
             task_poll_interval_seconds=0.01,
             nms_state_poll_interval=0.01,
         ),
@@ -1391,6 +1434,7 @@ async def test_a_restart_recovers_a_run_that_still_has_a_remote_task(
     manager = RunManager(
         config=replace(
             offline_config,
+            long_task_tracking=True,
             task_poll_interval_seconds=0.01,
             nms_state_poll_interval=0.01,
         ),
@@ -1477,6 +1521,7 @@ async def test_a_long_task_stops_after_repeated_poll_failures(
 
     config = replace(
         offline_config,
+        long_task_tracking=True,
         nms_state_poll_interval=0.01,
         task_poll_interval_seconds=0.01,
     )
@@ -1531,7 +1576,11 @@ async def test_a_long_running_run_stays_active_until_the_remote_task_finishes(
         return _LongRunningRuntime()
 
     manager = RunManager(
-        config=replace(offline_config, task_poll_interval_seconds=0.01),
+        config=replace(
+            offline_config,
+            long_task_tracking=True,
+            task_poll_interval_seconds=0.01,
+        ),
         runtime_factory=factory,
         catalog=DemoRunCatalog(),
         runs_dir=tmp_path / "runs",
@@ -1835,7 +1884,12 @@ async def test_the_long_task_watcher_answers_a_polled_question(
     from protocol.client_service.run_manager import _PolledTask
     from protocol.client_service.run_state import RunState
 
-    config = replace(offline_config, nms_state_poll_interval=0.01, task_poll_interval_seconds=0.01)
+    config = replace(
+        offline_config,
+        long_task_tracking=True,
+        nms_state_poll_interval=0.01,
+        task_poll_interval_seconds=0.01,
+    )
     manager, _store, _runtimes = _manager(tmp_path, config)
     run = RunState(
         run_id="run-1",
