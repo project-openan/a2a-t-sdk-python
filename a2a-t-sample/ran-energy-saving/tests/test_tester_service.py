@@ -1862,8 +1862,8 @@ def test_pairs_skip_cases_that_ran_under_one_protocol() -> None:
     assert _pairs([only]) == []
 
 
-def test_a_paired_batch_excludes_blocked_cases(tmp_path: Path) -> None:
-    """A blocked case sends different text per protocol, so it cannot be a paired row."""
+def test_a_paired_batch_runs_blocked_cases_under_both_protocols(tmp_path: Path) -> None:
+    """Every selected case runs; the console must not drop interception cases in paired mode."""
     manager = _manager(tmp_path, _FakeRuns(_finish))
     case = manager._catalog.get(22)
     assert case is not None and is_blocked_case(case)
@@ -1876,31 +1876,18 @@ def test_a_paired_batch_excludes_blocked_cases(tmp_path: Path) -> None:
         timeout_seconds=2,
     )
 
-    assert created["excludedCaseIds"] == [22]
-    assert all(item["caseId"] != 22 for item in created["items"])
-
-
-def test_a_paired_batch_of_only_blocked_cases_explains_the_skip(tmp_path: Path) -> None:
-    """Refusing the batch must say which cases were skipped and what to do instead."""
-    manager = _manager(tmp_path, _FakeRuns(_finish))
-
-    with pytest.raises(ValueError) as excinfo:
-        manager.create(
-            case_ids=[22],
-            protocols=[PROTOCOL_A2A_T, PROTOCOL_A2A],
-            stop_after="send",
-            approval=None,
-            timeout_seconds=2,
-        )
-
-    message = str(excinfo.value)
-    assert "22" in message
-    assert "拦截用例" in message
-    assert "只选 A2A-T" in message
+    assert created["excludedCaseIds"] == []
+    rows = [(item["caseId"], item["protocol"]) for item in created["items"]]
+    assert rows == [
+        (1, PROTOCOL_A2A_T),
+        (1, PROTOCOL_A2A),
+        (22, PROTOCOL_A2A_T),
+        (22, PROTOCOL_A2A),
+    ]
 
 
 def test_a_single_protocol_batch_keeps_blocked_cases(tmp_path: Path) -> None:
-    """Blocked cases are the point of an A2A-T interception run; only paired batches drop them."""
+    """Blocked cases are the point of an A2A-T interception run."""
     manager = _manager(tmp_path, _FakeRuns(_finish))
 
     created = manager.create(

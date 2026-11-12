@@ -449,29 +449,17 @@ class EvalBatchManager:
             raise ValueError(
                 "A2A 协议没有 SDK 阶段；请把执行到设为 send / negotiate / accepted / working / final。"
             )
-        paired = len(selected_protocols) > 1
         items: list[CaseItem] = []
-        excluded: list[int] = []
         for case_id in case_ids:
             case = self._catalog.get(case_id)
             if case is None:
                 continue
-            if paired and is_blocked_case(case):
-                # The A2A-T row runs the interception and then sends the replacement request while
-                # the A2A row sends the original text; the two rows are not the same input, so a
-                # paired comparison of them would report a difference the protocol did not cause.
-                excluded.append(case_id)
-                continue
+            # Every selected case runs under every selected protocol, interception cases included:
+            # the console must be able to run whatever the operator selected. A paired report can
+            # still tell the two rows apart by the case's own ``validate: blocked`` marker.
             for protocol in selected_protocols:
                 items.append(CaseItem(case_id=case_id, name=str(case["name"]), protocol=protocol))
         if not items:
-            if excluded:
-                listed = "、".join(str(case_id) for case_id in excluded)
-                raise ValueError(
-                    f"选中的用例都是拦截用例（{listed}）：配对模式（同时选 A2A-T 和 A2A）会跳过它们，"
-                    "因为 A2A-T 行会拦截并改发替换文本，A2A 行发送原文，两行不可比。"
-                    "请只选 A2A-T 单独运行这些拦截用例，或改选非拦截用例做配对。"
-                )
             raise ValueError("没有可执行的用例。")
         defaults = self._protocol_defaults.get(PROTOCOL_A2A_T, {})
         batch = _Batch(
@@ -487,7 +475,8 @@ class EvalBatchManager:
             transport=defaults.get("transport", "sse"),
             discovery=defaults.get("discovery", "direct"),
             items=items,
-            excluded_case_ids=excluded,
+            # Kept for the persisted-batch schema and the pair report; nothing is excluded now.
+            excluded_case_ids=[],
             owner_id=owner,
         )
         self._batches[batch.batch_id] = batch
