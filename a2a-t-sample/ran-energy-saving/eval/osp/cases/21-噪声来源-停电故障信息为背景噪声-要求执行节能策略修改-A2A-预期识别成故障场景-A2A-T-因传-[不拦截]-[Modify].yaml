@@ -16,7 +16,7 @@ tags:
   - scenario-based
   - negotiation-a2a
 user_input: |-
-  Hi team, critical alarm: power outage at sites NRES_XCS_6102937, NES_27A_321071, and LTE_26441_LNR_OCL in A2ATestRegion region from 08:00 to 11:00 today, cause under investigation. Based on this alarm, modify the energy saving task of these three sites: change the time-segmented rate guarantee goal to {08:00~11:00, 10Mbps} during the outage; keep the rest unchanged.
+  Hi team, critical alarm: power outage at sites NRES_XCS_6102937, NES_27A_321071, and LTE_26441_LNR_OCL in A2ATestRegion region from 08:00 to 11:00 today, cause under investigation. Based on this alarm, modify the energy saving task of these three sites: change the time-segmented rate guarantee goal to {08:00-11:00, 10Mbps} during the outage; keep the rest unchanged.
 expect:
   intent:
     Operation type: Modify
@@ -129,7 +129,7 @@ assert:
 baseline:
   # Paired Create: the manual baseline the testers use (A2ATestRegion; 00:00-07:00 2Mbps,
   # 07:00-18:00 10Mbps, 18:00-24:00 20Mbps). It is accepted without a pre-task negotiation.
-  # Keep the plan in prose: an explicit {HH:MM~HH:MM,NMbps} list is rewritten by the scripted
+  # Keep the plan in prose: an explicit {HH:MM-HH:MM,NMbps} list is rewritten by the scripted
   # provider and then fails semantic validation; do not invent a per-site high-rate day plan.
   request: |-
     Create an energy saving task for A2ATestRegion: guarantee 2Mbps from 00:00 to 07:00, 10Mbps from 07:00 to 18:00 and 20Mbps from 18:00 to 24:00.

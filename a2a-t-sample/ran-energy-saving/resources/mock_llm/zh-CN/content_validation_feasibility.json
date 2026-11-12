@@ -15,6 +15,6 @@
     "energySavingGoal": "在满足任务上下文的前提下最大化节能。",
     "guaranteedThroughputTarget": null,
     "siteList": "NRES_XCS_6102937,LTE_26441_LNR_OCL",
-    "backgroundEvent": "00:00~18:00 停电"
+    "backgroundEvent": "00:00-18:00 停电"
   }
 }

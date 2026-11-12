@@ -275,7 +275,7 @@ def agreed_target_value(
         baseline: Task-T values already accepted by the server.
 
     Returns:
-        A time-segmented target such as ``{08:00~18:00,2Mbps}``, or ``None`` when no concrete rate
+        A time-segmented target such as ``{08:00-18:00,2Mbps}``, or ``None`` when no concrete rate
         can be derived.
     """
     rates = [value for item in server_target_rates(propose) for value in _rate_values(item)]
@@ -304,9 +304,9 @@ def _apply_alternative_rate(
     The proposal's alternative covers the outage window only. A baseline window that spans past
     the outage is split, so the agreement never claims a rate change for time outside it.
     """
-    unchanged = f"{{{segment.start}~{segment.end},{segment.rate_mbps:g}Mbps}}"
+    unchanged = f"{{{segment.start}-{segment.end},{segment.rate_mbps:g}Mbps}}"
     if event_window is None:
-        return [f"{{{segment.start}~{segment.end},{rate_text}}}"]
+        return [f"{{{segment.start}-{segment.end},{rate_text}}}"]
     start, end = segment.start_minutes, segment.end_minutes
     event_start, event_end = _minutes(event_window[0]), _minutes(event_window[1])
     if end <= start or event_end <= event_start:
@@ -315,15 +315,15 @@ def _apply_alternative_rate(
     if not _overlaps(segment.start, segment.end, *event_window):
         return [unchanged]
     if start >= event_start and end <= event_end:
-        return [f"{{{segment.start}~{segment.end},{rate_text}}}"]
+        return [f"{{{segment.start}-{segment.end},{rate_text}}}"]
     parts: list[str] = []
     if start < event_start:
-        parts.append(f"{{{_clock(start)}~{_clock(event_start)},{segment.rate_mbps:g}Mbps}}")
+        parts.append(f"{{{_clock(start)}-{_clock(event_start)},{segment.rate_mbps:g}Mbps}}")
     parts.append(
-        f"{{{_clock(max(start, event_start))}~{_clock(min(end, event_end))},{rate_text}}}"
+        f"{{{_clock(max(start, event_start))}-{_clock(min(end, event_end))},{rate_text}}}"
     )
     if end > event_end:
-        parts.append(f"{{{_clock(event_end)}~{_clock(end)},{segment.rate_mbps:g}Mbps}}")
+        parts.append(f"{{{_clock(event_end)}-{_clock(end)},{segment.rate_mbps:g}Mbps}}")
     return parts
 
 
@@ -368,7 +368,7 @@ def _rate_values(text: str) -> list[float]:
 
 
 def _event_window(value: object) -> tuple[str, str] | None:
-    """Return the ``HH:MM~HH:MM`` window named by a background event, if any."""
+    """Return the ``HH:MM-HH:MM`` window named by a background event, if any."""
     return find_window(value)
 
 

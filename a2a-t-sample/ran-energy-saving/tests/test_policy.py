@@ -143,7 +143,7 @@ def test_infeasible_counter_propose_is_revised_to_a_feasible_plan() -> None:
 
     assert content.round == 2
     assert "not feasible" in content.text
-    assert "00:00~06:00" in content.text
+    assert "00:00-06:00" in content.text
     assert content.sample_proposal == sample
 
 
@@ -270,7 +270,7 @@ def test_revision_caps_the_rate_for_a_cell_with_a_lower_limit() -> None:
 
 def test_default_plan_matches_the_dataset_contract() -> None:
     assert DEFAULT_PLAN.cell_id == "cell-001"
-    assert DEFAULT_PLAN.window == "00:00~06:00"
+    assert DEFAULT_PLAN.window == "00:00-06:00"
     assert DEFAULT_PLAN.target_rate == "30"
 
 

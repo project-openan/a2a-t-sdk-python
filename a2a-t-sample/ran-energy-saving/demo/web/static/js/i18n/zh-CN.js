@@ -250,7 +250,7 @@ export const ZH_CN = {
     counterPlaceholder: "自然语言反提议",
     counterParams: "反提议参数（counter，JSON）",
     counterParamsPlaceholder: '{"cellId": "cell-001"}',
-    counterParamsPlaceholderFull: '{"cellId": "cell-001", "window": "00:00~06:00", "targetRate": "30"}',
+    counterParamsPlaceholderFull: '{"cellId": "cell-001", "window": "00:00-06:00", "targetRate": "30"}',
     submit: "提交决策",
     focus: "打开固定卡片",
     submitHint: "Cmd/Ctrl+Enter 提交。",

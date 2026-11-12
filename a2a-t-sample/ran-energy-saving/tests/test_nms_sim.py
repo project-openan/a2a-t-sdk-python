@@ -257,7 +257,7 @@ async def test_unavailable_window_is_rejected() -> None:
 
         text = _message_text(frames[0])
         assert "not available" in text
-        assert "00:00~06:00" in text
+        assert "00:00-06:00" in text
 
 
 async def test_missing_time_segmented_throughput_uses_the_vendor_wording() -> None:
@@ -1278,7 +1278,7 @@ def test_the_osp_baseline_prose_names_the_region() -> None:
     )
 
     assert content.region == "A2ATestRegion"
-    assert content.windows == ("00:00~07:00", "07:00~18:00", "18:00~24:00")
+    assert content.windows == ("00:00-07:00", "07:00-18:00", "18:00-24:00")
 
 
 def test_an_unknown_region_negotiation_names_no_candidate() -> None:

@@ -1211,7 +1211,7 @@ function chipKind(entry) {
   return "";
 }
 
-//: ``cell-001, 00:00~06:00, 30%`` inside the INPUT_REQUIRED status text.
+//: ``cell-001, 00:00-06:00, 30%`` inside the INPUT_REQUIRED status text.
 const APPROVAL_PLAN_PATTERN = /([A-Za-z0-9_-]+),\s*(\d{2}:\d{2}\s*[~-]\s*\d{2}:\d{2}),\s*([\d.]+%)/;
 
 /**

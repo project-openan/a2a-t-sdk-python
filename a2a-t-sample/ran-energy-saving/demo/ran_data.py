@@ -129,7 +129,7 @@ class RanCell:
         region: Coverage region of the cell.
         description: One-line description of the cell.
         max_saving_rate: Maximum energy-saving rate (percent) the cell accepts.
-        available_windows: Energy-saving windows the cell accepts, in ``HH:MM~HH:MM`` form.
+        available_windows: Energy-saving windows the cell accepts, in ``HH:MM-HH:MM`` form.
         capacity: Capacity and SLA limits of the cell.
         hourly: Exactly 24 hourly curve points.
     """
@@ -163,7 +163,7 @@ class PlanEvaluation:
 
     Attributes:
         cell_id: Cell the plan applies to.
-        window: Canonical plan window (``HH:MM~HH:MM``).
+        window: Canonical plan window (``HH:MM-HH:MM``).
         target_rate: Requested energy-saving rate in percent.
         feasible: Whether the plan satisfies the windows, rate cap, and SLA.
         reasons: Human-readable reasons; empty when feasible.
@@ -211,7 +211,7 @@ class EnergySavingPlan:
         cell_name: Human-readable cell name.
         region: Coverage region of the cell.
         date: Date of the dataset curves the plan was computed from.
-        window: Canonical plan window (``HH:MM~HH:MM``).
+        window: Canonical plan window (``HH:MM-HH:MM``).
         target_rate: Energy-saving rate in percent.
         status: Lifecycle status, always ``applied`` for stored plans.
         baseline_energy_kwh: Energy consumption of the window in the baseline curve.
@@ -418,10 +418,13 @@ def _parse_clock(text: str, *, allow_end_of_day: bool) -> int:
 
 
 def parse_window(window: str) -> tuple[str, tuple[int, ...]]:
-    """Parse a ``HH:MM~HH:MM`` window.
+    """Parse a ``HH:MM-HH:MM`` window.
+
+    The legacy ``~`` separator is still accepted as an input alias; the canonical output uses
+    ``-``.
 
     Args:
-        window: Window string, e.g. ``00:00~06:00`` or ``23:00~24:00``.
+        window: Window string, e.g. ``00:00-06:00`` or ``23:00-24:00``.
 
     Returns:
         The canonical window string and the whole hours it covers.
@@ -429,16 +432,19 @@ def parse_window(window: str) -> tuple[str, tuple[int, ...]]:
     Raises:
         InvalidPlanError: when the window is malformed, uses partial hours, or is empty/reversed.
     """
-    if "~" not in window:
-        raise InvalidPlanError(f"Invalid window '{window}'; expected HH:MM~HH:MM")
-    start_text, end_text = window.split("~", 1)
+    parts = [part.strip() for part in window.split("-", 1)]
+    if len(parts) != 2:
+        parts = [part.strip() for part in window.split("~", 1)]
+    if len(parts) != 2:
+        raise InvalidPlanError(f"Invalid window '{window}'; expected HH:MM-HH:MM")
+    start_text, end_text = parts
     start_minute = _parse_clock(start_text, allow_end_of_day=False)
     end_minute = _parse_clock(end_text, allow_end_of_day=True)
     if end_minute <= start_minute:
         raise InvalidPlanError(f"Invalid window '{window}'; the end must be after the start")
     if end_minute - start_minute > HOURS_PER_DAY * 60:
         raise InvalidPlanError(f"Invalid window '{window}'; a window cannot exceed 24 hours")
-    canonical = f"{start_minute // 60:02d}:{start_minute % 60:02d}~{end_minute // 60:02d}:{end_minute % 60:02d}"
+    canonical = f"{start_minute // 60:02d}:{start_minute % 60:02d}-{end_minute // 60:02d}:{end_minute % 60:02d}"
     return canonical, tuple(range(start_minute // 60, end_minute // 60))
 
 

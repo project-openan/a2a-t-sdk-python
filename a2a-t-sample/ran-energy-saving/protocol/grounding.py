@@ -195,7 +195,7 @@ def server_target_rates(propose: NegotiationProposeView) -> set[str]:
 
     A feasibility proposal often states its revised target in prose
     ("reduce the throughput target from 10Mbps to 2Mbps for the outage period") without the
-    ``{HH:MM~HH:MM,NMbps}`` notation. The accepted value is still grounded by that sentence.
+    ``{HH:MM-HH:MM,NMbps}`` notation. The accepted value is still grounded by that sentence.
     """
     rates: set[str] = set()
     for sentence in _sentences(propose.content):
@@ -230,7 +230,7 @@ def server_contains(propose: NegotiationProposeView, value: object) -> bool:
 def _unchanged(name: str, value: object, other: object) -> bool:
     """Return whether one value equals another, comparing targets by their notation.
 
-    The accept normalizes a target to ``{HH:MM~HH:MM,NMbps}`` while the baseline may carry the
+    The accept normalizes a target to ``{HH:MM-HH:MM,NMbps}`` while the baseline may carry the
     vendor's ``{HH:MM-HH:MM: NMbps}``; a textual comparison would report the unchanged value as a
     change and demand a source for it.
     """
@@ -248,7 +248,7 @@ def _target_segments(value: object) -> list[str]:
 
 
 def _canonical_segments(value: object) -> list[str]:
-    """Return the canonical ``{HH:MM~HH:MM,NMbps}`` segments of one value, in source order."""
+    """Return the canonical ``{HH:MM-HH:MM,NMbps}`` segments of one value, in source order."""
     return [normalize(segment.canonical()) for segment in find_segments(value)]
 
 

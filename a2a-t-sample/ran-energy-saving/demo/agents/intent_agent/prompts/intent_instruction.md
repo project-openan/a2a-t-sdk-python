@@ -12,7 +12,7 @@ sent.
 2. `operation_type` is exactly `Create` or `Modify`. When the request is ambiguous choose `Create`.
 3. Keep `region` verbatim, even when it looks unknown (for example `Region Z`).
 4. Keep the guaranteed-throughput windows in the notation the request used, in request order. Use
-   the `{HH:MM~HH:MM,<rate>Mbps}` form when the request gives windows in another notation.
+   the `{HH:MM-HH:MM,<rate>Mbps}` form when the request gives windows in another notation.
 5. Copy `background_event` (for example a planned outage) verbatim, including how its time is
    stated. Do not turn a relative date such as "tomorrow" into a different wording.
 6. `task_description` is required by the Task-T template. Always fill it, using the canonical form

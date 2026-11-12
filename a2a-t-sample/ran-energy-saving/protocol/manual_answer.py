@@ -70,7 +70,7 @@ _INLINE_SEPARATOR_PATTERN: Final[re.Pattern[str]] = re.compile(r"\s*(?:,|，|、
 
 
 #: Everything that is not a letter, digit or CJK character. Comparing compact forms makes
-#: punctuation and separators (``{00:00~06:00,2Mbps}`` vs ``00:00-06:00 2 Mbps``) irrelevant.
+#: punctuation and separators (``{00:00-06:00,2Mbps}`` vs ``00:00-06:00 2 Mbps``) irrelevant.
 _COMPACT_STRIP: Final[re.Pattern[str]] = re.compile(r"[^0-9a-z一-鿿]+")
 
 #: A proposal that asks the client to confirm a plan. Such a question is answered by agreeing,
@@ -210,7 +210,7 @@ def _value_grounded(value: object, text: str, compact: str) -> bool:
     """Whether one filled value appears in the operator's answer.
 
     Structured targets are compared token by token: the model may restate
-    ``{00:00~06:00,2Mbps}`` with different separators, but every clock and rate it claims must
+    ``{00:00-06:00,2Mbps}`` with different separators, but every clock and rate it claims must
     still be present in the answer.
     """
     rendered = str(value)

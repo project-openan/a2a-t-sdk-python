@@ -114,7 +114,7 @@ INFORMATION_NEGOTIATION_SPEC = replace(
             rationale="The missing time-segmented throughput target is supplied.",
             filled_params={
                 "guaranteedThroughputTarget": (
-                    "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
+                    "{00:00-17:30,10Mbps}, {17:30-23:00,20Mbps}, {23:00-24:00,10Mbps}"
                 )
             },
         ),
@@ -677,7 +677,7 @@ async def test_information_scenario_accepts_and_completes_a_task() -> None:
     assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1)]
     assert prompt_client.refill_data[0]["region"] == "Region A"
     assert prompt_client.refill_data[0]["guaranteedThroughputTarget"] == (
-        "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
+        "{00:00-17:30,10Mbps}, {17:30-23:00,20Mbps}, {23:00-24:00,10Mbps}"
     )
     accept_metadata = MessageToDict(transport.requests[1].message.metadata)
     assert accept_metadata[TASK_T_EXTENSION_URI].startswith("Refilled Task-T prompt:")
@@ -918,9 +918,9 @@ async def test_accept_rewrites_a_refill_that_dropped_the_agreed_target() -> None
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
     accept_metadata = MessageToDict(transport.requests[1].message.metadata)
     task_text = accept_metadata[TASK_T_EXTENSION_URI]
-    assert "{00:00~17:30,10Mbps}" in task_text
-    assert "{17:30~23:00,20Mbps}" in task_text
-    assert "{23:00~24:00,10Mbps}" in task_text
+    assert "{00:00-17:30,10Mbps}" in task_text
+    assert "{17:30-23:00,20Mbps}" in task_text
+    assert "{23:00-24:00,10Mbps}" in task_text
 
 
 async def test_target_scenario_corrects_the_target_in_one_accept() -> None:
@@ -968,7 +968,7 @@ async def test_an_operator_summary_still_names_the_agreed_target() -> None:
 
     content = prompt_client.accept_data[0].content
     assert isinstance(content, FeasibilityEndingContent)
-    assert "{08:00~18:00,2Mbps}" in content.feasibility_summary
+    assert "{08:00-18:00,2Mbps}" in content.feasibility_summary
     assert "Accepted the proposal." in content.feasibility_summary
 
 
@@ -993,7 +993,7 @@ async def test_a_summary_that_contradicts_the_agreed_target_is_replaced() -> Non
     content = prompt_client.accept_data[0].content
     assert isinstance(content, FeasibilityEndingContent)
     assert "10Mbps" not in content.feasibility_summary
-    assert "{08:00~18:00,2Mbps}" in content.feasibility_summary
+    assert "{08:00-18:00,2Mbps}" in content.feasibility_summary
 
 
 async def test_a_summary_that_already_names_the_target_is_not_duplicated() -> None:
@@ -1042,7 +1042,7 @@ async def test_a_feasibility_accept_is_rendered_from_typed_content() -> None:
     content = prompt_client.accept_data[0].content
     assert isinstance(content, FeasibilityEndingContent)
     assert content.conclusion is NegotiationConclusion.ACCEPT
-    assert "{08:00~18:00,2Mbps}" in content.feasibility_summary
+    assert "{08:00-18:00,2Mbps}" in content.feasibility_summary
 
 
 async def test_a_feasibility_accept_without_values_still_carries_a_summary() -> None:
@@ -1109,10 +1109,10 @@ async def test_the_live_task_t_shape_yields_the_canonical_agreed_target() -> Non
         },
     )
 
-    assert prompt_client.refill_data[0]["guaranteedThroughputTarget"] == "{08:00~18:00,2Mbps}"
+    assert prompt_client.refill_data[0]["guaranteedThroughputTarget"] == "{08:00-18:00,2Mbps}"
     content = prompt_client.accept_data[0].content
     assert isinstance(content, FeasibilityEndingContent)
-    assert "{08:00~18:00,2Mbps}" in content.feasibility_summary
+    assert "{08:00-18:00,2Mbps}" in content.feasibility_summary
     assert "10Mbps" not in content.feasibility_summary
 
 
@@ -1144,7 +1144,7 @@ async def test_a_feasibility_accept_keeps_an_unchanged_target_in_the_refilled_ta
         intent_fields={**_INTENT_FIELDS, "guaranteedThroughputTarget": "{08:00~18:00,10Mbps}"},
     )
 
-    assert prompt_client.refill_data[0]["guaranteedThroughputTarget"] == "{08:00~18:00,10Mbps}"
+    assert prompt_client.refill_data[0]["guaranteedThroughputTarget"] == "{08:00-18:00,10Mbps}"
     content = prompt_client.accept_data[0].content
     assert isinstance(content, FeasibilityEndingContent)
     assert "10Mbps" not in content.feasibility_summary
@@ -1230,7 +1230,7 @@ async def test_a_feasibility_accept_derives_the_agreed_target_from_the_proposal(
 
     content = prompt_client.accept_data[0].content
     assert isinstance(content, FeasibilityEndingContent)
-    assert "{08:00~18:00,2Mbps}" in content.feasibility_summary
+    assert "{08:00-18:00,2Mbps}" in content.feasibility_summary
 
 
 async def test_a_target_accept_does_not_re_rate_the_baseline_from_prose() -> None:
@@ -1346,7 +1346,7 @@ async def test_a_target_confirmation_still_names_the_agreed_target() -> None:
 
     content = prompt_client.accept_data[0].content
     assert isinstance(content, TargetEndingContent)
-    assert "{00:00~06:00,2Mbps}" in (content.confirmed_intent or "")
+    assert "{00:00-06:00,2Mbps}" in (content.confirmed_intent or "")
     assert "The client confirms the target reduction." in (content.confirmed_intent or "")
 
 
@@ -1395,7 +1395,7 @@ async def test_a_target_accept_names_a_target_that_did_not_change() -> None:
 
     content = prompt_client.accept_data[0].content
     assert isinstance(content, TargetEndingContent)
-    assert "{00:00~06:00,2Mbps}" in (content.confirmed_intent or "")
+    assert "{00:00-06:00,2Mbps}" in (content.confirmed_intent or "")
 
 
 async def test_a_target_accept_is_rendered_from_typed_content() -> None:
@@ -1414,7 +1414,7 @@ async def test_a_target_accept_is_rendered_from_typed_content() -> None:
     assert prompt_client.accept_texts == []
     content = prompt_client.accept_data[0].content
     assert isinstance(content, TargetEndingContent)
-    assert "{00:00~06:00,2Mbps}" in (content.confirmed_intent or "")
+    assert "{00:00-06:00,2Mbps}" in (content.confirmed_intent or "")
 
 
 async def test_an_information_accept_is_rendered_from_typed_content() -> None:

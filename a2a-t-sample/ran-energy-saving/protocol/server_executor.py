@@ -8,7 +8,7 @@ negotiation messages without creating a Task, and delegates only accepted work t
 executor.
 
 The graph is sample business logic, not a protocol rule: it reads cell-001's profile, evaluates and
-applies a 30% saving plan in 00:00~06:00, and writes the report. A real deployment replaces the
+applies a 30% saving plan in 00:00-06:00, and writes the report. A real deployment replaces the
 planner/tool set with its own RAN NMS planning logic.
 
 Offline mode uses the deterministic :class:`~agents.server_agent.planner.ScriptedChatModel`; live

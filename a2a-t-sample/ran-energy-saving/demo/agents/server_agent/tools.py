@@ -182,7 +182,7 @@ def evaluate_energy_saving_plan(cell_id: str, window: str, target_rate: str) -> 
 
     Args:
         cell_id: Cell identifier, for example ``cell-001``.
-        window: Energy-saving window in ``HH:MM~HH:MM`` form, for example ``00:00~06:00``.
+        window: Energy-saving window in ``HH:MM-HH:MM`` form, for example ``00:00-06:00``.
         target_rate: Energy-saving rate in percent, for example ``30`` or ``30%``.
 
     Returns:
@@ -231,7 +231,7 @@ def apply_energy_saving_plan(cell_id: str, window: str, target_rate: str) -> dic
 
     Args:
         cell_id: Cell identifier, for example ``cell-001``.
-        window: Energy-saving window in ``HH:MM~HH:MM`` form, for example ``00:00~06:00``.
+        window: Energy-saving window in ``HH:MM-HH:MM`` form, for example ``00:00-06:00``.
         target_rate: Energy-saving rate in percent, for example ``30`` or ``30%``.
 
     Returns:
@@ -284,7 +284,7 @@ def modify_energy_saving_plan(
     Args:
         plan_id: Existing plan identifier returned by :func:`apply_energy_saving_plan`.
         cell_id: Cell identifier, for example ``cell-002``.
-        window: Energy-saving window in ``HH:MM~HH:MM`` form, for example ``01:00~05:00``.
+        window: Energy-saving window in ``HH:MM-HH:MM`` form, for example ``01:00-05:00``.
         target_rate: Energy-saving rate in percent, for example ``20`` or ``20%``.
 
     Returns:

@@ -8,7 +8,7 @@
       "region": "Region A",
       "description": "Macro cell covering the northern business district of Region A.",
       "max_saving_rate": 35,
-      "available_windows": ["00:00~06:00", "23:00~24:00"],
+      "available_windows": ["00:00-06:00", "23:00-24:00"],
       "capacity": {
         "max_throughput_mbps": 400,
         "sla_min_throughput_mbps": 250,
@@ -48,7 +48,7 @@
       "region": "Region A",
       "description": "Micro cell covering the southern residential area of Region A.",
       "max_saving_rate": 20,
-      "available_windows": ["01:00~05:00"],
+      "available_windows": ["01:00-05:00"],
       "capacity": {
         "max_throughput_mbps": 250,
         "sla_min_throughput_mbps": 150,
@@ -88,7 +88,7 @@
       "region": "Region B",
       "description": "Macro cell covering the central district of the Region B service area.",
       "max_saving_rate": 28,
-      "available_windows": ["00:00~06:00", "23:00~24:00"],
+      "available_windows": ["00:00-06:00", "23:00-24:00"],
       "capacity": {
         "max_throughput_mbps": 360,
         "sla_min_throughput_mbps": 220,

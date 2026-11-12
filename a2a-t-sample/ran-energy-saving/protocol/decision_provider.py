@@ -332,7 +332,7 @@ def build_manual_answer_prompt(
             "The engineer is supplying missing information: use action=accept and put every value "
             "the engineer supplied into filled_params, keyed by the exact Task-T parameter name "
             "(for example guaranteedThroughputTarget). Write guaranteedThroughputTarget in the "
-            "Task-T form {HH:MM~HH:MM,NMbps}; a full-period rate becomes {00:00~24:00,NMbps}. If "
+            "Task-T form {HH:MM-HH:MM,NMbps}; a full-period rate becomes {00:00-24:00,NMbps}. If "
             "the engineer explicitly refuses, use action=reject. Do not use action=counter for an "
             "information proposal."
         )

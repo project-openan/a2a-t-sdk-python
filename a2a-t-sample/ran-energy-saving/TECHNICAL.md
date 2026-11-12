@@ -634,7 +634,7 @@ OperatorRequest → IntentProcessor → ProcessedIntent → normalized text / pl
 - `ProcessedIntent` carries two renderings of the same business values.
   `render_normalized_text` produces the Task-T section layout (`normalizedText`) used only by the
   A2A-T hop. `render_plain_text` produces a natural-language request (`plainText`) used by the
-  standard A2A hops; it has no `##` Task-T headings and keeps the `{HH:MM~HH:MM,NMbps}` target
+  standard A2A hops; it has no `##` Task-T headings and keeps the `{HH:MM-HH:MM,NMbps}` target
   tokens that `RegexPureTargetPolicy` and the NMS simulator parse. The A2A-T path must never send
   `plainText`, and an A2A path must never send `normalizedText`.
 - In `processed` mode `ClientRuntime.run` emits an `intent_processed` trace, then calls approval 1
@@ -894,7 +894,7 @@ them.
 
 **RAN negotiation (`protocol/pure_a2a.py`).** `PureTaskHandler` inspects the inbound message:
 
-- a complete, non-overlapping `{HH:MM~HH:MM,<rate>Mbps}` target is handed to the planner directly;
+- a complete, non-overlapping `{HH:MM-HH:MM,<rate>Mbps}` target is handed to the planner directly;
 - a missing target creates a ticked Task in `INPUT_REQUIRED` and asks for the value;
 - overlapping targets create the same state and propose the corrected non-overlapping target;
 - the client continues the Task with `taskId`/`contextId`; the handler merges the answer, accepts a
@@ -1128,7 +1128,7 @@ Notes:
 A client counter-proposal may carry:
 
 ```json
-"metadata": {"sampleProposal": {"cellId": "cell-001", "window": "00:00~06:00", "targetRate": "30"}}
+"metadata": {"sampleProposal": {"cellId": "cell-001", "window": "00:00-06:00", "targetRate": "30"}}
 ```
 
 `sampleProposal` is **not an A2A-T protocol field**. It lets the deterministic policy evaluate the

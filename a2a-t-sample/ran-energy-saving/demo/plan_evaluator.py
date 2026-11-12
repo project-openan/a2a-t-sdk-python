@@ -15,13 +15,13 @@ from demo import ran_data
 
 #: Fallback plan used when a counter proposal carries no usable sample plan.
 DEFAULT_PLAN: Final[SampleProposal] = SampleProposal(
-    cell_id="cell-001", window="00:00~06:00", target_rate="30"
+    cell_id="cell-001", window="00:00-06:00", target_rate="30"
 )
 
 #: Preset revisions when the counter proposal carries no sample plan.
 PRESET_REVISIONS: Final[dict[int, SampleProposal]] = {
     2: DEFAULT_PLAN,
-    3: SampleProposal(cell_id="cell-001", window="23:00~24:00", target_rate="30"),
+    3: SampleProposal(cell_id="cell-001", window="23:00-24:00", target_rate="30"),
 }
 
 

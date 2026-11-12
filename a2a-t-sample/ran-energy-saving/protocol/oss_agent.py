@@ -2197,14 +2197,14 @@ def main() -> None:
         if config.is_offline:
             # The simulator runs offline with the deterministic fake model; a scripted answer
             # keeps the pure round-trip testable without a live endpoint. The simulator serves
-            # 00:00~06:00 and accepts a 30% rate, so the answer fills both missing values.
+            # 00:00-06:00 and accepts a 30% rate, so the answer fills both missing values.
             # In the vendor-dialogue replay the question is the terse confirmation instead: relay
             # it so the tester's OSP answer (or the operator) supplies the value.
             def answer(event: dict[str, object]) -> str:
                 del event
                 if config.nms_sim_pure_question == NMS_SIM_PURE_QUESTION_CONFIRM:
                     return ""
-                return "{00:00~06:00,30Mbps}"
+                return "{00:00-06:00,30Mbps}"
 
         else:
             from demo.agents.client_agent.agent import build_client_agent

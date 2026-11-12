@@ -50,9 +50,9 @@ def test_unknown_cell_raises_a_typed_error() -> None:
 @pytest.mark.parametrize(
     ("window", "canonical", "hours"),
     [
-        ("00:00~06:00", "00:00~06:00", (0, 1, 2, 3, 4, 5)),
-        ("23:00~24:00", "23:00~24:00", (23,)),
-        ("1:00~5:00", "01:00~05:00", (1, 2, 3, 4)),
+        ("00:00~06:00", "00:00-06:00", (0, 1, 2, 3, 4, 5)),
+        ("23:00~24:00", "23:00-24:00", (23,)),
+        ("1:00~5:00", "01:00-05:00", (1, 2, 3, 4)),
     ],
 )
 def test_parse_window_normalizes_and_expands_hours(
@@ -66,7 +66,7 @@ def test_parse_window_normalizes_and_expands_hours(
 
 @pytest.mark.parametrize(
     "window",
-    ["00:00-06:00", "06:00~00:00", "00:30~06:30", "24:00~24:00", "00:00~06:00~07:00"],
+    ["00:00/06:00", "06:00~00:00", "00:30~06:30", "24:00~24:00", "00:00~06:00~07:00"],
 )
 def test_parse_window_rejects_malformed_windows(window: str) -> None:
     with pytest.raises(ran_data.InvalidPlanError):
@@ -92,7 +92,7 @@ def test_evaluate_rejects_an_unavailable_window() -> None:
     assert not evaluation.feasible
     assert any("not available" in reason for reason in evaluation.reasons)
     assert evaluation.recommendation is not None
-    assert "00:00~06:00" in evaluation.recommendation
+    assert "00:00-06:00" in evaluation.recommendation
 
 
 def test_evaluate_rejects_a_rate_above_the_cell_maximum() -> None:

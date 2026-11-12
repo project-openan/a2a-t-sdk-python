@@ -47,7 +47,7 @@ MISSING_EXTENSION_METADATA: Final[dict[str, object]] = {
 DEFAULT_ACCEPT_RATE_MBPS: Final[float] = 30.0
 
 #: Activation window assumed when the Task-T omits the optional energy-saving period.
-FULL_DAY_WINDOW: Final[str] = "00:00~24:00"
+FULL_DAY_WINDOW: Final[str] = "00:00-24:00"
 
 _WINDOW_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(\d{1,2}:\d{2})(?::\d{2})?\s*(?:[~\-–]|to|until|至)\s*(\d{1,2}:\d{2})(?::\d{2})?",
@@ -110,7 +110,7 @@ class ExtractedContent:
     Attributes:
         operation: ``Create``/``Modify`` when the text names one, else ``None``.
         region: Region the NMS will act on (empty when absent).
-        windows: Activation windows found in the text, canonicalized with ``~``.
+        windows: Activation windows found in the text, canonicalized with ``-``.
         rate_mbps: First guaranteed throughput value in Mbps, when present.
         percent: First percentage value in the text, when present.
         source: The text the values came from.
@@ -148,7 +148,7 @@ class ParsedIntent:
     Attributes:
         operation: ``Create`` or ``Modify``.
         region: Region the NMS will act on.
-        window: Activation window in ``HH:MM~HH:MM`` form.
+        window: Activation window in ``HH:MM-HH:MM`` form.
         rate_mbps: First guaranteed throughput value, in Mbps.
         sites: Site names shown in the report text only.
         source: The Task-T prompt or the message text the values came from.
@@ -508,9 +508,9 @@ def _strip_region_line(line: str) -> str:
 
 
 def _windows(text: str) -> tuple[str, ...]:
-    """Return every ``HH:MM~HH:MM`` window found in the text, canonicalized with ``~``."""
+    """Return every ``HH:MM-HH:MM`` window found in the text, canonicalized with ``-``."""
     pairs = _WINDOW_PATTERN.findall(text) + _START_END_PATTERN.findall(text)
-    return tuple(f"{_clock(start)}~{_clock(end)}" for start, end in pairs)
+    return tuple(f"{_clock(start)}-{_clock(end)}" for start, end in pairs)
 
 
 def _throughput(text: str) -> float | None:

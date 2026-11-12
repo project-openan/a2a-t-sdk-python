@@ -1800,7 +1800,7 @@ def _accept_filled_values(
     whether that change is allowed. There is no configured fallback and no default operation type:
     an absent value stays absent and the verifier blocks the ACCEPT.
 
-    A target is normalized to the canonical ``{HH:MM~HH:MM,NMbps}`` form rather than validated
+    A target is normalized to the canonical ``{HH:MM-HH:MM,NMbps}`` form rather than validated
     against one notation. The old tilde-only filter dropped the hyphen/colon form the English slot
     overlay and the vendor Task-T use, and did so without a trace; a value that still cannot be
     parsed is now recorded in ``dropped`` so the caller can surface it.

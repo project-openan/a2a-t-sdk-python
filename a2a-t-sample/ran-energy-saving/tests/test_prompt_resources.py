@@ -37,7 +37,7 @@ def test_the_slot_rule_defines_24_00_as_the_end_of_the_day() -> None:
     """A window ending at 24:00 must not be read as wrapping around to 00:00.
 
     Without this rule a live extractor reports a structural overlap between
-    ``{00:00~03:00}`` and ``{05:00~24:00}`` even though they are disjoint.
+    ``{00:00-03:00}`` and ``{05:00-24:00}`` even though they are disjoint.
     """
     assert "24:00 is the end of that same day" in _task_context_constraint("en-US")
     assert "24:00 是当日结束" in _task_context_constraint("zh-CN")

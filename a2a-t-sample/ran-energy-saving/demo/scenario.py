@@ -59,12 +59,12 @@ EXAMPLE_REQUESTS: dict[str, dict[str, str]] = {
     SCENARIO_NIGHT: {
         LANGUAGE_EN: (
             "Create an energy saving task for Region A with these guaranteed throughputs: "
-            "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}. "
+            "{00:00-17:30,10Mbps}, {17:30-23:00,20Mbps}, {23:00-24:00,10Mbps}. "
             "Output the wireless network energy saving plan and return the intent report."
         ),
         LANGUAGE_ZH: (
-            "在区域 A 创建节能任务，保障速率为：{00:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、"
-            "{23:00~24:00,10Mbps}。输出无线网络节能方案并返回意图报告。"
+            "在区域 A 创建节能任务，保障速率为：{00:00-17:30,10Mbps}、{17:30-23:00,20Mbps}、"
+            "{23:00-24:00,10Mbps}。输出无线网络节能方案并返回意图报告。"
         ),
     },
     SCENARIO_INFORMATION: {
@@ -77,37 +77,37 @@ EXAMPLE_REQUESTS: dict[str, dict[str, str]] = {
     SCENARIO_UNKNOWN_AREA: {
         LANGUAGE_EN: (
             "Create an energy saving task for Region Z with these guaranteed throughputs: "
-            "{00:00~07:00,2Mbps}, {07:00~23:00,20Mbps}, {23:00~24:00,2Mbps}. "
+            "{00:00-07:00,2Mbps}, {07:00-23:00,20Mbps}, {23:00-24:00,2Mbps}. "
             "Output the wireless network energy saving plan and return the intent report."
         ),
         LANGUAGE_ZH: (
-            "在未知区域创建节能任务，保障速率为：{00:00~07:00,2Mbps}、{07:00~23:00,20Mbps}、"
-            "{23:00~24:00,2Mbps}。输出无线网络节能方案并返回意图报告。"
+            "在未知区域创建节能任务，保障速率为：{00:00-07:00,2Mbps}、{07:00-23:00,20Mbps}、"
+            "{23:00-24:00,2Mbps}。输出无线网络节能方案并返回意图报告。"
         ),
     },
     SCENARIO_TARGET: {
         LANGUAGE_EN: (
             "Create an energy saving task for Region A with these guaranteed throughputs: "
-            "{00:00~07:00,2Mbps}, {07:00~09:00,10Mbps}, {09:00~17:30,10Mbps}, "
-            "{17:30~23:00,20Mbps}, {20:00~00:00,10Mbps}. "
+            "{00:00-07:00,2Mbps}, {07:00-09:00,10Mbps}, {09:00-17:30,10Mbps}, "
+            "{17:30-23:00,20Mbps}, {20:00-00:00,10Mbps}. "
             "Output the wireless network energy saving plan and return the intent report."
         ),
         LANGUAGE_ZH: (
-            "在区域 A 创建节能任务，保障速率为：{00:00~07:00,2Mbps}、{07:00~09:00,10Mbps}、"
-            "{09:00~17:30,10Mbps}、{17:30~23:00,20Mbps}、{20:00~00:00,10Mbps}。"
+            "在区域 A 创建节能任务，保障速率为：{00:00-07:00,2Mbps}、{07:00-09:00,10Mbps}、"
+            "{09:00-17:30,10Mbps}、{17:30-23:00,20Mbps}、{20:00-00:00,10Mbps}。"
             "输出无线网络节能方案并返回意图报告。"
         ),
     },
     SCENARIO_FEASIBILITY: {
         LANGUAGE_EN: (
             "Create an energy saving task for NRES_XCS_6102937 and LTE_26441_LNR_OCL in Region A "
-            "with these guaranteed throughputs: {00:00~06:00,2Mbps}, {06:00~18:00,10Mbps}. "
-            "A power outage runs from 00:00~18:00. Output the wireless network energy saving plan "
+            "with these guaranteed throughputs: {00:00-06:00,2Mbps}, {06:00-18:00,10Mbps}. "
+            "A power outage runs from 00:00-18:00. Output the wireless network energy saving plan "
             "and return the intent report."
         ),
         LANGUAGE_ZH: (
             "在区域 A 为 NRES_XCS_6102937 和 LTE_26441_LNR_OCL 创建节能任务，保障速率为："
-            "{00:00~06:00,2Mbps}、{06:00~18:00,10Mbps}；00:00~18:00 有停电事件。"
+            "{00:00-06:00,2Mbps}、{06:00-18:00,10Mbps}；00:00-18:00 有停电事件。"
             "输出无线网络节能方案并返回意图报告。"
         ),
     },
@@ -128,12 +128,12 @@ EXAMPLE_REQUESTS: dict[str, dict[str, str]] = {
     SCENARIO_OUTAGE: {
         LANGUAGE_EN: (
             "Create a baseline energy saving task for NRES_XCS_6102937 and LTE_26441_LNR_OCL in "
-            "Region A with these guaranteed throughputs: {00:00~24:00,10Mbps}. "
+            "Region A with these guaranteed throughputs: {00:00-24:00,10Mbps}. "
             "Output the wireless network energy saving plan and return the intent report."
         ),
         LANGUAGE_ZH: (
             "在区域 A 为 NRES_XCS_6102937 和 LTE_26441_LNR_OCL 创建节能基线任务，"
-            "保障速率为：{00:00~24:00,10Mbps}。输出无线网络节能方案并返回意图报告。"
+            "保障速率为：{00:00-24:00,10Mbps}。输出无线网络节能方案并返回意图报告。"
         ),
     },
 }
@@ -143,14 +143,14 @@ EXAMPLE_REQUESTS: dict[str, dict[str, str]] = {
 MODIFY_REQUEST: dict[str, str] = {
     LANGUAGE_EN: (
         "Modify the running energy saving task for NRES_XCS_6102937 and LTE_26441_LNR_OCL in "
-        "Region A for the planned outage 03:00~05:00: {00:00~03:00,10Mbps}, "
-        "{03:00~05:00,2Mbps}, {05:00~24:00,10Mbps}. "
+        "Region A for the planned outage 03:00-05:00: {00:00-03:00,10Mbps}, "
+        "{03:00-05:00,2Mbps}, {05:00-24:00,10Mbps}. "
         "Output the wireless network energy saving plan and return the intent report."
     ),
     LANGUAGE_ZH: (
         "在区域 A 为 NRES_XCS_6102937 和 LTE_26441_LNR_OCL 修改运行中的节能任务"
-        "以应对 03:00~05:00 的计划停电：{00:00~03:00,10Mbps}、{03:00~05:00,2Mbps}、"
-        "{05:00~24:00,10Mbps}。输出无线网络节能方案并返回意图报告。"
+        "以应对 03:00-05:00 的计划停电：{00:00-03:00,10Mbps}、{03:00-05:00,2Mbps}、"
+        "{05:00-24:00,10Mbps}。输出无线网络节能方案并返回意图报告。"
     ),
 }
 
@@ -161,13 +161,13 @@ def resolve_modify_request(language: str) -> str:
 
 
 #: Corrected target the target negotiation agrees on.
-TARGET_TARGET: Final[str] = "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
+TARGET_TARGET: Final[str] = "{00:00-17:30,10Mbps}, {17:30-23:00,20Mbps}, {23:00-24:00,10Mbps}"
 
 #: Agreed target of the feasibility negotiation (the outage window is lowered to 2 Mbps).
-FEASIBILITY_TARGET: Final[str] = "{00:00~06:00,2Mbps}, {06:00~18:00,2Mbps}"
+FEASIBILITY_TARGET: Final[str] = "{00:00-06:00,2Mbps}, {06:00-18:00,2Mbps}"
 
 #: Agreed target and region of the unknown-area negotiation.
-UNKNOWN_AREA_TARGET: Final[str] = "{00:00~07:00,2Mbps}, {07:00~23:00,20Mbps}, {23:00~24:00,2Mbps}"
+UNKNOWN_AREA_TARGET: Final[str] = "{00:00-07:00,2Mbps}, {07:00-23:00,20Mbps}, {23:00-24:00,2Mbps}"
 
 #: Site context the feasibility accept carries.
 FEASIBILITY_CONTEXT: Final[dict[str, object]] = {
@@ -183,7 +183,7 @@ TARGET_ACCEPT_CONFIRMATION: Final[str] = (
 
 #: Feasibility summary of the feasibility negotiation accept.
 FEASIBILITY_ACCEPT_SUMMARY: Final[str] = (
-    "Agreed to lower the guaranteed throughput target for 06:00~18:00 from 10Mbps to 2Mbps; "
+    "Agreed to lower the guaranteed throughput target for 06:00-18:00 from 10Mbps to 2Mbps; "
     "the negotiation is confirmed as complete."
 )
 

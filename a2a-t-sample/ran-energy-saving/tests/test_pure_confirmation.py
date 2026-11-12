@@ -101,7 +101,7 @@ def test_automatic_mode_falls_back_to_the_structured_policy() -> None:
         "metadata": {"pure": {"kind": "negotiation", "phase": "information", "round": 1}},
     }
 
-    assert pure_answer_from_recommendation(event) == "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
+    assert pure_answer_from_recommendation(event) == "{00:00-17:30,10Mbps}, {17:30-23:00,20Mbps}, {23:00-24:00,10Mbps}"
 
 
 async def test_confirm_mode_publishes_the_recommendation_and_sends_the_answer() -> None:

@@ -40,7 +40,7 @@ Follow this order for every server proposal.
   `energySavingGoal`). A value must appear in the original request or in the proposal (its content
   or options). If an item cannot be answered from those sources, return `reject` and name the
   missing item in the rationale. `guaranteedThroughputTarget` must use the time-segmented form
-  such as `{00:00~07:00,2Mbps}`.
+  such as `{00:00-07:00,2Mbps}`.
 - **target**: the server reports overlapping or conflicting time segments and asks for a corrected
   target. Return `accept` with the corrected non-overlapping target in `confirmed_intent` and
   `filled_params.guaranteedThroughputTarget`; both must use the same corrected target. Never change

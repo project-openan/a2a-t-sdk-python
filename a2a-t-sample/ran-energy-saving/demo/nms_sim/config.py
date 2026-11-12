@@ -88,7 +88,7 @@ WINDOW_POLICY_ENV_KEY: Final[str] = "A2AT_SAMPLE_NMS_SIM_WINDOW_POLICY"
 #: Test region the real 910 environment accepts.
 DEFAULT_REGION: Final[str] = "A2ATestRegion"
 #: Test activation window the real 910 environment accepts.
-DEFAULT_WINDOW: Final[str] = "00:00~06:00"
+DEFAULT_WINDOW: Final[str] = "00:00-06:00"
 #: Maximum energy-saving rate of the simulator cell.
 DEFAULT_MAX_SAVING_RATE: Final[float] = 35.0
 #: Negotiation round budget before the simulator aborts.

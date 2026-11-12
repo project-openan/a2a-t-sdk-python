@@ -8,7 +8,7 @@ the English slot overlay asks the model to write — while the accept path accep
 
 Every module parses targets through this module now. It reads the notations the repository and the
 vendor actually produce (tilde, hyphen, en/em dash, ``to``, Chinese punctuation, one- or two-digit
-hours, optional braces) and writes the canonical ``{HH:MM~HH:MM,NMbps}`` form back.
+hours, optional braces) and writes the canonical ``{HH:MM-HH:MM,NMbps}`` form back.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ _WINDOW_PATTERN: Final[re.Pattern[str]] = re.compile(
 
 @dataclass(frozen=True, slots=True)
 class TargetSegment:
-    """One parsed ``{HH:MM~HH:MM,NMbps}`` segment.
+    """One parsed ``{HH:MM-HH:MM,NMbps}`` segment.
 
     Attributes:
         start: canonical start clock, ``HH:MM``.
@@ -77,8 +77,8 @@ class TargetSegment:
         return _minutes(self.end)
 
     def canonical(self) -> str:
-        """Return this segment in the canonical ``{HH:MM~HH:MM,NMbps}`` form."""
-        return f"{{{self.start}~{self.end},{self.rate_mbps:g}Mbps}}"
+        """Return this segment in the canonical ``{HH:MM-HH:MM,NMbps}`` form."""
+        return f"{{{self.start}-{self.end},{self.rate_mbps:g}Mbps}}"
 
 
 def find_segments(text: object) -> list[TargetSegment]:

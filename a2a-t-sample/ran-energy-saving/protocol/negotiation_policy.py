@@ -107,7 +107,7 @@ class SampleProposal:
 
     Attributes:
         cell_id: RAN cell the plan applies to.
-        window: energy-saving window (``HH:MM~HH:MM``).
+        window: energy-saving window (``HH:MM-HH:MM``).
         target_rate: energy-saving target rate as a percentage string.
     """
 

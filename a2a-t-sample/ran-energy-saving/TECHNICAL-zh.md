@@ -527,7 +527,7 @@ OperatorRequest → IntentProcessor → ProcessedIntent → 规范化文本 / �
 - `ProcessedIntent` 携带同一组业务值的两个渲染结果。`render_normalized_text` 生成 Task-T
   段结构（`normalizedText`），只用于 A2A-T；`render_plain_text` 生成自然语言请求
   （`plainText`），用于标准 A2A，不含 `##` Task-T 标题，但保留
-  `{HH:MM~HH:MM,NMbps}` 速率 token（`RegexPureTargetPolicy` 和 NMS 模拟器依赖该格式）。
+  `{HH:MM-HH:MM,NMbps}` 速率 token（`RegexPureTargetPolicy` 和 NMS 模拟器依赖该格式）。
   A2A-T 路径不得发送 `plainText`，A2A 路径不得发送 `normalizedText`。
 - `processed` 模式下 `ClientRuntime.run` 先发布 `intent_processed` trace，再携带意图调用审批 1。
   A2A-T 流程对**内置场景**拿到**规范化文本**并严格从中生成 Task-T（禁用 `initial_data` 结构化快路径）；
@@ -697,7 +697,7 @@ A2A-T 是 A2A 的扩展，所以 RAN 进程可以同时服务两种形态。`--p
 
 **RAN 协商（`protocol/pure_a2a.py`）。** `PureTaskHandler` 检查入站消息：
 
-- 完整且不重叠的 `{HH:MM~HH:MM,<rate>Mbps}` 目标直接交给规划器；
+- 完整且不重叠的 `{HH:MM-HH:MM,<rate>Mbps}` 目标直接交给规划器；
 - 缺目标时创建一个 `INPUT_REQUIRED` Task 并询问；
 - 目标重叠时同样进入 `INPUT_REQUIRED`，并给出修正后的非重叠目标；
 - 客户端带 `taskId`/`contextId` 续传；handler 合并回答、校验目标、把协商后的目标交给 planner。
@@ -888,7 +888,7 @@ transcript 的 `source`，由 live 快照和持久化详情对外提供。允许
 客户端反提议可以携带：
 
 ```json
-"metadata": {"sampleProposal": {"cellId": "cell-001", "window": "00:00~06:00", "targetRate": "30"}}
+"metadata": {"sampleProposal": {"cellId": "cell-001", "window": "00:00-06:00", "targetRate": "30"}}
 ```
 
 `sampleProposal` **不是 A2A-T 协议字段**。它让确定性策略可以用 `shared.ran_data.evaluate_plan` 评估反提议，从而保证离线演示可复现。若缺失，协议仍然工作：策略按预设修订序列推进。该键定义在 [`protocol/messages.py`](protocol/messages.py)，解析在 [`protocol/negotiation_policy.py`](protocol/negotiation_policy.py)。

@@ -231,7 +231,7 @@ def _nms_sim_settings(values: dict[str, str], port: int) -> dict[str, str]:
             values, "A2AT_SAMPLE_NMS_SIM_CANCEL_UNSUPPORTED", "0"
         ),
         "A2AT_SAMPLE_NMS_SIM_REGION": _env_str(values, "A2AT_SAMPLE_NMS_SIM_REGION", "A2ATestRegion"),
-        "A2AT_SAMPLE_NMS_SIM_WINDOW": _env_str(values, "A2AT_SAMPLE_NMS_SIM_WINDOW", "00:00~06:00"),
+        "A2AT_SAMPLE_NMS_SIM_WINDOW": _env_str(values, "A2AT_SAMPLE_NMS_SIM_WINDOW", "00:00-06:00"),
         "A2AT_SAMPLE_NMS_SIM_MAX_SAVING_RATE": _env_str(
             values, "A2AT_SAMPLE_NMS_SIM_MAX_SAVING_RATE", "35"
         ),

@@ -57,7 +57,7 @@ expect:
 
         ## Task Context
 
-        Time-segmented rate guarantee target: {00:00~07:00,2Mbps}, {07:00~18:00,10Mbps}, {18:00~23:00,20Mbps}, {23:00~24:00,2Mbps}
+        Time-segmented rate guarantee target: {00:00-07:00,2Mbps}, {07:00-18:00,10Mbps}, {18:00-23:00,20Mbps}, {23:00-24:00,2Mbps}
 
         ## Terminology Explanation
         1. LTE
@@ -110,7 +110,7 @@ expect:
         kinds: null
         rounds:
           - |-
-            Idle period are 00:00-07:00 and  23:00~24:00 at 2Mbps, regular period are 07:00-18:00 at 10Mbps, busy period are 18:00~23:00 at 20Mbps.
+            Idle period are 00:00-07:00 and  23:00-24:00 at 2Mbps, regular period are 07:00-18:00 at 10Mbps, busy period are 18:00-23:00 at 20Mbps.
       final_state: null
 assert:
   intent: true
@@ -137,7 +137,7 @@ known_issue: null
 blocked_followup:
   input: |-
     Implement energy-saving in A2ATestRegion region, set the guaranteed throughput as follows:
-    00:00~07:00→2Mbps
-    23:00~24:00→2Mbps
-    07:00~18:00→10Mbps
-    18:00~23:00→20Mbps
+    00:00-07:00→2Mbps
+    23:00-24:00→2Mbps
+    07:00-18:00→10Mbps
+    18:00-23:00→20Mbps

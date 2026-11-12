@@ -189,13 +189,13 @@ BASELINE_REGION: Final[str] = "A2ATestRegion"
 #: Default activation window of the simulator. Only used by the fallback baseline: a configured
 #: window that differs from it replaces the day plan with one segment, because two segments
 #: covering the same hours would describe an ambiguous prior task.
-BASELINE_WINDOW: Final[str] = "00:00~06:00"
+BASELINE_WINDOW: Final[str] = "00:00-06:00"
 
 #: One-day rate plan of the shared fallback baseline: the Task-T the testers use as the manual
 #: baseline (``00:00-07:00 2Mbps``, ``07:00-18:00 10Mbps``, ``18:00-24:00 20Mbps``). It is a
 #: complete Create the vendor accepts without a pre-task negotiation, so baselines reuse it instead
 #: of inventing a per-site plan. The plan is written in prose: an explicit
-#: ``{HH:MM~HH:MM,NMbps}`` list is rewritten by the scripted provider into the Task Context and
+#: ``{HH:MM-HH:MM,NMbps}`` list is rewritten by the scripted provider into the Task Context and
 #: then fails semantic validation on the offline path. Every Modify case ships its own
 #: ``baseline.request`` (see eval/osp/README.md 3.5); this plan is the fallback.
 BASELINE_SCHEDULE: Final[str] = (
@@ -2184,7 +2184,7 @@ def _baseline_request(case: Mapping[str, Any] | None = None) -> str:
     if window == BASELINE_WINDOW:
         schedule = BASELINE_SCHEDULE
     else:
-        start, end = (part.strip() for part in window.split("~", 1))
+        start, end = (part.strip() for part in window.replace("~", "-").split("-", 1))
         schedule = f"guarantee 10Mbps from {start} to {end}"
     return BASELINE_REQUEST.replace(BASELINE_REGION, region).replace(BASELINE_SCHEDULE, schedule)
 

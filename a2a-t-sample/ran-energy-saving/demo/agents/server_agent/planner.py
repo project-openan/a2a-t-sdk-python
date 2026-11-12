@@ -153,9 +153,9 @@ class ScriptedChatModel(BaseChatModel):
         text = "\n".join(str(message.content) for message in messages if isinstance(message, HumanMessage))
         lower = text.lower()
         if "region b" in lower or "区域 b" in lower:
-            return "cell-003", "00:00~06:00", "28"
+            return "cell-003", "00:00-06:00", "28"
         if "power outage" in lower or "停电" in text:
-            return "cell-002", "01:00~05:00", "20"
+            return "cell-002", "01:00-05:00", "20"
         if (
             "site 1" in lower
             or "site 2" in lower
@@ -166,8 +166,8 @@ class ScriptedChatModel(BaseChatModel):
         ):
             # The two-site baseline is the micro cell's normal plan; the planned-outage Modify
             # raises the same plan to the cell's maximum saving rate during the outage window.
-            return "cell-002", "01:00~05:00", "10"
-        return "cell-001", "00:00~06:00", "30"
+            return "cell-002", "01:00-05:00", "10"
+        return "cell-001", "00:00-06:00", "30"
 
     def _tool_call(self, name: str, args: dict[str, object], turn: int) -> AIMessage:
         """Build one tool-calling assistant message."""
@@ -268,7 +268,7 @@ def build_system_prompt(*, dataset_catalog: str | None = None) -> str:
         "4. Call generate_energy_saving_report last, with the exact plan_id returned by apply.\n"
         "5. If a tool returns ok=false, adjust the plan within the dataset limits and retry at "
         "most twice; if it still fails, stop and explain.\n"
-        "6. The sample default plan is cell-001, window 00:00~06:00, target rate 30%. Prefer a "
+        "6. The sample default plan is cell-001, window 00:00-06:00, target rate 30%. Prefer a "
         "dataset cell whose region matches the accepted Task-T area. You may choose another "
         "dataset cell/window/rate when the accepted task or tool results justify it; the tools "
         "reject an invalid order or an infeasible plan.\n"

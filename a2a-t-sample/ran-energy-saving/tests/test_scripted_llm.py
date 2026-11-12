@@ -95,7 +95,7 @@ _EXPECTED_STAGES: dict[str, tuple[str, str]] = {
 _OUTAGE_BASELINE_CONTENT = (
     "## Operation Type\n\nCreate\n\n## Task Context\n"
     "Site list: Site 1,Site 2; time-segment-based guaranteed throughput target: "
-    "{00:00~24:00,10Mbps}"
+    "{00:00-24:00,10Mbps}"
 )
 
 
@@ -132,7 +132,7 @@ def test_outage_baseline_content_validation_uses_the_create_fixture(
     assert client.calls[-1] == STAGE_CONTENT_VALIDATION_OUTAGE_BASELINE
     payload = json.loads(response.content)
     assert payload["params"]["operationType"] == "Create"
-    assert payload["params"]["guaranteedThroughputTarget"] == "{00:00~24:00,10Mbps}"
+    assert payload["params"]["guaranteedThroughputTarget"] == "{00:00-24:00,10Mbps}"
 
 
 def test_all_five_scenarios_are_defined() -> None:
@@ -212,7 +212,7 @@ def test_a_free_text_window_replaces_the_canned_task_context(
     response = client.structured(messages=_messages(request), json_schema=SLOT_SCHEMA)
 
     slots = json.loads(response.content)["slots"]
-    assert "{00:00~06:00,30Mbps}" in slots["task_context"]
+    assert "{00:00-06:00,30Mbps}" in slots["task_context"]
     assert "17:30" not in slots["task_context"]
 
 

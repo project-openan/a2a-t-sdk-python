@@ -60,7 +60,7 @@ From `runs/<runId>/wire.jsonl`, take the outbound `message:send` metadata Task-T
 
 Return at least the `Task Context` section, preferably the whole Task-T. Check:
 
-- does it contain `Time-segmented rate guarantee target: {08:00~18:00,10Mbps}` (or an equivalent)?
+- does it contain `Time-segmented rate guarantee target: {08:00-18:00,10Mbps}` (or an equivalent)?
 - does it contain only `Cell RAT: NR, LNR`?
 - is `Operation Type` `Create` or `Modify`?
 
@@ -76,7 +76,7 @@ Export the `task_validation` span `detail` from the event stream/trace:
 - `errors[]`: `slotName`, `code`, `facts`
 - the validator's extracted `params`
 
-Record `params.guaranteedThroughputTarget`: `null` / `"NR, LNR"` / `"{08:00~18:00,10Mbps}"`.
+Record `params.guaranteedThroughputTarget`: `null` / `"NR, LNR"` / `"{08:00-18:00,10Mbps}"`.
 This is what decides why the required-field gate let the request through.
 
 ### A3 return the full NMS Task JSON

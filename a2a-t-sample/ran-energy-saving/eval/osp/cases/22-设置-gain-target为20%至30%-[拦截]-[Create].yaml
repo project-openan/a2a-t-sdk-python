@@ -49,7 +49,7 @@ expect:
         energy saving gain target: 30%
 
         ## Task Context
-        Time-segmented rate guarantee target: {00:00~08:00: 2Mbps},{08:00~24:00: 10Mbps}
+        Time-segmented rate guarantee target: {00:00-08:00: 2Mbps},{08:00-24:00: 10Mbps}
 
         ## Terminology Explanation
         1. LTE

@@ -176,7 +176,7 @@ async def test_planned_outage_request_creates_a_baseline_task(
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
     assert result.report is not None
     assert result.report.get("cell_id") == "cell-002"
-    assert result.report.get("window") == "01:00~05:00"
+    assert result.report.get("window") == "01:00-05:00"
     assert result.report.get("target_rate") == 10
     assert result.report.get("status") == "applied"
 
@@ -311,8 +311,8 @@ async def test_target_accept_carries_the_corrected_target(english_language: None
     decision = result.decisions[0]
     assert decision.action == "accept"
     assert decision.filled_params
-    assert "{17:30~23:00,20Mbps}" in str(decision.filled_params["guaranteedThroughputTarget"])
-    assert "{23:00~24:00,10Mbps}" in str(decision.filled_params["guaranteedThroughputTarget"])
+    assert "{17:30-23:00,20Mbps}" in str(decision.filled_params["guaranteedThroughputTarget"])
+    assert "{23:00-24:00,10Mbps}" in str(decision.filled_params["guaranteedThroughputTarget"])
 
 
 async def test_abort_scenario_uses_the_client_abort_primitive(english_language: None) -> None:

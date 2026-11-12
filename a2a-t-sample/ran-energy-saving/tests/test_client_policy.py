@@ -112,7 +112,7 @@ def test_a_feasible_alternative_turns_the_models_reject_into_an_accept() -> None
 
     assert decision.action == "accept"
     assert outcome.forced_accept is True
-    assert decision.filled_params == {"guaranteedThroughputTarget": "{08:00~18:00,2Mbps}"}
+    assert decision.filled_params == {"guaranteedThroughputTarget": "{08:00-18:00,2Mbps}"}
 
 
 def test_the_throughput_floor_keeps_the_models_reject() -> None:
@@ -137,7 +137,7 @@ def test_an_accept_below_the_floor_is_refused() -> None:
 
 
 def test_agreed_target_applies_the_alternative_rate_to_the_outage_window() -> None:
-    assert agreed_target_value(_propose(), _BASELINE) == "{08:00~18:00,2Mbps}"
+    assert agreed_target_value(_propose(), _BASELINE) == "{08:00-18:00,2Mbps}"
 
 
 def test_agreed_target_splits_a_window_that_extends_past_the_outage() -> None:
@@ -145,7 +145,7 @@ def test_agreed_target_splits_a_window_that_extends_past_the_outage() -> None:
     baseline = {**_BASELINE, "guaranteedThroughputTarget": "{00:00~24:00,10Mbps}"}
 
     assert agreed_target_value(_propose(), baseline) == (
-        "{00:00~08:00,10Mbps}, {08:00~18:00,2Mbps}, {18:00~24:00,10Mbps}"
+        "{00:00-08:00,10Mbps}, {08:00-18:00,2Mbps}, {18:00-24:00,10Mbps}"
     )
 
 
@@ -156,7 +156,7 @@ def test_agreed_target_keeps_a_window_that_does_not_overlap_the_outage() -> None
     }
 
     assert agreed_target_value(_propose(), baseline) == (
-        "{00:00~07:00,5Mbps}, {08:00~18:00,2Mbps}"
+        "{00:00-07:00,5Mbps}, {08:00-18:00,2Mbps}"
     )
 
 
@@ -168,7 +168,7 @@ def test_agreed_target_reads_a_chinese_outage_window() -> None:
     }
 
     assert agreed_target_value(_propose(), baseline) == (
-        "{00:00~08:00,5Mbps}, {08:00~18:00,2Mbps}"
+        "{00:00-08:00,5Mbps}, {08:00-18:00,2Mbps}"
     )
 
 
@@ -176,7 +176,7 @@ def test_agreed_target_reads_the_vendor_notation() -> None:
     """A baseline written ``{08:00-18:00: 10Mbps}`` still yields the agreed outage window."""
     baseline = {**_BASELINE, "guaranteedThroughputTarget": "{08:00-18:00: 10Mbps}"}
 
-    assert agreed_target_value(_propose(), baseline) == "{08:00~18:00,2Mbps}"
+    assert agreed_target_value(_propose(), baseline) == "{08:00-18:00,2Mbps}"
 
 
 def test_agreed_target_keeps_a_segment_outside_the_background_event() -> None:
@@ -186,7 +186,7 @@ def test_agreed_target_keeps_a_segment_outside_the_background_event() -> None:
     }
 
     assert agreed_target_value(_propose(), baseline) == (
-        "{00:00~08:00,10Mbps}, {08:00~18:00,2Mbps}"
+        "{00:00-08:00,10Mbps}, {08:00-18:00,2Mbps}"
     )
 
 

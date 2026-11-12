@@ -139,31 +139,31 @@ _MISSING_SCENARIO_INPUTS = tuple(EXAMPLE_REQUESTS[SCENARIO_INFORMATION].values()
 #: Distinguishing values the target/feasibility rendered prompts carry, so the content-validation
 #: routing also fires on real rendered-prompt heads and not only on the scenario natural-language
 #: inputs. Each marker is a value the failing input carries and the negotiated refill does not.
-_TARGET_VALIDATION_MARKER = "20:00~00:00,10Mbps"
-_FEASIBILITY_VALIDATION_MARKERS = ("06:00~18:00,10Mbps",)
-#: The planned-outage request and its rendered Task-T both carry the 03:00~05:00 outage and the
+_TARGET_VALIDATION_MARKER = "20:00-00:00,10Mbps"
+_FEASIBILITY_VALIDATION_MARKERS = ("06:00-18:00,10Mbps",)
+#: The planned-outage request and its rendered Task-T both carry the 03:00-05:00 outage and the
 #: lower 2 Mbps guarantee. Either marker is enough to route to the outage canned validation.
 _OUTAGE_VALIDATION_MARKERS = (
-    "03:00~05:00,2Mbps",
+    "03:00-05:00,2Mbps",
     "lower the guaranteed throughput to 2Mbps",
     "将分时段保障速率下调到 2Mbps",
     "power outage from 03:00 to 05:00",
-    "03:00~05:00停电",
+    "03:00-05:00停电",
 )
 
 #: Markers of the two-site baseline Task-T (phase 1 of the planned-outage run). It has no outage
 #: wording, so it needs its own create-shaped validation fixture.
-_OUTAGE_BASELINE_VALIDATION_MARKERS = ("00:00~24:00,10Mbps", "00:00~24:00, 10Mbps")
+_OUTAGE_BASELINE_VALIDATION_MARKERS = ("00:00-24:00,10Mbps", "00:00-24:00, 10Mbps")
 
 #: Throughput segment of the complete (information-accept) target. A rendered Task-T prompt that
 #: carries the region but none of this marker omits the time-segmented guaranteed throughput
 #: target, i.e. it is the information scenario's intentionally incomplete prompt.
-_COMPLETE_THROUGHPUT_MARKER = "07:00~17:30,10Mbps"
+_COMPLETE_THROUGHPUT_MARKER = "07:00-17:30,10Mbps"
 
 #: Throughput marker of the unknown-area scenario. The area is the only invalid slot, so its
 #: Task-T must validate successfully and reach the sample precheck instead of being treated as the
 #: intentionally incomplete information request.
-_UNKNOWN_AREA_VALIDATION_MARKER = "07:00~23:00,20Mbps"
+_UNKNOWN_AREA_VALIDATION_MARKER = "07:00-23:00,20Mbps"
 
 #: Requested area inside the precheck proposal text (localized).
 _REQUESTED_AREA_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -184,15 +184,15 @@ def _requested_area(user_content: str) -> str | None:
 #: From-data Task-T refill markers (the accepted values are the only distinguishing text).
 #:
 #: The feasibility refill carries the outage in both spellings: the filled parameter uses a space
-#: (``00:00~18:00 停电``), while the canned slot extraction renders the task context without one
-#: (``在00:00~18:00停电``). Content validation reads the rendered Task-T, so it needs the second
+#: (``00:00-18:00 停电``), while the canned slot extraction renders the task context without one
+#: (``在00:00-18:00停电``). Content validation reads the rendered Task-T, so it needs the second
 #: spelling; the failing input still routes to its own feasibility stage first through the
-#: ``06:00~18:00,10Mbps`` marker.
-_TARGET_REFILL_MARKERS = ("23:00~24:00,10Mbps",)
+#: ``06:00-18:00,10Mbps`` marker.
+_TARGET_REFILL_MARKERS = ("23:00-24:00,10Mbps",)
 _FEASIBILITY_REFILL_MARKERS = (
     "power outage from 00:00 to 18:00",
-    "00:00~18:00 停电",
-    "00:00~18:00停电",
+    "00:00-18:00 停电",
+    "00:00-18:00停电",
 )
 
 #: Negotiation-T extraction signatures routed most-specific property set first, pinned to the
@@ -617,7 +617,8 @@ def _task_description(value: object, operation: str, zh: bool) -> str:
 #: Vendor region token in a free-text request (``A2ATestRegion``, ``RegionZ``, ...).
 _REQUESTED_REGION_PATTERN = re.compile(r"\b([A-Za-z][A-Za-z0-9_-]*Region[A-Za-z0-9_-]*)\b")
 _REQUESTED_WINDOW_PATTERN = re.compile(
-    r"\{\s*(\d{1,2}:\d{2})\s*~\s*(\d{1,2}:\d{2})\s*,\s*(\d+(?:\.\d+)?)\s*Mbps\s*\}"
+    r"\{\s*(\d{1,2}:\d{2})\s*(?:~|～|-|–|—|\bto\b)\s*(\d{1,2}:\d{2})\s*,"
+    r"\s*(\d+(?:\.\d+)?)\s*Mbps\s*\}"
 )
 
 
@@ -651,7 +652,7 @@ def _apply_requested_profile(content: str, user_content: str, language: str) -> 
         # The feasibility canned response carries the background event after the target; keep it
         # instead of flattening the Task Context to the window list.
         return content
-    target = ", ".join(f"{{{start}~{end},{rate}Mbps}}" for start, end, rate in windows)
+    target = ", ".join(f"{{{start}-{end},{rate}Mbps}}" for start, end, rate in windows)
     context = (
         f"分时段保障速率目标：{target}。"
         if language == LANGUAGE_ZH

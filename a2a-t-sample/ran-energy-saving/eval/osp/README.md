@@ -169,12 +169,12 @@ baseline:
    按用例站点或停电目标另造“10Mbps 整天”之类的计划：高费率 × 长窗口会被网管在基线 Create
    阶段判为不可行并要求降到 2Mbps，基线任务根本建不出来，Modify 也就跑不到。
 3. **不含**停电/背景事件——停电是 Modify 引入的新事件。
-4. 时间窗用散文写（`from 00:00 to 07:00`），不要写 `{HH:MM~HH:MM,NMbps}`：scripted provider 会把
+4. 时间窗用散文写（`from 00:00 to 07:00`），不要写 `{HH:MM-HH:MM,NMbps}`：scripted provider 会把
    显式窗口改写成 Task Context，随后语义校验失败，基线判 blocked。
 5. offline/scripted 模式下基线的 Task-T 由 `night` 场景的固定计划渲染，请求文本里的站点/速率只在
    live 模式生效；这不影响建 Task 和续传，但看 wire 时不要按请求文本逐字核对。
 6. nms-sim 回放仍建议 `A2AT_SAMPLE_NMS_SIM_WINDOW_POLICY=any`：OSP 的 Modify 窗口和手工基线
-   的第一段都不是 demo 的 `00:00~06:00` 窗口。
+   的第一段都不是 demo 的 `00:00-06:00` 窗口。
 
 `/tester` 优先用用例自己的 `baseline.request`；没有该字段时回退到共享 fixture（`_baseline_request`）。
 生成器尚未支持该字段，手工加入后 `--check` 会报漂移（与 `blocked_followup` 相同）。

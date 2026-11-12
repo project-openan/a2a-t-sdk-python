@@ -252,7 +252,7 @@ export const EN = {
     counterPlaceholder: "Natural-language counter proposal",
     counterParams: "Counter params (counter, JSON)",
     counterParamsPlaceholder: '{"cellId": "cell-001"}',
-    counterParamsPlaceholderFull: '{"cellId": "cell-001", "window": "00:00~06:00", "targetRate": "30"}',
+    counterParamsPlaceholderFull: '{"cellId": "cell-001", "window": "00:00-06:00", "targetRate": "30"}',
     submit: "Submit decision",
     focus: "Open the pinned card",
     submitHint: "Cmd/Ctrl+Enter submits.",

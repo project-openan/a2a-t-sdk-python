@@ -56,7 +56,7 @@
 
 每条至少回传 `Task Context` 段落，最好整段 Task-T。重点看：
 
-- 是否包含 `Time-segmented rate guarantee target: {08:00~18:00,10Mbps}`（或等价写法）；
+- 是否包含 `Time-segmented rate guarantee target: {08:00-18:00,10Mbps}`（或等价写法）；
 - 是否只有 `Cell RAT: NR, LNR`；
 - `Operation Type` 是 `Create` 还是 `Modify`。
 
@@ -72,7 +72,7 @@
 - 校验模型抽取出的 `params`
 
 重点记录 `params.guaranteedThroughputTarget` 的值：`null` / `"NR, LNR"` /
-`"{08:00~18:00,10Mbps}"`。这决定业务门禁为什么放行。
+`"{08:00-18:00,10Mbps}"`。这决定业务门禁为什么放行。
 
 ### A3 回传网管 Task 文档的完整 JSON
 
@@ -104,7 +104,7 @@ GET /a2a/json/tasks/<healthy-task-id>     # 对照
    - 真机：用 Running-tasks picker 选 `WORKING`；或
    - 本地模拟器：`A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1` 创建一个会保持 `WORKING` 的 Task。
 2. 记录 `targetTaskId` / `contextId` 和选中时间。
-3. 发送与失败 run **完全相同**的不可行请求（例：10 Mbps + 08:00~18:00 停电）。
+3. 发送与失败 run **完全相同**的不可行请求（例：10 Mbps + 08:00-18:00 停电）。
 4. 记录：
    - `message:send` 的响应状态；
    - 是否出现 `Negotiation-T` / `negotiationContext` / `PROPOSE`；

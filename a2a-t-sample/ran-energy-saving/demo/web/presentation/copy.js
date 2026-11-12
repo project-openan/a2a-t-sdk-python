@@ -483,13 +483,13 @@ const EN = {
     manualLabel: "Provide missing information or a revised plan",
     manualPlaceholder: "Type the missing values or the revised plan…",
     manualExampleLabel: "Example",
-    manualExample: "the guaranteed rate is 10Mbps, or the revised plan is cell-001, 00:00~06:00, 2Mbps.",
+    manualExample: "the guaranteed rate is 10Mbps, or the revised plan is cell-001, 00:00-06:00, 2Mbps.",
     // A matching example per asked item; the generic sentence stays the fallback.
     manualExamples: {
       region: "the region is Region A",
-      rate: "the guaranteed rate is 10Mbps, or the revised plan is cell-001, 00:00~06:00, 2Mbps.",
-      throughput: "the guaranteed rate is 10Mbps, or the revised plan is cell-001, 00:00~06:00, 2Mbps.",
-      default: "the guaranteed rate is 10Mbps, or the revised plan is cell-001, 00:00~06:00, 2Mbps.",
+      rate: "the guaranteed rate is 10Mbps, or the revised plan is cell-001, 00:00-06:00, 2Mbps.",
+      throughput: "the guaranteed rate is 10Mbps, or the revised plan is cell-001, 00:00-06:00, 2Mbps.",
+      default: "the guaranteed rate is 10Mbps, or the revised plan is cell-001, 00:00-06:00, 2Mbps.",
     },
     manualUseExample: "Use example",
     manualParse: "Parse with the OSS Agent",
@@ -873,7 +873,7 @@ const EN = {
       kind: "neg",
       story: "Two guaranteed-rate windows overlap; the client corrects the target inside its Accept.",
       proposals: {
-        1: "Two guaranteed-rate windows overlap: 17:30~23:00 and 20:00~00:00. Please provide a non-overlapping target.",
+        1: "Two guaranteed-rate windows overlap: 17:30-23:00 and 20:00-00:00. Please provide a non-overlapping target.",
       },
       decisions: {
         1: "Accept with the corrected non-overlapping windows.",
@@ -884,8 +884,8 @@ const EN = {
       tag: "Use case 1 · negotiation",
       kind: "neg",
       story: "A guaranteed rate is requested during a power outage; the RAN Agent offers a feasible alternative.",
-      proposals: { 1: "The rate cannot be guaranteed during the outage. Lower 06:00~18:00 to 2Mbps." },
-      decisions: { 1: "Accept: lower 06:00~18:00 to 2Mbps during the outage." },
+      proposals: { 1: "The rate cannot be guaranteed during the outage. Lower 06:00-18:00 to 2Mbps." },
+      decisions: { 1: "Accept: lower 06:00-18:00 to 2Mbps during the outage." },
     },
     reject: {
       label: "OSS rejects",
@@ -1367,13 +1367,13 @@ const ZH = {
     manualLabel: "补充缺失信息或修订方案",
     manualPlaceholder: "在这里输入缺失的值或修订方案…",
     manualExampleLabel: "示例",
-    manualExample: "保障速率为 10Mbps，或修订方案为 cell-001、00:00~06:00、2Mbps。",
+    manualExample: "保障速率为 10Mbps，或修订方案为 cell-001、00:00-06:00、2Mbps。",
     // 按所问条目选择示例；通用句子保留为兜底。
     manualExamples: {
       region: "区域为区域 A",
-      rate: "保障速率为 10Mbps，或修订方案为 cell-001、00:00~06:00、2Mbps。",
-      throughput: "保障速率为 10Mbps，或修订方案为 cell-001、00:00~06:00、2Mbps。",
-      default: "保障速率为 10Mbps，或修订方案为 cell-001、00:00~06:00、2Mbps。",
+      rate: "保障速率为 10Mbps，或修订方案为 cell-001、00:00-06:00、2Mbps。",
+      throughput: "保障速率为 10Mbps，或修订方案为 cell-001、00:00-06:00、2Mbps。",
+      default: "保障速率为 10Mbps，或修订方案为 cell-001、00:00-06:00、2Mbps。",
     },
     manualUseExample: "填入示例",
     manualParse: "由 OSS Agent 解析",
@@ -1746,7 +1746,7 @@ const ZH = {
       kind: "neg",
       story: "两个保障时段重叠，客户端在 Accept 中修正目标后执行。",
       proposals: {
-        1: "两个保障时段重叠：17:30~23:00 与 20:00~00:00，请给出不重叠的目标。",
+        1: "两个保障时段重叠：17:30-23:00 与 20:00-00:00，请给出不重叠的目标。",
       },
       decisions: {
         1: "接受，并在结果内容中给出修正后的不重叠时段。",
@@ -1757,8 +1757,8 @@ const ZH = {
       tag: "用例 1 · 协商",
       kind: "neg",
       story: "停电期间仍要求保障速率，RAN Agent 给出可行替代方案。",
-      proposals: { 1: "停电期间无法保障速率，建议把 06:00~18:00 下调到 2Mbps。" },
-      decisions: { 1: "接受：停电期间把 06:00~18:00 下调到 2Mbps。" },
+      proposals: { 1: "停电期间无法保障速率，建议把 06:00-18:00 下调到 2Mbps。" },
+      decisions: { 1: "接受：停电期间把 06:00-18:00 下调到 2Mbps。" },
     },
     reject: {
       label: "拒绝",

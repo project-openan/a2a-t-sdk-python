@@ -30,7 +30,7 @@ from protocol.pre_task_negotiation import NegotiationOutcome
 from protocol.target_grammar import find_segments
 
 # Target segments are parsed by :mod:`protocol.target_grammar`, which reads every notation the
-# sample and the vendor write (the local copy used to accept only ``HH:MM~HH:MM,<rate>Mbps``).
+# sample and the vendor write (the local copy used to accept only ``HH:MM-HH:MM,<rate>Mbps``).
 
 #: Text of a pure A2A request that carries no text at all.
 EMPTY_REQUEST_TEXT: Final[str] = "The pure A2A request carries no task description."
@@ -128,7 +128,7 @@ class RegexPureTargetPolicy:
                 kind="information",
                 question=(
                     "The request does not define the time-segmented guaranteed throughput target. "
-                    "Please provide it in the form {HH:MM~HH:MM,NMbps}."
+                    "Please provide it in the form {HH:MM-HH:MM,NMbps}."
                 ),
             )
         if has_overlap(segments):
@@ -153,7 +153,7 @@ class RegexPureTargetPolicy:
             return self._retry_or_reject(
                 state,
                 "The answer does not contain a time-segmented target in the form "
-                "{HH:MM~HH:MM,NMbps}.",
+                "{HH:MM-HH:MM,NMbps}.",
                 language,
             )
         if has_overlap(segments):
@@ -375,7 +375,7 @@ def format_target_segments(segments: tuple[TargetSegment, ...], language: str) -
     """Render target segments in the request format of ``language``."""
     separator = "、" if language.startswith("zh") else ", "
     return separator.join(
-        f"{{{segment.start}~{segment.end},{segment.rate}Mbps}}" for segment in segments
+        f"{{{segment.start}-{segment.end},{segment.rate}Mbps}}" for segment in segments
     )
 
 

@@ -48,7 +48,7 @@ def test_profile_returns_the_full_curve() -> None:
     assert result["cell_id"] == "cell-001"
     assert result["cell_name"] == "Region-A-North"
     assert len(_as_list(result["hourly_profile"])) == 24
-    assert result["available_windows"] == ["00:00~06:00", "23:00~24:00"]
+    assert result["available_windows"] == ["00:00-06:00", "23:00-24:00"]
     assert _as_mapping(result["capacity"])["max_throughput_mbps"] == 400
     total_kwh = _as_mapping(result["energy_summary"])["total_kwh"]
     assert isinstance(total_kwh, (int, float))

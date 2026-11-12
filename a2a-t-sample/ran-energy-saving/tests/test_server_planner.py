@@ -287,7 +287,7 @@ def test_scripted_planner_uses_the_cell_of_a_confirmed_second_area() -> None:
     model = ScriptedChatModel(dataset_date=ran_data.dataset_date())
     messages = [HumanMessage(content="## Task Object\nThe area is Region B.")]
 
-    assert model._plan_args(messages) == ("cell-003", "00:00~06:00", "28")
+    assert model._plan_args(messages) == ("cell-003", "00:00-06:00", "28")
 
 
 def test_scripted_planner_ignores_area_names_in_the_system_prompt() -> None:
@@ -297,7 +297,7 @@ def test_scripted_planner_ignores_area_names_in_the_system_prompt() -> None:
         HumanMessage(content="## Task Object\nThe area is Region A."),
     ]
 
-    assert model._plan_args(messages) == ("cell-001", "00:00~06:00", "30")
+    assert model._plan_args(messages) == ("cell-001", "00:00-06:00", "30")
 
 
 async def _turn_count(model: ScriptedChatModel) -> int:

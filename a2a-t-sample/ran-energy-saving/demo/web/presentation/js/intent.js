@@ -2,7 +2,7 @@
  *
  * The intent is the OSS's own structured reading of the engineer's request; the Task-T is the
  * later wire mapping and is not used here. Parsing is deliberately small: it accepts both the
- * Task-T ``{HH:MM~HH:MM,NMbps}`` notation and the concise ``HH:MM–HH:MM at N Mbps`` wording.
+ * Task-T ``{HH:MM-HH:MM,NMbps}`` notation and the concise ``HH:MM–HH:MM at N Mbps`` wording.
  */
 
 import { clear, el, isObject, svg } from "./dom.js";
