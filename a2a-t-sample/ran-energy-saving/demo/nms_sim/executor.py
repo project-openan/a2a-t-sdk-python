@@ -93,6 +93,41 @@ def report_artifact(task_id: str, report: dict[str, object]) -> dict[str, object
 
 
 def _effective_periods(window: str) -> str:
-    """Render a window as the vendor's hour-by-hour period string."""
-    _, hours = ran_data.parse_window(window)
+    """Render a window as the vendor's hour-by-hour period string.
+
+    The sample's plan model only expresses whole hours, while an operator request may start or end
+    on the half hour (``00:00-17:30``). The rehearsal widens such a window to the enclosing hours
+    instead of failing the Task: the acceptance comparison stops at the accepted state and never
+    judges the plan arithmetic, so refusing the request would hide the protocol result behind a
+    simulator limitation.
+    """
+    try:
+        _, hours = ran_data.parse_window(window)
+    except ran_data.InvalidPlanError:
+        hours = _whole_hours(window)
     return "&".join(f"{hour:02d}:00:00-{hour:02d}:59:59" for hour in hours)
+
+
+def _whole_hours(window: str) -> tuple[int, ...]:
+    """Return the whole hours that enclose one ``HH:MM-HH:MM`` window."""
+    text = window.strip()
+    parts = [part.strip() for part in text.split("-", 1)]
+    if len(parts) != 2:
+        parts = [part.strip() for part in text.split("~", 1)]
+    if len(parts) != 2:
+        raise ran_data.InvalidPlanError(f"Invalid window '{window}'; expected HH:MM-HH:MM")
+    start = _minutes(parts[0])
+    end = _minutes(parts[1])
+    start_hour = start // 60
+    end_hour = (end + 59) // 60
+    if end_hour <= start_hour:
+        end_hour = min(start_hour + 1, 24)
+    return tuple(range(start_hour, end_hour))
+
+
+def _minutes(text: str) -> int:
+    """Return the minutes since midnight of one ``HH:MM`` clock."""
+    clock = text.split(":", 1)
+    if len(clock) != 2:
+        raise ran_data.InvalidPlanError(f"Invalid time '{text}'; expected HH:MM")
+    return int(clock[0]) * 60 + int(clock[1])

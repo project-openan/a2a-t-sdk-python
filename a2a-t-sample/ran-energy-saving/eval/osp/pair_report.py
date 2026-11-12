@@ -42,6 +42,7 @@ _INFRA_HINTS: Final[tuple[str, ...]] = (
     "promptgenerationerror",
     "the llm response is invalid",
     "decisionprovidererror",
+    "invocation_failed",
     "model",
 )
 
@@ -217,10 +218,12 @@ def _failure_table(items: Sequence[Mapping[str, Any]]) -> list[str]:
     for item in items:
         if item.get("status") not in {"failed", "error"}:
             continue
-        error = item.get("error")
-        # A failed stage without a thrown error is an assertion mismatch, which is the only
-        # bucket that belongs to the protocol itself.
-        bucket = _classify(str(error)) if isinstance(error, str) and error else BUCKET_PROTOCOL
+        # A failure often lives in a stage message rather than in ``error``: an extraction failure
+        # records ``item.error = None``. Judge the combined text so infra noise is not reported as
+        # a protocol result. Nothing to read means an assertion mismatch, which is the protocol
+        # bucket.
+        text = _failure_text(item)
+        bucket = _classify(text) if text else BUCKET_PROTOCOL
         buckets.setdefault(bucket, []).append(
             f"{item.get('caseId')}/{item.get('protocol')}"
         )
@@ -238,6 +241,25 @@ def _failure_table(items: Sequence[Mapping[str, Any]]) -> list[str]:
     if len(lines) == 4:
         lines.append("| — | 0 | 无失败项 |")
     return lines + [""]
+
+
+def _failure_text(item: Mapping[str, Any]) -> str:
+    """Return the item's error plus every failed stage message."""
+    parts: list[str] = []
+    error = item.get("error")
+    if isinstance(error, str) and error:
+        parts.append(error)
+    stages = item.get("stages")
+    if isinstance(stages, Mapping):
+        for stage in stages.values():
+            if not isinstance(stage, Mapping):
+                continue
+            if stage.get("status") not in {"failed", "error"}:
+                continue
+            message = stage.get("message")
+            if isinstance(message, str) and message:
+                parts.append(message)
+    return "\n".join(parts)
 
 
 def _classify(error: str) -> str:

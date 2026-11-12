@@ -141,3 +141,29 @@ def test_report_buckets_llm_failures_as_infra(tmp_path: Path) -> None:
     report = build_report(batch, runs_dir=tmp_path)
 
     assert "| infra | 1 | 35/a2a-t |" in report
+
+
+def test_report_reads_stage_messages_when_the_item_has_no_error(tmp_path: Path) -> None:
+    """An extraction failure records item.error=None, so the stage message decides the bucket."""
+    batch = _batch()
+    batch["items"] = [
+        {
+            "caseId": 2,
+            "protocol": "a2a-t",
+            "status": "failed",
+            "runId": None,
+            "error": None,
+            "stages": {
+                "intent": {
+                    "status": "failed",
+                    "message": "intent extraction reported llm.invocation_failed; schema defaults",
+                },
+                "validate": {"status": "failed", "message": "validation unavailable"},
+            },
+        }
+    ]
+    batch["pairs"] = []
+
+    report = build_report(batch, runs_dir=tmp_path)
+
+    assert "| infra | 1 | 2/a2a-t |" in report

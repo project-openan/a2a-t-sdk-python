@@ -1293,3 +1293,28 @@ def test_an_unknown_region_negotiation_names_no_candidate() -> None:
     assert issue is not None
     assert "not recognized" in issue.detail
     assert "A2ATestRegion" not in issue.detail
+
+
+def test_the_simulator_widens_a_half_hour_window_to_whole_hours() -> None:
+    """An operator window such as 00:00-17:30 must not fail the Task on the sample's hourly plan."""
+    from demo.nms_sim.executor import _effective_periods
+
+    rendered = _effective_periods("00:00-17:30")
+
+    periods = rendered.split("&")
+    assert periods[0] == "00:00:00-00:59:59"
+    assert periods[-1] == "17:00:00-17:59:59"
+    assert len(periods) == 18
+
+
+def test_the_simulator_keeps_a_whole_hour_window_unchanged() -> None:
+    from demo.nms_sim.executor import _effective_periods
+
+    assert _effective_periods("00:00-06:00").split("&") == [
+        "00:00:00-00:59:59",
+        "01:00:00-01:59:59",
+        "02:00:00-02:59:59",
+        "03:00:00-03:59:59",
+        "04:00:00-04:59:59",
+        "05:00:00-05:59:59",
+    ]
