@@ -1174,11 +1174,11 @@ class _RepeatedStateRuntime(_LongRunningRuntime):
         self.a2a_client = _RepeatedStateA2AClient(stable_polls)
 
 
-async def test_long_task_publishes_wait_state_on_every_poll_even_when_nothing_changes(
+async def test_long_task_does_not_publish_polled_states(
     tmp_path: Path,
     offline_config: SampleConfig,
 ) -> None:
-    """An unchanged SUBMITTED/WORKING result is still proof of life for the page."""
+    """Polling is the backup channel: its (often stale) state never reaches the demo state."""
     runtime = _RepeatedStateRuntime(stable_polls=3)
 
     async def factory(
@@ -1213,10 +1213,9 @@ async def test_long_task_publishes_wait_state_on_every_poll_even_when_nothing_ch
     )
     _, queue = run.subscribe()
 
-    first: dict[str, object] | None = None
-    second: dict[str, object] | None = None
+    polled_states: list[object] = []
     deadline = asyncio.get_running_loop().time() + 3.0
-    while asyncio.get_running_loop().time() < deadline and second is None:
+    while asyncio.get_running_loop().time() < deadline:
         try:
             frame = queue.get_nowait()
         except asyncio.QueueEmpty:
@@ -1226,20 +1225,14 @@ async def test_long_task_publishes_wait_state_on_every_poll_even_when_nothing_ch
             continue
         activity = frame.get("activity")
         detail = activity.get("detail") if isinstance(activity, dict) else None
-        if not isinstance(detail, dict) or not detail.get("state"):
-            # The handoff frame announces tracking before the first poll names a state.
-            continue
-        if first is None:
-            first = dict(detail)
-        elif int(detail.get("pollCount") or 0) > int(first.get("pollCount") or 0):
-            second = dict(detail)
+        if isinstance(detail, dict) and detail.get("state"):
+            polled_states.append(detail.get("state"))
 
     await _finish(manager, run.run_id)
 
-    assert first is not None and second is not None
-    # The state did not change between the two frames; only the poll counter advanced.
-    assert first.get("state") == second.get("state") == "TASK_STATE_WORKING"
-    assert int(second["pollCount"]) > int(first["pollCount"])
+    # Every poll reported the same WORKING state; none of them may reach the page.
+    assert polled_states == []
+    assert not [span for span in run.traces if span.get("kind") == "task_poll"]
     # Wait states are live-only: they must not grow the replay buffer of a days-long run.
     assert all(message.get("type") != "activity" for message in run.messages)
     assert run.activity is None
@@ -1307,12 +1300,8 @@ async def test_a_presentation_run_keeps_tracking_without_a_viewer(
     assert not any(
         "The remote task is" in str(entry.get("summary") or "") for entry in run.transcript.events
     )
-    polls = [span for span in run.traces if span.get("kind") == "task_poll"]
-    assert polls
-    assert all(
-        (span["actor"], span["side"], span["direction"]) == ("client", "client", "poll")
-        for span in polls
-    )
+    # Every poll is the backup channel: none of them is published to the session trace.
+    assert not [span for span in run.traces if span.get("kind") == "task_poll"]
 
 
 class _PollRuntime:

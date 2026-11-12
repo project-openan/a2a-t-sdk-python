@@ -337,23 +337,22 @@ def test_a_status_that_is_not_submitted_never_populates_the_downstream_intent(
     assert run.snapshot()["serverIntent"] is None
 
 
-def test_a_polled_task_state_is_recorded_as_a_local_snapshot(tmp_path: Path) -> None:
+def test_a_polled_task_state_is_not_published(tmp_path: Path) -> None:
+    """Polling is a backup channel: a poll can be stale, so it stays out of the demo state."""
     run = _run(tmp_path)
 
-    span = run.record_polled_task_state(
+    run.record_polled_task_state(
         task_id="task-1",
         context_id="ctx-1",
         state="TASK_STATE_WORKING",
     )
 
-    assert span["kind"] == "task_poll"
-    assert span["title"] == "Polled task state: TASK_STATE_WORKING"
-    assert (span["actor"], span["side"], span["direction"]) == ("client", "client", "poll")
-    assert span["detail"]["state"] == "TASK_STATE_WORKING"
-    # The export carries the local origin instead of a fabricated status update.
+    # The Task identity is still learned, but nothing user-visible is produced.
+    assert (run.remote_task_id, run.remote_context_id) == ("task-1", "ctx-1")
+    assert run.latest_task_state is None
+    assert not [span for span in run.traces if span.get("kind") == "task_poll"]
     assert run.transcript is not None
-    entry = run.transcript.events[-1]
-    assert (entry["entryType"], entry["kind"], entry["direction"]) == ("trace", "task_poll", "poll")
+    assert not [entry for entry in run.transcript.events if entry.get("kind") == "task_poll"]
     assert not [row for row in run.transcript.events if row.get("eventKind") == "status"]
 
 

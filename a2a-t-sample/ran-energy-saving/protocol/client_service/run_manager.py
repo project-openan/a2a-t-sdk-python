@@ -60,7 +60,12 @@ from shared.trace import (
     PHASE_DISPATCH,
     PHASE_NEGOTIATION,
 )
-from shared.trace_propagation import reset_active_trace, set_active_trace
+from shared.trace_propagation import (
+    reset_active_trace,
+    reset_vendor_span_starter,
+    set_active_trace,
+    set_vendor_span_starter,
+)
 
 from protocol.client_flow import ClientFlowResult
 from protocol.client_runtime import MODE_CONFIRM, MODE_MANUAL, build_poll_runtime
@@ -1131,9 +1136,15 @@ class RunManager:
             workflow_trace=bool(run.workflow_root_span_id),
             decision_mode=run.mode,
         )
+        # The vendor NMS joins its backend trace to the span named in our ``traceparent``. Give
+        # every outbound vendor request a real exported span under this run's root; without an
+        # exporter the header falls back to the bound run root span id.
+        span_starter = getattr(exporter, "start_vendor_span", None)
+        vendor_span_tokens = set_vendor_span_starter(span_starter)
         try:
             await self._run_with_log_context(run)
         finally:
+            reset_vendor_span_starter(vendor_span_tokens)
             reset_active_trace(trace_tokens)
 
     async def _run_with_log_context(self, run: RunState) -> None:
@@ -1802,7 +1813,9 @@ class RunManager:
                         run.detached = False
                         _LOGGER.info("run %s has a viewer again; resuming fast tracking", run.run_id)
                         interval = watched_interval
-                        publish_wait_state(last_state or "", detached=False)
+                        # The frame reports tracking, not a polled Task state: polls stay out of
+                        # the demo state entirely.
+                        publish_wait_state("", detached=False)
                     last_watched = time.monotonic()
                 elif not run.detached and time.monotonic() - last_watched >= _DETACHED_TRACKING_GRACE_SECONDS:
                     run.detached = True
@@ -1822,7 +1835,7 @@ class RunManager:
                         },
                     )
                     interval = background_interval
-                    publish_wait_state(last_state or "", detached=True)
+                    publish_wait_state("", detached=True)
                 interval = watched_interval if run.subscribers else background_interval
             try:
                 polled = await self._poll_remote_task(run, task_id)
@@ -1830,18 +1843,14 @@ class RunManager:
                 poll_errors = 0
                 if polled.state_name and polled.state_name != last_state:
                     last_state = polled.state_name
-                    state_since = now_iso()
-                    # Polling observes the Task; it never fabricates a status update the peer
-                    # did not send. The local snapshot row is explicitly client-origin.
+                    # Polling is the backup channel: the vendor's push is authoritative and a
+                    # poll often returns a state that was already superseded. The observation is
+                    # logged only, never published to the trace or the demo state.
                     run.record_polled_task_state(
                         task_id=task_id,
                         context_id=polled.context_id or result.context_id,
                         state=polled.state_name,
                     )
-                if polled.state_name:
-                    # Every poll publishes, including an unchanged one: a stable SUBMITTED state
-                    # is still proof that the client is alive and still checking.
-                    publish_wait_state(polled.state_name)
                 if polled.state_name == "TASK_STATE_INPUT_REQUIRED" and run.protocol == PROTOCOL_PURE:
                     # The initial stream may have closed before the OSS Agent relayed the vendor
                     # question. Open the same human decision instead of waiting forever.
@@ -1858,7 +1867,7 @@ class RunManager:
                     has_report=bool(polled.reports),
                 )
                 if final_state is not None:
-                    publish_wait_state(polled.state_name or last_state or "", status="done")
+                    publish_wait_state("", status="done")
                     return replace(
                         result,
                         final_state=final_state,
@@ -1874,8 +1883,6 @@ class RunManager:
                 # The vendor NMS delivers progress through its push/webhook channel, so a poll
                 # failure costs at most one observation, not the run.
                 _LOGGER.warning("task poll failed for run %s", run.run_id, exc_info=True)
-                # Surface the retry: a silent failure looks exactly like an idle task.
-                publish_wait_state(last_state or "")
                 if poll_errors >= _MAX_CONSECUTIVE_POLL_ERRORS:
                     # The Task is no longer observable (expired/foreign/404). Keeping the run
                     # ``running`` forever also kept old recovered snapshots in the current UI.
@@ -1883,7 +1890,7 @@ class RunManager:
                         f"The remote Task {task_id} could not be observed after "
                         f"{poll_errors} consecutive attempts."
                     )
-                    publish_wait_state(last_state or "", status="failed")
+                    publish_wait_state("", status="failed")
                     return replace(result, final_state=FINAL_STATE_TASK_FAILED)
             # Sleep in one-second slices so a disappearing viewer is noticed within the grace
             # window instead of after a full background poll interval.

@@ -142,7 +142,7 @@ class RunState:
         cancel_reason: error label of a non-operator stop (handover); ``None`` for the defaults.
         remote_task_id: last Task id observed on the remote side (cancel target).
         remote_context_id: last Task context id observed on the remote side.
-        latest_task_state: last Task state observed on the remote side.
+        latest_task_state: last Task state the remote side *pushed*; a poll never updates it.
         server_intent: structured Task payload the downstream returned with ``TASK_STATE_SUBMITTED``,
             i.e. the downstream's own understanding of the Task-T (``None`` when it returns none).
         intent_mode: ``processed`` or ``raw`` for this run.
@@ -817,39 +817,20 @@ class RunState:
         task_id: str,
         context_id: str | None,
         state: str,
-    ) -> dict[str, object]:
-        """Record one local poll snapshot of the remote Task.
+    ) -> None:
+        """Record one local poll observation of the remote Task without publishing it.
 
-        Polling is an observation, not a wire event. The row is explicitly local
-        (``actor=client`` / ``direction=poll``) so the timeline and the wire inspector never
-        present a fabricated ``statusUpdate`` the peer did not send. The authoritative state is
-        still persisted for the Run Explorer.
+        Polling is a backup channel: the vendor's push is authoritative and a poll can return a
+        state that was already superseded. The observation therefore never reaches the session
+        trace, the task snapshots or the run's broadcast state; it only refreshes the Task
+        identity (a bare status event may omit ``taskId``) and the debug log.
         """
         self.remote_task_id = task_id
         if context_id:
             self.remote_context_id = context_id
-        self.latest_task_state = state
-        span = self.emit_trace(
-            kind="task_poll",
-            phase=PHASE_EXECUTION,
-            title=f"Polled task state: {state}",
-            actor="client",
-            side="client",
-            direction="poll",
-            context_id=context_id,
-            task_id=task_id,
-            detail={"state": state, "origin": "poll"},
+        _LOGGER.debug(
+            "run %s poll observed %s for task %s (not published)", self.run_id, state, task_id
         )
-        self._persist_task_snapshot(
-            {
-                "kind": "task_poll",
-                "task_id": task_id,
-                "context_id": context_id,
-                "state": state,
-                "origin": "poll",
-            }
-        )
-        return span
 
     def record_intent(self, detail: Mapping[str, object]) -> None:
         """Capture the business intent carried by one ``intent_processed`` trace row."""
