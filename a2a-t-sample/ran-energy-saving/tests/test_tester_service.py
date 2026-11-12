@@ -938,6 +938,33 @@ async def test_a_live_a2a_t_modify_baseline_uses_the_live_decision_provider(
     assert runs.calls[0]["scripted_decisions"] == ()
 
 
+async def test_a_negotiation_case_without_a_parsed_reply_never_starts_a_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing scripted reply is reported as case data before any Task is created."""
+    from demo.web.tester import service as tester_service
+
+    runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED))
+    manager = _manager(tmp_path, runs)
+    monkeypatch.setattr(tester_service, "a2at_decisions", lambda case: [])
+    created = manager.create(
+        case_ids=[32],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="negotiate",
+        approval=None,
+        timeout_seconds=2,
+        decision_mode="scripted",
+    )
+
+    await manager.start(str(created["batchId"]))
+    snapshot = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = snapshot["items"][0]
+    assert isinstance(item, Mapping)
+    assert item["status"] == CASE_ERROR
+    assert runs.calls == []
+
+
 async def test_a_negotiating_baseline_is_recorded_as_failed_with_its_run(tmp_path: Path) -> None:
     """A baseline that opens a negotiation is not continuable; the export must still name it."""
 

@@ -839,8 +839,12 @@ async def test_information_accept_maps_the_single_operator_answer_to_the_server_
     assert "Region B" in prompt_client.accept_data[0].content.items[0].value
 
 
-async def test_information_accept_falls_back_to_the_sdk_text_extraction() -> None:
-    """With no server option the one operator text still becomes a Task-T locally."""
+async def test_information_accept_carries_the_operator_text_as_one_item() -> None:
+    """With no server option the one operator text becomes a structured result item.
+
+    The accept stays on the from-data path: the reply is not parsed into fields and no text
+    extraction is asked to recover it.
+    """
     decision = NegotiationDecision(action="accept", rationale="Region B")
 
     result, _transport, prompt_client = await _run(
@@ -852,7 +856,10 @@ async def test_information_accept_falls_back_to_the_sdk_text_extraction() -> Non
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
     assert prompt_client.task_prompts[-1] == "Region B"
     assert prompt_client.refill_data == []
-    assert "Region B" in prompt_client.accept_texts[0]
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, InformationEndingContent)
+    assert [(item.name, item.value) for item in content.items] == [("Region B", None)]
+    assert prompt_client.accept_texts == []
 
 
 async def test_information_accept_discards_an_invalid_model_filled_target() -> None:
@@ -1172,6 +1179,30 @@ async def test_a_dropped_information_answer_is_not_replaced_by_the_baseline() ->
     assert [(item.name, item.value) for item in content.items] == [
         ("guaranteedThroughputTarget", "10 Mbps during the outage")
     ]
+
+
+async def test_an_information_accept_carries_the_reply_text_as_one_item() -> None:
+    """A recorded answer that names no Task-T field is still the requested information.
+
+    The accept must stay on the deterministic from-data path: the reply is carried as one result
+    item, never parsed into fields and never handed to a text extraction.
+    """
+    reply = "The region is A2ATestRegion."
+    decision = NegotiationDecision(action="accept", rationale=reply)
+    prompt_client = FakePromptClient()
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=ScriptedTransport([[propose_event("information", 1)], _task_completed_batch()]),
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields=dict(_INTENT_FIELDS),
+    )
+
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, InformationEndingContent)
+    assert [(item.name, item.value) for item in content.items] == [(reply, None)]
+    assert prompt_client.accept_texts == []
 
 
 async def test_a_dropped_accept_value_is_traced() -> None:

@@ -25,14 +25,19 @@ _INFORMATION = "Information Negotiation Result"
 def a2at_decisions(case: Mapping[str, object]) -> list[NegotiationDecision]:
     """Turn the A2A-T Q-column replies of one case into ordered client decisions.
 
-    A single workbook reply can carry both a target and a feasibility section; the order of the
-    sections is preserved because the server sends its proposals in that order. The current corpus
-    has no such reply (id 34 was refreshed to a feasibility-only answer), but the vendor can still
-    return one.
+    Two reply formats coexist in the corpus: the older heading form (``## Target/Feasibility/
+    Information Negotiation Result``) and a bare natural-language answer ("Reduce throughput
+    target from 5Mbps to 2Mbps..."). The heading form can carry several sections in one round; the
+    bare form is always one answer. A bare answer is replayed as an ``accept`` because an A2A-T
+    ``accept`` is the neutral "here is the information you asked for" performative, and the OSP Q
+    column is the expected reply. The structured content is still built downstream by the client
+    flow and the SDK from-data generators; the tester never renders protocol text itself.
     """
     decisions: list[NegotiationDecision] = []
     for text in _negotiation_rounds(case, "a2a-t"):
+        matched = False
         if _TARGET in text:
+            matched = True
             detail = _section_detail(text, _TARGET)
             decisions.append(
                 NegotiationDecision(
@@ -42,6 +47,7 @@ def a2at_decisions(case: Mapping[str, object]) -> list[NegotiationDecision]:
                 )
             )
         if _FEASIBILITY in text:
+            matched = True
             detail = _section_detail(text, _FEASIBILITY)
             decisions.append(
                 NegotiationDecision(
@@ -51,6 +57,7 @@ def a2at_decisions(case: Mapping[str, object]) -> list[NegotiationDecision]:
                 )
             )
         if _INFORMATION in text:
+            matched = True
             detail = _section_detail(text, _INFORMATION)
             decisions.append(
                 NegotiationDecision(
@@ -58,6 +65,18 @@ def a2at_decisions(case: Mapping[str, object]) -> list[NegotiationDecision]:
                     rationale=detail or "Accept the information negotiation.",
                 )
             )
+        if matched or not text.strip():
+            continue
+        # Bare natural-language reply: the text is the answer the operator would have sent.
+        detail = text.strip()
+        decisions.append(
+            NegotiationDecision(
+                action="accept",
+                rationale=detail,
+                confirmed_intent=detail,
+                feasibility_summary=detail,
+            )
+        )
     return decisions
 
 

@@ -3203,9 +3203,9 @@ def _typed_accept_content(
 ) -> NegotiationEndingContent | None:
     """Build the typed ending content of an accept, or ``None`` when the flow cannot type it.
 
-    ``None`` keeps the from-text fallback for content the flow does not own (an operator's free
-    answer the sample cannot map onto Task-T parameters). Every branch here is deterministic: the
-    values come from the decision, the agreed Task-T parameters or the proposal, never from a model
+    ``None`` keeps the from-text fallback for content the flow does not own (a reply with no text
+    and no Task-T parameter the sample can map). Every branch here is deterministic: the values
+    come from the decision, the agreed Task-T parameters or the proposal, never from a model
     re-reading the client's own accept text.
     """
     if kind is NegotiationKind.INFORMATION:
@@ -3221,7 +3221,15 @@ def _typed_accept_content(
                 continue
             value = normalize_text(raw) if name == RATE_TARGET_FIELD else None
             items.append(NegotiationItem(name, value or str(raw)))
-        return InformationEndingContent(NegotiationConclusion.ACCEPT, items) if items else None
+        if items:
+            return InformationEndingContent(NegotiationConclusion.ACCEPT, items)
+        # A recorded answer that names no Task-T field is still the information the server asked
+        # for: carry the reply itself as one result item. That keeps the accept on the deterministic
+        # from-data path instead of a text extraction, and it never parses the reply into fields.
+        reply = (decision.rationale or "").strip()
+        if reply:
+            return InformationEndingContent(NegotiationConclusion.ACCEPT, [NegotiationItem(reply, None)])
+        return None
     if kind is NegotiationKind.TARGET:
         confirmation = (decision.confirmed_intent or "").strip()
         if confirmation and _contradicts_agreed_target(confirmation, agreed_target, baseline):

@@ -46,6 +46,7 @@ from protocol.client_runtime import MODE_AUTO, MODE_SCRIPTED
 from protocol.client_service import STATUS_FAILED, RunManager, RunState
 from protocol.run_metrics import build_run_metrics
 from shared.config import DISCOVERY_NMS, MODEL_MODE_LIVE, MODEL_MODE_OFFLINE
+from shared.models import NegotiationDecision
 from shared.run_constants import (
     FINAL_STATE_DECISION_UNGROUNDED,
     FINAL_STATE_INPUT_INVALID,
@@ -929,6 +930,17 @@ class EvalBatchManager:
         defaults = self._protocol_defaults.get(runtime_protocol, {})
         transport = defaults.get("transport", "sse")
         discovery = defaults.get("discovery", "direct")
+        negotiation_expected = _negotiation_expected(case, PROTOCOL_A2A_T)
+        decisions = a2at_decisions(case) if runtime_protocol == RUNTIME_A2A_T else []
+        answers = pure_answers(case) if runtime_protocol == PROTOCOL_PURE else []
+        reply_error = _scripted_reply_error(case, runtime_protocol, decisions, answers)
+        if reply_error is not None:
+            # The reply is case data. Failing before the run keeps the failure attributable and,
+            # for a Modify, avoids creating a baseline Task the run can never continue.
+            for stage in stages:
+                item.stages[stage] = StageResult(stage, STAGE_ERROR, reply_error)
+            item.status = CASE_ERROR
+            return
         # A blocked A2A-T request never reaches the NMS, so it has nothing to continue; without a
         # follow-up, seeding would only create a Task that the case then refuses to modify.
         blocked_without_followup = (
@@ -958,11 +970,9 @@ class EvalBatchManager:
                 target_server_task_id = str(baseline["taskId"])
                 target_server_context_id = str(baseline["contextId"])
 
-        decisions = a2at_decisions(case) if runtime_protocol == RUNTIME_A2A_T else []
-        answers = pure_answers(case) if runtime_protocol == PROTOCOL_PURE else []
         conversation_id, idempotency_key = self._run_identity(batch, index, item)
         mode = self._mode_for(batch, item.protocol)
-        if runtime_protocol == RUNTIME_A2A_T and _negotiation_expected(case, PROTOCOL_A2A_T):
+        if runtime_protocol == RUNTIME_A2A_T and negotiation_expected:
             # The OSP Q column is the expected negotiation dialogue. Replaying it verifies the
             # protocol path deterministically; the SDK intent/Task-T stages still run in live mode.
             mode = MODE_SCRIPTED
@@ -984,7 +994,7 @@ class EvalBatchManager:
                 "caseName": item.name,
                 # A rate-less site-level negotiation is expected to reach the server, which
                 # proposes the missing value; only the corpus' negotiation cases get this pass.
-                "negotiationExpected": _negotiation_expected(case, PROTOCOL_A2A_T),
+                "negotiationExpected": negotiation_expected,
             },
             target_task_id=target_task_id,
             target_context_id=target_context_id,
@@ -2281,6 +2291,26 @@ def _negotiation_expected(case: Mapping[str, Any], protocol: str) -> bool:
     block = protocols.get(protocol) if isinstance(protocols, Mapping) else None
     negotiation = block.get("negotiation") if isinstance(block, Mapping) else None
     return bool(isinstance(negotiation, Mapping) and negotiation.get("expected"))
+
+
+def _scripted_reply_error(
+    case: Mapping[str, Any],
+    runtime_protocol: str,
+    decisions: Sequence[NegotiationDecision],
+    answers: Sequence[str],
+) -> str | None:
+    """Return why a negotiation case has no reply to replay, or ``None`` when it has one.
+
+    A case that expects a negotiation but carries no Q/P-column answer cannot be replayed.
+    Starting the run anyway would send the request and then fail at the first proposal with an
+    exhausted script, leaving a remote Task stuck in ``INPUT_REQUIRED`` and reporting a protocol
+    failure for what is missing case data.
+    """
+    if runtime_protocol == RUNTIME_A2A_T and _negotiation_expected(case, PROTOCOL_A2A_T) and not decisions:
+        return "用例 Q 列协商回复为空或无法解析，未启动 run。"
+    if runtime_protocol == PROTOCOL_PURE and _negotiation_expected(case, PROTOCOL_A2A) and not answers:
+        return "用例 P 列纯 A2A 回复为空，未启动 run。"
+    return None
 
 
 def _case_runner(case: Mapping[str, Any] | None) -> Mapping[str, Any]:

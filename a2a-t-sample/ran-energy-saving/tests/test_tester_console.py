@@ -670,6 +670,64 @@ def test_a2at_decision_parser_reads_a_feasibility_reply() -> None:
     assert "Reduce throughput target" in str(decisions[0].feasibility_summary)
 
 
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Reduce throughput target from 10Mbps to 2Mbps for the power outage period.",
+        "Reduce throughput target from 5Mbps to 2Mbps for the power outage period.",
+        "LNR_KPI_7745 reduces its throughput target from 10 Mbps to 2 Mbps during the power outage.",
+        "Agree to reduce the target from 5Mbps to 2Mbps.",
+    ],
+)
+def test_a2at_decision_parser_accepts_a_bare_natural_language_reply(reply: str) -> None:
+    """The refreshed corpus' Q column is a bare reply; it is still one accept decision."""
+    case = {
+        "expect": {
+            "protocols": {
+                "a2a-t": {"negotiation": {"expected": True, "rounds": [reply]}}
+            }
+        }
+    }
+
+    decisions = a2at_decisions(case)
+
+    assert len(decisions) == 1
+    assert decisions[0].action == "accept"
+    assert decisions[0].rationale == reply
+    assert decisions[0].confirmed_intent == reply
+    assert decisions[0].feasibility_summary == reply
+
+
+def test_a_negotiation_case_without_a_scripted_reply_fails_before_the_run() -> None:
+    """A missing Q/P-column reply is case data, not a protocol failure at the first proposal."""
+    from demo.web.tester.service import _scripted_reply_error
+
+    empty = {
+        "expect": {
+            "protocols": {
+                "a2a-t": {"negotiation": {"expected": True, "rounds": []}},
+                "a2a": {"negotiation": {"expected": True, "rounds": []}},
+            }
+        }
+    }
+    reply = {
+        "expect": {
+            "protocols": {
+                "a2a-t": {
+                    "negotiation": {
+                        "expected": True,
+                        "rounds": ["Agree to reduce the target from 5Mbps to 2Mbps."],
+                    }
+                }
+            }
+        }
+    }
+
+    assert _scripted_reply_error(empty, PROTOCOL_A2A_T, [], []) is not None
+    assert _scripted_reply_error(empty, PROTOCOL_PURE, [], []) is not None
+    assert _scripted_reply_error(reply, PROTOCOL_A2A_T, a2at_decisions(reply), []) is None
+
+
 def test_pure_answers_replay_the_p_column() -> None:
     answers = pure_answers(CASES[1])
     assert len(answers) == 1
