@@ -1,8 +1,9 @@
 /** Structured intent and the 24-hour guaranteed-throughput chart.
  *
- * The intent is the OSS's own structured reading of the engineer's request; the Task-T is the
- * later wire mapping and is not used here. Parsing is deliberately small: it accepts both the
- * Task-T ``{HH:MM-HH:MM,NMbps}`` notation and the concise ``HH:MM–HH:MM at N Mbps`` wording.
+ * The intent is the client's reading of the engineer's request: the rendered Task-T once the
+ * A2A-T flow produces it (the wire truth), otherwise the business intent layer or the request
+ * itself. Parsing is deliberately small: it accepts the Task-T ``{HH:MM-HH:MM,NMbps}`` notation
+ * and the concise ``HH:MM–HH:MM at N Mbps`` wording.
  */
 
 import { clear, el, isObject, svg } from "./dom.js";
@@ -145,6 +146,7 @@ export function renderIntent(
   {
     update,
     rawRequest = null,
+    normalizedText = null,
     source = null,
     warnings = [],
     missingFields = [],
@@ -158,7 +160,7 @@ export function renderIntent(
     container.append(
       businessBlock(copy, {
         rawRequest,
-        normalizedText: intentText,
+        normalizedText: normalizedText ?? intentText,
         source,
         warnings,
         missingFields,

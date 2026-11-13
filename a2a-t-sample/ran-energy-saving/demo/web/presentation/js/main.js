@@ -21,6 +21,7 @@ import {
   continuityModel,
   createState,
   endingOf,
+  intentPanelView,
   isModifiableTaskState,
   keepsAttemptChain,
   modifyStateLabel,
@@ -1831,14 +1832,18 @@ function renderIntentPanel() {
   if (ui.renderingIntent) return;
   ui.renderingIntent = true;
   try {
-    const text = ui.view.intentText || els.requestText.value;
+    // The A2A-T flow parses its own rendered Task-T once it exists; before that the panel shows
+    // the operator's request and the business intent layer.
+    const panel = intentPanelView(ui.view);
+    const text = panel.intentText || els.requestText.value;
     renderIntent(els.intentBody, text, ui.copy, {
       rawRequest: ui.view.rawRequest,
+      normalizedText: panel.normalizedText || text,
       source: ui.view.intentSource,
       warnings: ui.view.intentWarnings || [],
       missingFields: ui.view.businessIntent?.missingFields || [],
       conflicts: ui.view.businessIntent?.conflicts || [],
-      businessIntent: ui.view.businessIntent,
+      businessIntent: panel.businessIntent,
       validation: ui.view.validation,
     });
   } finally {

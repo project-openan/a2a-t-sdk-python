@@ -14,6 +14,7 @@ import {
   createState,
   endingOf,
   executionSteps,
+  intentPanelView,
   isModifiableTaskState,
   keepsAttemptChain,
   modifyStateLabel,
@@ -2158,6 +2159,111 @@ applyFrame(pureIntent, {
 });
 assert.equal(pureIntent.rawRequest, "raw text");
 assert.equal(pureIntent.normalizedRequest, "normalized text");
+
+// --- The intent panel follows the rendered Task-T -------------------------
+
+// The operator typed a sentence whose wording the page cannot parse. Until the Task-T exists the
+// panel shows the request; once it is rendered the facts come from the wire payload.
+const promptPanel = createState();
+applyFrame(promptPanel, {
+  type: "run_started",
+  runId: "task-t-panel",
+  mode: "auto",
+  userRequest: "在A2ATestRegion 从 00:00 到 06:00 保障 30Mbps。",
+  intentMode: "raw",
+});
+assert.deepEqual(intentPanelView(promptPanel), {
+  intentText: "在A2ATestRegion 从 00:00 到 06:00 保障 30Mbps。",
+  normalizedText: "在A2ATestRegion 从 00:00 到 06:00 保障 30Mbps。",
+  businessIntent: null,
+});
+applyFrame(promptPanel, {
+  type: "trace",
+  event: {
+    seq: 1,
+    phase: "task_prompt",
+    kind: "task_prompt_rendered",
+    title: "Task-T prompt rendered",
+    detail: {
+      promptText:
+        "## Operation Type\nCreate\n\n## Task Object\nThe area is A2ATestRegion.\n\n" +
+        "## Task Context\nTime-segment-based guaranteed throughput target: {00:00-06:00,30Mbps}.",
+    },
+  },
+});
+const promptFacts = intentPanelView(promptPanel);
+assert.ok(promptFacts.intentText.startsWith("## Operation Type"));
+// The business block keeps showing the operator's own text, not the Task-T.
+assert.equal(promptFacts.normalizedText, "在A2ATestRegion 从 00:00 到 06:00 保障 30Mbps。");
+const parsedTaskT = parseIntent(promptFacts.intentText, promptFacts.businessIntent);
+assert.equal(parsedTaskT.area, "A2ATestRegion");
+assert.deepEqual(parsedTaskT.slots, [{ start: 0, end: 360, rate: 30 }]);
+
+// A passed validation re-confirms the panel. Its prompt copy is truncated, so it must never
+// replace the full rendered Task-T.
+applyFrame(promptPanel, {
+  type: "trace",
+  event: {
+    seq: 2,
+    phase: "task_prompt",
+    kind: "task_validation",
+    detail: { verdict: "passed", promptText: "## Operation Type\nCreate", errors: [] },
+  },
+});
+assert.equal(promptPanel.validation.verdict, "passed");
+assert.ok(intentPanelView(promptPanel).intentText.includes("## Task Context"));
+
+// The Task-T is the wire truth: once rendered, the business intent's own reading no longer
+// overrides the facts (it stays available to the business block).
+const processedPanel = createState();
+applyFrame(processedPanel, {
+  type: "run_started",
+  runId: "task-t-wins",
+  mode: "auto",
+  userRequest: "在区域 A 从 00:00 到 06:00 保障 10Mbps。",
+  intentMode: "processed",
+});
+applyFrame(processedPanel, {
+  type: "trace",
+  event: {
+    seq: 1,
+    phase: "task_prompt",
+    kind: "intent_processed",
+    detail: {
+      normalizedText: "在区域 A 从 00:00 到 06:00 保障 10Mbps。",
+      intent: {
+        region: "Region A",
+        operationType: "Create",
+        sites: [],
+        windows: ["{00:00-06:00,10Mbps}"],
+      },
+      warnings: [],
+    },
+  },
+});
+assert.equal(intentPanelView(processedPanel).businessIntent.region, "Region A");
+applyFrame(processedPanel, {
+  type: "trace",
+  event: {
+    seq: 2,
+    phase: "task_prompt",
+    kind: "task_prompt_rendered",
+    detail: {
+      promptText:
+        "## Operation Type\nCreate\n\n## Task Object\nThe area is A2ATestRegion.\n\n" +
+        "## Task Context\nTime-segment-based guaranteed throughput target: {00:00-06:00,30Mbps}.",
+    },
+  },
+});
+const processedFacts = intentPanelView(processedPanel);
+assert.equal(processedFacts.businessIntent, null);
+assert.equal(
+  parseIntent(processedFacts.intentText, processedFacts.businessIntent).area,
+  "A2ATestRegion",
+);
+assert.deepEqual(parseIntent(processedFacts.intentText, processedFacts.businessIntent).slots, [
+  { start: 0, end: 360, rate: 30 },
+]);
 
 // Langfuse: the trace id arrives with run_started, the URL in a late langfuse frame.
 assert.equal(copy.result.openInLangfuse, "在 Langfuse 中打开");

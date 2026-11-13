@@ -433,6 +433,25 @@ function applyBusinessIntent(state, detail) {
   state.businessIntent = document;
 }
 
+/** Return the text and structured intent the understood-intent panel uses.
+ *
+ * In A2A-T the rendered Task-T is the wire truth, so the panel parses it as soon as it exists and
+ * the facts/chart match what the server received. Before that (and in standard A2A, which never
+ * renders one) the panel keeps the operator request and the business intent layer. Once the Task-T
+ * is rendered the business intent's own region/sites/windows never override the parsed facts; the
+ * business block still shows its source, warnings, missing fields and conflicts.
+ */
+export function intentPanelView(state) {
+  if (!isObject(state)) return { intentText: "", normalizedText: "", businessIntent: null };
+  const requestText = typeof state.intentText === "string" ? state.intentText : "";
+  const taskT = typeof state.taskTPrompt === "string" ? state.taskTPrompt : "";
+  return {
+    intentText: taskT || requestText,
+    normalizedText: requestText,
+    businessIntent: taskT ? null : state.businessIntent,
+  };
+}
+
 function applyEvent(state, entry) {
   if (!isObject(entry)) return state;
   const seq = entry.seq;
@@ -710,8 +729,7 @@ function applyTrace(state, span) {
     applyBusinessIntent(state, detail);
   }
   if (kind === "task_prompt_rendered" && detail && typeof detail.promptText === "string") {
-    // The rendered prompt is the Task-T wire payload. The OSS intent panel shows the engineer's
-    // own structured intent, not the Task-T; the wire inspector opens the prompt when needed.
+    // The rendered prompt is the Task-T wire payload; the intent panel parses it once it exists.
     state.taskTPrompt = detail.promptText;
   }
   if (kind === "task_validation" && detail) {
@@ -727,6 +745,11 @@ function applyTrace(state, span) {
       attempts: Number.isInteger(detail.attempts) ? detail.attempts : 1,
       phase: typeof span.phase === "string" ? span.phase : null,
     };
+    // A passed verdict re-confirms the panel after a retry. The validation copy is truncated, so
+    // it only fills in when no rendered Task-T was recorded; it never replaces the full payload.
+    if (!state.taskTPrompt && typeof detail.promptText === "string" && detail.promptText) {
+      state.taskTPrompt = detail.promptText;
+    }
   }
   if (kind === "tool" && detail && typeof detail.toolName === "string") {
     state.nmsTool = detail.toolName;
