@@ -286,8 +286,9 @@ operator request → [processed] ADK intent agent (ProcessedIntent: display / ap
 - The negotiation accept is built from the parsed intent plus what the ADK decision agent puts in
   `filled_params`; the decision is authoritative and the sample fabricates no business value when
   the model omits one.
-- The sample mounts a small `prompt_resources/` overlay through `A2AT_PROMPT_SOURCE_TYPE=local_file`.
-  It refines this scenario's slot schema only (rate targets belong in Task Context, a missing goal
+- By default the SDK reads its packaged `prompt_resources/` bundle, the shared slot schema. Set
+  `A2AT_SAMPLE_PROMPT_OVERLAY=1` to mount the sample's small `prompt_resources/` overlay instead:
+  it refines this scenario's slot schema only (rate targets belong in Task Context, a missing goal
   is null rather than a "Not provided" string); every other SDK resource still comes from the
   packaged bundle.
 - A2A keeps the same story inside the OSS Agent: the engineer client sends the raw request,

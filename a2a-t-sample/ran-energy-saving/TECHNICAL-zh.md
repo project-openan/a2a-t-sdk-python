@@ -533,10 +533,10 @@ OperatorRequest → IntentProcessor → ProcessedIntent → 规范化文本 / �
   A2A-T 流程对**内置场景**拿到**规范化文本**并严格从中生成 Task-T（禁用 `initial_data` 结构化快路径）；
   **自由文本**（非空 `userRequest`）则把操作员原文交给 SDK，意图层只用于展示/审批，不做二次改写，
   这样不受控的测试输入也走同一套通用 slot 管线。`plain` 流程拿到 `plainText`。
-- 样例通过 `A2AT_PROMPT_SOURCE_TYPE=local_file` 挂载 `prompt_resources/`。overlay 只包含本场景
-  中英文 slot schema；模板、提示词、错误目录及其他场景仍来自打包 SDK 资源。细化后的 schema 明确
-  速率/吞吐/用户体验目标归 `task_context`，缺失目标用 null（不写 `Not provided`），并要求任务描述
-  同时格式化目标与预期输出占位符。
+- SDK prompt 源默认使用打包资源；设置 `A2AT_SAMPLE_PROMPT_OVERLAY=1` 才挂载样例的
+  `prompt_resources/`。overlay 只包含本场景中英文 slot schema；模板、提示词、错误目录及其他场景
+  仍来自打包 SDK 资源。细化后的 schema 明确速率/吞吐/用户体验目标归 `task_context`，缺失目标用
+  null（不写 `Not provided`），并要求任务描述同时格式化目标与预期输出占位符。
 - A2A 由 OSS Agent 处理原文，在外层 Task 的 `metadata.intentProcessed` 上发布意图，再把
   `plainText` 转发给 RAN；`a2a_request_text` 是该跳的唯一选择器。
 - Gateway 的入站 A2A 文本一律视为 raw，进入同一处理层。

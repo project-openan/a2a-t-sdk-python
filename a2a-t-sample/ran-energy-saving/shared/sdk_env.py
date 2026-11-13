@@ -102,6 +102,9 @@ def prepare_sdk_env(
     scripted provider; live mode keeps the SDK endpoint values of the source file and fills any
     missing one from the ADK model configuration, so both SDK and ADK address the same endpoint.
 
+    The SDK prompt source is ``packaged`` unless ``config.prompt_overlay`` is set; an inherited
+    ``local_file`` root is dropped so the packaged slot schema stays the shared baseline.
+
     Args:
         config: resolved sample configuration.
         env_path: source ``.env``; defaults to ``$CWD/.env``.
@@ -150,11 +153,16 @@ def prepare_sdk_env(
             "A2AT_LLM_MAX_ATTEMPTS": str(config.llm_max_attempts),
         }
     )
-    if SAMPLE_PROMPT_RESOURCES.is_dir():
+    if config.prompt_overlay and SAMPLE_PROMPT_RESOURCES.is_dir():
         # The overlay refines the sample's own slot schema (placement rules); the SDK's packaged
         # prompts and every other resource still win, so the generic conversion contract is intact.
         values["A2AT_PROMPT_SOURCE_TYPE"] = "local_file"
         values["A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR"] = str(SAMPLE_PROMPT_RESOURCES)
+    else:
+        # Deterministic packaged baseline: do not inherit a stale local_file/root from the source
+        # .env or the shell. A2AT_SAMPLE_PROMPT_OVERLAY=1 is the explicit opt-in.
+        values["A2AT_PROMPT_SOURCE_TYPE"] = "packaged"
+        values.pop("A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR", None)
     temp_dir = Path(tempfile.mkdtemp(prefix=prefix))
     target = temp_dir / ".env"
     target.write_text(

@@ -238,7 +238,8 @@ HTTP 503 取消应答。
   后续 A2A-T 协商仍然会发生。
 - 协商 accept 由解析出的意图加上 ADK 决策 agent 的 `filled_params` 组成；以决策为准，模型漏填时
   样例不编造业务值。
-- 样例通过 `A2AT_PROMPT_SOURCE_TYPE=local_file` 挂载一个很小的 `prompt_resources/` overlay，
+- 默认使用 SDK 打包的 `prompt_resources/`（共享 slot schema）。设置
+  `A2AT_SAMPLE_PROMPT_OVERLAY=1` 才挂载样例自己的小 `prompt_resources/` overlay，
   只细化本场景的 slot schema（速率目标归 Task Context；缺失目标用 null，不写 "Not provided"）；
   其余 SDK 资源仍来自打包资源。
 - A2A 把同样的处理放在 OSS Agent 内：工程师客户端发送原文，OSS Agent 解析并发布意图，

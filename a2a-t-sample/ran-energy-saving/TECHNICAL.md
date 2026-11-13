@@ -644,12 +644,12 @@ OperatorRequest → IntentProcessor → ProcessedIntent → normalized text / pl
   text: the intent layer is a display/approval aid there, not a second rewrite, so input the test
   team does not control still goes through the generic slot pipeline. The `plain` flow receives
   `plainText`.
-- The sample mounts `prompt_resources/` through `A2AT_PROMPT_SOURCE_TYPE=local_file`. The overlay
-  contains only this scenario's slot schema (English and Chinese); templates, prompts, errors and
-  every other scenario still resolve from the packaged SDK bundle. The refined schema states that
-  a rate/throughput/user-experience target belongs to `task_context`, that a missing goal is null
-  (never the literal `Not provided`), and that the description formats the target and expected
-  output placeholders too.
+- The SDK prompt source is the packaged bundle by default. `A2AT_SAMPLE_PROMPT_OVERLAY=1` mounts
+  the sample's `prompt_resources/` instead. The overlay contains only this scenario's slot schema
+  (English and Chinese); templates, prompts, errors and every other scenario still resolve from the
+  packaged SDK bundle. The refined schema states that a rate/throughput/user-experience target
+  belongs to `task_context`, that a missing goal is null (never the literal `Not provided`), and
+  that the description formats the target and expected output placeholders too.
 - A2A sends the raw request to the OSS Agent, which runs its own processor, publishes the intent on
   the outer Task (`metadata.intentProcessed`) and forwards `plainText` to RAN. `a2a_request_text`
   is the single selector of that hop.

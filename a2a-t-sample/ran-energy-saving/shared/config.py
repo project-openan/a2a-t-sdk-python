@@ -58,6 +58,9 @@ SUPPORTED_PRE_SEND_VALIDATION = (
     PRE_SEND_VALIDATION_ALWAYS,
 )
 DEFAULT_PRE_SEND_VALIDATION = PRE_SEND_VALIDATION_ON
+#: Mount the sample's ``prompt_resources/`` overlay (its ``slot.json`` deltas). Off by default: the
+#: SDK's packaged bundle is the shared baseline, and a tuned sample overlay is an explicit opt-in.
+DEFAULT_PROMPT_OVERLAY = False
 
 #: Conversation fields of a pure A2A follow-up. The vendor may reject ``taskId``; the yellow-zone
 #: run can switch to ``context`` without a code change.
@@ -111,6 +114,7 @@ DISCOVERY_ENV_KEY = "A2AT_SAMPLE_DISCOVERY"
 TRANSPORT_ENV_KEY = "A2AT_SAMPLE_TRANSPORT"
 INTENT_MODE_ENV_KEY = "A2AT_SAMPLE_INTENT_MODE"
 PRE_SEND_VALIDATION_ENV_KEY = "A2AT_SAMPLE_PRE_SEND_VALIDATION"
+PROMPT_OVERLAY_ENV_KEY = "A2AT_SAMPLE_PROMPT_OVERLAY"
 
 #: Run Explorer detail exported to Langfuse. ``full`` exports every span, ``phase`` keeps the key
 #: protocol/LLM/tool spans plus one representative per phase, and ``minimal`` keeps only LLM/tool
@@ -635,6 +639,8 @@ class SampleConfig:
         intent_mode: Intent handling (``processed`` / ``raw``).
         pre_send_validation: Client-side Task-T validation scope (``off`` / ``on`` / ``always``);
             ``on`` enables it for the presentation page only.
+        prompt_overlay: Whether the SDK reads the sample's ``prompt_resources/`` overlay instead of
+            its packaged bundle. Off by default; the packaged slot schema is the shared baseline.
         trace_span_level: Langfuse export detail (``full`` / ``phase`` / ``minimal``); the Web UI
             timeline is unaffected.
         http_timeout_seconds: Client HTTP budget of one A2A request, in seconds.
@@ -754,6 +760,7 @@ class SampleConfig:
     transport: str = TRANSPORT_SSE
     intent_mode: str = INTENT_MODE_PROCESSED
     pre_send_validation: str = DEFAULT_PRE_SEND_VALIDATION
+    prompt_overlay: bool = DEFAULT_PROMPT_OVERLAY
     trace_span_level: str = DEFAULT_TRACE_SPAN_LEVEL
     webhook_host: str = DEFAULT_HOST
     webhook_public_url: str = ""
@@ -1042,6 +1049,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         transport=transport,
         intent_mode=intent_mode,
         pre_send_validation=pre_send_validation,
+        prompt_overlay=_env_bool(values, PROMPT_OVERLAY_ENV_KEY, DEFAULT_PROMPT_OVERLAY),
         trace_span_level=trace_span_level,
         http_timeout_seconds=_positive_seconds(values, HTTP_TIMEOUT_ENV_KEY, DEFAULT_HTTP_TIMEOUT_SECONDS),
         long_task_mode=long_task_mode,
