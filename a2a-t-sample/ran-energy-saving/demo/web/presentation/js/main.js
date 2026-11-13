@@ -183,6 +183,7 @@ const els = {
   sayText: byId("say-text-content"),
   sayDetail: byId("say-detail"),
   choices: byId("choices"),
+  playbackControls: byId("playback-controls"),
   pbAuto: byId("pb-auto"),
   pbStep: byId("pb-step"),
   speed: byId("speed"),
@@ -788,6 +789,10 @@ function applyStaticCopy() {
     ui.meta?.modelMode === "offline" ? copy.runPillOffline : copy.runPillLive;
   els.scenariosLabel.textContent = copy.scenarioLabel;
   els.editLabel.textContent = copy.editRequest;
+  // A vendor NMS runs on its own clock: the story cannot be paused, stepped or replayed, and Loop
+  // would send a real Task every cycle. Hide the whole playback row instead of leaving dead
+  // controls on screen.
+  els.playbackControls.hidden = Boolean(ui.meta?.nmsTasksEnabled);
   renderModifyButton();
   renderModifyActions();
   renderTargetCard();
@@ -1960,7 +1965,9 @@ function renderNarrator() {
     els.sayText.textContent = card.title;
     els.sayDetail.hidden = false;
     els.sayDetail.replaceChildren();
-    els.sayDetail.append(el("span", "", card.text));
+    // The negotiation card carries the server's own text. Keep its line breaks and give it its
+    // own ground so it does not read as narration written by the demo.
+    els.sayDetail.append(el("span", card.type === "decision" ? "raw-text" : "", card.text));
     if (card.detail) els.sayDetail.append(el("span", "reason", card.detail));
     if (card.validation) {
       const block = validationBlock(card.validation, ui.copy);
@@ -2694,6 +2701,8 @@ function renderProtocol() {
 }
 
 function handleLoop(scene) {
+  // A real NMS has no Loop control; a restored checkbox must never re-send a Task.
+  if (ui.meta?.nmsTasksEnabled) return;
   if (scene.key !== "finish" || !ui.view.finished || !els.loop.checked || ui.looping) return;
   ui.looping = true;
   window.setTimeout(() => {

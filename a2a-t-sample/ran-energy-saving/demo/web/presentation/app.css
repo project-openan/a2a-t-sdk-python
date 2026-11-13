@@ -792,6 +792,21 @@ body.resizing-y { cursor: row-resize; user-select: none; }
 .say-text p { margin: 2px 0 0; font-size: 16px; line-height: 1.4; }
 .say-detail { margin-top: 6px; font-size: 12.5px; line-height: 1.45; color: var(--g300); }
 .say-detail > span { display: block; }
+/* The negotiation prompt is the server's own text, not narration written by the demo: keep its
+   line breaks and give it its own ground. */
+.say-detail .raw-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--g900);
+  border-left: 3px solid var(--orange);
+  color: var(--white);
+  padding: 6px 9px;
+}
+.say.ask .say-detail .raw-text {
+  background: var(--white);
+  border-left-color: var(--black);
+  color: var(--black);
+}
 .say-detail .error { color: #ffb4a0; }
 .card-error { margin: 6px 0 0; padding: 6px 8px; border: 2px solid var(--red); background: var(--white); color: var(--red); font-size: 12px; font-weight: 700; }
 .result-card { margin-top: 7px; border-top: 1px solid var(--g700); padding-top: 7px; }

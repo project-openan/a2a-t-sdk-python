@@ -386,6 +386,20 @@ def test_confirm_strip_scales_its_type_for_the_orange_ground() -> None:
     assert re.search(r"\.say\.ask \.manual-answer \{[^}]*rgba\(0, 0, 0, \.28\)", css, re.S)
 
 
+def test_vendor_nms_hides_the_playback_row_and_keeps_server_line_breaks() -> None:
+    """A vendor NMS runs on its own clock: no step/pause/replay controls, and its own prompt
+    text keeps the line breaks and gets a ground of its own."""
+    html = (PRESENTATION_DIR / "index.html").read_text(encoding="utf-8")
+    main_js = (PRESENTATION_DIR / "js" / "main.js").read_text(encoding="utf-8")
+    css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")
+
+    assert re.search(r'<div class="controls" id="playback-controls">', html)
+    assert "els.playbackControls.hidden = Boolean(ui.meta?.nmsTasksEnabled)" in main_js
+    assert 'card.type === "decision" ? "raw-text" : ""' in main_js
+    assert re.search(r"\.say-detail \.raw-text \{[^}]*white-space: pre-wrap", css, re.S)
+    assert re.search(r"\.say\.ask \.say-detail \.raw-text \{[^}]*background: var\(--white\)", css, re.S)
+
+
 def test_huawei_theme_has_no_pointer_hover_effects() -> None:
     """The Huawei skin stays static on pointer hover; only explicit states may change."""
     css = (PRESENTATION_DIR / "app.css").read_text(encoding="utf-8")
