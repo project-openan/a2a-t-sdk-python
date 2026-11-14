@@ -118,16 +118,25 @@ DEFAULT_CONCURRENCY: Final[int] = 1
 #: again when the NMS reports a task-quota or conflict error.
 MAX_CONCURRENCY: Final[int] = 32
 
+#: How many times the whole batch repeats unless the operator asks for more. One runs the batch
+#: exactly once, which is the historical behaviour.
+DEFAULT_ROUNDS: Final[int] = 1
+
+#: Hard ceiling of a batch's rounds. Each round is an independent pass (new runs, new Tasks), so
+#: the value is a deliberate operator choice, not an environment property.
+MAX_ROUNDS: Final[int] = 8
+
 
 def default_decision_mode(model_mode: str) -> str:
     """Return the default decision mode of a tester process in one model mode."""
     return DECISION_MODE_SCRIPTED if model_mode == MODEL_MODE_OFFLINE else DEFAULT_DECISION_MODE
 
-#: Persisted batch schema; v1/v2 batches are still readable.
-SCHEMA: Final[str] = "osp-tester/v3"
+#: Persisted batch schema; v1-v3 batches are still readable and load as a single round.
+SCHEMA: Final[str] = "osp-tester/v4"
 SCHEMA_V1: Final[str] = "osp-tester/v1"
 SCHEMA_V2: Final[str] = "osp-tester/v2"
-_SCHEMAS: Final[frozenset[str]] = frozenset({SCHEMA, SCHEMA_V2, SCHEMA_V1})
+SCHEMA_V3: Final[str] = "osp-tester/v3"
+_SCHEMAS: Final[frozenset[str]] = frozenset({SCHEMA, SCHEMA_V3, SCHEMA_V2, SCHEMA_V1})
 
 #: Task states that end the item in red.
 _FAILED_TASK_STATES: Final[frozenset[str]] = frozenset(
@@ -279,6 +288,8 @@ class CaseItem:
     case_id: int
     name: str
     protocol: str
+    #: One-based repetition of the batch this item belongs to (``1`` for a single-round batch).
+    round_index: int = 1
     status: str = CASE_PENDING
     stages: dict[str, StageResult] = field(default_factory=dict)
     run_id: str | None = None
@@ -323,6 +334,7 @@ class CaseItem:
             "caseId": self.case_id,
             "name": self.name,
             "protocol": self.protocol,
+            "round": self.round_index,
             "status": self.status,
             "stages": {stage: result.to_dict() for stage, result in self.stages.items()},
             "runId": self.run_id,
@@ -365,6 +377,10 @@ class _Batch:
     keep_tasks: bool = False
     #: How many items may run at once (``1`` = the historical sequential loop).
     concurrency: int = DEFAULT_CONCURRENCY
+    #: How many times the whole item set repeats (``1`` = the historical single pass).
+    rounds: int = DEFAULT_ROUNDS
+    #: The round currently executing, kept for the progress line (``1`` before/after a run).
+    current_round: int = 1
     #: Concurrency the currently executing items actually use. A single-item rerun forces ``1``
     #: even on a batch configured for more, so the SDK stage keeps its exclusive client.
     active_concurrency: int = 1
@@ -460,6 +476,7 @@ class EvalBatchManager:
         decision_mode: str | None = None,
         keep_tasks: bool = False,
         concurrency: int = DEFAULT_CONCURRENCY,
+        rounds: int = DEFAULT_ROUNDS,
         owner: str = "",
     ) -> dict[str, object]:
         """Register one draft batch from the selected cases and protocols.
@@ -471,11 +488,17 @@ class EvalBatchManager:
         default each item releases its remote Task once its evidence is collected.
         ``concurrency`` is how many items run at once (1..:data:`MAX_CONCURRENCY`); ``1`` is the
         sequential behaviour every existing batch has.
+        ``rounds`` is how many independent passes the whole item set makes
+        (1..:data:`MAX_ROUNDS`); ``1`` is the historical single pass. A multi-round batch cannot
+        keep its Tasks: every round would multiply the Tasks left behind.
         """
         if stop_after not in ALL_STAGES:
             raise ValueError(f"unknown stop_after {stop_after!r}")
         resolved_approval = _validate_approval(approval)
         resolved_concurrency = validate_concurrency(concurrency)
+        resolved_rounds = validate_rounds(rounds)
+        if resolved_rounds > DEFAULT_ROUNDS and keep_tasks:
+            raise ValueError("多轮批次不支持保留任务。")
         resolved_decision_mode = self._validate_decision_mode(
             decision_mode or default_decision_mode(self._model_mode)
         )
@@ -487,15 +510,25 @@ class EvalBatchManager:
                 "A2A 协议没有 SDK 阶段；请把执行到设为 send / negotiate / accepted / working / final。"
             )
         items: list[CaseItem] = []
-        for case_id in case_ids:
-            case = self._catalog.get(case_id)
-            if case is None:
-                continue
-            # Every selected case runs under every selected protocol, interception cases included:
-            # the console must be able to run whatever the operator selected. A paired report can
-            # still tell the two rows apart by the case's own ``validate: blocked`` marker.
-            for protocol in selected_protocols:
-                items.append(CaseItem(case_id=case_id, name=str(case["name"]), protocol=protocol))
+        # Round-major expansion: the first round keeps the exact order a single-pass batch has.
+        for round_index in range(1, resolved_rounds + 1):
+            for case_id in case_ids:
+                case = self._catalog.get(case_id)
+                if case is None:
+                    continue
+                # Every selected case runs under every selected protocol, interception cases
+                # included: the console must be able to run whatever the operator selected. A
+                # paired report can still tell the two rows apart by the case's own
+                # ``validate: blocked`` marker.
+                for protocol in selected_protocols:
+                    items.append(
+                        CaseItem(
+                            case_id=case_id,
+                            name=str(case["name"]),
+                            protocol=protocol,
+                            round_index=round_index,
+                        )
+                    )
         if not items:
             raise ValueError("没有可执行的用例。")
         defaults = self._protocol_defaults.get(PROTOCOL_A2A_T, {})
@@ -510,6 +543,7 @@ class EvalBatchManager:
             decision_mode=resolved_decision_mode,
             keep_tasks=keep_tasks,
             concurrency=resolved_concurrency,
+            rounds=resolved_rounds,
             transport=defaults.get("transport", "sse"),
             discovery=defaults.get("discovery", "direct"),
             items=items,
@@ -700,6 +734,16 @@ class EvalBatchManager:
             raise ValueError("没有失败、错误或取消的用例可以重跑。")
         for item in selected:
             await self._release_item_runs(item)
+        # The new batch keeps the original round count: a failed case is retried in every round,
+        # so the operator can see whether the failure repeats or was a single-pass flake.
+        unique: list[CaseItem] = []
+        seen: set[tuple[int, str, str | None]] = set()
+        for item in selected:
+            key = (item.case_id, item.protocol, item.scratch)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
         retried = _Batch(
             batch_id=f"batch-{uuid.uuid4().hex[:12]}",
             case_ids=batch.case_ids,
@@ -711,6 +755,7 @@ class EvalBatchManager:
             decision_mode=batch.decision_mode,
             keep_tasks=batch.keep_tasks,
             concurrency=batch.concurrency,
+            rounds=batch.rounds,
             transport=batch.transport,
             discovery=batch.discovery,
             items=[
@@ -719,8 +764,10 @@ class EvalBatchManager:
                     name=item.name,
                     protocol=item.protocol,
                     scratch=item.scratch,
+                    round_index=round_index,
                 )
-                for item in selected
+                for round_index in range(1, batch.rounds + 1)
+                for item in unique
             ],
             owner_id=batch.owner_id,
         )
@@ -764,6 +811,7 @@ class EvalBatchManager:
                     "decisionMode": document.get("decisionMode"),
                     "keepTasks": bool(document.get("keepTasks")),
                     "concurrency": _clamp_concurrency(document.get("concurrency")),
+                    "rounds": _clamp_rounds(document.get("rounds")),
                     "transport": document.get("transport"),
                     "discovery": document.get("discovery"),
                 }
@@ -798,6 +846,7 @@ class EvalBatchManager:
         item.attempts.append(
             {
                 "runId": item.run_id,
+                "round": item.round_index,
                 "decisionMode": batch.decision_mode,
                 "status": item.status,
                 "finishedAt": _now_iso(),
@@ -839,12 +888,22 @@ class EvalBatchManager:
         # A single-item run is sequential even on a batch configured for more: one item has
         # nothing to overlap with, so it keeps the historical client and counter behaviour.
         concurrent = indices is None and batch.concurrency > 1 and len(selected) > 1
+        # A rerun touches one row; a single-round batch keeps the historical single group, so the
+        # loop below is a no-op wrapper around exactly the previous execution path.
+        groups = [selected] if indices is not None else _round_groups(batch, selected)
         batch.active_concurrency = batch.concurrency if concurrent else 1
         try:
-            if concurrent:
-                await self._run_items_concurrently(batch, selected)
-            else:
-                await self._run_items_sequentially(batch, selected)
+            for group in groups:
+                if batch.cancel_requested:
+                    break
+                if group:
+                    batch.current_round = batch.items[group[0]].round_index
+                group_concurrent = concurrent and len(group) > 1
+                batch.active_concurrency = batch.concurrency if group_concurrent else 1
+                if group_concurrent:
+                    await self._run_items_concurrently(batch, group)
+                else:
+                    await self._run_items_sequentially(batch, group)
         except asyncio.CancelledError:
             self._mark_pending_cancelled(batch)
             batch.status = BATCH_CANCELLED
@@ -2238,6 +2297,7 @@ class EvalBatchManager:
                 case_id=int(item.get("caseId") or 0),
                 name=str(item.get("name") or ""),
                 protocol=str(item.get("protocol") or PROTOCOL_A2A_T),
+                round_index=_clamp_rounds(item.get("round")),
                 status=str(item.get("status") or CASE_PENDING),
                 stages=_load_stages(item.get("stages")),
                 run_id=item.get("runId") if isinstance(item.get("runId"), str) else None,
@@ -2271,8 +2331,12 @@ class EvalBatchManager:
             timeout_seconds=_optional_float(document.get("timeoutSeconds")),
             working_timeout_seconds=_optional_float(document.get("workingTimeoutSeconds")),
             decision_mode=str(document.get("decisionMode") or DECISION_MODE_SCRIPTED),
-            keep_tasks=bool(document.get("keepTasks")),
+            # A multi-round batch never keeps Tasks; an edited document cannot re-enable it.
+            keep_tasks=bool(document.get("keepTasks"))
+            and _clamp_rounds(document.get("rounds")) == DEFAULT_ROUNDS,
             concurrency=_clamp_concurrency(document.get("concurrency")),
+            rounds=_clamp_rounds(document.get("rounds")),
+            current_round=_clamp_rounds(document.get("currentRound")),
             transport=str(document.get("transport") or defaults.get("transport", "sse")),
             discovery=str(document.get("discovery") or defaults.get("discovery", "direct")),
             items=items,
@@ -2328,6 +2392,12 @@ class EvalBatchManager:
             "decisionMode": batch.decision_mode,
             "keepTasks": batch.keep_tasks,
             "concurrency": batch.concurrency,
+            "rounds": batch.rounds,
+            "currentRound": batch.current_round,
+            "roundSummaries": _round_summaries(batch.items, batch.rounds),
+            # Cross-round stability is only meaningful with at least two rounds; the console
+            # hides it when ``total`` is zero.
+            "crossRound": _cross_round(batch.items),
             "activeIndices": list(batch.active_indices),
             "transport": batch.transport,
             "discovery": batch.discovery,
@@ -2350,14 +2420,27 @@ class EvalBatchManager:
         }
 
 
+def _round_groups(batch: _Batch, selected: Sequence[int]) -> list[list[int]]:
+    """Split the selected items into their rounds, preserving round and catalog order.
+
+    A single-round batch returns one group holding every selected index, which is exactly the
+    list the executor used before rounds existed.
+    """
+    if batch.rounds <= DEFAULT_ROUNDS:
+        return [list(selected)]
+    groups: dict[int, list[int]] = {}
+    for index in selected:
+        groups.setdefault(batch.items[index].round_index, []).append(index)
+    return [group for _, group in sorted(groups.items())]
+
+
 def _pairs(items: Sequence[CaseItem]) -> list[dict[str, object]]:
-    """Join the per-protocol items of the same case into one comparable row."""
-    by_case: dict[int, dict[str, CaseItem]] = {}
+    """Join the per-protocol items of the same ``(case, round)`` into one comparable row."""
+    by_key: dict[tuple[int, int], dict[str, CaseItem]] = {}
     for item in items:
-        by_case.setdefault(item.case_id, {})[item.protocol] = item
+        by_key.setdefault((item.case_id, item.round_index), {})[item.protocol] = item
     rows: list[dict[str, object]] = []
-    for case_id in sorted(by_case):
-        runs = by_case[case_id]
+    for (case_id, round_index), runs in sorted(by_key.items()):
         if len(runs) < 2:
             continue
         entries = {
@@ -2371,6 +2454,7 @@ def _pairs(items: Sequence[CaseItem]) -> list[dict[str, object]]:
         rows.append(
             {
                 "caseId": case_id,
+                "round": round_index,
                 "name": next(iter(runs.values())).name,
                 "protocols": entries,
                 "roundsDelta": _delta(a2at["rounds"], pure["rounds"]),
@@ -2459,6 +2543,39 @@ def _summary(items: Sequence[CaseItem]) -> dict[str, int]:
             elif stage.status == STAGE_WAITING:
                 counts["stageWaiting"] += 1
     return counts
+
+
+def _round_summaries(items: Sequence[CaseItem], rounds: int) -> list[dict[str, object]]:
+    """Return one summary per round, keeping the rounds with no items visible as zeroes."""
+    return [
+        {
+            "round": round_index,
+            "summary": _summary(
+                [item for item in items if item.round_index == round_index]
+            ),
+        }
+        for round_index in range(1, rounds + 1)
+    ]
+
+
+def _cross_round(items: Sequence[CaseItem]) -> dict[str, int]:
+    """Count the ``(case, protocol)`` pairs that passed every round they ran.
+
+    Scratch items are excluded: they have no case identity, so they cannot be compared across
+    rounds. A single-round batch reports ``total=0`` and lets the console hide the figure.
+    """
+    groups: dict[tuple[int, str], list[CaseItem]] = {}
+    for item in items:
+        if item.scratch is not None:
+            continue
+        groups.setdefault((item.case_id, item.protocol), []).append(item)
+    repeated = [group for group in groups.values() if len(group) > 1]
+    return {
+        "stable": sum(
+            1 for group in repeated if all(item.status == CASE_PASSED for item in group)
+        ),
+        "total": len(repeated),
+    }
 
 
 def _baseline_request(case: Mapping[str, Any] | None = None) -> str:
@@ -2761,6 +2878,22 @@ def _clamp_concurrency(value: object) -> int:
     return min(MAX_CONCURRENCY, max(DEFAULT_CONCURRENCY, value))
 
 
+def validate_rounds(value: object) -> int:
+    """Return the requested batch rounds, rejecting values outside ``1..MAX_ROUNDS``."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("轮次必须是整数。")
+    if value < DEFAULT_ROUNDS or value > MAX_ROUNDS:
+        raise ValueError(f"轮次必须在 {DEFAULT_ROUNDS} 到 {MAX_ROUNDS} 之间。")
+    return value
+
+
+def _clamp_rounds(value: object) -> int:
+    """Return a persisted round value, normalized to the supported range (old docs get 1)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return DEFAULT_ROUNDS
+    return min(MAX_ROUNDS, max(DEFAULT_ROUNDS, value))
+
+
 def _validate_approval(approval: str | None) -> str | None:
     """Validate one optional batch approval value."""
     if approval is None:
@@ -2806,10 +2939,13 @@ __all__ = [
     "DECISION_MODE_LIVE",
     "DECISION_MODE_SCRIPTED",
     "DEFAULT_CONCURRENCY",
+    "DEFAULT_ROUNDS",
     "DEFAULT_WORKING_TIMEOUT_SECONDS",
     "EvalBatchManager",
     "MAX_CONCURRENCY",
+    "MAX_ROUNDS",
     "validate_concurrency",
+    "validate_rounds",
     "SCHEMA",
     "STAGE_SKIPPED",
     "STAGE_WAITING",

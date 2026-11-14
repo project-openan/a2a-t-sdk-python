@@ -312,3 +312,59 @@ def test_the_stage_diff_sheet_labels_interception_stages() -> None:
     rows = list(workbook["阶段差异"].iter_rows(values_only=True))
 
     assert any(row[2] == "拦截/validate" for row in rows)
+
+
+def _multi_round_snapshot() -> dict[str, Any]:
+    """Two independent passes of one item; the second one failed."""
+    batch = _snapshot()
+    first = dict(batch["items"][0])
+    second = json.loads(json.dumps(first))
+    first["round"] = 1
+    second["round"] = 2
+    second["status"] = "failed"
+    second["runId"] = "d" * 32
+    batch["items"] = [first, second]
+    batch["rounds"] = 2
+    batch["currentRound"] = 2
+    batch["roundSummaries"] = [
+        {"round": 1, "summary": {"total": 1, "passed": 1}},
+        {"round": 2, "summary": {"total": 1, "failed": 1}},
+    ]
+    batch["crossRound"] = {"stable": 0, "total": 1}
+    return batch
+
+
+def test_the_multi_round_report_adds_the_round_column_and_summary_sheet() -> None:
+    workbook = load_workbook(BytesIO(write_report(_multi_round_snapshot())))
+
+    assert workbook.sheetnames == [
+        "仲裁格式",
+        "用例结果",
+        "阶段差异",
+        "汇总",
+        "轮次汇总",
+    ]
+    reference = list(workbook["仲裁格式"].iter_rows(values_only=True))
+    assert reference[0][:3] == ("traceId", "协议", "轮次")
+    assert [row[2] for row in reference[1:]] == [1, 2]
+
+    results = list(workbook["用例结果"].iter_rows(values_only=True))
+    assert results[0][3] == "轮次"
+    assert [row[3] for row in results[1:]] == [1, 2]
+
+    diffs = list(workbook["阶段差异"].iter_rows(values_only=True))
+    assert diffs[0][2] == "轮次"
+
+    summary = dict(list(workbook["汇总"].iter_rows(values_only=True)))
+    assert summary["rounds"] == 2
+
+    rounds = list(workbook["轮次汇总"].iter_rows(values_only=True))
+    assert rounds[0][0] == "轮次"
+    assert [row[0] for row in rounds[1:3]] == [1, 2]
+
+
+def test_a_single_round_report_keeps_the_existing_columns() -> None:
+    rows = _reference_sheet(_snapshot())
+
+    assert rows[0] == REFERENCE_HEADERS
+    assert len(rows[0]) == len(REFERENCE_HEADERS)

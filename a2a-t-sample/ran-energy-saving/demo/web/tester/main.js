@@ -40,6 +40,7 @@ const state = {
   batch: null,
   history: [],
   polling: null,
+  roundFilter: "",
   tab: "catalog",
   drawer: { item: null, tab: "result", caseDoc: null, loading: false },
 };
@@ -127,12 +128,24 @@ async function loadMeta() {
   const concurrency = $("config-concurrency");
   concurrency.max = String(meta?.maxConcurrency || 1);
   concurrency.value = String(meta?.defaults?.concurrency || 1);
+  const rounds = $("config-rounds");
+  rounds.max = String(meta?.maxRounds || 1);
+  rounds.value = String(meta?.defaults?.rounds || 1);
+  syncRoundsKeepTasks();
   const liveEnabled = (meta?.modelMode || "") !== "offline";
   const decision = $("config-decision");
   decision.value = meta?.defaults?.decisionMode || "scripted";
   decision.querySelector('option[value="live"]').disabled = !liveEnabled;
   if (!liveEnabled) decision.title = "离线模式只能使用 scripted";
   $("scratch-decision").querySelector('option[value="live"]').disabled = !liveEnabled;
+}
+
+function syncRoundsKeepTasks() {
+  const multi = Number($("config-rounds").value || 1) > 1;
+  const keep = $("config-keep-tasks");
+  keep.disabled = multi;
+  if (multi) keep.checked = false;
+  keep.title = multi ? "多轮批次不支持保留任务" : "";
 }
 
 async function loadCatalog() {
@@ -247,8 +260,10 @@ async function startBatch() {
     showToast("至少选择一个协议。", "error");
     return;
   }
-  const runs = caseIds.length * protocols.length;
-  if (state.meta?.nmsEnabled && !window.confirm(`当前连接真实网管，将执行 ${runs} 个运行项。确认继续？`)) {
+  const rounds = Number($("config-rounds").value || 1);
+  const runs = caseIds.length * protocols.length * rounds;
+  const runLabel = rounds > 1 ? `${runs} 个运行项（${rounds} 轮）` : `${runs} 个运行项`;
+  if (state.meta?.nmsEnabled && !window.confirm(`当前连接真实网管，将执行 ${runLabel}。确认继续？`)) {
     return;
   }
   $("start-button").disabled = true;
@@ -264,6 +279,7 @@ async function startBatch() {
         $("config-working-timeout").value === "" ? null : Number($("config-working-timeout").value),
       keepTasks: $("config-keep-tasks").checked,
       concurrency: Number($("config-concurrency").value || 1),
+      rounds,
     });
     state.batch = await postJson(`/api/tester/batches/${encodeURIComponent(created.batchId)}/start`, {});
     renderResults();
@@ -414,7 +430,8 @@ async function loadHistory() {
     const transport = batch.transport ? ` · ${batch.transport}` : "";
     const keep = batch.keepTasks ? " · 保留任务" : "";
     const concurrency = batch.concurrency > 1 ? ` · 并发 ${batch.concurrency}` : "";
-    const option = el("option", "", `${batch.stopAfter || "final"}${mode}${transport}${keep}${concurrency} · ${statusLabel(batch.status)} · ${batch.createdAt || ""}`);
+    const rounds = batch.rounds > 1 ? ` · ${batch.rounds} 轮` : "";
+    const option = el("option", "", `${batch.stopAfter || "final"}${mode}${transport}${keep}${concurrency}${rounds} · ${statusLabel(batch.status)} · ${batch.createdAt || ""}`);
     option.value = batch.batchId;
     select.append(option);
   }
@@ -509,6 +526,39 @@ function resultText(item) {
   return item.status === "passed" ? "全部阶段通过" : "";
 }
 
+function populateRoundFilter(rounds) {
+  const select = $("round-filter");
+  const signature = `${state.batch?.batchId || ""}:${rounds}`;
+  if (select.dataset.signature === signature) {
+    select.value = state.roundFilter;
+    return;
+  }
+  select.dataset.signature = signature;
+  // A different batch starts on "all rounds"; the previous selection would hide rows.
+  state.roundFilter = "";
+  clear(select);
+  const all = el("option", "", "全部轮次");
+  all.value = "";
+  select.append(all);
+  for (let index = 1; index <= rounds; index += 1) {
+    const option = el("option", "", `第 ${index} 轮`);
+    option.value = String(index);
+    select.append(option);
+  }
+  select.value = state.roundFilter;
+}
+
+function roundSummaryNote(batch) {
+  const parts = [];
+  for (const entry of batch.roundSummaries || []) {
+    const summary = entry.summary || {};
+    parts.push(`第 ${entry.round} 轮 ${summary.passed || 0}/${summary.total || 0}`);
+  }
+  const cross = batch.crossRound || {};
+  if (cross.total) parts.push(`稳定通过 ${cross.stable || 0}/${cross.total}`);
+  return parts.length ? ` · ${parts.join(" · ")}` : "";
+}
+
 function renderResults() {
   const batch = state.batch;
   const body = $("results-body");
@@ -517,6 +567,9 @@ function renderResults() {
     $("empty-state").hidden = false;
     $("empty-state").textContent = "选择用例并开始执行。";
     $("result-summary").textContent = "";
+    $("round-head").hidden = true;
+    $("round-filter-wrap").hidden = true;
+    state.roundFilter = "";
     $("start-button").hidden = false;
     $("cancel-button").hidden = true;
     $("retry-button").hidden = true;
@@ -526,16 +579,29 @@ function renderResults() {
     return;
   }
   const items = Array.isArray(batch.items) ? batch.items : [];
-  $("empty-state").hidden = items.length > 0;
+  const rounds = Number(batch.rounds || 1);
+  const multi = rounds > 1;
+  $("round-head").hidden = !multi;
+  $("round-filter-wrap").hidden = !multi;
+  if (multi) populateRoundFilter(rounds);
+  else state.roundFilter = "";
+  const visible = multi && state.roundFilter
+    ? items
+        .map((item, index) => [item, index])
+        .filter(([item]) => String(item.round || 1) === state.roundFilter)
+    : items.map((item, index) => [item, index]);
+  $("empty-state").hidden = visible.length > 0;
   if (!items.length) $("empty-state").textContent = "该批次没有运行项。";
+  else if (!visible.length) $("empty-state").textContent = "该轮次没有运行项。";
 
-  items.forEach((item, index) => {
+  visible.forEach(([item, index]) => {
     const row = document.createElement("tr");
     if (item.status === "running") row.className = "running";
     const number = el("td", "num", index + 1);
     const id = el("td", "", item.caseId === 0 ? "scratch" : String(item.caseId).padStart(2, "0"));
     const name = el("td", "", item.name || "—");
     const protocol = el("td", "", item.protocol === "a2a-t" ? "A2A-T" : "A2A");
+    const round = multi ? el("td", "metric", String(item.round || 1)) : null;
     const stages = document.createElement("td");
     stages.append(stageChips(item, batch.stopAfter));
     const status = document.createElement("td");
@@ -590,13 +656,17 @@ function renderResults() {
     rerun.disabled = batch.status === "running";
     rerun.addEventListener("click", () => rerunItem(index));
     actions.append(document.createTextNode(" · "), rerun);
-    row.append(number, id, name, protocol, stages, status, duration, tokens, runs, result, actions);
+    row.append(
+      number, id, name, protocol, ...(round ? [round] : []),
+      stages, status, duration, tokens, runs, result, actions,
+    );
     body.append(row);
   });
 
   const summary = batch.summary || {};
   const concurrencyNote = batch.concurrency > 1 ? ` · 并发 ${batch.concurrency}` : "";
-  $("result-summary").textContent = `${summary.total || 0} 项 · 通过 ${summary.passed || 0} · 待确认 ${summary.partial || 0} · 失败 ${summary.failed || 0} · 错误 ${summary.error || 0} · 仅记录 ${summary.stageRecorded || 0}${concurrencyNote}`;
+  const roundNote = multi ? roundSummaryNote(batch) : "";
+  $("result-summary").textContent = `${summary.total || 0} 项 · 通过 ${summary.passed || 0} · 待确认 ${summary.partial || 0} · 失败 ${summary.failed || 0} · 错误 ${summary.error || 0} · 仅记录 ${summary.stageRecorded || 0}${concurrencyNote}${roundNote}`;
   const running = batch.status === "running";
   const retryable = (summary.failed || 0) + (summary.error || 0) + (summary.cancelled || 0) > 0;
   $("start-button").hidden = running;
@@ -610,9 +680,10 @@ function renderResults() {
   const done =
     (summary.passed || 0) + (summary.partial || 0) + (summary.failed || 0) + (summary.error || 0) + (summary.cancelled || 0);
   $("progress-bar").style.width = `${total ? Math.min(100, Math.round((done / total) * 100)) : 0}%`;
+  const roundPrefix = multi ? `第 ${batch.currentRound || 1}/${rounds} 轮 · ` : "";
   $("progress-text").textContent = running
-    ? `${done}/${total} · 运行中 ${summary.running || 0}`
-    : `${done}/${total}`;
+    ? `${roundPrefix}${done}/${total} · 运行中 ${summary.running || 0}`
+    : `${roundPrefix}${done}/${total}`;
   if (running) startPolling();
 }
 
@@ -1273,7 +1344,8 @@ function renderDrawer() {
   const item = drawer.item;
   if (!item) return;
   const protocol = item.protocol === "a2a-t" ? "A2A-T" : "A2A";
-  $("drawer-title").textContent = `#${String(item.caseId).padStart(2, "0")} ${item.name} · ${protocol}`;
+  const roundNote = item.round && state.batch?.rounds > 1 ? ` · 第 ${item.round} 轮` : "";
+  $("drawer-title").textContent = `#${String(item.caseId).padStart(2, "0")} ${item.name} · ${protocol}${roundNote}`;
   const langfuseLink = $("drawer-langfuse");
   const langfuseUrl = typeof item.langfuseUrl === "string" ? item.langfuseUrl : "";
   if (langfuseUrl) {
@@ -1411,6 +1483,11 @@ function wireEvents() {
   $("export-xlsx").addEventListener("click", () => exportBatch("xlsx"));
   $("scratch-run").addEventListener("click", startScratch);
   $("history-select").addEventListener("change", () => openBatch($("history-select").value));
+  $("round-filter").addEventListener("change", () => {
+    state.roundFilter = $("round-filter").value;
+    renderResults();
+  });
+  $("config-rounds").addEventListener("input", syncRoundsKeepTasks);
   $("drawer-close").addEventListener("click", closeDrawer);
   $("drawer-backdrop").addEventListener("click", closeDrawer);
   $("drawer-tab-result").addEventListener("click", () => switchDrawerTab("result"));

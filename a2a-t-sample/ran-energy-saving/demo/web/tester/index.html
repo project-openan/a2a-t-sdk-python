@@ -106,10 +106,14 @@
               <label>并发
                 <input id="config-concurrency" type="number" min="1" max="32" step="1" value="1">
               </label>
+              <label>轮次
+                <input id="config-rounds" type="number" min="1" max="8" step="1" value="1">
+              </label>
               <label class="check"><input id="config-keep-tasks" type="checkbox"> 保留任务（不自动 cancel）</label>
             </div>
             <p class="status-line" id="concurrency-hint">
               并发 N 时最坏同时占用 2N 个网管任务（每个 Modify 用例另有一条基线任务）；
+              轮次 R 会把整批用例独立重复 R 遍，每轮结束释放任务（多轮不支持保留任务）；
               真实网管报任务数上限或区域冲突时请调小。
             </p>
             <div class="actions">
@@ -133,6 +137,10 @@
                   <span>最近批次</span>
                   <select id="history-select"></select>
                 </label>
+                <label class="history" id="round-filter-wrap" hidden>
+                  <span>轮次</span>
+                  <select id="round-filter"></select>
+                </label>
                 <span class="summary" id="result-summary"></span>
               </div>
             </div>
@@ -144,6 +152,7 @@
                     <th>编号</th>
                     <th>名称</th>
                     <th>协议</th>
+                    <th id="round-head" hidden>轮次</th>
                     <th>阶段</th>
                     <th>状态</th>
                     <th>耗时</th>

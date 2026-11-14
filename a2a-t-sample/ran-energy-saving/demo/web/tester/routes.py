@@ -24,11 +24,14 @@ from demo.web.tester.service import (
     ALL_STAGES,
     DECISION_MODES,
     DEFAULT_CONCURRENCY,
+    DEFAULT_ROUNDS,
     DEFAULT_WORKING_TIMEOUT_SECONDS,
     MAX_CONCURRENCY,
+    MAX_ROUNDS,
     EvalBatchManager,
     default_decision_mode,
     validate_concurrency,
+    validate_rounds,
 )
 
 #: Directory of the tester page assets.
@@ -127,8 +130,10 @@ def build_tester_routes(
                     "workingTimeoutSeconds": DEFAULT_WORKING_TIMEOUT_SECONDS,
                     "decisionMode": default_decision_mode(model_mode),
                     "concurrency": DEFAULT_CONCURRENCY,
+                    "rounds": DEFAULT_ROUNDS,
                 },
                 "maxConcurrency": MAX_CONCURRENCY,
+                "maxRounds": MAX_ROUNDS,
                 "runnerDefaultsIndicateCase": True,
                 "catalogCount": resolved_catalog.count,
                 "modelMode": model_mode,
@@ -188,6 +193,7 @@ def build_tester_routes(
                 decision_mode=_optional_str(body.get("decisionMode")),
                 keep_tasks=bool(body.get("keepTasks")),
                 concurrency=_concurrency(body.get("concurrency")),
+                rounds=_rounds(body.get("rounds")),
                 owner=_client_id(request),
             )
         except (TypeError, ValueError) as exc:
@@ -405,6 +411,13 @@ def _concurrency(value: object) -> int:
     if value is None or value == "":
         return DEFAULT_CONCURRENCY
     return validate_concurrency(value)
+
+
+def _rounds(value: object) -> int:
+    """Return the requested batch rounds; an absent value keeps the default."""
+    if value is None or value == "":
+        return DEFAULT_ROUNDS
+    return validate_rounds(value)
 
 
 def _optional_float(value: object) -> float | None:

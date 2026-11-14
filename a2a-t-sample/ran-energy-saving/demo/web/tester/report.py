@@ -92,12 +92,14 @@ _REBUILT_TRACE_NOTE: Final[str] = "traceparent 为重建值"
 
 def write_report(batch: Mapping[str, Any]) -> bytes:
     """Build the XLSX report of one batch snapshot."""
+    rounds = _rounds_of(batch)
+    multi = rounds > 1
     workbook = Workbook()
     reference = workbook.active
     reference.title = "仲裁格式"
-    _write_reference_sheet(reference, batch)
+    _write_reference_sheet(reference, batch, multi=multi)
     results = workbook.create_sheet("用例结果")
-    headers = (
+    headers: list[str] = [
         "用例编号",
         "用例名称",
         "协议",
@@ -117,7 +119,9 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
         "拦截后补充信息",
         *[f"{stage} 状态" for stage in _STAGE_ORDER],
         "错误信息",
-    )
+    ]
+    if multi:
+        headers.insert(3, "轮次")
     results.append(list(headers))
     _style_header(results)
     items = batch.get("items")
@@ -130,44 +134,48 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
         token_map = tokens if isinstance(tokens, Mapping) else {}
         baseline = item.get("baseline")
         baseline_map = baseline if isinstance(baseline, Mapping) else {}
-        results.append(
-            [
-                item.get("caseId", ""),
-                item.get("name", ""),
-                item.get("protocol", ""),
-                item.get("status", ""),
-                item.get("durationMs", ""),
-                token_map.get("total", ""),
-                item.get("runId", ""),
-                baseline_map.get("status", ""),
-                baseline_map.get("runId", ""),
-                baseline_map.get("taskId", ""),
-                baseline_map.get("state", ""),
-                baseline_map.get("error", ""),
-                batch.get("decisionMode", ""),
-                batch.get("transport", ""),
-                batch.get("discovery", ""),
-                _interception_verdict(item),
-                _interception_followup(item),
-                *[
-                    (stage_map.get(stage, {}).get("status", "") if isinstance(stage_map.get(stage), Mapping) else "")
-                    for stage in _STAGE_ORDER
-                ],
-                item.get("error", ""),
-            ]
-        )
-    _set_widths(
-        results,
-        (
-            12, 42, 10, 10, 12, 12, 34,
-            10, 34, 34, 18, 40,
-            10, 10, 10, 14, 48,
-            12, 12, 12, 12, 14, 12, 12, 12, 40,
-        ),
-    )
+        row: list[object] = [
+            item.get("caseId", ""),
+            item.get("name", ""),
+            item.get("protocol", ""),
+            item.get("status", ""),
+            item.get("durationMs", ""),
+            token_map.get("total", ""),
+            item.get("runId", ""),
+            baseline_map.get("status", ""),
+            baseline_map.get("runId", ""),
+            baseline_map.get("taskId", ""),
+            baseline_map.get("state", ""),
+            baseline_map.get("error", ""),
+            batch.get("decisionMode", ""),
+            batch.get("transport", ""),
+            batch.get("discovery", ""),
+            _interception_verdict(item),
+            _interception_followup(item),
+            *[
+                (stage_map.get(stage, {}).get("status", "") if isinstance(stage_map.get(stage), Mapping) else "")
+                for stage in _STAGE_ORDER
+            ],
+            item.get("error", ""),
+        ]
+        if multi:
+            row.insert(3, item.get("round", 1))
+        results.append(row)
+    widths = [
+        12, 42, 10, 10, 12, 12, 34,
+        10, 34, 34, 18, 40,
+        10, 10, 10, 14, 48,
+        12, 12, 12, 12, 14, 12, 12, 12, 40,
+    ]
+    if multi:
+        widths.insert(3, 6)
+    _set_widths(results, tuple(widths))
 
     diffs = workbook.create_sheet("阶段差异")
-    diffs.append(["用例编号", "协议", "阶段", "状态", "字段", "预期", "实际", "说明"])
+    diff_headers = ["用例编号", "协议", "阶段", "状态", "字段", "预期", "实际", "说明"]
+    if multi:
+        diff_headers.insert(2, "轮次")
+    diffs.append(diff_headers)
     _style_header(diffs)
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, Mapping):
@@ -190,32 +198,37 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
                     for diff in raw_diffs:
                         if not isinstance(diff, Mapping):
                             continue
-                        diffs.append(
-                            [
-                                item.get("caseId", ""),
-                                item.get("protocol", ""),
-                                label,
-                                stage.get("status", ""),
-                                diff.get("path", ""),
-                                _text(diff.get("expected")),
-                                _text(diff.get("actual")),
-                                diff.get("reason", ""),
-                            ]
-                        )
-                elif stage.get("message"):
-                    diffs.append(
-                        [
+                        row = [
                             item.get("caseId", ""),
                             item.get("protocol", ""),
                             label,
                             stage.get("status", ""),
-                            "",
-                            _text(stage.get("expected")),
-                            _text(stage.get("actual")),
-                            stage.get("message", ""),
+                            diff.get("path", ""),
+                            _text(diff.get("expected")),
+                            _text(diff.get("actual")),
+                            diff.get("reason", ""),
                         ]
-                    )
-    _set_widths(diffs, (12, 10, 12, 10, 30, 48, 48, 34))
+                        if multi:
+                            row.insert(2, item.get("round", 1))
+                        diffs.append(row)
+                elif stage.get("message"):
+                    row = [
+                        item.get("caseId", ""),
+                        item.get("protocol", ""),
+                        label,
+                        stage.get("status", ""),
+                        "",
+                        _text(stage.get("expected")),
+                        _text(stage.get("actual")),
+                        stage.get("message", ""),
+                    ]
+                    if multi:
+                        row.insert(2, item.get("round", 1))
+                    diffs.append(row)
+    diff_widths = [12, 10, 12, 10, 30, 48, 48, 34]
+    if multi:
+        diff_widths.insert(2, 6)
+    _set_widths(diffs, tuple(diff_widths))
 
     summary = workbook.create_sheet("汇总")
     summary.append(["指标", "值"])
@@ -229,31 +242,162 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
     summary.append(["decisionMode", batch.get("decisionMode", "")])
     summary.append(["keepTasks", batch.get("keepTasks", "")])
     summary.append(["concurrency", batch.get("concurrency", 1)])
+    if multi:
+        summary.append(["rounds", rounds])
     summary.append(["transport", batch.get("transport", "")])
     summary.append(["discovery", batch.get("discovery", "")])
     summary.append(["batchId", batch.get("batchId", "")])
     _set_widths(summary, (28, 36))
+
+    if multi:
+        _write_round_sheet(workbook.create_sheet("轮次汇总"), batch, rounds)
 
     buffer = BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
 
 
-def _write_reference_sheet(sheet: Worksheet, batch: Mapping[str, Any]) -> None:
+def _write_reference_sheet(
+    sheet: Worksheet, batch: Mapping[str, Any], *, multi: bool
+) -> None:
     """Write the arbitration worksheet: one row per batch item, reference column order."""
-    sheet.append(list(_REFERENCE_HEADERS))
+    headers = list(_REFERENCE_HEADERS)
+    if multi:
+        headers.insert(2, "轮次")
+    sheet.append(headers)
     _style_header(sheet)
     items = batch.get("items")
     for item in items if isinstance(items, list) else []:
         if isinstance(item, Mapping):
-            sheet.append([_cell(value) for value in _reference_row(item)])
-    _set_widths(
-        sheet,
-        (
-            34, 8, 10, 42, 10, 12, 36, 10, 60, 48, 48, 60, 60, 10, 60, 60, 60, 60, 50,
-            16, 14, 10, 10, 10, 12, 12, 10, 10, 10, 10, 10, 12, 40,
-        ),
+            row = _reference_row(item)
+            if multi:
+                row.insert(2, item.get("round", 1))
+            sheet.append([_cell(value) for value in row])
+    widths = [
+        34, 8, 10, 42, 10, 12, 36, 10, 60, 48, 48, 60, 60, 10, 60, 60, 60, 60, 50,
+        16, 14, 10, 10, 10, 12, 12, 10, 10, 10, 10, 10, 12, 40,
+    ]
+    if multi:
+        widths.insert(2, 6)
+    _set_widths(sheet, tuple(widths))
+
+
+def _rounds_of(batch: Mapping[str, Any]) -> int:
+    """Return the batch's round count; an old document without the field is one round."""
+    value = batch.get("rounds")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return 1
+    return value
+
+
+def _write_round_sheet(sheet: Worksheet, batch: Mapping[str, Any], rounds: int) -> None:
+    """Write the per-round counts and the case × round status matrix."""
+    sheet.append(
+        [
+            "轮次",
+            "总数",
+            "通过",
+            "待确认",
+            "失败",
+            "错误",
+            "取消",
+            "耗时(ms)",
+            "稳定通过",
+            "可比用例",
+        ]
     )
+    _style_header(sheet)
+    cross = _map_of(batch.get("crossRound"))
+    stable = cross.get("stable", 0)
+    total = cross.get("total", 0)
+    for entry in _round_entries(batch, rounds):
+        summary = _map_of(entry.get("summary"))
+        sheet.append(
+            [
+                entry.get("round", ""),
+                summary.get("total", 0),
+                summary.get("passed", 0),
+                summary.get("partial", 0),
+                summary.get("failed", 0),
+                summary.get("error", 0),
+                summary.get("cancelled", 0),
+                summary.get("durationMs", 0),
+                stable,
+                total,
+            ]
+        )
+    sheet.append([])
+    sheet.append(
+        ["用例编号", "用例名称", "协议", *[f"第 {round_index} 轮" for round_index in range(1, rounds + 1)]]
+    )
+    for row in _round_matrix(batch, rounds):
+        sheet.append(row)
+    _set_widths(sheet, (10, 10, 10, 10, 10, 10, 10, 12, 12, 12))
+
+
+def _round_entries(
+    batch: Mapping[str, Any], rounds: int
+) -> list[Mapping[str, object]]:
+    """Return the snapshot's per-round summaries, rebuilding them from items when absent."""
+    raw = batch.get("roundSummaries")
+    entries = [entry for entry in raw if isinstance(entry, Mapping)] if isinstance(raw, list) else []
+    if entries:
+        return entries
+    items = batch.get("items")
+    rows: list[Mapping[str, object]] = []
+    for round_index in range(1, rounds + 1):
+        group = [
+            item
+            for item in (items if isinstance(items, list) else [])
+            if isinstance(item, Mapping) and item.get("round", 1) == round_index
+        ]
+        rows.append(
+            {
+                "round": round_index,
+                "summary": {
+                    "total": len(group),
+                    "passed": sum(1 for item in group if item.get("status") == "passed"),
+                    "partial": sum(1 for item in group if item.get("status") == "partial"),
+                    "failed": sum(1 for item in group if item.get("status") == "failed"),
+                    "error": sum(1 for item in group if item.get("status") == "error"),
+                    "cancelled": sum(1 for item in group if item.get("status") == "cancelled"),
+                    "durationMs": sum(
+                        int(item.get("durationMs") or 0) for item in group
+                    ),
+                },
+            }
+        )
+    return rows
+
+
+def _round_matrix(batch: Mapping[str, Any], rounds: int) -> list[list[object]]:
+    """Return one row per ``(case, protocol)`` with its status in every round."""
+    items = batch.get("items")
+    statuses: dict[tuple[object, object], dict[int, str]] = {}
+    names: dict[tuple[object, object], object] = {}
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        key = (item.get("caseId"), item.get("protocol"))
+        statuses.setdefault(key, {})[int(item.get("round") or 1)] = str(
+            item.get("status") or ""
+        )
+        names[key] = item.get("name", "")
+    rows: list[list[object]] = []
+    for key in sorted(statuses, key=lambda pair: (str(pair[0]), str(pair[1]))):
+        case_id, protocol = key
+        rows.append(
+            [
+                case_id,
+                names[key],
+                protocol,
+                *[
+                    statuses[key].get(round_index, "")
+                    for round_index in range(1, rounds + 1)
+                ],
+            ]
+        )
+    return rows
 
 
 def _reference_row(item: Mapping[str, Any]) -> list[object]:

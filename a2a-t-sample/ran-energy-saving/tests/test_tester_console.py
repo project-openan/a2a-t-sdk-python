@@ -15,7 +15,12 @@ import httpx
 import pytest
 from demo.web.app import create_app
 from demo.web.tester.decisions import a2at_decisions, pure_answers
-from demo.web.tester.service import DEFAULT_CONCURRENCY, MAX_CONCURRENCY
+from demo.web.tester.service import (
+    DEFAULT_CONCURRENCY,
+    DEFAULT_ROUNDS,
+    MAX_CONCURRENCY,
+    MAX_ROUNDS,
+)
 from eval.osp.intent_schema import OSP_INTENT_SCHEMA
 from eval.osp.runner import load_cases
 from protocol.client_flow import ClientFlowResult
@@ -906,3 +911,72 @@ def test_the_console_has_a_concurrency_control() -> None:
     assert "concurrency: Number($(\"config-concurrency\")" in js
     assert "/items/${index}/cancel" in js
     assert "运行中 ${summary.running || 0}" in js
+
+
+async def test_the_meta_advertises_the_round_cap(client: httpx.AsyncClient) -> None:
+    payload = (await client.get("/api/tester/meta")).json()
+
+    assert payload["maxRounds"] == MAX_ROUNDS
+    assert payload["defaults"]["rounds"] == DEFAULT_ROUNDS
+
+
+async def test_a_batch_can_be_created_with_rounds(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        "/api/tester/batches",
+        json={
+            "caseIds": [1],
+            "protocols": ["a2a-t"],
+            "stopAfter": "validate",
+            "rounds": 3,
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["rounds"] == 3
+    assert payload["currentRound"] == 1
+    assert [item["round"] for item in payload["items"]] == [1, 2, 3]
+
+
+async def test_an_out_of_range_rounds_is_rejected(client: httpx.AsyncClient) -> None:
+    for value in (0, MAX_ROUNDS + 1, True):
+        response = await client.post(
+            "/api/tester/batches",
+            json={
+                "caseIds": [1],
+                "protocols": ["a2a-t"],
+                "stopAfter": "validate",
+                "rounds": value,
+            },
+        )
+        assert response.status_code == 400, value
+
+
+async def test_a_multi_round_batch_rejects_keep_tasks(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        "/api/tester/batches",
+        json={
+            "caseIds": [1],
+            "protocols": ["a2a-t"],
+            "stopAfter": "validate",
+            "rounds": 2,
+            "keepTasks": True,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "保留任务" in response.json()["error"]
+
+
+def test_the_console_has_a_round_control() -> None:
+    tester = Path(__file__).resolve().parent.parent / "demo" / "web" / "tester"
+    page = (tester / "index.html").read_text(encoding="utf-8")
+    js = (tester / "main.js").read_text(encoding="utf-8")
+
+    assert 'id="config-rounds"' in page
+    assert 'id="round-filter"' in page
+    assert 'id="round-head"' in page
+    assert "maxRounds" in js
+    assert "rounds," in js
+    assert "roundSummaryNote" in js
+    assert "syncRoundsKeepTasks" in js

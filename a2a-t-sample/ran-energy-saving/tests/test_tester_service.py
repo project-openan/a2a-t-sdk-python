@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from a2a_t.core.errors.catalog import ErrorCatalog
@@ -23,10 +23,13 @@ from demo.web.tester.service import (
     CASE_FAILED,
     CASE_PARTIAL,
     CASE_PASSED,
+    CASE_PENDING,
     CASE_RUNNING,
     DECISION_MODE_LIVE,
     DEFAULT_CONCURRENCY,
+    DEFAULT_ROUNDS,
     MAX_CONCURRENCY,
+    MAX_ROUNDS,
     STAGE_ERROR,
     STAGE_FAILED,
     STAGE_PASSED,
@@ -2406,3 +2409,292 @@ async def test_the_concurrent_sdk_stage_pools_clients_per_slot(
     manager._close_prompt_pool()
     assert manager._prompt_env_dirs == []
     assert not any(directory.exists() for directory in built)
+
+
+def _wide(document: dict[str, object]) -> dict[str, Any]:
+    """Return a batch document as an untyped mapping so nested assertions stay readable."""
+    return cast(dict[str, Any], document)
+
+
+def _required(document: dict[str, object] | None) -> dict[str, Any]:
+    """Return one batch snapshot, failing the test when it is missing."""
+    assert document is not None
+    return _wide(document)
+
+
+def test_rounds_default_to_one_and_reject_out_of_range(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    created = _wide(
+        manager.create(case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="validate")
+    )
+    assert created["rounds"] == DEFAULT_ROUNDS == 1
+    assert [item["round"] for item in created["items"]] == [1]
+
+    maximum = _wide(
+        manager.create(
+            case_ids=[1],
+            protocols=[PROTOCOL_A2A_T],
+            stop_after="validate",
+            rounds=MAX_ROUNDS,
+        )
+    )
+    assert maximum["rounds"] == MAX_ROUNDS == 8
+    assert [item["round"] for item in maximum["items"]] == list(range(1, MAX_ROUNDS + 1))
+
+    for value in (0, MAX_ROUNDS + 1, True, 2.0, "3"):
+        with pytest.raises(ValueError):
+            manager.create(
+                case_ids=[1],
+                protocols=[PROTOCOL_A2A_T],
+                stop_after="validate",
+                rounds=cast(Any, value),
+            )
+
+
+def test_a_multi_round_batch_cannot_keep_its_tasks(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+
+    with pytest.raises(ValueError):
+        manager.create(
+            case_ids=[1],
+            protocols=[PROTOCOL_A2A_T],
+            stop_after="validate",
+            rounds=2,
+            keep_tasks=True,
+        )
+
+    single = _wide(
+        manager.create(
+            case_ids=[1],
+            protocols=[PROTOCOL_A2A_T],
+            stop_after="validate",
+            keep_tasks=True,
+        )
+    )
+    assert single["keepTasks"] is True
+
+
+def test_rounds_expand_round_major_and_keep_the_single_pass_order(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    single = _wide(
+        manager.create(case_ids=[1, 2], protocols=[PROTOCOL_A2A_T], stop_after="send")
+    )
+    assert [(item["caseId"], item["protocol"]) for item in single["items"]] == [
+        (1, PROTOCOL_A2A_T),
+        (2, PROTOCOL_A2A_T),
+    ]
+
+    multi = _wide(
+        manager.create(
+            case_ids=[1, 2], protocols=[PROTOCOL_A2A_T], stop_after="send", rounds=2
+        )
+    )
+    assert [(item["round"], item["caseId"], item["protocol"]) for item in multi["items"]] == [
+        (1, 1, PROTOCOL_A2A_T),
+        (1, 2, PROTOCOL_A2A_T),
+        (2, 1, PROTOCOL_A2A_T),
+        (2, 2, PROTOCOL_A2A_T),
+    ]
+
+
+async def test_rounds_run_with_a_barrier_between_passes(tmp_path: Path) -> None:
+    runs = _GatedRuns()
+    manager = _manager(tmp_path, runs)
+    created = _wide(
+        manager.create(
+            case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="send", rounds=2
+        )
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_in_flight(runs, 1)
+
+    snapshot = _required(manager.get(batch_id))
+    assert snapshot["currentRound"] == 1
+    assert snapshot["items"][0]["status"] == CASE_RUNNING
+    assert snapshot["items"][1]["status"] == CASE_PENDING
+    assert len(runs.calls) == 1
+
+    runs.release(next(iter(runs.gates)))
+    deadline = asyncio.get_running_loop().time() + 10.0
+    while len(runs.calls) < 2 and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.01)
+    assert len(runs.calls) == 2
+
+    snapshot = _required(manager.get(batch_id))
+    assert snapshot["currentRound"] == 2
+    assert snapshot["items"][0]["status"] == CASE_PASSED
+    assert snapshot["items"][1]["status"] == CASE_RUNNING
+
+    runs.release_all()
+    finished = _wide(await _wait_status(manager, batch_id, "finished"))
+    assert finished["summary"]["passed"] == 2
+    assert [entry["round"] for entry in finished["roundSummaries"]] == [1, 2]
+    assert all(
+        entry["summary"]["passed"] == 1 and entry["summary"]["total"] == 1
+        for entry in finished["roundSummaries"]
+    )
+    assert finished["crossRound"] == {"stable": 1, "total": 1}
+
+
+async def test_cancelling_one_round_leaves_the_other_rounds_running(tmp_path: Path) -> None:
+    runs = _GatedRuns()
+    manager = _manager(tmp_path, runs)
+    created = _wide(
+        manager.create(
+            case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="send", rounds=2
+        )
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_in_flight(runs, 1)
+
+    await manager.cancel_item(batch_id, 1)
+    snapshot = _required(manager.get(batch_id))
+    assert snapshot["items"][1]["status"] == CASE_CANCELLED
+
+    runs.release_all()
+    finished = _wide(await _wait_status(manager, batch_id, "finished"))
+    assert len(runs.calls) == 1
+    assert finished["summary"]["passed"] == 1
+    assert finished["summary"]["cancelled"] == 1
+
+
+async def test_a_rerun_touches_only_its_own_round_row(tmp_path: Path) -> None:
+    runs = _FakeRuns(_finish)
+    manager = _manager(tmp_path, runs)
+    created = _wide(
+        manager.create(
+            case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="send", rounds=2
+        )
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    finished = _wide(await _wait_status(manager, batch_id, "finished"))
+    first_run = finished["items"][0]["runId"]
+    second_run = finished["items"][1]["runId"]
+    assert finished["items"][1]["round"] == 2
+
+    await manager.rerun_item(batch_id, 1)
+    rerun = _wide(await _wait_status(manager, batch_id, "finished"))
+    assert rerun["items"][0]["runId"] == first_run
+    assert rerun["items"][1]["runId"] != second_run
+    assert rerun["items"][1]["round"] == 2
+
+
+async def test_cancelling_a_multi_round_batch_cancels_every_round(tmp_path: Path) -> None:
+    runs = _GatedRuns()
+    manager = _manager(tmp_path, runs)
+    created = _wide(
+        manager.create(
+            case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="send", rounds=3
+        )
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_in_flight(runs, 1)
+
+    await manager.cancel(batch_id)
+    finished = _wide(await _wait_status(manager, batch_id, "cancelled"))
+    assert len(runs.calls) == 1
+    assert all(item["status"] == CASE_CANCELLED for item in finished["items"])
+
+
+async def test_retry_keeps_the_round_count_and_retries_only_failed_cases(
+    tmp_path: Path,
+) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    created = _wide(
+        manager.create(
+            case_ids=[1, 2], protocols=[PROTOCOL_A2A_T], stop_after="validate", rounds=2
+        )
+    )
+    batch_id = str(created["batchId"])
+    batch = manager._batches[batch_id]
+    batch.items[0].status = CASE_FAILED
+    batch.items[3].status = CASE_ERROR
+
+    retried = _wide(await manager.retry(batch_id))
+
+    assert retried["rounds"] == 2
+    assert retried["keepTasks"] is False
+    assert [(item["round"], item["caseId"]) for item in retried["items"]] == [
+        (1, 1),
+        (1, 2),
+        (2, 1),
+        (2, 2),
+    ]
+    assert retried["caseIds"] == [1, 2]
+
+
+def test_the_round_summaries_count_each_round_and_the_stable_cases(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    created = _wide(
+        manager.create(
+            case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="validate", rounds=2
+        )
+    )
+    batch_id = str(created["batchId"])
+    batch = manager._batches[batch_id]
+    batch.items[0].status = CASE_PASSED
+    batch.items[1].status = CASE_FAILED
+
+    snapshot = _required(manager.get(batch_id))
+    assert snapshot["roundSummaries"][0]["summary"]["passed"] == 1
+    assert snapshot["roundSummaries"][1]["summary"]["failed"] == 1
+    assert snapshot["crossRound"] == {"stable": 0, "total": 1}
+
+    batch.items[1].status = CASE_PASSED
+    snapshot = _required(manager.get(batch_id))
+    assert snapshot["crossRound"] == {"stable": 1, "total": 1}
+
+
+def test_a_single_round_batch_reports_no_cross_round_stability(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    created = _wide(
+        manager.create(case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="validate")
+    )
+
+    assert created["rounds"] == 1
+    assert created["currentRound"] == 1
+    assert created["roundSummaries"][0]["round"] == 1
+    assert created["crossRound"] == {"stable": 0, "total": 0}
+
+
+def test_a_persisted_multi_round_batch_round_trips(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    created = _wide(
+        manager.create(
+            case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="validate", rounds=2
+        )
+    )
+    batch_id = str(created["batchId"])
+
+    reloaded = _manager(tmp_path, _FakeRuns(_finish))
+    snapshot = _required(reloaded.get(batch_id))
+    assert snapshot["rounds"] == 2
+    assert snapshot["currentRound"] == 1
+    assert [item["round"] for item in snapshot["items"]] == [1, 2]
+    assert [entry["round"] for entry in snapshot["roundSummaries"]] == [1, 2]
+
+
+def test_an_old_v3_batch_loads_as_a_single_round(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    created = _wide(
+        manager.create(case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="validate")
+    )
+    batch_id = str(created["batchId"])
+    path = tmp_path / "tester" / f"{batch_id}.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["schema"] = "osp-tester/v3"
+    for key in ("rounds", "currentRound", "roundSummaries", "crossRound"):
+        document.pop(key, None)
+    for item in document["items"]:
+        item.pop("round", None)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    reloaded = _manager(tmp_path, _FakeRuns(_finish))
+    snapshot = _required(reloaded.get(batch_id))
+    assert snapshot["rounds"] == 1
+    assert snapshot["currentRound"] == 1
+    assert [item["round"] for item in snapshot["items"]] == [1]
