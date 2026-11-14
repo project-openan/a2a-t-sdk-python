@@ -116,7 +116,7 @@ DEFAULT_CONCURRENCY: Final[int] = 1
 #: Hard ceiling of a batch's concurrency. The process does not model an environment's real
 #: capacity; the operator raises the value when they hold an exclusive environment and lowers it
 #: again when the NMS reports a task-quota or conflict error.
-MAX_CONCURRENCY: Final[int] = 8
+MAX_CONCURRENCY: Final[int] = 32
 
 
 def default_decision_mode(model_mode: str) -> str:
