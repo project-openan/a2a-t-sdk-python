@@ -706,10 +706,22 @@ class ScriptedDecisionProvider:
     server behavior drifts from its script fails loudly instead of silently accepting.
     """
 
-    def __init__(self, decisions: Sequence[NegotiationDecision]) -> None:
-        """Create one scripted provider over an ordered decision list."""
+    def __init__(
+        self,
+        decisions: Sequence[NegotiationDecision],
+        *,
+        graceful_exhaustion: bool = False,
+    ) -> None:
+        """Create one scripted provider over an ordered decision list.
+
+        ``graceful_exhaustion`` marks a script the caller supplied for one run (the tester's case
+        column) rather than the scenario's own catalogue. Such a script running out means the case
+        recorded fewer rounds than the vendor asked, so the client stops answering and reports the
+        reason instead of failing the run; a scenario script keeps failing loudly.
+        """
         self._decisions = tuple(decisions)
         self._index = 0
+        self.graceful_exhaustion = graceful_exhaustion
 
     @property
     def remaining(self) -> int:

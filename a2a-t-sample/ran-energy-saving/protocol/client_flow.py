@@ -119,6 +119,7 @@ from shared.trace import (
 from protocol.client_policy import ClientPolicy, agreed_target_value, apply_automated_decision
 from protocol.decision_provider import (
     AdkDecisionProvider,
+    DecisionProviderError,
     DecisionTimeoutError,
     NegotiationDecisionProvider,
     ScriptedDecisionProvider,
@@ -215,6 +216,11 @@ _ERROR_NO_PROPOSE: Final[str] = "The server sent a negotiation message that is n
 _ERROR_DECISION_WAIT: Final[str] = (
     "The decision provider stopped waiting without a decision; nothing was sent and the run "
     "failed (wiring error)."
+)
+#: Unfinished-run reason of a per-run decision script that ran out before the vendor stopped.
+_DECISIONS_EXHAUSTED_REASON: Final[str] = (
+    "第 {round} 轮协商没有可用的决策答复（用例提供的协商回复已耗尽）；"
+    "未再作答，Task 仍停在下游等待。"
 )
 
 
@@ -1456,6 +1462,21 @@ async def run_client_flow(
                 # The provider loop normally only notifies the page. Reaching here means the wait
                 # sink was never installed; refuse to send an abort the operator never chose.
                 raise ClientFlowError(_ERROR_DECISION_WAIT) from exc
+            except DecisionProviderError as exc:
+                if not _allows_graceful_exhaustion(provider):
+                    raise
+                # A case-supplied script ran out: the vendor asked one more round than the case
+                # recorded. Stop answering, say why, and keep the evidence already received.
+                result.error = _DECISIONS_EXHAUSTED_REASON.format(round=session.round)
+                emit_trace(
+                    "decision_unavailable",
+                    phase=PHASE_NEGOTIATION,
+                    title="Decision script exhausted; question left unanswered",
+                    round_number=session.round,
+                    context_id=context_id,
+                    detail={"reason": result.error, "provider": type(exc).__name__},
+                )
+                return finish(FINAL_STATE_INCOMPLETE)
             policy_outcome = None
             if _requires_auto_verification(provider):
                 decision, policy_outcome = apply_automated_decision(
@@ -1891,6 +1912,15 @@ def _match_area_option(
             if contained is None and folded in answer:
                 contained = option
     return contained
+
+
+def _allows_graceful_exhaustion(provider: object) -> bool:
+    """Return whether an exhausted script is a recorded reason instead of a run failure.
+
+    Only the provider the caller scripted for one run (the tester's case column) opts in; the
+    scenario catalogue keeps failing loudly when the server drifts from its script.
+    """
+    return bool(getattr(provider, "graceful_exhaustion", False))
 
 
 def _requires_auto_verification(provider: NegotiationDecisionProvider) -> bool:

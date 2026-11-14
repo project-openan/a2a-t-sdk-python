@@ -5,6 +5,7 @@ Only this module (and the entry points that import it) may combine ``protocol`` 
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -16,6 +17,8 @@ from protocol.run_spec import RunSpec
 from shared.config import DISCOVERY_NMS, INTENT_MODE_PROCESSED, SampleConfig
 from shared.models import NegotiationDecision
 from shared.run_constants import PROTOCOL_A2A_T, PROTOCOL_PURE
+
+_LOGGER = logging.getLogger("ran_energy_saving.composition")
 
 
 def offline_model_factory(run_spec: RunSpec) -> Any:
@@ -53,13 +56,26 @@ def install_offline_provider() -> None:
 
 
 def _scripted_pure_answer(answers: Sequence[str]) -> Callable[[dict[str, object]], str]:
-    """Return a pure A2A answer callback that replays ``answers`` in order."""
+    """Return a pure A2A answer callback that replays ``answers`` in order.
+
+    An exhausted script answers with an empty string instead of raising: the flow then records
+    "no answer left" as the unfinished reason and keeps the downstream's receipt, which is the
+    evidence a batch test wants. A vendor that asks more rounds than the case recorded is a case
+    data gap, not a client failure.
+    """
     remaining = list(answers)
+    consumed = 0
 
     def answer(event: dict[str, object]) -> str:
         del event
+        nonlocal consumed
         if not remaining:
-            raise RuntimeError("The pure A2A answer script is exhausted.")
+            _LOGGER.warning(
+                "pure A2A answer script exhausted after %s answer(s); leaving the question unanswered",
+                consumed,
+            )
+            return ""
+        consumed += 1
         return remaining.pop(0)
 
     return answer

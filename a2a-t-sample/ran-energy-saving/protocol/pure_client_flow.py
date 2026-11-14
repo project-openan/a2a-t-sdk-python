@@ -12,6 +12,7 @@ import inspect
 import logging
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
+from typing import Final
 
 from a2a.client.client import ClientCallContext
 from a2a.types import Role, SendMessageRequest
@@ -23,7 +24,8 @@ from shared.config import (
     PURE_FOLLOWUP_TASK,
 )
 from shared.models import NegotiationProposeView
-from shared.trace import PHASE_TASK_PROMPT, TraceRecorder, current_trace
+from shared.server_intent import parse_server_intent
+from shared.trace import PHASE_NEGOTIATION, PHASE_TASK_PROMPT, TraceRecorder, current_trace
 
 from protocol.client_flow import (
     ClientFlowResult,
@@ -45,6 +47,22 @@ _NEGOTIATION_KINDS: frozenset[str] = frozenset({"information", "target", "feasib
 
 #: ``pure.phase`` values that describe the OSS hop rather than the negotiation itself.
 _RELAY_PHASES: frozenset[str] = frozenset({"question", "answer"})
+
+#: Prefixes of the downstream's success copy. A real NMS reports a completed Create/Modify as a
+#: status with this text (usually followed by its structured Task payload) and no negotiation
+#: metadata; that frame is a receipt, not a question the client must answer.
+_RECEIPT_PREFIXES: Final[tuple[str, ...]] = (
+    "task creation succeeded",
+    "task modification succeeded",
+    "任务创建成功",
+    "任务修改成功",
+)
+
+#: Reason recorded when the caller's answer script cannot answer a vendor question any more.
+_UNANSWERED_QUESTION_REASON: Final[str] = (
+    "厂商第 {round} 轮追问没有可用答案（用例提供的答案已耗尽或为空）；"
+    "未再作答，下游回执与意图已保留。"
+)
 
 
 async def run_pure_client_flow(
@@ -228,6 +246,17 @@ async def _drive_negotiation(
             break
         text = await _answer_for(pending, answer)
         if not text.strip():
+            # The question is real but the caller has no answer left. Leaving it unanswered is
+            # the honest outcome; the receipt and its intent payload stay in the recorded events.
+            result.error = _UNANSWERED_QUESTION_REASON.format(round=rounds + 1)
+            _emit_flow_note(
+                trace_sink,
+                kind="answer_unavailable",
+                title="Pure A2A question left unanswered",
+                round_number=rounds + 1,
+                context_id=_text(pending.get("context_id")),
+                detail={"reason": result.error},
+            )
             break
         if on_answer is not None:
             await on_answer(pending, text)
@@ -341,6 +370,11 @@ def _pending_negotiation(
                 continue
             if pure and pure.get("kind") not in (None, "negotiation"):
                 continue
+            if _is_downstream_receipt(event):
+                # The vendor reports a completed Modify as INPUT_REQUIRED plus its structured
+                # Task payload (and no negotiation metadata). Answering it would spend a round the
+                # case never recorded and leave the Task waiting for an answer nobody asked for.
+                return None
             return event
         if allow_plain_question and is_plain_question(event):
             return event
@@ -363,6 +397,22 @@ def is_plain_question(event: Mapping[str, object]) -> bool:
     if isinstance(metadata, Mapping) and is_negotiation_message(metadata_to_dict(metadata)):
         return False
     return not event.get("task_id")
+
+
+def _is_downstream_receipt(event: Mapping[str, object]) -> bool:
+    """Return whether one pure status is the downstream's success receipt, not a question.
+
+    A real NMS stops a pure Modify at ``INPUT_REQUIRED`` while the copy says the change already
+    succeeded (``Task modification succeeded{...}``) and carries no negotiation metadata. The
+    structured Task payload, or the localized success prefix, identifies the receipt.
+    """
+    text = event.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return False
+    if parse_server_intent(text) is not None:
+        return True
+    lowered = text.lstrip().lower()
+    return any(lowered.startswith(prefix) for prefix in _RECEIPT_PREFIXES)
 
 
 def pure_metadata(event: Mapping[str, object]) -> dict[str, object]:
@@ -477,6 +527,33 @@ async def _answer_for(
     if inspect.isawaitable(result):
         result = await result
     return result if isinstance(result, str) else ""
+
+
+def _emit_flow_note(
+    trace_sink: Callable[[dict[str, object]], None] | None,
+    *,
+    kind: str,
+    title: str,
+    round_number: int | None = None,
+    context_id: str | None = None,
+    detail: Mapping[str, object] | None = None,
+) -> None:
+    """Record one client-side flow note so the drawer can explain an unfinished run."""
+    if trace_sink is None:
+        return
+    recorder = TraceRecorder(current_trace().run_id or "", id_prefix="flow-note")
+    span = recorder.emit(
+        kind=kind,
+        phase=PHASE_NEGOTIATION,
+        title=title,
+        actor="client",
+        side="client",
+        direction="internal",
+        round=round_number,
+        context_id=context_id,
+        detail=detail,
+    )
+    trace_sink(span.to_dict())
 
 
 def _emit_message_sent(

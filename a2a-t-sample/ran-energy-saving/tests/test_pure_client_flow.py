@@ -206,6 +206,81 @@ async def test_no_answer_stops_the_flow() -> None:
     assert result.final_state != FINAL_STATE_TASK_COMPLETED
 
 
+async def test_a_structured_receipt_is_not_answered() -> None:
+    """A completed Modify arrives as INPUT_REQUIRED with its payload and no negotiation metadata."""
+    receipt = {
+        "kind": "status",
+        "task_id": "task-1",
+        "context_id": "ctx-1",
+        "state": "TASK_STATE_INPUT_REQUIRED",
+        "text": (
+            'Task modification succeeded{"Operation type":"Modify",'
+            '"Energy saving region":"A2ATestRegion"}'
+        ),
+    }
+    transport = _FakeTransport([[receipt]])
+    answers: list[str] = []
+
+    def answer(event: dict[str, object]) -> str:
+        del event
+        answers.append("should not be used")
+        return "should not be used"
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Modify the rate.",
+        answer=answer,
+    )
+
+    assert answers == []
+    assert len(transport.requests) == 1
+    assert result.final_state == FINAL_STATE_INCOMPLETE
+    assert result.error is None
+
+
+async def test_a_receipt_prefix_is_not_answered_without_a_payload() -> None:
+    receipt = {
+        "kind": "status",
+        "task_id": "task-1",
+        "context_id": "ctx-1",
+        "state": "TASK_STATE_INPUT_REQUIRED",
+        "text": "Task modification succeeded.",
+    }
+    transport = _FakeTransport([[receipt]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Modify the rate.",
+        answer=lambda event: "should not be used",
+    )
+
+    assert len(transport.requests) == 1
+    assert result.final_state == FINAL_STATE_INCOMPLETE
+
+
+async def test_an_exhausted_answer_script_records_why_it_stopped() -> None:
+    """The run keeps the receipt and says which round nobody could answer."""
+    transport = _FakeTransport(
+        [[_input_required(round_number=1)], [_input_required(round_number=2)]]
+    )
+    remaining = ["Use {00:00~06:00,10Mbps}."]
+
+    def answer(event: dict[str, object]) -> str:
+        del event
+        return remaining.pop(0) if remaining else ""
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=answer,
+    )
+
+    assert len(transport.requests) == 2
+    assert result.final_state == FINAL_STATE_INCOMPLETE
+    assert result.error is not None
+    assert "第 2 轮" in result.error
+
+
 async def test_input_required_without_sample_metadata_is_still_detected() -> None:
     """A real NMS returns a standard A2A status without the sample's ``pure`` metadata."""
     event = _input_required()

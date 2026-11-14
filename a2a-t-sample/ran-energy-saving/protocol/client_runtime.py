@@ -330,7 +330,10 @@ def _decision_provider(
         )
     if mode == MODE_SCRIPTED:
         decisions = scripted_decisions if scripted_decisions is not None else run_spec.scripted_decisions
-        return ScriptedDecisionProvider(decisions)
+        # A per-run script (tester case column) may run out before the vendor stops asking; that
+        # is a case-data gap and must end the run with a visible reason, not a failed run. The
+        # scenario's own catalogue script keeps failing loudly on drift.
+        return ScriptedDecisionProvider(decisions, graceful_exhaustion=scripted_decisions is not None)
     if mode == MODE_AUTO:
         return _build_adk_decision_provider(
             config,

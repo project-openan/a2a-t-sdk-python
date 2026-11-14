@@ -317,11 +317,10 @@ def test_the_submitted_status_payload_is_kept_as_the_downstream_intent(tmp_path:
     assert created["detail"]["params"] == payload
 
 
-def test_a_status_that_is_not_submitted_never_populates_the_downstream_intent(
-    tmp_path: Path,
-) -> None:
+def test_a_working_status_payload_is_kept_as_the_downstream_intent(tmp_path: Path) -> None:
+    """A real NMS reports an accepted Modify as WORKING; its payload is still the intent."""
     run = _run(tmp_path)
-    payload = {"Operation type": "Create", "Energy saving region": "A2ATestRegion"}
+    payload = {"Operation type": "Modify", "Energy saving region": "A2ATestRegion"}
 
     run.record_event(
         {
@@ -329,7 +328,46 @@ def test_a_status_that_is_not_submitted_never_populates_the_downstream_intent(
             "state": "TASK_STATE_WORKING",
             "task_id": "task-1",
             "context_id": "ctx-1",
-            "text": f"Task creation succeeded{json.dumps(payload, separators=(',', ':'))}",
+            "text": f"Task modification succeeded{json.dumps(payload, separators=(',', ':'))}",
+        }
+    )
+
+    assert run.server_intent == payload
+    assert run.snapshot()["serverIntent"] == payload
+    # ``Task created`` stays tied to the A2A submission signal; WORKING must not emit it.
+    assert not [span for span in run.traces if span.get("kind") == "task_created"]
+
+
+def test_an_input_required_status_payload_is_kept_as_the_downstream_intent(
+    tmp_path: Path,
+) -> None:
+    """The pure-A2A hop stops at INPUT_REQUIRED with the same completed-Modify payload."""
+    run = _run(tmp_path)
+    payload = {"Operation type": "Modify", "Energy saving region": "A2ATestRegion"}
+
+    run.record_event(
+        {
+            "kind": "status",
+            "state": "TASK_STATE_INPUT_REQUIRED",
+            "task_id": "task-1",
+            "context_id": "ctx-1",
+            "text": f"Task modification succeeded{json.dumps(payload, separators=(',', ':'))}",
+        }
+    )
+
+    assert run.server_intent == payload
+
+
+def test_a_status_without_the_task_payload_keeps_the_intent_empty(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+
+    run.record_event(
+        {
+            "kind": "status",
+            "state": "TASK_STATE_WORKING",
+            "task_id": "task-1",
+            "context_id": "ctx-1",
+            "text": "Task modification succeeded",
         }
     )
 

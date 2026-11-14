@@ -4,8 +4,12 @@ The A2A Task state is the machine-readable submission signal (:data:`shared.run_
 TASK_STATE_SUBMITTED`): the localized copy of that status must never decide whether the Task was
 created. The copy *does* carry data, though: the vendor NMS and the simulator append their own
 structured understanding of the Task-T right after it, e.g. ``Task creation succeeded{"Operation
-type":"Create",...}``. This module reads that payload as evidence only; callers must already know
-the state is ``TASK_STATE_SUBMITTED``.
+type":"Create",...}``. This module reads that payload as evidence only.
+
+The payload is not tied to one state: a real NMS accepts a Create as ``SUBMITTED`` but reports an
+accepted Modify as ``WORKING`` (A2A-T), and its pure-A2A hop stops at ``INPUT_REQUIRED`` carrying
+the same copy. Callers therefore read it from any status frame; the ``Operation type`` key keeps an
+unrelated JSON object from being mistaken for the downstream's reading.
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ def parse_server_intent(text: object) -> dict[str, object] | None:
     :data:`OPERATION_KEY` yields ``None``.
 
     Args:
-        text: status message text of a ``TASK_STATE_SUBMITTED`` event.
+        text: status message text of any Task status event.
 
     Returns:
         The decoded payload, or ``None`` when the message carries none.

@@ -48,6 +48,7 @@ from protocol.client_flow import ClientFlowResult
 from protocol.client_runtime import MODE_AUTO, MODE_SCRIPTED
 from protocol.client_service import RunState
 from shared.run_constants import (
+    FINAL_STATE_INCOMPLETE,
     FINAL_STATE_INPUT_INVALID,
     FINAL_STATE_TASK_COMPLETED,
     FINAL_STATE_TASK_FAILED,
@@ -1273,6 +1274,30 @@ async def test_a_matching_downstream_payload_passes_the_intent_stage(tmp_path: P
     assert stage.diffs == []
     assert item.server_intent == CASES[1]["expect"]["intent"]
     assert item.to_dict()["serverIntent"] == CASES[1]["expect"]["intent"]
+
+
+async def test_an_unfinished_flow_reason_is_visible_in_the_item(tmp_path: Path) -> None:
+    """The result column shows why a run stopped unfinished, without opening the drawer."""
+    reason = (
+        "第 2 轮追问没有可用答案（用例提供的答案已耗尽）；未再作答，下游回执与意图已保留。"
+    )
+
+    def builder(run: RunState) -> None:
+        _finish(run)
+        run.result = ClientFlowResult(final_state=FINAL_STATE_INCOMPLETE, error=reason)
+        run.latest_task_state = "TASK_STATE_INPUT_REQUIRED"
+
+    manager = _manager(tmp_path, _FakeRuns(builder))
+    created = manager.create(
+        case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="final", approval=None
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_status(manager, batch_id, "finished")
+
+    item = manager._batches[batch_id].items[0]
+    assert item.error == reason
+    assert item.to_dict()["error"] == reason
 
 
 async def test_a_downstream_that_returns_no_payload_records_the_intent_stage(

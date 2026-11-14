@@ -74,7 +74,11 @@ from protocol.client_flow import (
     run_client_flow,
 )
 from protocol.client_policy import ClientPolicy
-from protocol.decision_provider import DecisionTimeoutError, ScriptedDecisionProvider
+from protocol.decision_provider import (
+    DecisionProviderError,
+    DecisionTimeoutError,
+    ScriptedDecisionProvider,
+)
 from protocol.messages import (
     END_MESSAGE_TEXT,
     SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY,
@@ -459,6 +463,38 @@ async def _run(
         single_extension_per_message=single_extension_per_message,
     )
     return result, transport, prompt_client
+
+
+async def test_a_tester_script_exhaustion_ends_the_run_with_a_reason() -> None:
+    """A case column with fewer rounds than the vendor asks must not fail the run."""
+    transport = ScriptedTransport([[propose_event("information", 1)], _task_completed_batch()])
+
+    result = await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=transport,
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((), graceful_exhaustion=True),
+        language="en-US",
+    )
+
+    assert result.final_state == FINAL_STATE_INCOMPLETE
+    assert result.error is not None
+    assert "第 1 轮" in result.error
+    assert len(transport.requests) == 1
+
+
+async def test_a_scenario_script_exhaustion_still_fails_loudly() -> None:
+    """The catalog's own scripts keep the historical contract: drift is an error."""
+    with pytest.raises(DecisionProviderError):
+        await run_client_flow(
+            prompt_client=FakePromptClient(),
+            transport=ScriptedTransport(
+                [[propose_event("information", 1)], _task_completed_batch()]
+            ),
+            user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+            provider=ScriptedDecisionProvider(()),
+            language="en-US",
+        )
 
 
 async def test_message_sent_span_carries_the_wire_fields() -> None:

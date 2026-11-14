@@ -143,8 +143,8 @@ class RunState:
         remote_task_id: last Task id observed on the remote side (cancel target).
         remote_context_id: last Task context id observed on the remote side.
         latest_task_state: last Task state the remote side *pushed*; a poll never updates it.
-        server_intent: structured Task payload the downstream returned with ``TASK_STATE_SUBMITTED``,
-            i.e. the downstream's own understanding of the Task-T (``None`` when it returns none).
+        server_intent: structured Task payload the downstream returned with any status frame, i.e.
+            its own understanding of the Task-T (``None`` when it returns none).
         intent_mode: ``processed`` or ``raw`` for this run.
         validate_before_send: whether the client validates the rendered Task-T before sending it.
         run_mode: ``create`` or ``modify`` (Modify-only against an existing Task).
@@ -222,9 +222,10 @@ class RunState:
     remote_context_id: str | None = None
     #: Latest Task state observed on the remote side (status event or ``GET /tasks/{id}`` poll).
     latest_task_state: str | None = None
-    #: Structured Task payload the downstream returned with ``TASK_STATE_SUBMITTED``. The A2A state
-    #: proves submission; this payload is the downstream's own reading of the Task-T (the vendor
-    #: NMS and the simulator append it to the localized copy), kept verbatim as evidence.
+    #: Structured Task payload the downstream returned on a status frame. Any state may carry it:
+    #: a real NMS reports an accepted Modify as ``TASK_STATE_WORKING`` or, on its pure-A2A hop, as
+    #: ``TASK_STATE_INPUT_REQUIRED``. The payload is the downstream's own reading of the Task-T
+    #: (the vendor NMS and the simulator append it to the localized copy), kept verbatim.
     server_intent: dict[str, object] | None = None
     #: Downstream Task the server continued on its own far side (NMS / RAN Agent), when it reports
     #: one. These never replace ``result.task_id``/``context_id``: those belong to this run's hop.
@@ -723,9 +724,11 @@ class RunState:
             self._promote_intent_span(intent_payload)
         state = _string_value(event.get("state"))
         # The A2A state is the submission signal; the payload the downstream appends to its
-        # localized copy is data, read only once the state already proves the Task was accepted.
+        # localized copy is data. Read it from *any* status frame: a real NMS accepts a Create as
+        # SUBMITTED but reports an accepted Modify as WORKING (A2A-T) or INPUT_REQUIRED (pure),
+        # and ``parse_server_intent`` already refuses text without the Task-payload key.
         server_intent: dict[str, object] | None = None
-        if state == TASK_STATE_SUBMITTED:
+        if _string_value(event.get("kind")) == "status":
             server_intent = parse_server_intent(event.get("text"))
             if server_intent is not None:
                 self.server_intent = server_intent

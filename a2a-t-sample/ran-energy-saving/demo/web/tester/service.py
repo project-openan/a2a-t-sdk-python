@@ -1579,7 +1579,9 @@ class EvalBatchManager:
                 item.error = message
             elif expected_final is None:
                 status = STAGE_RECORDED
-                message = ""
+                # A flow that stopped unfinished carries its reason here; keep it on the stage so
+                # the chip tooltip explains the run even when the result column is truncated.
+                message = (run.result.error or "") if run.result is not None else ""
             else:
                 status = STAGE_PASSED if actual_final == expected_final else STAGE_FAILED
                 message = "" if status == STAGE_PASSED else "最终状态与预期不一致。"
@@ -1901,6 +1903,10 @@ class EvalBatchManager:
         """Collect the trace id, the operator request and the reference answer of one run."""
         try:
             item.trace_id = run.trace_id or run.run_id
+            if item.error is None and run.result is not None and run.result.error:
+                # The flow finished unfinished on purpose (an exhausted answer script): show its
+                # reason in the result column so a batch run does not need the drawer to read it.
+                item.error = run.result.error
             langfuse_url = _langfuse_url(run)
             if langfuse_url:
                 item.langfuse_url = langfuse_url
