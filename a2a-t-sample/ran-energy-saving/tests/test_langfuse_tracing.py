@@ -211,6 +211,32 @@ def test_llm_span_becomes_a_generation_with_usage(offline_config: SampleConfig) 
     assert generation.parent is not None
 
 
+def test_a_generation_falls_back_to_detail_model_and_usage(
+    offline_config: SampleConfig,
+) -> None:
+    """Some producer shapes keep model/usage in ``detail.response`` only."""
+    exporter, runtime = _exporter(offline_config)
+    span = _llm_span()
+    span.pop("model")
+    span.pop("tokens")
+    span["detail"] = {
+        "response": {
+            "model": "detail-model",
+            "usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7},
+        }
+    }
+
+    exporter(span)
+
+    generation = _by_name(runtime)["LLM call · negotiation_propose_extraction"]
+    assert generation.attributes["langfuse.observation.model.name"] == "detail-model"
+    assert json.loads(generation.attributes["langfuse.observation.usage_details"]) == {
+        "input": 3,
+        "output": 4,
+        "total": 7,
+    }
+
+
 def test_round_spans_group_negotiation_observations(offline_config: SampleConfig) -> None:
     exporter, runtime = _exporter(offline_config)
 

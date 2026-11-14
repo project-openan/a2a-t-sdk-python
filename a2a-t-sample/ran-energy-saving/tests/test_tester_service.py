@@ -58,7 +58,7 @@ from shared.run_constants import (
     PROTOCOL_PURE,
     TASK_STATE_SUBMITTED,
 )
-from shared.trace import record_span
+from shared.trace import emit_span, record_span
 
 CASES: dict[int, dict[str, Any]] = {case["id"]: case for case in load_cases()}
 
@@ -2694,6 +2694,16 @@ async def test_preflight_sdk_spans_are_replayed_into_the_run_trace(
             title="LLM call · preflight",
             prefix="llm_preflight",
         )
+        # A preflight intent row must not overwrite the run's own intent.
+        emit_span(
+            {
+                "kind": "intent_processed",
+                "phase": "task_prompt",
+                "title": "preflight intent",
+                "status": "ok",
+                "detail": {"region": "preflight-region"},
+            }
+        )
         return real_run_case(case, client, stop_after=stop_after)
 
     monkeypatch.setattr(service, "run_case", run_case_with_span)
@@ -2707,7 +2717,9 @@ async def test_preflight_sdk_spans_are_replayed_into_the_run_trace(
     await _wait_status(manager, batch_id, "finished")
 
     run = next(iter(runs.runs.values()))
-    assert any(span.get("title") == "LLM call · preflight" for span in run.traces)
+    titles = [span.get("title") for span in run.traces]
+    assert "LLM call · preflight" in titles
+    assert "preflight intent" not in titles
 
 
 async def test_the_item_snapshot_exposes_the_langfuse_warning(tmp_path: Path) -> None:

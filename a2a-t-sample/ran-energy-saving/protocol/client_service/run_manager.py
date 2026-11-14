@@ -463,6 +463,9 @@ class RunManager:
         self._last_session_sweep = 0.0
         self._metric_tasks: set[asyncio.Task[None]] = set()
         self._langfuse_tasks: set[asyncio.Task[None]] = set()
+        #: Shutdown must not cancel these: a cancelled run detaches its shielded flush, and the
+        #: queued spans are only sent once that task completes.
+        self._langfuse_finish_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def store(self) -> ClientStore | None:
@@ -514,6 +517,9 @@ class RunManager:
                         await asyncio.to_thread(
                             exporter.finish, result=run.result, error=run.error
                         )
+                        # Publish the ingestion warning without resolving the URL (that lookup
+                        # is best effort and must not delay a cancel).
+                        run.langfuse = await asyncio.to_thread(exporter.snapshot)
         return True
 
     def _task_handover_candidates(self, task_id: str) -> list[RunState]:
@@ -1736,7 +1742,7 @@ class RunManager:
             self._active_by_conversation.pop(run.conversation_id or "", None)
             exporter = run.langfuse_exporter
             if exporter is not None:
-                with suppress(Exception):
+                with suppress(asyncio.CancelledError, Exception):
                     # ``finish`` flushes over HTTP and resolves the trace URL; keep both off the
                     # event loop so a slow Langfuse endpoint cannot delay the terminal frame.
                     # Shield it: a second cancellation must not skip the flush, which is the only
@@ -1747,6 +1753,8 @@ class RunManager:
                         ),
                         name=f"langfuse-finish-{run.run_id}",
                     )
+                    self._langfuse_finish_tasks.add(finish_task)
+                    finish_task.add_done_callback(self._langfuse_finish_tasks.discard)
                     finish_task.add_done_callback(_consume_task_error)
                     try:
                         await asyncio.shield(finish_task)
@@ -2154,6 +2162,18 @@ class RunManager:
                 task.cancel()
             with suppress(asyncio.CancelledError, Exception):
                 await asyncio.gather(*tuple(self._langfuse_tasks), return_exceptions=True)
+        if self._langfuse_finish_tasks:
+            # These already own the queued spans; give them a bounded chance to flush instead of
+            # cancelling the only task that can send them.
+            with suppress(asyncio.CancelledError, Exception):
+                _, pending = await asyncio.wait(
+                    tuple(self._langfuse_finish_tasks), timeout=10.0
+                )
+                if pending:
+                    _LOGGER.warning(
+                        "%d Langfuse flush task(s) did not finish within 10s of shutdown",
+                        len(pending),
+                    )
 
 
 def _format_conversation_context(turns: list[Any]) -> str:

@@ -1342,8 +1342,15 @@ class EvalBatchManager:
         Observability only: a replay failure must never change the item result.
         """
         for span in spans:
+            # Only producer work belongs to the run trace. An ``intent_processed`` row from the
+            # preflight stage would overwrite the run's own intent, so it stays out.
+            if str(span.get("kind") or "") not in {"llm", "tool"}:
+                continue
             try:
-                run.record_trace(span)
+                payload = dict(span)
+                payload["runId"] = run.run_id
+                payload["traceId"] = run.trace_id
+                run.record_trace(payload)
             except Exception:  # noqa: BLE001 - tracing must never break the tested flow
                 _LOGGER.warning(
                     "tester preflight span replay failed for run %s", run.run_id, exc_info=True

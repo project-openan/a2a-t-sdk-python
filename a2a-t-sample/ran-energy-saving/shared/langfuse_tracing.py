@@ -841,14 +841,22 @@ class LangfuseSpanExporter:
             attributes[OBSERVATION_LEVEL_ATTRIBUTE] = "ERROR"
             if error:
                 attributes[OBSERVATION_STATUS_MESSAGE_ATTRIBUTE] = error[:2048]
-        model = _as_str(span.get("model"))
-        if observation_type == OBSERVATION_GENERATION and model:
-            attributes[OBSERVATION_MODEL_ATTRIBUTE] = model
-        usage = _usage_details(span.get("tokens"))
-        if observation_type == OBSERVATION_GENERATION and usage:
-            attributes[OBSERVATION_USAGE_ATTRIBUTE] = _json_value(usage)
         detail = span.get("detail")
         detail_map = detail if isinstance(detail, Mapping) else {}
+        response = detail_map.get("response")
+        response_map = response if isinstance(response, Mapping) else {}
+        # Top-level fields are the current producer contract; older/other shapes kept the model
+        # and raw usage only in ``detail.response``. Prefer the top level and fall back so a
+        # generation never loses its model/token columns.
+        model = _as_str(span.get("model")) or _as_str(response_map.get("model"))
+        if observation_type == OBSERVATION_GENERATION and model:
+            attributes[OBSERVATION_MODEL_ATTRIBUTE] = model
+        tokens_value = span.get("tokens")
+        if not isinstance(tokens_value, Mapping) or not tokens_value:
+            tokens_value = response_map.get("usage")
+        usage = _usage_details(tokens_value)
+        if observation_type == OBSERVATION_GENERATION and usage:
+            attributes[OBSERVATION_USAGE_ATTRIBUTE] = _json_value(usage)
         if self._config.langfuse_capture_content:
             input_payload, output_payload = _observation_payload(kind, detail_map)
             if input_payload is not None:
