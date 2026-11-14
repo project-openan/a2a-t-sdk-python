@@ -62,6 +62,7 @@ from shared.run_constants import (
 from shared.run_constants import (
     PROTOCOL_A2A_T as RUNTIME_A2A_T,
 )
+from shared.trace import reset_task_sink, set_task_sink
 
 from demo.web.tester.decisions import a2at_decisions, pure_answers
 from demo.web.tester.export_view import build_answer, read_traceparent
@@ -304,6 +305,8 @@ class CaseItem:
     trace_id: str = ""
     #: Clickable Langfuse trace URL of the run, empty when observability is off or unresolved.
     langfuse_url: str = ""
+    #: Why Langfuse rejected the run's export (project suspended, bad key), empty when healthy.
+    langfuse_warning: str = ""
     #: OSP 11-key structured intent extracted by the tester's SDK ``intent`` stage.
     intent: dict[str, object] | None = None
     #: Structured Task payload the downstream returned with ``TASK_STATE_SUBMITTED``: the
@@ -346,6 +349,7 @@ class CaseItem:
             "attempts": [dict(attempt) for attempt in self.attempts],
             "traceId": self.trace_id,
             "langfuseUrl": self.langfuse_url,
+            "langfuseWarning": self.langfuse_warning,
             "intent": self.intent,
             "serverIntent": self.server_intent,
             "intentCompare": self.intent_comparison(),
@@ -863,6 +867,7 @@ class EvalBatchManager:
         # The arbitration evidence belongs to the attempt that produced it; a rerun must not
         # export the previous run's intent/trace/answer when the new attempt fails early.
         item.trace_id = ""
+        item.langfuse_warning = ""
         item.intent = None
         item.server_intent = None
         item.intent_meta = {}
@@ -1013,6 +1018,9 @@ class EvalBatchManager:
             return
         stages = list(ALL_STAGES[: ALL_STAGES.index(batch.stop_after) + 1])
         effective_case = case
+        #: Producer spans of the pre-run SDK stages. They are replayed into the item's run once
+        #: ``RunManager.start`` creates it, so Langfuse sees the intent/Task-T model calls too.
+        preflight_spans: list[dict[str, object]] = []
         if item.protocol == PROTOCOL_A2A:
             # OSP defines no SDK stages for pure A2A; only the runtime chain applies.
             stages = [stage for stage in stages if stage not in SDK_STAGE_ORDER]
@@ -1025,7 +1033,7 @@ class EvalBatchManager:
                 # The SDK runner owns the two-segment split of a blocked case: it returns the
                 # follow-up request's stages as the outcome and keeps the intercepted original as
                 # ``outcome.interception``. The full flow below dispatches the replacement request.
-                await self._run_sdk_stages(
+                preflight_spans = await self._run_sdk_stages(
                     case,
                     item,
                     sdk_stages[-1],
@@ -1041,7 +1049,9 @@ class EvalBatchManager:
         if batch.stop_after in SDK_STAGE_ORDER:
             item.status = self._item_status(item)
             return
-        await self._run_full_flow(batch, index, item, effective_case, stages)
+        await self._run_full_flow(
+            batch, index, item, effective_case, stages, preflight_spans=preflight_spans
+        )
         item.status = self._item_status(item)
 
     async def _run_sdk_stages(
@@ -1053,17 +1063,25 @@ class EvalBatchManager:
         *,
         outcome_case: Mapping[str, Any] | None = None,
         concurrent: bool = False,
-    ) -> None:
+    ) -> list[dict[str, object]]:
         """Run the SDK stages of one case and record its interception segment, when split.
 
         ``outcome_case`` is the derived replacement case whose expectations judge the returned
         stages; the runner already judged the intercepted original, so those stages are recorded
         verbatim (the runner derived their assertion flags). ``concurrent`` selects the pooled
         client path; the default keeps the historical single locked client.
+
+        Returns the producer spans the SDK stages emitted. They run before the item's run exists,
+        so they have no run id; the caller replays them into the run trace once it starts.
         """
-        results, interception, error = await self._sdk_stage_results(
-            case, stop_after, decision_mode, outcome_case=outcome_case, concurrent=concurrent
-        )
+        preflight_spans: list[dict[str, object]] = []
+        sink_token = set_task_sink(preflight_spans.append)
+        try:
+            results, interception, error = await self._sdk_stage_results(
+                case, stop_after, decision_mode, outcome_case=outcome_case, concurrent=concurrent
+            )
+        finally:
+            reset_task_sink(sink_token)
         item.stages.update(results)
         if interception is not None:
             record: dict[str, object] = {
@@ -1076,6 +1094,7 @@ class EvalBatchManager:
             item.interception = record
         if error:
             item.error = error
+        return preflight_spans
 
     async def _sdk_stage_results(
         self,
@@ -1137,6 +1156,8 @@ class EvalBatchManager:
         item: CaseItem,
         case: Mapping[str, Any],
         stages: Sequence[str],
+        *,
+        preflight_spans: Sequence[Mapping[str, object]] = (),
     ) -> None:
         if item.cancel_requested:
             # Cancelled between the SDK stages and here: never seed a baseline or send a request.
@@ -1234,6 +1255,7 @@ class EvalBatchManager:
             language=resolved_language,
         )
         item.run_id = run.run_id
+        self._replay_preflight_spans(run, preflight_spans)
         self._persist(batch)
         if item.cancel_requested:
             # The cancel arrived while the run was being created; stop it before observing it,
@@ -1308,6 +1330,24 @@ class EvalBatchManager:
         await self._collect_metrics(item, run)
         if not batch.keep_tasks:
             await self._release_item_runs(item, run)
+
+    def _replay_preflight_spans(
+        self, run: RunState, spans: Sequence[Mapping[str, object]]
+    ) -> None:
+        """Attach the tester's pre-run SDK spans to the run trace.
+
+        The SDK stages run before ``RunManager.start`` creates the run, so their producer spans
+        carry no run id and the process sink drops them. Replaying them into the run keeps the
+        intent/Task-T/validation model calls visible in the run's trace and Langfuse trace.
+        Observability only: a replay failure must never change the item result.
+        """
+        for span in spans:
+            try:
+                run.record_trace(span)
+            except Exception:  # noqa: BLE001 - tracing must never break the tested flow
+                _LOGGER.warning(
+                    "tester preflight span replay failed for run %s", run.run_id, exc_info=True
+                )
 
     async def _release_item_runs(self, item: CaseItem, run: RunState | None = None) -> None:
         """Cancel the runs one item created and release their remote Tasks.
@@ -1969,6 +2009,9 @@ class EvalBatchManager:
             langfuse_url = _langfuse_url(run)
             if langfuse_url:
                 item.langfuse_url = langfuse_url
+            langfuse_warning = _langfuse_warning(run)
+            if langfuse_warning:
+                item.langfuse_warning = langfuse_warning
             self._collect_reference(item, case)
             raw_request = run.raw_request or str(item.refs.get("userInput") or "")
             item.intent_meta["rawRequest"] = raw_request
@@ -2311,6 +2354,11 @@ class EvalBatchManager:
                 langfuse_url=(
                     item.get("langfuseUrl") if isinstance(item.get("langfuseUrl"), str) else ""
                 ),
+                langfuse_warning=(
+                    item.get("langfuseWarning")
+                    if isinstance(item.get("langfuseWarning"), str)
+                    else ""
+                ),
                 intent=_optional_mapping(item.get("intent")),
                 server_intent=_optional_mapping(item.get("serverIntent")),
                 intent_meta=_mapping_or_empty(item.get("intentMeta")),
@@ -2362,18 +2410,27 @@ class EvalBatchManager:
         return batch
 
     def _item_snapshot(self, item: CaseItem) -> dict[str, object]:
-        """Return one item, recovering a Langfuse URL that resolved after the evidence pass."""
+        """Return one item, recovering Langfuse state that resolved after the evidence pass.
+
+        The exporter finishes (and resolves the URL, and probes ingestion) after the item's
+        evidence is collected, so every snapshot re-reads the live run instead of freezing the
+        values seen at collection time.
+        """
         data = item.to_dict()
-        if data.get("langfuseUrl") or not item.run_id:
+        if not item.run_id:
             return data
         getter = getattr(self._runs, "get", None)
         run = getter(item.run_id) if callable(getter) else None
         if run is None:
             return data
         url = _langfuse_url(run)
-        if url:
+        if url and url != item.langfuse_url:
             item.langfuse_url = url
             data["langfuseUrl"] = url
+        warning = _langfuse_warning(run)
+        if warning and warning != item.langfuse_warning:
+            item.langfuse_warning = warning
+            data["langfuseWarning"] = warning
         return data
 
     def _snapshot(self, batch: _Batch) -> dict[str, object]:
@@ -2793,6 +2850,13 @@ def _interception_statuses(record: Mapping[str, object]) -> list[str]:
         for stage in stages.values()
         if isinstance(stage, Mapping) and stage.get("status")
     ]
+
+
+def _langfuse_warning(run: RunState) -> str:
+    """Return the Langfuse exporter warning of one run, empty when the export is healthy."""
+    snapshot = run.langfuse if isinstance(run.langfuse, Mapping) else {}
+    warning = snapshot.get("warning")
+    return warning if isinstance(warning, str) else ""
 
 
 def _langfuse_url(run: RunState) -> str:

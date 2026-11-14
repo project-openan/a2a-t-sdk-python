@@ -295,6 +295,18 @@ def test_the_results_sheet_carries_the_baseline_columns() -> None:
     assert "协商" in str(row[headers.index("基线错误")])
 
 
+def test_the_arbitration_note_names_a_langfuse_export_failure() -> None:
+    batch = _snapshot()
+    batch["items"][0]["langfuseWarning"] = (
+        "Langfuse ingestion rejected (HTTP 403): suspended"
+    )
+
+    rows = _reference_sheet(batch)
+
+    assert "Langfuse 导出失败" in str(rows[1][32])
+    assert "HTTP 403" in str(rows[1][32])
+
+
 def test_the_arbitration_note_names_a_failed_baseline() -> None:
     """The arbitration sheet is the comparison view; a baseline failure must not look silent."""
     rows = _reference_sheet(_with_baseline())

@@ -21,10 +21,13 @@ span, so the exporter talks to OpenTelemetry directly and passes the recorded ``
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -193,6 +196,86 @@ class _LangfuseRuntime:
 
 _RUNTIME: _LangfuseRuntime | None = None
 _RUNTIME_LOCK = threading.Lock()
+
+#: How long one ingestion-probe result is trusted. The probe is a single empty OTLP batch, so a
+#: healthy project costs one request per process per window instead of one per run.
+_INGESTION_PROBE_TTL_SECONDS: Final[float] = 300.0
+_INGESTION_PROBE_TIMEOUT_SECONDS: Final[float] = 5.0
+_INGESTION_PROBES: dict[tuple[str, str], tuple[float, str]] = {}
+_INGESTION_PROBE_LOCK = threading.Lock()
+
+
+def _probe_ingestion(config: SampleConfig) -> str:
+    """Return why one Langfuse project rejects writes, or ``""`` when it accepts them.
+
+    Langfuse answers a suspended project with HTTP 403 while its read API keeps working. The
+    SDK's OTLP exporter logs that failure and the run still reports ``status=exported``, so a
+    reader of the run snapshot would otherwise believe the trace was stored. An empty OTLP batch
+    is accepted by a healthy project and rejected by a suspended one, which makes it a cheap
+    health check that writes no observation.
+    """
+    endpoint = f"{config.langfuse_base_url.rstrip('/')}/api/public/otel/v1/traces"
+    raw = f"{config.langfuse_public_key}:{config.langfuse_secret_key}".encode("utf-8")
+    request = urllib.request.Request(
+        endpoint,
+        data=b'{"resourceSpans": []}',
+        headers={
+            "Authorization": "Basic " + base64.b64encode(raw).decode("ascii"),
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_INGESTION_PROBE_TIMEOUT_SECONDS) as response:
+            if 200 <= response.status < 300:
+                return ""
+            return f"Langfuse ingestion returned HTTP {response.status}"
+    except urllib.error.HTTPError as exc:
+        return f"Langfuse ingestion rejected (HTTP {exc.code}): {_probe_error_detail(exc)}"
+    except Exception as exc:  # noqa: BLE001 - observability must never break the run
+        return f"Langfuse ingestion probe failed: {type(exc).__name__}: {exc}"
+
+
+def _probe_error_detail(exc: urllib.error.HTTPError) -> str:
+    """Return the server's message of one rejected OTLP batch, bounded for a snapshot."""
+    try:
+        body = exc.read().decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 - the status code is already enough
+        return "no response body"
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return body[:300]
+    if isinstance(payload, Mapping):
+        message = payload.get("message") or payload.get("error")
+        if isinstance(message, str) and message:
+            return message[:300]
+    return body[:300]
+
+
+def _ingestion_warning(config: SampleConfig) -> str:
+    """Return the cached ingestion health of one project, probing again after the TTL."""
+    key = (config.langfuse_base_url, config.langfuse_public_key)
+    now = time.monotonic()
+    with _INGESTION_PROBE_LOCK:
+        cached = _INGESTION_PROBES.get(key)
+        if cached is not None and now - cached[0] < _INGESTION_PROBE_TTL_SECONDS:
+            return cached[1]
+    warning = _probe_ingestion(config)
+    with _INGESTION_PROBE_LOCK:
+        _INGESTION_PROBES[key] = (time.monotonic(), warning)
+    return warning
+
+
+def _cached_ingestion_warning(config: SampleConfig) -> str:
+    """Return a fresh cached probe result without making a request (empty when unknown)."""
+    key = (config.langfuse_base_url, config.langfuse_public_key)
+    now = time.monotonic()
+    with _INGESTION_PROBE_LOCK:
+        cached = _INGESTION_PROBES.get(key)
+    if cached is None or now - cached[0] >= _INGESTION_PROBE_TTL_SECONDS:
+        return ""
+    return cached[1]
 
 
 def _should_export_span(span: Any) -> bool:
@@ -367,7 +450,9 @@ class LangfuseSpanExporter:
         self._closed = False
         self._finished = False
         self._status = "exporting"
-        self._warning: str | None = None
+        # A suspended project rejects every OTLP batch while its read API still works. Later runs
+        # surface the previous run's probe result immediately instead of looking healthy.
+        self._warning: str | None = _cached_ingestion_warning(config) or None
         self._exported = 0
         self._phase_spans: dict[str, Any] = {}
         self._round_spans: dict[int, Any] = {}
@@ -616,6 +701,12 @@ class LangfuseSpanExporter:
 
     def finish(self, *, result: Any | None = None, error: str | None = None) -> None:
         """Close every open phase/round span, write the run result and flush the client."""
+        if isinstance(self._runtime, _LangfuseRuntime):
+            # ``client.flush()`` reports transport errors only through the SDK log. Probe the
+            # project once so a suspended ingestion endpoint becomes a visible run warning.
+            warning = _ingestion_warning(self._config)
+            if warning and not self._warning:
+                self._warning = warning
         with self._lock:
             if self._closed or self._finished:
                 return

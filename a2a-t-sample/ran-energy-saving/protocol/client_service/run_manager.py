@@ -189,6 +189,14 @@ def _should_watch_long_task(run: RunState, result: ClientFlowResult | None) -> b
     )
 
 
+def _consume_task_error(task: asyncio.Task[None]) -> None:
+    """Consume a detached task's exception so a late flush failure is not logged as unretrieved."""
+    if task.cancelled():
+        return
+    with suppress(Exception):
+        task.exception()
+
+
 def _final_state_for_task_state(
     state_name: str,
     text: object = "",
@@ -498,6 +506,14 @@ class RunManager:
                     run.run_id,
                     CANCEL_UNWIND_TIMEOUT_SECONDS,
                 )
+                # The run task never reached its ``finally``: flush its exporter here so the
+                # spans already queued in the OTel processor are not lost with the process.
+                exporter = run.langfuse_exporter
+                if exporter is not None:
+                    with suppress(Exception):
+                        await asyncio.to_thread(
+                            exporter.finish, result=run.result, error=run.error
+                        )
         return True
 
     def _task_handover_candidates(self, task_id: str) -> list[RunState]:
@@ -1720,10 +1736,26 @@ class RunManager:
             self._active_by_conversation.pop(run.conversation_id or "", None)
             exporter = run.langfuse_exporter
             if exporter is not None:
-                with suppress(asyncio.CancelledError, Exception):
+                with suppress(Exception):
                     # ``finish`` flushes over HTTP and resolves the trace URL; keep both off the
                     # event loop so a slow Langfuse endpoint cannot delay the terminal frame.
-                    await asyncio.to_thread(exporter.finish, result=run.result, error=run.error)
+                    # Shield it: a second cancellation must not skip the flush, which is the only
+                    # thing that sends the spans still queued in the OTel processor.
+                    finish_task = asyncio.create_task(
+                        asyncio.to_thread(
+                            exporter.finish, result=run.result, error=run.error
+                        ),
+                        name=f"langfuse-finish-{run.run_id}",
+                    )
+                    finish_task.add_done_callback(_consume_task_error)
+                    try:
+                        await asyncio.shield(finish_task)
+                    except asyncio.CancelledError:
+                        _LOGGER.warning(
+                            "run %s was cancelled while flushing Langfuse; the shielded flush keeps running",
+                            run.run_id,
+                        )
+                with suppress(asyncio.CancelledError, Exception):
                     run.langfuse = await asyncio.to_thread(exporter.snapshot, resolve_url=True)
             run.emit_finished()
 

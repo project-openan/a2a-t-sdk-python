@@ -499,6 +499,9 @@ def _reference_note(
         notes.append(_NO_ANSWER_NOTE)
     if intent_meta.get("traceparentSource") == "reconstructed":
         notes.append(_REBUILT_TRACE_NOTE)
+    langfuse_warning = item.get("langfuseWarning")
+    if isinstance(langfuse_warning, str) and langfuse_warning:
+        notes.append(f"Langfuse 导出失败：{langfuse_warning}")
     return "；".join(notes)
 
 

@@ -968,6 +968,14 @@ async def test_a_multi_round_batch_rejects_keep_tasks(client: httpx.AsyncClient)
     assert "保留任务" in response.json()["error"]
 
 
+def test_the_console_shows_a_langfuse_export_warning() -> None:
+    tester = Path(__file__).resolve().parent.parent / "demo" / "web" / "tester"
+    js = (tester / "main.js").read_text(encoding="utf-8")
+
+    assert "item.langfuseWarning" in js
+    assert "Langfuse 导出失败" in js
+
+
 def test_the_console_has_a_round_control() -> None:
     tester = Path(__file__).resolve().parent.parent / "demo" / "web" / "tester"
     page = (tester / "index.html").read_text(encoding="utf-8")

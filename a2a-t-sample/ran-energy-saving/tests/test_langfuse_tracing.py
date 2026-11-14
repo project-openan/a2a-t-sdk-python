@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import json
+import urllib.error
 from dataclasses import replace
 from datetime import UTC, datetime
+from email.message import Message
 from typing import Any
 
 import pytest
@@ -13,9 +16,12 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from shared.config import MODEL_MODE_LIVE, SampleConfig, load_config
 from shared.langfuse_tracing import (
+    _INGESTION_PROBES,
     LANGFUSE_SCOPE_NAME,
     LangfuseRunMetadata,
     LangfuseSpanExporter,
+    _LangfuseRuntime,
+    _probe_ingestion,
     create_langfuse_exporter,
 )
 
@@ -820,3 +826,68 @@ def test_a_retry_attaches_to_the_workflow_anchor_from_another_process(
     assert "langfuse.trace.name" not in retry_root.attributes
     # No second workflow anchor was created by the retry.
     assert "workflow · night · a2a-t" not in _by_name(second_runtime)
+
+
+def test_the_ingestion_probe_reports_a_suspended_project(offline_config, monkeypatch) -> None:
+    """Langfuse's 403 is a project-level rejection; the probe must surface its message."""
+    config = replace(
+        offline_config,
+        langfuse_public_key="pk",
+        langfuse_secret_key="sk",
+        langfuse_base_url="https://langfuse.example",
+    )
+
+    def deny(request: Any, timeout: float = 0) -> Any:
+        del timeout
+        raise urllib.error.HTTPError(
+            request.full_url,
+            403,
+            "Forbidden",
+            Message(),
+            io.BytesIO(
+                b'{"message":"Ingestion suspended: Usage threshold exceeded.","error":"ForbiddenError"}'
+            ),
+        )
+
+    monkeypatch.setattr("shared.langfuse_tracing.urllib.request.urlopen", deny)
+
+    warning = _probe_ingestion(config)
+
+    assert "HTTP 403" in warning
+    assert "Ingestion suspended" in warning
+
+
+def test_finish_probes_ingestion_with_a_real_runtime(offline_config, monkeypatch) -> None:
+    """A healthy exporter looks finished even when the project rejects writes; the probe fixes that."""
+    runtime_double = _Runtime()
+    config = replace(
+        offline_config,
+        model_mode=MODEL_MODE_LIVE,
+        langfuse_public_key="pk",
+        langfuse_secret_key="sk",
+        langfuse_base_url="https://langfuse.example",
+    )
+    real_runtime = _LangfuseRuntime(
+        client=runtime_double.client,
+        provider=runtime_double.provider,
+        tracer=runtime_double.tracer,
+    )
+    _INGESTION_PROBES.clear()
+    monkeypatch.setattr(
+        "shared.langfuse_tracing._probe_ingestion",
+        lambda config: "Langfuse ingestion rejected (HTTP 403): suspended",
+    )
+    try:
+        exporter = LangfuseSpanExporter(
+            runtime=real_runtime,
+            config=config,
+            metadata=_metadata(),
+            parent_trace_id="e" * 32,
+        )
+
+        exporter.finish()
+
+        assert "HTTP 403" in str(exporter.snapshot()["warning"])
+        assert runtime_double.client.flushed == 1
+    finally:
+        _INGESTION_PROBES.clear()

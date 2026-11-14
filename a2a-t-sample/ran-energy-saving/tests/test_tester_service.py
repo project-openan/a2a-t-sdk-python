@@ -58,6 +58,7 @@ from shared.run_constants import (
     PROTOCOL_PURE,
     TASK_STATE_SUBMITTED,
 )
+from shared.trace import record_span
 
 CASES: dict[int, dict[str, Any]] = {case["id"]: case for case in load_cases()}
 
@@ -2676,6 +2677,56 @@ def test_a_persisted_multi_round_batch_round_trips(tmp_path: Path) -> None:
     assert snapshot["currentRound"] == 1
     assert [item["round"] for item in snapshot["items"]] == [1, 2]
     assert [entry["round"] for entry in snapshot["roundSummaries"]] == [1, 2]
+
+
+async def test_preflight_sdk_spans_are_replayed_into_the_run_trace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The intent/Task-T model calls happen before the run exists; replay keeps them visible."""
+    real_run_case = service.run_case
+
+    def run_case_with_span(
+        case: Mapping[str, Any], client: Any, *, stop_after: str = "validate"
+    ) -> Any:
+        record_span(
+            kind="llm",
+            phase="task_prompt",
+            title="LLM call · preflight",
+            prefix="llm_preflight",
+        )
+        return real_run_case(case, client, stop_after=stop_after)
+
+    monkeypatch.setattr(service, "run_case", run_case_with_span)
+    runs = _FakeRuns(_finish)
+    manager = _manager(tmp_path, runs)
+    created = _wide(
+        manager.create(case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="send")
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_status(manager, batch_id, "finished")
+
+    run = next(iter(runs.runs.values()))
+    assert any(span.get("title") == "LLM call · preflight" for span in run.traces)
+
+
+async def test_the_item_snapshot_exposes_the_langfuse_warning(tmp_path: Path) -> None:
+    runs = _FakeRuns(_finish)
+    manager = _manager(tmp_path, runs)
+    created = _wide(
+        manager.create(case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="send")
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_status(manager, batch_id, "finished")
+
+    run = next(iter(runs.runs.values()))
+    run.langfuse = {
+        "enabled": True,
+        "warning": "Langfuse ingestion rejected (HTTP 403): suspended",
+    }
+    snapshot = _required(manager.get(batch_id))
+    assert "HTTP 403" in snapshot["items"][0]["langfuseWarning"]
 
 
 def test_an_old_v3_batch_loads_as_a_single_round(tmp_path: Path) -> None:

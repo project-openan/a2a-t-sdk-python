@@ -615,6 +615,11 @@ function renderResults() {
     if (item.runId) runs.append(runLine(baseline?.runId ? "修改" : "", item.runId));
     if (!runs.childNodes.length) runs.append(document.createTextNode("—"));
     const result = el("td", "result", resultText(item));
+    if (item.langfuseWarning) {
+      const warning = el("div", "context-line error", "Langfuse 导出失败");
+      warning.title = String(item.langfuseWarning);
+      result.append(warning);
+    }
     const context = itemContext(item);
     if (context.taskId) {
       const line = el("div", "context-line", `task ${shortId(context.taskId)}`);
@@ -896,6 +901,12 @@ function appendIntentCompareTable(body, rows) {
 }
 
 function renderResultTab(item, body) {
+  if (item.langfuseWarning) {
+    const block = el("section", "diff-block");
+    block.append(el("strong", "", "Langfuse 导出失败"));
+    block.append(el("p", "status-line error", String(item.langfuseWarning)));
+    body.append(block);
+  }
   appendBaselineBlock(body, item);
   appendContextBlock(body, item);
   appendServerReplyBlock(body, item);
