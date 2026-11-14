@@ -15,6 +15,7 @@ import httpx
 import pytest
 from demo.web.app import create_app
 from demo.web.tester.decisions import a2at_decisions, pure_answers
+from demo.web.tester.service import DEFAULT_CONCURRENCY, MAX_CONCURRENCY
 from eval.osp.intent_schema import OSP_INTENT_SCHEMA
 from eval.osp.runner import load_cases
 from protocol.client_flow import ClientFlowResult
@@ -837,3 +838,71 @@ def test_the_console_uses_the_full_width_of_a_large_screen() -> None:
     css = (tester / "app.css").read_text(encoding="utf-8")
 
     assert not re.search(r"\.main\s*\{[^}]*max-width:\s*1440px", css)
+
+
+async def test_the_meta_advertises_the_concurrency_cap(client: httpx.AsyncClient) -> None:
+    response = await client.get("/api/tester/meta")
+
+    payload = response.json()
+    assert payload["maxConcurrency"] == MAX_CONCURRENCY
+    assert payload["defaults"]["concurrency"] == DEFAULT_CONCURRENCY
+
+
+async def test_a_batch_can_be_created_with_concurrency(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        "/api/tester/batches",
+        json={
+            "caseIds": [1, 2],
+            "protocols": ["a2a-t"],
+            "stopAfter": "validate",
+            "concurrency": 4,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["concurrency"] == 4
+    assert response.json()["activeIndices"] == []
+
+
+async def test_an_out_of_range_concurrency_is_rejected(client: httpx.AsyncClient) -> None:
+    for value in (0, MAX_CONCURRENCY + 1, True):
+        response = await client.post(
+            "/api/tester/batches",
+            json={
+                "caseIds": [1],
+                "protocols": ["a2a-t"],
+                "stopAfter": "validate",
+                "concurrency": value,
+            },
+        )
+        assert response.status_code == 400, value
+
+
+async def test_an_item_cancel_needs_a_running_batch(client: httpx.AsyncClient) -> None:
+    created = await client.post(
+        "/api/tester/batches",
+        json={"caseIds": [1], "protocols": ["a2a-t"], "stopAfter": "validate"},
+    )
+    batch_id = created.json()["batchId"]
+
+    draft = await client.post(f"/api/tester/batches/{batch_id}/items/0/cancel")
+    assert draft.status_code == 409
+    assert draft.json()["code"] == "item_not_cancellable"
+
+    unknown = await client.post("/api/tester/batches/batch-unknown/items/0/cancel")
+    assert unknown.status_code == 404
+
+    invalid = await client.post(f"/api/tester/batches/{batch_id}/items/99/cancel")
+    assert invalid.status_code == 404
+
+
+def test_the_console_has_a_concurrency_control() -> None:
+    tester = Path(__file__).resolve().parent.parent / "demo" / "web" / "tester"
+    page = (tester / "index.html").read_text(encoding="utf-8")
+    js = (tester / "main.js").read_text(encoding="utf-8")
+
+    assert 'id="config-concurrency"' in page
+    assert "maxConcurrency" in js
+    assert "concurrency: Number($(\"config-concurrency\")" in js
+    assert "/items/${index}/cancel" in js
+    assert "运行中 ${summary.running || 0}" in js

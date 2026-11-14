@@ -504,6 +504,20 @@ def build_client(
     Offline mode registers the demo's deterministic SDK provider, because the SDK facade resolves
     ``scripted_traced`` only after that registration (the same step the demo runtime performs).
     """
+    client, _ = build_client_with_env(env_path, model_mode=model_mode)
+    return client
+
+
+def build_client_with_env(
+    env_path: Path | None = None,
+    *,
+    model_mode: str | None = None,
+) -> tuple[EvalPromptClient, Path]:
+    """Build the client and return the temporary SDK env directory it was built from.
+
+    Callers that pool clients own those directories and must remove them; :func:`build_client`
+    drops the directory the way the historical helper did.
+    """
     from a2a_t.client.a2at_client import A2ATClient
     from protocol.client_runtime import prepare_client_sdk_env
     from shared.config import load_config
@@ -518,7 +532,7 @@ def build_client(
 
         install_offline_provider()
     sdk_env = prepare_client_sdk_env(config, env_path)
-    return A2ATClient(env_path=sdk_env.path, logger=None)
+    return A2ATClient(env_path=sdk_env.path, logger=None), sdk_env.directory
 
 
 def build_report(

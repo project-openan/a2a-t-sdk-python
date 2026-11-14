@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import threading
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Any
 import pytest
 from a2a_t.core.errors.catalog import ErrorCatalog
 from a2a_t.core.errors.exceptions import ContentValidationError
+from demo.web.tester import service
 from demo.web.tester.service import (
     ALL_STAGES,
     CASE_CANCELLED,
@@ -21,7 +23,10 @@ from demo.web.tester.service import (
     CASE_FAILED,
     CASE_PARTIAL,
     CASE_PASSED,
+    CASE_RUNNING,
     DECISION_MODE_LIVE,
+    DEFAULT_CONCURRENCY,
+    MAX_CONCURRENCY,
     STAGE_ERROR,
     STAGE_FAILED,
     STAGE_PASSED,
@@ -1900,3 +1905,479 @@ def test_a_single_protocol_batch_keeps_blocked_cases(tmp_path: Path) -> None:
 
     assert created["excludedCaseIds"] == []
     assert [item["caseId"] for item in created["items"]] == [22]
+
+
+# ---------------------------------------------------------------------------
+# Concurrent batches and per-item cancellation
+# ---------------------------------------------------------------------------
+
+
+class _GatedRuns(_FakeRuns):
+    """RunManager double whose runs stay unfinished until the test releases them.
+
+    The concurrency tests need items that overlap in time; the plain double finishes every run
+    immediately, which would make an N-item batch look sequential.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(_hang)
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self.gates: dict[str, asyncio.Event] = {}
+
+    async def start(self, *args: object, **kwargs: object) -> RunState:
+        run = await super().start(*args, **kwargs)  # type: ignore[misc]
+        gate = asyncio.Event()
+        self.gates[run.run_id] = gate
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        asyncio.create_task(self._release_when_asked(run, gate))
+        return run
+
+    async def _release_when_asked(self, run: RunState, gate: asyncio.Event) -> None:
+        await gate.wait()
+        self.in_flight -= 1
+        if run.status == "running":
+            _finish(run)
+
+    async def cancel(self, run_id: str) -> bool:
+        self.cancelled.append(run_id)
+        run = self.runs.get(run_id)
+        if run is not None and not run.finished():
+            # A real ``RunManager.cancel`` ends the run; the waiter must observe that.
+            run.status = "cancelled"
+        gate = self.gates.get(run_id)
+        if gate is not None:
+            gate.set()
+        return True
+
+    def release(self, run_id: str) -> None:
+        self.gates[run_id].set()
+
+    def release_all(self) -> None:
+        for gate in self.gates.values():
+            gate.set()
+
+
+async def _wait_item_status(
+    manager: EvalBatchManager,
+    batch_id: str,
+    index: int,
+    expected: str,
+    timeout: float = 10.0,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        snapshot = manager.get(batch_id)
+        assert snapshot is not None
+        if snapshot["items"][index]["status"] == expected:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"item {index} of {batch_id} did not reach {expected}")
+
+
+async def _wait_in_flight(runs: _GatedRuns, expected: int, timeout: float = 10.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if runs.in_flight >= expected:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"only {runs.in_flight} runs were in flight, expected {expected}")
+
+
+def test_concurrency_defaults_to_one_and_rejects_out_of_range(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    created = manager.create(case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="validate")
+    assert created["concurrency"] == DEFAULT_CONCURRENCY == 1
+
+    maximum = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+        concurrency=MAX_CONCURRENCY,
+    )
+    assert maximum["concurrency"] == MAX_CONCURRENCY
+
+    for value in (0, MAX_CONCURRENCY + 1, True, 2.0, "3"):
+        with pytest.raises(ValueError):
+            manager.create(
+                case_ids=[1],
+                protocols=[PROTOCOL_A2A_T],
+                stop_after="validate",
+                concurrency=value,  # type: ignore[arg-type]
+            )
+
+
+def test_a_persisted_batch_without_concurrency_loads_as_one(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    created = manager.create(
+        case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="validate", concurrency=4
+    )
+    batch_id = str(created["batchId"])
+    path = tmp_path / "tester" / f"{batch_id}.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document.pop("concurrency", None)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    reloaded = _manager(tmp_path, _FakeRuns(_finish))
+    snapshot = reloaded.get(batch_id)
+    assert snapshot is not None
+    assert snapshot["concurrency"] == 1
+
+
+async def test_a_sequential_batch_still_runs_one_item_at_a_time(tmp_path: Path) -> None:
+    runs = _GatedRuns()
+    manager = _manager(tmp_path, runs)
+    created = manager.create(case_ids=[1, 2], protocols=[PROTOCOL_A2A_T], stop_after="send")
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_in_flight(runs, 1)
+
+    snapshot = manager.get(batch_id)
+    assert snapshot is not None
+    assert snapshot["concurrency"] == 1
+    assert snapshot["activeIndices"] == [0]
+    assert snapshot["currentIndex"] == 0
+    assert len(runs.calls) == 1
+
+    runs.release(next(iter(runs.gates)))
+    deadline = asyncio.get_running_loop().time() + 10.0
+    while len(runs.calls) < 2 and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.01)
+    assert len(runs.calls) == 2
+
+    runs.release_all()
+    finished = await _wait_status(manager, batch_id, "finished")
+    assert runs.max_in_flight == 1
+    assert finished["summary"]["passed"] == 2
+    assert finished["activeIndices"] == []
+    assert finished["currentIndex"] is None
+
+
+async def test_a_concurrent_batch_runs_three_items_at_once(tmp_path: Path) -> None:
+    runs = _GatedRuns()
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[1, 2, 3],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="send",
+        concurrency=3,
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_in_flight(runs, 3)
+
+    snapshot = manager.get(batch_id)
+    assert snapshot is not None
+    assert snapshot["concurrency"] == 3
+    assert sorted(snapshot["activeIndices"]) == [0, 1, 2]
+
+    runs.release_all()
+    finished = await _wait_status(manager, batch_id, "finished")
+    assert runs.max_in_flight == 3
+    assert finished["summary"]["passed"] == 3
+    assert finished["activeIndices"] == []
+
+
+async def test_cancelling_one_running_item_leaves_the_others_running(tmp_path: Path) -> None:
+    runs = _GatedRuns()
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[1, 2],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="send",
+        concurrency=2,
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_in_flight(runs, 2)
+
+    await manager.cancel_item(batch_id, 0)
+    await _wait_item_status(manager, batch_id, 0, CASE_CANCELLED)
+
+    snapshot = manager.get(batch_id)
+    assert snapshot is not None
+    assert snapshot["status"] == "running"
+    assert snapshot["items"][0]["status"] == CASE_CANCELLED
+    assert snapshot["items"][1]["status"] == CASE_RUNNING
+
+    runs.release_all()
+    finished = await _wait_status(manager, batch_id, "finished")
+    assert finished["summary"]["cancelled"] == 1
+    assert finished["summary"]["passed"] == 1
+
+
+async def test_cancelling_a_queued_item_skips_it(tmp_path: Path) -> None:
+    runs = _GatedRuns()
+    manager = _manager(tmp_path, runs)
+    created = manager.create(case_ids=[1, 2], protocols=[PROTOCOL_A2A_T], stop_after="send")
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_in_flight(runs, 1)
+
+    await manager.cancel_item(batch_id, 1)
+    snapshot = manager.get(batch_id)
+    assert snapshot is not None
+    assert snapshot["items"][1]["status"] == CASE_CANCELLED
+
+    runs.release_all()
+    finished = await _wait_status(manager, batch_id, "finished")
+    assert len(runs.calls) == 1
+    assert finished["summary"]["passed"] == 1
+    assert finished["summary"]["cancelled"] == 1
+
+
+async def test_cancelling_a_batch_cancels_every_active_item(tmp_path: Path) -> None:
+    runs = _GatedRuns()
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[1, 2, 3],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="send",
+        concurrency=3,
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_in_flight(runs, 3)
+
+    assert await manager.cancel(batch_id) is True
+    cancelled = await _wait_status(manager, batch_id, "cancelled")
+    assert sorted(runs.cancelled) == ["run-1", "run-2", "run-3"]
+    assert {item["status"] for item in cancelled["items"]} == {CASE_CANCELLED}
+
+
+async def test_a_cancel_during_the_sdk_stage_never_starts_a_run(tmp_path: Path) -> None:
+    runs = _FakeRuns(_finish)
+    manager = _manager(tmp_path, runs)
+    created = manager.create(case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="send")
+    batch = manager._batches[str(created["batchId"])]
+    item = batch.items[0]
+    item.cancel_requested = True
+
+    await manager._run_item(batch, 0, item)
+
+    assert runs.calls == []
+    assert item.status == CASE_CANCELLED
+
+
+async def test_a_cancel_arriving_while_the_run_starts_stops_the_run(tmp_path: Path) -> None:
+    """The cancel can land inside ``RunManager.start``; the new run must still be stopped."""
+    runs = _FakeRuns(_finish)
+    manager = _manager(tmp_path, runs)
+    created = manager.create(case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="send")
+    batch = manager._batches[str(created["batchId"])]
+    item = batch.items[0]
+
+    original_start = runs.start
+
+    async def start_and_cancel(*args: object, **kwargs: object) -> RunState:
+        run = await original_start(*args, **kwargs)  # type: ignore[misc]
+        item.cancel_requested = True
+        return run
+
+    runs.start = start_and_cancel  # type: ignore[method-assign]
+
+    await manager._run_item(batch, 0, item)
+
+    assert runs.cancelled == ["run-1"]
+    assert item.status == CASE_CANCELLED
+
+
+async def test_a_rerun_resets_the_cancel_flag_and_the_active_set(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    created = manager.create(
+        case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="validate", concurrency=2
+    )
+    batch_id = str(created["batchId"])
+    batch = manager._batches[batch_id]
+    batch.items[0].status = CASE_CANCELLED
+    batch.items[0].cancel_requested = True
+    batch.active_indices = [0]
+
+    await manager.rerun_item(batch_id, 0)
+    finished = await _wait_status(manager, batch_id, "finished")
+
+    assert finished["items"][0]["status"] == CASE_PASSED
+    assert batch.items[0].cancel_requested is False
+    assert batch.active_indices == []
+    # A single-item rerun is sequential even when the batch is configured for more.
+    assert batch.active_concurrency == 1
+
+
+async def test_retry_keeps_the_batch_concurrency(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    created = manager.create(
+        case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="validate", concurrency=4
+    )
+    batch_id = str(created["batchId"])
+    manager._batches[batch_id].items[0].status = CASE_FAILED
+
+    retried = await manager.retry(batch_id)
+
+    assert retried["concurrency"] == 4
+
+
+async def test_a_one_item_batch_ignores_the_concurrency_setting(tmp_path: Path) -> None:
+    runs = _FakeRuns(_finish)
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="validate", concurrency=4
+    )
+    batch = manager._batches[str(created["batchId"])]
+
+    await manager.start(str(created["batchId"]))
+    await _wait_status(manager, str(created["batchId"]), "finished")
+
+    # One item has nothing to overlap with, so it keeps the historical (sequential) behaviour.
+    assert batch.active_concurrency == 1
+
+
+async def test_cancelling_a_modify_item_marks_its_baseline_cancelled(tmp_path: Path) -> None:
+    runs = _FakeRuns(_finish)
+    manager = _manager(tmp_path, runs)
+    item = CaseItem(case_id=1, name="modify", protocol=PROTOCOL_A2A_T)
+    item.run_id = "run-main"
+    item.baseline = {"runId": "run-base", "status": "running"}
+
+    await manager._cancel_item_runs(item)
+
+    assert runs.cancelled == ["run-main", "run-base"]
+    assert item.baseline["status"] == "cancelled"
+
+
+async def test_a_cancelled_sdk_checkout_does_not_reuse_its_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancelling the item cannot stop the thread; its client must not go back to the pool."""
+    manager = EvalBatchManager(
+        runs=_FakeRuns(_finish),  # type: ignore[arg-type]
+        catalog=CaseCatalog(),
+        protocol_defaults=PROTOCOL_DEFAULTS,
+        server_url=None,
+        server_auth_token=None,
+        runs_dir=tmp_path,
+        language="en-US",
+        model_mode="offline",
+        prompt_client=None,
+    )
+    built: list[Path] = []
+    started = threading.Event()
+    release = threading.Event()
+    real_run_case = service.run_case
+
+    def fake_build(
+        env_path: Path | None = None, *, model_mode: str | None = None
+    ) -> tuple[Any, Path]:
+        del env_path, model_mode
+        directory = tmp_path / f"env-{len(built) + 1}"
+        directory.mkdir()
+        built.append(directory)
+        return _PromptClient(), directory
+
+    def blocking_run_case(
+        case: Mapping[str, Any], client: Any, *, stop_after: str = "validate"
+    ) -> Any:
+        started.set()
+        release.wait(timeout=10)
+        return real_run_case(case, client, stop_after=stop_after)
+
+    monkeypatch.setattr(service, "build_client_with_env", fake_build)
+    monkeypatch.setattr(service, "run_case", blocking_run_case)
+
+    task = asyncio.create_task(
+        manager._run_case_with_client(CASES[1], "validate", None, concurrent=True)
+    )
+    deadline = asyncio.get_running_loop().time() + 10.0
+    while not started.is_set() and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.01)
+    assert started.is_set()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # The retired client is not idle in the pool, so the worker cannot be shared.
+    assert manager._prompt_pool["offline"].empty() is True
+
+    release.set()
+    deadline = asyncio.get_running_loop().time() + 10.0
+    second = asyncio.create_task(
+        manager._run_case_with_client(CASES[1], "validate", None, concurrent=True)
+    )
+    await asyncio.wait_for(second, timeout=10.0)
+
+    assert len(built) == 2
+    assert manager._prompt_pool["offline"].qsize() == 1
+
+
+async def test_the_concurrent_sdk_stage_pools_clients_per_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Concurrent SDK stages must not share one ``A2ATClient`` and must build serially."""
+    manager = EvalBatchManager(
+        runs=_FakeRuns(_finish),  # type: ignore[arg-type]
+        catalog=CaseCatalog(),
+        protocol_defaults=PROTOCOL_DEFAULTS,
+        server_url=None,
+        server_auth_token=None,
+        runs_dir=tmp_path,
+        language="en-US",
+        model_mode="offline",
+        prompt_client=None,
+    )
+    built: list[Path] = []
+    building = 0
+    max_building = 0
+    lock = threading.Lock()
+    barrier = threading.Barrier(4)
+
+    def fake_build(
+        env_path: Path | None = None, *, model_mode: str | None = None
+    ) -> tuple[Any, Path]:
+        del env_path, model_mode
+        nonlocal building, max_building
+        with lock:
+            building += 1
+            max_building = max(max_building, building)
+        directory = tmp_path / f"env-{len(built) + 1}"
+        directory.mkdir()
+        built.append(directory)
+        with lock:
+            building -= 1
+        return _PromptClient(), directory
+
+    real_run_case = service.run_case
+
+    def blocking_run_case(
+        case: Mapping[str, Any], client: Any, *, stop_after: str = "validate"
+    ) -> Any:
+        barrier.wait(timeout=10)
+        return real_run_case(case, client, stop_after=stop_after)
+
+    monkeypatch.setattr(service, "build_client_with_env", fake_build)
+    monkeypatch.setattr(service, "run_case", blocking_run_case)
+
+    case = CASES[1]
+    outcomes = await asyncio.gather(
+        *(
+            manager._run_case_with_client(case, "validate", None, concurrent=True)
+            for _ in range(4)
+        )
+    )
+    assert all(outcome.error is None for outcome in outcomes)
+    assert len(built) == 4
+    assert max_building == 1
+    assert len(manager._prompt_env_dirs) == 4
+
+    # The next four calls reuse the idle clients instead of building again.
+    barrier.reset()
+    await asyncio.gather(
+        *(
+            manager._run_case_with_client(case, "validate", None, concurrent=True)
+            for _ in range(4)
+        )
+    )
+    assert len(built) == 4
+
+    manager._close_prompt_pool()
+    assert manager._prompt_env_dirs == []
+    assert not any(directory.exists() for directory in built)

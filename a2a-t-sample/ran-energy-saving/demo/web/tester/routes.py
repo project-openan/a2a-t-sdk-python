@@ -23,9 +23,12 @@ from demo.web.tester.report import write_report
 from demo.web.tester.service import (
     ALL_STAGES,
     DECISION_MODES,
+    DEFAULT_CONCURRENCY,
     DEFAULT_WORKING_TIMEOUT_SECONDS,
+    MAX_CONCURRENCY,
     EvalBatchManager,
     default_decision_mode,
+    validate_concurrency,
 )
 
 #: Directory of the tester page assets.
@@ -123,7 +126,9 @@ def build_tester_routes(
                     "timeoutSeconds": None,
                     "workingTimeoutSeconds": DEFAULT_WORKING_TIMEOUT_SECONDS,
                     "decisionMode": default_decision_mode(model_mode),
+                    "concurrency": DEFAULT_CONCURRENCY,
                 },
+                "maxConcurrency": MAX_CONCURRENCY,
                 "runnerDefaultsIndicateCase": True,
                 "catalogCount": resolved_catalog.count,
                 "modelMode": model_mode,
@@ -182,6 +187,7 @@ def build_tester_routes(
                 working_timeout_seconds=_optional_float(body.get("workingTimeoutSeconds")),
                 decision_mode=_optional_str(body.get("decisionMode")),
                 keep_tasks=bool(body.get("keepTasks")),
+                concurrency=_concurrency(body.get("concurrency")),
                 owner=_client_id(request),
             )
         except (TypeError, ValueError) as exc:
@@ -265,6 +271,26 @@ def build_tester_routes(
             return JSONResponse({"error": str(exc), "code": "batch_not_retryable"}, status_code=409)
         return JSONResponse(snapshot, status_code=201)
 
+    async def cancel_item(request: Request) -> Response:
+        """Cancel one item of a running batch, leaving the other items running."""
+        try:
+            index = int(request.path_params["index"])
+        except ValueError:
+            return JSONResponse({"error": "用例下标无效。", "code": "invalid_index"}, status_code=404)
+        try:
+            payload = await batches.cancel_item(
+                request.path_params["batch_id"], index, owner=_client_id(request)
+            )
+        except KeyError:
+            return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
+        except IndexError:
+            return JSONResponse({"error": "用例下标无效。", "code": "invalid_index"}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse(
+                {"error": str(exc), "code": "item_not_cancellable"}, status_code=409
+            )
+        return JSONResponse(payload)
+
     async def rerun_item(request: Request) -> Response:
         """Rerun one item of a finished batch in place."""
         try:
@@ -323,6 +349,11 @@ def build_tester_routes(
         Route("/api/tester/batches/{batch_id}/cancel", cancel_batch, methods=["POST"]),
         Route("/api/tester/batches/{batch_id}/retry", retry_batch, methods=["POST"]),
         Route(
+            "/api/tester/batches/{batch_id}/items/{index}/cancel",
+            cancel_item,
+            methods=["POST"],
+        ),
+        Route(
             "/api/tester/batches/{batch_id}/items/{index}/rerun",
             rerun_item,
             methods=["POST"],
@@ -367,6 +398,13 @@ def _optional_str(value: object) -> str | None:
         return None
     text = value.strip()
     return text or None
+
+
+def _concurrency(value: object) -> int:
+    """Return the requested item concurrency; an absent value keeps the default."""
+    if value is None or value == "":
+        return DEFAULT_CONCURRENCY
+    return validate_concurrency(value)
 
 
 def _optional_float(value: object) -> float | None:

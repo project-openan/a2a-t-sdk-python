@@ -375,6 +375,20 @@ def test_every_js_module_passes_node_syntax_check() -> None:
         assert result.returncode == 0, f"{module.name}: {result.stderr or result.stdout}"
 
 
+def test_the_tester_module_passes_node_syntax_check() -> None:
+    """The tester console ships outside ``static/js``; its only build-time gate is this parse."""
+    node = _node_binary()
+    module = Path(__file__).resolve().parent.parent / "demo" / "web" / "tester" / "main.js"
+    result = subprocess.run(
+        [node, "--check", str(module)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, f"{module.name}: {result.stderr or result.stdout}"
+
+
 def test_in_repo_store_harness_runs_in_node() -> None:
     """The store/filter harness lives in the repo and runs against the real modules."""
     node = _node_binary()

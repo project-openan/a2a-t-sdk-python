@@ -103,8 +103,15 @@
               <label>观察窗口（秒）
                 <input id="config-working-timeout" type="number" min="1" step="1" placeholder="按用例（60）">
               </label>
+              <label>并发
+                <input id="config-concurrency" type="number" min="1" max="8" step="1" value="1">
+              </label>
               <label class="check"><input id="config-keep-tasks" type="checkbox"> 保留任务（不自动 cancel）</label>
             </div>
+            <p class="status-line" id="concurrency-hint">
+              并发 N 时最坏同时占用 2N 个网管任务（每个 Modify 用例另有一条基线任务）；
+              真实网管报任务数上限或区域冲突时请调小。
+            </p>
             <div class="actions">
               <button class="primary" id="start-button" type="button">开始执行</button>
               <button class="secondary" id="cancel-button" type="button" hidden>取消执行</button>

@@ -124,6 +124,9 @@ async function loadMeta() {
   $("config-approval").value = meta?.defaults?.approval || "";
   $("config-timeout").value = meta?.defaults?.timeoutSeconds ?? "";
   $("config-working-timeout").value = meta?.defaults?.workingTimeoutSeconds ?? "";
+  const concurrency = $("config-concurrency");
+  concurrency.max = String(meta?.maxConcurrency || 1);
+  concurrency.value = String(meta?.defaults?.concurrency || 1);
   const liveEnabled = (meta?.modelMode || "") !== "offline";
   const decision = $("config-decision");
   decision.value = meta?.defaults?.decisionMode || "scripted";
@@ -260,6 +263,7 @@ async function startBatch() {
       workingTimeoutSeconds:
         $("config-working-timeout").value === "" ? null : Number($("config-working-timeout").value),
       keepTasks: $("config-keep-tasks").checked,
+      concurrency: Number($("config-concurrency").value || 1),
     });
     state.batch = await postJson(`/api/tester/batches/${encodeURIComponent(created.batchId)}/start`, {});
     renderResults();
@@ -362,6 +366,19 @@ async function retryBatch() {
   }
 }
 
+async function cancelItem(index) {
+  if (!state.batch?.batchId) return;
+  try {
+    await postJson(
+      `/api/tester/batches/${encodeURIComponent(state.batch.batchId)}/items/${index}/cancel`,
+      {},
+    );
+    await refreshBatch();
+  } catch (error) {
+    showToast(`取消失败：${error.message || error}`, "error");
+  }
+}
+
 async function rerunItem(index) {
   if (!state.batch?.batchId) return;
   try {
@@ -396,7 +413,8 @@ async function loadHistory() {
     const mode = batch.decisionMode ? ` · ${batch.decisionMode}` : "";
     const transport = batch.transport ? ` · ${batch.transport}` : "";
     const keep = batch.keepTasks ? " · 保留任务" : "";
-    const option = el("option", "", `${batch.stopAfter || "final"}${mode}${transport}${keep} · ${statusLabel(batch.status)} · ${batch.createdAt || ""}`);
+    const concurrency = batch.concurrency > 1 ? ` · 并发 ${batch.concurrency}` : "";
+    const option = el("option", "", `${batch.stopAfter || "final"}${mode}${transport}${keep}${concurrency} · ${statusLabel(batch.status)} · ${batch.createdAt || ""}`);
     option.value = batch.batchId;
     select.append(option);
   }
@@ -418,7 +436,9 @@ function stageChips(item, stopAfter) {
           ? "waiting"
           : baseline.status === "failed"
             ? "failed"
-            : "pending";
+            : baseline.status === "cancelled"
+              ? "skipped"
+              : "pending";
     const chip = el("span", `stage-chip ${status}`, "基线");
     chip.title = `基线 Create：${baseline.status || ""}${baseline.state ? ` · ${baseline.state}` : ""}${
       baseline.error ? ` · ${baseline.error}` : ""
@@ -557,6 +577,14 @@ function renderResults() {
     detail.type = "button";
     detail.addEventListener("click", () => openDrawer(item, index));
     actions.append(document.createTextNode(" · "), detail);
+    if (batch.status === "running" && (item.status === "running" || item.status === "pending")) {
+      // One item at a time: the rest of the batch keeps running.
+      const cancel = el("button", "link-button", "取消");
+      cancel.type = "button";
+      cancel.title = "只取消这一条用例，其余继续";
+      cancel.addEventListener("click", () => cancelItem(index));
+      actions.append(document.createTextNode(" · "), cancel);
+    }
     const rerun = el("button", "link-button", "重跑");
     rerun.type = "button";
     rerun.disabled = batch.status === "running";
@@ -567,7 +595,8 @@ function renderResults() {
   });
 
   const summary = batch.summary || {};
-  $("result-summary").textContent = `${summary.total || 0} 项 · 通过 ${summary.passed || 0} · 待确认 ${summary.partial || 0} · 失败 ${summary.failed || 0} · 错误 ${summary.error || 0} · 仅记录 ${summary.stageRecorded || 0}`;
+  const concurrencyNote = batch.concurrency > 1 ? ` · 并发 ${batch.concurrency}` : "";
+  $("result-summary").textContent = `${summary.total || 0} 项 · 通过 ${summary.passed || 0} · 待确认 ${summary.partial || 0} · 失败 ${summary.failed || 0} · 错误 ${summary.error || 0} · 仅记录 ${summary.stageRecorded || 0}${concurrencyNote}`;
   const running = batch.status === "running";
   const retryable = (summary.failed || 0) + (summary.error || 0) + (summary.cancelled || 0) > 0;
   $("start-button").hidden = running;
@@ -581,7 +610,9 @@ function renderResults() {
   const done =
     (summary.passed || 0) + (summary.partial || 0) + (summary.failed || 0) + (summary.error || 0) + (summary.cancelled || 0);
   $("progress-bar").style.width = `${total ? Math.min(100, Math.round((done / total) * 100)) : 0}%`;
-  $("progress-text").textContent = `${done}/${total}`;
+  $("progress-text").textContent = running
+    ? `${done}/${total} · 运行中 ${summary.running || 0}`
+    : `${done}/${total}`;
   if (running) startPolling();
 }
 

@@ -19,8 +19,10 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import time
 import uuid
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -36,7 +38,8 @@ from eval.osp.runner import (
     STAGE_FAILED,
     STAGE_PASSED,
     STAGE_RECORDED,
-    build_client,
+    CaseOutcome,
+    build_client_with_env,
     run_case,
 )
 from eval.osp.runner import (
@@ -105,6 +108,15 @@ DECISION_MODES: Final[tuple[str, ...]] = (DECISION_MODE_SCRIPTED, DECISION_MODE_
 #: Batch decision mode used when the caller does not choose one. An online model should exercise
 #: the model decisions by default; an offline process can only run the scripted mode.
 DEFAULT_DECISION_MODE: Final[str] = DECISION_MODE_LIVE
+
+#: How many items one batch runs at the same time unless the operator asks for more. One keeps
+#: the historical sequential behaviour, including its single ``current_index``.
+DEFAULT_CONCURRENCY: Final[int] = 1
+
+#: Hard ceiling of a batch's concurrency. The process does not model an environment's real
+#: capacity; the operator raises the value when they hold an exclusive environment and lowers it
+#: again when the NMS reports a task-quota or conflict error.
+MAX_CONCURRENCY: Final[int] = 8
 
 
 def default_decision_mode(model_mode: str) -> str:
@@ -294,6 +306,9 @@ class CaseItem:
     answer: dict[str, object] | None = None
     #: The interception the case expects before its follow-up request (``blocked_followup``).
     interception: dict[str, object] | None = None
+    #: Set by an operator cancelling this item alone. Transient: never persisted, and reset by a
+    #: rerun. The item's outcome is the persisted ``status`` once it unwinds.
+    cancel_requested: bool = False
 
     def intent_comparison(self) -> list[dict[str, object]]:
         """Return the flattened expected-vs-server intent rows, empty when one side is absent."""
@@ -348,6 +363,11 @@ class _Batch:
     #: Keep every Task this batch created alive after its item ends. Off by default: a finished
     #: tester item releases its remote Task so a long acceptance run does not exhaust the NMS quota.
     keep_tasks: bool = False
+    #: How many items may run at once (``1`` = the historical sequential loop).
+    concurrency: int = DEFAULT_CONCURRENCY
+    #: Concurrency the currently executing items actually use. A single-item rerun forces ``1``
+    #: even on a batch configured for more, so the SDK stage keeps its exclusive client.
+    active_concurrency: int = 1
     transport: str = "sse"
     discovery: str = "direct"
     owner_id: str = ""
@@ -356,6 +376,9 @@ class _Batch:
     started_at: str | None = None
     finished_at: str | None = None
     current_index: int | None = None
+    #: Items executing right now, in start order. Maintained by both execution paths so
+    #: cancellation has one implementation and the UI can show every running row.
+    active_indices: list[int] = field(default_factory=list)
     cancel_requested: bool = False
     error: str | None = None
     task: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -398,9 +421,19 @@ class EvalBatchManager:
         self._prompt_client = prompt_client
         #: One SDK client per model mode: a live batch must not reuse the offline scripted client.
         self._prompt_clients: dict[str, Any] = {}
+        #: Idle clients per model mode, used only by the concurrent path. Each pool slot owns one
+        #: client because ``A2ATClient`` is not documented as thread-safe.
+        self._prompt_pool: dict[str, asyncio.Queue[Any]] = {}
+        #: Serializes pool growth: ``build_client`` registers the traced providers with a
+        #: check-then-register dance, so building two clients at once would raise.
+        self._prompt_build_lock = asyncio.Lock()
+        #: Temporary SDK ``.env`` directories owned by pooled clients, removed on shutdown.
+        self._prompt_env_dirs: list[Path] = []
         self._prompt_errors: dict[str, str] = {}
         self._baseline_request = _baseline_request()
         self._sdk_lock = asyncio.Lock()
+        #: Bounds the ``run_case`` threads across every concurrent batch of the process.
+        self._sdk_slots = asyncio.Semaphore(MAX_CONCURRENCY)
         self._batches: dict[str, _Batch] = {}
 
     def _replays_pure_dialogue(self) -> bool:
@@ -426,6 +459,7 @@ class EvalBatchManager:
         working_timeout_seconds: float | None = None,
         decision_mode: str | None = None,
         keep_tasks: bool = False,
+        concurrency: int = DEFAULT_CONCURRENCY,
         owner: str = "",
     ) -> dict[str, object]:
         """Register one draft batch from the selected cases and protocols.
@@ -435,10 +469,13 @@ class EvalBatchManager:
         ``decision_mode`` defaults to the process mode: live for an online model, scripted offline.
         ``keep_tasks`` keeps every Task alive after its item ends (long-task verification); by
         default each item releases its remote Task once its evidence is collected.
+        ``concurrency`` is how many items run at once (1..:data:`MAX_CONCURRENCY`); ``1`` is the
+        sequential behaviour every existing batch has.
         """
         if stop_after not in ALL_STAGES:
             raise ValueError(f"unknown stop_after {stop_after!r}")
         resolved_approval = _validate_approval(approval)
+        resolved_concurrency = validate_concurrency(concurrency)
         resolved_decision_mode = self._validate_decision_mode(
             decision_mode or default_decision_mode(self._model_mode)
         )
@@ -472,6 +509,7 @@ class EvalBatchManager:
             working_timeout_seconds=_positive_or_none(working_timeout_seconds),
             decision_mode=resolved_decision_mode,
             keep_tasks=keep_tasks,
+            concurrency=resolved_concurrency,
             transport=defaults.get("transport", "sse"),
             discovery=defaults.get("discovery", "direct"),
             items=items,
@@ -552,7 +590,7 @@ class EvalBatchManager:
         return self._snapshot(batch)
 
     async def cancel(self, batch_id: str, *, owner: str | None = None) -> bool:
-        """Cancel one running batch and its active run.
+        """Cancel one running batch and every run its items still own.
 
         ``owner=None`` is the internal shutdown path; HTTP callers pass their browser identity.
         """
@@ -560,30 +598,77 @@ class EvalBatchManager:
         if batch is None or batch.status != BATCH_RUNNING:
             return False
         batch.cancel_requested = True
-        if batch.current_index is not None:
-            item = batch.items[batch.current_index]
-            if item.run_id:
-                await self._runs.cancel(item.run_id)
-            # A Modify item's baseline Task is not ``item.run_id``; release it too, otherwise a
-            # cancelled batch leaves the Create Task WORKING.
-            baseline = _baseline_run_id(item)
-            if baseline is not None and baseline != item.run_id:
-                await self._runs.cancel(baseline)
+        # Snapshot the active items: workers append and remove entries while the cancellations
+        # below await, so iterating the live list would skip items.
+        active = [
+            batch.items[index]
+            for index in list(batch.active_indices)
+            if 0 <= index < len(batch.items)
+        ]
+        await asyncio.gather(*(self._cancel_item_runs(item) for item in active))
         if batch.task is not None and not batch.task.done():
             batch.task.cancel()
         self._persist(batch)
         return True
+
+    async def cancel_item(
+        self, batch_id: str, index: int, *, owner: str = ""
+    ) -> dict[str, object]:
+        """Cancel one item of a running batch without touching the others.
+
+        A queued item is marked cancelled and skipped when a worker reaches it; a running item
+        has its own run (and a Modify's baseline run) cancelled, and unwinds to ``cancelled``.
+        The batch itself keeps running and still finishes when the remaining items are done.
+        """
+        batch = self._owned(batch_id, owner)
+        if batch is None:
+            raise KeyError(batch_id)
+        if index < 0 or index >= len(batch.items):
+            raise IndexError(index)
+        if batch.status != BATCH_RUNNING:
+            raise ValueError("该批次不在执行中。")
+        item = batch.items[index]
+        if item.status not in {CASE_PENDING, CASE_RUNNING}:
+            raise ValueError("该用例已经结束。")
+        item.cancel_requested = True
+        if item.status == CASE_PENDING:
+            # A worker checks this flag before it starts the item, so marking the row is enough.
+            _mark_item_cancelled(item)
+        else:
+            await self._cancel_item_runs(item)
+        self._persist(batch)
+        return {"cancelled": True, "batchId": batch.batch_id, "index": index}
+
+    async def _cancel_item_runs(self, item: CaseItem) -> None:
+        """Cancel the run one item owns and, for a Modify, the baseline run it seeded."""
+        if item.run_id:
+            await self._runs.cancel(item.run_id)
+        baseline = _baseline_run_id(item)
+        if baseline is not None and baseline != item.run_id:
+            await self._runs.cancel(baseline)
+            if isinstance(item.baseline, dict) and item.baseline.get("status") == "running":
+                # The evidence must not claim an accepted baseline that was cancelled.
+                item.baseline["status"] = "cancelled"
 
     async def shutdown(self) -> None:
         """Cancel every running batch and release the Tasks its items still own."""
         for batch_id, batch in list(self._batches.items()):
             if batch.status == BATCH_RUNNING:
                 await self.cancel(batch_id)
+        # Let every cancelled batch coroutine unwind before the pool and its temp dirs go away.
+        pending = [
+            batch.task
+            for batch in self._batches.values()
+            if batch.task is not None and not batch.task.done()
+        ]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         for batch in list(self._batches.values()):
             if batch.keep_tasks:
                 continue
             for item in batch.items:
                 await self._release_item_runs(item)
+        self._close_prompt_pool()
 
     def _owned(self, batch_id: str, owner: str | None) -> _Batch | None:
         """Return one batch, or ``None`` when it belongs to a different browser.
@@ -625,6 +710,7 @@ class EvalBatchManager:
             working_timeout_seconds=batch.working_timeout_seconds,
             decision_mode=batch.decision_mode,
             keep_tasks=batch.keep_tasks,
+            concurrency=batch.concurrency,
             transport=batch.transport,
             discovery=batch.discovery,
             items=[
@@ -677,6 +763,7 @@ class EvalBatchManager:
                     "stopAfter": document.get("stopAfter"),
                     "decisionMode": document.get("decisionMode"),
                     "keepTasks": bool(document.get("keepTasks")),
+                    "concurrency": _clamp_concurrency(document.get("concurrency")),
                     "transport": document.get("transport"),
                     "discovery": document.get("discovery"),
                 }
@@ -717,6 +804,7 @@ class EvalBatchManager:
             }
         )
         item.status = CASE_PENDING
+        item.cancel_requested = False
         item.stages = {}
         item.run_id = None
         item.duration_ms = None
@@ -734,6 +822,7 @@ class EvalBatchManager:
         item.interception = None
         batch.status = BATCH_RUNNING
         batch.cancel_requested = False
+        batch.active_indices = []
         batch.finished_at = None
         batch.error = None
         self._persist(batch)
@@ -747,12 +836,15 @@ class EvalBatchManager:
         self, batch: _Batch, indices: Sequence[int] | None = None
     ) -> None:
         selected = list(range(len(batch.items))) if indices is None else list(indices)
+        # A single-item run is sequential even on a batch configured for more: one item has
+        # nothing to overlap with, so it keeps the historical client and counter behaviour.
+        concurrent = indices is None and batch.concurrency > 1 and len(selected) > 1
+        batch.active_concurrency = batch.concurrency if concurrent else 1
         try:
-            for index in selected:
-                if batch.cancel_requested:
-                    break
-                batch.current_index = index
-                await self._run_item(batch, index, batch.items[index])
+            if concurrent:
+                await self._run_items_concurrently(batch, selected)
+            else:
+                await self._run_items_sequentially(batch, selected)
         except asyncio.CancelledError:
             self._mark_pending_cancelled(batch)
             batch.status = BATCH_CANCELLED
@@ -767,7 +859,57 @@ class EvalBatchManager:
             batch.finished_at = _now_iso()
         finally:
             batch.current_index = None
+            batch.active_indices = []
             self._persist(batch)
+
+    async def _run_items_sequentially(self, batch: _Batch, selected: Sequence[int]) -> None:
+        """Run the selected items one after another: the historical batch behaviour.
+
+        Kept separate from :meth:`_run_items_concurrently` so a single-item batch always takes
+        exactly the code path it always took; the only addition is the per-item cancel check.
+        """
+        for index in selected:
+            if batch.cancel_requested:
+                break
+            item = batch.items[index]
+            if item.cancel_requested:
+                # Cancelled while queued: it must not start, and the batch keeps going.
+                _mark_item_cancelled(item)
+                continue
+            batch.current_index = index
+            batch.active_indices = [index]
+            try:
+                await self._run_item(batch, index, item)
+            finally:
+                batch.active_indices = []
+
+    async def _run_items_concurrently(self, batch: _Batch, selected: Sequence[int]) -> None:
+        """Run up to ``batch.concurrency`` items at once, taking them in catalog order."""
+        pending = deque(selected)
+
+        async def worker() -> None:
+            while pending:
+                if batch.cancel_requested:
+                    return
+                # No await between the check and the pop, so two workers cannot take one index.
+                index = pending.popleft()
+                item = batch.items[index]
+                if item.cancel_requested:
+                    _mark_item_cancelled(item)
+                    continue
+                batch.active_indices.append(index)
+                try:
+                    await self._run_item(batch, index, item)
+                finally:
+                    if index in batch.active_indices:
+                        batch.active_indices.remove(index)
+                    # ``currentIndex`` stays meaningful for older consumers of the snapshot.
+                    batch.current_index = (
+                        batch.active_indices[0] if batch.active_indices else None
+                    )
+
+        workers = max(1, min(batch.concurrency, len(selected)))
+        await asyncio.gather(*(worker() for _ in range(workers)))
 
     def _mark_pending_cancelled(self, batch: _Batch) -> None:
         for item in batch.items:
@@ -793,7 +935,12 @@ class EvalBatchManager:
             item.error = f"{type(exc).__name__}: {exc}"
         finally:
             item.duration_ms = int(round((time.monotonic() - started) * 1000))
-            if item.status == CASE_RUNNING and not batch.cancel_requested:
+            if item.cancel_requested:
+                # An item cancelled on its own must never be reported green or red: the flow may
+                # have judged part of its stages before the cancellation unwound. This also
+                # overrides ``_run_case_item``'s unconditional status mapping.
+                _mark_item_cancelled(item)
+            elif item.status == CASE_RUNNING and not batch.cancel_requested:
                 # A scratch item never calls ``_run_case_item``'s status mapping; derive the
                 # status from its stages so a failed or timed-out scratch is not counted as a pass.
                 item.status = self._item_status(item)
@@ -825,7 +972,12 @@ class EvalBatchManager:
                     sdk_stages[-1],
                     batch.decision_mode,
                     outcome_case=effective_case if blocked_followup else None,
+                    concurrent=batch.active_concurrency > 1,
                 )
+        if item.cancel_requested:
+            # The SDK call runs in a thread and cannot be interrupted; a cancel that arrived
+            # during it must stop here, before a baseline is seeded or a real request is sent.
+            return
         self._collect_reference(item, effective_case)
         if batch.stop_after in SDK_STAGE_ORDER:
             item.status = self._item_status(item)
@@ -841,15 +993,17 @@ class EvalBatchManager:
         decision_mode: str = DECISION_MODE_SCRIPTED,
         *,
         outcome_case: Mapping[str, Any] | None = None,
+        concurrent: bool = False,
     ) -> None:
         """Run the SDK stages of one case and record its interception segment, when split.
 
         ``outcome_case`` is the derived replacement case whose expectations judge the returned
         stages; the runner already judged the intercepted original, so those stages are recorded
-        verbatim (the runner derived their assertion flags).
+        verbatim (the runner derived their assertion flags). ``concurrent`` selects the pooled
+        client path; the default keeps the historical single locked client.
         """
         results, interception, error = await self._sdk_stage_results(
-            case, stop_after, decision_mode, outcome_case=outcome_case
+            case, stop_after, decision_mode, outcome_case=outcome_case, concurrent=concurrent
         )
         item.stages.update(results)
         if interception is not None:
@@ -871,6 +1025,7 @@ class EvalBatchManager:
         decision_mode: str,
         *,
         outcome_case: Mapping[str, Any] | None = None,
+        concurrent: bool = False,
     ) -> tuple[dict[str, StageResult], dict[str, StageResult] | None, str | None]:
         """Run the SDK-owned stages of one case and return stages, interception and error.
 
@@ -879,9 +1034,9 @@ class EvalBatchManager:
         """
         judge = outcome_case if outcome_case is not None else case
         model_mode = MODEL_MODE_LIVE if decision_mode == DECISION_MODE_LIVE else None
-        async with self._sdk_lock:
-            client = await self._ensure_prompt_client(model_mode)
-            outcome = await asyncio.to_thread(run_case, case, client, stop_after=stop_after)
+        outcome = await self._run_case_with_client(
+            case, stop_after, model_mode, concurrent=concurrent
+        )
         negotiation_expected = _negotiation_expected(judge, PROTOCOL_A2A_T)
         results: dict[str, StageResult] = {}
         for stage in outcome.stages:
@@ -924,6 +1079,9 @@ class EvalBatchManager:
         case: Mapping[str, Any],
         stages: Sequence[str],
     ) -> None:
+        if item.cancel_requested:
+            # Cancelled between the SDK stages and here: never seed a baseline or send a request.
+            return
         runtime_protocol = _runtime_protocol(item.protocol)
         runner = _case_runner(case)
         scenario = str(runner.get("scenario") or "night")
@@ -964,6 +1122,9 @@ class EvalBatchManager:
             # OSS Agent's outer Task, which is the Task id that hop owns.
             baseline = await self._seed_baseline(batch, index, item, runtime_protocol, case)
             if baseline is None:
+                if item.cancel_requested:
+                    # Cancelled while the baseline was starting; the item is already unwinding.
+                    return
                 for stage in ("send", "negotiate", "accepted", "working", "final"):
                     if stage in stages:
                         item.stages[stage] = StageResult(
@@ -1015,6 +1176,10 @@ class EvalBatchManager:
         )
         item.run_id = run.run_id
         self._persist(batch)
+        if item.cancel_requested:
+            # The cancel arrived while the run was being created; stop it before observing it,
+            # otherwise its Task would keep running and the item would wait for the full timeout.
+            await self._runs.cancel(run.run_id)
         approval_task = asyncio.create_task(
             self._answer_approval_gate(resolved_approval, item.protocol, run),
             name=f"tester-approval-{run.run_id}",
@@ -1042,7 +1207,7 @@ class EvalBatchManager:
 
     async def _run_scratch(self, batch: _Batch, index: int, item: CaseItem) -> None:
         """Run an ad-hoc request through the full flow; no expectations are asserted."""
-        if item.scratch is None:
+        if item.scratch is None or item.cancel_requested:
             return
         runtime_protocol = _runtime_protocol(item.protocol)
         defaults = self._protocol_defaults.get(runtime_protocol, {})
@@ -1063,6 +1228,8 @@ class EvalBatchManager:
         )
         item.run_id = run.run_id
         self._persist(batch)
+        if item.cancel_requested:
+            await self._runs.cancel(run.run_id)
         timed_out = await self._wait_for_run(run, self._resolved_timeout(batch))
         actual = run.result.final_state if run.result is not None else None
         if run.status == STATUS_FAILED:
@@ -1201,6 +1368,11 @@ class EvalBatchManager:
             "state": run.latest_task_state,
             "request": request,
         }
+        if item.cancel_requested:
+            # Cancelled while the baseline Create was starting: release it and stop the item.
+            item.baseline["status"] = "cancelled"
+            await self._runs.cancel(run.run_id)
+            return None
         # A Modify needs the Task accepted and still continuable. It must not wait for the
         # baseline run to reach a terminal state: a real NMS keeps the Create Task WORKING for the
         # whole energy-saving window, which made every Modify item time out as a baseline failure.
@@ -1835,13 +2007,116 @@ class EvalBatchManager:
         cached = self._prompt_clients.get(key)
         if cached is not None:
             return cached
+        # The concurrent pool builds under the same lock: the provider registrations inside
+        # ``build_client_with_env`` are check-then-register and raise on a duplicate.
+        async with self._prompt_build_lock:
+            cached = self._prompt_clients.get(key)
+            if cached is not None:
+                return cached
+            if key in self._prompt_errors:
+                raise RuntimeError(self._prompt_errors[key])
+            try:
+                client, directory = await asyncio.to_thread(
+                    build_client_with_env, model_mode=model_mode
+                )
+            except Exception as exc:  # noqa: BLE001 - reported per case
+                self._prompt_errors[key] = f"{type(exc).__name__}: {exc}"
+                raise
+            self._prompt_env_dirs.append(directory)
+            self._prompt_clients[key] = client
+            return client
+
+    async def _run_case_with_client(
+        self,
+        case: Mapping[str, Any],
+        stop_after: str,
+        model_mode: str | None,
+        *,
+        concurrent: bool,
+    ) -> CaseOutcome:
+        """Run the SDK stages on a client that is not borrowed by another thread.
+
+        The sequential path and any injected client keep the historical single client behind
+        ``_sdk_lock``. The concurrent path checks a client out of the per-mode pool, so no two
+        ``run_case`` threads ever share one ``A2ATClient``.
+        """
+        if not concurrent or self._prompt_client is not None:
+            async with self._sdk_lock:
+                client = await self._ensure_prompt_client(model_mode)
+                return await asyncio.to_thread(
+                    run_case, case, client, stop_after=stop_after
+                )
+        await self._sdk_slots.acquire()
         try:
-            client = await asyncio.to_thread(build_client, model_mode=model_mode)
-        except Exception as exc:  # noqa: BLE001 - reported per case
-            self._prompt_errors[key] = f"{type(exc).__name__}: {exc}"
+            client = await self._checkout_prompt_client(model_mode)
+        except BaseException:
+            self._sdk_slots.release()
             raise
-        self._prompt_clients[key] = client
-        return client
+        # ``to_thread`` cannot stop its thread. A task plus ``shield`` lets the item unwind on
+        # cancellation while the worker finishes, and keeps the slot held until it really does.
+        task = asyncio.create_task(
+            asyncio.to_thread(run_case, case, client, stop_after=stop_after),
+            name="tester-sdk-stage",
+        )
+
+        def _finished(finished: asyncio.Task[CaseOutcome]) -> None:
+            self._sdk_slots.release()
+            if not finished.cancelled():
+                # Consume a late exception so a cancelled item does not log "never retrieved".
+                finished.exception()
+
+        task.add_done_callback(_finished)
+        try:
+            outcome = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # The thread may still be inside this client: never return it to the pool.
+            raise
+        except BaseException:
+            # The thread finished with an error, so the client is idle again.
+            self._checkin_prompt_client(model_mode, client)
+            raise
+        self._checkin_prompt_client(model_mode, client)
+        return outcome
+
+    async def _checkout_prompt_client(self, model_mode: str | None) -> Any:
+        """Return an idle pooled client, building one under the build lock when none is free."""
+        key = model_mode or self._model_mode or MODEL_MODE_OFFLINE
+        queue = self._prompt_pool.setdefault(key, asyncio.Queue())
+        try:
+            return queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+        # ``build_client`` registers the traced providers with a check-then-register pattern that
+        # raises on a duplicate, so two parallel first-time builds must not run at once.
+        async with self._prompt_build_lock:
+            try:
+                return queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            if key in self._prompt_errors:
+                raise RuntimeError(self._prompt_errors[key])
+            try:
+                client, directory = await asyncio.to_thread(
+                    build_client_with_env, model_mode=model_mode
+                )
+            except Exception as exc:  # noqa: BLE001 - reported per case
+                self._prompt_errors[key] = f"{type(exc).__name__}: {exc}"
+                raise
+            if directory is not None:
+                self._prompt_env_dirs.append(directory)
+            return client
+
+    def _checkin_prompt_client(self, model_mode: str | None, client: Any) -> None:
+        """Return a pooled client so the next item of this mode can reuse it."""
+        key = model_mode or self._model_mode or MODEL_MODE_OFFLINE
+        self._prompt_pool.setdefault(key, asyncio.Queue()).put_nowait(client)
+
+    def _close_prompt_pool(self) -> None:
+        """Drop the pooled clients and remove the temporary SDK env directories they own."""
+        for directory in self._prompt_env_dirs:
+            shutil.rmtree(directory, ignore_errors=True)
+        self._prompt_env_dirs.clear()
+        self._prompt_pool.clear()
 
     def _item_status(self, item: CaseItem) -> str:
         statuses = [result.status for result in item.stages.values()]
@@ -1991,6 +2266,7 @@ class EvalBatchManager:
             working_timeout_seconds=_optional_float(document.get("workingTimeoutSeconds")),
             decision_mode=str(document.get("decisionMode") or DECISION_MODE_SCRIPTED),
             keep_tasks=bool(document.get("keepTasks")),
+            concurrency=_clamp_concurrency(document.get("concurrency")),
             transport=str(document.get("transport") or defaults.get("transport", "sse")),
             discovery=str(document.get("discovery") or defaults.get("discovery", "direct")),
             items=items,
@@ -2045,6 +2321,8 @@ class EvalBatchManager:
             "workingTimeoutSeconds": batch.working_timeout_seconds,
             "decisionMode": batch.decision_mode,
             "keepTasks": batch.keep_tasks,
+            "concurrency": batch.concurrency,
+            "activeIndices": list(batch.active_indices),
             "transport": batch.transport,
             "discovery": batch.discovery,
             "resolvedRunner": {
@@ -2372,6 +2650,16 @@ def _apply_assertion(
     return result
 
 
+def _mark_item_cancelled(item: CaseItem) -> None:
+    """Record an operator's per-item cancel on the item itself.
+
+    Shared by the queued-item skip of both execution paths and by ``_run_item``'s finally, so the
+    cancel contract has one implementation.
+    """
+    item.status = CASE_CANCELLED
+    item.error = "已取消。"
+
+
 def _interception_statuses(record: Mapping[str, object]) -> list[str]:
     """Return the stage statuses of one interception record (empty when malformed)."""
     stages = record.get("stages")
@@ -2451,6 +2739,22 @@ def _mapping_or_empty(raw: object) -> dict[str, object]:
     return {str(key): value for key, value in raw.items()} if isinstance(raw, Mapping) else {}
 
 
+def validate_concurrency(value: object) -> int:
+    """Return the requested item concurrency, rejecting values outside ``1..MAX_CONCURRENCY``."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("并发必须是整数。")
+    if value < 1 or value > MAX_CONCURRENCY:
+        raise ValueError(f"并发必须在 1 到 {MAX_CONCURRENCY} 之间。")
+    return value
+
+
+def _clamp_concurrency(value: object) -> int:
+    """Return a persisted concurrency, normalized to the supported range (old docs get 1)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return DEFAULT_CONCURRENCY
+    return min(MAX_CONCURRENCY, max(DEFAULT_CONCURRENCY, value))
+
+
 def _validate_approval(approval: str | None) -> str | None:
     """Validate one optional batch approval value."""
     if approval is None:
@@ -2495,8 +2799,11 @@ __all__ = [
     "DECISION_MODES",
     "DECISION_MODE_LIVE",
     "DECISION_MODE_SCRIPTED",
+    "DEFAULT_CONCURRENCY",
     "DEFAULT_WORKING_TIMEOUT_SECONDS",
     "EvalBatchManager",
+    "MAX_CONCURRENCY",
+    "validate_concurrency",
     "SCHEMA",
     "STAGE_SKIPPED",
     "STAGE_WAITING",
