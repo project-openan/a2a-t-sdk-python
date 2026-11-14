@@ -72,12 +72,187 @@ class LLMConfigLoaderTest(ManagedTempDirTestCase):
         self.assertEqual(config.history_window, 10)
         self.assertEqual(config.session_max_total, 300)
         self.assertEqual(config.session_max_per_provider, 100)
+        from a2a_t.llm.config_loader import DEFAULT_MAX_TOKENS
+
         self.assertIsNone(config.base_url)
-        self.assertIsNone(config.max_tokens)
+        self.assertEqual(config.max_tokens, DEFAULT_MAX_TOKENS)
         self.assertIsNone(config.temperature)
         self.assertIsNone(config.timeout_seconds)
         self.assertTrue(config.ssl_verify)
         self.assertFalse(config.detail_log_enabled)
+
+    def test_load_max_tokens_none_disables_the_cap(self) -> None:
+        from a2a_t.llm.config_loader import LLMConfigLoader
+
+        for raw in ("none", "null", "NONE", " null "):
+            with self.subTest(raw=raw):
+                env_path = self._write_env(
+                    "\n".join(
+                        [
+                            "A2AT_LLM_PROVIDER=openai",
+                            "A2AT_LLM_MODEL=gpt-4o-mini",
+                            "A2AT_LLM_API_KEY=sk-test",
+                            f"A2AT_LLM_MAX_TOKENS={raw}",
+                        ]
+                    )
+                    + "\n"
+                )
+                self.assertIsNone(LLMConfigLoader.load(env_path).max_tokens)
+
+    def test_load_rejects_zero_or_negative_max_tokens(self) -> None:
+        from a2a_t.llm.config_loader import LLMConfigLoader
+
+        for raw in ("0", "-1"):
+            with self.subTest(raw=raw):
+                env_path = self._write_env(
+                    "\n".join(
+                        [
+                            "A2AT_LLM_PROVIDER=openai",
+                            "A2AT_LLM_MODEL=gpt-4o-mini",
+                            "A2AT_LLM_API_KEY=sk-test",
+                            f"A2AT_LLM_MAX_TOKENS={raw}",
+                        ]
+                    )
+                    + "\n"
+                )
+                with self.assertRaisesRegex(LLMConfigError, "A2AT_LLM_MAX_TOKENS"):
+                    LLMConfigLoader.load(env_path)
+
+    def test_load_parses_extra_body_and_timeout_retries(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4o-mini",
+                    "A2AT_LLM_API_KEY=sk-test",
+                    'A2AT_LLM_EXTRA_BODY={"chat_template_kwargs":{"enable_thinking":false}}',
+                    "A2AT_LLM_TIMEOUT_RETRIES=2",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.config_loader import LLMConfigLoader
+
+        config = LLMConfigLoader.load(env_path)
+
+        self.assertEqual(
+            config.extra_body,
+            {"chat_template_kwargs": {"enable_thinking": False}},
+        )
+        self.assertEqual(config.timeout_retries, 2)
+
+    def test_load_defaults_extra_body_and_timeout_retries(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4o-mini",
+                    "A2AT_LLM_API_KEY=sk-test",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.config_loader import LLMConfigLoader
+
+        config = LLMConfigLoader.load(env_path)
+
+        self.assertIsNone(config.extra_body)
+        self.assertEqual(config.timeout_retries, 0)
+
+    def test_load_rejects_an_extra_body_that_is_not_a_json_object(self) -> None:
+        from a2a_t.llm.config_loader import LLMConfigLoader
+
+        for raw_value in ["not-json", "[]", '"text"', "42"]:
+            with self.subTest(raw_value=raw_value):
+                env_path = self._write_env(
+                    "\n".join(
+                        [
+                            "A2AT_LLM_PROVIDER=openai",
+                            "A2AT_LLM_MODEL=gpt-4o-mini",
+                            "A2AT_LLM_API_KEY=sk-test",
+                            f"A2AT_LLM_EXTRA_BODY={raw_value}",
+                        ]
+                    )
+                    + "\n"
+                )
+
+                with self.assertRaisesRegex(LLMConfigError, "A2AT_LLM_EXTRA_BODY"):
+                    LLMConfigLoader.load(env_path)
+
+    def test_load_rejects_an_invalid_timeout_retries_value(self) -> None:
+        from a2a_t.llm.config_loader import LLMConfigLoader
+
+        for raw_value in ["abc", "-1", "6"]:
+            with self.subTest(raw_value=raw_value):
+                env_path = self._write_env(
+                    "\n".join(
+                        [
+                            "A2AT_LLM_PROVIDER=openai",
+                            "A2AT_LLM_MODEL=gpt-4o-mini",
+                            "A2AT_LLM_API_KEY=sk-test",
+                            f"A2AT_LLM_TIMEOUT_RETRIES={raw_value}",
+                        ]
+                    )
+                    + "\n"
+                )
+
+                with self.assertRaisesRegex(LLMConfigError, "A2AT_LLM_TIMEOUT_RETRIES"):
+                    LLMConfigLoader.load(env_path)
+
+    def test_load_parses_the_response_format(self) -> None:
+        from a2a_t.llm.config_loader import LLMConfigLoader
+
+        for raw_value, expected in [("json_object", "json_object"), ("json_schema", "json_schema")]:
+            with self.subTest(raw_value=raw_value):
+                env_path = self._write_env(
+                    "\n".join(
+                        [
+                            "A2AT_LLM_PROVIDER=openai",
+                            "A2AT_LLM_MODEL=gpt-4o-mini",
+                            "A2AT_LLM_API_KEY=sk-test",
+                            f"A2AT_LLM_RESPONSE_FORMAT={raw_value}",
+                        ]
+                    )
+                    + "\n"
+                )
+
+                self.assertEqual(LLMConfigLoader.load(env_path).response_format, expected)
+
+    def test_load_defaults_the_response_format_to_json_object(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4o-mini",
+                    "A2AT_LLM_API_KEY=sk-test",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.config_loader import LLMConfigLoader
+
+        self.assertEqual(LLMConfigLoader.load(env_path).response_format, "json_object")
+
+    def test_load_rejects_an_unknown_response_format(self) -> None:
+        from a2a_t.llm.config_loader import LLMConfigLoader
+
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4o-mini",
+                    "A2AT_LLM_API_KEY=sk-test",
+                    "A2AT_LLM_RESPONSE_FORMAT=yaml",
+                ]
+            )
+            + "\n"
+        )
+
+        with self.assertRaisesRegex(LLMConfigError, "A2AT_LLM_RESPONSE_FORMAT"):
+            LLMConfigLoader.load(env_path)
 
     def test_load_parses_detail_log_enabled(self) -> None:
         from a2a_t.llm.config_loader import LLMConfigLoader

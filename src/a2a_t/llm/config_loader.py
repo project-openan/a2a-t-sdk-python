@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 from a2a_t.config.errors import ConfigFileNotFoundError
 from a2a_t.config.source import DotEnvConfigSource
@@ -12,9 +14,19 @@ from a2a_t.llm.models import LLMClientConfig
 _MAX_HISTORY_WINDOW = 100
 _MAX_SESSION_MAX_TOTAL = 3000
 _MAX_SESSION_MAX_PER_PROVIDER = 1000
+#: Upper bound of ``A2AT_LLM_TIMEOUT_RETRIES``; a larger retry budget only multiplies one
+#: caller's timeout budget and hides a broken endpoint.
+_MAX_TIMEOUT_RETRIES = 5
 
 #: Accepted reasoning-effort values (Java ``LLMClientConfig.VALID_REASONING_EFFORTS``).
 _VALID_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
+#: Accepted ``A2AT_LLM_RESPONSE_FORMAT`` values.
+_VALID_RESPONSE_FORMATS = ("json_object", "json_schema")
+#: Default completion cap of a structured call when ``A2AT_LLM_MAX_TOKENS`` is not configured.
+#: A structured call must emit a whole JSON object, and a reasoning model spends part of the
+#: completion budget on its thinking; 16384 leaves room for both while still bounding a runaway
+#: generation. ``A2AT_LLM_MAX_TOKENS=none`` removes the cap explicitly.
+DEFAULT_MAX_TOKENS = 16384
 
 
 def default_env_path() -> Path:
@@ -56,6 +68,29 @@ def coerce_optional_int(value: str | None, key: str) -> int | None:
         raise LLMConfigError(f"{key} must be an integer") from exc
 
 
+def coerce_max_tokens(value: str | None) -> int | None:
+    """Parse ``A2AT_LLM_MAX_TOKENS`` into a completion cap.
+
+    An unset or blank value falls back to :data:`DEFAULT_MAX_TOKENS`, so a reasoning model is
+    bounded by default instead of being allowed to generate for minutes. The explicit words
+    ``none``/``null`` (case insensitive) mean "no cap" and omit the provider parameter; a positive
+    integer is used verbatim. Zero, negative values and non-integers are configuration errors,
+    because the provider would either reject them or silently ignore the caller's intent.
+    """
+    if value is None or not value.strip():
+        return DEFAULT_MAX_TOKENS
+    normalized = value.strip().lower()
+    if normalized in {"none", "null"}:
+        return None
+    try:
+        parsed = int(normalized)
+    except ValueError as exc:
+        raise LLMConfigError("A2AT_LLM_MAX_TOKENS must be an integer, 'none' or 'null'") from exc
+    if parsed <= 0:
+        raise LLMConfigError("A2AT_LLM_MAX_TOKENS must be greater than zero, or 'none'/'null'")
+    return parsed
+
+
 def coerce_optional_float(value: str | None, key: str) -> float | None:
     """Parse an optional float environment value."""
     if value is None or value == "":
@@ -80,6 +115,47 @@ def coerce_boolean(value: str | None, key: str, *, default: bool) -> bool:
     if normalized == "false":
         return False
     raise LLMConfigError(f"{key} must be a boolean value (true/false)")
+
+
+def coerce_extra_body(value: str | None, key: str) -> dict[str, Any] | None:
+    """Parse the optional provider-specific ``extra_body`` JSON object.
+
+    A blank value stays unset. Any non-blank value must decode to a JSON object; arrays, scalars
+    and malformed JSON are configuration errors, never silently dropped.
+    """
+    if value is None or not value.strip():
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise LLMConfigError(f"{key} must be a JSON object") from exc
+    if not isinstance(parsed, dict):
+        raise LLMConfigError(f"{key} must be a JSON object")
+    return parsed
+
+
+def coerce_response_format(value: str | None, key: str) -> str:
+    """Parse the structured-call response format; a blank value keeps the portable JSON mode."""
+    if value is None or not value.strip():
+        return "json_object"
+    normalized = value.strip().lower()
+    if normalized not in _VALID_RESPONSE_FORMATS:
+        raise LLMConfigError(f"{key} must be one of {_VALID_RESPONSE_FORMATS}")
+    return normalized
+
+
+def coerce_timeout_retries(value: str | None, key: str) -> int:
+    """Parse the optional timeout-retry budget and bound it.
+
+    A blank value means no retry (the historical single-attempt behavior). Negative values and
+    values above :data:`_MAX_TIMEOUT_RETRIES` are configuration errors.
+    """
+    parsed = coerce_optional_int(value, key)
+    if parsed is None:
+        return 0
+    if parsed < 0 or parsed > _MAX_TIMEOUT_RETRIES:
+        raise LLMConfigError(f"{key} must be between 0 and {_MAX_TIMEOUT_RETRIES}")
+    return parsed
 
 
 def coerce_bounded_int(value: int | str, key: str, *, max_value: int) -> int:
@@ -140,7 +216,7 @@ class LLMConfigLoader:
             api_key=api_key,
             base_url=str(values.get("A2AT_LLM_BASE_URL", "")).strip() or None,
             history_window=history_window,
-            max_tokens=coerce_optional_int(values.get("A2AT_LLM_MAX_TOKENS"), "A2AT_LLM_MAX_TOKENS"),
+            max_tokens=coerce_max_tokens(values.get("A2AT_LLM_MAX_TOKENS")),
             temperature=coerce_optional_float(values.get("A2AT_LLM_TEMPERATURE"), "A2AT_LLM_TEMPERATURE"),
             timeout_seconds=coerce_optional_float(
                 values.get("A2AT_LLM_TIMEOUT_SECONDS"),
@@ -149,6 +225,13 @@ class LLMConfigLoader:
             session_max_total=session_max_total,
             session_max_per_provider=session_max_per_provider,
             reasoning_effort=coerce_reasoning_effort(values.get("A2AT_LLM_REASONING_EFFORT")),
+            extra_body=coerce_extra_body(values.get("A2AT_LLM_EXTRA_BODY"), "A2AT_LLM_EXTRA_BODY"),
+            timeout_retries=coerce_timeout_retries(
+                values.get("A2AT_LLM_TIMEOUT_RETRIES"), "A2AT_LLM_TIMEOUT_RETRIES"
+            ),
+            response_format=coerce_response_format(
+                values.get("A2AT_LLM_RESPONSE_FORMAT"), "A2AT_LLM_RESPONSE_FORMAT"
+            ),
             ssl_verify=coerce_boolean(values.get("A2AT_LLM_SSL_VERIFY"), "A2AT_LLM_SSL_VERIFY", default=True),
             detail_log_enabled=coerce_boolean(
                 values.get("A2AT_LLM_DETAIL_LOG_ENABLED"),

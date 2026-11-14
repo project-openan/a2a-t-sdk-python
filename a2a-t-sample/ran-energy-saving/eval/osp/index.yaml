@@ -1,0 +1,629 @@
+# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
+# Source: docs-local/osp-eval-cases/*.json (internal).
+schema: osp-eval-index/v1
+source: OSP-Unified Evaluation Set_v.01.xlsx
+count: 51
+cases:
+  - id: 1
+    file: 01-速率保障目标-视频码率720p-[不拦截]-[Create].yaml
+    name: 速率保障目标：视频码率720p
+    operation: Create
+    validate: pass
+    validate_label: 不拦截
+    tags:
+      - rate-guarantee
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 2
+    file: 02-速率保障目标-用户体验目标-UX-target-[不拦截+术语]-[Create].yaml
+    name: 速率保障目标：用户体验目标（UX target）
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - rate-guarantee
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 3
+    file: 03-速率保障目标-下行速率下限-DL-rate-floor-[不拦截+术语]-[Create].yaml
+    name: 速率保障目标：下行速率下限（DL rate floor）
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - rate-guarantee
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 4
+    file: 04-速率保障目标-平均下行吞吐速率-AVG-DL-THP-rate-[不拦截+术语]-[Create].yaml
+    name: 速率保障目标：平均下行吞吐速率（ AVG DL THP rate）
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - rate-guarantee
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 5
+    file: 05-速率保障目标-用户体验目标-User-Experience-Target-[不拦截+术语]-[Create].yaml
+    name: 速率保障目标：用户体验目标（User Experience Target）
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - rate-guarantee
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 6
+    file: 06-速率保障目标-SLA-Service-Level-Agreement-[不拦截+术语]-[Create].yaml
+    name: 速率保障目标：SLA（Service Level Agreement）
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - rate-guarantee
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 7
+    file: 07-增益目标-节电比例-Power-Savings-Ratio-[不拦截+术语]-[Create].yaml
+    name: 增益目标：节电比例（Power Savings Ratio）
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - gain-target
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 8
+    file: 08-节能时间-energy-saving-activation-period-[不拦截+术语]-[Create].yaml
+    name: 节能时间： energy saving activation period
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - energy-saving-time
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 9
+    file: 09-小区制式-E-UTRAN-LTE-[不拦截+术语]-[Create].yaml
+    name: 小区制式：E-UTRAN-->LTE
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - cell-rat
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 10
+    file: 10-小区制式-NG-RAN-NR-[不拦截+术语]-[Create].yaml
+    name: 小区制式：NG-RAN-->NR
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - cell-rat
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 11
+    file: 11-小区制式-LNR-All-LTE+NR-[不拦截+术语]-[Create].yaml
+    name: 小区制式：LNR-->All（LTE+NR）
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - cell-rat
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 12
+    file: 12-节能激进程度-high-GS-激进节能-[不拦截+术语]-[Create].yaml
+    name: 节能激进程度：high GS-->激进节能
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - energy-saving-mode
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 13
+    file: 13-节能激进程度-Maximize-Energy-Savings-最大化节能-激进节能-[不拦截+术语]-[Create].yaml
+    name: 节能激进程度：Maximize Energy Savings（最大化节能）-->激进节能
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - energy-saving-mode
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 14
+    file: 14-节能激进程度-Maximize-User-Experience-Assurance-最大化保障体验-[不拦截+术语]-[Create].yaml
+    name: 节能激进程度：Maximize User Experience Assurance（最大化保障体验）-->保守节能
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - energy-saving-mode
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 15
+    file: 15-节能激进程度-Maximize-KPI-Assurance-最大化保障KPI-保守节能-[不拦截+术语]-[Create].yaml
+    name: 节能激进程度：Maximize KPI Assurance（最大化保障KPI）-->保守节能
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - energy-saving-mode
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 16
+    file: 16-可关闭载波频点-EARFCN-LTE的频点号-[不拦截+术语]-[Create].yaml
+    name: 可关闭载波频点：EARFCN （LTE的频点号）
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - carrier-frequency
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 17
+    file: 17-可关闭载波频点-NR-ARFCN-NR的频点号-[不拦截+术语]-[Create].yaml
+    name: 可关闭载波频点：NR-ARFCN （NR的频点号）
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - carrier-frequency
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 18
+    file: 18-站点-NE-[不拦截+术语]-[Modify].yaml
+    name: 站点：NE
+    operation: Modify
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - site
+      - scenario-based
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 19
+    file: 19-站点-base-station-[不拦截+术语]-[Modify].yaml
+    name: 站点：base station
+    operation: Modify
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - site
+      - scenario-based
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 20
+    file: 20-噪声来源-节能目标多个参考-过去下发的任务A和B大部分下发内容一样-但速率保障目标不一样-下发任务C-[拦截]-[Create].yaml
+    name: '噪声来源 节能目标多个参考
+
+      过去下发的任务A和B大部分下发内容一样，但速率保障目标不一样，下发任务C时要求参考此前的任务，指代不清晰
+
+      the previous task 指代不清
+
+
+      A2A：预期识别出错
+
+      A2A-T：预期触发拦截'
+    operation: Create
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - rate-guarantee
+      - noise
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 21
+    file: 21-噪声来源-停电故障信息为背景噪声-要求执行节能策略修改-A2A-预期识别成故障场景-A2A-T-因传-[不拦截]-[Modify].yaml
+    name: '噪声来源 停电故障信息为背景噪声，要求执行节能策略修改
+
+
+      A2A：预期识别成故障场景
+
+      A2A-T：因传入templateUri可输出正确模板'
+    operation: Modify
+    validate: pass
+    validate_label: 不拦截
+    tags:
+      - noise
+      - power-outage
+      - scenario-based
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 22
+    file: 22-设置-gain-target为20%至30%-[拦截]-[Create].yaml
+    name: 设置 gain target为20%至30%
+    operation: Create
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 23
+    file: 23-停电2-3个小时-[拦截]-[Modify].yaml
+    name: 停电2-3个小时
+    operation: Modify
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - power-outage
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 24
+    file: 24-关闭在1600附近的频率-[拦截]-[Create].yaml
+    name: 关闭在1600附近的频率
+    operation: Create
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 25
+    file: 25-停电5个小时电-起始时间不明确-[拦截]-[Modify].yaml
+    name: 停电5个小时电，起始时间不明确
+    operation: Modify
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - power-outage
+      - scenario-based
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 26
+    file: 26-停电3个多小时-[拦截]-[Modify].yaml
+    name: 停电3个多小时
+    operation: Modify
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - power-outage
+      - scenario-based
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 27
+    file: 27-停电影响的站点-[拦截]-[Modify].yaml
+    name: 停电影响的站点
+    operation: Modify
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - site
+      - power-outage
+      - scenario-based
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 28
+    file: 28-一次性下发多个区域-A2A-T拦截-A2A行为不确定-生效1个-生效3个-拒绝-[拦截]-[Create].yaml
+    name: 一次性下发多个区域，A2A-T拦截，A2A行为不确定（生效1个？生效3个？拒绝？）
+    operation: Create
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - region
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 29
+    file: 29-该区域下所有站点-[拦截]-[Modify].yaml
+    name: 该区域下所有站点
+    operation: Modify
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - site
+      - scenario-based
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 30
+    file: 30-NRES_XCS_6102937-LTE_26441_LNR_OCL等-[拦截]-[Modify].yaml
+    name: NRES_XCS_6102937，LTE_26441_LNR_OCL等
+    operation: Modify
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - scenario-based
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 31
+    file: 31-闲忙时-[拦截]-[Create].yaml
+    name: 闲忙时
+    operation: Create
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - idle-busy
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 32
+    file: 32-10Mbps-[不拦截]-[Modify].yaml
+    name: 10Mbps
+    operation: Modify
+    validate: pass
+    validate_label: 不拦截
+    tags:
+      - scenario-based
+      - negotiation-a2a
+      - negotiation-a2at
+    a2a_negotiation_rounds: 2
+    a2a_t_negotiation_rounds: 1
+  - id: 33
+    file: 33-要求停电可保障的速率可能大-未明确具体速率-[拦截]-[Modify].yaml
+    name: 要求停电可保障的速率可能大，未明确具体速率
+    operation: Modify
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - power-outage
+      - scenario-based
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 34
+    file: 34-时间重叠+可行性协商-[拦截]-[Modify].yaml
+    name: 时间重叠+可行性协商
+    operation: Modify
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - feasibility-negotiation
+      - scenario-based
+      - negotiation-a2a
+      - negotiation-a2at
+      - needs-confirmation
+    a2a_negotiation_rounds: 3
+    a2a_t_negotiation_rounds: 1
+  - id: 35
+    file: 35-部分站点需要协商-部分站点不协商-[不拦截]-[Modify].yaml
+    name: 部分站点需要协商，部分站点不协商
+    operation: Modify
+    validate: pass
+    validate_label: 不拦截
+    tags:
+      - site
+      - scenario-based
+      - negotiation-a2a
+      - negotiation-a2at
+    a2a_negotiation_rounds: 3
+    a2a_t_negotiation_rounds: 1
+  - id: 36
+    file: 36-分段停电大于4小时触发协商-[不拦截]-[Modify].yaml
+    name: 分段停电大于4小时触发协商
+    operation: Modify
+    validate: pass
+    validate_label: 不拦截
+    tags:
+      - power-outage
+      - scenario-based
+      - negotiation-a2a
+      - negotiation-a2at
+    a2a_negotiation_rounds: 3
+    a2a_t_negotiation_rounds: 1
+  - id: 37
+    file: 37-缺速率目标+可行性协商-[拦截]-[Modify].yaml
+    name: 缺速率目标+可行性协商
+    operation: Modify
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - feasibility-negotiation
+      - scenario-based
+      - negotiation-a2a
+      - negotiation-a2at
+    a2a_negotiation_rounds: 3
+    a2a_t_negotiation_rounds: 1
+  - id: 38
+    file: 38-LTE_26441_LNR_OCL-NRES_XCS_6102937等站点+可行性协商-[拦截]-[Modify].yaml
+    name: LTE_26441_LNR_OCL, NRES_XCS_6102937等站点+可行性协商
+    operation: Modify
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - site
+      - feasibility-negotiation
+      - scenario-based
+      - negotiation-a2a
+      - negotiation-a2at
+    a2a_negotiation_rounds: 2
+    a2a_t_negotiation_rounds: 1
+  - id: 39
+    file: 39-10个站点-没有具体站点名称-[拦截]-[Modify].yaml
+    name: 10个站点，没有具体站点名称
+    operation: Modify
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - site
+      - scenario-based
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 40
+    file: 40-缺区域-[拦截]-[Create].yaml
+    name: 缺区域
+    operation: Create
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - region
+      - negotiation-a2a
+      - blocked
+      - needs-confirmation
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 41
+    file: 41-停电场景缺站点名称-[拦截]-[Modify].yaml
+    name: 停电场景缺站点名称
+    operation: Modify
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - site
+      - power-outage
+      - scenario-based
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 42
+    file: 42-停电场景缺速率-[拦截]-[Modify].yaml
+    name: 停电场景缺速率
+    operation: Modify
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - power-outage
+      - scenario-based
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 43
+    file: 43-要关载波-但是没提供具体的频点-[拦截]-[Create].yaml
+    name: 要关载波，但是没提供具体的频点
+    operation: Create
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - carrier-frequency
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 44
+    file: 44-制式不合法-[拦截]-[Create].yaml
+    name: 制式不合法
+    operation: Create
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - invalid-rat
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 45
+    file: 45-停电场景缺起止时间-[拦截]-[Modify].yaml
+    name: 停电场景缺起止时间
+    operation: Modify
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - power-outage
+      - scenario-based
+      - negotiation-a2a
+      - blocked
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 46
+    file: 46-节能激进程度-绿色节能-[拦截]-[Create].yaml
+    name: 节能激进程度：绿色节能
+    operation: Create
+    validate: blocked
+    validate_label: 拦截
+    tags:
+      - energy-saving-mode
+      - negotiation-a2a
+      - blocked
+      - needs-confirmation
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 47
+    file: 47-是否要求体验无损节能-User-experience-first-体验无损节能-[不拦截+术语]-[Create].yaml
+    name: 是否要求体验无损节能（User experience first-->体验无损节能）
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - experience-preserving
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 48
+    file: 48-是否要求体验无损节能-Energy-Saving-First-体验有损节能-[不拦截+术语]-[Create].yaml
+    name: 是否要求体验无损节能（Energy Saving First--->体验有损节能）
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - experience-preserving
+      - experience-lossy
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 49
+    file: 49-调整输入描述-让模型猜不出来是速率-AVG-DL-THP-[不拦截+术语]-[Create].yaml
+    name: 调整输入描述，让模型猜不出来是速率-AVG DL THP
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 50
+    file: 50-加入干扰信息-也是速率Mbps的形式-[不拦截+术语]-[Create].yaml
+    name: 加入干扰信息，也是速率Mbps的形式
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0
+  - id: 51
+    file: 51-Energy-Saving-Scope-is-NG-RAN-[不拦截+术语]-[Create].yaml
+    name: Energy-Saving Scope is NG-RAN
+    operation: Create
+    validate: pass_with_terminology
+    validate_label: 不拦截，携带术语上下文信息
+    tags:
+      - cell-rat
+      - negotiation-a2a
+    a2a_negotiation_rounds: 1
+    a2a_t_negotiation_rounds: 0

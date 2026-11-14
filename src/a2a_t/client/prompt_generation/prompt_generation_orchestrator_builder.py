@@ -68,4 +68,5 @@ class PromptGenerationOrchestratorBuilder:
             renderer=self._renderer_cls(),
             input_limit=config.input_limits,
             logger=logger,
+            provider=str(getattr(llm_client, "provider", "") or ""),
         )

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from openai import OpenAI
+from openai import APITimeoutError, OpenAI
 
 from a2a_t.llm.errors import LLMConfigError, LLMRuntimeError
 from a2a_t.llm.models import LLMClientConfig, LLMResponse
@@ -19,8 +19,56 @@ _JSON_MODE_INSTRUCTION_DEFAULT = (
     "Return a valid JSON object string. "
     "The output must be valid json. "
     "Do not wrap the response in markdown code fences. "
-    "Do not include any explanation outside the JSON object."
+    "Do not include any explanation outside the JSON object. "
+    "The JSON schema below describes the required shape of your output; never echo or repeat "
+    "the schema itself."
 )
+
+_STRUCTURED_SCHEMA_INSTRUCTION_PREFIX = "Return JSON that conforms to this JSON schema: "
+
+_SYSTEM_MESSAGE_JOINER = "\n\n"
+
+
+def build_structured_messages(
+    messages: list[dict[str, str]],
+    json_schema: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Build the chat messages of one structured call with a single leading system message.
+
+    Strict OpenAI-compatible gateways (oneapi + qwen3.x, and any implementation reading "system
+    message must be at the beginning" literally) accept exactly one system message and reject a
+    second one with HTTP 400. The JSON-mode instruction, the schema instruction and the caller's
+    leading system prompt are therefore joined into one message instead of being sent separately.
+    System messages the caller places elsewhere in the list are left in place: reordering caller
+    messages is not this layer's business.
+    """
+    system_parts = [
+        _JSON_MODE_INSTRUCTION_DEFAULT,
+        f"{_STRUCTURED_SCHEMA_INSTRUCTION_PREFIX}{json.dumps(json_schema, ensure_ascii=False)}",
+    ]
+    remaining = list(messages)
+    if remaining and remaining[0].get("role") == "system":
+        caller_system = remaining.pop(0).get("content")
+        if isinstance(caller_system, str) and caller_system.strip():
+            system_parts.append(caller_system)
+    return [{"role": "system", "content": _SYSTEM_MESSAGE_JOINER.join(system_parts)}, *remaining]
+
+
+def _cached_tokens(usage: Any) -> int | None:
+    """Return the provider-reported cached prefix tokens, ``None`` when absent.
+
+    OpenAI-compatible gateways report ``usage.prompt_tokens_details.cached_tokens``; DeepSeek's
+    native API reports a top-level ``prompt_cache_hit_tokens``. The value is optional, and ``None``
+    is kept distinct from ``0`` (reported miss) so downstream averages can skip unreported calls.
+    """
+    details = getattr(usage, "prompt_tokens_details", None)
+    cached = getattr(details, "cached_tokens", None) if details is not None else None
+    if isinstance(cached, int) and not isinstance(cached, bool):
+        return cached
+    hit = getattr(usage, "prompt_cache_hit_tokens", None)
+    if isinstance(hit, int) and not isinstance(hit, bool):
+        return hit
+    return None
 
 
 class OpenAIClient(LLMClient):
@@ -33,6 +81,11 @@ class OpenAIClient(LLMClient):
         self._logger = logger if logger is not None else logging.getLogger(__name__)
         self._call_logger = logging.getLogger("a2a_t.llm.call")
         self._client: Any | None = None
+
+    @property
+    def provider(self) -> str:
+        """Provider name configured for this client."""
+        return self._config.provider
 
     def _get_client(self) -> Any:
         if self._client is not None:
@@ -73,14 +126,35 @@ class OpenAIClient(LLMClient):
         debug_enabled = self._call_logger.isEnabledFor(logging.DEBUG)
         if debug_enabled:
             self._log_request(payload)
-        try:
-            raw_response = self._get_client().chat.completions.create(**payload)
-        except LLMConfigError:
-            raise
-        except Exception as exc:  # pragma: no cover - provider failure path
-            if debug_enabled:
-                self._log_error(started, exc)
-            raise LLMRuntimeError(f"{self._config.provider} invocation failed: {exc}") from exc
+        attempts = max(1, self._config.timeout_retries + 1)
+        for attempt in range(1, attempts + 1):
+            try:
+                raw_response = self._get_client().chat.completions.create(**payload)
+                break
+            except LLMConfigError:
+                raise
+            except APITimeoutError as exc:
+                # A timeout is the one transport error worth retrying: a client-side timeout may
+                # leave the server-side prefix computation warm, making the second identical
+                # request much cheaper. Other failures are never retried here.
+                if attempt >= attempts:
+                    if debug_enabled:
+                        self._log_error(started, exc)
+                    raise LLMRuntimeError(
+                        f"{self._config.provider} invocation timed out after {attempts} attempt(s): {exc}"
+                    ) from exc
+                self._logger.warning(
+                    "%s invocation timed out (attempt %s/%s); retrying",
+                    self._config.provider,
+                    attempt,
+                    attempts,
+                )
+            except Exception as exc:  # pragma: no cover - provider failure path
+                if debug_enabled:
+                    self._log_error(started, exc)
+                raise LLMRuntimeError(f"{self._config.provider} invocation failed: {exc}") from exc
+        else:  # pragma: no cover - the loop always breaks or raises
+            raise RuntimeError("unreachable")
         try:
             response = self._parse_response(raw_response)
         except LLMRuntimeError as exc:
@@ -102,43 +176,80 @@ class OpenAIClient(LLMClient):
         payload: dict[str, Any] = {
             "model": self._config.model,
             "messages": self._build_structured_messages(messages, json_schema),
-            "response_format": {"type": "json_object"},
+            "response_format": self._response_format(json_schema),
         }
-        if temperature is not None:
-            payload["temperature"] = temperature
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
+        # A call-site value wins; otherwise the configured default applies. Many call sites pass
+        # neither, so without this fallback ``A2AT_LLM_TEMPERATURE`` would be silently ignored.
+        resolved_temperature = temperature if temperature is not None else self._config.temperature
+        if resolved_temperature is not None:
+            payload["temperature"] = resolved_temperature
+        # A call-site value wins; otherwise the configured default applies. A structured call must
+        # be able to emit the whole JSON object, so the cap must leave room for a reasoning model's
+        # thinking. ``A2AT_LLM_MAX_TOKENS=none`` keeps the parameter unset (no cap), while an unset
+        # key resolves to the SDK's documented default in the config loader.
+        resolved_max_tokens = max_tokens if max_tokens is not None else self._config.max_tokens
+        if resolved_max_tokens is not None:
+            payload["max_tokens"] = resolved_max_tokens
         # Java parity: the reasoning effort is only forwarded when configured with a non-blank
         # value, so non-reasoning models never receive the parameter.
         if self._config.reasoning_effort:
             payload["reasoning_effort"] = self._config.reasoning_effort
+        if self._config.extra_body:
+            # The OpenAI SDK merges ``extra_body`` into the JSON request body, so a gateway
+            # extension (``chat_template_kwargs`` and the like) reaches the endpoint without a
+            # provider-specific branch in this client.
+            payload["extra_body"] = dict(self._config.extra_body)
         return payload
+
+    def _response_format(self, json_schema: dict[str, Any]) -> dict[str, Any]:
+        """Return the request ``response_format`` selected by the configuration.
+
+        ``json_object`` is the portable default. ``json_schema`` asks the gateway to constrain the
+        output to the caller's schema and is opt-in because not every OpenAI-compatible gateway
+        accepts it. ``strict`` is false so the existing schemas (which do not set
+        ``additionalProperties``) remain valid.
+        """
+        if self._config.response_format == "json_schema":
+            return {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "a2at_structured_response",
+                    "schema": json_schema,
+                    "strict": False,
+                },
+            }
+        return {"type": "json_object"}
 
     def _build_structured_messages(
         self,
         messages: list[dict[str, str]],
         json_schema: dict[str, Any],
     ) -> list[dict[str, str]]:
-        schema_text = json.dumps(json_schema, ensure_ascii=False)
-        return [
-            {"role": "system", "content": _JSON_MODE_INSTRUCTION_DEFAULT},
-            {"role": "system", "content": f"Return JSON that conforms to this JSON schema: {schema_text}"},
-            *messages,
-        ]
+        return build_structured_messages(messages, json_schema)
 
     def _parse_response(self, response: Any) -> LLMResponse:
         usage = getattr(response, "usage", None)
-        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-        total_tokens = int(getattr(usage, "total_tokens", 0) or 0) or (prompt_tokens + completion_tokens)
-        return LLMResponse(
-            content=self._extract_json_object_string(response),
-            model=str(getattr(response, "model", self._config.model)),
-            usage={
+        # An omitted ``usage`` is unreported, not a reported zero. Fabricating 0/0/0 would make a
+        # downstream token average count a call that never supplied a count.
+        token_usage: dict[str, int] = {}
+        if usage is not None:
+            prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+            completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+            total_tokens = int(getattr(usage, "total_tokens", 0) or 0) or (
+                prompt_tokens + completion_tokens
+            )
+            token_usage = {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
-            },
+            }
+            cached_tokens = _cached_tokens(usage)
+            if cached_tokens is not None:
+                token_usage["cached"] = cached_tokens
+        return LLMResponse(
+            content=self._extract_json_object_string(response),
+            model=str(getattr(response, "model", self._config.model)),
+            usage=token_usage,
             metadata={"response": response},
         )
 

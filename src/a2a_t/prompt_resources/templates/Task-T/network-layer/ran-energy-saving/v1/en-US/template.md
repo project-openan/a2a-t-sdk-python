@@ -38,7 +38,7 @@ Requirement:
 {{task_context}} (optional)
 
 Requirement:
-1. Cell radio access technology for energy saving (optional); allowed values: LTE, NR, all
+1. Cell radio access technology for energy saving (optional); allowed values: LTE, NR, LNR, all
 2. Energy saving time range (optional): The time range for executing energy saving, recurring daily. If omitted, energy saving is performed for the full period. **The rate goal is guaranteed only within the energy saving enabled time range**. Example: Energy saving time range: start time "08:00:00", end time "12:00:00"
 3. Energy saving cell coverage type (optional); allowed values: indoor, outdoor, all
 4. Enable Lossless Experience Energy Saving (optional); allowed values: yes, no

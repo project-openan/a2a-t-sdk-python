@@ -22,6 +22,10 @@ class LLMClientConfig:
     """Resolved default configuration for the shared LLM client.
 
     Attributes:
+        max_tokens: default completion cap of a structured call whose call site passes
+            ``max_tokens=None``; ``None`` means "no cap" (the provider decides). The config loader
+            fills ``DEFAULT_MAX_TOKENS`` when ``A2AT_LLM_MAX_TOKENS`` is unset and keeps ``None``
+            only for the explicit ``none``/``null`` value. Java ``LLMClientConfig.maxTokens``.
         reasoning_effort: optional reasoning effort for reasoning models, one of
             ``none``/``minimal``/``low``/``medium``/``high``/``xhigh`` (already normalized to lower
             case); ``None`` leaves the provider parameter unset. Java ``LLMClientConfig.reasoningEffort``.
@@ -32,6 +36,14 @@ class LLMClientConfig:
             Summary logs (timestamp, token usage, elapsed time) are recorded at DEBUG level on the
             dedicated logger ``a2a_t.llm.call`` independently of this flag. Java
             ``LLMClientConfig.detailLogEnabled``.
+        extra_body: optional provider-specific request fields forwarded verbatim as the OpenAI SDK
+            ``extra_body`` argument (for example ``{"chat_template_kwargs": {"enable_thinking":
+            false}}``). ``None`` sends nothing, so non-reasoning providers are unaffected.
+        timeout_retries: how many extra attempts one structured call makes after the transport
+            timeout (``0`` keeps the original single-attempt behavior).
+        response_format: ``json_object`` (default) sends the portable JSON-mode request format;
+            ``json_schema`` asks the gateway to enforce the caller's output schema. The latter is
+            opt-in because not every OpenAI-compatible gateway accepts it.
     """
 
     provider: str
@@ -47,3 +59,6 @@ class LLMClientConfig:
     reasoning_effort: str | None = None
     ssl_verify: bool = True
     detail_log_enabled: bool = False
+    extra_body: dict[str, Any] | None = None
+    timeout_retries: int = 0
+    response_format: str = "json_object"

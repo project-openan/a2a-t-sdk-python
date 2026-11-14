@@ -1,0 +1,171 @@
+# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
+# Source: docs-local/osp-eval-cases/*.json (internal).
+schema: osp-eval-case/v1
+id: 34
+name: 时间重叠+可行性协商
+dimension: D1 意图完备无歧义
+operation: Modify
+tags:
+  - feasibility-negotiation
+  - scenario-based
+  - negotiation-a2a
+  - negotiation-a2at
+  - needs-confirmation
+user_input: |-
+  Because LNR_KPI_7745 and NES_27A_321071 in the A2ATestRegion zone experienced a power outage from 08:00 to 18:00 on the second day, the guaranteed bandwidth for LNR_KPI_7745 and NES_27A_321071 needs to be modified to 10 Mbit/s from 08:00 to 12:00 and 5 Mbit/s from 11:00 to 18:00.
+expect:
+  intent:
+    Operation type: Modify
+    Energy saving cell RAT: ALL
+    Energy saving aggressiveness: ''
+    Energy saving region: A2ATestRegion
+    Whether Experience-Preserving Energy Saving is Required: ''
+    Special Requirements for Carrier Shutdown Frequencies: ''
+    Energy saving time: ''
+    Frequencies of carriers that can be shut down: []
+    Gain target: ''
+    Guaranteed throughput target by zone: []
+    Scenario-based energy saving:
+      - Site list:
+          - LNR_KPI_7745
+          - NES_27A_321071
+        Guaranteed throughput target by site:
+          - Guaranteed throughput target: 2Mbps
+            Effective time period: 08:00:00-08:59:59&09:00:00-09:59:59&10:00:00-10:59:59&11:00:00-11:59:59&12:00:00-12:59:59&13:00:00-13:59:59&14:00:00-14:59:59&15:00:00-15:59:59&16:00:00-16:59:59&17:00:00-17:59:59
+        Scenario: Power outage
+        Scenario period: 08:00:00-17:59:59
+  protocols:
+    a2a-t:
+      validate: blocked
+      validate_label: 拦截
+      send: false
+      task_t: |-
+        ## Operation Type
+        Modify
+
+        ## Task Type
+        RAN energy saving
+
+        ## Task Description
+        Based on [Task Object](#task-object) and [Task Context](#task-context), execute the energy-saving task to achieve the goal defined in [Task Target](#task-target).
+
+        ## Task Object
+        A2ATestRegion
+
+        ## Task Target
+
+        ## Task Context
+        Site list: ["LNR_KPI_7745", "NES_27A_321071"], Time-segmented rate guarantee target: {08:00-12:00: 10Mbps}, {12:00-18:00: 5Mbps}, Background event: power outage from 08:00 to 18:00.
+
+        ## Terminology Explanation
+        1. LTE
+           - Synonyms: 4G, E-UTRAN
+        2. NR
+           - Synonyms: 5G, NG-RAN
+        3. LNR
+           - Explanation: Includes both LTE and NR RATs
+        4. Aggressive Energy Saving
+           - Synonyms: Maximize Energy Saving
+        5. Conservative Energy Saving
+           - Synonyms: Maximize User Experience Assurance, Maximize KPI Assurance
+        6. GS
+           - Explanation: A network energy saving parameter defined in 3GPP, used to control the trade-off between energy consumption and performance. The higher the GS value, the more aggressive the energy saving strategy.
+        7. Video Bitrate
+           - Explanation: Mapping between video bitrate and downlink throughput: 720p → 2 Mbps, 1080p → 10 Mbps, 4K → 20 Mbps.
+        8. Rate guarantee target
+           - Synonyms: guaranteed throughput target, downlink throughput target, DL throughput target, User Experience Target, UX target, SLA
+        9. Site
+           - Synonyms: NE, base station
+        10. Capacity Layer
+            - Synonyms: Shutdown Layer
+        11. Coverage Layer
+            - Synonyms: Retained Layer, Basic Layer
+        12. Lossless Experience Energy Saving
+            - Synonyms: User Experience First
+        13. Lossy Experience Energy Saving
+            - Synonyms: Energy Saving First
+        14. ARFCN
+            - Explanation: Absolute Radio Frequency Channel Number is used to identify the position of a radio frequency channel in a wireless system. For LTE, EARFCN can be used for identification; for NR, NR-ARFCN can be used.
+
+        ## Expected Output
+        - Basic information about the intent execution result, including:
+          - Area
+          - Intent goal achievement status
+        - Detailed information about the intent execution result, including:
+          - Energy saving gain achievement status, current energy saving gain goal, actual energy saving gain percentage, target adjustment suggestions
+          - Rate goal achievement status, current rate goal, actual rate, target adjustment suggestions
+      negotiation:
+        expected: true
+        expected_rounds: 1
+        kinds:
+          - feasibility
+        rounds:
+          - |-
+            ## Feasibility Negotiation Result
+
+            Accept
+
+            ## Feasibility Negotiation Result in Detail
+
+            Reduce throughput target from 5Mbps to 2Mbps for the power outage period.
+      final_state: input_invalid
+      final_state_derived: true
+    a2a:
+      negotiation:
+        expected: true
+        expected_rounds: 3
+        kinds: null
+        rounds:
+          - |-
+            Set the guaranteed throughput targets: 08:00-12:00→10Mbps,12:00-18:00→5Mbps.
+          - |-
+            Set the guaranteed throughput targets: 08:00-18:00→5Mbps.
+          - |-
+            Set the guaranteed throughput targets: 08:00-18:00→2Mbps.
+      final_state: null
+assert:
+  intent: true
+  a2a-t:
+    validate: true
+    task_t: true
+    send: true
+    negotiation: true
+    final_state: true
+  a2a:
+    negotiation: true
+    final_state: false
+blocked_followup:
+  input: |-
+    Because LNR_KPI_7745 and NES_27A_321071 in the A2ATestRegion zone experienced a power outage from 08:00 to 18:00 on the second day, the guaranteed bandwidth for those sites needs to be modified to 10 Mbit/s from 08:00 to 12:00 and 5 Mbit/s from 12:00 to 18:00.
+baseline:
+  # Paired Create: the manual baseline the testers use (A2ATestRegion; 00:00-07:00 2Mbps,
+  # 07:00-18:00 10Mbps, 18:00-24:00 20Mbps). It is accepted without a pre-task negotiation.
+  # Keep the plan in prose: an explicit {HH:MM-HH:MM,NMbps} list is rewritten by the scripted
+  # provider and then fails semantic validation; do not invent a per-site high-rate day plan.
+  request: |-
+    Create an energy saving task for A2ATestRegion: guarantee 2Mbps from 00:00 to 07:00, 10Mbps from 07:00 to 18:00 and 20Mbps from 18:00 to 24:00.
+runner:
+  scenario: night
+  language: en-US
+  approval: approve
+  timeout_seconds: 300
+  pre_send_validation: always
+source:
+  file: OSP-Unified Evaluation Set_v.01.xlsx
+  sheet: A2A-T_原始数据
+  row: 35
+known_issue: |-
+  原表 I 列（预期SDK校验结果）为「拦截」，J 列给出拦截后补充请求，本文件按 blocked_followup 处理：
+  拦截段只判 validate=blocked，intent/task_t 只作证据；补充段的 validate=pass、send=true、
+  final_state=task_completed 由拦截态机械派生，intent/task_t/send/final_state 参与判定。
+  补充请求（J 列）把第二个时段写成 12:00-18:00，而原表 H 列（预期SDK转换输入）仍按原始输入写成
+  11:00-18:00；本文件按 README 3.4 的规则，expect.task_t 描述的是补充请求，故取 12:00-18:00。
+  H 列未同步，待业务确认；确认前保留 tags: [needs-confirmation]。
+  原表 R 列（A2A-T 协商信息）只含 Feasibility Negotiation Result，不含 Target Negotiation，故
+  kinds=[feasibility]、1 轮。解析器仍支持一条答复里同时出现 Target 与 Feasibility，并按出现顺序生成
+  决策（当前语料已没有这种答复）。
+  A2A 与 A2A-T 的预期协商轮次不同：A2A-T 为 1 轮（feasibility），A2A 为 3 轮
+  （{08:00-12:00,10Mbps}/{12:00-18:00,5Mbps} → 5Mbps → 2Mbps），属协议行为差异，不关断言。
+  expect.intent 为协商后的最终意图（停电时段 2Mbps）；离线 runner 看不到协商结果（拦截段只看原
+  请求，补充段只看 J 列请求），intent 阶段标 recorded。
+

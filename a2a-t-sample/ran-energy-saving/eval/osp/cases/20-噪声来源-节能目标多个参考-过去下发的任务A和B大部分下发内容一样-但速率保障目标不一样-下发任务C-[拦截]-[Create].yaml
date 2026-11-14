@@ -1,0 +1,142 @@
+# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
+# Source: docs-local/osp-eval-cases/*.json (internal).
+schema: osp-eval-case/v1
+id: 20
+name: '噪声来源 节能目标多个参考
+
+  过去下发的任务A和B大部分下发内容一样，但速率保障目标不一样，下发任务C时要求参考此前的任务，指代不清晰
+
+  the previous task 指代不清
+
+
+  A2A：预期识别出错
+
+  A2A-T：预期触发拦截'
+dimension: D1 意图完备无歧义
+operation: Create
+tags:
+  - rate-guarantee
+  - noise
+  - negotiation-a2a
+  - blocked
+user_input: |-
+  Hi team, two earlier tasks under this program: one covered all indoor communities in A2ATestRegionA region — NR cells, 00:00:00–06:00:00 nightly, 5 Mbps floor; the other covered A2ATestRegionB region — same RAT and window, 2 Mbps floor. Create the next one: same as the previous task, but the area moves to A2ATestRegion region.
+expect:
+  intent:
+    Operation type: Create
+    Energy saving cell RAT: NR
+    Energy saving aggressiveness: ''
+    Energy saving region: A2ATestRegion
+    Whether Experience-Preserving Energy Saving is Required: ''
+    Special Requirements for Carrier Shutdown Frequencies: ''
+    Energy saving time: 00:00:00-00:59:59&01:00:00-01:59:59&02:00:00-02:59:59&03:00:00-03:59:59&04:00:00-04:59:59&05:00:00-05:59:59
+    Frequencies of carriers that can be shut down: []
+    Gain target: ''
+    Guaranteed throughput target by zone:
+      - Guaranteed throughput target: 2Mbps
+        Effective time period: 00:00:00-00:59:59&01:00:00-01:59:59&02:00:00-02:59:59&03:00:00-03:59:59&04:00:00-04:59:59&05:00:00-05:59:59
+    Scenario-based energy saving: []
+  protocols:
+    a2a-t:
+      validate: blocked
+      validate_label: 拦截
+      send: false
+      task_t: |-
+        ## Operation Type
+        Create
+
+        ## Task Type
+        RAN energy saving
+
+        ## Task Description
+        Based on [Task Object](#task-object) and [Task Context](#task-context), execute the energy-saving task to achieve the goal defined in [Task Target](#task-target), and return the wireless network energy saving result in the format defined in [Expected Output](#expected-output).
+
+        ## Task Object
+        A2ATestRegion
+
+        ## Task Target
+
+        ## Task Context
+        Energy saving cell RAT:NR
+        Energy saving time range: start time "00:00:00", end time "06:00:00"
+        Rate guarantee target: 2Mbps
+
+        ## Terminology Explanation
+        1. LTE
+           - Synonyms: 4G, E-UTRAN
+        2. NR
+           - Synonyms: 5G, NG-RAN
+        3. LNR
+           - Explanation: Includes both LTE and NR RATs
+        4. Aggressive Energy Saving
+           - Synonyms: Maximize Energy Saving
+        5. Conservative Energy Saving
+           - Synonyms: Maximize User Experience Assurance, Maximize KPI Assurance
+        6. GS
+           - Explanation: A network energy saving parameter defined in 3GPP, used to control the trade-off between energy consumption and performance. The higher the GS value, the more aggressive the energy saving strategy.
+        7. Video Bitrate
+           - Explanation: Mapping between video bitrate and downlink throughput: 720p → 2 Mbps, 1080p → 10 Mbps, 4K → 20 Mbps.
+        8. Rate guarantee target
+           - Synonyms: guaranteed throughput target, downlink throughput target, DL throughput target, User Experience Target, UX target, SLA
+        9. Site
+           - Synonyms: NE, base station
+        10. Capacity Layer
+            - Synonyms: Shutdown Layer
+        11. Coverage Layer
+            - Synonyms: Retained Layer, Basic Layer
+        12. Lossless Experience Energy Saving
+            - Synonyms: User Experience First
+        13. Lossy Experience Energy Saving
+            - Synonyms: Energy Saving First
+        14. ARFCN
+            - Explanation: Absolute Radio Frequency Channel Number is used to identify the position of a radio frequency channel in a wireless system. For LTE, EARFCN can be used for identification; for NR, NR-ARFCN can be used.
+
+        ## Expected Output
+        - Basic information about the intent execution result, including:
+          - Area
+          - Intent goal achievement status
+        - Detailed information about the intent execution result, including:
+          - Energy saving gain achievement status, current energy saving gain goal, actual energy saving gain percentage, target adjustment suggestions
+          - Rate goal achievement status, current rate goal, actual rate, target adjustment suggestions
+      negotiation:
+        expected: false
+        expected_rounds: 0
+        kinds: []
+        rounds: []
+      final_state: input_invalid
+      final_state_derived: true
+    a2a:
+      negotiation:
+        expected: true
+        expected_rounds: 1
+        kinds: null
+        rounds:
+          - |-
+            Implement energy-saving in A2ATestRegion region, and set the guaranteed throughput targets for each time period in NR cells as follows: 00:00-06:00→2Mbps.
+      final_state: null
+assert:
+  intent: true
+  a2a-t:
+    validate: true
+    task_t: true
+    send: true
+    negotiation: true
+    final_state: true
+  a2a:
+    negotiation: true
+    final_state: false
+runner:
+  scenario: night
+  language: en-US
+  approval: approve
+  timeout_seconds: 300
+  pre_send_validation: always
+source:
+  file: OSP-Unified Evaluation Set_v.01.xlsx
+  sheet: A2A-T_原始数据
+  row: 21
+known_issue: |-
+  A2A 预期识别出错；A2A-T 预期触发拦截。user_input 用“the previous task”指代两个内容不同（5Mbps / 2Mbps）的历史任务，无法确定引用哪一个。
+blocked_followup:
+  input: |-
+    Implement energy-saving in NR cells within the A2ATestRegion area, and set the guaranteed throughput targets for each time period as follows: 00:00–06:00→2Mbps.

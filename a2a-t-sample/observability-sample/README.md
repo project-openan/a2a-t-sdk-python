@@ -95,6 +95,11 @@ In the Langfuse UI you will see the client and server spans of every round and t
 task on a single timeline — including who proposed what, which round was accepted, and
 how long each step took.
 
+`langfuse_setup.py` allows the `a2at-observability` instrumentation scope explicitly: Langfuse
+Python SDK v5 exports only its own, `gen_ai.*`, and known LLM-instrumentation spans by default.
+Credentials are read from the environment; never hard-code or commit them. The `check_*.py` /
+`verify_langfuse.py` helpers use the same variables.
+
 ## What gets recorded (cheat sheet)
 
 | You do | The SDK records |

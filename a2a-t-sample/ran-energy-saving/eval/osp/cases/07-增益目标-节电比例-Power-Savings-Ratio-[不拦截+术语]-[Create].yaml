@@ -1,0 +1,125 @@
+# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
+# Source: docs-local/osp-eval-cases/*.json (internal).
+schema: osp-eval-case/v1
+id: 7
+name: 增益目标：节电比例（Power Savings Ratio）
+dimension: D1 意图完备无歧义
+operation: Create
+tags:
+  - gain-target
+  - negotiation-a2a
+user_input: "Implement energy-saving in A2ATestRegion region, the time range  is from 00:00 to 22:00.   \nSet the Power Savings Ratio to 10%."
+expect:
+  intent:
+    Operation type: Create
+    Energy saving cell RAT: ALL
+    Energy saving aggressiveness: ''
+    Energy saving region: A2ATestRegion
+    Whether Experience-Preserving Energy Saving is Required: ''
+    Special Requirements for Carrier Shutdown Frequencies: ''
+    Energy saving time: 00:00:00-00:59:59&01:00:00-01:59:59&02:00:00-02:59:59&03:00:00-03:59:59&04:00:00-04:59:59&05:00:00-05:59:59&06:00:00-06:59:59&07:00:00-07:59:59&08:00:00-08:59:59&09:00:00-09:59:59&10:00:00-10:59:59&11:00:00-11:59:59&12:00:00-12:59:59&13:00:00-13:59:59&14:00:00-14:59:59&15:00:00-15:59:59&16:00:00-16:59:59&17:00:00-17:59:59&18:00:00-18:59:59&19:00:00-19:59:59&20:00:00-20:59:59&21:00:00-21:59:59
+    Frequencies of carriers that can be shut down: []
+    Gain target: '10'
+    Guaranteed throughput target by zone: []
+    Scenario-based energy saving: []
+  protocols:
+    a2a-t:
+      validate: pass_with_terminology
+      validate_label: 不拦截，携带术语上下文信息
+      send: true
+      task_t: |-
+        ## Operation Type
+        Create
+
+        ## Task Type
+        RAN energy saving
+
+        ## Task Description
+        Based on [Task Object](#task-object) and [Task Context](#task-context), execute the energy-saving task to achieve the goal defined in [Task Target](#task-target), and return the wireless network energy saving result in the format defined in [Expected Output](#expected-output).
+
+        ## Task Object
+        A2ATestRegion
+
+        ## Task Target
+
+        ## Task Context
+        Energy saving time range: start time "00:00:00", end time "22:00:00"
+        Set the Power Savings Ratio to 10%
+
+        ## Terminology Explanation
+        1. LTE
+           - Synonyms: 4G, E-UTRAN
+        2. NR
+           - Synonyms: 5G, NG-RAN
+        3. LNR
+           - Explanation: Includes both LTE and NR RATs
+        4. Aggressive Energy Saving
+           - Synonyms: Maximize Energy Saving
+        5. Conservative Energy Saving
+           - Synonyms: Maximize User Experience Assurance, Maximize KPI Assurance
+        6. GS
+           - Explanation: A network energy saving parameter defined in 3GPP, used to control the trade-off between energy consumption and performance. The higher the GS value, the more aggressive the energy saving strategy.
+        7. Video Bitrate
+           - Explanation: Mapping between video bitrate and downlink throughput: 720p → 2 Mbps, 1080p → 10 Mbps, 4K → 20 Mbps.
+        8. Rate guarantee target
+           - Synonyms: guaranteed throughput target, downlink throughput target, DL throughput target, User Experience Target, UX target, SLA
+        9. Site
+           - Synonyms: NE, base station
+        10. Capacity Layer
+            - Synonyms: Shutdown Layer
+        11. Coverage Layer
+            - Synonyms: Retained Layer, Basic Layer
+        12. Lossless Experience Energy Saving
+            - Synonyms: User Experience First
+        13. Lossy Experience Energy Saving
+            - Synonyms: Energy Saving First
+        14. ARFCN
+            - Explanation: Absolute Radio Frequency Channel Number is used to identify the position of a radio frequency channel in a wireless system. For LTE, EARFCN can be used for identification; for NR, NR-ARFCN can be used.
+
+
+        ## Expected Output
+        - Basic information about the intent execution result, including:
+          - Area
+          - Intent goal achievement status
+        - Detailed information about the intent execution result, including:
+          - Energy saving gain achievement status, current energy saving gain goal, actual energy saving gain percentage, target adjustment suggestions
+          - Rate goal achievement status, current rate goal, actual rate, target adjustment suggestions
+      negotiation:
+        expected: false
+        expected_rounds: 0
+        kinds: []
+        rounds: []
+      final_state: task_completed
+      final_state_derived: true
+    a2a:
+      negotiation:
+        expected: true
+        expected_rounds: 1
+        kinds: null
+        rounds:
+          - |-
+            energy saving gain target: 10%.
+      final_state: null
+assert:
+  intent: true
+  a2a-t:
+    validate: true
+    task_t: true
+    send: true
+    negotiation: true
+    final_state: true
+  a2a:
+    negotiation: true
+    final_state: false
+runner:
+  scenario: night
+  language: en-US
+  approval: approve
+  timeout_seconds: 300
+  pre_send_validation: always
+source:
+  file: OSP-Unified Evaluation Set_v.01.xlsx
+  sheet: A2A-T_原始数据
+  row: 8
+known_issue: |-
+  H 列把“Power Savings Ratio 10%”放在 Task Context，Task Target 留空；但 slot 约束要求定量 gain target 放在 Task Target。SDK 实际输出放在 Task Target，因此 task_t 阶段会报 Task Target 差异。待业务确认以 H 列还是 slot 约束为准；确认前保留断言，让差异可见。

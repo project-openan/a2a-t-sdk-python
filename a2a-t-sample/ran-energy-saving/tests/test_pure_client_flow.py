@@ -1,0 +1,489 @@
+"""Tests of the pure A2A client flow and its INPUT_REQUIRED continuation."""
+
+from __future__ import annotations
+
+from a2a.client.client import ClientCallContext
+from a2a.types import SendMessageRequest
+from protocol.pure_client_flow import (
+    continue_pure_client_flow,
+    pure_proposal_view,
+    run_pure_client_flow,
+)
+from shared.run_constants import (
+    FINAL_STATE_INCOMPLETE,
+    FINAL_STATE_NEGOTIATION_ENDED,
+    FINAL_STATE_TASK_COMPLETED,
+)
+
+
+class _FakeTransport:
+    """Return pre-built event batches and record every request."""
+
+    def __init__(self, batches: list[list[dict[str, object]]]) -> None:
+        self._batches = list(batches)
+        self.requests: list[tuple[SendMessageRequest, ClientCallContext]] = []
+
+    async def send(
+        self,
+        request: SendMessageRequest,
+        call_context: ClientCallContext,
+    ) -> list[dict[str, object]]:
+        self.requests.append((request, call_context))
+        if not self._batches:
+            return []
+        return self._batches.pop(0)
+
+
+def _input_required(*, round_number: int = 1) -> dict[str, object]:
+    return {
+        "kind": "status",
+        "task_id": "task-1",
+        "context_id": "ctx-1",
+        "state": "TASK_STATE_INPUT_REQUIRED",
+        "text": "Please provide the target.",
+        "metadata": {
+            "pure": {
+                "kind": "negotiation",
+                "phase": "information",
+                "round": round_number,
+                "maxRounds": 3,
+            }
+        },
+    }
+
+
+def _completed() -> dict[str, object]:
+    return {
+        "kind": "status",
+        "task_id": "task-1",
+        "context_id": "ctx-1",
+        "state": "TASK_STATE_COMPLETED",
+        "text": "RAN energy-saving task completed.",
+    }
+
+
+async def test_a_first_message_can_continue_an_existing_task() -> None:
+    """A pure Modify is a standard A2A continuation: the first message carries the peer's ids."""
+    transport = _FakeTransport([[_completed()]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Modify the rate to 10 Mbps.",
+        task_id="outer-1",
+        context_id="outer-ctx",
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    first_request, _ = transport.requests[0]
+    assert first_request.message.task_id == "outer-1"
+    assert first_request.message.context_id == "outer-ctx"
+    assert first_request.message.parts[0].text == "Modify the rate to 10 Mbps."
+
+
+async def test_a_plain_question_without_ids_is_answered_on_the_run_target() -> None:
+    """The vendor's standalone question may carry no ids; the answer keeps the Task identity."""
+    question = {"kind": "message", "text": "What rate?", "metadata": {}}
+    transport = _FakeTransport([[question], [_completed()]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Modify the rate.",
+        task_id="vendor-task",
+        context_id="vendor-ctx",
+        plain_questions=True,
+        message_ends_flow=False,
+        answer=lambda event: "2Mbps",
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    answer_request, _ = transport.requests[1]
+    assert answer_request.message.task_id == "vendor-task"
+    assert answer_request.message.context_id == "vendor-ctx"
+
+
+async def test_a_plain_message_does_not_end_a_direct_hop_flow() -> None:
+    """A direct vendor hop keeps working after answering; only a Task state ends the flow."""
+    question = {"kind": "message", "text": "What rate?", "metadata": {}}
+    working = {
+        "kind": "status",
+        "task_id": "vendor-task",
+        "context_id": "vendor-ctx",
+        "state": "TASK_STATE_WORKING",
+    }
+    transport = _FakeTransport([[question], [working]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Modify the rate.",
+        task_id="vendor-task",
+        context_id="vendor-ctx",
+        plain_questions=True,
+        message_ends_flow=False,
+        answer=lambda event: "2Mbps",
+    )
+
+    assert result.final_state == FINAL_STATE_INCOMPLETE
+
+
+async def test_a_plain_message_still_ends_the_proxy_flow() -> None:
+    """The OSS-relayed plain answer keeps its historical negotiation-end meaning."""
+    transport = _FakeTransport([[{"kind": "message", "text": "Done.", "metadata": {}}]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a task.",
+    )
+
+    assert result.final_state == FINAL_STATE_NEGOTIATION_ENDED
+
+
+async def test_the_flow_continues_the_same_task_after_input_required() -> None:
+    transport = _FakeTransport([[_input_required()], [_completed()]])
+    spans: list[dict[str, object]] = []
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "Use {00:00~06:00,10Mbps}.",
+        trace_sink=spans.append,
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert len(transport.requests) == 2
+    first_request, first_context = transport.requests[0]
+    assert first_request.message.parts[0].text == "Create a RAN energy saving task."
+    assert first_context.service_parameters == {"A2A-Extensions": ""}
+
+    follow_up, follow_context = transport.requests[1]
+    assert follow_up.message.task_id == "task-1"
+    assert follow_up.message.context_id == "ctx-1"
+    assert follow_up.message.parts[0].text == "Use {00:00~06:00,10Mbps}."
+    assert follow_context.service_parameters == {"A2A-Extensions": ""}
+    assert len(spans) == 2
+    assert all(span["detail"]["protocol"] == "pure" for span in spans)
+
+
+async def test_the_messages_carry_no_sample_or_extension_metadata() -> None:
+    """The run correlation travels on headers, so a standard A2A message stays clean."""
+    transport = _FakeTransport([[_input_required()], [_completed()]])
+
+    await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "Use {00:00~06:00,10Mbps}.",
+    )
+
+    first_request, _ = transport.requests[0]
+    follow_up, _ = transport.requests[1]
+    assert set(first_request.message.metadata) == set()
+    assert set(follow_up.message.metadata) == set()
+
+
+async def test_the_default_answer_uses_the_server_proposal() -> None:
+    proposal = "{00:00~17:30,10Mbps}, {17:30~23:00,20Mbps}, {23:00~24:00,10Mbps}"
+    event = _input_required()
+    event["metadata"] = {"pure": {"kind": "negotiation", "phase": "target", "proposal": proposal}}
+    transport = _FakeTransport([[event], [_completed()]])
+
+    await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+    )
+
+    assert transport.requests[1][0].message.parts[0].text == proposal
+
+
+async def test_no_answer_stops_the_flow() -> None:
+    transport = _FakeTransport([[_input_required()]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "",
+    )
+
+    assert len(transport.requests) == 1
+    assert result.final_state != FINAL_STATE_TASK_COMPLETED
+
+
+async def test_a_structured_receipt_is_not_answered() -> None:
+    """A completed Modify arrives as INPUT_REQUIRED with its payload and no negotiation metadata."""
+    receipt = {
+        "kind": "status",
+        "task_id": "task-1",
+        "context_id": "ctx-1",
+        "state": "TASK_STATE_INPUT_REQUIRED",
+        "text": (
+            'Task modification succeeded{"Operation type":"Modify",'
+            '"Energy saving region":"A2ATestRegion"}'
+        ),
+    }
+    transport = _FakeTransport([[receipt]])
+    answers: list[str] = []
+
+    def answer(event: dict[str, object]) -> str:
+        del event
+        answers.append("should not be used")
+        return "should not be used"
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Modify the rate.",
+        answer=answer,
+    )
+
+    assert answers == []
+    assert len(transport.requests) == 1
+    assert result.final_state == FINAL_STATE_INCOMPLETE
+    assert result.error is None
+
+
+async def test_a_receipt_prefix_is_not_answered_without_a_payload() -> None:
+    receipt = {
+        "kind": "status",
+        "task_id": "task-1",
+        "context_id": "ctx-1",
+        "state": "TASK_STATE_INPUT_REQUIRED",
+        "text": "Task modification succeeded.",
+    }
+    transport = _FakeTransport([[receipt]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Modify the rate.",
+        answer=lambda event: "should not be used",
+    )
+
+    assert len(transport.requests) == 1
+    assert result.final_state == FINAL_STATE_INCOMPLETE
+
+
+async def test_an_exhausted_answer_script_records_why_it_stopped() -> None:
+    """The run keeps the receipt and says which round nobody could answer."""
+    transport = _FakeTransport(
+        [[_input_required(round_number=1)], [_input_required(round_number=2)]]
+    )
+    remaining = ["Use {00:00~06:00,10Mbps}."]
+
+    def answer(event: dict[str, object]) -> str:
+        del event
+        return remaining.pop(0) if remaining else ""
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=answer,
+    )
+
+    assert len(transport.requests) == 2
+    assert result.final_state == FINAL_STATE_INCOMPLETE
+    assert result.error is not None
+    assert "第 2 轮" in result.error
+
+
+async def test_input_required_without_sample_metadata_is_still_detected() -> None:
+    """A real NMS returns a standard A2A status without the sample's ``pure`` metadata."""
+    event = _input_required()
+    event["metadata"] = {}
+    transport = _FakeTransport([[event], [_completed()]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "Use {00:00~06:00,10Mbps}.",
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert len(transport.requests) == 2
+    assert transport.requests[1][0].message.task_id == "task-1"
+
+
+async def test_an_async_answer_callback_is_awaited() -> None:
+    transport = _FakeTransport([[_input_required()], [_completed()]])
+
+    async def answer(event: dict[str, object]) -> str:
+        del event
+        return "Use {00:00~06:00,10Mbps}."
+
+    await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=answer,
+    )
+
+    assert transport.requests[1][0].message.parts[0].text == "Use {00:00~06:00,10Mbps}."
+
+
+async def test_followup_can_carry_only_the_context_id() -> None:
+    transport = _FakeTransport([[_input_required()], [_completed()]])
+
+    await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "Use {00:00~06:00,10Mbps}.",
+        followup="context",
+    )
+
+    follow_up = transport.requests[1][0]
+    assert follow_up.message.task_id == ""
+    assert follow_up.message.context_id == "ctx-1"
+
+
+async def test_followup_can_carry_only_the_task_id() -> None:
+    transport = _FakeTransport([[_input_required()], [_completed()]])
+
+    await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "Use {00:00~06:00,10Mbps}.",
+        followup="task",
+    )
+
+    follow_up = transport.requests[1][0]
+    assert follow_up.message.task_id == "task-1"
+    assert follow_up.message.context_id == ""
+
+
+def _plain_question() -> dict[str, object]:
+    """The vendor NMS answers a pure request with a plain text question, not a Task."""
+    return {
+        "kind": "message",
+        "message_id": "question-1",
+        "context_id": "ctx-1",
+        "text": (
+            "## Information Negotiation\nPlease supplement the relevant content.\n\n"
+            "## Required Information Items\n1. Energy saving region: not recognized."
+        ),
+    }
+
+
+async def test_a_plain_text_question_is_answered_when_enabled() -> None:
+    transport = _FakeTransport([[_plain_question()], [_completed()]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "Region A",
+        plain_questions=True,
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert len(transport.requests) == 2
+    follow_up, _ = transport.requests[1]
+    assert follow_up.message.parts[0].text == "Region A"
+    # The question carried no task id, so the answer continues the context only.
+    assert follow_up.message.task_id == ""
+    assert follow_up.message.context_id == "ctx-1"
+
+
+async def test_a_plain_text_question_is_terminal_when_not_enabled() -> None:
+    transport = _FakeTransport([[_plain_question()]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "Region A",
+    )
+
+    assert result.final_state == FINAL_STATE_NEGOTIATION_ENDED
+    assert len(transport.requests) == 1
+
+
+async def test_continuing_a_context_sends_the_operator_text_first() -> None:
+    transport = _FakeTransport([[_completed()]])
+
+    result = await continue_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        text="Region A",
+        task_id=None,
+        context_id="ctx-1",
+        plain_questions=True,
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert len(transport.requests) == 1
+    follow_up, _ = transport.requests[0]
+    assert follow_up.message.parts[0].text == "Region A"
+    assert follow_up.message.task_id == ""
+    assert follow_up.message.context_id == "ctx-1"
+
+
+async def test_an_approval_input_required_is_not_answered() -> None:
+    event = _input_required()
+    event["metadata"] = {"pure": {"kind": "approval", "phase": "approval", "round": 1}}
+    transport = _FakeTransport([[event]])
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "should not be sent",
+    )
+
+    assert len(transport.requests) == 1
+    assert result.final_state != FINAL_STATE_TASK_COMPLETED
+
+
+def test_the_proposal_view_reads_the_kind_the_oss_forwarded() -> None:
+    """The outer phase is ``question``; the negotiation kind travels as ``negotiationKind``."""
+    event = {
+        "kind": "status",
+        "context_id": "ctx-1",
+        "text": "Which target rate?",
+        "metadata": {
+            "pure": {
+                "hop": "oss",
+                "kind": "negotiation",
+                "phase": "question",
+                "negotiationKind": "target",
+                "round": 2,
+                "maxRounds": 3,
+            }
+        },
+    }
+
+    propose, session = pure_proposal_view(event)
+
+    assert propose.kind == "target"
+    assert session.round == 2
+    assert session.max_rounds == 3
+
+
+def test_an_unlabelled_question_uses_the_answered_count_as_its_round() -> None:
+    event = {
+        "kind": "status",
+        "context_id": "ctx-1",
+        "text": "Which region?",
+        "metadata": {"pure": {"kind": "negotiation", "phase": "question"}},
+    }
+
+    propose, session = pure_proposal_view(event, fallback_round=2)
+
+    assert propose.kind == "information"
+    assert session.round == 2
+
+
+def test_an_unknown_phase_is_recorded_as_unknown() -> None:
+    event = {"text": "Which region?", "metadata": {"pure": {"phase": "mystery"}}}
+
+    propose, _ = pure_proposal_view(event)
+
+    assert propose.kind == "unknown"
+
+
+def test_a_terse_vendor_confirmation_is_classified_as_feasibility() -> None:
+    """The vendor's plain message carries no metadata; the wording is the only tag."""
+    event = {"kind": "message", "context_id": "ctx-1", "text": "Not feasible, please confirm"}
+
+    propose, _ = pure_proposal_view(event)
+
+    assert propose.kind == "feasibility"
+    assert propose.parameters == {"pureConfirmation": True}
+
+
+def test_an_information_question_without_metadata_stays_information() -> None:
+    event = {"kind": "message", "context_id": "ctx-1", "text": "Which region?"}
+
+    propose, _ = pure_proposal_view(event)
+
+    assert propose.kind == "information"
+    assert propose.parameters is None

@@ -1,0 +1,9 @@
+{
+  "conclusion": "Reject",
+  "items": [
+    {
+      "name": "guaranteedThroughputTarget",
+      "value": "The requested guaranteed throughput target is not available from the client side."
+    }
+  ]
+}

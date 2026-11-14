@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-brand="orange">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>A2A / A2A-T · Langfuse 指标导出</title>
+  <link rel="stylesheet" href="/observe/app.css">
+  <script type="module" src="/observe/main.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">A2A-T</span>
+      <div class="brand-text">
+        <small>RAN 节能 · 观测</small>
+        <h1>Langfuse 指标导出</h1>
+      </div>
+    </div>
+    <nav class="top-nav">
+      <a class="ghost" href="/">演示页面</a>
+      <a class="ghost" href="/runs">Run 控制台</a>
+      <a class="ghost" href="/tester">Tester</a>
+    </nav>
+  </header>
+
+  <main class="main">
+    <div class="banner" id="banner" role="alert" hidden></div>
+
+    <section class="card" aria-label="Langfuse 配置">
+      <div class="config-line">
+        <span class="pill" id="config-state">读取中…</span>
+        <span class="mono" id="config-host"></span>
+        <span class="muted" id="tls-hint"></span>
+        <span class="muted" id="tool-version"></span>
+      </div>
+      <p class="muted config-detail" id="config-detail">正在读取 Langfuse 配置…</p>
+    </section>
+
+    <div class="layout">
+      <section class="card input-card" aria-label="输入 trace">
+        <div class="card-head">
+          <h2>Trace ID</h2>
+          <span class="summary" id="trace-count">0 条</span>
+        </div>
+        <textarea id="trace-input" class="trace-input" rows="2"
+          placeholder="一行一个 Langfuse traceId（32 位十六进制）；单个可直接查询"></textarea>
+        <p class="muted input-hint" id="input-hint">输入单个 traceId 用“查询”；多个用“批量导出”。</p>
+        <div class="actions">
+          <label class="check">
+            <input id="full-export" type="checkbox">
+            同时生成完整导出（raw / transcript / manifest + zip）
+          </label>
+          <label class="check">
+            协商轮次模型
+            <select id="round-mode">
+              <option value="legacy" selected>legacy（按行序，默认）</option>
+              <option value="decision">decision（PROPOSE↔DECISION，A2A/pure）</option>
+            </select>
+          </label>
+          <span class="spacer"></span>
+          <button class="secondary" id="clear-button" type="button">清空</button>
+          <button class="primary" id="query-button" type="button" disabled>查询</button>
+          <button class="secondary" id="start-button" type="button" disabled>批量导出</button>
+        </div>
+        <div class="progress" id="progress" hidden>
+          <span class="progress-track"><span class="progress-bar" id="progress-bar"></span></span>
+          <span id="progress-text"></span>
+        </div>
+      </section>
+
+      <aside class="card runs-card" aria-label="最近 run">
+        <div class="card-head">
+          <h2>最近 run</h2>
+          <span class="summary" id="runs-summary">读取中…</span>
+        </div>
+        <div class="run-list" id="run-list">
+          <p class="empty">读取中…</p>
+        </div>
+      </aside>
+    </div>
+
+    <section class="card" aria-label="导出结果">
+      <div class="card-head">
+        <h2>查询结果</h2>
+        <div class="head-tools">
+          <span class="summary" id="job-summary">尚未查询</span>
+          <button class="secondary" id="download-metrics" type="button" disabled>metrics.csv</button>
+          <button class="secondary" id="download-rounds" type="button" disabled>rounds.csv</button>
+          <button class="secondary" id="download-fields" type="button" disabled>fields.csv</button>
+          <button class="secondary" id="download-table" type="button" disabled>table.xlsx（AF–AW）</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="grid" id="results-table">
+          <thead>
+            <tr id="results-head"></tr>
+          </thead>
+          <tbody id="results-body">
+            <tr><td class="empty">尚未查询。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="status-line">点击结果行可展开该 trace 的耗时、警告与完整导出下载；批量导出时可下载汇总表。</p>
+    </section>
+
+    <section class="card" aria-label="字段说明">
+      <details id="legend">
+        <summary>字段说明</summary>
+        <p class="status-line">字段含义、来源与注意事项与 fields.csv 共用同一份定义。</p>
+        <div class="table-wrap">
+          <table class="grid" id="legend-table">
+            <thead>
+              <tr>
+                <th>列名</th>
+                <th>分组</th>
+                <th>含义</th>
+                <th>来源</th>
+                <th>注意事项</th>
+              </tr>
+            </thead>
+            <tbody id="legend-body">
+              <tr><td colspan="5" class="empty">读取中…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+
+    <section class="card" aria-label="历史 job">
+      <div class="card-head">
+        <h2>历史 job</h2>
+        <span class="summary" id="jobs-summary">读取中…</span>
+      </div>
+      <div class="table-wrap">
+        <table class="grid" id="jobs-table">
+          <thead>
+            <tr>
+              <th>jobId</th>
+              <th>创建时间</th>
+              <th>完整导出</th>
+              <th>总数</th>
+              <th>完成</th>
+              <th>失败</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody id="jobs-body">
+            <tr><td colspan="7" class="empty">读取中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

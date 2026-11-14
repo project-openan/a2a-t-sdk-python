@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Mapping
 from typing import Any
 
 from a2a_t.common.prompt_resources import PromptResourceAccess
-from a2a_t.common.prompt_resources.models import PromptMessages, SlotSchema, slot_schema_from_json_schema
+from a2a_t.common.prompt_resources.models import (
+    PromptMessages,
+    SlotDefinition,
+    SlotSchema,
+    slot_schema_from_json_schema,
+)
 from a2a_t.config.models import PromptRuntimeConfig
 from a2a_t.core.errors.catalog import ErrorCatalog, by_code
 from a2a_t.core.errors.exceptions import (
@@ -75,6 +81,7 @@ class PromptGenerationOrchestrator:
         renderer: TaskPromptRenderer | None = None,
         input_limit: InputLimitConfig | None = None,
         logger: Any | None = None,
+        provider: str = "",
     ) -> None:
         if not isinstance(config, PromptRuntimeConfig):
             raise TypeError("config must be a PromptRuntimeConfig instance.")
@@ -86,6 +93,7 @@ class PromptGenerationOrchestrator:
         self._renderer = renderer or TaskPromptRenderer()
         self._input_limit = input_limit if input_limit is not None else InputLimitConfig()
         self._logger = logger if logger is not None else _LOGGER
+        self._provider = provider
 
     def generate(self, user_input: str | dict[str, object]) -> PromptGenerationResult:
         """Run prompt generation from input normalization through prompt rendering."""
@@ -402,7 +410,8 @@ class PromptGenerationOrchestrator:
         """Generate one ``MetadataContent`` for the addressed template (Java ``generateWithMetadata``).
 
         Stage order: load the template text, run the template-directed slot extraction, map the
-        reported slot errors, validate the schema-required slots, render the prompt — each stage
+        reported slot errors, optionally inspect the extracted slots against the slot schema
+        (``A2AT_VALIDATE_SLOT_CONSTRAINTS``, off by default), render the prompt — each stage
         translating its failure to the Java catch-point catalog code.
         """
         language = self._config.language
@@ -432,11 +441,15 @@ class PromptGenerationOrchestrator:
             language=language,
             data_schema=data_schema,
         )
-        extraction_errors = self._map_slot_errors(extraction_result.slot_errors, language)
+        extraction_errors = _dedupe_slot_errors(self._map_slot_errors(extraction_result.slot_errors, language))
         if extraction_errors:
             raise self._slot_errors_exception(extraction_errors)
         slots = extraction_result.slots
-        self._validate_required_slots(slots, template_identifier, language)
+        # The model-reported slot errors above are the sole business verdict by default. The
+        # schema/declarative inspection is opt-in (``A2AT_VALIDATE_SLOT_CONSTRAINTS``) because a
+        # heuristic overlay rule must not veto an extraction the model considers complete.
+        if self._config.validate_slot_constraints:
+            self._validate_slot_constraints(slots, template_identifier, language, user_input)
 
         rendered_prompt_text, render_failure_reason = self._render_prompt_text(
             template_text=template_text,
@@ -578,16 +591,24 @@ class PromptGenerationOrchestrator:
             facts=facts,
         )
 
-    def _validate_required_slots(
+    def _validate_slot_constraints(
         self,
         slots: Mapping[str, str | None] | None,
         template_identifier: str,
         language: str,
+        user_input: object = None,
     ) -> None:
-        """Fail with ``slot.not_provided`` when a schema-required slot is blank (Java parity).
+        """Fail with ``slot.*`` when a machine-readable schema constraint is violated.
+
+        Opt-in through ``A2AT_VALIDATE_SLOT_CONSTRAINTS`` (default off): the extraction model's
+        reported ``slot_errors`` are the default business verdict.
 
         The slot schema is resolved through the same access seam as the extraction step; a miss
-        surfaces as ``slot.schema_not_found`` before the required-slot inspection runs.
+        surfaces as ``slot.schema_not_found`` before the inspection runs. A blank required slot is
+        ``slot.not_provided``. A filled slot that violates the schema's ``enum``, ``pattern`` or
+        numeric ``minimum``/``maximum`` is ``slot.constraint_violated``: the extraction model does
+        not own that decision, so a model that reports no error cannot silently emit an invalid
+        value.
         """
         try:
             slot_json_schema = self._resource_access.slot_schema(template_identifier, language)
@@ -600,16 +621,29 @@ class PromptGenerationOrchestrator:
         effective_slots: Mapping[str, str | None] = slots if slots is not None else {}
         failed: list[SlotValidationError] = []
         for definition in slot_schema.slots:
-            if definition is None or not definition.required:
+            if definition is None:
                 continue
             name = definition.name
             if name is None:
                 continue
             value = effective_slots.get(name)
             if value is None or not str(value).strip():
-                failed.append(self._not_provided_error(name, self._slot_label(definition), language))
+                if definition.required:
+                    failed.append(
+                        self._not_provided_error(name, self._slot_label(definition), language)
+                    )
+                continue
+            if _slot_constraint_reason(definition, str(value)) is not None:
+                failed.append(
+                    self._constraint_violated_error(
+                        name, self._slot_label(definition), str(value), language
+                    )
+                )
+        failed.extend(
+            _declarative_check_errors(slot_json_schema, effective_slots, language, user_input)
+        )
         if failed:
-            raise self._slot_errors_exception(failed)
+            raise self._slot_errors_exception(_dedupe_slot_errors(failed))
 
     def _not_provided_error(self, slot_name: str, slot_label: str, language: str) -> SlotValidationError:
         """Build the ``slot.not_provided`` error of one missing required slot."""
@@ -618,6 +652,22 @@ class PromptGenerationOrchestrator:
             slot_name=slot_name,
             code=ErrorCatalog.SLOT_NOT_PROVIDED.value,
             message=render_error_message(ErrorCatalog.SLOT_NOT_PROVIDED, facts, language),
+            facts=facts,
+        )
+
+    def _constraint_violated_error(
+        self,
+        slot_name: str,
+        slot_label: str,
+        actual: str,
+        language: str,
+    ) -> SlotValidationError:
+        """Build the ``slot.constraint_violated`` error of one filled-but-invalid slot."""
+        facts = {"slot_label": slot_label, "actual": actual}
+        return SlotValidationError(
+            slot_name=slot_name,
+            code=ErrorCatalog.SLOT_CONSTRAINT_VIOLATED.value,
+            message=render_error_message(ErrorCatalog.SLOT_CONSTRAINT_VIOLATED, facts, language),
             facts=facts,
         )
 
@@ -675,7 +725,7 @@ class PromptGenerationOrchestrator:
             )
         return self._generation_exception(
             ErrorCatalog.LLM_INVOCATION_FAILED,
-            {"reason": str(error)},
+            {"provider": self._provider or "unknown", "reason": str(error)},
             cause=error,
         )
 
@@ -850,6 +900,47 @@ class _PromptGenerationResourceError(Exception):
         self.stage = stage
 
 
+def _dedupe_slot_errors(errors: list[SlotValidationError]) -> list[SlotValidationError]:
+    """Keep one error per offending input value when the extractor copied it across slots.
+
+    A live model sometimes places the same fragment in several slots (for example a frequency
+    value in both ``task_target`` and ``task_context``) and reports a constraint violation for
+    each. The operator only has one value to fix, so duplicate reports are collapsed. The most
+    specific report wins: a concrete slot beats the descriptive ``task_description`` slot, and a
+    longer ``slot_label`` (a sub-item such as "Carrier frequencies") beats a generic section
+    label. Errors without an ``actual`` fact are independent and are always kept.
+    """
+    grouped: dict[str, list[tuple[int, SlotValidationError]]] = {}
+    for index, error in enumerate(errors):
+        facts = error.facts or {}
+        actual = str(facts.get("actual", "")).strip()
+        if not actual:
+            continue
+        grouped.setdefault(actual, []).append((index, error))
+    if not grouped:
+        return errors
+
+    kept: set[int] = set()
+    for group in grouped.values():
+        if len(group) == 1:
+            kept.add(group[0][0])
+            continue
+        candidates = [item for item in group if item[1].slot_name != "task_description"] or group
+        best = max(
+            candidates,
+            key=lambda item: (
+                len(str((item[1].facts or {}).get("slot_label", ""))),
+                -item[0],
+            ),
+        )
+        kept.add(best[0])
+    return [
+        error
+        for index, error in enumerate(errors)
+        if str((error.facts or {}).get("actual", "")).strip() == "" or index in kept
+    ]
+
+
 def _template_uri_of(template_uri: str | TemplateUri | None) -> TemplateUri:
     """Normalize the template URI boundary argument into its typed form, fail-fast (D16).
 
@@ -887,3 +978,110 @@ def _stringify_user_input(user_input: object) -> str:
     if isinstance(user_input, Mapping):
         return str(dict(user_input))
     return str(user_input)
+
+
+def _declarative_check_errors(
+    slot_json_schema: Mapping[str, object],
+    slots: Mapping[str, str | None],
+    language: str,
+    user_input: object = None,
+) -> list[SlotValidationError]:
+    """Evaluate the schema's ``x-a2at-checks`` business rules against the extracted slots.
+
+    A check is ``{"slot", "when", "require"?, "error", "slot_label", "actual"?, "source"?}``:
+    when the inspected text matches the ``when`` pattern and does not match ``require`` (when
+    present), the check reports ``error``. ``source`` defaults to ``both``: the rule must hold on
+    the extracted slot and on the operator's original text, because the extractor may normalize
+    away the phrase that makes the input incomplete ("five-hour outage", "sites such as X and Y").
+    ``slot`` inspects only the extracted value and ``input`` only the operator text. The rules live
+    in the prompt-resource overlay, so the SDK only owns this small evaluator and the business set
+    stays with the sample. A malformed pattern is ignored instead of turning an authoring mistake
+    into a user-facing block.
+    """
+    raw_checks = slot_json_schema.get("x-a2at-checks")
+    if not isinstance(raw_checks, list):
+        return []
+    errors: list[SlotValidationError] = []
+    for check in raw_checks:
+        if not isinstance(check, Mapping):
+            continue
+        slot_name = check.get("slot")
+        when = check.get("when")
+        if not isinstance(slot_name, str) or not isinstance(when, str):
+            continue
+        source = check.get("source")
+        if source == "input":
+            candidates: list[object] = [_stringify_user_input(user_input)]
+        elif source == "slot":
+            candidates = [slots.get(slot_name)]
+        else:
+            # Default: the rule must hold on both the extracted slot and the operator's text. The
+            # extractor may normalize away the phrase that makes the input incomplete ("five-hour
+            # outage", "such as X and Y"), so checking only the extracted value lets the request
+            # through. Either source violating the rule is enough to block.
+            candidates = [slots.get(slot_name), _stringify_user_input(user_input)]
+        violated = False
+        for candidate in candidates:
+            if not isinstance(candidate, str) or not candidate.strip():
+                continue
+            try:
+                if re.search(when, candidate, re.IGNORECASE) is None:
+                    continue
+                require = check.get("require")
+                if isinstance(require, str) and re.search(
+                    require, candidate, re.IGNORECASE
+                ) is not None:
+                    continue
+            except re.error:
+                continue
+            violated = True
+            break
+        if not violated:
+            continue
+        catalog = _known_slot_code(str(check.get("error") or "slot.constraint_violated"))
+        if catalog is None:
+            continue
+        label = str(check.get("slot_label") or slot_name)
+        facts: dict[str, str] = {"slot_label": label}
+        if catalog is ErrorCatalog.SLOT_CONSTRAINT_VIOLATED:
+            actual = check.get("actual") or str(slots.get(slot_name) or "").strip()[:120]
+            facts["actual"] = str(actual or slot_name)
+        errors.append(
+            SlotValidationError(
+                slot_name=slot_name,
+                code=catalog.value,
+                message=render_error_message(catalog, facts, language),
+                facts=facts,
+            )
+        )
+    return errors
+
+
+def _slot_constraint_reason(definition: SlotDefinition, value: str) -> str | None:
+    """Return the violated machine-readable constraint of one slot, or ``None``.
+
+    The slot JSON Schema already carries ``enum`` (or the ``x-a2at-allowed-values`` alias),
+    ``pattern`` and numeric ``minimum``/``maximum``; the model projection keeps them but the
+    generation pipeline used to enforce only ``required``. A malformed authoring pattern is not a
+    slot error, so it is ignored rather than turning a schema mistake into a user-facing block.
+    """
+    if definition.allowed_values is not None:
+        allowed = {str(item) for item in definition.allowed_values}
+        if value not in allowed:
+            return "allowed_values"
+    if definition.pattern is not None:
+        try:
+            if re.search(definition.pattern, value) is None:
+                return "pattern"
+        except re.error:
+            return None
+    if definition.range is not None:
+        try:
+            number = float(value)
+        except ValueError:
+            return "range" if definition.type in {"integer", "number"} else None
+        if definition.range.min is not None and number < definition.range.min:
+            return "range"
+        if definition.range.max is not None and number > definition.range.max:
+            return "range"
+    return None

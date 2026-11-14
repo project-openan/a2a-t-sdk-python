@@ -22,7 +22,7 @@ A2A-T SDK 对外仅提供两个入口：客户端入口 `A2ATClient`（提示词
 | Negotiation-T | `validate_abort_prompt_and_data_filling` | A2A-T Client / A2A-T Server | 校验协商中止报文合规性并按Schema提取参数 | 是 |
 | Task-T | `generate_task_prompt_from_text` | A2A-T Client | 从自然语言文本按指定Task-T模板生成任务提示词（跳过场景识别） | 是 |
 | Task-T | `generate_task_prompt_from_data_with_schema` | A2A-T Client | 从结构化数据+语义Schema按指定Task-T模板生成任务提示词 | 是 |
-| Task-T | `validate_task_prompt_and_data_filling` | A2A-T Server | 校验Task-T任务提示词合规性并按Schema提取参数 | 是 |
+| Task-T | `validate_task_prompt_and_data_filling` | A2A-T Client / A2A-T Server | 校验Task-T任务提示词合规性并按Schema提取参数 | 是 |
 | Notification-T | `generate_notification_prompt_from_text` | A2A-T Client | 从自然语言文本按指定Notification-T模板生成通知订阅提示词 | 是 |
 | Notification-T | `generate_notification_prompt_from_data_with_schema` | A2A-T Client | 从结构化数据+语义Schema按指定Notification-T模板生成通知订阅提示词 | 是 |
 | Notification-T | `validate_notification_prompt_and_data_filling` | A2A-T Server | 校验Notification-T提示词合规性并按Schema提取参数 | 是 |
@@ -1180,9 +1180,9 @@ def validate_task_prompt_and_data_filling(
 ) -> FilledParamData
 ```
 
-**典型场景**：服务端Agent收到Task-T报文后、进入业务执行前的参数校验与提取入口；也是协商流程中"缺槽检测"的判定点——required参数缺失时由调用方决定是否发起协商补参。
+**典型场景**：服务端Agent收到Task-T报文后、进入业务执行前的参数校验与提取入口；也是协商流程中"缺槽检测"的判定点——required参数缺失时由调用方决定是否发起协商补参。客户端 `A2ATClient` 也暴露同名方法，可在发送渲染后的 Task-T 之前执行同一套校验。
 
-**功能说明**：校验一条 Task-T 任务提示词报文是否匹配模板与槽位约束，并按调用方提供的 JSON Schema 提取参数。管线顺序：输入门 → 规则门 → 模板加载 → 一次可重试 LLM 语义校验（同时提取参数）→ 确定性参数合并。
+**功能说明**：校验一条 Task-T 任务提示词报文是否匹配模板与槽位约束，并按调用方提供的 JSON Schema 提取参数。管线顺序：输入门 → 规则门 → 模板加载 → 一次可重试 LLM 语义校验（同时提取参数）→ 确定性参数合并。`A2ATClient` 与 `A2ATServer` 共用同一个 `DefaultContentValidator` 管线。
 
 **输入说明**
 
