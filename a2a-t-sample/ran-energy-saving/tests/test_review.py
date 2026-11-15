@@ -14,7 +14,13 @@ import yaml
 from demo.web.annotate.overlay import confirmed_overlay, overlay_token
 from demo.web.annotate.store import AnnotationStore, TargetKey
 from demo.web.review.__main__ import build_app, main
-from demo.web.review.corpus import scan_evidence
+from demo.web.review.corpus import (
+    NMS_KIND_LOCAL,
+    NMS_KIND_REAL,
+    NMS_KIND_SIM,
+    NMS_KIND_UNKNOWN,
+    scan_evidence,
+)
 from demo.web.review.export import build_payload, payload_json, payload_yaml, report_markdown
 from demo.web.review.routes import build_review_routes
 from demo.web.review.service import STATUS_NOT_RUN, STATUS_STALE, ReviewService
@@ -235,21 +241,28 @@ def _write_batch(
     model: str = "qwen3.8",
     decision_mode: str = "live",
     finished_at: str = "2026-11-15T10:05:00+00:00",
+    discovery: str = "nms",
+    nms: bool | None = None,
+    nms_sim: bool | None = None,
 ) -> None:
     directory = runs_dir / "tester"
     directory.mkdir(parents=True, exist_ok=True)
-    document = {
+    document: dict[str, object] = {
         "schema": "osp-tester/v4",
         "batchId": batch_id,
         "createdAt": "2026-11-15T10:00:00+00:00",
         "finishedAt": finished_at,
         "decisionMode": decision_mode,
         "modelLabel": model,
-        "discovery": "nms",
+        "discovery": discovery,
         "transport": "webhook",
         "rounds": 1,
         "items": items,
     }
+    if nms is not None:
+        document["nms"] = nms
+    if nms_sim is not None:
+        document["nmsSim"] = nms_sim
     (directory / f"{batch_id}.json").write_text(json.dumps(document), encoding="utf-8")
 
 
@@ -361,6 +374,50 @@ def test_scan_reads_the_real_machine_flag_from_the_batch_discovery(tmp_path: Pat
 
     assert scan.observations[0]["nms"] is True
     assert scan.observations[0]["discovery"] == "nms"
+
+
+def test_scan_derives_the_nms_kind_from_the_declared_keys(tmp_path: Path) -> None:
+    """The display flag keeps the legacy discovery fallback; attribution does not.
+
+    Trace attribution must never treat ``discovery: nms`` alone as a real-NMS run, or an old
+    batch becomes a vendor defect the moment its trace is missing a point.
+    """
+    _write_batch(tmp_path, [_evidence_item()], batch_id="batch-real", nms=True, nms_sim=False)
+    _write_batch(tmp_path, [_evidence_item()], batch_id="batch-sim", nms=True, nms_sim=True)
+    _write_batch(tmp_path, [_evidence_item()], batch_id="batch-local", nms=False, nms_sim=False)
+    _write_batch(tmp_path, [_evidence_item()], batch_id="batch-old")
+    _write_batch(tmp_path, [_evidence_item()], batch_id="batch-half", nms=True)
+    _write_batch(
+        tmp_path,
+        [_evidence_item()],
+        batch_id="batch-nodiscovery",
+        discovery="",
+        nms=False,
+        nms_sim=False,
+    )
+
+    scan = scan_evidence(
+        runs_dir=tmp_path,
+        client_db_path=None,
+        cases={1: _case_document()},
+        days=2.0,
+    )
+
+    rows = {row["batchId"]: row for row in scan.observations}
+    assert {batch: (row["nms"], row["nmsKind"]) for batch, row in rows.items()} == {
+        "batch-real": (True, NMS_KIND_REAL),
+        "batch-sim": (True, NMS_KIND_SIM),
+        "batch-local": (True, NMS_KIND_LOCAL),
+        "batch-old": (True, NMS_KIND_UNKNOWN),
+        "batch-half": (True, NMS_KIND_UNKNOWN),
+        "batch-nodiscovery": (False, NMS_KIND_LOCAL),
+    }
+    assert rows["batch-real"]["nmsDeclared"] is True
+    assert rows["batch-real"]["nmsSimDeclared"] is False
+    assert rows["batch-old"]["nmsDeclared"] is None
+    assert rows["batch-old"]["nmsSimDeclared"] is None
+    assert rows["batch-half"]["nmsDeclared"] is True
+    assert rows["batch-half"]["nmsSimDeclared"] is None
 
 
 def test_scan_skips_items_without_stages(tmp_path: Path) -> None:

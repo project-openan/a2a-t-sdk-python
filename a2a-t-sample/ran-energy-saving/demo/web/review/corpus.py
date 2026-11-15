@@ -32,6 +32,13 @@ _LOGGER = logging.getLogger("ran_energy_saving.review")
 #: Protocol of the tester item versus the protocol recorded by the run store.
 _RUNTIME_PROTOCOL: Final[dict[str, str]] = {"a2a-t": "a2a-t", "a2a": "pure"}
 
+#: Downstream identity used by trace attribution. It is derived only from the batch's explicit
+#: ``nms`` / ``nmsSim`` keys, never from the display flag (see :func:`_nms_kind`).
+NMS_KIND_REAL: Final[str] = "real"
+NMS_KIND_SIM: Final[str] = "sim"
+NMS_KIND_LOCAL: Final[str] = "local"
+NMS_KIND_UNKNOWN: Final[str] = "unknown"
+
 #: How many batch files one scan reads unless the caller asks for more.
 DEFAULT_MAX_BATCHES: Final[int] = 500
 
@@ -171,6 +178,8 @@ def _observation(
         "tokens": _mapping(item.get("tokens")),
         "langfuseUrl": item.get("langfuseUrl"),
     }
+    nms_declared = _declared_bool(batch, "nms")
+    nms_sim_declared = _declared_bool(batch, "nmsSim")
     return {
         "caseId": case_id,
         "protocol": protocol,
@@ -183,6 +192,9 @@ def _observation(
         "decisionMode": str(batch.get("decisionMode") or ""),
         "nms": _batch_nms(batch),
         "nmsSim": bool(batch.get("nmsSim")),
+        "nmsDeclared": nms_declared,
+        "nmsSimDeclared": nms_sim_declared,
+        "nmsKind": _nms_kind(nms_declared, nms_sim_declared),
         "discovery": str(batch.get("discovery") or ""),
         "transport": str(batch.get("transport") or ""),
         "status": str(item.get("status") or ""),
@@ -295,14 +307,40 @@ def _batch_time(document: Mapping[str, Any]) -> float:
 
 
 def _batch_nms(batch: Mapping[str, Any]) -> bool:
-    """Return whether the batch ran against the real vendor NMS.
+    """Return the *display* flag of a batch's downstream.
 
     Mirrors the annotation console: live batches record the downstream as ``discovery: nms``;
-    older batches used ``nms`` / ``nmsSim``.
+    older batches used ``nms`` / ``nmsSim``. This value drives the page filters and deliberately
+    keeps the legacy ``discovery`` fallback. Trace attribution must use :func:`_nms_kind` instead.
     """
     if batch.get("nms") or batch.get("nmsSim"):
         return True
     return str(batch.get("discovery") or "") == "nms"
+
+
+def _declared_bool(batch: Mapping[str, Any], key: str) -> bool | None:
+    """Return a declared boolean batch key, or ``None`` when the key is absent.
+
+    A missing key is not ``False``: older batches recorded the downstream only as
+    ``discovery: nms``, and attributing a trace gap to the vendor requires the batch to declare
+    explicitly that it ran against the real NMS.
+    """
+    value = batch.get(key)
+    return value if isinstance(value, bool) else None
+
+
+def _nms_kind(nms_declared: bool | None, nms_sim_declared: bool | None) -> str:
+    """Return the downstream identity used by trace attribution.
+
+    The display flag ``nms`` must not be an input: it also accepts the legacy
+    ``discovery: nms`` fallback, which would silently turn an undeclared old batch into a
+    real-NMS run and blame the vendor for a gap we never measured.
+    """
+    if nms_sim_declared is True:
+        return NMS_KIND_SIM
+    if nms_declared is None or nms_sim_declared is None:
+        return NMS_KIND_UNKNOWN
+    return NMS_KIND_REAL if nms_declared else NMS_KIND_LOCAL
 
 
 def _int_value(value: object) -> int | None:
