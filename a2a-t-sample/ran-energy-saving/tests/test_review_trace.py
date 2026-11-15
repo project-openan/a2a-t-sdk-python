@@ -8,6 +8,7 @@ from pathlib import Path
 
 import demo.web.review.traces as traces_module
 import pytest
+from demo.web.review.corpus import local_trace_points
 from demo.web.review.traces import (
     EXPORT_STATE_EXPORTED,
     EXPORT_STATE_FAILED,
@@ -268,6 +269,31 @@ def test_cached_payload_marks_a_stale_snapshot_when_fetch_is_disabled(tmp_path: 
     )
     assert payload["exportState"] == EXPORT_STATE_EXPORTED
     assert any("cache TTL" in warning for warning in payload["warnings"])
+
+
+def test_local_trace_points_only_claim_what_the_snapshot_proves() -> None:
+    item = {
+        "answer": {
+            "taskId": "task-1",
+            "exchanges": [
+                {"direction": "OUT", "messageType": "Task-T", "round": 1},
+                {"direction": "OUT", "messageType": "ACCEPT", "round": 1},
+                {"direction": "IN", "messageType": "status", "round": None},
+            ],
+        },
+        "stages": {"send": {"stage": "send", "status": "passed"}},
+    }
+    emitted, known = local_trace_points(item)
+
+    assert {"message_sent", "decision:R1", "task_created"} <= set(emitted)
+    assert {"message_sent", "decision:R1", "task_created"} <= set(known)
+    # Task-T rendering / LLM validation are preflight calls, not provable run spans.
+    assert "task_prompt_rendered" not in known
+    assert "task_validation" not in known
+
+
+def test_local_trace_points_are_empty_without_a_tester_answer() -> None:
+    assert local_trace_points({}) == ((), ())
 
 
 def test_payload_is_the_compact_block_the_review_store_keeps(tmp_path: Path) -> None:

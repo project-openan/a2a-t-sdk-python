@@ -201,6 +201,20 @@ def test_judge_trace_applies_the_acceptance_order() -> None:
     assert (mismatch.status, mismatch.reason) == (TRACE_FAIL, REASON_FRAMES_MISMATCH)
 
 
+def test_attribution_keeps_unknown_outside_the_local_coverage() -> None:
+    points = expected_client_points(_context())[:2]
+    results = match_points(points, (), run_id="run-1")
+    status, findings = attribute_points(
+        results,
+        local_points=(),
+        local_known=("task_validation",),
+    )
+    by_point = {finding.point: finding.status for finding in findings}
+    assert by_point["task_prompt_rendered"] == ATTRIBUTION_UNKNOWN
+    assert by_point["task_validation"] == ATTRIBUTION_MISSING_CLIENT
+    assert status == ATTRIBUTION_MISSING_CLIENT
+
+
 def test_judge_trace_reads_the_payload_camel_case_local_points() -> None:
     observations = [
         item for item in _complete_observations() if item["kind"] != "task_validation"

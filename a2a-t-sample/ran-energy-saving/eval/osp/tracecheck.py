@@ -311,13 +311,16 @@ def attribute_points(
     points: Sequence[PointResult],
     *,
     local_points: Sequence[str] | None,
+    local_known: Sequence[str] | None = None,
 ) -> tuple[str, tuple[AttributionFinding, ...]]:
     """Attribute every missing point to ingest, client, or unknown.
 
-    ``local_points`` is the set of point ids the local producer emitted (from the tester's
-    ``answer.exchanges`` or ``server-trace.jsonl``). ``None`` means the local layer is
-    unavailable, which must stay ``unknown`` rather than blaming the producer.
+    ``local_points`` is the set of point ids the local producer provably emitted;
+    ``local_known`` is the subset the local evidence can adjudicate at all. A point outside
+    ``local_known`` stays ``unknown`` — a partial local view must not turn into a client defect.
+    ``None`` for either means the local layer is unavailable.
     """
+    known = set(local_known) if local_known is not None else None
     findings: list[AttributionFinding] = []
     for result in points:
         if result.ok:
@@ -328,6 +331,9 @@ def attribute_points(
         elif result.point.id in local_points:
             status = ATTRIBUTION_MISSING_INGEST
             detail = "本地已发射，Langfuse 未入库"
+        elif known is not None and result.point.id not in known:
+            status = ATTRIBUTION_UNKNOWN
+            detail = "本地证据无法裁决该点"
         else:
             status = ATTRIBUTION_MISSING_CLIENT
             detail = "本地未发射"
@@ -395,7 +401,13 @@ def judge_trace(
     if local_value is None:
         local_value = payload.get("localPoints")
     local_points = tuple(str(item) for item in local_value) if isinstance(local_value, (list, tuple)) else None
-    attribution, findings = attribute_points(results, local_points=local_points)
+    known_value = payload.get("local_known")
+    if known_value is None:
+        known_value = payload.get("localKnown")
+    local_known = tuple(str(item) for item in known_value) if isinstance(known_value, (list, tuple)) else None
+    attribution, findings = attribute_points(
+        results, local_points=local_points, local_known=local_known
+    )
     if findings:
         # The customer gate is the presence of the expected points, not the attribution. A point
         # we cannot attribute (local emission is not persisted) still fails; the report shows the

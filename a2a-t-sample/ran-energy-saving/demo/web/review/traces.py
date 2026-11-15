@@ -220,6 +220,7 @@ class TraceStore:
         run_id: str | None,
         nms_kind: str,
         local_points: Sequence[str] | None = None,
+        local_known: Sequence[str] | None = None,
     ) -> dict[str, object]:
         """Return the compact trace block stored beside one review observation."""
         return self._payload(
@@ -227,6 +228,7 @@ class TraceStore:
             run_id=run_id,
             nms_kind=nms_kind,
             local_points=local_points,
+            local_known=local_known,
         )
 
     def cached_payload(
@@ -239,6 +241,7 @@ class TraceStore:
         ttl_seconds: float = DEFAULT_TRACE_TTL_SECONDS,
         force: bool = False,
         local_points: Sequence[str] | None = None,
+        local_known: Sequence[str] | None = None,
     ) -> dict[str, object]:
         """Return the cached snapshot, fetching lazily only when it is missing or stale.
 
@@ -260,6 +263,7 @@ class TraceStore:
             run_id=run_id,
             nms_kind=nms_kind,
             local_points=local_points,
+            local_known=local_known,
             warnings=warnings,
         )
 
@@ -270,6 +274,7 @@ class TraceStore:
         run_id: str | None,
         nms_kind: str,
         local_points: Sequence[str] | None,
+        local_known: Sequence[str] | None = None,
         warnings: Sequence[str] | None = None,
     ) -> dict[str, object]:
         frames = build_frames(
@@ -295,6 +300,7 @@ class TraceStore:
             "observationsTruncated": snapshot.truncated,
             "related": [],
             "localPoints": list(local_points) if local_points is not None else None,
+            "localKnown": list(local_known) if local_known is not None else None,
             "warnings": list(warnings if warnings is not None else snapshot.warnings),
         }
 

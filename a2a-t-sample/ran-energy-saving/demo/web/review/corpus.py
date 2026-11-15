@@ -160,6 +160,7 @@ def _observation(
     """Build one review observation from a stored tester item."""
     observed_at = str(batch.get("finishedAt") or batch.get("createdAt") or "")
     messages = _messages(events, item.get("runId"), protocol)
+    local_points, local_known = local_trace_points(item)
     evidence: dict[str, object] = {
         "caseId": case_id,
         "protocol": protocol,
@@ -177,6 +178,11 @@ def _observation(
         "durationMs": item.get("durationMs"),
         "tokens": _mapping(item.get("tokens")),
         "langfuseUrl": item.get("langfuseUrl"),
+        #: Point ids the local producer provably emitted, and the ids the local evidence can
+        #: adjudicate at all. A point outside ``localKnown`` stays ``unknown`` instead of being
+        #: blamed on the client.
+        "localPoints": local_points,
+        "localKnown": local_known,
     }
     nms_declared = _declared_bool(batch, "nms")
     nms_sim_declared = _declared_bool(batch, "nmsSim")
@@ -201,6 +207,58 @@ def _observation(
         "inputSignature": evidence_input_signature(evidence),
         "evidence": evidence,
     }
+
+
+#: Outbound message types that represent a client decision in ``answer.exchanges``.
+_DECISION_MESSAGE_TYPES: Final[frozenset[str]] = frozenset(
+    {"ACCEPT", "COUNTER", "REJECT", "ABORT"}
+)
+
+
+def local_trace_points(item: Mapping[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return the trace point ids the local evidence proves emitted, and the ids it can judge.
+
+    Only the client hop and the accepted task are provable from the tester snapshot: an OUT
+    exchange means our client sent a frame (and, for a decision performative, resolved a round),
+    and ``answer.taskId`` means a Task was accepted. LLM and Task-T-render points are deliberately
+    not claimed: the tester's preflight is a different invocation from the run's own spans, so
+    calling them "locally emitted" would blame ingestion for a call the run never made.
+    """
+    emitted: set[str] = set()
+    known: set[str] = set()
+    answer = item.get("answer")
+    answer_map = answer if isinstance(answer, Mapping) else {}
+    exchanges = answer_map.get("exchanges")
+    if isinstance(exchanges, list):
+        known.add("message_sent")
+        for exchange in exchanges:
+            if not isinstance(exchange, Mapping):
+                continue
+            if str(exchange.get("direction") or "") != "OUT":
+                continue
+            emitted.add("message_sent")
+            message_type = str(exchange.get("messageType") or "").upper()
+            round_number = exchange.get("round")
+            if (
+                message_type in _DECISION_MESSAGE_TYPES
+                and isinstance(round_number, int)
+                and not isinstance(round_number, bool)
+            ):
+                emitted.add(f"decision:R{round_number}")
+                known.add(f"decision:R{round_number}")
+    stages = item.get("stages")
+    if isinstance(stages, Mapping):
+        send = stages.get("send")
+        if isinstance(send, Mapping):
+            status = str(send.get("status") or "")
+            if status in {"passed", "failed", "error"}:
+                known.add("message_sent")
+                if status == "passed":
+                    emitted.add("message_sent")
+    if str(answer_map.get("taskId") or "").strip():
+        emitted.add("task_created")
+        known.add("task_created")
+    return tuple(sorted(emitted)), tuple(sorted(known))
 
 
 def _stages(raw: object) -> dict[str, object]:
