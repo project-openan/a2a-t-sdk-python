@@ -903,6 +903,7 @@ class _StubTraceStore:
         }
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.fetched: list[tuple[str, str | None]] = []
+        self.fetch_configs: list[object] = []
         #: State of the on-disk cache this stub models, keyed by trace id. A fetch moves the entry
         #: to the fetch result's state, which is what makes the permanent-cache branch testable.
         self.snapshot_states: dict[str, str] = {}
@@ -918,8 +919,8 @@ class _StubTraceStore:
         return {**self.payload, "exportState": state}
 
     def fetch(self, trace_id: str, config: object, *, run_id: str | None = None) -> dict[str, object]:
-        del config
         self.fetched.append((trace_id, run_id))
+        self.fetch_configs.append(config)
         self.snapshot_states[trace_id] = str(self.fetch_result.get("exportState") or "failed")
         return dict(self.fetch_result)
 
@@ -1121,20 +1122,60 @@ def test_the_detail_exposes_the_observation_rows_and_the_langfuse_link(
     assert trace["url"] == "https://langfuse.example/trace/abc"
 
 
+def _sample_settings(
+    *,
+    configured: bool,
+    base_url: str = "http://127.0.0.1:3099",
+    public_key: str = "pk",
+    secret_key: str = "sk",
+) -> SimpleNamespace:
+    """Stand in for ``shared.config.SampleConfig`` when only Langfuse matters."""
+    return SimpleNamespace(
+        langfuse_configured=configured,
+        langfuse_base_url=base_url,
+        langfuse_public_key=public_key if configured else "",
+        langfuse_secret_key=secret_key if configured else "",
+    )
+
+
 def test_the_instance_reports_whether_langfuse_credentials_are_configured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from langfuse_export.config import ConfigError
+    import shared.config as sample_config
 
-    def explode(**_kwargs: object) -> object:
-        raise ConfigError("missing credentials")
-
-    monkeypatch.setattr("langfuse_export.config.load_config", explode)
+    monkeypatch.setattr(
+        sample_config, "load_config", lambda **_kwargs: _sample_settings(configured=False)
+    )
     unconfigured, _stub = _trace_service(tmp_path / "plain")
-    configured, _resolved = _trace_service(tmp_path / "configured", trace_config=object())
 
     assert unconfigured.trace_configured() is False
-    assert configured.trace_configured() is True
+
+
+def test_the_fetch_uses_the_sample_langfuse_base_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The proxy that fronts ``us.cloud.langfuse.com`` lives in ``LANGFUSE_BASE_URL``."""
+    import shared.config as sample_config
+
+    monkeypatch.setattr(
+        sample_config,
+        "load_config",
+        lambda **_kwargs: _sample_settings(
+            configured=True, base_url="http://127.0.0.1:3099"
+        ),
+    )
+    service, stub = _trace_service(tmp_path)
+    service.scan(days=2.0)
+
+    service.fetch_trace(1, "a2a-t")
+
+    from langfuse_export.config import Config
+
+    config = stub.fetch_configs[0]
+    assert isinstance(config, Config)
+    assert config.host == "http://127.0.0.1:3099"
+    assert config.public_key == "pk"
+    assert config.secret_key == "sk"
 
 
 def test_an_untraced_run_explains_why_the_dimension_is_not_applicable(

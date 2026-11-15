@@ -104,8 +104,11 @@ curl -s http://127.0.0.1:8091/ready
 或帧数不符才判「失败」。
 
 - **抓取开关**：完整 Web UI（8080）默认开启；独立审核实例默认关闭，启动时加 `--fetch-traces`。
-- **凭据**：`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`，可从进程环境或 `.env` 读取。审核实例按
-  `<runs>/.env` → `<runs>/../.env` 的顺序查找；完整 Web UI 直接把已加载的配置传给审核页面。
+- **凭据与端点**：沿用 sample 自己的上报配置（`shared.config.load_config`）——`LANGFUSE_PUBLIC_KEY`
+  / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL`（`A2AT_SAMPLE_LANGFUSE_ENABLED=0` 视为未配置）。
+  `LANGFUSE_BASE_URL` 就是访问 `us.cloud.langfuse.com` 的本地代理地址，抓取请求走同一个端点；
+  进程环境优先于 `.env`。审核实例按 `<runs>/.env` → `<runs>/../.env` 的顺序查找；完整 Web UI
+  直接把已加载的配置传给审核页面。注意 `langfuse_export` 自己的 `LANGFUSE_HOST` 不再使用。
 - **自动加载**：打开某一轮时，如果没有快照就自动抓一次；已有快照**永久缓存**，不会自动重抓。
 - **手动操作**：按钮随状态显示「抓取轨迹」/「重试抓取」/「重新抓取（强制刷新）」。只读实例会提示
   启动命令；未配置凭据会提示缺哪个环境变量。
@@ -176,7 +179,7 @@ curl -s "$BASE/api/review/report.md" -o osp-review-report.md
 | 结论保存被拒 | 缺陷缺归属/备注，或覆盖自动判定未写理由 | 按提示补全 |
 | 结论显示「待复核」 | 用例/期望变更或出现新轮次 | 复核后重新保存 |
 | 轨迹显示「轨迹抓取未启用」 | 独立实例没加 `--fetch-traces` | 启动命令加 `--fetch-traces`；或在 8080 的完整 Web UI 里看 |
-| 轨迹抓取报「未配置 Langfuse 凭据」 | 环境/`.env` 里缺 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | 配置凭据后重启；确认 `.env` 在 runs 目录或其上一级 |
+| 轨迹抓取报「未配置 Langfuse 凭据」 | 环境/`.env` 里缺 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`，或 `A2AT_SAMPLE_LANGFUSE_ENABLED=0` | 配好凭据后重启；确认 `.env` 在 runs 目录或其上一级，`LANGFUSE_BASE_URL` 指向可达的本地代理 |
 | 轨迹显示「不适用」 | 显式模拟器、无 `runId`、无/非法 `traceId` | 详情页 blocker 会写出具体原因；真机用例请重跑或检查 tester 是否记录了 `traceId` |
 | 轨迹显示「NMS 跳未识别」 | 轨迹里没有 `a2a-t-server` 的发送 span | 确认网管侧是否上报 Langfuse，或 scope 名是否变化 |
 | 轨迹抓取报 429 | Langfuse 限流 | 等页面提示的冷却秒数后点「重试抓取」；不要连续刷新 |

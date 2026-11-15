@@ -45,6 +45,7 @@ from eval.osp.tracecheck import (
     trace_applicability,
 )
 from langfuse_export.config import Config
+from shared.config import SampleConfig
 
 from demo.web.review.corpus import case_documents, scan_evidence
 from demo.web.review.store import (
@@ -311,25 +312,43 @@ class ReviewService:
         return max(0, int(remaining + 0.999)) if remaining > 0 else 0
 
     def _resolved_trace_config(self) -> Config:
-        """Return the Langfuse credentials, loading them from the environment once."""
+        """Return the Langfuse credentials the sample itself reports with.
+
+        The sample does not use ``langfuse_export``'s own ``LANGFUSE_HOST``: it reads
+        ``LANGFUSE_PUBLIC_KEY`` / ``LANGFUSE_SECRET_KEY`` / ``LANGFUSE_BASE_URL`` through
+        :func:`shared.config.load_config`, and ``LANGFUSE_BASE_URL`` is what points at the local
+        proxy that fronts ``us.cloud.langfuse.com``. Building the fetch config from the same values
+        keeps the console and the run export talking to the same endpoint.
+        """
         if self._trace_config is not None:
             return self._trace_config
-        from langfuse_export.config import ConfigError, load_config
+        sample = self._sample_config()
+        if not sample.langfuse_configured:
+            raise ValueError(
+                "未配置 Langfuse 凭据（LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY），"
+                "或 A2AT_SAMPLE_LANGFUSE_ENABLED=0。"
+            )
+        self._trace_config = Config(
+            host=sample.langfuse_base_url.rstrip("/"),
+            public_key=sample.langfuse_public_key,
+            secret_key=sample.langfuse_secret_key,
+            # The sample's precedence is process env > .env > default; ``load_config`` already
+            # merged it, so the origin only matters for diagnostics.
+            host_source="env",
+        )
+        return self._trace_config
 
-        # ``langfuse_export.load_config`` reads ``.env`` from the given directory only (it never
-        # walks upwards). The sample keeps its ``.env`` above the runs directory, so try the runs
-        # directory and its parent before declaring the credentials missing. The process cwd is
-        # deliberately not consulted: a console pointed at another instance's runs must not pick
-        # up an unrelated ``.env`` by accident.
-        last_error: ConfigError | None = None
-        for candidate in (self._runs_dir, self._runs_dir.parent):
-            try:
-                self._trace_config = load_config(cwd=candidate)
-            except ConfigError as exc:
-                last_error = exc
-                continue
-            return self._trace_config
-        raise ValueError("未配置 Langfuse 凭据（LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY）。") from last_error
+    def _sample_config(self) -> SampleConfig:
+        """Load the sample configuration from the runs directory, then its parent, then cwd."""
+        from shared.config import load_config as load_sample_config
+
+        for candidate in (self._runs_dir / ".env", self._runs_dir.parent / ".env"):
+            if candidate.is_file():
+                try:
+                    return load_sample_config(env_path=candidate)
+                except ValueError as exc:
+                    raise ValueError(f"无法读取 sample 配置 {candidate}：{exc}") from exc
+        return load_sample_config()
 
     def trace_configured(self) -> bool:
         """Return whether this instance can resolve Langfuse credentials."""
