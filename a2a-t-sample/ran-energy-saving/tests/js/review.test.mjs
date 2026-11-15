@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import {
   attentionDimensions,
   batchLabel,
+  caseExpectations,
   categoryLabel,
+  expectationMarkers,
   filterTaskTRows,
   decisionLabel,
   defaultRoundIndex,
@@ -24,6 +26,8 @@ const CASES = [
   {
     caseId: 16,
     caseName: "设置 gain target",
+    blocked: false,
+    negotiation: { "a2a-t": false, a2a: true },
     protocols: [
       {
         protocol: "a2a-t",
@@ -48,6 +52,8 @@ const CASES = [
   {
     caseId: 26,
     caseName: "时间重叠 + 可行性协商",
+    blocked: true,
+    negotiation: { "a2a-t": true, a2a: false },
     protocols: [
       {
         protocol: "a2a-t",
@@ -123,6 +129,33 @@ assert.deepEqual(
   [16, 26],
 );
 assert.deepEqual(filterCases(CASES, { query: "26" }).map((row) => row.caseId), [26]);
+
+// The static expectation markers and their filter are distinct from the verdict.
+assert.deepEqual(
+  caseExpectations(CASES[1]),
+  { blocked: true, a2aT: true, a2a: false },
+);
+assert.deepEqual(
+  expectationMarkers(CASES[1]).map(([, label]) => label),
+  ["拦截", "A2A-T 协商"],
+);
+assert.deepEqual(
+  expectationMarkers(CASES[0]).map(([, label]) => label),
+  ["A2A 协商"],
+);
+assert.deepEqual(expectationMarkers({}), []);
+assert.deepEqual(
+  filterCases(CASES, { expect: "blocked" }).map((row) => row.caseId),
+  [26],
+);
+assert.deepEqual(
+  filterCases(CASES, { expect: "a2a-t" }).map((row) => row.caseId),
+  [26],
+);
+assert.deepEqual(
+  filterCases(CASES, { expect: "a2a" }).map((row) => row.caseId),
+  [16],
+);
 
 // A dimension filter keeps the case and only the protocol tasks failing that point.
 assert.deepEqual(

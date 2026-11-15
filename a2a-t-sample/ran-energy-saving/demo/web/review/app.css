@@ -178,6 +178,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .proto.active { background: var(--accent-soft); border-color: #f6c9a8; }
 .proto-name { font-weight: 600; }
 .badges { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.expect-markers { display: inline-flex; gap: 3px; flex-wrap: wrap; }
 
 /* The round list is narrow: stack the batch head and the round badges instead of squeezing them. */
 #sidebar-round .filters input,
@@ -202,6 +203,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .badge.fail, .badge.defect { background: #fdecea; border-color: #f3b4ae; color: var(--bad); }
 .badge.partial, .badge.stale, .badge.recheck { background: #fff7e6; border-color: #f3d39b; color: var(--warn); }
 .badge.known_issue { background: #e8f0fe; border-color: #a9c2f5; color: var(--info); }
+.badge.expect-blocked { background: #fff4e5; border-color: #f1c894; color: #9a5a12; }
+.badge.expect-negotiation { background: #eef2fb; border-color: #c3d2ee; color: #35568f; }
 .badge.pending, .badge.not_run, .badge.not_applicable, .badge.not_expected,
 .badge.recorded, .badge.missing { background: #f2f4f8; color: #7b8494; }
 

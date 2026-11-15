@@ -337,6 +337,7 @@ class ReviewService:
                     "dimension": case.get("dimension"),
                     "tags": list(case.get("tags") or ()),
                     "blocked": _is_blocked(case),
+                    "negotiation": _negotiation_flags(case),
                     "protocols": [
                         self._protocol_row(
                             case,
@@ -456,6 +457,7 @@ class ReviewService:
                     "dimension": case.get("dimension"),
                     "tags": list(case.get("tags") or ()),
                     "blocked": _is_blocked(case),
+                    "negotiation": _negotiation_flags(case),
                     "protocols": tasks,
                 }
             )
@@ -1014,6 +1016,24 @@ def _messages(block: Mapping[str, Any]) -> object:
 def _is_blocked(case: Mapping[str, Any]) -> bool:
     """Return whether the case expects an interception."""
     return _protocol_block(case, PROTOCOL_A2A_T).get("validate") == "blocked"
+
+
+def _negotiates(block: Mapping[str, Any]) -> bool:
+    """Return whether one protocol block expects a negotiation at all."""
+    negotiation = block.get("negotiation")
+    if not isinstance(negotiation, Mapping):
+        return False
+    if negotiation.get("expected") is True:
+        return True
+    # Some converted cases spell the expectation as rounds or messages only.
+    return _rounds(block) > 0 or bool(_messages(block))
+
+
+def _negotiation_flags(case: Mapping[str, Any]) -> dict[str, bool]:
+    """Return the negotiation expectation of both protocols, for the list markers and filters."""
+    return {
+        protocol: _negotiates(_protocol_block(case, protocol)) for protocol in PROTOCOLS
+    }
 
 
 __all__ = [

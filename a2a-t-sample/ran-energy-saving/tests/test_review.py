@@ -558,6 +558,28 @@ def test_a_case_without_evidence_is_not_run(tmp_path: Path) -> None:
     assert [task["status"] for task in rows[0]["protocols"]] == [STATUS_NOT_RUN, STATUS_NOT_RUN]
 
 
+def test_the_case_list_marks_interception_and_negotiation(tmp_path: Path) -> None:
+    cases_dir = tmp_path / "cases"
+    _write_cases(
+        cases_dir,
+        _case_document(1, blocked=True, rounds=0),
+        _case_document(2, blocked=False, rounds=1),
+    )
+    catalog = CaseCatalog(cases_dir, overlay_path=tmp_path / "absent.yaml")
+    store = ReviewStore(tmp_path / "review.sqlite3")
+    store.ensure()
+    service = ReviewService(
+        store=store, catalog=catalog, runs_dir=tmp_path / "runs", client_db_path=None
+    )
+
+    rows = {row["caseId"]: row for row in service.cases()}
+
+    assert rows[1]["blocked"] is True
+    assert rows[1]["negotiation"] == {"a2a-t": False, "a2a": False}
+    assert rows[2]["blocked"] is False
+    assert rows[2]["negotiation"] == {"a2a-t": True, "a2a": False}
+
+
 # ---------------------------------------------------------------------------
 # Round (batch) view
 # ---------------------------------------------------------------------------

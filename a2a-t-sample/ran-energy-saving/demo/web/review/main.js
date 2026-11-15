@@ -133,6 +133,26 @@ export function progressText(progress) {
     + ` · 已知问题 ${decisions.known_issue || 0} · 待复核 ${decisions.recheck || 0}`;
 }
 
+//: The static expectations a reviewer filters by: interception and per-protocol negotiation.
+export function caseExpectations(caseRow) {
+  const negotiation = caseRow.negotiation || {};
+  return {
+    blocked: Boolean(caseRow.blocked),
+    a2aT: Boolean(negotiation["a2a-t"]),
+    a2a: Boolean(negotiation.a2a),
+  };
+}
+
+//: Human-readable expectation markers of one case, as ``[className, label]`` pairs.
+export function expectationMarkers(caseRow) {
+  const expected = caseExpectations(caseRow);
+  const markers = [];
+  if (expected.blocked) markers.push(["expect-blocked", "拦截"]);
+  if (expected.a2aT) markers.push(["expect-negotiation", "A2A-T 协商"]);
+  if (expected.a2a) markers.push(["expect-negotiation", "A2A 协商"]);
+  return markers;
+}
+
 //: Filter the corpus rows by case, protocol, verdict, decision and attention flags.
 export function filterCases(cases, filters) {
   const query = String(filters.query || "").trim().toLowerCase();
@@ -145,6 +165,10 @@ export function filterCases(cases, filters) {
     ) {
       continue;
     }
+    const expected = caseExpectations(caseRow);
+    if (filters.expect === "blocked" && !expected.blocked) continue;
+    if (filters.expect === "a2a-t" && !expected.a2aT) continue;
+    if (filters.expect === "a2a" && !expected.a2a) continue;
     const protocols = [];
     for (const task of caseRow.protocols || []) {
       if (filters.protocol && task.protocol !== filters.protocol) continue;
@@ -344,6 +368,7 @@ function currentFilters() {
     query: field("filter-query"),
     protocol: field("filter-protocol"),
     status: field("filter-status"),
+    expect: field("filter-expect"),
     decision: field("filter-decision"),
     category: field("filter-category"),
     onlyFailures: checked("only-failures"),
@@ -367,6 +392,12 @@ function renderCases() {
     const head = el("div", "case-head");
     head.append(el("span", "id", `#${caseRow.caseId}`));
     head.append(el("span", "name", caseRow.caseName || ""));
+    const markers = expectationMarkers(caseRow);
+    if (markers.length) {
+      const list = el("span", "expect-markers");
+      for (const [kind, label] of markers) list.append(el("span", `badge ${kind}`, label));
+      head.append(list);
+    }
     block.append(head);
     for (const task of caseRow.protocols) {
       const row = el("button", "proto");
@@ -571,7 +602,7 @@ function renderBatchTable() {
   const table = document.createElement("table");
   table.className = "batch-table";
   const headRow = document.createElement("tr");
-  for (const label of ["#", "用例", "操作", "A2A-T", "A2A", "标记"]) {
+  for (const label of ["#", "用例", "操作", "期望", "A2A-T", "A2A", "标记"]) {
     const th = document.createElement("th");
     th.textContent = label;
     headRow.append(th);
@@ -611,6 +642,7 @@ function batchCaseFilters() {
     query: field("batch-filter-query"),
     protocol: field("batch-filter-protocol"),
     status: field("batch-filter-status"),
+    expect: field("batch-filter-expect"),
     dimension: field("batch-filter-dimension"),
     decision: field("batch-filter-decision"),
     category: field("batch-filter-category"),
@@ -642,6 +674,15 @@ function renderBatchFilters() {
         ["", "全部协议"],
         ["a2a-t", "A2A-T"],
         ["a2a", "A2A"],
+      ],
+    ],
+    [
+      "batch-filter-expect",
+      [
+        ["", "全部期望"],
+        ["blocked", "需拦截"],
+        ["a2a-t", "A2A-T 协商"],
+        ["a2a", "A2A 协商"],
       ],
     ],
     ["batch-filter-dimension", dimensionOptions],
@@ -716,7 +757,7 @@ function refreshBatchTable() {
   if (!rows.length) {
     const tr = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 6;
+    cell.colSpan = 7;
     cell.className = "empty-state";
     cell.textContent = "没有匹配的用例。";
     tr.append(cell);
@@ -728,6 +769,7 @@ function refreshBatchTable() {
     tr.append(cellText(`#${caseRow.caseId}`));
     tr.append(cellText(caseRow.caseName || ""));
     tr.append(cellText(caseRow.operation || ""));
+    tr.append(expectationCell(caseRow));
     tr.append(protocolCell(caseRow, "a2a-t"));
     tr.append(protocolCell(caseRow, "a2a"));
     tr.append(cellText(batchMarkers(caseRow)));
@@ -738,6 +780,19 @@ function refreshBatchTable() {
 function cellText(value) {
   const cell = document.createElement("td");
   cell.append(document.createTextNode(value === null || value === undefined ? "" : String(value)));
+  return cell;
+}
+
+function expectationCell(caseRow) {
+  const cell = document.createElement("td");
+  const markers = expectationMarkers(caseRow);
+  if (!markers.length) {
+    cell.append(el("span", "muted", "—"));
+    return cell;
+  }
+  const list = el("span", "expect-markers");
+  for (const [kind, label] of markers) list.append(el("span", `badge ${kind}`, label));
+  cell.append(list);
   return cell;
 }
 
@@ -1772,6 +1827,7 @@ function wireEvents() {
     "filter-query",
     "filter-protocol",
     "filter-status",
+    "filter-expect",
     "filter-decision",
     "filter-category",
     "only-failures",
