@@ -740,8 +740,11 @@ def test_the_scan_keeps_the_intercepted_and_the_dispatched_request(tmp_path: Pat
     service, _catalog, _overlay, _runs = _fixture(tmp_path)
     service.scan(days=2.0)
 
-    round_row = service.detail(1, "a2a-t")["rounds"][0]
+    detail = service.detail(1, "a2a-t")
+    round_row = detail["rounds"][0]
 
+    assert detail["case"]["userInput"] == "do it"
+    assert detail["case"]["followupInput"] == "do it properly"
     assert round_row["requests"] == {
         "original": "do it",
         "originalSource": "interception",

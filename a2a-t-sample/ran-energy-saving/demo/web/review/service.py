@@ -611,12 +611,17 @@ def _case_summary(case: Mapping[str, Any]) -> dict[str, object]:
     """Return the case metadata the page shows above the rounds."""
     a2a_t = _protocol_block(case, PROTOCOL_A2A_T)
     a2a = _protocol_block(case, PROTOCOL_A2A)
+    followup = case.get("blocked_followup")
+    followup_map = followup if isinstance(followup, Mapping) else {}
     return {
         "id": int(case["id"]),
         "name": str(case.get("name") or ""),
         "operation": case.get("operation"),
         "dimension": case.get("dimension"),
         "userInput": case.get("user_input"),
+        # The replacement request a blocked case dispatches. The detail shows it next to the
+        # original so a reviewer can see what changed without opening the case YAML.
+        "followupInput": followup_map.get("input"),
         "blocked": _is_blocked(case),
         "validate": a2a_t.get("validate"),
         "a2aTRounds": _rounds(a2a_t),

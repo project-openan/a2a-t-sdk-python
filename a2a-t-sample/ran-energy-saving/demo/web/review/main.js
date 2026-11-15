@@ -862,6 +862,7 @@ function renderCaseCard() {
   const badge = el("span", `badge ${protocolStatus()}`, statusLabel(protocolStatus()));
   board.append(badge);
   card.append(board);
+  card.append(renderCaseRequests(caseRow));
   const facts = el("dl", "kv");
   const rows = [
     ["操作", caseRow.operation],
@@ -880,6 +881,53 @@ function renderCaseCard() {
   card.append(facts);
   card.append(el("p", "sub", `用例指纹 ${caseRow.caseSignature || "—"}；判定使用当前语料重算已存证据。`));
   return card;
+}
+
+//: The two requests the corpus configures, always visible above the round cards.
+function renderCaseRequests(caseRow) {
+  const block = el("div", "request-pair");
+  block.append(
+    requestField("操作员原始输入（用例语料）", caseRow.userInput),
+  );
+  if (caseRow.followupInput) {
+    block.append(
+      requestField(
+        "拦截后重新下发（blocked_followup.input）",
+        caseRow.followupInput,
+        "该用例先期望被拦截，拦截后再下发这段请求参与验收。",
+      ),
+    );
+  } else if (caseRow.blocked) {
+    block.append(
+      el("p", "hint", "该用例期望被拦截，但没有配置 blocked_followup，因此没有重新下发的请求。"),
+    );
+  }
+  return block;
+}
+
+function requestField(label, value, hint) {
+  const item = el("div", "request-item");
+  const head = el("div", "request-head");
+  head.append(el("span", "request-label", label));
+  const text = value === null || value === undefined || value === "" ? "—" : textBlock(value);
+  const copy = el("button", "ghost small", "复制");
+  copy.type = "button";
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      copy.textContent = "已复制";
+      window.setTimeout(() => {
+        copy.textContent = "复制";
+      }, 1500);
+    } catch {
+      copy.textContent = "复制失败";
+    }
+  });
+  head.append(copy);
+  item.append(head);
+  if (hint) item.append(el("p", "request-hint", hint));
+  item.append(el("pre", "request-text", text));
+  return item;
 }
 
 function protocolStatus() {
@@ -938,13 +986,16 @@ function renderDimensionStrip(round) {
   const requests = round.requests || {};
   const rows = [
     [
-      requests.originalSource === "corpus" ? "用例原文（当前语料，未采到运行时原文）" : "用例原文",
+      requests.originalSource === "corpus"
+        ? "本次运行原文（当前语料，未采到运行时原文）"
+        : "本次运行原文",
       requests.original,
     ],
-    ["拦截请求", requests.intercepted],
+    ["被拦截的请求", requests.intercepted],
     ["实际下发", requests.dispatched],
   ].filter(([, value]) => value);
   if (rows.length) {
+    card.append(el("h3", "sub-title", "本次运行的请求（冻结证据）"));
     const facts = el("dl", "kv");
     for (const [label, value] of rows) {
       facts.append(el("dt", "", label));
