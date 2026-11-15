@@ -470,6 +470,9 @@ python -m eval.osp.runner --all --stop-after validate --model-mode live \
 的一个 tab——`/tester` 只服务"本浏览器发起的那一个批次"，而标注要跨批次、跨轮次、跨操作员查看同一批
 用例的语料。
 
+> 现场（黄区）启动与操作手册见 **`eval/osp/ANNOTATE-GUIDE.md`**：只读实例的启动命令、健康检查、页面流程、
+> HTTP API、导出合并与故障对照都在那里；本节的 12.7 只给最小示例。
+
 ### 12.1 目标模型：用例 → 协议 → 子任务
 
 页面映射的就是 `eval/osp/cases` 这 100 条用例，每个用例都有两个协议任务，任务下挂它实际拥有的子任务：
