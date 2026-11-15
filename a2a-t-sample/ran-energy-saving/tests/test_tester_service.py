@@ -1865,6 +1865,41 @@ async def test_the_followup_request_is_what_the_full_flow_dispatches(
     assert refs["expectedFinalState"] == "task_completed"
 
 
+async def test_a_blocked_modify_dispatches_its_followup_not_the_original(
+    tmp_path: Path,
+) -> None:
+    """A blocked Modify seeds its baseline Create, then sends the corrected request.
+
+    The follow-up input is the only request the Modify run may dispatch: the original input is
+    incomplete by contract (that is why the case expects an interception), so sending it would
+    block the item at validation instead of exercising the continuation.
+    """
+    runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED))
+    manager = _manager(tmp_path, runs)
+    case = manager._catalog.get(63)
+    assert case is not None
+    assert case.get("operation") == "Modify"
+    supplement = followup_input(case)
+    assert supplement
+    created = manager.create(
+        case_ids=[63],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="send",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    await _wait_status(manager, str(created["batchId"]), "finished")
+
+    # Call 1 is the paired Create baseline; call 2 is the case's Modify request.
+    assert len(runs.calls) == 2
+    assert runs.calls[0]["userRequest"] != supplement
+    assert runs.calls[1]["userRequest"] == supplement
+    assert runs.calls[1]["target_task_id"] == "task-1"
+    assert runs.calls[1]["target_context_id"] == "ctx-1"
+
+
 async def test_a_blocked_case_without_a_followup_keeps_the_original_flow(tmp_path: Path) -> None:
     runs = _FakeRuns(_finish)
     manager = _manager(tmp_path, runs)
