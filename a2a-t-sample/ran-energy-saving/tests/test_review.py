@@ -173,6 +173,11 @@ def _evidence_item(
         "durationMs": 1200,
         "tokens": {"total": 10},
         "refs": {"userInput": refs_input},
+        "intentMeta": {
+            "rawRequest": refs_input,
+            "normalizedText": refs_input,
+            "source": "server",
+        },
         "intent": dict(INTENT),
         "serverIntent": dict(server_intent or INTENT),
         "stages": {
@@ -608,11 +613,36 @@ def test_the_scan_keeps_the_intercepted_and_the_dispatched_request(tmp_path: Pat
 
     assert round_row["requests"] == {
         "original": "do it",
+        "originalSource": "interception",
         "intercepted": "do it",
         "followup": "do it properly",
         "dispatched": "do it properly",
+        "dispatchedSource": "rawRequest",
     }
     assert round_row["nmsSim"] is False
+
+
+def test_a_missing_run_request_falls_back_to_the_corpus_and_says_so(tmp_path: Path) -> None:
+    cases_dir = tmp_path / "cases"
+    _write_cases(cases_dir, _case_document(blocked=False))
+    catalog = CaseCatalog(cases_dir, overlay_path=tmp_path / "absent.yaml")
+    store = ReviewStore(tmp_path / "review.sqlite3")
+    store.ensure()
+    service = ReviewService(
+        store=store, catalog=catalog, runs_dir=tmp_path / "runs", client_db_path=None
+    )
+    item = _evidence_item(blocked=False, slot_error=False)
+    item["refs"] = {}
+    item["intentMeta"] = {}
+    _write_batch(tmp_path / "runs", [item])
+    service.scan(days=2.0)
+
+    requests = service.detail(1, "a2a-t")["rounds"][0]["requests"]
+
+    assert requests["original"] == "do it"
+    assert requests["originalSource"] == "corpus"
+    assert requests["dispatched"] is None
+    assert requests["dispatchedSource"] == ""
 
 
 def test_the_detail_judges_every_round(tmp_path: Path) -> None:

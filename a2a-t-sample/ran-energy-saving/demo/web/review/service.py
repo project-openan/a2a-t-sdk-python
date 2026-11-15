@@ -531,20 +531,45 @@ def _request_sources(
 ) -> dict[str, object]:
     """Return the three requests a verdict can be about: original, blocked, dispatched.
 
-    A blocked case dispatches its replacement request, so the run's frozen input
-    (``refs.userInput``) is the follow-up, while the blocked original only survives in the
-    interception record. Showing them side by side is the only way to tell "the judge compared the
-    wrong text" from a real mismatch.
+    A blocked case dispatches its replacement request, so the run's frozen input is the follow-up,
+    while the blocked original only survives in the interception record. The precedence is the one
+    that never substitutes today's corpus for what the run actually read:
+
+    * original — the intercepted text, else the run's frozen ``rawRequest``, else the frozen case
+      input, and only as a last resort the current corpus (flagged ``corpus``);
+    * dispatched — the run's ``rawRequest``, else the frozen case input.
     """
     refs = evidence.get("refs")
-    frozen_input = refs.get("userInput") if isinstance(refs, Mapping) else None
+    refs_map = refs if isinstance(refs, Mapping) else {}
+    intent_meta = evidence.get("intentMeta")
+    meta_map = intent_meta if isinstance(intent_meta, Mapping) else {}
     interception = evidence.get("interception")
     blocked = interception if isinstance(interception, Mapping) else {}
+    frozen_input = refs_map.get("userInput")
+    raw_request = meta_map.get("rawRequest")
+    intercepted = blocked.get("input")
+    if intercepted:
+        original, original_source = intercepted, "interception"
+    elif raw_request:
+        original, original_source = raw_request, "rawRequest"
+    elif frozen_input:
+        original, original_source = frozen_input, "refs"
+    else:
+        # The corpus text is the current file, not what the run read: mark it as degraded.
+        original, original_source = case.get("user_input"), "corpus"
+    if raw_request:
+        dispatched, dispatched_source = raw_request, "rawRequest"
+    elif frozen_input:
+        dispatched, dispatched_source = frozen_input, "refs"
+    else:
+        dispatched, dispatched_source = None, ""
     return {
-        "original": case.get("user_input"),
-        "intercepted": blocked.get("input"),
+        "original": original,
+        "originalSource": original_source,
+        "intercepted": intercepted,
         "followup": blocked.get("followupInput"),
-        "dispatched": frozen_input,
+        "dispatched": dispatched,
+        "dispatchedSource": dispatched_source,
     }
 
 

@@ -936,7 +936,10 @@ function renderDimensionStrip(round) {
   card.append(strip);
   const requests = round.requests || {};
   const rows = [
-    ["用例原文", requests.original],
+    [
+      requests.originalSource === "corpus" ? "用例原文（当前语料，未采到运行时原文）" : "用例原文",
+      requests.original,
+    ],
     ["拦截请求", requests.intercepted],
     ["实际下发", requests.dispatched],
   ].filter(([, value]) => value);
