@@ -182,14 +182,14 @@ async def _wait_batch(
     raise AssertionError(f"batch {batch_id} did not finish")
 
 
-async def test_the_catalog_lists_the_51_osp_cases(client: httpx.AsyncClient) -> None:
+async def test_the_catalog_lists_the_100_osp_cases(client: httpx.AsyncClient) -> None:
     response = await client.get("/api/tester/catalog")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["count"] == 51
+    assert payload["count"] == 100
     first = payload["cases"][0]
     assert first["id"] == 1
-    assert first["validate"] == "pass"
+    assert first["validate"] == "pass_with_terminology"
     assert first["protocols"] == ["a2a-t", "a2a"]
 
 
@@ -199,7 +199,7 @@ async def test_the_catalog_reload_endpoint_reloads_without_a_restart(
     response = await client.post("/api/tester/catalog/reload")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["count"] == 51
+    assert payload["count"] == 100
     assert payload["added"] == []
     assert payload["removed"] == []
     assert payload["version"]
@@ -227,7 +227,7 @@ async def test_the_meta_lists_the_stage_chain(client: httpx.AsyncClient) -> None
     assert payload["runnerDefaultsIndicateCase"] is True
     assert payload["transport"] in {"sse", "webhook"}
     assert payload["discovery"]
-    assert payload["catalogCount"] == 51
+    assert payload["catalogCount"] == 100
 
 
 async def test_creating_a_batch_expands_each_case_by_protocol(client: httpx.AsyncClient) -> None:
@@ -662,9 +662,9 @@ def test_a2at_decision_parser_keeps_target_and_feasibility_order() -> None:
     assert decisions[1].feasibility_summary.startswith("Reduce throughput target")
 
 
-def test_a2at_decision_parser_follows_the_refreshed_case_34() -> None:
+def test_a2at_decision_parser_follows_the_refreshed_case_26() -> None:
     """The refreshed R column only has a feasibility answer; no target decision is expected."""
-    decisions = a2at_decisions(CASES[34])
+    decisions = a2at_decisions(CASES[26])
 
     assert len(decisions) == 1
     assert "2Mbps" in str(decisions[0].feasibility_summary)

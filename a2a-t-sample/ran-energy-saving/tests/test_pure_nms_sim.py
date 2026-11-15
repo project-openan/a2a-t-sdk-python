@@ -124,9 +124,9 @@ async def _run_pure(
     return result, answered
 
 
-async def test_osp_case_40_region_answer_completes_the_task() -> None:
+async def test_osp_case_34_region_answer_completes_the_task() -> None:
     """The vendor asks for the missing region; the workbook answer resolves it."""
-    case = _case(40)
+    case = _case(34)
     expected = _expected_answer(case)
 
     result, answered = await _run_pure(str(case["user_input"]), lambda event: expected)
@@ -139,7 +139,7 @@ async def test_osp_case_40_region_answer_completes_the_task() -> None:
 
 async def test_a_pure_follow_up_continues_the_same_vendor_task() -> None:
     """A standard A2A Modify is a follow-up message on the Task the first request created."""
-    case = _case(40)
+    case = _case(34)
     expected = _expected_answer(case)
     sim = build_sim_app(_sim_config())
 
@@ -166,7 +166,7 @@ async def test_a_pure_follow_up_continues_the_same_vendor_task() -> None:
 
 async def test_an_accept_with_two_values_sends_both_and_completes() -> None:
     """W-PURE-2: the rendered answer carries the region and the throughput target."""
-    case = _case(40)
+    case = _case(34)
     decision = NegotiationDecision(
         action="accept",
         rationale="Confirm the served region and keep the requested windows.",
@@ -189,7 +189,7 @@ async def test_an_accept_with_two_values_sends_both_and_completes() -> None:
 
 async def test_an_answer_that_still_misses_the_region_is_a_failure() -> None:
     """W-PURE-3: COMPLETED with a refusal sentence is not success, even with no artifact."""
-    case = _case(40)
+    case = _case(34)
 
     result, answered = await _run_pure(
         str(case["user_input"]),
@@ -207,7 +207,7 @@ async def test_an_answer_that_still_misses_the_region_is_a_failure() -> None:
     assert any("not recognized" in text for text in status_texts)
 
 
-@pytest.mark.parametrize("case_id", [40, 28])
+@pytest.mark.parametrize("case_id", [34, 22])
 def test_the_region_cases_still_expect_a_plain_a2a_answer(case_id: int) -> None:
     """The rehearsal is driven by the shipped cases; a dataset drift must fail loudly."""
     case = _case(case_id)
@@ -262,7 +262,7 @@ async def test_a_vendor_question_without_round_metadata_is_recorded_as_round_one
     """The vendor does not number its questions; the client still reports a timed round."""
     from protocol.client_runtime import _announce_pure_proposals
 
-    case = _case(40)
+    case = _case(34)
     expected = _expected_answer(case)
     proposals: list[tuple[object, object]] = []
     decisions: list[tuple[object, object, object]] = []

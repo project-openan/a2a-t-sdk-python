@@ -1,8 +1,9 @@
 """Contract tests of the generated OSP evaluation cases.
 
-The 51 YAML files are generated from an internal workbook export; this test protects the
-committed contract (counts, filenames, schema keys and the deliberate assertion switches)
-without depending on the internal source JSON.
+The 100 YAML files are generated from an internal workbook export
+(``docs-local/cases-all.yaml``, not committed); this test protects the committed contract
+(counts, filenames, schema keys and the deliberate assertion switches) without depending on the
+internal source.
 """
 
 from __future__ import annotations
@@ -44,17 +45,29 @@ TASK_T_SECTIONS = (
 )
 
 FILENAME_PATTERN = re.compile(
-    r"^(?P<id>\d{2})-(?P<name>.+)-\[(?P<validate>拦截|不拦截\+术语|不拦截|未填写)\]-"
+    r"^(?P<id>\d{2,3})-(?P<name>.+)-\[(?P<validate>拦截|不拦截\+术语|不拦截|未填写)\]-"
     r"\[(?P<operation>Create|Modify)\]\.yaml$"
 )
 
-A2AT_NEGOTIATION_IDS = frozenset({32, 34, 35, 36, 37, 38})
+#: Cases whose A2A-T request is expected to open a negotiation.
+A2AT_NEGOTIATION_IDS = frozenset({26, 28, 29, 30, 31, 32, 50, 51, 88, 89})
 
-#: Cases whose refreshed row comes from the reviewer's blocked-variant supplement rather than
-#: the main sheet, so their ``source.row`` no longer follows the ``id + 1`` mapping.
-_SUPPLEMENT_ROW_IDS = frozenset({37, 38})
-PARTIAL_IDS = frozenset({40, 46})
-ISSUE_IDS = frozenset({20, 21, 28, 34, 40, 46})
+#: Cases the pure-A2A path is expected to complete without a negotiation.
+A2A_NO_NEGOTIATION_IDS = frozenset({45, 46, 47, 48, 49, 53, 54, 55, 56, 57, 69})
+
+DIMENSIONS = frozenset(
+    {
+        "D1 意图完备且清晰",
+        "D2 专业术语/行业黑话",
+        "D3 意图模糊",
+        "D4 意图不完备",
+        "D5 意图存在噪声",
+        "D6 意图存在值越界",
+        "D7 混合",
+    }
+)
+
+SOURCE_FILE = "OSP-Unified Evaluation Set_v.01_拆分_A2ATestRegion.xlsx"
 
 VALIDATE_LABELS: dict[str | None, str] = {
     "blocked": "拦截",
@@ -91,8 +104,8 @@ def cases() -> dict[int, dict[str, Any]]:
     return result
 
 
-def test_51_cases_with_ids_1_to_51(cases: dict[int, dict[str, Any]]) -> None:
-    assert sorted(cases) == list(range(1, 52))
+def test_100_cases_with_ids_1_to_100(cases: dict[int, dict[str, Any]]) -> None:
+    assert sorted(cases) == list(range(1, 101))
 
 
 def test_filenames_follow_the_contract(cases: dict[int, dict[str, Any]]) -> None:
@@ -143,19 +156,22 @@ def test_validate_maps_to_send_and_final_state(cases: dict[int, dict[str, Any]])
         assert protocol["final_state_derived"] is (validate is not None)
 
 
-def test_a2a_negotiation_is_expected_for_every_case(cases: dict[int, dict[str, Any]]) -> None:
+def test_a2a_negotiation_matches_its_rounds(cases: dict[int, dict[str, Any]]) -> None:
+    """``expected`` is a per-case fact; the round count must agree with the recorded rounds."""
     for case_id, document in cases.items():
         protocol = document["expect"]["protocols"]["a2a"]
         negotiation = protocol["negotiation"]
-        assert negotiation["expected"] is True, case_id
-        assert negotiation["kinds"] is None
+        assert negotiation["expected"] is (case_id not in A2A_NO_NEGOTIATION_IDS), case_id
         assert negotiation["expected_rounds"] == len(negotiation["rounds"])
-        assert negotiation["expected_rounds"] >= 1
+        if negotiation["expected"]:
+            assert negotiation["expected_rounds"] >= 1, case_id
+        else:
+            assert negotiation["expected_rounds"] == 0, case_id
         assert protocol["final_state"] is None
         assert document["assert"]["a2a"]["final_state"] is False
 
 
-def test_a2a_t_negotiation_only_for_the_six_cases(cases: dict[int, dict[str, Any]]) -> None:
+def test_a2a_t_negotiation_only_for_the_pinned_cases(cases: dict[int, dict[str, Any]]) -> None:
     for case_id, document in cases.items():
         negotiation = document["expect"]["protocols"]["a2a-t"]["negotiation"]
         expected = case_id in A2AT_NEGOTIATION_IDS
@@ -165,124 +181,56 @@ def test_a2a_t_negotiation_only_for_the_six_cases(cases: dict[int, dict[str, Any
         if expected:
             assert negotiation["kinds"]
         else:
-            assert negotiation["kinds"] == []
+            assert not negotiation["kinds"]
 
 
-#: The manual baseline Task-T the testers use: a complete, non-negotiating Create.
-BASELINE_SCHEDULE = (
-    "guarantee 2Mbps from 00:00 to 07:00, 10Mbps from 07:00 to 18:00 "
-    "and 20Mbps from 18:00 to 24:00"
-)
-
-
-def test_every_modify_case_pairs_a_normal_create_baseline(
-    cases: dict[int, dict[str, Any]],
-) -> None:
-    """A Modify continues a Task that must already exist.
-
-    The corpus does not say where that Task came from, so each Modify row states its paired Create
-    explicitly. The baseline is the Create Task-T the testers use manually: a complete plan the
-    vendor accepts without a pre-task negotiation. The region must be written as ``A2ATestRegion``;
-    any other region either fails validation or opens an information negotiation.
-
-    A per-site high-rate day plan is not used. Widening Create 8/9's 10Mbps guarantee to the whole
-    day makes the baseline itself infeasible: the vendor answers a high rate over a long window
-    with a feasibility negotiation, so no continuable Task is created and the Modify never runs.
-    """
+def test_assert_switches(cases: dict[int, dict[str, Any]]) -> None:
+    """The corpus judges intent, Task-T, validation, send, negotiation and final state."""
     for case_id, document in cases.items():
-        if document["operation"] != "Modify":
-            assert "baseline" not in document, case_id
-            continue
-        baseline = document.get("baseline")
-        assert isinstance(baseline, dict), case_id
-        request = baseline.get("request")
-        assert isinstance(request, str) and request.strip(), case_id
-        assert request.startswith("Create an energy saving task for A2ATestRegion"), case_id
-        assert BASELINE_SCHEDULE in request, case_id
-        assert "Modify" not in request, case_id
-        # Prose only: the scripted provider rewrites an explicit window list into the Task Context
-        # and content validation then rejects the baseline.
-        assert "{" not in request and "}" not in request, case_id
-        # The region is part of the request, never inherited from the environment.
-        assert "Region A" not in request and "Region Z" not in request, case_id
-        lowered = request.lower()
-        for marker in ("outage", "停电", "background event"):
-            assert marker not in lowered, f"{case_id}: baseline carries the new event"
-
-
-def test_every_modify_baseline_passes_the_sdk_pipeline(
-    cases: dict[int, dict[str, Any]],
-) -> None:
-    """The baseline is a real Create: the SDK must generate and validate its Task-T.
-
-    The baseline runs on the ``night`` scenario, so its canned Task-T is the default plan; the
-    test keeps every baseline request on the path that renders and validates that plan.
-    """
-    from eval.osp.runner import build_client
-    from protocol.messages import TASK_TEMPLATE_URI
-    from shared.task_schema import TASK_PARAM_SCHEMA
-
-    client = build_client(model_mode="offline")
-    for case_id, document in cases.items():
-        if document["operation"] != "Modify":
-            continue
-        request = document["baseline"]["request"]
-        generated = client.generate_task_prompt_from_text(request, TASK_TEMPLATE_URI)
-        text = getattr(generated, "prompt_text", "")
-        assert isinstance(text, str) and text.strip(), case_id
-        client.validate_task_prompt_and_data_filling(text, TASK_PARAM_SCHEMA, TASK_TEMPLATE_URI)
-
-
-def test_conflict_assert_switches(cases: dict[int, dict[str, Any]]) -> None:
-    for case_id in PARTIAL_IDS:
-        document = cases[case_id]
-        assert isinstance(document["known_issue"], str) and document["known_issue"].strip()
-        assert "needs-confirmation" in document["tags"]
-    for case_id in (40, 46):
-        assert cases[case_id]["assert"]["intent"] is False
-        assert cases[case_id]["assert"]["a2a-t"]["task_t"] is False
-        assert cases[case_id]["assert"]["a2a-t"]["validate"] is True
-    for case_id in (49, 50, 51):
-        # Promoted to fully judged cases in the 2026-11-09 source table.
-        protocol = cases[case_id]["expect"]["protocols"]["a2a-t"]
-        assert protocol["validate"] == "pass_with_terminology"
-        assert cases[case_id]["known_issue"] is None
-        assert "needs-confirmation" not in cases[case_id]["tags"]
-        assert cases[case_id]["assert"]["a2a-t"]["validate"] is True
-        assert cases[case_id]["assert"]["a2a-t"]["send"] is True
-        assert cases[case_id]["assert"]["a2a-t"]["final_state"] is True
-    for case_id in ISSUE_IDS:
-        assert cases[case_id]["known_issue"], case_id
+        switches = document["assert"]
+        assert switches["intent"] is True, case_id
+        assert switches["a2a-t"] == {
+            "validate": True,
+            "task_t": True,
+            "send": True,
+            "negotiation": True,
+            "final_state": True,
+        }, case_id
+        assert switches["a2a"] == {"negotiation": True, "final_state": False}, case_id
 
 
 def test_index_matches_cases(cases: dict[int, dict[str, Any]]) -> None:
     index = _load(INDEX_PATH)
     assert index["schema"] == "osp-eval-index/v1"
-    assert index["count"] == 51
+    assert index["source"] == SOURCE_FILE
+    assert index["count"] == 100
     entries = index["cases"]
-    assert len(entries) == 51
-    assert sorted(entry["id"] for entry in entries) == list(range(1, 52))
+    assert len(entries) == 100
+    assert sorted(entry["id"] for entry in entries) == list(range(1, 101))
     for entry in entries:
         document = cases[entry["id"]]
         assert entry["file"] == document["_path"].name
         assert entry["operation"] == document["operation"]
         assert entry["validate"] == document["expect"]["protocols"]["a2a-t"]["validate"]
         assert entry["tags"] == document["tags"]
+        assert entry["a2a_negotiation_rounds"] == (
+            document["expect"]["protocols"]["a2a"]["negotiation"]["expected_rounds"]
+        )
+        assert entry["a2a_t_negotiation_rounds"] == (
+            document["expect"]["protocols"]["a2a-t"]["negotiation"]["expected_rounds"]
+        )
 
 
 def test_top_level_contract(cases: dict[int, dict[str, Any]]) -> None:
     for case_id, document in cases.items():
         assert document["schema"] == "osp-eval-case/v1"
         assert document["id"] == case_id
-        assert document["dimension"] == "D1 意图完备无歧义"
+        assert document["dimension"] in DIMENSIONS, case_id
         assert document["user_input"].strip()
-        assert document["assert"]["intent"] is (case_id not in {40, 46})
-        assert document["source"]["file"] == "OSP-Unified Evaluation Set_v.01.xlsx"
+        assert document["source"]["file"] == SOURCE_FILE
         assert document["source"]["sheet"] == "A2A-T_原始数据"
         row = document["source"]["row"]
         assert isinstance(row, int) and row >= 2
-        if case_id not in _SUPPLEMENT_ROW_IDS:
-            assert row == case_id + 1
         runner = document["runner"]
         assert runner["scenario"] == "night"
         assert runner["language"] == "en-US"

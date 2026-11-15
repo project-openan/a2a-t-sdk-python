@@ -940,7 +940,7 @@ async def test_an_a2a_t_modify_continues_the_task_it_just_created(tmp_path: Path
     runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED))
     manager = _manager(tmp_path, runs)
     created = manager.create(
-        case_ids=[18],
+        case_ids=[13],
         protocols=[PROTOCOL_A2A_T],
         stop_after="send",
         approval=None,
@@ -975,7 +975,7 @@ async def test_a_live_a2a_t_modify_baseline_uses_the_live_decision_provider(
     runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED))
     manager = _manager(tmp_path, runs, model_mode="live")
     created = manager.create(
-        case_ids=[18],
+        case_ids=[13],
         protocols=[PROTOCOL_A2A_T],
         stop_after="send",
         approval=None,
@@ -1029,7 +1029,7 @@ async def test_a_negotiating_baseline_is_recorded_as_failed_with_its_run(tmp_pat
     runs = _FakeRuns(_negotiating)
     manager = _manager(tmp_path, runs)
     created = manager.create(
-        case_ids=[18],
+        case_ids=[13],
         protocols=[PROTOCOL_A2A_T],
         stop_after="send",
         approval=None,
@@ -1055,7 +1055,7 @@ async def test_a_pure_modify_continues_the_outer_task_it_just_created(tmp_path: 
     runs = _FakeRuns(_seed_then_modify("TASK_STATE_WORKING"))
     manager = _manager(tmp_path, runs)
     created = manager.create(
-        case_ids=[18],
+        case_ids=[13],
         protocols=[PROTOCOL_A2A],
         stop_after="send",
         approval=None,
@@ -1098,7 +1098,7 @@ async def test_a_proxy_baseline_that_failed_downstream_never_becomes_the_modify_
     runs = _FakeRuns(_seed_then_fail_downstream)
     manager = _manager(tmp_path, runs)
     created = manager.create(
-        case_ids=[18],
+        case_ids=[13],
         protocols=[PROTOCOL_A2A],
         stop_after="send",
         approval=None,
@@ -1124,7 +1124,7 @@ async def test_a_direct_pure_modify_continues_the_vendor_task(tmp_path: Path) ->
     runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED))
     manager = _manager(tmp_path, runs, protocol_defaults=DIRECT_PURE_DEFAULTS)
     created = manager.create(
-        case_ids=[18],
+        case_ids=[13],
         protocols=[PROTOCOL_A2A],
         stop_after="send",
         approval=None,
@@ -1150,7 +1150,7 @@ async def test_a_proxy_pure_modify_still_waits_for_the_outer_working_state(tmp_p
     runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED))
     manager = _manager(tmp_path, runs)
     created = manager.create(
-        case_ids=[18],
+        case_ids=[13],
         protocols=[PROTOCOL_A2A],
         stop_after="send",
         approval=None,
@@ -1171,7 +1171,7 @@ async def test_a_pure_modify_refuses_a_terminal_baseline_task(tmp_path: Path) ->
     runs = _FakeRuns(_seed_then_modify("TASK_STATE_COMPLETED"))
     manager = _manager(tmp_path, runs)
     created = manager.create(
-        case_ids=[18],
+        case_ids=[13],
         protocols=[PROTOCOL_A2A],
         stop_after="send",
         approval=None,
@@ -1302,7 +1302,7 @@ async def test_a_full_flow_item_gets_its_validation_stage(tmp_path: Path) -> Non
 
     manager = _manager(tmp_path, _FakeRuns(builder))
     created = manager.create(
-        case_ids=[1],
+        case_ids=[51],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
         approval=None,

@@ -1,14 +1,17 @@
 # Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
-# Source: docs-local/osp-eval-cases/*.json (internal).
+# Source: docs-local/osp-eval-cases/generate_osp_cases.py
 schema: osp-eval-case/v1
 id: 3
 name: 速率保障目标：下行速率下限（DL rate floor）
-dimension: D1 意图完备无歧义
+dimension: D2 专业术语/行业黑话
 operation: Create
 tags:
   - rate-guarantee
   - negotiation-a2a
-user_input: "Implement energy-saving in A2ATestRegion region, the time range  is from 00:00 to 22:00.   \nSet the DL rate floor to 10."
+  - terminology
+user_input: |-
+  Implement energy-saving in A2ATestRegion region, the time range  is from 00:00 to 22:00.
+  Set the DL rate floor to 10.
 expect:
   intent:
     Operation type: Create
@@ -88,7 +91,7 @@ expect:
       negotiation:
         expected: false
         expected_rounds: 0
-        kinds: []
+        kinds: null
         rounds: []
       final_state: task_completed
       final_state_derived: true
@@ -98,8 +101,7 @@ expect:
         expected_rounds: 1
         kinds: null
         rounds:
-          - |-
-            Set the guaranteed throughput targets: 00:00-22:00→10Mbps.
+          - 'Set the guaranteed throughput targets: 00:00-22:00→10Mbps.'
       final_state: null
 assert:
   intent: true
@@ -119,7 +121,7 @@ runner:
   timeout_seconds: 300
   pre_send_validation: always
 source:
-  file: OSP-Unified Evaluation Set_v.01.xlsx
+  file: OSP-Unified Evaluation Set_v.01_拆分_A2ATestRegion.xlsx
   sheet: A2A-T_原始数据
   row: 4
 known_issue: null

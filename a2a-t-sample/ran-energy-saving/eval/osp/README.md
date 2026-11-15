@@ -11,10 +11,10 @@
 ```
 eval/osp/
 ├── README.md        # 本文件
-├── index.yaml       # 51 条用例的目录索引（选题、速查用）
+├── index.yaml       # 100 条用例的目录索引（选题、速查用）
 └── cases/
-    ├── 01-速率保障目标-视频码率720p-[不拦截]-[Create].yaml
-    └── ...          # 共 51 个
+    ├── 01-速率保障目标-视频码率720p-[不拦截+术语]-[Create].yaml
+    └── ...          # 共 100 个
 ```
 
 ## 2. 文件名
@@ -99,7 +99,7 @@ known_issue: null
 
 ### 3.1 `expect.intent`
 
-A2A 与 A2A-T 的预期结构化意图在这 51 条里完全相同，因此只存一份。11 个键：
+A2A 与 A2A-T 的预期结构化意图在这 100 条里完全相同，因此只存一份。11 个键：
 
 1. `Operation type`
 2. `Energy saving cell RAT`
@@ -196,7 +196,7 @@ runner 用 `stop_after: intent | task_t | validate | send | negotiate | final` �
 前三个阶段可以只跑 SDK 管线、完全不碰 NMS，适合快速回归；后三个阶段才需要完整运行时。
 
 **"不协商"也是断言**：`negotiation.expected: false` + `expected_rounds: 0`，不是跳过阶段。
-A2A-T 只有 6 条需要协商（32/34/35/36/37/38），其余 45 条断言 0 轮；A2A 的 51 条全部有协商答复。
+A2A-T 只有 10 条需要协商（26/28/29/30/31/32/50/51/88/89），其余 90 条断言 0 轮；A2A 有 89 条协商答复，11 条（45–49/53–57/69）断言 0 轮。
 
 ## 5. 判定规则
 
@@ -226,13 +226,12 @@ A2A-T 只有 6 条需要协商（32/34/35/36/37/38），其余 45 条断言 0 �
 
 ### 5.4 协商
 
-- **A2A**：51 条全部有 P 列协商答复，`expected_rounds = len(rounds)`（1–3）；协商类型原表未给，
-  `kinds: null`，不判定类型。
-- **A2A-T**：仅 6 条有 Q 列协商答复，各 1 轮；`kinds` 由答复里的标题派生：
+- **A2A**：89 条有 P 列协商答复，`expected_rounds = len(rounds)`（1–3）；11 条没有，断言 0 轮。
+  协商类型原表未给，`kinds: null`，不判定类型。
+- **A2A-T**：仅 10 条有 Q 列协商答复，各 1 轮；`kinds` 由答复里的标题派生：
   `Feasibility Negotiation Result` → `feasibility`，`Target Negotiation Result` → `target`。
-  6 条当前都只有 `Feasibility Negotiation Result`，所以 `kinds: [feasibility]`。解析器仍支持一条
-  答复里同时出现 Target 与 Feasibility，并按出现顺序生成决策；id 34 的早期版本就是这种形态，已刷新，
-  不要再按 `[target, feasibility]` 理解。
+  其中 9 条只有 `Feasibility Negotiation Result`，id 51 只有 `Information Negotiation Result`。
+  解析器仍支持一条答复里同时出现多种协商，并按出现顺序生成决策。
 
 ### 5.5 最终状态
 
@@ -306,7 +305,7 @@ PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-af
 
 `/tester` 已改为 **catalog 驱动**，不再导入 Excel：
 
-- 左侧列出 `eval/osp/cases` 的 51 条用例，可按 id/名称、维度、操作、校验结果、标签筛选，勾选后批量执行。
+- 左侧列出 `eval/osp/cases` 的 100 条用例，可按 id/名称、维度、操作、校验结果、标签筛选，勾选后批量执行。
 - 一条用例 × 一个协议 = 一个运行项；协议可选 A2A-T / A2A。
 - 运行配置：`执行到`（intent / task_t / validate / send / negotiate / final）、审批、超时。
 - 前三阶段走 SDK-only runner；后三阶段走 `RunManager` 完整运行时。

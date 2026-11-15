@@ -239,10 +239,10 @@ def test_compare_task_t_accepts_the_runtime_site_context() -> None:
 
 
 def test_compare_task_t_reports_an_extra_context_rate() -> None:
-    expected = CASES[49]["expect"]["protocols"]["a2a-t"]["task_t"]
+    expected = CASES[42]["expect"]["protocols"]["a2a-t"]["task_t"]
     actual = expected.replace(
-        "Set the AVG DL THP to 10.",
-        "Rate guarantee goal: 2 Mbps; AVG DL THP: 10 Mbps.",
+        "Set the AVG DL THP to 10Mbps.",
+        "Rate guarantee goal: 5Mbps. Set the AVG DL THP to 10Mbps.",
     )
     diffs = compare_task_t(expected, actual)
     assert [diff.path for diff in diffs] == ["task_t.Task Context"]
@@ -684,7 +684,7 @@ def test_time_segment_does_not_swallow_a_rate_as_seconds() -> None:
 def test_scenario_outage_is_the_same_as_power_outage() -> None:
     from eval.osp.compare import compare_intent
 
-    expected = CASES[25]["expect"]["intent"]
+    expected = CASES[13]["expect"]["intent"]
     actual = dict(expected)
     actual["Scenario-based energy saving"] = [
         {
