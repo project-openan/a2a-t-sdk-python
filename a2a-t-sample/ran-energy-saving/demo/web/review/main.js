@@ -1125,8 +1125,8 @@ function clearTraceInput() {
   state.selected = null;
   renderTraceSidebar();
   renderEmptyDetail(
-    "粘贴一个或一批 traceId / runId，按运行身份复核。",
-    "支持整段日志和 Langfuse URL；命中 tester 批次的 run 会写入审核库。",
+    "粘贴一个或一批 traceId / runId，直接查看这些运行的判定与轨迹。",
+    "以运行 id 为入口，不用先知道用例和批次；支持整段日志和 Langfuse URL。",
   );
 }
 
