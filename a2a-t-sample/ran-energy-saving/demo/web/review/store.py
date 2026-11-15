@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Generator, Iterable, Mapping
+from collections.abc import Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -79,6 +79,10 @@ CREATE INDEX IF NOT EXISTS idx_review_observation_target
   ON observation(case_id, protocol, observed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_review_observation_batch
   ON observation(batch_id, source_round);
+CREATE INDEX IF NOT EXISTS idx_review_observation_run
+  ON observation(run_id);
+CREATE INDEX IF NOT EXISTS idx_review_observation_trace
+  ON observation(trace_id);
 
 CREATE TABLE IF NOT EXISTS decision (
   case_id        INTEGER NOT NULL,
@@ -385,6 +389,40 @@ class ReviewStore:
             connection.row_factory = sqlite3.Row
             rows = connection.execute(sql, params).fetchall()
         return [_observation_row(row) for row in rows]
+
+    def observations_by_ids(self, ids: Sequence[str]) -> list[dict[str, object]]:
+        """Return every evidence row matched by run id or trace id, newest first.
+
+        A trace id is not one run: presentation and correction-chain runs share the workflow
+        trace, so the caller must group by the returned ``runId`` instead of assuming 1:1. The
+        ids are chunked well below SQLite's parameter limit, and rows are deduplicated by the
+        observation primary key because one row can match two different input ids.
+        """
+        wanted = list(dict.fromkeys(str(value).strip() for value in ids if str(value).strip()))
+        if not wanted:
+            return []
+        found: dict[int, dict[str, object]] = {}
+        with self._session() as connection:
+            connection.row_factory = sqlite3.Row
+            for start in range(0, len(wanted), 400):
+                chunk = wanted[start : start + 400]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = connection.execute(
+                    f"""
+                    SELECT * FROM observation
+                    WHERE run_id IN ({placeholders}) OR trace_id IN ({placeholders})
+                    ORDER BY observed_at DESC, source_round DESC, id DESC
+                    """,
+                    (*chunk, *chunk),
+                ).fetchall()
+                for row in rows:
+                    parsed = _observation_row(row)
+                    found.setdefault(_as_int(parsed.get("id")), parsed)
+        return sorted(
+            found.values(),
+            key=lambda row: (str(row.get("observedAt") or ""), str(row.get("id"))),
+            reverse=True,
+        )
 
     # ------------------------------------------------------------------
     # Decisions

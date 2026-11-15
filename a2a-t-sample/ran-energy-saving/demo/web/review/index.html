@@ -48,6 +48,7 @@
     <div class="view-switch" role="tablist" aria-label="视图">
       <button class="tab active" id="view-round" type="button" role="tab" aria-selected="true">轮次视图</button>
       <button class="tab" id="view-case" type="button" role="tab" aria-selected="false">用例视图</button>
+      <button class="tab" id="view-trace" type="button" role="tab" aria-selected="false">轨迹视图</button>
       <span class="summary" id="view-hint"></span>
     </div>
 
@@ -122,6 +123,53 @@
           <label class="check"><input id="only-pending" type="checkbox"> 只看未审核</label>
         </div>
         <div class="case-list" id="case-list"></div>
+      </aside>
+
+      <aside class="card sidebar" id="sidebar-trace" hidden>
+        <div class="card-head">
+          <h2>轨迹 / 运行</h2>
+          <span class="summary" id="trace-count"></span>
+        </div>
+        <div class="trace-input">
+          <textarea id="trace-input" rows="5" spellcheck="false"
+            placeholder="粘贴 traceId / runId，每行一个或用逗号分隔"></textarea>
+          <div class="trace-actions">
+            <button class="primary" id="trace-resolve" type="button">解析</button>
+            <button class="ghost" id="trace-clear" type="button">清空</button>
+          </div>
+          <p class="hint">支持整段日志和 Langfuse URL。命中 tester 批次的 run 会写入审核库；未命中窗口也照常解析。</p>
+        </div>
+        <div class="filters">
+          <select id="trace-filter-status">
+            <option value="">全部状态</option>
+            <option value="attention">仅有关注点</option>
+            <option value="unjudged">仅未判定</option>
+            <option value="trace-missing">仅缺轨迹</option>
+          </select>
+          <select id="trace-filter-protocol">
+            <option value="">全部协议</option>
+            <option value="a2a-t">A2A-T</option>
+            <option value="a2a">A2A</option>
+          </select>
+          <select id="trace-filter-dimension">
+            <option value="">全部关注点</option>
+            <option value="intent">意图</option>
+            <option value="task_t">Task-T</option>
+            <option value="validate">拦截</option>
+            <option value="negotiation">协商</option>
+            <option value="final_state">结果</option>
+            <option value="trace">轨迹</option>
+          </select>
+          <select id="trace-filter-resolution">
+            <option value="">全部来源</option>
+            <option value="store">审核库</option>
+            <option value="tester">tester 批次</option>
+            <option value="client">仅运行</option>
+            <option value="trace">仅轨迹</option>
+            <option value="case_missing">用例缺失</option>
+          </select>
+        </div>
+        <div class="case-list" id="trace-list"></div>
       </aside>
 
       <div class="content" id="detail">

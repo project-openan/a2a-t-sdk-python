@@ -51,6 +51,20 @@ const CATEGORY_LABELS = {
   "": "—",
 };
 
+const TRACE_RESOLUTION_LABELS = {
+  store: "审核库",
+  tester: "tester 批次",
+  client: "仅运行",
+  trace: "仅轨迹",
+  case_missing: "用例缺失",
+  "": "—",
+};
+
+const TRACE_UNMATCHED_LABELS = {
+  not_found: "未找到",
+  tester_identity_only: "仅基线/重试",
+};
+
 const state = {
   meta: null,
   view: "round", // "round": batches of evidence first; "case": the corpus first
@@ -66,6 +80,12 @@ const state = {
   taskTDiffOnly: true,
   snippet: null,
   scan: null,
+  //: Result of the last trace / run lookup, plus the id the sidebar narrowed to and the run the
+  //: detail pane currently shows. A trace id is not one run, so the scope keeps both.
+  trace: null,
+  traceQuery: "",
+  traceExpanded: "",
+  traceScope: null,
   //: Trace ids this page already tried to auto-fetch. The snapshot is a permanent cache, so one
   //: attempt per run is enough; a failure is retried by the reviewer's button, not by a rerender.
   autoFetched: new Set(),
@@ -151,6 +171,77 @@ export function expectationMarkers(caseRow) {
   if (expected.a2aT) markers.push(["expect-negotiation", "A2A-T 协商"]);
   if (expected.a2a) markers.push(["expect-negotiation", "A2A 协商"]);
   return markers;
+}
+
+export function traceResolutionLabel(resolution) {
+  return TRACE_RESOLUTION_LABELS[resolution] || String(resolution || "—");
+}
+
+export function traceUnmatchedLabel(reason) {
+  return TRACE_UNMATCHED_LABELS[reason] || String(reason || "未找到");
+}
+
+//: One trace row needs attention when the row itself is stale or any judged point is not clean.
+export function traceRowNeedsAttention(row) {
+  if (!row) return false;
+  if (row.status === "stale") return true;
+  return (row.dimensions || []).some((dimension) => dimensionNeedsAttention(dimension.status));
+}
+
+//: Filter the trace / run rows by identity, protocol, source, status and judged dimension.
+export function filterTraceRows(rows, filters) {
+  const query = String(filters.query || "").trim().toLowerCase();
+  const selected = [];
+  for (const row of rows || []) {
+    if (filters.identity && row.input !== filters.identity) continue;
+    if (filters.protocol && row.protocol !== filters.protocol) continue;
+    if (filters.resolution && row.resolution !== filters.resolution) continue;
+    if (filters.dimension) {
+      const hit = (row.dimensions || []).some(
+        (dimension) =>
+          dimension.dimension === filters.dimension
+          && dimensionNeedsAttention(dimension.status),
+      );
+      if (!hit) continue;
+    }
+    const trace = row.trace || {};
+    if (filters.status === "attention" && !traceRowNeedsAttention(row)) continue;
+    if (filters.status === "trace-missing" && trace.present) continue;
+    if (
+      filters.status === "unjudged"
+      && !["client", "trace", "case_missing"].includes(row.resolution)
+    ) {
+      continue;
+    }
+    if (query) {
+      const haystack = [
+        row.input,
+        row.traceId,
+        row.runId,
+        row.caseId,
+        row.caseName,
+        row.batchId,
+        traceResolutionLabel(row.resolution),
+      ]
+        .map((value) => String(value || "").toLowerCase())
+        .join(" ");
+      if (!haystack.includes(query)) continue;
+    }
+    selected.push(row);
+  }
+  return selected;
+}
+
+//: The trace lookup counters, with the six attention dimensions.
+export function traceSummaryText(summary) {
+  if (!summary) return "";
+  const dimensions = summary.dimensions || {};
+  const attention = ATTENTION_DIMENSIONS.map(
+    (dimension) => `${dimensionLabel(dimension)} ${dimensions[dimension] || 0}`,
+  ).join(" · ");
+  return `输入 ${summary.inputs || 0} · run ${summary.runs || 0} · 可判定 ${summary.judged || 0}`
+    + ` · 未命中 ${summary.unmatched || 0} · 缺轨迹 ${summary.traceMissing || 0}`
+    + ` · 写入 ${summary.ingested || 0} ｜ ${attention}`;
 }
 
 //: Filter the corpus rows by case, protocol, verdict, decision and attention flags.
@@ -881,6 +972,730 @@ async function autoSelectBatch() {
   await selectBatch(newest.batchId, Math.max(1, Number(newest.rounds || 1)));
 }
 
+// ---------------------------------------------------------------------------
+// Trace / run view
+// ---------------------------------------------------------------------------
+
+function traceFilters() {
+  return {
+    identity: state.traceExpanded,
+    status: field("trace-filter-status"),
+    protocol: field("trace-filter-protocol"),
+    dimension: field("trace-filter-dimension"),
+    resolution: field("trace-filter-resolution"),
+  };
+}
+
+function shortId(value, head = 10, tail = 6) {
+  const text = String(value || "");
+  if (text.length <= head + tail + 1) return text;
+  return `${text.slice(0, head)}…${text.slice(-tail)}`;
+}
+
+function traceRowsForInput(id) {
+  return ((state.trace && state.trace.rows) || []).filter((row) => row.input === id);
+}
+
+function traceUnmatchedForInput(id) {
+  return ((state.trace && state.trace.unmatched) || []).filter((row) => row.input === id);
+}
+
+//: One trace per id: a batch can name the same workflow trace in several runs.
+function missingTraceRows() {
+  const seen = new Set();
+  return ((state.trace && state.trace.rows) || []).filter((row) => {
+    const trace = row.trace || {};
+    if (trace.present || !trace.canFetch || !row.traceId) return false;
+    if (seen.has(row.traceId)) return false;
+    seen.add(row.traceId);
+    return true;
+  });
+}
+
+function renderTraceSidebar() {
+  const list = document.getElementById("trace-list");
+  if (!list) return;
+  const count = document.getElementById("trace-count");
+  const payload = state.trace;
+  const ids = (payload && payload.query && payload.query.ids) || [];
+  if (count) count.textContent = payload ? `${ids.length} 输入` : "";
+  const scrollTop = list.scrollTop;
+  list.replaceChildren();
+  if (!payload) {
+    list.append(el("p", "empty-state", "先粘贴 traceId / runId 并解析。"));
+    return;
+  }
+  if (!ids.length) {
+    list.append(el("p", "empty-state", "没有解析到有效 id。"));
+    return;
+  }
+  const resolved = (payload && payload.query && payload.query.resolved) || [];
+  for (const id of ids) {
+    const rows = traceRowsForInput(id);
+    const unmatched = traceUnmatchedForInput(id);
+    const alias = !rows.length && resolved.includes(id);
+    const block = el("div", "case");
+    if (state.traceExpanded === id) block.classList.add("active");
+    const head = el("div", "case-head");
+    head.append(el("span", "id mono", shortId(id)));
+    head.append(
+      el(
+        "span",
+        "name",
+        rows.length ? `${rows.length} run` : alias ? "同一运行" : "未命中",
+      ),
+    );
+    block.append(head);
+    const badges = el("span", "badges");
+    if (unmatched.length) {
+      badges.append(
+        el("span", "badge missing", traceUnmatchedLabel(unmatched[0].reason)),
+      );
+    }
+    if (alias) badges.append(el("span", "badge", "已并入其它 id"));
+    for (const resolution of [...new Set(rows.map((row) => row.resolution))]) {
+      const kind = ["store", "tester"].includes(resolution) ? "pass" : "partial";
+      badges.append(el("span", `badge ${kind}`, traceResolutionLabel(resolution)));
+    }
+    const missing = rows.filter(
+      (row) => !(row.trace || {}).present && (row.trace || {}).canFetch,
+    ).length;
+    if (missing) badges.append(el("span", "badge missing", `缺轨迹 ${missing}`));
+    const attention = rows.filter(traceRowNeedsAttention).length;
+    if (attention) badges.append(el("span", "badge fail", `关注 ${attention}`));
+    block.append(badges);
+    block.title = id;
+    block.addEventListener("click", () => {
+      // A trace id pasted next to its run id resolves to the same evidence row; narrow to the
+      // input the row is grouped under instead of showing an empty table.
+      const target = alias
+        ? ((state.trace.rows || []).find(
+          (row) => row.traceId === id || row.runId === id,
+        ) || {}).input || id
+        : id;
+      state.traceExpanded = state.traceExpanded === target ? "" : target;
+      renderTraceSidebar();
+      renderTraceMain();
+    });
+    list.append(block);
+  }
+  list.scrollTop = scrollTop;
+}
+
+async function resolveTraces(options = {}) {
+  const text = String(
+    options.input !== undefined ? options.input : field("trace-input"),
+  ).trim();
+  if (!text) {
+    showNotice("请先粘贴 traceId / runId。", "error");
+    return;
+  }
+  const button = document.getElementById("trace-resolve");
+  if (button) button.disabled = true;
+  try {
+    const payload = await postJson("/api/review/traces", { ids: text });
+    state.trace = payload;
+    state.traceQuery = text;
+    state.traceExpanded = "";
+    renderTraceSidebar();
+    if (!options.silent || !state.traceScope) renderTraceMain();
+    if (!options.silent) {
+      const summary = payload.summary || {};
+      showNotice(
+        `解析 ${summary.inputs || 0} 个 id：命中 ${summary.runs || 0} 个 run`
+          + `，未命中 ${summary.unmatched || 0}，写入审核库 ${summary.ingested || 0}。`,
+        "ok",
+      );
+    }
+  } catch (caught) {
+    showNotice(caught.message, "error");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function clearTraceInput() {
+  const node = document.getElementById("trace-input");
+  if (node) node.value = "";
+  state.trace = null;
+  state.traceQuery = "";
+  state.traceExpanded = "";
+  state.traceScope = null;
+  state.detail = null;
+  state.selected = null;
+  renderTraceSidebar();
+  renderEmptyDetail(
+    "粘贴一个或一批 traceId / runId，按运行身份复核。",
+    "支持整段日志和 Langfuse URL；命中 tester 批次的 run 会写入审核库。",
+  );
+}
+
+function renderTraceMain() {
+  if (!state.trace) return;
+  const container = document.getElementById("detail");
+  const scrollTop = container.scrollTop;
+  container.replaceChildren();
+  container.append(renderTraceSummaryCard());
+  const rows = filterTraceRows(state.trace.rows || [], traceFilters());
+  container.append(renderTraceTable(rows));
+  const unmatched = (state.trace.unmatched || []).filter(
+    (row) => !state.traceExpanded || row.input === state.traceExpanded,
+  );
+  if (unmatched.length) container.append(renderTraceUnmatchedCard(unmatched));
+  container.scrollTop = scrollTop;
+}
+
+function renderTraceSummaryCard() {
+  const card = el("section", "card");
+  const head = el("div", "section-title");
+  head.append(el("h2", "", "轨迹 / 运行复核"));
+  head.append(el("span", "summary", traceSummaryText(state.trace && state.trace.summary)));
+  card.append(head);
+  const dropped = Number((state.trace && state.trace.query && state.trace.query.dropped) || 0);
+  if (dropped) {
+    card.append(el("p", "hint", `超过单次上限，已丢弃 ${dropped} 个 id。`));
+  }
+  const actions = el("div", "trace-actions");
+  const missing = missingTraceRows();
+  const fetchAll = el("button", "secondary", `抓取缺失轨迹（${missing.length}）`);
+  fetchAll.type = "button";
+  fetchAll.disabled = !missing.length || !(state.meta && state.meta.traceFetchEnabled);
+  fetchAll.addEventListener("click", () => {
+    fetchMissingTraces(fetchAll).catch((caught) => showNotice(caught.message, "error"));
+  });
+  actions.append(fetchAll);
+  for (const [format, label] of [["yaml", "导出本批 YAML"], ["json", "导出本批 JSON"]]) {
+    const button = el("button", "ghost", label);
+    button.type = "button";
+    button.addEventListener("click", () => {
+      downloadTraceExport(format).catch((caught) => showNotice(caught.message, "error"));
+    });
+    actions.append(button);
+  }
+  card.append(actions);
+  return card;
+}
+
+function renderTraceTable(rows) {
+  const card = el("section", "card");
+  if (!rows.length) {
+    card.append(el("p", "empty-state", "没有匹配的运行。"));
+    return card;
+  }
+  const wrap = el("div", "table-wrap");
+  const table = el("table", "batch-table");
+  const headRow = el("tr");
+  for (const title of [
+    "traceId",
+    "runId",
+    "用例",
+    "协议",
+    "批次 / 轮次",
+    "判定",
+    "关注点",
+    "轨迹",
+    "结论",
+  ]) {
+    headRow.append(el("th", "", title));
+  }
+  const thead = el("thead");
+  thead.append(headRow);
+  table.append(thead);
+  const body = el("tbody");
+  for (const row of rows) {
+    const tr = el("tr");
+    if (row.status === "fail") tr.className = "fail";
+    tr.title = `打开 ${row.traceId || row.input}${row.runId ? ` · ${row.runId}` : ""}`;
+    tr.addEventListener("click", () => {
+      openTraceRow(row).catch((caught) => showNotice(caught.message, "error"));
+    });
+    tr.append(
+      el("td", "mono", shortId(row.traceId || row.input)),
+      el("td", "mono", row.runId ? shortId(row.runId) : "—"),
+      el("td", "", row.caseId ? `#${row.caseId} ${row.caseName || ""}` : "—"),
+      el("td", "", row.protocol ? protocolLabel(row.protocol) : "—"),
+      el(
+        "td",
+        "",
+        row.batchId
+          ? `${row.batchId}${row.sourceRound ? ` r${row.sourceRound}` : ""}`
+          : "—",
+      ),
+      traceVerdictCell(row),
+      traceAttentionCell(row),
+      traceStateCell(row),
+      traceDecisionCell(row),
+    );
+    body.append(tr);
+  }
+  table.append(body);
+  wrap.append(table);
+  card.append(wrap);
+  return card;
+}
+
+function traceVerdictCell(row) {
+  const td = el("td");
+  if (["store", "tester"].includes(row.resolution) && row.caseId) {
+    td.append(el("span", `badge ${row.status}`, statusLabel(row.status)));
+    if (row.inputChanged) td.append(el("span", "badge stale", "输入已变更"));
+    return td;
+  }
+  td.append(el("span", "badge partial", traceResolutionLabel(row.resolution)));
+  if (row.runStatus) td.append(el("span", "sub", row.runStatus));
+  if (row.finalState) td.append(el("span", "sub", String(row.finalState)));
+  return td;
+}
+
+function traceAttentionCell(row) {
+  const td = el("td");
+  for (const dimension of row.dimensions || []) {
+    if (!dimensionNeedsAttention(dimension.status)) continue;
+    const mark = DIMENSION_MARKS[dimension.status] || "";
+    const chip = el(
+      "span",
+      `dim-chip ${dimension.status}`,
+      `${dimensionLabel(dimension.dimension)} ${mark}`.trim(),
+    );
+    chip.title = dimension.reason || "";
+    td.append(chip);
+  }
+  if (!td.childNodes.length) td.append(el("span", "muted", "—"));
+  return td;
+}
+
+function traceStateCell(row) {
+  const td = el("td");
+  const trace = row.trace || {};
+  let label = "不可抓取";
+  let kind = "not_run";
+  if (trace.present) {
+    label = trace.exportState === "partial" ? "快照部分" : "已缓存";
+    kind = trace.exportState === "partial" ? "partial" : "pass";
+  } else if (trace.exportState === "failed") {
+    label = "抓取失败";
+    kind = "fail";
+  } else if (trace.canFetch) {
+    label = "缺轨迹";
+    kind = "partial";
+  }
+  td.append(el("span", `badge ${kind}`, label));
+  if (trace.capturedAt) {
+    td.append(
+      el("span", "sub", String(trace.capturedAt).replace("T", " ").slice(0, 16)),
+    );
+  }
+  return td;
+}
+
+function traceDecisionCell(row) {
+  const td = el("td");
+  const decision = row.decision || {};
+  const status = decision.status || "pending";
+  td.append(el("span", "badge", decisionLabel(status)));
+  if (decision.stale) td.append(el("span", "badge stale", "待复核"));
+  return td;
+}
+
+function renderTraceUnmatchedCard(unmatched) {
+  const card = el("section", "card");
+  card.append(el("h2", "", `未命中（${unmatched.length}）`));
+  for (const row of unmatched) {
+    const line = el("p", "sub");
+    line.append(el("span", "mono", row.input));
+    line.append(
+      document.createTextNode(
+        ` · ${traceUnmatchedLabel(row.reason)} · ${row.hint || ""}`,
+      ),
+    );
+    card.append(line);
+  }
+  return card;
+}
+
+async function openTraceRow(row) {
+  const traceId = row.traceId || row.input;
+  if (!traceId) return;
+  state.traceScope = { traceId, runId: row.runId || "", input: row.input };
+  const container = document.getElementById("detail");
+  container.replaceChildren(el("section", "card", "加载中…"));
+  const query = row.runId ? `?runId=${encodeURIComponent(row.runId)}` : "";
+  const payload = await getJson(
+    `/api/review/trace/${encodeURIComponent(traceId)}${query}`,
+  );
+  applyTraceDetail(payload, row.runId || "");
+}
+
+async function reloadTraceDetail() {
+  const scope = state.traceScope;
+  if (!scope) return;
+  const query = scope.runId ? `?runId=${encodeURIComponent(scope.runId)}` : "";
+  const payload = await getJson(
+    `/api/review/trace/${encodeURIComponent(scope.traceId)}${query}`,
+  );
+  applyTraceDetail(payload, scope.runId || "");
+}
+
+function applyTraceDetail(payload, runId) {
+  if (payload.mode === "evidence") {
+    const caseRow = payload.case || {};
+    state.selected = {
+      caseId: caseRow.id,
+      protocol: payload.protocol,
+      caseName: caseRow.name,
+    };
+    state.detail = payload;
+    state.round = 0;
+    state.detailScope = runId ? { runId } : null;
+    renderDetail();
+    return;
+  }
+  state.selected = null;
+  state.detail = null;
+  renderTraceOnlyDetail(payload);
+}
+
+function renderTraceOnlyDetail(payload) {
+  const container = document.getElementById("detail");
+  container.replaceChildren();
+  const bar = el("div", "backbar");
+  const back = el("button", "ghost", "← 返回轨迹清单");
+  back.type = "button";
+  back.addEventListener("click", backToTraceList);
+  bar.append(back);
+  container.append(bar);
+
+  const head = el("section", "card");
+  const title = el("div", "section-title");
+  title.append(el("h2", "", `轨迹 / 运行 ${shortId(payload.traceId)}`));
+  title.append(
+    el("span", "badge partial", payload.mode === "run" ? "仅运行" : "仅轨迹"),
+  );
+  head.append(title);
+  const facts = el("dl", "kv");
+  for (const [label, value] of [
+    ["traceId", payload.traceId],
+    ["runId", payload.runId || "—"],
+    ["相关 run", (payload.relatedRunIds || []).join(", ") || "—"],
+  ]) {
+    facts.append(el("dt", "", label));
+    facts.append(el("dd", "mono", textBlock(value)));
+  }
+  head.append(facts);
+  for (const hint of payload.hints || []) head.append(el("p", "hint", hint));
+  container.append(head);
+
+  for (const run of (payload.runs || []).slice(0, 20)) {
+    container.append(renderRunCard(run));
+  }
+  if ((payload.runs || []).length > 20) {
+    container.append(
+      el("p", "sub", `仅显示前 20 个运行，共 ${payload.runs.length} 个。`),
+    );
+  }
+  container.append(renderRawTraceCard(payload.tracePayload || {}, payload));
+}
+
+function renderRunCard(run) {
+  const card = el("section", "card");
+  const title = el("div", "section-title");
+  title.append(el("h2", "", `运行 ${shortId(run.runId)}`));
+  if (run.protocol) title.append(el("span", "badge", protocolLabel(run.protocol)));
+  if (run.status) title.append(el("span", "badge", String(run.status)));
+  card.append(title);
+  const source = run.source && typeof run.source === "object" ? run.source : {};
+  const facts = el("dl", "kv");
+  for (const [label, value] of [
+    ["traceId", run.traceId],
+    ["终态", run.finalState],
+    ["来源", [run.sourceKind, source.batchId ? `批次 ${source.batchId}` : "", source.caseId ? `用例 ${source.caseId}` : ""].filter(Boolean).join(" · ")],
+    ["时间", [run.createdAt, run.finishedAt].filter(Boolean).join(" → ")],
+    ["服务端 Task", run.serverTaskId],
+    ["耗时 / Token", run.durationMs == null ? "" : `${run.durationMs} ms`],
+  ]) {
+    facts.append(el("dt", "", label));
+    facts.append(el("dd", "", textBlock(value === null || value === undefined || value === "" ? "—" : value)));
+  }
+  card.append(facts);
+  if (run.userRequest) card.append(el("pre", "request-text", String(run.userRequest)));
+  const events = run.negotiationEvents || [];
+  if (events.length) {
+    const box = document.createElement("details");
+    box.open = true;
+    box.append(el("summary", "", `协商事件（${events.length} 条）`));
+    const table = el("table", "grid");
+    const headRow = el("tr");
+    for (const titleText of ["轮次", "类型", "执行语", "方向", "协议"]) {
+      headRow.append(el("th", "", titleText));
+    }
+    const thead = el("thead");
+    thead.append(headRow);
+    table.append(thead);
+    const body = el("tbody");
+    for (const event of events) {
+      const tr = el("tr");
+      tr.append(
+        el("td", "", event.round == null ? "—" : String(event.round)),
+        el("td", "", event.kind || ""),
+        el("td", "", event.performative || ""),
+        el("td", "", event.direction || ""),
+        el("td", "", event.protocol || ""),
+      );
+      body.append(tr);
+    }
+    table.append(body);
+    box.append(table);
+    card.append(box);
+  }
+  return card;
+}
+
+function renderRawTraceCard(trace, payload) {
+  const card = el("section", "card");
+  card.append(el("h2", "", "轨迹快照"));
+  const frames = trace.frames || {};
+  const nms = frames.nms || {};
+  const facts = [
+    trace.traceId ? `traceId ${trace.traceId}` : "",
+    trace.exportState ? `状态 ${trace.exportState}` : "",
+    trace.capturedAt ? `抓取 ${trace.capturedAt}` : "",
+    trace.spanLevel ? `层级 ${trace.spanLevel}` : "",
+    nms.observed != null ? `NMS 帧 ${nms.observed}/${nms.expected ?? "—"}` : "",
+    (trace.observations || []).length
+      ? `观测 ${trace.observations.length} 条`
+      : "",
+  ].filter(Boolean);
+  if (facts.length) card.append(el("p", "sub", facts.join(" · ")));
+  for (const warning of trace.warnings || []) {
+    card.append(el("p", "hint", warning));
+  }
+  const canFetch = Boolean(
+    state.meta && state.meta.traceFetchEnabled && trace.canFetch !== false,
+  );
+  if (canFetch) {
+    const button = el(
+      "button",
+      "ghost small",
+      trace.exportState && trace.exportState !== "not_exported"
+        ? "重新抓取"
+        : "抓取轨迹",
+    );
+    button.type = "button";
+    button.addEventListener("click", () => {
+      fetchTraceInTraceView(
+        button,
+        payload.traceId,
+        payload.runId,
+        Boolean(trace.exportState && trace.exportState !== "not_exported"),
+      ).catch((caught) => showNotice(caught.message, "error"));
+    });
+    card.append(button);
+  } else if (state.meta && state.meta.traceConfigured === false) {
+    card.append(
+      el(
+        "p",
+        "hint",
+        "未配置 Langfuse 凭据（LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY），抓取会失败。",
+      ),
+    );
+  } else if (!(state.meta && state.meta.traceFetchEnabled)) {
+    card.append(
+      el("p", "hint", "轨迹抓取未启用：启动 review 时加 --fetch-traces。"),
+    );
+  }
+  const observations = trace.observations || [];
+  if (observations.length) {
+    card.append(
+      traceObservationTable(observations, Boolean(trace.observationsTruncated)),
+    );
+  }
+  return card;
+}
+
+function traceObservationTable(observations, truncated) {
+  const box = document.createElement("details");
+  box.append(el("summary", "", `轨迹观测（${observations.length} 条）`));
+  const table = el("table", "grid");
+  const headRow = el("tr");
+  for (const title of ["观测", "类型", "轮次", "侧", "runId", "状态"]) {
+    headRow.append(el("th", "", title));
+  }
+  const thead = el("thead");
+  thead.append(headRow);
+  table.append(thead);
+  const body = el("tbody");
+  for (const row of observations) {
+    const tr = el("tr");
+    tr.append(
+      el("td", "", [row.name, row.kind || row.stage].filter(Boolean).join(" · ")),
+      el("td", "", row.type || ""),
+      el("td", "", row.round == null ? "—" : String(row.round)),
+      el("td", "", row.side || ""),
+      el("td", "mono", row.runId || "—"),
+      el("td", "", row.status || ""),
+    );
+    body.append(tr);
+  }
+  table.append(body);
+  box.append(table);
+  if (truncated) box.append(el("p", "hint", "快照超过上限，观测列表已截断。"));
+  return box;
+}
+
+async function fetchTraceInTraceView(button, traceId, runId, force) {
+  button.disabled = true;
+  const original = button.textContent;
+  button.textContent = "抓取中…";
+  try {
+    await postJson(`/api/review/trace/${encodeURIComponent(traceId)}/fetch`, {
+      runId: runId || undefined,
+      force,
+    });
+    showNotice(`已抓取轨迹 ${shortId(traceId)}。`, "ok");
+    await resolveTraces({ silent: true });
+    if (state.traceScope && state.traceScope.traceId === traceId) {
+      await reloadTraceDetail();
+    }
+  } catch (caught) {
+    showNotice(caught.message, "error");
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+async function fetchMissingTraces(button) {
+  const rows = missingTraceRows();
+  if (!rows.length) return;
+  if (
+    rows.length > 20
+    && !window.confirm(
+      `将依次抓取 ${rows.length} 条轨迹；遇到 Langfuse 429 会停止。继续？`,
+    )
+  ) {
+    return;
+  }
+  button.disabled = true;
+  let done = 0;
+  let failure = "";
+  for (const row of rows) {
+    button.textContent = `抓取中 ${done + 1}/${rows.length}…`;
+    try {
+      await postJson(`/api/review/trace/${encodeURIComponent(row.traceId)}/fetch`, {
+        runId: row.runId || undefined,
+      });
+      done += 1;
+    } catch (caught) {
+      failure = caught.message;
+      break;
+    }
+  }
+  showNotice(
+    `抓取完成 ${done}/${rows.length}${failure ? `；停止原因：${failure}` : ""}`,
+    failure ? "error" : "ok",
+  );
+  await resolveTraces({ silent: true });
+  if (!state.traceScope) renderTraceMain();
+  else button.disabled = false;
+}
+
+async function downloadTraceExport(format) {
+  if (!state.traceQuery) return;
+  const response = await fetch("/api/review/traces/export", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids: state.traceQuery, format }),
+  });
+  if (!response.ok) {
+    let message = `导出失败（${response.status}）`;
+    try {
+      const payload = await response.json();
+      if (payload && payload.error) message = payload.error;
+    } catch {
+      // A non-JSON error body keeps the status message.
+    }
+    throw new Error(message);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `osp-review-traces.${format === "yaml" ? "yaml" : "json"}`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function backToTraceList() {
+  state.traceScope = null;
+  state.detail = null;
+  state.selected = null;
+  if (state.trace) renderTraceMain();
+}
+
+//: The trace view is read-only for decisions: the stored decision is one per case × protocol.
+function renderTraceDecisionCard() {
+  const card = el("section", "card");
+  card.append(el("h2", "", "审核结论"));
+  const decision = (state.detail && state.detail.decision) || {};
+  card.append(
+    el(
+      "p",
+      "sub",
+      `当前：${decisionLabel(decision.status)}${decision.stale ? "（需复核）" : ""}`,
+    ),
+  );
+  if (decision.category) {
+    card.append(el("p", "sub", `缺陷归属：${categoryLabel(decision.category)}`));
+  }
+  if (decision.note) card.append(el("pre", "request-text", decision.note));
+  if (decision.reviewer || decision.confirmedAt) {
+    card.append(
+      el(
+        "p",
+        "sub",
+        `上次保存：${decision.reviewer || "—"} · ${decision.confirmedAt || "—"}`,
+      ),
+    );
+  }
+  const evidence = decision.evidence || {};
+  const runIds = Array.isArray(evidence.runIds) ? evidence.runIds : [];
+  if (runIds.length) {
+    card.append(el("p", "sub", `依据 run：${runIds.join(", ")}`));
+  }
+  card.append(
+    el(
+      "p",
+      "hint",
+      "轨迹视图只读：结论按用例×协议保存，避免把一次运行当成整个用例的结论。",
+    ),
+  );
+  const button = el("button", "secondary", "到用例视图给结论");
+  button.type = "button";
+  button.addEventListener("click", () => {
+    openCaseFromTrace().catch((caught) => showNotice(caught.message, "error"));
+  });
+  card.append(button);
+  return card;
+}
+
+async function openCaseFromTrace() {
+  const scope = state.traceScope;
+  if (!scope) return;
+  state.detailScope = scope.runId ? { runId: scope.runId } : null;
+  // ``setView`` clears the trace scope and reloads every round of the selected case.
+  await setView("case");
+}
+
+//: A trace id / run id can be handed over as ``/review?trace=<id>``; repeat the parameter for a list.
+function traceLinkInput() {
+  if (typeof window === "undefined" || !window.location) return "";
+  const params = new URLSearchParams(window.location.search);
+  return [...params.getAll("trace"), ...params.getAll("run")]
+    .filter(Boolean)
+    .join("\n");
+}
+
 //: Tint the detail area so A2A and A2A-T are distinguishable at a glance.
 function applyProtocolTint() {
   const container = document.getElementById("detail");
@@ -900,19 +1715,37 @@ function renderEmptyDetail(message, hint) {
 }
 
 async function setView(view) {
-  state.view = view === "case" ? "case" : "round";
+  const wasTrace = state.view === "trace";
+  state.view = view === "case" ? "case" : view === "trace" ? "trace" : "round";
+  if (wasTrace && state.view !== "trace") state.traceScope = null;
   for (const [id, active] of [
     ["view-round", state.view === "round"],
     ["view-case", state.view === "case"],
+    ["view-trace", state.view === "trace"],
   ]) {
     const tab = document.getElementById(id);
     tab.classList.toggle("active", active);
     tab.setAttribute("aria-selected", String(active));
   }
   const layout = document.getElementById("layout");
-  if (layout) layout.classList.toggle("view-round", state.view === "round");
+  if (layout) {
+    layout.classList.toggle("view-round", state.view === "round");
+    layout.classList.toggle("view-trace", state.view === "trace");
+  }
   document.getElementById("sidebar-round").hidden = state.view !== "round";
   document.getElementById("sidebar-case").hidden = state.view !== "case";
+  document.getElementById("sidebar-trace").hidden = state.view !== "trace";
+  if (state.view === "trace") {
+    renderTraceSidebar();
+    if (state.trace) renderTraceMain();
+    else {
+      renderEmptyDetail(
+        "粘贴一个或一批 traceId / runId，按运行身份复核。",
+        "支持整段日志和 Langfuse URL；命中 tester 批次的 run 会写入审核库。",
+      );
+    }
+    return;
+  }
   if (state.view === "round") {
     renderBatches();
     if (state.batch) renderBatch();
@@ -926,8 +1759,11 @@ async function setView(view) {
   } else {
     if (!state.cases.length) await loadCases();
     else renderCases();
-    if (state.detail && state.selected) renderDetail();
-    else {
+    if (state.detail && state.selected) {
+      // Leaving a trace-scoped detail must reload every round of the case, not just the one run.
+      if (wasTrace) await loadDetail();
+      else renderDetail();
+    } else {
       renderEmptyDetail(
         "从左侧选择用例与协议，右侧会给出跨轮次的自动判定与审核结论。",
         "判定使用当前用例语料重算已存证据；证据是否仍然有效、是否出现新轮次会单独标出。",
@@ -956,7 +1792,12 @@ async function loadDetail() {
   state.detail = await getJson(detailPath(caseId, protocol));
   let index = defaultRoundIndex(state.detail.rounds || []);
   const scope = state.detailScope;
-  if (scope) {
+  if (scope && scope.runId) {
+    const match = (state.detail.rounds || []).findIndex(
+      (row) => row.runId === scope.runId,
+    );
+    if (match >= 0) index = match;
+  } else if (scope) {
     const match = (state.detail.rounds || []).findIndex(
       (row) => row.batchId === scope.batchId && Number(row.sourceRound || 1) === Number(scope.round || 1),
     );
@@ -1042,7 +1883,21 @@ function renderDetail() {
   applyProtocolTint();
   container.replaceChildren();
   const scopedToBatch = state.view === "round" && Boolean(state.batch);
-  if (scopedToBatch) {
+  const scopedToTrace = Boolean(state.traceScope);
+  if (scopedToTrace) {
+    const bar = el("div", "backbar");
+    const back = el("button", "ghost", "← 返回轨迹清单");
+    back.type = "button";
+    back.addEventListener("click", backToTraceList);
+    bar.append(back);
+    const allRounds = el("button", "ghost", "查看该用例全部轮次");
+    allRounds.type = "button";
+    allRounds.addEventListener("click", () => {
+      openCaseFromTrace().catch((caught) => showNotice(caught.message, "error"));
+    });
+    bar.append(allRounds);
+    container.append(bar);
+  } else if (scopedToBatch) {
     const bar = el("div", "backbar");
     const scopeRound = Number(state.selectedBatch?.round || 0);
     const back = el(
@@ -1071,7 +1926,7 @@ function renderDetail() {
     container.append(bar);
   }
   container.append(renderCaseCard());
-  if (!scopedToBatch) container.append(renderRoundBar());
+  if (!scopedToBatch && !scopedToTrace) container.append(renderRoundBar());
   if (state.round === -1) container.append(renderRoundMatrix());
   else {
     const round = (state.detail.rounds || [])[state.round];
@@ -1090,7 +1945,7 @@ function renderDetail() {
       container.append(renderRuntimeCard(round));
     }
   }
-  container.append(renderDecisionCard());
+  container.append(scopedToTrace ? renderTraceDecisionCard() : renderDecisionCard());
   container.append(renderEvidenceCard());
   container.scrollTop = scrollTop;
   updateDecisionState();
@@ -1330,32 +2185,9 @@ function renderTraceBlock(card, round) {
   }
   const observations = trace.observations || [];
   if (observations.length) {
-    const box = document.createElement("details");
-    box.append(el("summary", "", `轨迹观测（${observations.length} 条）`));
-    const table = document.createElement("table");
-    table.className = "grid";
-    const headRow = el("tr");
-    for (const title of ["观测", "类型", "轮次", "侧", "runId", "状态"]) {
-      headRow.append(el("th", "", title));
-    }
-    table.append(headRow);
-    for (const row of observations) {
-      const tr = el("tr");
-      tr.append(
-        el("td", "", [row.name, row.kind || row.stage].filter(Boolean).join(" · ")),
-        el("td", "", row.type || ""),
-        el("td", "", row.round == null ? "—" : String(row.round)),
-        el("td", "", row.side || ""),
-        el("td", "mono", row.runId || "—"),
-        el("td", "", row.status || ""),
-      );
-      table.append(tr);
-    }
-    box.append(table);
-    if (trace.observationsTruncated) {
-      box.append(el("p", "hint", "快照超过上限，观测列表已截断。"));
-    }
-    card.append(box);
+    card.append(
+      traceObservationTable(observations, Boolean(trace.observationsTruncated)),
+    );
   }
   if (trace.url) {
     const link = el("a", "sub", "在 Langfuse 打开");
@@ -1920,6 +2752,30 @@ function wireEvents() {
   document
     .getElementById("view-case")
     .addEventListener("click", () => setView("case").catch((caught) => showNotice(caught.message, "error")));
+  document
+    .getElementById("view-trace")
+    .addEventListener("click", () => setView("trace").catch((caught) => showNotice(caught.message, "error")));
+  document
+    .getElementById("trace-resolve")
+    .addEventListener("click", () => resolveTraces());
+  document
+    .getElementById("trace-clear")
+    .addEventListener("click", clearTraceInput);
+  const traceInput = document.getElementById("trace-input");
+  traceInput.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      resolveTraces();
+    }
+  });
+  for (const id of [
+    "trace-filter-status",
+    "trace-filter-protocol",
+    "trace-filter-dimension",
+    "trace-filter-resolution",
+  ]) {
+    document.getElementById(id).addEventListener("input", renderTraceMain);
+  }
   window.addEventListener("beforeunload", (event) => {
     if (!state.decision.dirty) return;
     event.preventDefault();
@@ -1959,7 +2815,15 @@ async function init() {
   try {
     state.meta = await getJson("/api/review/meta");
     await loadBatches();
-    await setView("round");
+    const linked = traceLinkInput();
+    if (linked) {
+      const node = document.getElementById("trace-input");
+      if (node) node.value = linked;
+      await setView("trace");
+      await resolveTraces();
+    } else {
+      await setView("round");
+    }
   } catch (caught) {
     showNotice(caught.message, "error");
   }

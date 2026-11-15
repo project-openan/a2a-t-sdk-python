@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sqlite3
 from collections.abc import Mapping
 from pathlib import Path
@@ -25,7 +26,13 @@ from demo.web.review.corpus import (
 )
 from demo.web.review.export import build_payload, payload_json, payload_yaml, report_markdown
 from demo.web.review.routes import build_review_routes
-from demo.web.review.service import STATUS_NOT_RUN, STATUS_STALE, ReviewService
+from demo.web.review.service import (
+    MAX_TRACE_IDS,
+    STATUS_NOT_RUN,
+    STATUS_STALE,
+    ReviewService,
+    parse_trace_input,
+)
 from demo.web.review.store import (
     DECISION_ACCEPTED,
     DECISION_DEFECT,
@@ -35,7 +42,11 @@ from demo.web.review.store import (
 )
 from eval.osp.catalog import CaseCatalog
 from eval.osp.expectations import SLOT_DIMENSION
-from protocol.client_store import NegotiationEventRecord, SqliteClientStore
+from protocol.client_store import (
+    ClientRunRecord,
+    NegotiationEventRecord,
+    SqliteClientStore,
+)
 from protocol.client_store.store import NEGOTIATION_DIRECTION_INBOUND
 from starlette.applications import Starlette
 
@@ -1532,6 +1543,202 @@ def test_the_payload_and_report_carry_the_decisions(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Trace / run lookup
+# ---------------------------------------------------------------------------
+
+
+def test_trace_input_accepts_logs_urls_and_caps_the_list() -> None:
+    raw = (
+        "traceId=0123456789ABCDEF0123456789abcdef\n"
+        "https://us.cloud.langfuse.com/trace/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+        "run-1, run-1"
+    )
+    query = parse_trace_input(raw)
+
+    assert query.ids == (
+        "0123456789abcdef0123456789abcdef",
+        "a" * 32,
+        "run-1",
+    )
+    assert query.inputs == 3
+    assert query.dropped == 0
+    assert parse_trace_input([str(index) for index in range(MAX_TRACE_IDS + 5)]).dropped == 5
+
+
+def test_the_store_finds_evidence_by_run_or_trace_id(tmp_path: Path) -> None:
+    service, _catalog, _overlay, _runs = _fixture(tmp_path)
+    service.scan(days=2)
+
+    rows = service.store.observations_by_ids(["run-1", "trace-1"])
+    by_run = service.store.observations_by_ids(["run-1"])
+
+    assert [row["runId"] for row in rows] == ["run-1"]
+    assert [row["traceId"] for row in by_run] == ["trace-1"]
+
+
+def test_the_trace_lookup_resolves_a_scanned_run(tmp_path: Path) -> None:
+    service, _catalog, _overlay, _runs = _fixture(tmp_path)
+    service.scan(days=2)
+
+    result = service.resolve_traces(["run-1", "trace-1"])
+    row = result["rows"][0]
+
+    assert row["resolution"] == "store"
+    assert row["caseId"] == 1
+    assert row["runId"] == "run-1"
+    assert row["dimensions"]
+    assert result["query"]["resolved"] == ["run-1", "trace-1"]
+    assert len(result["rows"]) == 1
+    assert result["summary"]["judged"] == 1
+
+
+def test_the_trace_lookup_ignores_the_scan_window(tmp_path: Path) -> None:
+    service, _catalog, _overlay, runs_dir = _fixture(tmp_path)
+    batch = runs_dir / "tester" / "batch-1.json"
+    old = 1_600_000_000.0
+    os.utime(batch, (old, old))
+
+    result = service.resolve_traces(["run-1"])
+
+    assert result["summary"]["ingested"] == 1
+    assert result["rows"][0]["resolution"] == "tester"
+    assert [row["runId"] for row in service.store.observations(1, "a2a-t")] == ["run-1"]
+
+
+def test_a_trace_id_can_group_several_runs(tmp_path: Path) -> None:
+    cases_dir = tmp_path / "cases"
+    _write_cases(
+        cases_dir,
+        _case_document(1, blocked=False),
+        _case_document(2, blocked=False),
+    )
+    runs_dir = tmp_path / "runs"
+    trace_id = "a" * 32
+    _write_batch(
+        runs_dir,
+        [
+            _evidence_item(
+                case_id=1,
+                run_id="run-a",
+                trace_id=trace_id,
+                blocked=False,
+                slot_error=False,
+                refs_input="do it",
+            ),
+            _evidence_item(
+                case_id=2,
+                run_id="run-b",
+                trace_id=trace_id,
+                blocked=False,
+                slot_error=False,
+                refs_input="do it",
+            ),
+        ],
+    )
+    store = ReviewStore(tmp_path / "review.sqlite3")
+    store.ensure()
+    service = ReviewService(
+        store=store,
+        catalog=CaseCatalog(cases_dir, overlay_path=tmp_path / "absent.yaml"),
+        runs_dir=runs_dir,
+        client_db_path=None,
+    )
+
+    result = service.resolve_traces([trace_id])
+    detail = service.trace_detail(trace_id)
+
+    assert {row["runId"] for row in result["rows"]} == {"run-a", "run-b"}
+    assert result["summary"]["runs"] == 2
+    assert detail["mode"] == "evidence"
+    assert len(detail["relatedRunIds"]) == 1
+
+
+def test_a_modify_baseline_is_identity_only(tmp_path: Path) -> None:
+    service, _catalog, _overlay, runs_dir = _fixture(tmp_path)
+    item = _evidence_item(blocked=False, slot_error=False)
+    item["baseline"] = {"runId": "baseline-run", "protocol": "a2a-t"}
+    _write_batch(runs_dir, [item])
+
+    result = service.resolve_traces(["baseline-run"])
+
+    assert result["rows"] == []
+    assert result["unmatched"][0]["reason"] == "tester_identity_only"
+
+
+def test_a_run_without_tester_evidence_stays_client_only(tmp_path: Path) -> None:
+    cases_dir = tmp_path / "cases"
+    _write_cases(cases_dir, _case_document(blocked=False))
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    client_db = runs_dir / "client-state.sqlite3"
+    client = SqliteClientStore(client_db)
+    asyncio.run(client.ensure_conversation(conversation_id="conv-client"))
+    trace_id = "c" * 32
+    asyncio.run(
+        client.create_run(
+            ClientRunRecord(
+                run_id="run-client",
+                scenario="ran_energy_saving",
+                mode="live",
+                transport="sse",
+                discovery="direct",
+                user_request="do it",
+                conversation_id="conv-client",
+                protocol="a2a-t",
+                source={"kind": "tester", "caseId": 1, "batchId": "batch-old"},
+                trace_id=trace_id,
+            )
+        )
+    )
+    store = ReviewStore(tmp_path / "review.sqlite3")
+    store.ensure()
+    service = ReviewService(
+        store=store,
+        catalog=CaseCatalog(cases_dir, overlay_path=tmp_path / "absent.yaml"),
+        runs_dir=runs_dir,
+        client_db_path=client_db,
+    )
+
+    result = service.resolve_traces(["run-client"])
+    detail = service.trace_detail(trace_id)
+
+    row = result["rows"][0]
+    assert row["resolution"] == "client"
+    assert row["caseId"] == 1
+    assert row["status"] == STATUS_NOT_RUN
+    assert row["dimensions"] == []
+    assert detail["mode"] == "run"
+    assert detail["runs"][0]["runId"] == "run-client"
+
+
+def test_a_trace_id_without_records_is_a_snapshot_row(tmp_path: Path) -> None:
+    service, _catalog, _overlay, _runs = _fixture(tmp_path)
+    trace_id = "d" * 32
+
+    result = service.resolve_traces([trace_id])
+    detail = service.trace_detail(trace_id)
+
+    row = result["rows"][0]
+    assert row["resolution"] == "trace"
+    assert row["runId"] == ""
+    assert row["trace"]["canFetch"] is True
+    assert detail["mode"] == "trace"
+    assert detail["tracePayload"]["exportState"] == "not_exported"
+
+
+def test_trace_detail_keeps_the_scope_to_one_run(tmp_path: Path) -> None:
+    service, _catalog, _overlay, _runs = _fixture(tmp_path)
+    service.scan(days=2)
+
+    detail = service.trace_detail("trace-1", run_id="run-1")
+
+    assert detail["mode"] == "evidence"
+    assert len(detail["rounds"]) == 1
+    assert detail["rounds"][0]["runId"] == "run-1"
+    assert detail["decision"]["status"] == DECISION_PENDING
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -1613,6 +1820,33 @@ async def test_route_batches_and_one_batch(tmp_path: Path) -> None:
     assert batch["cases"][0]["protocols"][0]["status"] == "pass"
     assert bad_round.status_code == 400
     assert missing.status_code == 404
+
+
+async def test_route_traces_resolve_detail_and_export(tmp_path: Path) -> None:
+    _write_batch(tmp_path / "runs", [_evidence_item(blocked=False, slot_error=False)])
+    app = _app(tmp_path)
+    async with _client(app) as client:
+        resolved = (
+            await client.post("/api/review/traces", json={"ids": ["run-1"]})
+        ).json()
+        detail = (
+            await client.get("/api/review/trace/trace-1?runId=run-1")
+        ).json()
+        exported = await client.post(
+            "/api/review/traces/export",
+            json={"ids": ["run-1"], "format": "yaml"},
+        )
+        empty = await client.post("/api/review/traces", json={})
+        bad_fetch = await client.post("/api/review/trace/not-a-trace/fetch", json={})
+
+    assert resolved["rows"][0]["resolution"] == "tester"
+    assert resolved["summary"]["ingested"] == 1
+    assert detail["mode"] == "evidence"
+    assert detail["rounds"][0]["runId"] == "run-1"
+    assert exported.status_code == 200
+    assert "osp-review-traces/v1" in exported.text
+    assert empty.status_code == 400
+    assert bad_fetch.status_code == 400
 
 
 async def test_route_fetch_trace_refuses_a_run_without_a_trace_id(tmp_path: Path) -> None:

@@ -13,6 +13,7 @@ import {
   dimensionNeedsAttention,
   filterBatches,
   filterCases,
+  filterTraceRows,
   progressText,
   protocolLabel,
   roundEvidence,
@@ -21,6 +22,10 @@ import {
   stabilityOf,
   statusLabel,
   traceButtonLabel,
+  traceResolutionLabel,
+  traceRowNeedsAttention,
+  traceSummaryText,
+  traceUnmatchedLabel,
 } from "../../demo/web/review/main.js";
 
 const CASES = [
@@ -380,3 +385,93 @@ assert.equal(shouldAutoFetch(META, { canFetch: true, exportState: "partial" }), 
 assert.equal(shouldAutoFetch(META, { canFetch: true, exportState: "failed" }), false);
 assert.equal(shouldAutoFetch({ traceFetchEnabled: false }, { canFetch: true }), false);
 assert.equal(shouldAutoFetch(META, { canFetch: false }), false);
+
+// Trace / run view: one row per run, a trace id may fan out, and an unjudged row is not a failure.
+const TRACE_ROWS = [
+  {
+    input: "run-a",
+    traceId: "run-a",
+    runId: "run-a",
+    caseId: 16,
+    caseName: "设置 gain target",
+    protocol: "a2a-t",
+    resolution: "store",
+    status: "fail",
+    dimensions: [
+      { dimension: "task_t", status: "fail", reason: "missing target" },
+      { dimension: "trace", status: "missing" },
+    ],
+    trace: { present: false, canFetch: true },
+    decision: { status: "pending" },
+  },
+  {
+    input: "trace-b",
+    traceId: "trace-b",
+    runId: "run-b",
+    caseId: 26,
+    caseName: "时间重叠",
+    protocol: "a2a",
+    resolution: "tester",
+    status: "pass",
+    dimensions: [{ dimension: "trace", status: "pass" }],
+    trace: { present: true, canFetch: true },
+    decision: { status: "accepted" },
+  },
+  {
+    input: "run-c",
+    traceId: "run-c",
+    runId: "run-c",
+    caseId: null,
+    caseName: "",
+    protocol: "a2a-t",
+    resolution: "client",
+    status: "not_run",
+    dimensions: [],
+    trace: { present: false, canFetch: true },
+    decision: { status: "pending" },
+  },
+];
+
+assert.equal(traceResolutionLabel("store"), "审核库");
+assert.equal(traceResolutionLabel("client"), "仅运行");
+assert.equal(traceUnmatchedLabel("tester_identity_only"), "仅基线/重试");
+assert.equal(traceRowNeedsAttention(TRACE_ROWS[0]), true);
+assert.equal(traceRowNeedsAttention(TRACE_ROWS[1]), false);
+assert.equal(traceRowNeedsAttention(TRACE_ROWS[2]), false);
+assert.deepEqual(
+  filterTraceRows(TRACE_ROWS, { dimension: "task_t" }).map((row) => row.runId),
+  ["run-a"],
+);
+assert.deepEqual(
+  filterTraceRows(TRACE_ROWS, { status: "attention" }).map((row) => row.runId),
+  ["run-a"],
+);
+assert.deepEqual(
+  filterTraceRows(TRACE_ROWS, { status: "unjudged" }).map((row) => row.runId),
+  ["run-c"],
+);
+assert.deepEqual(
+  filterTraceRows(TRACE_ROWS, { status: "trace-missing" }).map((row) => row.runId),
+  ["run-a", "run-c"],
+);
+assert.deepEqual(
+  filterTraceRows(TRACE_ROWS, { identity: "trace-b" }).map((row) => row.runId),
+  ["run-b"],
+);
+assert.deepEqual(
+  filterTraceRows(TRACE_ROWS, { resolution: "tester" }).map((row) => row.runId),
+  ["run-b"],
+);
+assert.deepEqual(filterTraceRows(TRACE_ROWS, { query: "26" }).map((row) => row.runId), ["run-b"]);
+assert.match(
+  traceSummaryText({
+    inputs: 3,
+    runs: 3,
+    judged: 1,
+    unmatched: 1,
+    traceMissing: 2,
+    ingested: 1,
+    dimensions: { task_t: 1, trace: 1 },
+  }),
+  /输入 3 · run 3 · 可判定 1 · 未命中 1 · 缺轨迹 2 · 写入 1/,
+);

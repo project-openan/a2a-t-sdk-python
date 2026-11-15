@@ -20,8 +20,19 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
-from demo.web.review.export import build_payload, payload_json, payload_yaml, report_markdown
-from demo.web.review.service import PROTOCOLS, STATUSES, ReviewService
+from demo.web.review.export import (
+    build_payload,
+    build_trace_payload,
+    payload_json,
+    payload_yaml,
+    report_markdown,
+)
+from demo.web.review.service import (
+    MAX_TRACE_IDS,
+    PROTOCOLS,
+    STATUSES,
+    ReviewService,
+)
 from demo.web.review.store import CATEGORIES, DECISIONS, ReviewStore
 from demo.web.review.traces import TraceStore
 
@@ -109,6 +120,7 @@ def build_review_routes(
                 "defaultDays": DEFAULT_DAYS,
                 "maxDays": MAX_DAYS,
                 "maxBatches": MAX_BATCHES,
+                "maxTraceIds": MAX_TRACE_IDS,
             }
         )
 
@@ -229,6 +241,83 @@ def build_review_routes(
             return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse({"ok": True, "trace": payload})
 
+    async def traces(request: Request) -> Response:
+        """Resolve a pasted list of trace ids / run ids to judged evidence.
+
+        This lookup ignores the scan window: it may ingest a tester item the window missed, which
+        is the same write ``scan`` performs. Rows that cannot support the six-dimension verdict
+        come back as ``client`` / ``trace`` instead of a guessed pass or fail.
+        """
+        body = await _json_body(request)
+        raw = _ids_from_body(body)
+        if raw is None:
+            return JSONResponse(
+                {"error": "ids 不能为空：传字符串或字符串数组。"},
+                status_code=400,
+            )
+        try:
+            payload = await asyncio.to_thread(service.resolve_traces, raw)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(payload)
+
+    async def trace(request: Request) -> Response:
+        """Return one run's judged detail, or its run / snapshot facts."""
+        trace_id = str(request.path_params.get("trace_id") or "").strip()
+        if not trace_id:
+            return JSONResponse({"error": "traceId 不能为空。"}, status_code=400)
+        run_id = _optional_text(request.query_params.get("runId"))
+        try:
+            payload = await asyncio.to_thread(
+                service.trace_detail,
+                trace_id,
+                run_id=run_id,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        return JSONResponse(payload)
+
+    async def fetch_trace_by_id(request: Request) -> Response:
+        """Fetch one trace snapshot without requiring an ingested case row."""
+        trace_id = str(request.path_params.get("trace_id") or "").strip()
+        if not trace_id:
+            return JSONResponse({"error": "traceId 不能为空。"}, status_code=400)
+        options = await _json_body(request)
+        try:
+            payload = await asyncio.to_thread(
+                service.fetch_trace_by_id,
+                trace_id,
+                run_id=_optional_text(options.get("runId")),
+                force=options.get("force") is True,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "trace": payload})
+
+    async def export_traces(request: Request) -> Response:
+        """Export the hand-picked trace / run list as a portable document."""
+        body = await _json_body(request)
+        raw = _ids_from_body(body)
+        if raw is None:
+            return JSONResponse({"error": "ids 不能为空。"}, status_code=400)
+        result = await asyncio.to_thread(service.export_traces, raw)
+        payload = build_trace_payload(result, corpus_version=service.catalog.version)
+        if str(body.get("format") or "json").lower() == "yaml":
+            return Response(
+                payload_yaml(payload),
+                media_type="application/yaml; charset=utf-8",
+                headers={
+                    "Content-Disposition": 'attachment; filename="osp-review-traces.yaml"'
+                },
+            )
+        return Response(
+            payload_json(payload),
+            media_type="application/json; charset=utf-8",
+            headers={
+                "Content-Disposition": 'attachment; filename="osp-review-traces.json"'
+            },
+        )
+
     async def export_all_json(request: Request) -> Response:
         """Return the review payload as JSON."""
         del request
@@ -265,6 +354,10 @@ def build_review_routes(
         Route("/api/review/batches", batches),
         Route("/api/review/batch/{batch_id}", batch),
         Route("/api/review/scan", scan, methods=["POST"]),
+        Route("/api/review/traces", traces, methods=["POST"]),
+        Route("/api/review/traces/export", export_traces, methods=["POST"]),
+        Route("/api/review/trace/{trace_id}", trace),
+        Route("/api/review/trace/{trace_id}/fetch", fetch_trace_by_id, methods=["POST"]),
         Route("/api/review/case/{case_id}/{protocol}", detail),
         Route(
             "/api/review/case/{case_id}/{protocol}/decision",
@@ -301,6 +394,17 @@ async def _json_body(request: Request) -> Mapping[str, object]:
 def _optional_text(value: object) -> str | None:
     """Return a non-empty string from a JSON body field, or ``None``."""
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _ids_from_body(body: Mapping[str, object]) -> str | list[str] | None:
+    """Return the trace ids of one request body, accepting a string or a string array."""
+    value = body.get("ids")
+    if isinstance(value, str):
+        return value if value.strip() else None
+    if isinstance(value, list):
+        rows = [item.strip() for item in value if isinstance(item, str) and item.strip()]
+        return rows or None
+    return None
 
 
 def _actor(request: Request) -> str:

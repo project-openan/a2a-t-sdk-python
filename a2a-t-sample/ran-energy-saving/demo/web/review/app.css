@@ -409,6 +409,27 @@ table.grid tr.recorded td { background: #fafbfc; color: var(--muted); }
 .dim-chip.partial, .dim-chip.missing { background: #fff7e6; border-color: #f3d39b; color: var(--warn); }
 .dim-chip.recorded { background: #f2f4f8; color: #7b8494; }
 
+/* Trace / run view: the pasted id list is the navigation, so the sidebar gets a little more room. */
+.layout.view-trace { grid-template-columns: 320px minmax(0, 1fr); }
+.trace-input { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.trace-input textarea {
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: 12px var(--mono);
+  background: #fff;
+}
+.trace-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+#sidebar-trace .case { cursor: pointer; border: 1px solid transparent; border-radius: 6px; padding: 4px 6px; }
+#sidebar-trace .case:hover { background: #f7f8fa; border-color: var(--line); }
+#sidebar-trace .case.active { background: var(--accent-soft); border-color: #f6c9a8; }
+#sidebar-trace .case-head { padding: 0 0 3px; }
+#sidebar-trace .badges { justify-content: flex-start; }
+#sidebar-trace .case-head .id { white-space: normal; overflow-wrap: anywhere; }
+
 @media (max-width: 1200px) {
   .layout { grid-template-columns: 1fr; }
   .sidebar { height: auto; max-height: 45vh; }

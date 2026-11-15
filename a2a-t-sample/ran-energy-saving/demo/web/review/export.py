@@ -24,6 +24,10 @@ from demo.web.yaml_dump import dump_yaml
 #: Format marker of the portable payload.
 SCHEMA: Final[str] = "osp-review/v1"
 
+#: Format marker of a trace/run-scoped export. It is deliberately distinct from ``SCHEMA``: a
+#: consumer must not mistake a hand-picked run list for a full acceptance file.
+TRACE_SCHEMA: Final[str] = "osp-review-traces/v1"
+
 _PROTOCOL_LABEL: Final[dict[str, str]] = {"a2a-t": "A2A-T", "a2a": "A2A"}
 _STATUS_LABEL: Final[dict[str, str]] = {
     "pass": "通过",
@@ -66,6 +70,21 @@ def build_payload(
         "corpusVersion": corpus_version,
         "counts": dict(counts),
         "cases": [_case_entry(case) for case in cases],
+    }
+
+
+def build_trace_payload(
+    result: Mapping[str, object],
+    *,
+    corpus_version: str,
+) -> dict[str, object]:
+    """Return the portable payload of a hand-picked trace / run list."""
+    body = {key: value for key, value in result.items() if key != "corpusVersion"}
+    return {
+        "schema": TRACE_SCHEMA,
+        "generatedAt": datetime.now(UTC).isoformat(timespec="seconds"),
+        "corpusVersion": corpus_version,
+        **body,
     }
 
 

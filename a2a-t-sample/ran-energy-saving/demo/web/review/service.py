@@ -17,9 +17,11 @@ A protocol task has two independent axes and the page shows both:
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
@@ -39,15 +41,23 @@ from eval.osp.review import (
     judge_protocol,
 )
 from eval.osp.tracecheck import (
+    TRACE_ID_PATTERN,
     TraceApplicability,
     nms_kind,
     original_request,
     trace_applicability,
 )
 from langfuse_export.config import Config
+from protocol.client_store import read_client_run_detail, read_client_run_summaries
 from shared.config import SampleConfig
 
-from demo.web.review.corpus import case_documents, scan_evidence
+from demo.web.review.corpus import (
+    TesterLookup,
+    TesterRunRef,
+    case_documents,
+    find_tester_evidence,
+    scan_evidence,
+)
 from demo.web.review.store import (
     CATEGORIES,
     DECISION_ACCEPTED,
@@ -90,6 +100,73 @@ _EXPORTED_STATES: Final[frozenset[str]] = frozenset({"exported", "partial"})
 #: Cooldown after a Langfuse 429. The public API admits 30 requests/minute; one minute is enough
 #: for the bucket to refill and short enough that a reviewer can retry by hand.
 FETCH_COOLDOWN_SECONDS: Final[float] = 60.0
+
+#: Hard bound of one trace id / run id lookup. A pasted list is a triage aid, not a bulk export;
+#: everything beyond this bound is reported as dropped instead of silently truncated.
+MAX_TRACE_IDS: Final[int] = 200
+
+#: Dimensions of the judged rows that the trace list summarises, in display order.
+TRACE_DIMENSIONS: Final[tuple[str, ...]] = (
+    "intent",
+    "task_t",
+    "validate",
+    "negotiation",
+    "final_state",
+    "trace",
+)
+
+#: Verdicts that mean the reviewer still has to look at that dimension.
+_ATTENTION_STATUSES: Final[frozenset[str]] = frozenset(
+    {VERDICT_FAIL, VERDICT_PARTIAL, VERDICT_MISSING, VERDICT_RECORDED, "stale"}
+)
+
+#: A 32-hex token is a trace id (and, in this sample, usually also the run id). A Langfuse URL or
+#: a ``traceId=...`` log line is normalised to the token it contains.
+_TRACE_TOKEN: Final[re.Pattern[str]] = re.compile(r"[0-9a-fA-F]{32}")
+_RUN_TOKEN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+
+@dataclass(frozen=True)
+class TraceQuery:
+    """The normalised ids of one trace / run lookup."""
+
+    ids: tuple[str, ...]
+    inputs: int
+    dropped: int
+
+
+def parse_trace_input(raw: str | Sequence[str]) -> TraceQuery:
+    """Return the unique trace ids / run ids in one pasted list.
+
+    Splitting is deliberately generous: field reports arrive as log lines, comma lists or Langfuse
+    URLs. A 32-hex token is preferred over the surrounding text, so
+    ``traceId=0123...`` and ``https://.../trace/0123...`` both resolve to the id. A token that is
+    not a hex trace id is kept as a run id when it looks like one.
+    """
+    if isinstance(raw, str):
+        parts: list[str] = re.split(r"[\s,;，；]+", raw)
+    else:
+        parts = []
+        for value in raw:
+            if isinstance(value, str):
+                parts.extend(re.split(r"[\s,;，；]+", value))
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        token = part.strip().strip("()[]<>\"'")
+        if not token:
+            continue
+        hexes = _TRACE_TOKEN.findall(token)
+        candidates = [value.lower() for value in hexes]
+        if not candidates and _RUN_TOKEN.match(token):
+            candidates = [token]
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            ordered.append(candidate)
+    inputs = len(ordered)
+    return TraceQuery(tuple(ordered[:MAX_TRACE_IDS]), inputs, max(0, inputs - MAX_TRACE_IDS))
 
 
 class ReviewService:
@@ -412,6 +489,39 @@ class ReviewService:
                 task["exportRequests"] = latest.get("requests") or {}
         return rows
 
+    def export_traces(self, raw: str | Sequence[str]) -> dict[str, object]:
+        """Return the trace lookup with each judged run's full detail attached.
+
+        The list must stay lean, so the export — which is a handoff artifact — re-judges every
+        selected run and attaches the same detail the case view shows. Run-only and snapshot-only
+        rows keep their degradation; nothing is invented to fill the gap.
+        """
+        result = self.resolve_traces(raw)
+        rows = result.get("rows")
+        for row in rows if isinstance(rows, list) else ():
+            if not isinstance(row, dict):
+                continue
+            if row.get("resolution") not in ("store", "tester") or not row.get("caseId"):
+                continue
+            try:
+                detail = self.trace_detail(
+                    str(row.get("traceId") or ""),
+                    run_id=str(row.get("runId") or "") or None,
+                )
+            except ValueError:
+                continue
+            rounds = detail.get("rounds")
+            if not isinstance(rounds, list) or not rounds or not isinstance(rounds[0], Mapping):
+                continue
+            latest = rounds[0]
+            judgement = latest.get("judgement")
+            row["exportDetail"] = (
+                judgement.get("detail") if isinstance(judgement, Mapping) else {}
+            )
+            row["exportRequests"] = latest.get("requests") or {}
+            row["exportDecision"] = detail.get("decision") or {}
+        return result
+
     def detail(self, case_id: int, protocol: str) -> dict[str, object]:
         """Return every round of one protocol task, judged, plus its decision."""
         case = self._catalog.get(case_id)
@@ -438,6 +548,570 @@ class ReviewService:
     def batches(self) -> list[dict[str, object]]:
         """Return the ingested batches, newest first, without judging them."""
         return self._store.batches()
+
+    # ------------------------------------------------------------------
+    # Trace / run lookup
+    # ------------------------------------------------------------------
+
+    def resolve_traces(self, raw: str | Sequence[str]) -> dict[str, object]:
+        """Resolve one or many trace ids / run ids to their judged evidence.
+
+        The lookup is deliberately not window-bound: a field report carries a run id that may be
+        older than the acceptance window. A tester item found outside the window is ingested into
+        the review store (the same write a scan makes), so the verdict, the trace snapshot and an
+        eventual export all refer to one evidence row instead of an ephemeral file read.
+
+        Rows whose evidence cannot support the six-dimension verdict are returned as ``client``
+        (a run only) or ``trace`` (a snapshot only); they are never painted as a pass or a fail.
+        """
+        query = parse_trace_input(raw)
+        if not query.ids:
+            raise ValueError("没有解析到 traceId / runId。")
+        cases = case_documents(self._catalog.documents())
+        grouped, resolved = _group_observations(
+            query.ids, self._store.observations_by_ids(query.ids)
+        )
+        unmatched = [value for value in query.ids if value not in resolved]
+        lookup = TesterLookup((), (), {}, False)
+        ingested: set[str] = set()
+        inserted = 0
+        if unmatched:
+            lookup = find_tester_evidence(
+                runs_dir=self._runs_dir,
+                client_db_path=self._client_db_path,
+                cases=cases,
+                ids=unmatched,
+            )
+            inserted = self._store.ingest(lookup.observations)
+            ingested = {str(row.get("runId") or "") for row in lookup.observations}
+            if inserted:
+                grouped, resolved = _group_observations(
+                    query.ids, self._store.observations_by_ids(query.ids)
+                )
+        refs = {ref.input: ref for ref in lookup.refs}
+        rows: list[dict[str, object]] = []
+        covered: set[str] = set(resolved)
+        for value in query.ids:
+            matched = grouped.get(value) or []
+            if matched:
+                for observation in matched:
+                    rows.append(
+                        self._trace_row(
+                            observation,
+                            value,
+                            cases=cases,
+                            resolution=(
+                                "tester"
+                                if str(observation.get("runId") or "") in ingested
+                                else "store"
+                            ),
+                        )
+                    )
+                continue
+            if value in covered:
+                # The same run was pasted both as its run id and its trace id; one row is enough.
+                continue
+            ref = refs.get(value)
+            if (
+                ref is not None
+                and ref.has_evidence
+                and ref.case_id is not None
+                and ref.case_id not in cases
+            ):
+                covered.add(value)
+                rows.append(self._missing_case_row(value, ref))
+                continue
+            client_rows = self._client_rows_for(value, ref, cases)
+            if client_rows:
+                covered.add(value)
+                rows.extend(client_rows)
+                continue
+            trace_row = self._trace_only_row(value)
+            if trace_row is not None:
+                covered.add(value)
+                rows.append(trace_row)
+        unmatched_rows = [
+            _unmatched_row(value, refs.get(value))
+            for value in query.ids
+            if value not in covered
+        ]
+        return {
+            "query": {
+                "ids": list(query.ids),
+                "resolved": sorted(resolved),
+                "inputs": query.inputs,
+                "unique": len(query.ids),
+                "dropped": query.dropped,
+            },
+            "rows": rows,
+            "unmatched": unmatched_rows,
+            "summary": _trace_summary(query, rows, unmatched_rows, inserted),
+            "corpusVersion": self._catalog.version,
+        }
+
+    def trace_detail(self, trace_id: str, *, run_id: str | None = None) -> dict[str, object]:
+        """Return one run's full detail, or the run / snapshot facts when no evidence exists.
+
+        The response is ``mode: evidence`` with the same shape as :meth:`detail` when a judged row
+        exists, so the page can reuse the case detail renderer. ``run`` and ``trace`` modes are the
+        honest degradations: no tester stages means no six-dimension verdict.
+        """
+        trace_value = trace_id.strip()
+        if not trace_value:
+            raise ValueError("traceId 不能为空。")
+        rows = self._store.observations_by_ids(
+            [trace_value] + ([run_id] if run_id else [])
+        )
+        rows = [
+            row
+            for row in rows
+            if _same_id(row.get("traceId"), trace_value) or _same_id(row.get("runId"), trace_value)
+        ]
+        if run_id:
+            narrowed = [row for row in rows if _same_id(row.get("runId"), run_id)]
+            if narrowed:
+                rows = narrowed
+        missing_case_hint = ""
+        if rows:
+            observation = rows[0]
+            case_id = _as_int(observation.get("caseId"))
+            protocol = str(observation.get("protocol") or "")
+            case = self._catalog.get(case_id)
+            if case is None:
+                missing_case_hint = f"用例 {case_id} 不在当前语料，无法重判。"
+            if case is not None:
+                round_row = self._round_row(case, protocol, observation)
+                decision = self._decision_block(
+                    case,
+                    protocol,
+                    self._store.decision(DecisionKey(case_id, protocol)),
+                    [{"runId": observation.get("runId"), "batchId": observation.get("batchId")}],
+                    scope={"runId": observation.get("runId")},
+                )
+                return {
+                    "mode": "evidence",
+                    "case": _case_summary(case),
+                    "protocol": protocol,
+                    "rounds": [round_row],
+                    "decision": decision,
+                    "corpusVersion": self._catalog.version,
+                    "traceId": str(observation.get("traceId") or trace_value),
+                    "runId": str(observation.get("runId") or ""),
+                    "relatedRunIds": [
+                        str(row.get("runId") or "") for row in rows[1:] if row.get("runId")
+                    ],
+                    "trace": self._trace_brief(
+                        trace_id=str(observation.get("traceId") or trace_value),
+                        run_id=str(observation.get("runId") or ""),
+                        observation=observation,
+                    ),
+                    "hints": [],
+                }
+        details = self._client_details(trace_value, run_id=run_id)
+        payload = self._cached_trace_payload(trace_value, run_id)
+        if not details and payload is None:
+            raise ValueError("找不到该 traceId / runId 的证据或轨迹快照。")
+        resolved_run = run_id or (str(details[0].get("runId") or "") if details else "")
+        hints: list[str] = []
+        if missing_case_hint:
+            hints.append(missing_case_hint)
+        if not details:
+            hints.append("没有找到运行记录，仅展示已缓存的轨迹快照。")
+        elif payload is None:
+            hints.append("没有找到轨迹快照；该运行也没有可抓取的 traceId。")
+        mode = "run" if details else "trace"
+        return {
+            "mode": mode,
+            "traceId": trace_value,
+            "runId": resolved_run,
+            "run": details[0] if details else None,
+            "runs": details,
+            "relatedRunIds": [str(row.get("runId") or "") for row in details[1:]],
+            "trace": self._trace_brief(trace_id=trace_value, run_id=resolved_run),
+            "tracePayload": payload or {},
+            "hints": hints,
+            "corpusVersion": self._catalog.version,
+        }
+
+    def fetch_trace_by_id(
+        self,
+        trace_id: str,
+        *,
+        run_id: str | None = None,
+        force: bool = False,
+    ) -> dict[str, object]:
+        """Fetch one trace without requiring an ingested case row.
+
+        This is the trace view's entry point: a reviewer can paste a trace id from Langfuse and
+        collect its snapshot even when the run is outside every tester batch. The snapshot stays a
+        permanent cache, the 429 cooldown is shared with the case view, and an evidence row that
+        names the trace is updated so the next render sees the snapshot too.
+        """
+        if not self._trace_fetch_enabled:
+            raise ValueError("该实例是只读模式，未启用轨迹抓取（启动时加 --fetch-traces）。")
+        trace_value = trace_id.strip()
+        if not TRACE_ID_PATTERN.match(trace_value):
+            raise ValueError("traceId 必须是 32 位十六进制。")
+        if not force:
+            cached = self._trace_store.load(trace_value)
+            if cached.export_state in _EXPORTED_STATES:
+                return self._attach_fetched_trace(trace_value, run_id)
+        remaining = self._cooldown_remaining()
+        if remaining > 0:
+            raise ValueError(f"Langfuse 限流冷却中，请 {remaining} 秒后重试。")
+        with self._fetch_lock:
+            if not force:
+                cached = self._trace_store.load(trace_value)
+                if cached.export_state in _EXPORTED_STATES:
+                    return self._attach_fetched_trace(trace_value, run_id)
+            config = self._resolved_trace_config()
+            result = self._trace_store.fetch(trace_value, config, run_id=run_id)
+            if str(result.get("exportState") or "") != "exported":
+                error = str(result.get("error") or result.get("exportState") or "")
+                if _is_rate_limited(error):
+                    self._fetch_cooldown_until = time.monotonic() + FETCH_COOLDOWN_SECONDS
+                    raise ValueError(
+                        f"Langfuse 限流（429），请 {int(FETCH_COOLDOWN_SECONDS)} 秒后重试。"
+                    )
+                raise ValueError(f"轨迹抓取失败：{error}")
+            return self._attach_fetched_trace(trace_value, run_id)
+
+    def _attach_fetched_trace(
+        self,
+        trace_id: str,
+        run_id: str | None,
+    ) -> dict[str, object]:
+        """Attach a fetched snapshot to every evidence row that names the trace."""
+        rows = self._store.observations_by_ids([trace_id])
+        payload: dict[str, object] | None = None
+        for observation in rows:
+            target = _trace_target(observation)
+            if target is None:
+                continue
+            try:
+                attached = self._attach_trace(observation, target)
+            except ValueError:
+                continue
+            if payload is None or _same_id(observation.get("runId"), run_id):
+                payload = attached
+        if payload is None:
+            payload = self._cached_trace_payload(trace_id, run_id)
+        if payload is None:
+            raise ValueError("轨迹已抓取，但无法读取快照。")
+        payload["fetchEnabled"] = self._trace_fetch_enabled
+        payload["canFetch"] = True
+        return payload
+
+    def _trace_row(
+        self,
+        observation: Mapping[str, object],
+        input_value: str,
+        *,
+        cases: Mapping[int, Mapping[str, Any]],
+        resolution: str,
+    ) -> dict[str, object]:
+        """Build one trace-list row from a stored observation."""
+        case_id = _as_int(observation.get("caseId"))
+        protocol = str(observation.get("protocol") or "")
+        case = cases.get(case_id)
+        trace = self._trace_brief(
+            trace_id=str(observation.get("traceId") or ""),
+            run_id=str(observation.get("runId") or ""),
+            observation=observation,
+        )
+        base: dict[str, object] = {
+            "input": input_value,
+            "traceId": str(observation.get("traceId") or ""),
+            "runId": str(observation.get("runId") or ""),
+            "caseId": case_id or None,
+            "caseName": str(case.get("name") or "") if case is not None else "",
+            "protocol": protocol,
+            "batchId": str(observation.get("batchId") or ""),
+            "sourceRound": _as_int(observation.get("sourceRound"), 1),
+            "observedAt": observation.get("observedAt"),
+            "model": observation.get("model"),
+            "decisionMode": observation.get("decisionMode"),
+            "nms": bool(observation.get("nms")),
+            "runStatus": str(observation.get("status") or ""),
+            "resolution": resolution,
+            "trace": trace,
+            "hints": [],
+        }
+        if case is None:
+            base.update(
+                {
+                    "status": STATUS_NOT_RUN,
+                    "dimensions": [],
+                    "failures": [],
+                    "inputChanged": False,
+                    "decision": _pending_decision_block(),
+                    "hints": [f"用例 {case_id} 不在当前语料，无法重判。"],
+                }
+            )
+            return base
+        row = self._protocol_row(
+            case,
+            case_id,
+            protocol,
+            observation,
+            self._store.decision(DecisionKey(case_id, protocol)),
+            scope={"runId": observation.get("runId")},
+        )
+        row.update(base)
+        row["trace"] = trace
+        return row
+
+    def _missing_case_row(self, input_value: str, ref: TesterRunRef) -> dict[str, object]:
+        """Return a row for a tester item whose case left the corpus."""
+        return {
+            "input": input_value,
+            "traceId": ref.trace_id,
+            "runId": ref.run_id,
+            "caseId": ref.case_id,
+            "caseName": "",
+            "protocol": ref.protocol,
+            "batchId": ref.batch_id,
+            "sourceRound": None,
+            "observedAt": "",
+            "model": None,
+            "decisionMode": "",
+            "nms": False,
+            "runStatus": "",
+            "status": STATUS_NOT_RUN,
+            "dimensions": [],
+            "failures": [],
+            "inputChanged": False,
+            "resolution": "case_missing",
+            "trace": self._trace_brief(trace_id=ref.trace_id, run_id=ref.run_id),
+            "decision": _pending_decision_block(),
+            "hints": [f"用例 {ref.case_id} 不在当前语料，无法重判。"],
+        }
+
+    def _client_rows_for(
+        self,
+        input_value: str,
+        ref: TesterRunRef | None,
+        cases: Mapping[int, Mapping[str, Any]],
+    ) -> list[dict[str, object]]:
+        """Return run-only rows for an id that has no tester evidence."""
+        return [
+            self._client_row(detail, input_value, cases)
+            for detail in self._client_details(input_value, run_id=None, ref=ref)
+        ]
+
+    def _client_details(
+        self,
+        input_value: str,
+        *,
+        run_id: str | None,
+        ref: TesterRunRef | None = None,
+    ) -> list[dict[str, object]]:
+        """Return the client-store run records that match one id.
+
+        A run id is looked up exactly. A trace id has no exact run column in the client store, so
+        it is resolved through the existing ``trace_id`` filter; one workflow trace can therefore
+        return several runs.
+        """
+        if self._client_db_path is None:
+            return []
+        candidates = [value for value in (run_id, input_value) if value]
+        details: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            detail = read_client_run_detail(self._client_db_path, candidate)
+            if detail is None:
+                continue
+            resolved = str(detail.get("runId") or "")
+            if resolved and resolved not in seen:
+                seen.add(resolved)
+                details.append(detail)
+        if details:
+            return details
+        if ref is not None and ref.run_id:
+            detail = read_client_run_detail(self._client_db_path, ref.run_id)
+            if detail is not None:
+                return [detail]
+        if TRACE_ID_PATTERN.match(input_value):
+            for summary in read_client_run_summaries(
+                self._client_db_path, trace_id=input_value, limit=50
+            ):
+                resolved = str(summary.get("runId") or "")
+                if not resolved or resolved in seen:
+                    continue
+                seen.add(resolved)
+                detail = read_client_run_detail(self._client_db_path, resolved)
+                details.append(detail if detail is not None else summary)
+        return details
+
+    def _client_row(
+        self,
+        detail: Mapping[str, object],
+        input_value: str,
+        cases: Mapping[int, Mapping[str, Any]],
+    ) -> dict[str, object]:
+        """Build one run-only row from a client-store record."""
+        source = detail.get("source")
+        source_map = source if isinstance(source, Mapping) else {}
+        case_id = _as_int(source_map.get("caseId")) or _as_int(detail.get("caseId"))
+        batch_id = str(source_map.get("batchId") or detail.get("batchId") or "")
+        protocol = str(detail.get("protocol") or "")
+        run_id = str(detail.get("runId") or "")
+        trace_id = str(detail.get("traceId") or "")
+        case = cases.get(case_id) if case_id else None
+        decision = (
+            self._decision_block(
+                case,
+                protocol,
+                self._store.decision(DecisionKey(case_id, protocol)),
+                [{"runId": run_id}],
+                scope={"runId": run_id},
+            )
+            if case is not None
+            else _pending_decision_block()
+        )
+        return {
+            "input": input_value,
+            "traceId": trace_id,
+            "runId": run_id,
+            "caseId": case_id or None,
+            "caseName": str(case.get("name") or "") if case is not None else "",
+            "protocol": protocol,
+            "batchId": batch_id,
+            "sourceRound": None,
+            "observedAt": detail.get("createdAt"),
+            "model": None,
+            "decisionMode": "",
+            "nms": False,
+            "runStatus": str(detail.get("status") or ""),
+            "finalState": detail.get("finalState"),
+            "status": STATUS_NOT_RUN,
+            "dimensions": [],
+            "failures": [],
+            "inputChanged": False,
+            "resolution": "client",
+            "trace": self._trace_brief(trace_id=trace_id, run_id=run_id),
+            "decision": decision,
+            "hints": ["没有 tester 阶段证据，未做六维判定。"],
+        }
+
+    def _trace_only_row(self, input_value: str) -> dict[str, object] | None:
+        """Return a snapshot-only row for a valid trace id with no run record."""
+        if not TRACE_ID_PATTERN.match(input_value):
+            return None
+        trace = self._trace_brief(trace_id=input_value, run_id="")
+        trace["applicable"] = "no"
+        trace["text"] = (
+            "只有轨迹快照，没有运行证据可对照。"
+            if trace.get("present")
+            else "未找到运行证据，可抓取轨迹查看。"
+        )
+        return {
+            "input": input_value,
+            "traceId": input_value,
+            "runId": "",
+            "caseId": None,
+            "caseName": "",
+            "protocol": "",
+            "batchId": "",
+            "sourceRound": None,
+            "observedAt": "",
+            "model": None,
+            "decisionMode": "",
+            "nms": False,
+            "runStatus": "",
+            "status": STATUS_NOT_RUN,
+            "dimensions": [],
+            "failures": [],
+            "inputChanged": False,
+            "resolution": "trace",
+            "trace": trace,
+            "decision": _pending_decision_block(),
+            "hints": [str(trace.get("text") or "")],
+        }
+
+    def _trace_brief(
+        self,
+        *,
+        trace_id: str,
+        run_id: str,
+        observation: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Return the trace state of one row without fetching anything."""
+        applicability = (
+            _row_applicability(observation)
+            if observation is not None
+            else trace_applicability(run_id, trace_id)
+        )
+        trace = observation.get("trace") if observation is not None else None
+        present = isinstance(trace, Mapping) and trace.get("present") is True
+        export_state = str(trace.get("exportState") or "") if isinstance(trace, Mapping) else ""
+        captured_at = str(trace.get("capturedAt") or "") if isinstance(trace, Mapping) else ""
+        if trace_id and TRACE_ID_PATTERN.match(trace_id) and (not present or not export_state):
+            try:
+                snapshot = self._trace_store.load(trace_id)
+            except (InvalidTraceIdError, OSError):
+                snapshot = None
+            if snapshot is not None:
+                present = present or snapshot.export_state in _EXPORTED_STATES
+                export_state = export_state or snapshot.export_state
+                captured_at = captured_at or snapshot.captured_at
+        return {
+            "traceId": trace_id,
+            "present": present,
+            "exportState": export_state,
+            "capturedAt": captured_at,
+            "canFetch": bool(
+                self._trace_fetch_enabled
+                and trace_id
+                and TRACE_ID_PATTERN.match(trace_id)
+            ),
+            "fetchEnabled": self._trace_fetch_enabled,
+            "applicable": applicability.applicable,
+            "text": applicability.text,
+        }
+
+    def _cached_trace_payload(
+        self,
+        trace_id: str,
+        run_id: str | None,
+    ) -> dict[str, object] | None:
+        """Return the on-disk snapshot of one trace, without a network call."""
+        if not TRACE_ID_PATTERN.match(trace_id):
+            return None
+        observation = self._observation_for_trace(trace_id, run_id)
+        try:
+            payload = self._trace_store.cached_payload(
+                trace_id,
+                run_id=run_id
+                or (str(observation.get("runId") or "") if observation is not None else None),
+                nms_kind=(
+                    _row_nms_kind(observation)
+                    if observation is not None
+                    else nms_kind(None, None)
+                ),
+                local_points=_local_points(observation),
+                local_known=_local_known(observation),
+            )
+        except (InvalidTraceIdError, OSError):
+            return None
+        payload["fetchEnabled"] = self._trace_fetch_enabled
+        payload["canFetch"] = self._trace_fetch_enabled
+        return payload
+
+    def _observation_for_trace(
+        self,
+        trace_id: str,
+        run_id: str | None,
+    ) -> dict[str, object] | None:
+        """Return one stored observation naming the trace, preferring ``run_id``."""
+        rows = self._store.observations_by_ids([trace_id] + ([run_id] if run_id else []))
+        for row in rows:
+            if run_id and _same_id(row.get("runId"), run_id):
+                return row
+        for row in rows:
+            if _same_id(row.get("traceId"), trace_id):
+                return row
+        return None
 
     def batch_rows(self, batch_id: str, round: int | None = None) -> dict[str, object]:
         """Judge every case × protocol against one batch, optionally narrowed to one round.
@@ -804,6 +1478,146 @@ class ReviewService:
         }
 
 
+def _group_observations(
+    ids: Sequence[str],
+    observations: Sequence[Mapping[str, object]],
+) -> tuple[dict[str, list[dict[str, object]]], set[str]]:
+    """Group evidence rows by the first query id that names them.
+
+    A run id and its trace id are often both pasted. The row is shown once, under the first id,
+    while every matching id counts as resolved so the second one does not fall through to a run-only
+    or snapshot-only row.
+    """
+    grouped: dict[str, list[dict[str, object]]] = {value: [] for value in ids}
+    resolved: set[str] = set()
+    for observation in observations:
+        matches = [
+            value
+            for value in ids
+            if _same_id(value, observation.get("runId"))
+            or _same_id(value, observation.get("traceId"))
+        ]
+        if not matches:
+            continue
+        grouped[matches[0]].append(dict(observation))
+        resolved.update(matches)
+    return grouped, resolved
+
+
+def _same_id(value: object, other: object) -> bool:
+    """Compare two ids, folding case only for 32-hex trace ids."""
+    left = str(value or "").strip()
+    right = str(other or "").strip()
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    return bool(
+        TRACE_ID_PATTERN.match(left)
+        and TRACE_ID_PATTERN.match(right)
+        and left.lower() == right.lower()
+    )
+
+
+def _pending_decision_block() -> dict[str, object]:
+    """Return the empty decision block the page renders for a target without a decision."""
+    return {
+        "status": DECISION_PENDING,
+        "category": "",
+        "note": "",
+        "reviewer": "",
+        "confirmedAt": "",
+        "evidence": {},
+        "stale": False,
+        "staleReason": "",
+        "newEvidence": False,
+        "onThisRound": None,
+    }
+
+
+def _unmatched_row(value: str, ref: TesterRunRef | None) -> dict[str, object]:
+    """Return the explanation for an id no source could resolve."""
+    if ref is not None and not ref.has_evidence:
+        kind = "基线" if ref.matched == "baseline" else "重试"
+        return {
+            "input": value,
+            "reason": "tester_identity_only",
+            "hint": (
+                f"只出现在 tester 批次 {ref.batch_id} 的{kind}记录中；"
+                "客户端库没有这次运行的记录。"
+            ),
+        }
+    return {
+        "input": value,
+        "reason": "not_found",
+        "hint": "审核库、tester 批次和客户端库都没有这个 id；确认是否正确，或现场证据文件已轮转。",
+    }
+
+
+def _trace_summary(
+    query: TraceQuery,
+    rows: Sequence[Mapping[str, object]],
+    unmatched: Sequence[Mapping[str, object]],
+    inserted: int,
+) -> dict[str, object]:
+    """Return the counters the trace view header shows."""
+    dimensions: dict[str, int] = {name: 0 for name in TRACE_DIMENSIONS}
+    judged = 0
+    runs = 0
+    trace_missing = 0
+    for row in rows:
+        if row.get("runId"):
+            runs += 1
+        trace = row.get("trace")
+        trace_map = trace if isinstance(trace, Mapping) else {}
+        if not trace_map.get("present") and trace_map.get("canFetch"):
+            trace_missing += 1
+        if row.get("resolution") not in ("store", "tester") or not row.get("caseId"):
+            continue
+        if row.get("status") != STATUS_NOT_RUN:
+            judged += 1
+        dimensions_rows = row.get("dimensions")
+        if not isinstance(dimensions_rows, list):
+            continue
+        for dimension in dimensions_rows:
+            if not isinstance(dimension, Mapping):
+                continue
+            if dimension.get("status") not in _ATTENTION_STATUSES:
+                continue
+            name = str(dimension.get("dimension") or "")
+            if name in dimensions:
+                dimensions[name] += 1
+    return {
+        "inputs": query.inputs,
+        "unique": len(query.ids),
+        "dropped": query.dropped,
+        "runs": runs,
+        "judged": judged,
+        "unmatched": len(unmatched),
+        "traceMissing": trace_missing,
+        "ingested": inserted,
+        "dimensions": dimensions,
+    }
+
+
+def _local_points(observation: Mapping[str, object] | None) -> list[str] | None:
+    """Return the locally provable trace points of one observation."""
+    if observation is None:
+        return None
+    evidence = observation.get("evidence")
+    value = evidence.get("localPoints") if isinstance(evidence, Mapping) else None
+    return _string_list(value)
+
+
+def _local_known(observation: Mapping[str, object] | None) -> list[str] | None:
+    """Return the trace points one observation's local evidence can adjudicate."""
+    if observation is None:
+        return None
+    evidence = observation.get("evidence")
+    value = evidence.get("localKnown") if isinstance(evidence, Mapping) else None
+    return _string_list(value)
+
+
 def _as_int(value: object, default: int = 0) -> int:
     """Return ``value`` as an integer, or ``default`` when it is not one."""
     if isinstance(value, bool):
@@ -1075,9 +1889,13 @@ def _negotiation_flags(case: Mapping[str, Any]) -> dict[str, bool]:
 
 
 __all__ = [
+    "MAX_TRACE_IDS",
     "PROTOCOLS",
     "STATUSES",
     "STATUS_NOT_RUN",
     "STATUS_STALE",
+    "TRACE_DIMENSIONS",
     "ReviewService",
+    "TraceQuery",
+    "parse_trace_input",
 ]

@@ -123,6 +123,26 @@ curl -s http://127.0.0.1:8091/ready
   `a2a-t-server` 的发送跳（网管侧未上报或 scope 不匹配）；`trace_missing_*` 预期轨迹点缺失，
   按本机/入库/厂商归因区分。
 
+### 4.2 按 traceId / runId 复核
+
+现场回报通常直接给一个 run id 或 Langfuse trace id。切到**轨迹视图**，把 id 粘贴进左栏即可，不必先
+知道它属于哪个用例、哪个批次。
+
+- **输入**：每行一个，或逗号/空格分隔；可以直接粘贴整段日志、`traceId=...` 行或 Langfuse URL。
+  一次最多 200 个 id，超出会提示丢弃数量。`traceId` 与 `runId` 在本样例中通常相同，但一个
+  presentation / correction-chain trace 可以对应多个 run，列表会按 run 展开。
+- **解析顺序**：审核库 → tester 批次文件（不受 2 天窗口限制）→ 客户端库 → 已缓存轨迹快照。
+  tester 批次命中的证据会**写入审核库**（与「采集证据」同一写语义），之后导出和结论都指向同一条证据。
+- **判定**：能拿到 tester 阶段证据的 run 走完整六维判定；只有客户端运行记录的显示「仅运行」；
+  只有轨迹快照的显示「仅轨迹」；三者都不会被伪造成通过或失败。
+- **只读结论**：轨迹视图显示该用例×协议已有的审核结论，但不能在这里保存；点「到用例视图给结论」
+  跳到原用例（并定位到该 run）。
+- **批量抓取**：表格上方「抓取缺失轨迹」按 trace 串行抓取，遇 429 停止并显示已抓条数；快照仍为
+  永久缓存，不会自动重抓。
+- **导出**：轨迹视图导出 `osp-review-traces/v1`（JSON/YAML），只含这批 run，不要与完整的
+  `osp-review/v1` 验收文件混用。
+- **深链**：`/review?trace=<id1>,<id2>` 或重复 `?trace=` 参数会自动切到轨迹视图并解析，便于现场回报。
+
 ---
 
 ## 5. 导出与回传
@@ -160,6 +180,24 @@ curl -s -X POST "$BASE/api/review/case/16/a2a-t/decision" \
   -H 'content-type: application/json' \
   -d '{"status": "defect", "category": "sdk", "note": "Task-T 丢失站点列表"}'
 
+# 按 traceId / runId 列表复核（不是 GET：一次可能解析并写入多条证据）
+curl -s -X POST "$BASE/api/review/traces" \
+  -H 'content-type: application/json' \
+  -d '{"ids": ["<traceId 或 runId>", "<另一个>"]}'
+
+# 单条轨迹/运行详情（有证据时与 case detail 同构）
+curl -s "$BASE/api/review/trace/<traceId>?runId=<runId>"
+
+# 按 traceId 抓取轨迹（不需要先有用例证据）
+curl -s -X POST "$BASE/api/review/trace/<traceId>/fetch" \
+  -H 'content-type: application/json' \
+  -d '{"runId": "<runId>", "force": false}'
+
+# 导出这批 run（format: json|yaml，schema 为 osp-review-traces/v1）
+curl -s -X POST "$BASE/api/review/traces/export" \
+  -H 'content-type: application/json' \
+  -d '{"ids": ["<traceId 或 runId>"], "format": "yaml"}' -o osp-review-traces.yaml
+
 # 导出
 curl -s "$BASE/api/review/export.yaml" -o osp-review.yaml
 curl -s "$BASE/api/review/report.md" -o osp-review-report.md
@@ -183,6 +221,9 @@ curl -s "$BASE/api/review/report.md" -o osp-review-report.md
 | 轨迹显示「不适用」 | 显式模拟器、无 `runId`、无/非法 `traceId` | 详情页 blocker 会写出具体原因；真机用例请重跑或检查 tester 是否记录了 `traceId` |
 | 轨迹显示「NMS 跳未识别」 | 轨迹里没有 `a2a-t-server` 的发送 span | 确认网管侧是否上报 Langfuse，或 scope 名是否变化 |
 | 轨迹抓取报 429 | Langfuse 限流 | 等页面提示的冷却秒数后点「重试抓取」；不要连续刷新 |
+| 轨迹视图显示「未找到」 | 审核库、tester 批次和客户端库都没有该 id | 确认 id 是否完整；现场 tester 文件可能已轮转，改走客户端库或直接抓轨迹 |
+| 轨迹视图显示「仅基线/重试」 | 该 runId 只出现在 Modify 的 baseline 或 attempts 里 | 该 run 没有独立的 tester 阶段证据；到 Run 控制台看运行，或抓它的轨迹 |
+| 轨迹视图的结论不能保存 | 这是设计：结论按用例×协议保存 | 点「到用例视图给结论」，页面会定位到这条 run 所在用例 |
 
 ---
 

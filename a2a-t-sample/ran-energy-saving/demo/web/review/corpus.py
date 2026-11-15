@@ -75,6 +75,192 @@ class ReviewScan:
     truncated: bool = False
 
 
+@dataclass(frozen=True)
+class TesterRunRef:
+    """One trace id / run id occurrence inside a tester batch.
+
+    ``has_evidence`` is False for a Modify baseline or an earlier attempt: the batch keeps their
+    run ids for identity, but the item's stages belong to the latest run, so they cannot be judged
+    as if they were its evidence.
+    """
+
+    input: str
+    run_id: str
+    trace_id: str
+    case_id: int | None
+    protocol: str
+    batch_id: str
+    matched: str
+    has_evidence: bool
+
+
+@dataclass(frozen=True)
+class TesterLookup:
+    """Result of an explicit run-id / trace-id lookup over the tester history."""
+
+    observations: tuple[dict[str, object], ...]
+    refs: tuple[TesterRunRef, ...]
+    skipped: Mapping[str, int] = field(default_factory=dict)
+    truncated: bool = False
+
+
+def find_tester_evidence(
+    *,
+    runs_dir: Path,
+    client_db_path: Path | None,
+    cases: Mapping[int, Mapping[str, Any]],
+    ids: Sequence[str],
+    max_batches: int = DEFAULT_MAX_BATCHES,
+) -> TesterLookup:
+    """Find the tester items that name one of ``ids`` as their own run or trace.
+
+    Unlike :func:`scan_evidence` this lookup ignores the time window: a field report usually
+    carries a run id older than the acceptance window. The batch files are pre-filtered with a
+    plain substring test before JSON parsing because run ids appear verbatim in the document; a
+    manual lookup may still read every file, so ``max_batches`` stays a hard bound.
+    """
+    wanted = list(dict.fromkeys(str(value).strip() for value in ids if str(value).strip()))
+    skipped: dict[str, int] = {}
+    if not wanted:
+        return TesterLookup((), (), {}, False)
+    directory = runs_dir / "tester"
+    if not directory.is_dir():
+        return TesterLookup((), (), {"missing": 1}, False)
+    files = _batch_files(directory, skipped)
+    truncated = len(files) > max_batches
+    selected = files[: max(0, max_batches)]
+    if truncated:
+        skipped["limit"] = len(files) - len(selected)
+
+    refs: list[TesterRunRef] = []
+    matched_items: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    seen_items: set[tuple[str, str]] = set()
+    wanted_set = set(wanted)
+    for path in selected:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            skipped["unreadable"] = skipped.get("unreadable", 0) + 1
+            continue
+        # Run ids are plain hex in JSON, so a substring test cannot false-negative. This keeps a
+        # 500-file lookup from parsing every batch when only one or two carry the requested run.
+        if not any(value in text for value in wanted_set):
+            continue
+        try:
+            document = json.loads(text)
+        except ValueError:
+            skipped["unreadable"] = skipped.get("unreadable", 0) + 1
+            continue
+        if not isinstance(document, Mapping) or not isinstance(document.get("items"), list):
+            skipped["unknown_schema"] = skipped.get("unknown_schema", 0) + 1
+            continue
+        batch = dict(document)
+        batch.setdefault("batchId", path.stem)
+        for item in batch["items"]:
+            if not isinstance(item, Mapping):
+                continue
+            run_id = item.get("runId") if isinstance(item.get("runId"), str) else ""
+            trace_id = item.get("traceId") if isinstance(item.get("traceId"), str) else ""
+            evidence_hits = [value for value in wanted if value in (run_id, trace_id)]
+            identity_hits = [
+                (value, "baseline" if value == _baseline_run_id(item) else "attempt")
+                for value in wanted
+                if value not in evidence_hits and value in _identity_run_ids(item)
+            ]
+            case_id = _int_value(item.get("caseId"))
+            protocol = str(item.get("protocol") or "a2a-t")
+            batch_id = str(batch.get("batchId") or "")
+            for value in evidence_hits:
+                refs.append(
+                    TesterRunRef(
+                        input=value,
+                        run_id=run_id,
+                        trace_id=trace_id,
+                        case_id=case_id,
+                        protocol=protocol,
+                        batch_id=batch_id,
+                        matched="runId" if value == run_id else "traceId",
+                        has_evidence=isinstance(item.get("stages"), Mapping),
+                    )
+                )
+            for value, matched in identity_hits:
+                refs.append(
+                    TesterRunRef(
+                        input=value,
+                        run_id=value,
+                        trace_id="",
+                        case_id=case_id,
+                        protocol=protocol,
+                        batch_id=batch_id,
+                        matched=matched,
+                        has_evidence=False,
+                    )
+                )
+            if not evidence_hits:
+                continue
+            if not isinstance(item.get("stages"), Mapping):
+                skipped["no_stages"] = skipped.get("no_stages", 0) + 1
+                continue
+            if case_id is None or case_id not in cases:
+                skipped["case_missing"] = skipped.get("case_missing", 0) + 1
+                continue
+            key = (batch_id, run_id)
+            if key in seen_items:
+                continue
+            seen_items.add(key)
+            matched_items.append((batch, dict(item)))
+
+    run_ids = [
+        str(item["runId"])
+        for _batch, item in matched_items
+        if isinstance(item.get("runId"), str) and item.get("runId")
+    ]
+    events = (
+        read_inbound_negotiation_events(client_db_path, run_ids)
+        if client_db_path is not None and run_ids
+        else {}
+    )
+    observations = tuple(
+        _observation(batch, item, int(item["caseId"]), str(item.get("protocol") or "a2a-t"), events)
+        for batch, item in matched_items
+    )
+    return TesterLookup(observations, tuple(refs), skipped, truncated)
+
+
+def _batch_files(directory: Path, skipped: dict[str, int]) -> list[Path]:
+    """Return the tester batch files, newest first."""
+    rows: list[tuple[float, Path]] = []
+    for path in directory.glob("*.json"):
+        try:
+            rows.append((path.stat().st_mtime, path))
+        except OSError:
+            skipped["unreadable"] = skipped.get("unreadable", 0) + 1
+    rows.sort(key=lambda row: row[0], reverse=True)
+    return [path for _moment, path in rows]
+
+
+def _identity_run_ids(item: Mapping[str, Any]) -> set[str]:
+    """Return the run ids the item keeps only as identity (baseline and earlier attempts)."""
+    values: set[str] = set()
+    baseline = _baseline_run_id(item)
+    if baseline:
+        values.add(baseline)
+    attempts = item.get("attempts")
+    if isinstance(attempts, list):
+        for attempt in attempts:
+            run_id = attempt.get("runId") if isinstance(attempt, Mapping) else None
+            if isinstance(run_id, str) and run_id:
+                values.add(run_id)
+    return values
+
+
+def _baseline_run_id(item: Mapping[str, Any]) -> str:
+    """Return the run that seeded a Modify item's baseline Task, or an empty string."""
+    baseline = item.get("baseline")
+    value = baseline.get("runId") if isinstance(baseline, Mapping) else None
+    return value if isinstance(value, str) else ""
+
+
 def scan_evidence(
     *,
     runs_dir: Path,
@@ -435,4 +621,12 @@ def case_documents(cases: Iterable[Mapping[str, Any]]) -> dict[int, Mapping[str,
     return {int(case["id"]): case for case in cases if isinstance(case.get("id"), int)}
 
 
-__all__ = ["DEFAULT_MAX_BATCHES", "ReviewScan", "case_documents", "scan_evidence"]
+__all__ = [
+    "DEFAULT_MAX_BATCHES",
+    "ReviewScan",
+    "TesterLookup",
+    "TesterRunRef",
+    "case_documents",
+    "find_tester_evidence",
+    "scan_evidence",
+]
