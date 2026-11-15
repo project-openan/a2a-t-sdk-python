@@ -1153,7 +1153,8 @@ def test_the_export_carries_the_trace_reason_and_the_fidelity_appendices() -> No
                     "protocol": "a2a-t",
                     "status": "fail",
                     "dimensions": [{"dimension": "trace", "status": "fail"}],
-                    "traceReason": "trace_not_exported",
+                    "traceReason": "trace_missing_client",
+                    "traceReasons": ["trace_missing_client", "trace_missing_ingest"],
                     "failures": [
                         {
                             "dimension": "trace",
@@ -1196,6 +1197,22 @@ def test_the_export_carries_the_trace_reason_and_the_fidelity_appendices() -> No
                             "expected": {},
                             "server": {},
                             "sdk": None,
+                            "rows": [
+                                {
+                                    "path": "Energy saving region",
+                                    "expected": "A",
+                                    "actual": "B",
+                                    "verdict": "changed",
+                                    "reason": "different",
+                                },
+                                {
+                                    "path": "Operation type",
+                                    "expected": "Modify",
+                                    "actual": "Modify",
+                                    "verdict": "same",
+                                    "reason": "",
+                                },
+                            ],
                             "corroboration": {
                                 "comparable": True,
                                 "equal": True,
@@ -1203,6 +1220,7 @@ def test_the_export_carries_the_trace_reason_and_the_fidelity_appendices() -> No
                                 "rows": [],
                             },
                         },
+                        "followup": True,
                         "trace": {
                             "present": True,
                             "traceId": "t",
@@ -1223,7 +1241,7 @@ def test_the_export_carries_the_trace_reason_and_the_fidelity_appendices() -> No
                     },
                     "exportRequests": {
                         "original": "o",
-                        "originalSource": "interception",
+                        "originalSource": "corpus",
                         "intercepted": "o",
                         "followup": "f",
                         "dispatched": "f",
@@ -1243,18 +1261,26 @@ def test_the_export_carries_the_trace_reason_and_the_fidelity_appendices() -> No
     payload = build_payload(rows, counts=counts, corpus_version="v1")
     entry = payload["cases"][0]["protocols"]["a2a-t"]
 
-    assert entry["traceReason"] == "trace_not_exported"
+    assert entry["traceReasons"] == ["trace_missing_client", "trace_missing_ingest"]
     assert entry["taskT"]["fidelity"]["differenceCount"] == 1
     assert entry["taskT"]["fidelity"]["differences"][0]["path"] == "task_t.Task Context"
     assert entry["trace"]["points"][0]["id"] == "message_sent"
-    assert entry["requests"]["originalSource"] == "interception"
+    assert [row["path"] for row in entry["intent"]["rows"]] == ["Energy saving region"]
+    assert entry["intent"]["followupCaseUsed"] is True
+    assert entry["requests"]["originalSource"] == "corpus"
+    assert entry["requests"]["blocked"] is True
+    assert entry["requests"]["followupApplied"] is True
+    assert entry["requests"]["warnings"]
 
     report = report_markdown(payload)
     assert "## 2.1 轨迹判定原因" in report
-    assert "trace_not_exported" in report
+    assert "`trace_missing_client` | 1" in report
+    assert "`trace_missing_ingest` | 1" in report
     assert "附录 A" in report
     assert "task_t.Task Context" in report
-    assert "附录 B" not in report
+    assert "## 附录 B：最终意图漂移" in report
+    assert "Energy saving region" in report
+    assert "附录 B.1" not in report
 
 
 def test_the_payload_and_report_carry_the_decisions(tmp_path: Path) -> None:

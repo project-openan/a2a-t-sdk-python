@@ -185,9 +185,15 @@ def report_markdown(
     reason_counts: dict[str, int] = {}
     for case in entries:
         for _protocol, task in _tasks(case):
-            reason = str(task.get("traceReason") or "")
-            if reason in TRACE_REASONS:
-                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            reasons = task.get("traceReasons")
+            codes = (
+                [str(reason) for reason in reasons]
+                if isinstance(reasons, list)
+                else [str(task.get("traceReason") or "")]
+            )
+            for code in codes:
+                if code in TRACE_REASONS:
+                    reason_counts[code] = reason_counts.get(code, 0) + 1
     if reason_counts:
         lines.extend(["", "## 2.1 轨迹判定原因", ""])
         lines.append("| 原因 | 数量 |")
@@ -254,10 +260,48 @@ def report_markdown(
         )
     _append_fidelity(lines, entries, key="taskT", summary_key="fidelity",
                      title="附录 A：Task-T 判定与下发差异")
+    _append_intent_drift(lines, entries)
     _append_fidelity(lines, entries, key="intent", summary_key="corroboration",
-                     title="附录 B：意图 corroboration 漂移")
+                     title="附录 B.1：意图 corroboration 漂移")
     lines.append("")
     return "\n".join(lines)
+
+
+def _append_intent_drift(
+    lines: list[str],
+    entries: Sequence[Mapping[str, object]],
+) -> None:
+    """Append the expected-vs-server intent differences, the acceptance oracle itself."""
+    rows: list[tuple[Mapping[str, object], str, list[Mapping[str, object]], bool]] = []
+    for case in entries:
+        for protocol, task in _tasks(case):
+            block = task.get("intent")
+            mapping = block if isinstance(block, Mapping) else {}
+            differences = mapping.get("rows")
+            if not isinstance(differences, list) or not differences:
+                continue
+            rows.append(
+                (
+                    case,
+                    protocol,
+                    [row for row in differences if isinstance(row, Mapping)],
+                    bool(mapping.get("followupCaseUsed")),
+                )
+            )
+    if not rows:
+        return
+    lines.extend(["", "## 附录 B：最终意图漂移（期望 vs 服务端）", ""])
+    for case, protocol, differences, followup in rows:
+        suffix = "（判定使用 blocked_followup 用例）" if followup else ""
+        lines.append(
+            f"- `#{case.get('id')}` {case.get('name')} · {_PROTOCOL_LABEL.get(protocol, protocol)}"
+            f" — {len(differences)} 个字段不一致{suffix}"
+        )
+        for diff in differences:
+            lines.append(
+                f"  - {diff.get('path')}: 期望 `{diff.get('expected')}`"
+                f" / 服务端 `{diff.get('actual')}` — {diff.get('reason') or diff.get('verdict')}"
+            )
 
 
 def _append_fidelity(
@@ -335,9 +379,16 @@ def _case_entry(case: Mapping[str, object]) -> dict[str, object]:
             },
             "failures": list(task.get("failures") or ()),
             "traceReason": str(task.get("traceReason") or ""),
+            "traceReasons": [
+                str(reason) for reason in task.get("traceReasons") or ()
+            ],
             "taskT": _task_t_entry(detail_map),
             "intent": _intent_entry(detail_map),
-            "requests": _requests_entry(task.get("exportRequests")),
+            "requests": _requests_entry(
+                task.get("exportRequests"),
+                blocked=bool(case.get("blocked")),
+                followup=bool(detail_map.get("followup")),
+            ),
             "trace": _trace_entry(detail_map),
         }
     return {
@@ -366,25 +417,45 @@ def _intent_entry(detail: Mapping[str, object]) -> dict[str, object]:
     """Return the intent block of one protocol task; the server reading stays the oracle."""
     block = detail.get("intent")
     intent = block if isinstance(block, Mapping) else {}
+    rows = intent.get("rows")
+    differences = (
+        [dict(row) for row in rows if isinstance(row, Mapping) and row.get("verdict") != "same"]
+        if isinstance(rows, list)
+        else []
+    )
     return {
         "expected": intent.get("expected"),
         "server": intent.get("server"),
         "sdk": intent.get("sdk"),
         "sourceOfTruth": "server",
+        "rows": differences,
+        "followupCaseUsed": bool(detail.get("followup")),
         "corroboration": _fidelity_entry(intent.get("corroboration")),
     }
 
 
-def _requests_entry(value: object) -> dict[str, object]:
-    """Return the three request sources and where each came from."""
+def _requests_entry(
+    value: object,
+    *,
+    blocked: bool,
+    followup: bool,
+) -> dict[str, object]:
+    """Return the three request sources, where each came from, and any degraded fallback."""
     block = value if isinstance(value, Mapping) else {}
+    source = str(block.get("originalSource") or "")
+    warnings: list[str] = []
+    if source == "corpus":
+        warnings.append("原始请求来自当前语料，未采到运行时原文")
     return {
         "original": block.get("original"),
-        "originalSource": block.get("originalSource"),
+        "originalSource": source,
         "intercepted": block.get("intercepted"),
         "followup": block.get("followup"),
         "dispatched": block.get("dispatched"),
         "dispatchedSource": block.get("dispatchedSource"),
+        "blocked": blocked,
+        "followupApplied": followup,
+        "warnings": warnings,
     }
 
 

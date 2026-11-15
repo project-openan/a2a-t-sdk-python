@@ -536,12 +536,16 @@ class ReviewService:
         input_changed = not evidence_is_current_input(case, protocol, evidence_map)
         judgement = judge_protocol(case, protocol, evidence_map)
         status = STATUS_STALE if input_changed else judgement.status
-        trace_reason = ""
+        trace_reasons: list[str] = []
         trace_dimension = judgement.dimension(DIMENSION_TRACE)
         if trace_dimension is not None:
-            trace_reason = next(
-                (str(diff.get("reason") or "") for diff in trace_dimension.diffs if diff.get("reason")),
-                "",
+            # One round can fail for several reasons at once; the report counts each of them.
+            trace_reasons = list(
+                dict.fromkeys(
+                    str(diff.get("reason") or "")
+                    for diff in trace_dimension.diffs
+                    if diff.get("reason")
+                )
             )
         return {
             "protocol": protocol,
@@ -567,7 +571,8 @@ class ReviewService:
             "decisionMode": observation.get("decisionMode"),
             "nms": bool(observation.get("nms")),
             "inputChanged": input_changed,
-            "traceReason": trace_reason,
+            "traceReason": trace_reasons[0] if trace_reasons else "",
+            "traceReasons": trace_reasons,
             "decision": self._decision_block(
                 case,
                 protocol,

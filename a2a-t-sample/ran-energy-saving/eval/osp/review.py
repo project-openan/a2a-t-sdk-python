@@ -845,6 +845,9 @@ def _trace_detail(
     frames = trace.get("frames")
     attribution = trace.get("attribution")
     points: list[dict[str, object]] = []
+    computed_attribution: dict[str, object] = (
+        dict(attribution) if isinstance(attribution, Mapping) else {}
+    )
     if context is not None:
         points = [
             {
@@ -856,18 +859,50 @@ def _trace_detail(
             }
             for result in process_points(trace, context)
         ]
+        # The snapshot carries the observations, not the verdict: the attribution is derived here
+        # so the page and the customer pack show producer/ingest/vendor instead of an empty block.
+        judged = judge_trace(
+            trace, context, not_exported_status=TRACE_NOT_EXPORTED_STATUS
+        )
+        computed_attribution = {
+            "status": judged.attribution,
+            "findings": [
+                {
+                    "point": finding.point,
+                    "label": finding.label,
+                    "status": finding.status,
+                    "detail": finding.detail,
+                }
+                for finding in judged.findings
+            ],
+        }
+    warnings = trace.get("warnings")
     return {
         "present": True,
         "traceId": trace.get("traceId"),
         "fetchedAt": trace.get("fetchedAt") or trace.get("capturedAt"),
         "exportState": trace.get("exportState") or trace.get("export_state"),
+        "spanLevel": trace.get("spanLevel"),
+        "captureContent": trace.get("captureContent"),
+        "nmsKind": _nms_kind(evidence),
         "frames": dict(frames) if isinstance(frames, Mapping) else {},
-        "attribution": dict(attribution) if isinstance(attribution, Mapping) else {},
+        "attribution": computed_attribution,
         "points": points,
+        "warnings": [str(item) for item in warnings] if isinstance(warnings, list) else [],
         "related": list(trace.get("related") or ())
         if isinstance(trace.get("related"), list)
         else [],
     }
+
+
+def _nms_kind(evidence: Mapping[str, Any]) -> str:
+    """Return real / sim / local / unknown from the declared batch flags."""
+    batch = _mapping(evidence.get("batch"))
+    if batch.get("nmsSim") is True:
+        return "sim"
+    if batch.get("nms") is None or batch.get("nmsSim") is None:
+        return "unknown"
+    return "real" if batch.get("nms") is True else "local"
 
 
 def _fidelity_dict(fidelity: Fidelity) -> dict[str, object]:

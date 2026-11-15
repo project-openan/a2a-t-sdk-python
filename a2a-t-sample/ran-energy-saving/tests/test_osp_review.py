@@ -485,6 +485,11 @@ def test_a_missing_expected_point_fails_with_its_code() -> None:
     assert _trace_code(judgement) == "trace_missing_ingest"
     assert judgement.status == VERDICT_FAIL
 
+    trace = judgement.to_dict()["detail"]["trace"]
+    assert trace["attribution"]["status"] == "missing_ingest"
+    assert trace["attribution"]["findings"]
+    assert trace["nmsKind"] == "real"
+
 
 def test_a_missing_point_without_local_evidence_is_still_a_failure() -> None:
     without_validation = tuple(

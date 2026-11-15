@@ -1007,6 +1007,22 @@ function renderDimensionStrip(round) {
     );
   }
   card.append(strip);
+  const trace = (round.judgement && round.judgement.detail && round.judgement.detail.trace) || {};
+  if (trace.present) {
+    const nms = (trace.frames && trace.frames.nms) || {};
+    const attribution = trace.attribution || {};
+    const findings = attribution.findings || [];
+    const facts = [
+      `轨迹 ${trace.nmsKind || "—"}`,
+      trace.spanLevel ? `层级 ${trace.spanLevel}` : "",
+      trace.captureContent === false ? "内容未捕获" : "",
+      `NMS 帧 ${nms.observed ?? "—"}/${nms.expected ?? "—"}`,
+      attribution.status
+        ? `归因 ${attribution.status}${findings.length ? `（${findings.length} 点）` : ""}`
+        : "",
+    ].filter(Boolean);
+    card.append(el("p", "sub", facts.join(" · ")));
+  }
   const failures = (round.judgement && round.judgement.failures) || [];
   const notExported = failures.some(
     (row) =>
