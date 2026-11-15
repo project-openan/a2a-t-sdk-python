@@ -238,6 +238,40 @@ def intent_params(payload: Mapping[str, object]) -> Mapping[str, object] | None:
     return None
 
 
+def fidelity_summary(fidelity: Fidelity) -> dict[str, object]:
+    """Return the compact export form of a fidelity comparison.
+
+    The customer pack needs the failing rows and the counts; repeating every ``same`` section in
+    each of 200 targets only inflates the artifact. The UI can still render ``Fidelity.rows``.
+    """
+    differences = [
+        row
+        for row in fidelity.rows
+        if (row.get("verdict") or row.get("status")) in {"changed", "missing", "added"}
+    ]
+    return {
+        "comparable": fidelity.comparable,
+        "equal": fidelity.equal,
+        "truncated": fidelity.truncated,
+        "differenceCount": len(differences),
+        "differences": differences,
+    }
+
+
+def points_summary(results: Sequence[PointResult]) -> list[dict[str, object]]:
+    """Return the compact export form of the process-point table."""
+    return [
+        {
+            "id": result.point.id,
+            "label": result.point.label,
+            "expected": result.point.count,
+            "observed": result.observed,
+            "ok": result.ok,
+        }
+        for result in results
+    ]
+
+
 def _observations(payload: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     value = payload.get("observations")
     if not isinstance(value, Sequence):

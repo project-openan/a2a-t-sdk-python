@@ -23,12 +23,14 @@ from eval.osp.tracecheck import (
     attribute_points,
     dispatched_task_t,
     expected_client_points,
+    fidelity_summary,
     frame_gate,
     intent_corroboration,
     intent_params,
     judge_trace,
     match_points,
     original_request,
+    points_summary,
     process_points,
     task_t_fidelity,
 )
@@ -307,6 +309,24 @@ def test_intent_corroboration_compares_the_oracle_with_the_langfuse_reading() ->
     drifted["Energy saving region"] = "OtherRegion"
     assert intent_corroboration(INTENT, drifted).equal is False
     assert intent_corroboration(INTENT, {"foo": "bar"}).comparable is False
+
+
+def test_fidelity_summary_exports_only_the_differences() -> None:
+    summary = fidelity_summary(task_t_fidelity(TASK_T, TASK_T.replace("Create", "Modify")))
+    assert summary["comparable"] is True
+    assert summary["equal"] is False
+    assert summary["differenceCount"] >= 1
+    assert summary["differences"]
+    assert all(
+        (row.get("verdict") or row.get("status")) in {"changed", "missing", "added"}
+        for row in summary["differences"]
+    )
+
+
+def test_points_summary_is_compact() -> None:
+    summary = points_summary(process_points({"observations": _complete_observations()}, _context()))
+    assert summary
+    assert {"id", "label", "expected", "observed", "ok"} <= set(summary[0])
 
 
 def test_dispatched_content_is_read_from_the_snapshot_observations() -> None:
