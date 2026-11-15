@@ -109,6 +109,12 @@ _VERDICTS: Final[tuple[str, ...]] = (
     VERDICT_NOT_APPLICABLE,
 )
 
+#: Status of a real-machine run whose trace was never exported. The decision (2026-11-16) is
+#: ``fail``: the trace is a customer gate, so "not collected" blocks acceptance exactly like a
+#: vendor gap, and only the reason code tells them apart. Kept as one constant because the rejected
+#: alternative was a separate "blocked" state, which must not be confused with a defect.
+TRACE_NOT_EXPORTED_STATUS: Final[str] = VERDICT_FAIL
+
 
 @dataclass(frozen=True)
 class DimensionResult:
@@ -604,7 +610,7 @@ def _judge_trace(protocol: str, evidence: Mapping[str, Any]) -> DimensionResult:
     if not isinstance(trace, Mapping):
         return DimensionResult(
             DIMENSION_TRACE,
-            VERDICT_FAIL,
+            TRACE_NOT_EXPORTED_STATUS,
             reason="轨迹未导出",
             diffs=(_trace_diff("trace.export", "已导出", "缺失", TRACE_NOT_EXPORTED),),
         )
@@ -893,6 +899,7 @@ __all__ = [
     "DIMENSION_VALIDATE",
     "DimensionResult",
     "ProtocolJudgement",
+    "TRACE_NOT_EXPORTED_STATUS",
     "TRACE_REASONS",
     "VERDICT_FAIL",
     "VERDICT_MISSING",
