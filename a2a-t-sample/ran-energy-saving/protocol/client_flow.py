@@ -2949,6 +2949,12 @@ def _vendor_kind_for_negotiation_type(value: object) -> NegotiationKind | None:
     return negotiation_kind_for_negotiation_type(alias) if alias is not None else None
 
 
+#: The vendor NMS sometimes stamps its generic propose template on a feasibility proposal, where
+#: the sample (and the same vendor most of the time) sends ``feasibility-negotiation``. The generic
+#: template names no kind, so it must not be treated as an unknown sample template.
+_VENDOR_GENERIC_PROPOSE_URI: Final[str] = "Negotiation-T/common/propose/v1"
+
+
 def _normalized_template_uri(value: str) -> str:
     """Return one template URI without URL decoration, casing or underscore spelling."""
     text = value.strip().strip("\"'")
@@ -2962,6 +2968,14 @@ def _normalized_template_uri(value: str) -> str:
         segment = parts[1].lower().replace("_", "-")
         parts[1] = _TEMPLATE_SEGMENT_ALIASES.get(segment, segment)
     return "/".join(parts)
+
+
+def _is_generic_vendor_propose(value: object) -> bool:
+    """Return whether a template URI is the vendor's kind-less ``common`` propose template."""
+    return (
+        isinstance(value, str)
+        and _normalized_template_uri(value) == _VENDOR_GENERIC_PROPOSE_URI
+    )
 
 
 def _vendor_kind_for_template_uri(value: object) -> NegotiationKind | None:
@@ -3091,7 +3105,9 @@ def _resolve_propose_template(
     canonical propose URI of that kind stands in for the unusable value. The resolution order is
     nested ``negotiationType``, nested ``templateUri``, the typed fields read from the raw value,
     then the opening heading of the unwrapped body. An untyped body still fails: guessing the kind
-    would select the wrong decision prompt and the wrong reply template.
+    would select the wrong decision prompt and the wrong reply template. The vendor's kind-less
+    ``Negotiation-T/common/propose/v1`` is the one exception: it is a known template, the body
+    still types it first, and only an untyped body falls back to feasibility.
 
     Args:
         metadata: A2A metadata map of the inbound propose.
@@ -3108,20 +3124,29 @@ def _resolve_propose_template(
             outer URI so a field report is diagnosable without the raw frame.
     """
     value = metadata.get(TEMPLATE_URI_METADATA_KEY)
+    generic_common = False
     if isinstance(value, str) and value.strip():
         kind = _vendor_kind_for_template_uri(value)
         if kind is not None:
             return value, kind, False
+        generic_common = _is_generic_vendor_propose(value)
         if not infer_missing_template_uri:
             raise ClientFlowError(
                 f"{_ERROR_UNKNOWN_KIND} templateUri={value} "
                 f"({_propose_diagnostics(metadata, outer_template_uri=value, frame=frame)})"
             )
-        _LOGGER.warning(
-            "the negotiation propose template %r is not a sample negotiation template; "
-            "inferring its kind from the body",
-            value,
-        )
+        if generic_common:
+            _LOGGER.info(
+                "the negotiation propose uses the vendor's generic template %r; "
+                "typing it from the body",
+                value,
+            )
+        else:
+            _LOGGER.warning(
+                "the negotiation propose template %r is not a sample negotiation template; "
+                "inferring its kind from the body",
+                value,
+            )
     elif not infer_missing_template_uri:
         raise ClientFlowError(
             f"{_ERROR_NO_TEMPLATE_URI} ({_propose_diagnostics(metadata, frame=frame)})"
@@ -3130,12 +3155,22 @@ def _resolve_propose_template(
     kind = _vendor_propose_kind(frame)
     if kind is None:
         kind = negotiation_kind_for_propose_content(frame.text)
-    if kind is not None:
+    if kind is None and generic_common:
+        # The generic template names no kind and the body types none. In this scenario the vendor
+        # only starts a feasibility negotiation on a propose, so the compatibility fallback keeps
+        # a valid run green instead of failing on a vendor template name.
+        kind = NegotiationKind.FEASIBILITY
         _LOGGER.warning(
-            "the negotiation propose carries no usable outer template URI; inferred kind=%s "
-            "from its responseMetadata, typed fields or heading",
-            kind.value,
+            "the vendor's generic propose template names no kind and its body names none; "
+            "falling back to feasibility"
         )
+    if kind is not None:
+        if not generic_common:
+            _LOGGER.warning(
+                "the negotiation propose carries no usable outer template URI; inferred kind=%s "
+                "from its responseMetadata, typed fields or heading",
+                kind.value,
+            )
         return _PROPOSE_TEMPLATE_URI_BY_KIND[kind.value], kind, True
     diagnostics = _propose_diagnostics(metadata, outer_template_uri=value, frame=frame)
     if isinstance(value, str) and value.strip():

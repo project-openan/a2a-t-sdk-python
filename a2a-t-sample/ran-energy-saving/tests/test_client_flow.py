@@ -2856,6 +2856,15 @@ def _propose_with_vendor_template_uri(kind: str, *, content: str) -> dict[str, o
     return event
 
 
+def _propose_with_common_template_uri(kind: str, *, content: str) -> dict[str, object]:
+    """Build a propose whose outer ``templateUri`` is the vendor's generic ``common`` template."""
+    event = propose_event(kind, 1, content=content)
+    metadata = event["metadata"]
+    assert isinstance(metadata, dict)
+    metadata[TEMPLATE_URI_METADATA_KEY] = "Negotiation-T/common/propose/v1"
+    return event
+
+
 async def test_the_field_feasibility_frame_is_typed_from_its_nested_negotiation_type() -> None:
     """The real NMS wraps the body in a top-level array; the nested type still names the kind."""
     requested = await _requested_propose(_field_feasibility_frame())
@@ -3067,6 +3076,98 @@ async def test_an_unknown_vendor_template_uri_is_inferred_from_the_body() -> Non
                 [
                     _propose_with_vendor_template_uri(
                         "information", content=_field_feasibility_frame()
+                    )
+                ],
+                [end_event()],
+            ]
+        ),
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+        language="en-US",
+        on_decision_requested=lambda propose, session: seen.append(propose),
+        infer_missing_negotiation_kind=True,
+    )
+
+    assert [(item.kind, item.template_uri) for item in seen] == [
+        ("feasibility", FEASIBILITY_NEGOTIATION_PROPOSE_URI)
+    ]
+
+
+async def test_the_vendor_generic_propose_template_is_typed_from_its_body() -> None:
+    """The NMS sometimes stamps ``common/propose``; the nested typed metadata still names feasibility."""
+    seen: list[NegotiationProposeView] = []
+    await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=ScriptedTransport(
+            [
+                [
+                    _propose_with_common_template_uri(
+                        "feasibility", content=_field_feasibility_frame()
+                    )
+                ],
+                [end_event()],
+            ]
+        ),
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+        language="en-US",
+        on_decision_requested=lambda propose, session: seen.append(propose),
+        infer_missing_negotiation_kind=True,
+    )
+
+    assert [(item.kind, item.template_uri) for item in seen] == [
+        ("feasibility", FEASIBILITY_NEGOTIATION_PROPOSE_URI)
+    ]
+
+
+async def test_the_generic_propose_template_does_not_override_a_body_that_names_another_kind() -> (
+    None
+):
+    """``common`` names no kind, so the body's information type must still win over the fallback."""
+    seen: list[NegotiationProposeView] = []
+    await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=ScriptedTransport(
+            [
+                [
+                    _propose_with_common_template_uri(
+                        "information",
+                        content=_vendor_propose_content(
+                            negotiation_type="INFORMATION",
+                            template_uri="Negotiation-T/common/propose/v1",
+                        ),
+                    )
+                ],
+                [end_event()],
+            ]
+        ),
+        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((NegotiationDecision(action="reject", rationale="No."),)),
+        language="en-US",
+        on_decision_requested=lambda propose, session: seen.append(propose),
+        infer_missing_negotiation_kind=True,
+    )
+
+    assert [(item.kind, item.template_uri) for item in seen] == [
+        ("information", INFORMATION_NEGOTIATION_PROPOSE_URI)
+    ]
+
+
+async def test_an_untyped_generic_propose_falls_back_to_feasibility() -> None:
+    """The vendor only proposes feasibility in this scenario, so the generic template is not fatal."""
+    seen: list[NegotiationProposeView] = []
+    await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=ScriptedTransport(
+            [
+                [
+                    _propose_with_common_template_uri(
+                        "feasibility",
+                        content=_vendor_propose_content(
+                            negotiation_type=None,
+                            template_uri="Negotiation-T/common/propose/v1",
+                            text="Please reduce the rate target to 2Mbps or less.",
+                        ),
                     )
                 ],
                 [end_event()],
