@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-brand="orange">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>A2A / A2A-T · 验收审核</title>
+  <link rel="stylesheet" href="/review/app.css">
+  <script type="module" src="/review/main.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">验收</span>
+      <div class="brand-text">
+        <small>RAN 节能 · 用例语料</small>
+        <h1>验收审核</h1>
+      </div>
+    </div>
+    <nav class="top-nav">
+      <a class="ghost" href="/">演示页面</a>
+      <a class="ghost" href="/tester">评测控制台</a>
+      <a class="ghost" href="/runs">Run 控制台</a>
+      <a class="ghost" href="/annotate">预期标注</a>
+    </nav>
+    <div class="top-actions">
+      <label class="inline" for="config-days">证据窗口
+        <select id="config-days">
+          <option value="3">3 天</option>
+          <option value="7" selected>7 天</option>
+          <option value="30">30 天</option>
+          <option value="90">90 天</option>
+        </select>
+      </label>
+      <button class="primary" id="scan-button" type="button">采集证据</button>
+      <span class="summary" id="progress"></span>
+      <a class="button" href="/api/review/export.yaml">导出 YAML</a>
+      <a class="button" href="/api/review/export.json">导出 JSON</a>
+      <a class="button" href="/api/review/report.md">验收报告</a>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="notice" id="scan-note" hidden></div>
+
+    <div class="layout">
+      <aside class="card sidebar">
+        <div class="card-head">
+          <h2>用例</h2>
+          <span class="summary" id="case-count"></span>
+        </div>
+        <div class="filters">
+          <input id="filter-query" type="search" placeholder="搜索编号或名称">
+          <select id="filter-protocol">
+            <option value="">全部协议</option>
+            <option value="a2a-t">A2A-T</option>
+            <option value="a2a">A2A</option>
+          </select>
+          <select id="filter-status">
+            <option value="">全部自动判定</option>
+            <option value="pass">通过</option>
+            <option value="fail">失败</option>
+            <option value="partial">部分可判</option>
+            <option value="stale">需重跑</option>
+            <option value="not_run">未跑</option>
+            <option value="not_applicable">不适用</option>
+          </select>
+          <select id="filter-decision">
+            <option value="">全部审核结论</option>
+            <option value="pending">未审核</option>
+            <option value="accepted">通过</option>
+            <option value="defect">缺陷</option>
+            <option value="known_issue">已知问题</option>
+            <option value="recheck">待复核</option>
+          </select>
+          <select id="filter-category">
+            <option value="">全部缺陷归属</option>
+            <option value="sdk">SDK</option>
+            <option value="vendor">网管</option>
+            <option value="case">用例</option>
+            <option value="env">环境</option>
+            <option value="other">其他</option>
+          </select>
+          <label class="check"><input id="only-failures" type="checkbox"> 只看失败/部分/需重跑</label>
+          <label class="check"><input id="only-pending" type="checkbox"> 只看未审核</label>
+        </div>
+        <div class="case-list" id="case-list"></div>
+      </aside>
+
+      <div class="content" id="detail">
+        <section class="card empty">
+          <p>从左侧选择用例与协议，右侧会给出跨轮次的自动判定与审核结论。</p>
+          <p class="muted">判定使用<strong>当前用例语料</strong>重算已存证据；证据是否仍然有效、是否出现新轮次会单独标出。</p>
+        </section>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

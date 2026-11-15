@@ -478,7 +478,7 @@ def test_confirming_changes_the_status_and_the_confirmed_payload(tmp_path: Path)
     assert row["status"] == TARGET_CONFIRMED
     assert row["confirmedBy"] == "tester-cookie"
     assert store.export_payload()["cases"] == [
-        {"id": 28, "a2a-t": {"messages": [[FEASIBILITY]]}}
+        {"id": 28, "a2a-t": {"negotiation": {"messages": [[FEASIBILITY]]}}}
     ]
 
 
@@ -569,7 +569,9 @@ def test_replace_rejects_the_previous_choice_of_one_target(tmp_path: Path) -> No
 
     store.adopt(key, [as_int(second["id"])], replace=True, confirm=True)
 
-    assert store.export_payload()["cases"] == [{"id": 28, "a2a-t": {"messages": [[other]]}}]
+    assert store.export_payload()["cases"] == [
+        {"id": 28, "a2a-t": {"negotiation": {"messages": [[other]]}}}
+    ]
 
 
 def test_applying_a_selection_rejects_the_candidates_left_out(tmp_path: Path) -> None:
@@ -598,7 +600,7 @@ def test_applying_a_selection_rejects_the_candidates_left_out(tmp_path: Path) ->
     )
     store.apply(key, [as_int(first["id"])], confirm=True)
     assert store.export_payload()["cases"] == [
-        {"id": 28, "a2a-t": {"messages": [[FEASIBILITY]]}}
+        {"id": 28, "a2a-t": {"negotiation": {"messages": [[FEASIBILITY]]}}}
     ]
 
     rows = store.detail(key)["observations"]
@@ -607,7 +609,9 @@ def test_applying_a_selection_rejects_the_candidates_left_out(tmp_path: Path) ->
 
     store.apply(key, [as_int(second["id"])], edits={as_int(second["id"]): other}, confirm=True)
 
-    assert store.export_payload()["cases"] == [{"id": 28, "a2a-t": {"messages": [[other]]}}]
+    assert store.export_payload()["cases"] == [
+        {"id": 28, "a2a-t": {"negotiation": {"messages": [[other]]}}}
+    ]
     assert _target(store.detail(key))["status"] == TARGET_CONFIRMED
 
 
@@ -697,7 +701,7 @@ def test_rescanning_repairs_the_metadata_of_an_existing_observation(tmp_path: Pa
 
 def _payload() -> dict[str, object]:
     return {
-        "schema": "osp-annotations/v1",
+        "schema": "osp-expectations-overlay/v1",
         "generatedAt": "2026-11-15T10:00:00+00:00",
         "cases": [
             {
@@ -711,8 +715,8 @@ def _payload() -> dict[str, object]:
             },
             {
                 "id": 26,
-                "a2a-t": {"messages": [[FEASIBILITY]]},
-                "a2a": {"messages": [["Not feasible, please confirm"]]},
+                "a2a-t": {"negotiation": {"messages": [[FEASIBILITY]]}},
+                "a2a": {"negotiation": {"messages": [["Not feasible, please confirm"]]}},
             },
         ],
     }
@@ -721,7 +725,7 @@ def _payload() -> dict[str, object]:
 def test_the_global_yaml_export_carries_the_schema_and_cases() -> None:
     text = payload_yaml(_payload())
 
-    assert text.startswith("# osp-annotations/v1")
+    assert text.startswith("# osp-expectations-overlay/v1")
     assert "    expect:" in text
 
 
@@ -884,7 +888,7 @@ def test_a_trace_adopts_every_round_of_its_negotiation(tmp_path: Path) -> None:
     assert result["adopted"][0]["choices"] == 2
     assert result["adopted"][0]["status"] == TARGET_DRAFT
     assert store.export_payload(confirmed_only=False)["cases"] == [
-        {"id": _case_id(), "a2a": {"messages": [[FEASIBILITY], [FEASIBILITY]]}}
+        {"id": _case_id(), "a2a": {"negotiation": {"messages": [[FEASIBILITY], [FEASIBILITY]]}}}
     ]
 
 
@@ -934,14 +938,14 @@ def test_a_second_trace_does_not_overwrite_adopted_values_without_replace(tmp_pa
     assert kept["adopted"] == []
     assert kept["skipped"][0]["reason"] == "already_adopted"
     assert store.export_payload()["cases"] == [
-        {"id": _case_id(), "a2a-t": {"messages": [[FEASIBILITY]]}}
+        {"id": _case_id(), "a2a-t": {"negotiation": {"messages": [[FEASIBILITY]]}}}
     ]
 
     replaced = service.adopt_traces(["t-2"], replace=True)
 
     assert replaced["adopted"][0]["status"] == TARGET_CONFIRMED
     assert store.export_payload()["cases"] == [
-        {"id": _case_id(), "a2a-t": {"messages": [[other]]}}
+        {"id": _case_id(), "a2a-t": {"negotiation": {"messages": [[other]]}}}
     ]
 
 

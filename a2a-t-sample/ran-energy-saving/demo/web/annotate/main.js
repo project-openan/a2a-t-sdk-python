@@ -874,7 +874,8 @@ function renderCaseExport(caseRow) {
     el(
       "p",
       "sub",
-      "片段按 expect.protocols 的层级（6 空格）生成，供人工合并进 eval/osp/cases/<用例>.yaml。",
+      "片段按 expect.protocols 的层级（6 空格）生成；首选放进 eval/osp/expectations-overlay.yaml，"
+        + "不要合并进会被热更新替换的用例 YAML。",
     ),
   );
   if (state.snippet) card.append(el("pre", "mono", state.snippet));

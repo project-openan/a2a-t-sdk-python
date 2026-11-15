@@ -253,7 +253,9 @@ A2A-T 只有 10 条需要协商（26/28/29/30/31/32/50/51/88/89），其余 90 �
   `contains`（任一关键词出现在 slot 名 / message / facts 值里）、`facts`（子集精确匹配）。
 - `/annotate` 采纳一条候选时导出的就是**整个观测到的错误**（`code` + `slotName` + `message` +
   `facts`），这样 oracle 记录的是当时真正报出的内容；如果不想把模型渲染的 `slotName`/`message`
-  固化进预期，在用例里删掉对应键即可（只留 `code` / `facts` 同样合法）。
+  固化进预期，在用例（或 overlay）里删掉对应键即可（只留 `code` / `facts` 同样合法）。
+- 这两个块既可以写在用例 YAML 的 `expect.protocols` 下，也可以写在 `eval/osp/expectations-overlay.yaml`
+  （`CaseCatalog` 加载时合并）；现场推荐 overlay，见 §12.5。
 - `mode: any`：观测到的错误里任意一条命中任意一个期望即通过。`mode: cover`：观测到的每条错误都必须
   被某条期望覆盖（且至少观测到一条）。
 - 没有该块 = 不判定（保持"只看 verdict"的历史行为）。
@@ -524,7 +526,7 @@ python -m eval.osp.runner --all --stop-after validate --model-mode live \
 等于 `expected_rounds` 且 `kinds` 命中。不一致的候选仍然展示（红底）作为证据，但不能变成 oracle；
 需要记录时写进备注或 `known_issue`。这样可以避免"把当前缺陷固化成期望"。
 
-### 12.5 存储与导出（只导出，不落盘）
+### 12.5 存储与使用（默认直接读库，不需要导出）
 
 - 标注库：`runs/annotations/annotations.sqlite3`（append-only：`observation` / `target` / `choice` /
   `event`）。来源 runId、确认人、时间只存在这里，**不写进用例 YAML**。
@@ -533,11 +535,23 @@ python -m eval.osp.runner --all --stop-after validate --model-mode live \
   **全部**子任务（accepted 集合 = 提交的 `observationIds`）并标记为已确认。保存成功后「已保存的
   导出值」和左侧状态徽标才更新；未保存就切换用例会提示。
 - 状态机：`pending → draft → confirmed`；确认后再改候选会自动退回 `draft`。
-- **页面不写任何用例文件**：黄区的用例会被热更新替换，直接写会被覆盖或与正在测的副本分叉。因此只提供：
-  - 顶部「导出全部 YAML / JSON」：`osp-annotations/v1`，case 级的两类期望，便携、可跨环境传递；
-  - 右侧「生成期望片段」：单用例的片段，已按 `expect.protocols` 的层级（6 空格）缩进，复制粘贴即可；
-    没有已确认值时片段会明确说明，而不是给空字符串。
-- `eval/osp/index.yaml` 只记录 id/文件名/标签/轮次数，不含这两类期望，合并后无需更新它。
+- **页面不写任何用例文件**：黄区的用例会被热更新替换，直接写会被覆盖或与正在测的副本分叉。
+- **默认不需要导出**：`CaseCatalog` 通过 `annotation_overlay` 回调**按用例 id 直接读标注库**的
+  已确认值，在加载时叠加到用例文档；标注页保存后立即 reload。tester / review / annotate 看到的是
+  同一份合并结果，没有"忘记导出"的中间态。审核实例用 `--annotations` 指向标注库（默认
+  `<runs>/annotations/annotations.sqlite3`，与标注实例默认 `--store` 相同）。离线
+  `python -m eval.osp.runner` 直接读用例 YAML，不读标注库；需要离线复判时以 tester 的离线批次为准。
+  - 读库使用 SQLite `mode=ro`，不创建 `-wal`、不修改写入方；库不存在时视为无 overlay。
+  - 标注库中个别条目失效（例如用例 `expected_rounds` 改过）时只跳过该用例并告警，不影响整个语料。
+- **可选导出**：顶部「导出 overlay YAML / JSON」产出 `osp-expectations-overlay/v1`，用于跨环境、
+  入库或蓝区固化；可直接放到 `eval/osp/expectations-overlay.yaml`（或 `--overlay` 指定的路径）。
+  - overlay 只接受两类键：`a2a-t.slot_errors`（仅 blocked 用例）与
+    `<protocol>.negotiation.messages`；`validate` / `task_t` / 轮次数仍以生成的用例为准。
+  - YAML overlay 是严格模式（写错即失败）；标注库是宽松模式（坏条目告警后跳过）。
+  - 叠加顺序：生成用例 < YAML overlay < 标注库（最新的人工确认优先）。
+- 右侧「生成期望片段」：单用例的片段，已按 `expect.protocols` 的层级（6 空格）缩进；没有已确认值时
+  会明确说明。它和 overlay 的单个 case 条目同形。
+- `eval/osp/index.yaml` 只记录 id/文件名/标签/轮次数，不含这两类期望，无需更新它。
 
 ### 12.6 注意
 
@@ -588,3 +602,50 @@ python -m demo.web.annotate \
   批次超上限会显式提示。
 - 自动采纳与手工勾选等价：`messages` 落原文作为该轮备选，`slot_errors` 落**整个观测错误**
   （`code` / `slotName` / `message` / `facts`），导出格式见 §5.3。API 见 `ANNOTATE-GUIDE.md` 第 7 节。
+
+## 13. 验收审核控制台 `/review`
+
+tester 回答"这一轮跑得怎么样"，`/review` 回答"**用今天的语料看，这批证据能不能验收**"。它是跨
+批次的只读验收层：证据仍来自 `runs/tester/*.json`，判定在读取时用当前用例重新计算，结论由人给出并
+落库，最后导出验收报告。
+
+### 13.1 判定模型
+
+| 维度 | oracle | 证据 | 协议 |
+|---|---|---|---|
+| 最终意图（硬门槛） | `expect.intent` vs `serverIntent`（`flatten_intent` 语义判定） | 下游 SUBMITTED 结构化读数 | A2A-T；A2A 仅记录 |
+| SDK Task-T | `expect.protocols.a2a-t.task_t` | `stages.task_t.actual`（分节判定） | A2A-T |
+| 拦截 | `validate` + `slot_errors` | 拦截段 `stages.validate.detail` | A2A-T |
+| 协商 | 轮数/类型 + `messages` | 阶段 actual + 按 runId 关联的 `negotiation_events` | 双协议 |
+| 终态 | `final_state` | `stages.final.actual` | 按 `assert` |
+
+- **以当前语料重判**：`eval/osp/review.py` 用 `compare.py` / `expectations.py` 对已存证据重新判，
+  所以新写的 `slot_errors` / `messages` 立即对旧批次生效，不需要重跑。期望值的来源是标注库
+  （按用例 id 直接读，见 §12.5），可选的 YAML overlay 叠加在其前面。
+- **意图三方对比**：页面并列「用例预期 / 服务端最终 / SDK 抽取」，前者衡量交付正确性，后两者衡量
+  SDK 抽取与 Task-T 传递损耗。
+- **blocked 用例**：拦截段对原始用例判 validate + slot_errors；后续段对 `followup_case` 判
+  intent / Task-T / 终态。
+- **不可判定就标出来**：模拟器/代理/无直连 payload 的意图是 `recorded`，缺报文证据是 `missing`，
+  两者都让协议任务成为 `partial`，不能被当成通过。
+- 证据的输入签名（`refs.userInput`）与当前有效用例不一致时，任务标 `stale`（需重跑），不重判。
+
+### 13.2 结论与新鲜度
+
+- 自动判定：`pass / fail / partial / recorded / missing / not_expected / not_applicable / stale / not_run`。
+- 人工结论（按用例 × 协议，共 200 个）：`pending / accepted / defect / known_issue / recheck`；
+  缺陷必须填归属（SDK / 网管 / 用例 / 环境 / 其他）和备注。
+- 人工覆盖自动判定时服务端要求备注；页面提示"自动判定不是通过"。
+- 结论记录证据 runId 与用例指纹：用例或期望变更 → `stale`；结论之后出现新轮次 → `newEvidence`，
+  都要求复核，而不是静默沿用旧结论。
+
+### 13.3 页面与导出
+
+- 左栏用例列表，右栏当前用例 × 协议：结论卡、运行轮次（默认最新真机 + live，可看全部轮次稳定性）、
+  最终意图、Task-T、拦截、协商、运行终态、审核结论、证据。
+- 「保存结论」一次写入该协议任务的结论；不再有逐项提交。
+- 导出：`osp-review/v1` YAML/JSON + Markdown 验收报告（结论汇总、用例矩阵、缺陷清单按归属分组、
+  已认可偏差、待审核、已知问题/待复核）。与 `/annotate` 一样不写用例文件。
+- 入口：主 Web UI 的 `/review`；黄区用只读进程
+  `python -m demo.web.review --runs-dir … --store … [--annotations <标注库>] --port 8091`。
+  详细运行手册见 **`eval/osp/REVIEW-GUIDE.md`**。

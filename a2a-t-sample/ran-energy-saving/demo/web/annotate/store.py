@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
+from eval.osp.catalog import OVERLAY_SCHEMA
 from eval.osp.expectations import MESSAGE_DIMENSION, SLOT_DIMENSION, SLOT_MODE_ANY
 
 #: Status of one annotation target.
@@ -561,10 +562,26 @@ class AnnotationStore:
             self._record(connection, actor, "confirm", key, {})
         return {"status": TARGET_CONFIRMED, "confirmedAt": stamp, "confirmedBy": actor}
 
-    def export_payload(self, *, confirmed_only: bool = True) -> dict[str, object]:
+    def read_payload(self) -> dict[str, object] | None:
+        """Return the confirmed payload without writing, or ``None`` when the database is absent.
+
+        The review console and the catalog read the annotation database of another process. A
+        read-only connection keeps that process the only writer and never creates a ``-wal`` file
+        beside its data.
+        """
+        if not self._path.is_file():
+            return None
+        return self.export_payload(confirmed_only=True, readonly=True)
+
+    def export_payload(
+        self,
+        *,
+        confirmed_only: bool = True,
+        readonly: bool = False,
+    ) -> dict[str, object]:
         """Return the case-level expectation payload of the confirmed targets."""
         cases: dict[int, dict[str, object]] = {}
-        with self._session() as connection:
+        with self._session(readonly=readonly) as connection:
             connection.row_factory = sqlite3.Row
             targets = connection.execute(
                 "SELECT * FROM target ORDER BY case_id ASC"
@@ -588,9 +605,11 @@ class AnnotationStore:
                 if key.dimension == SLOT_DIMENSION:
                     protocols["slot_errors"] = value
                 else:
-                    protocols["messages"] = value
+                    negotiation = protocols.setdefault("negotiation", {})
+                    if isinstance(negotiation, dict):
+                        negotiation["messages"] = value
         return {
-            "schema": "osp-annotations/v1",
+            "schema": OVERLAY_SCHEMA,
             "generatedAt": now_iso(),
             "cases": [
                 {"id": case_id, **protocols}
@@ -743,14 +762,26 @@ class AnnotationStore:
         )
 
     @contextmanager
-    def _session(self) -> Generator[sqlite3.Connection, None, None]:
-        """Open one short-lived connection, committing on success and always closing it."""
-        connection = sqlite3.connect(self._path, timeout=10.0)
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA foreign_keys=ON")
+    def _session(self, *, readonly: bool = False) -> Generator[sqlite3.Connection, None, None]:
+        """Open one short-lived connection, committing on success and always closing it.
+
+        ``readonly`` uses SQLite's URI mode, so reading another instance's annotation database
+        cannot create a ``-wal`` file, flip the journal mode, or otherwise touch the writer.
+        """
+        if readonly:
+            connection = sqlite3.connect(
+                f"file:{self._path.as_posix()}?mode=ro",
+                uri=True,
+                timeout=10.0,
+            )
+        else:
+            connection = sqlite3.connect(self._path, timeout=10.0)
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA foreign_keys=ON")
         try:
             yield connection
-            connection.commit()
+            if not readonly:
+                connection.commit()
         finally:
             connection.close()
 

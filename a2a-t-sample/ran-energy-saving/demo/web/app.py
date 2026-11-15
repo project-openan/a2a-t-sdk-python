@@ -125,6 +125,7 @@ from demo.scenario import (
     resolve_modify_request,
 )
 from demo.web.annotate import build_annotate_routes
+from demo.web.annotate.overlay import confirmed_overlay, overlay_token
 from demo.web.nms_tasks import (
     ACTIVE_STATES,
     MODIFIABLE_STATES,
@@ -136,6 +137,7 @@ from demo.web.nms_tasks import (
     read_task,
 )
 from demo.web.observe.routes import build_observe_routes
+from demo.web.review import build_review_routes
 from demo.web.runs_console import build_run_console_routes
 from demo.web.tester import build_tester_routes
 from demo.web.wire_records import read_wire_records
@@ -541,10 +543,14 @@ def create_app(
     # Install the run-id router before any run is built. Uvicorn also runs the lifespan, but the
     # ASGI test client may not, and an in-process server already emits on its own thread.
     set_global_sink(manager.route_external_span)
-    # One catalog instance is shared by the tester and the annotation console: applying an
-    # annotation reloads it in place, so the tester's case list reflects the new expectations
-    # without a second reload request.
-    case_catalog = CaseCatalog()
+    # One catalog instance is shared by the tester, the annotation console and the review console.
+    # The confirmed annotation values are read from their database by case id, so a confirmation
+    # takes effect without an export; the annotation console reloads this catalog after a save.
+    annotation_store_path = resolved_runs_dir / "annotations" / "annotations.sqlite3"
+    case_catalog = CaseCatalog(
+        annotation_overlay=lambda: confirmed_overlay(annotation_store_path),
+        annotation_token=lambda: overlay_token(annotation_store_path),
+    )
     tester_routes, tester_batches = build_tester_routes(
         runs=manager,
         protocols=advertised_protocols,
@@ -580,6 +586,11 @@ def create_app(
         client_db_path=Path(config.client_db_path) if config.client_db_path else None,
     )
     annotate_routes = build_annotate_routes(
+        catalog=case_catalog,
+        runs_dir=resolved_runs_dir,
+        client_db_path=Path(config.client_db_path) if config.client_db_path else None,
+    )
+    review_routes = build_review_routes(
         catalog=case_catalog,
         runs_dir=resolved_runs_dir,
         client_db_path=Path(config.client_db_path) if config.client_db_path else None,
@@ -1871,6 +1882,7 @@ def create_app(
             *run_console_routes,
             *observe_routes,
             *annotate_routes,
+            *review_routes,
             Mount("/static", app=StaticFiles(directory=static_dir), name="static"),
         ],
         lifespan=lifespan,

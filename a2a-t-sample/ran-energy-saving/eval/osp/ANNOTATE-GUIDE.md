@@ -137,25 +137,47 @@ curl -s http://127.0.0.1:8090/ready
 
 ---
 
-## 5. 导出与合并（只导出，不写用例）
+## 5. 落地（默认直接读标注库；overlay 可选）
 
-### 5.1 两条出口
+**现场默认不需要导出**：审核实例的 catalog 会按用例 id 直接读标注库的已确认值
+（`--annotations`，默认 `<runs>/annotations/annotations.sqlite3`，与标注实例默认 `--store` 相同）。
+标注页保存后立即 reload，tester / review 看到的就是最新人工确认值。只有跨环境、入库或蓝区固化时
+才使用下面的导出/overlay。
+
+### 5.1 两条出口（可选）
 
 | 出口 | 位置 | 内容 |
 |---|---|---|
-| 单用例片段 | 右侧「生成期望片段」 | 该用例已确认的两个协议块，已按 `expect.protocols` 层级（6 空格）缩进 |
-| 全量导出 | 顶栏「导出全部 YAML / JSON」 | `osp-annotations/v1`，仅含已确认的用例 |
+| 单用例片段 | 右侧「生成期望片段」 | 该用例已确认的协议块（overlay 的一项），按 `expect.protocols` 层级缩进 |
+| 全量导出 | 顶栏「导出全部 YAML / JSON」 | `osp-expectations-overlay/v1`，仅含已确认的用例 |
 
 API（Agent 可用 curl 直接驱动，见第 7 节）。
 
-### 5.2 合并到用例
+### 5.2 跨环境落地到 overlay（可选）
 
-把片段粘贴到 `eval/osp/cases/<用例>.yaml` 的 `expect.protocols` 下，示例：
+**不要合并进 `eval/osp/cases/*.yaml`**：用例会被热更新替换，改动既会丢也不方便提交。需要把值带出
+现场时，全量导出的 YAML 就是 catalog 的 overlay，直接放到下面任一位置（注意：同一环境里标注库与
+overlay 同时存在时，标注库优先）：
+
+```bash
+# 默认位置：与 cases/ 同级，用例 refresh 不会覆盖
+cp osp-expectations-overlay.yaml eval/osp/expectations-overlay.yaml
+
+# 或任意稳定路径，启动时指定
+python -m demo.web.annotate --overlay /data/annotate/expectations-overlay.yaml ...
+python -m demo.web.review   --overlay /data/annotate/expectations-overlay.yaml ...
+
+# 审核实例默认还会直接读标注库；标注库放在别处时显式指定（与标注实例的 --store 相同）
+python -m demo.web.review --annotations /data/annotate/annotations.sqlite3 ...
+```
+
+overlay 的形状（`id` + 协议块）：
 
 ```yaml
+schema: osp-expectations-overlay/v1
+cases:
+  - id: 16
     a2a-t:
-      validate: blocked
-      validate_label: 拦截
       slot_errors:
         mode: any
         expect:
@@ -164,38 +186,43 @@ API（Agent 可用 curl 直接驱动，见第 7 节）。
             message: 增益目标不允许为 20%
             facts:
               actual: "20%"
-            contains:
-              - gain
-              - 增益
-```
-
-`slotName` / `message` / `facts` 是采纳时原样固化的观测值；只想断言错误类型时删掉前三者，
-只留 `code` / `contains` 即可。
-
-```yaml
+            contains: [gain, 增益]
+  - id: 26
+    a2a-t:
       negotiation:
-        expected: true
-        expected_rounds: 1
-        kinds: [feasibility]
-        rounds:
-          - …
         messages:
           - - |-
               ## Feasibility Negotiation
               …
+    a2a:
+      negotiation:
+        messages:
+          - - OK, lower the target to 2Mbps during the outage.
 ```
+
+`slotName` / `message` / `facts` 是采纳时原样固化的观测值；只想断言错误类型时删掉这些键，
+只留 `code` / `contains` 即可。
 
 - `slot_errors` 只允许出现在 `validate: blocked` 的 A2A-T 用例上。
 - `messages` 外层下标 = 轮次（1 基），内层 = 该轮可接受的渲染；`expected_rounds > 1` 时必须每轮一组。
+- overlay 只接受 `slot_errors` 与 `negotiation.messages`；`validate` / `task_t` / 轮次数仍以用例为准。
+- overlay 的 mtime/size 计入 catalog 版本；解析失败会让 reload 保留上一份快照，不会清空目录。
 - `eval/osp/index.yaml` 不含这两类期望，**不需要**改。
-- 用例文件在现场可能被热更新替换：合并前先 `git status` 确认没有他人未提交改动。
+- 如果确实要把值写进单个用例（例如蓝区固化），片段仍可直接粘贴；但现场请优先用 overlay。
 
-### 5.3 合并后必须验证
+### 5.3 落地后必须验证
 
 ```bash
 cd <sample>/a2a-t-sample/ran-energy-saving
-PYTHONPATH=. python -m pytest tests/test_osp_eval_cases.py -q      # 契约：新键可解析、只在 blocked 用例上
+PYTHONPATH=. python -m pytest tests/test_osp_catalog.py -q          # overlay 能被解析/合并，错误会 fail-fast
+PYTHONPATH=. python -m pytest tests/test_osp_eval_cases.py -q      # 用例契约（overlay 之外的部分）
 PYTHONPATH=. python -m pytest tests/test_osp_expectations.py -q    # 比较器自检
+```
+
+手工确认 overlay 已生效：
+
+```bash
+PYTHONPATH=. python -c "from eval.osp.catalog import CaseCatalog; c=CaseCatalog(); print(c.get(16)['expect']['protocols']['a2a-t'].get('slot_errors'))"
 ```
 
 可选（不连网管、只跑 SDK 三阶段，验证判定是否按新期望工作）：

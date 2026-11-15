@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
-from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog
+from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog, CatalogReloadError
 from eval.osp.expectations import MESSAGE_DIMENSION, SLOT_DIMENSION, SLOT_MODES
 from eval.osp.followup import is_blocked_case
 
@@ -91,6 +91,18 @@ class AnnotateService:
     def store(self) -> AnnotationStore:
         """Return the annotation store (routes export from it)."""
         return self._store
+
+    def reload_catalog(self) -> None:
+        """Re-read the corpus and the live annotation overlay after a confirmed value changed.
+
+        The catalog reads the confirmed values from this store, so a confirmation changes what the
+        tester and the review console judge against. The reload is best effort: a malformed case
+        file must not break the page that just saved an annotation.
+        """
+        try:
+            self._catalog.reload()
+        except CatalogReloadError as exc:
+            _LOGGER.warning("catalog reload after an annotation change failed: %s", exc)
 
     def scan(self, *, days: float = 1.0, max_batches: int = 500) -> ScanSummary:
         """Collect the candidates of the recent tester batches into the store."""
@@ -268,6 +280,7 @@ class AnnotateService:
             details[dimension] = self.detail(case_id, protocol, dimension)
         if not details:
             raise ValueError("没有要保存的子任务。")
+        self.reload_catalog()
         return details
 
     def cases(self) -> list[dict[str, object]]:

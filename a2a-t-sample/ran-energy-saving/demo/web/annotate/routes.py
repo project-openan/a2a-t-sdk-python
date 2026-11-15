@@ -190,6 +190,7 @@ def build_annotate_routes(
             edited_text=edited if isinstance(edited, str) else None,
             actor=_actor(request),
         )
+        await asyncio.to_thread(service.reload_catalog)
         return JSONResponse({"ok": True})
 
     async def apply_case(request: Request) -> Response:
@@ -230,6 +231,7 @@ def build_annotate_routes(
         if value not in SLOT_MODES:
             return JSONResponse({"error": f"mode 只能是 {SLOT_MODES}。"}, status_code=400)
         await asyncio.to_thread(resolved_store.set_mode, key, value, actor=_actor(request))
+        await asyncio.to_thread(service.reload_catalog)
         return JSONResponse({"ok": True})
 
     async def note(request: Request) -> Response:
@@ -241,6 +243,7 @@ def build_annotate_routes(
         await asyncio.to_thread(
             resolved_store.set_note, key, str(body.get("note") or ""), actor=_actor(request)
         )
+        await asyncio.to_thread(service.reload_catalog)
         return JSONResponse({"ok": True})
 
     async def confirm(request: Request) -> Response:
@@ -249,6 +252,7 @@ def build_annotate_routes(
         if key is None:
             return JSONResponse({"error": "未知的标注子任务。"}, status_code=404)
         result = await asyncio.to_thread(resolved_store.confirm, key, actor=_actor(request))
+        await asyncio.to_thread(service.reload_catalog)
         return JSONResponse({"ok": True, **result})
 
     async def export_all_yaml(request: Request) -> Response:

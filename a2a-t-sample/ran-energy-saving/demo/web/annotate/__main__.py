@@ -22,13 +22,15 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
-from eval.osp.catalog import CaseCatalog
+from eval.osp.catalog import DEFAULT_OVERLAY_PATH, CaseCatalog
+from eval.osp.runner import DEFAULT_CASES_DIR
 from shared.http_security import install_health_routes
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 from starlette.routing import Route
 
+from demo.web.annotate.overlay import confirmed_overlay, overlay_token
 from demo.web.annotate.routes import build_annotate_routes
 
 #: The sample root (``a2a-t-sample/ran-energy-saving``).
@@ -47,6 +49,7 @@ def build_app(
     client_db_path: Path | None = None,
     store_path: Path | None = None,
     cases_dir: Path | None = None,
+    overlay_path: Path | None = None,
 ) -> Starlette:
     """Build the read-only annotation application.
 
@@ -56,6 +59,8 @@ def build_app(
             file leaves only the slot-error candidates.
         store_path: annotation database; defaults to ``<runs_dir>/annotations/annotations.sqlite3``.
         cases_dir: case corpus to annotate; defaults to the packaged ``eval/osp/cases``.
+        overlay_path: hand-authored expectation overlay merged into the catalog; defaults to the
+            file next to the case directory.
     """
     resolved_runs = Path(runs_dir)
     resolved_client_db = (
@@ -66,7 +71,12 @@ def build_app(
         if store_path is not None
         else resolved_runs / "annotations" / "annotations.sqlite3"
     )
-    catalog = CaseCatalog(cases_dir) if cases_dir is not None else CaseCatalog()
+    catalog = CaseCatalog(
+        cases_dir if cases_dir is not None else DEFAULT_CASES_DIR,
+        overlay_path=overlay_path,
+        annotation_overlay=lambda: confirmed_overlay(resolved_store),
+        annotation_token=lambda: overlay_token(resolved_store),
+    )
     routes = build_annotate_routes(
         catalog=catalog,
         runs_dir=resolved_runs,
@@ -124,6 +134,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="case corpus to annotate; default: the packaged eval/osp/cases",
     )
+    parser.add_argument(
+        "--overlay",
+        type=Path,
+        default=None,
+        help=(
+            "hand-authored expectation overlay merged into the catalog; "
+            f"default: {DEFAULT_OVERLAY_PATH}"
+        ),
+    )
     parser.add_argument("--host", default="127.0.0.1", help="bind host (default: loopback)")
     parser.add_argument(
         "--port",
@@ -154,10 +173,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         else runs_dir / "annotations" / "annotations.sqlite3"
     )
     cases_dir = Path(args.cases_dir).expanduser().resolve() if args.cases_dir is not None else None
+    overlay = Path(args.overlay).expanduser().resolve() if args.overlay is not None else None
     print(f"[annotate] source batches : {runs_dir / 'tester'}")
     print(f"[annotate] source run store: {client_db}")
     print(f"[annotate] annotation store: {store}")
     print(f"[annotate] case corpus     : {cases_dir or 'packaged eval/osp/cases'}")
+    print(f"[annotate] expectation overlay: {overlay or DEFAULT_OVERLAY_PATH}")
     if not client_db.is_file():
         print(
             "[annotate] WARNING: the client store is missing; only slot-error candidates will be "
@@ -180,6 +201,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         client_db_path=client_db,
         store_path=store,
         cases_dir=cases_dir,
+        overlay_path=overlay,
     )
     print(f"[annotate] serving on http://{args.host}:{args.port}/annotate (read-only)")
     print("[annotate] this process does not start runs and does not recover run state")

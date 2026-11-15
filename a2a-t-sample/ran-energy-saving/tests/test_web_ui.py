@@ -2652,3 +2652,23 @@ async def test_the_annotation_console_is_served(client: httpx.AsyncClient) -> No
     assert script.status_code == 200
     assert meta.json()["dimensions"] == ["slot_errors", "messages"]
     assert cases.json()["cases"], "the catalog must project its expectation space"
+
+
+async def test_the_review_console_is_served(client: httpx.AsyncClient) -> None:
+    """The acceptance console page and its API are wired into the real app."""
+    page = await client.get("/review")
+    script = await client.get("/review/main.js")
+    meta = await client.get("/api/review/meta")
+    cases = await client.get("/api/review/cases")
+
+    assert page.status_code == 200
+    assert "验收审核" in page.text
+    assert script.status_code == 200
+    assert meta.json()["decisions"] == [
+        "pending",
+        "accepted",
+        "defect",
+        "known_issue",
+        "recheck",
+    ]
+    assert cases.json()["cases"], "the catalog must project its review space"
