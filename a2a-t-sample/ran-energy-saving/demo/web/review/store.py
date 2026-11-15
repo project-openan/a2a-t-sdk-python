@@ -106,6 +106,21 @@ CREATE TABLE IF NOT EXISTS event (
 """
 
 
+#: Schema version written after the additive migration (version 1 was the first release).
+SCHEMA_VERSION: Final[int] = 2
+
+#: Columns added after version 1, applied when missing so an existing store upgrades in place.
+#: SQLite has no ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS``, so the migration checks
+#: ``PRAGMA table_info`` first. All four stay nullable: ``NULL`` means "not recorded", which is
+#: different from ``0`` for the declared downstream flags.
+_ADDITIVE_COLUMNS: Final[tuple[tuple[str, str], ...]] = (
+    ("trace_json", "TEXT"),
+    ("trace_fetched_at", "TEXT"),
+    ("nms_declared", "INTEGER"),
+    ("nms_sim_declared", "INTEGER"),
+)
+
+
 @dataclass(frozen=True)
 class DecisionKey:
     """The identity of one review decision: one case, one protocol task."""
@@ -136,11 +151,20 @@ class ReviewStore:
         return self._path
 
     def ensure(self) -> None:
-        """Create the database and its schema when missing."""
+        """Create the database and its schema when missing, then apply the additive migrations."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._session() as connection:
             connection.executescript(_SCHEMA)
-            connection.execute("PRAGMA user_version=1")
+            self._migrate(connection)
+            connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+
+    @staticmethod
+    def _migrate(connection: sqlite3.Connection) -> None:
+        """Add the columns a version-1 store lacks; a fresh store already has them."""
+        existing = {str(row[1]) for row in connection.execute("PRAGMA table_info(observation)")}
+        for name, kind in _ADDITIVE_COLUMNS:
+            if name not in existing:
+                connection.execute(f"ALTER TABLE observation ADD COLUMN {name} {kind}")
 
     # ------------------------------------------------------------------
     # Evidence
@@ -157,8 +181,9 @@ class ReviewStore:
                     INSERT INTO observation
                         (case_id, protocol, batch_id, source_round, run_id, trace_id,
                          observed_at, model, decision_mode, nms, nms_sim, discovery, transport,
+                         nms_declared, nms_sim_declared,
                          status, input_signature, evidence_json, first_seen, last_seen)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (case_id, protocol, batch_id, source_round, run_id)
                     DO UPDATE SET
                         trace_id=excluded.trace_id,
@@ -169,6 +194,8 @@ class ReviewStore:
                         nms_sim=excluded.nms_sim,
                         discovery=excluded.discovery,
                         transport=excluded.transport,
+                        nms_declared=excluded.nms_declared,
+                        nms_sim_declared=excluded.nms_sim_declared,
                         status=excluded.status,
                         input_signature=excluded.input_signature,
                         evidence_json=excluded.evidence_json,
@@ -188,6 +215,8 @@ class ReviewStore:
                         1 if observation.get("nmsSim") else 0,
                         str(observation.get("discovery") or ""),
                         str(observation.get("transport") or ""),
+                        _optional_bool(observation.get("nmsDeclared")),
+                        _optional_bool(observation.get("nmsSimDeclared")),
                         str(observation.get("status") or ""),
                         str(observation.get("inputSignature") or ""),
                         json.dumps(observation.get("evidence") or {}, ensure_ascii=False),
@@ -197,6 +226,41 @@ class ReviewStore:
                 )
                 inserted += int(cursor.rowcount > 0)
         return inserted
+
+    def set_trace(
+        self,
+        *,
+        case_id: int,
+        protocol: str,
+        batch_id: str,
+        source_round: int,
+        run_id: str,
+        trace: Mapping[str, object],
+        fetched_at: str,
+    ) -> int:
+        """Attach a trace snapshot to one observation; a rescan never overwrites it.
+
+        The snapshot is evidence, not a verdict: the review re-judges it on read, so a deleted
+        snapshot degrades to "not exported" instead of preserving a stale pass.
+        """
+        with self._session() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE observation
+                   SET trace_json=?, trace_fetched_at=?
+                 WHERE case_id=? AND protocol=? AND batch_id=? AND source_round=? AND run_id=?
+                """,
+                (
+                    json.dumps(dict(trace), ensure_ascii=False),
+                    fetched_at,
+                    case_id,
+                    protocol,
+                    batch_id,
+                    source_round,
+                    run_id,
+                ),
+            )
+        return int(cursor.rowcount)
 
     def observations(self, case_id: int, protocol: str) -> list[dict[str, object]]:
         """Return the evidence rows of one case × protocol, newest first."""
@@ -249,6 +313,8 @@ class ReviewStore:
                        MIN(decision_mode) AS decision_mode,
                        MAX(nms) AS nms,
                        MAX(nms_sim) AS nms_sim,
+                       MAX(nms_declared) AS nms_declared,
+                       MAX(nms_sim_declared) AS nms_sim_declared,
                        MIN(discovery) AS discovery,
                        MIN(transport) AS transport
                 FROM observation
@@ -267,6 +333,8 @@ class ReviewStore:
                 "decisionMode": str(row["decision_mode"] or ""),
                 "nms": bool(row["nms"]),
                 "nmsSim": bool(row["nms_sim"]),
+                "nmsDeclared": _optional_bool_value(row["nms_declared"]),
+                "nmsSimDeclared": _optional_bool_value(row["nms_sim_declared"]),
                 "discovery": str(row["discovery"] or ""),
                 "transport": str(row["transport"] or ""),
             }
@@ -426,6 +494,10 @@ def _observation_row(row: sqlite3.Row) -> dict[str, object]:
         "status": str(row["status"] or ""),
         "inputSignature": str(row["input_signature"] or ""),
         "evidence": json.loads(str(row["evidence_json"] or "{}")),
+        "trace": _json_or_none(row["trace_json"]),
+        "traceFetchedAt": str(row["trace_fetched_at"] or ""),
+        "nmsDeclared": _optional_bool_value(row["nms_declared"]),
+        "nmsSimDeclared": _optional_bool_value(row["nms_sim_declared"]),
         "firstSeen": str(row["first_seen"] or ""),
         "lastSeen": str(row["last_seen"] or ""),
     }
@@ -445,6 +517,30 @@ def _decision_row(row: sqlite3.Row) -> dict[str, object]:
         "confirmedAt": str(row["confirmed_at"] or ""),
         "updatedAt": str(row["updated_at"] or ""),
     }
+
+
+def _optional_bool(value: object) -> int | None:
+    """Return ``1``/``0`` for a declared flag, ``NULL`` when the batch never recorded it."""
+    if value is None:
+        return None
+    return 1 if value else 0
+
+
+def _optional_bool_value(value: object) -> bool | None:
+    """Return a stored nullable flag as a bool, or ``None`` when it was not recorded."""
+    if value is None:
+        return None
+    return bool(value)
+
+
+def _json_or_none(value: object) -> object:
+    """Return a stored JSON column parsed, or ``None`` when empty or unreadable."""
+    if not value:
+        return None
+    try:
+        return json.loads(str(value))
+    except ValueError:
+        return None
 
 
 def _as_int(value: object, default: int = 0) -> int:

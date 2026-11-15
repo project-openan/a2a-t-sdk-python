@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -506,6 +507,79 @@ def test_a_case_without_evidence_is_not_run(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Round (batch) view
 # ---------------------------------------------------------------------------
+
+
+def test_the_store_migrates_in_place_and_is_idempotent(tmp_path: Path) -> None:
+    path = tmp_path / "review.sqlite3"
+    store = ReviewStore(path)
+    store.ensure()
+    store.ensure()
+
+    with sqlite3.connect(path) as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(observation)")}
+
+    assert version == 2
+    assert {"trace_json", "trace_fetched_at", "nms_declared", "nms_sim_declared"} <= columns
+
+
+def test_a_rescan_preserves_the_trace_snapshot(tmp_path: Path) -> None:
+    service, _catalog, _overlay, _runs = _fixture(tmp_path)
+    service.scan(days=2.0)
+    row = service.store.observations(1, "a2a-t")[0]
+    written = service.store.set_trace(
+        case_id=1,
+        protocol="a2a-t",
+        batch_id=str(row["batchId"]),
+        source_round=int(row["sourceRound"]),
+        run_id=str(row["runId"]),
+        trace={"traceId": "trace-1", "frames": {"observed": 2}},
+        fetched_at="2026-11-16T10:00:00+00:00",
+    )
+    assert written == 1
+
+    service.scan(days=2.0)
+
+    refreshed = service.store.observations(1, "a2a-t")[0]
+    assert refreshed["trace"] == {"traceId": "trace-1", "frames": {"observed": 2}}
+    assert refreshed["traceFetchedAt"] == "2026-11-16T10:00:00+00:00"
+
+
+def test_the_declared_downstream_flags_stay_nullable(tmp_path: Path) -> None:
+    store = ReviewStore(tmp_path / "review.sqlite3")
+    store.ensure()
+
+    def observation(run_id: str, **declared: object) -> dict[str, object]:
+        return {
+            "caseId": 1,
+            "protocol": "a2a-t",
+            "batchId": "batch-1",
+            "sourceRound": 1,
+            "runId": run_id,
+            "traceId": run_id,
+            "observedAt": "2026-11-16T10:00:00+00:00",
+            "model": "qwen3.8",
+            "decisionMode": "live",
+            "nms": True,
+            "nmsSim": False,
+            "discovery": "nms",
+            "transport": "webhook",
+            "status": "passed",
+            "inputSignature": "sig",
+            "evidence": {},
+            **declared,
+        }
+
+    store.ingest(
+        [
+            observation("run-1", nmsDeclared=True, nmsSimDeclared=False),
+            observation("run-2"),
+        ]
+    )
+
+    rows = store.observations(1, "a2a-t")
+    declared = {row["runId"]: (row["nmsDeclared"], row["nmsSimDeclared"]) for row in rows}
+    assert declared == {"run-1": (True, False), "run-2": (None, None)}
 
 
 def test_the_batch_list_groups_the_evidence_without_judging_it(tmp_path: Path) -> None:
