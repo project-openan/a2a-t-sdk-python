@@ -395,5 +395,7 @@ python -m eval.osp.runner --all --stop-after validate --model-mode live \
 - **子集**：`A2AT_OSP_LIVE_IDS=1,11,42`，或 runner 的 `--ids`。
 - **阶段口径**：`intent` / `task_t` / `validate` 只跑 SDK 管线，不经过样例 OSS 的业务 gate；`blocked`
   的判定见第 10 节。
-- **耗时**：单个用例（3 次模型调用）在远端模型上约 1–3 分钟，100 条串行需要数小时；按需用 `--ids` 分批，
-  或把 `--out` 指向不同文件后汇总 `summary.stages`。
+- **耗时**：单个用例（3 次模型调用）在远端模型上约 1–3 分钟，但个别行（站点/时间段很多）单次调用可能
+  超过默认 180 秒，表现为全阶段 `error`。此时把 `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` 调到 600 再跑，
+  不要直接判定为模型缺陷；100 条串行需要数小时，按需用 `--ids` 分批，或把 `--out` 指向不同文件后汇总
+  `summary.stages`。
