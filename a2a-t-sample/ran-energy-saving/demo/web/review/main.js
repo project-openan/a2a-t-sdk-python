@@ -1018,9 +1018,15 @@ function renderDetail() {
   const scrollTop = container.scrollTop;
   applyProtocolTint();
   container.replaceChildren();
-  if (state.view === "round" && state.batch) {
+  const scopedToBatch = state.view === "round" && Boolean(state.batch);
+  if (scopedToBatch) {
     const bar = el("div", "backbar");
-    const back = el("button", "ghost", `← 返回批次 ${state.selectedBatch?.batchId || ""}`);
+    const scopeRound = Number(state.selectedBatch?.round || 0);
+    const back = el(
+      "button",
+      "ghost",
+      `← 返回批次 ${state.selectedBatch?.batchId || ""}${scopeRound ? ` · 第 ${scopeRound} 轮` : ""}`,
+    );
     back.type = "button";
     back.addEventListener("click", () => {
       state.detail = null;
@@ -1029,10 +1035,20 @@ function renderDetail() {
       renderBatch();
     });
     bar.append(back);
+    // The per-round selector belongs to the case view (one case, every round). From a batch
+    // round the scope is fixed, so offer the cross-round view explicitly instead of silently
+    // switching the round under a "back to this batch" bar.
+    const allRounds = el("button", "ghost", "查看该用例全部轮次");
+    allRounds.type = "button";
+    allRounds.addEventListener("click", () => {
+      state.detailScope = null;
+      setView("case").catch((caught) => showNotice(caught.message, "error"));
+    });
+    bar.append(allRounds);
     container.append(bar);
   }
   container.append(renderCaseCard());
-  container.append(renderRoundBar());
+  if (!scopedToBatch) container.append(renderRoundBar());
   if (state.round === -1) container.append(renderRoundMatrix());
   else {
     const round = (state.detail.rounds || [])[state.round];
