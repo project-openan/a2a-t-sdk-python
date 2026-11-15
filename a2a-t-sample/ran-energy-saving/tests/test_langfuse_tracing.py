@@ -22,6 +22,7 @@ from shared.langfuse_tracing import (
     LangfuseSpanExporter,
     _LangfuseRuntime,
     _probe_ingestion,
+    _retrying_otlp_exporter,
     create_langfuse_exporter,
 )
 
@@ -870,9 +871,7 @@ def test_the_ingestion_probe_reports_a_suspended_project(offline_config, monkeyp
             403,
             "Forbidden",
             Message(),
-            io.BytesIO(
-                b'{"message":"Ingestion suspended: Usage threshold exceeded.","error":"ForbiddenError"}'
-            ),
+            io.BytesIO(b'{"message":"Ingestion suspended: Usage threshold exceeded.","error":"ForbiddenError"}'),
         )
 
     monkeypatch.setattr("shared.langfuse_tracing.urllib.request.urlopen", deny)
@@ -917,3 +916,24 @@ def test_finish_probes_ingestion_with_a_real_runtime(offline_config, monkeypatch
         assert runtime_double.client.flushed == 1
     finally:
         _INGESTION_PROBES.clear()
+
+
+def test_the_otlp_exporter_retries_rate_limited_batches() -> None:
+    """A 429 must be retried inside the HTTP session instead of dropping the whole batch."""
+    config = replace(
+        load_config(),
+        langfuse_public_key="pk",
+        langfuse_secret_key="sk",
+        langfuse_base_url="https://us.cloud.langfuse.com",
+    )
+
+    exporter = _retrying_otlp_exporter(config)
+
+    assert exporter is not None
+    transport = exporter._client._transport  # type: ignore[attr-defined]
+    session = transport._session  # type: ignore[attr-defined]
+    retry = session.get_adapter("https://us.cloud.langfuse.com/api/public/otel/v1/traces").max_retries
+    assert retry.total == 4
+    assert 429 in retry.status_forcelist
+    assert retry.allowed_methods == frozenset({"POST"})
+    assert retry.respect_retry_after_header is True

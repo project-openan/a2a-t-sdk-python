@@ -135,6 +135,7 @@ def is_exported_kind(kind: str, level: str) -> bool:
     kinds = exported_span_kinds(level)
     return kinds is None or kind in kinds
 
+
 #: Fields copied into the structural observation metadata.
 _STRUCTURAL_FIELDS: Final[tuple[str, ...]] = (
     "kind",
@@ -222,6 +223,10 @@ _RUNTIME_LOCK = threading.Lock()
 #: healthy project costs one request per process per window instead of one per run.
 _INGESTION_PROBE_TTL_SECONDS: Final[float] = 300.0
 _INGESTION_PROBE_TIMEOUT_SECONDS: Final[float] = 5.0
+#: OTLP request timeout and the batch processor's export budget. It must cover the retry budget
+#: (0.5 + 1 + 2 + 4 s of backoff plus the request time), otherwise the processor would give up
+#: while the exporter is still retrying.
+_OTLP_TIMEOUT_SECONDS: Final[float] = 30.0
 _INGESTION_PROBES: dict[tuple[str, str], tuple[float, str]] = {}
 _INGESTION_PROBE_LOCK = threading.Lock()
 
@@ -305,6 +310,69 @@ def _should_export_span(span: Any) -> bool:
     return scope is not None and getattr(scope, "name", None) == LANGFUSE_SCOPE_NAME
 
 
+def _retrying_otlp_exporter(config: SampleConfig) -> Any | None:
+    """Return an OTLP exporter that retries 429/5xx before the batch is dropped.
+
+    Langfuse's ingestion limiter answers 429; the SDK's default OTLP exporter reports one failure
+    and the batch processor discards the whole batch, so the trace silently loses spans. Retrying
+    inside the HTTP session keeps the batch alive: urllib3 honours ``Retry-After`` and rewinds the
+    POST body. 401/403 (bad key / suspended ingestion) are deliberately not retried.
+
+    Returns ``None`` when the retry stack is unavailable, so the caller falls back to the SDK's
+    default exporter rather than failing the run.
+    """
+    try:
+        import os
+
+        import requests
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+    except Exception:  # noqa: BLE001 - observability must never break the run
+        return None
+    auth = "Basic " + base64.b64encode(
+        f"{config.langfuse_public_key}:{config.langfuse_secret_key}".encode("utf-8")
+    ).decode("ascii")
+    headers = {
+        "Authorization": auth,
+        "x-langfuse-sdk-name": "python",
+        "x-langfuse-sdk-version": "5.1.0",
+        "x-langfuse-public-key": config.langfuse_public_key,
+        # Langfuse v4/Cloud needs this to process the batch in real time.
+        "x-langfuse-ingestion-version": "4",
+    }
+    export_path = os.environ.get("LANGFUSE_OTEL_TRACES_EXPORT_PATH", "")
+    endpoint = (
+        f"{config.langfuse_base_url.rstrip('/')}/{export_path}"
+        if export_path
+        else f"{config.langfuse_base_url.rstrip('/')}/api/public/otel/v1/traces"
+    )
+    retry = Retry(
+        total=4,
+        connect=2,
+        read=2,
+        status=4,
+        backoff_factor=0.5,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset({"POST"}),
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+    session = requests.Session()
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    try:
+        return OTLPSpanExporter(
+            endpoint=endpoint,
+            headers=headers,
+            timeout=_OTLP_TIMEOUT_SECONDS,
+            session=session,
+        )
+    except Exception:  # noqa: BLE001 - fall back to the SDK default exporter
+        return None
+
+
 def _get_runtime(config: SampleConfig) -> _LangfuseRuntime | None:
     """Return the process-wide Langfuse runtime, creating it once."""
     global _RUNTIME
@@ -316,6 +384,7 @@ def _get_runtime(config: SampleConfig) -> _LangfuseRuntime | None:
         if _RUNTIME is not None:
             return _RUNTIME
         provider = TracerProvider(resource=Resource.create({"service.name": "ran-energy-saving-sample"}))
+        exporter = _retrying_otlp_exporter(config)
         client = Langfuse(
             public_key=config.langfuse_public_key,
             secret_key=config.langfuse_secret_key,
@@ -323,8 +392,12 @@ def _get_runtime(config: SampleConfig) -> _LangfuseRuntime | None:
             environment=config.langfuse_environment or None,
             tracer_provider=provider,
             should_export_span=_should_export_span,
+            # The batch processor's export timeout must cover the retry budget (0.5+1+2+4s plus
+            # the request time), otherwise it would give up while the exporter is still retrying.
+            timeout=_OTLP_TIMEOUT_SECONDS,
             flush_at=32,
             flush_interval=1.0,
+            **({"span_exporter": exporter} if exporter is not None else {}),
         )
         tracer = provider.get_tracer(LANGFUSE_SCOPE_NAME)
         _RUNTIME = _LangfuseRuntime(client=client, provider=provider, tracer=tracer)
@@ -571,11 +644,7 @@ class LangfuseSpanExporter:
         anchor ends immediately, so it exists from the first seconds of the run; the observations
         (and the root, when it finally arrives) attach to it.
         """
-        attributes = {
-            key: value
-            for key, value in _root_attributes(self._metadata).items()
-            if key != ROOT_ATTRIBUTE
-        }
+        attributes = {key: value for key, value in _root_attributes(self._metadata).items() if key != ROOT_ATTRIBUTE}
         attributes[OBSERVATION_TYPE_ATTRIBUTE] = OBSERVATION_SPAN
         anchor = self._runtime.tracer.start_span(
             "run opened",
