@@ -21,10 +21,16 @@ from eval.osp.tracecheck import (
     TraceContext,
     TracePoint,
     attribute_points,
+    dispatched_task_t,
     expected_client_points,
     frame_gate,
+    intent_corroboration,
+    intent_params,
     judge_trace,
     match_points,
+    original_request,
+    process_points,
+    task_t_fidelity,
 )
 from shared.langfuse_tracing import exported_span_kinds
 
@@ -268,6 +274,58 @@ def test_reason_codes_are_exposed_as_one_tuple() -> None:
         "trace_content_unavailable",
         "trace_nms_hop_unknown",
     }
+
+
+TASK_T = "## Operation Type\nCreate\n\n## Task Object\nA2ATestRegion"
+
+INTENT = {
+    "Operation type": "Create",
+    "Energy saving cell RAT": "ALL",
+    "Energy saving aggressiveness": "",
+    "Energy saving region": "A2ATestRegion",
+    "Whether Experience-Preserving Energy Saving is Required": "",
+    "Special Requirements for Carrier Shutdown Frequencies": "",
+    "Energy saving time": "",
+    "Frequencies of carriers that can be shut down": [],
+    "Gain target": "",
+    "Guaranteed throughput target by zone": [],
+    "Scenario-based energy saving": [],
+}
+
+
+def test_task_t_fidelity_compares_the_judged_and_exported_copies() -> None:
+    assert task_t_fidelity(TASK_T, TASK_T).equal is True
+    changed = task_t_fidelity(TASK_T, TASK_T.replace("Create", "Modify"))
+    assert changed.comparable is True
+    assert changed.equal is False
+    assert task_t_fidelity("", TASK_T).comparable is False
+
+
+def test_intent_corroboration_compares_the_oracle_with_the_langfuse_reading() -> None:
+    assert intent_corroboration(INTENT, dict(INTENT)).equal is True
+    drifted = dict(INTENT)
+    drifted["Energy saving region"] = "OtherRegion"
+    assert intent_corroboration(INTENT, drifted).equal is False
+    assert intent_corroboration(INTENT, {"foo": "bar"}).comparable is False
+
+
+def test_dispatched_content_is_read_from_the_snapshot_observations() -> None:
+    payload = {
+        "observations": [
+            {"kind": "task_prompt_rendered", "promptText": "TASK", "interception": False},
+            {"kind": "task_validation", "interception": True, "userRequest": "ORIGINAL"},
+            {"kind": "task_created", "params": {"Operation type": "Create"}},
+        ]
+    }
+    assert dispatched_task_t(payload) == ("TASK", False)
+    assert original_request(payload) == "ORIGINAL"
+    assert intent_params(payload) == {"Operation type": "Create"}
+
+
+def test_process_points_lists_every_expected_point() -> None:
+    results = process_points({"observations": _complete_observations()}, _context())
+    assert results
+    assert all(result.ok for result in results)
 
 
 def test_the_phase_whitelist_is_the_export_contract() -> None:

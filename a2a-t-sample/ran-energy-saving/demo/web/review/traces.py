@@ -39,6 +39,10 @@ NMS_SCOPE_MARKER: Final[str] = "a2a-t-server"
 #: One snapshot larger than this is truncated to a ``partial`` state instead of stalling a scan.
 MAX_OBSERVATIONS: Final[int] = 5000
 MAX_OBSERVATION_BYTES: Final[int] = 32 * 1024 * 1024
+#: Task-T / request text kept in the snapshot payload. The producer already caps some fields at
+#: 4000 characters; keeping 16 KiB covers the full rendered Task-T and stays well below a
+#: customer-pack problem.
+MAX_PROMPT_TEXT: Final[int] = 16384
 
 #: A fresh snapshot is served without a Langfuse request. The page fetches one trace lazily when
 #: it is opened, so a 200-target scan never consumes the API quota up front.
@@ -83,10 +87,14 @@ class Observation:
     scope: str
     span_id: str
     parent_id: str
+    user_request: str = ""
+    prompt_text: str = ""
+    prompt_truncated: bool = False
+    params: Mapping[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
-        """Return the compact export form (no input/output payload)."""
-        return {
+        """Return the compact export form used by the review store."""
+        payload: dict[str, object] = {
             "name": self.name,
             "type": self.type,
             "kind": self.kind,
@@ -103,6 +111,14 @@ class Observation:
             "spanId": self.span_id,
             "parentId": self.parent_id,
         }
+        if self.user_request:
+            payload["userRequest"] = self.user_request
+        if self.prompt_text:
+            payload["promptText"] = self.prompt_text
+            payload["promptTruncated"] = self.prompt_truncated
+        if self.params is not None:
+            payload["params"] = dict(self.params)
+        return payload
 
 
 @dataclass(frozen=True)
@@ -385,6 +401,8 @@ def normalize_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[Observation, ...]
         if not kind:
             kind = "llm" if raw_type == "GENERATION" else "tool" if raw_type == "TOOL" else ""
         side, side_source = _side(row, metadata)
+        prompt_text, prompt_truncated = _clip(_text(detail.get("promptText")), MAX_PROMPT_TEXT)
+        raw_params = detail.get("params")
         observations.append(
             Observation(
                 name=_text(row.get("name")),
@@ -402,6 +420,10 @@ def normalize_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[Observation, ...]
                 scope=_scope(metadata),
                 span_id=_text(row.get("id")),
                 parent_id=_text(row.get("parentObservationId")),
+                user_request=_text(detail.get("userRequest")),
+                prompt_text=prompt_text,
+                prompt_truncated=prompt_truncated,
+                params=dict(raw_params) if isinstance(raw_params, Mapping) else None,
             )
         )
     return tuple(observations)
@@ -565,6 +587,12 @@ def _stamp() -> str:
 
 def _text(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+def _clip(text: str, limit: int) -> tuple[str, bool]:
+    if len(text) <= limit:
+        return text, False
+    return text[:limit], True
 
 
 def _int(value: object) -> int | None:

@@ -15,6 +15,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
+from eval.osp.compare import flatten_intent, flatten_task_t
+
 PROTOCOL_A2A_T: Final[str] = "a2a-t"
 PROTOCOL_A2A: Final[str] = "a2a"
 
@@ -120,6 +122,127 @@ class TraceJudgement:
     attribution: str
     findings: tuple[AttributionFinding, ...]
     frames: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class Fidelity:
+    """Comparison of two copies of the same evidence (judged vs exported)."""
+
+    comparable: bool
+    equal: bool
+    rows: tuple[Mapping[str, object], ...]
+    truncated: bool = False
+
+
+def task_t_fidelity(judged: str, dispatched: str, *, truncated: bool = False) -> Fidelity:
+    """Compare the Task-T the console judged with the Task-T the Langfuse export carries.
+
+    ``recorded`` sections (prose the comparison deliberately does not judge) never make the
+    copies unequal; only ``changed`` / ``missing`` do.
+    """
+    left = judged.strip()
+    right = dispatched.strip()
+    if not left or not right:
+        return Fidelity(False, False, (), truncated)
+    rows = tuple(
+        {
+            "path": row.path,
+            "judged": row.expected,
+            "dispatched": row.actual,
+            "status": row.status,
+            "verdict": row.verdict,
+            "reason": row.reason,
+        }
+        for row in flatten_task_t(left, right)
+    )
+    failures = [
+        row
+        for row in rows
+        if (row["verdict"] or row["status"]) in {"changed", "missing"}
+        and not (_is_missing(row["judged"]) and _is_missing(row["dispatched"]))
+    ]
+    return Fidelity(True, not failures, rows, truncated)
+
+
+def intent_corroboration(
+    server: Mapping[str, object] | None,
+    params: Mapping[str, object] | None,
+) -> Fidelity:
+    """Compare the acceptance oracle with the Langfuse ``task_created`` structured reading.
+
+    Both copies should be the same downstream Task reading. A drift is evidence-chain noise, not
+    a replacement oracle: the console keeps ``serverIntent`` as the only final intent.
+    """
+    if not server or not params or "Operation type" not in params:
+        return Fidelity(False, False, ())
+    rows = tuple(
+        {
+            "path": row.path,
+            "server": row.expected,
+            "langfuse": row.actual,
+            "status": row.status,
+            "verdict": row.verdict,
+            "reason": row.reason,
+        }
+        for row in flatten_intent(dict(server), dict(params))
+    )
+    failures = [row for row in rows if row["status"] in {"changed", "missing", "added"}]
+    return Fidelity(True, not failures, rows)
+
+
+def process_points(
+    payload: Mapping[str, object],
+    context: TraceContext,
+) -> tuple[PointResult, ...]:
+    """Return the per-point expectation table the UI renders under the Task-T card."""
+    observations_value = payload.get("observations")
+    observations: Sequence[Mapping[str, object]] = (
+        observations_value if isinstance(observations_value, Sequence) else ()
+    )
+    return match_points(expected_client_points(context), observations, run_id=context.run_id)
+
+
+def dispatched_task_t(
+    payload: Mapping[str, object],
+) -> tuple[str, bool]:
+    """Return the Task-T text the Langfuse export carries, preferring the non-interception copy."""
+    observations = _observations(payload)
+    candidates = [
+        observation
+        for observation in observations
+        if _text(observation.get("kind")) == "task_prompt_rendered"
+        and _text(observation.get("promptText"))
+    ]
+    candidates.sort(key=lambda observation: observation.get("interception") is True)
+    if not candidates:
+        return "", False
+    chosen = candidates[0]
+    return _text(chosen.get("promptText")), chosen.get("promptTruncated") is True
+
+
+def original_request(payload: Mapping[str, object]) -> str:
+    """Return the request the interception recorded, or ``""`` when it is not in the export."""
+    for observation in _observations(payload):
+        if observation.get("interception") is True and _text(observation.get("userRequest")):
+            return _text(observation.get("userRequest"))
+    return ""
+
+
+def intent_params(payload: Mapping[str, object]) -> Mapping[str, object] | None:
+    """Return the structured Task reading carried by the Langfuse ``task_created`` span."""
+    for observation in _observations(payload):
+        if _text(observation.get("kind")) == "task_created":
+            params = observation.get("params")
+            if isinstance(params, Mapping):
+                return params
+    return None
+
+
+def _observations(payload: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    value = payload.get("observations")
+    if not isinstance(value, Sequence):
+        return ()
+    return tuple(item for item in value if isinstance(item, Mapping))
 
 
 def expected_client_points(context: TraceContext) -> tuple[TracePoint, ...]:
@@ -448,6 +571,10 @@ def _reason_for(attribution: str, findings: Sequence[AttributionFinding]) -> str
 
 def _text(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+def _is_missing(value: object) -> bool:
+    return value is None or (isinstance(value, str) and value.strip() in {"", "<missing>"})
 
 
 def _int(value: object) -> int | None:
