@@ -114,6 +114,27 @@ _PHASE_EXPORT_KINDS: Final[frozenset[str]] = (
 #: Everything else (``transport``, ``run_started``, artifacts, execution, plain status rows, ...)
 #: is full-level evidence: it duplicates the rows above or is too granular for the dashboard.
 
+
+def exported_span_kinds(level: str) -> frozenset[str] | None:
+    """Return the span kinds the exporter keeps at one detail level.
+
+    ``full`` exports every kind, so it returns ``None``. The review console derives its expected
+    trace points from this function instead of copying the private tables, so a change to the
+    export contract fails a single contract test rather than silently changing the acceptance
+    oracle.
+    """
+    if level == TRACE_SPAN_LEVEL_FULL:
+        return None
+    if level == TRACE_SPAN_LEVEL_MINIMAL:
+        return _ALWAYS_EXPORT_KINDS
+    return _ALWAYS_EXPORT_KINDS | _PHASE_EXPORT_KINDS
+
+
+def is_exported_kind(kind: str, level: str) -> bool:
+    """Return whether one span kind reaches Langfuse at ``level``."""
+    kinds = exported_span_kinds(level)
+    return kinds is None or kind in kinds
+
 #: Fields copied into the structural observation metadata.
 _STRUCTURAL_FIELDS: Final[tuple[str, ...]] = (
     "kind",
