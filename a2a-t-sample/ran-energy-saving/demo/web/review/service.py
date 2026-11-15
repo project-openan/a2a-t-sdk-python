@@ -391,8 +391,7 @@ class ReviewService:
                     case, protocol, decision, [], scope=scope
                 ),
             }
-        evidence = observation.get("evidence")
-        evidence_map = evidence if isinstance(evidence, Mapping) else {}
+        evidence_map = _judged_evidence(observation)
         input_changed = not evidence_is_current_input(case, protocol, evidence_map)
         judgement = judge_protocol(case, protocol, evidence_map)
         status = STATUS_STALE if input_changed else judgement.status
@@ -436,8 +435,7 @@ class ReviewService:
         observation: Mapping[str, object],
     ) -> dict[str, object]:
         """Build one judged evidence round for the detail payload."""
-        evidence = observation.get("evidence")
-        evidence_map = evidence if isinstance(evidence, Mapping) else {}
+        evidence_map = _judged_evidence(observation)
         input_changed = not evidence_is_current_input(case, protocol, evidence_map)
         judgement: ProtocolJudgement = judge_protocol(case, protocol, evidence_map)
         return {
@@ -524,6 +522,26 @@ def _as_int(value: object, default: int = 0) -> int:
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return default
+
+
+def _judged_evidence(observation: Mapping[str, object]) -> dict[str, object]:
+    """Merge the row's trace snapshot and declared downstream into the stored evidence.
+
+    The tester item carries neither: the trace lives in its own column and the declared downstream
+    flags are batch properties. ``judge_protocol`` stays a pure function over one mapping, so the
+    service is the only place that knows the store layout.
+    """
+    evidence = observation.get("evidence")
+    merged = dict(evidence) if isinstance(evidence, Mapping) else {}
+    merged["runId"] = observation.get("runId")
+    trace = observation.get("trace")
+    if trace is not None:
+        merged["trace"] = trace
+    merged["batch"] = {
+        "nms": observation.get("nmsDeclared"),
+        "nmsSim": observation.get("nmsSimDeclared"),
+    }
+    return merged
 
 
 def _request_sources(

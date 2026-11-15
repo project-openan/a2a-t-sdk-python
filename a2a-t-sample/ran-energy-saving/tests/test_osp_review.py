@@ -129,9 +129,15 @@ def _evidence(
     final_state: str = "task_completed",
     refs_input: str = "do it",
     interception: dict[str, object] | None = None,
+    run_id: str = "run-1",
+    batch: dict[str, object] | None = None,
+    trace: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Return one stored tester item (trimmed like the review corpus stores it)."""
     return {
+        "runId": run_id,
+        "batch": batch if batch is not None else {},
+        "trace": trace,
         "refs": {"userInput": refs_input},
         "stages": {
             "intent": {"stage": "intent", "status": action, "actual": dict(INTENT)},
@@ -311,6 +317,122 @@ def test_a_wrong_round_count_fails() -> None:
     judgement = judge_protocol(_case(rounds=2), "a2a-t", _evidence(rounds=1))
 
     assert _dimension(judgement, "negotiation").status == VERDICT_FAIL
+
+
+REAL_BATCH: dict[str, object] = {"nms": True, "nmsSim": False}
+
+
+def _trace(
+    *,
+    expected: int | None = 2,
+    observed: int = 2,
+    client: int = 2,
+    attribution: str = "ok",
+) -> dict[str, object]:
+    return {
+        "traceId": "trace-1",
+        "frames": {
+            "nms": {"expected": expected, "observed": observed, "scope": "a2a-t-server"},
+            "client": {"runId": "run-1", "observed": client},
+        },
+        "attribution": {"status": attribution, "findings": []},
+    }
+
+
+def _trace_code(judgement: Any) -> str:
+    diff = _dimension(judgement, "trace").diffs[0]
+    return str(diff["reason"])
+
+
+def test_a_real_run_without_a_trace_snapshot_fails() -> None:
+    judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH))
+
+    assert _dimension(judgement, "trace").status == VERDICT_FAIL
+    assert _trace_code(judgement) == "trace_not_exported"
+    assert judgement.status == VERDICT_FAIL
+
+
+def test_a_simulator_run_never_judges_the_trace() -> None:
+    judgement = judge_protocol(
+        _case(), "a2a-t", _evidence(batch={"nms": True, "nmsSim": True})
+    )
+
+    assert _dimension(judgement, "trace").status == VERDICT_NOT_APPLICABLE
+    assert judgement.status == VERDICT_PASS
+
+
+def test_a_run_without_a_dispatch_never_judges_the_trace() -> None:
+    judgement = judge_protocol(
+        _case(), "a2a-t", _evidence(batch=REAL_BATCH, run_id="")
+    )
+
+    assert _dimension(judgement, "trace").status == VERDICT_NOT_APPLICABLE
+    assert judgement.status == VERDICT_PASS
+
+
+def test_a_matching_nms_frame_count_passes() -> None:
+    judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace()))
+
+    trace = _dimension(judgement, "trace")
+    assert trace.status == VERDICT_PASS
+    assert trace.expected == 2
+    assert trace.actual == 2
+
+
+def test_a_frame_mismatch_fails_with_its_code() -> None:
+    judgement = judge_protocol(
+        _case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(observed=1))
+    )
+
+    assert _dimension(judgement, "trace").status == VERDICT_FAIL
+    assert _trace_code(judgement) == "trace_frames_mismatch"
+    assert judgement.status == VERDICT_FAIL
+
+
+def test_an_unidentified_nms_hop_is_not_applicable() -> None:
+    judgement = judge_protocol(
+        _case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(expected=None))
+    )
+
+    assert _dimension(judgement, "trace").status == VERDICT_NOT_APPLICABLE
+    assert _trace_code(judgement) == "trace_nms_hop_unknown"
+    assert judgement.status == VERDICT_PASS
+
+
+def test_an_attribution_gap_fails_with_its_code() -> None:
+    judgement = judge_protocol(
+        _case(),
+        "a2a-t",
+        _evidence(batch=REAL_BATCH, trace=_trace(attribution="missing_vendor")),
+    )
+
+    assert _dimension(judgement, "trace").status == VERDICT_FAIL
+    assert _trace_code(judgement) == "trace_missing_vendor"
+
+
+def test_a_missing_client_frame_fails_only_the_a2a_t_hop() -> None:
+    failing = judge_protocol(
+        _case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(client=0))
+    )
+    passing = judge_protocol(
+        _case(protocol="a2a", rounds=0),
+        "a2a",
+        _evidence(batch=REAL_BATCH, trace=_trace(client=0)),
+    )
+
+    assert _dimension(failing, "trace").status == VERDICT_FAIL
+    assert _trace_code(failing) == "trace_missing_client"
+    assert _dimension(passing, "trace").status == VERDICT_PASS
+
+
+def test_the_trace_summary_is_part_of_the_detail_payload() -> None:
+    judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace()))
+
+    trace = judgement.to_dict()["detail"]["trace"]
+
+    assert trace["present"] is True
+    assert trace["traceId"] == "trace-1"
+    assert trace["frames"]["nms"]["expected"] == 2
 
 
 def test_a_wrong_final_state_fails() -> None:

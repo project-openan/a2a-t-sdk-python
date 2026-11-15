@@ -12,6 +12,7 @@ const DIMENSION_LABELS = {
   validate: "拦截",
   negotiation: "协商",
   final_state: "终态",
+  trace: "轨迹",
 };
 
 const STATUS_LABELS = {

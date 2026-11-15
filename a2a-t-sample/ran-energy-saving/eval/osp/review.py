@@ -49,6 +49,7 @@ DIMENSION_TASK_T: Final[str] = "task_t"
 DIMENSION_VALIDATE: Final[str] = "validate"
 DIMENSION_NEGOTIATION: Final[str] = "negotiation"
 DIMENSION_FINAL: Final[str] = "final_state"
+DIMENSION_TRACE: Final[str] = "trace"
 
 DIMENSIONS: Final[tuple[str, ...]] = (
     DIMENSION_INTENT,
@@ -56,7 +57,36 @@ DIMENSIONS: Final[tuple[str, ...]] = (
     DIMENSION_VALIDATE,
     DIMENSION_NEGOTIATION,
     DIMENSION_FINAL,
+    DIMENSION_TRACE,
 )
+
+#: Why the trace dimension did not pass. The report counts them separately so "we never collected
+#: the trace" is never reported as "the vendor dropped a span" (or the other way round).
+TRACE_NOT_EXPORTED: Final[str] = "trace_not_exported"
+TRACE_FRAMES_MISMATCH: Final[str] = "trace_frames_mismatch"
+TRACE_MISSING_CLIENT: Final[str] = "trace_missing_client"
+TRACE_MISSING_INGEST: Final[str] = "trace_missing_ingest"
+TRACE_MISSING_VENDOR: Final[str] = "trace_missing_vendor"
+TRACE_CONTENT_UNAVAILABLE: Final[str] = "trace_content_unavailable"
+TRACE_NMS_HOP_UNKNOWN: Final[str] = "trace_nms_hop_unknown"
+
+TRACE_REASONS: Final[tuple[str, ...]] = (
+    TRACE_NOT_EXPORTED,
+    TRACE_FRAMES_MISMATCH,
+    TRACE_MISSING_CLIENT,
+    TRACE_MISSING_INGEST,
+    TRACE_MISSING_VENDOR,
+    TRACE_CONTENT_UNAVAILABLE,
+    TRACE_NMS_HOP_UNKNOWN,
+)
+
+#: Attribution statuses the trace collector may report. The three gap states fail the dimension;
+#: ``unknown`` only explains a failure the frames already established.
+TRACE_ATTRIBUTION_GAPS: Final[dict[str, str]] = {
+    "missing_ingest": TRACE_MISSING_INGEST,
+    "missing_vendor": TRACE_MISSING_VENDOR,
+    "content_unavailable": TRACE_CONTENT_UNAVAILABLE,
+}
 
 #: One dimension's result. ``recorded`` means "evidence exists but this run cannot judge it"
 #: (simulator, proxy hop, a blocked-before-Task-T segment); ``missing`` means the evidence needed to
@@ -150,6 +180,7 @@ def judge_protocol(
         _judge_validate(case, effective, protocol, evidence),
         _judge_negotiation(effective, protocol, evidence),
         _judge_final(effective, protocol, evidence),
+        _judge_trace(protocol, evidence),
     )
     asserted = _asserted_dimensions(case, protocol)
     return ProtocolJudgement(
@@ -257,7 +288,15 @@ def _overall_status(
     dimensions: Sequence[DimensionResult],
     asserted: set[str],
 ) -> str:
-    """Derive the protocol verdict from its asserted dimensions."""
+    """Derive the protocol verdict from its asserted dimensions.
+
+    The trace dimension is asserted by the *evidence*, not by the corpus: it applies to a run that
+    actually dispatched to the real vendor NMS. Keeping it out of ``case_signature`` matters — a
+    corpus-wide opt-in would invalidate every stored decision.
+    """
+    trace = next((row for row in dimensions if row.dimension == DIMENSION_TRACE), None)
+    if trace is not None and trace.status not in (VERDICT_NOT_APPLICABLE, VERDICT_NOT_EXPECTED):
+        asserted = asserted | {DIMENSION_TRACE}
     relevant = [
         row
         for row in dimensions
@@ -540,6 +579,98 @@ def _judge_final(
     )
 
 
+def _judge_trace(protocol: str, evidence: Mapping[str, Any]) -> DimensionResult:
+    """Judge the vendor trace of a real-machine run.
+
+    Applicability is decided by what the batch *declared* and by whether the run dispatched: a
+    simulator, an undeclared legacy batch or an SDK-only/preflight item has no vendor trace to
+    judge. A real run whose trace was never exported fails — that is the customer's hard gate.
+    """
+    batch = _mapping(evidence.get("batch"))
+    if not (batch.get("nms") is True and batch.get("nmsSim") is False):
+        return DimensionResult(
+            DIMENSION_TRACE,
+            VERDICT_NOT_APPLICABLE,
+            reason="不是真机批次，轨迹不参与验收",
+        )
+    run_id = evidence.get("runId")
+    if not isinstance(run_id, str) or not run_id:
+        return DimensionResult(
+            DIMENSION_TRACE,
+            VERDICT_NOT_APPLICABLE,
+            reason="没有实际下发（SDK-only / preflight），轨迹不参与验收",
+        )
+    trace = evidence.get("trace")
+    if not isinstance(trace, Mapping):
+        return DimensionResult(
+            DIMENSION_TRACE,
+            VERDICT_FAIL,
+            reason="轨迹未导出",
+            diffs=(_trace_diff("trace.export", "已导出", "缺失", TRACE_NOT_EXPORTED),),
+        )
+    frames = _mapping(trace.get("frames"))
+    attribution = _mapping(trace.get("attribution"))
+    gap = TRACE_ATTRIBUTION_GAPS.get(str(attribution.get("status") or ""))
+    if gap is not None:
+        return DimensionResult(
+            DIMENSION_TRACE,
+            VERDICT_FAIL,
+            expected="完整轨迹",
+            actual=str(attribution.get("status") or ""),
+            reason="轨迹归因缺失",
+            diffs=(
+                _trace_diff(
+                    "trace.attribution", "ok", attribution.get("status"), gap
+                ),
+            ),
+        )
+    client = _mapping(frames.get("client"))
+    if protocol == A2A_T_PROTOCOL and _optional_int(client.get("observed")) == 0:
+        # The pure hop's client is our own OSS, so a missing client frame there describes our code,
+        # not the acceptance object; only the A2A-T client hop is asserted.
+        return DimensionResult(
+            DIMENSION_TRACE,
+            VERDICT_FAIL,
+            expected="至少一帧客户端发送",
+            actual=0,
+            reason="轨迹里没有客户端发送帧",
+            diffs=(_trace_diff("trace.frames.client", ">0", 0, TRACE_MISSING_CLIENT),),
+        )
+    nms = _mapping(frames.get("nms"))
+    expected = _optional_int(nms.get("expected"))
+    observed = _optional_int(nms.get("observed"))
+    if expected is None:
+        return DimensionResult(
+            DIMENSION_TRACE,
+            VERDICT_NOT_APPLICABLE,
+            actual=observed,
+            reason="无法从轨迹确定 NMS 跳",
+            diffs=(_trace_diff("trace.frames.nms", None, observed, TRACE_NMS_HOP_UNKNOWN),),
+        )
+    if observed != expected:
+        return DimensionResult(
+            DIMENSION_TRACE,
+            VERDICT_FAIL,
+            expected=expected,
+            actual=observed,
+            reason="NMS 跳的发送帧数不符",
+            diffs=(_trace_diff("trace.frames.nms", expected, observed, TRACE_FRAMES_MISMATCH),),
+        )
+    return DimensionResult(
+        DIMENSION_TRACE,
+        VERDICT_PASS,
+        expected=expected,
+        actual=observed,
+    )
+
+
+def _trace_diff(
+    path: str, expected: object, actual: object, code: str
+) -> dict[str, object]:
+    """Return one trace diff whose ``reason`` is the machine-readable code, not prose."""
+    return {"path": path, "expected": expected, "actual": actual, "reason": code}
+
+
 # ---------------------------------------------------------------------------
 # Evidence / detail payloads
 # ---------------------------------------------------------------------------
@@ -624,6 +755,30 @@ def _detail_payload(
             "working": _stage_value(evidence, "working"),
             "final": _stage_value(evidence, "final"),
         },
+        "trace": _trace_detail(evidence),
+    }
+
+
+def _trace_detail(evidence: Mapping[str, Any]) -> dict[str, object]:
+    """Return the compact trace summary the page and the report show.
+
+    The full snapshot stays in the store (``trace_json``); embedding it in every round row would
+    duplicate it into the export once per protocol.
+    """
+    trace = evidence.get("trace")
+    if not isinstance(trace, Mapping):
+        return {"present": False}
+    frames = trace.get("frames")
+    attribution = trace.get("attribution")
+    return {
+        "present": True,
+        "traceId": trace.get("traceId"),
+        "fetchedAt": trace.get("fetchedAt"),
+        "frames": dict(frames) if isinstance(frames, Mapping) else {},
+        "attribution": dict(attribution) if isinstance(attribution, Mapping) else {},
+        "related": list(trace.get("related") or ())
+        if isinstance(trace.get("related"), list)
+        else [],
     }
 
 
@@ -697,6 +852,21 @@ def _strings(value: object) -> list[str]:
     return [str(item) for item in value if isinstance(item, str) and item]
 
 
+def _optional_int(value: object) -> int | None:
+    """Return an integer when the value is one, else ``None``.
+
+    Frame counts distinguish "not measured" from zero: an unidentified NMS hop must stay
+    ``not_applicable`` instead of failing on ``0 vs 0``.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    return None
+
+
 def _int_value(value: object) -> int:
     """Return an integer, or zero."""
     if isinstance(value, bool):
@@ -719,9 +889,11 @@ __all__ = [
     "DIMENSION_INTENT",
     "DIMENSION_NEGOTIATION",
     "DIMENSION_TASK_T",
+    "DIMENSION_TRACE",
     "DIMENSION_VALIDATE",
     "DimensionResult",
     "ProtocolJudgement",
+    "TRACE_REASONS",
     "VERDICT_FAIL",
     "VERDICT_MISSING",
     "VERDICT_NOT_APPLICABLE",
