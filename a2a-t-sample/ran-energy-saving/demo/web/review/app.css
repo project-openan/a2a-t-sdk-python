@@ -87,8 +87,6 @@ body {
   gap: 12px;
   padding: 12px 22px;
   width: 100%;
-  max-width: 1680px;
-  margin: 0 auto;
 }
 
 .card {
@@ -390,6 +388,22 @@ table.grid tr.recorded td { background: #fafbfc; color: var(--muted); }
 }
 .cell-button:hover { border-color: var(--accent); background: var(--accent-soft); }
 .cell-button .sub { color: var(--warn); font-size: 11px; }
+.dim-chips { display: inline-flex; flex-wrap: wrap; gap: 3px; }
+.dim-chip {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: #f2f4f8;
+  color: #7b8494;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.dim-chip.pass { background: #e9f7ef; border-color: #a8d9bd; color: var(--ok); }
+.dim-chip.fail { background: #fdecea; border-color: #f3b4ae; color: var(--bad); }
+.dim-chip.partial, .dim-chip.missing { background: #fff7e6; border-color: #f3d39b; color: var(--warn); }
+.dim-chip.recorded { background: #f2f4f8; color: #7b8494; }
 
 @media (max-width: 1200px) {
   .layout { grid-template-columns: 1fr; }

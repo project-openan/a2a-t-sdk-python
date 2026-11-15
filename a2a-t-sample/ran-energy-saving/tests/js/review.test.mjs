@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 
 import {
+  attentionDimensions,
   batchLabel,
   categoryLabel,
   filterTaskTRows,
   decisionLabel,
   defaultRoundIndex,
   dimensionLabel,
+  dimensionNeedsAttention,
   filterBatches,
   filterCases,
   progressText,
@@ -119,6 +121,35 @@ assert.deepEqual(
   [16, 26],
 );
 assert.deepEqual(filterCases(CASES, { query: "26" }).map((row) => row.caseId), [26]);
+
+// A dimension filter keeps the case and only the protocol tasks failing that point.
+assert.deepEqual(
+  filterCases(CASES, { dimension: "task_t" }).map((row) => [
+    row.caseId,
+    row.protocols.map((task) => task.protocol),
+  ]),
+  [[16, ["a2a-t"]]],
+);
+assert.deepEqual(
+  filterCases(CASES, { dimension: "negotiation" }).map((row) => [
+    row.caseId,
+    row.protocols.map((task) => task.protocol),
+  ]),
+  [[26, ["a2a"]]],
+);
+assert.deepEqual(filterCases(CASES, { dimension: "trace" }).map((row) => row.caseId), []);
+assert.equal(dimensionNeedsAttention("pass"), false);
+assert.equal(dimensionNeedsAttention("not_applicable"), false);
+assert.equal(dimensionNeedsAttention("not_expected"), false);
+assert.equal(dimensionNeedsAttention("fail"), true);
+assert.equal(dimensionNeedsAttention("partial"), true);
+assert.equal(dimensionNeedsAttention("missing"), true);
+assert.equal(dimensionNeedsAttention("recorded"), true);
+assert.deepEqual(
+  attentionDimensions(CASES[0].protocols[0]).map((row) => row.dimension),
+  ["task_t"],
+);
+assert.deepEqual(attentionDimensions(null), []);
 
 const TASK_T_ROWS = [
   { path: "task_t.Operation Type", verdict: "same" },

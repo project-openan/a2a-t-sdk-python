@@ -81,6 +81,38 @@ export function dimensionLabel(dimension) {
   return DIMENSION_LABELS[dimension] || String(dimension);
 }
 
+//: The judged dimensions a reviewer can filter by, in display order.
+export const ATTENTION_DIMENSIONS = [
+  "intent",
+  "task_t",
+  "validate",
+  "negotiation",
+  "final_state",
+  "trace",
+];
+
+const DIMENSION_OK = new Set(["pass", "not_expected", "not_applicable"]);
+
+const DIMENSION_MARKS = {
+  pass: "✓",
+  fail: "✗",
+  partial: "…",
+  missing: "?",
+  recorded: "·",
+};
+
+//: A dimension needs attention when it did not pass and is not inapplicable; partial, missing and
+//: recorded all mean the reviewer still has to look at that point.
+export function dimensionNeedsAttention(status) {
+  return !DIMENSION_OK.has(status);
+}
+
+//: The judged dimensions of one protocol task that need attention.
+export function attentionDimensions(task) {
+  const dimensions = (task && task.dimensions) || [];
+  return dimensions.filter((row) => dimensionNeedsAttention(row.status));
+}
+
 export function progressText(progress) {
   if (!progress || !progress.statuses) return "";
   const statuses = progress.statuses;
@@ -107,6 +139,14 @@ export function filterCases(cases, filters) {
     for (const task of caseRow.protocols || []) {
       if (filters.protocol && task.protocol !== filters.protocol) continue;
       if (filters.status && task.status !== filters.status) continue;
+      if (
+        filters.dimension
+        && !(task.dimensions || []).some(
+          (row) => row.dimension === filters.dimension && dimensionNeedsAttention(row.status),
+        )
+      ) {
+        continue;
+      }
       const decision = task.decision || {};
       const decisionStatus = decision.status || "pending";
       if (filters.decision && decisionStatus !== filters.decision) continue;
@@ -538,11 +578,30 @@ function renderBatchTable() {
   return card;
 }
 
+//: How many protocol tasks in the batch fail one dimension; shown in the filter options so the
+//: reviewer sees where this round needs attention before choosing a filter.
+function batchAttentionCount(dimension) {
+  let count = 0;
+  for (const caseRow of (state.batch && state.batch.cases) || []) {
+    for (const task of caseRow.protocols || []) {
+      if (
+        (task.dimensions || []).some(
+          (row) => row.dimension === dimension && dimensionNeedsAttention(row.status),
+        )
+      ) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
 function batchCaseFilters() {
   return {
     query: field("batch-filter-query"),
     protocol: field("batch-filter-protocol"),
     status: field("batch-filter-status"),
+    dimension: field("batch-filter-dimension"),
     decision: field("batch-filter-decision"),
     category: field("batch-filter-category"),
     onlyFailures: checked("batch-only-failures"),
@@ -558,6 +617,14 @@ function renderBatchFilters() {
   query.placeholder = "搜索编号或名称";
   query.addEventListener("input", refreshBatchTable);
   bar.append(query);
+  const dimensionOptions = [["", "全部关注点"]];
+  for (const dimension of ATTENTION_DIMENSIONS) {
+    const count = batchAttentionCount(dimension);
+    dimensionOptions.push([
+      dimension,
+      `${dimensionLabel(dimension)}${count ? `（${count}）` : ""}`,
+    ]);
+  }
   for (const [id, options] of [
     [
       "batch-filter-protocol",
@@ -567,6 +634,7 @@ function renderBatchFilters() {
         ["a2a", "A2A"],
       ],
     ],
+    ["batch-filter-dimension", dimensionOptions],
     [
       "batch-filter-status",
       [
@@ -673,12 +741,20 @@ function protocolCell(caseRow, protocol) {
   const button = el("button", "cell-button");
   button.type = "button";
   button.append(el("span", `badge ${task.status}`, statusLabel(task.status)));
-  const failing = (task.dimensions || []).filter(
-    (row) => !["pass", "not_expected", "not_applicable"].includes(row.status),
-  );
-  if (failing.length) {
-    button.append(el("span", "sub", failing.map((row) => dimensionLabel(row.dimension)).join("/")));
+  // Every judged point inline, so one row answers "which check is not OK" without opening the case.
+  const chips = el("span", "dim-chips");
+  for (const row of task.dimensions || []) {
+    if (row.status === "not_expected" || row.status === "not_applicable") continue;
+    const mark = DIMENSION_MARKS[row.status] || "·";
+    const chip = el(
+      "span",
+      `dim-chip ${row.status}`,
+      `${mark} ${dimensionLabel(row.dimension)}`,
+    );
+    chip.title = `${dimensionLabel(row.dimension)} · ${statusLabel(row.status)}`;
+    chips.append(chip);
   }
+  if (chips.childNodes.length) button.append(chips);
   const decision = task.decision || {};
   const decisionStatus = decision.status || "pending";
   button.append(el("span", `badge ${decisionStatus}`, decisionLabel(decisionStatus)));
