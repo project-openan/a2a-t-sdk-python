@@ -467,6 +467,7 @@ def _trace_entry(detail: Mapping[str, object]) -> dict[str, object]:
     return {
         "present": bool(trace.get("present")),
         "traceId": trace.get("traceId"),
+        "url": trace.get("url"),
         # Why the dimension abstained (or why it has no snapshot yet) travels with the customer
         # pack: "not applicable" must never be an unexplained badge.
         "applicability": dict(applicability) if isinstance(applicability, Mapping) else {},

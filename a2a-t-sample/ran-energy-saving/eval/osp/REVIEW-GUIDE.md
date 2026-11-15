@@ -12,7 +12,8 @@ tester 证据做**当前语料重判**、给出验收结论并导出报告。
 1. **不要**把完整 Web UI（`run_demo.py` / `demo.web.serve`）指向现场 `runs/`：完整应用启动会执行
    `RunManager.recover_runs()`，把未结束的 run 标成 `interrupted`。
 2. 审核实例只读源目录：`runs/tester/*.json` 与 `runs/client-state.sqlite3`。
-3. 唯一允许写的文件是审核库（`--store`）。**显式放到源目录之外**。
+3. 唯一允许写的文件是审核库（`--store`）。**显式放到源目录之外**。启用 `--fetch-traces` 后还会写
+   轨迹快照（默认 `<runs>/review/langfuse`，可用 `--trace-store` 指到源目录之外）。
 4. 不启动 run、不下发任务、不恢复 run 状态；复跑失败用例去 `/tester`。
 5. 不要删除审核库：结论、审核人、证据 runId、用例指纹都在里面。
 6. 用例 refresh 只会替换 `eval/osp/cases`；手写期望放在 overlay
@@ -59,6 +60,8 @@ nohup python -m demo.web.review \
   --store  <审核库目录>/review.sqlite3 \
   [--annotations <标注库路径>] \
   [--overlay <稳定的 overlay 路径>] \
+  [--fetch-traces] \
+  [--trace-store <轨迹快照目录>] \
   --host 127.0.0.1 --port 8091 \
   > <审核库目录>/review.log 2>&1 &
 echo $! > <审核库目录>/review.pid
@@ -93,6 +96,30 @@ curl -s http://127.0.0.1:8091/ready
    自动判定不是通过时，确认通过必须写理由；自动判定通过却判缺陷也要写理由。
 6. **过期提示**：结论上方出现「用例或期望已变更」或「有新轮次」时，重新复核后再保存。
 
+### 4.1 轨迹（Langfuse）
+
+轨迹是客户硬门槛。判定规则：**运行有 `traceId` 就审计**，不再要求批次声明 `nms/nmsSim`；只有显式
+模拟器批次、SDK-only/preflight（无 `runId`）、没有或格式错误的 `traceId` 才「不适用」，并且详情页会
+写出原因和下一步。**未采集**的轨迹判「缺证据」（partial，避免整批提前变红）；采集到快照后若轨迹点
+或帧数不符才判「失败」。
+
+- **抓取开关**：完整 Web UI（8080）默认开启；独立审核实例默认关闭，启动时加 `--fetch-traces`。
+- **凭据**：`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`，可从进程环境或 `.env` 读取。审核实例按
+  `<runs>/.env` → `<runs>/../.env` 的顺序查找；完整 Web UI 直接把已加载的配置传给审核页面。
+- **自动加载**：打开某一轮时，如果没有快照就自动抓一次；已有快照**永久缓存**，不会自动重抓。
+- **手动操作**：按钮随状态显示「抓取轨迹」/「重试抓取」/「重新抓取（强制刷新）」。只读实例会提示
+  启动命令；未配置凭据会提示缺哪个环境变量。
+- **按轮抓取**：请求带 `traceId`/`runId`/`batchId`/`round`，多轮批次抓的是当前查看的轮。
+- **限流**：同一进程一次只抓一个 trace；Langfuse 返回 429 后进入 60 秒冷却，页面提示剩余秒数。
+  自动加载每个 run 每次会话只尝试一次，失败后由人工点「重试抓取」。
+- **快照位置**：默认 `<runs>/review/langfuse/<traceId>_<时间>/`，可用 `--trace-store` 改到源目录之外。
+  客户验收可直接拷走该目录。
+- **页面查看**：判定汇总卡片里有 `traceId`、快照时间、NMS 帧数、归因；展开「轨迹观测」看每一条
+  span；有 `langfuseUrl` 时提供「在 Langfuse 打开」链接。
+- **常见原因**：`trace_not_exported` 未导出；`trace_nms_hop_unknown` 轨迹里没有
+  `a2a-t-server` 的发送跳（网管侧未上报或 scope 不匹配）；`trace_missing_*` 预期轨迹点缺失，
+  按本机/入库/厂商归因区分。
+
 ---
 
 ## 5. 导出与回传
@@ -120,6 +147,11 @@ curl -s "$BASE/api/review/cases"
 # 单任务的全部轮次与结论
 curl -s "$BASE/api/review/case/16/a2a-t"
 
+# 抓取某一轮的 Langfuse 轨迹（需要 --fetch-traces；force=true 强制刷新）
+curl -s -X POST "$BASE/api/review/case/16/a2a-t/trace" \
+  -H 'content-type: application/json' \
+  -d '{"traceId": "<32 位 trace id>", "round": 1, "force": false}'
+
 # 保存结论（status: accepted|defect|known_issue|recheck|pending）
 curl -s -X POST "$BASE/api/review/case/16/a2a-t/decision" \
   -H 'content-type: application/json' \
@@ -143,6 +175,11 @@ curl -s "$BASE/api/review/report.md" -o osp-review-report.md
 | 显示「需重跑」 | 证据的 `refs.userInput` 与当前有效输入不同 | 用例输入已变更，重跑该用例 |
 | 结论保存被拒 | 缺陷缺归属/备注，或覆盖自动判定未写理由 | 按提示补全 |
 | 结论显示「待复核」 | 用例/期望变更或出现新轮次 | 复核后重新保存 |
+| 轨迹显示「轨迹抓取未启用」 | 独立实例没加 `--fetch-traces` | 启动命令加 `--fetch-traces`；或在 8080 的完整 Web UI 里看 |
+| 轨迹抓取报「未配置 Langfuse 凭据」 | 环境/`.env` 里缺 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | 配置凭据后重启；确认 `.env` 在 runs 目录或其上一级 |
+| 轨迹显示「不适用」 | 显式模拟器、无 `runId`、无/非法 `traceId` | 详情页 blocker 会写出具体原因；真机用例请重跑或检查 tester 是否记录了 `traceId` |
+| 轨迹显示「NMS 跳未识别」 | 轨迹里没有 `a2a-t-server` 的发送 span | 确认网管侧是否上报 Langfuse，或 scope 名是否变化 |
+| 轨迹抓取报 429 | Langfuse 限流 | 等页面提示的冷却秒数后点「重试抓取」；不要连续刷新 |
 
 ---
 

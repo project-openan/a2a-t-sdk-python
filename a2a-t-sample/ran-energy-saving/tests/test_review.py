@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import httpx
+import pytest
 import yaml
 from demo.web.annotate.overlay import confirmed_overlay, overlay_token
 from demo.web.annotate.store import AnnotationStore, TargetKey
@@ -168,6 +169,7 @@ def _evidence_item(
     blocked: bool = True,
     slot_error: bool = False,
     refs_input: str = "do it properly",
+    langfuse_url: str = "",
 ) -> dict[str, object]:
     """Return one persisted tester item."""
     item: dict[str, object] = {
@@ -205,6 +207,8 @@ def _evidence_item(
             "final": {"stage": "final", "status": "passed", "actual": final_state},
         },
     }
+    if langfuse_url:
+        item["langfuseUrl"] = langfuse_url
     if blocked:
         item["interception"] = {
             "input": "do it",
@@ -921,13 +925,14 @@ def _trace_service(
     stub: _StubTraceStore | None = None,
     trace_config: object | None = None,
     fetch_enabled: bool = True,
+    langfuse_url: str = "",
 ) -> tuple[ReviewService, _StubTraceStore]:
     cases_dir = tmp_path / "cases"
     _write_cases(cases_dir, _case_document(blocked=False))
     catalog = CaseCatalog(cases_dir, overlay_path=tmp_path / "absent.yaml")
     store = ReviewStore(tmp_path / "review.sqlite3")
     store.ensure()
-    item = _evidence_item(blocked=False, slot_error=False, trace_id=TRACE_ID)
+    item = _evidence_item(blocked=False, slot_error=False, trace_id=TRACE_ID, langfuse_url=langfuse_url)
     _write_batch(tmp_path / "runs", [item], nms=nms, nms_sim=nms_sim)
     resolved = stub if stub is not None else _StubTraceStore()
     service = ReviewService(
@@ -1060,6 +1065,69 @@ def test_the_detail_explains_and_offers_the_trace_fetch(tmp_path: Path) -> None:
     refreshed = service.detail(1, "a2a-t")["rounds"][0]["judgement"]["detail"]["trace"]
     assert refreshed["blockers"] == []
     assert refreshed["exportState"] == "exported"
+
+
+def test_the_detail_exposes_the_observation_rows_and_the_langfuse_link(
+    tmp_path: Path,
+) -> None:
+    stub = _StubTraceStore(
+        payload={
+            "traceId": TRACE_ID,
+            "exportState": "exported",
+            "frames": {"nms": {"expected": 1, "observed": 1}},
+            "observations": [
+                {
+                    "name": "SendMessage",
+                    "type": "SPAN",
+                    "kind": "message_sent",
+                    "round": 1,
+                    "side": "server",
+                    "runId": "run-1",
+                    "status": "ok",
+                }
+            ],
+        }
+    )
+    service, _resolved = _trace_service(
+        tmp_path,
+        stub=stub,
+        trace_config=object(),
+        langfuse_url="https://langfuse.example/trace/abc",
+    )
+    service.scan(days=2.0)
+    service.fetch_trace(1, "a2a-t")
+
+    trace = service.detail(1, "a2a-t")["rounds"][0]["judgement"]["detail"]["trace"]
+
+    assert trace["observations"] == [
+        {
+            "name": "SendMessage",
+            "type": "SPAN",
+            "kind": "message_sent",
+            "stage": None,
+            "round": 1,
+            "side": "server",
+            "runId": "run-1",
+            "status": "ok",
+        }
+    ]
+    assert trace["url"] == "https://langfuse.example/trace/abc"
+
+
+def test_the_instance_reports_whether_langfuse_credentials_are_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from langfuse_export.config import ConfigError
+
+    def explode(**_kwargs: object) -> object:
+        raise ConfigError("missing credentials")
+
+    monkeypatch.setattr("langfuse_export.config.load_config", explode)
+    unconfigured, _stub = _trace_service(tmp_path / "plain")
+    configured, _resolved = _trace_service(tmp_path / "configured", trace_config=object())
+
+    assert unconfigured.trace_configured() is False
+    assert configured.trace_configured() is True
 
 
 def test_an_untraced_run_explains_why_the_dimension_is_not_applicable(
@@ -1511,6 +1579,7 @@ async def test_route_fetch_trace_refuses_a_run_without_a_trace_id(tmp_path: Path
     assert "traceId" in refused.json()["error"]
     # The page needs the fetch capability and the snapshot root without opening a case.
     assert meta["traceFetchEnabled"] is True
+    assert isinstance(meta["traceConfigured"], bool)
     assert meta["traceStore"].endswith("langfuse")
 
 

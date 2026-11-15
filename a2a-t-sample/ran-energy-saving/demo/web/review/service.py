@@ -316,11 +316,30 @@ class ReviewService:
             return self._trace_config
         from langfuse_export.config import ConfigError, load_config
 
+        # ``langfuse_export.load_config`` reads ``.env`` from the given directory only (it never
+        # walks upwards). The sample keeps its ``.env`` above the runs directory, so try the runs
+        # directory and its parent before declaring the credentials missing. The process cwd is
+        # deliberately not consulted: a console pointed at another instance's runs must not pick
+        # up an unrelated ``.env`` by accident.
+        last_error: ConfigError | None = None
+        for candidate in (self._runs_dir, self._runs_dir.parent):
+            try:
+                self._trace_config = load_config(cwd=candidate)
+            except ConfigError as exc:
+                last_error = exc
+                continue
+            return self._trace_config
+        raise ValueError("未配置 Langfuse 凭据（LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY）。") from last_error
+
+    def trace_configured(self) -> bool:
+        """Return whether this instance can resolve Langfuse credentials."""
+        if self._trace_config is not None:
+            return True
         try:
-            self._trace_config = load_config(cwd=self._runs_dir)
-        except ConfigError as exc:
-            raise ValueError("未配置 Langfuse 凭据（LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY）。") from exc
-        return self._trace_config
+            self._resolved_trace_config()
+        except ValueError:
+            return False
+        return True
 
     def cases(self) -> list[dict[str, object]]:
         """Return every case with its two protocol tasks, verdicts and decisions."""

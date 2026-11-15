@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Final
 
 from eval.osp.catalog import CaseCatalog
+from langfuse_export.config import Config
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
@@ -43,6 +44,7 @@ def build_review_routes(
     client_db_path: Path | None,
     store_path: Path | None = None,
     trace_store: TraceStore | None = None,
+    trace_config: Config | None = None,
     trace_fetch_enabled: bool = True,
 ) -> list[Route]:
     """Build the acceptance review routes.
@@ -59,6 +61,7 @@ def build_review_routes(
         runs_dir=Path(runs_dir),
         client_db_path=client_db_path,
         trace_store=resolved_trace_store,
+        trace_config=trace_config,
         trace_fetch_enabled=trace_fetch_enabled,
     )
 
@@ -100,6 +103,7 @@ def build_review_routes(
                 # The page decides whether to auto-fetch on open from these; the snapshot root is
                 # shown so a reviewer can hand the acceptance pack to the customer.
                 "traceFetchEnabled": trace_fetch_enabled,
+                "traceConfigured": service.trace_configured(),
                 "traceStore": str(resolved_trace_store.root),
                 "corpusVersion": catalog.version,
                 "defaultDays": DEFAULT_DAYS,

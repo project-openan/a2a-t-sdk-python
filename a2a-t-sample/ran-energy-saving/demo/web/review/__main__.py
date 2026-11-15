@@ -62,14 +62,8 @@ def build_app(
     export step.
     """
     resolved_runs = Path(runs_dir)
-    resolved_client_db = (
-        Path(client_db_path) if client_db_path is not None else resolved_runs / CLIENT_DB_NAME
-    )
-    resolved_store = (
-        Path(store_path)
-        if store_path is not None
-        else resolved_runs / "review" / "review.sqlite3"
-    )
+    resolved_client_db = Path(client_db_path) if client_db_path is not None else resolved_runs / CLIENT_DB_NAME
+    resolved_store = Path(store_path) if store_path is not None else resolved_runs / "review" / "review.sqlite3"
     resolved_annotations = (
         Path(annotations_path)
         if annotations_path is not None
@@ -144,10 +138,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--overlay",
         type=Path,
         default=None,
-        help=(
-            "hand-authored expectation overlay merged into the catalog; "
-            f"default: {DEFAULT_OVERLAY_PATH}"
-        ),
+        help=(f"hand-authored expectation overlay merged into the catalog; default: {DEFAULT_OVERLAY_PATH}"),
     )
     parser.add_argument(
         "--annotations",
@@ -162,10 +153,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--trace-store",
         type=Path,
         default=None,
-        help=(
-            "directory of the local Langfuse snapshots; "
-            "default: <runs-dir>/review/langfuse"
-        ),
+        help=("directory of the local Langfuse snapshots; default: <runs-dir>/review/langfuse"),
     )
     parser.add_argument(
         "--fetch-traces",
@@ -194,15 +182,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Parse the arguments and serve the console, or print the resolved paths with ``--check``."""
     args = _build_parser().parse_args(list(argv) if argv is not None else None)
     runs_dir = Path(args.runs_dir).expanduser().resolve()
-    client_db = (
-        Path(args.client_db).expanduser().resolve()
-        if args.client_db is not None
-        else runs_dir / CLIENT_DB_NAME
-    )
+    client_db = Path(args.client_db).expanduser().resolve() if args.client_db is not None else runs_dir / CLIENT_DB_NAME
     store = (
-        Path(args.store).expanduser().resolve()
-        if args.store is not None
-        else runs_dir / "review" / "review.sqlite3"
+        Path(args.store).expanduser().resolve() if args.store is not None else runs_dir / "review" / "review.sqlite3"
     )
     cases_dir = Path(args.cases_dir).expanduser().resolve() if args.cases_dir is not None else None
     overlay = Path(args.overlay).expanduser().resolve() if args.overlay is not None else None
@@ -220,8 +202,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"[review] source run store: {client_db}")
     print(f"[review] review store   : {store}")
     print(f"[review] annotations    : {annotations}")
-    print(f"[review] trace snapshots: {trace_store}"
-          f"{'' if args.fetch_traces else ' (fetch disabled)'}")
+    print(f"[review] trace snapshots: {trace_store}{'' if args.fetch_traces else ' (fetch disabled)'}")
     print(f"[review] case corpus    : {cases_dir or 'packaged eval/osp/cases'}")
     print(f"[review] expectation overlay: {overlay or DEFAULT_OVERLAY_PATH}")
     if not client_db.is_file():
@@ -234,6 +215,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             "[review] note: the review database lives inside the source directory "
             "(review/ only); pass --store elsewhere to keep the source strictly untouched.",
+            file=sys.stderr,
+        )
+    if not args.fetch_traces:
+        print(
+            "[review] note: trace fetching is off, so the page can only read snapshots that "
+            "already exist here. Add --fetch-traces (and LANGFUSE_PUBLIC_KEY / "
+            "LANGFUSE_SECRET_KEY in the environment or .env) to load them from the page.",
             file=sys.stderr,
         )
     if args.check:

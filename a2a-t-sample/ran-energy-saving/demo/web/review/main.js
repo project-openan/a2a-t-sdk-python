@@ -1268,8 +1268,60 @@ function renderTraceBlock(card, round) {
       fetchTrace(button, round, { force: Boolean(trace.present) }),
     );
     card.append(button);
+    if (state.meta && state.meta.traceConfigured === false) {
+      card.append(
+        el(
+          "p",
+          "hint",
+          "未配置 Langfuse 凭据（LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY），抓取会失败。",
+        ),
+      );
+    }
   } else if (applicability.applicable === "yes" && trace.fetchEnabled === false) {
-    card.append(el("p", "sub", "该实例是只读模式，未启用轨迹抓取。"));
+    // Say exactly what is missing; "只读模式" alone left the reviewer with no next step.
+    card.append(
+      el(
+        "p",
+        "hint",
+        "轨迹抓取未启用：启动 review 时加 --fetch-traces，并配置 LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY。",
+      ),
+    );
+  }
+  const observations = trace.observations || [];
+  if (observations.length) {
+    const box = document.createElement("details");
+    box.append(el("summary", "", `轨迹观测（${observations.length} 条）`));
+    const table = document.createElement("table");
+    table.className = "grid";
+    const headRow = el("tr");
+    for (const title of ["观测", "类型", "轮次", "侧", "runId", "状态"]) {
+      headRow.append(el("th", "", title));
+    }
+    table.append(headRow);
+    for (const row of observations) {
+      const tr = el("tr");
+      tr.append(
+        el("td", "", [row.name, row.kind || row.stage].filter(Boolean).join(" · ")),
+        el("td", "", row.type || ""),
+        el("td", "", row.round == null ? "—" : String(row.round)),
+        el("td", "", row.side || ""),
+        el("td", "mono", row.runId || "—"),
+        el("td", "", row.status || ""),
+      );
+      table.append(tr);
+    }
+    box.append(table);
+    if (trace.observationsTruncated) {
+      box.append(el("p", "hint", "快照超过上限，观测列表已截断。"));
+    }
+    card.append(box);
+  }
+  if (trace.url) {
+    const link = el("a", "sub", "在 Langfuse 打开");
+    link.href = trace.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    card.append(link);
   }
   maybeAutoFetch(round, trace);
 }

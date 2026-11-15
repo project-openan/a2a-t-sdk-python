@@ -41,6 +41,9 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import httpx
 from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
 from eval.osp.catalog import CaseCatalog
+from langfuse_export.config import Config as LangfuseConfig
+from langfuse_export.config import ConfigError as LangfuseConfigError
+from langfuse_export.config import load_config as load_langfuse_config
 from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from protocol.client_runtime import MODE_AUTO
 from protocol.client_service import (
@@ -590,10 +593,25 @@ def create_app(
         runs_dir=resolved_runs_dir,
         client_db_path=Path(config.client_db_path) if config.client_db_path else None,
     )
+    # The review console fetches Langfuse traces with the same credentials the client uses. The
+    # sample's `.env` is above the runs directory, so passing the loaded config avoids making the
+    # console rediscover it (``langfuse_export`` only reads the cwd).
+    trace_config: LangfuseConfig | None = None
+    if config.langfuse_public_key and config.langfuse_secret_key:
+        try:
+            trace_config = load_langfuse_config(
+                host=config.langfuse_base_url,
+                public_key=config.langfuse_public_key,
+                secret_key=config.langfuse_secret_key,
+            )
+        except LangfuseConfigError as exc:
+            _LOGGER.warning("review trace fetch disabled: %s", exc)
+            trace_config = None
     review_routes = build_review_routes(
         catalog=case_catalog,
         runs_dir=resolved_runs_dir,
         client_db_path=Path(config.client_db_path) if config.client_db_path else None,
+        trace_config=trace_config,
     )
 
     @asynccontextmanager
@@ -1103,12 +1121,8 @@ def create_app(
                 )
         resolved_target_task = target_task_id.strip() if isinstance(target_task_id, str) else ""
         resolved_target_context = target_context_id.strip() if isinstance(target_context_id, str) else ""
-        resolved_server_task = (
-            target_server_task_id.strip() if isinstance(target_server_task_id, str) else ""
-        )
-        resolved_server_context = (
-            target_server_context_id.strip() if isinstance(target_server_context_id, str) else ""
-        )
+        resolved_server_task = target_server_task_id.strip() if isinstance(target_server_task_id, str) else ""
+        resolved_server_context = target_server_context_id.strip() if isinstance(target_server_context_id, str) else ""
         if bool(resolved_target_task) != bool(resolved_target_context):
             return JSONResponse(
                 {
@@ -1137,9 +1151,7 @@ def create_app(
             # The picker always reads the vendor NMS from this process, while a pure run's own hop
             # is the OSS Agent (direct). What matters is that the page can validate the vendor
             # Task; an A2A-T run additionally continues that same Task directly.
-            if config.discovery != DISCOVERY_NMS or (
-                protocol == PROTOCOL_A2A_T and discovery != DISCOVERY_NMS
-            ):
+            if config.discovery != DISCOVERY_NMS or (protocol == PROTOCOL_A2A_T and discovery != DISCOVERY_NMS):
                 return JSONResponse(
                     {
                         "error": "The task picker is available only with NMS discovery.",
