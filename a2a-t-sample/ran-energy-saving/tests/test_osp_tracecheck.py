@@ -143,6 +143,27 @@ def test_match_points_uses_kind_stage_round_and_run_id() -> None:
     assert by_id["decision:R1"] == 1
 
 
+def test_match_points_carries_the_matching_span_names() -> None:
+    results = match_points(
+        [
+            TracePoint("message_sent", "客户端消息帧", kind="message_sent", count=2),
+            TracePoint("task_created", "任务接受", kind="task_created"),
+        ],
+        [
+            _observation(name="SendMessage · R1", kind="message_sent"),
+            _observation(name="SendMessage · R2", kind="message_sent"),
+            _observation(name="SendMessage · R2", kind="message_sent"),
+        ],
+        run_id="run-1",
+    )
+    by_id = {result.point.id: result for result in results}
+
+    # Names ride along deduplicated, in observation order; a point with no observation has none
+    # so the console falls back to the point id.
+    assert by_id["message_sent"].names == ("SendMessage · R1", "SendMessage · R2")
+    assert by_id["task_created"].names == ()
+
+
 def test_match_points_reads_the_payload_camel_case_run_id() -> None:
     results = match_points(
         [TracePoint("message_sent", "客户端消息帧", kind="message_sent")],

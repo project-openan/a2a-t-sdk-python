@@ -2413,8 +2413,14 @@ function renderTracePointsCard(round) {
   table.append(headRow);
   for (const point of points) {
     const tr = el("tr", point.ok ? "" : "fail");
+    // The original Langfuse observation name rides next to the process point so the table can be
+    // matched against the observation list below without knowing the point-to-span mapping.
+    const spans = (point.spans || []).filter(Boolean);
+    const labelCell = el("td", "");
+    labelCell.append(point.label);
+    labelCell.append(el("span", "sub", ` (${spans.length ? spans.join(" / ") : point.point})`));
     tr.append(
-      el("td", "", point.label),
+      labelCell,
       el("td", "", point.expected),
       el("td", "", point.observed),
       el("td", `verdict ${point.ok ? "same" : "missing"}`, point.ok ? "满足" : "缺失"),

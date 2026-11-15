@@ -202,10 +202,11 @@ class TraceContext:
 
 @dataclass(frozen=True)
 class PointResult:
-    """Observed count of one expected point."""
+    """Observed count of one expected point, with the span names that satisfied it."""
 
     point: TracePoint
     observed: int
+    names: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -505,22 +506,26 @@ def match_points(
     *,
     run_id: str | None,
 ) -> tuple[PointResult, ...]:
-    """Count how many observations satisfy each expected point."""
-    return tuple(PointResult(point, _count_point(point, observations, run_id=run_id)) for point in points)
+    """Count how many observations satisfy each expected point.
 
-
-def _count_point(
-    point: TracePoint,
-    observations: Sequence[Mapping[str, object]],
-    *,
-    run_id: str | None,
-) -> int:
-    matched = 0
-    for observation in observations:
-        if not _matches(point, observation, run_id=run_id):
-            continue
-        matched += 1
-    return matched
+    The matching span names ride along so the console can show the original Langfuse observation
+    name next to the process point; a reviewer compares the table with the observation list by
+    name, and the point id alone does not always name a span (``gen:`` points are GENERATIONs with
+    a free-text title).
+    """
+    results: list[PointResult] = []
+    for point in points:
+        names: list[str] = []
+        matched = 0
+        for observation in observations:
+            if not _matches(point, observation, run_id=run_id):
+                continue
+            matched += 1
+            name = _text(observation.get("name"))
+            if name and name not in names:
+                names.append(name)
+        results.append(PointResult(point, matched, tuple(names)))
+    return tuple(results)
 
 
 def _matches(

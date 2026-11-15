@@ -893,6 +893,7 @@ def _trace_detail(
                 "label": result.point.label,
                 "expected": result.point.count,
                 "observed": result.observed,
+                "spans": list(result.names),
                 "ok": result.ok,
             }
             for result in process_points(trace, context)

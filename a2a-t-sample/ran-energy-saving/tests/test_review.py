@@ -1145,6 +1145,9 @@ def test_the_detail_exposes_the_observation_rows_and_the_langfuse_link(
         }
     ]
     assert trace["url"] == "https://langfuse.example/trace/abc"
+    points = {point["point"]: point for point in trace["points"]}
+    assert points["message_sent"]["spans"] == ["SendMessage"]
+    assert points["task_created"]["spans"] == []
 
 
 def _sample_settings(
