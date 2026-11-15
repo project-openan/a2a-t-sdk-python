@@ -45,6 +45,7 @@ from eval.osp.followup import followup_case, has_followup, is_blocked_case
 from eval.osp.tracecheck import (
     TRACE_REASONS,
     Fidelity,
+    TraceApplicability,
     TraceContext,
     dispatched_task_t,
     intent_corroboration,
@@ -53,6 +54,7 @@ from eval.osp.tracecheck import (
     nms_kind,
     process_points,
     task_t_fidelity,
+    trace_applicability,
 )
 
 #: Review dimensions. ``intent`` and ``task_t`` are the two the acceptance cares about most.
@@ -207,9 +209,7 @@ def case_signature(case: Mapping[str, Any]) -> str:
 
 def input_signature(case: Mapping[str, Any]) -> str:
     """Return the fingerprint of just the operator request a run was produced from."""
-    return hashlib.sha256(
-        str(case.get("user_input") or "").encode("utf-8")
-    ).hexdigest()[:16]
+    return hashlib.sha256(str(case.get("user_input") or "").encode("utf-8")).hexdigest()[:16]
 
 
 def evidence_input_signature(evidence: Mapping[str, Any]) -> str:
@@ -234,9 +234,7 @@ def evidence_is_current_input(
     A blocked case's evidence comes from its follow-up request, so the comparison is against the
     effective case, not the operator's original text.
     """
-    return evidence_input_signature(evidence) == input_signature(
-        _effective_case(case, protocol)
-    )
+    return evidence_input_signature(evidence) == input_signature(_effective_case(case, protocol))
 
 
 def _effective_case(case: Mapping[str, Any], protocol: str) -> Mapping[str, Any]:
@@ -291,15 +289,11 @@ def _overall_status(
     relevant = [
         row
         for row in dimensions
-        if row.dimension in asserted
-        and row.status not in (VERDICT_NOT_APPLICABLE, VERDICT_NOT_EXPECTED)
+        if row.dimension in asserted and row.status not in (VERDICT_NOT_APPLICABLE, VERDICT_NOT_EXPECTED)
     ]
     if any(row.status == VERDICT_FAIL for row in relevant):
         return VERDICT_FAIL
-    if any(
-        row.status in (VERDICT_MISSING, VERDICT_RECORDED, VERDICT_PARTIAL)
-        for row in relevant
-    ):
+    if any(row.status in (VERDICT_MISSING, VERDICT_RECORDED, VERDICT_PARTIAL) for row in relevant):
         return VERDICT_PARTIAL
     if relevant and all(row.status == VERDICT_PASS for row in relevant):
         return VERDICT_PASS
@@ -614,28 +608,30 @@ def _judge_trace(
     protocol: str,
     evidence: Mapping[str, Any],
 ) -> DimensionResult:
-    """Judge the vendor trace of a real-machine run.
+    """Judge the Langfuse trace of a dispatched run.
 
-    Applicability is decided by what the batch *declared* and by whether the run dispatched: a
-    simulator, an undeclared legacy batch or an SDK-only/preflight item has no vendor trace to
-    judge. The point model, attribution and status mapping live in :mod:`eval.osp.tracecheck`;
-    this function only turns the stored evidence into its context, so the console and the
-    collector cannot drift apart.
+    Applicability is decided by the run itself: a run with a trace id is audited. The declared
+    downstream is display only, so a batch produced before the tester recorded ``nms``/``nmsSim``
+    still reaches the gate instead of silently abstaining. A declared simulator, an SDK-only or
+    preflight item and a run without a usable trace id stay out of the gate with a reason. The
+    point model, attribution and status mapping live in :mod:`eval.osp.tracecheck`; this function
+    only turns the stored evidence into its context, so the console and the collector cannot drift
+    apart.
     """
     batch = _mapping(evidence.get("batch"))
-    if not (batch.get("nms") is True and batch.get("nmsSim") is False):
+    applicability = trace_applicability(
+        evidence.get("runId"),
+        evidence.get("traceId"),
+        simulated=batch.get("nmsSim") is True,
+    )
+    if not applicability.applicable:
         return DimensionResult(
             DIMENSION_TRACE,
             VERDICT_NOT_APPLICABLE,
-            reason="不是真机批次，轨迹不参与验收",
+            reason=applicability.text,
+            diffs=(_trace_diff("trace.applicability", None, None, applicability.code),),
         )
-    run_id = evidence.get("runId")
-    if not isinstance(run_id, str) or not run_id:
-        return DimensionResult(
-            DIMENSION_TRACE,
-            VERDICT_NOT_APPLICABLE,
-            reason="没有实际下发（SDK-only / preflight），轨迹不参与验收",
-        )
+    run_id = applicability.run_id
     trace = evidence.get("trace")
     payload: Mapping[str, Any] = trace if isinstance(trace, Mapping) else {"exportState": "not_exported"}
     judgement = judge_trace(
@@ -724,11 +720,7 @@ def _trace_rounds(
         return max(0, value), "observed"
     messages = evidence.get("messages")
     if isinstance(messages, list) and messages:
-        numbers = [
-            _int_value(message.get("round"))
-            for message in messages
-            if isinstance(message, Mapping)
-        ]
+        numbers = [_int_value(message.get("round")) for message in messages if isinstance(message, Mapping)]
         return max(0, max(numbers, default=0)), "messages"
     return _expected_rounds(case, protocol), "expected"
 
@@ -752,9 +744,7 @@ def _expected_rounds(case: Mapping[str, Any], protocol: str) -> int:
     return _int_value(negotiation.get("expected_rounds"))
 
 
-def _trace_diff(
-    path: str, expected: object, actual: object, code: str
-) -> dict[str, object]:
+def _trace_diff(path: str, expected: object, actual: object, code: str) -> dict[str, object]:
     """Return one trace diff whose ``reason`` is the machine-readable code, not prose."""
     return {"path": path, "expected": expected, "actual": actual, "reason": code}
 
@@ -775,9 +765,7 @@ def _detail_payload(
     server = _mapping_or_none(evidence.get("serverIntent"))
     sdk = _mapping_or_none(evidence.get("intent"))
     intent_rows = (
-        [row.to_dict() for row in flatten_intent(expected_intent, server)]
-        if expected_intent and server
-        else []
+        [row.to_dict() for row in flatten_intent(expected_intent, server)] if expected_intent and server else []
     )
     sdk_rows = (
         [row.to_dict() for row in flatten_intent(expected_intent, sdk)]
@@ -800,9 +788,7 @@ def _detail_payload(
     trace_map = trace_value if isinstance(trace_value, Mapping) else {}
     judged_task_t = actual_task_t if isinstance(actual_task_t, str) else ""
     exported_task_t, exported_truncated = dispatched_task_t(trace_map)
-    fidelity = task_t_fidelity(
-        judged_task_t, exported_task_t, truncated=exported_truncated
-    )
+    fidelity = task_t_fidelity(judged_task_t, exported_task_t, truncated=exported_truncated)
     corroboration = intent_corroboration(server, intent_params(trace_map))
     validate_detail = _mapping(validate_stage.get("detail"))
     errors = validate_detail.get("slotErrors")
@@ -815,9 +801,7 @@ def _detail_payload(
         message_match = match_negotiation_messages(expectation, messages).to_dict()
     applicable_run = _trace_applicable(evidence)
     trace_context = (
-        _trace_context(case, effective, protocol, evidence, applicable_run)
-        if applicable_run is not None
-        else None
+        _trace_context(case, effective, protocol, evidence, applicable_run) if applicable_run is not None else None
     )
     return {
         "blocked": is_blocked_case(case),
@@ -873,17 +857,35 @@ def _trace_detail(
     """Return the compact trace summary the page and the report show.
 
     The full snapshot stays in the store (``trace_json``); embedding it in every round row would
-    duplicate it into the export once per protocol.
+    duplicate it into the export once per protocol. The block is returned even when no snapshot
+    exists: the page must be able to say *why* the dimension abstains and offer the fetch, instead
+    of the bare "不适用" the reviewer used to get.
     """
     trace = evidence.get("trace")
+    batch = _mapping(evidence.get("batch"))
+    applicability = trace_applicability(
+        evidence.get("runId"),
+        evidence.get("traceId"),
+        simulated=batch.get("nmsSim") is True,
+    )
     if not isinstance(trace, Mapping):
-        return {"present": False}
+        return {
+            "present": False,
+            "traceId": applicability.trace_id,
+            "applicability": applicability.to_dict(),
+            "exportState": "not_exported" if applicability.applicable else "",
+            "nmsKind": _nms_kind_of(evidence),
+            "frames": {},
+            "attribution": {},
+            "points": [],
+            "warnings": [],
+            "related": [],
+            "blockers": _trace_blockers(applicability, None),
+        }
     frames = trace.get("frames")
     attribution = trace.get("attribution")
     points: list[dict[str, object]] = []
-    computed_attribution: dict[str, object] = (
-        dict(attribution) if isinstance(attribution, Mapping) else {}
-    )
+    computed_attribution: dict[str, object] = dict(attribution) if isinstance(attribution, Mapping) else {}
     if context is not None:
         points = [
             {
@@ -897,9 +899,7 @@ def _trace_detail(
         ]
         # The snapshot carries the observations, not the verdict: the attribution is derived here
         # so the page and the customer pack show producer/ingest/vendor instead of an empty block.
-        judged = judge_trace(
-            trace, context, not_exported_status=TRACE_NOT_EXPORTED_STATUS
-        )
+        judged = judge_trace(trace, context, not_exported_status=TRACE_NOT_EXPORTED_STATUS)
         computed_attribution = {
             "status": judged.attribution,
             "findings": [
@@ -915,7 +915,9 @@ def _trace_detail(
     warnings = trace.get("warnings")
     return {
         "present": True,
-        "traceId": trace.get("traceId"),
+        "traceId": trace.get("traceId") or applicability.trace_id,
+        "applicability": applicability.to_dict(),
+        "blockers": _trace_blockers(applicability, trace),
         "fetchedAt": trace.get("fetchedAt") or trace.get("capturedAt"),
         "exportState": trace.get("exportState") or trace.get("export_state"),
         "spanLevel": trace.get("spanLevel"),
@@ -925,10 +927,62 @@ def _trace_detail(
         "attribution": computed_attribution,
         "points": points,
         "warnings": [str(item) for item in warnings] if isinstance(warnings, list) else [],
-        "related": list(trace.get("related") or ())
-        if isinstance(trace.get("related"), list)
-        else [],
+        "related": list(trace.get("related") or ()) if isinstance(trace.get("related"), list) else [],
     }
+
+
+def _trace_blockers(
+    applicability: TraceApplicability,
+    trace: Mapping[str, Any] | None,
+) -> list[dict[str, object]]:
+    """Return why the trace dimension cannot pass yet, with the action the page offers.
+
+    ``action`` is ``none`` (not auditable, nothing to do), ``fetch`` (no snapshot yet) or
+    ``retry`` (the last fetch failed). The page turns it into the visibility and label of the
+    fetch button, so an abstention always carries an explanation.
+    """
+    if not applicability.applicable:
+        return [{"code": applicability.code, "text": applicability.text, "action": "none"}]
+    if trace is None:
+        return [
+            {
+                "code": "trace_snapshot_missing",
+                "text": "尚未抓取 Langfuse 轨迹快照",
+                "action": "fetch",
+            }
+        ]
+    state = str(trace.get("exportState") or trace.get("export_state") or "")
+    if state == "failed":
+        warnings = trace.get("warnings")
+        detail = next((str(item) for item in warnings if item), "") if isinstance(warnings, list) else ""
+        return [
+            {
+                "code": "trace_snapshot_failed",
+                "text": f"上次抓取失败：{detail}" if detail else "上次抓取失败",
+                "action": "retry",
+            }
+        ]
+    if state not in {"exported", "partial"}:
+        return [
+            {
+                "code": "trace_snapshot_missing",
+                "text": "尚未抓取 Langfuse 轨迹快照",
+                "action": "fetch",
+            }
+        ]
+    frames = trace.get("frames")
+    nms = frames.get("nms") if isinstance(frames, Mapping) else None
+    if isinstance(nms, Mapping) and nms.get("expected") is None:
+        # The dimension abstains when no vendor hop can be identified; say it, so the badge is
+        # not read as "nothing to check".
+        return [
+            {
+                "code": "trace_nms_hop_unknown",
+                "text": "轨迹里没有可识别的 NMS（a2a-t-server）发送跳，无法判定",
+                "action": "none",
+            }
+        ]
+    return []
 
 
 def _nms_kind_of(evidence: Mapping[str, Any]) -> str:
@@ -955,10 +1009,12 @@ def _fidelity_dict(fidelity: Fidelity) -> dict[str, object]:
 def _trace_applicable(evidence: Mapping[str, Any]) -> str | None:
     """Return the run id when the trace dimension applies, else ``None``."""
     batch = _mapping(evidence.get("batch"))
-    if not (batch.get("nms") is True and batch.get("nmsSim") is False):
-        return None
-    run_id = evidence.get("runId")
-    return run_id if isinstance(run_id, str) and run_id else None
+    applicability = trace_applicability(
+        evidence.get("runId"),
+        evidence.get("traceId"),
+        simulated=batch.get("nmsSim") is True,
+    )
+    return applicability.run_id if applicability.applicable else None
 
 
 def _interception_stage(evidence: Mapping[str, Any]) -> Mapping[str, Any] | None:

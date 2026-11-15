@@ -133,6 +133,7 @@ def _evidence(
     run_id: str = "run-1",
     batch: dict[str, object] | None = None,
     trace: dict[str, object] | None = None,
+    trace_id: str | None = None,
     accepted_status: str | None = None,
 ) -> dict[str, object]:
     """Return one stored tester item (trimmed like the review corpus stores it)."""
@@ -162,8 +163,15 @@ def _evidence(
             "status": accepted_status,
             "actual": "accepted",
         }
+    # Applicability is "the run has a trace id". A helper call that carries trace evidence (or a
+    # downstream declaration) models a traced run; the non-trace dimensions keep passing no
+    # batch/trace and stay out of the gate.
+    resolved_trace_id = (
+        trace_id if trace_id is not None else ("a" * 32 if batch is not None or trace is not None else None)
+    )
     return {
         "runId": run_id,
+        "traceId": resolved_trace_id,
         "batch": batch if batch is not None else {},
         "trace": trace,
         "refs": {"userInput": refs_input},
@@ -216,7 +224,7 @@ def test_pure_a2a_never_judges_the_intent() -> None:
 
 
 def test_a_changed_task_t_section_fails() -> None:
-    actual = TASK_T.replace("Site list: [\"LNR_KPI_7745\"]", "Site list: [\"NES_27A_321071\"]")
+    actual = TASK_T.replace('Site list: ["LNR_KPI_7745"]', 'Site list: ["NES_27A_321071"]')
 
     judgement = judge_protocol(_case(), "a2a-t", _evidence(task_t=actual))
 
@@ -412,21 +420,37 @@ def test_a_failed_export_fails_like_a_missing_snapshot() -> None:
 
 
 def test_a_simulator_run_never_judges_the_trace() -> None:
-    judgement = judge_protocol(
-        _case(), "a2a-t", _evidence(batch={"nms": True, "nmsSim": True})
-    )
+    judgement = judge_protocol(_case(), "a2a-t", _evidence(batch={"nms": True, "nmsSim": True}))
 
     assert _dimension(judgement, "trace").status == VERDICT_NOT_APPLICABLE
     assert judgement.status == VERDICT_PASS
 
 
 def test_a_run_without_a_dispatch_never_judges_the_trace() -> None:
-    judgement = judge_protocol(
-        _case(), "a2a-t", _evidence(batch=REAL_BATCH, run_id="")
-    )
+    judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, run_id=""))
 
     assert _dimension(judgement, "trace").status == VERDICT_NOT_APPLICABLE
     assert judgement.status == VERDICT_PASS
+
+
+def test_a_legacy_batch_without_declared_downstream_is_still_audited() -> None:
+    """The real-machine complaint: an old batch has no nms/nmsSim key but does have a trace."""
+    judgement = judge_protocol(
+        _case(),
+        "a2a-t",
+        _evidence(batch={"discovery": "nms"}, trace=_trace()),
+    )
+
+    assert _dimension(judgement, "trace").status == VERDICT_PASS
+    assert judgement.status == VERDICT_PASS
+
+
+def test_a_run_without_a_trace_id_says_why_it_abstains() -> None:
+    judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(), trace_id=""))
+
+    trace = _dimension(judgement, "trace")
+    assert trace.status == VERDICT_NOT_APPLICABLE
+    assert "traceId" in trace.reason
 
 
 def test_a_complete_trace_passes() -> None:
@@ -450,9 +474,7 @@ def test_the_trace_uses_the_observed_rounds_not_the_expected_ones() -> None:
 
 
 def test_a_failed_accepted_stage_does_not_require_task_created() -> None:
-    without_task_created = tuple(
-        row for row in A2A_T_OBSERVATIONS if row.get("kind") != "task_created"
-    )
+    without_task_created = tuple(row for row in A2A_T_OBSERVATIONS if row.get("kind") != "task_created")
 
     judgement = judge_protocol(
         _case(),
@@ -469,9 +491,7 @@ def test_a_failed_accepted_stage_does_not_require_task_created() -> None:
 
 
 def test_a_missing_expected_point_fails_with_its_code() -> None:
-    without_validation = tuple(
-        row for row in A2A_T_OBSERVATIONS if row.get("kind") != "task_validation"
-    )
+    without_validation = tuple(row for row in A2A_T_OBSERVATIONS if row.get("kind") != "task_validation")
 
     judgement = judge_protocol(
         _case(),
@@ -493,9 +513,7 @@ def test_a_missing_expected_point_fails_with_its_code() -> None:
 
 
 def test_a_missing_point_without_local_evidence_is_still_a_failure() -> None:
-    without_validation = tuple(
-        row for row in A2A_T_OBSERVATIONS if row.get("kind") != "task_validation"
-    )
+    without_validation = tuple(row for row in A2A_T_OBSERVATIONS if row.get("kind") != "task_validation")
 
     judgement = judge_protocol(
         _case(),
@@ -508,9 +526,7 @@ def test_a_missing_point_without_local_evidence_is_still_a_failure() -> None:
 
 
 def test_a_frame_mismatch_fails_with_its_code() -> None:
-    judgement = judge_protocol(
-        _case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(observed=1))
-    )
+    judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(observed=1)))
 
     assert _dimension(judgement, "trace").status == VERDICT_FAIL
     assert _trace_code(judgement) == "trace_frames_mismatch"
@@ -518,19 +534,18 @@ def test_a_frame_mismatch_fails_with_its_code() -> None:
 
 
 def test_an_unidentified_nms_hop_is_not_applicable() -> None:
-    judgement = judge_protocol(
-        _case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(expected=None))
-    )
+    judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(expected=None)))
 
     assert _dimension(judgement, "trace").status == VERDICT_NOT_APPLICABLE
     assert _trace_code(judgement) == "trace_nms_hop_unknown"
+    # The abstention is explained in the detail, not left as a bare "不适用".
+    blockers = judgement.to_dict()["detail"]["trace"]["blockers"]
+    assert [row["code"] for row in blockers] == ["trace_nms_hop_unknown"]
     assert judgement.status == VERDICT_PASS
 
 
 def test_a_disabled_content_capture_only_partially_judges_the_trace() -> None:
-    judgement = judge_protocol(
-        _case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(capture=False))
-    )
+    judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(capture=False)))
 
     assert _dimension(judgement, "trace").status == VERDICT_PARTIAL
     assert _trace_code(judgement) == "trace_content_unavailable"
@@ -538,9 +553,7 @@ def test_a_disabled_content_capture_only_partially_judges_the_trace() -> None:
 
 
 def test_a_missing_client_frame_fails_only_the_a2a_t_hop() -> None:
-    failing = judge_protocol(
-        _case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(client=0))
-    )
+    failing = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(client=0)))
     pure_observations = (
         {"kind": "message_sent", "runId": "run-1"},
         {"kind": "task_created", "runId": "run-1"},
@@ -592,11 +605,7 @@ def test_a_different_exported_task_t_is_reported() -> None:
 
     assert fidelity["comparable"] is True
     assert fidelity["equal"] is False
-    changed = [
-        row["path"]
-        for row in fidelity["rows"]
-        if row["verdict"] in {"changed", "missing"}
-    ]
+    changed = [row["path"] for row in fidelity["rows"] if row["verdict"] in {"changed", "missing"}]
     assert changed == ["task_t.Task Context"]
 
 
@@ -632,9 +641,7 @@ def test_a_wrong_final_state_fails() -> None:
 
 
 def test_acceptance_is_the_success_point_when_the_batch_stops_at_accepted() -> None:
-    judgement = judge_protocol(
-        _case(), "a2a-t", _evidence(final_state=None, accepted_status="passed")
-    )
+    judgement = judge_protocol(_case(), "a2a-t", _evidence(final_state=None, accepted_status="passed"))
 
     final = _dimension(judgement, "final_state")
     assert final.status == VERDICT_PASS
@@ -644,18 +651,14 @@ def test_acceptance_is_the_success_point_when_the_batch_stops_at_accepted() -> N
 
 
 def test_a_failed_acceptance_fails_instead_of_going_missing() -> None:
-    judgement = judge_protocol(
-        _case(), "a2a-t", _evidence(final_state=None, accepted_status="failed")
-    )
+    judgement = judge_protocol(_case(), "a2a-t", _evidence(final_state=None, accepted_status="failed"))
 
     assert _dimension(judgement, "final_state").status == VERDICT_FAIL
     assert judgement.status == VERDICT_FAIL
 
 
 def test_an_unobserved_acceptance_stays_missing() -> None:
-    judgement = judge_protocol(
-        _case(), "a2a-t", _evidence(final_state=None, accepted_status="waiting")
-    )
+    judgement = judge_protocol(_case(), "a2a-t", _evidence(final_state=None, accepted_status="waiting"))
 
     assert _dimension(judgement, "final_state").status == VERDICT_MISSING
     assert judgement.status == VERDICT_PARTIAL

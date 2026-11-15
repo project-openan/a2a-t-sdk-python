@@ -14,8 +14,10 @@ import {
   progressText,
   protocolLabel,
   roundLabel,
+  shouldAutoFetch,
   stabilityOf,
   statusLabel,
+  traceButtonLabel,
 } from "../../demo/web/review/main.js";
 
 const CASES = [
@@ -305,3 +307,33 @@ assert.deepEqual(
     { dimension: "task_t", pass: 1, total: 2 },
   ],
 );
+
+// The fetch button follows what the round can do, not one failure code: a real-machine round
+// with no snapshot must offer 抓取轨迹 instead of a bare "不适用".
+assert.equal(
+  traceButtonLabel({ canFetch: true, present: false, exportState: "not_exported" }),
+  "抓取轨迹",
+);
+assert.equal(
+  traceButtonLabel({ canFetch: true, present: true, exportState: "exported" }),
+  "重新抓取",
+);
+assert.equal(traceButtonLabel({ canFetch: false, present: false }), "");
+assert.equal(
+  traceButtonLabel({ canFetch: true, present: true, exportState: "failed" }),
+  "重试抓取",
+);
+assert.equal(
+  traceButtonLabel({ canFetch: true, present: false, exportState: "failed" }),
+  "重试抓取",
+);
+
+// The snapshot is permanent: only a missing export is loaded automatically, never refreshed and
+// never retried without a click.
+const META = { traceFetchEnabled: true };
+assert.equal(shouldAutoFetch(META, { canFetch: true, exportState: "not_exported" }), true);
+assert.equal(shouldAutoFetch(META, { canFetch: true, exportState: "exported" }), false);
+assert.equal(shouldAutoFetch(META, { canFetch: true, exportState: "partial" }), false);
+assert.equal(shouldAutoFetch(META, { canFetch: true, exportState: "failed" }), false);
+assert.equal(shouldAutoFetch({ traceFetchEnabled: false }, { canFetch: true }), false);
+assert.equal(shouldAutoFetch(META, { canFetch: false }), false);

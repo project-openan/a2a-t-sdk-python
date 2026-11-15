@@ -7,6 +7,7 @@ import json
 import sqlite3
 from collections.abc import Mapping
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -228,7 +229,7 @@ def _evidence_item(
                         ),
                     },
                 }
-            }
+            },
         }
     return item
 
@@ -513,9 +514,7 @@ def test_confirmed_annotations_are_used_without_an_export(tmp_path: Path) -> Non
     # Replace the observed error with a non-matching one.
     batch_path = tmp_path / "runs" / "tester" / "batch-1.json"
     document = json.loads(batch_path.read_text(encoding="utf-8"))
-    document["items"][0]["interception"]["stages"]["validate"]["detail"]["slotErrors"][0][
-        "code"
-    ] = "slot.not_provided"
+    document["items"][0]["interception"]["stages"]["validate"]["detail"]["slotErrors"][0]["code"] = "slot.not_provided"
     batch_path.write_text(json.dumps(document), encoding="utf-8")
     store = ReviewStore(tmp_path / "review.sqlite3")
     store.ensure()
@@ -552,9 +551,7 @@ def test_a_case_without_evidence_is_not_run(tmp_path: Path) -> None:
     catalog = CaseCatalog(cases_dir, overlay_path=tmp_path / "absent.yaml")
     store = ReviewStore(tmp_path / "review.sqlite3")
     store.ensure()
-    service = ReviewService(
-        store=store, catalog=catalog, runs_dir=tmp_path / "runs", client_db_path=None
-    )
+    service = ReviewService(store=store, catalog=catalog, runs_dir=tmp_path / "runs", client_db_path=None)
 
     rows = service.cases()
 
@@ -669,9 +666,7 @@ def test_the_batch_view_lists_every_corpus_case(tmp_path: Path) -> None:
     catalog = CaseCatalog(cases_dir, overlay_path=tmp_path / "absent.yaml")
     store = ReviewStore(tmp_path / "review.sqlite3")
     store.ensure()
-    service = ReviewService(
-        store=store, catalog=catalog, runs_dir=tmp_path / "runs", client_db_path=None
-    )
+    service = ReviewService(store=store, catalog=catalog, runs_dir=tmp_path / "runs", client_db_path=None)
     _write_batch(tmp_path / "runs", [_evidence_item(blocked=False, slot_error=False)])
     service.scan(days=2.0)
 
@@ -703,12 +698,8 @@ def test_the_batch_view_can_narrow_to_one_round(tmp_path: Path) -> None:
     merged = service.batch_rows("batch-multi")
 
     assert first["batch"]["round"] == 1
-    assert [row["runId"] for row in service.store.observations_for_batch("batch-multi", 1)] == [
-        "run-r1"
-    ]
-    assert [row["runId"] for row in service.store.observations_for_batch("batch-multi", 2)] == [
-        "run-r2"
-    ]
+    assert [row["runId"] for row in service.store.observations_for_batch("batch-multi", 1)] == ["run-r1"]
+    assert [row["runId"] for row in service.store.observations_for_batch("batch-multi", 2)] == ["run-r2"]
     assert second["batch"]["round"] == 2
     assert merged["coverage"]["observed"] == 1
     assert merged["cases"][0]["protocols"][0]["observations"] == 2
@@ -820,9 +811,7 @@ def test_a_non_blocked_case_uses_the_frozen_input_as_the_original(tmp_path: Path
     catalog = CaseCatalog(cases_dir, overlay_path=tmp_path / "absent.yaml")
     store = ReviewStore(tmp_path / "review.sqlite3")
     store.ensure()
-    service = ReviewService(
-        store=store, catalog=catalog, runs_dir=tmp_path / "runs", client_db_path=None
-    )
+    service = ReviewService(store=store, catalog=catalog, runs_dir=tmp_path / "runs", client_db_path=None)
     item = _evidence_item(blocked=False, slot_error=False)
     item["refs"] = {"userInput": "original text"}
     item["intentMeta"] = {"rawRequest": "rewritten text"}
@@ -843,9 +832,7 @@ def test_a_missing_run_request_falls_back_to_the_corpus_and_says_so(tmp_path: Pa
     catalog = CaseCatalog(cases_dir, overlay_path=tmp_path / "absent.yaml")
     store = ReviewStore(tmp_path / "review.sqlite3")
     store.ensure()
-    service = ReviewService(
-        store=store, catalog=catalog, runs_dir=tmp_path / "runs", client_db_path=None
-    )
+    service = ReviewService(store=store, catalog=catalog, runs_dir=tmp_path / "runs", client_db_path=None)
     item = _evidence_item(blocked=False, slot_error=False)
     item["refs"] = {}
     item["intentMeta"] = {}
@@ -883,14 +870,24 @@ class _StubTraceStore:
         }
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.fetched: list[tuple[str, str | None]] = []
+        #: State of the on-disk cache this stub models, keyed by trace id. A fetch moves the entry
+        #: to the fetch result's state, which is what makes the permanent-cache branch testable.
+        self.snapshot_states: dict[str, str] = {}
+
+    def load(self, trace_id: str) -> object:
+        return SimpleNamespace(export_state=self.snapshot_states.get(trace_id, "not_exported"))
 
     def cached_payload(self, trace_id: str, **kwargs: object) -> dict[str, object]:
         self.calls.append((trace_id, dict(kwargs)))
-        return dict(self.payload)
+        # Only an exported/failed state on disk is visible; a missing snapshot stays
+        # ``not_exported`` so the attach step and the fetch step are independently testable.
+        state = self.snapshot_states.get(trace_id, "not_exported")
+        return {**self.payload, "exportState": state}
 
     def fetch(self, trace_id: str, config: object, *, run_id: str | None = None) -> dict[str, object]:
         del config
         self.fetched.append((trace_id, run_id))
+        self.snapshot_states[trace_id] = str(self.fetch_result.get("exportState") or "failed")
         return dict(self.fetch_result)
 
 
@@ -925,6 +922,7 @@ def _trace_service(
 
 def test_a_scan_attaches_the_local_trace_snapshot(tmp_path: Path) -> None:
     service, stub = _trace_service(tmp_path)
+    stub.snapshot_states[TRACE_ID] = "exported"
 
     summary = service.scan(days=2.0)
 
@@ -934,14 +932,17 @@ def test_a_scan_attaches_the_local_trace_snapshot(tmp_path: Path) -> None:
     assert row["trace"]["exportState"] == "exported"  # type: ignore[index]
 
 
-def test_a_scan_never_attaches_a_simulator_or_legacy_trace(tmp_path: Path) -> None:
+def test_a_scan_attaches_a_legacy_trace_but_not_a_simulator_one(tmp_path: Path) -> None:
     simulator, simulator_stub = _trace_service(tmp_path / "sim", nms=True, nms_sim=True)
     legacy, legacy_stub = _trace_service(tmp_path / "legacy", nms=None, nms_sim=None)
+    legacy_stub.snapshot_states[TRACE_ID] = "exported"
 
     assert simulator.scan(days=2.0)["traces"] == 0
-    assert legacy.scan(days=2.0)["traces"] == 0
+    # A batch from before the tester recorded nms/nmsSim is still a real-machine run: it has a
+    # trace id, so its snapshot must attach instead of the dimension silently abstaining.
+    assert legacy.scan(days=2.0)["traces"] == 1
     assert simulator_stub.calls == []
-    assert legacy_stub.calls == []
+    assert legacy_stub.calls and legacy_stub.calls[0][0] == TRACE_ID
 
 
 def test_fetching_a_trace_stores_it(tmp_path: Path) -> None:
@@ -957,9 +958,7 @@ def test_fetching_a_trace_stores_it(tmp_path: Path) -> None:
 
 
 def test_a_failed_trace_fetch_is_reported(tmp_path: Path) -> None:
-    stub = _StubTraceStore(
-        fetch_result={"traceId": TRACE_ID, "exportState": "failed", "error": "boom"}
-    )
+    stub = _StubTraceStore(fetch_result={"traceId": TRACE_ID, "exportState": "failed", "error": "boom"})
     service, _resolved = _trace_service(tmp_path, stub=stub, trace_config=object())
     service.scan(days=2.0)
 
@@ -984,16 +983,113 @@ def test_a_read_only_instance_refuses_to_fetch(tmp_path: Path) -> None:
     assert stub.fetched == []
 
 
-def test_fetching_a_trace_of_a_legacy_batch_is_refused(tmp_path: Path) -> None:
+def test_fetching_a_trace_of_a_legacy_batch_is_allowed(tmp_path: Path) -> None:
     service, stub = _trace_service(tmp_path, nms=None, nms_sim=None, trace_config=object())
+    service.scan(days=2.0)
+
+    payload = service.fetch_trace(1, "a2a-t")
+
+    assert payload["exportState"] == "exported"
+    assert stub.fetched == [(TRACE_ID, "run-1")]
+
+
+def test_the_trace_snapshot_is_a_permanent_cache(tmp_path: Path) -> None:
+    service, stub = _trace_service(tmp_path, trace_config=object())
+    service.scan(days=2.0)
+    service.fetch_trace(1, "a2a-t")
+
+    # A second open serves the snapshot; only ``force`` spends Langfuse quota again.
+    service.fetch_trace(1, "a2a-t")
+    assert stub.fetched == [(TRACE_ID, "run-1")]
+    service.fetch_trace(1, "a2a-t", force=True)
+    assert stub.fetched == [(TRACE_ID, "run-1"), (TRACE_ID, "run-1")]
+
+
+def test_a_fetch_targets_the_round_the_reviewer_selected(tmp_path: Path) -> None:
+    service, stub = _trace_service(tmp_path, trace_config=object())
+    service.scan(days=2.0)
+    second = _evidence_item(
+        run_id="run-2",
+        trace_id="b" * 32,
+        round_index=2,
+        blocked=False,
+        slot_error=False,
+    )
+    _write_batch(tmp_path / "runs", [second], nms=True, nms_sim=False, batch_id="batch-2")
+    service.scan(days=2.0)
+
+    service.fetch_trace(1, "a2a-t", trace_id="b" * 32, source_round=2)
+
+    assert stub.fetched[-1] == ("b" * 32, "run-2")
+
+
+def test_the_detail_explains_and_offers_the_trace_fetch(tmp_path: Path) -> None:
+    service, _stub = _trace_service(tmp_path, trace_config=object())
+    service.scan(days=2.0)
+
+    round_row = service.detail(1, "a2a-t")["rounds"][0]
+    trace = round_row["judgement"]["detail"]["trace"]
+
+    assert trace["applicability"]["applicable"] == "yes"
+    assert trace["canFetch"] is True
+    assert trace["blockers"][0]["action"] == "fetch"
+
+    service.fetch_trace(1, "a2a-t")
+    refreshed = service.detail(1, "a2a-t")["rounds"][0]["judgement"]["detail"]["trace"]
+    assert refreshed["blockers"] == []
+    assert refreshed["exportState"] == "exported"
+
+
+def test_an_untraced_run_explains_why_the_dimension_is_not_applicable(
+    tmp_path: Path,
+) -> None:
+    service, _catalog, _overlay, _runs = _fixture(tmp_path)
+    service.scan(days=2.0)
+
+    round_row = service.detail(1, "a2a-t")["rounds"][0]
+    trace = round_row["judgement"]["detail"]["trace"]
+
+    assert trace["applicability"]["applicable"] == "no"
+    assert trace["applicability"]["code"] == "trace_no_trace_id"
+    assert trace["blockers"][0]["text"]
+    assert trace["canFetch"] is False
+
+
+def test_a_rate_limited_fetch_cools_down_before_retrying(tmp_path: Path) -> None:
+    stub = _StubTraceStore(fetch_result={"traceId": TRACE_ID, "exportState": "failed", "error": "HTTP 429"})
+    service, _resolved = _trace_service(tmp_path, stub=stub, trace_config=object())
     service.scan(days=2.0)
 
     try:
         service.fetch_trace(1, "a2a-t")
     except ValueError as exc:
-        assert "真机" in str(exc)
+        assert "限流" in str(exc)
     else:
-        raise AssertionError("a legacy batch has no vendor trace")
+        raise AssertionError("a 429 must surface as a rate-limit error")
+
+    try:
+        service.fetch_trace(1, "a2a-t")
+    except ValueError as exc:
+        assert "冷却" in str(exc)
+    else:
+        raise AssertionError("the cooldown must reject an immediate retry")
+    assert len(stub.fetched) == 1
+
+
+def test_fetching_a_trace_without_a_trace_id_is_refused(tmp_path: Path) -> None:
+    service, stub = _trace_service(tmp_path, trace_config=object())
+    service.scan(days=2.0)
+    # Re-ingest the same run without a trace id, as an SDK-only/preflight row would.
+    item = _evidence_item(blocked=False, slot_error=False, trace_id="")
+    _write_batch(tmp_path / "runs", [item], nms=True, nms_sim=False, batch_id="batch-2")
+    service.scan(days=2.0)
+
+    try:
+        service.fetch_trace(1, "a2a-t", batch_id="batch-2")
+    except ValueError as exc:
+        assert "traceId" in str(exc)
+    else:
+        raise AssertionError("a run without a trace id has nothing to fetch")
     assert stub.fetched == []
 
 
@@ -1045,9 +1141,7 @@ def test_a_decision_must_explain_an_override(tmp_path: Path) -> None:
     else:  # pragma: no cover - the assertion above is the contract
         raise AssertionError("a pass over a failing verdict must require a note")
 
-    detail = service.set_decision(
-        1, "a2a-t", status=DECISION_ACCEPTED, note="standard deviation accepted"
-    )
+    detail = service.set_decision(1, "a2a-t", status=DECISION_ACCEPTED, note="standard deviation accepted")
 
     assert detail["decision"]["status"] == DECISION_ACCEPTED
     assert detail["decision"]["note"] == "standard deviation accepted"
@@ -1068,9 +1162,7 @@ def test_a_defect_requires_a_category_and_a_note(tmp_path: Path) -> None:
         else:  # pragma: no cover
             raise AssertionError("an unexplained defect must be rejected")
 
-    detail = service.set_decision(
-        1, "a2a-t", status=DECISION_DEFECT, category="sdk", note="Task-T drops a site"
-    )
+    detail = service.set_decision(1, "a2a-t", status=DECISION_DEFECT, category="sdk", note="Task-T drops a site")
 
     assert detail["decision"]["category"] == "sdk"
 
@@ -1138,7 +1230,9 @@ def test_the_export_projection_attaches_the_latest_detail(tmp_path: Path) -> Non
     task = rows[0]["protocols"][0]
     assert task["exportDetail"]["taskT"]["judged"]
     assert task["exportRequests"]["dispatched"] == "do it properly"
-    assert task["traceReason"] == ""
+    # The fixture's trace id is not a Langfuse id; the export says why the dimension abstains
+    # instead of leaving the reason empty.
+    assert task["traceReason"] == "trace_no_trace_id"
 
 
 def test_the_export_carries_the_trace_reason_and_the_fidelity_appendices() -> None:
@@ -1286,13 +1380,9 @@ def test_the_export_carries_the_trace_reason_and_the_fidelity_appendices() -> No
 def test_the_payload_and_report_carry_the_decisions(tmp_path: Path) -> None:
     service, _catalog, _overlay, _runs = _fixture(tmp_path)
     service.scan(days=2.0)
-    service.set_decision(
-        1, "a2a-t", status=DECISION_DEFECT, category="sdk", note="Task-T drops a site"
-    )
+    service.set_decision(1, "a2a-t", status=DECISION_DEFECT, category="sdk", note="Task-T drops a site")
     rows = service.cases()
-    payload = build_payload(
-        rows, counts=service.progress(rows), corpus_version=service.catalog.version
-    )
+    payload = build_payload(rows, counts=service.progress(rows), corpus_version=service.catalog.version)
 
     assert payload["schema"] == "osp-review/v1"
     text = report_markdown(payload)
@@ -1356,9 +1446,7 @@ async def test_route_scan_cases_detail_and_decision(tmp_path: Path) -> None:
 async def test_route_rejects_invalid_decisions_and_unknown_targets(tmp_path: Path) -> None:
     app = _app(tmp_path)
     async with _client(app) as client:
-        bad_status = await client.post(
-            "/api/review/case/1/a2a-t/decision", json={"status": "maybe"}
-        )
+        bad_status = await client.post("/api/review/case/1/a2a-t/decision", json={"status": "maybe"})
         bad_category = await client.post(
             "/api/review/case/1/a2a-t/decision",
             json={"status": "defect", "category": "sdk", "note": ""},
@@ -1389,14 +1477,19 @@ async def test_route_batches_and_one_batch(tmp_path: Path) -> None:
     assert missing.status_code == 404
 
 
-async def test_route_fetch_trace_refuses_a_non_real_batch(tmp_path: Path) -> None:
+async def test_route_fetch_trace_refuses_a_run_without_a_trace_id(tmp_path: Path) -> None:
     _write_batch(tmp_path / "runs", [_evidence_item(blocked=False, slot_error=False)])
     app = _app(tmp_path)
     async with _client(app) as client:
         await client.post("/api/review/scan?days=2")
-        refused = await client.post("/api/review/case/1/a2a-t/trace")
+        refused = await client.post("/api/review/case/1/a2a-t/trace", json={})
+        meta = (await client.get("/api/review/meta")).json()
 
     assert refused.status_code == 400
+    assert "traceId" in refused.json()["error"]
+    # The page needs the fetch capability and the snapshot root without opening a case.
+    assert meta["traceFetchEnabled"] is True
+    assert meta["traceStore"].endswith("langfuse")
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,8 @@ A protocol task has two independent axes and the page shows both:
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final
@@ -36,7 +38,12 @@ from eval.osp.review import (
     evidence_is_current_input,
     judge_protocol,
 )
-from eval.osp.tracecheck import original_request
+from eval.osp.tracecheck import (
+    TraceApplicability,
+    nms_kind,
+    original_request,
+    trace_applicability,
+)
 from langfuse_export.config import Config
 
 from demo.web.review.corpus import case_documents, scan_evidence
@@ -76,6 +83,13 @@ STATUSES: Final[tuple[str, ...]] = (
     STATUS_NOT_RUN,
 )
 
+#: Export states whose snapshot is complete enough to serve from cache without a request.
+_EXPORTED_STATES: Final[frozenset[str]] = frozenset({"exported", "partial"})
+
+#: Cooldown after a Langfuse 429. The public API admits 30 requests/minute; one minute is enough
+#: for the bucket to refill and short enough that a reviewer can retry by hand.
+FETCH_COOLDOWN_SECONDS: Final[float] = 60.0
+
 
 class ReviewService:
     """Evidence projection, current-corpus judging and decision storage."""
@@ -95,13 +109,16 @@ class ReviewService:
         self._catalog = catalog
         self._runs_dir = Path(runs_dir)
         self._client_db_path = client_db_path
-        self._trace_store = (
-            trace_store if trace_store is not None else TraceStore(self._runs_dir)
-        )
+        self._trace_store = trace_store if trace_store is not None else TraceStore(self._runs_dir)
         #: Langfuse credentials for the opt-in fetch; ``None`` means "not configured yet".
         self._trace_config = trace_config
         #: The standalone read-only instance leaves this off: it must not call Langfuse at all.
         self._trace_fetch_enabled = trace_fetch_enabled
+        #: One fetch at a time. The public API admits 30 requests/minute; a serial queue plus the
+        #: permanent on-disk cache keeps a page that opens several cases from bursting through it.
+        self._fetch_lock = threading.Lock()
+        #: Wall-clock moment before which no fetch is attempted after a 429.
+        self._fetch_cooldown_until = 0.0
         self._last_scan: dict[str, object] | None = None
 
     @property
@@ -176,7 +193,7 @@ class ReviewService:
                 payload = self._trace_store.cached_payload(
                     trace_id,
                     run_id=str(target["runId"]),
-                    nms_kind="real",
+                    nms_kind=_row_nms_kind(rows[0]),
                     local_points=_string_list(target.get("localPoints")),
                     local_known=_string_list(target.get("localKnown")),
                 )
@@ -196,8 +213,26 @@ class ReviewService:
                 )
         return attached
 
-    def fetch_trace(self, case_id: int, protocol: str) -> dict[str, object]:
-        """Fetch one run's trace snapshot from Langfuse (explicit opt-in) and attach it."""
+    def fetch_trace(
+        self,
+        case_id: int,
+        protocol: str,
+        *,
+        trace_id: str | None = None,
+        run_id: str | None = None,
+        batch_id: str | None = None,
+        source_round: int | None = None,
+        force: bool = False,
+    ) -> dict[str, object]:
+        """Fetch one round's trace snapshot (explicit opt-in) and attach it.
+
+        The snapshot is a **permanent cache**: without ``force`` an existing export is reused
+        without touching Langfuse. Opening a case therefore costs at most one request per run, and
+        the reviewer's "重新抓取" is the only way to spend quota again.
+
+        Fetches are serialized because the public API admits 30 requests/minute. A 429 puts the
+        service into a short cooldown instead of retrying; the page shows the remaining seconds.
+        """
         if not self._trace_fetch_enabled:
             raise ValueError("该实例是只读模式，未启用轨迹抓取（启动时加 --fetch-traces）。")
         case = self._catalog.get(case_id)
@@ -208,26 +243,58 @@ class ReviewService:
         rows = self._store.observations(case_id, protocol)
         if not rows:
             raise ValueError("该协议任务没有证据。")
-        observation = rows[0]
+        observation = _select_round(
+            rows,
+            trace_id=trace_id,
+            run_id=run_id,
+            batch_id=batch_id,
+            source_round=source_round,
+        )
+        if observation is None:
+            raise ValueError("找不到对应的运行证据，请先重新扫描。")
         target = _trace_target(observation)
         if target is None:
-            raise ValueError("该运行不是真机下发，轨迹不参与验收。")
-        config = self._resolved_trace_config()
-        result = self._trace_store.fetch(
-            str(target["traceId"]), config, run_id=str(target["runId"])
-        )
-        if str(result.get("exportState") or "") != "exported":
-            raise ValueError(f"轨迹抓取失败：{result.get('error') or result.get('exportState')}")
+            raise ValueError(_row_applicability(observation).text or "该运行没有可抓取的轨迹。")
+        resolved_trace = str(target["traceId"])
+        if not force:
+            cached = self._trace_store.load(resolved_trace)
+            if cached.export_state in _EXPORTED_STATES:
+                return self._attach_trace(observation, target)
+        remaining = self._cooldown_remaining()
+        if remaining > 0:
+            raise ValueError(f"Langfuse 限流冷却中，请 {remaining} 秒后重试。")
+        with self._fetch_lock:
+            # Another tab may have fetched this trace while this request waited for the lock.
+            if not force:
+                cached = self._trace_store.load(resolved_trace)
+                if cached.export_state in _EXPORTED_STATES:
+                    return self._attach_trace(observation, target)
+            config = self._resolved_trace_config()
+            result = self._trace_store.fetch(resolved_trace, config, run_id=str(target["runId"]))
+            if str(result.get("exportState") or "") != "exported":
+                error = str(result.get("error") or result.get("exportState") or "")
+                if _is_rate_limited(error):
+                    self._fetch_cooldown_until = time.monotonic() + FETCH_COOLDOWN_SECONDS
+                    raise ValueError(f"Langfuse 限流（429），请 {int(FETCH_COOLDOWN_SECONDS)} 秒后重试。")
+                raise ValueError(f"轨迹抓取失败：{error}")
+            return self._attach_trace(observation, target)
+
+    def _attach_trace(
+        self,
+        observation: Mapping[str, object],
+        target: Mapping[str, object],
+    ) -> dict[str, object]:
+        """Attach one run's snapshot to its evidence row and return the payload."""
         payload = self._trace_store.cached_payload(
             str(target["traceId"]),
             run_id=str(target["runId"]),
-            nms_kind="real",
+            nms_kind=_row_nms_kind(observation),
             local_points=_string_list(target.get("localPoints")),
             local_known=_string_list(target.get("localKnown")),
         )
         stored = self._store.set_trace(
-            case_id=case_id,
-            protocol=protocol,
+            case_id=_as_int(observation.get("caseId")),
+            protocol=str(observation.get("protocol") or ""),
             batch_id=str(observation.get("batchId") or ""),
             source_round=_as_int(observation.get("sourceRound"), 1),
             run_id=str(observation.get("runId") or ""),
@@ -238,6 +305,11 @@ class ReviewService:
             raise ValueError("该证据行已不在库中，请重新采集。")
         return payload
 
+    def _cooldown_remaining(self) -> int:
+        """Return the whole seconds left of the 429 cooldown, or ``0``."""
+        remaining = self._fetch_cooldown_until - time.monotonic()
+        return max(0, int(remaining + 0.999)) if remaining > 0 else 0
+
     def _resolved_trace_config(self) -> Config:
         """Return the Langfuse credentials, loading them from the environment once."""
         if self._trace_config is not None:
@@ -247,9 +319,7 @@ class ReviewService:
         try:
             self._trace_config = load_config(cwd=self._runs_dir)
         except ConfigError as exc:
-            raise ValueError(
-                "未配置 Langfuse 凭据（LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY）。"
-            ) from exc
+            raise ValueError("未配置 Langfuse 凭据（LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY）。") from exc
         return self._trace_config
 
     def cases(self) -> list[dict[str, object]]:
@@ -299,9 +369,7 @@ class ReviewService:
                     continue
                 latest = rounds[0]
                 judgement = latest.get("judgement")
-                task["exportDetail"] = (
-                    judgement.get("detail") if isinstance(judgement, Mapping) else {}
-                )
+                task["exportDetail"] = judgement.get("detail") if isinstance(judgement, Mapping) else {}
                 task["exportRequests"] = latest.get("requests") or {}
         return rows
 
@@ -313,9 +381,7 @@ class ReviewService:
         if protocol not in PROTOCOLS:
             raise ValueError(f"protocol 只能是 {', '.join(PROTOCOLS)}。")
         observations = self._store.observations(case_id, protocol)
-        rounds = [
-            self._round_row(case, protocol, observation) for observation in observations
-        ]
+        rounds = [self._round_row(case, protocol, observation) for observation in observations]
         decision = self._decision_block(
             case,
             protocol,
@@ -528,9 +594,7 @@ class ReviewService:
                 "decisionMode": "",
                 "nms": False,
                 "inputChanged": False,
-                "decision": self._decision_block(
-                    case, protocol, decision, [], scope=scope
-                ),
+                "decision": self._decision_block(case, protocol, decision, [], scope=scope),
             }
         evidence_map = _judged_evidence(observation)
         input_changed = not evidence_is_current_input(case, protocol, evidence_map)
@@ -541,18 +605,13 @@ class ReviewService:
         if trace_dimension is not None:
             # One round can fail for several reasons at once; the report counts each of them.
             trace_reasons = list(
-                dict.fromkeys(
-                    str(diff.get("reason") or "")
-                    for diff in trace_dimension.diffs
-                    if diff.get("reason")
-                )
+                dict.fromkeys(str(diff.get("reason") or "") for diff in trace_dimension.diffs if diff.get("reason"))
             )
         return {
             "protocol": protocol,
             "status": status,
             "dimensions": [
-                {"dimension": row.dimension, "status": row.status, "reason": row.reason}
-                for row in judgement.dimensions
+                {"dimension": row.dimension, "status": row.status, "reason": row.reason} for row in judgement.dimensions
             ],
             "failures": [
                 {
@@ -562,8 +621,7 @@ class ReviewService:
                     "diffs": [dict(diff) for diff in row.diffs][:20],
                 }
                 for row in judgement.dimensions
-                if row.status
-                in (VERDICT_FAIL, VERDICT_PARTIAL, VERDICT_MISSING, VERDICT_RECORDED)
+                if row.status in (VERDICT_FAIL, VERDICT_PARTIAL, VERDICT_MISSING, VERDICT_RECORDED)
             ],
             "observations": _as_int(observation.get("observations"), 1),
             "observedAt": observation.get("observedAt"),
@@ -592,6 +650,9 @@ class ReviewService:
         evidence_map = _judged_evidence(observation)
         input_changed = not evidence_is_current_input(case, protocol, evidence_map)
         judgement: ProtocolJudgement = judge_protocol(case, protocol, evidence_map)
+        detail = judgement.to_dict()
+        _mark_fetch_state(detail, self._trace_fetch_enabled)
+        self._mark_snapshot_state(detail, observation)
         return {
             "id": observation.get("id"),
             "batchId": observation.get("batchId"),
@@ -606,9 +667,45 @@ class ReviewService:
             "discovery": observation.get("discovery"),
             "status": observation.get("status"),
             "inputChanged": input_changed,
-            "judgement": judgement.to_dict(),
+            "judgement": detail,
             "requests": _request_sources(case, evidence_map),
         }
+
+    def _mark_snapshot_state(
+        self,
+        judgement: dict[str, Any],
+        observation: Mapping[str, object],
+    ) -> None:
+        """Reflect a failed or on-disk snapshot that the store has not attached yet.
+
+        A failed fetch leaves only a ``failure.json`` marker, so the stored evidence still has no
+        trace. The page must say "上次抓取失败" and offer a retry instead of pretending the trace
+        was never requested.
+        """
+        block = judgement.get("detail")
+        trace = block.get("trace") if isinstance(block, dict) else None
+        if not isinstance(trace, dict) or trace.get("present"):
+            return
+        trace_id = str(observation.get("traceId") or "")
+        if not trace_id:
+            return
+        try:
+            snapshot = self._trace_store.load(trace_id)
+        except (InvalidTraceIdError, OSError):
+            return
+        state = str(snapshot.export_state or "")
+        if state in _EXPORTED_STATES:
+            trace["exportState"] = state
+            trace["blockers"] = []
+        elif state == "failed":
+            trace["exportState"] = "failed"
+            trace["blockers"] = [
+                {
+                    "code": "trace_snapshot_failed",
+                    "text": "上次抓取失败，请重试",
+                    "action": "retry",
+                }
+            ]
 
     def _decision_block(
         self,
@@ -678,28 +775,96 @@ def _as_int(value: object, default: int = 0) -> int:
     return default
 
 
+def _mark_fetch_state(detail: dict[str, Any], fetch_enabled: bool) -> None:
+    """Attach the instance's fetch capability to the trace block of one judged round.
+
+    ``judge_protocol`` is pure and cannot know whether this process may call Langfuse. The page
+    needs that bit to decide whether the fetch button is enabled and whether the automatic load
+    runs at all, so the service adds it here instead of duplicating the rule in JavaScript.
+    """
+    block = detail.get("detail")
+    if not isinstance(block, dict):
+        return
+    trace = block.get("trace")
+    if not isinstance(trace, dict):
+        return
+    applicability = trace.get("applicability")
+    applicable = isinstance(applicability, Mapping) and applicability.get("applicable") == "yes"
+    trace["fetchEnabled"] = fetch_enabled
+    trace["canFetch"] = bool(fetch_enabled and applicable)
+
+
+def _select_round(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    trace_id: str | None,
+    run_id: str | None,
+    batch_id: str | None,
+    source_round: int | None,
+) -> Mapping[str, object] | None:
+    """Return the evidence row a fetch request names, defaulting to the newest one.
+
+    The page always sends the trace id of the round the reviewer is looking at, so a multi-round
+    batch can no longer fetch the newest round while showing an older card. Every selector must
+    match an already-ingested row: the endpoint never fetches an arbitrary trace id.
+    """
+    for row in rows:
+        if trace_id and str(row.get("traceId") or "") != trace_id:
+            continue
+        if run_id and str(row.get("runId") or "") != run_id:
+            continue
+        if batch_id and str(row.get("batchId") or "") != batch_id:
+            continue
+        if source_round is not None and _as_int(row.get("sourceRound"), 1) != source_round:
+            continue
+        return row
+    return None
+
+
+def _is_rate_limited(error: str) -> bool:
+    """Return whether a fetch error is a Langfuse rate-limit response."""
+    lowered = error.lower()
+    return "429" in lowered or "rate limit" in lowered or "rate_limit" in lowered
+
+
 def _trace_target(observation: Mapping[str, object]) -> dict[str, object] | None:
     """Return the trace lookup of one observation, or ``None`` when it is not judgeable.
 
-    Only a batch that declared the real vendor NMS and a run that actually dispatched have a
-    vendor trace to look up; an undeclared legacy batch must not borrow a trace by accident.
+    A run that dispatched and carries a Langfuse trace id has a trace to look up. The declared
+    downstream is deliberately not checked here: batches from before the tester recorded
+    ``nms``/``nmsSim`` are still real-machine runs, and refusing them would leave the console
+    unable to fetch the very evidence the acceptance gate needs.
     """
-    if observation.get("nmsDeclared") is not True or observation.get("nmsSimDeclared") is not False:
-        return None
-    run_id = observation.get("runId")
-    trace_id = observation.get("traceId")
-    if not isinstance(run_id, str) or not run_id:
-        return None
-    if not isinstance(trace_id, str) or not trace_id:
+    applicability = _row_applicability(observation)
+    if not applicability.applicable:
         return None
     evidence = observation.get("evidence")
     evidence_map = evidence if isinstance(evidence, Mapping) else {}
     return {
-        "runId": run_id,
-        "traceId": trace_id,
+        "runId": applicability.run_id,
+        "traceId": applicability.trace_id,
         "localPoints": evidence_map.get("localPoints"),
         "localKnown": evidence_map.get("localKnown"),
     }
+
+
+def _row_nms_kind(observation: Mapping[str, object]) -> str:
+    """Return the display-only downstream identity of one stored evidence row."""
+    declared = observation.get("nmsDeclared")
+    simulated = observation.get("nmsSimDeclared")
+    return nms_kind(
+        declared if isinstance(declared, bool) else None,
+        simulated if isinstance(simulated, bool) else None,
+    )
+
+
+def _row_applicability(observation: Mapping[str, object]) -> TraceApplicability:
+    """Return the trace applicability of one stored evidence row."""
+    return trace_applicability(
+        observation.get("runId"),
+        observation.get("traceId"),
+        simulated=observation.get("nmsSimDeclared") is True,
+    )
 
 
 def _string_list(value: object) -> list[str] | None:
@@ -719,6 +884,9 @@ def _judged_evidence(observation: Mapping[str, object]) -> dict[str, object]:
     evidence = observation.get("evidence")
     merged = dict(evidence) if isinstance(evidence, Mapping) else {}
     merged["runId"] = observation.get("runId")
+    # The trace id decides applicability now; the stored evidence carries the snapshot, but the
+    # round row is the authority for identity (a rescanned batch may re-point the same run).
+    merged["traceId"] = observation.get("traceId")
     trace = observation.get("trace")
     if trace is not None:
         merged["trace"] = trace
@@ -729,9 +897,7 @@ def _judged_evidence(observation: Mapping[str, object]) -> dict[str, object]:
     return merged
 
 
-def _request_sources(
-    case: Mapping[str, Any], evidence: Mapping[str, Any]
-) -> dict[str, object]:
+def _request_sources(case: Mapping[str, Any], evidence: Mapping[str, Any]) -> dict[str, object]:
     """Return the three requests a verdict can be about: original, blocked, dispatched.
 
     A blocked case dispatches its replacement request, so the run's frozen input is the follow-up,
@@ -819,9 +985,7 @@ def _case_summary(case: Mapping[str, Any]) -> dict[str, object]:
         "a2aRounds": _rounds(a2a),
         "finalState": a2a_t.get("final_state"),
         "hasSlotErrors": a2a_t.get("slot_errors") is not None,
-        "hasMessages": bool(
-            _messages(a2a_t) or _messages(a2a)
-        ),
+        "hasMessages": bool(_messages(a2a_t) or _messages(a2a)),
         "caseSignature": case_signature(case),
     }
 

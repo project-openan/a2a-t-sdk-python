@@ -35,6 +35,13 @@ const DECISION_LABELS = {
   recheck: "待复核",
 };
 
+const NMS_KIND_LABELS = {
+  real: "真机",
+  sim: "模拟器",
+  local: "本机",
+  unknown: "下游未声明",
+};
+
 const CATEGORY_LABELS = {
   sdk: "SDK",
   vendor: "网管",
@@ -59,6 +66,9 @@ const state = {
   taskTDiffOnly: true,
   snippet: null,
   scan: null,
+  //: Trace ids this page already tried to auto-fetch. The snapshot is a permanent cache, so one
+  //: attempt per run is enough; a failure is retried by the reviewer's button, not by a rerender.
+  autoFetched: new Set(),
 };
 
 export function statusLabel(status) {
@@ -879,18 +889,39 @@ async function loadDetail() {
   renderDetail();
 }
 
-async function fetchTrace(button) {
+async function fetchTrace(button, round, options = {}) {
   if (!state.selected) return;
   const { caseId, protocol } = state.selected;
-  button.disabled = true;
-  button.textContent = "抓取中…";
+  const auto = options.auto === true;
+  const original = button ? button.textContent : "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "抓取中…";
+  }
   try {
-    await postJson(detailPath(caseId, protocol, "/trace"), {});
+    await postJson(detailPath(caseId, protocol, "/trace"), {
+      traceId: round && round.traceId ? round.traceId : undefined,
+      runId: round && round.runId ? round.runId : undefined,
+      batchId: round && round.batchId ? round.batchId : undefined,
+      round: round ? Number(round.sourceRound || 1) : undefined,
+      force: options.force === true,
+    });
     await loadDetail();
+    if (auto) showNotice("");
   } catch (caught) {
+    // An automatic load stays quiet on failure beyond the notice: the retry is a click, and a
+    // shared Langfuse quota must not turn one page open into a request loop.
     showNotice(caught.message, "error");
-    button.disabled = false;
-    button.textContent = "抓取轨迹";
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+    // The attempt is not forgotten: the automatic load runs once per run and session, and the
+    // reviewer's button is the retry after a 429 or a vendor outage.
+    if (auto) {
+      const key = round ? round.traceId || round.runId || "" : "";
+      state.autoFetched.add(`${caseId}|${protocol}|${key}`);
+    }
   }
 }
 
@@ -1100,34 +1131,7 @@ function renderDimensionStrip(round) {
     strip.append(badge);
   }
   card.append(strip);
-  const trace = (round.judgement && round.judgement.detail && round.judgement.detail.trace) || {};
-  if (trace.present) {
-    const nms = (trace.frames && trace.frames.nms) || {};
-    const attribution = trace.attribution || {};
-    const findings = attribution.findings || [];
-    const facts = [
-      `轨迹 ${trace.nmsKind || "—"}`,
-      trace.spanLevel ? `层级 ${trace.spanLevel}` : "",
-      trace.captureContent === false ? "内容未捕获" : "",
-      `NMS 帧 ${nms.observed ?? "—"}/${nms.expected ?? "—"}`,
-      attribution.status
-        ? `归因 ${attribution.status}${findings.length ? `（${findings.length} 点）` : ""}`
-        : "",
-    ].filter(Boolean);
-    card.append(el("p", "sub", facts.join(" · ")));
-  }
-  const failures = (round.judgement && round.judgement.failures) || [];
-  const notExported = failures.some(
-    (row) =>
-      row.dimension === "trace"
-      && (row.diffs || []).some((diff) => diff.reason === "trace_not_exported"),
-  );
-  if (notExported && round.runId) {
-    const button = el("button", "ghost small", "抓取轨迹");
-    button.type = "button";
-    button.addEventListener("click", () => fetchTrace(button));
-    card.append(button);
-  }
+  renderTraceBlock(card, round);
   const requests = round.requests || {};
   const rows = [
     [
@@ -1154,6 +1158,78 @@ function renderDimensionStrip(round) {
     );
   }
   return card;
+}
+
+export function traceButtonLabel(trace) {
+  if (!trace || trace.canFetch !== true) return "";
+  if (String(trace.exportState || "") === "failed") return "重试抓取";
+  if (!trace.present) return "抓取轨迹";
+  return "重新抓取";
+}
+
+export function shouldAutoFetch(meta, trace) {
+  if (!meta || meta.traceFetchEnabled !== true) return false;
+  if (!trace || trace.canFetch !== true) return false;
+  // The snapshot is a permanent cache: an export is never refreshed automatically, and a failed
+  // attempt waits for the reviewer's retry instead of hammering a rate-limited API.
+  return !["exported", "partial", "failed"].includes(String(trace.exportState || ""));
+}
+
+function renderTraceBlock(card, round) {
+  const trace = (round.judgement && round.judgement.detail && round.judgement.detail.trace) || {};
+  const applicability = trace.applicability || {};
+  const nms = (trace.frames && trace.frames.nms) || {};
+  const attribution = trace.attribution || {};
+  const findings = attribution.findings || [];
+  const facts = [
+    applicability.applicable === "yes"
+      ? `轨迹 ${NMS_KIND_LABELS[trace.nmsKind] || "下游未声明"}`
+      : `轨迹 ${applicability.text || "不参与验收"}`,
+    trace.present ? `traceId ${trace.traceId || round.traceId || "—"}` : "",
+    trace.fetchedAt ? `快照 ${trace.fetchedAt}` : "",
+    trace.spanLevel ? `层级 ${trace.spanLevel}` : "",
+    trace.captureContent === false ? "内容未捕获" : "",
+    trace.present ? `NMS 帧 ${nms.observed ?? "—"}/${nms.expected ?? "—"}` : "",
+    attribution.status
+      ? `归因 ${attribution.status}${findings.length ? `（${findings.length} 点）` : ""}`
+      : "",
+  ].filter(Boolean);
+  if (facts.length) card.append(el("p", "sub", facts.join(" · ")));
+  const blockers = trace.blockers || [];
+  if (blockers.length) {
+    const list = el("ul", "trace-blockers");
+    for (const blocker of blockers) {
+      list.append(el("li", "", blocker.text || blocker.code || ""));
+    }
+    card.append(list);
+  }
+  // The button follows the judged state, not one failure code: an applicable round can be
+  // fetched even when the dimension is not_applicable yet (e.g. no snapshot at all).
+  const label = traceButtonLabel(trace);
+  if (label) {
+    const button = el("button", "ghost small", label);
+    button.type = "button";
+    button.addEventListener("click", () =>
+      fetchTrace(button, round, { force: Boolean(trace.present) }),
+    );
+    card.append(button);
+  } else if (applicability.applicable === "yes" && trace.fetchEnabled === false) {
+    card.append(el("p", "sub", "该实例是只读模式，未启用轨迹抓取。"));
+  }
+  maybeAutoFetch(round, trace);
+}
+
+function maybeAutoFetch(round, trace) {
+  if (!shouldAutoFetch(state.meta, trace)) return;
+  const key = [
+    state.selected ? state.selected.caseId : "",
+    state.selected ? state.selected.protocol : "",
+    round.traceId || round.runId || "",
+  ].join("|");
+  if (state.autoFetched.has(key)) return;
+  state.autoFetched.add(key);
+  showNotice("正在自动抓取 Langfuse 轨迹…");
+  fetchTrace(null, round, { auto: true });
 }
 
 function renderIntentCard(round) {

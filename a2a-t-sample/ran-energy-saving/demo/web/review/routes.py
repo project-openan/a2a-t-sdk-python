@@ -50,18 +50,15 @@ def build_review_routes(
     ``trace_store`` defaults to ``<runs-dir>/review/langfuse``; ``trace_fetch_enabled`` lets the
     standalone read-only instance forbid Langfuse calls.
     """
-    resolved_store = ReviewStore(
-        store_path
-        if store_path is not None
-        else Path(runs_dir) / "review" / "review.sqlite3"
-    )
+    resolved_store = ReviewStore(store_path if store_path is not None else Path(runs_dir) / "review" / "review.sqlite3")
     resolved_store.ensure()
+    resolved_trace_store = trace_store if trace_store is not None else TraceStore(Path(runs_dir))
     service = ReviewService(
         store=resolved_store,
         catalog=catalog,
         runs_dir=Path(runs_dir),
         client_db_path=client_db_path,
-        trace_store=trace_store,
+        trace_store=resolved_trace_store,
         trace_fetch_enabled=trace_fetch_enabled,
     )
 
@@ -100,6 +97,10 @@ def build_review_routes(
                 "runsDir": str(runs_dir),
                 "clientDb": str(client_db_path) if client_db_path is not None else None,
                 "store": str(resolved_store.path),
+                # The page decides whether to auto-fetch on open from these; the snapshot root is
+                # shown so a reviewer can hand the acceptance pack to the customer.
+                "traceFetchEnabled": trace_fetch_enabled,
+                "traceStore": str(resolved_trace_store.root),
                 "corpusVersion": catalog.version,
                 "defaultDays": DEFAULT_DAYS,
                 "maxDays": MAX_DAYS,
@@ -151,9 +152,7 @@ def build_review_routes(
             return JSONResponse({"error": "caseId 必须是整数。"}, status_code=400)
         protocol = request.path_params["protocol"]
         if protocol not in PROTOCOLS:
-            return JSONResponse(
-                {"error": f"protocol 只能是 {', '.join(PROTOCOLS)}。"}, status_code=400
-            )
+            return JSONResponse({"error": f"protocol 只能是 {', '.join(PROTOCOLS)}。"}, status_code=400)
         try:
             payload = await asyncio.to_thread(service.detail, case_id, protocol)
         except ValueError as exc:
@@ -168,9 +167,7 @@ def build_review_routes(
             return JSONResponse({"error": "caseId 必须是整数。"}, status_code=400)
         protocol = request.path_params["protocol"]
         if protocol not in PROTOCOLS:
-            return JSONResponse(
-                {"error": f"protocol 只能是 {', '.join(PROTOCOLS)}。"}, status_code=400
-            )
+            return JSONResponse({"error": f"protocol 只能是 {', '.join(PROTOCOLS)}。"}, status_code=400)
         body = await _json_body(request)
         status = str(body.get("status") or "")
         category = str(body.get("category") or "")
@@ -191,18 +188,39 @@ def build_review_routes(
         return JSONResponse({"ok": True, "detail": payload})
 
     async def fetch_trace(request: Request) -> Response:
-        """Fetch one run's trace snapshot from Langfuse (explicit opt-in)."""
+        """Fetch one round's trace snapshot from Langfuse (explicit opt-in).
+
+        The body names the round the reviewer is looking at. An empty body still works and means
+        "the newest round", which keeps older callers usable.
+        """
         try:
             case_id = int(request.path_params["case_id"])
         except (KeyError, TypeError, ValueError):
             return JSONResponse({"error": "caseId 必须是整数。"}, status_code=400)
         protocol = request.path_params["protocol"]
         if protocol not in PROTOCOLS:
-            return JSONResponse(
-                {"error": f"protocol 只能是 {', '.join(PROTOCOLS)}。"}, status_code=400
-            )
+            return JSONResponse({"error": f"protocol 只能是 {', '.join(PROTOCOLS)}。"}, status_code=400)
+        options = await _json_body(request)
+        round_value = options.get("round")
+        source_round: int | None = None
+        if round_value is not None and round_value != "":
+            if isinstance(round_value, bool) or not isinstance(round_value, (int, str)):
+                return JSONResponse({"error": "round 必须是整数。"}, status_code=400)
+            try:
+                source_round = max(1, int(round_value))
+            except ValueError:
+                return JSONResponse({"error": "round 必须是整数。"}, status_code=400)
         try:
-            payload = await asyncio.to_thread(service.fetch_trace, case_id, protocol)
+            payload = await asyncio.to_thread(
+                service.fetch_trace,
+                case_id,
+                protocol,
+                trace_id=_optional_text(options.get("traceId")),
+                run_id=_optional_text(options.get("runId")),
+                batch_id=_optional_text(options.get("batchId")),
+                source_round=source_round,
+                force=options.get("force") is True,
+            )
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse({"ok": True, "trace": payload})
@@ -274,6 +292,11 @@ async def _json_body(request: Request) -> Mapping[str, object]:
     except ValueError:
         return {}
     return payload if isinstance(payload, Mapping) else {}
+
+
+def _optional_text(value: object) -> str | None:
+    """Return a non-empty string from a JSON body field, or ``None``."""
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _actor(request: Request) -> str:

@@ -34,6 +34,10 @@ EXPORT_STATE_PARTIAL: Final[str] = "partial"
 EXPORT_STATE_FAILED: Final[str] = "failed"
 EXPORT_STATE_NOT_EXPORTED: Final[str] = "not_exported"
 
+#: States whose export is complete enough to be the permanent cache. A failure marker is not a
+#: usable snapshot; `ReviewService` retries it only when the reviewer presses "重试抓取".
+_CACHED_STATES: Final[frozenset[str]] = frozenset({EXPORT_STATE_EXPORTED, EXPORT_STATE_PARTIAL})
+
 NMS_SCOPE_MARKER: Final[str] = "a2a-t-server"
 
 #: One snapshot larger than this is truncated to a ``partial`` state instead of stalling a scan.
@@ -43,10 +47,6 @@ MAX_OBSERVATION_BYTES: Final[int] = 32 * 1024 * 1024
 #: 4000 characters; keeping 16 KiB covers the full rendered Task-T and stays well below a
 #: customer-pack problem.
 MAX_PROMPT_TEXT: Final[int] = 16384
-
-#: A fresh snapshot is served without a Langfuse request. The page fetches one trace lazily when
-#: it is opened, so a 200-target scan never consumes the API quota up front.
-DEFAULT_TRACE_TTL_SECONDS: Final[float] = 300.0
 
 _SEND_SPAN_NAMES: Final[frozenset[str]] = frozenset({"SendMessage", "SendStreamingMessage"})
 _OBSERVATION_FIELDS: Final[tuple[str, ...]] = (
@@ -155,11 +155,7 @@ class TraceStore:
         self._require_trace_id(trace_id)
         if not self.root.is_dir():
             return None
-        candidates = [
-            path
-            for path in self.root.glob(f"{trace_id}_*")
-            if path.is_dir() and self._is_inside(path)
-        ]
+        candidates = [path for path in self.root.glob(f"{trace_id}_*") if path.is_dir() and self._is_inside(path)]
         if not candidates:
             return None
         return max(candidates, key=self._rank)
@@ -254,33 +250,27 @@ class TraceStore:
         run_id: str | None,
         nms_kind: str,
         config: Config | None = None,
-        ttl_seconds: float = DEFAULT_TRACE_TTL_SECONDS,
         force: bool = False,
         local_points: Sequence[str] | None = None,
         local_known: Sequence[str] | None = None,
     ) -> dict[str, object]:
-        """Return the cached snapshot, fetching lazily only when it is missing or stale.
+        """Return the cached snapshot, fetching only when no export exists yet.
 
-        ``scan`` must never pass a config: the review page opens this on one case at a time, and
-        a fresh snapshot is served without consuming Langfuse quota. Callers should serialize
-        fetches per trace so two browser tabs do not issue the same request twice.
+        The snapshot on disk is a **permanent cache**: a Langfuse export is immutable evidence for
+        one trace, so re-reading it must never spend quota. Only a missing or failed export is
+        fetched again; ``force`` (the reviewer's "重新抓取") is the explicit way to ask for a new
+        copy. ``scan`` passes no config and therefore only reads the snapshot root.
         """
         snapshot = self.load(trace_id)
-        stale = not self._is_fresh(snapshot, ttl_seconds)
-        if config is not None and (force or stale):
+        if config is not None and (force or snapshot.export_state not in _CACHED_STATES):
             self.fetch(trace_id, config, run_id=run_id)
             snapshot = self.load(trace_id)
-            stale = not self._is_fresh(snapshot, ttl_seconds)
-        warnings = list(snapshot.warnings)
-        if stale and config is None:
-            warnings.append("snapshot is older than the cache TTL; lazy fetch is disabled")
         return self._payload(
             snapshot,
             run_id=run_id,
             nms_kind=nms_kind,
             local_points=local_points,
             local_known=local_known,
-            warnings=warnings,
         )
 
     def _payload(
@@ -319,14 +309,6 @@ class TraceStore:
             "localKnown": list(local_known) if local_known is not None else None,
             "warnings": list(warnings if warnings is not None else snapshot.warnings),
         }
-
-    def _is_fresh(self, snapshot: TraceSnapshot, ttl_seconds: float) -> bool:
-        if snapshot.export_state not in {EXPORT_STATE_EXPORTED, EXPORT_STATE_PARTIAL}:
-            return False
-        captured = _parse_iso(snapshot.captured_at)
-        if captured is None:
-            return False
-        return (datetime.now(UTC) - captured).total_seconds() <= ttl_seconds
 
     def fetch(
         self,
@@ -464,11 +446,13 @@ def build_frames(
         group["count"] = (_int(group["count"]) or 0) + 1
     candidates = [group for group in by_scope.values() if NMS_SCOPE_MARKER in str(group["scope"]).lower()]
     nms_group = None
-    if nms_kind == "real":
-        if len(candidates) == 1:
-            nms_group = candidates[0]
-        elif len(by_scope) == 1:
-            nms_group = next(iter(by_scope.values()))
+    # The downstream identity is display only. Locating the NMS hop must not depend on a batch key:
+    # a real-machine batch produced before the tester recorded ``nms``/``nmsSim`` still exported
+    # the vendor spans, and silently skipping them would turn a gate into an abstention.
+    if len(candidates) == 1:
+        nms_group = candidates[0]
+    elif len(by_scope) == 1:
+        nms_group = next(iter(by_scope.values()))
     expected = 1 + rounds if rounds is not None and nms_group is not None else None
     return {
         "rounds": rounds,
@@ -478,9 +462,7 @@ def build_frames(
             "observed": (_int(nms_group["count"]) or 0) if nms_group is not None else None,
             "scope": str(nms_group["scope"]) if nms_group is not None else None,
         },
-        "otherHops": [
-            {"runId": other_run, "observed": count} for other_run, count in sorted(other.items())
-        ],
+        "otherHops": [{"runId": other_run, "observed": count} for other_run, count in sorted(other.items())],
         "serverSendCount": {
             "total": len(server),
             "byScope": list(by_scope.values()),
@@ -494,8 +476,7 @@ def _side(row: Mapping[str, Any], metadata: Mapping[str, Any]) -> tuple[str, str
         source = "metadata" if _text(metadata.get("side")) else "scope"
         return side, source
     attribute = _text(
-        metadata.get("attributes.a2at.span.side")
-        or metadata.get("attributes.gen_ai.agent.a2at.span.side")
+        metadata.get("attributes.a2at.span.side") or metadata.get("attributes.gen_ai.agent.a2at.span.side")
     ).lower()
     if attribute in {"client", "server"}:
         return attribute, "attribute"

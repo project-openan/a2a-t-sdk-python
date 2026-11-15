@@ -38,8 +38,11 @@ from eval.osp.tracecheck import (
     points_summary,
     process_points,
     task_t_fidelity,
+    trace_applicability,
 )
 from shared.langfuse_tracing import exported_span_kinds
+
+TRACE_ID = "a" * 32
 
 
 def _observation(
@@ -99,10 +102,7 @@ def test_expected_points_follow_the_run_mode_and_the_interception() -> None:
     assert "gen:task_t_modify_extraction" in modify
     assert "gen:task_t_slot_extraction" not in modify
 
-    blocked = {
-        point.id
-        for point in expected_client_points(_context(blocked=True, followup=True, run_mode="modify"))
-    }
+    blocked = {point.id for point in expected_client_points(_context(blocked=True, followup=True, run_mode="modify"))}
     assert {"blocked_replay_extraction", "blocked_replay_validation"} <= blocked
     assert "gen:task_t_modify_extraction" in blocked
 
@@ -162,9 +162,7 @@ def test_frame_gate_requires_a_known_nms_hop() -> None:
 
 
 def test_attribution_never_blames_the_producer_without_local_evidence() -> None:
-    results = match_points(
-        (expected_client_points(_context())[0],), (), run_id="run-1"
-    )
+    results = match_points((expected_client_points(_context())[0],), (), run_id="run-1")
     status, findings = attribute_points(results, local_points=None)
     assert status == ATTRIBUTION_UNKNOWN
     assert findings[0].status == ATTRIBUTION_UNKNOWN
@@ -229,9 +227,7 @@ def test_attribution_keeps_unknown_outside_the_local_coverage() -> None:
 
 
 def test_judge_trace_reads_the_payload_camel_case_local_points() -> None:
-    observations = [
-        item for item in _complete_observations() if item["kind"] != "task_validation"
-    ]
+    observations = [item for item in _complete_observations() if item["kind"] != "task_validation"]
     judgement = judge_trace(
         {
             "exportState": "exported",
@@ -323,8 +319,7 @@ def test_fidelity_summary_exports_only_the_differences() -> None:
     assert summary["differenceCount"] >= 1
     assert summary["differences"]
     assert all(
-        (row.get("verdict") or row.get("status")) in {"changed", "missing", "added"}
-        for row in summary["differences"]
+        (row.get("verdict") or row.get("status")) in {"changed", "missing", "added"} for row in summary["differences"]
     )
 
 
@@ -351,6 +346,20 @@ def test_process_points_lists_every_expected_point() -> None:
     results = process_points({"observations": _complete_observations()}, _context())
     assert results
     assert all(result.ok for result in results)
+
+
+def test_a_run_is_audited_when_it_has_a_trace_id() -> None:
+    """The declared downstream never gates the audit: a traced run is a traced run."""
+    applicability = trace_applicability("run-1", TRACE_ID)
+    assert applicability.applicable is True
+    assert applicability.to_dict()["applicable"] == "yes"
+    assert applicability.to_dict()["traceId"] == TRACE_ID
+
+    assert trace_applicability("run-1", TRACE_ID, simulated=True).applicable is False
+    assert trace_applicability("", TRACE_ID).applicable is False
+    assert trace_applicability("run-1", "").applicable is False
+    # A malformed id would make ``TraceStore`` reject the fetch; say so instead of trying.
+    assert trace_applicability("run-1", "trace-1").applicable is False
 
 
 def test_nms_kind_is_derived_from_the_declared_keys_only() -> None:

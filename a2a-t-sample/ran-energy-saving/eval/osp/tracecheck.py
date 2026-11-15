@@ -11,6 +11,7 @@ changes with the exporter rather than with a hand-maintained table. A configurat
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
@@ -19,6 +20,18 @@ from eval.osp.compare import flatten_intent, flatten_task_t
 
 PROTOCOL_A2A_T: Final[str] = "a2a-t"
 PROTOCOL_A2A: Final[str] = "a2a"
+
+#: The Langfuse trace id format the exporter accepts (32 hexadecimal characters).
+TRACE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[0-9a-fA-F]{32}$")
+
+#: Applicability of the trace dimension. A run is audited when it actually dispatched and carries
+#: a usable Langfuse trace id; the downstream identity is display only and never gates the audit.
+APPLICABLE_YES: Final[str] = "yes"
+APPLICABLE_NO: Final[str] = "no"
+
+BLOCKER_SIMULATED: Final[str] = "trace_batch_simulated"
+BLOCKER_NO_RUN: Final[str] = "trace_no_run"
+BLOCKER_NO_TRACE_ID: Final[str] = "trace_no_trace_id"
 
 #: Downstream identity used by trace attribution. The display flag keeps the legacy
 #: ``discovery: nms`` fallback; this value must come only from the explicit batch keys.
@@ -40,6 +53,78 @@ def nms_kind(nms_declared: bool | None, nms_sim_declared: bool | None) -> str:
     if nms_declared is None or nms_sim_declared is None:
         return NMS_KIND_UNKNOWN
     return NMS_KIND_REAL if nms_declared else NMS_KIND_LOCAL
+
+
+@dataclass(frozen=True)
+class TraceApplicability:
+    """Whether the trace of one run can be audited, with the reason when it cannot.
+
+    A run that dispatched and carries a Langfuse trace id is auditable. The downstream identity
+    is deliberately not an input: a batch produced before the tester recorded ``nms``/``nmsSim``
+    still has a trace, and abstaining on it would hide a real-machine run. Only an explicitly
+    declared simulator batch is excluded, because it is not a customer deployment.
+    """
+
+    applicable: bool
+    code: str = ""
+    text: str = ""
+    run_id: str = ""
+    trace_id: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the JSON-friendly form the page and the export render."""
+        return {
+            "applicable": APPLICABLE_YES if self.applicable else APPLICABLE_NO,
+            "code": self.code,
+            "text": self.text,
+            "runId": self.run_id,
+            "traceId": self.trace_id,
+        }
+
+
+def trace_applicability(
+    run_id: object,
+    trace_id: object,
+    *,
+    simulated: bool = False,
+) -> TraceApplicability:
+    """Return whether one run's trace is auditable.
+
+    The rule is the one the acceptance console states: **a run with a trace id is audited**. A
+    missing ``nms``/``nmsSim`` key is not a reason to abstain anymore, so old real-machine batches
+    remain judgeable. Only an explicit simulator declaration, a missing dispatch (SDK-only /
+    preflight) and a missing or malformed trace id keep the dimension out of the gate.
+    """
+    resolved_run = _text(run_id)
+    resolved_trace = _text(trace_id)
+    if simulated:
+        return TraceApplicability(False, BLOCKER_SIMULATED, "模拟器批次，轨迹不参与验收", resolved_run, resolved_trace)
+    if not resolved_run:
+        return TraceApplicability(
+            False,
+            BLOCKER_NO_RUN,
+            "没有实际下发（SDK-only / preflight），轨迹不参与验收",
+            resolved_run,
+            resolved_trace,
+        )
+    if not resolved_trace:
+        return TraceApplicability(
+            False,
+            BLOCKER_NO_TRACE_ID,
+            "本次运行没有记录 Langfuse traceId，无法抓取轨迹",
+            resolved_run,
+            resolved_trace,
+        )
+    if not TRACE_ID_PATTERN.match(resolved_trace):
+        return TraceApplicability(
+            False,
+            BLOCKER_NO_TRACE_ID,
+            "traceId 不是 32 位十六进制，无法抓取轨迹",
+            resolved_run,
+            resolved_trace,
+        )
+    return TraceApplicability(True, "", "", resolved_run, resolved_trace)
+
 
 TRACE_PASS: Final[str] = "pass"
 TRACE_FAIL: Final[str] = "fail"
@@ -77,8 +162,12 @@ ATTRIBUTION_CONTENT_UNAVAILABLE: Final[str] = "content_unavailable"
 #: local emission layer is not persisted today (``client-state.sqlite3.trace_json`` is always
 #: NULL), so a missing point we cannot attribute is not evidence of a producer defect.
 FAILING_ATTRIBUTION: Final[frozenset[str]] = frozenset(
-    {ATTRIBUTION_MISSING_INGEST, ATTRIBUTION_MISSING_VENDOR, ATTRIBUTION_MISSING_CLIENT,
-     ATTRIBUTION_CONTENT_UNAVAILABLE}
+    {
+        ATTRIBUTION_MISSING_INGEST,
+        ATTRIBUTION_MISSING_VENDOR,
+        ATTRIBUTION_MISSING_CLIENT,
+        ATTRIBUTION_CONTENT_UNAVAILABLE,
+    }
 )
 
 _DECISION_KINDS: Final[frozenset[str]] = frozenset({"accept", "counter", "reject", "abort"})
@@ -231,8 +320,7 @@ def dispatched_task_t(
     candidates = [
         observation
         for observation in observations
-        if _text(observation.get("kind")) == "task_prompt_rendered"
-        and _text(observation.get("promptText"))
+        if _text(observation.get("kind")) == "task_prompt_rendered" and _text(observation.get("promptText"))
     ]
     candidates.sort(key=lambda observation: observation.get("interception") is True)
     if not candidates:
@@ -266,9 +354,7 @@ def fidelity_summary(fidelity: Fidelity) -> dict[str, object]:
     each of 200 targets only inflates the artifact. The UI can still render ``Fidelity.rows``.
     """
     differences = [
-        row
-        for row in fidelity.rows
-        if (row.get("verdict") or row.get("status")) in {"changed", "missing", "added"}
+        row for row in fidelity.rows if (row.get("verdict") or row.get("status")) in {"changed", "missing", "added"}
     ]
     return {
         "comparable": fidelity.comparable,
@@ -307,9 +393,7 @@ def expected_client_points(context: TraceContext) -> tuple[TracePoint, ...]:
     decisions are expected there. Everything else follows the run mode and the interception.
     """
     if context.protocol == PROTOCOL_A2A:
-        points: list[TracePoint] = [
-            TracePoint("message_sent", "客户端消息帧", kind="message_sent")
-        ]
+        points: list[TracePoint] = [TracePoint("message_sent", "客户端消息帧", kind="message_sent")]
         points.extend(_round_points(context.rounds, agent=False))
         if context.accepted:
             points.append(TracePoint("task_created", "任务接受", kind="task_created"))
@@ -345,17 +429,11 @@ def expected_client_points(context: TraceContext) -> tuple[TracePoint, ...]:
             )
         )
     if modify:
-        points.append(
-            TracePoint("gen:task_t_modify_extraction", "LLM 修改抽取", stage="task_t_modify_extraction")
-        )
+        points.append(TracePoint("gen:task_t_modify_extraction", "LLM 修改抽取", stage="task_t_modify_extraction"))
     elif not (context.blocked and context.followup):
-        points.append(
-            TracePoint("gen:task_t_slot_extraction", "LLM 槽位抽取", stage="task_t_slot_extraction")
-        )
+        points.append(TracePoint("gen:task_t_slot_extraction", "LLM 槽位抽取", stage="task_t_slot_extraction"))
     elif context.blocked and context.followup:
-        points.append(
-            TracePoint("gen:task_t_slot_extraction", "LLM 槽位抽取", stage="task_t_slot_extraction")
-        )
+        points.append(TracePoint("gen:task_t_slot_extraction", "LLM 槽位抽取", stage="task_t_slot_extraction"))
     points.append(
         TracePoint(
             "message_sent",
@@ -428,10 +506,7 @@ def match_points(
     run_id: str | None,
 ) -> tuple[PointResult, ...]:
     """Count how many observations satisfy each expected point."""
-    return tuple(
-        PointResult(point, _count_point(point, observations, run_id=run_id))
-        for point in points
-    )
+    return tuple(PointResult(point, _count_point(point, observations, run_id=run_id)) for point in points)
 
 
 def _count_point(
@@ -515,9 +590,7 @@ def attribute_points(
         else:
             status = ATTRIBUTION_MISSING_CLIENT
             detail = "本地未发射"
-        findings.append(
-            AttributionFinding(result.point.id, result.point.label, status, detail)
-        )
+        findings.append(AttributionFinding(result.point.id, result.point.label, status, detail))
     if any(finding.status == ATTRIBUTION_MISSING_INGEST for finding in findings):
         return ATTRIBUTION_MISSING_INGEST, tuple(findings)
     if any(finding.status == ATTRIBUTION_MISSING_CLIENT for finding in findings):
@@ -583,9 +656,7 @@ def judge_trace(
     if known_value is None:
         known_value = payload.get("localKnown")
     local_known = tuple(str(item) for item in known_value) if isinstance(known_value, (list, tuple)) else None
-    attribution, findings = attribute_points(
-        results, local_points=local_points, local_known=local_known
-    )
+    attribution, findings = attribute_points(results, local_points=local_points, local_known=local_known)
     if findings:
         # The customer gate is the presence of the expected points, not the attribution. A point
         # we cannot attribute (local emission is not persisted) still fails; the report shows the
@@ -593,14 +664,8 @@ def judge_trace(
         return TraceJudgement(TRACE_FAIL, _reason_for(attribution, findings), results, attribution, findings, frames)
 
     client = frames.get("client")
-    if (
-        context.protocol == PROTOCOL_A2A_T
-        and isinstance(client, Mapping)
-        and _int(client.get("observed")) == 0
-    ):
-        return TraceJudgement(
-            TRACE_FAIL, REASON_MISSING_CLIENT, results, attribution, findings, frames
-        )
+    if context.protocol == PROTOCOL_A2A_T and isinstance(client, Mapping) and _int(client.get("observed")) == 0:
+        return TraceJudgement(TRACE_FAIL, REASON_MISSING_CLIENT, results, attribution, findings, frames)
 
     gate_status, gate_reason = frame_gate(frames)
     if gate_status == TRACE_FAIL:
@@ -608,9 +673,7 @@ def judge_trace(
     if gate_status == TRACE_NOT_APPLICABLE:
         return TraceJudgement(gate_status, gate_reason, results, attribution, findings, frames)
     if payload.get("capture_content") is False and not findings:
-        return TraceJudgement(
-            TRACE_PARTIAL, REASON_CONTENT_UNAVAILABLE, results, attribution, findings, frames
-        )
+        return TraceJudgement(TRACE_PARTIAL, REASON_CONTENT_UNAVAILABLE, results, attribution, findings, frames)
     return TraceJudgement(TRACE_PASS, "", results, attribution, findings, frames)
 
 

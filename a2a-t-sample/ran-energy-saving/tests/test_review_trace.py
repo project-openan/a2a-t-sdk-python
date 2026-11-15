@@ -166,9 +166,7 @@ def test_frames_gate_the_nms_hop_and_keep_other_hops_for_display(tmp_path: Path)
     assert frames["client"] == {"runId": "run-1", "observed": 2}
     assert frames["otherHops"] == [{"runId": "oss-hop", "observed": 1}]
     assert frames["serverSendCount"]["total"] == 2
-    assert frames["serverSendCount"]["byScope"] == [
-        {"scope": "a2a-t-server", "count": 2, "sideSource": "metadata"}
-    ]
+    assert frames["serverSendCount"]["byScope"] == [{"scope": "a2a-t-server", "count": 2, "sideSource": "metadata"}]
 
 
 def test_frames_pick_the_unique_vendor_scope() -> None:
@@ -181,6 +179,13 @@ def test_frames_pick_the_unique_vendor_scope() -> None:
     assert frames["serverSendCount"]["total"] == 2
 
 
+def test_frames_find_the_nms_hop_even_when_the_downstream_is_undeclared() -> None:
+    """A legacy batch has no nms key; its vendor spans are still the vendor spans."""
+    rows = [_row("SendMessage", metadata={"side": "server", "scope.name": "a2a-t-server"})]
+    frames = build_frames(normalize_rows(rows), run_id="run-1", nms_kind="unknown", rounds=0)
+    assert frames["nms"] == {"expected": 1, "observed": 1, "scope": "a2a-t-server"}
+
+
 def test_frames_do_not_guess_the_nms_group_when_two_scopes_look_like_the_vendor() -> None:
     rows = [
         _row("SendMessage", metadata={"side": "server", "scope.name": "a2a-t-server"}),
@@ -191,7 +196,7 @@ def test_frames_do_not_guess_the_nms_group_when_two_scopes_look_like_the_vendor(
     assert frames["serverSendCount"]["total"] == 2
 
 
-def test_cached_payload_serves_a_fresh_snapshot_without_a_langfuse_request(
+def test_cached_payload_serves_a_snapshot_without_a_langfuse_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _write_snapshot(
@@ -201,7 +206,7 @@ def test_cached_payload_serves_a_fresh_snapshot_without_a_langfuse_request(
     )
 
     def explode(*args: object, **kwargs: object) -> None:
-        raise AssertionError("a fresh snapshot must not be fetched again")
+        raise AssertionError("an existing snapshot must not be fetched again")
 
     monkeypatch.setattr(traces_module, "export_full", explode)
     payload = TraceStore(tmp_path).cached_payload(
@@ -214,9 +219,7 @@ def test_cached_payload_serves_a_fresh_snapshot_without_a_langfuse_request(
     assert payload["exportState"] == EXPORT_STATE_EXPORTED
 
 
-def test_cached_payload_fetches_lazily_and_caches_the_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cached_payload_fetches_lazily_and_caches_the_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
     def fake_export_full(
@@ -232,9 +235,7 @@ def test_cached_payload_fetches_lazily_and_caches_the_result(
             json.dumps({"exportedAt": datetime.now(UTC).isoformat(timespec="seconds")}),
             encoding="utf-8",
         )
-        (directory / "raw" / "observations.jsonl").write_text(
-            json.dumps(_root_row(rounds=0)), encoding="utf-8"
-        )
+        (directory / "raw" / "observations.jsonl").write_text(json.dumps(_root_row(rounds=0)), encoding="utf-8")
         return {"exportDir": str(directory), "observations": 1}
 
     monkeypatch.setattr(traces_module, "export_full", fake_export_full)
@@ -249,7 +250,7 @@ def test_cached_payload_fetches_lazily_and_caches_the_result(
     assert calls == [TRACE_ID]
     assert payload["exportState"] == EXPORT_STATE_EXPORTED
 
-    # A second read hits the cache; the TTL keeps the API quota untouched.
+    # A second read hits the permanent cache; an old snapshot is never re-fetched.
     store.cached_payload(
         TRACE_ID,
         run_id="run-1",
@@ -259,7 +260,7 @@ def test_cached_payload_fetches_lazily_and_caches_the_result(
     assert calls == [TRACE_ID]
 
 
-def test_cached_payload_marks_a_stale_snapshot_when_fetch_is_disabled(tmp_path: Path) -> None:
+def test_an_old_snapshot_is_still_the_permanent_cache(tmp_path: Path) -> None:
     _write_snapshot(tmp_path, rows=[_root_row(rounds=0)], exported_at="2020-01-01T00:00:00+00:00")
     payload = TraceStore(tmp_path).cached_payload(
         TRACE_ID,
@@ -268,7 +269,7 @@ def test_cached_payload_marks_a_stale_snapshot_when_fetch_is_disabled(tmp_path: 
         config=None,
     )
     assert payload["exportState"] == EXPORT_STATE_EXPORTED
-    assert any("cache TTL" in warning for warning in payload["warnings"])
+    assert payload["warnings"] == []
 
 
 def test_local_trace_points_only_claim_what_the_snapshot_proves() -> None:

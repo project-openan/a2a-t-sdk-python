@@ -99,15 +99,20 @@ def report_markdown(
         f"- 用例语料版本：`{payload.get('corpusVersion')}`",
     ]
     if window:
-        lines.append(
-            f"- 证据窗口：{window.get('windowStart') or '—'} → {window.get('windowEnd') or '—'}"
-        )
+        lines.append(f"- 证据窗口：{window.get('windowStart') or '—'} → {window.get('windowEnd') or '—'}")
     lines.extend(["", "## 0. 结论", ""])
     lines.append("| 自动判定 | 数量 |")
     lines.append("|---|---:|")
     for status in (
-        "pass", "fail", "partial", "recorded", "missing",
-        "stale", "not_run", "not_expected", "not_applicable",
+        "pass",
+        "fail",
+        "partial",
+        "recorded",
+        "missing",
+        "stale",
+        "not_run",
+        "not_expected",
+        "not_applicable",
     ):
         value = statuses.get(status) if isinstance(statuses, Mapping) else 0
         if value:
@@ -118,11 +123,7 @@ def report_markdown(
         lines.append(f"| {_DECISION_LABEL[status]} | {value or 0} |")
 
     raw_cases = payload.get("cases")
-    entries = (
-        [case for case in raw_cases if isinstance(case, Mapping)]
-        if isinstance(raw_cases, list)
-        else []
-    )
+    entries = [case for case in raw_cases if isinstance(case, Mapping)] if isinstance(raw_cases, list) else []
     lines.extend(["", "## 1. 用例矩阵", ""])
     lines.append("| 编号 | 用例 | A2A-T 自动 | A2A-T 结论 | A2A 自动 | A2A 结论 |")
     lines.append("|---:|---|---|---|---|---|")
@@ -157,9 +158,7 @@ def report_markdown(
     for case, protocol, task in defects:
         decision = task.get("decision")
         mapping = decision if isinstance(decision, Mapping) else {}
-        by_category.setdefault(str(mapping.get("category") or ""), []).append(
-            (case, protocol, task)
-        )
+        by_category.setdefault(str(mapping.get("category") or ""), []).append((case, protocol, task))
     for category in ("sdk", "vendor", "case", "env", "other", ""):
         rows = by_category.get(category)
         if not rows:
@@ -258,11 +257,11 @@ def report_markdown(
             f"- `#{case.get('id')}` {case.get('name')} · {_PROTOCOL_LABEL.get(protocol, protocol)}"
             f" — {'；'.join(reason for reason in reasons if reason)}"
         )
-    _append_fidelity(lines, entries, key="taskT", summary_key="fidelity",
-                     title="附录 A：Task-T 判定与下发差异")
+    _append_fidelity(lines, entries, key="taskT", summary_key="fidelity", title="附录 A：Task-T 判定与下发差异")
     _append_intent_drift(lines, entries)
-    _append_fidelity(lines, entries, key="intent", summary_key="corroboration",
-                     title="附录 B.1：意图 corroboration 漂移")
+    _append_fidelity(
+        lines, entries, key="intent", summary_key="corroboration", title="附录 B.1：意图 corroboration 漂移"
+    )
     lines.append("")
     return "\n".join(lines)
 
@@ -336,9 +335,7 @@ def _append_fidelity(
         for diff in differences if isinstance(differences, list) else ():
             if not isinstance(diff, Mapping):
                 continue
-            lines.append(
-                f"  - {diff.get('path')}: {diff.get('verdict') or diff.get('status')}"
-            )
+            lines.append(f"  - {diff.get('path')}: {diff.get('verdict') or diff.get('status')}")
 
 
 def _case_entry(case: Mapping[str, object]) -> dict[str, object]:
@@ -379,9 +376,7 @@ def _case_entry(case: Mapping[str, object]) -> dict[str, object]:
             },
             "failures": list(task.get("failures") or ()),
             "traceReason": str(task.get("traceReason") or ""),
-            "traceReasons": [
-                str(reason) for reason in task.get("traceReasons") or ()
-            ],
+            "traceReasons": [str(reason) for reason in task.get("traceReasons") or ()],
             "taskT": _task_t_entry(detail_map),
             "intent": _intent_entry(detail_map),
             "requests": _requests_entry(
@@ -464,15 +459,22 @@ def _trace_entry(detail: Mapping[str, object]) -> dict[str, object]:
     block = detail.get("trace")
     trace = block if isinstance(block, Mapping) else {}
     points = trace.get("points")
+    applicability = trace.get("applicability")
+    blockers = trace.get("blockers")
+    blocker_rows: list[dict[str, object]] = (
+        [dict(row) for row in blockers if isinstance(row, Mapping)] if isinstance(blockers, list) else []
+    )
     return {
         "present": bool(trace.get("present")),
         "traceId": trace.get("traceId"),
+        # Why the dimension abstained (or why it has no snapshot yet) travels with the customer
+        # pack: "not applicable" must never be an unexplained badge.
+        "applicability": dict(applicability) if isinstance(applicability, Mapping) else {},
+        "blockers": blocker_rows,
         "fetchedAt": trace.get("fetchedAt"),
         "exportState": trace.get("exportState"),
         "frames": trace.get("frames") if isinstance(trace.get("frames"), Mapping) else {},
-        "attribution": trace.get("attribution")
-        if isinstance(trace.get("attribution"), Mapping)
-        else {},
+        "attribution": trace.get("attribution") if isinstance(trace.get("attribution"), Mapping) else {},
         "points": [
             {
                 "id": row.get("point"),
@@ -496,9 +498,7 @@ def _fidelity_entry(value: object) -> dict[str, object]:
     fidelity = Fidelity(
         comparable=bool(block.get("comparable")),
         equal=bool(block.get("equal")),
-        rows=tuple(row for row in rows if isinstance(row, Mapping))
-        if isinstance(rows, list)
-        else (),
+        rows=tuple(row for row in rows if isinstance(row, Mapping)) if isinstance(rows, list) else (),
         truncated=bool(block.get("truncated")),
     )
     return fidelity_summary(fidelity)
@@ -510,11 +510,7 @@ def _tasks(
     """Return the protocol tasks of one payload case (the payload keys them by protocol)."""
     protocols = case.get("protocols")
     if isinstance(protocols, Mapping):
-        return [
-            (str(protocol), task)
-            for protocol, task in protocols.items()
-            if isinstance(task, Mapping)
-        ]
+        return [(str(protocol), task) for protocol, task in protocols.items() if isinstance(task, Mapping)]
     tasks: list[tuple[str, Mapping[str, object]]] = []
     for task in protocols if isinstance(protocols, list) else ():
         if isinstance(task, Mapping):
