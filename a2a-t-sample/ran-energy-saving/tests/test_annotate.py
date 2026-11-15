@@ -777,6 +777,32 @@ def test_every_case_carries_both_protocol_tasks(tmp_path: Path) -> None:
     assert all(row["caseName"] for row in rows)
 
 
+def test_the_case_projection_carries_the_requests_the_page_shows(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    documents = _cases()
+
+    rows = {row["caseId"]: row for row in service.cases()}
+    blocked = rows[_blocked_case_id()]
+    plain = rows[_case_id()]
+
+    assert blocked["userInput"] == documents[_blocked_case_id()]["user_input"]
+    followup = documents[_blocked_case_id()]["blocked_followup"]["input"]
+    assert blocked["followupInput"] == followup
+    assert blocked["blocked"] is True
+    assert plain["followupInput"] is None
+    assert plain["blocked"] is False
+
+
+def test_the_subtask_detail_repeats_the_blocked_follow_up(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+
+    detail = service.detail(_blocked_case_id(), "a2a-t", SLOT_DIMENSION)
+
+    case = detail["case"]
+    assert isinstance(case, dict)
+    assert case["followupInput"] == _cases()[_blocked_case_id()]["blocked_followup"]["input"]
+
+
 def test_the_subtask_space_matches_the_corpus(tmp_path: Path) -> None:
     service = _service(tmp_path)
 

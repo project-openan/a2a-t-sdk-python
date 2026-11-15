@@ -303,6 +303,11 @@ class AnnotateService:
                     "operation": case.get("operation"),
                     "dimension": case.get("dimension"),
                     "tags": list(case.get("tags") or ()),
+                    # The requests the case configures, so the page can show what is being
+                    # annotated without opening the YAML.
+                    "userInput": case.get("user_input"),
+                    "followupInput": _followup_input(case),
+                    "blocked": is_blocked_case(case),
                     "protocols": [
                         self._protocol_task(case, case_id, protocol, observed)
                         for protocol in PROTOCOLS
@@ -322,6 +327,8 @@ class AnnotateService:
             "operation": (case or {}).get("operation"),
             "dimension": (case or {}).get("dimension"),
             "userInput": (case or {}).get("user_input"),
+            "followupInput": _followup_input(case),
+            "blocked": is_blocked_case(case) if case is not None else False,
             "validate": _expected_validate(case),
             "expectedRounds": _expected_rounds(case, protocol),
             "kinds": _expected_kinds(case, protocol),
@@ -511,6 +518,15 @@ def _aggregate_status(subtasks: list[dict[str, object]]) -> str:
         if status in statuses:
             return status
     return TARGET_CONFIRMED
+
+
+def _followup_input(case: Mapping[str, Any] | None) -> str | None:
+    """Return the replacement request a blocked case dispatches, if it has one."""
+    followup = (case or {}).get("blocked_followup")
+    if not isinstance(followup, Mapping):
+        return None
+    value = followup.get("input")
+    return value if isinstance(value, str) else None
 
 
 def _expected_validate(case: Mapping[str, Any] | None) -> object:

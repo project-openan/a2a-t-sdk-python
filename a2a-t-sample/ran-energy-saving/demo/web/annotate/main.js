@@ -221,6 +221,51 @@ function textBlock(value) {
   return JSON.stringify(value, null, 2);
 }
 
+//: The two requests the corpus configures, shown above the metadata of every case.
+function renderCaseRequests(caseRow) {
+  const block = el("div", "request-pair");
+  block.append(requestField("操作员原始输入（用例语料）", caseRow.userInput));
+  if (caseRow.followupInput) {
+    block.append(
+      requestField(
+        "拦截后重新下发（blocked_followup.input）",
+        caseRow.followupInput,
+        "该用例先期望被拦截，拦截后再下发这段请求参与评测；标注的 slot_errors 属于拦截的那一次。",
+      ),
+    );
+  } else if (caseRow.blocked) {
+    block.append(
+      el("p", "hint", "该用例期望被拦截，但没有配置 blocked_followup，因此没有重新下发的请求。"),
+    );
+  }
+  return block;
+}
+
+function requestField(label, value, hint) {
+  const item = el("div", "request-item");
+  const head = el("div", "request-head");
+  head.append(el("span", "request-label", label));
+  const text = value === null || value === undefined || value === "" ? "—" : textBlock(value);
+  const copy = el("button", "ghost small", "复制");
+  copy.type = "button";
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      copy.textContent = "已复制";
+      window.setTimeout(() => {
+        copy.textContent = "复制";
+      }, 1500);
+    } catch {
+      copy.textContent = "复制失败";
+    }
+  });
+  head.append(copy);
+  item.append(head);
+  if (hint) item.append(el("p", "request-hint", hint));
+  item.append(el("pre", "request-text", text));
+  return item;
+}
+
 function field(id) {
   const node = document.getElementById(id);
   return node ? node.value : "";
@@ -494,6 +539,7 @@ function renderHeader(caseRow, protocol) {
   const task = (caseRow.protocols || []).find((row) => row.protocol === protocol);
   title.append(el("span", `badge ${task ? task.status : "none"}`, statusLabel(task && task.status)));
   card.append(title);
+  card.append(renderCaseRequests(caseRow));
   const facts = el("dl", "kv");
   const rows = [
     ["操作", caseRow.operation],
