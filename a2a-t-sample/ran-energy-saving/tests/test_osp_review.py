@@ -127,7 +127,7 @@ def _evidence(
     action: str = "passed",
     rounds: int = 1,
     messages: list[dict[str, object]] | None = None,
-    final_state: str = "task_completed",
+    final_state: str | None = "task_completed",
     refs_input: str = "do it",
     interception: dict[str, object] | None = None,
     run_id: str = "run-1",
@@ -153,8 +153,9 @@ def _evidence(
             "status": "passed",
             "actual": {"rounds": rounds, "kinds": ["feasibility"]},
         },
-        "final": {"stage": "final", "status": "passed", "actual": final_state},
     }
+    if final_state is not None:
+        stages["final"] = {"stage": "final", "status": "passed", "actual": final_state}
     if accepted_status is not None:
         stages["accepted"] = {
             "stage": "accepted",
@@ -628,6 +629,36 @@ def test_a_wrong_final_state_fails() -> None:
     judgement = judge_protocol(_case(), "a2a-t", _evidence(final_state="task_failed"))
 
     assert _dimension(judgement, "final_state").status == VERDICT_FAIL
+
+
+def test_acceptance_is_the_success_point_when_the_batch_stops_at_accepted() -> None:
+    judgement = judge_protocol(
+        _case(), "a2a-t", _evidence(final_state=None, accepted_status="passed")
+    )
+
+    final = _dimension(judgement, "final_state")
+    assert final.status == VERDICT_PASS
+    assert final.actual == "accepted"
+    assert "受理阶段" in final.reason
+    assert judgement.status == VERDICT_PASS
+
+
+def test_a_failed_acceptance_fails_instead_of_going_missing() -> None:
+    judgement = judge_protocol(
+        _case(), "a2a-t", _evidence(final_state=None, accepted_status="failed")
+    )
+
+    assert _dimension(judgement, "final_state").status == VERDICT_FAIL
+    assert judgement.status == VERDICT_FAIL
+
+
+def test_an_unobserved_acceptance_stays_missing() -> None:
+    judgement = judge_protocol(
+        _case(), "a2a-t", _evidence(final_state=None, accepted_status="waiting")
+    )
+
+    assert _dimension(judgement, "final_state").status == VERDICT_MISSING
+    assert judgement.status == VERDICT_PARTIAL
 
 
 def test_evidence_from_another_input_is_detected() -> None:

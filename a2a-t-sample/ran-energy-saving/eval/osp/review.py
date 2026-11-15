@@ -539,13 +539,48 @@ def _judge_final(
     protocol: str,
     evidence: Mapping[str, Any],
 ) -> DimensionResult:
-    """Judge the final task state, when the case states one."""
+    """Judge the outcome of the task: the final state, or the acceptance that ends the batch.
+
+    The automated batches stop at ``accepted``: a Create answers "Task created success" and a Modify
+    "Task modify success", and that reply is the success point they are run for. The corpus
+    ``final_state`` of a case is a derived default, not an authored expectation, so when the batch
+    never ran the final stage the accepted stage decides this dimension instead of leaving it
+    missing.
+    """
     expected = _protocol_block(case, protocol).get("final_state")
     if expected is None:
         return DimensionResult(DIMENSION_FINAL, VERDICT_NOT_EXPECTED)
     stage = _stage(evidence, "final")
     actual = stage.get("actual")
     if actual is None or actual == "":
+        if stage:
+            # The batch did run the final stage but the run ended without a state: that is real
+            # missing evidence, not a batch configured to stop at acceptance.
+            return DimensionResult(
+                DIMENSION_FINAL,
+                VERDICT_MISSING,
+                expected=expected,
+                reason=str(stage.get("message") or "该运行没有终态证据"),
+            )
+        accepted = _stage(evidence, "accepted")
+        accepted_status = str(accepted.get("status") or "")
+        accepted_actual = accepted.get("actual")
+        if accepted_status == "passed":
+            return DimensionResult(
+                DIMENSION_FINAL,
+                VERDICT_PASS,
+                expected=expected,
+                actual=accepted_actual,
+                reason="该批次停在受理阶段，以 accepted（Task created / modify success）作为成功点",
+            )
+        if accepted_status in ("failed", "error"):
+            return DimensionResult(
+                DIMENSION_FINAL,
+                VERDICT_FAIL,
+                expected=expected,
+                actual=accepted_actual,
+                reason=str(accepted.get("message") or "受理阶段没有成功"),
+            )
         return DimensionResult(
             DIMENSION_FINAL,
             VERDICT_MISSING,

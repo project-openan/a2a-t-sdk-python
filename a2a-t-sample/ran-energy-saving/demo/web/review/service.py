@@ -551,7 +551,7 @@ class ReviewService:
             "protocol": protocol,
             "status": status,
             "dimensions": [
-                {"dimension": row.dimension, "status": row.status}
+                {"dimension": row.dimension, "status": row.status, "reason": row.reason}
                 for row in judgement.dimensions
             ],
             "failures": [

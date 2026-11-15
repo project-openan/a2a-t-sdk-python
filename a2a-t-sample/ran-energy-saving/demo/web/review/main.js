@@ -11,7 +11,7 @@ const DIMENSION_LABELS = {
   task_t: "Task-T",
   validate: "拦截",
   negotiation: "协商",
-  final_state: "终态",
+  final_state: "结果",
   trace: "轨迹",
 };
 
@@ -751,7 +751,8 @@ function protocolCell(caseRow, protocol) {
       `dim-chip ${row.status}`,
       `${mark} ${dimensionLabel(row.dimension)}`,
     );
-    chip.title = `${dimensionLabel(row.dimension)} · ${statusLabel(row.status)}`;
+    chip.title = `${dimensionLabel(row.dimension)} · ${statusLabel(row.status)}`
+      + (row.reason ? `：${row.reason}` : "");
     chips.append(chip);
   }
   if (chips.childNodes.length) button.append(chips);
@@ -1090,13 +1091,13 @@ function renderDimensionStrip(round) {
   card.append(head);
   const strip = el("div", "dimension-status");
   for (const dimension of (round.judgement && round.judgement.dimensions) || []) {
-    strip.append(
-      el(
-        "span",
-        `badge ${dimension.status}`,
-        `${dimensionLabel(dimension.dimension)} · ${statusLabel(dimension.status)}`,
-      ),
+    const badge = el(
+      "span",
+      `badge ${dimension.status}`,
+      `${dimensionLabel(dimension.dimension)} · ${statusLabel(dimension.status)}`,
     );
+    if (dimension.reason) badge.title = String(dimension.reason);
+    strip.append(badge);
   }
   card.append(strip);
   const trace = (round.judgement && round.judgement.detail && round.judgement.detail.trace) || {};

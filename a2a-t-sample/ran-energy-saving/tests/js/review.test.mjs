@@ -73,7 +73,7 @@ assert.equal(categoryLabel("vendor"), "网管");
 assert.equal(categoryLabel(""), "—");
 assert.equal(protocolLabel("a2a-t"), "A2A-T");
 assert.equal(dimensionLabel("task_t"), "Task-T");
-assert.equal(dimensionLabel("final_state"), "终态");
+assert.equal(dimensionLabel("final_state"), "结果");
 
 assert.equal(
   progressText({
