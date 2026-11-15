@@ -42,7 +42,17 @@ from eval.osp.expectations import (
     slot_error_evidence,
 )
 from eval.osp.followup import followup_case, has_followup, is_blocked_case
-from eval.osp.tracecheck import TRACE_REASONS, TraceContext, judge_trace
+from eval.osp.tracecheck import (
+    TRACE_REASONS,
+    Fidelity,
+    TraceContext,
+    dispatched_task_t,
+    intent_corroboration,
+    intent_params,
+    judge_trace,
+    process_points,
+    task_t_fidelity,
+)
 
 #: Review dimensions. ``intent`` and ``task_t`` are the two the acceptance cares about most.
 DIMENSION_INTENT: Final[str] = "intent"
@@ -750,6 +760,14 @@ def _detail_payload(
         if protocol == A2A_T_PROTOCOL and is_blocked_case(case) and has_followup(case)
         else _stage(evidence, "validate")
     )
+    trace_value = evidence.get("trace")
+    trace_map = trace_value if isinstance(trace_value, Mapping) else {}
+    judged_task_t = actual_task_t if isinstance(actual_task_t, str) else ""
+    exported_task_t, exported_truncated = dispatched_task_t(trace_map)
+    fidelity = task_t_fidelity(
+        judged_task_t, exported_task_t, truncated=exported_truncated
+    )
+    corroboration = intent_corroboration(server, intent_params(trace_map))
     validate_detail = _mapping(validate_stage.get("detail"))
     errors = validate_detail.get("slotErrors")
     negotiation = _mapping(_protocol_block(effective, protocol).get("negotiation"))
@@ -759,6 +777,12 @@ def _detail_payload(
     message_match: object = None
     if expectation is not None and messages:
         message_match = match_negotiation_messages(expectation, messages).to_dict()
+    applicable_run = _trace_applicable(evidence)
+    trace_context = (
+        _trace_context(case, effective, protocol, evidence, applicable_run)
+        if applicable_run is not None
+        else None
+    )
     return {
         "blocked": is_blocked_case(case),
         "followup": effective is not case,
@@ -769,11 +793,16 @@ def _detail_payload(
             "server": server,
             "rows": intent_rows,
             "sdkRows": sdk_rows,
+            "corroboration": _fidelity_dict(corroboration),
         },
         "taskT": {
             "expected": expected_task_t,
             "actual": actual_task_t,
+            "judged": judged_task_t,
+            "dispatched": exported_task_t,
+            "dispatchedTruncated": exported_truncated,
             "rows": task_t_rows,
+            "fidelity": _fidelity_dict(fidelity),
         },
         "validate": {
             "expected": _protocol_block(case if is_blocked_case(case) else effective, A2A_T_PROTOCOL).get("validate"),
@@ -797,11 +826,14 @@ def _detail_payload(
             "working": _stage_value(evidence, "working"),
             "final": _stage_value(evidence, "final"),
         },
-        "trace": _trace_detail(evidence),
+        "trace": _trace_detail(evidence, trace_context),
     }
 
 
-def _trace_detail(evidence: Mapping[str, Any]) -> dict[str, object]:
+def _trace_detail(
+    evidence: Mapping[str, Any],
+    context: TraceContext | None,
+) -> dict[str, object]:
     """Return the compact trace summary the page and the report show.
 
     The full snapshot stays in the store (``trace_json``); embedding it in every round row would
@@ -812,6 +844,18 @@ def _trace_detail(evidence: Mapping[str, Any]) -> dict[str, object]:
         return {"present": False}
     frames = trace.get("frames")
     attribution = trace.get("attribution")
+    points: list[dict[str, object]] = []
+    if context is not None:
+        points = [
+            {
+                "point": result.point.id,
+                "label": result.point.label,
+                "expected": result.point.count,
+                "observed": result.observed,
+                "ok": result.ok,
+            }
+            for result in process_points(trace, context)
+        ]
     return {
         "present": True,
         "traceId": trace.get("traceId"),
@@ -819,10 +863,30 @@ def _trace_detail(evidence: Mapping[str, Any]) -> dict[str, object]:
         "exportState": trace.get("exportState") or trace.get("export_state"),
         "frames": dict(frames) if isinstance(frames, Mapping) else {},
         "attribution": dict(attribution) if isinstance(attribution, Mapping) else {},
+        "points": points,
         "related": list(trace.get("related") or ())
         if isinstance(trace.get("related"), list)
         else [],
     }
+
+
+def _fidelity_dict(fidelity: Fidelity) -> dict[str, object]:
+    """Return one fidelity comparison as a JSON-friendly block."""
+    return {
+        "comparable": fidelity.comparable,
+        "equal": fidelity.equal,
+        "truncated": fidelity.truncated,
+        "rows": [dict(row) for row in fidelity.rows],
+    }
+
+
+def _trace_applicable(evidence: Mapping[str, Any]) -> str | None:
+    """Return the run id when the trace dimension applies, else ``None``."""
+    batch = _mapping(evidence.get("batch"))
+    if not (batch.get("nms") is True and batch.get("nmsSim") is False):
+        return None
+    run_id = evidence.get("runId")
+    return run_id if isinstance(run_id, str) and run_id else None
 
 
 def _interception_stage(evidence: Mapping[str, Any]) -> Mapping[str, Any] | None:

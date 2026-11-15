@@ -554,6 +554,60 @@ def test_a_missing_client_frame_fails_only_the_a2a_t_hop() -> None:
     assert _dimension(passing, "trace").status == VERDICT_PASS
 
 
+def test_the_detail_compares_the_judged_task_t_with_the_exported_one() -> None:
+    trace = _trace()
+    trace["observations"] = [
+        *A2A_T_OBSERVATIONS,
+        {"kind": "task_prompt_rendered", "promptText": TASK_T},
+        {"kind": "task_created", "params": dict(INTENT)},
+    ]
+
+    judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=trace))
+    detail = judgement.to_dict()["detail"]
+
+    assert detail["taskT"]["judged"] == TASK_T
+    assert detail["taskT"]["dispatched"] == TASK_T.rstrip()
+    assert detail["taskT"]["fidelity"]["comparable"] is True
+    assert detail["taskT"]["fidelity"]["equal"] is True
+    assert detail["intent"]["corroboration"]["equal"] is True
+    assert detail["trace"]["points"]
+
+
+def test_a_different_exported_task_t_is_reported() -> None:
+    other = TASK_T.replace("2Mbps", "5Mbps")
+    trace = _trace()
+    trace["observations"] = [
+        *A2A_T_OBSERVATIONS,
+        {"kind": "task_prompt_rendered", "promptText": other},
+    ]
+
+    judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=trace))
+    fidelity = judgement.to_dict()["detail"]["taskT"]["fidelity"]
+
+    assert fidelity["comparable"] is True
+    assert fidelity["equal"] is False
+    changed = [
+        row["path"]
+        for row in fidelity["rows"]
+        if row["verdict"] in {"changed", "missing"}
+    ]
+    assert changed == ["task_t.Task Context"]
+
+
+def test_a_drifting_exported_intent_is_not_the_oracle() -> None:
+    trace = _trace()
+    trace["observations"] = [
+        *A2A_T_OBSERVATIONS,
+        {"kind": "task_created", "params": {**INTENT, "Energy saving region": "Other"}},
+    ]
+
+    judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=trace))
+    detail = judgement.to_dict()["detail"]
+
+    assert detail["intent"]["server"]["Energy saving region"] == "A2ATestRegion"
+    assert detail["intent"]["corroboration"]["equal"] is False
+
+
 def test_the_trace_summary_is_part_of_the_detail_payload() -> None:
     judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace()))
 

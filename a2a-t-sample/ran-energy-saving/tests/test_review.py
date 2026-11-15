@@ -784,6 +784,36 @@ def test_a_blocked_case_never_shows_the_follow_up_as_the_operator_original(
     assert requests["original"] != requests["dispatched"]
 
 
+def test_a_blocked_original_falls_back_to_the_trace_user_request(tmp_path: Path) -> None:
+    service, _catalog, _overlay, _runs = _fixture(tmp_path)
+    service.scan(days=2.0)
+    observation = service.store.observations(1, "a2a-t")[0]
+    stored = observation["evidence"]
+    assert isinstance(stored, Mapping)
+    evidence = dict(stored)
+    interception = evidence["interception"]
+    assert isinstance(interception, Mapping)
+    evidence["interception"] = {"stages": interception["stages"]}
+    service.store.ingest([{**observation, "evidence": evidence}])
+    service.store.set_trace(
+        case_id=1,
+        protocol="a2a-t",
+        batch_id=str(observation["batchId"]),
+        source_round=int(observation["sourceRound"]),
+        run_id=str(observation["runId"]),
+        trace={
+            "exportState": "exported",
+            "observations": [{"interception": True, "userRequest": "trace original"}],
+        },
+        fetched_at="2026-11-16T10:00:00+00:00",
+    )
+
+    requests = service.detail(1, "a2a-t")["rounds"][0]["requests"]
+
+    assert requests["original"] == "trace original"
+    assert requests["originalSource"] == "trace"
+
+
 def test_a_non_blocked_case_uses_the_frozen_input_as_the_original(tmp_path: Path) -> None:
     cases_dir = tmp_path / "cases"
     _write_cases(cases_dir, _case_document(blocked=False))

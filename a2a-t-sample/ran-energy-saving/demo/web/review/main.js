@@ -1100,6 +1100,24 @@ function renderIntentCard(round) {
   card.append(table);
   const diffCount = intent.rows.filter((row) => row.verdict !== "same").length;
   card.append(el("p", "sub", `共 ${intent.rows.length} 个字段，${diffCount} 个与预期不一致。`));
+  const corroboration = intent.corroboration || {};
+  if (corroboration.comparable) {
+    if (corroboration.equal) {
+      card.append(el("p", "sub", "Langfuse task_created 的结构化读数与 oracle 一致。"));
+    } else {
+      const drift = (corroboration.rows || []).filter(
+        (row) => ["changed", "missing", "added"].includes(row.status),
+      );
+      card.append(
+        el(
+          "p",
+          "hint",
+          `Langfuse task_created 读数与 oracle 有 ${drift.length} 处漂移`
+            + `（${drift.map((row) => row.path).join("、")}）；oracle 仍以服务端 SUBMITTED payload 为准，不替换。`,
+        ),
+      );
+    }
+  }
   return card;
 }
 
@@ -1125,6 +1143,30 @@ function renderTaskTCard(round) {
     card.append(el("p", "empty-state", "没有 Task-T 证据（拦截前即失败或该协议不适用）。"));
     return card;
   }
+  const fidelity = taskT.fidelity || {};
+  if (!fidelity.comparable) {
+    card.append(
+      el("p", "sub", "未导出 Task-T 原文，无法核对“判定所用”与 Langfuse 实际下发是否一致。"),
+    );
+  } else if (fidelity.equal) {
+    card.append(el("p", "sub", "判定所用 Task-T 与 Langfuse 实际下发一致。"));
+  } else {
+    const changed = (fidelity.rows || []).filter(
+      (row) => ["changed", "missing"].includes(row.verdict),
+    );
+    card.append(
+      el(
+        "p",
+        "hint",
+        `判定所用 Task-T 与 Langfuse 实际下发不一致：${changed.length} 处`
+          + `（${changed.map((row) => row.path.replace("task_t.", "")).join("、")}）`
+          + (fidelity.truncated ? "；导出的原文已截断，只比较前 16 KiB。" : "。"),
+      ),
+    );
+  }
+  const exportedByPath = new Map(
+    (fidelity.rows || []).map((row) => [row.path, row.dispatched]),
+  );
   const rows = filterTaskTRows(taskT.rows, state.taskTDiffOnly);
   if (!rows.length) {
     card.append(
@@ -1138,16 +1180,20 @@ function renderTaskTCard(round) {
     const table = document.createElement("table");
     table.className = "grid";
     const headRow = el("tr");
-    for (const title of ["小节", "预期", "实际", "结论"]) {
+    for (const title of ["小节", "预期", "判定使用", "实际下发", "结论"]) {
       headRow.append(el("th", "", title));
     }
     table.append(headRow);
     for (const row of rows) {
+      const exported = fidelity.comparable
+        ? exportedByPath.get(row.path)
+        : undefined;
       const tr = el("tr", row.verdict === "same" ? "" : "fail");
       tr.append(
         el("td", "mono-cell", row.path.replace("task_t.", "")),
         el("td", "", shortText(row.expected)),
         el("td", "", shortText(row.actual)),
+        el("td", "", exported === undefined ? "—" : shortText(exported)),
         el("td", `verdict ${row.verdict}`, row.verdict === "same" ? "一致" : row.reason || row.verdict),
       );
       table.append(tr);
@@ -1160,9 +1206,48 @@ function renderTaskTCard(round) {
     }
   }
   const raw = document.createElement("details");
-  raw.append(el("summary", "", "生成的 Task-T 原文"));
-  raw.append(el("pre", "mono", taskT.actual || ""));
+  raw.append(el("summary", "", "判定使用的 Task-T 原文"));
+  raw.append(el("pre", "mono", taskT.judged || taskT.actual || ""));
   card.append(raw);
+  if (taskT.dispatched) {
+    const exported = document.createElement("details");
+    exported.append(
+      el(
+        "summary",
+        "",
+        `Langfuse 实际下发的 Task-T${taskT.dispatchedTruncated ? "（已截断）" : ""}`,
+      ),
+    );
+    exported.append(el("pre", "mono", taskT.dispatched));
+    card.append(exported);
+  }
+  const points = (detail.trace && detail.trace.points) || [];
+  if (points.length) {
+    const box = document.createElement("details");
+    const passed = points.filter((point) => point.ok).length;
+    box.append(
+      el("summary", "", `过程点（期望 vs Langfuse，${passed}/${points.length} 满足）`),
+    );
+    const table = document.createElement("table");
+    table.className = "grid";
+    const headRow = el("tr");
+    for (const title of ["过程点", "期望", "实际", "结论"]) {
+      headRow.append(el("th", "", title));
+    }
+    table.append(headRow);
+    for (const point of points) {
+      const tr = el("tr", point.ok ? "" : "fail");
+      tr.append(
+        el("td", "", point.label),
+        el("td", "", point.expected),
+        el("td", "", point.observed),
+        el("td", `verdict ${point.ok ? "same" : "missing"}`, point.ok ? "满足" : "缺失"),
+      );
+      table.append(tr);
+    }
+    box.append(table);
+    card.append(box);
+  }
   return card;
 }
 

@@ -35,6 +35,7 @@ from eval.osp.review import (
     evidence_is_current_input,
     judge_protocol,
 )
+from eval.osp.tracecheck import original_request
 from langfuse_export.config import Config
 
 from demo.web.review.corpus import case_documents, scan_evidence
@@ -714,16 +715,22 @@ def _request_sources(
     frozen_input = refs_map.get("userInput")
     raw_request = meta_map.get("rawRequest")
     intercepted = blocked.get("input")
+    trace = evidence.get("trace")
+    traced_original = original_request(trace) if isinstance(trace, Mapping) else ""
     # A blocked run dispatched its follow-up, so ``rawRequest`` and ``refs.userInput`` both hold
     # that replacement text: neither may stand in for the original the operator wrote.
     if isinstance(interception, Mapping) or _is_blocked(case):
         if intercepted:
             original, original_source = intercepted, "interception"
+        elif traced_original:
+            original, original_source = traced_original, "trace"
         else:
             # The corpus text is the current file, not what the run read: mark it as degraded.
             original, original_source = case.get("user_input"), "corpus"
     elif frozen_input:
         original, original_source = frozen_input, "refs"
+    elif traced_original:
+        original, original_source = traced_original, "trace"
     else:
         original, original_source = case.get("user_input"), "corpus"
     if raw_request:
