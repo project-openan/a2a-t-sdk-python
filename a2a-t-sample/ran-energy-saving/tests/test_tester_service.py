@@ -295,6 +295,105 @@ async def test_pure_accepted_is_judged_by_the_outer_task_state(tmp_path: Path) -
     assert result.status == STAGE_PASSED
 
 
+async def test_vendor_accepted_waits_for_the_success_copy(tmp_path: Path) -> None:
+    """A bare SUBMITTED only acknowledges the Task; the vendor may still cancel it."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    run = RunState(
+        run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="webhook", discovery="nms"
+    )
+    run.remote_task_id = "task-1"
+    run.remote_context_id = "ctx-1"
+    run.latest_task_state = TASK_STATE_SUBMITTED
+    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A_T)
+
+    result = await manager._judge_accepted(
+        run, item, CASES[1], True, timeout_seconds=0.2
+    )
+
+    assert result.status == STAGE_WAITING
+    assert "TASK_STATE_SUBMITTED" in result.message
+
+
+async def test_vendor_accepted_passes_on_the_structured_task_payload(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    run = RunState(
+        run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="webhook", discovery="nms"
+    )
+    run.remote_task_id = "task-1"
+    run.remote_context_id = "ctx-1"
+    run.latest_task_state = TASK_STATE_SUBMITTED
+    run.server_intent = {"Operation type": "Create"}
+    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A_T)
+
+    result = await manager._judge_accepted(
+        run, item, CASES[1], True, timeout_seconds=0.2
+    )
+
+    assert result.status == STAGE_PASSED
+
+
+async def test_vendor_accepted_passes_on_the_success_copy(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    run = RunState(
+        run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="webhook", discovery="nms"
+    )
+    run.remote_task_id = "task-1"
+    run.remote_context_id = "ctx-1"
+    run.latest_task_state = TASK_STATE_SUBMITTED
+    run.acceptance_copy = "Task creation succeeded"
+    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A_T)
+
+    result = await manager._judge_accepted(
+        run, item, CASES[1], True, timeout_seconds=0.2
+    )
+
+    assert result.status == STAGE_PASSED
+
+
+async def test_vendor_accepted_fails_when_the_task_is_cancelled_after_the_ack(
+    tmp_path: Path,
+) -> None:
+    """The acceptance must not be reported green before the vendor's later refusal arrives."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    run = RunState(
+        run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="webhook", discovery="nms"
+    )
+    run.remote_task_id = "task-1"
+    run.remote_context_id = "ctx-1"
+    run.latest_task_state = TASK_STATE_SUBMITTED
+    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A_T)
+
+    async def cancel_after_ack() -> None:
+        await asyncio.sleep(0.05)
+        run.latest_task_state = "TASK_STATE_CANCELED"
+
+    publisher = asyncio.create_task(cancel_after_ack())
+    try:
+        result = await manager._judge_accepted(
+            run, item, CASES[1], True, timeout_seconds=1.0
+        )
+    finally:
+        await publisher
+
+    assert result.status == STAGE_FAILED
+    assert "TASK_STATE_CANCELED" in result.message
+
+
+def test_a_vendor_baseline_needs_the_acceptance_evidence() -> None:
+    """Continuing an acknowledged-but-unaccepted Task makes the Modify fail unexplained."""
+    run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="webhook")
+    run.remote_task_id = "task-1"
+    run.remote_context_id = "ctx-1"
+    run.latest_task_state = TASK_STATE_SUBMITTED
+
+    assert not service._baseline_continuable(
+        run, PROTOCOL_A2A_T, "nms", TASK_STATE_SUBMITTED
+    )
+
+    run.server_intent = {"Operation type": "Create"}
+    assert service._baseline_continuable(run, PROTOCOL_A2A_T, "nms", TASK_STATE_SUBMITTED)
+
+
 async def test_negotiation_without_expected_rounds_ends_on_the_first_response(
     tmp_path: Path,
 ) -> None:
@@ -922,6 +1021,10 @@ def _seed_then_modify(seed_state: str) -> Callable[[RunState], None]:
         run.remote_context_id = f"ctx-{index}"
         if index == 1:
             run.latest_task_state = seed_state
+            if seed_state == TASK_STATE_SUBMITTED:
+                # The vendor ships its success copy with the accepting status: a bare SUBMITTED is
+                # only an acknowledgement, and a refused Create is cancelled after it.
+                run.acceptance_copy = "Task creation succeeded"
             # The proxy hop only proves the downstream accepted the Create through its binding.
             if seed_state in {TASK_STATE_SUBMITTED, "TASK_STATE_WORKING"}:
                 run.downstream_task_id = "inner-1"
@@ -1945,6 +2048,57 @@ async def test_a_followup_that_is_still_blocked_fails_the_item(tmp_path: Path) -
     assert stages["validate"]["actual"] == "blocked"
     assert stages["validate"]["status"] == STAGE_FAILED
     assert item["status"] == "failed"
+    # The expected interception and the rejected replacement must not read the same way.
+    assert "blocked_followup.input" in stages["validate"]["message"]
+    assert "仍被拦截" in stages["validate"]["message"]
+    assert "blocked_followup.input" in item["error"]
+    interception = item["interception"]
+    assert isinstance(interception, Mapping)
+    assert interception["followupBlocked"] is True
+
+
+async def test_a_full_flow_followup_that_is_still_blocked_says_so(tmp_path: Path) -> None:
+    """The run dispatches the replacement request; blocking it is not the expected interception."""
+
+    def blocked_in_run(run: RunState) -> None:
+        run.status = "finished"
+        run.result = ClientFlowResult(
+            final_state=FINAL_STATE_INPUT_INVALID, error="Task-T 校验未通过。"
+        )
+        run.traces.append(
+            {
+                "kind": "task_validation",
+                "phase": "task_validation",
+                "detail": {
+                    "verdict": "blocked",
+                    "errors": [],
+                    "reason": "content.param_missing",
+                },
+            }
+        )
+
+    manager = _manager(tmp_path, _FakeRuns(blocked_in_run))
+    _inject_followup(manager, 22)
+    created = manager.create(
+        case_ids=[22],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    finished = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = _only_item(finished)
+    stages = item["stages"]
+    assert isinstance(stages, Mapping)
+    assert stages["validate"]["status"] == STAGE_FAILED
+    assert "补充请求" in stages["validate"]["message"]
+    assert "blocked_followup.input" in item["error"]
+    interception = item["interception"]
+    assert isinstance(interception, Mapping)
+    assert interception["followupBlocked"] is True
 
 
 async def test_a_pure_a2a_item_ignores_a_followup(tmp_path: Path) -> None:

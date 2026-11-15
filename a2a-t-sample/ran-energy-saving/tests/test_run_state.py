@@ -375,6 +375,26 @@ def test_a_status_without_the_task_payload_keeps_the_intent_empty(tmp_path: Path
     assert run.snapshot()["serverIntent"] is None
 
 
+def test_the_success_copy_is_latched_across_a_later_status_text(tmp_path: Path) -> None:
+    """The vendor's fixed "Task submitted." reply overwrites the text but not the evidence."""
+    run = _run(tmp_path)
+
+    run.record_event(
+        {
+            "kind": "status",
+            "state": "TASK_STATE_SUBMITTED",
+            "task_id": "task-1",
+            "context_id": "ctx-1",
+            "text": "Task creation succeeded",
+        }
+    )
+    run.record_event({"kind": "message", "text": "Task submitted.", "context_id": "ctx-1"})
+
+    assert run.acceptance_copy == "Task creation succeeded"
+    # The copy without the payload is not the structured reading; the two are separate evidence.
+    assert run.server_intent is None
+
+
 def test_a_polled_task_state_is_not_published(tmp_path: Path) -> None:
     """Polling is a backup channel: a poll can be stale, so it stays out of the demo state."""
     run = _run(tmp_path)

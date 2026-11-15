@@ -31,7 +31,7 @@ from shared.run_constants import (
     RUN_MODE_MODIFY,
     TASK_STATE_SUBMITTED,
 )
-from shared.server_intent import parse_server_intent
+from shared.server_intent import is_acceptance_copy, parse_server_intent
 from shared.trace import (
     PHASE_DISPATCH,
     PHASE_DONE,
@@ -220,8 +220,16 @@ class RunState:
     remote_task_id: str | None = None
     #: Context id paired with :attr:`remote_task_id`, when a status event or a poll carried one.
     remote_context_id: str | None = None
-    #: Latest Task state observed on the remote side (status event or ``GET /tasks/{id}`` poll).
+    #: Latest Task state the remote side pushed. A ``GET /tasks/{id}`` poll refreshes the identity
+    #: only: the vendor's push channel is the authoritative state signal.
     latest_task_state: str | None = None
+    #: The vendor's submission success copy, latched the first time it is pushed. The contract
+    #: appends ``Task creation succeeded{...}`` / ``Task modification succeeded{...}`` to the status
+    #: that accepts a request, and a bare ``TASK_STATE_SUBMITTED`` without it is only an
+    #: acknowledgement (the real NMS sometimes omits it -- a vendor defect). Latching matters: a
+    #: later status message (the vendor's fixed "Task submitted." reply) overwrites the latest text
+    #: and carries no success meaning of its own.
+    acceptance_copy: str | None = None
     #: Structured Task payload the downstream returned on a status frame. Any state may carry it:
     #: a real NMS reports an accepted Modify as ``TASK_STATE_WORKING`` or, on its pure-A2A hop, as
     #: ``TASK_STATE_INPUT_REQUIRED``. The payload is the downstream's own reading of the Task-T
@@ -741,6 +749,9 @@ class RunState:
             self.remote_context_id = context_id
         if state is not None:
             self.latest_task_state = state
+        text = _string_value(event.get("text"))
+        if text is not None and is_acceptance_copy(text):
+            self.acceptance_copy = text
         self._persist_task_snapshot(event)
         return entry
 

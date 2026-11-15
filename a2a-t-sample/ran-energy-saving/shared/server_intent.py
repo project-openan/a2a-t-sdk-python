@@ -15,13 +15,31 @@ unrelated JSON object from being mistaken for the downstream's reading.
 from __future__ import annotations
 
 import json
+import re
 from typing import Final
 
 #: Key every Task payload carries. It scopes the scan: an unrelated JSON object quoted in the
 #: status copy (an error body, a diagnostic) is not the downstream's Task understanding.
 OPERATION_KEY: Final[str] = "Operation type"
 
+#: Copy the vendor NMS is contracted to ship with the status that accepts a request, immediately
+#: before the structured payload (``Task creation succeeded{...}``). A real NMS sometimes reports a
+#: bare ``TASK_STATE_SUBMITTED`` without it and cancels the Task afterwards -- a vendor-side defect.
+#: The copy must be latched when it arrives: the vendor's fixed final reply ("Task submitted.")
+#: carries no success meaning and overwrites the latest status text. Matching the two "succeeded"
+#: contract strings (rather than any success word) keeps a proposal or an error body from turning
+#: into a false acceptance.
+ACCEPTANCE_COPY_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"\bTask (?:creation|modification) succeeded\b",
+    re.IGNORECASE,
+)
+
 _DECODER: Final[json.JSONDecoder] = json.JSONDecoder()
+
+
+def is_acceptance_copy(text: object) -> bool:
+    """Return whether one status message carries the vendor's submission success copy."""
+    return isinstance(text, str) and ACCEPTANCE_COPY_PATTERN.search(text) is not None
 
 
 def parse_server_intent(text: object) -> dict[str, object] | None:
@@ -53,4 +71,4 @@ def parse_server_intent(text: object) -> dict[str, object] | None:
     return None
 
 
-__all__ = ["OPERATION_KEY", "parse_server_intent"]
+__all__ = ["ACCEPTANCE_COPY_PATTERN", "OPERATION_KEY", "is_acceptance_copy", "parse_server_intent"]

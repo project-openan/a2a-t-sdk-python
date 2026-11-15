@@ -169,6 +169,14 @@ _WORKING_TASK_STATES: Final[frozenset[str]] = frozenset(
 _ACCEPTED_TASK_STATES: Final[frozenset[str]] = frozenset(
     {TASK_STATE_SUBMITTED}
 ) | _WORKING_TASK_STATES
+
+#: Message of the ``accepted`` stage when the vendor reported ``SUBMITTED`` without the success
+#: copy its contract requires. The defect is on the NMS side; the tester only refuses to call it
+#: accepted and keeps observing until the Task turns terminal or the run ends.
+_ACCEPTANCE_UNPROVEN_MESSAGE: Final[str] = (
+    "NMS 只上报了 TASK_STATE_SUBMITTED，未按契约附带 “Task creation succeeded” 报文或结构化意图"
+    "（网管侧缺陷）；受理尚未确认，继续观察。"
+)
 #: Client outcomes that prove the request ended before any Task was sent.
 _PRE_SEND_TERMINAL_STATES: Final[frozenset[str]] = frozenset(
     {
@@ -221,6 +229,19 @@ _VALIDATION_MISMATCH_MESSAGE: Final[str] = "拦截结论与期望不一致。"
 
 #: Message of a validation stage whose case carries no expectation.
 _NO_EXPECTED_VALIDATION_MESSAGE: Final[str] = "用例没有期望拦截结论，只记录。"
+
+#: Message of a ``blocked_followup.input`` request that is itself intercepted. The original
+#: request of such a case is *expected* to be blocked, so the two outcomes must never be reported
+#: with the same wording: the follow-up is the request the case actually wants sent.
+_FOLLOWUP_STILL_BLOCKED_MESSAGE: Final[str] = (
+    "补充请求（blocked_followup.input）仍被拦截：原始请求被拦截是预期行为，补充请求必须通过校验。"
+)
+
+#: Message of a ``blocked_followup.input`` request the run ended before sending.
+_FOLLOWUP_NOT_SENT_MESSAGE: Final[str] = (
+    "补充请求（blocked_followup.input）未发出：run 在发送前结束（{final_state}）；"
+    "原始请求被拦截是预期行为。"
+)
 
 #: Scenario used to seed a Modify target task; it is a complete request that creates a task.
 BASELINE_SCENARIO: Final[str] = "night"
@@ -1057,6 +1078,8 @@ class EvalBatchManager:
             return
         stages = list(ALL_STAGES[: ALL_STAGES.index(batch.stop_after) + 1])
         effective_case = case
+        #: Whether the case carries an expected interception plus a replacement request.
+        blocked_followup = False
         #: Producer spans of the blocked original request; replayed into the item's run trace so
         #: the trace shows the interception and the corrected retry like the presentation UI.
         interception_spans: list[dict[str, object]] = []
@@ -1102,6 +1125,10 @@ class EvalBatchManager:
             return
         self._collect_reference(item, effective_case)
         if batch.stop_after in SDK_STAGE_ORDER:
+            if blocked_followup:
+                # The SDK stages are this item's whole evidence, so a follow-up that was blocked
+                # again must name itself here instead of looking like the expected interception.
+                self._stamp_followup_block(item)
             # No run will collect this evidence: freeze the request the SDK stages read so the
             # arbitration export still names it.
             if not item.intent_meta.get("rawRequest"):
@@ -1112,7 +1139,13 @@ class EvalBatchManager:
             item.status = self._item_status(item)
             return
         await self._run_full_flow(
-            batch, index, item, effective_case, stages, interception_spans=interception_spans
+            batch,
+            index,
+            item,
+            effective_case,
+            stages,
+            interception_spans=interception_spans,
+            followup=blocked_followup,
         )
         item.status = self._item_status(item)
 
@@ -1264,6 +1297,7 @@ class EvalBatchManager:
         stages: Sequence[str],
         *,
         interception_spans: Sequence[Mapping[str, object]] = (),
+        followup: bool = False,
     ) -> None:
         if item.cancel_requested:
             # Cancelled between the SDK stages and here: never seed a baseline or send a request.
@@ -1385,6 +1419,11 @@ class EvalBatchManager:
             approval_task.cancel()
             await asyncio.gather(approval_task, return_exceptions=True)
             await self._collect_metrics(item, run, case)
+            if followup:
+                # The run dispatches the replacement request, so a block here is the follow-up
+                # being rejected, not the interception the case expects. The stamp runs after the
+                # evidence collection because that is what creates the run's ``validate`` stage.
+                self._stamp_followup_block(item, run)
             # The evidence is collected; release the remote Task unless this batch keeps Tasks for
             # long-task verification. ``accepted``/``working`` end the observation window, and the
             # tester — unlike the presentation page — never reattaches to that run, so leaving the
@@ -1864,6 +1903,13 @@ class EvalBatchManager:
         ``TASK_STATE_SUBMITTED`` is the A2A-T success signal for Create and Modify alike; a pure
         A2A outer Task starts at ``TASK_STATE_WORKING``. An ``INPUT_REQUIRED`` Task carries an
         identity but the negotiation is not finished, so it must not turn the row green.
+
+        The vendor's contract ships its success copy (``Task creation succeeded{...}``) with the
+        status that accepts the request. A real NMS also violates that contract: it reports a bare
+        ``SUBMITTED`` and later cancels the Task. Treating the bare state as acceptance would
+        report a green row for a Task the vendor never accepted, so for the vendor hop the item
+        keeps observing until the success copy or the structured payload arrives (see
+        :func:`_acceptance_evidence`). The defect is the NMS's; this is only our robustness.
         """
         started = time.monotonic()
         actual = _task_observation(run)
@@ -1877,7 +1923,10 @@ class EvalBatchManager:
                 duration_ms=int(round((time.monotonic() - started) * 1000)),
             )
 
-        await self._wait_for_acceptance_state(run, timeout_seconds)
+        requires_evidence = _requires_acceptance_evidence(run)
+        await self._wait_for_acceptance_state(
+            run, timeout_seconds, require_evidence=requires_evidence
+        )
         actual = _task_observation(run)
         state = run.latest_task_state
         final_state = run.result.final_state if run.result is not None else None
@@ -1891,8 +1940,12 @@ class EvalBatchManager:
             status = STAGE_FAILED
             message = f"Task 状态为 {state}。"
         elif state in _ACCEPTED_TASK_STATES:
-            status = STAGE_PASSED
-            message = ""
+            if requires_evidence and not _acceptance_evidence(run, state):
+                status = STAGE_WAITING
+                message = _ACCEPTANCE_UNPROVEN_MESSAGE
+            else:
+                status = STAGE_PASSED
+                message = ""
         elif state == "TASK_STATE_INPUT_REQUIRED":
             status = STAGE_WAITING
             message = "Task 仍在协商（INPUT_REQUIRED），尚未确认受理。"
@@ -1981,12 +2034,14 @@ class EvalBatchManager:
         )
 
     async def _wait_for_acceptance_state(
-        self, run: RunState, timeout_seconds: float
+        self, run: RunState, timeout_seconds: float, *, require_evidence: bool = False
     ) -> str | None:
         """Poll until the Task identity and an accepted or failed state are observed.
 
         A Task only proves the downstream accepted the request once its status state arrives;
-        ``INPUT_REQUIRED`` means the negotiation is still in progress.
+        ``INPUT_REQUIRED`` means the negotiation is still in progress. ``require_evidence`` keeps
+        observing a bare ``SUBMITTED`` until the vendor pushes its success copy, or until the Task
+        turns terminal or the run ends, so an acknowledgement is never reported as an acceptance.
         """
         deadline = time.monotonic() + max(0.1, timeout_seconds)
         while time.monotonic() < deadline:
@@ -1997,6 +2052,7 @@ class EvalBatchManager:
                 run.remote_task_id
                 and run.remote_context_id
                 and state in _ACCEPTED_TASK_STATES
+                and (not require_evidence or _acceptance_evidence(run, state))
             ):
                 return state
             if run.finished():
@@ -2299,6 +2355,35 @@ class EvalBatchManager:
             result.status = STAGE_FAILED
             result.message = _TASK_T_MISMATCH_MESSAGE
         item.stages["task_t"] = result
+
+    def _stamp_followup_block(self, item: CaseItem, run: RunState | None = None) -> None:
+        """Report a follow-up that did not get through differently from the expected block.
+
+        A ``blocked_followup.input`` case *expects* its original request to be intercepted; the
+        replacement request is the one the case actually asks to be sent. A replacement that is
+        blocked again, or a run that ends before dispatching it, is therefore a defect of the case
+        or of the SDK, not the expected interception. Naming the follow-up on the validation stage,
+        the item error and the interception record keeps the row from reading like a normal block.
+        """
+        validate = item.stages.get("validate")
+        verdict = _stage_verdict(validate)
+        final_state = (
+            run.result.final_state if run is not None and run.result is not None else None
+        )
+        if verdict == "blocked":
+            message = _FOLLOWUP_STILL_BLOCKED_MESSAGE
+        elif final_state in _PRE_SEND_TERMINAL_STATES:
+            message = _FOLLOWUP_NOT_SENT_MESSAGE.format(final_state=final_state)
+        else:
+            return
+        reason = _validation_reason(validate)
+        if reason:
+            message = f"{message} 原因：{reason}"
+        if validate is not None:
+            validate.message = message
+        if item.interception is not None:
+            item.interception["followupBlocked"] = True
+        item.error = f"{message} 详情：{item.error}" if item.error else message
 
     def _judge_run_validation(
         self,
@@ -2947,6 +3032,35 @@ def _baseline_accepted_states(protocol: str, discovery: str = "") -> frozenset[s
     return frozenset({TASK_STATE_WORKING})
 
 
+def _requires_acceptance_evidence(run: RunState) -> bool:
+    """Return whether a bare Task state cannot prove that the request was accepted.
+
+    A direct vendor NMS reports :data:`TASK_STATE_SUBMITTED` without the success copy its contract
+    requires and then cancels the Task when it refuses the request -- a vendor-side defect we
+    tolerate by waiting for the copy. Our own RAN Agent answers the same state as its final
+    acceptance and ships no copy, so only the vendor hop is held to it.
+    """
+    return run.discovery == DISCOVERY_NMS and run.protocol == RUNTIME_A2A_T
+
+
+def _acceptance_evidence(run: RunState, state: str | None) -> str:
+    """Return the evidence that proves the downstream accepted the request.
+
+    ``state`` means the Task moved past the acknowledgement (``WORKING`` / ``COMPLETED``);
+    ``intent`` is the structured Task payload the vendor ships with its success copy; ``copy`` is
+    that copy without a payload. An empty string means nothing but the acknowledgement was seen.
+    """
+    if state in _WORKING_TASK_STATES:
+        return "state"
+    if state != TASK_STATE_SUBMITTED:
+        return ""
+    if run.server_intent is not None:
+        return "intent"
+    if run.acceptance_copy is not None:
+        return "copy"
+    return ""
+
+
 def _baseline_continuable(
     run: RunState,
     protocol: str,
@@ -2959,6 +3073,12 @@ def _baseline_continuable(
     before the downstream Create is sent. A downstream failure (the field's HTTP 500
     ``Running task limit reached``) then leaves a non-existent Task behind. The outer↔inner
     binding is the evidence that the downstream actually accepted the Create.
+
+    The vendor hop has the same gap from the other side: when the vendor reports ``SUBMITTED``
+    without the success copy its contract requires, the Create may still be cancelled. Continuing
+    such a Task makes the Modify fail for a reason the item cannot explain, so the baseline waits
+    for the same acceptance evidence as the ``accepted`` stage. That is robustness against a
+    vendor defect, not a change of our own contract.
     """
     if not run.remote_task_id or not run.remote_context_id:
         return False
@@ -2966,6 +3086,8 @@ def _baseline_continuable(
         return False
     if protocol != RUNTIME_A2A_T and discovery != DISCOVERY_NMS:
         return bool(run.downstream_task_id)
+    if discovery == DISCOVERY_NMS and not _acceptance_evidence(run, state):
+        return False
     return True
 
 
@@ -2994,6 +3116,12 @@ def _baseline_failure_message(protocol: str, state: str | None, discovery: str =
                 "Modify 基线 Create 触发了协商（TASK_STATE_INPUT_REQUIRED），不是可续传状态；"
                 "请检查 baseline.request：必须显式使用 A2ATestRegion，并采用手工验收那类"
                 "不拦截、不协商的三段日计划。"
+            )
+        if state == TASK_STATE_SUBMITTED and discovery == DISCOVERY_NMS:
+            return (
+                "Modify 基线 Create 未被确认受理：网管只上报 TASK_STATE_SUBMITTED、未按契约附带 "
+                "“Task creation succeeded” 报文或结构化意图（网管侧缺陷）；任务若随后被取消，"
+                "Modify 必然失败。"
             )
         return (
             f"Modify 基线任务未到达可续传状态（当前 {state or '未观察到状态'}）；"
@@ -3099,6 +3227,29 @@ def _assertion_enabled(case: Mapping[str, Any], protocol: str, key: str) -> bool
         return True
     value = container.get(key)
     return True if value is None else bool(value)
+
+
+def _stage_verdict(stage: StageResult | None) -> str:
+    """Return the validation verdict of one stage, preferring its structured detail."""
+    if stage is None:
+        return ""
+    detail = stage.detail if isinstance(stage.detail, Mapping) else {}
+    verdict = detail.get("verdict")
+    if isinstance(verdict, str) and verdict:
+        return verdict
+    actual = stage.actual
+    return actual if isinstance(actual, str) else ""
+
+
+def _validation_reason(stage: StageResult | None) -> str:
+    """Return the failing code (else message) of one validation stage."""
+    if stage is None:
+        return ""
+    detail = stage.detail if isinstance(stage.detail, Mapping) else {}
+    code = detail.get("code")
+    if isinstance(code, str) and code:
+        return code
+    return stage.message if isinstance(stage.message, str) else ""
 
 
 def _apply_assertion(
