@@ -443,22 +443,12 @@ class AnnotationStore:
         stamp = now_iso()
         with self._session() as connection:
             keep = self._owned_ids(connection, key, requested)
-            if keep:
-                marks = ",".join("?" for _ in keep)
-                connection.execute(
-                    f"""
-                    UPDATE choice SET accepted=0
-                    WHERE case_id=? AND protocol=? AND dimension=?
-                      AND observation_id NOT IN ({marks})
-                    """,
-                    (key.case_id, key.protocol, key.dimension, *keep),
-                )
-            else:
-                connection.execute(
-                    "UPDATE choice SET accepted=0 "
-                    "WHERE case_id=? AND protocol=? AND dimension=?",
-                    (key.case_id, key.protocol, key.dimension),
-                )
+            # Reject everything first and re-accept the posted set: a plain reset sidesteps a
+            # ``NOT IN`` parameter list, which would hit SQLite's bind limit on a large selection.
+            connection.execute(
+                "UPDATE choice SET accepted=0 WHERE case_id=? AND protocol=? AND dimension=?",
+                (key.case_id, key.protocol, key.dimension),
+            )
             for observation_id in keep:
                 edited = (edits or {}).get(observation_id)
                 connection.execute(
@@ -525,15 +515,20 @@ class AnnotationStore:
         """Return the given observation ids that belong to one target, sorted."""
         if not ids:
             return []
-        marks = ",".join("?" for _ in ids)
-        rows = connection.execute(
-            f"""
-            SELECT id FROM observation
-            WHERE dimension=? AND case_id=? AND protocol=? AND id IN ({marks})
-            """,
-            (key.dimension, key.case_id, key.protocol, *sorted(ids)),
-        ).fetchall()
-        return sorted(int(row[0]) for row in rows)
+        ordered = sorted(ids)
+        owned: set[int] = set()
+        for start in range(0, len(ordered), _TRACE_CHUNK):
+            chunk = ordered[start : start + _TRACE_CHUNK]
+            marks = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT id FROM observation
+                WHERE dimension=? AND case_id=? AND protocol=? AND id IN ({marks})
+                """,
+                (key.dimension, key.case_id, key.protocol, *chunk),
+            ).fetchall()
+            owned.update(int(row[0]) for row in rows)
+        return sorted(owned)
 
     def set_mode(self, key: TargetKey, mode: str, *, actor: str = "") -> None:
         """Set the matching mode of a slot-error target."""
