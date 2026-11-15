@@ -17,6 +17,8 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Final
 
+from eval.osp.tracecheck import TRACE_REASONS, Fidelity, fidelity_summary
+
 from demo.web.yaml_dump import dump_yaml
 
 #: Format marker of the portable payload.
@@ -180,6 +182,20 @@ def report_markdown(
             if run_ids:
                 lines.append(f"  - 证据：{', '.join(f'`{run_id}`' for run_id in run_ids)}")
 
+    reason_counts: dict[str, int] = {}
+    for case in entries:
+        for _protocol, task in _tasks(case):
+            reason = str(task.get("traceReason") or "")
+            if reason in TRACE_REASONS:
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    if reason_counts:
+        lines.extend(["", "## 2.1 轨迹判定原因", ""])
+        lines.append("| 原因 | 数量 |")
+        lines.append("|---|---:|")
+        for code in TRACE_REASONS:
+            if reason_counts.get(code):
+                lines.append(f"| `{code}` | {reason_counts[code]} |")
+
     acknowledged = [
         (case, protocol, task)
         for case in entries
@@ -236,8 +252,49 @@ def report_markdown(
             f"- `#{case.get('id')}` {case.get('name')} · {_PROTOCOL_LABEL.get(protocol, protocol)}"
             f" — {'；'.join(reason for reason in reasons if reason)}"
         )
+    _append_fidelity(lines, entries, key="taskT", summary_key="fidelity",
+                     title="附录 A：Task-T 判定与下发差异")
+    _append_fidelity(lines, entries, key="intent", summary_key="corroboration",
+                     title="附录 B：意图 corroboration 漂移")
     lines.append("")
     return "\n".join(lines)
+
+
+def _append_fidelity(
+    lines: list[str],
+    entries: Sequence[Mapping[str, object]],
+    *,
+    key: str,
+    summary_key: str,
+    title: str,
+) -> None:
+    """Append one failing-comparison appendix, or nothing when every target agrees."""
+    rows: list[tuple[Mapping[str, object], str, Mapping[str, object]]] = []
+    for case in entries:
+        for protocol, task in _tasks(case):
+            block = task.get(key)
+            mapping = block if isinstance(block, Mapping) else {}
+            summary = mapping.get(summary_key)
+            summary_map = summary if isinstance(summary, Mapping) else {}
+            if not summary_map.get("comparable") or summary_map.get("equal"):
+                continue
+            rows.append((case, protocol, summary_map))
+    if not rows:
+        return
+    lines.extend(["", f"## {title}", ""])
+    for case, protocol, summary_map in rows:
+        truncated = "（导出文本已截断）" if summary_map.get("truncated") else ""
+        lines.append(
+            f"- `#{case.get('id')}` {case.get('name')} · {_PROTOCOL_LABEL.get(protocol, protocol)}"
+            f" — {summary_map.get('differenceCount')} 处{truncated}"
+        )
+        differences = summary_map.get("differences")
+        for diff in differences if isinstance(differences, list) else ():
+            if not isinstance(diff, Mapping):
+                continue
+            lines.append(
+                f"  - {diff.get('path')}: {diff.get('verdict') or diff.get('status')}"
+            )
 
 
 def _case_entry(case: Mapping[str, object]) -> dict[str, object]:
@@ -250,6 +307,8 @@ def _case_entry(case: Mapping[str, object]) -> dict[str, object]:
         protocol = str(task.get("protocol") or "")
         decision = task.get("decision")
         mapping = decision if isinstance(decision, Mapping) else {}
+        detail = task.get("exportDetail")
+        detail_map = detail if isinstance(detail, Mapping) else {}
         protocols[protocol] = {
             "status": str(task.get("status") or ""),
             "dimensions": {
@@ -275,6 +334,11 @@ def _case_entry(case: Mapping[str, object]) -> dict[str, object]:
                 "newEvidence": bool(mapping.get("newEvidence")),
             },
             "failures": list(task.get("failures") or ()),
+            "traceReason": str(task.get("traceReason") or ""),
+            "taskT": _task_t_entry(detail_map),
+            "intent": _intent_entry(detail_map),
+            "requests": _requests_entry(task.get("exportRequests")),
+            "trace": _trace_entry(detail_map),
         }
     return {
         "id": case.get("caseId"),
@@ -283,6 +347,90 @@ def _case_entry(case: Mapping[str, object]) -> dict[str, object]:
         "blocked": case.get("blocked"),
         "protocols": protocols,
     }
+
+
+def _task_t_entry(detail: Mapping[str, object]) -> dict[str, object]:
+    """Return the Task-T block of one protocol task, with the compact fidelity summary."""
+    block = detail.get("taskT")
+    task_t = block if isinstance(block, Mapping) else {}
+    return {
+        "expected": task_t.get("expected"),
+        "judged": task_t.get("judged"),
+        "dispatched": task_t.get("dispatched"),
+        "dispatchedTruncated": bool(task_t.get("dispatchedTruncated")),
+        "fidelity": _fidelity_entry(task_t.get("fidelity")),
+    }
+
+
+def _intent_entry(detail: Mapping[str, object]) -> dict[str, object]:
+    """Return the intent block of one protocol task; the server reading stays the oracle."""
+    block = detail.get("intent")
+    intent = block if isinstance(block, Mapping) else {}
+    return {
+        "expected": intent.get("expected"),
+        "server": intent.get("server"),
+        "sdk": intent.get("sdk"),
+        "sourceOfTruth": "server",
+        "corroboration": _fidelity_entry(intent.get("corroboration")),
+    }
+
+
+def _requests_entry(value: object) -> dict[str, object]:
+    """Return the three request sources and where each came from."""
+    block = value if isinstance(value, Mapping) else {}
+    return {
+        "original": block.get("original"),
+        "originalSource": block.get("originalSource"),
+        "intercepted": block.get("intercepted"),
+        "followup": block.get("followup"),
+        "dispatched": block.get("dispatched"),
+        "dispatchedSource": block.get("dispatchedSource"),
+    }
+
+
+def _trace_entry(detail: Mapping[str, object]) -> dict[str, object]:
+    """Return the trace summary and the process-point table of one round."""
+    block = detail.get("trace")
+    trace = block if isinstance(block, Mapping) else {}
+    points = trace.get("points")
+    return {
+        "present": bool(trace.get("present")),
+        "traceId": trace.get("traceId"),
+        "fetchedAt": trace.get("fetchedAt"),
+        "exportState": trace.get("exportState"),
+        "frames": trace.get("frames") if isinstance(trace.get("frames"), Mapping) else {},
+        "attribution": trace.get("attribution")
+        if isinstance(trace.get("attribution"), Mapping)
+        else {},
+        "points": [
+            {
+                "id": row.get("point"),
+                "label": row.get("label"),
+                "expected": row.get("expected"),
+                "observed": row.get("observed"),
+                "ok": bool(row.get("ok")),
+            }
+            for row in points
+            if isinstance(row, Mapping)
+        ]
+        if isinstance(points, list)
+        else [],
+    }
+
+
+def _fidelity_entry(value: object) -> dict[str, object]:
+    """Return one comparison in its compact export form (failing rows only)."""
+    block = value if isinstance(value, Mapping) else {}
+    rows = block.get("rows")
+    fidelity = Fidelity(
+        comparable=bool(block.get("comparable")),
+        equal=bool(block.get("equal")),
+        rows=tuple(row for row in rows if isinstance(row, Mapping))
+        if isinstance(rows, list)
+        else (),
+        truncated=bool(block.get("truncated")),
+    )
+    return fidelity_summary(fidelity)
 
 
 def _tasks(

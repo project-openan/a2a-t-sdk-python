@@ -262,7 +262,7 @@ def build_review_routes(
 
 def _payload(service: ReviewService) -> dict[str, object]:
     """Build the export payload from one consistent projection."""
-    rows = service.cases()
+    rows = service.export_cases()
     progress = service.progress(rows)
     return build_payload(rows, counts=progress, corpus_version=service.catalog.version)
 

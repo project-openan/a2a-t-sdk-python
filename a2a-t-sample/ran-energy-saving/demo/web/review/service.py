@@ -23,6 +23,7 @@ from typing import Any, Final
 
 from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog, CatalogReloadError
 from eval.osp.review import (
+    DIMENSION_TRACE,
     VERDICT_FAIL,
     VERDICT_MISSING,
     VERDICT_NOT_APPLICABLE,
@@ -280,6 +281,30 @@ class ReviewService:
             )
         return rows
 
+    def export_cases(self) -> list[dict[str, object]]:
+        """Return the case projection with the latest round's detail attached.
+
+        The list endpoint must stay lean, so the export — which needs the full Task-T texts and
+        the trace comparison — re-judges the newest round of every target and attaches it here.
+        """
+        rows = self.cases()
+        for row in rows:
+            protocols = row.get("protocols")
+            for task in protocols if isinstance(protocols, list) else ():
+                if not isinstance(task, dict) or task.get("status") == STATUS_NOT_RUN:
+                    continue
+                detail = self.detail(_as_int(row.get("caseId")), str(task.get("protocol") or ""))
+                rounds = detail.get("rounds")
+                if not isinstance(rounds, list) or not rounds:
+                    continue
+                latest = rounds[0]
+                judgement = latest.get("judgement")
+                task["exportDetail"] = (
+                    judgement.get("detail") if isinstance(judgement, Mapping) else {}
+                )
+                task["exportRequests"] = latest.get("requests") or {}
+        return rows
+
     def detail(self, case_id: int, protocol: str) -> dict[str, object]:
         """Return every round of one protocol task, judged, plus its decision."""
         case = self._catalog.get(case_id)
@@ -511,6 +536,13 @@ class ReviewService:
         input_changed = not evidence_is_current_input(case, protocol, evidence_map)
         judgement = judge_protocol(case, protocol, evidence_map)
         status = STATUS_STALE if input_changed else judgement.status
+        trace_reason = ""
+        trace_dimension = judgement.dimension(DIMENSION_TRACE)
+        if trace_dimension is not None:
+            trace_reason = next(
+                (str(diff.get("reason") or "") for diff in trace_dimension.diffs if diff.get("reason")),
+                "",
+            )
         return {
             "protocol": protocol,
             "status": status,
@@ -535,6 +567,7 @@ class ReviewService:
             "decisionMode": observation.get("decisionMode"),
             "nms": bool(observation.get("nms")),
             "inputChanged": input_changed,
+            "traceReason": trace_reason,
             "decision": self._decision_block(
                 case,
                 protocol,

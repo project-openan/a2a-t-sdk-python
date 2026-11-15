@@ -1129,6 +1129,134 @@ def test_the_store_keeps_one_decision_per_target_and_audits_it(tmp_path: Path) -
 # ---------------------------------------------------------------------------
 
 
+def test_the_export_projection_attaches_the_latest_detail(tmp_path: Path) -> None:
+    service, _catalog, _overlay, _runs = _fixture(tmp_path)
+    service.scan(days=2.0)
+
+    rows = service.export_cases()
+
+    task = rows[0]["protocols"][0]
+    assert task["exportDetail"]["taskT"]["judged"]
+    assert task["exportRequests"]["dispatched"] == "do it properly"
+    assert task["traceReason"] == ""
+
+
+def test_the_export_carries_the_trace_reason_and_the_fidelity_appendices() -> None:
+    rows: list[dict[str, object]] = [
+        {
+            "caseId": 16,
+            "caseName": "blocked",
+            "operation": "Create",
+            "blocked": True,
+            "protocols": [
+                {
+                    "protocol": "a2a-t",
+                    "status": "fail",
+                    "dimensions": [{"dimension": "trace", "status": "fail"}],
+                    "traceReason": "trace_not_exported",
+                    "failures": [
+                        {
+                            "dimension": "trace",
+                            "status": "fail",
+                            "reason": "轨迹未导出",
+                            "diffs": [{"path": "trace", "reason": "trace_not_exported"}],
+                        }
+                    ],
+                    "exportDetail": {
+                        "taskT": {
+                            "expected": "e",
+                            "judged": "j",
+                            "dispatched": "d",
+                            "dispatchedTruncated": False,
+                            "fidelity": {
+                                "comparable": True,
+                                "equal": False,
+                                "truncated": False,
+                                "rows": [
+                                    {
+                                        "path": "task_t.Task Context",
+                                        "judged": "j",
+                                        "dispatched": "d",
+                                        "status": "changed",
+                                        "verdict": "changed",
+                                        "reason": "different",
+                                    },
+                                    {
+                                        "path": "task_t.Operation Type",
+                                        "judged": "x",
+                                        "dispatched": "x",
+                                        "status": "same",
+                                        "verdict": "same",
+                                        "reason": "",
+                                    },
+                                ],
+                            },
+                        },
+                        "intent": {
+                            "expected": {},
+                            "server": {},
+                            "sdk": None,
+                            "corroboration": {
+                                "comparable": True,
+                                "equal": True,
+                                "truncated": False,
+                                "rows": [],
+                            },
+                        },
+                        "trace": {
+                            "present": True,
+                            "traceId": "t",
+                            "fetchedAt": "now",
+                            "exportState": "exported",
+                            "frames": {},
+                            "attribution": {"status": "ok"},
+                            "points": [
+                                {
+                                    "point": "message_sent",
+                                    "label": "客户端消息帧",
+                                    "expected": 1,
+                                    "observed": 1,
+                                    "ok": True,
+                                }
+                            ],
+                        },
+                    },
+                    "exportRequests": {
+                        "original": "o",
+                        "originalSource": "interception",
+                        "intercepted": "o",
+                        "followup": "f",
+                        "dispatched": "f",
+                        "dispatchedSource": "rawRequest",
+                    },
+                    "decision": {"status": "pending"},
+                }
+            ],
+        }
+    ]
+    counts = {
+        "statuses": {"fail": 1},
+        "decisions": {"pending": 1},
+        "targets": 1,
+        "caseCount": 1,
+    }
+    payload = build_payload(rows, counts=counts, corpus_version="v1")
+    entry = payload["cases"][0]["protocols"]["a2a-t"]
+
+    assert entry["traceReason"] == "trace_not_exported"
+    assert entry["taskT"]["fidelity"]["differenceCount"] == 1
+    assert entry["taskT"]["fidelity"]["differences"][0]["path"] == "task_t.Task Context"
+    assert entry["trace"]["points"][0]["id"] == "message_sent"
+    assert entry["requests"]["originalSource"] == "interception"
+
+    report = report_markdown(payload)
+    assert "## 2.1 轨迹判定原因" in report
+    assert "trace_not_exported" in report
+    assert "附录 A" in report
+    assert "task_t.Task Context" in report
+    assert "附录 B" not in report
+
+
 def test_the_payload_and_report_carry_the_decisions(tmp_path: Path) -> None:
     service, _catalog, _overlay, _runs = _fixture(tmp_path)
     service.scan(days=2.0)
