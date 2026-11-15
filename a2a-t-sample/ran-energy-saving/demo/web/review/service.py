@@ -189,6 +189,90 @@ class ReviewService:
             "corpusVersion": self._catalog.version,
         }
 
+    def batches(self) -> list[dict[str, object]]:
+        """Return the ingested batches, newest first, without judging them."""
+        return self._store.batches()
+
+    def batch_rows(self, batch_id: str, round: int | None = None) -> dict[str, object]:
+        """Judge every case × protocol against one batch, optionally narrowed to one round.
+
+        Rows come from the corpus, not from the evidence: a case the batch never ran appears as
+        ``not_run``, so the coverage of the round stays visible instead of reading as a pass.
+        """
+        observations = self._store.observations_for_batch(batch_id, round)
+        if not observations:
+            raise ValueError("未知批次，或该轮次没有证据。")
+        by_target: dict[tuple[int, str], dict[str, object]] = {}
+        attempts: dict[tuple[int, str], int] = {}
+        for observation in observations:
+            key = (_as_int(observation.get("caseId")), str(observation.get("protocol") or ""))
+            attempts[key] = attempts.get(key, 0) + 1
+            by_target.setdefault(key, observation)
+        decisions = self._store.decisions()
+        scope: dict[str, object] = {"batchId": batch_id, "round": round}
+        observed = 0
+        rows: list[dict[str, object]] = []
+        documents = self._catalog.documents()
+        for case in documents:
+            case_id = int(case.get("id") or 0)
+            tasks: list[dict[str, object]] = []
+            for protocol in PROTOCOLS:
+                observation = by_target.get((case_id, protocol))
+                if observation is None:
+                    tasks.append(
+                        self._protocol_row(
+                            case,
+                            case_id,
+                            protocol,
+                            None,
+                            decisions.get((case_id, protocol)),
+                            scope=scope,
+                        )
+                    )
+                    continue
+                observed += 1
+                tasks.append(
+                    self._protocol_row(
+                        case,
+                        case_id,
+                        protocol,
+                        {**observation, "observations": attempts.get((case_id, protocol), 1)},
+                        decisions.get((case_id, protocol)),
+                        scope=scope,
+                    )
+                )
+            rows.append(
+                {
+                    "caseId": case_id,
+                    "caseName": str(case.get("name") or ""),
+                    "operation": case.get("operation"),
+                    "dimension": case.get("dimension"),
+                    "tags": list(case.get("tags") or ()),
+                    "blocked": _is_blocked(case),
+                    "protocols": tasks,
+                }
+            )
+        summary = self._batch_summary(batch_id)
+        progress = self.progress(rows)
+        return {
+            "batch": {**summary, "round": round},
+            "cases": rows,
+            "coverage": {
+                "observed": observed,
+                "targets": len(documents) * len(PROTOCOLS),
+                "cases": summary.get("cases"),
+            },
+            **progress,
+            "corpusVersion": self._catalog.version,
+        }
+
+    def _batch_summary(self, batch_id: str) -> dict[str, object]:
+        """Return one batch's metadata, or raise when it has no evidence."""
+        for batch in self._store.batches():
+            if batch.get("batchId") == batch_id:
+                return batch
+        raise ValueError("未知批次。")
+
     def progress(self, rows: Sequence[Mapping[str, object]] | None = None) -> dict[str, object]:
         """Return the protocol-task and decision counters for the header."""
         cases = rows if rows is not None else self.cases()
@@ -284,8 +368,14 @@ class ReviewService:
         protocol: str,
         observation: Mapping[str, object] | None,
         decision: Mapping[str, object] | None,
+        *,
+        scope: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
-        """Build one protocol task row for the list and the header counters."""
+        """Build one protocol task row for the list and the header counters.
+
+        ``scope`` names the batch/round the row is projected from; the decision block then reports
+        whether the stored decision was made from that evidence.
+        """
         if observation is None:
             return {
                 "protocol": protocol,
@@ -297,7 +387,9 @@ class ReviewService:
                 "decisionMode": "",
                 "nms": False,
                 "inputChanged": False,
-                "decision": self._decision_block(case, protocol, decision, []),
+                "decision": self._decision_block(
+                    case, protocol, decision, [], scope=scope
+                ),
             }
         evidence = observation.get("evidence")
         evidence_map = evidence if isinstance(evidence, Mapping) else {}
@@ -333,6 +425,7 @@ class ReviewService:
                 protocol,
                 decision,
                 [{"runId": observation.get("runId"), "batchId": observation.get("batchId")}],
+                scope=scope,
             ),
         }
 
@@ -362,6 +455,7 @@ class ReviewService:
             "status": observation.get("status"),
             "inputChanged": input_changed,
             "judgement": judgement.to_dict(),
+            "requests": _request_sources(case, evidence_map),
         }
 
     def _decision_block(
@@ -370,8 +464,15 @@ class ReviewService:
         protocol: str,
         decision: Mapping[str, object] | None,
         rounds: Sequence[Mapping[str, object]],
+        *,
+        scope: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
-        """Return the decision together with its staleness flags."""
+        """Return the decision together with its staleness flags.
+
+        With ``scope`` (the batch view) the block also reports whether the decision's evidence
+        includes the scoped run, and stops claiming "new evidence": that flag compares against the
+        newest run of the whole corpus, which is meaningless for one batch.
+        """
         if decision is None:
             return {
                 "status": DECISION_PENDING,
@@ -383,6 +484,7 @@ class ReviewService:
                 "stale": False,
                 "staleReason": "",
                 "newEvidence": False,
+                "onThisRound": None,
             }
         stale_reason = ""
         if str(decision.get("caseSignature") or "") != case_signature(case):
@@ -393,7 +495,12 @@ class ReviewService:
         known = {str(value) for value in run_ids} if isinstance(run_ids, list) else set()
         latest = rounds[0].get("runId") if rounds else None
         newest = str(latest or "")
-        new_evidence = bool(newest) and newest not in known
+        on_this_round: bool | None = None
+        if scope is None:
+            new_evidence = bool(newest) and newest not in known
+        else:
+            on_this_round = bool(newest) and newest in known
+            new_evidence = False
         return {
             "status": str(decision.get("status") or DECISION_PENDING),
             "category": str(decision.get("category") or ""),
@@ -404,6 +511,7 @@ class ReviewService:
             "stale": bool(stale_reason),
             "staleReason": stale_reason,
             "newEvidence": new_evidence,
+            "onThisRound": on_this_round,
         }
 
 
@@ -416,6 +524,28 @@ def _as_int(value: object, default: int = 0) -> int:
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return default
+
+
+def _request_sources(
+    case: Mapping[str, Any], evidence: Mapping[str, Any]
+) -> dict[str, object]:
+    """Return the three requests a verdict can be about: original, blocked, dispatched.
+
+    A blocked case dispatches its replacement request, so the run's frozen input
+    (``refs.userInput``) is the follow-up, while the blocked original only survives in the
+    interception record. Showing them side by side is the only way to tell "the judge compared the
+    wrong text" from a real mismatch.
+    """
+    refs = evidence.get("refs")
+    frozen_input = refs.get("userInput") if isinstance(refs, Mapping) else None
+    interception = evidence.get("interception")
+    blocked = interception if isinstance(interception, Mapping) else {}
+    return {
+        "original": case.get("user_input"),
+        "intercepted": blocked.get("input"),
+        "followup": blocked.get("followupInput"),
+        "dispatched": frozen_input,
+    }
 
 
 def _auto_status(rounds: Sequence[Mapping[str, object]]) -> str:

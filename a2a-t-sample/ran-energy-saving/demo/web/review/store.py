@@ -77,6 +77,8 @@ CREATE TABLE IF NOT EXISTS observation (
 );
 CREATE INDEX IF NOT EXISTS idx_review_observation_target
   ON observation(case_id, protocol, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_review_observation_batch
+  ON observation(batch_id, source_round);
 
 CREATE TABLE IF NOT EXISTS decision (
   case_id        INTEGER NOT NULL,
@@ -227,6 +229,72 @@ class ReviewStore:
         for key, row in latest.items():
             row["observations"] = counts.get(key, 0)
         return latest
+
+    def batches(self) -> list[dict[str, object]]:
+        """Return one row per ingested batch, newest first.
+
+        The batch's own metadata (model, downstream, transport) is read from its observations, so
+        the list survives the rotation of ``runs/tester/*.json``.
+        """
+        with self._session() as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                """
+                SELECT batch_id,
+                       MAX(observed_at) AS observed_at,
+                       COUNT(*) AS observations,
+                       COUNT(DISTINCT case_id) AS cases,
+                       MAX(source_round) AS rounds,
+                       MIN(model) AS model,
+                       MIN(decision_mode) AS decision_mode,
+                       MAX(nms) AS nms,
+                       MAX(nms_sim) AS nms_sim,
+                       MIN(discovery) AS discovery,
+                       MIN(transport) AS transport
+                FROM observation
+                GROUP BY batch_id
+                ORDER BY MAX(observed_at) DESC, batch_id DESC
+                """
+            ).fetchall()
+        return [
+            {
+                "batchId": str(row["batch_id"]),
+                "observedAt": str(row["observed_at"] or ""),
+                "observations": int(row["observations"] or 0),
+                "cases": int(row["cases"] or 0),
+                "rounds": max(1, int(row["rounds"] or 1)),
+                "model": row["model"],
+                "decisionMode": str(row["decision_mode"] or ""),
+                "nms": bool(row["nms"]),
+                "nmsSim": bool(row["nms_sim"]),
+                "discovery": str(row["discovery"] or ""),
+                "transport": str(row["transport"] or ""),
+            }
+            for row in rows
+        ]
+
+    def observations_for_batch(
+        self, batch_id: str, round: int | None = None
+    ) -> list[dict[str, object]]:
+        """Return the evidence rows of one batch, newest first; ``round`` narrows it."""
+        if round is None:
+            sql = """
+                SELECT * FROM observation
+                WHERE batch_id=?
+                ORDER BY observed_at DESC, source_round DESC, id DESC
+            """
+            params: tuple[object, ...] = (batch_id,)
+        else:
+            sql = """
+                SELECT * FROM observation
+                WHERE batch_id=? AND source_round=?
+                ORDER BY observed_at DESC, id DESC
+            """
+            params = (batch_id, int(round))
+        with self._session() as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(sql, params).fetchall()
+        return [_observation_row(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Decisions

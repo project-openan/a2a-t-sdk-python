@@ -209,9 +209,14 @@ def _interception(raw: object) -> dict[str, object] | None:
     if not isinstance(raw, Mapping):
         return None
     return {
+        # The intercepted and the replacement request are evidence in their own right: the review
+        # compares what the operator wrote, what was blocked and what the run actually dispatched.
+        "input": raw.get("input"),
+        "followupInput": raw.get("followupInput"),
         "stages": _stages(raw.get("stages")),
         "verdict": raw.get("verdict"),
         "reason": raw.get("reason"),
+        "error": raw.get("error"),
     }
 
 

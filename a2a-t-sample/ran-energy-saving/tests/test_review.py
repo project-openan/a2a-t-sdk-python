@@ -194,6 +194,8 @@ def _evidence_item(
     }
     if blocked:
         item["interception"] = {
+            "input": "do it",
+            "followupInput": refs_input,
             "stages": {
                 "validate": {
                     "stage": "validate",
@@ -496,6 +498,123 @@ def test_a_case_without_evidence_is_not_run(tmp_path: Path) -> None:
     assert [task["status"] for task in rows[0]["protocols"]] == [STATUS_NOT_RUN, STATUS_NOT_RUN]
 
 
+# ---------------------------------------------------------------------------
+# Round (batch) view
+# ---------------------------------------------------------------------------
+
+
+def test_the_batch_list_groups_the_evidence_without_judging_it(tmp_path: Path) -> None:
+    service, _catalog, _overlay, runs = _fixture(tmp_path)
+    service.scan(days=2.0)
+    _write_batch(
+        runs,
+        [_evidence_item(run_id="run-2", trace_id="trace-2", blocked=False, slot_error=False)],
+        batch_id="batch-2",
+        decision_mode="scripted",
+        finished_at="2026-11-15T11:00:00+00:00",
+    )
+    service.scan(days=2.0)
+
+    batches = service.batches()
+
+    assert [row["batchId"] for row in batches] == ["batch-2", "batch-1"]
+    assert batches[0]["observations"] == 1
+    assert batches[0]["cases"] == 1
+    assert batches[0]["rounds"] == 1
+    assert batches[0]["model"] == "qwen3.8"
+    assert batches[0]["decisionMode"] == "scripted"
+    assert batches[0]["nms"] is True
+    assert batches[0]["transport"] == "webhook"
+
+
+def test_the_batch_view_lists_every_corpus_case(tmp_path: Path) -> None:
+    cases_dir = tmp_path / "cases"
+    _write_cases(cases_dir, _case_document(1), _case_document(2))
+    catalog = CaseCatalog(cases_dir, overlay_path=tmp_path / "absent.yaml")
+    store = ReviewStore(tmp_path / "review.sqlite3")
+    store.ensure()
+    service = ReviewService(
+        store=store, catalog=catalog, runs_dir=tmp_path / "runs", client_db_path=None
+    )
+    _write_batch(tmp_path / "runs", [_evidence_item(blocked=False, slot_error=False)])
+    service.scan(days=2.0)
+
+    payload = service.batch_rows("batch-1", 1)
+
+    assert [row["caseId"] for row in payload["cases"]] == [1, 2]
+    assert [task["status"] for task in payload["cases"][1]["protocols"]] == [
+        STATUS_NOT_RUN,
+        STATUS_NOT_RUN,
+    ]
+    assert payload["coverage"] == {"observed": 1, "targets": 4, "cases": 1}
+    assert payload["batch"]["round"] == 1
+
+
+def test_the_batch_view_can_narrow_to_one_round(tmp_path: Path) -> None:
+    service, _catalog, _overlay, runs = _fixture(tmp_path)
+    _write_batch(
+        runs,
+        [
+            _evidence_item(run_id="run-r1", trace_id="trace-r1", round_index=1),
+            _evidence_item(run_id="run-r2", trace_id="trace-r2", round_index=2),
+        ],
+        batch_id="batch-multi",
+    )
+    service.scan(days=2.0)
+
+    first = service.batch_rows("batch-multi", 1)
+    second = service.batch_rows("batch-multi", 2)
+    merged = service.batch_rows("batch-multi")
+
+    assert first["batch"]["round"] == 1
+    assert [row["runId"] for row in service.store.observations_for_batch("batch-multi", 1)] == [
+        "run-r1"
+    ]
+    assert [row["runId"] for row in service.store.observations_for_batch("batch-multi", 2)] == [
+        "run-r2"
+    ]
+    assert second["batch"]["round"] == 2
+    assert merged["coverage"]["observed"] == 1
+    assert merged["cases"][0]["protocols"][0]["observations"] == 2
+
+
+def test_the_batch_view_reports_whether_the_decision_came_from_the_round(
+    tmp_path: Path,
+) -> None:
+    service, _catalog, _overlay, runs = _fixture(tmp_path)
+    service.scan(days=2.0)
+    service.set_decision(1, "a2a-t", status=DECISION_ACCEPTED, note="reviewed")
+    _write_batch(
+        runs,
+        [_evidence_item(run_id="run-2", trace_id="trace-2", blocked=False, slot_error=False)],
+        batch_id="batch-2",
+        finished_at="2026-11-15T11:00:00+00:00",
+    )
+    service.scan(days=2.0)
+
+    first = service.batch_rows("batch-1", 1)["cases"][0]["protocols"][0]
+    second = service.batch_rows("batch-2", 1)["cases"][0]["protocols"][0]
+
+    assert first["decision"]["onThisRound"] is True
+    assert second["decision"]["onThisRound"] is False
+    assert second["decision"]["newEvidence"] is False
+
+
+def test_the_scan_keeps_the_intercepted_and_the_dispatched_request(tmp_path: Path) -> None:
+    service, _catalog, _overlay, _runs = _fixture(tmp_path)
+    service.scan(days=2.0)
+
+    round_row = service.detail(1, "a2a-t")["rounds"][0]
+
+    assert round_row["requests"] == {
+        "original": "do it",
+        "intercepted": "do it",
+        "followup": "do it properly",
+        "dispatched": "do it properly",
+    }
+    assert round_row["nmsSim"] is False
+
+
 def test_the_detail_judges_every_round(tmp_path: Path) -> None:
     service, _catalog, _overlay, runs = _fixture(tmp_path)
     service.scan(days=2.0)
@@ -715,6 +834,23 @@ async def test_route_rejects_invalid_decisions_and_unknown_targets(tmp_path: Pat
     assert bad_category.status_code == 400
     assert unknown_case.status_code == 404
     assert bad_protocol.status_code == 400
+
+
+async def test_route_batches_and_one_batch(tmp_path: Path) -> None:
+    _write_batch(tmp_path / "runs", [_evidence_item(blocked=False, slot_error=False)])
+    app = _app(tmp_path)
+    async with _client(app) as client:
+        await client.post("/api/review/scan?days=2")
+        batches = (await client.get("/api/review/batches")).json()
+        batch = (await client.get("/api/review/batch/batch-1?round=1")).json()
+        bad_round = await client.get("/api/review/batch/batch-1?round=x")
+        missing = await client.get("/api/review/batch/nope")
+
+    assert [row["batchId"] for row in batches["batches"]] == ["batch-1"]
+    assert batch["batch"]["round"] == 1
+    assert batch["cases"][0]["protocols"][0]["status"] == "pass"
+    assert bad_round.status_code == 400
+    assert missing.status_code == 404
 
 
 # ---------------------------------------------------------------------------

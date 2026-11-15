@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 
 import {
+  batchLabel,
   categoryLabel,
   decisionLabel,
   defaultRoundIndex,
   dimensionLabel,
+  filterBatches,
   filterCases,
   progressText,
   protocolLabel,
@@ -117,6 +119,86 @@ assert.deepEqual(
 );
 assert.deepEqual(filterCases(CASES, { query: "26" }).map((row) => row.caseId), [26]);
 
+const BATCHES = [
+  {
+    batchId: "batch-new",
+    observedAt: "2026-11-15T18:22:00+00:00",
+    model: "qwen3.8",
+    nms: true,
+    nmsSim: false,
+    decisionMode: "live",
+    discovery: "nms",
+    transport: "webhook",
+    rounds: 2,
+    cases: 100,
+    observations: 200,
+  },
+  {
+    batchId: "batch-sim",
+    observedAt: "2026-11-14T09:00:00+00:00",
+    model: "offline",
+    nms: true,
+    nmsSim: true,
+    decisionMode: "scripted",
+    discovery: "nms",
+    transport: "sse",
+    rounds: 1,
+    cases: 40,
+    observations: 40,
+  },
+  {
+    batchId: "batch-local",
+    observedAt: "2026-11-13T08:00:00+00:00",
+    model: "offline",
+    nms: false,
+    nmsSim: false,
+    decisionMode: "offline",
+    discovery: "direct",
+    transport: "sse",
+    rounds: 1,
+    cases: 10,
+    observations: 10,
+  },
+];
+
+assert.deepEqual(
+  filterBatches(BATCHES, {}).map((batch) => batch.batchId),
+  ["batch-new", "batch-sim", "batch-local"],
+);
+assert.deepEqual(
+  filterBatches(BATCHES, { nms: "nms" }).map((batch) => batch.batchId),
+  ["batch-new"],
+);
+assert.deepEqual(
+  filterBatches(BATCHES, { nms: "local" }).map((batch) => batch.batchId),
+  ["batch-local"],
+);
+assert.deepEqual(
+  filterBatches(BATCHES, { nms: "sim" }).map((batch) => batch.batchId),
+  ["batch-sim"],
+);
+assert.deepEqual(
+  filterBatches(BATCHES, { mode: "offline" }).map((batch) => batch.batchId),
+  ["batch-local"],
+);
+assert.deepEqual(
+  filterBatches(BATCHES, { query: "2026-11-14" }).map((batch) => batch.batchId),
+  ["batch-sim"],
+);
+assert.deepEqual(
+  filterBatches(BATCHES, { query: "QWEN" }).map((batch) => batch.batchId),
+  ["batch-new"],
+);
+assert.equal(
+  batchLabel(BATCHES[0]),
+  "batch-new · 2026-11-15 18:22 · qwen3.8 · 真机 · live · 2 轮",
+);
+assert.equal(
+  batchLabel(BATCHES[1]),
+  "batch-sim · 2026-11-14 09:00 · offline · 模拟器 · scripted · 1 轮",
+);
+assert.equal(batchLabel(null), "");
+
 const ROUNDS = [
   {
     batchId: "batch-new",
@@ -142,8 +224,16 @@ assert.equal(
   defaultRoundIndex([{ ...ROUNDS[1], nms: true, decisionMode: "scripted" }]),
   0,
 );
+assert.equal(
+  defaultRoundIndex([
+    { ...ROUNDS[0], nmsSim: true, decisionMode: "live" },
+    { ...ROUNDS[0], batchId: "batch-real", nmsSim: false, decisionMode: "live" },
+  ]),
+  1,
+);
 assert.equal(defaultRoundIndex([]), 0);
 assert.match(roundLabel(ROUNDS[0]), /batch-new · r1 · 2026-11-15 18:22 · qwen3\.8 · 真机 · live · 通过/);
+assert.match(roundLabel({ ...ROUNDS[0], nmsSim: true }), /模拟器/);
 
 assert.deepEqual(
   stabilityOf([

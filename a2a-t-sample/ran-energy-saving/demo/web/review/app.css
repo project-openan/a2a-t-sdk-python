@@ -136,7 +136,10 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   gap: 14px;
 }
 .sidebar { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+.sidebar[hidden] { display: none; }
 .filters { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.filters.inline { flex-direction: row; flex-wrap: wrap; align-items: center; }
+.filters.inline input { min-width: 180px; }
 .filters input, .filters select {
   padding: 5px 8px;
   border: 1px solid var(--line);
@@ -259,6 +262,79 @@ table.grid tr.recorded td { background: #fafbfc; color: var(--muted); }
 .stability { display: flex; flex-wrap: wrap; gap: 8px; }
 .empty-state { color: var(--muted); font-size: 13px; }
 .hint { font-size: 12px; color: var(--warn); }
+
+.view-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.view-switch .tab {
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.view-switch .tab.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.view-switch .summary { margin-left: 6px; }
+
+.backbar { display: flex; align-items: center; gap: 8px; }
+.backbar .ghost {
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.backbar .ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+.table-wrap { overflow: auto; max-height: 62vh; margin-top: 8px; }
+.batch-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.batch-table th,
+.batch-table td {
+  padding: 5px 8px;
+  text-align: left;
+  border-bottom: 1px solid #eef1f5;
+  vertical-align: top;
+}
+.batch-table thead th {
+  position: sticky;
+  top: 0;
+  background: #fff;
+  color: var(--muted);
+  font-weight: 600;
+  z-index: 1;
+}
+.batch-table tbody tr:hover { background: #fafbfc; }
+.batch-table td:nth-child(1) { font-family: var(--mono); color: var(--muted); white-space: nowrap; }
+.cell-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cell-button:hover { border-color: var(--accent); background: var(--accent-soft); }
+.cell-button .sub { color: var(--warn); font-size: 11px; }
 
 @media (max-width: 1200px) {
   .layout { grid-template-columns: 1fr; }

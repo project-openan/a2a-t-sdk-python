@@ -43,8 +43,37 @@
   <main class="main">
     <div class="notice" id="scan-note" hidden></div>
 
+    <div class="view-switch" role="tablist" aria-label="视图">
+      <button class="tab active" id="view-round" type="button" role="tab" aria-selected="true">轮次视图</button>
+      <button class="tab" id="view-case" type="button" role="tab" aria-selected="false">用例视图</button>
+      <span class="summary" id="view-hint"></span>
+    </div>
+
     <div class="layout">
-      <aside class="card sidebar">
+      <aside class="card sidebar" id="sidebar-round">
+        <div class="card-head">
+          <h2>轮次</h2>
+          <span class="summary" id="batch-count"></span>
+        </div>
+        <div class="filters">
+          <input id="batch-query" type="search" placeholder="搜索批次号、模型、日期">
+          <select id="batch-nms">
+            <option value="">全部下游</option>
+            <option value="nms">真机</option>
+            <option value="local">本地</option>
+            <option value="sim">模拟器</option>
+          </select>
+          <select id="batch-mode">
+            <option value="">全部决策模式</option>
+            <option value="live">live</option>
+            <option value="scripted">scripted</option>
+            <option value="offline">offline</option>
+          </select>
+        </div>
+        <div class="case-list" id="batch-list"></div>
+      </aside>
+
+      <aside class="card sidebar" id="sidebar-case" hidden>
         <div class="card-head">
           <h2>用例</h2>
           <span class="summary" id="case-count"></span>

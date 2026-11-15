@@ -45,7 +45,11 @@ const CATEGORY_LABELS = {
 
 const state = {
   meta: null,
+  view: "round", // "round": batches of evidence first; "case": the corpus first
   cases: [],
+  batches: [],
+  batch: null, // payload of the selected batch/round
+  selectedBatch: null, // {batchId, round}
   selected: null, // {caseId, protocol}
   detail: null,
   round: 0, // index into detail.rounds, or -1 for the round matrix
@@ -115,6 +119,47 @@ export function filterCases(cases, filters) {
   return rows;
 }
 
+//: Filter the batch list by identifier, model, time, downstream and decision mode.
+export function filterBatches(batches, filters) {
+  const query = String(filters.query || "").trim().toLowerCase();
+  const rows = [];
+  for (const batch of batches || []) {
+    if (filters.nms === "nms" && !(batch.nms && !batch.nmsSim)) continue;
+    if (filters.nms === "local" && (batch.nms || batch.nmsSim)) continue;
+    if (filters.nms === "sim" && !batch.nmsSim) continue;
+    if (filters.mode && batch.decisionMode !== filters.mode) continue;
+    if (query) {
+      const haystack = [
+        batch.batchId,
+        batch.model,
+        batch.decisionMode,
+        batch.discovery,
+        batch.transport,
+        batch.observedAt,
+      ]
+        .map((value) => String(value || "").toLowerCase())
+        .join(" ");
+      if (!haystack.includes(query)) continue;
+    }
+    rows.push(batch);
+  }
+  return rows;
+}
+
+//: Human-readable label of one ingested batch.
+export function batchLabel(batch) {
+  if (!batch) return "";
+  const rounds = Number(batch.rounds || 1);
+  return [
+    batch.batchId || "unknown",
+    String(batch.observedAt || "").replace("T", " ").slice(0, 16),
+    batch.model || "—",
+    batch.nmsSim ? "模拟器" : batch.nms ? "真机" : "本地",
+    batch.decisionMode || "—",
+    `${rounds} 轮`,
+  ].join(" · ");
+}
+
 //: Human-readable label of one stored round.
 export function roundLabel(round) {
   return [
@@ -122,16 +167,18 @@ export function roundLabel(round) {
     `r${round.sourceRound || 1}`,
     String(round.observedAt || "").replace("T", " ").slice(0, 16),
     round.model || "—",
-    round.nms ? "真机" : "本地",
+    round.nmsSim ? "模拟器" : round.nms ? "真机" : "本地",
     round.decisionMode || "—",
     statusLabel(round.judgement && round.judgement.status),
   ].join(" · ");
 }
 
-//: Default round: the newest real-machine live run, else the newest one.
+//: Default round: the newest real-machine live run (never the simulator), else the newest one.
 export function defaultRoundIndex(rounds) {
   if (!rounds || !rounds.length) return 0;
-  const live = rounds.findIndex((round) => round.nms && round.decisionMode === "live");
+  const live = rounds.findIndex(
+    (round) => round.nms && !round.nmsSim && round.decisionMode === "live",
+  );
   return live >= 0 ? live : 0;
 }
 
@@ -226,7 +273,9 @@ function detailPath(caseId, protocol, suffix = "") {
 async function loadCases(progressPayload) {
   const payload = await getJson("/api/review/cases");
   state.cases = payload.cases || [];
-  document.getElementById("progress").textContent = progressText(progressPayload || payload);
+  if (state.view === "case") {
+    document.getElementById("progress").textContent = progressText(progressPayload || payload);
+  }
   renderCases();
 }
 
@@ -304,9 +353,411 @@ function renderCases() {
   list.scrollTop = scrollTop;
 }
 
-async function selectProtocol(caseRow, protocol) {
+// ---------------------------------------------------------------------------
+// Round (batch) view
+// ---------------------------------------------------------------------------
+
+async function loadBatches() {
+  const payload = await getJson("/api/review/batches");
+  state.batches = payload.batches || [];
+  renderBatches();
+}
+
+function batchFilters() {
+  return {
+    query: field("batch-query"),
+    nms: field("batch-nms"),
+    mode: field("batch-mode"),
+  };
+}
+
+function renderBatches() {
+  const list = document.getElementById("batch-list");
+  if (!list) return;
+  const scrollTop = list.scrollTop;
+  const rows = filterBatches(state.batches, batchFilters());
+  const count = document.getElementById("batch-count");
+  if (count) count.textContent = `${rows.length} / ${state.batches.length}`;
+  list.replaceChildren();
+  if (!rows.length) {
+    list.append(el("p", "empty-state", "没有匹配的批次；先在右上角采集证据。"));
+    list.scrollTop = scrollTop;
+    return;
+  }
+  for (const batch of rows) {
+    const block = el("div", "case");
+    const head = el("div", "case-head");
+    head.append(el("span", "id", batch.batchId || "batch"));
+    head.append(
+      el(
+        "span",
+        "name",
+        `${String(batch.observedAt || "").replace("T", " ").slice(5, 16)} · ${batch.cases || 0} 用例`,
+      ),
+    );
+    block.append(head);
+    const total = Math.max(1, Number(batch.rounds || 1));
+    for (let index = 1; index <= total; index += 1) {
+      const row = el("button", "proto");
+      row.type = "button";
+      if (
+        state.selectedBatch
+        && state.selectedBatch.batchId === batch.batchId
+        && Number(state.selectedBatch.round) === index
+      ) {
+        row.classList.add("active");
+      }
+      row.append(el("span", "proto-name", total > 1 ? `第 ${index} 轮` : "本轮"));
+      const badges = el("span", "badges");
+      badges.append(
+        el(
+          "span",
+          `badge ${batch.nmsSim ? "partial" : batch.nms ? "pass" : "not_run"}`,
+          batch.nmsSim ? "模拟器" : batch.nms ? "真机" : "本地",
+        ),
+      );
+      badges.append(el("span", "badge", batch.decisionMode || "—"));
+      badges.append(el("span", "badge", `${batch.observations || 0} 证据`));
+      row.append(badges);
+      row.title = batchLabel(batch);
+      row.addEventListener("click", () => selectBatch(batch.batchId, index));
+      block.append(row);
+    }
+    list.append(block);
+  }
+  list.scrollTop = scrollTop;
+}
+
+async function selectBatch(batchId, round) {
+  if (!confirmDiscardDecision()) return;
+  state.selectedBatch = { batchId, round };
+  state.selected = null;
+  state.detail = null;
+  state.detailScope = null;
+  renderBatches();
+  await loadBatch();
+}
+
+async function refreshBatch() {
+  if (!state.selectedBatch) return;
+  const { batchId, round } = state.selectedBatch;
+  const query = round ? `?round=${encodeURIComponent(round)}` : "";
+  state.batch = await getJson(`/api/review/batch/${encodeURIComponent(batchId)}${query}`);
+}
+
+async function loadBatch() {
+  if (!state.selectedBatch) return;
+  const container = document.getElementById("detail");
+  container.replaceChildren(el("section", "card", "加载中…"));
+  await refreshBatch();
+  renderBatch();
+}
+
+function renderBatch() {
+  if (!state.batch) return;
+  const container = document.getElementById("detail");
+  const scrollTop = container.scrollTop;
+  container.replaceChildren();
+  container.append(renderBatchSummary());
+  container.append(renderBatchTable());
+  refreshBatchTable();
+  container.scrollTop = scrollTop;
+  const header = document.getElementById("progress");
+  if (header) header.textContent = progressText(state.batch);
+}
+
+function renderBatchSummary() {
+  const card = el("section", "card");
+  const batch = state.batch.batch || {};
+  const coverage = state.batch.coverage || {};
+  const head = el("div", "section-title");
+  head.append(
+    el("h2", "", `批次 ${batch.batchId || "—"}${batch.round ? ` · 第 ${batch.round} 轮` : ""}`),
+  );
+  head.append(el("span", "summary", batchLabel(batch)));
+  card.append(head);
+  const facts = el("dl", "kv");
+  const rows = [
+    ["时间", String(batch.observedAt || "").replace("T", " ").slice(0, 19)],
+    ["模型", batch.model || "—"],
+    ["下游", batch.nmsSim ? "模拟器" : batch.nms ? "真机" : "本地"],
+    ["发现 / 传输", [batch.discovery, batch.transport].filter(Boolean).join(" / ") || "—"],
+    ["决策模式", batch.decisionMode || "—"],
+    ["本批轮次", `${batch.rounds || 1}`],
+    [
+      "证据覆盖",
+      `${coverage.observed || 0} / ${coverage.targets || 0} 协议任务（${coverage.cases || 0} 个用例）`,
+    ],
+  ];
+  for (const [label, value] of rows) {
+    facts.append(el("dt", "", label));
+    facts.append(el("dd", "", textBlock(value)));
+  }
+  card.append(facts);
+  card.append(el("p", "summary", progressText(state.batch)));
+  return card;
+}
+
+function renderBatchTable() {
+  const card = el("section", "card");
+  const head = el("div", "section-title");
+  head.append(el("h2", "", "本轮用例状态"));
+  const count = el("span", "summary");
+  head.append(count);
+  card.append(head);
+  card.append(renderBatchFilters());
+
+  const wrap = el("div", "table-wrap");
+  const table = document.createElement("table");
+  table.className = "batch-table";
+  const headRow = document.createElement("tr");
+  for (const label of ["#", "用例", "操作", "A2A-T", "A2A", "标记"]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    headRow.append(th);
+  }
+  const thead = document.createElement("thead");
+  thead.append(headRow);
+  table.append(thead);
+  const tbody = document.createElement("tbody");
+  table.append(tbody);
+  wrap.append(table);
+  card.append(wrap);
+
+  state.batchTable = { tbody, count };
+  return card;
+}
+
+function batchCaseFilters() {
+  return {
+    query: field("batch-filter-query"),
+    protocol: field("batch-filter-protocol"),
+    status: field("batch-filter-status"),
+    decision: field("batch-filter-decision"),
+    category: field("batch-filter-category"),
+    onlyFailures: checked("batch-only-failures"),
+    onlyPending: checked("batch-only-pending"),
+  };
+}
+
+function renderBatchFilters() {
+  const bar = el("div", "filters inline");
+  const query = document.createElement("input");
+  query.type = "search";
+  query.id = "batch-filter-query";
+  query.placeholder = "搜索编号或名称";
+  query.addEventListener("input", refreshBatchTable);
+  bar.append(query);
+  for (const [id, options] of [
+    [
+      "batch-filter-protocol",
+      [
+        ["", "全部协议"],
+        ["a2a-t", "A2A-T"],
+        ["a2a", "A2A"],
+      ],
+    ],
+    [
+      "batch-filter-status",
+      [
+        ["", "全部自动判定"],
+        ["pass", "通过"],
+        ["fail", "失败"],
+        ["partial", "部分可判"],
+        ["stale", "需重跑"],
+        ["not_run", "未跑"],
+        ["not_applicable", "不适用"],
+      ],
+    ],
+    [
+      "batch-filter-decision",
+      [
+        ["", "全部审核结论"],
+        ["pending", "未审核"],
+        ["accepted", "通过"],
+        ["defect", "缺陷"],
+        ["known_issue", "已知问题"],
+        ["recheck", "待复核"],
+      ],
+    ],
+    [
+      "batch-filter-category",
+      [
+        ["", "全部缺陷归属"],
+        ["sdk", "SDK"],
+        ["vendor", "网管"],
+        ["case", "用例"],
+        ["env", "环境"],
+        ["other", "其他"],
+      ],
+    ],
+  ]) {
+    const select = document.createElement("select");
+    select.id = id;
+    for (const [value, label] of options) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      select.append(option);
+    }
+    select.addEventListener("change", refreshBatchTable);
+    bar.append(select);
+  }
+  for (const [id, label] of [
+    ["batch-only-failures", "只看失败/部分/需重跑"],
+    ["batch-only-pending", "只看未审核"],
+  ]) {
+    const wrapper = el("label", "check");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.id = id;
+    input.addEventListener("change", refreshBatchTable);
+    wrapper.append(input, document.createTextNode(` ${label}`));
+    bar.append(wrapper);
+  }
+  return bar;
+}
+
+function refreshBatchTable() {
+  const table = state.batchTable;
+  if (!table || !state.batch) return;
+  const all = state.batch.cases || [];
+  const rows = filterCases(all, batchCaseFilters());
+  table.count.textContent = `${rows.length} / ${all.length}`;
+  table.tbody.replaceChildren();
+  if (!rows.length) {
+    const tr = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 6;
+    cell.className = "empty-state";
+    cell.textContent = "没有匹配的用例。";
+    tr.append(cell);
+    table.tbody.append(tr);
+    return;
+  }
+  for (const caseRow of rows) {
+    const tr = document.createElement("tr");
+    tr.append(cellText(`#${caseRow.caseId}`));
+    tr.append(cellText(caseRow.caseName || ""));
+    tr.append(cellText(caseRow.operation || ""));
+    tr.append(protocolCell(caseRow, "a2a-t"));
+    tr.append(protocolCell(caseRow, "a2a"));
+    tr.append(cellText(batchMarkers(caseRow)));
+    table.tbody.append(tr);
+  }
+}
+
+function cellText(value) {
+  const cell = document.createElement("td");
+  cell.append(document.createTextNode(value === null || value === undefined ? "" : String(value)));
+  return cell;
+}
+
+function protocolCell(caseRow, protocol) {
+  const cell = document.createElement("td");
+  const task = (caseRow.protocols || []).find((row) => row.protocol === protocol);
+  if (!task) {
+    cell.append(el("span", "muted", "—"));
+    return cell;
+  }
+  const button = el("button", "cell-button");
+  button.type = "button";
+  button.append(el("span", `badge ${task.status}`, statusLabel(task.status)));
+  const failing = (task.dimensions || []).filter(
+    (row) => !["pass", "not_expected", "not_applicable"].includes(row.status),
+  );
+  if (failing.length) {
+    button.append(el("span", "sub", failing.map((row) => dimensionLabel(row.dimension)).join("/")));
+  }
+  const decision = task.decision || {};
+  const decisionStatus = decision.status || "pending";
+  button.append(el("span", `badge ${decisionStatus}`, decisionLabel(decisionStatus)));
+  button.addEventListener("click", () => openFromBatch(caseRow, protocol));
+  cell.append(button);
+  return cell;
+}
+
+function batchMarkers(caseRow) {
+  const markers = new Set();
+  for (const task of caseRow.protocols || []) {
+    if (task.inputChanged) markers.add("输入已变更");
+    const decision = task.decision || {};
+    const decisionStatus = decision.status || "pending";
+    if (decision.stale) markers.add("结论待复核");
+    if (decision.onThisRound === false && decisionStatus !== "pending") markers.add("结论来自其它轮次");
+  }
+  return [...markers].join("；");
+}
+
+async function openFromBatch(caseRow, protocol) {
+  await selectProtocol(caseRow, protocol, state.selectedBatch);
+}
+
+async function autoSelectBatch() {
+  const rows = filterBatches(state.batches, batchFilters());
+  if (!rows.length) {
+    renderEmptyDetail(
+      "还没有证据。",
+      "先点右上角「采集证据」，或到评测控制台跑一轮用例。",
+    );
+    return;
+  }
+  const newest = rows[0];
+  await selectBatch(newest.batchId, Math.max(1, Number(newest.rounds || 1)));
+}
+
+function renderEmptyDetail(message, hint) {
+  const container = document.getElementById("detail");
+  container.replaceChildren();
+  const card = el("section", "card empty");
+  card.append(el("p", "", message));
+  if (hint) card.append(el("p", "muted", hint));
+  container.append(card);
+}
+
+async function setView(view) {
+  state.view = view === "case" ? "case" : "round";
+  for (const [id, active] of [
+    ["view-round", state.view === "round"],
+    ["view-case", state.view === "case"],
+  ]) {
+    const tab = document.getElementById(id);
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", String(active));
+  }
+  document.getElementById("sidebar-round").hidden = state.view !== "round";
+  document.getElementById("sidebar-case").hidden = state.view !== "case";
+  if (state.view === "round") {
+    renderBatches();
+    if (state.batch) renderBatch();
+    else if (state.batches.length) await autoSelectBatch();
+    else {
+      renderEmptyDetail(
+        "还没有证据。",
+        "先点右上角「采集证据」，或到评测控制台跑一轮用例。",
+      );
+    }
+  } else {
+    if (!state.cases.length) await loadCases();
+    else renderCases();
+    if (state.detail && state.selected) renderDetail();
+    else {
+      renderEmptyDetail(
+        "从左侧选择用例与协议，右侧会给出跨轮次的自动判定与审核结论。",
+        "判定使用当前用例语料重算已存证据；证据是否仍然有效、是否出现新轮次会单独标出。",
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Case detail
+// ---------------------------------------------------------------------------
+
+async function selectProtocol(caseRow, protocol, scope = null) {
   if (!confirmDiscardDecision()) return;
   state.selected = { caseId: caseRow.caseId, protocol, caseName: caseRow.caseName };
+  state.detailScope = scope;
   state.snippet = null;
   await loadDetail();
 }
@@ -317,7 +768,15 @@ async function loadDetail() {
   container.replaceChildren(el("section", "card", "加载中…"));
   const { caseId, protocol } = state.selected;
   state.detail = await getJson(detailPath(caseId, protocol));
-  state.round = defaultRoundIndex(state.detail.rounds || []);
+  let index = defaultRoundIndex(state.detail.rounds || []);
+  const scope = state.detailScope;
+  if (scope) {
+    const match = (state.detail.rounds || []).findIndex(
+      (row) => row.batchId === scope.batchId && Number(row.sourceRound || 1) === Number(scope.round || 1),
+    );
+    if (match >= 0) index = match;
+  }
+  state.round = index;
   resetDecision();
   renderDetail();
 }
@@ -359,6 +818,19 @@ function renderDetail() {
   const container = document.getElementById("detail");
   const scrollTop = container.scrollTop;
   container.replaceChildren();
+  if (state.view === "round" && state.batch) {
+    const bar = el("div", "backbar");
+    const back = el("button", "ghost", `← 返回批次 ${state.selectedBatch?.batchId || ""}`);
+    back.type = "button";
+    back.addEventListener("click", () => {
+      state.detail = null;
+      state.selected = null;
+      state.detailScope = null;
+      renderBatch();
+    });
+    bar.append(back);
+    container.append(bar);
+  }
   container.append(renderCaseCard());
   container.append(renderRoundBar());
   if (state.round === -1) container.append(renderRoundMatrix());
@@ -462,6 +934,20 @@ function renderDimensionStrip(round) {
     );
   }
   card.append(strip);
+  const requests = round.requests || {};
+  const rows = [
+    ["用例原文", requests.original],
+    ["拦截请求", requests.intercepted],
+    ["实际下发", requests.dispatched],
+  ].filter(([, value]) => value);
+  if (rows.length) {
+    const facts = el("dl", "kv");
+    for (const [label, value] of rows) {
+      facts.append(el("dt", "", label));
+      facts.append(el("dd", "", textBlock(value)));
+    }
+    card.append(facts);
+  }
   if (round.inputChanged) {
     card.append(
       el("p", "hint", "该轮证据来自另一个输入（用例输入已变更），不能作为当前用例的判定，需要重跑。"),
@@ -828,6 +1314,7 @@ async function saveDecision() {
     state.detail = payload.detail;
     resetDecision();
     await loadCases();
+    if (state.view === "round" && state.selectedBatch) await refreshBatch();
     renderDetail();
   } catch (caught) {
     if (error) {
@@ -847,7 +1334,19 @@ async function scan() {
     const payload = await postJson(`/api/review/scan?days=${encodeURIComponent(days)}`, {});
     state.scan = payload.scan;
     await loadCases(payload);
-    if (state.selected) await loadDetail();
+    await loadBatches();
+    if (state.view === "round") {
+      const kept = state.selectedBatch
+        && state.batches.some((batch) => batch.batchId === state.selectedBatch.batchId);
+      if (kept) await loadBatch();
+      else {
+        state.selectedBatch = null;
+        state.batch = null;
+        await autoSelectBatch();
+      }
+    } else if (state.selected) {
+      await loadDetail();
+    }
     const info = payload.scan || {};
     const skipped = Object.entries(info.skipped || {})
       .map(([reason, count]) => `${reason}=${count}`)
@@ -868,6 +1367,12 @@ async function scan() {
 
 function wireEvents() {
   document.getElementById("scan-button").addEventListener("click", scan);
+  document
+    .getElementById("view-round")
+    .addEventListener("click", () => setView("round").catch((caught) => showNotice(caught.message, "error")));
+  document
+    .getElementById("view-case")
+    .addEventListener("click", () => setView("case").catch((caught) => showNotice(caught.message, "error")));
   window.addEventListener("beforeunload", (event) => {
     if (!state.decision.dirty) return;
     event.preventDefault();
@@ -883,6 +1388,9 @@ function wireEvents() {
     "only-pending",
   ]) {
     document.getElementById(id).addEventListener("input", renderCases);
+  }
+  for (const id of ["batch-query", "batch-nms", "batch-mode"]) {
+    document.getElementById(id).addEventListener("input", renderBatches);
   }
 }
 
@@ -902,8 +1410,8 @@ async function init() {
   wireEvents();
   try {
     state.meta = await getJson("/api/review/meta");
-    await loadCases();
-    await autoSelect();
+    await loadBatches();
+    await setView("round");
   } catch (caught) {
     showNotice(caught.message, "error");
   }

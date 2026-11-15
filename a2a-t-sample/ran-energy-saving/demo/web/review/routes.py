@@ -104,6 +104,27 @@ def build_review_routes(
         progress = await asyncio.to_thread(service.progress, rows)
         return JSONResponse({"cases": rows, **progress})
 
+    async def batches(request: Request) -> Response:
+        """Return the ingested batches, newest first, without judging them."""
+        rows = await asyncio.to_thread(service.batches)
+        return JSONResponse({"batches": rows})
+
+    async def batch(request: Request) -> Response:
+        """Return every case × protocol judged against one batch, optionally one of its rounds."""
+        batch_id = str(request.path_params.get("batch_id") or "")
+        round_param = request.query_params.get("round")
+        round_value: int | None = None
+        if round_param not in (None, ""):
+            try:
+                round_value = max(1, int(round_param))
+            except (TypeError, ValueError):
+                return JSONResponse({"error": "round 必须是整数。"}, status_code=400)
+        try:
+            payload = await asyncio.to_thread(service.batch_rows, batch_id, round_value)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        return JSONResponse(payload)
+
     async def scan(request: Request) -> Response:
         """Collect the evidence of the recent tester batches."""
         days = min(MAX_DAYS, max(0.05, _float_param(request, "days", DEFAULT_DAYS)))
@@ -193,6 +214,8 @@ def build_review_routes(
         Route("/review/main.js", script),
         Route("/api/review/meta", meta),
         Route("/api/review/cases", cases),
+        Route("/api/review/batches", batches),
+        Route("/api/review/batch/{batch_id}", batch),
         Route("/api/review/scan", scan, methods=["POST"]),
         Route("/api/review/case/{case_id}/{protocol}", detail),
         Route(
