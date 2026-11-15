@@ -8,6 +8,10 @@ from eval.osp.tracecheck import (
     ATTRIBUTION_MISSING_CLIENT,
     ATTRIBUTION_MISSING_INGEST,
     ATTRIBUTION_UNKNOWN,
+    NMS_KIND_LOCAL,
+    NMS_KIND_REAL,
+    NMS_KIND_SIM,
+    NMS_KIND_UNKNOWN,
     PROTOCOL_A2A,
     PROTOCOL_A2A_T,
     REASON_FRAMES_MISMATCH,
@@ -29,6 +33,7 @@ from eval.osp.tracecheck import (
     intent_params,
     judge_trace,
     match_points,
+    nms_kind,
     original_request,
     points_summary,
     process_points,
@@ -346,6 +351,15 @@ def test_process_points_lists_every_expected_point() -> None:
     results = process_points({"observations": _complete_observations()}, _context())
     assert results
     assert all(result.ok for result in results)
+
+
+def test_nms_kind_is_derived_from_the_declared_keys_only() -> None:
+    assert nms_kind(True, False) == NMS_KIND_REAL
+    assert nms_kind(True, True) == NMS_KIND_SIM
+    assert nms_kind(False, False) == NMS_KIND_LOCAL
+    assert nms_kind(True, None) == NMS_KIND_UNKNOWN
+    assert nms_kind(None, False) == NMS_KIND_UNKNOWN
+    assert nms_kind(None, None) == NMS_KIND_UNKNOWN
 
 
 def test_the_phase_whitelist_is_the_export_contract() -> None:

@@ -20,6 +20,27 @@ from eval.osp.compare import flatten_intent, flatten_task_t
 PROTOCOL_A2A_T: Final[str] = "a2a-t"
 PROTOCOL_A2A: Final[str] = "a2a"
 
+#: Downstream identity used by trace attribution. The display flag keeps the legacy
+#: ``discovery: nms`` fallback; this value must come only from the explicit batch keys.
+NMS_KIND_REAL: Final[str] = "real"
+NMS_KIND_SIM: Final[str] = "sim"
+NMS_KIND_LOCAL: Final[str] = "local"
+NMS_KIND_UNKNOWN: Final[str] = "unknown"
+
+
+def nms_kind(nms_declared: bool | None, nms_sim_declared: bool | None) -> str:
+    """Return the downstream identity of one batch from its declared keys.
+
+    A missing key is ``unknown``, not ``local``: an old batch recorded the downstream only as
+    ``discovery: nms``, and blaming the vendor for its trace gaps would be a fabricated finding.
+    This is the single implementation shared by the corpus projection and the review judge.
+    """
+    if nms_sim_declared is True:
+        return NMS_KIND_SIM
+    if nms_declared is None or nms_sim_declared is None:
+        return NMS_KIND_UNKNOWN
+    return NMS_KIND_REAL if nms_declared else NMS_KIND_LOCAL
+
 TRACE_PASS: Final[str] = "pass"
 TRACE_FAIL: Final[str] = "fail"
 TRACE_PARTIAL: Final[str] = "partial"
