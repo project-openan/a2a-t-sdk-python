@@ -29,7 +29,7 @@ from typing import Final
 from shared.models import NegotiationAreaOption, NegotiationDecision, NegotiationProposeView
 
 from protocol.grounding import normalize, present, server_entity_values, server_target_rates
-from protocol.target_grammar import TargetSegment, find_segments, find_window
+from protocol.target_grammar import TargetSegment, find_segments, find_windows
 
 #: Task-T fields the server owns. The model may only restate a value the server itself offers, or
 #: a value the operator's own intent already states.
@@ -287,43 +287,51 @@ def agreed_target_value(
     if not segments:
         offered = [segment.canonical() for segment in find_segments(propose.content)]
         return ", ".join(offered) if offered else None
-    event_window = _event_window(baseline.get("backgroundEvent"))
+    event_windows = _event_windows(baseline.get("backgroundEvent"))
     agreed: list[str] = []
     for segment in segments:
-        agreed.extend(_apply_alternative_rate(segment, event_window, rate_text))
+        agreed.extend(_apply_alternative_rate(segment, event_windows, rate_text))
     return ", ".join(agreed)
 
 
 def _apply_alternative_rate(
     segment: TargetSegment,
-    event_window: tuple[str, str] | None,
+    event_windows: tuple[tuple[str, str], ...],
     rate_text: str,
 ) -> list[str]:
     """Return the canonical segments of one window after applying the alternative rate.
 
-    The proposal's alternative covers the outage window only. A baseline window that spans past
-    the outage is split, so the agreement never claims a rate change for time outside it.
+    The proposal's alternative covers the outage only. A baseline window that spans past the outage
+    is split, so the agreement never claims a rate change for time outside it. A segmented event
+    names several windows, and every one of them takes the alternative rate: reading only the first
+    would leave the rest of the outage at the rate the server just rejected.
     """
     unchanged = f"{{{segment.start}-{segment.end},{segment.rate_mbps:g}Mbps}}"
-    if event_window is None:
-        return [f"{{{segment.start}-{segment.end},{rate_text}}}"]
     start, end = segment.start_minutes, segment.end_minutes
-    event_start, event_end = _minutes(event_window[0]), _minutes(event_window[1])
-    if end <= start or event_end <= event_start:
+    windows = _minutes_windows(event_windows)
+    if not windows:
+        return [f"{{{segment.start}-{segment.end},{rate_text}}}"]
+    if end <= start:
         # A window crossing midnight is left untouched rather than split on the wrong side.
         return [unchanged]
-    if not _overlaps(segment.start, segment.end, *event_window):
+    if not any(event_start < end and event_end > start for event_start, event_end in windows):
         return [unchanged]
-    if start >= event_start and end <= event_end:
+    if any(event_start <= start and event_end >= end for event_start, event_end in windows):
         return [f"{{{segment.start}-{segment.end},{rate_text}}}"]
+    cuts = {start, end}
+    for event_start, event_end in windows:
+        if event_end <= start or event_start >= end:
+            continue
+        cuts.add(max(start, event_start))
+        cuts.add(min(end, event_end))
+    ordered = sorted(cuts)
     parts: list[str] = []
-    if start < event_start:
-        parts.append(f"{{{_clock(start)}-{_clock(event_start)},{segment.rate_mbps:g}Mbps}}")
-    parts.append(
-        f"{{{_clock(max(start, event_start))}-{_clock(min(end, event_end))},{rate_text}}}"
-    )
-    if end > event_end:
-        parts.append(f"{{{_clock(event_end)}-{_clock(end)},{segment.rate_mbps:g}Mbps}}")
+    for left, right in zip(ordered, ordered[1:]):
+        inside = any(
+            event_start < right and event_end > left for event_start, event_end in windows
+        )
+        rate = rate_text if inside else f"{segment.rate_mbps:g}Mbps"
+        parts.append(f"{{{_clock(left)}-{_clock(right)},{rate}}}")
     return parts
 
 
@@ -367,9 +375,9 @@ def _rate_values(text: str) -> list[float]:
     return values
 
 
-def _event_window(value: object) -> tuple[str, str] | None:
-    """Return the ``HH:MM-HH:MM`` window named by a background event, if any."""
-    return find_window(value)
+def _event_windows(value: object) -> tuple[tuple[str, str], ...]:
+    """Return every ``HH:MM-HH:MM`` window named by a background event."""
+    return find_windows(value)
 
 
 def _minutes(clock: str) -> int:
@@ -380,9 +388,16 @@ def _minutes(clock: str) -> int:
     return int(match.group(1)) * 60 + int(match.group(2))
 
 
-def _overlaps(start: str, end: str, event_start: str, event_end: str) -> bool:
-    """Return whether two clock windows overlap."""
-    return _minutes(start) < _minutes(event_end) and _minutes(event_start) < _minutes(end)
+def _minutes_windows(
+    windows: tuple[tuple[str, str], ...],
+) -> list[tuple[int, int]]:
+    """Return the event windows in minutes, dropping the degenerate ones."""
+    resolved: list[tuple[int, int]] = []
+    for start, end in windows:
+        start_minutes, end_minutes = _minutes(start), _minutes(end)
+        if end_minutes > start_minutes:
+            resolved.append((start_minutes, end_minutes))
+    return resolved
 
 
 __all__ = [

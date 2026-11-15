@@ -190,6 +190,19 @@ def test_agreed_target_keeps_a_segment_outside_the_background_event() -> None:
     )
 
 
+def test_agreed_target_applies_the_rate_to_every_window_of_a_segmented_outage() -> None:
+    """A two-window outage must not keep its second segment at the rejected rate (case 30)."""
+    baseline = {
+        **_BASELINE,
+        "backgroundEvent": "power outage from 08:00 to 10:00 and 15:00 to 18:00",
+        "guaranteedThroughputTarget": "{08:00~10:00,10Mbps}, {15:00~18:00,10Mbps}",
+    }
+
+    assert agreed_target_value(_propose(), baseline) == (
+        "{08:00-10:00,2Mbps}, {15:00-18:00,2Mbps}"
+    )
+
+
 def test_a_counter_below_the_floor_is_refused() -> None:
     decision, _outcome = _apply(
         NegotiationDecision(

@@ -991,8 +991,8 @@ async def test_feasibility_scenario_accepts_the_alternative() -> None:
     assert prompt_client.refill_data[0]["siteList"] == "NRES_XCS_6102937,LTE_26441_LNR_OCL"
 
 
-async def test_an_operator_summary_still_names_the_agreed_target() -> None:
-    """A hand-written summary must not replace the deterministic agreed-value line."""
+async def test_an_operator_summary_is_sent_verbatim() -> None:
+    """The decision's summary is the reply text: the flow must not prefix or re-render it."""
     decision = NegotiationDecision(
         action="accept",
         rationale="Accept the reduced rate.",
@@ -1011,8 +1011,40 @@ async def test_an_operator_summary_still_names_the_agreed_target() -> None:
 
     content = prompt_client.accept_data[0].content
     assert isinstance(content, FeasibilityEndingContent)
-    assert "{08:00-18:00,2Mbps}" in content.feasibility_summary
-    assert "Accepted the proposal." in content.feasibility_summary
+    assert content.feasibility_summary == "Accepted the proposal."
+
+
+async def test_a_case_authored_summary_reaches_the_accept_verbatim() -> None:
+    """The OSP corpus expects its Q-column text on the wire; the flow only renders it."""
+    summary = "Reduce throughput target from 10Mbps to 2Mbps for the power outage period."
+    decision = NegotiationDecision(
+        action="accept",
+        rationale=summary,
+        confirmed_intent=summary,
+        feasibility_summary=summary,
+    )
+    prompt_client = FakePromptClient()
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=ScriptedTransport(
+            [
+                [
+                    propose_event(
+                        "feasibility", 1, content="Reduce all rate targets to 2Mbps or less."
+                    )
+                ],
+                _task_completed_batch(),
+            ]
+        ),
+        user_request=SCENARIO_FEASIBILITY_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields=_INTENT_FIELDS,
+    )
+
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, FeasibilityEndingContent)
+    assert content.feasibility_summary == summary
 
 
 async def test_a_summary_that_contradicts_the_agreed_target_is_replaced() -> None:
@@ -1393,8 +1425,8 @@ async def test_a_target_accept_without_values_uses_the_decision_wording() -> Non
     assert "Accept the server's adjusted target." in (content.confirmed_intent or "")
 
 
-async def test_a_target_confirmation_still_names_the_agreed_target() -> None:
-    """The operator/model intent text must not replace the deterministic agreed-value line."""
+async def test_a_target_confirmation_is_sent_verbatim() -> None:
+    """The decision's confirmed intent is the reply text: the flow must not prefix it."""
     decision = NegotiationDecision(
         action="accept",
         rationale="Confirm the adjusted target.",
@@ -1413,8 +1445,7 @@ async def test_a_target_confirmation_still_names_the_agreed_target() -> None:
 
     content = prompt_client.accept_data[0].content
     assert isinstance(content, TargetEndingContent)
-    assert "{00:00-06:00,2Mbps}" in (content.confirmed_intent or "")
-    assert "The client confirms the target reduction." in (content.confirmed_intent or "")
+    assert content.confirmed_intent == "The client confirms the target reduction."
 
 
 async def test_a_target_intent_mentioning_the_baseline_rate_is_kept() -> None:

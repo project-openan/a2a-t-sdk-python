@@ -3275,9 +3275,7 @@ def _typed_accept_content(
                 "deterministic confirmation instead"
             )
             confirmation = ""
-        if confirmation:
-            confirmation = _with_agreed_target(confirmation, agreed_target)
-        else:
+        if not confirmation:
             confirmation = _agreed_values_line(filled, baseline=baseline)
         if not confirmation and agreed_target is not None:
             # The decision explicitly named this target even though it equals the baseline; an
@@ -3295,11 +3293,7 @@ def _typed_accept_content(
             "deterministic summary instead"
         )
         supplied_summary = ""
-    summary = (
-        _with_agreed_target(supplied_summary, agreed_target)
-        if supplied_summary
-        else _feasibility_accept_summary(filled, baseline, agreed_target)
-    )
+    summary = supplied_summary or _feasibility_accept_summary(filled, baseline, agreed_target)
     return FeasibilityEndingContent(NegotiationConclusion.ACCEPT, summary)
 
 
@@ -3323,22 +3317,6 @@ def _contradicts_agreed_target(
     }
     claimed = {(segment.start, segment.end, segment.rate_mbps) for segment in find_segments(text)}
     return bool(claimed - allowed)
-
-
-def _with_agreed_target(summary: str, agreed_target: str | None) -> str:
-    """Put the deterministic agreed value in front of a hand-written confirmation.
-
-    The result confirmation is the only thing the vendor reads from an accept; a summary that
-    omits the agreed rate would leave the vendor executing the pre-negotiation rate. A summary
-    that already names every agreed segment is left alone, so the value is never repeated.
-    """
-    if agreed_target is None:
-        return summary
-    agreed = find_segments(agreed_target)
-    rendered = {(segment.start, segment.end, segment.rate_mbps) for segment in find_segments(summary)}
-    if agreed and all((segment.start, segment.end, segment.rate_mbps) in rendered for segment in agreed):
-        return summary
-    return f"Rate guarantee target: {agreed_target}. {summary}"
 
 
 def _feasibility_accept_summary(

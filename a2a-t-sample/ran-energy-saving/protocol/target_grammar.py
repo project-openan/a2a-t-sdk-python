@@ -21,6 +21,7 @@ __all__ = [
     "TargetSegment",
     "find_segments",
     "find_window",
+    "find_windows",
     "format_segments",
     "has_segment",
     "normalize_text",
@@ -127,16 +128,27 @@ def find_window(text: object) -> tuple[str, str] | None:
     they cannot use :func:`find_segments`; sharing this parser keeps every module reading the same
     separators (``~ - – — to 至 到``, one- or two-digit hours, optional spaces).
     """
+    windows = find_windows(text)
+    return windows[0] if windows else None
+
+
+def find_windows(text: object) -> tuple[tuple[str, str], ...]:
+    """Return every ``(start, end)`` clock window of one text, in written order.
+
+    A segmented event names more than one window ("power outage from 08:00 to 10:00 and 15:00 to
+    18:00"). Reading only the first would leave the second segment at the rate the server just
+    rejected, so every window is returned.
+    """
     if not isinstance(text, str) or not text.strip():
-        return None
-    match = _WINDOW_PATTERN.search(text)
-    if match is None:
-        return None
-    start = _canonical_clock(match.group("start"))
-    end = _canonical_clock(match.group("end"))
-    if start is None or end is None:
-        return None
-    return start, end
+        return ()
+    windows: list[tuple[str, str]] = []
+    for match in _WINDOW_PATTERN.finditer(text):
+        start = _canonical_clock(match.group("start"))
+        end = _canonical_clock(match.group("end"))
+        if start is None or end is None:
+            continue
+        windows.append((start, end))
+    return tuple(windows)
 
 
 def _canonical_clock(value: str) -> str | None:
