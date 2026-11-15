@@ -322,22 +322,58 @@ def test_a_wrong_round_count_fails() -> None:
 
 REAL_BATCH: dict[str, object] = {"nms": True, "nmsSim": False}
 
+#: The client-side observations a one-round A2A-T run exports at phase level.
+A2A_T_OBSERVATIONS: tuple[dict[str, object], ...] = (
+    {"kind": "task_prompt_rendered", "runId": "run-1"},
+    {"kind": "task_validation", "runId": "run-1"},
+    {
+        "kind": "generation",
+        "type": "GENERATION",
+        "stage": "task_t_slot_extraction",
+        "runId": "run-1",
+    },
+    {"kind": "message_sent", "runId": "run-1"},
+    {"kind": "message_sent", "runId": "run-1"},
+    {"kind": "decision_requested", "round": 1, "runId": "run-1"},
+    {"kind": "propose", "round": 1, "runId": "run-1"},
+    {"kind": "accept", "round": 1, "runId": "run-1"},
+    {
+        "kind": "generation",
+        "type": "GENERATION",
+        "stage": "client_decision_agent",
+        "runId": "run-1",
+    },
+    {"type": "TOOL", "stage": "client_decision_agent", "runId": "run-1"},
+)
+
 
 def _trace(
     *,
     expected: int | None = 2,
     observed: int = 2,
     client: int = 2,
-    attribution: str = "ok",
+    export_state: str = "exported",
+    observations: tuple[dict[str, object], ...] | None = None,
+    local_points: list[str] | None = None,
+    capture: bool | None = None,
 ) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "traceId": "trace-1",
+        "exportState": export_state,
+        "capturedAt": "2026-11-16T10:00:00+00:00",
         "frames": {
+            "rounds": 1,
             "nms": {"expected": expected, "observed": observed, "scope": "a2a-t-server"},
             "client": {"runId": "run-1", "observed": client},
         },
-        "attribution": {"status": attribution, "findings": []},
+        "observations": list(A2A_T_OBSERVATIONS if observations is None else observations),
+        "attribution": {"status": "ok", "findings": []},
     }
+    if local_points is not None:
+        payload["localPoints"] = list(local_points)
+    if capture is not None:
+        payload["capture_content"] = capture
+    return payload
 
 
 def _trace_code(judgement: Any) -> str:
@@ -352,6 +388,17 @@ def test_a_real_run_without_a_trace_snapshot_fails() -> None:
     assert TRACE_NOT_EXPORTED_STATUS == VERDICT_FAIL
     assert _trace_code(judgement) == "trace_not_exported"
     assert judgement.status == VERDICT_FAIL
+
+
+def test_a_failed_export_fails_like_a_missing_snapshot() -> None:
+    judgement = judge_protocol(
+        _case(),
+        "a2a-t",
+        _evidence(batch=REAL_BATCH, trace=_trace(export_state="not_exported")),
+    )
+
+    assert _dimension(judgement, "trace").status == VERDICT_FAIL
+    assert _trace_code(judgement) == "trace_not_exported"
 
 
 def test_a_simulator_run_never_judges_the_trace() -> None:
@@ -372,13 +419,47 @@ def test_a_run_without_a_dispatch_never_judges_the_trace() -> None:
     assert judgement.status == VERDICT_PASS
 
 
-def test_a_matching_nms_frame_count_passes() -> None:
+def test_a_complete_trace_passes() -> None:
     judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace()))
 
     trace = _dimension(judgement, "trace")
     assert trace.status == VERDICT_PASS
     assert trace.expected == 2
     assert trace.actual == 2
+
+
+def test_a_missing_expected_point_fails_with_its_code() -> None:
+    without_validation = tuple(
+        row for row in A2A_T_OBSERVATIONS if row.get("kind") != "task_validation"
+    )
+
+    judgement = judge_protocol(
+        _case(),
+        "a2a-t",
+        _evidence(
+            batch=REAL_BATCH,
+            trace=_trace(observations=without_validation, local_points=["task_validation"]),
+        ),
+    )
+
+    assert _dimension(judgement, "trace").status == VERDICT_FAIL
+    assert _trace_code(judgement) == "trace_missing_ingest"
+    assert judgement.status == VERDICT_FAIL
+
+
+def test_a_missing_point_without_local_evidence_is_still_a_failure() -> None:
+    without_validation = tuple(
+        row for row in A2A_T_OBSERVATIONS if row.get("kind") != "task_validation"
+    )
+
+    judgement = judge_protocol(
+        _case(),
+        "a2a-t",
+        _evidence(batch=REAL_BATCH, trace=_trace(observations=without_validation)),
+    )
+
+    assert _dimension(judgement, "trace").status == VERDICT_FAIL
+    assert _trace_code(judgement) == "trace_missing_client"
 
 
 def test_a_frame_mismatch_fails_with_its_code() -> None:
@@ -401,25 +482,28 @@ def test_an_unidentified_nms_hop_is_not_applicable() -> None:
     assert judgement.status == VERDICT_PASS
 
 
-def test_an_attribution_gap_fails_with_its_code() -> None:
+def test_a_disabled_content_capture_only_partially_judges_the_trace() -> None:
     judgement = judge_protocol(
-        _case(),
-        "a2a-t",
-        _evidence(batch=REAL_BATCH, trace=_trace(attribution="missing_vendor")),
+        _case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(capture=False))
     )
 
-    assert _dimension(judgement, "trace").status == VERDICT_FAIL
-    assert _trace_code(judgement) == "trace_missing_vendor"
+    assert _dimension(judgement, "trace").status == VERDICT_PARTIAL
+    assert _trace_code(judgement) == "trace_content_unavailable"
+    assert judgement.status == VERDICT_PARTIAL
 
 
 def test_a_missing_client_frame_fails_only_the_a2a_t_hop() -> None:
     failing = judge_protocol(
         _case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(client=0))
     )
+    pure_observations = ({"kind": "message_sent", "runId": "run-1"},)
     passing = judge_protocol(
         _case(protocol="a2a", rounds=0),
         "a2a",
-        _evidence(batch=REAL_BATCH, trace=_trace(client=0)),
+        _evidence(
+            batch=REAL_BATCH,
+            trace=_trace(client=0, observations=pure_observations),
+        ),
     )
 
     assert _dimension(failing, "trace").status == VERDICT_FAIL
@@ -434,6 +518,7 @@ def test_the_trace_summary_is_part_of_the_detail_payload() -> None:
 
     assert trace["present"] is True
     assert trace["traceId"] == "trace-1"
+    assert trace["exportState"] == "exported"
     assert trace["frames"]["nms"]["expected"] == 2
 
 

@@ -42,6 +42,7 @@ from eval.osp.expectations import (
     slot_error_evidence,
 )
 from eval.osp.followup import followup_case, has_followup, is_blocked_case
+from eval.osp.tracecheck import TRACE_REASONS, TraceContext, judge_trace
 
 #: Review dimensions. ``intent`` and ``task_t`` are the two the acceptance cares about most.
 DIMENSION_INTENT: Final[str] = "intent"
@@ -60,33 +61,6 @@ DIMENSIONS: Final[tuple[str, ...]] = (
     DIMENSION_TRACE,
 )
 
-#: Why the trace dimension did not pass. The report counts them separately so "we never collected
-#: the trace" is never reported as "the vendor dropped a span" (or the other way round).
-TRACE_NOT_EXPORTED: Final[str] = "trace_not_exported"
-TRACE_FRAMES_MISMATCH: Final[str] = "trace_frames_mismatch"
-TRACE_MISSING_CLIENT: Final[str] = "trace_missing_client"
-TRACE_MISSING_INGEST: Final[str] = "trace_missing_ingest"
-TRACE_MISSING_VENDOR: Final[str] = "trace_missing_vendor"
-TRACE_CONTENT_UNAVAILABLE: Final[str] = "trace_content_unavailable"
-TRACE_NMS_HOP_UNKNOWN: Final[str] = "trace_nms_hop_unknown"
-
-TRACE_REASONS: Final[tuple[str, ...]] = (
-    TRACE_NOT_EXPORTED,
-    TRACE_FRAMES_MISMATCH,
-    TRACE_MISSING_CLIENT,
-    TRACE_MISSING_INGEST,
-    TRACE_MISSING_VENDOR,
-    TRACE_CONTENT_UNAVAILABLE,
-    TRACE_NMS_HOP_UNKNOWN,
-)
-
-#: Attribution statuses the trace collector may report. The three gap states fail the dimension;
-#: ``unknown`` only explains a failure the frames already established.
-TRACE_ATTRIBUTION_GAPS: Final[dict[str, str]] = {
-    "missing_ingest": TRACE_MISSING_INGEST,
-    "missing_vendor": TRACE_MISSING_VENDOR,
-    "content_unavailable": TRACE_CONTENT_UNAVAILABLE,
-}
 
 #: One dimension's result. ``recorded`` means "evidence exists but this run cannot judge it"
 #: (simulator, proxy hop, a blocked-before-Task-T segment); ``missing`` means the evidence needed to
@@ -186,7 +160,7 @@ def judge_protocol(
         _judge_validate(case, effective, protocol, evidence),
         _judge_negotiation(effective, protocol, evidence),
         _judge_final(effective, protocol, evidence),
-        _judge_trace(protocol, evidence),
+        _judge_trace(case, effective, protocol, evidence),
     )
     asserted = _asserted_dimensions(case, protocol)
     return ProtocolJudgement(
@@ -311,7 +285,10 @@ def _overall_status(
     ]
     if any(row.status == VERDICT_FAIL for row in relevant):
         return VERDICT_FAIL
-    if any(row.status in (VERDICT_MISSING, VERDICT_RECORDED) for row in relevant):
+    if any(
+        row.status in (VERDICT_MISSING, VERDICT_RECORDED, VERDICT_PARTIAL)
+        for row in relevant
+    ):
         return VERDICT_PARTIAL
     if relevant and all(row.status == VERDICT_PASS for row in relevant):
         return VERDICT_PASS
@@ -585,12 +562,19 @@ def _judge_final(
     )
 
 
-def _judge_trace(protocol: str, evidence: Mapping[str, Any]) -> DimensionResult:
+def _judge_trace(
+    case: Mapping[str, Any],
+    effective: Mapping[str, Any],
+    protocol: str,
+    evidence: Mapping[str, Any],
+) -> DimensionResult:
     """Judge the vendor trace of a real-machine run.
 
     Applicability is decided by what the batch *declared* and by whether the run dispatched: a
     simulator, an undeclared legacy batch or an SDK-only/preflight item has no vendor trace to
-    judge. A real run whose trace was never exported fails — that is the customer's hard gate.
+    judge. The point model, attribution and status mapping live in :mod:`eval.osp.tracecheck`;
+    this function only turns the stored evidence into its context, so the console and the
+    collector cannot drift apart.
     """
     batch = _mapping(evidence.get("batch"))
     if not (batch.get("nms") is True and batch.get("nmsSim") is False):
@@ -607,67 +591,79 @@ def _judge_trace(protocol: str, evidence: Mapping[str, Any]) -> DimensionResult:
             reason="没有实际下发（SDK-only / preflight），轨迹不参与验收",
         )
     trace = evidence.get("trace")
-    if not isinstance(trace, Mapping):
-        return DimensionResult(
-            DIMENSION_TRACE,
-            TRACE_NOT_EXPORTED_STATUS,
-            reason="轨迹未导出",
-            diffs=(_trace_diff("trace.export", "已导出", "缺失", TRACE_NOT_EXPORTED),),
-        )
-    frames = _mapping(trace.get("frames"))
-    attribution = _mapping(trace.get("attribution"))
-    gap = TRACE_ATTRIBUTION_GAPS.get(str(attribution.get("status") or ""))
-    if gap is not None:
-        return DimensionResult(
-            DIMENSION_TRACE,
-            VERDICT_FAIL,
-            expected="完整轨迹",
-            actual=str(attribution.get("status") or ""),
-            reason="轨迹归因缺失",
-            diffs=(
-                _trace_diff(
-                    "trace.attribution", "ok", attribution.get("status"), gap
-                ),
-            ),
-        )
-    client = _mapping(frames.get("client"))
-    if protocol == A2A_T_PROTOCOL and _optional_int(client.get("observed")) == 0:
-        # The pure hop's client is our own OSS, so a missing client frame there describes our code,
-        # not the acceptance object; only the A2A-T client hop is asserted.
-        return DimensionResult(
-            DIMENSION_TRACE,
-            VERDICT_FAIL,
-            expected="至少一帧客户端发送",
-            actual=0,
-            reason="轨迹里没有客户端发送帧",
-            diffs=(_trace_diff("trace.frames.client", ">0", 0, TRACE_MISSING_CLIENT),),
-        )
-    nms = _mapping(frames.get("nms"))
-    expected = _optional_int(nms.get("expected"))
-    observed = _optional_int(nms.get("observed"))
-    if expected is None:
-        return DimensionResult(
-            DIMENSION_TRACE,
-            VERDICT_NOT_APPLICABLE,
-            actual=observed,
-            reason="无法从轨迹确定 NMS 跳",
-            diffs=(_trace_diff("trace.frames.nms", None, observed, TRACE_NMS_HOP_UNKNOWN),),
-        )
-    if observed != expected:
-        return DimensionResult(
-            DIMENSION_TRACE,
-            VERDICT_FAIL,
-            expected=expected,
-            actual=observed,
-            reason="NMS 跳的发送帧数不符",
-            diffs=(_trace_diff("trace.frames.nms", expected, observed, TRACE_FRAMES_MISMATCH),),
-        )
+    payload: Mapping[str, Any] = trace if isinstance(trace, Mapping) else {"exportState": "not_exported"}
+    judgement = judge_trace(
+        payload,
+        _trace_context(case, effective, protocol, evidence, run_id),
+        not_exported_status=TRACE_NOT_EXPORTED_STATUS,
+    )
+    diffs: tuple[dict[str, object], ...] = tuple(
+        {
+            "path": f"trace.{finding.point}",
+            "expected": finding.label,
+            "actual": finding.status,
+            "reason": judgement.reason,
+            "detail": finding.detail,
+        }
+        for finding in judgement.findings
+    )
+    if not diffs and judgement.reason:
+        diffs = (_trace_diff("trace", None, None, judgement.reason),)
+    frames = _mapping(judgement.frames.get("nms"))
     return DimensionResult(
         DIMENSION_TRACE,
-        VERDICT_PASS,
-        expected=expected,
-        actual=observed,
+        judgement.status,
+        expected=_optional_int(frames.get("expected")),
+        actual=_optional_int(frames.get("observed")),
+        diffs=diffs,
+        reason=_TRACE_REASON_TEXT.get(judgement.reason, ""),
     )
+
+
+#: Human text of the trace reason codes; the code itself travels in the diffs.
+_TRACE_REASON_TEXT: Final[dict[str, str]] = {
+    "trace_not_exported": "轨迹未导出",
+    "trace_frames_mismatch": "NMS 跳的发送帧数不符",
+    "trace_missing_client": "预期的轨迹点缺失（本机或客户端）",
+    "trace_missing_ingest": "本地已发射但未入库",
+    "trace_missing_vendor": "厂商侧轨迹点缺失",
+    "trace_content_unavailable": "轨迹内容捕获关闭，仅判是否存在",
+    "trace_nms_hop_unknown": "无法从轨迹确定 NMS 跳",
+}
+
+
+def _trace_context(
+    case: Mapping[str, Any],
+    effective: Mapping[str, Any],
+    protocol: str,
+    evidence: Mapping[str, Any],
+    run_id: str,
+) -> TraceContext:
+    """Return the run facts the pure trace judge needs.
+
+    ``validation_on`` is deliberately conservative: the tester only runs the client validation
+    gate when the case forces ``always`` (the process setting defaults to presentation-only), and
+    expecting a point that was never emitted would fail a correct run. Under-expecting is safe;
+    over-expecting is not.
+    """
+    runner = _mapping(case.get("runner"))
+    stages = _mapping(evidence.get("stages"))
+    return TraceContext(
+        protocol=protocol,
+        run_mode=str(case.get("operation") or "").strip().lower(),
+        blocked=is_blocked_case(case),
+        followup=has_followup(case),
+        rounds=_expected_rounds(effective, protocol),
+        accepted="accepted" in stages,
+        validation_on=runner.get("pre_send_validation") == "always",
+        run_id=run_id,
+    )
+
+
+def _expected_rounds(case: Mapping[str, Any], protocol: str) -> int:
+    """Return the negotiation rounds the corpus expects of one protocol."""
+    negotiation = _mapping(_protocol_block(case, protocol).get("negotiation"))
+    return _int_value(negotiation.get("expected_rounds"))
 
 
 def _trace_diff(
@@ -779,7 +775,8 @@ def _trace_detail(evidence: Mapping[str, Any]) -> dict[str, object]:
     return {
         "present": True,
         "traceId": trace.get("traceId"),
-        "fetchedAt": trace.get("fetchedAt"),
+        "fetchedAt": trace.get("fetchedAt") or trace.get("capturedAt"),
+        "exportState": trace.get("exportState") or trace.get("export_state"),
         "frames": dict(frames) if isinstance(frames, Mapping) else {},
         "attribution": dict(attribution) if isinstance(attribution, Mapping) else {},
         "related": list(trace.get("related") or ())
