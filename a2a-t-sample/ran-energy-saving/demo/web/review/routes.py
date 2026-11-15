@@ -30,8 +30,8 @@ REVIEW_DIR: Final[Path] = Path(__file__).resolve().parent
 #: Anonymous operator identity, shared with the tester and the annotation console.
 CLIENT_COOKIE: Final[str] = "a2at_tester_client"
 
-#: Review windows look further back than annotation: acceptance covers several batches and rounds.
-DEFAULT_DAYS: Final[float] = 7.0
+#: Two days is enough for the acceptance batches; a wider window mostly re-reads stale evidence.
+DEFAULT_DAYS: Final[float] = 2.0
 MAX_DAYS: Final[float] = 90.0
 MAX_BATCHES: Final[int] = 500
 

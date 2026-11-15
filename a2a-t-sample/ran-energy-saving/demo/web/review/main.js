@@ -1774,7 +1774,7 @@ async function scan() {
   button.disabled = true;
   showNotice("");
   try {
-    const days = Number(field("config-days")) || 7;
+    const days = Number(field("config-days")) || 2;
     const payload = await postJson(`/api/review/scan?days=${encodeURIComponent(days)}`, {});
     state.scan = payload.scan;
     await loadCases(payload);

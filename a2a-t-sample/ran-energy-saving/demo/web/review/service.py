@@ -143,7 +143,7 @@ class ReviewService:
         except CatalogReloadError as exc:
             _LOGGER.warning("catalog reload before a review scan failed: %s", exc)
 
-    def scan(self, *, days: float = 7.0, max_batches: int = 500) -> dict[str, object]:
+    def scan(self, *, days: float = 2.0, max_batches: int = 500) -> dict[str, object]:
         """Collect the evidence of the recent tester batches into the store."""
         self.reload_catalog()
         cases = case_documents(self._catalog.documents())
