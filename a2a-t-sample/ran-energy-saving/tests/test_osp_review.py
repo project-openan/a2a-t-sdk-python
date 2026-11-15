@@ -399,23 +399,24 @@ def _trace_code(judgement: Any) -> str:
     return str(diff["reason"])
 
 
-def test_a_real_run_without_a_trace_snapshot_fails() -> None:
+def test_a_real_run_without_a_trace_snapshot_is_missing_not_failed() -> None:
     judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH))
 
     assert _dimension(judgement, "trace").status == TRACE_NOT_EXPORTED_STATUS
-    assert TRACE_NOT_EXPORTED_STATUS == VERDICT_FAIL
+    assert TRACE_NOT_EXPORTED_STATUS == VERDICT_MISSING
     assert _trace_code(judgement) == "trace_not_exported"
-    assert judgement.status == VERDICT_FAIL
+    # Not collecting a snapshot is missing evidence: the task is partial, not a failed run.
+    assert judgement.status == VERDICT_PARTIAL
 
 
-def test_a_failed_export_fails_like_a_missing_snapshot() -> None:
+def test_a_failed_export_is_missing_like_an_absent_snapshot() -> None:
     judgement = judge_protocol(
         _case(),
         "a2a-t",
         _evidence(batch=REAL_BATCH, trace=_trace(export_state="not_exported")),
     )
 
-    assert _dimension(judgement, "trace").status == VERDICT_FAIL
+    assert _dimension(judgement, "trace").status == VERDICT_MISSING
     assert _trace_code(judgement) == "trace_not_exported"
 
 

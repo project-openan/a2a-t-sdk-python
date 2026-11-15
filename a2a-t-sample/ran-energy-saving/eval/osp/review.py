@@ -96,11 +96,11 @@ _VERDICTS: Final[tuple[str, ...]] = (
     VERDICT_NOT_APPLICABLE,
 )
 
-#: Status of a real-machine run whose trace was never exported. The decision (2026-11-16) is
-#: ``fail``: the trace is a customer gate, so "not collected" blocks acceptance exactly like a
-#: vendor gap, and only the reason code tells them apart. Kept as one constant because the rejected
-#: alternative was a separate "blocked" state, which must not be confused with a defect.
-TRACE_NOT_EXPORTED_STATUS: Final[str] = VERDICT_FAIL
+#: Status of a real-machine run whose trace was never exported. A missing snapshot is missing
+#: evidence, not a failed gate: reporting it as ``fail`` painted every real batch red before anyone
+#: had collected a trace, which buried the actual mismatches. It is ``missing`` (partial) instead;
+#: a snapshot that *was* collected and disagrees with the run still fails in :mod:`tracecheck`.
+TRACE_NOT_EXPORTED_STATUS: Final[str] = VERDICT_MISSING
 
 
 @dataclass(frozen=True)
@@ -913,9 +913,11 @@ def _trace_detail(
             ],
         }
     warnings = trace.get("warnings")
+    url = evidence.get("langfuseUrl")
     return {
         "present": True,
         "traceId": trace.get("traceId") or applicability.trace_id,
+        "url": url if isinstance(url, str) and url.strip() else "",
         "applicability": applicability.to_dict(),
         "blockers": _trace_blockers(applicability, trace),
         "fetchedAt": trace.get("fetchedAt") or trace.get("capturedAt"),
@@ -926,9 +928,39 @@ def _trace_detail(
         "frames": dict(frames) if isinstance(frames, Mapping) else {},
         "attribution": computed_attribution,
         "points": points,
+        "observations": _observation_rows(trace.get("observations")),
+        "observationsTruncated": bool(trace.get("observationsTruncated")),
         "warnings": [str(item) for item in warnings] if isinstance(warnings, list) else [],
         "related": list(trace.get("related") or ()) if isinstance(trace.get("related"), list) else [],
     }
+
+
+def _observation_rows(value: object) -> list[dict[str, object]]:
+    """Return the compact observation list the page renders under "轨迹观测".
+
+    The snapshot keeps the full row; the page only needs the fields that answer "which span is
+    this and where does it sit". The list is capped by the snapshot itself, so a long run stays
+    complete instead of being silently sampled.
+    """
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, object]] = []
+    for row in value:
+        if not isinstance(row, Mapping):
+            continue
+        rows.append(
+            {
+                "name": row.get("name"),
+                "type": row.get("type"),
+                "kind": row.get("kind"),
+                "stage": row.get("stage"),
+                "round": row.get("round"),
+                "side": row.get("side"),
+                "runId": row.get("runId"),
+                "status": row.get("status"),
+            }
+        )
+    return rows
 
 
 def _trace_blockers(
