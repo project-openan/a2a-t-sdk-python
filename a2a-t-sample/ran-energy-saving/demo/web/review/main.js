@@ -716,8 +716,17 @@ async function autoSelectBatch() {
   await selectBatch(newest.batchId, Math.max(1, Number(newest.rounds || 1)));
 }
 
+//: Tint the detail area so A2A and A2A-T are distinguishable at a glance.
+function applyProtocolTint() {
+  const container = document.getElementById("detail");
+  const protocol = (state.detail && state.detail.protocol) || "";
+  container.classList.toggle("proto-a2a-t", protocol === "a2a-t");
+  container.classList.toggle("proto-a2a", protocol === "a2a");
+}
+
 function renderEmptyDetail(message, hint) {
   const container = document.getElementById("detail");
+  applyProtocolTint();
   container.replaceChildren();
   const card = el("section", "card empty");
   card.append(el("p", "", message));
@@ -735,6 +744,8 @@ async function setView(view) {
     tab.classList.toggle("active", active);
     tab.setAttribute("aria-selected", String(active));
   }
+  const layout = document.getElementById("layout");
+  if (layout) layout.classList.toggle("view-round", state.view === "round");
   document.getElementById("sidebar-round").hidden = state.view !== "round";
   document.getElementById("sidebar-case").hidden = state.view !== "case";
   if (state.view === "round") {
@@ -842,6 +853,7 @@ function renderDetail() {
   if (!state.selected || !state.detail) return;
   const container = document.getElementById("detail");
   const scrollTop = container.scrollTop;
+  applyProtocolTint();
   container.replaceChildren();
   if (state.view === "round" && state.batch) {
     const bar = el("div", "backbar");
@@ -864,8 +876,12 @@ function renderDetail() {
     if (round) {
       container.append(renderDimensionStrip(round));
       container.append(renderIntentCard(round));
-      container.append(renderTaskTCard(round));
-      container.append(renderValidateCard(round));
+      // Pure A2A has no SDK Task-T and no interception, and both dimensions are judged
+      // not_applicable there; showing the empty cards only adds noise.
+      if (state.detail.protocol === "a2a-t") {
+        container.append(renderTaskTCard(round));
+        container.append(renderValidateCard(round));
+      }
       container.append(renderNegotiationCard(round));
       container.append(renderRuntimeCard(round));
     }
