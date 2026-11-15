@@ -588,6 +588,13 @@ class ReviewService:
                 grouped, resolved = _group_observations(
                     query.ids, self._store.observations_by_ids(query.ids)
                 )
+        # A targeted ingest bypasses ``scan``, so attach the snapshots already on disk here. No
+        # network: an uncollected trace stays missing and waits for the page's explicit fetch.
+        cached = [row for rows in grouped.values() for row in rows]
+        if cached and self._attach_traces(cached):
+            grouped, resolved = _group_observations(
+                query.ids, self._store.observations_by_ids(query.ids)
+            )
         refs = {ref.input: ref for ref in lookup.refs}
         rows: list[dict[str, object]] = []
         covered: set[str] = set(resolved)
@@ -1054,7 +1061,9 @@ class ReviewService:
             if snapshot is not None:
                 present = present or snapshot.export_state in _EXPORTED_STATES
                 export_state = export_state or snapshot.export_state
-                captured_at = captured_at or snapshot.captured_at
+                captured_at = captured_at or str(
+                    getattr(snapshot, "captured_at", "") or ""
+                )
         return {
             "traceId": trace_id,
             "present": present,

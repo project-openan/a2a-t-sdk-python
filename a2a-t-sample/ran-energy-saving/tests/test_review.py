@@ -978,6 +978,20 @@ def test_a_scan_attaches_the_local_trace_snapshot(tmp_path: Path) -> None:
     assert row["trace"]["exportState"] == "exported"  # type: ignore[index]
 
 
+def test_a_targeted_lookup_attaches_the_cached_snapshot(tmp_path: Path) -> None:
+    service, stub = _trace_service(tmp_path)
+    stub.snapshot_states[TRACE_ID] = "exported"
+
+    result = service.resolve_traces([TRACE_ID])
+    detail = service.trace_detail(TRACE_ID)
+
+    row = result["rows"][0]
+    assert row["resolution"] == "tester"
+    assert row["trace"]["present"] is True
+    trace = detail["rounds"][0]["judgement"]["detail"]["trace"]
+    assert trace["present"] is True
+
+
 def test_a_scan_attaches_a_legacy_trace_but_not_a_simulator_one(tmp_path: Path) -> None:
     simulator, simulator_stub = _trace_service(tmp_path / "sim", nms=True, nms_sim=True)
     legacy, legacy_stub = _trace_service(tmp_path / "legacy", nms=None, nms_sim=None)
