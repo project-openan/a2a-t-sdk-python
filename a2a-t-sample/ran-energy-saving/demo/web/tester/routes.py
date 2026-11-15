@@ -77,6 +77,7 @@ def build_tester_routes(
         server_url=server_url,
         server_auth_token=server_auth_token,
         runs_dir=runs_dir,
+        nms=nms_enabled,
         nms_sim=nms_sim,
         nms_sim_pure_question=nms_sim_pure_question,
         language=language,

@@ -49,6 +49,11 @@ expect:
     a2a-t:
       validate: pass                 # blocked | pass | pass_with_terminology | null
       validate_label: 不拦截
+      slot_errors:                   # 可选：拦截时报出的槽位错误（仅 blocked 用例，见 5.3）
+        mode: any                    # any（默认，任一命中）| cover（观测到的每条都要被覆盖）
+        expect:
+          - code: slot.constraint_violated
+            contains: [gain, 增益]    # 可选：命中任一关键词
       send: true                     # 是否预期把请求发出去
       task_t: |                      # 原表 H 列：预期 Task-T 报文全文
         ## Operation Type
@@ -57,7 +62,8 @@ expect:
         expected: false
         expected_rounds: 0
         kinds: []
-        rounds: []
+        rounds: []                   # 客户端答复脚本（Q 列），不是服务端报文
+        messages: []                 # 可选：服务端协商报文，按轮次给备选（见 5.4）
       final_state: task_completed    # 由 validate 派生
       final_state_derived: true
     a2a:
@@ -224,6 +230,56 @@ A2A-T 只有 10 条需要协商（26/28/29/30/31/32/50/51/88/89），其余 90 �
 `pass_with_terminology` 目前只能硬断言"未拦截"；"术语上下文"没有独立的离散可观测点，
 先作为软预期记录。等有探针后再收紧。
 
+#### `slot_errors`（拦截时预期报出的槽位错误）
+
+```yaml
+      validate: blocked
+      slot_errors:
+        mode: any
+        expect:
+          - code: slot.constraint_violated
+            contains: [gain, 增益]
+            facts: { actual: "20" }
+          - slot.not_provided            # 只写 code 的简写
+```
+
+- 只在**该段** `validate: blocked` 且 `assert.a2a-t.validate` 打开时判定；带 `blocked_followup`
+  的用例因此只判**拦截段**（补充段的 `validate` 由派生逻辑改成 `pass`，不判）。
+- 观测源两处都收：Task-T 之前 `PromptGenerationError.failed_parameters`、Task-T 之后
+  `ContentValidationError.errors`。
+- 匹配键：`code`（精确）、`slotName`（精确，可选）、`contains`（任一关键词出现在 slot 名 / message /
+  facts 值里）、`facts`（子集精确匹配）。**不判 `message`**：它是按 code+facts 渲染的多语言文本，
+  而 `slot_label` 是模型生成的自由文本，两者都不稳定。
+- `mode: any`：观测到的错误里任意一条命中任意一个期望即通过。`mode: cover`：观测到的每条错误都必须
+  被某条期望覆盖（且至少观测到一条）。
+- 没有该块 = 不判定（保持"只看 verdict"的历史行为）。
+
+#### `negotiation.messages`（服务端协商报文）
+
+```yaml
+      negotiation:
+        expected: true
+        expected_rounds: 1
+        kinds: [feasibility]
+        rounds: [...]                 # 不变：客户端答复脚本
+        messages:                     # 外层下标 = 轮次（1 基），内层 = 该轮可接受的渲染
+          - - |-
+              ## Feasibility Negotiation
+              ...
+            - |-
+              ## Feasibility Negotiation
+              ...
+```
+
+- 观测源：`run.proposals[i].content`（A2A-T 是渲染后的 Negotiation-T；A2A 是下游 `INPUT_REQUIRED`
+  原文），不是 `wire.jsonl`。
+- 判定：期望小节必须按序出现（观测方允许**多出**可选小节）；逐小节比业务事实——速率、时段与小时、
+  站点 id、百分比、结论词。期望事实必须是观测事实的子集，措辞可自由改写。没有小节的纯文本
+  （A2A 常见）按整段比事实，没有事实时退化为关键词包含。
+- 每轮至少命中一个备选；轮数必须等于 `expected_rounds`（多一轮、少一轮都红）。
+- `expected_rounds > 1` 时必须嵌套成"每轮一组"；单轮用例可以写成扁平字符串列表（即该轮的备选）。
+- `--nms-sim` 的 pure A2A 仍是 `recorded`：模拟器发的是固定文案，无法复现厂商对话。
+
 ### 5.4 协商
 
 - **A2A**：89 条有 P 列协商答复，`expected_rounds = len(rounds)`（1–3）；11 条没有，断言 0 轮。
@@ -232,6 +288,9 @@ A2A-T 只有 10 条需要协商（26/28/29/30/31/32/50/51/88/89），其余 90 �
   `Feasibility Negotiation Result` → `feasibility`，`Target Negotiation Result` → `target`。
   其中 9 条只有 `Feasibility Negotiation Result`，id 51 只有 `Information Negotiation Result`。
   解析器仍支持一条答复里同时出现多种协商，并按出现顺序生成决策。
+- **报文内容**：`negotiation.rounds` 是**客户端答复**（Q/P 列），用于驱动脚本；服务端报文用
+  `negotiation.messages` 另写，判定规则见 5.3 之后的 `negotiation.messages` 一节。没有该块时
+  只判轮数与类型。
 
 ### 5.5 最终状态
 
@@ -403,3 +462,52 @@ python -m eval.osp.runner --all --stop-after validate --model-mode live \
   超过默认 180 秒，表现为全阶段 `error`。此时把 `A2AT_SAMPLE_LLM_TIMEOUT_SECONDS` 调到 600 再跑，
   不要直接判定为模型缺陷；100 条串行需要数小时，按需用 `--ids` 分批，或把 `--out` 指向不同文件后汇总
   `summary.stages`。
+
+## 12. 预期标注控制台 `/annotate`
+
+新增的两类期望（`slot_errors`、`negotiation.messages`）不靠手写：`/annotate` 把已经跑过的 tester
+批次里的观测值整理成候选，人工挑选并确认后写进用例。它是独立页面，不是 `/tester` 的一个 tab——
+`/tester` 只服务"本浏览器发起的那一个批次"，而标注要跨批次、跨轮次、跨操作员查看同一批用例的语料。
+
+### 12.1 数据来源
+
+| 产物 | 位置 | 提供 |
+|---|---|---|
+| tester 批次快照 | `runs/tester/<batchId>.json` | caseId / protocol / 批次轮次 / 每段 `stages`（含 `validate.detail.slotErrors` 与拦截段）、runId、模型、是否真机 |
+| run 存储 | `runs/client-state.sqlite3` → `negotiation_events` | 每轮服务端报文 `content`（A2A-T 的 Negotiation-T 原文；A2A 的下游 `INPUT_REQUIRED` 原文），按 `runId` 关联 |
+
+- 扫描**不按浏览器 owner 过滤**，多人多轮的批次合在一起看；默认只读最近 1 天（可调 6 小时–7 天）。
+- 批次超过上限时会显式提示"已达批次上限"，不做静默截断。
+- 界面上的"运行轮次"筛选对应批次重复轮次（`item.round`），"协商轮次"是报文轮次（`negotiation_events.round`），两者不混用。
+
+### 12.2 两个维度
+
+- **拦截 `slot_errors`**：52 条 `validate: blocked` 用例各一个目标。候选来自拦截段的 `slotErrors`；
+  可编辑 `contains` 关键词（多语言标签用逗号分隔），并选择 `mode: any | cover`。
+- **协商报文 `messages`**：10 条 A2A-T + 89 条 A2A 协商用例各一个目标。候选按协商轮次分组，
+  同一轮可采纳多个备选（"任意一个都 OK"）。
+
+### 12.3 一致性守门
+
+只有**与用例现有预期一致**的观测可以采纳：拦截用例必须实测也是 `blocked`，协商用例的观测轮数必须
+等于 `expected_rounds` 且 `kinds` 命中。不一致的候选仍然展示（红底）作为证据，但不能变成 oracle；
+需要记录时写进备注或 `known_issue`。这样可以避免"把当前缺陷固化成期望"。
+
+### 12.4 存储与应用
+
+- 标注库：`runs/annotations/annotations.sqlite3`（append-only：`observation` / `target` / `choice` / `event`）。
+  来源 runId、确认人、时间只存在这里，**不写进用例 YAML**。
+- 状态机：`pending → draft → confirmed → applied`；确认后再改候选会自动退回 `draft`。
+- 应用：`预览补丁` 生成 `docs-local/cases-all.yaml` 的 diff → `应用` 写源文件（带时间戳备份）→
+  调用 `docs-local/_generate_cases.py` 重生成 `eval/osp/cases/*.yaml` + `index.yaml` →
+  重新解析生成结果确认新键可读 → 刷新用例目录。
+- 黄区自持：代码与运行数据都在黄区，标注也在黄区完成；需要带回蓝区时用 `导出标注数据（YAML）`
+  （`osp-annotations/v1`，只有 case 级的两类期望），不需要拷贝运行产物。
+- 缺少 `docs-local/cases-all.yaml` 时页面会提示只能采集与导出，不能应用。
+
+### 12.5 注意
+
+- 采纳的是**观测到的原文**，但判定仍按第 5 节的归一化规则（小节 + 业务事实）：一次措辞不同的
+  渲染不会让用例变红。
+- 标注库不改动 run 存储，也不删除任何候选；重复扫描同一批次只会累加 `seen_count`。
+- 该页面只写标注库与 cases-all.yaml，不启动 run、不向网管下发任何东西。

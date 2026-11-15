@@ -45,6 +45,7 @@ from shared.trace import trace_stage
 
 from eval.osp.compare import Diff, compare_intent, compare_task_t
 from eval.osp.detail import render_failures
+from eval.osp.expectations import slot_error_evidence
 from eval.osp.followup import followup_case, has_followup, interception_case, is_blocked_case
 from eval.osp.intent_schema import OSP_INTENT_SCHEMA
 
@@ -316,9 +317,16 @@ def _blocked_before_task_t(
     outcomes: list[StageOutcome] = []
     for stage in stages:
         if stage == "validate":
+            detail: dict[str, object] = {
+                "verdict": "blocked",
+                "negotiationKind": None,
+                "code": str(getattr(error, "code_str", "")),
+                "slotErrors": _slot_error_documents(error.failed_parameters),
+            }
+            diffs = _slot_error_diffs(case, expected_validate, "blocked", detail)
             if not _assert_flag(case, "a2a-t", "validate") or expected_validate is None:
                 status = STAGE_RECORDED
-            elif expected_validate == "blocked":
+            elif expected_validate == "blocked" and _slot_errors_matched(detail):
                 status = STAGE_PASSED
             else:
                 status = STAGE_FAILED
@@ -329,12 +337,8 @@ def _blocked_before_task_t(
                     message=message,
                     expected=expected_validate,
                     actual="blocked",
-                    detail={
-                        "verdict": "blocked",
-                        "negotiationKind": None,
-                        "code": str(getattr(error, "code_str", "")),
-                        "slotErrors": _slot_error_documents(error.failed_parameters),
-                    },
+                    diffs=diffs,
+                    detail=detail,
                 )
             )
             continue
@@ -505,7 +509,8 @@ def _run_validate(
             actual=actual,
             detail=detail,
         )
-    passed = _validation_matches(expected, actual)
+    diffs = _slot_error_diffs(case, expected, actual, detail)
+    passed = _validation_matches(expected, actual) and _slot_errors_matched(detail)
     if expected == "pass_with_terminology" and actual == "pass":
         note = _append_note(note, "terminology context is a soft expectation")
     return StageOutcome(
@@ -514,6 +519,7 @@ def _run_validate(
         message=note,
         expected=expected,
         actual=actual,
+        diffs=diffs,
         detail=detail,
     )
 
@@ -575,6 +581,51 @@ def _validation_matches(expected: object, actual: object) -> bool:
     if expected == "pass_with_terminology":
         return actual in {"pass", "pass_with_terminology"}
     return expected == actual
+
+
+def _slot_error_diffs(
+    case: Mapping[str, Any],
+    expected_verdict: object,
+    actual_verdict: object,
+    detail: dict[str, object] | None,
+) -> tuple[Diff, ...]:
+    """Attach the expected slot errors to one validation detail and return their diffs."""
+    if detail is None:
+        return ()
+    evidence = slot_error_evidence(
+        case,
+        expected_verdict,
+        actual_verdict,
+        _observed_slot_errors(detail),
+    )
+    if evidence is None:
+        return ()
+    detail.update(evidence.to_detail())
+    return tuple(
+        Diff(
+            path=str(item["path"]),
+            expected=item["expected"],
+            actual=item["actual"],
+            reason=str(item["reason"]),
+        )
+        for item in evidence.diffs()
+    )
+
+
+def _observed_slot_errors(detail: Mapping[str, object]) -> list[dict[str, object]]:
+    """Return the observed per-slot errors of one validation detail."""
+    raw = detail.get("slotErrors")
+    if not isinstance(raw, list):
+        return []
+    return [dict(item) for item in raw if isinstance(item, Mapping)]
+
+
+def _slot_errors_matched(detail: Mapping[str, object] | None) -> bool:
+    """Return whether the slot-error expectation of one detail is satisfied (or absent)."""
+    if not detail:
+        return True
+    match = detail.get("slotErrorMatch")
+    return not isinstance(match, Mapping) or bool(match.get("matched"))
 
 
 def _assert_flag(case: Mapping[str, Any], *path: str) -> bool:

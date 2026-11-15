@@ -40,6 +40,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
+from eval.osp.catalog import CaseCatalog
 from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from protocol.client_runtime import MODE_AUTO
 from protocol.client_service import (
@@ -123,6 +124,7 @@ from demo.scenario import (
     resolve_example_request,
     resolve_modify_request,
 )
+from demo.web.annotate import build_annotate_routes
 from demo.web.nms_tasks import (
     ACTIVE_STATES,
     MODIFIABLE_STATES,
@@ -539,6 +541,10 @@ def create_app(
     # Install the run-id router before any run is built. Uvicorn also runs the lifespan, but the
     # ASGI test client may not, and an in-process server already emits on its own thread.
     set_global_sink(manager.route_external_span)
+    # One catalog instance is shared by the tester and the annotation console: applying an
+    # annotation reloads it in place, so the tester's case list reflects the new expectations
+    # without a second reload request.
+    case_catalog = CaseCatalog()
     tester_routes, tester_batches = build_tester_routes(
         runs=manager,
         protocols=advertised_protocols,
@@ -556,6 +562,7 @@ def create_app(
         model_label=config.model_label,
         metrics_grace_seconds=metrics_grace_seconds,
         prompt_client=tester_prompt_client,
+        catalog=case_catalog,
     )
     run_console_routes = build_run_console_routes(
         runs=manager,
@@ -570,6 +577,11 @@ def create_app(
         config=config,
         runs_dir=resolved_runs_dir,
         env_path=env_path,
+        client_db_path=Path(config.client_db_path) if config.client_db_path else None,
+    )
+    annotate_routes = build_annotate_routes(
+        catalog=case_catalog,
+        runs_dir=resolved_runs_dir,
         client_db_path=Path(config.client_db_path) if config.client_db_path else None,
     )
 
@@ -1858,6 +1870,7 @@ def create_app(
             *tester_routes,
             *run_console_routes,
             *observe_routes,
+            *annotate_routes,
             Mount("/static", app=StaticFiles(directory=static_dir), name="static"),
         ],
         lifespan=lifespan,

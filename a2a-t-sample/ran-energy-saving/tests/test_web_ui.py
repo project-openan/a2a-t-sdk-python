@@ -2639,3 +2639,16 @@ async def test_cancel_nms_task_endpoint_requires_nms_discovery(
 
     assert response.status_code == 400
     assert response.json()["code"] == "nms_discovery_required"
+
+async def test_the_annotation_console_is_served(client: httpx.AsyncClient) -> None:
+    """The console page and its API are wired into the real app, not only into its own router."""
+    page = await client.get("/annotate")
+    script = await client.get("/annotate/main.js")
+    meta = await client.get("/api/annotate/meta")
+    targets = await client.get("/api/annotate/targets")
+
+    assert page.status_code == 200
+    assert "预期标注" in page.text
+    assert script.status_code == 200
+    assert meta.json()["dimensions"] == ["slot_errors", "messages"]
+    assert targets.json()["targets"], "the catalog must project its expectation space"

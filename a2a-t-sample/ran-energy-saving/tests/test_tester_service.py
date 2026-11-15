@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import json
 import threading
 import time
@@ -2913,6 +2914,174 @@ async def test_the_item_snapshot_exposes_the_langfuse_warning(tmp_path: Path) ->
     }
     snapshot = _required(manager.get(batch_id))
     assert "HTTP 403" in snapshot["items"][0]["langfuseWarning"]
+
+
+_NEGOTIATION_MESSAGE = """## Feasibility Negotiation
+Reduce the guaranteed throughput target to 2Mbps for 08:00-18:00.
+"""
+
+
+def _message_case() -> dict[str, Any]:
+    """Return a negotiation case whose expected server message is pinned."""
+    case = copy.deepcopy(CASES[26])
+    negotiation = case["expect"]["protocols"]["a2a-t"]["negotiation"]
+    negotiation["expected"] = True
+    negotiation["expected_rounds"] = 1
+    negotiation["kinds"] = ["feasibility"]
+    negotiation["messages"] = [[_NEGOTIATION_MESSAGE]]
+    return case
+
+
+def _negotiation_batch(item: CaseItem) -> _Batch:
+    return _Batch(
+        batch_id="batch",
+        case_ids=[item.case_id],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="negotiate",
+        approval=None,
+        timeout_seconds=1.0,
+        items=[item],
+    )
+
+
+async def _run_negotiate(
+    tmp_path: Path,
+    *,
+    content: str,
+    case: Mapping[str, Any] | None = None,
+) -> StageResult:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="sse")
+    run.status = "running"
+    run.proposals.append(  # type: ignore[arg-type]
+        SimpleNamespace(round=1, kind="feasibility", content=content)
+    )
+    item = CaseItem(case_id=26, name="case", protocol=PROTOCOL_A2A_T)
+    await manager._wait_for_stage(
+        run,
+        item,
+        _negotiation_batch(item),
+        ("negotiate",),
+        case=case if case is not None else _message_case(),
+        timeout_seconds=1.0,
+        working_timeout_seconds=1.0,
+    )
+    return item.stages["negotiate"]
+
+
+async def test_negotiate_stage_judges_the_expected_server_message(tmp_path: Path) -> None:
+    """The case's expected Negotiation-T is compared with the observed proposal content."""
+    paraphrased = (
+        "## Feasibility Negotiation\n"
+        "Please reduce the guaranteed throughput target to 2Mbps between 08:00 and 18:00.\n"
+    )
+
+    result = await _run_negotiate(tmp_path, content=paraphrased)
+
+    assert result.status == STAGE_PASSED
+    assert result.actual["messages"] == [
+        {"round": 1, "kind": "feasibility", "content": paraphrased}
+    ]
+    assert result.detail is not None
+    assert result.detail["messageMatch"]["matched"] is True
+
+
+async def test_negotiate_stage_fails_on_a_different_server_message(tmp_path: Path) -> None:
+    """A message stating another rate fails and points at the diverging round."""
+    result = await _run_negotiate(
+        tmp_path,
+        content="## Feasibility Negotiation\nReduce the target to 4Mbps.\n",
+    )
+
+    assert result.status == STAGE_FAILED
+    assert [diff["path"] for diff in result.diffs] == ["negotiate.messages[1]"]
+    assert "rate:2" in result.diffs[0]["reason"]
+
+
+async def test_negotiate_stage_keeps_the_round_count_contract(tmp_path: Path) -> None:
+    """Without a message expectation only the round count and the kinds are judged."""
+    result = await _run_negotiate(tmp_path, content="anything", case=copy.deepcopy(CASES[26]))
+
+    assert "messages" not in result.actual
+    assert result.status == STAGE_PASSED
+
+
+def _blocked_validation_run(slot_code: str) -> RunState:
+    run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="sse")
+    run.status = "finished"
+    run.traces.append(
+        {
+            "kind": "task_validation",
+            "detail": {
+                "verdict": "blocked",
+                "reason": slot_code,
+                "errors": [
+                    {
+                        "slotName": "Gain target",
+                        "code": slot_code,
+                        "message": "the value is not allowed",
+                        "facts": {"slot_label": "Gain target", "actual": "20% - 30%"},
+                    }
+                ],
+            },
+        }
+    )
+    return run
+
+
+def test_validate_stage_judges_the_expected_slot_errors(tmp_path: Path) -> None:
+    """The full-flow validation compares the observed slot errors with the case's expectation."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    case = copy.deepcopy(CASES[16])
+    case["expect"]["protocols"]["a2a-t"]["slot_errors"] = {
+        "mode": "any",
+        "expect": [{"code": "slot.constraint_violated", "contains": ["gain"]}],
+    }
+    item = CaseItem(case_id=16, name="case", protocol=PROTOCOL_A2A_T)
+
+    manager._judge_run_validation(
+        item, _blocked_validation_run("slot.constraint_violated"), case
+    )
+
+    result = item.stages["validate"]
+    assert result.status == STAGE_PASSED
+    assert result.detail is not None
+    assert result.detail["slotErrorMatch"]["matched"] is True
+
+
+def test_validate_stage_fails_on_an_unexpected_slot_error(tmp_path: Path) -> None:
+    """A block reported for another reason is a mismatch, not a pass on the verdict alone."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    case = copy.deepcopy(CASES[16])
+    case["expect"]["protocols"]["a2a-t"]["slot_errors"] = {
+        "mode": "cover",
+        "expect": [{"code": "slot.constraint_violated"}],
+    }
+    item = CaseItem(case_id=16, name="case", protocol=PROTOCOL_A2A_T)
+
+    manager._judge_run_validation(
+        item, _blocked_validation_run("slot.rule_violation"), case
+    )
+
+    result = item.stages["validate"]
+    assert result.status == STAGE_FAILED
+    assert [diff["path"] for diff in result.diffs] == ["validate.slotErrors[0]"]
+
+
+def test_validate_stage_records_slot_errors_without_an_expectation(tmp_path: Path) -> None:
+    """A case without the block keeps judging the verdict only."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    item = CaseItem(case_id=16, name="case", protocol=PROTOCOL_A2A_T)
+
+    manager._judge_run_validation(
+        item, _blocked_validation_run("slot.rule_violation"), copy.deepcopy(CASES[16])
+    )
+
+    result = item.stages["validate"]
+    assert result.status == STAGE_PASSED
+    assert result.diffs == []
+    assert result.detail is not None
+    assert "expectedSlotErrors" not in result.detail
 
 
 def test_an_old_v3_batch_loads_as_a_single_round(tmp_path: Path) -> None:

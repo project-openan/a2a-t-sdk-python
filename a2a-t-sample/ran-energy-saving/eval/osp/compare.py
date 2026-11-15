@@ -9,6 +9,7 @@ section, leaving the raw values in the report for inspection.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final
@@ -163,13 +164,111 @@ class CompareRow:
 
 def parse_sections(text: str) -> dict[str, str]:
     """Split one Task-T prompt into ``## Heading`` sections."""
+    return dict(parse_sections_ordered(text))
+
+
+def parse_sections_ordered(text: str) -> tuple[tuple[str, str], ...]:
+    """Split one markdown message into its ``## Heading`` sections, in document order.
+
+    A negotiation message is judged by its sections, so the order matters: a proposal that carries
+    the right headings in the wrong order is a different message. Duplicate headings keep their
+    first position and are reported once, matching :func:`parse_sections`.
+    """
     matches = list(_SECTION_RE.finditer(text))
-    sections: dict[str, str] = {}
+    sections: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for index, match in enumerate(matches):
+        title = match.group(1).strip()
+        if title in seen:
+            continue
+        seen.add(title)
         start = match.end()
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        sections[match.group(1).strip()] = text[start:end].strip()
-    return sections
+        sections.append((title, text[start:end].strip()))
+    return tuple(sections)
+
+
+#: Percentages a negotiation message states (a power-saving ratio, a gain target).
+_PERCENT_RE: Final[re.Pattern[str]] = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+#: The ``between 08:00 and 18:00`` form. :data:`_TIME_PAIR_RE` accepts ``to`` and the dash forms
+#: only; a negotiation message paraphrases a window with ``between … and …`` often enough that the
+#: fact set has to read it, while the Task Context normalizer stays untouched (a bare pair of
+#: timestamps joined by ``and`` is ambiguous in prose).
+_BETWEEN_TIME_RE: Final[re.Pattern[str]] = re.compile(
+    r"between\s+(\d{1,2}):(\d{2})(?::\d{2})?\s+and\s+(\d{1,2}):(\d{2})(?::\d{2})?",
+    re.IGNORECASE,
+)
+#: Conclusion words of a negotiation message. They are business facts, not prose: an expected
+#: ``Accept`` must not be satisfied by a message that concludes ``Reject``.
+_NEGOTIATION_CONCLUSIONS: Final[frozenset[str]] = frozenset(
+    {"accept", "reject", "abort", "feasible", "infeasible"}
+)
+_CJK_RE: Final[re.Pattern[str]] = re.compile(r"[一-鿿]")
+_WORD_RE: Final[re.Pattern[str]] = re.compile(r"[a-z0-9][a-z0-9.+\-/]*")
+
+
+def business_facts(text: str) -> frozenset[str]:
+    """Return the normalized business facts a free-form message states.
+
+    Prose differs between renderings of the same requirement (``please reduce the target from
+    5 Mbps to 2 Mbps`` vs ``Reduce throughput target from 5Mbps to 2Mbps``), so a negotiation
+    expectation is judged on what it *states* instead of how it is phrased: rates, time windows
+    and their hours, site identifiers, percentages and the conclusion word. The facts of the
+    expected text must all appear in the observed text; extra observed facts are allowed.
+    """
+    value = unicodedata.normalize("NFKC", str(text or ""))
+    facts: set[str] = set()
+    for match in _RATE_RE.finditer(value):
+        facts.add(f"rate:{normalize_number(match.group(1))}")
+    for match in _PERCENT_RE.finditer(value):
+        facts.add(f"percent:{normalize_number(match.group(1))}")
+    for match in (*_TIME_PAIR_RE.finditer(value), *_BETWEEN_TIME_RE.finditer(value)):
+        start = f"{int(match.group(1)):02d}:{int(match.group(2)):02d}"
+        end = f"{int(match.group(3)):02d}:{int(match.group(4)):02d}"
+        facts.add(f"window:{start}-{end}")
+        for hour in time_period_hours(f"{start}-{end}"):
+            facts.add(f"hour:{hour:02d}")
+    for match in _SITE_RE.finditer(value):
+        facts.add(f"site:{_normalize_site_text(match.group(0))}")
+    lowered = value.lower()
+    for word in _NEGOTIATION_CONCLUSIONS:
+        if re.search(rf"\b{word}\b", lowered):
+            facts.add(f"conclusion:{word}")
+    return frozenset(facts)
+
+
+def free_text_tokens(text: str) -> frozenset[str]:
+    """Return the word-order-insensitive tokens of a message that states no business fact.
+
+    Used as the fallback comparison for a short plain-language expectation (for example the
+    simulator's ``Not feasible, please confirm``): every expected token must appear in the
+    observed text.
+    """
+    value = unicodedata.normalize("NFKC", str(text or "")).lower()
+    value = re.sub(r"[`*_#>\[\]()]", " ", value)
+    tokens = set(_WORD_RE.findall(value))
+    tokens.update(_CJK_RE.findall(value))
+    return frozenset(token for token in tokens if token not in _CONTEXT_STOPWORDS)
+
+
+def normalize_number(value: object) -> str:
+    """Return a numeric literal without its trailing zeros (``10.0`` and ``10`` are equal)."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        number = float(text)
+    except ValueError:
+        return text.lower()
+    return f"{number:g}"
+
+
+def _normalize_site_text(value: str) -> str:
+    text = value.strip().lower()
+    for prefix in _SITE_PREFIXES:
+        if text.startswith(prefix):
+            return text[len(prefix) :].strip()
+    return text
 
 
 def flatten_intent(

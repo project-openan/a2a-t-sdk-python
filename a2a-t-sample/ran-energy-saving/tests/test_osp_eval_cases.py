@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 import yaml
+from eval.osp.expectations import negotiation_message_expectation, slot_error_expectation
 
 OSP_DIR = Path(__file__).resolve().parents[1] / "eval" / "osp"
 CASES_DIR = OSP_DIR / "cases"
@@ -182,6 +183,36 @@ def test_a2a_t_negotiation_only_for_the_pinned_cases(cases: dict[int, dict[str, 
             assert negotiation["kinds"]
         else:
             assert not negotiation["kinds"]
+
+
+def test_the_optional_expectations_parse(cases: dict[int, dict[str, Any]]) -> None:
+    """A case may state the expected slot errors and the expected negotiation messages.
+
+    Both blocks are optional, so this test pins their shape rather than their presence: a
+    malformed block must fail here instead of at run time, and the slot-error block may only
+    describe an intercepted request.
+    """
+    for case_id, document in cases.items():
+        protocol = document["expect"]["protocols"]["a2a-t"]
+        slot_errors = protocol.get("slot_errors")
+        if slot_errors is not None:
+            assert protocol["validate"] == "blocked", case_id
+        slot_error_expectation(document)
+        for name in ("a2a-t", "a2a"):
+            expectation = negotiation_message_expectation(document, name)
+            if expectation is not None:
+                assert expectation.rounds, case_id
+
+
+def test_a_case_without_the_optional_expectations_keeps_the_verdict_only(cases: dict[int, dict[str, Any]]) -> None:
+    """The blocks stay optional: most cases still judge the verdict and the round count alone."""
+    assert any(
+        "slot_errors" not in case["expect"]["protocols"]["a2a-t"] for case in cases.values()
+    )
+    assert any(
+        "messages" not in case["expect"]["protocols"]["a2a-t"].get("negotiation", {})
+        for case in cases.values()
+    )
 
 
 def test_assert_switches(cases: dict[int, dict[str, Any]]) -> None:

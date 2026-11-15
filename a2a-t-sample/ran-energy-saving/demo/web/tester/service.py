@@ -37,6 +37,11 @@ from eval.osp.compare import (
     flatten_intent,
     flatten_task_t,
 )
+from eval.osp.expectations import (
+    match_negotiation_messages,
+    negotiation_message_expectation,
+    slot_error_evidence,
+)
 from eval.osp.followup import followup_case, followup_input, has_followup, is_blocked_case
 from eval.osp.runner import (
     STAGE_ERROR,
@@ -448,6 +453,7 @@ class EvalBatchManager:
         server_url: str | None,
         server_auth_token: str | None,
         runs_dir: Path | None = None,
+        nms: bool = False,
         nms_sim: bool = False,
         nms_sim_pure_question: str = "issue",
         language: str = "",
@@ -462,6 +468,7 @@ class EvalBatchManager:
         self._server_url = (server_url or "").rstrip("/")
         self._server_auth_token = server_auth_token
         self._history_dir = (Path(runs_dir) / "tester") if runs_dir is not None else None
+        self._nms = nms
         self._nms_sim = nms_sim
         #: ``confirm`` replays the vendor's fixed plain-A2A dialogue, so the OSP round count is
         #: assertable; ``issue`` renders the historical business issue and is only recorded.
@@ -1737,14 +1744,56 @@ class EvalBatchManager:
             kinds_ok = expected_kinds is None or all(
                 kind in actual_kinds for kind in expected_kinds
             )
-            status = STAGE_PASSED if rounds_ok and kinds_ok else STAGE_FAILED
+            # The message expectation is the oracle of the dialogue itself; the round count and the
+            # kind stay as a cheap pre-check so a wrong shape is explained before the prose.
+            messages_expectation = (
+                negotiation_message_expectation(case, item.protocol)
+                if case is not None
+                else None
+            )
+            observed_messages = (
+                [
+                    _observed_proposal(proposal, index)
+                    for index, proposal in enumerate(run.proposals)
+                ]
+                if messages_expectation is not None
+                else []
+            )
+            message_match = (
+                match_negotiation_messages(messages_expectation, observed_messages)
+                if messages_expectation is not None
+                else None
+            )
+            messages_ok = message_match is None or message_match.matched
+            status = (
+                STAGE_PASSED if rounds_ok and kinds_ok and messages_ok else STAGE_FAILED
+            )
+            expected_payload: dict[str, object] = {
+                "rounds": expected_rounds,
+                "kinds": expected_kinds,
+            }
+            actual_payload: dict[str, object] = {
+                "rounds": actual_rounds,
+                "kinds": actual_kinds,
+            }
+            if messages_expectation is not None:
+                expected_payload["messages"] = [
+                    list(alternatives) for alternatives in messages_expectation.rounds
+                ]
+                actual_payload["messages"] = observed_messages
             negotiate_result = StageResult(
                 "negotiate",
                 status,
-                "" if status == STAGE_PASSED else "协商轮次或类型与预期不一致。",
-                expected={"rounds": expected_rounds, "kinds": expected_kinds},
-                actual={"rounds": actual_rounds, "kinds": actual_kinds},
+                "" if status == STAGE_PASSED else "协商轮次、类型或报文与预期不一致。",
+                expected=expected_payload,
+                actual=actual_payload,
+                diffs=_message_diffs(message_match),
                 duration_ms=int(round((time.monotonic() - started) * 1000)),
+                detail=(
+                    {"messageMatch": message_match.to_dict()}
+                    if message_match is not None
+                    else None
+                ),
             )
             if case is not None:
                 negotiate_result = _apply_assertion(
@@ -2271,11 +2320,21 @@ class EvalBatchManager:
             return
         verdict = str(detail.get("verdict") or "")
         expected = _case_validation_expectation(case)
+        observed = detail.get("slotErrors")
+        evidence = slot_error_evidence(
+            case,
+            expected,
+            verdict,
+            observed if isinstance(observed, list) else (),
+        )
+        if evidence is not None:
+            detail.update(evidence.to_detail())
         result = StageResult(
             "validate",
             STAGE_PASSED,
             expected=expected,
             actual=verdict,
+            diffs=[dict(item) for item in evidence.diffs()] if evidence is not None else [],
             detail=detail,
         )
         if expected is None:
@@ -2284,7 +2343,9 @@ class EvalBatchManager:
         elif not _assertion_enabled(case, PROTOCOL_A2A_T, "validate"):
             result.status = STAGE_RECORDED
             result.message = _ASSERTION_OFF_MESSAGE
-        elif not _validation_matches(expected, verdict):
+        elif not _validation_matches(expected, verdict) or (
+            evidence is not None and not evidence.matched()
+        ):
             result.status = STAGE_FAILED
             result.message = _VALIDATION_MISMATCH_MESSAGE
         item.stages["validate"] = result
@@ -2632,6 +2693,12 @@ class EvalBatchManager:
             "timeoutSeconds": batch.timeout_seconds,
             "workingTimeoutSeconds": batch.working_timeout_seconds,
             "decisionMode": batch.decision_mode,
+            # The annotation console groups evidence by model and by downstream, so the batch
+            # records the process identity it ran against. Older files lack these keys.
+            "modelLabel": self._model_label,
+            "modelMode": self._model_mode,
+            "nms": self._nms,
+            "nmsSim": self._nms_sim,
             "keepTasks": batch.keep_tasks,
             "concurrency": batch.concurrency,
             "rounds": batch.rounds,
@@ -2948,6 +3015,36 @@ def _negotiation_expected(case: Mapping[str, Any], protocol: str) -> bool:
     block = protocols.get(protocol) if isinstance(protocols, Mapping) else None
     negotiation = block.get("negotiation") if isinstance(block, Mapping) else None
     return bool(isinstance(negotiation, Mapping) and negotiation.get("expected"))
+
+
+def _observed_proposal(proposal: object, index: int) -> dict[str, object]:
+    """Render one inbound proposal as the observed side of the message comparison."""
+    round_number = getattr(proposal, "round", None)
+    return {
+        "round": (
+            round_number
+            if isinstance(round_number, int) and round_number > 0
+            else index + 1
+        ),
+        "kind": str(getattr(proposal, "kind", "") or ""),
+        "content": str(getattr(proposal, "content", "") or ""),
+    }
+
+
+def _message_diffs(match: object) -> list[dict[str, object]]:
+    """Render the failed rounds of one message match as stage diffs."""
+    failed_rounds = getattr(match, "failed_rounds", None)
+    if not callable(failed_rounds):
+        return []
+    return [
+        {
+            "path": f"negotiate.messages[{round_match.round}]",
+            "expected": list(round_match.expected),
+            "actual": round_match.actual,
+            "reason": round_match.reason,
+        }
+        for round_match in failed_rounds()
+    ]
 
 
 def _scripted_reply_error(

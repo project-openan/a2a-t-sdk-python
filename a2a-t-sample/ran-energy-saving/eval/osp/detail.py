@@ -7,6 +7,7 @@ the operator text and the exact expected/actual values without anyone reading th
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -118,6 +119,14 @@ def _render_segment(label: str, stages: object) -> list[str]:
 
 
 def _cell(value: object) -> str:
-    """Render one diff value inside a Markdown table cell."""
-    text = str("" if value is None else value)
+    """Render one diff value inside a Markdown table cell.
+
+    A structured value (the expected slot-error entries, the acceptable negotiation messages) is
+    rendered as compact JSON: a Python ``repr`` of a dict is unreadable in a report and would quote
+    the keys arbitrarily.
+    """
+    if isinstance(value, Mapping | list | tuple):
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    else:
+        text = "" if value is None else str(value)
     return text.replace("\n", "\\n").replace("|", "\\|")

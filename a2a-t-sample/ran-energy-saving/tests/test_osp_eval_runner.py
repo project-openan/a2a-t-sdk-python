@@ -559,6 +559,64 @@ def test_runner_records_an_unfilled_validation_result() -> None:
     }
 
 
+def _generation_block(code: str) -> PromptGenerationError:
+    slot = SlotValidationError(
+        slot_name="Gain target",
+        code=code,
+        message="the gain target is not allowed",
+        facts={"slot_label": "Gain target", "actual": "20% - 30%"},
+    )
+    return PromptGenerationError(
+        ErrorCatalog.SLOT_CONSTRAINT_VIOLATED,
+        {"slot_label": "Gain target", "actual": "20% - 30%"},
+        message="blocked by test",
+        failed_parameters=[slot],
+    )
+
+
+def test_the_validate_stage_judges_the_expected_slot_errors_of_a_generation_block() -> None:
+    case = copy.deepcopy(CASES[16])
+    case["expect"]["protocols"]["a2a-t"]["slot_errors"] = {
+        "mode": "any",
+        "expect": [{"code": "slot.constraint_violated", "contains": ["gain", "增益"]}],
+    }
+    client = FakePromptClient(generation_errors={(16, "original"): _generation_block(
+        "slot.constraint_violated"
+    )})
+
+    outcome = run_case(case, client, stop_after="validate")
+
+    assert outcome.interception is not None
+    validate_stage = next(
+        stage for stage in outcome.interception if stage.stage == "validate"
+    )
+    assert validate_stage.status == STAGE_PASSED
+    assert validate_stage.detail is not None
+    assert validate_stage.detail["slotErrorMatch"]["matched"] is True
+    assert validate_stage.diffs == ()
+
+
+def test_the_validate_stage_fails_when_the_block_reports_another_slot_error() -> None:
+    case = copy.deepcopy(CASES[16])
+    case["expect"]["protocols"]["a2a-t"]["slot_errors"] = {
+        "mode": "any",
+        "expect": [{"code": "slot.not_provided"}],
+    }
+    client = FakePromptClient(generation_errors={(16, "original"): _generation_block(
+        "slot.constraint_violated"
+    )})
+
+    outcome = run_case(case, client, stop_after="validate")
+
+    assert outcome.interception is not None
+    validate_stage = next(
+        stage for stage in outcome.interception if stage.stage == "validate"
+    )
+    assert validate_stage.status == STAGE_FAILED
+    assert [diff.path for diff in validate_stage.diffs] == ["validate.slotErrors[0]"]
+    assert outcome.passed is False
+
+
 def test_runner_handles_a_blocked_generation_as_the_expected_outcome() -> None:
     error = PromptGenerationError(
         ErrorCatalog.SLOT_NOT_PROVIDED,

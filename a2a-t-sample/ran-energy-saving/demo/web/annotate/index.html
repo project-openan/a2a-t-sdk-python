@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-brand="orange">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>A2A / A2A-T · 预期标注</title>
+  <link rel="stylesheet" href="/annotate/app.css">
+  <script type="module" src="/annotate/main.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">A2A-T</span>
+      <div class="brand-text">
+        <small>RAN 节能 · 用例语料</small>
+        <h1>预期标注</h1>
+      </div>
+    </div>
+    <nav class="top-nav">
+      <a class="ghost" href="/">演示页面</a>
+      <a class="ghost" href="/tester">评测控制台</a>
+      <a class="ghost" href="/runs">Run 控制台</a>
+    </nav>
+  </header>
+
+  <main class="main">
+    <section class="card toolbar">
+      <label>时间窗
+        <select id="config-days">
+          <option value="0.25">6 小时</option>
+          <option value="1" selected>最近 1 天</option>
+          <option value="3">3 天</option>
+          <option value="7">7 天</option>
+        </select>
+      </label>
+      <button class="primary" id="scan-button" type="button">采集候选</button>
+      <label>维度
+        <select id="filter-dimension">
+          <option value="">全部</option>
+          <option value="slot_errors">拦截 slot_errors</option>
+          <option value="messages">协商报文</option>
+        </select>
+      </label>
+      <label>协议
+        <select id="filter-protocol">
+          <option value="">全部</option>
+          <option value="a2a-t">A2A-T</option>
+          <option value="a2a">A2A</option>
+        </select>
+      </label>
+      <label>状态
+        <select id="filter-status">
+          <option value="">全部</option>
+          <option value="pending">未采集</option>
+          <option value="draft">草稿</option>
+          <option value="confirmed">已确认</option>
+          <option value="applied">已应用</option>
+        </select>
+      </label>
+      <label>运行轮次
+        <select id="filter-round">
+          <option value="">全部</option>
+          <option value="1">第 1 轮</option>
+          <option value="2">第 2 轮</option>
+          <option value="3">第 3 轮</option>
+          <option value="4">第 4 轮</option>
+        </select>
+      </label>
+      <input id="filter-query" type="search" placeholder="搜索编号或名称">
+      <label class="check"><input id="only-consistent" type="checkbox" checked> 只看一致候选</label>
+      <span class="summary" id="progress"></span>
+    </section>
+
+    <div class="notice" id="scan-note" hidden></div>
+
+    <div class="layout">
+      <aside class="card sidebar">
+        <div class="card-head">
+          <h2>标注目标</h2>
+          <span class="summary" id="target-count"></span>
+        </div>
+        <div class="target-list" id="target-list"></div>
+      </aside>
+
+      <div class="content" id="detail">
+        <section class="card empty">
+          <p>从左侧选择一个用例的预期维度开始标注。</p>
+          <p class="muted">候选来自本机已落盘的 tester 批次与 run 存储；只有与用例现有预期一致的观测才能被采纳。</p>
+        </section>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

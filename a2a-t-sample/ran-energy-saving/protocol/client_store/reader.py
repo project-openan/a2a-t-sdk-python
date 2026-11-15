@@ -5,13 +5,22 @@ from __future__ import annotations
 import builtins
 import logging
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 
 from shared.sqlite import readonly_connection
 
-from protocol.client_store.store import _load_json, _truncate
+from protocol.client_store.store import (
+    NEGOTIATION_DIRECTION_INBOUND,
+    PROTOCOL_A2A_T,
+    _load_json,
+    _truncate,
+)
 
 _LOGGER = logging.getLogger("ran_energy_saving.client_store")
+
+#: Run ids per ``IN (...)`` clause; SQLite caps a statement at 999 bound parameters.
+_RUN_ID_CHUNK: int = 400
 
 
 def _readonly_connection(path: str | Path) -> sqlite3.Connection | None:
@@ -202,6 +211,69 @@ def _source_text(raw: object, key: str) -> str:
     source = _load_json(raw) if isinstance(raw, str) else {}
     value = source.get(key)
     return str(value) if isinstance(value, str) else ""
+
+
+def read_inbound_negotiation_events(
+    path: str | Path,
+    run_ids: Sequence[str],
+    *,
+    direction: str = NEGOTIATION_DIRECTION_INBOUND,
+) -> dict[str, list[dict[str, object]]]:
+    """Return the negotiation events of several runs, grouped by run id.
+
+    The annotation console reads the server's negotiation messages of a whole batch at once, and the
+    per-run detail reader would issue one query per run. Rows keep their ``seq`` order, so the n-th
+    inbound event of a run is its n-th negotiation round.
+    """
+    unique = [run_id for run_id in dict.fromkeys(run_ids) if run_id]
+    if not unique:
+        return {}
+    connection = _readonly_connection(path)
+    if connection is None:
+        return {}
+    results: dict[str, list[dict[str, object]]] = {run_id: [] for run_id in unique}
+    try:
+        connection.row_factory = sqlite3.Row
+        for start in range(0, len(unique), _RUN_ID_CHUNK):
+            chunk = unique[start : start + _RUN_ID_CHUNK]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT * FROM negotiation_events
+                WHERE direction=? AND run_id IN ({placeholders})
+                ORDER BY run_id ASC, seq ASC
+                """,
+                (direction, *chunk),
+            ).fetchall()
+            for row in rows:
+                run_id = str(row["run_id"])
+                results.setdefault(run_id, []).append(_negotiation_event_row(row))
+        return results
+    except sqlite3.Error as exc:
+        _LOGGER.warning("negotiation event read failed: %s", exc)
+        return {}
+    finally:
+        connection.close()
+
+
+def _negotiation_event_row(row: sqlite3.Row) -> dict[str, object]:
+    """Render one stored negotiation event as the plain mapping the consoles consume."""
+    return {
+        "eventId": str(row["event_id"]),
+        "runId": str(row["run_id"]),
+        "seq": int(row["seq"]),
+        "negotiationId": row["negotiation_id"],
+        "kind": row["kind"],
+        "round": row["round"],
+        "performative": row["performative"],
+        "direction": str(row["direction"]),
+        "actor": str(row["actor"]),
+        "content": _load_json(row["content_json"]),
+        "decisionAction": row["decision_action"],
+        "rationale": row["rationale"],
+        "createdAt": str(row["created_at"]),
+        "protocol": str(row["protocol"] or PROTOCOL_A2A_T),
+    }
 
 
 def read_client_run_detail(path: str | Path, run_id: str) -> dict[str, object] | None:
