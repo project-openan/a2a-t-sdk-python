@@ -50,6 +50,7 @@ from eval.osp.tracecheck import (
     intent_corroboration,
     intent_params,
     judge_trace,
+    nms_kind,
     process_points,
     task_t_fidelity,
 )
@@ -884,7 +885,7 @@ def _trace_detail(
         "exportState": trace.get("exportState") or trace.get("export_state"),
         "spanLevel": trace.get("spanLevel"),
         "captureContent": trace.get("captureContent"),
-        "nmsKind": _nms_kind(evidence),
+        "nmsKind": _nms_kind_of(evidence),
         "frames": dict(frames) if isinstance(frames, Mapping) else {},
         "attribution": computed_attribution,
         "points": points,
@@ -895,14 +896,15 @@ def _trace_detail(
     }
 
 
-def _nms_kind(evidence: Mapping[str, Any]) -> str:
-    """Return real / sim / local / unknown from the declared batch flags."""
+def _nms_kind_of(evidence: Mapping[str, Any]) -> str:
+    """Return the downstream identity of the scoped batch (one shared rule, see tracecheck)."""
     batch = _mapping(evidence.get("batch"))
-    if batch.get("nmsSim") is True:
-        return "sim"
-    if batch.get("nms") is None or batch.get("nmsSim") is None:
-        return "unknown"
-    return "real" if batch.get("nms") is True else "local"
+    declared = batch.get("nms")
+    simulated = batch.get("nmsSim")
+    return nms_kind(
+        declared if isinstance(declared, bool) else None,
+        simulated if isinstance(simulated, bool) else None,
+    )
 
 
 def _fidelity_dict(fidelity: Fidelity) -> dict[str, object]:
