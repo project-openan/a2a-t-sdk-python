@@ -32,6 +32,7 @@ from starlette.routing import Route
 
 from demo.web.annotate.overlay import confirmed_overlay, overlay_token
 from demo.web.review.routes import build_review_routes
+from demo.web.review.traces import TraceStore
 
 #: The sample root (``a2a-t-sample/ran-energy-saving``).
 SAMPLE_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
@@ -51,6 +52,8 @@ def build_app(
     cases_dir: Path | None = None,
     overlay_path: Path | None = None,
     annotations_path: Path | None = None,
+    trace_store_path: Path | None = None,
+    fetch_traces: bool = False,
 ) -> Starlette:
     """Build the read-only review application.
 
@@ -83,6 +86,8 @@ def build_app(
         runs_dir=resolved_runs,
         client_db_path=resolved_client_db,
         store_path=resolved_store,
+        trace_store=TraceStore(resolved_runs, trace_store_path),
+        trace_fetch_enabled=fetch_traces,
     )
 
     async def index(request: Request) -> Response:
@@ -153,6 +158,23 @@ def _build_parser() -> argparse.ArgumentParser:
             "default: <runs-dir>/annotations/annotations.sqlite3"
         ),
     )
+    parser.add_argument(
+        "--trace-store",
+        type=Path,
+        default=None,
+        help=(
+            "directory of the local Langfuse snapshots; "
+            "default: <runs-dir>/review/langfuse"
+        ),
+    )
+    parser.add_argument(
+        "--fetch-traces",
+        action="store_true",
+        help=(
+            "allow the page to fetch a trace from Langfuse (read-only instances leave this off; "
+            "requires LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY)"
+        ),
+    )
     parser.add_argument("--host", default="127.0.0.1", help="bind host (default: loopback)")
     parser.add_argument(
         "--port",
@@ -189,10 +211,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.annotations is not None
         else runs_dir / "annotations" / "annotations.sqlite3"
     )
+    trace_store = (
+        Path(args.trace_store).expanduser().resolve()
+        if args.trace_store is not None
+        else runs_dir / "review" / "langfuse"
+    )
     print(f"[review] source batches : {runs_dir / 'tester'}")
     print(f"[review] source run store: {client_db}")
     print(f"[review] review store   : {store}")
     print(f"[review] annotations    : {annotations}")
+    print(f"[review] trace snapshots: {trace_store}"
+          f"{'' if args.fetch_traces else ' (fetch disabled)'}")
     print(f"[review] case corpus    : {cases_dir or 'packaged eval/osp/cases'}")
     print(f"[review] expectation overlay: {overlay or DEFAULT_OVERLAY_PATH}")
     if not client_db.is_file():
@@ -219,6 +248,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         cases_dir=cases_dir,
         overlay_path=overlay,
         annotations_path=annotations,
+        trace_store_path=trace_store,
+        fetch_traces=bool(args.fetch_traces),
     )
     print(f"[review] serving on http://{args.host}:{args.port}/review (read-only)")
     print("[review] this process does not start runs and does not recover run state")

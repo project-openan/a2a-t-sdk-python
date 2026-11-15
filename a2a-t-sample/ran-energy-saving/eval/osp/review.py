@@ -648,16 +648,56 @@ def _trace_context(
     """
     runner = _mapping(case.get("runner"))
     stages = _mapping(evidence.get("stages"))
+    rounds, _source = _trace_rounds(effective, protocol, evidence)
     return TraceContext(
         protocol=protocol,
         run_mode=str(case.get("operation") or "").strip().lower(),
         blocked=is_blocked_case(case),
         followup=has_followup(case),
-        rounds=_expected_rounds(effective, protocol),
-        accepted="accepted" in stages,
+        rounds=rounds,
+        accepted=_run_accepted(stages),
         validation_on=runner.get("pre_send_validation") == "always",
         run_id=run_id,
     )
+
+
+def _trace_rounds(
+    case: Mapping[str, Any],
+    protocol: str,
+    evidence: Mapping[str, Any],
+) -> tuple[int, str]:
+    """Return the rounds the run actually negotiated, and where the number came from.
+
+    The trace gate asks "did every span this run produced reach Langfuse", not "did the run
+    negotiate the corpus' expected number of rounds" — that is the negotiation dimension's job.
+    Using the expected count here would report a functional shortfall as missing spans.
+    """
+    actual = _mapping(_stage(evidence, "negotiate").get("actual"))
+    value = actual.get("rounds")
+    if isinstance(value, int) and not isinstance(value, bool):
+        return max(0, value), "observed"
+    messages = evidence.get("messages")
+    if isinstance(messages, list) and messages:
+        numbers = [
+            _int_value(message.get("round"))
+            for message in messages
+            if isinstance(message, Mapping)
+        ]
+        return max(0, max(numbers, default=0)), "messages"
+    return _expected_rounds(case, protocol), "expected"
+
+
+def _run_accepted(stages: Mapping[str, Any]) -> bool:
+    """Return whether the run was accepted (or reached a working/final state after it).
+
+    The presence of an ``accepted`` stage is not enough: the tester records it as failed or
+    waiting in some flows, and requiring a ``task_created`` point then fails a correct run.
+    """
+    for name in ("accepted", "working"):
+        if str(_mapping(stages.get(name)).get("status") or "") == "passed":
+            return True
+    final = _mapping(stages.get("final"))
+    return str(final.get("actual") or "") in {"task_completed", "task_modified"}
 
 
 def _expected_rounds(case: Mapping[str, Any], protocol: str) -> int:

@@ -133,32 +133,40 @@ def _evidence(
     run_id: str = "run-1",
     batch: dict[str, object] | None = None,
     trace: dict[str, object] | None = None,
+    accepted_status: str | None = None,
 ) -> dict[str, object]:
     """Return one stored tester item (trimmed like the review corpus stores it)."""
+    stages: dict[str, object] = {
+        "intent": {"stage": "intent", "status": action, "actual": dict(INTENT)},
+        "task_t": {"stage": "task_t", "status": "passed", "actual": task_t},
+        "validate": {
+            "stage": "validate",
+            "status": "passed",
+            "actual": validate_verdict,
+            "detail": {
+                "verdict": validate_verdict,
+                "slotErrors": slot_errors or [],
+            },
+        },
+        "negotiate": {
+            "stage": "negotiate",
+            "status": "passed",
+            "actual": {"rounds": rounds, "kinds": ["feasibility"]},
+        },
+        "final": {"stage": "final", "status": "passed", "actual": final_state},
+    }
+    if accepted_status is not None:
+        stages["accepted"] = {
+            "stage": "accepted",
+            "status": accepted_status,
+            "actual": "accepted",
+        }
     return {
         "runId": run_id,
         "batch": batch if batch is not None else {},
         "trace": trace,
         "refs": {"userInput": refs_input},
-        "stages": {
-            "intent": {"stage": "intent", "status": action, "actual": dict(INTENT)},
-            "task_t": {"stage": "task_t", "status": "passed", "actual": task_t},
-            "validate": {
-                "stage": "validate",
-                "status": "passed",
-                "actual": validate_verdict,
-                "detail": {
-                    "verdict": validate_verdict,
-                    "slotErrors": slot_errors or [],
-                },
-            },
-            "negotiate": {
-                "stage": "negotiate",
-                "status": "passed",
-                "actual": {"rounds": rounds, "kinds": ["feasibility"]},
-            },
-            "final": {"stage": "final", "status": "passed", "actual": final_state},
-        },
+        "stages": stages,
         "intent": dict(sdk_intent or INTENT),
         "serverIntent": dict(server_intent or INTENT),
         "messages": messages or [],
@@ -326,6 +334,7 @@ REAL_BATCH: dict[str, object] = {"nms": True, "nmsSim": False}
 A2A_T_OBSERVATIONS: tuple[dict[str, object], ...] = (
     {"kind": "task_prompt_rendered", "runId": "run-1"},
     {"kind": "task_validation", "runId": "run-1"},
+    {"kind": "task_created", "runId": "run-1"},
     {
         "kind": "generation",
         "type": "GENERATION",
@@ -428,6 +437,36 @@ def test_a_complete_trace_passes() -> None:
     assert trace.actual == 2
 
 
+def test_the_trace_uses_the_observed_rounds_not_the_expected_ones() -> None:
+    judgement = judge_protocol(
+        _case(rounds=2),
+        "a2a-t",
+        _evidence(batch=REAL_BATCH, trace=_trace(), rounds=1),
+    )
+
+    assert _dimension(judgement, "trace").status == VERDICT_PASS
+    assert _dimension(judgement, "negotiation").status == VERDICT_FAIL
+
+
+def test_a_failed_accepted_stage_does_not_require_task_created() -> None:
+    without_task_created = tuple(
+        row for row in A2A_T_OBSERVATIONS if row.get("kind") != "task_created"
+    )
+
+    judgement = judge_protocol(
+        _case(),
+        "a2a-t",
+        _evidence(
+            batch=REAL_BATCH,
+            trace=_trace(observations=without_task_created),
+            accepted_status="failed",
+            final_state="",
+        ),
+    )
+
+    assert _dimension(judgement, "trace").status == VERDICT_PASS
+
+
 def test_a_missing_expected_point_fails_with_its_code() -> None:
     without_validation = tuple(
         row for row in A2A_T_OBSERVATIONS if row.get("kind") != "task_validation"
@@ -496,13 +535,17 @@ def test_a_missing_client_frame_fails_only_the_a2a_t_hop() -> None:
     failing = judge_protocol(
         _case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(client=0))
     )
-    pure_observations = ({"kind": "message_sent", "runId": "run-1"},)
+    pure_observations = (
+        {"kind": "message_sent", "runId": "run-1"},
+        {"kind": "task_created", "runId": "run-1"},
+    )
     passing = judge_protocol(
         _case(protocol="a2a", rounds=0),
         "a2a",
         _evidence(
             batch=REAL_BATCH,
             trace=_trace(client=0, observations=pure_observations),
+            rounds=0,
         ),
     )
 

@@ -22,6 +22,7 @@ from starlette.routing import Route
 from demo.web.review.export import build_payload, payload_json, payload_yaml, report_markdown
 from demo.web.review.service import PROTOCOLS, STATUSES, ReviewService
 from demo.web.review.store import CATEGORIES, DECISIONS, ReviewStore
+from demo.web.review.traces import TraceStore
 
 #: Directory of the console page assets.
 REVIEW_DIR: Final[Path] = Path(__file__).resolve().parent
@@ -41,8 +42,14 @@ def build_review_routes(
     runs_dir: Path,
     client_db_path: Path | None,
     store_path: Path | None = None,
+    trace_store: TraceStore | None = None,
+    trace_fetch_enabled: bool = True,
 ) -> list[Route]:
-    """Build the acceptance review routes."""
+    """Build the acceptance review routes.
+
+    ``trace_store`` defaults to ``<runs-dir>/review/langfuse``; ``trace_fetch_enabled`` lets the
+    standalone read-only instance forbid Langfuse calls.
+    """
     resolved_store = ReviewStore(
         store_path
         if store_path is not None
@@ -54,6 +61,8 @@ def build_review_routes(
         catalog=catalog,
         runs_dir=Path(runs_dir),
         client_db_path=client_db_path,
+        trace_store=trace_store,
+        trace_fetch_enabled=trace_fetch_enabled,
     )
 
     async def page(request: Request) -> Response:
@@ -181,6 +190,23 @@ def build_review_routes(
             return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse({"ok": True, "detail": payload})
 
+    async def fetch_trace(request: Request) -> Response:
+        """Fetch one run's trace snapshot from Langfuse (explicit opt-in)."""
+        try:
+            case_id = int(request.path_params["case_id"])
+        except (KeyError, TypeError, ValueError):
+            return JSONResponse({"error": "caseId 必须是整数。"}, status_code=400)
+        protocol = request.path_params["protocol"]
+        if protocol not in PROTOCOLS:
+            return JSONResponse(
+                {"error": f"protocol 只能是 {', '.join(PROTOCOLS)}。"}, status_code=400
+            )
+        try:
+            payload = await asyncio.to_thread(service.fetch_trace, case_id, protocol)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "trace": payload})
+
     async def export_all_json(request: Request) -> Response:
         """Return the review payload as JSON."""
         del request
@@ -221,6 +247,11 @@ def build_review_routes(
         Route(
             "/api/review/case/{case_id}/{protocol}/decision",
             decision,
+            methods=["POST"],
+        ),
+        Route(
+            "/api/review/case/{case_id}/{protocol}/trace",
+            fetch_trace,
             methods=["POST"],
         ),
         Route("/api/review/export.json", export_all_json),

@@ -782,6 +782,21 @@ async function loadDetail() {
   renderDetail();
 }
 
+async function fetchTrace(button) {
+  if (!state.selected) return;
+  const { caseId, protocol } = state.selected;
+  button.disabled = true;
+  button.textContent = "抓取中…";
+  try {
+    await postJson(detailPath(caseId, protocol, "/trace"), {});
+    await loadDetail();
+  } catch (caught) {
+    showNotice(caught.message, "error");
+    button.disabled = false;
+    button.textContent = "抓取轨迹";
+  }
+}
+
 function resetDecision() {
   const decision = (state.detail && state.detail.decision) || {};
   state.decision = {
@@ -983,6 +998,18 @@ function renderDimensionStrip(round) {
     );
   }
   card.append(strip);
+  const failures = (round.judgement && round.judgement.failures) || [];
+  const notExported = failures.some(
+    (row) =>
+      row.dimension === "trace"
+      && (row.diffs || []).some((diff) => diff.reason === "trace_not_exported"),
+  );
+  if (notExported && round.runId) {
+    const button = el("button", "ghost small", "抓取轨迹");
+    button.type = "button";
+    button.addEventListener("click", () => fetchTrace(button));
+    card.append(button);
+  }
   const requests = round.requests || {};
   const rows = [
     [
@@ -1407,7 +1434,8 @@ async function scan() {
       .map(([reason, count]) => `${reason}=${count}`)
       .join("，");
     showNotice(
-      `采集 ${info.batches || 0} 个批次、${info.observations || 0} 条证据（新增 ${info.inserted || 0}）。`
+      `采集 ${info.batches || 0} 个批次、${info.observations || 0} 条证据`
+        + `（新增 ${info.inserted || 0}，轨迹快照 ${info.traces || 0}）。`
         + `窗口 ${info.windowStart} → ${info.windowEnd}`
         + (skipped ? `；跳过 ${skipped}` : "")
         + (info.truncated ? "；已达批次上限，较早批次未纳入。" : ""),

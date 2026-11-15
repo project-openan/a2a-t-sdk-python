@@ -35,6 +35,7 @@ from eval.osp.review import (
     evidence_is_current_input,
     judge_protocol,
 )
+from langfuse_export.config import Config
 
 from demo.web.review.corpus import case_documents, scan_evidence
 from demo.web.review.store import (
@@ -46,7 +47,9 @@ from demo.web.review.store import (
     DECISIONS,
     DecisionKey,
     ReviewStore,
+    now_iso,
 )
+from demo.web.review.traces import InvalidTraceIdError, TraceStore
 
 _LOGGER = logging.getLogger("ran_energy_saving.review")
 
@@ -82,11 +85,21 @@ class ReviewService:
         catalog: CaseCatalog,
         runs_dir: Path,
         client_db_path: Path | None,
+        trace_store: TraceStore | None = None,
+        trace_config: Config | None = None,
+        trace_fetch_enabled: bool = True,
     ) -> None:
         self._store = store
         self._catalog = catalog
         self._runs_dir = Path(runs_dir)
         self._client_db_path = client_db_path
+        self._trace_store = (
+            trace_store if trace_store is not None else TraceStore(self._runs_dir)
+        )
+        #: Langfuse credentials for the opt-in fetch; ``None`` means "not configured yet".
+        self._trace_config = trace_config
+        #: The standalone read-only instance leaves this off: it must not call Langfuse at all.
+        self._trace_fetch_enabled = trace_fetch_enabled
         self._last_scan: dict[str, object] | None = None
 
     @property
@@ -123,10 +136,12 @@ class ReviewService:
             max_batches=max_batches,
         )
         inserted = self._store.ingest(scan.observations)
+        attached = self._attach_traces(scan.observations)
         summary: dict[str, object] = {
             "inserted": inserted,
             "observations": len(scan.observations),
             "batches": len(scan.batches),
+            "traces": attached,
             "windowStart": scan.window_start,
             "windowEnd": scan.window_end,
             "skipped": dict(scan.skipped),
@@ -134,6 +149,106 @@ class ReviewService:
         }
         self._last_scan = summary
         return summary
+
+    def _attach_traces(self, observations: Sequence[Mapping[str, object]]) -> int:
+        """Attach the trace snapshot already on disk to every judgeable observation.
+
+        No network: ``cached_payload`` without a config only reads the snapshot root. A scan must
+        never pull every trace of a window from Langfuse — that is the page's explicit action.
+        """
+        groups: dict[str, tuple[dict[str, object], list[Mapping[str, object]]]] = {}
+        for observation in observations:
+            target = _trace_target(observation)
+            if target is None:
+                continue
+            trace_id = str(target["traceId"])
+            entry = groups.get(trace_id)
+            if entry is None:
+                groups[trace_id] = (target, [observation])
+            else:
+                entry[1].append(observation)
+        attached = 0
+        stamp = now_iso()
+        for trace_id, (target, rows) in groups.items():
+            try:
+                payload = self._trace_store.cached_payload(
+                    trace_id,
+                    run_id=str(target["runId"]),
+                    nms_kind="real",
+                    local_points=_string_list(target.get("localPoints")),
+                    local_known=_string_list(target.get("localKnown")),
+                )
+            except (InvalidTraceIdError, OSError):
+                continue
+            if str(payload.get("exportState") or "") not in {"exported", "partial"}:
+                continue
+            for observation in rows:
+                attached += self._store.set_trace(
+                    case_id=_as_int(observation.get("caseId")),
+                    protocol=str(observation.get("protocol") or ""),
+                    batch_id=str(observation.get("batchId") or ""),
+                    source_round=_as_int(observation.get("sourceRound"), 1),
+                    run_id=str(observation.get("runId") or ""),
+                    trace=payload,
+                    fetched_at=stamp,
+                )
+        return attached
+
+    def fetch_trace(self, case_id: int, protocol: str) -> dict[str, object]:
+        """Fetch one run's trace snapshot from Langfuse (explicit opt-in) and attach it."""
+        if not self._trace_fetch_enabled:
+            raise ValueError("该实例是只读模式，未启用轨迹抓取（启动时加 --fetch-traces）。")
+        case = self._catalog.get(case_id)
+        if case is None:
+            raise ValueError("未知用例。")
+        if protocol not in PROTOCOLS:
+            raise ValueError(f"protocol 只能是 {', '.join(PROTOCOLS)}。")
+        rows = self._store.observations(case_id, protocol)
+        if not rows:
+            raise ValueError("该协议任务没有证据。")
+        observation = rows[0]
+        target = _trace_target(observation)
+        if target is None:
+            raise ValueError("该运行不是真机下发，轨迹不参与验收。")
+        config = self._resolved_trace_config()
+        result = self._trace_store.fetch(
+            str(target["traceId"]), config, run_id=str(target["runId"])
+        )
+        if str(result.get("exportState") or "") != "exported":
+            raise ValueError(f"轨迹抓取失败：{result.get('error') or result.get('exportState')}")
+        payload = self._trace_store.cached_payload(
+            str(target["traceId"]),
+            run_id=str(target["runId"]),
+            nms_kind="real",
+            local_points=_string_list(target.get("localPoints")),
+            local_known=_string_list(target.get("localKnown")),
+        )
+        stored = self._store.set_trace(
+            case_id=case_id,
+            protocol=protocol,
+            batch_id=str(observation.get("batchId") or ""),
+            source_round=_as_int(observation.get("sourceRound"), 1),
+            run_id=str(observation.get("runId") or ""),
+            trace=payload,
+            fetched_at=now_iso(),
+        )
+        if not stored:
+            raise ValueError("该证据行已不在库中，请重新采集。")
+        return payload
+
+    def _resolved_trace_config(self) -> Config:
+        """Return the Langfuse credentials, loading them from the environment once."""
+        if self._trace_config is not None:
+            return self._trace_config
+        from langfuse_export.config import ConfigError, load_config
+
+        try:
+            self._trace_config = load_config(cwd=self._runs_dir)
+        except ConfigError as exc:
+            raise ValueError(
+                "未配置 Langfuse 凭据（LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY）。"
+            ) from exc
+        return self._trace_config
 
     def cases(self) -> list[dict[str, object]]:
         """Return every case with its two protocol tasks, verdicts and decisions."""
@@ -522,6 +637,37 @@ def _as_int(value: object, default: int = 0) -> int:
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return default
+
+
+def _trace_target(observation: Mapping[str, object]) -> dict[str, object] | None:
+    """Return the trace lookup of one observation, or ``None`` when it is not judgeable.
+
+    Only a batch that declared the real vendor NMS and a run that actually dispatched have a
+    vendor trace to look up; an undeclared legacy batch must not borrow a trace by accident.
+    """
+    if observation.get("nmsDeclared") is not True or observation.get("nmsSimDeclared") is not False:
+        return None
+    run_id = observation.get("runId")
+    trace_id = observation.get("traceId")
+    if not isinstance(run_id, str) or not run_id:
+        return None
+    if not isinstance(trace_id, str) or not trace_id:
+        return None
+    evidence = observation.get("evidence")
+    evidence_map = evidence if isinstance(evidence, Mapping) else {}
+    return {
+        "runId": run_id,
+        "traceId": trace_id,
+        "localPoints": evidence_map.get("localPoints"),
+        "localKnown": evidence_map.get("localKnown"),
+    }
+
+
+def _string_list(value: object) -> list[str] | None:
+    """Return a list of strings, or ``None`` when the value is not a list."""
+    if not isinstance(value, list):
+        return None
+    return [str(item) for item in value]
 
 
 def _judged_evidence(observation: Mapping[str, object]) -> dict[str, object]:
