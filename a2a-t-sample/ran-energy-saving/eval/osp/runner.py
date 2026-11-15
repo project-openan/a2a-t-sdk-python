@@ -44,6 +44,7 @@ from shared.task_schema import TASK_PARAM_SCHEMA
 from shared.trace import trace_stage
 
 from eval.osp.compare import Diff, compare_intent, compare_task_t
+from eval.osp.detail import render_failures
 from eval.osp.followup import followup_case, has_followup, interception_case, is_blocked_case
 from eval.osp.intent_schema import OSP_INTENT_SCHEMA
 
@@ -718,6 +719,12 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         help="override A2AT_SAMPLE_MODEL_MODE for this run",
     )
     parser.add_argument("--out", type=Path, default=None, help="JSON report path")
+    parser.add_argument(
+        "--detail",
+        type=Path,
+        default=None,
+        help="Markdown detail report of the failing cases (operator text, expectations, diffs)",
+    )
     parser.add_argument("--no-write", action="store_true", help="do not write a JSON report")
     parser.add_argument("--verbose", action="store_true", help="print every diff")
     return parser.parse_args(argv)
@@ -756,6 +763,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_outcome(outcome, verbose=args.verbose)
 
     report = build_report(outcomes, stop_after=args.stop_after, started_at=started_at)
+    if args.detail is not None:
+        args.detail.parent.mkdir(parents=True, exist_ok=True)
+        args.detail.write_text(
+            render_failures(report, {int(case["id"]): case for case in cases}),
+            encoding="utf-8",
+        )
+        print(f"detail: {args.detail}")
     if not args.no_write:
         target = args.out or (DEFAULT_REPORT_DIR / f"{started_at.replace(':', '')}.json")
         target.parent.mkdir(parents=True, exist_ok=True)

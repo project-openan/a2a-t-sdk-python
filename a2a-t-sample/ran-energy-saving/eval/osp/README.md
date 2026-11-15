@@ -383,6 +383,10 @@ pytest tests/test_osp_live_eval.py -q
 # 2) runner：写 JSON 报告，summary.stages 给出 intent / task_t / validate 的分阶段计数
 python -m eval.osp.runner --all --stop-after validate --model-mode live \
   --out runs/osp-eval/qwen3.8-flash.json
+
+# 3) 同一次运行再写一份失败用例的 Markdown 详情报告（原始请求、逐阶段状态、期望/实际 diff）
+python -m eval.osp.runner --all --stop-after validate --model-mode live \
+  --out runs/osp-eval/qwen3.8-flash.json --detail runs/osp-eval/qwen3.8-flash-failures.md
 ```
 
 要点：
