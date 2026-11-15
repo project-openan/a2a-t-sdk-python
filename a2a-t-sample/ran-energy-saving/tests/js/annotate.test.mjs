@@ -1,63 +1,203 @@
 import assert from "node:assert/strict";
 
 import {
-  filterTargets,
+  defaultRunKey,
+  filterCases,
+  filterObservations,
   groupByRound,
   progressText,
+  protocolLabel,
+  runKey,
+  runOptions,
   statusLabel,
+  subtaskLabel,
+  subtasksOf,
 } from "../../demo/web/annotate/main.js";
 
-const targets = [
-  { caseId: 16, caseName: "gain target", protocol: "a2a-t", dimension: "slot_errors", status: "pending" },
-  { caseId: 28, caseName: "时间重叠", protocol: "a2a-t", dimension: "messages", status: "confirmed" },
-  { caseId: 28, caseName: "时间重叠", protocol: "a2a", dimension: "messages", status: "applied" },
+const CASES = [
+  {
+    caseId: 16,
+    caseName: "设置 gain target",
+    operation: "Create",
+    protocols: [
+      {
+        protocol: "a2a-t",
+        status: "pending",
+        subtasks: [
+          { dimension: "slot_errors", status: "pending", observations: 2 },
+        ],
+      },
+      { protocol: "a2a", status: "none", subtasks: [] },
+    ],
+  },
+  {
+    caseId: 26,
+    caseName: "时间重叠 + 可行性协商",
+    operation: "Modify",
+    protocols: [
+      {
+        protocol: "a2a-t",
+        status: "confirmed",
+        subtasks: [
+          { dimension: "slot_errors", status: "confirmed", observations: 3 },
+          { dimension: "messages", status: "confirmed", observations: 2 },
+        ],
+      },
+      {
+        protocol: "a2a",
+        status: "draft",
+        subtasks: [{ dimension: "messages", status: "draft", observations: 1 }],
+      },
+    ],
+  },
+  {
+    caseId: 50,
+    caseName: "待黄区跑",
+    operation: "Modify",
+    protocols: [
+      {
+        protocol: "a2a-t",
+        status: "pending",
+        subtasks: [{ dimension: "messages", status: "pending", observations: 0 }],
+      },
+      { protocol: "a2a", status: "none", subtasks: [] },
+    ],
+  },
+  {
+    caseId: 45,
+    caseName: "双协议都不协商",
+    operation: "Create",
+    protocols: [
+      { protocol: "a2a-t", status: "none", subtasks: [] },
+      { protocol: "a2a", status: "none", subtasks: [] },
+    ],
+  },
 ];
 
 assert.equal(statusLabel("draft"), "草稿");
-assert.equal(statusLabel("applied"), "已应用");
+assert.equal(statusLabel("none"), "无需标注");
 assert.equal(statusLabel(null), "未采集");
+assert.equal(protocolLabel("a2a-t"), "A2A-T");
+assert.equal(protocolLabel("a2a"), "A2A");
+assert.equal(subtaskLabel("slot_errors"), "拦截 slot_errors");
+assert.equal(subtaskLabel("messages"), "协商报文");
 
 assert.deepEqual(
-  filterTargets(targets, {}).map((target) => target.caseId),
-  [16, 28, 28],
+  subtasksOf(CASES[1], "a2a").map((row) => row.dimension),
+  ["messages"],
+);
+assert.deepEqual(subtasksOf(CASES[0], "a2a"), []);
+
+// hideNone on: the second protocol of case 16 and the whole case 45 disappear.
+assert.deepEqual(
+  filterCases(CASES, { hideNone: true }).map((row) => [
+    row.caseId,
+    row.protocols.map((task) => task.protocol),
+  ]),
+  [
+    [16, ["a2a-t"]],
+    [26, ["a2a-t", "a2a"]],
+    [50, ["a2a-t"]],
+  ],
+);
+// hideNone off keeps the "无需标注" tasks.
+assert.deepEqual(
+  filterCases(CASES, { hideNone: false }).map((row) => row.caseId),
+  [16, 26, 50, 45],
 );
 assert.deepEqual(
-  filterTargets(targets, { dimension: "messages" }).map((target) => target.protocol),
-  ["a2a-t", "a2a"],
+  filterCases(CASES, { protocol: "a2a", hideNone: true }).map((row) => row.caseId),
+  [26],
 );
 assert.deepEqual(
-  filterTargets(targets, { protocol: "a2a" }).map((target) => target.caseId),
-  [28],
+  filterCases(CASES, { subtask: "messages", hideNone: true }).map((row) => row.caseId),
+  [26, 50],
 );
 assert.deepEqual(
-  filterTargets(targets, { status: "pending" }).map((target) => target.caseId),
-  [16],
+  filterCases(CASES, { status: "confirmed", hideNone: true }).map((row) => row.caseId),
+  [26],
 );
 assert.deepEqual(
-  filterTargets(targets, { query: "28" }).map((target) => target.protocol),
-  ["a2a-t", "a2a"],
+  filterCases(CASES, { candidates: "without", hideNone: false }).map((row) => row.caseId),
+  [50],
 );
 assert.deepEqual(
-  filterTargets(targets, { query: "时间" }).length,
-  2,
+  filterCases(CASES, { query: "26" }).map((row) => row.caseId),
+  [26],
+);
+assert.deepEqual(
+  filterCases(CASES, { query: "时间" }).map((row) => row.caseId),
+  [26],
 );
 
-const grouped = groupByRound([
-  { id: 2, round: 2 },
-  { id: 1, round: 1 },
-  { id: 3, round: 1 },
-]);
+const OLD = {
+  id: 1,
+  round: 1,
+  sourceBatch: "batch-old",
+  sourceRound: 1,
+  observedAt: "2026-11-14T09:00:00+00:00",
+  model: "offline",
+  nms: false,
+  decisionMode: "scripted",
+  consistent: true,
+};
+const LIVE = {
+  id: 2,
+  round: 1,
+  sourceBatch: "batch-live",
+  sourceRound: 1,
+  observedAt: "2026-11-15T18:22:00+00:00",
+  model: "qwen3.8",
+  nms: true,
+  decisionMode: "live",
+  consistent: true,
+};
+const LIVE_DIVERGENT = { ...LIVE, id: 3, consistent: false };
+
+assert.equal(runKey(LIVE), "batch-live#1");
+
+const options = runOptions([OLD, LIVE, LIVE_DIVERGENT, { ...LIVE, id: 4 }]);
 assert.deepEqual(
-  grouped.map(([round, rows]) => [round, rows.length]),
+  options.map((option) => option.key),
+  ["batch-live#1", "batch-old#1"],
+);
+assert.equal(options[0].count, 3);
+assert.equal(options[0].nms, true);
+assert.equal(defaultRunKey(options), "batch-live#1");
+assert.equal(
+  defaultRunKey(runOptions([{ ...OLD, nms: true, decisionMode: "scripted" }])),
+  "batch-old#1",
+);
+assert.equal(defaultRunKey([]), "");
+
+assert.deepEqual(
+  filterObservations([OLD, LIVE, LIVE_DIVERGENT], { run: "", nms: true, live: true, consistent: true })
+    .map((row) => row.id),
+  [2],
+);
+assert.deepEqual(
+  filterObservations([OLD, LIVE, LIVE_DIVERGENT], { run: "", consistent: false }).map((row) => row.id),
+  [1, 2, 3],
+);
+assert.deepEqual(
+  filterObservations([OLD, LIVE], { run: "batch-old#1" }).map((row) => row.id),
+  [1],
+);
+
+assert.deepEqual(
+  groupByRound([
+    { id: 2, round: 2 },
+    { id: 1, round: 1 },
+    { id: 3, round: 1 },
+  ]).map(([round, rows]) => [round, rows.length]),
   [
     [1, 2],
     [2, 1],
   ],
 );
-assert.deepEqual(groupByRound([]).length, 0);
 
 assert.equal(
-  progressText({ counts: { total: 151, pending: 149, draft: 0, confirmed: 2, applied: 0 } }),
-  "目标 151 · 未采集 149 · 草稿 0 · 已确认 2 · 已应用 0",
+  progressText({ counts: { total: 151, pending: 149, draft: 0, confirmed: 2 } }),
+  "子任务 151 · 未采集 149 · 草稿 0 · 已确认 2",
 );
 assert.equal(progressText(null), "");

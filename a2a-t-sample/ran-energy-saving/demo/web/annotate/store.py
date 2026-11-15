@@ -17,7 +17,7 @@ import hashlib
 import json
 import sqlite3
 import unicodedata
-from collections.abc import Generator, Iterable, Mapping, Sequence
+from collections.abc import Generator, Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,12 +30,12 @@ from eval.osp.expectations import MESSAGE_DIMENSION, SLOT_DIMENSION, SLOT_MODE_A
 TARGET_PENDING: Final[str] = "pending"
 TARGET_DRAFT: Final[str] = "draft"
 TARGET_CONFIRMED: Final[str] = "confirmed"
-TARGET_APPLIED: Final[str] = "applied"
+#: Statuses of one subtask. There is no "applied" state: the console only exports, because the
+#: yellow zone hot-replaces the case files and a direct write would be overwritten.
 TARGETS: Final[tuple[str, ...]] = (
     TARGET_PENDING,
     TARGET_DRAFT,
     TARGET_CONFIRMED,
-    TARGET_APPLIED,
 )
 
 #: Dimensions this console annotates.
@@ -79,7 +79,6 @@ CREATE TABLE IF NOT EXISTS target (
   note        TEXT,
   confirmed_by TEXT,
   confirmed_at TEXT,
-  applied_at  TEXT,
   updated_at  TEXT NOT NULL,
   PRIMARY KEY (case_id, protocol, dimension)
 );
@@ -217,7 +216,7 @@ class AnnotationStore:
                        (SELECT COUNT(*) FROM choice c
                          WHERE c.case_id=o.case_id AND c.protocol=o.protocol
                            AND c.dimension=o.dimension AND c.accepted=1) AS accepted,
-                       t.status, t.mode, t.note, t.confirmed_by, t.confirmed_at, t.applied_at
+                       t.status, t.mode, t.note, t.confirmed_by, t.confirmed_at
                 FROM observation o
                 LEFT JOIN target t
                   ON t.case_id=o.case_id AND t.protocol=o.protocol AND t.dimension=o.dimension
@@ -240,7 +239,6 @@ class AnnotationStore:
                 "note": row["note"],
                 "confirmedBy": row["confirmed_by"],
                 "confirmedAt": row["confirmed_at"],
-                "appliedAt": row["applied_at"],
             }
             for row in rows
         ]
@@ -377,15 +375,6 @@ class AnnotationStore:
             self._record(connection, actor, "confirm", key, {})
         return {"status": TARGET_CONFIRMED, "confirmedAt": stamp, "confirmedBy": actor}
 
-    def mark_applied(self, keys: Sequence[TargetKey], *, actor: str = "") -> None:
-        """Mark the confirmed targets whose expectations were written to the corpus."""
-        stamp = now_iso()
-        with self._session() as connection:
-            for key in keys:
-                self._touch_target(connection, key, status=TARGET_APPLIED, applied_at=stamp,
-                                   stamp=stamp)
-                self._record(connection, actor, "apply", key, {"appliedAt": stamp})
-
     def export_payload(self, *, confirmed_only: bool = True) -> dict[str, object]:
         """Return the case-level expectation payload of the confirmed targets."""
         cases: dict[int, dict[str, object]] = {}
@@ -401,7 +390,7 @@ class AnnotationStore:
                     str(target["dimension"]),
                 )
                 status = str(target["status"] or TARGET_PENDING)
-                if confirmed_only and status not in {TARGET_CONFIRMED, TARGET_APPLIED}:
+                if confirmed_only and status != TARGET_CONFIRMED:
                     continue
                 value = self._value(connection, key, target)
                 if value is None:
@@ -491,7 +480,6 @@ class AnnotationStore:
         note: str | None = None,
         confirmed_by: str | None = None,
         confirmed_at: str | None = None,
-        applied_at: str | None = None,
         stamp: str,
     ) -> None:
         """Create or update one target row, keeping the columns the caller did not set.
@@ -504,8 +492,8 @@ class AnnotationStore:
             """
             INSERT OR IGNORE INTO target
                 (case_id, protocol, dimension, status, mode, note, confirmed_by, confirmed_at,
-                 applied_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 key.case_id,
@@ -516,7 +504,6 @@ class AnnotationStore:
                 note,
                 confirmed_by,
                 confirmed_at,
-                applied_at,
                 stamp,
             ),
         )
@@ -528,7 +515,6 @@ class AnnotationStore:
             ("note", note),
             ("confirmed_by", confirmed_by),
             ("confirmed_at", confirmed_at),
-            ("applied_at", applied_at),
         ):
             if value is not None:
                 assignments.append(f"{column}=?")
@@ -622,7 +608,6 @@ def _target_row(row: sqlite3.Row) -> dict[str, object]:
         "note": row["note"],
         "confirmedBy": row["confirmed_by"],
         "confirmedAt": row["confirmed_at"],
-        "appliedAt": row["applied_at"],
         "updatedAt": row["updated_at"],
     }
 
@@ -634,7 +619,6 @@ def _empty_target(key: TargetKey) -> dict[str, object]:
         "note": None,
         "confirmedBy": None,
         "confirmedAt": None,
-        "appliedAt": None,
         "updatedAt": None,
         "caseId": key.case_id,
         "protocol": key.protocol,
@@ -676,7 +660,6 @@ __all__ = [
     "AnnotationStore",
     "DIMENSIONS",
     "TARGETS",
-    "TARGET_APPLIED",
     "TARGET_CONFIRMED",
     "TARGET_DRAFT",
     "TARGET_PENDING",

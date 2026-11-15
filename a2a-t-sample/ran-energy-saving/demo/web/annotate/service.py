@@ -1,10 +1,16 @@
 """Service layer of the expectation annotation console.
 
-The console works on the full expectation space, not on the batches a browser happened to run:
-every case whose A2A-T request is expected to be intercepted contributes a ``slot_errors`` target,
-and every case that expects a negotiation contributes a ``messages`` target per protocol. That
-space is derived from the catalog, and the store only adds what the runs observed and what an
-operator chose, so a case with no evidence still appears (as ``pending``) instead of hiding.
+The console mirrors the corpus: one row per case, two protocol tasks per case (A2A-T and A2A), and
+the expectation subtasks each protocol actually has.
+
+    case 16  ─ a2a-t ─ slot_errors        (only when the case expects an interception)
+             │       └ messages           (only when the case expects a negotiation)
+             └ a2a   └ messages
+
+A protocol with no subtask is still listed, as ``none``, because "this protocol expects no
+negotiation" is itself a fact of the case; the page can hide those rows, but the API never pretends
+they do not exist. Every target comes from the catalog, so a case nobody has run yet still appears
+(as ``pending``) instead of hiding until it has evidence.
 """
 
 from __future__ import annotations
@@ -21,7 +27,6 @@ from eval.osp.followup import is_blocked_case
 
 from demo.web.annotate.corpus import case_documents, scan_corpus
 from demo.web.annotate.store import (
-    TARGET_APPLIED,
     TARGET_CONFIRMED,
     TARGET_DRAFT,
     TARGET_PENDING,
@@ -32,8 +37,11 @@ from demo.web.annotate.store import (
 
 _LOGGER = logging.getLogger("ran_energy_saving.annotate")
 
-#: Protocols a negotiation target exists for.
-MESSAGE_PROTOCOLS: Final[tuple[str, ...]] = (PROTOCOL_A2A_T, PROTOCOL_A2A)
+#: Protocol tasks every case carries, in display order.
+PROTOCOLS: Final[tuple[str, ...]] = (PROTOCOL_A2A_T, PROTOCOL_A2A)
+
+#: Status of a protocol task that has no expectation to annotate.
+STATUS_NONE: Final[str] = "none"
 
 
 @dataclass(frozen=True)
@@ -62,7 +70,7 @@ class ScanSummary:
 
 
 class AnnotateService:
-    """Corpus scanning and target projection for the annotation console."""
+    """Corpus scanning and case projection for the annotation console."""
 
     def __init__(
         self,
@@ -80,7 +88,7 @@ class AnnotateService:
 
     @property
     def store(self) -> AnnotationStore:
-        """Return the annotation store (routes build the payload from it)."""
+        """Return the annotation store (routes export from it)."""
         return self._store
 
     def scan(self, *, days: float = 1.0, max_batches: int = 500) -> ScanSummary:
@@ -112,40 +120,36 @@ class AnnotateService:
         )
         return summary
 
-    def targets(self) -> list[dict[str, object]]:
-        """Return every annotatable target with its evidence and confirmation state."""
+    def cases(self) -> list[dict[str, object]]:
+        """Return every case with its two protocol tasks and their subtasks."""
         observed = {
-            (as_int(row.get("caseId")), str(row.get("protocol") or ""), str(row.get("dimension") or "")): row
+            (
+                as_int(row.get("caseId")),
+                str(row.get("protocol") or ""),
+                str(row.get("dimension") or ""),
+            ): row
             for row in self._store.targets()
         }
         rows: list[dict[str, object]] = []
         for case in self._catalog.documents():
             case_id = int(case["id"])
-            name = str(case.get("name") or "")
-            if is_blocked_case(case):
-                rows.append(
-                    self._target_row(
-                        case, case_id, name, PROTOCOL_A2A_T, SLOT_DIMENSION, observed
-                    )
-                )
-            for protocol in MESSAGE_PROTOCOLS:
-                rounds = _expected_rounds(case, protocol)
-                if rounds <= 0:
-                    continue
-                rows.append(
-                    self._target_row(case, case_id, name, protocol, MESSAGE_DIMENSION, observed)
-                )
-        rows.sort(
-            key=lambda row: (
-                as_int(row.get("caseId")),
-                str(row.get("protocol") or ""),
-                str(row.get("dimension") or ""),
+            rows.append(
+                {
+                    "caseId": case_id,
+                    "caseName": str(case.get("name") or ""),
+                    "operation": case.get("operation"),
+                    "dimension": case.get("dimension"),
+                    "tags": list(case.get("tags") or ()),
+                    "protocols": [
+                        self._protocol_task(case, case_id, protocol, observed)
+                        for protocol in PROTOCOLS
+                    ],
+                }
             )
-        )
         return rows
 
     def detail(self, case_id: int, protocol: str, dimension: str) -> dict[str, object]:
-        """Return the candidates, choices and current corpus value of one target."""
+        """Return the candidates, choices and current corpus value of one subtask."""
         key = TargetKey(case_id, protocol, dimension)
         detail = self._store.detail(key)
         case = self._catalog.get(case_id)
@@ -164,41 +168,66 @@ class AnnotateService:
         return detail
 
     def progress(self) -> dict[str, object]:
-        """Return the number of targets per status and the last scan summary."""
-        counts: dict[str, int] = {status: 0 for status in
-                                  (TARGET_PENDING, TARGET_DRAFT, TARGET_CONFIRMED, TARGET_APPLIED)}
-        for row in self.targets():
-            status = str(row.get("status") or TARGET_PENDING)
-            counts[status] = counts.get(status, 0) + 1
-        counts["total"] = sum(
-            counts[status] for status in (TARGET_PENDING, TARGET_DRAFT, TARGET_CONFIRMED,
-                                         TARGET_APPLIED)
-        )
+        """Return the number of subtasks per status and the last scan summary."""
+        counts: dict[str, int] = {
+            status: 0 for status in (TARGET_PENDING, TARGET_DRAFT, TARGET_CONFIRMED)
+        }
+        for case in self.cases():
+            protocols = case.get("protocols")
+            if not isinstance(protocols, list):
+                continue
+            for task in protocols:
+                subtasks = task.get("subtasks") if isinstance(task, Mapping) else None
+                if not isinstance(subtasks, list):
+                    continue
+                for subtask in subtasks:
+                    if not isinstance(subtask, Mapping):
+                        continue
+                    status = str(subtask.get("status") or TARGET_PENDING)
+                    counts[status] = counts.get(status, 0) + 1
         return {
-            "counts": counts,
+            "counts": {**counts, "total": sum(counts.values())},
+            "caseCount": len(self._catalog.documents()),
             "lastScan": self._last_scan.to_dict() if self._last_scan is not None else None,
         }
 
-    def _target_row(
+    def _protocol_task(
         self,
         case: Mapping[str, Any],
         case_id: int,
-        name: str,
+        protocol: str,
+        observed: Mapping[tuple[int, str, str], Mapping[str, object]],
+    ) -> dict[str, object]:
+        """Build one protocol task with the subtasks this case actually has."""
+        subtasks: list[dict[str, object]] = []
+        if protocol == PROTOCOL_A2A_T and is_blocked_case(case):
+            subtasks.append(self._subtask(case, case_id, protocol, SLOT_DIMENSION, observed))
+        if _expected_rounds(case, protocol) > 0:
+            subtasks.append(self._subtask(case, case_id, protocol, MESSAGE_DIMENSION, observed))
+        return {
+            "protocol": protocol,
+            "status": _aggregate_status(subtasks),
+            "validate": _expected_validate(case) if protocol == PROTOCOL_A2A_T else None,
+            "expectedRounds": _expected_rounds(case, protocol),
+            "kinds": _expected_kinds(case, protocol),
+            "subtasks": subtasks,
+        }
+
+    def _subtask(
+        self,
+        case: Mapping[str, Any],
+        case_id: int,
         protocol: str,
         dimension: str,
         observed: Mapping[tuple[int, str, str], Mapping[str, object]],
     ) -> dict[str, object]:
-        """Build one target row from the catalog and the stored evidence."""
+        """Build one subtask row from the catalog and the stored evidence."""
         evidence = observed.get((case_id, protocol, dimension), {})
         current = _current_value(case, protocol, dimension)
         return {
             "caseId": case_id,
-            "caseName": name,
             "protocol": protocol,
             "dimension": dimension,
-            "validate": _expected_validate(case),
-            "expectedRounds": _expected_rounds(case, protocol),
-            "kinds": _expected_kinds(case, protocol),
             "observations": as_int(evidence.get("observations")),
             "consistentObservations": as_int(evidence.get("consistentObservations")),
             "runs": as_int(evidence.get("runs")),
@@ -208,13 +237,12 @@ class AnnotateService:
             "note": evidence.get("note"),
             "confirmedBy": evidence.get("confirmedBy"),
             "confirmedAt": evidence.get("confirmedAt"),
-            "appliedAt": evidence.get("appliedAt"),
             "hasCurrent": current is not None,
             "current": current,
         }
 
     def _pending_value(self, key: TargetKey) -> object | None:
-        """Return the value the accepted choices of one target would write."""
+        """Return the value the accepted choices of one subtask would export."""
         payload = self._store.export_payload(confirmed_only=False)
         entries = payload.get("cases")
         if not isinstance(entries, list):
@@ -229,6 +257,17 @@ class AnnotateService:
         return None
 
 
+def _aggregate_status(subtasks: list[dict[str, object]]) -> str:
+    """Return the status of one protocol task from its subtasks."""
+    if not subtasks:
+        return STATUS_NONE
+    statuses = {str(subtask.get("status") or TARGET_PENDING) for subtask in subtasks}
+    for status in (TARGET_PENDING, TARGET_DRAFT, TARGET_CONFIRMED):
+        if status in statuses:
+            return status
+    return TARGET_CONFIRMED
+
+
 def _expected_validate(case: Mapping[str, Any] | None) -> object:
     """Return the case's expected A2A-T validation verdict."""
     block = _protocol_block(case, PROTOCOL_A2A_T)
@@ -241,7 +280,7 @@ def _expected_rounds(case: Mapping[str, Any] | None, protocol: str) -> int:
     if not isinstance(negotiation, Mapping):
         return 0
     value = negotiation.get("expected_rounds")
-    return int(value) if isinstance(value, int) and not isinstance(value, bool) else 0
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 def _expected_kinds(case: Mapping[str, Any] | None, protocol: str) -> list[str] | None:
@@ -258,7 +297,7 @@ def _current_value(
     protocol: str,
     dimension: str,
 ) -> object | None:
-    """Return the expectation the corpus already states for one target."""
+    """Return the expectation the corpus already states for one subtask."""
     block = _protocol_block(case, protocol)
     if dimension == SLOT_DIMENSION:
         return block.get(SLOT_DIMENSION)
@@ -276,4 +315,4 @@ def _protocol_block(case: Mapping[str, Any] | None, protocol: str) -> Mapping[st
     return block if isinstance(block, Mapping) else {}
 
 
-__all__ = ["AnnotateService", "MESSAGE_PROTOCOLS", "ScanSummary"]
+__all__ = ["AnnotateService", "PROTOCOLS", "STATUS_NONE", "ScanSummary"]

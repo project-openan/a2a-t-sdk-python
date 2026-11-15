@@ -35,41 +35,10 @@
         </select>
       </label>
       <button class="primary" id="scan-button" type="button">采集候选</button>
-      <label>维度
-        <select id="filter-dimension">
-          <option value="">全部</option>
-          <option value="slot_errors">拦截 slot_errors</option>
-          <option value="messages">协商报文</option>
-        </select>
-      </label>
-      <label>协议
-        <select id="filter-protocol">
-          <option value="">全部</option>
-          <option value="a2a-t">A2A-T</option>
-          <option value="a2a">A2A</option>
-        </select>
-      </label>
-      <label>状态
-        <select id="filter-status">
-          <option value="">全部</option>
-          <option value="pending">未采集</option>
-          <option value="draft">草稿</option>
-          <option value="confirmed">已确认</option>
-          <option value="applied">已应用</option>
-        </select>
-      </label>
-      <label>运行轮次
-        <select id="filter-round">
-          <option value="">全部</option>
-          <option value="1">第 1 轮</option>
-          <option value="2">第 2 轮</option>
-          <option value="3">第 3 轮</option>
-          <option value="4">第 4 轮</option>
-        </select>
-      </label>
-      <input id="filter-query" type="search" placeholder="搜索编号或名称">
-      <label class="check"><input id="only-consistent" type="checkbox" checked> 只看一致候选</label>
       <span class="summary" id="progress"></span>
+      <span class="spacer"></span>
+      <a class="button" href="/api/annotate/export.yaml">导出全部 YAML</a>
+      <a class="button" href="/api/annotate/export.json">导出全部 JSON</a>
     </section>
 
     <div class="notice" id="scan-note" hidden></div>
@@ -77,16 +46,42 @@
     <div class="layout">
       <aside class="card sidebar">
         <div class="card-head">
-          <h2>标注目标</h2>
-          <span class="summary" id="target-count"></span>
+          <h2>用例</h2>
+          <span class="summary" id="case-count"></span>
         </div>
-        <div class="target-list" id="target-list"></div>
+        <div class="filters">
+          <input id="filter-query" type="search" placeholder="搜索编号或名称">
+          <select id="filter-protocol">
+            <option value="">全部协议</option>
+            <option value="a2a-t">A2A-T</option>
+            <option value="a2a">A2A</option>
+          </select>
+          <select id="filter-subtask">
+            <option value="">全部子任务</option>
+            <option value="slot_errors">拦截 slot_errors</option>
+            <option value="messages">协商报文</option>
+          </select>
+          <select id="filter-status">
+            <option value="">全部状态</option>
+            <option value="pending">未采集</option>
+            <option value="draft">草稿</option>
+            <option value="confirmed">已确认</option>
+          </select>
+          <select id="filter-candidates">
+            <option value="">候选：全部</option>
+            <option value="with">有候选</option>
+            <option value="without">无候选</option>
+          </select>
+          <label class="check"><input id="hide-none" type="checkbox" checked> 隐藏“无需标注”</label>
+        </div>
+        <div class="case-list" id="case-list"></div>
       </aside>
 
       <div class="content" id="detail">
         <section class="card empty">
-          <p>从左侧选择一个用例的预期维度开始标注。</p>
-          <p class="muted">候选来自本机已落盘的 tester 批次与 run 存储；只有与用例现有预期一致的观测才能被采纳。</p>
+          <p>从左侧选择用例与协议，右侧按运行轮次查看候选。</p>
+          <p class="muted">候选来自本机已落盘的 tester 批次与 run 存储；默认只看真机 + live 的最新一轮，
+            只有与用例现有预期一致的观测可以采纳。</p>
         </section>
       </div>
     </div>

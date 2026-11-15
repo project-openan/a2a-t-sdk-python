@@ -1,7 +1,11 @@
 // Expectation annotation console.
 //
-// The page annotates one case expectation at a time, but its unit of evidence is the whole corpus
-// window: candidates come from every stored tester batch, not from the batch this browser started.
+// The page mirrors the corpus: pick a case and a protocol on the left, then work the subtasks on
+// the right. A subtask's candidates come from every stored tester batch, and the run-round
+// selector narrows them to one observation (default: the newest real-machine live run). Only
+// candidates that agree with the case may be adopted; the values are exported, never written to
+// the case files, because the yellow zone hot-replaces them.
+//
 // Pure helpers are exported so the Node tests can drive them without a DOM.
 
 const SLOT_DIMENSION = "slot_errors";
@@ -11,18 +15,18 @@ const STATUS_LABELS = {
   pending: "未采集",
   draft: "草稿",
   confirmed: "已确认",
-  applied: "已应用",
+  none: "无需标注",
 };
 
 const state = {
   meta: null,
-  targets: [],
-  selected: null,
-  detail: null,
+  cases: [],
+  selected: null, // {caseId, protocol}
+  details: {},
+  run: "",
+  runTouched: false,
+  snippet: null,
   scan: null,
-  diff: null,
-  applyResult: null,
-  busy: false,
 };
 
 export function statusLabel(status) {
@@ -30,33 +34,118 @@ export function statusLabel(status) {
   return STATUS_LABELS[status] || String(status);
 }
 
+export function subtaskLabel(dimension) {
+  return dimension === SLOT_DIMENSION ? "拦截 slot_errors" : "协商报文";
+}
+
+export function protocolLabel(protocol) {
+  return protocol === "a2a-t" ? "A2A-T" : "A2A";
+}
+
 export function progressText(progress) {
   if (!progress || !progress.counts) return "";
   const counts = progress.counts;
-  return `目标 ${counts.total || 0} · 未采集 ${counts.pending || 0} · 草稿 ${counts.draft || 0} · `
-    + `已确认 ${counts.confirmed || 0} · 已应用 ${counts.applied || 0}`;
+  return `子任务 ${counts.total || 0} · 未采集 ${counts.pending || 0} · 草稿 ${counts.draft || 0}`
+    + ` · 已确认 ${counts.confirmed || 0}`;
 }
 
-export function filterTargets(targets, filters) {
+//: Sub-task rows of one protocol task.
+export function subtasksOf(caseRow, protocol) {
+  const task = (caseRow.protocols || []).find((item) => item.protocol === protocol);
+  return task && Array.isArray(task.subtasks) ? task.subtasks : [];
+}
+
+//: Filter the corpus rows by case, protocol, sub-task, status and evidence presence.
+export function filterCases(cases, filters) {
   const query = String(filters.query || "").trim().toLowerCase();
-  return targets.filter((target) => {
-    if (filters.dimension && target.dimension !== filters.dimension) return false;
-    if (filters.protocol && target.protocol !== filters.protocol) return false;
-    if (filters.status && (target.status || "pending") !== filters.status) return false;
-    if (!query) return true;
-    return (
-      String(target.caseId).includes(query)
-      || String(target.caseName || "").toLowerCase().includes(query)
-    );
-  });
+  const rows = [];
+  for (const caseRow of cases) {
+    if (
+      query
+      && !String(caseRow.caseId).includes(query)
+      && !String(caseRow.caseName || "").toLowerCase().includes(query)
+    ) {
+      continue;
+    }
+    const protocols = [];
+    for (const task of caseRow.protocols || []) {
+      if (filters.protocol && task.protocol !== filters.protocol) continue;
+      let subtasks = task.subtasks || [];
+      if (filters.subtask) subtasks = subtasks.filter((row) => row.dimension === filters.subtask);
+      if (filters.status) {
+        subtasks = subtasks.filter((row) => (row.status || "pending") === filters.status);
+      }
+      if (filters.candidates === "with") {
+        subtasks = subtasks.filter((row) => Number(row.observations || 0) > 0);
+      } else if (filters.candidates === "without") {
+        subtasks = subtasks.filter((row) => Number(row.observations || 0) === 0);
+      }
+      if (!subtasks.length) {
+        if (filters.hideNone) continue;
+        if (filters.subtask || filters.status || filters.candidates) continue;
+      }
+      protocols.push({ ...task, subtasks });
+    }
+    if (!protocols.length) continue;
+    rows.push({ ...caseRow, protocols });
+  }
+  return rows;
 }
 
-export function filterByRunRound(observations, runRound) {
-  if (!runRound) return observations || [];
-  const wanted = Number(runRound);
-  return (observations || []).filter(
-    (observation) => Number(observation.sourceRound || 1) === wanted,
-  );
+export function runKey(observation) {
+  return `${observation.sourceBatch || ""}#${observation.sourceRound || 1}`;
+}
+
+export function runLabel(observation) {
+  return [
+    observation.sourceBatch || "unknown",
+    `r${observation.sourceRound || 1}`,
+    String(observation.observedAt || "").replace("T", " ").slice(0, 16),
+    observation.model || "—",
+    observation.nms ? "真机" : "本地",
+    observation.decisionMode || "—",
+  ].join(" · ");
+}
+
+//: Unique run options of a detail payload, newest first.
+export function runOptions(observations) {
+  const byKey = new Map();
+  for (const observation of observations || []) {
+    const key = runKey(observation);
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.count += 1;
+      continue;
+    }
+    byKey.set(key, { key, observation, count: 1 });
+  }
+  return [...byKey.values()]
+    .map(({ key, observation, count }) => ({
+      key,
+      label: runLabel(observation),
+      observedAt: String(observation.observedAt || ""),
+      nms: Boolean(observation.nms),
+      decisionMode: String(observation.decisionMode || ""),
+      count,
+    }))
+    .sort((left, right) => right.observedAt.localeCompare(left.observedAt));
+}
+
+//: Default run: the newest real-machine live observation, else the newest one.
+export function defaultRunKey(options) {
+  if (!options || !options.length) return "";
+  const live = options.find((option) => option.nms && option.decisionMode === "live");
+  return (live || options[0]).key;
+}
+
+export function filterObservations(observations, filters) {
+  return (observations || []).filter((observation) => {
+    if (filters.run && runKey(observation) !== filters.run) return false;
+    if (filters.nms && !observation.nms) return false;
+    if (filters.live && observation.decisionMode !== "live") return false;
+    if (filters.consistent && !observation.consistent) return false;
+    return true;
+  });
 }
 
 export function groupByRound(observations) {
@@ -82,47 +171,14 @@ function textBlock(value) {
   return JSON.stringify(value, null, 2);
 }
 
-async function getJson(path, options) {
-  const response = await fetch(path, { credentials: "same-origin", ...options });
-  if (response.status === 401) {
-    throw new Error("未认证：请用带 ?token=… 的链接打开，或关闭 UI_TOKEN。");
-  }
-  const text = await response.text();
-  let payload = {};
-  if (text) {
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      throw new Error(`响应不是 JSON（HTTP ${response.status}）。`);
-    }
-  }
-  if (!response.ok) {
-    throw new Error(payload.error || `请求失败（HTTP ${response.status}）。`);
-  }
-  return payload;
-}
-
-function targetPath(target, suffix = "") {
-  return `/api/annotate/target/${target.caseId}/${target.protocol}/${target.dimension}${suffix}`;
-}
-
-function onlyConsistent() {
-  const node = document.getElementById("only-consistent");
-  return node ? node.checked : true;
-}
-
-function visibleObservations(detail) {
-  const rows = filterByRunRound(detail.observations || [], selectedRunRound());
-  return onlyConsistent() ? rows.filter((observation) => observation.consistent) : rows;
-}
-
-function selectedRunRound() {
-  const node = document.getElementById("filter-round");
+function field(id) {
+  const node = document.getElementById(id);
   return node ? node.value : "";
 }
 
-function currentTarget() {
-  return state.selected;
+function checked(id) {
+  const node = document.getElementById(id);
+  return node ? node.checked : false;
 }
 
 function showNotice(message, isError = false) {
@@ -137,160 +193,255 @@ function showNotice(message, isError = false) {
   node.textContent = message;
 }
 
-function setBusy(busy) {
-  state.busy = busy;
-  const button = document.getElementById("scan-button");
-  if (button) button.disabled = busy;
-}
-
-async function loadTargets() {
-  const payload = await getJson("/api/annotate/targets");
-  state.targets = payload.targets || [];
-  renderTargets(payload);
-}
-
-function renderTargets(progressPayload) {
-  const list = document.getElementById("target-list");
-  const count = document.getElementById("target-count");
-  const filters = {
-    dimension: document.getElementById("filter-dimension").value,
-    protocol: document.getElementById("filter-protocol").value,
-    status: document.getElementById("filter-status").value,
-    query: document.getElementById("filter-query").value,
-  };
-  const rows = filterTargets(state.targets, filters);
-  count.textContent = `${rows.length} / ${state.targets.length}`;
-  if (progressPayload) {
-    document.getElementById("progress").textContent = progressText(progressPayload);
+async function getJson(path, options) {
+  const response = await fetch(path, { credentials: "same-origin", ...options });
+  if (response.status === 401) {
+    throw new Error("未认证：请用带 ?token=… 的链接打开，或关闭 UI_TOKEN。");
   }
+  const text = await response.text();
+  let payload = {};
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new Error(`响应不是 JSON（HTTP ${response.status}）。`);
+    }
+  }
+  if (!response.ok) throw new Error(payload.error || `请求失败（HTTP ${response.status}）。`);
+  return payload;
+}
+
+async function postJson(path, body) {
+  return getJson(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+}
+
+function subtaskPath(caseId, protocol, dimension, suffix = "") {
+  return `/api/annotate/case/${caseId}/${protocol}/${dimension}${suffix}`;
+}
+
+async function loadCases(progressPayload) {
+  const payload = await getJson("/api/annotate/cases");
+  state.cases = payload.cases || [];
+  document.getElementById("progress").textContent = progressText(progressPayload || payload);
+  renderCases();
+}
+
+function currentFilters() {
+  return {
+    query: field("filter-query"),
+    protocol: field("filter-protocol"),
+    subtask: field("filter-subtask"),
+    status: field("filter-status"),
+    candidates: field("filter-candidates"),
+    hideNone: checked("hide-none"),
+  };
+}
+
+function renderCases() {
+  const list = document.getElementById("case-list");
+  const rows = filterCases(state.cases, currentFilters());
+  document.getElementById("case-count").textContent = `${rows.length} / ${state.cases.length}`;
   list.replaceChildren();
   if (!rows.length) {
-    list.append(el("p", "empty-state", "没有匹配的标注目标。"));
+    list.append(el("p", "empty-state", "没有匹配的用例。"));
     return;
   }
-  for (const target of rows) {
-    const button = el("button", "target");
-    if (
-      state.selected
-      && state.selected.caseId === target.caseId
-      && state.selected.protocol === target.protocol
-      && state.selected.dimension === target.dimension
-    ) {
-      button.classList.add("active");
+  for (const caseRow of rows) {
+    const block = el("div", "case");
+    const head = el("div", "case-head");
+    head.append(el("span", "id", `#${caseRow.caseId}`));
+    head.append(el("span", "name", caseRow.caseName || ""));
+    block.append(head);
+    for (const task of caseRow.protocols) {
+      const row = el("button", "proto");
+      row.type = "button";
+      if (
+        state.selected
+        && state.selected.caseId === caseRow.caseId
+        && state.selected.protocol === task.protocol
+      ) {
+        row.classList.add("active");
+      }
+      row.append(el("span", "proto-name", protocolLabel(task.protocol)));
+      const badges = el("span", "badges");
+      if (task.status === "none") {
+        badges.append(el("span", "badge none", statusLabel("none")));
+      } else {
+        for (const subtask of task.subtasks) {
+          const status = subtask.status || "pending";
+          badges.append(
+            el(
+              "span",
+              `badge ${status}`,
+              `${subtask.dimension === SLOT_DIMENSION ? "拦截" : "协商"} · ${statusLabel(status)}`,
+            ),
+          );
+        }
+      }
+      row.append(badges);
+      row.addEventListener("click", () => selectProtocol(caseRow, task.protocol));
+      block.append(row);
     }
-    button.type = "button";
-    const left = el("span", "meta");
-    left.append(el("span", "id", `#${target.caseId}`));
-    left.append(
-      el(
-        "span",
-        "name",
-        `${target.protocol === "a2a-t" ? "A2A-T" : "A2A"} · `
-          + (target.dimension === SLOT_DIMENSION ? "拦截" : `协商 ${target.expectedRounds} 轮`),
-      ),
-    );
-    const right = el("span", "meta");
-    right.append(el("span", "muted", `${target.accepted || 0}/${target.observations || 0}`));
-    const badge = el("span", `badge ${target.status || "pending"}`, statusLabel(target.status));
-    right.append(badge);
-    button.append(left, right);
-    button.addEventListener("click", () => openTarget(target));
-    list.append(button);
+    list.append(block);
   }
 }
 
-async function openTarget(target) {
-  state.selected = target;
-  state.detail = null;
-  renderTargets();
+async function selectProtocol(caseRow, protocol) {
+  state.selected = { caseId: caseRow.caseId, protocol, caseName: caseRow.caseName };
+  state.snippet = null;
+  state.run = "";
+  state.runTouched = false;
+  renderCases();
+  await loadDetails();
+}
+
+async function loadDetails() {
   const container = document.getElementById("detail");
   container.replaceChildren(el("section", "card", "加载中…"));
-  try {
-    state.detail = await getJson(targetPath(target));
-  } catch (error) {
-    container.replaceChildren(el("section", "card notice error", error.message));
-    return;
+  const { caseId, protocol } = state.selected;
+  const caseRow = state.cases.find((row) => row.caseId === caseId);
+  const subtasks = subtasksOf(caseRow || {}, protocol);
+  const details = {};
+  await Promise.all(
+    subtasks.map(async (subtask) => {
+      details[subtask.dimension] = await getJson(
+        subtaskPath(caseId, protocol, subtask.dimension),
+      );
+    }),
+  );
+  state.details = details;
+  if (!state.runTouched) {
+    const observations = Object.values(details).flatMap((detail) => detail.observations || []);
+    state.run = defaultRunKey(runOptions(observations));
   }
   renderDetail();
 }
 
-function renderDetail() {
-  const container = document.getElementById("detail");
-  container.replaceChildren();
-  const detail = state.detail;
-  if (!detail) return;
-  container.append(renderHeader(detail));
-  container.append(renderCurrent(detail));
-  if (detail.target && detail.target.status === "applied") {
-    container.append(
-      el("section", "card notice", "该目标已应用；再次确认会生成新的补丁并覆盖用例中的期望。"),
-    );
+function currentDetailObservations() {
+  const filters = {
+    run: state.run,
+    nms: checked("run-nms"),
+    live: checked("run-live"),
+    consistent: checked("run-consistent"),
+  };
+  const visible = {};
+  for (const [dimension, detail] of Object.entries(state.details)) {
+    visible[dimension] = filterObservations(detail.observations || [], filters);
   }
-  container.append(
-    detail.target && detail.target.dimension === SLOT_DIMENSION
-      ? renderSlotPanel(detail)
-      : renderMessagePanel(detail),
-  );
-  container.append(renderConfirmPanel(detail));
-  container.append(renderApplyPanel());
+  return visible;
 }
 
-function renderHeader(detail) {
-  const header = el("section", "card");
+function renderDetail() {
+  if (!state.selected) return;
+  const container = document.getElementById("detail");
+  container.replaceChildren();
+  const { caseId, protocol } = state.selected;
+  const caseRow = state.cases.find((row) => row.caseId === caseId) || {};
+  const subtasks = subtasksOf(caseRow, protocol);
+  container.append(renderHeader(caseRow, protocol));
+  if (!subtasks.length) {
+    container.append(
+      el("section", "card empty", "该用例的这个协议没有需要标注的子任务（无需标注）。"),
+    );
+    return;
+  }
+  container.append(renderRunBar(subtasks));
+  const visible = currentDetailObservations();
+  const dimensionFilter = field("filter-subtask");
+  for (const subtask of subtasks) {
+    if (dimensionFilter && subtask.dimension !== dimensionFilter) continue;
+    const detail = state.details[subtask.dimension];
+    if (!detail) continue;
+    container.append(
+      subtask.dimension === SLOT_DIMENSION
+        ? renderSlotPanel(detail, visible[subtask.dimension] || [])
+        : renderMessagePanel(detail, visible[subtask.dimension] || []),
+    );
+  }
+  container.append(renderCaseExport(caseRow));
+}
+
+function renderHeader(caseRow, protocol) {
+  const card = el("section", "card");
   const title = el("div", "section-title");
-  const name = el(
-    "h2",
-    "",
-    `#${detail.case.id} ${detail.case.name} · `
-      + (detail.target.dimension === SLOT_DIMENSION ? "拦截 slot_errors" : "协商报文"),
-  );
-  title.append(name);
   title.append(
-    el(
-      "span",
-      `badge ${detail.target.status || "pending"}`,
-      statusLabel(detail.target.status),
-    ),
+    el("h2", "", `#${caseRow.caseId} ${caseRow.caseName || ""} · ${protocolLabel(protocol)}`),
   );
-  header.append(title);
+  const task = (caseRow.protocols || []).find((row) => row.protocol === protocol);
+  title.append(el("span", `badge ${task ? task.status : "none"}`, statusLabel(task && task.status)));
+  card.append(title);
   const facts = el("dl", "kv");
   const rows = [
-    ["操作", detail.case.operation],
-    ["维度", detail.case.dimension],
-    ["协议", detail.target.protocol],
-    ["预期校验", detail.case.validate],
-    ["预期轮次", detail.case.expectedRounds],
-    ["预期类型", (detail.case.kinds || []).join(", ") || "—"],
+    ["操作", caseRow.operation],
+    ["维度", caseRow.dimension],
+    ["预期校验", task && task.validate],
+    ["预期轮次", task && task.expectedRounds],
+    ["预期类型", task && (task.kinds || []).join(", ")],
   ];
   for (const [label, value] of rows) {
     facts.append(el("dt", "", label));
     facts.append(el("dd", "", textBlock(value)));
   }
-  header.append(facts);
-  header.append(el("p", "sub", "原始请求"));
-  header.append(el("pre", "mono", String(detail.case.userInput || "")));
-  return header;
-}
-
-function renderCurrent(detail) {
-  const card = el("section", "card");
-  card.append(el("p", "sub", "用例现有期望"));
-  card.append(
-    el(
-      "pre",
-      "mono",
-      detail.current === null || detail.current === undefined
-        ? "（用例当前没有该期望，只按校验结论/轮次判定）"
-        : textBlock(detail.current),
-    ),
-  );
+  card.append(facts);
   return card;
 }
 
-function renderSlotPanel(detail) {
+function renderRunBar(subtasks) {
+  const card = el("section", "card runbar");
+  const observations = subtasks.flatMap((subtask) => {
+    const detail = state.details[subtask.dimension];
+    return detail ? detail.observations || [] : [];
+  });
+  const options = runOptions(observations);
+  const label = el("label", "", "运行轮次");
+  const select = document.createElement("select");
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = `全部轮次（${options.length}）`;
+  select.append(all);
+  for (const option of options) {
+    const node = document.createElement("option");
+    node.value = option.key;
+    node.textContent = `${option.label} · ${option.count} 条`;
+    select.append(node);
+  }
+  if (!state.runTouched) state.run = defaultRunKey(options);
+  select.value = state.run;
+  select.addEventListener("change", () => {
+    state.run = select.value;
+    state.runTouched = true;
+    renderDetail();
+  });
+  label.append(select);
+  card.append(label);
+  card.append(check("run-nms", "只看真机", true));
+  card.append(check("run-live", "只看 live", true));
+  card.append(check("run-consistent", "只看一致候选", true));
+  if (!options.length) {
+    card.append(el("span", "summary", "该时间窗内没有该协议、该子任务的观测。"));
+  }
+  return card;
+}
+
+function check(id, label, defaultChecked) {
+  const wrapper = el("label", "check");
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.id = id;
+  input.checked = defaultChecked;
+  input.addEventListener("change", () => renderDetail());
+  wrapper.append(input, document.createTextNode(` ${label}`));
+  return wrapper;
+}
+
+function renderSlotPanel(detail, observations) {
   const card = el("section", "card");
   const head = el("div", "section-title");
-  head.append(el("h2", "", "候选 slot_errors"));
+  head.append(el("h2", "", subtaskLabel(SLOT_DIMENSION)));
   const mode = document.createElement("select");
   for (const value of ["any", "cover"]) {
     const option = document.createElement("option");
@@ -300,25 +451,26 @@ function renderSlotPanel(detail) {
   }
   mode.value = detail.target.mode || "any";
   mode.addEventListener("change", async () => {
-    await postJson(targetPath(detail.target, "/mode"), { mode: mode.value });
+    await postJson(
+      subtaskPath(detail.target.caseId, detail.target.protocol, SLOT_DIMENSION, "/mode"),
+      { mode: mode.value },
+    );
     await refresh();
   });
   head.append(mode);
   card.append(head);
+  card.append(el("p", "sub", "用例现有期望"));
   card.append(
     el(
-      "p",
-      "sub",
-      "只有与用例预期一致（预期拦截且实测拦截）的候选可以采纳；关键词命中槽位名、说明或事实值中的任意一个即可。",
+      "pre",
+      "mono",
+      detail.current === null || detail.current === undefined
+        ? "（用例当前没有 slot_errors 期望，只按校验结论判定）"
+        : textBlock(detail.current),
     ),
   );
 
-  const accepted = new Map(
-    (detail.choices || []).filter((choice) => choice.accepted).map((choice) => [
-      choice.observationId,
-      choice,
-    ]),
-  );
+  const accepted = acceptedMap(detail);
   const table = document.createElement("table");
   table.className = "grid";
   const thead = document.createElement("thead");
@@ -329,11 +481,9 @@ function renderSlotPanel(detail) {
   thead.append(headRow);
   table.append(thead);
   const tbody = document.createElement("tbody");
-
-  const observations = visibleObservations(detail);
   if (!observations.length) {
     const row = document.createElement("tr");
-    const cell = el("td", "empty-state", "该时间窗内没有观测到 slot 错误。");
+    const cell = el("td", "empty-state", "当前轮次过滤后没有候选。");
     cell.colSpan = 8;
     row.append(cell);
     tbody.append(row);
@@ -350,11 +500,14 @@ function renderSlotPanel(detail) {
     keywords.placeholder = "gain, 增益";
     keywords.value = accepted.get(observation.id)?.editedText || "";
     const save = async () => {
-      await postJson(targetPath(detail.target, "/choice"), {
-        observationId: observation.id,
-        accepted: checkbox.checked,
-        editedText: keywords.value || null,
-      });
+      await postJson(
+        subtaskPath(detail.target.caseId, detail.target.protocol, SLOT_DIMENSION, "/choice"),
+        {
+          observationId: observation.id,
+          accepted: checkbox.checked,
+          editedText: keywords.value || null,
+        },
+      );
       await refresh();
     };
     checkbox.addEventListener("change", save);
@@ -363,6 +516,8 @@ function renderSlotPanel(detail) {
     });
     const first = document.createElement("td");
     first.append(checkbox);
+    const keywordCell = document.createElement("td");
+    keywordCell.append(keywords);
     row.append(
       first,
       el("td", "mono-cell", observation.code || ""),
@@ -371,43 +526,41 @@ function renderSlotPanel(detail) {
       el("td", "", observation.message || ""),
       el("td", "mono-cell", String(observation.seenCount || 1)),
       el("td", "mono-cell", `${observation.sourceBatch || ""} r${observation.sourceRound || 1}`),
-      (() => {
-        const cell = document.createElement("td");
-        cell.append(keywords);
-        return cell;
-      })(),
+      keywordCell,
     );
     tbody.append(row);
   }
   table.append(tbody);
   card.append(table);
   card.append(renderPending(detail));
+  card.append(renderConfirmPanel(detail));
   return card;
 }
 
-function renderMessagePanel(detail) {
+function renderMessagePanel(detail, observations) {
   const card = el("section", "card");
-  card.append(el("h2", "", "候选协商报文"));
+  card.append(
+    el("h2", "", `${subtaskLabel(MESSAGE_DIMENSION)}（${detail.case.expectedRounds} 轮）`),
+  );
+  card.append(el("p", "sub", "用例现有期望"));
   card.append(
     el(
-      "p",
-      "sub",
-      "按协商轮次分组；同一轮可采纳多个备选（任意一个命中即通过）。未观测到该轮的用例不会出现在这里。",
+      "pre",
+      "mono",
+      detail.current === null || detail.current === undefined
+        ? "（用例当前没有 messages 期望，只按轮数与类型判定）"
+        : textBlock(detail.current),
     ),
   );
-  const accepted = new Map(
-    (detail.choices || []).filter((choice) => choice.accepted).map((choice) => [
-      choice.observationId,
-      choice,
-    ]),
-  );
-  const groups = groupByRound(visibleObservations(detail));
+  const accepted = acceptedMap(detail);
+  const groups = groupByRound(observations);
   if (!groups.length) {
-    card.append(el("p", "empty-state", "该时间窗内没有观测到服务端协商报文。"));
+    card.append(el("p", "empty-state", "当前轮次过滤后没有候选。"));
     card.append(renderPending(detail));
+    card.append(renderConfirmPanel(detail));
     return card;
   }
-  for (const [round, observations] of groups) {
+  for (const [round, rows] of groups) {
     const group = el("div", "round-group");
     const head = el("div", "round-head");
     head.append(el("strong", "", `第 ${round} 轮`));
@@ -415,11 +568,11 @@ function renderMessagePanel(detail) {
       el(
         "span",
         "summary",
-        `${observations.length} 个变体 · 采纳 ${observations.filter((item) => accepted.has(item.id)).length}`,
+        `${rows.length} 个变体 · 已采纳 ${rows.filter((row) => accepted.has(row.id)).length}`,
       ),
     );
     group.append(head);
-    for (const observation of observations) {
+    for (const observation of rows) {
       const candidate = el("div", "candidate");
       const candidateHead = el("div", "candidate-head");
       const checkbox = document.createElement("input");
@@ -429,21 +582,22 @@ function renderMessagePanel(detail) {
       const label = el("label", "", "采纳");
       label.prepend(checkbox);
       checkbox.addEventListener("change", async () => {
-        await postJson(targetPath(detail.target, "/choice"), {
-          observationId: observation.id,
-          accepted: checkbox.checked,
-          editedText: null,
-        });
+        await postJson(
+          subtaskPath(detail.target.caseId, detail.target.protocol, MESSAGE_DIMENSION, "/choice"),
+          { observationId: observation.id, accepted: checkbox.checked, editedText: null },
+        );
         await refresh();
       });
       candidateHead.append(label);
       candidateHead.append(
-        el("span", "source", `${observation.kind || "unknown"} · ${observation.sourceBatch} r${observation.sourceRound}`),
+        el(
+          "span",
+          "source",
+          `${observation.kind || "unknown"} · ${observation.sourceBatch} r${observation.sourceRound}`,
+        ),
       );
       candidateHead.append(el("span", "summary", `出现 ${observation.seenCount || 1} 次`));
-      if (!observation.consistent) {
-        candidateHead.append(el("span", "badge", "与预期不一致"));
-      }
+      if (!observation.consistent) candidateHead.append(el("span", "badge", "与预期不一致"));
       const editButton = el("button", "secondary", "编辑备选");
       candidateHead.append(editButton);
       candidate.append(candidateHead);
@@ -456,11 +610,10 @@ function renderMessagePanel(detail) {
         editor.hidden = !editor.hidden;
       });
       editor.addEventListener("change", async () => {
-        await postJson(targetPath(detail.target, "/choice"), {
-          observationId: observation.id,
-          accepted: true,
-          editedText: editor.value,
-        });
+        await postJson(
+          subtaskPath(detail.target.caseId, detail.target.protocol, MESSAGE_DIMENSION, "/choice"),
+          { observationId: observation.id, accepted: true, editedText: editor.value },
+        );
         await refresh();
       });
       candidate.append(editor);
@@ -469,12 +622,21 @@ function renderMessagePanel(detail) {
     card.append(group);
   }
   card.append(renderPending(detail));
+  card.append(renderConfirmPanel(detail));
   return card;
+}
+
+function acceptedMap(detail) {
+  return new Map(
+    (detail.choices || [])
+      .filter((choice) => choice.accepted)
+      .map((choice) => [choice.observationId, choice]),
+  );
 }
 
 function renderPending(detail) {
   const block = el("div", "");
-  block.append(el("p", "sub", "采纳后的期望值（确认后才会写入用例）"));
+  block.append(el("p", "sub", "采纳后的导出值（确认后进入全量导出）"));
   block.append(
     el(
       "pre",
@@ -488,180 +650,138 @@ function renderPending(detail) {
 }
 
 function renderConfirmPanel(detail) {
-  const card = el("section", "card");
-  const head = el("div", "section-title");
-  head.append(el("h2", "", "确认"));
-  head.append(
+  const card = el("div", "confirm");
+  const target = detail.target;
+  card.append(
     el(
       "span",
       "summary",
-      detail.target.confirmedBy
-        ? `${detail.target.confirmedBy} · ${detail.target.confirmedAt || ""}`
+      target.confirmedBy
+        ? `已确认：${target.confirmedBy} · ${target.confirmedAt || ""}`
         : "尚未确认",
     ),
   );
-  card.append(head);
-  const note = document.createElement("textarea");
+  const note = document.createElement("input");
+  note.className = "note";
   note.placeholder = "备注（例如：依据 11-15 三批 live 的多数渲染）";
-  note.value = detail.target.note || "";
-  note.style.width = "100%";
-  note.style.minHeight = "60px";
+  note.value = target.note || "";
   card.append(note);
-  const actions = el("div", "actions");
   const saveNote = el("button", "secondary", "保存备注");
   saveNote.addEventListener("click", async () => {
-    await postJson(targetPath(detail.target, "/note"), { note: note.value });
+    await postJson(
+      subtaskPath(target.caseId, target.protocol, target.dimension, "/note"),
+      { note: note.value },
+    );
     await refresh();
   });
-  const confirm = el("button", "primary", "确认该目标");
+  const confirm = el("button", "primary", "确认");
   confirm.disabled = !(detail.choices || []).some((choice) => choice.accepted);
   confirm.addEventListener("click", async () => {
-    await postJson(targetPath(detail.target, "/confirm"), {});
+    await postJson(subtaskPath(target.caseId, target.protocol, target.dimension, "/confirm"), {});
     await refresh();
   });
-  actions.append(saveNote, confirm);
-  card.append(actions);
+  card.append(saveNote, confirm);
   return card;
 }
 
-function renderApplyPanel() {
+function renderCaseExport(caseRow) {
   const card = el("section", "card");
   const head = el("div", "section-title");
-  head.append(el("h2", "", "生成用例期望"));
-  head.append(
-    el(
-      "span",
-      "summary",
-      state.meta && state.meta.casesAllPresent ? "写入 docs-local/cases-all.yaml 并重生成" : "缺少 cases-all.yaml，只能导出标注数据",
-    ),
-  );
+  head.append(el("h2", "", "导出该用例"));
+  const button = el("button", "secondary", "生成期望片段");
+  button.addEventListener("click", async () => {
+    const response = await fetch(`/api/annotate/export/case/${caseRow.caseId}`, {
+      credentials: "same-origin",
+    });
+    if (!response.ok) {
+      showNotice(`生成片段失败（HTTP ${response.status}）。`, true);
+      return;
+    }
+    state.snippet = await response.text();
+    renderDetail();
+  });
+  head.append(button);
   card.append(head);
   card.append(
     el(
       "p",
       "sub",
-      "只写入已确认的目标；应用前会先给出补丁预览，应用时先备份、重生成用例文件，再刷新用例目录。",
+      "片段按 expect.protocols 的层级（6 空格）生成，供人工合并进 eval/osp/cases/<用例>.yaml。",
     ),
   );
-  const actions = el("div", "actions");
-  const previewButton = el("button", "secondary", "预览补丁");
-  previewButton.addEventListener("click", async () => {
-    const payload = await getJson("/api/annotate/draft");
-    state.diff = payload.diff || "";
-    state.applyResult = payload;
-    renderDetail();
-  });
-  const applyButton = el("button", "primary", "应用");
-  applyButton.addEventListener("click", async () => {
-    if (!window.confirm("将写入 docs-local/cases-all.yaml 并重生成 eval/osp/cases，继续？")) return;
-    const payload = await postJson("/api/annotate/apply", {});
-    state.applyResult = payload;
-    state.diff = payload.diff || "";
-    await loadTargets();
-    renderDetail();
-  });
-  const exportYaml = el("a", "", "导出标注数据（YAML）");
-  exportYaml.href = "/api/annotate/export.yaml";
-  const exportJson = el("a", "", "导出 JSON");
-  exportJson.href = "/api/annotate/export.json";
-  actions.append(previewButton, applyButton, exportYaml, exportJson);
-  card.append(actions);
-  if (state.applyResult) {
-    const result = state.applyResult;
-    const message = el(
-      "p",
-      result.ok ? "sub" : "notice error",
-      [result.message, ...(result.errors || [])].filter(Boolean).join(" · "),
-    );
-    card.append(message);
-  }
-  if (state.diff) card.append(renderDiff(state.diff));
+  if (state.snippet) card.append(el("pre", "mono", state.snippet));
   return card;
 }
 
-function renderDiff(text) {
-  const pre = el("pre", "diff");
-  for (const line of String(text).split("\n")) {
-    const span = document.createElement("span");
-    span.className = line.startsWith("+") && !line.startsWith("+++")
-      ? "add"
-      : line.startsWith("-") && !line.startsWith("---")
-        ? "del"
-        : line.startsWith("@@")
-          ? "hunk"
-          : "";
-    span.textContent = `${line}\n`;
-    pre.append(span);
-  }
-  return pre;
-}
-
-async function postJson(path, body) {
-  return getJson(path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body || {}),
-  });
-}
-
 async function refresh() {
-  await loadTargets();
-  if (!state.selected) return;
-  state.detail = await getJson(targetPath(state.selected));
-  renderDetail();
+  await loadCases();
+  if (state.selected) await loadDetails();
 }
 
 async function scan() {
-  setBusy(true);
+  const button = document.getElementById("scan-button");
+  button.disabled = true;
   showNotice("");
   try {
-    const days = Number(document.getElementById("config-days").value) || 1;
+    const days = Number(field("config-days")) || 1;
     const payload = await postJson(`/api/annotate/scan?days=${encodeURIComponent(days)}`, {});
     state.scan = payload.scan;
-    await loadTargets(payload);
-    const scanInfo = payload.scan || {};
-    const skipped = scanInfo.skipped || {};
-    const skippedText = Object.entries(skipped)
+    await loadCases(payload);
+    if (state.selected) await loadDetails();
+    const info = payload.scan || {};
+    const skipped = Object.entries(info.skipped || {})
       .map(([reason, count]) => `${reason}=${count}`)
       .join("，");
     showNotice(
-      `扫描 ${scanInfo.batches || 0} 个批次，得到 ${scanInfo.observations || 0} 条候选`
-        + `（新增 ${scanInfo.inserted || 0}）。窗口 ${scanInfo.windowStart} → ${scanInfo.windowEnd}`
-        + (skippedText ? `；跳过 ${skippedText}` : "")
-        + (scanInfo.truncated ? "；已达批次上限，较早的批次未纳入。" : ""),
-      Boolean(scanInfo.truncated),
+      `扫描 ${info.batches || 0} 个批次，得到 ${info.observations || 0} 条候选`
+        + `（新增 ${info.inserted || 0}）。窗口 ${info.windowStart} → ${info.windowEnd}`
+        + (skipped ? `；跳过 ${skipped}` : "")
+        + (info.truncated ? "；已达批次上限，较早的批次未纳入。" : ""),
+      Boolean(info.truncated),
     );
   } catch (error) {
     showNotice(error.message, true);
   } finally {
-    setBusy(false);
+    button.disabled = false;
   }
 }
 
 function wireEvents() {
   document.getElementById("scan-button").addEventListener("click", scan);
-  for (const id of ["filter-dimension", "filter-protocol", "filter-status", "filter-query"]) {
-    document.getElementById(id).addEventListener("input", () => renderTargets());
+  const ids = [
+    "filter-query",
+    "filter-protocol",
+    "filter-subtask",
+    "filter-status",
+    "filter-candidates",
+    "hide-none",
+  ];
+  for (const id of ids) {
+    document.getElementById(id).addEventListener("input", () => {
+      renderCases();
+      if (state.selected) renderDetail();
+    });
   }
-  document.getElementById("filter-round").addEventListener("input", () => {
-    if (state.detail) renderDetail();
-  });
-  document.getElementById("only-consistent").addEventListener("input", () => {
-    if (state.detail) renderDetail();
-  });
+}
+
+async function autoSelect() {
+  const rows = filterCases(state.cases, currentFilters());
+  for (const caseRow of rows) {
+    for (const task of caseRow.protocols) {
+      if (task.subtasks.length) {
+        await selectProtocol(caseRow, task.protocol);
+        return;
+      }
+    }
+  }
 }
 
 async function init() {
   wireEvents();
   try {
     state.meta = await getJson("/api/annotate/meta");
-    if (!state.meta.casesAllPresent) {
-      showNotice(
-        "未找到 docs-local/cases-all.yaml：可以采集与导出标注数据，但无法应用。",
-        true,
-      );
-    }
-    await loadTargets();
+    await loadCases();
+    await autoSelect();
   } catch (error) {
     showNotice(error.message, true);
   }

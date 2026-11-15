@@ -1,4 +1,4 @@
-"""Tests of the expectation annotation console (corpus scan, store, patch and routes)."""
+"""Tests of the expectation annotation console (corpus scan, store, export and routes)."""
 
 from __future__ import annotations
 
@@ -10,12 +10,11 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from demo.web.annotate.apply import apply, patch_text, preview
 from demo.web.annotate.corpus import scan_corpus
+from demo.web.annotate.export import case_snippet, payload_json, payload_yaml
 from demo.web.annotate.routes import build_annotate_routes
-from demo.web.annotate.service import AnnotateService
+from demo.web.annotate.service import STATUS_NONE, AnnotateService
 from demo.web.annotate.store import (
-    TARGET_APPLIED,
     TARGET_CONFIRMED,
     TARGET_DRAFT,
     TARGET_PENDING,
@@ -33,7 +32,7 @@ FEASIBILITY = "## Feasibility Negotiation\nReduce the target to 2Mbps for 08:00-
 
 
 def _case_id() -> int:
-    """Return a negotiation case id of the shipped corpus (26 is a feasibility negotiation)."""
+    """Return a negotiation case id of the shipped corpus (26 negotiates on both protocols)."""
     return 26
 
 
@@ -48,6 +47,8 @@ def _write_batch(
     batch_id: str = "batch-test",
     items: list[dict[str, object]],
     model: str = "test-model",
+    nms: bool = True,
+    decision_mode: str = "live",
 ) -> None:
     """Write one persisted tester batch snapshot the annotation scan can read."""
     directory = runs_dir / "tester"
@@ -57,9 +58,9 @@ def _write_batch(
         "batchId": batch_id,
         "createdAt": "2026-11-15T10:00:00+00:00",
         "finishedAt": "2026-11-15T10:05:00+00:00",
-        "decisionMode": "live",
+        "decisionMode": decision_mode,
         "modelLabel": model,
-        "nms": True,
+        "nms": nms,
         "nmsSim": False,
         "rounds": 1,
         "items": items,
@@ -133,6 +134,48 @@ def _cases() -> dict[int, Mapping[str, Any]]:
     return {int(case["id"]): case for case in CaseCatalog(SAMPLES).documents()}
 
 
+def _first_observation(detail: Mapping[str, object]) -> dict[str, object]:
+    """Return the first candidate of one detail payload."""
+    rows = detail.get("observations")
+    assert isinstance(rows, list) and rows
+    return dict(rows[0])
+
+
+def _observation_id(detail: Mapping[str, object]) -> int:
+    """Return the id of the first candidate of one detail payload."""
+    value = _first_observation(detail)["id"]
+    assert isinstance(value, int)
+    return value
+
+
+def _protocol_tasks(row: Mapping[str, object]) -> list[Mapping[str, object]]:
+    """Return the protocol tasks of one case row."""
+    tasks = row.get("protocols")
+    assert isinstance(tasks, list)
+    return [task for task in tasks if isinstance(task, Mapping)]
+
+
+def _subtask_rows(task: Mapping[str, object]) -> list[Mapping[str, object]]:
+    """Return the subtasks of one protocol task."""
+    rows = task.get("subtasks")
+    assert isinstance(rows, list)
+    return [row for row in rows if isinstance(row, Mapping)]
+
+
+def _target(detail: Mapping[str, object]) -> Mapping[str, object]:
+    """Return the target block of one detail payload."""
+    target = detail.get("target")
+    assert isinstance(target, Mapping)
+    return target
+
+
+def _counts(progress: Mapping[str, object]) -> Mapping[str, object]:
+    """Return the status counters of one progress payload."""
+    counts = progress.get("counts")
+    assert isinstance(counts, Mapping)
+    return counts
+
+
 # ---------------------------------------------------------------------------
 # Corpus scan
 # ---------------------------------------------------------------------------
@@ -141,18 +184,14 @@ def _cases() -> dict[int, Mapping[str, Any]]:
 def test_scan_collects_a_consistent_slot_error(tmp_path: Path) -> None:
     _write_batch(tmp_path, items=[_blocked_item(_blocked_case_id())])
 
-    scan = scan_corpus(
-        runs_dir=tmp_path,
-        client_db_path=None,
-        cases=_cases(),
-        days=2.0,
-    )
+    scan = scan_corpus(runs_dir=tmp_path, client_db_path=None, cases=_cases(), days=2.0)
 
     slot_rows = [row for row in scan.observations if row["dimension"] == SLOT_DIMENSION]
     assert len(slot_rows) == 1
     assert slot_rows[0]["code"] == "slot.constraint_violated"
     assert slot_rows[0]["consistent"] is True
     assert slot_rows[0]["model"] == "test-model"
+    assert slot_rows[0]["decisionMode"] == "live"
     assert slot_rows[0]["nms"] is True
 
 
@@ -227,27 +266,6 @@ def test_scan_ignores_files_outside_the_window(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _first_observation(detail: Mapping[str, object]) -> dict[str, object]:
-    """Return the first candidate of one detail payload."""
-    rows = detail.get("observations")
-    assert isinstance(rows, list) and rows
-    return dict(rows[0])
-
-
-def _target(detail: Mapping[str, object]) -> Mapping[str, object]:
-    """Return the target block of one detail payload."""
-    target = detail.get("target")
-    assert isinstance(target, Mapping)
-    return target
-
-
-def _counts(progress: Mapping[str, object]) -> Mapping[str, object]:
-    """Return the status counters of one progress payload."""
-    counts = progress.get("counts")
-    assert isinstance(counts, Mapping)
-    return counts
-
-
 def _store(tmp_path: Path) -> AnnotationStore:
     store = AnnotationStore(tmp_path / "annotations.sqlite3")
     store.ensure()
@@ -272,6 +290,7 @@ def _ingest(store: AnnotationStore, *, case_id: int = 16) -> None:
                 "runId": "run-1",
                 "observedAt": "2026-11-15T10:00:00+00:00",
                 "model": "m",
+                "decisionMode": "live",
                 "nms": True,
                 "consistent": True,
             },
@@ -321,9 +340,9 @@ def test_accepting_a_candidate_produces_the_yaml_value(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _ingest(store)
     key = TargetKey(16, "a2a-t", SLOT_DIMENSION)
-    observation = _first_observation(store.detail(key))
+    detail = store.detail(key)
 
-    store.set_choice(key, int(observation["id"]), accepted=True, edited_text="gain, 增益")
+    store.set_choice(key, _observation_id(detail), accepted=True, edited_text="gain, 增益")
     payload = store.export_payload(confirmed_only=False)
 
     assert payload["cases"] == [
@@ -343,9 +362,9 @@ def test_confirming_changes_the_status_and_the_confirmed_payload(tmp_path: Path)
     store = _store(tmp_path)
     _ingest(store)
     key = TargetKey(28, "a2a-t", MESSAGE_DIMENSION)
-    observation = _first_observation(store.detail(key))
+    detail = store.detail(key)
 
-    store.set_choice(key, int(observation["id"]), accepted=True)
+    store.set_choice(key, _observation_id(detail), accepted=True)
     assert store.targets()[1]["status"] == TARGET_DRAFT
     store.confirm(key, actor="tester-cookie")
 
@@ -361,8 +380,7 @@ def test_changing_a_confirmed_target_downgrades_it_to_draft(tmp_path: Path) -> N
     store = _store(tmp_path)
     _ingest(store)
     key = TargetKey(16, "a2a-t", SLOT_DIMENSION)
-    observation = _first_observation(store.detail(key))
-    store.set_choice(key, int(observation["id"]), accepted=True)
+    store.set_choice(key, _observation_id(store.detail(key)), accepted=True)
     store.confirm(key)
 
     store.set_mode(key, "cover")
@@ -371,173 +389,64 @@ def test_changing_a_confirmed_target_downgrades_it_to_draft(tmp_path: Path) -> N
     assert _target(store.detail(key))["mode"] == "cover"
 
 
-def test_applied_targets_are_marked(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    _ingest(store)
-    key = TargetKey(16, "a2a-t", SLOT_DIMENSION)
-    observation = _first_observation(store.detail(key))
-    store.set_choice(key, int(observation["id"]), accepted=True)
-    store.confirm(key)
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
 
-    store.mark_applied([key], actor="tester-cookie")
 
-    assert store.targets()[0]["status"] == TARGET_APPLIED
+def _payload() -> dict[str, object]:
+    return {
+        "schema": "osp-annotations/v1",
+        "generatedAt": "2026-11-15T10:00:00+00:00",
+        "cases": [
+            {
+                "id": 16,
+                "a2a-t": {
+                    "slot_errors": {
+                        "mode": "any",
+                        "expect": [{"code": "slot.constraint_violated", "contains": ["gain"]}],
+                    }
+                },
+            },
+            {
+                "id": 26,
+                "a2a-t": {"messages": [[FEASIBILITY]]},
+                "a2a": {"messages": [["Not feasible, please confirm"]]},
+            },
+        ],
+    }
+
+
+def test_the_global_yaml_export_carries_the_schema_and_cases() -> None:
+    text = payload_yaml(_payload())
+
+    assert text.startswith("# osp-annotations/v1")
+    assert "    expect:" in text
+
+
+def test_the_case_snippet_renders_at_the_protocols_nesting() -> None:
+    snippet = case_snippet(_payload(), 16, case_name="设置 gain target")
+
+    assert snippet.startswith("# case 16 · 设置 gain target")
+    assert "\n      a2a-t:\n        slot_errors:" in snippet
+    assert "        mode: any" in snippet
+
+
+def test_the_case_snippet_says_when_nothing_is_confirmed() -> None:
+    snippet = case_snippet(_payload(), 45, case_name="no expectation")
+
+    assert "# case 45 · no expectation" in snippet
+    assert "没有已确认的期望" in snippet
+
+
+def test_the_json_export_round_trips() -> None:
+    payload = _payload()
+
+    assert json.loads(payload_json(payload)) == payload
 
 
 # ---------------------------------------------------------------------------
-# Corpus patch
-# ---------------------------------------------------------------------------
-
-CORPUS = """# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
-schema: osp-eval-case/v1
-id: 1
-name: sample
-operation: Create
-expect:
-  intent:
-    Operation type: Create
-  protocols:
-    a2a-t:
-      validate: blocked
-      validate_label: 拦截
-      send: false
-      negotiation:
-        expected: false
-        expected_rounds: 0
-        kinds: null
-        rounds: []
-      final_state: input_invalid
-    a2a:
-      negotiation:
-        expected: true
-        expected_rounds: 1
-        kinds: null
-        rounds:
-          - 'Set the target.'
-      final_state: null
-assert:
-  intent: true
-"""
-
-
-def test_patch_inserts_the_slot_errors_after_the_label() -> None:
-    payload = {
-        "cases": [
-            {
-                "id": 1,
-                "a2a-t": {"slot_errors": {"mode": "any", "expect": [{"code": "slot.not_provided"}]}},
-            }
-        ]
-    }
-
-    text, changed, errors = patch_text(CORPUS, payload)
-
-    assert changed == (1,)
-    assert errors == ()
-    lines = text.splitlines()
-    label = lines.index("      validate_label: 拦截")
-    assert lines[label + 1] == "      slot_errors:"
-    assert "        mode: any" in lines
-
-
-def test_patch_inserts_the_messages_after_the_rounds() -> None:
-    message = "## Target Negotiation\nReduce the target to 2Mbps."
-    payload = {"cases": [{"id": 1, "a2a": {"messages": [[message]]}}]}
-
-    text, changed, errors = patch_text(CORPUS, payload)
-
-    assert changed == (1,)
-    assert errors == ()
-    lines = text.splitlines()
-    assert "          - - |-" in lines
-    assert "              ## Target Negotiation" in lines
-    assert "      final_state: null" in lines
-    assert lines.index("          - - |-") < lines.index("      final_state: null")
-
-
-def test_patch_replaces_an_existing_block() -> None:
-    payload = {
-        "cases": [
-            {
-                "id": 1,
-                "a2a-t": {"slot_errors": {"mode": "any", "expect": [{"code": "slot.not_provided"}]}},
-            }
-        ]
-    }
-    once, _changed, _errors = patch_text(CORPUS, payload)
-    second = {
-        "cases": [
-            {
-                "id": 1,
-                "a2a-t": {"slot_errors": {"mode": "cover", "expect": [{"code": "slot.rule_violation"}]}},
-            }
-        ]
-    }
-
-    twice, changed, errors = patch_text(once, second)
-
-    assert changed == (1,)
-    assert errors == ()
-    assert twice.count("slot_errors:") == 1
-    assert "        mode: cover" in twice.splitlines()
-
-
-def test_patch_leaves_an_unknown_case_untouched() -> None:
-    payload = {"cases": [{"id": 99, "a2a-t": {"slot_errors": ["slot.not_provided"]}}]}
-
-    text, changed, errors = patch_text(CORPUS, payload)
-
-    assert text == CORPUS
-    assert changed == ()
-    assert errors == ()
-
-
-def test_apply_writes_a_backup_and_the_patched_source(tmp_path: Path) -> None:
-    source = tmp_path / "cases-all.yaml"
-    source.write_text(CORPUS, encoding="utf-8")
-    payload = {
-        "cases": [
-            {
-                "id": 1,
-                "a2a-t": {"slot_errors": {"mode": "any", "expect": [{"code": "slot.not_provided"}]}},
-            }
-        ]
-    }
-
-    result = apply(payload, source=source, run_generator=False)
-
-    assert result.ok is True
-    assert result.changed_cases == (1,)
-    assert "slot_errors:" in source.read_text(encoding="utf-8")
-    backups = list(tmp_path.glob("cases-all.yaml.bak-*"))
-    assert len(backups) == 1
-    assert backups[0].read_text(encoding="utf-8") == CORPUS
-
-
-def test_apply_reports_an_invalid_payload_without_writing(tmp_path: Path) -> None:
-    source = tmp_path / "cases-all.yaml"
-    source.write_text(CORPUS, encoding="utf-8")
-
-    result = apply({"cases": "not-a-list"}, source=source, run_generator=False)
-
-    assert result.ok is False
-    assert source.read_text(encoding="utf-8") == CORPUS
-
-
-def test_preview_returns_the_review_diff(tmp_path: Path) -> None:
-    source = tmp_path / "cases-all.yaml"
-    source.write_text(CORPUS, encoding="utf-8")
-    payload = {"cases": [{"id": 1, "a2a-t": {"slot_errors": ["slot.not_provided"]}}]}
-
-    result = preview(payload, source=source)
-
-    assert result.ok is True
-    assert "+      slot_errors:" in result.diff
-    assert source.read_text(encoding="utf-8") == CORPUS
-
-
-# ---------------------------------------------------------------------------
-# Service and routes
+# Service
 # ---------------------------------------------------------------------------
 
 
@@ -551,26 +460,62 @@ def _service(tmp_path: Path) -> AnnotateService:
     )
 
 
-def test_the_service_lists_the_whole_expectation_space(tmp_path: Path) -> None:
+def test_every_case_carries_both_protocol_tasks(tmp_path: Path) -> None:
     service = _service(tmp_path)
 
-    rows = service.targets()
+    rows = service.cases()
+
+    assert len(rows) == 100
+    assert all(
+        [task["protocol"] for task in _protocol_tasks(row)] == ["a2a-t", "a2a"] for row in rows
+    )
+    assert all(row["caseName"] for row in rows)
+
+
+def test_the_subtask_space_matches_the_corpus(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+
+    rows = service.cases()
+    subtasks = [
+        (row["caseId"], task["protocol"], subtask["dimension"])
+        for row in rows
+        for task in _protocol_tasks(row)
+        for subtask in _subtask_rows(task)
+    ]
+    slot = [item for item in subtasks if item[2] == SLOT_DIMENSION]
+    messages = [item for item in subtasks if item[2] == MESSAGE_DIMENSION]
+
+    assert len(slot) == 52
+    assert all(item[1] == "a2a-t" for item in slot)
+    assert len(messages) == 99
+    assert len([item for item in messages if item[1] == "a2a-t"]) == 10
+    assert len([item for item in messages if item[1] == "a2a"]) == 89
+
+
+def test_a_protocol_without_a_subtask_reports_none(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+
+    row = next(item for item in service.cases() if item["caseId"] == 45)
+    tasks = {task["protocol"]: task for task in _protocol_tasks(row)}
+
+    assert tasks["a2a-t"]["status"] == STATUS_NONE
+    assert tasks["a2a"]["status"] == STATUS_NONE
+    assert tasks["a2a-t"]["subtasks"] == []
+
+
+def test_progress_counts_every_subtask(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+
     progress = service.progress()
 
-    slot_rows = [row for row in rows if row["dimension"] == SLOT_DIMENSION]
-    assert len(slot_rows) == 52
-    assert all(row["protocol"] == "a2a-t" for row in slot_rows)
-    assert len([row for row in rows if row["dimension"] == MESSAGE_DIMENSION]) == 99
+    assert progress["caseCount"] == 100
     assert _counts(progress)["total"] == 151
     assert _counts(progress)["pending"] == 151
 
 
-def test_the_service_merges_the_evidence_of_one_target(tmp_path: Path) -> None:
+def test_the_service_merges_the_evidence_of_one_subtask(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    _write_batch(
-        tmp_path,
-        items=[_blocked_item(_blocked_case_id())],
-    )
+    _write_batch(tmp_path, items=[_blocked_item(_blocked_case_id())])
     service.scan(days=2.0)
 
     detail = service.detail(_blocked_case_id(), "a2a-t", SLOT_DIMENSION)
@@ -578,6 +523,11 @@ def test_the_service_merges_the_evidence_of_one_target(tmp_path: Path) -> None:
     assert _first_observation(detail)["code"] == "slot.constraint_violated"
     assert detail["current"] is None
     assert detail["pending"] is None
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
 
 
 def _app(tmp_path: Path) -> Starlette:
@@ -597,49 +547,60 @@ def _client(app: Starlette) -> httpx.AsyncClient:
     )
 
 
-async def test_route_meta_and_targets(tmp_path: Path) -> None:
+async def test_route_meta_and_cases(tmp_path: Path) -> None:
     app = _app(tmp_path)
     async with _client(app) as client:
         meta = (await client.get("/api/annotate/meta")).json()
-        targets = (await client.get("/api/annotate/targets")).json()
+        cases = (await client.get("/api/annotate/cases")).json()
 
+    assert meta["protocols"] == ["a2a-t", "a2a"]
     assert meta["dimensions"] == [SLOT_DIMENSION, MESSAGE_DIMENSION]
-    assert meta["slotModes"] == ["any", "cover"]
-    assert targets["targets"]
-    assert targets["counts"]["total"] == len(targets["targets"])
+    assert meta["statuses"] == ["pending", "draft", "confirmed"]
+    assert len(cases["cases"]) == 100
+    assert cases["counts"]["total"] == 151
 
 
-async def test_route_scan_choice_and_export(tmp_path: Path) -> None:
+async def test_route_scan_choice_confirm_and_export(tmp_path: Path) -> None:
     _write_batch(tmp_path, items=[_blocked_item(_blocked_case_id())])
     app = _app(tmp_path)
     async with _client(app) as client:
         scanned = (await client.post("/api/annotate/scan?days=2")).json()
-        assert scanned["scan"]["observations"] == 1
         detail = (
-            await client.get(f"/api/annotate/target/{_blocked_case_id()}/a2a-t/{SLOT_DIMENSION}")
+            await client.get(f"/api/annotate/case/{_blocked_case_id()}/a2a-t/{SLOT_DIMENSION}")
         ).json()
         observation_id = detail["observations"][0]["id"]
         chosen = await client.post(
-            f"/api/annotate/target/{_blocked_case_id()}/a2a-t/{SLOT_DIMENSION}/choice",
+            f"/api/annotate/case/{_blocked_case_id()}/a2a-t/{SLOT_DIMENSION}/choice",
             json={"observationId": observation_id, "accepted": True},
         )
         confirmed = await client.post(
-            f"/api/annotate/target/{_blocked_case_id()}/a2a-t/{SLOT_DIMENSION}/confirm",
+            f"/api/annotate/case/{_blocked_case_id()}/a2a-t/{SLOT_DIMENSION}/confirm",
             json={},
         )
         exported = (await client.get("/api/annotate/export.json")).json()
+        snippet = await client.get(f"/api/annotate/export/case/{_blocked_case_id()}")
+        all_yaml = await client.get("/api/annotate/export.yaml")
 
     assert scanned["scan"]["inserted"] == 1
     assert chosen.json() == {"ok": True}
     assert confirmed.json()["status"] == TARGET_CONFIRMED
     assert exported["cases"][0]["id"] == _blocked_case_id()
+    assert snippet.status_code == 200
+    assert "slot_errors:" in snippet.text
+    assert all_yaml.status_code == 200
 
 
 async def test_route_rejects_an_unknown_dimension(tmp_path: Path) -> None:
     app = _app(tmp_path)
     async with _client(app) as client:
-        response = await client.get("/api/annotate/target/1/a2a-t/unknown")
+        response = await client.get("/api/annotate/case/1/a2a-t/unknown")
 
     assert response.status_code == 404
 
 
+async def test_route_rejects_the_case_export_of_an_unknown_case(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    async with _client(app) as client:
+        response = await client.get("/api/annotate/export/case/999")
+
+    assert response.status_code == 404

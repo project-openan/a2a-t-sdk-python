@@ -2645,10 +2645,10 @@ async def test_the_annotation_console_is_served(client: httpx.AsyncClient) -> No
     page = await client.get("/annotate")
     script = await client.get("/annotate/main.js")
     meta = await client.get("/api/annotate/meta")
-    targets = await client.get("/api/annotate/targets")
+    cases = await client.get("/api/annotate/cases")
 
     assert page.status_code == 200
     assert "预期标注" in page.text
     assert script.status_code == 200
     assert meta.json()["dimensions"] == ["slot_errors", "messages"]
-    assert targets.json()["targets"], "the catalog must project its expectation space"
+    assert cases.json()["cases"], "the catalog must project its expectation space"

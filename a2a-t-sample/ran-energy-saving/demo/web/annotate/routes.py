@@ -4,6 +4,9 @@ The console is a separate page on purpose. ``/tester`` shows the batch a browser
 scoped to that browser's cookie; annotation works across every batch of a window, whichever
 operator ran it, and its unit of work is one case expectation rather than one execution. The two
 pages share the catalog and the run store, not their request model.
+
+The page never writes the corpus: :mod:`demo.web.annotate.export` renders the confirmed values for
+an operator to merge, because the yellow zone hot-replaces the case files.
 """
 
 from __future__ import annotations
@@ -14,21 +17,15 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
-import yaml
 from eval.osp.catalog import CaseCatalog
-from eval.osp.expectations import MESSAGE_DIMENSION, SLOT_DIMENSION, SLOT_MODES
+from eval.osp.expectations import SLOT_DIMENSION, SLOT_MODES
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
-from demo.web.annotate.apply import CASES_ALL, apply, payload_json, preview
-from demo.web.annotate.service import AnnotateService
-from demo.web.annotate.store import (
-    DIMENSIONS,
-    TARGETS,
-    AnnotationStore,
-    TargetKey,
-)
+from demo.web.annotate.export import case_snippet, payload_json, payload_yaml
+from demo.web.annotate.service import PROTOCOLS, AnnotateService
+from demo.web.annotate.store import DIMENSIONS, TARGETS, AnnotationStore, TargetKey
 
 #: Directory of the console page assets.
 ANNOTATE_DIR: Final[Path] = Path(__file__).resolve().parent
@@ -53,7 +50,9 @@ def build_annotate_routes(
 ) -> list[Route]:
     """Build the annotation console routes."""
     resolved_store = AnnotationStore(
-        store_path if store_path is not None else Path(runs_dir) / "annotations" / "annotations.sqlite3"
+        store_path
+        if store_path is not None
+        else Path(runs_dir) / "annotations" / "annotations.sqlite3"
     )
     resolved_store.ensure()
     service = AnnotateService(
@@ -91,25 +90,24 @@ def build_annotate_routes(
         del request
         return JSONResponse(
             {
+                "protocols": list(PROTOCOLS),
                 "dimensions": list(DIMENSIONS),
                 "statuses": list(TARGETS),
                 "slotModes": list(SLOT_MODES),
                 "runsDir": str(runs_dir),
                 "clientDb": str(client_db_path) if client_db_path is not None else None,
                 "store": str(resolved_store.path),
-                "casesAll": str(CASES_ALL),
-                "casesAllPresent": CASES_ALL.is_file(),
                 "defaultDays": DEFAULT_DAYS,
                 "maxDays": MAX_DAYS,
                 "maxBatches": MAX_BATCHES,
             }
         )
 
-    async def targets(request: Request) -> Response:
-        """Return the target space with its evidence and confirmation state."""
-        rows = await asyncio.to_thread(service.targets)
+    async def cases(request: Request) -> Response:
+        """Return every case with its protocol tasks and subtasks."""
+        rows = await asyncio.to_thread(service.cases)
         progress = await asyncio.to_thread(service.progress)
-        return JSONResponse({"targets": rows, **progress})
+        return JSONResponse({"cases": rows, **progress})
 
     async def scan(request: Request) -> Response:
         """Collect the candidates of the recent tester batches."""
@@ -119,11 +117,11 @@ def build_annotate_routes(
         progress = await asyncio.to_thread(service.progress)
         return JSONResponse({"scan": summary.to_dict(), **progress})
 
-    async def target_detail(request: Request) -> Response:
-        """Return the candidates and the choices of one target."""
+    async def subtask_detail(request: Request) -> Response:
+        """Return the candidates and the choices of one subtask."""
         key = _target_key(request)
         if key is None:
-            return JSONResponse({"error": "未知的标注目标。"}, status_code=404)
+            return JSONResponse({"error": "未知的标注子任务。"}, status_code=404)
         detail = await asyncio.to_thread(
             service.detail, key.case_id, key.protocol, key.dimension
         )
@@ -133,28 +131,27 @@ def build_annotate_routes(
         """Accept, edit or reject one candidate."""
         key = _target_key(request)
         if key is None:
-            return JSONResponse({"error": "未知的标注目标。"}, status_code=404)
+            return JSONResponse({"error": "未知的标注子任务。"}, status_code=404)
         body = await _json_body(request)
         observation_id = body.get("observationId")
         if not isinstance(observation_id, int) or isinstance(observation_id, bool):
             return JSONResponse({"error": "observationId 必须是整数。"}, status_code=400)
-        accepted = bool(body.get("accepted"))
         edited = body.get("editedText")
         await asyncio.to_thread(
             resolved_store.set_choice,
             key,
             observation_id,
-            accepted=accepted,
+            accepted=bool(body.get("accepted")),
             edited_text=edited if isinstance(edited, str) else None,
             actor=_actor(request),
         )
         return JSONResponse({"ok": True})
 
     async def mode(request: Request) -> Response:
-        """Set the matching mode of a slot-error target."""
+        """Set the matching mode of a slot-error subtask."""
         key = _target_key(request)
         if key is None or key.dimension != SLOT_DIMENSION:
-            return JSONResponse({"error": "未知的 slot_errors 目标。"}, status_code=404)
+            return JSONResponse({"error": "未知的 slot_errors 子任务。"}, status_code=404)
         body = await _json_body(request)
         value = str(body.get("mode") or "")
         if value not in SLOT_MODES:
@@ -163,10 +160,10 @@ def build_annotate_routes(
         return JSONResponse({"ok": True})
 
     async def note(request: Request) -> Response:
-        """Record a free-form note on one target."""
+        """Record a free-form note on one subtask."""
         key = _target_key(request)
         if key is None:
-            return JSONResponse({"error": "未知的标注目标。"}, status_code=404)
+            return JSONResponse({"error": "未知的标注子任务。"}, status_code=404)
         body = await _json_body(request)
         await asyncio.to_thread(
             resolved_store.set_note, key, str(body.get("note") or ""), actor=_actor(request)
@@ -174,103 +171,84 @@ def build_annotate_routes(
         return JSONResponse({"ok": True})
 
     async def confirm(request: Request) -> Response:
-        """Confirm the accepted choices of one target."""
+        """Confirm the accepted choices of one subtask."""
         key = _target_key(request)
         if key is None:
-            return JSONResponse({"error": "未知的标注目标。"}, status_code=404)
+            return JSONResponse({"error": "未知的标注子任务。"}, status_code=404)
         result = await asyncio.to_thread(resolved_store.confirm, key, actor=_actor(request))
         return JSONResponse({"ok": True, **result})
 
-    async def draft(request: Request) -> Response:
-        """Return the corpus patch and its review diff for the confirmed targets."""
-        payload = await asyncio.to_thread(resolved_store.export_payload)
-        result = await asyncio.to_thread(preview, payload)
-        return JSONResponse(
-            {
-                "ok": result.ok,
-                "message": result.message,
-                "diff": result.diff,
-                "changedCases": list(result.changed_cases),
-                "errors": list(result.errors),
-                "payload": payload,
-            }
-        )
-
-    async def apply_annotations(request: Request) -> Response:
-        """Write the confirmed targets into the corpus source and regenerate the cases."""
-        payload = await asyncio.to_thread(resolved_store.export_payload)
-        result = await asyncio.to_thread(apply, payload)
-        if result.ok and result.changed_cases:
-            keys = _payload_keys(payload)
-            await asyncio.to_thread(resolved_store.mark_applied, keys, actor=_actor(request))
-            await asyncio.to_thread(catalog.reload)
-        return JSONResponse(
-            {
-                "ok": result.ok,
-                "message": result.message,
-                "diff": result.diff,
-                "changedCases": list(result.changed_cases),
-                "written": list(result.written),
-                "errors": list(result.errors),
-            }
-        )
-
-    async def export_yaml(request: Request) -> Response:
+    async def export_all_yaml(request: Request) -> Response:
         """Return the case-level annotation data as YAML (portable across environments)."""
         del request
         payload = await asyncio.to_thread(resolved_store.export_payload)
-        body = yaml.safe_dump(
-            payload, allow_unicode=True, sort_keys=False, default_flow_style=False, width=1000
-        )
         return Response(
-            body,
+            payload_yaml(payload),
             media_type="application/yaml; charset=utf-8",
             headers={"Content-Disposition": 'attachment; filename="osp-annotations.yaml"'},
         )
 
-    async def export_json(request: Request) -> Response:
+    async def export_all_json(request: Request) -> Response:
         """Return the same payload as JSON for a diff/merge workflow."""
         del request
         payload = await asyncio.to_thread(resolved_store.export_payload)
         return Response(payload_json(payload), media_type="application/json; charset=utf-8")
+
+    async def export_one_case(request: Request) -> Response:
+        """Return one case's confirmed expectations as a paste-ready YAML fragment."""
+        try:
+            case_id = int(request.path_params["case_id"])
+        except (KeyError, TypeError, ValueError):
+            return JSONResponse({"error": "caseId 必须是整数。"}, status_code=400)
+        case = catalog.get(case_id)
+        if case is None:
+            return JSONResponse({"error": "未知用例。"}, status_code=404)
+        payload = await asyncio.to_thread(resolved_store.export_payload)
+        body = case_snippet(payload, case_id, case_name=str(case.get("name") or ""))
+        return Response(
+            body,
+            media_type="application/yaml; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="case-{case_id}-expectations.yaml"'
+            },
+        )
 
     return [
         Route("/annotate", page),
         Route("/annotate/app.css", stylesheet),
         Route("/annotate/main.js", script),
         Route("/api/annotate/meta", meta),
-        Route("/api/annotate/targets", targets),
+        Route("/api/annotate/cases", cases),
         Route("/api/annotate/scan", scan, methods=["POST"]),
-        Route("/api/annotate/target/{case_id}/{protocol}/{dimension}", target_detail),
+        Route("/api/annotate/case/{case_id}/{protocol}/{dimension}", subtask_detail),
         Route(
-            "/api/annotate/target/{case_id}/{protocol}/{dimension}/choice",
+            "/api/annotate/case/{case_id}/{protocol}/{dimension}/choice",
             choice,
             methods=["POST"],
         ),
         Route(
-            "/api/annotate/target/{case_id}/{protocol}/{dimension}/mode",
+            "/api/annotate/case/{case_id}/{protocol}/{dimension}/mode",
             mode,
             methods=["POST"],
         ),
         Route(
-            "/api/annotate/target/{case_id}/{protocol}/{dimension}/note",
+            "/api/annotate/case/{case_id}/{protocol}/{dimension}/note",
             note,
             methods=["POST"],
         ),
         Route(
-            "/api/annotate/target/{case_id}/{protocol}/{dimension}/confirm",
+            "/api/annotate/case/{case_id}/{protocol}/{dimension}/confirm",
             confirm,
             methods=["POST"],
         ),
-        Route("/api/annotate/draft", draft),
-        Route("/api/annotate/apply", apply_annotations, methods=["POST"]),
-        Route("/api/annotate/export.yaml", export_yaml),
-        Route("/api/annotate/export.json", export_json),
+        Route("/api/annotate/export.yaml", export_all_yaml),
+        Route("/api/annotate/export.json", export_all_json),
+        Route("/api/annotate/export/case/{case_id}", export_one_case),
     ]
 
 
 def _target_key(request: Request) -> TargetKey | None:
-    """Return the target named by the path, or ``None`` when it is not a known dimension."""
+    """Return the subtask named by the path, or ``None`` when it is not a known dimension."""
     dimension = request.path_params["dimension"]
     if dimension not in DIMENSIONS:
         return None
@@ -282,36 +260,6 @@ def _target_key(request: Request) -> TargetKey | None:
     except (KeyError, TypeError, ValueError):
         return None
     return TargetKey(case_id, protocol, dimension)
-
-
-def _payload_keys(payload: Mapping[str, object]) -> list[TargetKey]:
-    """Return the target keys of one export payload."""
-    entries = payload.get("cases")
-    if not isinstance(entries, list):
-        return []
-    keys: list[TargetKey] = []
-    for entry in entries:
-        if not isinstance(entry, Mapping):
-            continue
-        case_id = entry.get("id")
-        if not isinstance(case_id, int) or isinstance(case_id, bool):
-            continue
-        for protocol, dimension in _target_dimensions(entry):
-            keys.append(TargetKey(case_id, protocol, dimension))
-    return keys
-
-
-def _target_dimensions(entry: Mapping[str, object]) -> list[tuple[str, str]]:
-    """Return the ``(protocol, dimension)`` pairs one export payload entry carries."""
-    pairs: list[tuple[str, str]] = []
-    for protocol, block in entry.items():
-        if not isinstance(block, Mapping):
-            continue
-        if SLOT_DIMENSION in block:
-            pairs.append((str(protocol), SLOT_DIMENSION))
-        if MESSAGE_DIMENSION in block:
-            pairs.append((str(protocol), MESSAGE_DIMENSION))
-    return pairs
 
 
 async def _json_body(request: Request) -> Mapping[str, object]:

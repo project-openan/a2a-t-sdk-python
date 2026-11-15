@@ -466,48 +466,68 @@ python -m eval.osp.runner --all --stop-after validate --model-mode live \
 ## 12. 预期标注控制台 `/annotate`
 
 新增的两类期望（`slot_errors`、`negotiation.messages`）不靠手写：`/annotate` 把已经跑过的 tester
-批次里的观测值整理成候选，人工挑选并确认后写进用例。它是独立页面，不是 `/tester` 的一个 tab——
-`/tester` 只服务"本浏览器发起的那一个批次"，而标注要跨批次、跨轮次、跨操作员查看同一批用例的语料。
+批次里的观测值整理成候选，人工挑选并确认，再**导出**给用例维护者合并。它是独立页面，不是 `/tester`
+的一个 tab——`/tester` 只服务"本浏览器发起的那一个批次"，而标注要跨批次、跨轮次、跨操作员查看同一批
+用例的语料。
 
-### 12.1 数据来源
+### 12.1 目标模型：用例 → 协议 → 子任务
+
+页面映射的就是 `eval/osp/cases` 这 100 条用例，每个用例都有两个协议任务，任务下挂它实际拥有的子任务：
+
+```
+用例 #16 设置 gain target为20%至30%
+├── A2A-T 任务
+│   ├── 子任务：拦截 slot_errors      （仅 validate: blocked 的 52 条）
+│   └── 子任务：协商报文 messages     （仅 expected_rounds > 0 的 10 条）
+└── A2A 任务
+    └── 子任务：协商报文 messages     （89 条）
+```
+
+- 语料分布：10 条双协议都协商（26/28/29/30/31/32/50/51/88/89），79 条只有 A2A 协商，0 条只有
+  A2A-T 协商，11 条都不协商（45–49/53–57/69）。
+- 没有子任务的协议任务显示为「无需标注」，列表可勾选隐藏；它不是错误，而是"该协议不预期协商"这一事实。
+- 子任务总数 151（52 + 10 + 89），页面顶部的进度按子任务统计 `未采集 / 草稿 / 已确认`。
+
+### 12.2 数据来源
 
 | 产物 | 位置 | 提供 |
 |---|---|---|
-| tester 批次快照 | `runs/tester/<batchId>.json` | caseId / protocol / 批次轮次 / 每段 `stages`（含 `validate.detail.slotErrors` 与拦截段）、runId、模型、是否真机 |
+| tester 批次快照 | `runs/tester/<batchId>.json` | caseId / protocol / 批次轮次 / 是否真机 / 决策模式 / 模型 / 每段 `stages`（含 `validate.detail.slotErrors` 与拦截段）、runId |
 | run 存储 | `runs/client-state.sqlite3` → `negotiation_events` | 每轮服务端报文 `content`（A2A-T 的 Negotiation-T 原文；A2A 的下游 `INPUT_REQUIRED` 原文），按 `runId` 关联 |
 
 - 扫描**不按浏览器 owner 过滤**，多人多轮的批次合在一起看；默认只读最近 1 天（可调 6 小时–7 天）。
 - 批次超过上限时会显式提示"已达批次上限"，不做静默截断。
-- 界面上的"运行轮次"筛选对应批次重复轮次（`item.round`），"协商轮次"是报文轮次（`negotiation_events.round`），两者不混用。
+- 右侧「运行轮次」下拉只列**当前用例、当前协议**的观测，按批次完成时间倒序；默认选中**最新一条真机
+  + live** 的观测，另有「全部轮次」把多轮候选并列（并按内容聚合 `出现 k/n 次`）。
+- 三个勾选框：只看真机、只看 live、只看一致候选（默认全开）。
 
-### 12.2 两个维度
+### 12.3 两个子任务
 
-- **拦截 `slot_errors`**：52 条 `validate: blocked` 用例各一个目标。候选来自拦截段的 `slotErrors`；
+- **拦截 `slot_errors`**：52 条 `validate: blocked` 用例各一个。候选来自拦截段的 `slotErrors`；
   可编辑 `contains` 关键词（多语言标签用逗号分隔），并选择 `mode: any | cover`。
-- **协商报文 `messages`**：10 条 A2A-T + 89 条 A2A 协商用例各一个目标。候选按协商轮次分组，
-  同一轮可采纳多个备选（"任意一个都 OK"）。
+- **协商报文 `messages`**：10 条 A2A-T + 89 条 A2A 用例各一个。候选按协商轮次分组，同一轮可采纳
+  多个备选（"任意一个都 OK"）。
 
-### 12.3 一致性守门
+### 12.4 一致性守门
 
 只有**与用例现有预期一致**的观测可以采纳：拦截用例必须实测也是 `blocked`，协商用例的观测轮数必须
 等于 `expected_rounds` 且 `kinds` 命中。不一致的候选仍然展示（红底）作为证据，但不能变成 oracle；
 需要记录时写进备注或 `known_issue`。这样可以避免"把当前缺陷固化成期望"。
 
-### 12.4 存储与应用
+### 12.5 存储与导出（只导出，不落盘）
 
-- 标注库：`runs/annotations/annotations.sqlite3`（append-only：`observation` / `target` / `choice` / `event`）。
-  来源 runId、确认人、时间只存在这里，**不写进用例 YAML**。
-- 状态机：`pending → draft → confirmed → applied`；确认后再改候选会自动退回 `draft`。
-- 应用：`预览补丁` 生成 `docs-local/cases-all.yaml` 的 diff → `应用` 写源文件（带时间戳备份）→
-  调用 `docs-local/_generate_cases.py` 重生成 `eval/osp/cases/*.yaml` + `index.yaml` →
-  重新解析生成结果确认新键可读 → 刷新用例目录。
-- 黄区自持：代码与运行数据都在黄区，标注也在黄区完成；需要带回蓝区时用 `导出标注数据（YAML）`
-  （`osp-annotations/v1`，只有 case 级的两类期望），不需要拷贝运行产物。
-- 缺少 `docs-local/cases-all.yaml` 时页面会提示只能采集与导出，不能应用。
+- 标注库：`runs/annotations/annotations.sqlite3`（append-only：`observation` / `target` / `choice` /
+  `event`）。来源 runId、确认人、时间只存在这里，**不写进用例 YAML**。
+- 状态机：`pending → draft → confirmed`；确认后再改候选会自动退回 `draft`。
+- **页面不写任何用例文件**：黄区的用例会被热更新替换，直接写会被覆盖或与正在测的副本分叉。因此只提供：
+  - 顶部「导出全部 YAML / JSON」：`osp-annotations/v1`，case 级的两类期望，便携、可跨环境传递；
+  - 右侧「生成期望片段」：单用例的片段，已按 `expect.protocols` 的层级（6 空格）缩进，复制粘贴即可；
+    没有已确认值时片段会明确说明，而不是给空字符串。
+- `eval/osp/index.yaml` 只记录 id/文件名/标签/轮次数，不含这两类期望，合并后无需更新它。
 
-### 12.5 注意
+### 12.6 注意
 
 - 采纳的是**观测到的原文**，但判定仍按第 5 节的归一化规则（小节 + 业务事实）：一次措辞不同的
   渲染不会让用例变红。
 - 标注库不改动 run 存储，也不删除任何候选；重复扫描同一批次只会累加 `seen_count`。
-- 该页面只写标注库与 cases-all.yaml，不启动 run、不向网管下发任何东西。
+- 该页面只读批次与 run 存储、写标注库，不启动 run、不向网管下发任何东西。
