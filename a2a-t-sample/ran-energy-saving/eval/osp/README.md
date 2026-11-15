@@ -238,6 +238,8 @@ A2A-T 只有 10 条需要协商（26/28/29/30/31/32/50/51/88/89），其余 90 �
         mode: any
         expect:
           - code: slot.constraint_violated
+            slotName: 增益目标             # 可选：精确
+            message: 增益目标不允许为 20%   # 可选：精确（仅归一化空白/全半角）
             contains: [gain, 增益]
             facts: { actual: "20" }
           - slot.not_provided            # 只写 code 的简写
@@ -247,9 +249,11 @@ A2A-T 只有 10 条需要协商（26/28/29/30/31/32/50/51/88/89），其余 90 �
   的用例因此只判**拦截段**（补充段的 `validate` 由派生逻辑改成 `pass`，不判）。
 - 观测源两处都收：Task-T 之前 `PromptGenerationError.failed_parameters`、Task-T 之后
   `ContentValidationError.errors`。
-- 匹配键：`code`（精确）、`slotName`（精确，可选）、`contains`（任一关键词出现在 slot 名 / message /
-  facts 值里）、`facts`（子集精确匹配）。**不判 `message`**：它是按 code+facts 渲染的多语言文本，
-  而 `slot_label` 是模型生成的自由文本，两者都不稳定。
+- 匹配键：`code`（精确）、`slotName`（精确，可选）、`message`（精确，仅做全半角与空白归一化）、
+  `contains`（任一关键词出现在 slot 名 / message / facts 值里）、`facts`（子集精确匹配）。
+- `/annotate` 采纳一条候选时导出的就是**整个观测到的错误**（`code` + `slotName` + `message` +
+  `facts`），这样 oracle 记录的是当时真正报出的内容；如果不想把模型渲染的 `slotName`/`message`
+  固化进预期，在用例里删掉对应键即可（只留 `code` / `facts` 同样合法）。
 - `mode: any`：观测到的错误里任意一条命中任意一个期望即通过。`mode: cover`：观测到的每条错误都必须
   被某条期望覆盖（且至少观测到一条）。
 - 没有该块 = 不判定（保持"只看 verdict"的历史行为）。
@@ -499,6 +503,8 @@ python -m eval.osp.runner --all --stop-after validate --model-mode live \
 | run 存储 | `runs/client-state.sqlite3` → `negotiation_events` | 每轮服务端报文 `content`（A2A-T 的 Negotiation-T 原文；A2A 的下游 `INPUT_REQUIRED` 原文），按 `runId` 关联 |
 
 - 扫描**不按浏览器 owner 过滤**，多人多轮的批次合在一起看；默认只读最近 1 天（可调 6 小时–7 天）。
+- 真机判定读批次的 `discovery: nms`（兼容旧的 `nms` / `nmsSim` 键）；`decisionMode`、模型名与
+  `nms` 都会入库。重新「采集候选」会刷新这些元数据，修复前采集的旧记录无需删库。
 - 批次超过上限时会显式提示"已达批次上限"，不做静默截断。
 - 右侧「运行轮次」下拉只列**当前用例、当前协议**的观测，按批次完成时间倒序；默认选中**最新一条真机
   + live** 的观测，另有「全部轮次」把多轮候选并列（并按内容聚合 `出现 k/n 次`）。
@@ -507,7 +513,8 @@ python -m eval.osp.runner --all --stop-after validate --model-mode live \
 ### 12.3 两个子任务
 
 - **拦截 `slot_errors`**：52 条 `validate: blocked` 用例各一个。候选来自拦截段的 `slotErrors`；
-  可编辑 `contains` 关键词（多语言标签用逗号分隔），并选择 `mode: any | cover`。
+  采纳后导出**整个观测错误**（`code` / `slotName` / `message` / `facts`），可再编辑 `contains`
+  关键词（多语言标签用逗号分隔），并选择 `mode: any | cover`。
 - **协商报文 `messages`**：10 条 A2A-T + 89 条 A2A 用例各一个。候选按协商轮次分组，同一轮可采纳
   多个备选（"任意一个都 OK"）。
 
@@ -521,6 +528,10 @@ python -m eval.osp.runner --all --stop-after validate --model-mode live \
 
 - 标注库：`runs/annotations/annotations.sqlite3`（append-only：`observation` / `target` / `choice` /
   `event`）。来源 runId、确认人、时间只存在这里，**不写进用例 YAML**。
+- 交互是**选择 → 确认保存**两步：勾选、关键词、`mode`、备注都只改页面本地状态，不发请求也不刷新；
+  底部「确认保存」用一次 `POST /api/annotate/case/{id}/{protocol}/apply` 提交当前用例 + 协议下的
+  **全部**子任务（accepted 集合 = 提交的 `observationIds`）并标记为已确认。保存成功后「已保存的
+  导出值」和左侧状态徽标才更新；未保存就切换用例会提示。
 - 状态机：`pending → draft → confirmed`；确认后再改候选会自动退回 `draft`。
 - **页面不写任何用例文件**：黄区的用例会被热更新替换，直接写会被覆盖或与正在测的副本分叉。因此只提供：
   - 顶部「导出全部 YAML / JSON」：`osp-annotations/v1`，case 级的两类期望，便携、可跨环境传递；
@@ -560,3 +571,20 @@ python -m demo.web.annotate \
 
 - 该进程不启动 run、不恢复 run 状态、不向源目录写其它文件；源实例正在跑时也可以同时使用（SQLite 读连接兼容 WAL）。
 - 需要挂到 LAN 时自己加 `--host 0.0.0.0`，并注意该页面会展示请求原文与报文。
+
+### 12.8 按 traceId / runId 批量采纳
+
+第一批期望值不需要逐个子任务点选：把已经确认过的运行标识（traceId，或 run 控制台里的 runId）
+填进页面顶部的「按 traceId / runId 批量采纳」，一次把它们的观测采纳为标注值（默认同时确认）。
+
+- **标识即选择**：填了就只读携带这些标识的批次条目，**不受时间窗限制**；不会因为一条旧 trace
+  不在默认 1 天窗口里就被报成"未找到"。
+- **仍然过一致性守门**：与用例现有预期不一致的观测（该拦未拦、轮数/类型不符）永远不采纳，只在
+  结果里报 `无一致候选`。
+- **不覆盖已审阅的工作**：目标已有采纳值或用例已有该期望时跳过（`已有采纳` / `用例已有期望`）；
+  勾选「覆盖已有采纳/期望」才重写。同一目标下同一内容只保留一份（按轮次去重）。
+- **可限定范围**：协议（A2A-T / A2A）与子任务（`slot_errors` / `messages`）两个下拉可以缩小批次。
+- **结果可解释**：返回匹配/未找到/无候选的标识数、扫描批次数、逐目标采纳结果与跳过原因；
+  批次超上限会显式提示。
+- 自动采纳与手工勾选等价：`messages` 落原文作为该轮备选，`slot_errors` 落**整个观测错误**
+  （`code` / `slotName` / `message` / `facts`），导出格式见 §5.3。API 见 `ANNOTATE-GUIDE.md` 第 7 节。

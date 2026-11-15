@@ -27,7 +27,14 @@ const state = {
   runTouched: false,
   snippet: null,
   scan: null,
+  //: Unsubmitted edits of the current case+protocol. Checking a box only touches this object;
+  //: the page saves everything with one request, so a click never flickers the panel.
+  pending: emptyPending(),
 };
+
+function emptyPending() {
+  return { choices: {}, modes: {}, notes: {}, edits: {}, dirty: false };
+}
 
 export function statusLabel(status) {
   if (!status) return STATUS_LABELS.pending;
@@ -47,6 +54,49 @@ export function progressText(progress) {
   const counts = progress.counts;
   return `子任务 ${counts.total || 0} · 未采集 ${counts.pending || 0} · 草稿 ${counts.draft || 0}`
     + ` · 已确认 ${counts.confirmed || 0}`;
+}
+
+const TRACE_SKIP_LABELS = {
+  inconsistent: "无一致候选",
+  already_adopted: "已有采纳",
+  has_value: "用例已有期望",
+};
+
+//: Split a pasted traceId/runId block into unique, lower-cased identifiers.
+export function parseTraceIds(value) {
+  const tokens = String(value || "")
+    .split(/[\s,，;；]+/)
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean);
+  return [...new Set(tokens)];
+}
+
+//: One-line summary of a bulk-adoption response.
+export function traceNotice(result) {
+  if (!result) return "";
+  const adopted = Array.isArray(result.adopted) ? result.adopted : [];
+  const skipped = Array.isArray(result.skipped) ? result.skipped : [];
+  const parts = [
+    `匹配 ${(result.matched || []).length}/${result.requested || 0} 个标识`,
+    `扫描 ${result.batches || 0} 个批次、${result.observations || 0} 条观测`,
+    `采纳 ${adopted.length} 个子任务${result.confirm ? "（已确认）" : "（草稿）"}`,
+  ];
+  const reasons = new Map();
+  for (const row of skipped) {
+    const label = TRACE_SKIP_LABELS[row.reason] || row.reason || "跳过";
+    reasons.set(label, (reasons.get(label) || 0) + 1);
+  }
+  if (reasons.size) {
+    parts.push(`跳过 ${[...reasons].map(([label, count]) => `${label} ${count}`).join("，")}`);
+  }
+  if ((result.unknown || []).length) {
+    parts.push(`未找到 ${(result.unknown || []).slice(0, 5).join("、")}`);
+  }
+  if ((result.noCandidate || []).length) {
+    parts.push(`无候选 ${(result.noCandidate || []).slice(0, 5).join("、")}`);
+  }
+  if (result.truncated) parts.push("已达批次上限，较早批次未纳入");
+  return parts.join("；");
 }
 
 //: Sub-task rows of one protocol task.
@@ -243,11 +293,13 @@ function currentFilters() {
 
 function renderCases() {
   const list = document.getElementById("case-list");
+  const scrollTop = list.scrollTop;
   const rows = filterCases(state.cases, currentFilters());
   document.getElementById("case-count").textContent = `${rows.length} / ${state.cases.length}`;
   list.replaceChildren();
   if (!rows.length) {
     list.append(el("p", "empty-state", "没有匹配的用例。"));
+    list.scrollTop = scrollTop;
     return;
   }
   for (const caseRow of rows) {
@@ -288,9 +340,11 @@ function renderCases() {
     }
     list.append(block);
   }
+  list.scrollTop = scrollTop;
 }
 
 async function selectProtocol(caseRow, protocol) {
+  if (!confirmDiscard()) return;
   state.selected = { caseId: caseRow.caseId, protocol, caseName: caseRow.caseName };
   state.snippet = null;
   state.run = "";
@@ -299,9 +353,11 @@ async function selectProtocol(caseRow, protocol) {
   await loadDetails();
 }
 
-async function loadDetails() {
+//: Fetch the current selection's subtasks. ``silent`` keeps the rendered panel on screen so a
+//: checkbox click does not flash "加载中…" and lose the reader's place.
+async function loadDetails(silent = false) {
   const container = document.getElementById("detail");
-  container.replaceChildren(el("section", "card", "加载中…"));
+  if (!silent) container.replaceChildren(el("section", "card", "加载中…"));
   const { caseId, protocol } = state.selected;
   const caseRow = state.cases.find((row) => row.caseId === caseId);
   const subtasks = subtasksOf(caseRow || {}, protocol);
@@ -314,11 +370,70 @@ async function loadDetails() {
     }),
   );
   state.details = details;
+  resetPending();
   if (!state.runTouched) {
     const observations = Object.values(details).flatMap((detail) => detail.observations || []);
     state.run = defaultRunKey(runOptions(observations));
   }
   renderDetail();
+}
+
+//: Seed the local editor from what the server has saved.
+function resetPending() {
+  const pending = emptyPending();
+  for (const [dimension, detail] of Object.entries(state.details)) {
+    const accepted = (detail.choices || []).filter((choice) => choice.accepted);
+    pending.choices[dimension] = new Set(accepted.map((choice) => choice.observationId));
+    pending.edits[dimension] = {};
+    for (const choice of accepted) {
+      if (choice.editedText) pending.edits[dimension][choice.observationId] = choice.editedText;
+    }
+    pending.notes[dimension] = detail.target.note || "";
+    if (dimension === SLOT_DIMENSION) pending.modes[dimension] = detail.target.mode || "any";
+  }
+  state.pending = pending;
+}
+
+function selectedIds(dimension) {
+  return state.pending.choices[dimension] || new Set();
+}
+
+//: Ask before an action that reloads the panels would drop unsaved selections.
+function confirmDiscard() {
+  if (!state.pending.dirty) return true;
+  return window.confirm("当前选择还没有保存，继续会丢弃这些修改。继续？");
+}
+
+function toggleSelection(dimension, observationId, accepted) {
+  const selected = state.pending.choices[dimension] || new Set();
+  if (accepted) selected.add(observationId);
+  else selected.delete(observationId);
+  state.pending.choices[dimension] = selected;
+  markDirty();
+}
+
+function markDirty() {
+  state.pending.dirty = true;
+  updateSaveState();
+}
+
+function updateSaveState() {
+  const hint = document.getElementById("save-state");
+  if (hint) hint.textContent = state.pending.dirty ? "有未保存的修改" : "与已保存一致";
+  for (const [dimension, detail] of Object.entries(state.details)) {
+    const node = document.getElementById(`save-status-${dimension}`);
+    if (!node) continue;
+    const target = detail.target;
+    const status = target.confirmedBy
+      ? `已确认 ${target.confirmedBy} · ${target.confirmedAt || ""}`
+      : statusLabel(target.status);
+    node.textContent = `${subtaskLabel(dimension)}：选中 ${selectedIds(dimension).size} 条 · ${status}`;
+  }
+  const button = document.getElementById("save-button");
+  if (button) {
+    const anySelected = Object.values(state.pending.choices).some((set) => set.size > 0);
+    button.disabled = !state.pending.dirty && !anySelected;
+  }
 }
 
 function currentDetailObservations() {
@@ -338,6 +453,7 @@ function currentDetailObservations() {
 function renderDetail() {
   if (!state.selected) return;
   const container = document.getElementById("detail");
+  const scrollTop = container.scrollTop;
   container.replaceChildren();
   const { caseId, protocol } = state.selected;
   const caseRow = state.cases.find((row) => row.caseId === caseId) || {};
@@ -347,6 +463,7 @@ function renderDetail() {
     container.append(
       el("section", "card empty", "该用例的这个协议没有需要标注的子任务（无需标注）。"),
     );
+    container.scrollTop = scrollTop;
     return;
   }
   container.append(renderRunBar(subtasks));
@@ -362,7 +479,10 @@ function renderDetail() {
         : renderMessagePanel(detail, visible[subtask.dimension] || []),
     );
   }
+  container.append(renderSavePanel());
   container.append(renderCaseExport(caseRow));
+  container.scrollTop = scrollTop;
+  updateSaveState();
 }
 
 function renderHeader(caseRow, protocol) {
@@ -449,13 +569,10 @@ function renderSlotPanel(detail, observations) {
     option.textContent = value === "any" ? "any（任一命中）" : "cover（全部覆盖）";
     mode.append(option);
   }
-  mode.value = detail.target.mode || "any";
-  mode.addEventListener("change", async () => {
-    await postJson(
-      subtaskPath(detail.target.caseId, detail.target.protocol, SLOT_DIMENSION, "/mode"),
-      { mode: mode.value },
-    );
-    await refresh();
+  mode.value = state.pending.modes[SLOT_DIMENSION] || detail.target.mode || "any";
+  mode.addEventListener("change", () => {
+    state.pending.modes[SLOT_DIMENSION] = mode.value;
+    markDirty();
   });
   head.append(mode);
   card.append(head);
@@ -470,7 +587,8 @@ function renderSlotPanel(detail, observations) {
     ),
   );
 
-  const accepted = acceptedMap(detail);
+  const selected = selectedIds(SLOT_DIMENSION);
+  const edits = state.pending.edits[SLOT_DIMENSION] || {};
   const table = document.createElement("table");
   table.className = "grid";
   const thead = document.createElement("thead");
@@ -494,25 +612,18 @@ function renderSlotPanel(detail, observations) {
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.disabled = !observation.consistent;
-    checkbox.checked = accepted.has(observation.id);
+    checkbox.checked = selected.has(observation.id);
     const keywords = document.createElement("input");
     keywords.className = "keywords";
     keywords.placeholder = "gain, 增益";
-    keywords.value = accepted.get(observation.id)?.editedText || "";
-    const save = async () => {
-      await postJson(
-        subtaskPath(detail.target.caseId, detail.target.protocol, SLOT_DIMENSION, "/choice"),
-        {
-          observationId: observation.id,
-          accepted: checkbox.checked,
-          editedText: keywords.value || null,
-        },
-      );
-      await refresh();
-    };
-    checkbox.addEventListener("change", save);
-    keywords.addEventListener("change", () => {
-      if (checkbox.checked) save();
+    keywords.value = edits[observation.id] || "";
+    checkbox.addEventListener("change", () => {
+      toggleSelection(SLOT_DIMENSION, observation.id, checkbox.checked);
+    });
+    keywords.addEventListener("input", () => {
+      state.pending.edits[SLOT_DIMENSION] = state.pending.edits[SLOT_DIMENSION] || {};
+      state.pending.edits[SLOT_DIMENSION][observation.id] = keywords.value;
+      markDirty();
     });
     const first = document.createElement("td");
     first.append(checkbox);
@@ -532,8 +643,8 @@ function renderSlotPanel(detail, observations) {
   }
   table.append(tbody);
   card.append(table);
+  card.append(renderNote(detail));
   card.append(renderPending(detail));
-  card.append(renderConfirmPanel(detail));
   return card;
 }
 
@@ -552,12 +663,13 @@ function renderMessagePanel(detail, observations) {
         : textBlock(detail.current),
     ),
   );
-  const accepted = acceptedMap(detail);
+  const selected = selectedIds(MESSAGE_DIMENSION);
+  const edits = state.pending.edits[MESSAGE_DIMENSION] || {};
   const groups = groupByRound(observations);
   if (!groups.length) {
     card.append(el("p", "empty-state", "当前轮次过滤后没有候选。"));
+    card.append(renderNote(detail));
     card.append(renderPending(detail));
-    card.append(renderConfirmPanel(detail));
     return card;
   }
   for (const [round, rows] of groups) {
@@ -568,7 +680,7 @@ function renderMessagePanel(detail, observations) {
       el(
         "span",
         "summary",
-        `${rows.length} 个变体 · 已采纳 ${rows.filter((row) => accepted.has(row.id)).length}`,
+        `${rows.length} 个变体 · 已选 ${rows.filter((row) => selected.has(row.id)).length}`,
       ),
     );
     group.append(head);
@@ -578,15 +690,11 @@ function renderMessagePanel(detail, observations) {
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
       checkbox.disabled = !observation.consistent;
-      checkbox.checked = accepted.has(observation.id);
+      checkbox.checked = selected.has(observation.id);
       const label = el("label", "", "采纳");
       label.prepend(checkbox);
-      checkbox.addEventListener("change", async () => {
-        await postJson(
-          subtaskPath(detail.target.caseId, detail.target.protocol, MESSAGE_DIMENSION, "/choice"),
-          { observationId: observation.id, accepted: checkbox.checked, editedText: null },
-        );
-        await refresh();
+      checkbox.addEventListener("change", () => {
+        toggleSelection(MESSAGE_DIMENSION, observation.id, checkbox.checked);
       });
       candidateHead.append(label);
       candidateHead.append(
@@ -605,38 +713,51 @@ function renderMessagePanel(detail, observations) {
 
       const editor = document.createElement("textarea");
       editor.hidden = true;
-      editor.value = accepted.get(observation.id)?.editedText || observation.content || "";
+      editor.value = edits[observation.id] || observation.content || "";
       editButton.addEventListener("click", () => {
         editor.hidden = !editor.hidden;
       });
-      editor.addEventListener("change", async () => {
-        await postJson(
-          subtaskPath(detail.target.caseId, detail.target.protocol, MESSAGE_DIMENSION, "/choice"),
-          { observationId: observation.id, accepted: true, editedText: editor.value },
-        );
-        await refresh();
+      editor.addEventListener("input", () => {
+        state.pending.edits[MESSAGE_DIMENSION] = state.pending.edits[MESSAGE_DIMENSION] || {};
+        state.pending.edits[MESSAGE_DIMENSION][observation.id] = editor.value;
+        toggleSelection(MESSAGE_DIMENSION, observation.id, true);
+        checkbox.checked = true;
       });
       candidate.append(editor);
       group.append(candidate);
     }
     card.append(group);
   }
+  card.append(renderNote(detail));
   card.append(renderPending(detail));
-  card.append(renderConfirmPanel(detail));
   return card;
 }
 
-function acceptedMap(detail) {
-  return new Map(
-    (detail.choices || [])
-      .filter((choice) => choice.accepted)
-      .map((choice) => [choice.observationId, choice]),
-  );
+function renderNote(detail) {
+  const row = el("div", "confirm");
+  const note = document.createElement("input");
+  note.className = "note";
+  note.placeholder = "备注（例如：依据 11-15 三批 live 的多数渲染）";
+  note.value = state.pending.notes[detail.target.dimension] || "";
+  note.addEventListener("input", () => {
+    state.pending.notes[detail.target.dimension] = note.value;
+    markDirty();
+  });
+  row.append(note);
+  return row;
 }
 
 function renderPending(detail) {
   const block = el("div", "");
-  block.append(el("p", "sub", "采纳后的导出值（确认后进入全量导出）"));
+  block.append(
+    el(
+      "p",
+      "sub",
+      state.pending.dirty
+        ? "已保存的导出值（有未保存的修改，点底部「确认保存」后更新）"
+        : "已保存的导出值",
+    ),
+  );
   block.append(
     el(
       "pre",
@@ -649,39 +770,86 @@ function renderPending(detail) {
   return block;
 }
 
-function renderConfirmPanel(detail) {
-  const card = el("div", "confirm");
-  const target = detail.target;
+//: The single save of the page: every subtask of the current case+protocol is submitted together,
+//: so checking a box is a local edit and only this button talks to the server.
+function renderSavePanel() {
+  const card = el("section", "card save");
+  const head = el("div", "section-title");
+  head.append(el("h2", "", "确认保存"));
+  const stateText = el("span", "summary", "");
+  stateText.id = "save-state";
+  head.append(stateText);
+  card.append(head);
+  const statuses = el("div", "save-status");
+  for (const [dimension, detail] of Object.entries(state.details)) {
+    const selected = selectedIds(dimension).size;
+    const target = detail.target;
+    const confirmed = target.confirmedBy
+      ? `已确认 ${target.confirmedBy} · ${target.confirmedAt || ""}`
+      : statusLabel(target.status);
+    const status = el("span", "summary", `${subtaskLabel(dimension)}：选中 ${selected} 条 · ${confirmed}`);
+    status.id = `save-status-${dimension}`;
+    statuses.append(status);
+  }
+  card.append(statuses);
+  const button = el("button", "primary", "确认保存");
+  button.id = "save-button";
+  button.addEventListener("click", savePanel);
+  card.append(button);
   card.append(
-    el(
-      "span",
-      "summary",
-      target.confirmedBy
-        ? `已确认：${target.confirmedBy} · ${target.confirmedAt || ""}`
-        : "尚未确认",
-    ),
+    el("p", "sub", "一次提交当前用例、当前协议下所有子任务的选择、匹配模式与备注，并标记为已确认。"),
   );
-  const note = document.createElement("input");
-  note.className = "note";
-  note.placeholder = "备注（例如：依据 11-15 三批 live 的多数渲染）";
-  note.value = target.note || "";
-  card.append(note);
-  const saveNote = el("button", "secondary", "保存备注");
-  saveNote.addEventListener("click", async () => {
-    await postJson(
-      subtaskPath(target.caseId, target.protocol, target.dimension, "/note"),
-      { note: note.value },
-    );
-    await refresh();
-  });
-  const confirm = el("button", "primary", "确认");
-  confirm.disabled = !(detail.choices || []).some((choice) => choice.accepted);
-  confirm.addEventListener("click", async () => {
-    await postJson(subtaskPath(target.caseId, target.protocol, target.dimension, "/confirm"), {});
-    await refresh();
-  });
-  card.append(saveNote, confirm);
+  const error = el("p", "empty-state");
+  error.id = "save-error";
+  error.hidden = true;
+  card.append(error);
   return card;
+}
+
+function setSaveError(message) {
+  const node = document.getElementById("save-error");
+  if (!node) return;
+  node.textContent = message || "";
+  node.hidden = !message;
+}
+
+async function savePanel() {
+  if (!state.selected) return;
+  const { caseId, protocol } = state.selected;
+  const button = document.getElementById("save-button");
+  const targets = Object.entries(state.details).map(([dimension, detail]) => {
+    const selected = [...selectedIds(dimension)];
+    const source = state.pending.edits[dimension] || {};
+    const edits = {};
+    for (const observationId of selected) {
+      if (source[observationId] !== undefined) edits[String(observationId)] = source[observationId];
+    }
+    const entry = {
+      dimension,
+      observationIds: selected,
+      note: state.pending.notes[dimension] || "",
+    };
+    if (dimension === SLOT_DIMENSION) {
+      entry.mode = state.pending.modes[dimension] || detail.target.mode || "any";
+    }
+    if (Object.keys(edits).length) entry.edits = edits;
+    return entry;
+  });
+  if (button) button.disabled = true;
+  setSaveError("");
+  try {
+    const payload = await postJson(
+      `/api/annotate/case/${caseId}/${protocol}/apply`,
+      { targets, confirm: true },
+    );
+    state.details = payload.details || {};
+    resetPending();
+    await loadCases();
+    renderDetail();
+  } catch (error) {
+    setSaveError(error.message);
+    updateSaveState();
+  }
 }
 
 function renderCaseExport(caseRow) {
@@ -713,12 +881,54 @@ function renderCaseExport(caseRow) {
   return card;
 }
 
+//: Reload after a mutation. The case list must be refreshed (status badges), but the detail panel
+//: stays on screen while the new payload arrives, so a click does not blank the page.
 async function refresh() {
   await loadCases();
-  if (state.selected) await loadDetails();
+  if (state.selected) await loadDetails(true);
+}
+
+function showTraceNote(message, isError = false) {
+  const node = document.getElementById("trace-note");
+  if (!node) return;
+  if (!message) {
+    node.hidden = true;
+    return;
+  }
+  node.hidden = false;
+  node.className = isError ? "notice error" : "notice";
+  node.textContent = message;
+}
+
+async function adoptTraces() {
+  if (!confirmDiscard()) return;
+  const button = document.getElementById("trace-adopt-button");
+  const tokens = parseTraceIds(field("trace-ids"));
+  if (!tokens.length) {
+    showTraceNote("请先填入至少一个 traceId 或 runId。", true);
+    return;
+  }
+  button.disabled = true;
+  showTraceNote("");
+  try {
+    const payload = await postJson("/api/annotate/adopt/traces", {
+      traces: tokens,
+      protocol: field("trace-protocol") || null,
+      dimension: field("trace-dimension") || null,
+      confirm: checked("trace-confirm"),
+      replace: checked("trace-replace"),
+    });
+    showTraceNote(traceNotice(payload), false);
+    await refresh();
+  } catch (error) {
+    showTraceNote(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function scan() {
+  if (!confirmDiscard()) return;
   const button = document.getElementById("scan-button");
   button.disabled = true;
   showNotice("");
@@ -748,6 +958,12 @@ async function scan() {
 
 function wireEvents() {
   document.getElementById("scan-button").addEventListener("click", scan);
+  document.getElementById("trace-adopt-button").addEventListener("click", adoptTraces);
+  window.addEventListener("beforeunload", (event) => {
+    if (!state.pending.dirty) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
   const ids = [
     "filter-query",
     "filter-protocol",

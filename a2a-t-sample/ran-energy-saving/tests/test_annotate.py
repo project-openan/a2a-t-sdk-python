@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -21,6 +22,7 @@ from demo.web.annotate.store import (
     TARGET_PENDING,
     AnnotationStore,
     TargetKey,
+    as_int,
 )
 from eval.osp.catalog import CaseCatalog
 from eval.osp.expectations import MESSAGE_DIMENSION, SLOT_DIMENSION
@@ -48,28 +50,40 @@ def _write_batch(
     batch_id: str = "batch-test",
     items: list[dict[str, object]],
     model: str = "test-model",
-    nms: bool = True,
+    nms: bool | None = True,
     decision_mode: str = "live",
+    discovery: str | None = None,
 ) -> None:
-    """Write one persisted tester batch snapshot the annotation scan can read."""
+    """Write one persisted tester batch snapshot the annotation scan can read.
+
+    ``nms=None`` omits the legacy ``nms`` / ``nmsSim`` keys, which is what the yellow-zone batches
+    look like: they record the downstream as ``discovery: nms`` instead.
+    """
     directory = runs_dir / "tester"
     directory.mkdir(parents=True, exist_ok=True)
-    document = {
+    document: dict[str, object] = {
         "schema": "osp-tester/v4",
         "batchId": batch_id,
         "createdAt": "2026-11-15T10:00:00+00:00",
         "finishedAt": "2026-11-15T10:05:00+00:00",
         "decisionMode": decision_mode,
         "modelLabel": model,
-        "nms": nms,
-        "nmsSim": False,
         "rounds": 1,
         "items": items,
     }
+    if nms is not None:
+        document["nms"] = nms
+        document["nmsSim"] = False
+    if discovery is not None:
+        document["discovery"] = discovery
     (directory / f"{batch_id}.json").write_text(json.dumps(document), encoding="utf-8")
 
 
-def _blocked_item(case_id: int, run_id: str | None = None) -> dict[str, object]:
+def _blocked_item(
+    case_id: int,
+    run_id: str | None = None,
+    trace_id: str | None = None,
+) -> dict[str, object]:
     """Return a blocked A2A-T item whose interception recorded one slot error."""
     slot_error = {
         "slotName": "Gain target",
@@ -84,6 +98,7 @@ def _blocked_item(case_id: int, run_id: str | None = None) -> dict[str, object]:
         "round": 1,
         "status": "passed",
         "runId": run_id,
+        "traceId": trace_id,
         "interception": {
             "stages": {
                 "validate": {
@@ -96,7 +111,12 @@ def _blocked_item(case_id: int, run_id: str | None = None) -> dict[str, object]:
     }
 
 
-def _negotiation_item(case_id: int, run_id: str, protocol: str = "a2a-t") -> dict[str, object]:
+def _negotiation_item(
+    case_id: int,
+    run_id: str,
+    protocol: str = "a2a-t",
+    trace_id: str | None = None,
+) -> dict[str, object]:
     """Return one item whose run produced the stored proposals."""
     return {
         "caseId": case_id,
@@ -105,10 +125,18 @@ def _negotiation_item(case_id: int, run_id: str, protocol: str = "a2a-t") -> dic
         "round": 1,
         "status": "passed",
         "runId": run_id,
+        "traceId": trace_id,
     }
 
 
-def _record_proposals(path: Path, run_id: str, *, count: int, protocol: str = "a2a-t") -> None:
+def _record_proposals(
+    path: Path,
+    run_id: str,
+    *,
+    count: int,
+    protocol: str = "a2a-t",
+    content: str = FEASIBILITY,
+) -> None:
     """Write the inbound proposals of one run into a client store."""
     store = SqliteClientStore(path)
     for index in range(1, count + 1):
@@ -123,7 +151,7 @@ def _record_proposals(path: Path, run_id: str, *, count: int, protocol: str = "a
                     kind="feasibility",
                     round=index,
                     performative="PROPOSE",
-                    content={"content": FEASIBILITY, "templateUri": None},
+                    content={"content": content, "templateUri": None},
                     protocol=protocol,
                 )
             )
@@ -262,6 +290,73 @@ def test_scan_ignores_files_outside_the_window(tmp_path: Path) -> None:
     assert scan.skipped["outside_window"] == 1
 
 
+def test_scan_reads_the_real_machine_flag_from_the_batch_discovery(tmp_path: Path) -> None:
+    """The yellow-zone batches record the downstream as ``discovery``, not ``nms``."""
+    _write_batch(
+        tmp_path,
+        items=[_blocked_item(_blocked_case_id(), trace_id="t-1")],
+        nms=None,
+        discovery="nms",
+    )
+
+    scan = scan_corpus(runs_dir=tmp_path, client_db_path=None, cases=_cases(), days=2.0)
+
+    assert [row["nms"] for row in scan.observations] == [True]
+
+
+def test_scan_records_the_trace_id_of_the_item(tmp_path: Path) -> None:
+    _write_batch(tmp_path, items=[_blocked_item(_blocked_case_id(), trace_id="AB-12")])
+
+    scan = scan_corpus(runs_dir=tmp_path, client_db_path=None, cases=_cases(), days=2.0)
+
+    assert [row["traceId"] for row in scan.observations] == ["ab-12"]
+
+
+def test_a_trace_scan_ignores_the_time_window(tmp_path: Path) -> None:
+    """An explicitly named trace must not be reported unknown just because it is old."""
+    _write_batch(tmp_path, items=[_blocked_item(_blocked_case_id(), trace_id="t-old")])
+
+    scan = scan_corpus(
+        runs_dir=tmp_path,
+        client_db_path=None,
+        cases=_cases(),
+        now=datetime.now(UTC) + timedelta(days=90),
+        traces=["t-old"],
+    )
+
+    assert len(scan.observations) == 1
+    assert scan.matched_ids == frozenset({"t-old"})
+    assert "outside_window" not in scan.skipped
+
+
+def test_a_trace_scan_keeps_only_the_selected_items(tmp_path: Path) -> None:
+    _write_batch(
+        tmp_path,
+        items=[
+            _blocked_item(_blocked_case_id(), run_id="run-1", trace_id="t-1"),
+            _blocked_item(_blocked_case_id(), run_id="run-2", trace_id="t-2"),
+        ],
+    )
+
+    selected = scan_corpus(
+        runs_dir=tmp_path,
+        client_db_path=None,
+        cases=_cases(),
+        traces=["T-2"],
+    )
+    by_run = scan_corpus(
+        runs_dir=tmp_path,
+        client_db_path=None,
+        cases=_cases(),
+        traces=["run-1"],
+    )
+
+    assert [row["runId"] for row in selected.observations] == ["run-2"]
+    assert selected.matched_ids == frozenset({"t-2"})
+    assert [row["traceId"] for row in by_run.observations] == ["t-1"]
+    assert by_run.matched_ids == frozenset({"run-1"})
+
+
 # ---------------------------------------------------------------------------
 # Store
 # ---------------------------------------------------------------------------
@@ -289,6 +384,7 @@ def _ingest(store: AnnotationStore, *, case_id: int = 16) -> None:
                 "sourceBatch": "batch-1",
                 "sourceRound": 1,
                 "runId": "run-1",
+                "traceId": "trace-1",
                 "observedAt": "2026-11-15T10:00:00+00:00",
                 "model": "m",
                 "decisionMode": "live",
@@ -305,6 +401,7 @@ def _ingest(store: AnnotationStore, *, case_id: int = 16) -> None:
                 "sourceBatch": "batch-1",
                 "sourceRound": 1,
                 "runId": "run-2",
+                "traceId": "trace-2",
                 "observedAt": "2026-11-15T10:00:00+00:00",
                 "consistent": True,
             },
@@ -352,7 +449,15 @@ def test_accepting_a_candidate_produces_the_yaml_value(tmp_path: Path) -> None:
             "a2a-t": {
                 "slot_errors": {
                     "mode": "any",
-                    "expect": [{"code": "slot.constraint_violated", "contains": ["gain", "增益"]}],
+                    "expect": [
+                        {
+                            "code": "slot.constraint_violated",
+                            "slotName": "Gain target",
+                            "message": "not allowed",
+                            "facts": {"actual": "20% - 30%"},
+                            "contains": ["gain", "增益"],
+                        }
+                    ],
                 }
             },
         }
@@ -388,6 +493,201 @@ def test_changing_a_confirmed_target_downgrades_it_to_draft(tmp_path: Path) -> N
 
     assert store.targets()[0]["status"] == TARGET_DRAFT
     assert _target(store.detail(key))["mode"] == "cover"
+
+
+def test_the_store_finds_observations_by_trace_id_and_by_run_id(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _ingest(store)
+
+    assert {row["runId"] for row in store.observations_by_traces(["trace-1"])} == {"run-1"}
+    assert {row["runId"] for row in store.observations_by_traces(["RUN-2"])} == {"run-2"}
+    assert store.observations_by_traces(["missing"]) == []
+
+
+def test_bulk_adoption_accepts_and_confirms_one_target(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _ingest(store)
+    key = TargetKey(16, "a2a-t", SLOT_DIMENSION)
+    ids = [as_int(row["id"]) for row in store.detail(key)["observations"]]
+
+    choices = store.adopt(key, ids, confirm=True, actor="tester-cookie")
+
+    assert choices == 1
+    row = next(row for row in store.targets() if row["caseId"] == 16)
+    assert row["status"] == TARGET_CONFIRMED
+    assert row["confirmedBy"] == "tester-cookie"
+    assert store.export_payload()["cases"] == [
+        {
+            "id": 16,
+            "a2a-t": {
+                "slot_errors": {
+                    "mode": "any",
+                    "expect": [
+                        {
+                            "code": "slot.constraint_violated",
+                            "slotName": "Gain target",
+                            "message": "not allowed",
+                            "facts": {"actual": "20% - 30%"},
+                        }
+                    ],
+                }
+            },
+        }
+    ]
+
+
+def test_replace_rejects_the_previous_choice_of_one_target(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _ingest(store)
+    key = TargetKey(28, "a2a-t", MESSAGE_DIMENSION)
+    first = store.detail(key)["observations"]
+    assert isinstance(first, list)
+    store.adopt(key, [as_int(first[0]["id"])], confirm=True)
+
+    other = "## Feasibility Negotiation\nReduce the target to 1Mbps.\n"
+    store.ingest(
+        [
+            {
+                "dimension": MESSAGE_DIMENSION,
+                "caseId": 28,
+                "protocol": "a2a-t",
+                "round": 1,
+                "kind": "feasibility",
+                "content": other,
+                "sourceBatch": "batch-2",
+                "sourceRound": 1,
+                "runId": "run-3",
+                "traceId": "trace-3",
+                "observedAt": "2026-11-15T11:00:00+00:00",
+                "consistent": True,
+            }
+        ]
+    )
+    rows = store.detail(key)["observations"]
+    assert isinstance(rows, list)
+    second = next(row for row in rows if row["traceId"] == "trace-3")
+
+    store.adopt(key, [as_int(second["id"])], replace=True, confirm=True)
+
+    assert store.export_payload()["cases"] == [{"id": 28, "a2a-t": {"messages": [[other]]}}]
+
+
+def test_applying_a_selection_rejects_the_candidates_left_out(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _ingest(store)
+    key = TargetKey(28, "a2a-t", MESSAGE_DIMENSION)
+    first = _first_observation(store.detail(key))
+    other = "## Feasibility Negotiation\nReduce the target to 1Mbps.\n"
+    store.ingest(
+        [
+            {
+                "dimension": MESSAGE_DIMENSION,
+                "caseId": 28,
+                "protocol": "a2a-t",
+                "round": 1,
+                "kind": "feasibility",
+                "content": other,
+                "sourceBatch": "batch-2",
+                "sourceRound": 1,
+                "runId": "run-3",
+                "traceId": "trace-3",
+                "observedAt": "2026-11-15T11:00:00+00:00",
+                "consistent": True,
+            }
+        ]
+    )
+    store.apply(key, [as_int(first["id"])], confirm=True)
+    assert store.export_payload()["cases"] == [
+        {"id": 28, "a2a-t": {"messages": [[FEASIBILITY]]}}
+    ]
+
+    rows = store.detail(key)["observations"]
+    assert isinstance(rows, list)
+    second = next(row for row in rows if row["traceId"] == "trace-3")
+
+    store.apply(key, [as_int(second["id"])], edits={as_int(second["id"]): other}, confirm=True)
+
+    assert store.export_payload()["cases"] == [{"id": 28, "a2a-t": {"messages": [[other]]}}]
+    assert _target(store.detail(key))["status"] == TARGET_CONFIRMED
+
+
+def test_applying_an_observation_of_another_target_is_ignored(tmp_path: Path) -> None:
+    """A client-side id mix-up must not let one case's evidence become another's oracle."""
+    store = _store(tmp_path)
+    _ingest(store)
+    foreign = _first_observation(store.detail(TargetKey(16, "a2a-t", SLOT_DIMENSION)))["id"]
+    key = TargetKey(28, "a2a-t", MESSAGE_DIMENSION)
+
+    applied = store.apply(key, [as_int(foreign)], confirm=True)
+
+    assert applied == 0
+    assert store.export_payload()["cases"] == []
+    assert _target(store.detail(key))["status"] == TARGET_DRAFT
+
+
+def test_an_existing_database_gains_the_new_metadata_columns(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    path = store.path
+    connection = sqlite3.connect(path)
+    connection.execute("DROP INDEX IF EXISTS idx_observation_trace")
+    connection.execute("ALTER TABLE observation DROP COLUMN trace_id")
+    connection.execute("ALTER TABLE observation DROP COLUMN decision_mode")
+    connection.commit()
+    connection.close()
+
+    store.ensure()
+
+    connection = sqlite3.connect(path)
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(observation)")}
+    connection.close()
+    assert {"trace_id", "decision_mode"} <= columns
+
+
+def test_rescanning_repairs_the_metadata_of_an_existing_observation(tmp_path: Path) -> None:
+    """An observation ingested before the metadata fix must not keep its stale flag forever."""
+    store = _store(tmp_path)
+    base = {
+        "dimension": SLOT_DIMENSION,
+        "caseId": 16,
+        "protocol": "a2a-t",
+        "round": 0,
+        "code": "slot.constraint_violated",
+        "slotName": "Gain target",
+        "facts": {"actual": "20% - 30%"},
+        "message": "not allowed",
+        "content": None,
+        "sourceBatch": "batch-1",
+        "sourceRound": 1,
+        "runId": "run-1",
+        "traceId": "",
+        "observedAt": "2026-11-15T10:00:00+00:00",
+        "model": None,
+        "nms": False,
+        "decisionMode": "",
+        "consistent": True,
+    }
+    store.ingest([base])
+    key = TargetKey(16, "a2a-t", SLOT_DIMENSION)
+    stale = _first_observation(store.detail(key))
+    assert (stale["nms"], stale["decisionMode"]) == (False, "")
+
+    store.ingest(
+        [
+            {
+                **base,
+                "traceId": "t-1",
+                "model": "qwen3.8",
+                "nms": True,
+                "decisionMode": "live",
+            }
+        ]
+    )
+
+    fresh = _first_observation(store.detail(key))
+    assert (fresh["nms"], fresh["decisionMode"]) == (True, "live")
+    assert fresh["traceId"] == "t-1"
+    assert fresh["model"] == "qwen3.8"
+    assert fresh["seenCount"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +826,150 @@ def test_the_service_merges_the_evidence_of_one_subtask(tmp_path: Path) -> None:
     assert detail["pending"] is None
 
 
+def test_a_trace_adopts_the_slot_errors_of_its_run(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    _write_batch(tmp_path, items=[_blocked_item(_blocked_case_id(), trace_id="t-1")])
+
+    result = service.adopt_traces(["T-1"])
+
+    assert result["matched"] == ["t-1"]
+    assert result["unknown"] == []
+    assert result["adopted"] == [
+        {
+            "caseId": _blocked_case_id(),
+            "protocol": "a2a-t",
+            "dimension": SLOT_DIMENSION,
+            "choices": 1,
+            "status": TARGET_CONFIRMED,
+        }
+    ]
+    assert service.store.export_payload()["cases"] == [
+        {
+            "id": _blocked_case_id(),
+            "a2a-t": {
+                "slot_errors": {
+                    "mode": "any",
+                    "expect": [
+                        {
+                            "code": "slot.constraint_violated",
+                            "slotName": "Gain target",
+                            "message": "the gain target is not allowed",
+                            "facts": {"slot_label": "Gain target", "actual": "20% - 30%"},
+                        }
+                    ],
+                }
+            },
+        }
+    ]
+
+
+def test_a_trace_adopts_every_round_of_its_negotiation(tmp_path: Path) -> None:
+    """Case 26 expects two rounds on the pure-A2A hop; both must be adopted."""
+    client_db = tmp_path / "client-state.sqlite3"
+    _record_proposals(client_db, "run-1", count=2, protocol="pure")
+    _write_batch(
+        tmp_path,
+        items=[_negotiation_item(_case_id(), "run-1", protocol="a2a", trace_id="t-1")],
+    )
+    store = _store(tmp_path)
+    service = AnnotateService(
+        store=store,
+        catalog=CaseCatalog(SAMPLES),
+        runs_dir=tmp_path,
+        client_db_path=client_db,
+    )
+
+    result = service.adopt_traces(["t-1"], confirm=False)
+
+    assert result["adopted"][0]["choices"] == 2
+    assert result["adopted"][0]["status"] == TARGET_DRAFT
+    assert store.export_payload(confirmed_only=False)["cases"] == [
+        {"id": _case_id(), "a2a": {"messages": [[FEASIBILITY], [FEASIBILITY]]}}
+    ]
+
+
+def test_a_trace_that_diverges_from_the_case_is_skipped(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    item = _blocked_item(1, trace_id="t-bad")  # case 1 expects `pass`: a block is a divergence
+    _write_batch(tmp_path, items=[item])
+
+    result = service.adopt_traces(["t-bad"])
+
+    assert result["matched"] == ["t-bad"]
+    assert result["adopted"] == []
+    assert result["skipped"] == [
+        {
+            "caseId": 1,
+            "protocol": "a2a-t",
+            "dimension": SLOT_DIMENSION,
+            "reason": "inconsistent",
+        }
+    ]
+    assert service.store.export_payload()["cases"] == []
+
+
+def test_a_second_trace_does_not_overwrite_adopted_values_without_replace(tmp_path: Path) -> None:
+    client_db = tmp_path / "client-state.sqlite3"
+    other = "## Feasibility Negotiation\nReduce the target to 1Mbps.\n"
+    _record_proposals(client_db, "run-1", count=1)
+    _record_proposals(client_db, "run-2", count=1, content=other)
+    _write_batch(
+        tmp_path,
+        items=[
+            _negotiation_item(_case_id(), "run-1", trace_id="t-1"),
+            _negotiation_item(_case_id(), "run-2", trace_id="t-2"),
+        ],
+    )
+    store = _store(tmp_path)
+    service = AnnotateService(
+        store=store,
+        catalog=CaseCatalog(SAMPLES),
+        runs_dir=tmp_path,
+        client_db_path=client_db,
+    )
+
+    service.adopt_traces(["t-1"])
+    kept = service.adopt_traces(["t-2"])
+
+    assert kept["adopted"] == []
+    assert kept["skipped"][0]["reason"] == "already_adopted"
+    assert store.export_payload()["cases"] == [
+        {"id": _case_id(), "a2a-t": {"messages": [[FEASIBILITY]]}}
+    ]
+
+    replaced = service.adopt_traces(["t-2"], replace=True)
+
+    assert replaced["adopted"][0]["status"] == TARGET_CONFIRMED
+    assert store.export_payload()["cases"] == [
+        {"id": _case_id(), "a2a-t": {"messages": [[other]]}}
+    ]
+
+
+def test_an_unknown_trace_and_a_trace_without_candidates_are_reported(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    item = _blocked_item(_blocked_case_id(), trace_id="t-empty")
+    del item["interception"]
+    _write_batch(tmp_path, items=[item])
+
+    result = service.adopt_traces(["t-empty", "t-missing"])
+
+    assert result["matched"] == ["t-empty"]
+    assert result["noCandidate"] == ["t-empty"]
+    assert result["unknown"] == ["t-missing"]
+    assert result["adopted"] == []
+
+
+def test_the_trace_adoption_can_be_scoped_to_a_protocol_and_a_subtask(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    _write_batch(tmp_path, items=[_blocked_item(_blocked_case_id(), trace_id="t-1")])
+
+    result = service.adopt_traces(["t-1"], protocol="a2a", dimension=MESSAGE_DIMENSION)
+
+    assert result["matched"] == ["t-1"]
+    assert result["adopted"] == []
+    assert service.store.export_payload()["cases"] == []
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -589,6 +1033,101 @@ async def test_route_scan_choice_confirm_and_export(tmp_path: Path) -> None:
     assert snippet.status_code == 200
     assert "slot_errors:" in snippet.text
     assert all_yaml.status_code == 200
+
+
+async def test_route_adopts_the_observations_of_a_trace(tmp_path: Path) -> None:
+    _write_batch(tmp_path, items=[_blocked_item(_blocked_case_id(), trace_id="t-1")])
+    app = _app(tmp_path)
+    async with _client(app) as client:
+        response = await client.post(
+            "/api/annotate/adopt/traces",
+            json={"traces": "t-1\nT-2", "confirm": True},
+        )
+        exported = (await client.get("/api/annotate/export.json")).json()
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["matched"] == ["t-1"]
+    assert body["unknown"] == ["t-2"]
+    assert body["adopted"][0]["caseId"] == _blocked_case_id()
+    assert exported["cases"][0]["id"] == _blocked_case_id()
+
+
+async def test_route_saves_the_whole_selection_in_one_request(tmp_path: Path) -> None:
+    _write_batch(tmp_path, items=[_blocked_item(_blocked_case_id(), trace_id="t-1")])
+    app = _app(tmp_path)
+    async with _client(app) as client:
+        await client.post("/api/annotate/scan?days=2")
+        detail = (
+            await client.get(f"/api/annotate/case/{_blocked_case_id()}/a2a-t/{SLOT_DIMENSION}")
+        ).json()
+        observation_id = detail["observations"][0]["id"]
+        applied = (
+            await client.post(
+                f"/api/annotate/case/{_blocked_case_id()}/a2a-t/apply",
+                json={
+                    "targets": [
+                        {
+                            "dimension": SLOT_DIMENSION,
+                            "observationIds": [observation_id],
+                            "mode": "cover",
+                            "note": "依据 11-15 live",
+                        }
+                    ],
+                    "confirm": True,
+                },
+            )
+        ).json()
+        exported = (await client.get("/api/annotate/export.json")).json()
+
+    assert applied["ok"] is True
+    slot = applied["details"][SLOT_DIMENSION]
+    assert slot["target"]["status"] == TARGET_CONFIRMED
+    assert slot["target"]["mode"] == "cover"
+    assert slot["target"]["note"] == "依据 11-15 live"
+    assert slot["pending"]["mode"] == "cover"
+    assert exported["cases"][0]["id"] == _blocked_case_id()
+
+
+async def test_route_rejects_an_invalid_save_request(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    async with _client(app) as client:
+        empty = await client.post(
+            f"/api/annotate/case/{_blocked_case_id()}/a2a-t/apply", json={"targets": []}
+        )
+        bad_dimension = await client.post(
+            f"/api/annotate/case/{_blocked_case_id()}/a2a-t/apply",
+            json={"targets": [{"dimension": "x"}]},
+        )
+        slot_on_a2a = await client.post(
+            f"/api/annotate/case/{_blocked_case_id()}/a2a/apply",
+            json={"targets": [{"dimension": SLOT_DIMENSION}]},
+        )
+        unknown_case = await client.post(
+            "/api/annotate/case/999/a2a-t/apply",
+            json={"targets": [{"dimension": SLOT_DIMENSION}]},
+        )
+
+    assert empty.status_code == 400
+    assert bad_dimension.status_code == 400
+    assert slot_on_a2a.status_code == 400
+    assert unknown_case.status_code == 400
+
+
+async def test_route_rejects_an_invalid_trace_adoption_request(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    async with _client(app) as client:
+        empty = await client.post("/api/annotate/adopt/traces", json={"traces": "  "})
+        bad_protocol = await client.post(
+            "/api/annotate/adopt/traces", json={"traces": "t", "protocol": "x"}
+        )
+        bad_dimension = await client.post(
+            "/api/annotate/adopt/traces", json={"traces": "t", "dimension": "x"}
+        )
+
+    assert empty.status_code == 400
+    assert bad_protocol.status_code == 400
+    assert bad_dimension.status_code == 400
 
 
 async def test_route_rejects_an_unknown_dimension(tmp_path: Path) -> None:

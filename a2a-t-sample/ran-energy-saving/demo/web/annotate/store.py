@@ -17,7 +17,7 @@ import hashlib
 import json
 import sqlite3
 import unicodedata
-from collections.abc import Generator, Iterable, Mapping
+from collections.abc import Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -41,6 +41,9 @@ TARGETS: Final[tuple[str, ...]] = (
 #: Dimensions this console annotates.
 DIMENSIONS: Final[tuple[str, ...]] = (SLOT_DIMENSION, MESSAGE_DIMENSION)
 
+#: SQLite binds at most 999 parameters; the trace lookup goes in chunks of this size.
+_TRACE_CHUNK: Final[int] = 400
+
 _SCHEMA: Final[str] = """
 CREATE TABLE IF NOT EXISTS observation (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,9 +61,11 @@ CREATE TABLE IF NOT EXISTS observation (
   source_batch   TEXT NOT NULL,
   source_round   INTEGER NOT NULL,
   run_id         TEXT,
+  trace_id       TEXT,
   observed_at    TEXT NOT NULL,
   model          TEXT,
   nms            INTEGER NOT NULL DEFAULT 0,
+  decision_mode  TEXT NOT NULL DEFAULT '',
   consistent     INTEGER NOT NULL,
   seen_count     INTEGER NOT NULL DEFAULT 1,
   first_seen     TEXT NOT NULL,
@@ -136,11 +141,15 @@ class AnnotationStore:
         return self._path
 
     def ensure(self) -> None:
-        """Create the database and its schema when missing."""
+        """Create the database and its schema, upgrading an older build's database in place."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._session() as connection:
             connection.executescript(_SCHEMA)
-            connection.execute("PRAGMA user_version=1")
+            _ensure_columns(connection)
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_observation_trace ON observation(trace_id)"
+            )
+            connection.execute("PRAGMA user_version=2")
 
     # ------------------------------------------------------------------
     # Ingestion
@@ -158,15 +167,25 @@ class AnnotationStore:
                     INSERT INTO observation
                         (dimension, case_id, protocol, round, content_hash, kind, code, slot_name,
                          facts_json, message, content, source_batch, source_round, run_id,
-                         observed_at, model, nms, consistent, first_seen, last_seen)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         trace_id, observed_at, model, nms, decision_mode, consistent,
+                         first_seen, last_seen)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT
                         (dimension, case_id, protocol, round, content_hash, source_batch,
                          source_round, run_id)
                     DO UPDATE SET
                         seen_count = observation.seen_count + 1,
                         last_seen = excluded.last_seen,
-                        observed_at = excluded.observed_at
+                        observed_at = excluded.observed_at,
+                        -- Metadata the page filters on may have been ingested wrong (or absent)
+                        -- by an older build; a rescan must repair it instead of keeping the
+                        -- stale value forever.
+                        trace_id = CASE WHEN excluded.trace_id != ''
+                                        THEN excluded.trace_id ELSE observation.trace_id END,
+                        model = COALESCE(excluded.model, observation.model),
+                        nms = excluded.nms,
+                        decision_mode = excluded.decision_mode,
+                        consistent = excluded.consistent
                     """,
                     (
                         str(observation.get("dimension") or ""),
@@ -183,9 +202,11 @@ class AnnotationStore:
                         str(observation.get("sourceBatch") or ""),
                         as_int(observation.get("sourceRound"), 1),
                         observation.get("runId"),
+                        str(observation.get("traceId") or ""),
                         str(observation.get("observedAt") or ""),
                         observation.get("model"),
                         1 if observation.get("nms") else 0,
+                        str(observation.get("decisionMode") or ""),
                         1 if observation.get("consistent") else 0,
                         stamp,
                         stamp,
@@ -281,6 +302,62 @@ class AnnotationStore:
             "choices": [_choice_row(row) for row in choices],
         }
 
+    def observations_by_traces(self, traces: Iterable[str]) -> list[dict[str, object]]:
+        """Return the observations carrying one of the given traceIds or runIds.
+
+        The console's bulk adoption starts from identifiers an operator has already verified
+        (the trace/run id of a good live run), so the lookup accepts either: a tester item stores
+        the traceId of its run, while the run console and the wire logs are keyed by runId.
+        """
+        tokens = sorted({str(token).strip().lower() for token in traces if str(token).strip()})
+        rows: list[sqlite3.Row] = []
+        with self._session() as connection:
+            connection.row_factory = sqlite3.Row
+            for start in range(0, len(tokens), _TRACE_CHUNK):
+                chunk = tokens[start : start + _TRACE_CHUNK]
+                marks = ",".join("?" for _ in chunk)
+                rows.extend(
+                    connection.execute(
+                        f"""
+                        SELECT * FROM observation
+                        WHERE trace_id IN ({marks}) OR lower(run_id) IN ({marks})
+                        ORDER BY observed_at DESC, seen_count DESC, id DESC
+                        """,
+                        (*chunk, *chunk),
+                    ).fetchall()
+                )
+        return [_observation_row(row) for row in rows]
+
+    def value(self, key: TargetKey) -> object | None:
+        """Return the value one target would export, without building the whole payload.
+
+        The per-subtask page asks for this on every click; building the global payload meant
+        reading and rendering every confirmed target of every case, which is what made selecting a
+        case feel slow once the corpus had evidence.
+        """
+        with self._session() as connection:
+            connection.row_factory = sqlite3.Row
+            target = connection.execute(
+                "SELECT * FROM target WHERE case_id=? AND protocol=? AND dimension=?",
+                (key.case_id, key.protocol, key.dimension),
+            ).fetchone()
+            if target is None:
+                return None
+            return self._value(connection, key, target)
+
+    def accepted_ids(self, key: TargetKey) -> list[int]:
+        """Return the candidates currently accepted for one target."""
+        with self._session() as connection:
+            rows = connection.execute(
+                """
+                SELECT observation_id FROM choice
+                WHERE case_id=? AND protocol=? AND dimension=? AND accepted=1
+                ORDER BY observation_id ASC
+                """,
+                (key.case_id, key.protocol, key.dimension),
+            ).fetchall()
+        return [int(row[0]) for row in rows]
+
     def progress(self) -> dict[str, int]:
         """Return the number of targets per status, for the console header."""
         counts = {status: 0 for status in TARGETS}
@@ -343,6 +420,120 @@ class AnnotationStore:
             self._record(connection, actor, "choice", key, {"observationId": observation_id,
                                                             "accepted": accepted})
         self._refresh_status(key)
+
+    def apply(
+        self,
+        key: TargetKey,
+        observation_ids: Sequence[int],
+        *,
+        mode: str | None = None,
+        note: str | None = None,
+        edits: Mapping[int, str] | None = None,
+        confirm: bool = False,
+        actor: str = "",
+    ) -> int:
+        """Replace the accepted set of one target with exactly the given candidates.
+
+        The page edits every subtask of a case and saves once, so the request carries the full
+        selection rather than one checkbox at a time: anything accepted before but absent now is
+        rejected. Ids that do not belong to this target are dropped instead of accepted, because a
+        client-side mistake must not let one case's evidence become another case's oracle.
+        """
+        requested = {int(value) for value in observation_ids}
+        stamp = now_iso()
+        with self._session() as connection:
+            keep = self._owned_ids(connection, key, requested)
+            if keep:
+                marks = ",".join("?" for _ in keep)
+                connection.execute(
+                    f"""
+                    UPDATE choice SET accepted=0
+                    WHERE case_id=? AND protocol=? AND dimension=?
+                      AND observation_id NOT IN ({marks})
+                    """,
+                    (key.case_id, key.protocol, key.dimension, *keep),
+                )
+            else:
+                connection.execute(
+                    "UPDATE choice SET accepted=0 "
+                    "WHERE case_id=? AND protocol=? AND dimension=?",
+                    (key.case_id, key.protocol, key.dimension),
+                )
+            for observation_id in keep:
+                edited = (edits or {}).get(observation_id)
+                connection.execute(
+                    """
+                    INSERT INTO choice
+                        (case_id, protocol, dimension, observation_id, accepted, edited_text,
+                         created_at)
+                    VALUES (?, ?, ?, ?, 1, ?, ?)
+                    ON CONFLICT (case_id, protocol, dimension, observation_id)
+                    DO UPDATE SET
+                        accepted=1,
+                        edited_text=COALESCE(excluded.edited_text, choice.edited_text)
+                    """,
+                    (
+                        key.case_id,
+                        key.protocol,
+                        key.dimension,
+                        observation_id,
+                        edited if isinstance(edited, str) else None,
+                        stamp,
+                    ),
+                )
+            self._touch_target(connection, key, status=TARGET_DRAFT, mode=mode, note=note,
+                               stamp=stamp)
+            self._record(
+                connection,
+                actor,
+                "apply",
+                key,
+                {"observationIds": list(keep), "mode": mode, "note": note, "confirm": confirm},
+            )
+        if confirm and keep:
+            self.confirm(key, actor=actor)
+        return len(keep)
+
+    def adopt(
+        self,
+        key: TargetKey,
+        observation_ids: Sequence[int],
+        *,
+        replace: bool = False,
+        confirm: bool = False,
+        actor: str = "",
+    ) -> int:
+        """Accept a batch of candidates of one target, optionally confirming the result.
+
+        This is the bulk form of :meth:`set_choice`, used by the trace-list adoption: the operator
+        supplied a trace list, which is the review step. ``replace`` keeps the documented meaning —
+        without it the previously accepted candidates are kept and the new ones are appended.
+        """
+        ids = {int(value) for value in observation_ids}
+        if not ids:
+            return 0
+        if not replace:
+            ids |= set(self.accepted_ids(key))
+        return self.apply(key, sorted(ids), confirm=confirm, actor=actor)
+
+    def _owned_ids(
+        self,
+        connection: sqlite3.Connection,
+        key: TargetKey,
+        ids: set[int],
+    ) -> list[int]:
+        """Return the given observation ids that belong to one target, sorted."""
+        if not ids:
+            return []
+        marks = ",".join("?" for _ in ids)
+        rows = connection.execute(
+            f"""
+            SELECT id FROM observation
+            WHERE dimension=? AND case_id=? AND protocol=? AND id IN ({marks})
+            """,
+            (key.dimension, key.case_id, key.protocol, *sorted(ids)),
+        ).fetchall()
+        return sorted(int(row[0]) for row in rows)
 
     def set_mode(self, key: TargetKey, mode: str, *, actor: str = "") -> None:
         """Set the matching mode of a slot-error target."""
@@ -434,11 +625,26 @@ class AnnotationStore:
         if key.dimension == SLOT_DIMENSION:
             matchers: list[dict[str, object]] = []
             for row in rows:
+                # Adopting a slot error keeps the whole observed error, not just its code: the
+                # code alone cannot tell "gain target rejected" from any other constraint
+                # violation of the same case. The author can still delete fields in the case.
                 matcher: dict[str, object] = {"code": str(row["code"] or "")}
+                slot_name = str(row["slot_name"] or "")
+                if slot_name:
+                    matcher["slotName"] = slot_name
+                message = str(row["message"] or "")
+                if message:
+                    matcher["message"] = message
+                facts = _facts(row["facts_json"])
+                if facts:
+                    matcher["facts"] = facts
                 keywords = _keywords(row["edited_text"])
                 if keywords:
                     matcher["contains"] = keywords
-                matchers.append(matcher)
+                # Two observations of the same error differ only in the facts the matcher ignores,
+                # so the same entry must not be emitted twice.
+                if matcher not in matchers:
+                    matchers.append(matcher)
             mode = str(target["mode"] or SLOT_MODE_ANY)
             return {"mode": mode, "expect": matchers}
         rounds: dict[int, list[str]] = {}
@@ -446,7 +652,9 @@ class AnnotationStore:
             text = str(row["edited_text"] or row["content"] or "")
             if not text.strip():
                 continue
-            rounds.setdefault(int(row["round"] or 0), []).append(text)
+            alternatives = rounds.setdefault(int(row["round"] or 0), [])
+            if text not in alternatives:
+                alternatives.append(text)
         if not rounds:
             return None
         highest = max(rounds)
@@ -576,6 +784,9 @@ def _observation_hash(observation: Mapping[str, object]) -> str:
     payload = {
         "code": observation.get("code"),
         "slotName": observation.get("slotName"),
+        # The message is part of the exported matcher now, so two renders that differ only in
+        # wording are two candidates, not one candidate seen twice.
+        "message": _normalize_text(observation.get("message")),
         "facts": observation.get("facts") or {},
         "content": _normalize_text(observation.get("content")),
     }
@@ -588,6 +799,17 @@ def _normalize_text(value: object) -> str:
     """Normalize the message text so whitespace differences are not separate candidates."""
     text = unicodedata.normalize("NFKC", str(value or ""))
     return "\n".join(" ".join(line.split()) for line in text.splitlines()).strip()
+
+
+def _facts(raw: object) -> dict[str, str]:
+    """Return the stored facts of one observation as the string mapping a matcher expects."""
+    try:
+        facts = json.loads(str(raw or "{}"))
+    except ValueError:
+        return {}
+    if not isinstance(facts, Mapping):
+        return {}
+    return {str(key): str(value) for key, value in facts.items() if value is not None}
 
 
 def _keywords(edited: object) -> list[str]:
@@ -626,9 +848,24 @@ def _empty_target(key: TargetKey) -> dict[str, object]:
     }
 
 
+def _ensure_columns(connection: sqlite3.Connection) -> None:
+    """Add the columns a database created by an older build of the console lacks."""
+    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(observation)")}
+    if "trace_id" not in columns:
+        connection.execute("ALTER TABLE observation ADD COLUMN trace_id TEXT")
+    if "decision_mode" not in columns:
+        connection.execute(
+            "ALTER TABLE observation ADD COLUMN decision_mode TEXT NOT NULL DEFAULT ''"
+        )
+
+
 def _observation_row(row: sqlite3.Row) -> dict[str, object]:
     return {
         "id": int(row["id"]),
+        "caseId": int(row["case_id"]),
+        "protocol": str(row["protocol"]),
+        "dimension": str(row["dimension"]),
+        "contentHash": str(row["content_hash"]),
         "round": int(row["round"] or 0),
         "kind": row["kind"],
         "code": row["code"],
@@ -639,9 +876,11 @@ def _observation_row(row: sqlite3.Row) -> dict[str, object]:
         "sourceBatch": str(row["source_batch"]),
         "sourceRound": int(row["source_round"] or 1),
         "runId": row["run_id"],
+        "traceId": row["trace_id"],
         "observedAt": str(row["observed_at"] or ""),
         "model": row["model"],
         "nms": bool(row["nms"]),
+        "decisionMode": str(row["decision_mode"] or ""),
         "consistent": bool(row["consistent"]),
         "seenCount": int(row["seen_count"] or 1),
     }

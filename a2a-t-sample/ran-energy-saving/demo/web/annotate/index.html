@@ -39,6 +39,37 @@
   </header>
 
   <main class="main">
+    <details class="card trace-adopt" id="trace-adopt">
+      <summary>
+        <span>按 traceId / runId 批量采纳</span>
+        <span class="summary">填入已确认的运行标识，把对应观测一次性采纳为预期（默认直接确认）</span>
+      </summary>
+      <div class="trace-form">
+        <textarea id="trace-ids" spellcheck="false"
+          placeholder="每行一个 traceId 或 runId，也可用逗号/空格分隔"></textarea>
+        <div class="trace-controls">
+          <label class="inline">协议
+            <select id="trace-protocol">
+              <option value="">全部</option>
+              <option value="a2a-t">A2A-T</option>
+              <option value="a2a">A2A</option>
+            </select>
+          </label>
+          <label class="inline">子任务
+            <select id="trace-dimension">
+              <option value="">全部</option>
+              <option value="slot_errors">拦截 slot_errors</option>
+              <option value="messages">协商报文</option>
+            </select>
+          </label>
+          <label class="check"><input id="trace-confirm" type="checkbox" checked> 采纳后直接确认</label>
+          <label class="check"><input id="trace-replace" type="checkbox"> 覆盖已有采纳/期望</label>
+          <button class="primary" id="trace-adopt-button" type="button">自动采纳</button>
+        </div>
+        <div class="notice" id="trace-note" hidden></div>
+      </div>
+    </details>
+
     <div class="notice" id="scan-note" hidden></div>
 
     <div class="layout">

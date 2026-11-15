@@ -53,6 +53,8 @@ class CorpusScan:
     skipped: Mapping[str, int] = field(default_factory=dict)
     #: True when the limit cut the scan short; the console must say so instead of implying coverage.
     truncated: bool = False
+    #: traceId/runId of the items a trace scan selected; empty for a time-window scan.
+    matched_ids: frozenset[str] = frozenset()
 
 
 def scan_corpus(
@@ -63,6 +65,7 @@ def scan_corpus(
     days: float = 1.0,
     max_batches: int = DEFAULT_MAX_BATCHES,
     now: datetime | None = None,
+    traces: Sequence[str] | None = None,
 ) -> CorpusScan:
     """Collect the slot-error and negotiation-message candidates of the recent tester batches.
 
@@ -75,9 +78,16 @@ def scan_corpus(
         days: size of the window, ending now.
         max_batches: limit on the batch files read, newest first.
         now: current time, injectable for tests.
+        traces: explicit traceId/runId selection. When given, the time window is ignored and only
+            the items carrying one of those identifiers are read: the supplied list *is* the
+            operator's selection, and silently requiring it to fall inside the default window
+            would report an explicitly named trace as unknown.
     """
     moment = now or datetime.now(UTC)
-    since = moment - timedelta(days=max(0.0, days))
+    selected_traces = frozenset(
+        token.strip().lower() for token in traces or () if token.strip()
+    )
+    since = None if selected_traces else moment - timedelta(days=max(0.0, days))
     skipped: dict[str, int] = {}
     batches = _recent_batches(runs_dir / "tester", since=since, skipped=skipped)
     truncated = len(batches) > max_batches
@@ -86,10 +96,18 @@ def scan_corpus(
         skipped["limit"] = len(batches) - len(selected)
 
     items: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+    matched_ids: set[str] = set()
     for batch in selected:
         for item in batch.get("items") or ():
-            if isinstance(item, Mapping):
-                items.append((batch, dict(item), dict(batch)))
+            if not isinstance(item, Mapping):
+                continue
+            identifiers = _item_ids(item)
+            if selected_traces:
+                hits = identifiers & selected_traces
+                if not hits:
+                    continue
+                matched_ids |= hits
+            items.append((batch, dict(item), dict(batch)))
     run_ids = [
         str(item["runId"])
         for _batch, item, _ in items
@@ -124,7 +142,7 @@ def scan_corpus(
             "finishedAt": batch.get("finishedAt"),
             "decisionMode": batch.get("decisionMode"),
             "model": batch.get("modelLabel"),
-            "nms": bool(batch.get("nms") or batch.get("nmsSim")),
+            "nms": _batch_nms(batch),
             "nmsSim": bool(batch.get("nmsSim")),
             "rounds": batch.get("rounds"),
             "items": len(batch.get("items") or ()),
@@ -134,24 +152,55 @@ def scan_corpus(
     return CorpusScan(
         observations=tuple(observations),
         batches=summary,
-        window_start=since.isoformat(timespec="seconds"),
+        window_start=(since or moment - timedelta(days=max(0.0, days))).isoformat(
+            timespec="seconds"
+        ),
         window_end=moment.isoformat(timespec="seconds"),
         skipped=skipped,
         truncated=truncated,
+        matched_ids=frozenset(matched_ids),
     )
+
+
+def _batch_nms(batch: Mapping[str, Any]) -> bool:
+    """Return whether the batch ran against the real vendor NMS.
+
+    The tester records the downstream it talked to as ``discovery: nms``; batches written before
+    that key existed (and the offline simulator) used ``nms`` / ``nmsSim``. Reading only the old
+    keys made every live batch look local, so the page's "只看真机" filter hid every candidate.
+    """
+    if batch.get("nms") or batch.get("nmsSim"):
+        return True
+    return str(batch.get("discovery") or "") == "nms"
+
+
+def _item_ids(item: Mapping[str, Any]) -> set[str]:
+    """Return the traceId and runId of one tester item, normalized for matching."""
+    identifiers: set[str] = set()
+    for key in ("traceId", "runId"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            identifiers.add(value.strip().lower())
+    return identifiers
+
+
+def _trace_id(item: Mapping[str, Any]) -> str:
+    """Return the normalized traceId of one tester item, or an empty string."""
+    value = item.get("traceId")
+    return value.strip().lower() if isinstance(value, str) else ""
 
 
 def _recent_batches(
     directory: Path,
     *,
-    since: datetime,
+    since: datetime | None,
     skipped: dict[str, int],
 ) -> list[dict[str, Any]]:
     """Return the batch documents written inside the window, newest first."""
     if not directory.is_dir():
         skipped["missing"] = 1
         return []
-    since_ts = since.timestamp()
+    since_ts = since.timestamp() if since is not None else None
     documents: list[tuple[float, dict[str, Any]]] = []
     for path in directory.glob("*.json"):
         try:
@@ -159,7 +208,7 @@ def _recent_batches(
         except OSError:
             skipped["unreadable"] = skipped.get("unreadable", 0) + 1
             continue
-        if modified < since_ts:
+        if since_ts is not None and modified < since_ts:
             skipped["outside_window"] = skipped.get("outside_window", 0) + 1
             continue
         try:
@@ -234,10 +283,11 @@ def _slot_observations(
                 "sourceBatch": str(batch.get("batchId") or ""),
                 "sourceRound": _int_value(item.get("round")) or 1,
                 "runId": item.get("runId"),
+                "traceId": _trace_id(item),
                 "observedAt": observed_at,
                 "model": batch.get("modelLabel"),
                 "decisionMode": str(batch.get("decisionMode") or ""),
-                "nms": bool(batch.get("nms") or batch.get("nmsSim")),
+                "nms": _batch_nms(batch),
                 "consistent": consistent,
                 "observedVerdict": verdict,
                 "expectedVerdict": expected,
@@ -300,10 +350,11 @@ def _message_observations(
                 "sourceBatch": str(batch.get("batchId") or ""),
                 "sourceRound": _int_value(item.get("round")) or 1,
                 "runId": run_id,
+                "traceId": _trace_id(item),
                 "observedAt": observed_at,
                 "model": batch.get("modelLabel"),
                 "decisionMode": str(batch.get("decisionMode") or ""),
-                "nms": bool(batch.get("nms") or batch.get("nmsSim")),
+                "nms": _batch_nms(batch),
                 "consistent": consistent,
                 "observedRounds": len(rounds),
                 "expectedRounds": expected_rounds,

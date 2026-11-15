@@ -12,6 +12,8 @@ blocks extend a case without changing ``validate`` (still a plain verdict string
       mode: any                     # any (default) | cover
       expect:
         - code: slot.constraint_violated
+          slotName: 增益目标        # exact observed slot name
+          message: 增益目标不允许为 20%   # exact observed message, whitespace-normalized
           contains: [gain, 增益]     # any keyword hit in slot name / message / facts
           facts: { actual: "20" }    # facts subset
         - slot.not_provided          # a bare code string is a code-only matcher
@@ -20,6 +22,11 @@ blocks extend a case without changing ``validate`` (still a plain verdict string
     ``any`` passes when one observed error matches one entry; ``cover`` passes when every observed
     error is matched (and at least one error was observed). ``contains`` entries are alternatives
     of each other, so one keyword list covers both languages of the model-rendered label.
+    The annotation console exports the whole observed error (``code`` / ``slotName`` /
+    ``message`` / ``facts``) so that adopting a candidate freezes what was actually reported; an
+    author who does not want the model-rendered parts to be part of the oracle deletes those keys
+    from the case. A matcher that states no condition matches any error, which is how an author
+    says "a slot error, any kind".
 
 ``negotiation.messages`` (``expect.protocols.<protocol>.negotiation``)
     The server's negotiation message per round, as a list of acceptable renderings.
@@ -70,14 +77,16 @@ A2A_T_PROTOCOL: Final[str] = "a2a-t"
 class SlotErrorMatcher:
     """One acceptable slot error of a blocked request.
 
-    ``code`` and ``slot_name`` are exact matches; ``contains`` is a list of keywords of which at
-    least one must appear in the slot name, the message or a fact value; ``facts`` is a subset
-    match over the observed facts. A matcher with no condition matches any error, which is how an
-    author says "a slot error, any kind".
+    ``code`` and ``slot_name`` are exact matches; ``message`` is an exact match after whitespace
+    normalization; ``contains`` is a list of keywords of which at least one must appear in the slot
+    name, the message or a fact value; ``facts`` is a subset match over the observed facts. A
+    matcher with no condition matches any error, which is how an author says "a slot error, any
+    kind".
     """
 
     code: str | None = None
     slot_name: str | None = None
+    message: str | None = None
     contains: tuple[str, ...] = ()
     facts: tuple[tuple[str, str], ...] = ()
 
@@ -86,6 +95,10 @@ class SlotErrorMatcher:
         if self.code is not None and str(observed.get("code") or "") != self.code:
             return False
         if self.slot_name is not None and str(observed.get("slotName") or "") != self.slot_name:
+            return False
+        if self.message is not None and _normalize_text(observed.get("message")) != (
+            _normalize_text(self.message)
+        ):
             return False
         observed_facts = observed.get("facts")
         fact_map = (
@@ -116,6 +129,8 @@ class SlotErrorMatcher:
             data["code"] = self.code
         if self.slot_name is not None:
             data["slotName"] = self.slot_name
+        if self.message is not None:
+            data["message"] = self.message
         if self.contains:
             data["contains"] = list(self.contains)
         if self.facts:
@@ -589,6 +604,7 @@ def _matcher(raw: object) -> SlotErrorMatcher:
         raise ValueError(f"{SLOT_DIMENSION} entries must be mappings or code strings")
     code = raw.get("code")
     slot_name = raw.get("slotName", raw.get("slot_name"))
+    message = raw.get("message")
     contains = raw.get("contains")
     facts = raw.get("facts")
     return SlotErrorMatcher(
@@ -597,6 +613,9 @@ def _matcher(raw: object) -> SlotErrorMatcher:
             str(slot_name).strip()
             if isinstance(slot_name, str) and slot_name.strip()
             else None
+        ),
+        message=(
+            str(message).strip() if isinstance(message, str) and message.strip() else None
         ),
         contains=_string_tuple(contains),
         facts=(
@@ -623,6 +642,11 @@ def _string_tuple(raw: object) -> tuple[str, ...]:
 def _normalize_value(value: str) -> str:
     """Normalize one fact value for the subset comparison."""
     return " ".join(unicodedata.normalize("NFKC", str(value)).lower().split())
+
+
+def _normalize_text(value: object) -> str:
+    """Normalize one message for the exact comparison (width and whitespace only, not case)."""
+    return " ".join(unicodedata.normalize("NFKC", str(value or "")).split())
 
 
 def _round_number(value: object, default: int) -> int:

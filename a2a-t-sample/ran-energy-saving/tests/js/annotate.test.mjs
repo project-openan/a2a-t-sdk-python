@@ -5,6 +5,7 @@ import {
   filterCases,
   filterObservations,
   groupByRound,
+  parseTraceIds,
   progressText,
   protocolLabel,
   runKey,
@@ -12,6 +13,7 @@ import {
   statusLabel,
   subtaskLabel,
   subtasksOf,
+  traceNotice,
 } from "../../demo/web/annotate/main.js";
 
 const CASES = [
@@ -201,3 +203,27 @@ assert.equal(
   "子任务 151 · 未采集 149 · 草稿 0 · 已确认 2",
 );
 assert.equal(progressText(null), "");
+
+assert.deepEqual(parseTraceIds(" A1\nb2, A1，c3;；d4 "), ["a1", "b2", "c3", "d4"]);
+assert.deepEqual(parseTraceIds(""), []);
+assert.deepEqual(parseTraceIds(null), []);
+
+assert.equal(
+  traceNotice({
+    requested: 3,
+    matched: ["a1", "b2"],
+    unknown: ["c3"],
+    batches: 4,
+    observations: 9,
+    confirm: true,
+    adopted: [{ caseId: 16 }, { caseId: 26 }],
+    skipped: [
+      { reason: "inconsistent" },
+      { reason: "already_adopted" },
+      { reason: "already_adopted" },
+    ],
+  }),
+  "匹配 2/3 个标识；扫描 4 个批次、9 条观测；采纳 2 个子任务（已确认）；"
+    + "跳过 无一致候选 1，已有采纳 2；未找到 c3",
+);
+assert.equal(traceNotice(null), "");

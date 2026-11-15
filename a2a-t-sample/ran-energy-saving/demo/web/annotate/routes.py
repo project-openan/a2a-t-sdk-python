@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping
+import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
@@ -39,6 +40,13 @@ DEFAULT_DAYS: Final[float] = 1.0
 #: Ceiling of the scan window and of the batches one scan reads.
 MAX_DAYS: Final[float] = 30.0
 MAX_BATCHES: Final[int] = 500
+
+#: Ceiling of one bulk adoption: enough for a whole week of batches, small enough to bound a typo.
+MAX_TRACES: Final[int] = 2000
+MAX_TRACE_LENGTH: Final[int] = 128
+
+#: A trace list may arrive as free text; any run of separators splits it.
+_TRACE_SPLIT: Final[re.Pattern[str]] = re.compile(r"[\s,，;；]+")
 
 
 def build_annotate_routes(
@@ -106,7 +114,7 @@ def build_annotate_routes(
     async def cases(request: Request) -> Response:
         """Return every case with its protocol tasks and subtasks."""
         rows = await asyncio.to_thread(service.cases)
-        progress = await asyncio.to_thread(service.progress)
+        progress = await asyncio.to_thread(service.progress, rows)
         return JSONResponse({"cases": rows, **progress})
 
     async def scan(request: Request) -> Response:
@@ -116,6 +124,43 @@ def build_annotate_routes(
         summary = await asyncio.to_thread(service.scan, days=days, max_batches=limit)
         progress = await asyncio.to_thread(service.progress)
         return JSONResponse({"scan": summary.to_dict(), **progress})
+
+    async def adopt_traces(request: Request) -> Response:
+        """Adopt the observations of the supplied traceIds/runIds as annotation values."""
+        body = await _json_body(request)
+        raw_traces = body.get("traces")
+        if raw_traces is None:
+            raw_traces = body.get("traceIds")
+        tokens = _trace_tokens(raw_traces)
+        if not tokens:
+            return JSONResponse(
+                {"error": "请提供至少一个 traceId 或 runId。"}, status_code=400
+            )
+        if len(tokens) > MAX_TRACES:
+            return JSONResponse(
+                {"error": f"一次最多 {MAX_TRACES} 个 traceId/runId。"}, status_code=400
+            )
+        protocol_ok, protocol = _optional_choice(body.get("protocol"), PROTOCOLS)
+        if not protocol_ok:
+            return JSONResponse(
+                {"error": f"protocol 只能是 {', '.join(PROTOCOLS)}。"}, status_code=400
+            )
+        dimension_ok, dimension = _optional_choice(body.get("dimension"), DIMENSIONS)
+        if not dimension_ok:
+            return JSONResponse(
+                {"error": f"dimension 只能是 {', '.join(DIMENSIONS)}。"}, status_code=400
+            )
+        result = await asyncio.to_thread(
+            service.adopt_traces,
+            tokens,
+            protocol=protocol,
+            dimension=dimension,
+            confirm=_flag(body.get("confirm"), True),
+            replace=_flag(body.get("replace"), False),
+            actor=_actor(request),
+            max_batches=MAX_BATCHES,
+        )
+        return JSONResponse(result)
 
     async def subtask_detail(request: Request) -> Response:
         """Return the candidates and the choices of one subtask."""
@@ -146,6 +191,34 @@ def build_annotate_routes(
             actor=_actor(request),
         )
         return JSONResponse({"ok": True})
+
+    async def apply_case(request: Request) -> Response:
+        """Save every subtask of one case+protocol in one request, then confirm the selection."""
+        try:
+            case_id = int(request.path_params["case_id"])
+        except (KeyError, TypeError, ValueError):
+            return JSONResponse({"error": "caseId 必须是整数。"}, status_code=400)
+        protocol = request.path_params["protocol"]
+        if protocol not in PROTOCOLS:
+            return JSONResponse(
+                {"error": f"protocol 只能是 {', '.join(PROTOCOLS)}。"}, status_code=400
+            )
+        body = await _json_body(request)
+        raw_targets = body.get("targets")
+        if not isinstance(raw_targets, list) or not raw_targets:
+            return JSONResponse({"error": "请提供要保存的子任务。"}, status_code=400)
+        try:
+            details = await asyncio.to_thread(
+                service.apply_targets,
+                case_id,
+                protocol,
+                [target for target in raw_targets if isinstance(target, Mapping)],
+                confirm=_flag(body.get("confirm"), True),
+                actor=_actor(request),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "details": details})
 
     async def mode(request: Request) -> Response:
         """Set the matching mode of a slot-error subtask."""
@@ -220,6 +293,14 @@ def build_annotate_routes(
         Route("/api/annotate/meta", meta),
         Route("/api/annotate/cases", cases),
         Route("/api/annotate/scan", scan, methods=["POST"]),
+        Route("/api/annotate/adopt/traces", adopt_traces, methods=["POST"]),
+        # ``apply`` must be registered before the ``{dimension}`` route, or Starlette would match
+        # the literal path as a dimension and answer 404.
+        Route(
+            "/api/annotate/case/{case_id}/{protocol}/apply",
+            apply_case,
+            methods=["POST"],
+        ),
         Route("/api/annotate/case/{case_id}/{protocol}/{dimension}", subtask_detail),
         Route(
             "/api/annotate/case/{case_id}/{protocol}/{dimension}/choice",
@@ -245,6 +326,45 @@ def build_annotate_routes(
         Route("/api/annotate/export.json", export_all_json),
         Route("/api/annotate/export/case/{case_id}", export_one_case),
     ]
+
+
+def _trace_tokens(raw: object) -> list[str]:
+    """Return the normalized identifiers of a trace-list request body.
+
+    The field accepts a list of strings or one block of free text: an operator pasting a column
+    from the run console should not have to reformat it, and every separator people actually use
+    (newline, comma, ideographic comma, semicolon) splits the same way.
+    """
+    if isinstance(raw, str):
+        parts = _TRACE_SPLIT.split(raw)
+    elif isinstance(raw, Sequence) and not isinstance(raw, (bytes, bytearray)):
+        parts = [str(item) for item in raw]
+    else:
+        return []
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        token = part.strip().lower()
+        if not token or len(token) > MAX_TRACE_LENGTH or token in seen:
+            continue
+        seen.add(token)
+        tokens.append(token)
+    return tokens
+
+
+def _optional_choice(raw: object, allowed: Sequence[str]) -> tuple[bool, str | None]:
+    """Return ``(valid, value)`` for an optional enum field of a request body."""
+    if raw is None or raw == "":
+        return True, None
+    text = str(raw)
+    if text not in allowed:
+        return False, None
+    return True, text
+
+
+def _flag(raw: object, default: bool) -> bool:
+    """Return one boolean body field, keeping the default for anything that is not a boolean."""
+    return raw if isinstance(raw, bool) else default
 
 
 def _target_key(request: Request) -> TargetKey | None:

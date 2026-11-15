@@ -125,6 +125,59 @@ def test_a_matcher_matches_a_facts_subset() -> None:
     assert match_slot_errors(expectation, [other]).matched is False
 
 
+def test_a_matcher_can_freeze_the_whole_observed_error() -> None:
+    """Adopting a candidate keeps code, slot name, message and facts; all are matched."""
+    expectation = slot_error_expectation(
+        _case(
+            slot_errors=[
+                {
+                    "code": "slot.constraint_violated",
+                    "slotName": "Gain target",
+                    "message": "Gain target is not allowed.",
+                    "facts": {"slot_label": "Gain target", "actual": "20%"},
+                }
+            ]
+        )
+    )
+    assert expectation is not None
+
+    observed = _error(
+        "slot.constraint_violated",
+        "Gain target",
+        message="Gain  target is not  allowed.",
+        facts={"slot_label": "Gain target", "actual": "20%"},
+    )
+    other_message = _error(
+        "slot.constraint_violated",
+        "Gain target",
+        message="Gain target is rejected.",
+        facts={"slot_label": "Gain target", "actual": "20%"},
+    )
+    other_slot = _error(
+        "slot.constraint_violated",
+        "Region",
+        message="Gain target is not allowed.",
+        facts={"slot_label": "Region", "actual": "20%"},
+    )
+
+    assert match_slot_errors(expectation, [observed]).matched is True
+    assert match_slot_errors(expectation, [other_message]).matched is False
+    assert match_slot_errors(expectation, [other_slot]).matched is False
+
+
+def test_the_expectation_round_trips_through_its_dict_form() -> None:
+    raw = {
+        "code": "slot.constraint_violated",
+        "slotName": "Gain target",
+        "message": "not allowed",
+        "facts": {"actual": "20%"},
+    }
+    expectation = slot_error_expectation(_case(slot_errors=[raw]))
+
+    assert expectation is not None
+    assert expectation.to_dict()["expect"] == [raw]
+
+
 def test_any_mode_accepts_one_match_among_several_errors() -> None:
     expectation = slot_error_expectation(
         _case(slot_errors={"mode": "any", "expect": ["slot.not_provided"]})
