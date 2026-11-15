@@ -15,6 +15,7 @@ import {
   filterCases,
   progressText,
   protocolLabel,
+  roundEvidence,
   roundLabel,
   shouldAutoFetch,
   stabilityOf,
@@ -213,6 +214,10 @@ const BATCHES = [
     rounds: 2,
     cases: 100,
     observations: 200,
+    roundsDetail: [
+      { round: 1, observations: 120, cases: 100 },
+      { round: 2, observations: 80, cases: 60 },
+    ],
   },
   {
     batchId: "batch-sim",
@@ -279,6 +284,11 @@ assert.equal(
   "batch-sim · 2026-11-14 09:00 · offline · 模拟器 · scripted · 1 轮",
 );
 assert.equal(batchLabel(null), "");
+
+// A multi-round batch counts evidence per round, not with the batch-wide total.
+assert.deepEqual(roundEvidence(BATCHES[0], 2), { round: 2, observations: 80, cases: 60 });
+assert.deepEqual(roundEvidence(BATCHES[0], 9), { round: 9, observations: 0, cases: 0 });
+assert.deepEqual(roundEvidence(null, 1), { round: 1, observations: 0, cases: 0 });
 
 const ROUNDS = [
   {

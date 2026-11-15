@@ -322,6 +322,25 @@ class ReviewStore:
                 ORDER BY MAX(observed_at) DESC, batch_id DESC
                 """
             ).fetchall()
+            per_round = connection.execute(
+                """
+                SELECT batch_id, source_round,
+                       COUNT(*) AS observations,
+                       COUNT(DISTINCT case_id) AS cases
+                FROM observation
+                GROUP BY batch_id, source_round
+                ORDER BY batch_id, source_round
+                """
+            ).fetchall()
+        rounds_by_batch: dict[str, list[dict[str, int]]] = {}
+        for row in per_round:
+            rounds_by_batch.setdefault(str(row["batch_id"]), []).append(
+                {
+                    "round": max(1, int(row["source_round"] or 1)),
+                    "observations": int(row["observations"] or 0),
+                    "cases": int(row["cases"] or 0),
+                }
+            )
         return [
             {
                 "batchId": str(row["batch_id"]),
@@ -329,6 +348,9 @@ class ReviewStore:
                 "observations": int(row["observations"] or 0),
                 "cases": int(row["cases"] or 0),
                 "rounds": max(1, int(row["rounds"] or 1)),
+                #: One entry per source round: the list shows each round on its own, and the
+                #: batch-wide count would overstate an older round after a retry.
+                "roundsDetail": rounds_by_batch.get(str(row["batch_id"]), []),
                 "model": row["model"],
                 "decisionMode": str(row["decision_mode"] or ""),
                 "nms": bool(row["nms"]),

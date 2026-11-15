@@ -680,6 +680,7 @@ def test_the_batch_list_groups_the_evidence_without_judging_it(tmp_path: Path) -
     assert batches[0]["observations"] == 1
     assert batches[0]["cases"] == 1
     assert batches[0]["rounds"] == 1
+    assert batches[0]["roundsDetail"] == [{"round": 1, "observations": 1, "cases": 1}]
     assert batches[0]["model"] == "qwen3.8"
     assert batches[0]["decisionMode"] == "scripted"
     assert batches[0]["nms"] is True
@@ -729,6 +730,12 @@ def test_the_batch_view_can_narrow_to_one_round(tmp_path: Path) -> None:
     assert second["batch"]["round"] == 2
     assert merged["coverage"]["observed"] == 1
     assert merged["cases"][0]["protocols"][0]["observations"] == 2
+    # The batch list shows each round's own evidence count, not the batch-wide total.
+    batch = next(row for row in service.batches() if row["batchId"] == "batch-multi")
+    assert batch["roundsDetail"] == [
+        {"round": 1, "observations": 1, "cases": 1},
+        {"round": 2, "observations": 1, "cases": 1},
+    ]
 
 
 def test_the_batch_view_reports_whether_the_decision_came_from_the_round(

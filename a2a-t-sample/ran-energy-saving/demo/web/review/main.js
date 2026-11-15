@@ -244,6 +244,19 @@ export function batchLabel(batch) {
   ].join(" · ");
 }
 
+//: The evidence counts of one stored round; a round the store did not summarise reads as empty.
+export function roundEvidence(batch, round) {
+  const index = Number(round);
+  const rows = (batch && batch.roundsDetail) || [];
+  return (
+    rows.find((row) => Number(row.round) === index) || {
+      round: index,
+      observations: 0,
+      cases: 0,
+    }
+  );
+}
+
 //: Human-readable label of one stored round.
 export function roundLabel(round) {
   return [
@@ -508,7 +521,17 @@ function renderBatches() {
         ),
       );
       badges.append(el("span", "badge", batch.decisionMode || "—"));
-      badges.append(el("span", "badge", `${batch.observations || 0} 证据`));
+      const evidence = roundEvidence(batch, index);
+      const evidenceBadge = el(
+        "span",
+        "badge",
+        `${evidence ? evidence.observations : 0} 条证据`,
+      );
+      evidenceBadge.title = evidence
+        ? `本轮 ${evidence.cases} 个用例、${evidence.observations} 条证据：`
+          + "一条用例×协议算一条；Modify 的基线 Create 与重试会各多一条。"
+        : "本轮没有证据。";
+      badges.append(evidenceBadge);
       row.append(badges);
       row.title = batchLabel(batch);
       row.addEventListener("click", () => selectBatch(batch.batchId, index));
