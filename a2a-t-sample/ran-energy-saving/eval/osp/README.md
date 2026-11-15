@@ -366,3 +366,34 @@ PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-af
 - **控制台显式开启校验**：`/tester` 启动运行项时传 `validate_before_send=True`，不依赖
   `A2AT_SAMPLE_PRE_SEND_VALIDATION=on` 的 `presentation` 限定。
 - **`scenario: night` 只是运行时配置**：它不提供任何预期值，预期全部来自本文件。
+
+## 11. 实时模型评测（Task-T / 拦截）
+
+离线 runner 用确定性 provider；要用真实模型（黄区验收、模型对比）评测 Task-T 与拦截结论时，有两个入口，
+预期值都来自本目录的用例：
+
+```bash
+# 1) pytest：每个用例一个断言，失败信息带逐阶段状态与 diff
+A2AT_OSP_LIVE=1 \
+A2AT_LLM_PROVIDER=openai A2AT_LLM_MODEL=mass/qwen3.8-flash \
+A2AT_LLM_BASE_URL=http://127.0.0.1:31943/v1 A2AT_LLM_API_KEY=not-needed \
+A2AT_LLM_MAX_TOKENS=16384 \
+pytest tests/test_osp_live_eval.py -q
+
+# 2) runner：写 JSON 报告，summary.stages 给出 intent / task_t / validate 的分阶段计数
+python -m eval.osp.runner --all --stop-after validate --model-mode live \
+  --out runs/osp-eval/qwen3.8-flash.json
+```
+
+要点：
+
+- **默认跳过**。`A2AT_OSP_LIVE` 未设置时 `tests/test_osp_live_eval.py` 整个模块跳过，普通套件与 CI 不发任何
+  模型请求。
+- **配置来源**：`A2AT_OSP_LIVE_ENV` 指向一个 live `.env`（推荐黄区使用，内含 `A2AT_SAMPLE_MODEL_MODE=live`
+  与 `A2AT_LLM_*` / `ADK_MODEL_*`）；不设时使用导入时捕获的 shell 导出（样例 `conftest` 会为每个测试清理
+  `A2AT_*`，模块在构建客户端前恢复）。
+- **子集**：`A2AT_OSP_LIVE_IDS=1,11,42`，或 runner 的 `--ids`。
+- **阶段口径**：`intent` / `task_t` / `validate` 只跑 SDK 管线，不经过样例 OSS 的业务 gate；`blocked`
+  的判定见第 10 节。
+- **耗时**：单个用例（3 次模型调用）在远端模型上约 1–3 分钟，100 条串行需要数小时；按需用 `--ids` 分批，
+  或把 `--out` 指向不同文件后汇总 `summary.stages`。

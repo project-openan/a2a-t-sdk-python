@@ -56,6 +56,14 @@ STAGE_FAILED: Final[str] = "failed"
 STAGE_RECORDED: Final[str] = "recorded"
 STAGE_ERROR: Final[str] = "error"
 
+#: Report bucket of each stage status, used by :func:`build_report` for the per-stage summary.
+_STAGE_BUCKET: Final[dict[str, str]] = {
+    STAGE_PASSED: "passed",
+    STAGE_FAILED: "failed",
+    STAGE_RECORDED: "recorded",
+    STAGE_ERROR: "error",
+}
+
 #: The 24 hourly intervals of a full-day energy-saving period. ``OSP_INTENT_SCHEMA`` declares this
 #: as the default for an area-level request that names no time range.
 _FULL_DAY_TIME: Final[str] = "&".join(
@@ -648,6 +656,14 @@ def build_report(
         for stage in (*outcome.stages, *(outcome.interception or ()))
         if stage.status == STAGE_ERROR
     )
+    stage_counts: dict[str, dict[str, int]] = {}
+    for outcome in outcomes:
+        for stage in (*outcome.stages, *(outcome.interception or ())):
+            bucket = stage_counts.setdefault(
+                stage.stage, {"passed": 0, "failed": 0, "recorded": 0, "error": 0}
+            )
+            bucket[_STAGE_BUCKET[stage.status]] += 1
+    counts["stages"] = stage_counts
     return {
         "schema": "osp-eval-run/v1",
         "startedAt": started_at,

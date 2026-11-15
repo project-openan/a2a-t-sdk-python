@@ -34,6 +34,9 @@ from eval.osp.runner import (
     STAGE_FAILED,
     STAGE_PASSED,
     STAGE_RECORDED,
+    CaseOutcome,
+    StageOutcome,
+    build_report,
     load_cases,
     run_case,
 )
@@ -828,3 +831,39 @@ def test_task_context_label_separator_is_not_a_business_difference() -> None:
         "maximize user experience assurance",
         "with the objective to maximize user experience assurance.",
     )
+
+
+def test_report_summarizes_each_stage() -> None:
+    """The report's per-stage counts drive the yellow-zone Task-T and interception summary."""
+    outcomes = [
+        CaseOutcome(
+            case_id=1,
+            name="one",
+            stages=(
+                StageOutcome(stage="intent", status=STAGE_PASSED),
+                StageOutcome(stage="task_t", status=STAGE_FAILED),
+                StageOutcome(stage="validate", status=STAGE_RECORDED),
+            ),
+            passed=False,
+        ),
+        CaseOutcome(
+            case_id=2,
+            name="two",
+            stages=(StageOutcome(stage="intent", status=STAGE_ERROR),),
+            passed=False,
+            error="boom",
+            interception=(StageOutcome(stage="validate", status=STAGE_PASSED),),
+        ),
+    ]
+
+    summary = build_report(
+        outcomes, stop_after="validate", started_at="2026-11-15T00:00:00Z"
+    )["summary"]
+
+    assert isinstance(summary, Mapping)
+    assert summary["total"] == 2
+    assert summary["stages"] == {
+        "intent": {"passed": 1, "failed": 0, "recorded": 0, "error": 1},
+        "task_t": {"passed": 0, "failed": 1, "recorded": 0, "error": 0},
+        "validate": {"passed": 1, "failed": 0, "recorded": 1, "error": 0},
+    }
