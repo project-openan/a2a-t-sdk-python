@@ -56,6 +56,7 @@ const state = {
   round: 0, // index into detail.rounds, or -1 for the round matrix
   decision: { status: "pending", category: "", note: "", dirty: false },
   intentDiffOnly: true,
+  taskTDiffOnly: true,
   snippet: null,
   scan: null,
 };
@@ -118,6 +119,14 @@ export function filterCases(cases, filters) {
     rows.push({ ...caseRow, protocols });
   }
   return rows;
+}
+
+//: Keep only the Task-T sections a reviewer must explain; the fixed template prose is recorded,
+//: never a difference, so "diff only" hides it as well.
+export function filterTaskTRows(rows, diffOnly) {
+  const all = rows || [];
+  if (!diffOnly) return all.slice();
+  return all.filter((row) => row.verdict !== "same" && row.verdict !== "recorded");
 }
 
 //: Filter the batch list by identifier, model, time, downstream and decision mode.
@@ -1098,30 +1107,58 @@ function renderTaskTCard(round) {
   const card = el("section", "card");
   const detail = (round.judgement && round.judgement.detail) || {};
   const taskT = detail.taskT || {};
-  card.append(el("h2", "", "SDK Task-T"));
+  const head = el("div", "section-title");
+  head.append(el("h2", "", "SDK Task-T"));
+  const label = el("label", "check");
+  const toggle = document.createElement("input");
+  toggle.type = "checkbox";
+  toggle.checked = state.taskTDiffOnly;
+  toggle.addEventListener("change", () => {
+    state.taskTDiffOnly = toggle.checked;
+    renderDetail();
+  });
+  label.append(toggle, document.createTextNode(" 只看差异"));
+  head.append(label);
+  card.append(head);
   card.append(el("p", "sub", "Task-T 直接决定下游如何理解请求；分节判定，固定模板文字只记录不判。"));
   if (!taskT.rows || !taskT.rows.length) {
     card.append(el("p", "empty-state", "没有 Task-T 证据（拦截前即失败或该协议不适用）。"));
     return card;
   }
-  const table = document.createElement("table");
-  table.className = "grid";
-  const headRow = el("tr");
-  for (const title of ["小节", "预期", "实际", "结论"]) {
-    headRow.append(el("th", "", title));
-  }
-  table.append(headRow);
-  for (const row of taskT.rows) {
-    const tr = el("tr", row.verdict === "same" ? "" : "fail");
-    tr.append(
-      el("td", "mono-cell", row.path.replace("task_t.", "")),
-      el("td", "", shortText(row.expected)),
-      el("td", "", shortText(row.actual)),
-      el("td", `verdict ${row.verdict}`, row.verdict === "same" ? "一致" : row.reason || row.verdict),
+  const rows = filterTaskTRows(taskT.rows, state.taskTDiffOnly);
+  if (!rows.length) {
+    card.append(
+      el(
+        "p",
+        "empty-state",
+        `没有差异（共 ${taskT.rows.length} 个小节；固定模板文字只记录不判）。`,
+      ),
     );
-    table.append(tr);
+  } else {
+    const table = document.createElement("table");
+    table.className = "grid";
+    const headRow = el("tr");
+    for (const title of ["小节", "预期", "实际", "结论"]) {
+      headRow.append(el("th", "", title));
+    }
+    table.append(headRow);
+    for (const row of rows) {
+      const tr = el("tr", row.verdict === "same" ? "" : "fail");
+      tr.append(
+        el("td", "mono-cell", row.path.replace("task_t.", "")),
+        el("td", "", shortText(row.expected)),
+        el("td", "", shortText(row.actual)),
+        el("td", `verdict ${row.verdict}`, row.verdict === "same" ? "一致" : row.reason || row.verdict),
+      );
+      table.append(tr);
+    }
+    card.append(table);
+    if (state.taskTDiffOnly && rows.length < taskT.rows.length) {
+      card.append(
+        el("p", "sub", `只显示 ${rows.length} 个差异小节；共 ${taskT.rows.length} 个小节。`),
+      );
+    }
   }
-  card.append(table);
   const raw = document.createElement("details");
   raw.append(el("summary", "", "生成的 Task-T 原文"));
   raw.append(el("pre", "mono", taskT.actual || ""));

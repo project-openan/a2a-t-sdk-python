@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   batchLabel,
   categoryLabel,
+  filterTaskTRows,
   decisionLabel,
   defaultRoundIndex,
   dimensionLabel,
@@ -118,6 +119,20 @@ assert.deepEqual(
   [16, 26],
 );
 assert.deepEqual(filterCases(CASES, { query: "26" }).map((row) => row.caseId), [26]);
+
+const TASK_T_ROWS = [
+  { path: "task_t.Operation Type", verdict: "same" },
+  { path: "task_t.Task Description", verdict: "recorded" },
+  { path: "task_t.Task Context", verdict: "changed" },
+  { path: "task_t.Task Target", verdict: "missing" },
+];
+
+assert.deepEqual(
+  filterTaskTRows(TASK_T_ROWS, true).map((row) => row.path),
+  ["task_t.Task Context", "task_t.Task Target"],
+);
+assert.equal(filterTaskTRows(TASK_T_ROWS, false).length, 4);
+assert.deepEqual(filterTaskTRows(null, true), []);
 
 const BATCHES = [
   {
