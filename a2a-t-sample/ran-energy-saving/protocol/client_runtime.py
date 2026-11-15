@@ -837,6 +837,9 @@ class ClientRuntime:
                         self.config.discovery == DISCOVERY_NMS
                         and self.config.nms_infer_negotiation_kind
                     ),
+                    # A scripted provider replays case/scenario data: that text is the reply, so
+                    # the accept must carry it verbatim instead of the flow's own wording.
+                    verbatim_decision_text=isinstance(provider, ScriptedDecisionProvider),
                     client_policy=ClientPolicy.from_config(self.config),
                     validate_before_send=validate_before_send,
                     enforce_required_fields=enforce_required_fields,

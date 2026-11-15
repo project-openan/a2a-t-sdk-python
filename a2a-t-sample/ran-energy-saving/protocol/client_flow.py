@@ -952,6 +952,7 @@ async def run_client_flow(
     conversation_context: str | None = None,
     single_extension_per_message: bool = False,
     infer_missing_negotiation_kind: bool = False,
+    verbatim_decision_text: bool = False,
     client_policy: ClientPolicy | None = None,
     validate_before_send: bool = False,
     enforce_required_fields: bool = False,
@@ -1006,6 +1007,11 @@ async def run_client_flow(
             field on the proposal that continues a negotiation; without this the run fails hard.
             A body without a known heading still fails, because guessing the kind would pick the
             wrong decision prompt and reply template.
+        verbatim_decision_text: Send the decision's ``confirmed_intent`` /
+            ``feasibility_summary`` exactly as authored. A scripted provider replays case data,
+            so the accept must not reword it or replace a reply that names a rate the flow did not
+            derive; the template still wraps the text. Model-authored decisions keep the
+            contradiction check, so an invented rate cannot go out as the agreement.
         client_policy: Client acceptance limits applied to an automatic decision. The flow never
             invents an entity value and never accepts a plan below the configured throughput floor;
             in automatic mode it also accepts a feasible server alternative the model rejected.
@@ -1665,6 +1671,7 @@ async def run_client_flow(
                 intent_fields=intent_fields,
                 call_timeout_seconds=call_timeout_seconds,
                 single_extension_per_message=single_extension_per_message,
+                verbatim_decision_text=verbatim_decision_text,
                 task_id=task_id,
                 dropped=dropped_values,
             )
@@ -2095,6 +2102,7 @@ async def _build_accept_request(
     intent_fields: Mapping[str, object] | None,
     call_timeout_seconds: float,
     single_extension_per_message: bool,
+    verbatim_decision_text: bool,
     task_id: str | None = None,
     dropped: list[str] | None = None,
 ) -> tuple[SendMessageRequest, ClientCallContext]:
@@ -2158,7 +2166,14 @@ async def _build_accept_request(
         accept_decision = decision.model_copy(
             update={"filled_params": {**(decision.filled_params or {}), **operator_fields}}
         )
-    typed = _typed_accept_content(kind, filled, accept_decision, baseline, agreed_target)
+    typed = _typed_accept_content(
+        kind,
+        filled,
+        accept_decision,
+        baseline,
+        agreed_target,
+        verbatim_text=verbatim_decision_text,
+    )
     if typed is not None:
         content = await asyncio.to_thread(
             prompt_client.generate_negotiation_accept_prompt_from_data,
@@ -3237,6 +3252,8 @@ def _typed_accept_content(
     decision: NegotiationDecision,
     baseline: Mapping[str, object] | None,
     agreed_target: str | None,
+    *,
+    verbatim_text: bool = False,
 ) -> NegotiationEndingContent | None:
     """Build the typed ending content of an accept, or ``None`` when the flow cannot type it.
 
@@ -3244,6 +3261,10 @@ def _typed_accept_content(
     and no Task-T parameter the sample can map). Every branch here is deterministic: the values
     come from the decision, the agreed Task-T parameters or the proposal, never from a model
     re-reading the client's own accept text.
+
+    ``verbatim_text`` is true when the decision replays scripted case data: the authored
+    confirmation/summary is then the reply, so it is not replaced even when it names a target the
+    flow did not derive. The template still renders around it.
     """
     if kind is NegotiationKind.INFORMATION:
         allowed = TASK_PARAM_SCHEMA.get("properties")
@@ -3270,11 +3291,17 @@ def _typed_accept_content(
     if kind is NegotiationKind.TARGET:
         confirmation = (decision.confirmed_intent or "").strip()
         if confirmation and _contradicts_agreed_target(confirmation, agreed_target, baseline):
-            _LOGGER.warning(
-                "the confirmed intent names a target the accept does not agree to; using the "
-                "deterministic confirmation instead"
-            )
-            confirmation = ""
+            if verbatim_text:
+                _LOGGER.warning(
+                    "the scripted confirmed intent names a target the flow did not derive; "
+                    "sending it verbatim"
+                )
+            else:
+                _LOGGER.warning(
+                    "the confirmed intent names a target the accept does not agree to; using the "
+                    "deterministic confirmation instead"
+                )
+                confirmation = ""
         if not confirmation:
             confirmation = _agreed_values_line(filled, baseline=baseline)
         if not confirmation and agreed_target is not None:
@@ -3288,11 +3315,16 @@ def _typed_accept_content(
         return TargetEndingContent(NegotiationConclusion.ACCEPT, confirmation, None)
     supplied_summary = (decision.feasibility_summary or "").strip()
     if supplied_summary and _contradicts_agreed_target(supplied_summary, agreed_target, baseline):
-        _LOGGER.warning(
-            "the decision summary names a target the accept does not agree to; using the "
-            "deterministic summary instead"
-        )
-        supplied_summary = ""
+        if verbatim_text:
+            _LOGGER.warning(
+                "the scripted summary names a target the flow did not derive; sending it verbatim"
+            )
+        else:
+            _LOGGER.warning(
+                "the decision summary names a target the accept does not agree to; using the "
+                "deterministic summary instead"
+            )
+            supplied_summary = ""
     summary = supplied_summary or _feasibility_accept_summary(filled, baseline, agreed_target)
     return FeasibilityEndingContent(NegotiationConclusion.ACCEPT, summary)
 
