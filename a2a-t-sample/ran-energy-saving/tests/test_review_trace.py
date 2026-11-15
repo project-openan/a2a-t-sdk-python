@@ -186,14 +186,40 @@ def test_frames_find_the_nms_hop_even_when_the_downstream_is_undeclared() -> Non
     assert frames["nms"] == {"expected": 1, "observed": 1, "scope": "a2a-t-server"}
 
 
-def test_frames_do_not_guess_the_nms_group_when_two_scopes_look_like_the_vendor() -> None:
+def test_frames_prefer_the_exact_vendor_scope_over_a_lookalike() -> None:
     rows = [
         _row("SendMessage", metadata={"side": "server", "scope.name": "a2a-t-server"}),
         _row("SendMessage", metadata={"side": "server", "scope.name": "a2a-t-server-2"}),
     ]
     frames = build_frames(normalize_rows(rows), run_id="run-1", nms_kind="real", rounds=0)
-    assert frames["nms"] == {"expected": None, "observed": None, "scope": None}
+    assert frames["nms"] == {"expected": 1, "observed": 1, "scope": "a2a-t-server"}
     assert frames["serverSendCount"]["total"] == 2
+
+
+def test_frames_read_a_nested_scope_metadata() -> None:
+    rows = [_row("SendMessage", metadata={"scope": {"name": "a2a-t-server"}})]
+    frames = build_frames(normalize_rows(rows), run_id="run-1", nms_kind="unknown", rounds=0)
+    assert frames["nms"] == {"expected": 1, "observed": 1, "scope": "a2a-t-server"}
+
+
+def test_frames_find_the_hop_when_the_side_metadata_is_missing() -> None:
+    """A remote SendMessage may carry only its scope; the scope is enough to place the hop."""
+    rows = [_row("SendMessage", metadata={"scope.name": "a2a-t-server"})]
+    frames = build_frames(normalize_rows(rows), run_id="run-1", nms_kind="unknown", rounds=0)
+    assert frames["nms"] == {"expected": 1, "observed": 1, "scope": "a2a-t-server"}
+
+
+def test_frames_derive_the_rounds_when_the_root_metadata_is_missing() -> None:
+    rows = [
+        _root_row(rounds=None),
+        _row("Task-T sent", metadata={"kind": "message_sent", "runId": "run-1"}),
+        _row("Accept sent", metadata={"kind": "message_sent", "runId": "run-1"}),
+        _row("SendMessage", metadata={"side": "server", "scope.name": "a2a-t-server"}),
+        _row("SendMessage", metadata={"side": "server", "scope.name": "a2a-t-server"}),
+    ]
+    frames = build_frames(normalize_rows(rows), run_id="run-1", nms_kind="real", rounds=None)
+    assert frames["rounds"] == 1
+    assert frames["nms"] == {"expected": 2, "observed": 2, "scope": "a2a-t-server"}
 
 
 def test_cached_payload_serves_a_snapshot_without_a_langfuse_request(

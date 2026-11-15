@@ -1084,6 +1084,8 @@ function renderDetail() {
         container.append(renderTaskTCard(round));
         container.append(renderValidateCard(round));
       }
+      const tracePoints = renderTracePointsCard(round);
+      if (tracePoints) container.append(tracePoints);
       container.append(renderNegotiationCard(round));
       container.append(renderRuntimeCard(round));
     }
@@ -1552,33 +1554,42 @@ function renderTaskTCard(round) {
     exported.append(el("pre", "mono", taskT.dispatched));
     card.append(exported);
   }
-  const points = (detail.trace && detail.trace.points) || [];
-  if (points.length) {
-    const box = document.createElement("details");
-    const passed = points.filter((point) => point.ok).length;
-    box.append(
-      el("summary", "", `过程点（期望 vs Langfuse，${passed}/${points.length} 满足）`),
-    );
-    const table = document.createElement("table");
-    table.className = "grid";
-    const headRow = el("tr");
-    for (const title of ["过程点", "期望", "实际", "结论"]) {
-      headRow.append(el("th", "", title));
-    }
-    table.append(headRow);
-    for (const point of points) {
-      const tr = el("tr", point.ok ? "" : "fail");
-      tr.append(
-        el("td", "", point.label),
-        el("td", "", point.expected),
-        el("td", "", point.observed),
-        el("td", `verdict ${point.ok ? "same" : "missing"}`, point.ok ? "满足" : "缺失"),
-      );
-      table.append(tr);
-    }
-    box.append(table);
-    card.append(box);
+  return card;
+}
+
+function renderTracePointsCard(round) {
+  const detail = (round.judgement && round.judgement.detail) || {};
+  const trace = detail.trace || {};
+  const points = trace.points || [];
+  if (!points.length) return null;
+  // The trace points are their own acceptance area, never a footer of the SDK Task-T card: they
+  // describe what the run emitted, and the Task-T card describes what it generated. The table is
+  // expanded by default so a reviewer does not have to open a disclosure per round.
+  const card = el("section", "card");
+  const passed = points.filter((point) => point.ok).length;
+  card.append(el("h2", "", "轨迹过程点"));
+  const facts = [`期望 vs Langfuse，${passed}/${points.length} 满足`];
+  if (trace.traceId) facts.push(`traceId ${trace.traceId}`);
+  if (trace.nmsKind) facts.push(`下游 ${trace.nmsKind}`);
+  card.append(el("p", "sub", facts.join(" · ")));
+  const table = document.createElement("table");
+  table.className = "grid";
+  const headRow = el("tr");
+  for (const title of ["过程点", "期望", "实际", "结论"]) {
+    headRow.append(el("th", "", title));
   }
+  table.append(headRow);
+  for (const point of points) {
+    const tr = el("tr", point.ok ? "" : "fail");
+    tr.append(
+      el("td", "", point.label),
+      el("td", "", point.expected),
+      el("td", "", point.observed),
+      el("td", `verdict ${point.ok ? "same" : "missing"}`, point.ok ? "满足" : "缺失"),
+    );
+    table.append(tr);
+  }
+  card.append(table);
   return card;
 }
 

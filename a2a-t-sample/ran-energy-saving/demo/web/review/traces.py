@@ -434,7 +434,11 @@ def build_frames(
     server = [
         observation
         for observation in observations
-        if observation.side == "server" and observation.name in _SEND_SPAN_NAMES
+        if observation.name in _SEND_SPAN_NAMES
+        # The scope is authoritative. A remote SendMessage can arrive without a ``side``
+        # attribute; dropping it just because the metadata is incomplete is what made a real
+        # ``a2a-t-server`` frame disappear from the gate.
+        and (observation.side == "server" or NMS_SCOPE_MARKER in observation.scope.lower())
     ]
     by_scope: dict[str, dict[str, object]] = {}
     for observation in server:
@@ -445,15 +449,31 @@ def build_frames(
         )
         group["count"] = (_int(group["count"]) or 0) + 1
     candidates = [group for group in by_scope.values() if NMS_SCOPE_MARKER in str(group["scope"]).lower()]
+    exact = [group for group in by_scope.values() if str(group["scope"]).lower() == NMS_SCOPE_MARKER]
     nms_group = None
     # The downstream identity is display only. Locating the NMS hop must not depend on a batch key:
     # a real-machine batch produced before the tester recorded ``nms``/``nmsSim`` still exported
-    # the vendor spans, and silently skipping them would turn a gate into an abstention.
-    if len(candidates) == 1:
+    # the vendor spans, and silently skipping them would turn a gate into an abstention. The exact
+    # scope wins over a lookalike (``a2a-t-server`` over ``a2a-t-server-2``); only a genuinely
+    # ambiguous set of marker scopes with no exact match stays unjudged.
+    if len(exact) == 1:
+        nms_group = exact[0]
+    elif len(candidates) == 1:
         nms_group = candidates[0]
     elif len(by_scope) == 1:
         nms_group = next(iter(by_scope.values()))
-    expected = 1 + rounds if rounds is not None and nms_group is not None else None
+    if rounds is None:
+        # The workflow-root metadata does not always carry ``rounds`` (a neutral root, an older
+        # export). The observed run still knows: one client frame per negotiation round plus the
+        # initial request, and every negotiation span carries its round.
+        observed_rounds = [item.round for item in observations if item.round is not None]
+        if observed_rounds:
+            rounds = max(observed_rounds)
+        elif client_observed > 0:
+            rounds = client_observed - 1
+        else:
+            rounds = 0
+    expected = 1 + rounds if nms_group is not None else None
     return {
         "rounds": rounds,
         "client": {"runId": run_id, "observed": client_observed},
@@ -484,7 +504,28 @@ def _side(row: Mapping[str, Any], metadata: Mapping[str, Any]) -> tuple[str, str
 
 
 def _scope(metadata: Mapping[str, Any]) -> str:
-    return _text(metadata.get("scope.name") or metadata.get("resourceAttributes.service.name"))
+    """Return the service/scope name of one row.
+
+    Langfuse metadata is usually flattened to dotted keys, but an export can also keep the raw
+    nesting (``scope: {name}`` / ``resourceAttributes: {service.name}``). Both shapes must yield
+    ``a2a-t-server``; otherwise a real vendor hop would be reported as unidentified.
+    """
+    scope = _text(metadata.get("scope.name") or metadata.get("resourceAttributes.service.name"))
+    if scope:
+        return scope
+    nested_scope = metadata.get("scope")
+    if isinstance(nested_scope, Mapping):
+        scope = _text(nested_scope.get("name"))
+        if scope:
+            return scope
+    nested_attributes = metadata.get("resourceAttributes")
+    if isinstance(nested_attributes, Mapping):
+        service = nested_attributes.get("service.name")
+        if not isinstance(service, str):
+            raw_service = nested_attributes.get("service")
+            service = raw_service.get("name") if isinstance(raw_service, Mapping) else None
+        scope = _text(service)
+    return scope
 
 
 def _round(metadata: Mapping[str, Any]) -> int | None:

@@ -368,7 +368,7 @@ A2A_T_OBSERVATIONS: tuple[dict[str, object], ...] = (
 def _trace(
     *,
     expected: int | None = 2,
-    observed: int = 2,
+    observed: int | None = 2,
     client: int = 2,
     export_state: str = "exported",
     observations: tuple[dict[str, object], ...] | None = None,
@@ -535,7 +535,11 @@ def test_a_frame_mismatch_fails_with_its_code() -> None:
 
 
 def test_an_unidentified_nms_hop_is_not_applicable() -> None:
-    judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(expected=None)))
+    judgement = judge_protocol(
+        _case(),
+        "a2a-t",
+        _evidence(batch=REAL_BATCH, trace=_trace(expected=None, observed=None)),
+    )
 
     assert _dimension(judgement, "trace").status == VERDICT_NOT_APPLICABLE
     assert _trace_code(judgement) == "trace_nms_hop_unknown"
@@ -543,6 +547,18 @@ def test_an_unidentified_nms_hop_is_not_applicable() -> None:
     blockers = judgement.to_dict()["detail"]["trace"]["blockers"]
     assert [row["code"] for row in blockers] == ["trace_nms_hop_unknown"]
     assert judgement.status == VERDICT_PASS
+
+
+def test_a_recognized_hop_without_a_round_count_says_so() -> None:
+    judgement = judge_protocol(
+        _case(),
+        "a2a-t",
+        _evidence(batch=REAL_BATCH, trace=_trace(expected=None, observed=2)),
+    )
+
+    assert _dimension(judgement, "trace").status == VERDICT_NOT_APPLICABLE
+    blockers = judgement.to_dict()["detail"]["trace"]["blockers"]
+    assert [row["code"] for row in blockers] == ["trace_rounds_unknown"]
 
 
 def test_a_disabled_content_capture_only_partially_judges_the_trace() -> None:

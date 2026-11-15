@@ -1006,7 +1006,16 @@ def _trace_blockers(
     nms = frames.get("nms") if isinstance(frames, Mapping) else None
     if isinstance(nms, Mapping) and nms.get("expected") is None:
         # The dimension abstains when no vendor hop can be identified; say it, so the badge is
-        # not read as "nothing to check".
+        # not read as "nothing to check". A recognized hop with an unknown round count is a
+        # different problem and must not be reported as "no hop".
+        if nms.get("observed") is not None:
+            return [
+                {
+                    "code": "trace_rounds_unknown",
+                    "text": "已识别 NMS 发送跳，但无法确定应发帧数（轮次未知）",
+                    "action": "none",
+                }
+            ]
         return [
             {
                 "code": "trace_nms_hop_unknown",
