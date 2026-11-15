@@ -535,8 +535,10 @@ def _request_sources(
     while the blocked original only survives in the interception record. The precedence is the one
     that never substitutes today's corpus for what the run actually read:
 
-    * original — the intercepted text, else the run's frozen ``rawRequest``, else the frozen case
-      input, and only as a last resort the current corpus (flagged ``corpus``);
+    * original — for a blocked case only the intercepted text, else the current corpus flagged
+      ``corpus``; both the run's ``rawRequest`` and ``refs.userInput`` are the *follow-up* text
+      there, so they must never fill the original column. For a non-blocked case: ``refs.userInput``
+      (the frozen input) and then the corpus, again flagged;
     * dispatched — the run's ``rawRequest``, else the frozen case input.
     """
     refs = evidence.get("refs")
@@ -548,14 +550,17 @@ def _request_sources(
     frozen_input = refs_map.get("userInput")
     raw_request = meta_map.get("rawRequest")
     intercepted = blocked.get("input")
-    if intercepted:
-        original, original_source = intercepted, "interception"
-    elif raw_request:
-        original, original_source = raw_request, "rawRequest"
+    # A blocked run dispatched its follow-up, so ``rawRequest`` and ``refs.userInput`` both hold
+    # that replacement text: neither may stand in for the original the operator wrote.
+    if isinstance(interception, Mapping) or _is_blocked(case):
+        if intercepted:
+            original, original_source = intercepted, "interception"
+        else:
+            # The corpus text is the current file, not what the run read: mark it as degraded.
+            original, original_source = case.get("user_input"), "corpus"
     elif frozen_input:
         original, original_source = frozen_input, "refs"
     else:
-        # The corpus text is the current file, not what the run read: mark it as degraded.
         original, original_source = case.get("user_input"), "corpus"
     if raw_request:
         dispatched, dispatched_source = raw_request, "rawRequest"

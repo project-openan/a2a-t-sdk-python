@@ -622,6 +622,57 @@ def test_the_scan_keeps_the_intercepted_and_the_dispatched_request(tmp_path: Pat
     assert round_row["nmsSim"] is False
 
 
+def test_a_blocked_case_never_shows_the_follow_up_as_the_operator_original(
+    tmp_path: Path,
+) -> None:
+    service, _catalog, _overlay, _runs = _fixture(tmp_path)
+    service.scan(days=2.0)
+    observation = service.store.observations(1, "a2a-t")[0]
+    stored = observation["evidence"]
+    assert isinstance(stored, Mapping)
+    evidence = dict(stored)
+    interception = evidence["interception"]
+    assert isinstance(interception, Mapping)
+    evidence["interception"] = {"stages": interception["stages"]}
+    service.store.ingest(
+        [
+            {
+                **observation,
+                "evidence": evidence,
+            }
+        ]
+    )
+
+    requests = service.detail(1, "a2a-t")["rounds"][0]["requests"]
+
+    assert requests["original"] == "do it"
+    assert requests["originalSource"] == "corpus"
+    assert requests["original"] != requests["dispatched"]
+
+
+def test_a_non_blocked_case_uses_the_frozen_input_as_the_original(tmp_path: Path) -> None:
+    cases_dir = tmp_path / "cases"
+    _write_cases(cases_dir, _case_document(blocked=False))
+    catalog = CaseCatalog(cases_dir, overlay_path=tmp_path / "absent.yaml")
+    store = ReviewStore(tmp_path / "review.sqlite3")
+    store.ensure()
+    service = ReviewService(
+        store=store, catalog=catalog, runs_dir=tmp_path / "runs", client_db_path=None
+    )
+    item = _evidence_item(blocked=False, slot_error=False)
+    item["refs"] = {"userInput": "original text"}
+    item["intentMeta"] = {"rawRequest": "rewritten text"}
+    _write_batch(tmp_path / "runs", [item])
+    service.scan(days=2.0)
+
+    requests = service.detail(1, "a2a-t")["rounds"][0]["requests"]
+
+    assert requests["original"] == "original text"
+    assert requests["originalSource"] == "refs"
+    assert requests["dispatched"] == "rewritten text"
+    assert requests["dispatchedSource"] == "rawRequest"
+
+
 def test_a_missing_run_request_falls_back_to_the_corpus_and_says_so(tmp_path: Path) -> None:
     cases_dir = tmp_path / "cases"
     _write_cases(cases_dir, _case_document(blocked=False))
