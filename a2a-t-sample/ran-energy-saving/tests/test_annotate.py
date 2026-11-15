@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from demo.web.annotate.__main__ import build_app, main
 from demo.web.annotate.corpus import scan_corpus
 from demo.web.annotate.export import case_snippet, payload_json, payload_yaml
 from demo.web.annotate.routes import build_annotate_routes
@@ -604,3 +605,55 @@ async def test_route_rejects_the_case_export_of_an_unknown_case(tmp_path: Path) 
         response = await client.get("/api/annotate/export/case/999")
 
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Standalone read-only server
+# ---------------------------------------------------------------------------
+
+
+def test_the_standalone_app_reads_another_runs_dir_and_keeps_the_store_outside(
+    tmp_path: Path,
+) -> None:
+    """Pointing at a live instance's runs must not write beside its data."""
+    source = tmp_path / "live" / "runs"
+    _write_batch(source, items=[_blocked_item(_blocked_case_id())])
+    store = tmp_path / "own" / "annotations.sqlite3"
+    app = build_app(
+        runs_dir=source,
+        client_db_path=source / "client-state.sqlite3",
+        store_path=store,
+        cases_dir=SAMPLES,
+    )
+
+    async def _probe() -> tuple[int, list[object], bool]:
+        async with _client(app) as client:
+            page = await client.get("/annotate")
+            cases = (await client.get("/api/annotate/cases")).json()
+        return page.status_code, list(cases.get("cases") or []), (source / "annotations").exists()
+
+    status, cases, wrote_beside_source = asyncio.run(_probe())
+
+    assert status == 200
+    assert len(cases) == 100
+    assert store.is_file()
+    assert wrote_beside_source is False
+
+
+def test_the_standalone_parser_defaults_to_the_sample_runs(tmp_path: Path) -> None:
+    from demo.web.annotate.__main__ import _build_parser
+
+    args = _build_parser().parse_args([])
+
+    assert args.port == 8090
+    assert args.host == "127.0.0.1"
+    assert args.store is None
+
+
+def test_the_standalone_check_mode_exits_without_serving(tmp_path: Path, capsys: Any) -> None:
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    code = main(["--runs-dir", str(runs), "--store", str(tmp_path / "a.sqlite3"), "--check"])
+
+    assert code == 0
+    assert "source batches" in capsys.readouterr().out

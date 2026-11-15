@@ -531,3 +531,29 @@ python -m eval.osp.runner --all --stop-after validate --model-mode live \
   渲染不会让用例变红。
 - 标注库不改动 run 存储，也不删除任何候选；重复扫描同一批次只会累加 `seen_count`。
 - 该页面只读批次与 run 存储、写标注库，不启动 run、不向网管下发任何东西。
+
+### 12.7 指向另一个实例的只读标注实例
+
+现场实例不方便重启时，**不要**在它上面再起一个 Web UI：完整应用启动时会执行 `recover_runs()`，
+可能把线上尚未结束的 run 标成 interrupted。改为启动只读标注服务：
+
+```bash
+# 读取现场实例的 runs/（只读），标注库放到别处，另开一个端口
+python -m demo.web.annotate \
+  --runs-dir /data/live/runs \
+  --store /data/annotate/annotations.sqlite3 \
+  --port 8090
+# 打开 http://127.0.0.1:8090/annotate
+```
+
+| 参数 | 说明 |
+|---|---|
+| `--runs-dir` | 源 runs 目录；批次 JSON 在 `<runs-dir>/tester` |
+| `--client-db` | 服务端报文来源，默认 `<runs-dir>/client-state.sqlite3`；缺失时只采集 slot 候选并告警 |
+| `--store` | 标注库路径，**唯一被写入**的文件；不传则写 `<runs-dir>/annotations/annotations.sqlite3` |
+| `--cases-dir` | 要标注的用例目录，默认打包含的 `eval/osp/cases` |
+| `--host/--port` | 默认 `127.0.0.1:8090`（与 Web UI 的 8080 不冲突） |
+| `--check` | 只打印解析后的路径并退出，开端口前先确认指向 |
+
+- 该进程不启动 run、不恢复 run 状态、不向源目录写其它文件；源实例正在跑时也可以同时使用（SQLite 读连接兼容 WAL）。
+- 需要挂到 LAN 时自己加 `--host 0.0.0.0`，并注意该页面会展示请求原文与报文。

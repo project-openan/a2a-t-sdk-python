@@ -22,11 +22,8 @@
       <a class="ghost" href="/tester">评测控制台</a>
       <a class="ghost" href="/runs">Run 控制台</a>
     </nav>
-  </header>
-
-  <main class="main">
-    <section class="card toolbar">
-      <label>时间窗
+    <div class="top-actions">
+      <label class="inline" for="config-days">时间窗
         <select id="config-days">
           <option value="0.25">6 小时</option>
           <option value="1" selected>最近 1 天</option>
@@ -36,11 +33,12 @@
       </label>
       <button class="primary" id="scan-button" type="button">采集候选</button>
       <span class="summary" id="progress"></span>
-      <span class="spacer"></span>
       <a class="button" href="/api/annotate/export.yaml">导出全部 YAML</a>
       <a class="button" href="/api/annotate/export.json">导出全部 JSON</a>
-    </section>
+    </div>
+  </header>
 
+  <main class="main">
     <div class="notice" id="scan-note" hidden></div>
 
     <div class="layout">
