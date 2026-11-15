@@ -229,6 +229,15 @@ def test_compare_task_t_accepts_a_prefixed_task_object() -> None:
     assert compare_task_t(expected, actual) == []
 
 
+def test_compare_task_t_accepts_the_template_area_label_and_quotes() -> None:
+    """The packaged template's example renders ``Area: "Region A"``; that is the same area."""
+    expected = CASES[1]["expect"]["protocols"]["a2a-t"]["task_t"]
+    actual = expected.replace(
+        "## Task Object\nA2ATestRegion", '## Task Object\nArea: "A2ATestRegion"'
+    )
+    assert compare_task_t(expected, actual) == []
+
+
 def test_compare_task_t_accepts_the_runtime_site_context() -> None:
     expected = CASES[32]["expect"]["protocols"]["a2a-t"]["task_t"]
     actual = expected.replace(

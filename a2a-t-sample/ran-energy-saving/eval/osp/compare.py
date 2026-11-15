@@ -750,6 +750,10 @@ def _normalize_section(section: str, value: str) -> str:
     if section == "Task Object":
         text = re.sub(r"^(?:the area is|area|region)\s*:?\s*", "", text, flags=re.IGNORECASE)
         text = text.rstrip(".")
+        # The packaged template's example writes ``Area: "Region A"``; the quotes are the
+        # example's formatting, not part of the area name, so they are not a business difference.
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+            text = text[1:-1].strip()
     elif section == "Task Target":
         text = re.sub(
             r"^(?:energy consumption goal|goal|target)\s*:\s*", "", text, flags=re.IGNORECASE
