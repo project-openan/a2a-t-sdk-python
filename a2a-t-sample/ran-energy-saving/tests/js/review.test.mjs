@@ -7,6 +7,7 @@ import {
   categoryLabel,
   dataCellClass,
   dataCellText,
+  dataCopyLabel,
   expectationMarkers,
   filterTaskTRows,
   decisionLabel,
@@ -558,3 +559,16 @@ assert.deepEqual(filterProtocolTasks(null, ""), []);
 assert.equal(langfuseLinkText({ langfuseUrl: "https://langfuse/trace/1" }), "在 Langfuse 查看 ↗");
 assert.equal(langfuseLinkText({ langfuseUrl: "" }), "—");
 assert.equal(langfuseLinkText(null), "—");
+
+// Copy provenance: the blocked original and the dispatched request must stay distinguishable.
+assert.equal(
+  dataCopyLabel({ source: "task_validation", span: "Task-T validation blocked" }),
+  "拦截回放 · Task-T validation blocked",
+);
+assert.equal(
+  dataCopyLabel({ source: "task_prompt_rendered", span: "Task-T prompt rendered" }),
+  "渲染提示词 · Task-T prompt rendered",
+);
+assert.equal(dataCopyLabel({ source: "task_created" }), "任务创建");
+assert.equal(dataCopyLabel({ source: "mystery", span: "x" }), "mystery · x");
+assert.equal(dataCopyLabel(null), "");

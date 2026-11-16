@@ -62,7 +62,7 @@ def test_every_a2a_t_item_is_present_when_any_copy_exists() -> None:
     assert results["negotiation.reply"].status == STATUS_NOT_APPLICABLE
 
 
-def test_a_blocked_original_prefers_the_interception_replay_then_the_trace() -> None:
+def test_a_blocked_followup_original_needs_the_interception_replay() -> None:
     observations = [
         _obs("task_prompt_rendered", user_request="follow-up text", promptText="TASK-T"),
         _obs("message_sent", performative="TASK_T", taskT="TASK-T", summary="follow-up text"),
@@ -73,11 +73,19 @@ def test_a_blocked_original_prefers_the_interception_replay_then_the_trace() -> 
             _context(blocked=True, followup=True),
         )
     )
-    # The tester often records the two attempts separately and does not replay the interception
-    # span into the follow-up trace; the request the trace did run still answers presence.
-    assert without["request.original"].status == STATUS_PRESENT
-    assert without["request.original"].copies[0].excerpt == "follow-up text"
+    # The follow-up run is started with the replacement request, so its own trace must not stand
+    # in for the blocked original: the two columns would silently show the same text.
+    assert without["request.original"].status == STATUS_MISSING
     assert without["request.dispatched"].status == STATUS_PRESENT
+
+    # A blocked case without a follow-up runs the original itself; its trace is a valid carrier.
+    plain = _by_id(
+        resolve_data_points(
+            {"observations": [{"name": "run · night · a2a-t", "runId": RUN, "userRequest": "text"}]},
+            _context(blocked=True, followup=False),
+        )
+    )
+    assert plain["request.original"].status == STATUS_PRESENT
 
     with_interception = _by_id(
         resolve_data_points(

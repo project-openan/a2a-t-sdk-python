@@ -763,6 +763,28 @@ export function langfuseLinkText(task) {
   return task && task.langfuseUrl ? "在 Langfuse 查看 ↗" : "—";
 }
 
+//: Provenance of one Langfuse copy. The blocked original and the dispatched request look alike
+//: once rendered, so the copy's origin is part of the evidence, not decoration.
+const DATA_SOURCE_LABELS = {
+  task_validation: "拦截回放",
+  task_prompt_rendered: "渲染提示词",
+  trace_root: "轨迹根 metadata",
+  message_sent: "发送报文",
+  llm: "LLM 输出",
+  propose: "协商报文",
+  decision_requested: "协商请求",
+  decision: "协商决策",
+  task_created: "任务创建",
+  finished: "运行结束",
+  status: "状态报文",
+};
+
+export function dataCopyLabel(copy) {
+  if (!copy) return "";
+  const label = DATA_SOURCE_LABELS[copy.source] || copy.source || "副本";
+  return copy.span ? `${label} · ${copy.span}` : label;
+}
+
 export function dataCellText(row) {
   if (!row || row.applicable === false) return "—";
   if (row.status !== "present") return "缺";
@@ -836,10 +858,7 @@ function renderDataTable() {
       const cell = el("td", `data-cell ${dataCellClass(row)}`, dataCellText(row));
       if (row && row.copies && row.copies.length) {
         cell.title = row.copies
-          .map(
-            (copy) =>
-              `${copy.source}${copy.span ? ` · ${copy.span}` : ""}${copy.round ? ` · R${copy.round}` : ""}`,
-          )
+          .map((copy) => `${dataCopyLabel(copy)}${copy.round ? ` · R${copy.round}` : ""}`)
           .join("\n");
       }
       cell.addEventListener("click", () => {
@@ -2640,12 +2659,7 @@ function renderDataCard(round) {
         "span",
         "sub",
         copies.length
-          ? copies
-              .map(
-                (copy) =>
-                  `${copy.source}${copy.span ? ` · ${copy.span}` : ""}${copy.round ? ` · R${copy.round}` : ""}`,
-              )
-              .join("\n")
+          ? copies.map((copy) => `${dataCopyLabel(copy)}${copy.round ? ` · R${copy.round}` : ""}`).join("\n")
           : "—",
       ),
     );
@@ -2656,7 +2670,7 @@ function renderDataCard(round) {
       const box = document.createElement("details");
       box.append(el("summary", "", `${values.length} 份原文`));
       for (const copy of values) {
-        box.append(el("p", "sub", `${copy.source}${copy.span ? ` · ${copy.span}` : ""}`));
+        box.append(el("p", "sub", dataCopyLabel(copy)));
         box.append(el("pre", "mono", copy.value));
       }
       valueCell.append(box);
