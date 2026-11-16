@@ -219,6 +219,57 @@ def test_normalize_rows_reads_the_pure_a2a_send_message_response() -> None:
     assert second.response == "flattened reply"
 
 
+def test_normalize_rows_reads_the_push_notification_status_message() -> None:
+    """The dual channel delivers the A2A text inside a ``statusUpdate`` push frame.
+
+    A server that answers by PushNotification records the frame on its own
+    ``SendMessage-pushNotification`` span: the text is under
+    ``response.statusUpdate.status.message.parts``, not under ``response.parts``. A Task snapshot
+    can carry it under ``response.task.status.message.parts``. Reading only the direct reply shape
+    reported an exported negotiation as missing.
+    """
+    rows = [
+        _row(
+            "SendMessage-pushNotification",
+            metadata={
+                "attributes.gen_ai.agent.a2a.status": "TASK_STATE_INPUT_REQUIRED",
+                "attributes.gen_ai.agent.a2a.response": {
+                    "statusUpdate": {
+                        "taskId": "task-1",
+                        "status": {
+                            "state": "TASK_STATE_INPUT_REQUIRED",
+                            "message": {
+                                "role": "ROLE_AGENT",
+                                "parts": [{"text": "Site list is missing."}],
+                            },
+                        },
+                    }
+                },
+            },
+        ),
+        _row(
+            "SendMessage",
+            type="AGENT",
+            metadata={
+                "attributes.gen_ai.agent.a2a.response": {
+                    "task": {
+                        "status": {
+                            "state": "TASK_STATE_COMPLETED",
+                            "message": {"parts": [{"text": "Task finished."}]},
+                        }
+                    }
+                },
+            },
+        ),
+    ]
+
+    pushed, task_snapshot = normalize_rows(rows)
+
+    assert pushed.response == "Site list is missing."
+    assert pushed.state == "TASK_STATE_INPUT_REQUIRED"
+    assert task_snapshot.response == "Task finished."
+
+
 def test_normalize_rows_reads_a_vendor_status_event_identity_and_state() -> None:
     """A Modify acceptance is a WORKING status frame with its state under ``event``."""
     rows = [

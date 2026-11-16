@@ -385,11 +385,16 @@ def _negotiation_message_copies(
     )
     if proposed or requested:
         return [*proposed, *requested]
-    # Pure A2A has no Negotiation-T span: the server proposes in the plain text of the
-    # SendMessage response (``attributes.gen_ai.agent.a2a.response.parts[].text``).
+    # Pure A2A has no Negotiation-T span: the server proposes in the plain text of its reply.
+    # The dual channel puts the same text on ``SendMessage`` or on the push frame
+    # (``SendMessage-pushNotification``), so the span name must not decide the channel. A frame
+    # only counts as a proposal when it hands the turn back (``INPUT_REQUIRED``); an execution
+    # status also carries text and must not stand in for a negotiation message.
     return _copies(
         observations,
-        predicate=lambda item: _name(item) == "SendMessage" and bool(_text(item, "response", "output")),
+        predicate=lambda item: _is_a2a_send_span(item)
+        and bool(_text(item, "response", "output"))
+        and _hands_the_turn_back(item),
         source="send_message",
         fields=("response",),
         value=lambda item: _text(item, "response", "output"),
@@ -620,6 +625,21 @@ def _snake(key: str) -> str:
 def _name(observation: Mapping[str, object]) -> str:
     """Return the Langfuse observation name."""
     return _text(observation, "name")
+
+
+def _is_a2a_send_span(observation: Mapping[str, object]) -> bool:
+    """Return whether one observation is the server side of an A2A SendMessage exchange."""
+    return _name(observation).startswith(("SendMessage", "SendStreamingMessage"))
+
+
+def _hands_the_turn_back(observation: Mapping[str, object]) -> bool:
+    """Return whether a reply is a proposal the client still has to answer.
+
+    A synchronous Message reply (and an older snapshot) carries no state. A push status must be
+    ``TASK_STATE_INPUT_REQUIRED``; any other state is an execution update, not a proposal.
+    """
+    state = _text(observation, "state")
+    return not state or state == "TASK_STATE_INPUT_REQUIRED"
 
 
 def _kind(observation: Mapping[str, object]) -> str:

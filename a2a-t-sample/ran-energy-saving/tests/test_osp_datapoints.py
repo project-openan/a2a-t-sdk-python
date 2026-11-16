@@ -234,6 +234,44 @@ def test_pure_a2a_reads_the_negotiation_message_from_the_send_message_reply() ->
     assert results["task.succeeded"].status == STATUS_MISSING
 
 
+def test_pure_a2a_reads_the_negotiation_message_from_a_push_notification() -> None:
+    """The same reply can arrive as a push, not as the synchronous SendMessage response."""
+    observations = [
+        {
+            "name": "SendMessage-pushNotification",
+            "type": "SPAN",
+            "response": "Site list is missing. Please provide the required information.",
+            "state": "TASK_STATE_INPUT_REQUIRED",
+        },
+        _obs("accept", summary="accept R1", round=1),
+    ]
+    results = _by_id(
+        resolve_data_points(
+            {"observations": observations},
+            _context(protocol="a2a", rounds=1),
+            include_values=True,
+        )
+    )
+    assert results["negotiation.message"].status == STATUS_PRESENT
+    assert results["negotiation.message"].copies[0].span == "SendMessage-pushNotification"
+
+
+def test_a_push_status_that_does_not_hand_the_turn_back_is_not_a_proposal() -> None:
+    """An execution status also has text; it must not stand in for a negotiation message."""
+    observations = [
+        {
+            "name": "SendMessage-pushNotification",
+            "type": "SPAN",
+            "response": "Task modification succeeded",
+            "state": "TASK_STATE_WORKING",
+        },
+    ]
+    results = _by_id(
+        resolve_data_points({"observations": observations}, _context(protocol="a2a", rounds=1))
+    )
+    assert results["negotiation.message"].status == STATUS_MISSING
+
+
 def test_required_and_optional_missing_are_separated() -> None:
     observations = [
         item for item in _complete() if item["kind"] != "llm"

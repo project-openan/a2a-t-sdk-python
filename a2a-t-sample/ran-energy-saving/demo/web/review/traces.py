@@ -30,7 +30,10 @@ TRACE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[0-9a-fA-F]{32}$")
 #: Payload contract of the normalized trace block. Bumped whenever the normalizer changes which
 #: fields a stored payload carries: the review re-derives a payload of an older schema from the
 #: snapshot on disk instead of judging with the fields the old code happened to record.
-SNAPSHOT_SCHEMA: Final[str] = "review-trace/v2"
+#: v3 reads the push channel: ``SendMessage-pushNotification`` carries the same A2A text inside
+#: ``response.statusUpdate.status.message.parts``. A payload stored by v2 has no ``response`` on
+#: those rows, so it must be re-derived instead of judged.
+SNAPSHOT_SCHEMA: Final[str] = "review-trace/v3"
 
 EXPORT_STATE_EXPORTED: Final[str] = "exported"
 EXPORT_STATE_PARTIAL: Final[str] = "partial"
@@ -486,7 +489,10 @@ def normalize_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[Observation, ...]
                 operation=_text(detail.get("operation")),
                 # A vendor status frame nests its state and Task identity under ``event``; the
                 # Modify acceptance is exactly such a frame (WORKING + modification succeeded).
-                state=_text(detail.get("state")) or _text(metadata.get("state")) or _event_state(event),
+                state=_text(detail.get("state"))
+                or _text(metadata.get("state"))
+                or _event_state(event)
+                or _a2a_response_state(metadata),
                 task_id=_text(metadata.get("taskId"))
                 or _text(metadata.get("task_id"))
                 or _event_identity(event, "taskId"),
@@ -659,10 +665,15 @@ def _a2a_response_text(metadata: Mapping[str, Any]) -> str:
     The A2A transport records the server reply as observation attributes
     (``attributes.gen_ai.agent.a2a.response.parts[].text``) in the nested shape, or as flattened
     dotted keys on v4. Pure A2A negotiates in this text; there is no Negotiation-T span.
+
+    A server can answer on either channel: the synchronous reply carries ``parts`` directly, while
+    a push (``SendMessage-pushNotification``) wraps the same text in a ``statusUpdate`` (or a
+    ``task`` snapshot). Both shapes must yield the text, otherwise an exported negotiation is
+    reported as missing solely because it arrived by push.
     """
     response = metadata.get("attributes.gen_ai.agent.a2a.response")
     if isinstance(response, Mapping):
-        text = _parts_text(response.get("parts"))
+        text = _parts_text(response.get("parts")) or _response_status_text(response)
         if text:
             return text
     prefix = "attributes.gen_ai.agent.a2a.response."
@@ -678,6 +689,43 @@ def _a2a_response_text(metadata: Mapping[str, Any]) -> str:
         text = _text(value)
         if text:
             return text
+    return ""
+
+
+def _response_status_text(response: Mapping[str, Any]) -> str:
+    """Return the status message of a push or Task-snapshot response envelope."""
+    for key in ("statusUpdate", "artifactUpdate", "task"):
+        event = response.get(key)
+        if isinstance(event, Mapping):
+            text = _status_message_text(event.get("status"))
+            if text:
+                return text
+    return _status_message_text(response.get("status"))
+
+
+def _status_message_text(status: object) -> str:
+    """Return the text parts of one ``TaskStatus.message``."""
+    if not isinstance(status, Mapping):
+        return ""
+    return _parts_text(_mapping(status.get("message")).get("parts"))
+
+
+def _a2a_response_state(metadata: Mapping[str, Any]) -> str:
+    """Return the Task state of a push response, from its attribute or its envelope."""
+    state = _text(metadata.get("attributes.gen_ai.agent.a2a.status"))
+    if state:
+        return state
+    response = metadata.get("attributes.gen_ai.agent.a2a.response")
+    if isinstance(response, Mapping):
+        for key in ("statusUpdate", "task"):
+            event = response.get(key)
+            if not isinstance(event, Mapping):
+                continue
+            status = event.get("status")
+            if isinstance(status, Mapping):
+                state = _text(status.get("state"))
+                if state:
+                    return state
     return ""
 
 
