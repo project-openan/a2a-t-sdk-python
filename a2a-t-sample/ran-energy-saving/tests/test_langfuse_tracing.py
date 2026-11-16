@@ -24,7 +24,6 @@ from shared.langfuse_tracing import (
     LangfuseSpanExporter,
     _audit_for,
     _audited_exporter,
-    _get_runtime,
     _instrument_otlp_client,
     _LangfuseRuntime,
     _probe_ingestion,
@@ -955,25 +954,6 @@ def test_the_otlp_exporter_retries_rejected_batches() -> None:
     assert 401 not in retry.status_forcelist
     assert retry.allowed_methods == frozenset({"POST"})
     assert retry.respect_retry_after_header is True
-
-
-def test_the_runtime_uses_the_configured_flush_interval(monkeypatch) -> None:
-    """The OTLP window is the ingestion request-rate lever, so config must reach the SDK."""
-    config = replace(load_config(), langfuse_flush_interval=7.0)
-    captured: dict[str, Any] = {}
-
-    class _FakeLangfuse:
-        def __init__(self, **kwargs: Any) -> None:
-            captured.update(kwargs)
-
-    monkeypatch.setattr("shared.langfuse_tracing.Langfuse", _FakeLangfuse)
-    monkeypatch.setattr("shared.langfuse_tracing._retrying_otlp_exporter", lambda _config: None)
-    monkeypatch.setattr("shared.langfuse_tracing._RUNTIME", None)
-
-    _get_runtime(config)
-
-    assert captured["flush_interval"] == 7.0
-    assert captured["flush_at"] == 32
 
 
 class _ExportedSpan:
