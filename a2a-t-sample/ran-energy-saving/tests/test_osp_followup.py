@@ -176,16 +176,16 @@ def test_the_followup_case_requires_a_blocked_expectation() -> None:
         followup_case(case)
 
 
-@pytest.mark.parametrize("status", ["passed", "recorded"])
-def test_a_passing_interception_lets_the_followup_run(status: str) -> None:
-    assert interception_held(status) is True
+def test_a_blocked_verdict_lets_the_followup_run() -> None:
+    assert interception_held("blocked") is True
 
 
-@pytest.mark.parametrize("status", ["failed", "error", "waiting", "skipped"])
-def test_a_failing_interception_stops_the_followup(status: str) -> None:
-    assert interception_held(status) is False
+@pytest.mark.parametrize("verdict", ["pass", "unavailable"])
+def test_an_unblocked_verdict_stops_the_followup(verdict: str) -> None:
+    assert interception_held(verdict) is False
 
 
-def test_an_unrun_validation_keeps_the_two_segment_behaviour() -> None:
-    # A batch that stops at ``intent`` / ``task_t`` has no verdict to gate on.
+def test_an_unobserved_verdict_keeps_the_two_segment_behaviour() -> None:
+    # A batch that stops at ``intent`` / ``task_t`` or a validation call that errored produced no
+    # verdict, so nothing proves the original was not intercepted.
     assert interception_held(None) is True

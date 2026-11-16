@@ -615,10 +615,14 @@ def test_the_validate_stage_fails_when_the_block_reports_another_slot_error() ->
     assert validate_stage.status == STAGE_FAILED
     assert [diff.path for diff in validate_stage.diffs] == ["validate.slotErrors[0]"]
     assert outcome.passed is False
-    # The block happened, but not the way the case describes: the interception segment failed,
-    # so the replacement request does not run either.
-    assert outcome.followup_skipped is True
-    assert outcome.stages == ()
+    # The request was blocked; only its slot errors differ from the case. The gate held, so the
+    # replacement still runs and the case is red on the slot expectation alone.
+    assert outcome.followup_skipped is False
+    assert _statuses(outcome) == {
+        "intent": STAGE_PASSED,
+        "task_t": STAGE_PASSED,
+        "validate": STAGE_PASSED,
+    }
 
 
 def test_runner_handles_a_blocked_generation_as_the_expected_outcome() -> None:
@@ -687,6 +691,21 @@ def test_blocked_case_stops_when_the_original_request_is_not_blocked() -> None:
         "validate": STAGE_FAILED,
     }
     assert client.calls.count((25, "generate")) == 1, "the follow-up request must not run"
+
+
+def test_an_interception_validation_error_does_not_stop_the_followup() -> None:
+    # The validation call itself failed, so no verdict exists: nothing proves the original was
+    # let through, and the historical two-segment behaviour is kept.
+    client = FakePromptClient(validate_outcomes={(25, "original"): "error"})
+    outcome = run_case(CASES[25], client, stop_after="validate")
+    assert outcome.followup_skipped is False
+    assert _statuses_of(outcome.interception)["validate"] == STAGE_ERROR
+    assert _statuses(outcome) == {
+        "intent": STAGE_PASSED,
+        "task_t": STAGE_PASSED,
+        "validate": STAGE_PASSED,
+    }
+    assert outcome.passed is False
 
 
 def test_blocked_case_reports_a_followup_generation_failure() -> None:

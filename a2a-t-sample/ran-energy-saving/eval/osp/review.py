@@ -21,9 +21,10 @@ Two case shapes need care:
 
 * a ``blocked`` case with a ``blocked_followup`` runs twice. The interception segment is judged
   against the *original* case (it is the block the case expects), while the follow-up run is judged
-  against :func:`eval.osp.followup.followup_case`, exactly like the tester. When the interception
-  segment failed, the tester never dispatched the follow-up (``interception.followupSkipped``): the
-  case is judged on its interception alone and the follow-up dimensions are not applicable;
+  against :func:`eval.osp.followup.followup_case`, exactly like the tester. When the original
+  request was not intercepted, the tester never dispatched the follow-up
+  (``interception.followupSkipped``): the case is judged on its interception alone and the
+  follow-up dimensions are not applicable;
 * a case that negotiates is judged on rounds/kinds and (when the corpus states them) the exact
   messages, but the final intent is still the downstream's reading of the **original** Task-T.
 """
@@ -237,16 +238,16 @@ def evidence_input_signature(evidence: Mapping[str, Any]) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()[:16]
 
 
-#: Reason of every follow-up dimension of a case whose interception segment failed.
+#: Reason of every follow-up dimension of a case whose original request was not intercepted.
 _FOLLOWUP_SKIPPED_REASON: Final[str] = (
-    "拦截段未通过，补充请求（blocked_followup.input）未执行；本用例只判定拦截段。"
+    "原请求未被拦截，补充请求（blocked_followup.input）未执行；本用例只判定拦截段。"
 )
 
 
 def _followup_skipped(
     case: Mapping[str, Any], protocol: str, evidence: Mapping[str, Any]
 ) -> bool:
-    """Return whether the evidence records a failed interception whose follow-up never ran."""
+    """Return whether the evidence records a miss whose follow-up never ran."""
     if protocol != A2A_T_PROTOCOL or not (is_blocked_case(case) and has_followup(case)):
         return False
     record = _mapping(evidence.get("interception"))

@@ -249,8 +249,8 @@ _FOLLOWUP_NOT_SENT_MESSAGE: Final[str] = (
     "原始请求被拦截是预期行为。"
 )
 
-#: Message of a blocked case whose interception segment failed: the replacement request is not
-#: dispatched, because the case has already failed at its gate.
+#: Message of a blocked case whose original request was not intercepted: the replacement request
+#: is not dispatched, because the case has already failed at its gate.
 _INTERCEPTION_MISSED_MESSAGE: Final[str] = (
     "拦截未生效（{detail}），已跳过补充请求（blocked_followup.input）。"
 )
@@ -1095,7 +1095,7 @@ class EvalBatchManager:
         #: Producer spans of the blocked original request; replayed into the item's run trace so
         #: the trace shows the interception and the corrected retry like the presentation UI.
         interception_spans: list[dict[str, object]] = []
-        #: Whether the interception segment failed, so the replacement request must not run.
+        #: Whether the original request was not intercepted, so the replacement must not run.
         interception_missed = False
         if item.protocol == PROTOCOL_A2A:
             # OSP defines no SDK stages for pure A2A; only the runtime chain applies.
@@ -1139,13 +1139,13 @@ class EvalBatchManager:
             # The SDK call runs in a thread and cannot be interrupted; a cancel that arrived
             # during it must stop here, before a baseline is seeded or a real request is sent.
             return
-        # A case that stopped at a failed interception ran the original request, not the
-        # replacement, so the frozen evidence must name the original.
+        # A case that stopped at a miss ran the original request, not the replacement, so the
+        # frozen evidence must name the original.
         self._collect_reference(item, case if interception_missed else effective_case)
         if interception_missed:
-            # The contract is "intercepted first, then the replacement": a gate that did not hold
-            # already fails the case, and the replacement must not be dispatched on top of that
-            # failure (no run, no baseline, no network change).
+            # The contract is "intercepted first, then the replacement": an original the gate let
+            # through already fails the case, and the replacement must not be dispatched on top of
+            # that failure (no run, no baseline, no network change).
             self._stamp_interception_miss(item, stages)
         if batch.stop_after in SDK_STAGE_ORDER:
             if blocked_followup and not interception_missed:
@@ -2383,11 +2383,12 @@ class EvalBatchManager:
         item.stages["task_t"] = result
 
     def _stamp_interception_miss(self, item: CaseItem, stages: Sequence[str]) -> None:
-        """Report a failed interception and mark the replacement segment as not executed.
+        """Report an interception that did not hold and mark the replacement as not executed.
 
-        A blocked case is "intercepted first, then the replacement is sent", so a failed
-        interception already fails the case and its replacement must not run. The stage columns
-        say ``skipped`` for the segment that never ran instead of reading as missing evidence.
+        A blocked case is "intercepted first, then the replacement is sent", so an original
+        request the gate let through already fails the case and its replacement must not run. The
+        stage columns say ``skipped`` for the segment that never ran instead of reading as missing
+        evidence.
         """
         message = _INTERCEPTION_MISSED_MESSAGE.format(detail=_interception_miss_detail(item))
         for stage in stages:
@@ -3317,32 +3318,24 @@ def _mark_item_cancelled(item: CaseItem) -> None:
 def _interception_held(item: CaseItem) -> bool:
     """Return whether one item's recorded interception lets the replacement request run.
 
-    ``None`` when the item has no interception record (or a malformed one) keeps the historical
-    two-segment behaviour rather than inventing a stop.
+    The gate reads the observed verdict, not the stage status: a block whose slot errors differ
+    from the case still intercepted the request, so the replacement still runs. A missing record
+    or a missing verdict keeps the historical two-segment behaviour rather than inventing a stop.
     """
     record = item.interception if isinstance(item.interception, Mapping) else {}
     stages = record.get("stages")
     validate = stages.get("validate") if isinstance(stages, Mapping) else None
-    status = validate.get("status") if isinstance(validate, Mapping) else None
-    return interception_held(status if isinstance(status, str) else None)
+    actual = validate.get("actual") if isinstance(validate, Mapping) else None
+    return interception_held(actual if isinstance(actual, str) and actual else None)
 
 
 def _interception_miss_detail(item: CaseItem) -> str:
-    """Return the one-line reason of a failed interception, for the item's message."""
+    """Return the one-line reason of an interception that did not hold, for the item's message."""
     record = item.interception if isinstance(item.interception, Mapping) else {}
     stages = record.get("stages")
     validate = stages.get("validate") if isinstance(stages, Mapping) else None
-    if not isinstance(validate, Mapping):
-        return "没有校验结论"
-    if str(validate.get("status") or "") == STAGE_ERROR:
-        return f"校验失败：{validate.get('message') or '未取得结论'}"
-    actual = str(validate.get("actual") or "")
-    if not actual:
-        return "没有校验结论"
-    if actual == "blocked":
-        # The request was blocked, but not the way the case describes: the slot errors differ.
-        return "拦截结论符合预期，但 slot 错误与预期不一致"
-    return f"实际校验结论：{actual}"
+    actual = validate.get("actual") if isinstance(validate, Mapping) else None
+    return f"实际校验结论：{actual}" if isinstance(actual, str) and actual else "没有校验结论"
 
 
 def _interception_statuses(record: Mapping[str, object]) -> list[str]:

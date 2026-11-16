@@ -345,7 +345,7 @@ def test_a_blocked_case_without_the_expected_slot_error_fails() -> None:
     assert _dimension(judgement, "validate").status == VERDICT_FAIL
 
 
-def test_a_failed_interception_judges_only_the_block() -> None:
+def test_an_interception_miss_judges_only_the_block() -> None:
     case = _case(blocked=True, followup="do it in A2ATestRegion")
     evidence = _evidence(
         run_id="",

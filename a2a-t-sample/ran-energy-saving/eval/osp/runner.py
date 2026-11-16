@@ -139,8 +139,10 @@ class CaseOutcome:
     case's real expectations. A case without a follow-up has ``interception`` set to ``None`` and
     ``stages`` is its only segment.
 
-    A follow-up only runs on top of a passing interception: when the original request was not
-    blocked, the case has already failed, ``stages`` is empty and ``followup_skipped`` is true.
+    A follow-up only runs when the original request was actually intercepted: when its observed
+    verdict is not ``blocked``, the case has already failed, ``stages`` is empty and
+    ``followup_skipped`` is true. A block whose slot errors differ from the case still dispatches
+    the replacement — that case fails on its slot expectation, not on the gate.
     """
 
     case_id: int
@@ -149,7 +151,7 @@ class CaseOutcome:
     passed: bool
     error: str | None = None
     interception: tuple[StageOutcome, ...] | None = None
-    #: True when a failed interception stopped the follow-up request from running at all.
+    #: True when the original request was not intercepted, so the follow-up never ran.
     followup_skipped: bool = False
 
     def to_dict(self) -> dict[str, object]:
@@ -217,8 +219,8 @@ def run_case(
     the incomplete original request, which reports a model error for a request the operator never
     meant to send.
 
-    The follow-up is gated by the interception: a case whose original request was not blocked has
-    already failed, so its replacement request is not executed at all (``followup_skipped``).
+    The follow-up is gated by the observed verdict: a case whose original request was not blocked
+    has already failed, so its replacement request is not executed at all (``followup_skipped``).
     """
     if stop_after not in STAGE_ORDER:
         raise ValueError(f"unsupported stop_after {stop_after!r}; expected one of {STAGE_ORDER}")
@@ -249,8 +251,9 @@ def run_case(
 
 def _interception_held(outcome: CaseOutcome) -> bool:
     """Return whether one interception segment's verdict lets the follow-up request run."""
-    status = next((stage.status for stage in outcome.stages if stage.stage == "validate"), None)
-    return interception_held(status)
+    stage = next((stage for stage in outcome.stages if stage.stage == "validate"), None)
+    actual = stage.actual if stage is not None else None
+    return interception_held(actual if isinstance(actual, str) else None)
 
 
 def run_interception_case(
