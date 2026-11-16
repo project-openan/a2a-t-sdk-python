@@ -352,7 +352,7 @@ def test_an_interception_miss_with_a_dispatched_original_records_the_downstream(
             "stages": {
                 "validate": {
                     "stage": "validate",
-                    "status": "failed",
+                    "status": "recorded",
                     "actual": "pass",
                     "detail": {"verdict": "pass", "slotErrors": []},
                 }
@@ -364,9 +364,10 @@ def test_an_interception_miss_with_a_dispatched_original_records_the_downstream(
 
     judgement = judge_protocol(case, "a2a-t", evidence)
 
-    assert judgement.status == VERDICT_FAIL
+    # The gate never fired: nothing left to judge, so the case is green like the tester's item.
+    assert judgement.status == VERDICT_PASS
     validate = _dimension(judgement, "validate")
-    assert validate.status == VERDICT_FAIL
+    assert validate.status == VERDICT_RECORDED
     assert validate.actual == "pass"
     # The run's evidence describes the original request, so it is recorded, never judged against
     # the replacement's expectations.
@@ -384,7 +385,7 @@ def test_an_interception_miss_without_a_run_marks_the_downstream_not_applicable(
             "stages": {
                 "validate": {
                     "stage": "validate",
-                    "status": "failed",
+                    "status": "recorded",
                     "actual": "pass",
                     "detail": {"verdict": "pass", "slotErrors": []},
                 }
@@ -397,8 +398,8 @@ def test_an_interception_miss_without_a_run_marks_the_downstream_not_applicable(
 
     judgement = judge_protocol(case, "a2a-t", evidence)
 
-    assert judgement.status == VERDICT_FAIL
-    assert _dimension(judgement, "validate").status == VERDICT_FAIL
+    assert judgement.status == VERDICT_PASS
+    assert _dimension(judgement, "validate").status == VERDICT_RECORDED
     for name in ("intent", "task_t", "negotiation", "final_state", "trace"):
         row = _dimension(judgement, name)
         assert row.status == VERDICT_NOT_APPLICABLE

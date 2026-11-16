@@ -64,6 +64,7 @@ def build_tester_routes(
     metrics_grace_seconds: float = 0.0,
     catalog: CaseCatalog | None = None,
     prompt_client: Any | None = None,
+    env_path: Path | None = None,
     scenarios_by_protocol: Mapping[str, Sequence[str]] | None = None,
     default_language: str = "",
 ) -> tuple[list[Route], EvalBatchManager]:
@@ -85,6 +86,7 @@ def build_tester_routes(
         model_label=model_label,
         metrics_grace_seconds=metrics_grace_seconds,
         prompt_client=prompt_client,
+        env_path=env_path,
     )
 
     async def page(request: Request) -> Response:

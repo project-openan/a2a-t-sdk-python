@@ -572,6 +572,9 @@ def create_app(
         metrics_grace_seconds=metrics_grace_seconds,
         prompt_client=tester_prompt_client,
         catalog=case_catalog,
+        # The SDK stages must read the same .env the run runtime reads; otherwise the preflight
+        # and the run can resolve different models and disagree on the same request.
+        env_path=env_path,
     )
     run_console_routes = build_run_console_routes(
         runs=manager,

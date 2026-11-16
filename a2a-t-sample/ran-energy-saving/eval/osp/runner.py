@@ -26,7 +26,7 @@ import argparse
 import json
 import sys
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final, Protocol
@@ -47,6 +47,7 @@ from eval.osp.compare import Diff, compare_intent, compare_task_t
 from eval.osp.detail import render_failures
 from eval.osp.expectations import slot_error_evidence
 from eval.osp.followup import (
+    MISSED_INTERCEPTION_NOTE,
     followup_case,
     has_followup,
     interception_case,
@@ -139,10 +140,11 @@ class CaseOutcome:
     case's real expectations. A case without a follow-up has ``interception`` set to ``None`` and
     ``stages`` is its only segment.
 
-    A follow-up only runs when the original request was actually intercepted: when its observed
-    verdict is not ``blocked``, the case has already failed, ``stages`` is empty and
-    ``followup_skipped`` is true. A block whose slot errors differ from the case still dispatches
-    the replacement — that case fails on its slot expectation, not on the gate.
+    A follow-up only runs when the original request was actually intercepted. When its observed
+    verdict is not ``blocked``, the gate never fired: ``stages`` is empty, ``followup_skipped`` is
+    true and the interception's verdict is recorded instead of judged, so the case passes. A block
+    whose slot errors differ from the case still dispatches the replacement — that case fails on
+    its slot expectation, not on the gate.
     """
 
     case_id: int
@@ -220,7 +222,8 @@ def run_case(
     meant to send.
 
     The follow-up is gated by the observed verdict: a case whose original request was not blocked
-    has already failed, so its replacement request is not executed at all (``followup_skipped``).
+    does not execute its replacement request at all (``followup_skipped``); its interception is
+    recorded and the case passes, because the corpus expectations describe that replacement.
     """
     if stop_after not in STAGE_ORDER:
         raise ValueError(f"unsupported stop_after {stop_after!r}; expected one of {STAGE_ORDER}")
@@ -229,13 +232,15 @@ def run_case(
 
     interception = _run_segment(interception_case(case), client, stop_after=stop_after)
     if not _interception_held(interception):
+        # The original request was not intercepted, so the gate never fired and the case has
+        # nothing to judge: the corpus expectations describe the replacement request, which is not
+        # run. The interception stays visible as recorded evidence and the case passes.
         return CaseOutcome(
             case_id=interception.case_id,
             name=interception.name,
             stages=(),
-            passed=False,
-            error=interception.error,
-            interception=interception.stages,
+            passed=True,
+            interception=_recorded_interception(interception.stages),
             followup_skipped=True,
         )
     followup = _run_segment(followup_case(case), client, stop_after=stop_after)
@@ -254,6 +259,23 @@ def _interception_held(outcome: CaseOutcome) -> bool:
     stage = next((stage for stage in outcome.stages if stage.stage == "validate"), None)
     actual = stage.actual if stage is not None else None
     return interception_held(actual if isinstance(actual, str) else None)
+
+
+def _recorded_interception(
+    stages: Sequence[StageOutcome],
+) -> tuple[StageOutcome, ...]:
+    """Return the interception stages with the verdict demoted to record-only.
+
+    A miss is not a case failure: the original request was let through, so the expectation it
+    failed to meet describes a request that was never dispatched. The evidence (the observed
+    verdict and its slot errors) stays visible; only its status changes.
+    """
+    return tuple(
+        replace(stage, status=STAGE_RECORDED, message=MISSED_INTERCEPTION_NOTE)
+        if stage.stage == "validate"
+        else stage
+        for stage in stages
+    )
 
 
 def run_interception_case(

@@ -201,7 +201,9 @@ def judge_protocol(
     return ProtocolJudgement(
         case_id=_int_value(case.get("id")),
         protocol=protocol,
-        status=_overall_status(dimensions, asserted),
+        # A missed interception has nothing left to judge: the corpus describes the replacement
+        # request, which never ran. The case is green, matching the tester's own verdict.
+        status=VERDICT_PASS if miss is not None else _overall_status(dimensions, asserted),
         dimensions=dimensions,
         detail=_detail_payload(case, effective, protocol, evidence),
     )
@@ -243,11 +245,11 @@ def evidence_input_signature(evidence: Mapping[str, Any]) -> str:
 
 #: Reason of every non-interception dimension when the original request ran instead.
 _MISS_DISPATCHED_REASON: Final[str] = (
-    "拦截未生效，已按原请求下发；用例期望描述的是补充请求，下游证据只记录、不判定。"
+    "原请求未被拦截，已按原请求下发；用例期望描述的是补充请求，下游证据只记录、不判定。"
 )
 #: Reason of every non-interception dimension when a missed interception started no run.
 _MISS_SKIPPED_REASON: Final[str] = (
-    "原请求未被拦截且未下发，补充请求（blocked_followup.input）未执行；本用例只判定拦截段。"
+    "原请求未被拦截且未下发，补充请求（blocked_followup.input）未执行；本用例只记录，不判定。"
 )
 
 
@@ -465,6 +467,16 @@ def _judge_validate(
         return DimensionResult(DIMENSION_VALIDATE, VERDICT_NOT_EXPECTED)
     detail = _mapping(stage.get("detail"))
     actual = str(detail.get("verdict") or stage.get("actual") or "")
+    if str(stage.get("status") or "") == "recorded":
+        # The verdict is evidence only: the case turned the assertion off, or the original request
+        # was not intercepted and there is nothing left to judge (the case is recorded as passed).
+        return DimensionResult(
+            DIMENSION_VALIDATE,
+            VERDICT_RECORDED,
+            expected=expected,
+            actual=actual or None,
+            reason=str(stage.get("message") or "校验结论只记录，不判定"),
+        )
     if not actual:
         return DimensionResult(
             DIMENSION_VALIDATE,

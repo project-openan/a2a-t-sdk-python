@@ -1870,6 +1870,44 @@ def _only_item(snapshot: Mapping[str, object]) -> Mapping[str, Any]:
     return item
 
 
+async def test_the_sdk_stages_build_their_client_from_the_ui_env_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The preflight and the run must read the same .env, or they resolve different models."""
+    seen: list[Path | None] = []
+
+    def fake_build_client(env_path: Path | None = None, *, model_mode: str | None = None) -> Any:
+        seen.append(env_path)
+        return _PromptClient(), tmp_path / "sdk-env"
+
+    monkeypatch.setattr(service, "build_client_with_env", fake_build_client)
+    env_path = tmp_path / "ui.env"
+    env_path.write_text("A2AT_SAMPLE_MODEL_MODE=live\n", encoding="utf-8")
+    manager = EvalBatchManager(
+        runs=_FakeRuns(_finish),  # type: ignore[arg-type]
+        catalog=CaseCatalog(),
+        protocol_defaults=PROTOCOL_DEFAULTS,
+        server_url=None,
+        server_auth_token=None,
+        runs_dir=tmp_path,
+        language="en-US",
+        model_mode="live",
+        env_path=env_path,
+    )
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    await _wait_status(manager, str(created["batchId"]), "finished")
+
+    assert seen == [env_path]
+
+
 async def test_a_blocked_case_with_a_followup_records_the_interception(tmp_path: Path) -> None:
     manager = _manager(tmp_path, _FakeRuns(_finish))
     _inject_followup(manager, 22)
@@ -2124,20 +2162,21 @@ async def test_an_interception_that_did_not_fire_skips_the_followup(tmp_path: Pa
     finished = await _wait_status(manager, str(created["batchId"]), "finished")
 
     item = _only_item(finished)
-    assert item["status"] == CASE_FAILED
+    # The gate never fired, so the interception is recorded and the case passes.
+    assert item["status"] == CASE_PASSED
+    assert item["error"] is None
     interception = item["interception"]
     assert isinstance(interception, Mapping)
     assert interception["followupSkipped"] is True
     blocked = interception["stages"]
     assert isinstance(blocked, Mapping)
-    assert blocked["validate"]["status"] == STAGE_FAILED
+    assert blocked["validate"]["status"] == STAGE_RECORDED
     assert blocked["validate"]["actual"] == "pass"
-    # The replacement's stage columns say it never ran, and the error names the gate.
+    # The replacement's stage columns say it never ran.
     stages = item["stages"]
     assert isinstance(stages, Mapping)
     assert {status["status"] for status in stages.values()} == {STAGE_SKIPPED}
-    assert "拦截未生效" in item["error"]
-    assert "blocked_followup.input" in item["error"]
+    assert all("原请求未被拦截" in str(status["message"]) for status in stages.values())
     # The frozen evidence names the request that actually ran.
     refs = item["refs"]
     assert isinstance(refs, Mapping)
@@ -2167,21 +2206,23 @@ async def test_a_full_flow_case_whose_interception_did_not_fire_dispatches_the_o
     finished = await _wait_status(manager, str(created["batchId"]), "finished")
 
     item = _only_item(finished)
-    assert item["status"] == CASE_FAILED
+    # The original request went downstream and the case is recorded as passed.
+    assert item["status"] == CASE_PASSED
+    assert item["error"] is None
     assert len(runs.calls) == 1
     assert runs.calls[0]["userRequest"] == original
     interception = item["interception"]
     assert isinstance(interception, Mapping)
     assert interception["followupSkipped"] is True
     assert interception["originalDispatched"] is True
-    assert interception["stages"]["validate"]["status"] == STAGE_FAILED
+    assert interception["stages"]["validate"]["status"] == STAGE_RECORDED
+    assert "已改按原请求下发" in interception["stages"]["validate"]["message"]
     # The run's evidence describes the original request, so it is recorded, never judged against
     # the corpus expectations of the replacement.
     stages = item["stages"]
     assert isinstance(stages, Mapping)
     assert stages["send"]["status"] == STAGE_RECORDED
     assert stages["final"]["status"] == STAGE_RECORDED
-    assert "已改按原请求下发" in item["error"]
     refs = item["refs"]
     assert isinstance(refs, Mapping)
     assert refs["userInput"] == original
@@ -2211,7 +2252,8 @@ async def test_a_full_flow_blocked_modify_that_did_not_fire_falls_back_to_the_or
     finished = await _wait_status(manager, str(created["batchId"]), "finished")
 
     item = _only_item(finished)
-    assert item["status"] == CASE_FAILED
+    assert item["status"] == CASE_PASSED
+    assert item["error"] is None
     # Call 1 is the paired Create baseline; call 2 is the original request, not the replacement.
     assert len(runs.calls) == 2
     assert runs.calls[0]["userRequest"] != original
@@ -2220,7 +2262,7 @@ async def test_a_full_flow_blocked_modify_that_did_not_fire_falls_back_to_the_or
     assert isinstance(interception, Mapping)
     assert interception["followupSkipped"] is True
     assert interception["originalDispatched"] is True
-    assert "已改按原请求下发" in item["error"]
+    assert "已改按原请求下发" in interception["stages"]["validate"]["message"]
 
 
 async def test_a_pure_a2a_item_ignores_a_followup(tmp_path: Path) -> None:

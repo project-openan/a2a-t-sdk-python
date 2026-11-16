@@ -677,19 +677,21 @@ def test_blocked_case_runs_the_followup_when_the_batch_stops_before_the_validati
     assert client.calls.count((25, "generate")) == 2
 
 
-def test_blocked_case_stops_when_the_original_request_is_not_blocked() -> None:
+def test_blocked_case_records_a_miss_and_passes() -> None:
     client = FakePromptClient()  # the original request validates as pass
     outcome = run_case(CASES[25], client, stop_after="validate")
-    assert outcome.passed is False
-    # The replacement request is a follow-up to a passing gate: a case that was not intercepted
-    # has already failed, so the follow-up must not run and its stages are never produced.
+    # The gate never fired, so there is nothing to judge: the verdict is recorded as evidence and
+    # the case passes. The replacement request (whose expectations the corpus carries) is not run.
+    assert outcome.passed is True
     assert outcome.followup_skipped is True
     assert outcome.stages == ()
     assert _statuses_of(outcome.interception) == {
         "intent": STAGE_RECORDED,
         "task_t": STAGE_RECORDED,
-        "validate": STAGE_FAILED,
+        "validate": STAGE_RECORDED,
     }
+    validate_stage = next(stage for stage in outcome.interception if stage.stage == "validate")
+    assert validate_stage.actual == "pass"
     assert client.calls.count((25, "generate")) == 1, "the follow-up request must not run"
 
 

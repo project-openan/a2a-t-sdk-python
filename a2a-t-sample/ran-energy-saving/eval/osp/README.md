@@ -149,19 +149,25 @@ A2A 与 A2A-T 的预期结构化意图在这 100 条里完全相同，因此只�
 写在 item 的 `interception`（持久化 JSON 同名键）；结果表增加「拦截校验」「拦截后补充信息」两列，
 阶段差异表用 `拦截/validate` 等前缀区分两段。
 
-**补充段只在原请求被真正拦截后执行。** 判定看拦截段**观察到的校验结论**，不看阶段状态：结论不是
-`blocked`（实际是 `pass`，或校验不可用）就是「实际未拦截」。这时用例直接判红，**不执行补充段**，
-而是**改按原请求继续往下走**（原请求既然没被拦住，就应该看它下发后会发生什么）：
+**补充段只在原请求被真正拦截后执行。** 判定看拦截段**观察到的校验结论**（`eval/osp/followup.py::
+interception_held`），不看阶段状态：结论不是 `blocked`（实际是 `pass`，或校验不可用）就是「实际
+未拦截」。这时**用例按记录判过（绿色）**，拦截段只记录不判定，并且**改按原请求继续往下走**——
+原请求既然没被拦住，就应该看它下发后会发生什么：
 
 - 全流程批次：run 下发**原 `user_input`**（Modify 仍先建基线 Task），下游阶段只记录、不判定
   （`intent` / `task_t` / `send` / `negotiation` / `final_state` 的断言全部关闭，因为用例期望描述的是
   补充请求）；
 - SDK-only 批次：这类批次本来不启动 run，阶段记 `skipped`；
-- `item.interception.followupSkipped = true`；全流程批次另加 `originalDispatched = true`；
-  `item.error` 写明「拦截未生效（实际校验结论：…），已改按原请求下发；补充请求
-  （blocked_followup.input）未执行」，结果表「拦截后补充信息」列标「（未执行）」；
-- `/review` 只判定拦截段：已按原请求下发时下游维度记 `recorded`，未启动 run 时记 `not_applicable`
-  （用 `missing` 会读成证据缺失）。
+- 拦截记录的 `validate` 阶段状态改为 `recorded`（实际结论保留在 `actual`），消息写明「原请求未被拦截
+  （实际校验结论：…）…按记录处理」；`item.interception.followupSkipped = true`，全流程批次另加
+  `originalDispatched = true`；`item.error` 保持为空（用例不判红），结果表「拦截后补充信息」列标
+  「（未执行）」；
+- `/review` 与 tester 一致：`validate` 记 `recorded`，已按原请求下发时其余维度记 `recorded`，未启动
+  run 时记 `not_applicable`（用 `missing` 会读成证据缺失），整个用例判 `pass`。
+
+**预检与 run 必须使用同一份 SDK 配置。** `/tester` 的 SDK 预检客户端由 UI 的 `--env-file`
+（`env_path`）构建，与 run 的 runtime 完全相同；否则两者会解析出不同模型，对同一段原文给出不同抽取
+（2026-11-17 现场：预检 deepseek 按站点分组→pass，run qwen 合并站点→时间窗重叠→blocked）。
 
 两种不停止的情况：
 

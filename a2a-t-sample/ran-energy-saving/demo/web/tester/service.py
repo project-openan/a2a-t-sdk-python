@@ -251,15 +251,15 @@ _FOLLOWUP_NOT_SENT_MESSAGE: Final[str] = (
 )
 
 #: Message of an SDK-only blocked case whose original request was not intercepted: no run is
-#: started, so the replacement request is not dispatched and the case fails at its gate.
+#: started, so the replacement request is not dispatched and the interception is recorded.
 _INTERCEPTION_MISSED_MESSAGE: Final[str] = (
-    "拦截未生效（{detail}），未启动 run，补充请求（blocked_followup.input）未执行。"
+    "原请求未被拦截（{detail}），未启动 run，补充请求（blocked_followup.input）未执行；按记录处理。"
 )
 
 #: Message of a full-flow blocked case whose original request was not intercepted: the run
 #: dispatches the original request instead of the replacement the corpus describes.
 _INTERCEPTION_MISS_DISPATCHED_MESSAGE: Final[str] = (
-    "拦截未生效（{detail}），已改按原请求下发；补充请求（blocked_followup.input）未执行。"
+    "原请求未被拦截（{detail}），已改按原请求下发；补充请求（blocked_followup.input）未执行；按记录处理。"
 )
 
 #: Scenario used to seed a Modify target task; it is a complete request that creates a task.
@@ -501,6 +501,7 @@ class EvalBatchManager:
         model_label: str = "",
         metrics_grace_seconds: float = 0.0,
         prompt_client: Any | None = None,
+        env_path: Path | None = None,
     ) -> None:
         self._runs = runs
         self._catalog = catalog
@@ -518,6 +519,10 @@ class EvalBatchManager:
         self._model_label = model_label
         self._metrics_grace_seconds = max(0.0, metrics_grace_seconds)
         self._prompt_client = prompt_client
+        #: The UI's source ``.env``. The SDK clients of the SDK stages must be built from the same
+        #: file the run runtime reads, or the preflight and the run can resolve different models
+        #: and disagree on the same request (2026-11-17 incident: deepseek vs qwen3.8-27b).
+        self._env_path = Path(env_path) if env_path is not None else None
         #: One SDK client per model mode: a live batch must not reuse the offline scripted client.
         self._prompt_clients: dict[str, Any] = {}
         #: Idle clients per model mode, used only by the concurrent path. Each pool slot owns one
@@ -2394,13 +2399,14 @@ class EvalBatchManager:
     def _stamp_interception_miss(
         self, item: CaseItem, stages: Sequence[str], *, dispatched: bool
     ) -> None:
-        """Report an interception that did not hold and record what happened to the replacement.
+        """Record an interception that did not hold; the replacement request is not executed.
 
         A blocked case is "intercepted first, then the replacement is sent". When the gate lets
-        the original through, the case is already red; ``dispatched`` says whether the original
-        request itself went downstream (full-flow) or no run was started at all (SDK-only). The
-        given stages are marked ``skipped`` so the unjudged segment does not read as missing
-        evidence.
+        the original through, the case has nothing to judge — the corpus expectations describe
+        the replacement — so the interception verdict is recorded and the item passes.
+        ``dispatched`` says whether the original request itself went downstream (full-flow) or no
+        run was started at all (SDK-only); the given stages are marked ``skipped`` so the unjudged
+        segment does not read as missing evidence.
         """
         template = (
             _INTERCEPTION_MISS_DISPATCHED_MESSAGE if dispatched else _INTERCEPTION_MISSED_MESSAGE
@@ -2415,7 +2421,18 @@ class EvalBatchManager:
                 # The original request is what the run dispatched; the review reads this flag to
                 # record — never judge — the downstream evidence.
                 item.interception["originalDispatched"] = True
-        item.error = f"{message} {item.error}" if item.error else message
+            self._record_interception_miss(item, message)
+
+    @staticmethod
+    def _record_interception_miss(item: CaseItem, message: str) -> None:
+        """Demote a missed interception's verdict to record-only in the stored record."""
+        record = item.interception if isinstance(item.interception, Mapping) else {}
+        stages = record.get("stages")
+        validate = stages.get("validate") if isinstance(stages, Mapping) else None
+        if not isinstance(validate, Mapping):
+            return
+        validate["status"] = STAGE_RECORDED
+        validate["message"] = message
 
     def _stamp_followup_block(self, item: CaseItem, run: RunState | None = None) -> None:
         """Report a follow-up that did not get through differently from the expected block.
@@ -2516,7 +2533,9 @@ class EvalBatchManager:
                 raise RuntimeError(self._prompt_errors[key])
             try:
                 client, directory = await asyncio.to_thread(
-                    build_client_with_env, model_mode=model_mode
+                    build_client_with_env,
+                    self._env_path,
+                    model_mode=model_mode,
                 )
             except Exception as exc:  # noqa: BLE001 - reported per case
                 self._prompt_errors[key] = f"{type(exc).__name__}: {exc}"
@@ -2597,7 +2616,9 @@ class EvalBatchManager:
                 raise RuntimeError(self._prompt_errors[key])
             try:
                 client, directory = await asyncio.to_thread(
-                    build_client_with_env, model_mode=model_mode
+                    build_client_with_env,
+                    self._env_path,
+                    model_mode=model_mode,
                 )
             except Exception as exc:  # noqa: BLE001 - reported per case
                 self._prompt_errors[key] = f"{type(exc).__name__}: {exc}"

@@ -33,6 +33,10 @@ A2A_T_PATH: Final[tuple[str, ...]] = ("expect", "protocols", "a2a-t")
 
 #: Observed validation verdict that proves the original request was intercepted.
 BLOCKING_VERDICT: Final[str] = "blocked"
+#: Message of a missed interception whose validation is recorded instead of judged.
+MISSED_INTERCEPTION_NOTE: Final[str] = (
+    "原请求未被拦截：补充请求（blocked_followup.input）未执行，本用例按记录处理。"
+)
 
 
 def interception_held(verdict: str | None) -> bool:
