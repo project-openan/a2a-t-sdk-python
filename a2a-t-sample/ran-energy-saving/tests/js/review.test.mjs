@@ -30,7 +30,9 @@ import {
   statusLabel,
   taskHasRun,
   textExcerpt,
+  traceArchiveUrl,
   traceButtonLabel,
+  traceFetchRequest,
   traceResolutionLabel,
   traceRowNeedsAttention,
   traceSummaryText,
@@ -644,3 +646,17 @@ assert.equal(
 );
 assert.equal(dataCopyLabel({ source: "mystery", span: "x" }), "mystery · x");
 assert.equal(dataCopyLabel(null), "");
+
+// The batch page offers two trace scopes: the whole batch and the selected round. Both the zip
+// download and the fetch action must name the scope the same way; an absent round means the
+// batch, never "round 0".
+assert.equal(traceArchiveUrl("batch-1"), "/api/review/batch/batch-1/export.traces.zip");
+assert.equal(
+  traceArchiveUrl("batch-1", 2),
+  "/api/review/batch/batch-1/export.traces.zip?round=2",
+);
+assert.equal(traceArchiveUrl("batch-1", null), "/api/review/batch/batch-1/export.traces.zip");
+assert.equal(traceFetchRequest("batch-1", 2).url, "/api/review/batch/batch-1/traces");
+assert.deepEqual(traceFetchRequest("batch-1", 2).body, { round: 2 });
+assert.deepEqual(traceFetchRequest("batch-1", null).body, {});
+assert.deepEqual(traceFetchRequest("batch-1", "x").body, {});

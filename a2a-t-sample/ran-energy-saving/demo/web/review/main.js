@@ -392,6 +392,22 @@ export function roundEvidence(batch, round) {
   );
 }
 
+//: URL of the raw-trace zip of one batch round; an absent round packs the whole batch.
+export function traceArchiveUrl(batchId, round) {
+  const base = `/api/review/batch/${encodeURIComponent(String(batchId || ""))}/export.traces.zip`;
+  const value = Number(round);
+  return Number.isInteger(value) && value > 0 ? `${base}?round=${value}` : base;
+}
+
+//: Request of one trace fetch; an absent round fetches every round of the batch.
+export function traceFetchRequest(batchId, round) {
+  const base = `/api/review/batch/${encodeURIComponent(String(batchId || ""))}/traces`;
+  const value = Number(round);
+  return Number.isInteger(value) && value > 0
+    ? { url: base, body: { round: value } }
+    : { url: base, body: {} };
+}
+
 //: Human-readable label of one stored round.
 export function roundLabel(round) {
   return [
@@ -973,12 +989,39 @@ function renderBatchSummary() {
   card.append(facts);
   card.append(el("p", "summary", progressText(state.batch)));
   const actions = el("div", "trace-actions");
+  const batchId = batch.batchId || (state.selectedBatch && state.selectedBatch.batchId);
+  const round = Number(batch.round || (state.selectedBatch && state.selectedBatch.round) || 0);
+  if (batchId) {
+    const exportAll = el("a", "button secondary", "导出全批 trace 包");
+    exportAll.href = traceArchiveUrl(batchId);
+    exportAll.title =
+      "每个 trace 一个 <traceId>/raw/observations.jsonl；只打包已有快照，不联网抓取。";
+    actions.append(exportAll);
+    if (Number(batch.rounds || 1) > 1 && round) {
+      const exportRound = el("a", "button secondary", `导出第 ${round} 轮 trace 包`);
+      exportRound.href = traceArchiveUrl(batchId, round);
+      exportRound.title = "只打包本轮的 trace 快照，结构与全批包相同。";
+      actions.append(exportRound);
+    }
+  }
+  const fetchEnabled = !!(state.meta && state.meta.traceFetchEnabled);
+  const fetchTitle =
+    `按 ${(state.meta && state.meta.traceConcurrency) || 2} 并发抓取缺失的轨迹快照；`
+    + "已有缓存不会重复请求，遇到 Langfuse 429 会停止。";
+  if (Number(batch.rounds || 1) > 1) {
+    const fetchBatch = el("button", "secondary", "抓取全批轨迹");
+    fetchBatch.type = "button";
+    fetchBatch.disabled = !fetchEnabled;
+    fetchBatch.title = fetchTitle;
+    fetchBatch.addEventListener("click", () => {
+      fetchTraces(fetchBatch, null).catch((caught) => showNotice(caught.message, "error"));
+    });
+    actions.append(fetchBatch);
+  }
   const fetchRound = el("button", "secondary", "抓取本轮轨迹");
   fetchRound.type = "button";
-  fetchRound.disabled = !(state.meta && state.meta.traceFetchEnabled);
-  fetchRound.title =
-    `按 ${(state.meta && state.meta.traceConcurrency) || 2} 并发抓取本轮缺失的轨迹快照；`
-    + "已有缓存不会重复请求，遇到 Langfuse 429 会停止。";
+  fetchRound.disabled = !fetchEnabled;
+  fetchRound.title = fetchTitle;
   fetchRound.addEventListener("click", () => {
     fetchRoundTraces(fetchRound).catch((caught) => showNotice(caught.message, "error"));
   });
@@ -994,14 +1037,23 @@ function renderBatchSummary() {
 
 async function fetchRoundTraces(button) {
   const batch = (state.batch && state.batch.batch) || {};
+  const round = Number(batch.round || (state.selectedBatch && state.selectedBatch.round) || 0);
+  return fetchTraces(button, round || null);
+}
+
+//: Fetch the trace snapshots of one round, or of every round when ``round`` is ``null``.
+async function fetchTraces(button, round) {
+  const batch = (state.batch && state.batch.batch) || {};
   const batchId = batch.batchId || (state.selectedBatch && state.selectedBatch.batchId);
   if (!batchId) return;
-  const round = Number(batch.round || (state.selectedBatch && state.selectedBatch.round) || 0);
   const observed = Number(((state.batch && state.batch.coverage) || {}).observed || 0);
+  const rounds = Number(batch.rounds || 1);
+  const scope = round ? `第 ${round} 轮` : `全批 ${rounds} 轮`;
   if (
-    observed > 20
+    (observed > 20 || round === null)
     && !window.confirm(
-      `本轮 ${observed} 条证据，将按 2 并发抓取缺失的轨迹快照；遇到 Langfuse 429 会停止。继续？`,
+      `${scope}${round ? `（${observed} 条证据）` : ""}，将按 2 并发抓取缺失的轨迹快照；`
+      + "已有缓存会跳过，遇到 Langfuse 429 会停止。继续？",
     )
   ) {
     return;
@@ -1010,10 +1062,8 @@ async function fetchRoundTraces(button) {
   button.disabled = true;
   button.textContent = "抓取中…";
   try {
-    const payload = await postJson(
-      `/api/review/batch/${encodeURIComponent(batchId)}/traces`,
-      { round: round || undefined },
-    );
+    const request = traceFetchRequest(batchId, round);
+    const payload = await postJson(request.url, request.body);
     const summary = payload.summary || {};
     const parts = [
       `抓取 ${summary.fetched || 0}`,
@@ -1023,7 +1073,7 @@ async function fetchRoundTraces(button) {
     if (summary.failed) parts.push(`失败 ${summary.failed}`);
     if (summary.stopped) parts.push("触发限流，已停止");
     const failed = Number(summary.failed || 0) > 0 || summary.stopped === true;
-    showNotice(`本轮轨迹：${parts.join(" · ")}`, failed ? "error" : "ok");
+    showNotice(`${scope}轨迹：${parts.join(" · ")}`, failed ? "error" : "ok");
     await refreshBatch();
     renderBatch();
   } catch (caught) {

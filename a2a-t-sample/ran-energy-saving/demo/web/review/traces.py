@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import zipfile
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -410,6 +411,38 @@ class TraceStore:
             "exportDir": str(result.get("exportDir") or ""),
             "observations": result.get("observations"),
         }
+
+    def build_archive(self, trace_ids: Sequence[str], destination: Path) -> Path:
+        """Write one ``<traceId>/raw/observations.jsonl`` entry per cached snapshot.
+
+        The pack carries the raw Langfuse observations only. A trace without a snapshot is listed
+        in ``_missing.txt`` instead of being fetched: a batch export must not spend Langfuse quota
+        or stall the download, and the page already has an explicit fetch action.
+        """
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        missing: list[str] = []
+        seen: set[str] = set()
+        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for trace_id in trace_ids:
+                if not trace_id or trace_id in seen:
+                    continue
+                seen.add(trace_id)
+                try:
+                    directory = self.latest_dir(trace_id)
+                except InvalidTraceIdError:
+                    missing.append(f"{trace_id}\tinvalid trace id")
+                    continue
+                if directory is None:
+                    missing.append(f"{trace_id}\tno snapshot")
+                    continue
+                source = directory / "raw" / "observations.jsonl"
+                if not source.is_file():
+                    missing.append(f"{trace_id}\traw/observations.jsonl is missing")
+                    continue
+                archive.write(source, f"{trace_id}/raw/observations.jsonl")
+            if missing:
+                archive.writestr("_missing.txt", "\n".join(missing) + "\n")
+        return destination
 
     def _require_trace_id(self, trace_id: str) -> None:
         if not TRACE_ID_PATTERN.match(trace_id):

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import sqlite3
+import zipfile
 from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
@@ -1311,6 +1313,26 @@ def test_a_round_fetch_covers_every_run_at_the_default_concurrency(tmp_path: Pat
     }
 
 
+def test_a_batch_fetch_covers_every_round(tmp_path: Path) -> None:
+    second_trace = "b" * 32
+    service, stub = _round_fetch_service(
+        tmp_path,
+        [
+            _evidence_item(run_id="run-r1", trace_id=TRACE_ID, round_index=1),
+            _evidence_item(run_id="run-r2", trace_id=second_trace, round_index=2),
+        ],
+    )
+
+    summary = service.fetch_round_traces("batch-1", None)
+
+    assert summary["total"] == 2
+    assert summary["fetched"] == 2
+    assert {(trace, run) for trace, run in stub.fetched} == {
+        (TRACE_ID, "run-r1"),
+        (second_trace, "run-r2"),
+    }
+
+
 def test_a_round_fetch_serves_cached_snapshots_without_a_request(tmp_path: Path) -> None:
     second_trace = "b" * 32
     stub = _StubTraceStore()
@@ -2200,6 +2222,97 @@ async def test_route_fetch_trace_refuses_a_run_without_a_trace_id(tmp_path: Path
     assert meta["traceFetchEnabled"] is True
     assert isinstance(meta["traceConfigured"], bool)
     assert meta["traceStore"].endswith("langfuse")
+
+
+def _write_snapshot(runs: Path, trace_id: str, body: str) -> None:
+    """Seed one cached Langfuse snapshot the way ``export_full`` lays it out."""
+    directory = runs / "review" / "langfuse" / f"{trace_id}_20260101-000000" / "raw"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "observations.jsonl").write_text(body, encoding="utf-8", newline="\n")
+
+
+async def test_route_export_batch_traces_packs_one_observations_file_per_trace(
+    tmp_path: Path,
+) -> None:
+    runs = tmp_path / "runs"
+    first, second = "a" * 32, "b" * 32
+    _write_batch(
+        runs,
+        [
+            _evidence_item(run_id="run-a", trace_id=first, blocked=False, slot_error=False),
+            _evidence_item(run_id="run-b", trace_id=second, blocked=False, slot_error=False),
+        ],
+    )
+    _write_snapshot(runs, first, '{"id": "a"}\n')
+    _write_snapshot(runs, second, '{"id": "b"}\n')
+    app = _app(tmp_path)
+    async with _client(app) as client:
+        await client.post("/api/review/scan?days=2")
+        response = await client.get("/api/review/batch/batch-1/export.traces.zip")
+
+    assert response.status_code == 200
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    assert sorted(archive.namelist()) == [
+        f"{first}/raw/observations.jsonl",
+        f"{second}/raw/observations.jsonl",
+    ]
+    assert archive.read(f"{first}/raw/observations.jsonl") == b'{"id": "a"}\n'
+
+
+async def test_route_export_batch_traces_narrows_to_the_selected_round(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    first, second = "a" * 32, "b" * 32
+    _write_batch(
+        runs,
+        [
+            _evidence_item(run_id="run-r1", trace_id=first, round_index=1, blocked=False, slot_error=False),
+            _evidence_item(run_id="run-r2", trace_id=second, round_index=2, blocked=False, slot_error=False),
+        ],
+        batch_id="batch-multi",
+    )
+    _write_snapshot(runs, first, '{"id": "a"}\n')
+    _write_snapshot(runs, second, '{"id": "b"}\n')
+    app = _app(tmp_path)
+    async with _client(app) as client:
+        await client.post("/api/review/scan?days=2")
+        second_round = await client.get("/api/review/batch/batch-multi/export.traces.zip?round=2")
+
+    assert second_round.status_code == 200
+    archive = zipfile.ZipFile(io.BytesIO(second_round.content))
+    assert archive.namelist() == [f"{second}/raw/observations.jsonl"]
+
+
+async def test_route_export_batch_traces_lists_traces_without_a_snapshot(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    cached, uncached = "a" * 32, "b" * 32
+    _write_batch(
+        runs,
+        [
+            _evidence_item(run_id="run-a", trace_id=cached, blocked=False, slot_error=False),
+            _evidence_item(run_id="run-b", trace_id=uncached, blocked=False, slot_error=False),
+        ],
+    )
+    _write_snapshot(runs, cached, '{"id": "a"}\n')
+    app = _app(tmp_path)
+    async with _client(app) as client:
+        await client.post("/api/review/scan?days=2")
+        response = await client.get("/api/review/batch/batch-1/export.traces.zip")
+
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    assert archive.namelist() == [f"{cached}/raw/observations.jsonl", "_missing.txt"]
+    assert uncached in archive.read("_missing.txt").decode("utf-8")
+
+
+async def test_route_export_batch_traces_rejects_unknown_batches_and_bad_rounds(
+    tmp_path: Path,
+) -> None:
+    app = _app(tmp_path)
+    async with _client(app) as client:
+        missing = await client.get("/api/review/batch/nope/export.traces.zip")
+        bad_round = await client.get("/api/review/batch/nope/export.traces.zip?round=x")
+
+    assert missing.status_code == 404
+    assert bad_round.status_code == 400
 
 
 # ---------------------------------------------------------------------------

@@ -283,6 +283,34 @@ def build_review_routes(
             return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse({"ok": True, "summary": summary})
 
+    async def export_batch_traces(request: Request) -> Response:
+        """Download the raw Langfuse observations of one batch round as a zip.
+
+        Only snapshots already on disk are packed; missing traces are listed in ``_missing.txt``
+        inside the archive. The page's "抓取本轮轨迹" action fills the cache first.
+        """
+        batch_id = str(request.path_params.get("batch_id") or "").strip()
+        if not batch_id:
+            return JSONResponse({"error": "batchId 不能为空。"}, status_code=400)
+        round_value = request.query_params.get("round")
+        source_round: int | None = None
+        if round_value not in (None, ""):
+            try:
+                source_round = int(round_value)
+            except (TypeError, ValueError):
+                return JSONResponse({"error": "round 必须是正整数。"}, status_code=400)
+            if source_round < 1:
+                return JSONResponse({"error": "round 必须是正整数。"}, status_code=400)
+        try:
+            path = await asyncio.to_thread(
+                service.export_trace_archive,
+                batch_id,
+                source_round,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        return FileResponse(path, media_type="application/zip", filename=path.name)
+
     async def traces(request: Request) -> Response:
         """Resolve a pasted list of trace ids / run ids to judged evidence.
 
@@ -399,6 +427,10 @@ def build_review_routes(
             "/api/review/batch/{batch_id}/traces",
             fetch_batch_traces,
             methods=["POST"],
+        ),
+        Route(
+            "/api/review/batch/{batch_id}/export.traces.zip",
+            export_batch_traces,
         ),
         Route("/api/review/scan", scan, methods=["POST"]),
         Route("/api/review/traces", traces, methods=["POST"]),

@@ -442,6 +442,21 @@ class ReviewService:
             "errors": errors[:5],
         }
 
+    def export_trace_archive(self, batch_id: str, round: int | None = None) -> Path:
+        """Zip the cached raw observations of one batch round, or of the whole batch.
+
+        The archive is rebuilt on every request and overwrites the previous file of the same
+        scope, so the export directory holds at most one pack per ``(batch, round)``.
+        """
+        rows = self._store.observations_for_batch(batch_id, round)
+        if not rows:
+            raise ValueError("未知批次，或该轮次没有证据。")
+        trace_ids = [str(row.get("traceId") or "") for row in rows]
+        suffix = f"r{round}" if round is not None else "all"
+        safe_id = re.sub(r"[^0-9A-Za-z._-]", "_", batch_id)
+        destination = self._runs_dir / "review" / "exports" / f"{safe_id}-{suffix}.zip"
+        return self._trace_store.build_archive(trace_ids, destination)
+
     def _fetch_round_item(self, item: Mapping[str, object], *, force: bool) -> tuple[str, str]:
         """Fetch one round item and classify it; one failure never aborts the round.
 
