@@ -216,8 +216,47 @@ def test_an_unjudgeable_intent_is_recorded_and_makes_the_task_partial() -> None:
     assert judgement.status == VERDICT_PARTIAL
 
 
-def test_pure_a2a_never_judges_the_intent() -> None:
+def test_pure_a2a_judges_an_intent_the_tester_could_judge() -> None:
+    """A direct vendor A2A payload is the downstream's own reading, so the review judges it too.
+
+    The tester already decides whether an A2A run has a direct payload worth judging (proxy and
+    simulator hops stay ``recorded``); the review must not downgrade a judged run to "not
+    applicable" just because the hop is pure A2A.
+    """
     judgement = judge_protocol(_case(protocol="a2a", rounds=0), "a2a", _evidence())
+
+    assert _dimension(judgement, "intent").status == VERDICT_PASS
+    assert judgement.status == VERDICT_PASS
+
+
+def test_a_changed_pure_a2a_intent_fails() -> None:
+    server = dict(INTENT)
+    server["Energy saving region"] = "OtherRegion"
+
+    judgement = judge_protocol(_case(protocol="a2a", rounds=0), "a2a", _evidence(server_intent=server))
+
+    intent = _dimension(judgement, "intent")
+    assert intent.status == VERDICT_FAIL
+    assert [diff["path"] for diff in intent.diffs] == ["intent.Energy saving region"]
+    assert judgement.status == VERDICT_FAIL
+
+
+def test_a_pure_a2a_proxy_intent_stays_recorded() -> None:
+    """The OSS hop returns a different payload shape; recording it must not turn the row red."""
+    judgement = judge_protocol(_case(protocol="a2a", rounds=0), "a2a", _evidence(action="recorded"))
+
+    assert _dimension(judgement, "intent").status == VERDICT_RECORDED
+    assert judgement.status == VERDICT_PARTIAL
+
+
+def test_pure_a2a_without_intent_evidence_is_not_applicable() -> None:
+    evidence = _evidence()
+    evidence["serverIntent"] = None
+    stages = evidence["stages"]
+    assert isinstance(stages, dict)
+    stages.pop("intent")
+
+    judgement = judge_protocol(_case(protocol="a2a", rounds=0), "a2a", evidence)
 
     assert _dimension(judgement, "intent").status == VERDICT_NOT_APPLICABLE
     assert judgement.status == VERDICT_NOT_APPLICABLE

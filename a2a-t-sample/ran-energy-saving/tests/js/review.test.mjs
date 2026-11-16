@@ -21,6 +21,7 @@ import {
   shouldAutoFetch,
   stabilityOf,
   statusLabel,
+  textExcerpt,
   traceButtonLabel,
   traceResolutionLabel,
   traceRowNeedsAttention,
@@ -475,3 +476,16 @@ assert.match(
   }),
   /输入 3 · run 3 · 可判定 1 · 未命中 1 · 缺轨迹 2 · 写入 1/,
 );
+
+// ---------------------------------------------------------------------------
+// Long cell values: the table may truncate for scanning, but the full text must stay available.
+// ---------------------------------------------------------------------------
+
+const LONG_INTENT = "x".repeat(250);
+const longExcerpt = textExcerpt(LONG_INTENT);
+assert.equal(longExcerpt.truncated, true);
+assert.equal(longExcerpt.full, LONG_INTENT);
+assert.equal(longExcerpt.preview.length, 181);
+assert.ok(longExcerpt.preview.endsWith("…"));
+assert.deepEqual(textExcerpt("short"), { preview: "short", full: "short", truncated: false });
+assert.deepEqual(textExcerpt(null), { preview: "—", full: "—", truncated: false });

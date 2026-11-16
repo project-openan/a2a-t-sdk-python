@@ -401,9 +401,29 @@ function textBlock(value) {
   return JSON.stringify(value, null, 2);
 }
 
-function shortText(value, limit = 180) {
-  const text = typeof value === "string" ? value : textBlock(value);
-  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+//: Split a cell value into its collapsed preview and the full text. A truncated line can hide the
+//: exact leaf that differs, so the full text must stay reachable from the cell itself.
+export function textExcerpt(value, limit = 180) {
+  const full = typeof value === "string" ? value : textBlock(value);
+  return {
+    preview: full.length > limit ? `${full.slice(0, limit)}…` : full,
+    full,
+    truncated: full.length > limit,
+  };
+}
+
+function textCell(value, limit = 180) {
+  const cell = el("td");
+  const excerpt = textExcerpt(value, limit);
+  if (!excerpt.truncated) {
+    cell.textContent = excerpt.preview;
+    return cell;
+  }
+  const details = el("details", "cell-more");
+  details.append(el("summary", "", excerpt.preview));
+  details.append(el("pre", "mono", excerpt.full));
+  cell.append(details);
+  return cell;
 }
 
 function field(id) {
@@ -2255,9 +2275,9 @@ function renderIntentCard(round) {
     const tr = el("tr", row.verdict === "same" ? "" : "fail");
     tr.append(
       el("td", "mono-cell", row.path),
-      el("td", "", shortText(row.expected)),
-      el("td", "", shortText(row.actual)),
-      el("td", "", shortText(sdkByPath.get(row.path)?.actual)),
+      textCell(row.expected),
+      textCell(row.actual),
+      textCell(sdkByPath.get(row.path)?.actual),
       el("td", `verdict ${row.verdict}`, row.verdict === "same" ? "一致" : row.reason || row.verdict),
     );
     table.append(tr);
@@ -2356,9 +2376,9 @@ function renderTaskTCard(round) {
       const tr = el("tr", row.verdict === "same" ? "" : "fail");
       tr.append(
         el("td", "mono-cell", row.path.replace("task_t.", "")),
-        el("td", "", shortText(row.expected)),
-        el("td", "", shortText(row.actual)),
-        el("td", "", exported === undefined ? "—" : shortText(exported)),
+        textCell(row.expected),
+        textCell(row.actual),
+        textCell(exported === undefined ? "—" : exported),
         el("td", `verdict ${row.verdict}`, row.verdict === "same" ? "一致" : row.reason || row.verdict),
       );
       table.append(tr);

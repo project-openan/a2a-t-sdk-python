@@ -248,6 +248,9 @@ table.grid th, table.grid td {
 table.grid th { color: var(--muted); font-weight: 600; background: #fafbfc; position: sticky; top: 0; }
 table.grid tr.fail td { background: #fff7f6; }
 table.grid tr.recorded td { background: #fafbfc; color: var(--muted); }
+.cell-more summary { cursor: pointer; color: var(--muted); }
+.cell-more summary:hover { color: var(--ink); }
+.cell-more pre.mono { margin: 6px 0 0; }
 .mono-cell { font-family: var(--mono); font-size: 12px; word-break: break-word; }
 .verdict { font-weight: 600; white-space: nowrap; }
 .verdict.pass { color: var(--ok); }

@@ -264,9 +264,11 @@ def _asserted_dimensions(case: Mapping[str, Any], protocol: str) -> set[str]:
     flags = _mapping(case.get("assert"))
     nested = _mapping(flags.get(protocol))
     asserted: set[str] = set()
-    if protocol == A2A_T_PROTOCOL:
-        if _flag(flags.get("intent"), True):
-            asserted.add(DIMENSION_INTENT)
+    # The intent expectation is shared by both protocols: the downstream's reading of the request
+    # is the same business fact whether it arrived over A2A-T or pure A2A. A run whose evidence
+    # cannot support the comparison stays ``not_applicable`` and is excluded by _overall_status.
+    if _flag(flags.get("intent"), True):
+        asserted.add(DIMENSION_INTENT)
     for dimension in (DIMENSION_TASK_T, DIMENSION_VALIDATE, DIMENSION_NEGOTIATION, DIMENSION_FINAL):
         if _flag(nested.get(dimension), True):
             asserted.add(dimension)
@@ -310,36 +312,62 @@ def _judge_intent(
     protocol: str,
     evidence: Mapping[str, Any],
 ) -> DimensionResult:
-    """Judge the downstream's structured reading of the Task-T against the corpus."""
+    """Judge the downstream's structured reading of the Task-T against the corpus.
+
+    The reading is the downstream's own payload, not our SDK extraction, so it is judgeable on
+    either protocol as long as the run actually got a direct payload. For pure A2A the tester
+    decides that: a simulator or OSS-proxy hop stays ``recorded``, a direct vendor payload is
+    judged. The review mirrors the stage instead of assuming every A2A hop is a proxy.
+    """
     expected = _mapping(_mapping(case.get("expect")).get("intent"))
     server = _mapping_or_none(evidence.get("serverIntent"))
-    if protocol != A2A_T_PROTOCOL:
-        # The pure-A2A hop is a proxy: its "intent" is a record, never an acceptance criterion.
-        return DimensionResult(
-            DIMENSION_INTENT,
-            VERDICT_NOT_APPLICABLE,
-            expected=expected,
-            actual=server,
-            reason="A2A 链路的意图仅记录，不作为验收判定",
-        )
+    stage = _stage(evidence, "intent")
+    status = str(stage.get("status") or "")
     if not expected:
         return DimensionResult(DIMENSION_INTENT, VERDICT_NOT_APPLICABLE)
-    if server is None:
-        return DimensionResult(
-            DIMENSION_INTENT,
-            VERDICT_MISSING,
-            expected=expected,
-            reason="未采集到下游服务端的结构化意图",
-        )
-    stage = _stage(evidence, "intent")
-    if str(stage.get("status") or "") == "recorded":
+    if protocol == A2A_T_PROTOCOL:
+        if server is None:
+            return DimensionResult(
+                DIMENSION_INTENT,
+                VERDICT_MISSING,
+                expected=expected,
+                reason="未采集到下游服务端的结构化意图",
+            )
+        if status == "recorded":
+            return DimensionResult(
+                DIMENSION_INTENT,
+                VERDICT_RECORDED,
+                expected=expected,
+                actual=server,
+                reason=str(stage.get("message") or "该运行不能判定意图（模拟/代理/无直连 payload）"),
+            )
+        return _intent_verdict(expected, server)
+    if status == "recorded":
         return DimensionResult(
             DIMENSION_INTENT,
             VERDICT_RECORDED,
             expected=expected,
             actual=server,
-            reason=str(stage.get("message") or "该运行不能判定意图（模拟/代理/无直连 payload）"),
+            reason=str(stage.get("message") or "A2A 链路的意图仅记录，不作为验收判定"),
         )
+    if status in {"passed", "failed"} and server is not None:
+        return _intent_verdict(expected, server)
+    # Older batches and runs without a payload never got a comparison stage; there is nothing to
+    # judge, and inventing a verdict from an absent reading would be worse than saying so.
+    return DimensionResult(
+        DIMENSION_INTENT,
+        VERDICT_NOT_APPLICABLE,
+        expected=expected,
+        actual=server,
+        reason="A2A 链路没有可判定的服务端意图证据",
+    )
+
+
+def _intent_verdict(
+    expected: Mapping[str, object],
+    server: Mapping[str, object],
+) -> DimensionResult:
+    """Compare the corpus reading with the downstream's reading, leaf by leaf."""
     rows = [row.to_dict() for row in flatten_intent(expected, server)]
     diffs = tuple(row for row in rows if row.get("verdict") != INTENT_ROW_SAME)
     return DimensionResult(
