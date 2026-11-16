@@ -143,6 +143,17 @@ class FakePromptClient:
     abort_texts: list[str] = field(default_factory=list)
     propose_texts: list[str] = field(default_factory=list)
     refill_data: list[dict[str, object]] = field(default_factory=list)
+    validation_prompts: list[str] = field(default_factory=list)
+
+    def validate_task_prompt_and_data_filling(
+        self,
+        prompt: str,
+        schema: Mapping[str, object],
+        template_uri: str,
+    ) -> object:
+        del schema, template_uri
+        self.validation_prompts.append(prompt)
+        return SimpleNamespace(data={})
 
     def generate_task_prompt_from_text(self, text: str, template_uri: str) -> MetadataContent:
         self.task_prompts.append(text)
@@ -463,6 +474,31 @@ async def _run(
         single_extension_per_message=single_extension_per_message,
     )
     return result, transport, prompt_client
+
+
+async def test_a_prepared_task_t_is_sent_without_regenerating_or_revalidating_it() -> None:
+    """A caller that already extracted and validated the Task-T (the tester's preflight) pays once."""
+    prompt_client = FakePromptClient()
+    transport = ScriptedTransport([_task_completed_batch()])
+    prepared = "## Operation Type\nCreate\n\n## Task Object\nA2ATestRegion\n"
+
+    result = await run_client_flow(
+        prompt_client=prompt_client,
+        transport=transport,
+        user_request="the original request the caller already extracted",
+        provider=ScriptedDecisionProvider(()),
+        language="en-US",
+        validate_before_send=True,
+        prepared_task_t=prepared,
+        prepared_filled={"Energy saving region": "A2ATestRegion"},
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert prompt_client.task_prompts == []
+    assert prompt_client.validation_prompts == []
+    assert len(transport.requests) == 1
+    metadata = MessageToDict(transport.requests[0].message.metadata)
+    assert prepared in metadata.values()
 
 
 async def test_a_tester_script_exhaustion_ends_the_run_with_a_reason() -> None:

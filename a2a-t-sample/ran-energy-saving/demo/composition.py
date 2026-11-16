@@ -6,7 +6,7 @@ Only this module (and the entry points that import it) may combine ``protocol`` 
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -94,6 +94,8 @@ async def build_demo_runtime(
     trace_sink: Callable[[dict[str, object]], None] | None = None,
     scripted_decisions: Sequence[NegotiationDecision] | None = None,
     pure_answers: Sequence[str] | None = None,
+    prepared_task_t: str | None = None,
+    prepared_filled: Mapping[str, object] | None = None,
 ) -> Any:
     """Build one client runtime with the demo catalog and offline assets."""
     from protocol.client_policy import ClientPolicy
@@ -188,4 +190,6 @@ async def build_demo_runtime(
         pure_answer=pure_answer,
         scripted_decisions=scripted_decisions,
         intent_processor_factory=intent_processor_factory,
+        prepared_task_t=prepared_task_t,
+        prepared_filled=prepared_filled,
     )

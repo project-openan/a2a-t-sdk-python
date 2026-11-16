@@ -32,7 +32,8 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
-from typing import Final, Protocol
+from types import SimpleNamespace
+from typing import Any, Final, Protocol
 
 from a2a.client.client import ClientCallContext
 from a2a.types import (
@@ -960,6 +961,8 @@ async def run_client_flow(
     run_mode: str = RUN_MODE_CREATE,
     target_task_id: str | None = None,
     target_context_id: str | None = None,
+    prepared_task_t: str | None = None,
+    prepared_filled: Mapping[str, object] | None = None,
 ) -> ClientFlowResult:
     """Run one complete client flow: initial Task-T, multi-round negotiation, task or end.
 
@@ -1220,29 +1223,42 @@ async def run_client_flow(
     # so the SDK call's own start/end is carried on it (the LLM spans inside are separate).
     sdk_started = time.perf_counter()
     sdk_started_at = now_iso()
-    try:
-        with trace_stage("task_t_modify_extraction" if modify_only else "task_t_slot_extraction"):
-            # Every run, Create and Modify alike, extracts its Task-T from the operator's text.
-            # There is no structured shortcut: the text is the only source of business values.
-            # The SDK call is synchronous and can take minutes on a slow endpoint; run it off the
-            # event loop so the page keeps receiving activity frames while it waits.
-            prompt_content = await asyncio.to_thread(
-                prompt_client.generate_task_prompt_from_text,
-                _request_with_context(user_request, conversation_context),
-                task_template_uri,
-            )
-    except PromptGenerationError as error:
-        validation = _generation_task_validation(error)
-        if validation is None:
-            raise
-        # No Task-T exists, so there is nothing to send and no protocol negotiation to start.
-        # Reuse the pre-send validation surface: the operator edits the request and retries.
-        emit_validation(validation, "", task_template_uri, initial_phase)
-        blocked = ClientFlowResult()
-        blocked.final_state = FINAL_STATE_INPUT_INVALID
-        _fill_result(blocked, target_context_id if modify_only else None)
-        return blocked
-    prompt_text = _require_prompt_text(prompt_content, "the initial Task-T prompt")
+    prepared = bool(prepared_task_t and prepared_task_t.strip())
+    if prepared:
+        # The caller already generated and validated this exact Task-T (the tester replays its
+        # interception preflight into this run). Re-running the two SDK calls would duplicate two
+        # model turns and could, on a non-deterministic model, disagree with the verdict already
+        # recorded next to this run.
+        prompt_text = str(prepared_task_t)
+        prompt_content: Any = SimpleNamespace(
+            prompt_text=prompt_text,
+            template_uri=task_template_uri,
+            extension_uri=None,
+        )
+    else:
+        try:
+            with trace_stage("task_t_modify_extraction" if modify_only else "task_t_slot_extraction"):
+                # Every run, Create and Modify alike, extracts its Task-T from the operator's text.
+                # There is no structured shortcut: the text is the only source of business values.
+                # The SDK call is synchronous and can take minutes on a slow endpoint; run it off
+                # the event loop so the page keeps receiving activity frames while it waits.
+                prompt_content = await asyncio.to_thread(
+                    prompt_client.generate_task_prompt_from_text,
+                    _request_with_context(user_request, conversation_context),
+                    task_template_uri,
+                )
+        except PromptGenerationError as error:
+            validation = _generation_task_validation(error)
+            if validation is None:
+                raise
+            # No Task-T exists, so there is nothing to send and no protocol negotiation to start.
+            # Reuse the pre-send validation surface: the operator edits the request and retries.
+            emit_validation(validation, "", task_template_uri, initial_phase)
+            blocked = ClientFlowResult()
+            blocked.final_state = FINAL_STATE_INPUT_INVALID
+            _fill_result(blocked, target_context_id if modify_only else None)
+            return blocked
+        prompt_text = _require_prompt_text(prompt_content, "the initial Task-T prompt")
     # A concurrent intent read (see the runtime) is awaited here, after generation, so the two
     # model turns overlap instead of running one after the other. Every later use of the fields
     # sees a plain mapping.
@@ -1256,6 +1272,7 @@ async def run_client_flow(
         duration_ms=elapsed_ms(sdk_started),
         detail={
             "promptText": prompt_text,
+            **({"prepared": True} if prepared else {}),
             "templateUri": prompt_content.template_uri or task_template_uri,
             "length": len(prompt_text),
             # The request this prompt was generated from. A blocked-then-retried case dispatches
@@ -1265,9 +1282,16 @@ async def run_client_flow(
         },
     )
     initial_filled: dict[str, object] = _merge_initial_filled(None, intent_fields)
+    if prepared and prepared_filled:
+        # The preflight's validation already extracted these values; reuse them so a later accept
+        # refill keeps the operator's values instead of falling back to the intent fields alone.
+        initial_filled = _merge_initial_filled(
+            TaskValidation("passed", None, [], None, 0, dict(prepared_filled), 1),
+            initial_filled,
+        )
     validation: TaskValidation | None = None
     required_unknown = False
-    if validate_before_send or enforce_required_fields:
+    if not prepared and (validate_before_send or enforce_required_fields):
         validation = await _validate_task_prompt(
             prompt_client,
             prompt_text,

@@ -852,6 +852,8 @@ class RunManager:
         pure_answers: Sequence[str] | None = None,
         validate_before_send: bool | None = None,
         language: str | None = None,
+        prepared_task_t: str | None = None,
+        prepared_filled: Mapping[str, object] | None = None,
     ) -> RunState:
         """Start one background run and broadcast ``run_started`` before the task is scheduled.
 
@@ -889,6 +891,10 @@ class RunManager:
             validate_before_send: force the pre-send Task-T validation on or off; ``None`` uses the
                 process setting and the source kind.
             language: per-run scenario language; ``None``/empty keeps the process language.
+            prepared_task_t: a Task-T the caller already generated and validated. The run sends it
+                as-is and skips both SDK calls (the tester's interception-miss path).
+            prepared_filled: values that validation extracted, used as the accept-refill baseline
+                when ``prepared_task_t`` is set.
 
         Raises:
             RunConflictError: when the same conversation already has an active run.
@@ -1029,6 +1035,8 @@ class RunManager:
             target_server_context_id=resolved_server_context or None,
             scripted_decisions=tuple(scripted_decisions or ()),
             pure_answers=tuple(pure_answers or ()),
+            prepared_task_t=prepared_task_t,
+            prepared_filled=dict(prepared_filled) if prepared_filled else None,
         )
         run.transcript = NegotiationTranscript(
             scenario=scenario,
@@ -1630,6 +1638,9 @@ class RunManager:
                 runtime_kwargs["scripted_decisions"] = run.scripted_decisions
             if run.pure_answers:
                 runtime_kwargs["pure_answers"] = run.pure_answers
+            if run.prepared_task_t:
+                runtime_kwargs["prepared_task_t"] = run.prepared_task_t
+                runtime_kwargs["prepared_filled"] = run.prepared_filled
             run.runtime = await self._runtime_factory(
                 # This manager keeps an incomplete remote Task active in the background, so the
                 # NMS transport may hand the task over after a short silence instead of waiting

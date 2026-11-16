@@ -55,6 +55,7 @@ class FakePromptClient:
     generation_errors: Mapping[int | tuple[int, str], PromptGenerationError] = field(
         default_factory=dict
     )
+    validation_filled: Mapping[int, Mapping[str, object]] = field(default_factory=dict)
     last_case_id: int | None = None
     current_segment: str = "original"
     calls: list[tuple[int | None, str]] = field(default_factory=list)
@@ -125,7 +126,7 @@ class FakePromptClient:
             )
         if outcome == "error":
             raise RuntimeError("validation crashed")
-        return SimpleNamespace(data={})
+        return SimpleNamespace(data=dict(self.validation_filled.get(self.last_case_id or 0, {})))
 
 
 def _statuses(outcome: Any) -> dict[str, str]:
@@ -524,6 +525,16 @@ def test_runner_records_the_conflict_fields() -> None:
         "task_t": STAGE_RECORDED,
         "validate": STAGE_PASSED,
     }
+
+
+def test_the_validate_stage_keeps_the_values_the_validation_extracted() -> None:
+    client = FakePromptClient(validation_filled={1: {"Operation type": "Create"}})
+    outcome = run_case(CASES[1], client, stop_after="validate")
+    validate_stage = next(stage for stage in outcome.stages if stage.stage == "validate")
+    assert validate_stage.detail is not None
+    # A full-flow run that reuses this Task-T (a tester interception miss) needs them to fill the
+    # accepted Task-T, so the preflight must keep them.
+    assert validate_stage.detail["filledParams"] == {"Operation type": "Create"}
 
 
 def test_the_validate_stage_carries_the_slot_errors() -> None:

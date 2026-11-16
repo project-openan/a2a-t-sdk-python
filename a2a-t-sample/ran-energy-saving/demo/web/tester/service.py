@@ -1109,6 +1109,10 @@ class EvalBatchManager:
         interception_spans: list[dict[str, object]] = []
         #: Whether the original request was not intercepted, so the replacement must not run.
         interception_missed = False
+        #: The Task-T and its filled values the interception preflight already produced, reused by
+        #: the miss run instead of extracting and validating the same request a second time.
+        prepared_task_t: str | None = None
+        prepared_filled: dict[str, object] | None = None
         if item.protocol == PROTOCOL_A2A:
             # OSP defines no SDK stages for pure A2A; only the runtime chain applies.
             stages = [stage for stage in stages if stage not in SDK_STAGE_ORDER]
@@ -1163,6 +1167,7 @@ class EvalBatchManager:
                 # is recorded — the corpus expectations describe the replacement — and only the
                 # interception segment judges the case.
                 effective_case = original_dispatch_case(case)
+                prepared_task_t, prepared_filled = _prepared_task_t(item.interception)
                 self._stamp_interception_miss(item, (), dispatched=True)
         if batch.stop_after in SDK_STAGE_ORDER:
             if blocked_followup and not interception_missed:
@@ -1186,6 +1191,8 @@ class EvalBatchManager:
             stages,
             interception_spans=interception_spans,
             followup=blocked_followup and not interception_missed,
+            prepared_task_t=prepared_task_t,
+            prepared_filled=prepared_filled,
         )
         item.status = self._item_status(item)
 
@@ -1338,6 +1345,8 @@ class EvalBatchManager:
         *,
         interception_spans: Sequence[Mapping[str, object]] = (),
         followup: bool = False,
+        prepared_task_t: str | None = None,
+        prepared_filled: Mapping[str, object] | None = None,
     ) -> None:
         if item.cancel_requested:
             # Cancelled between the SDK stages and here: never seed a baseline or send a request.
@@ -1433,6 +1442,8 @@ class EvalBatchManager:
             pure_answers=answers or None,
             validate_before_send=_pre_send_validation(runner),
             language=resolved_language,
+            prepared_task_t=prepared_task_t,
+            prepared_filled=prepared_filled,
         )
         item.run_id = run.run_id
         self._replay_interception_spans(run, interception_spans)
@@ -3367,6 +3378,29 @@ def _interception_held(item: CaseItem) -> bool:
     validate = stages.get("validate") if isinstance(stages, Mapping) else None
     actual = validate.get("actual") if isinstance(validate, Mapping) else None
     return followup_allowed(actual if isinstance(actual, str) and actual else None)
+
+
+def _prepared_task_t(
+    record: Mapping[str, object] | None,
+) -> tuple[str | None, dict[str, object] | None]:
+    """Return the Task-T and filled values an interception preflight already produced.
+
+    A miss dispatches the same original request the preflight just extracted and validated, so
+    the run reuses that Task-T (and the values the validation extracted) instead of paying for
+    the two model turns a second time.
+    """
+    record = record if isinstance(record, Mapping) else {}
+    stages = record.get("stages")
+    if not isinstance(stages, Mapping):
+        return None, None
+    task_t = stages.get("task_t")
+    text = task_t.get("actual") if isinstance(task_t, Mapping) else None
+    if not isinstance(text, str) or not text.strip() or text.startswith("<blocked"):
+        return None, None
+    validate = stages.get("validate")
+    detail = validate.get("detail") if isinstance(validate, Mapping) else None
+    filled = detail.get("filledParams") if isinstance(detail, Mapping) else None
+    return text, dict(filled) if isinstance(filled, Mapping) else None
 
 
 def _interception_miss_detail(item: CaseItem) -> str:

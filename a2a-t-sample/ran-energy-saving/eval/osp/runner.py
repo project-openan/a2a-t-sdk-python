@@ -593,7 +593,9 @@ def _actual_validation(
     """
     try:
         with trace_stage("task_t_client_validation"):
-            client.validate_task_prompt_and_data_filling(task_t, TASK_PARAM_SCHEMA, TASK_TEMPLATE_URI)
+            content = client.validate_task_prompt_and_data_filling(
+                task_t, TASK_PARAM_SCHEMA, TASK_TEMPLATE_URI
+            )
     except ContentValidationError as exc:
         verdict, kind = _classify_validation_error(exc)
         detail = _validation_detail(exc, verdict, kind)
@@ -604,7 +606,15 @@ def _actual_validation(
         return "pass", f"negotiable ({exc.code_str}); the request is still sent", None, detail
     except Exception as exc:  # noqa: BLE001 - reported as a stage error
         return None, "", f"{type(exc).__name__}: {exc}", None
-    return "pass", "", None, None
+    # Keep the extracted business values: a full-flow run that reuses this Task-T (a tester
+    # interception miss) needs them as the accept-refill baseline.
+    data = getattr(content, "data", None)
+    detail: dict[str, object] | None = (
+        {"filledParams": {str(key): value for key, value in data.items()}}
+        if isinstance(data, Mapping) and data
+        else None
+    )
+    return "pass", "", None, detail
 
 
 def _validation_detail(

@@ -2213,6 +2213,10 @@ async def test_a_full_flow_case_whose_interception_did_not_fire_dispatches_the_o
     assert runs.calls[0]["userRequest"] == original
     interception = item["interception"]
     assert isinstance(interception, Mapping)
+    # The run reuses the Task-T the preflight already produced instead of paying for the same slot
+    # extraction and validation a second time.
+    assert runs.calls[0]["prepared_task_t"] == interception["stages"]["task_t"]["actual"]
+    assert runs.calls[0]["prepared_filled"] is None
     assert interception["followupSkipped"] is True
     assert interception["originalDispatched"] is True
     assert interception["stages"]["validate"]["status"] == STAGE_RECORDED

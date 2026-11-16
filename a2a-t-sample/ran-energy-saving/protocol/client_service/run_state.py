@@ -257,6 +257,10 @@ class RunState:
     scripted_decisions: tuple[NegotiationDecision, ...] = ()
     #: Per-run answers for the pure A2A ``INPUT_REQUIRED`` rounds, consumed in order.
     pure_answers: tuple[str, ...] = ()
+    #: A Task-T the caller already generated and validated (the tester's interception preflight).
+    #: When set, the run reuses it instead of re-extracting and re-validating the same request.
+    prepared_task_t: str | None = None
+    prepared_filled: dict[str, object] | None = None
     proposals: list[NegotiationProposeView] = field(default_factory=list)
     traces: list[dict[str, object]] = field(default_factory=list)
     spans: dict[str, dict[str, object]] = field(default_factory=dict)

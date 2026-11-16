@@ -457,6 +457,10 @@ class ClientRuntime:
     activity_sink: ActivitySink | None = None
     pure_answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = None
     intent_processor: IntentProcessor | None = None
+    #: A Task-T the caller already generated and validated (the tester's interception preflight).
+    #: When set, the run reuses it instead of re-extracting and re-validating the same request.
+    prepared_task_t: str | None = None
+    prepared_filled: Mapping[str, object] | None = None
     wire_log: HttpWireLog | None = None
     shared_webhook: SharedWebhook | None = None
     webhook_subscription: WebhookSubscription | None = None
@@ -847,6 +851,8 @@ class ClientRuntime:
                     run_mode=run_mode,
                     target_task_id=target_task_id,
                     target_context_id=target_context_id,
+                    prepared_task_t=self.prepared_task_t,
+                    prepared_filled=self.prepared_filled,
                 )
         finally:
             if intent_task is not None and not intent_task.done():
@@ -910,6 +916,8 @@ async def build_client_runtime(
     pure_answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = None,
     scripted_decisions: Sequence[NegotiationDecision] | None = None,
     intent_processor_factory: Callable[[SampleConfig], IntentProcessor] | None = None,
+    prepared_task_t: str | None = None,
+    prepared_filled: Mapping[str, object] | None = None,
 ) -> ClientRuntime:
     """Assemble the client runtime of one run.
 
@@ -1161,6 +1169,8 @@ async def build_client_runtime(
         _sink_token=sink_token,
         pure_answer=pure_answer,
         intent_processor=intent_processor,
+        prepared_task_t=prepared_task_t,
+        prepared_filled=prepared_filled,
     )
 
 

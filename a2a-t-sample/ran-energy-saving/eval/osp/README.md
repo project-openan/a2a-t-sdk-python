@@ -162,7 +162,8 @@ followup_allowed`），不看阶段状态：
 
 - 全流程批次：run 下发**原 `user_input`**（Modify 仍先建基线 Task），下游阶段只记录、不判定
   （`intent` / `task_t` / `send` / `negotiation` / `final_state` 的断言全部关闭，因为用例期望描述的是
-  补充请求）；
+  补充请求）；run **复用预检已经生成并校验过的 Task-T**（`prepared_task_t`，外加校验抽出的
+  `filledParams` 作为 accept 回填基线），不再重复一次槽位抽取和一次校验（同一段原文的两轮模型调用）；
 - SDK-only 批次：这类批次本来不启动 run，阶段记 `skipped`；
 - 拦截记录的 `validate` 阶段状态改为 `recorded`（实际结论保留在 `actual`），消息写明「原请求未被拦截
   （实际校验结论：…）…按记录处理」；`item.interception.followupSkipped = true`，全流程批次另加

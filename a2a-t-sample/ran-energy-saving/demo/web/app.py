@@ -515,6 +515,8 @@ def create_app(
         run_id: str = "",
         scripted_decisions: Sequence[NegotiationDecision] | None = None,
         pure_answers: Sequence[str] | None = None,
+        prepared_task_t: str | None = None,
+        prepared_filled: Mapping[str, object] | None = None,
     ) -> ClientRuntimeLike:
         """Build the real client runtime with the app's source ``.env``."""
         from demo.composition import build_demo_runtime
@@ -530,6 +532,8 @@ def create_app(
             env_path=env_path,
             scripted_decisions=scripted_decisions,
             pure_answers=pure_answers,
+            prepared_task_t=prepared_task_t,
+            prepared_filled=prepared_filled,
         )
 
     resolved_runs_dir = runs_dir or Path(config.runs_dir)
