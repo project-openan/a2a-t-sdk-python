@@ -238,13 +238,15 @@ def _original_copies(
 ) -> list[DataCopy]:
     """Resolve the operator's original request.
 
-    A blocked A2A-T run dispatches a follow-up, so the run's own ``userRequest`` is the
-    replacement text. Only the replayed interception validation span names the blocked original;
-    the dispatched run's root must never fill this column. Pure A2A has no Task-T validation, so
-    its request is read from the trace itself.
+    A blocked A2A-T case is recorded as two runs: the intercepted request and the replacement.
+    The replayed interception validation span names the blocked original when it is present.
+    The tester does not always replay it into the follow-up run's trace, and the trace still
+    carries the request it actually ran (rendered prompt, run root), so that request counts as
+    present — the column asks whether the exported trace carries the request, not which of the
+    two attempts it was. Pure A2A has no Task-T validation at all.
     """
     if context.blocked and context.protocol != PROTOCOL_A2A:
-        return _copies(
+        copies = _copies(
             observations,
             predicate=lambda item: _kind(item) == "task_validation"
             and _flag(item, "interception")
@@ -253,6 +255,9 @@ def _original_copies(
             fields=("userRequest",),
             value=lambda item: _text(item, "user_request", "userRequest"),
         )
+        if copies:
+            return copies
+        return _trace_request_copies(observations, context)
     copies = _run_then_trace_copies(
         observations,
         context,

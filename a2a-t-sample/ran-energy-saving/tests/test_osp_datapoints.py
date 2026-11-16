@@ -62,7 +62,7 @@ def test_every_a2a_t_item_is_present_when_any_copy_exists() -> None:
     assert results["negotiation.reply"].status == STATUS_NOT_APPLICABLE
 
 
-def test_a_blocked_original_is_read_from_the_interception_span_only() -> None:
+def test_a_blocked_original_prefers_the_interception_replay_then_the_trace() -> None:
     observations = [
         _obs("task_prompt_rendered", user_request="follow-up text", promptText="TASK-T"),
         _obs("message_sent", performative="TASK_T", taskT="TASK-T", summary="follow-up text"),
@@ -73,8 +73,10 @@ def test_a_blocked_original_is_read_from_the_interception_span_only() -> None:
             _context(blocked=True, followup=True),
         )
     )
-    assert without["request.original"].status == STATUS_MISSING
-    # The follow-up run's own request must not fill the original column.
+    # The tester often records the two attempts separately and does not replay the interception
+    # span into the follow-up trace; the request the trace did run still answers presence.
+    assert without["request.original"].status == STATUS_PRESENT
+    assert without["request.original"].copies[0].excerpt == "follow-up text"
     assert without["request.dispatched"].status == STATUS_PRESENT
 
     with_interception = _by_id(
