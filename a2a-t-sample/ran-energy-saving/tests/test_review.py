@@ -719,6 +719,27 @@ def test_the_batch_view_lists_every_corpus_case(tmp_path: Path) -> None:
     assert payload["batch"]["round"] == 1
 
 
+def test_the_batch_row_exposes_the_langfuse_trace_link(tmp_path: Path) -> None:
+    cases_dir = tmp_path / "cases"
+    _write_cases(cases_dir, _case_document(1))
+    catalog = CaseCatalog(cases_dir, overlay_path=tmp_path / "absent.yaml")
+    store = ReviewStore(tmp_path / "review.sqlite3")
+    store.ensure()
+    service = ReviewService(store=store, catalog=catalog, runs_dir=tmp_path / "runs", client_db_path=None)
+    trace_id = "a" * 32
+    url = f"https://langfuse.example/project/p1/traces/{trace_id}"
+    _write_batch(
+        tmp_path / "runs",
+        [_evidence_item(blocked=False, slot_error=False, trace_id=trace_id, langfuse_url=url)],
+    )
+    service.scan(days=2.0)
+
+    task = service.batch_rows("batch-1", 1)["cases"][0]["protocols"][0]
+
+    assert task["traceId"] == trace_id
+    assert task["langfuseUrl"] == url
+
+
 def test_the_batch_view_can_narrow_to_one_round(tmp_path: Path) -> None:
     service, _catalog, _overlay, runs = _fixture(tmp_path)
     _write_batch(

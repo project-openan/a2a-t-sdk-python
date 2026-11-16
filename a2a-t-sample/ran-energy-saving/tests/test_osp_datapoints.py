@@ -111,6 +111,42 @@ def test_pure_a2a_marks_the_task_t_only_items_not_applicable() -> None:
     assert results["request.original"].status == STATUS_MISSING
 
 
+def test_pure_a2a_reads_the_original_from_the_trace_even_for_a_blocked_case() -> None:
+    # Task-T validation (and its interception replay) is A2A-T only; an A2A trace carries the
+    # request on its own root, so a blocked case must not require the A2A-T span.
+    results = _by_id(
+        resolve_data_points(
+            {"observations": [{"name": "run · night · pure", "runId": RUN, "userRequest": "text"}]},
+            _context(protocol="a2a", blocked=True),
+        )
+    )
+    assert results["request.original"].status == STATUS_PRESENT
+
+
+def test_the_original_request_is_read_from_any_span_that_carries_it() -> None:
+    # A pure-A2A root and its anchors carry the request as trace metadata; the span name is not
+    # part of the contract (``run · …``, ``run opened`` and ``trace opened`` all appear).
+    observations = [
+        {"name": "run opened", "runId": RUN, "userRequest": "operator text"},
+        {"name": "trace opened", "type": "EVENT", "runId": RUN, "userRequest": "operator text"},
+        {"name": "Some other hop", "runId": RUN, "userRequest": "operator text"},
+    ]
+    results = _by_id(resolve_data_points({"observations": observations}, _context(protocol="a2a")))
+    assert results["request.original"].status == STATUS_PRESENT
+    assert len(results["request.original"].copies) == 3
+
+
+def test_a_hop_run_id_mismatch_does_not_hide_exported_data() -> None:
+    # A gateway/OSS/agent hop can record its own runId while the review row keyed the UI run; the
+    # snapshot is still that trace. Presence must not depend on the two ids being equal.
+    observations = [
+        {**item, "runId": "another-hop"} for item in _complete()
+    ]
+    results = _by_id(resolve_data_points({"observations": observations}, _context()))
+    for point_id in ("request.original", "request.dispatched", "slot_extraction", "task_t"):
+        assert results[point_id].status == STATUS_PRESENT, point_id
+
+
 def test_negotiation_items_appear_once_a_round_ran() -> None:
     observations = [
         _obs("propose", content="proposal R1", round=1),

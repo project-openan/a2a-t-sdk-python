@@ -72,6 +72,7 @@ const state = {
   batches: [],
   batch: null, // payload of the selected batch/round
   batchView: "status", // "status": dimension table; "data": key-data table
+  dataProtocol: "", // protocol filter of the key-data table, "" = both
   selectedBatch: null, // {batchId, round}
   selected: null, // {caseId, protocol}
   detail: null,
@@ -749,6 +750,21 @@ function dataRowsOf(task) {
   return new Map(rows.map((row) => [row.id, row]));
 }
 
+//: One row per case × protocol, narrowed to one protocol when the reviewer asks for it.
+export function filterProtocolTasks(caseRows, protocol) {
+  const rows = [];
+  for (const caseRow of Array.isArray(caseRows) ? caseRows : []) {
+    for (const task of caseRow.protocols || []) {
+      if (!protocol || task.protocol === protocol) rows.push({ caseRow, task });
+    }
+  }
+  return rows;
+}
+
+export function langfuseLinkText(task) {
+  return task && task.langfuseUrl ? "在 Langfuse 查看 ↗" : "—";
+}
+
 export function dataCellText(row) {
   if (!row || row.applicable === false) return "—";
   if (row.status !== "present") return "缺";
@@ -778,10 +794,29 @@ function renderDataTable() {
       "只判导出的 Langfuse 轨迹里数据有没有；✓ n 表示 n 份副本中任一命中。点单元格查看该用例该协议的原文。",
     ),
   );
+  const filters = el("div", "filters inline data-filters");
+  const protocolSelect = el("select");
+  for (const [value, label] of [
+    ["", "全部协议"],
+    ["a2a-t", "A2A-T"],
+    ["a2a", "A2A"],
+  ]) {
+    const option = el("option", "", label);
+    option.value = value;
+    option.selected = state.dataProtocol === value;
+    protocolSelect.append(option);
+  }
+  protocolSelect.addEventListener("change", () => {
+    state.dataProtocol = protocolSelect.value;
+    renderBatch();
+  });
+  filters.append(protocolSelect);
+  card.append(filters);
+
   const wrap = el("div", "table-wrap");
   const table = el("table", "batch-table data-table");
   const headRow = el("tr");
-  for (const label of ["#", "用例", "协议", ...DATA_POINT_LABELS.map((entry) => entry[1]), "结论"]) {
+  for (const label of ["#", "用例", "协议", ...DATA_POINT_LABELS.map((entry) => entry[1]), "Langfuse"]) {
     headRow.append(el("th", "", label));
   }
   const thead = document.createElement("thead");
@@ -791,35 +826,46 @@ function renderDataTable() {
   table.append(tbody);
   wrap.append(table);
   card.append(wrap);
-  for (const caseRow of (state.batch && state.batch.cases) || []) {
-    for (const task of caseRow.protocols || []) {
-      const tr = el("tr");
-      tr.append(el("td", "", String(caseRow.caseId)));
-      tr.append(el("td", "", caseRow.caseName || ""));
-      tr.append(el("td", "", protocolLabel(task.protocol)));
-      const rows = dataRowsOf(task);
-      for (const [pointId] of DATA_POINT_LABELS) {
-        const row = rows.get(pointId);
-        const cell = el("td", `data-cell ${dataCellClass(row)}`, dataCellText(row));
-        if (row && row.copies && row.copies.length) {
-          cell.title = row.copies
-            .map(
-              (copy) =>
-                `${copy.source}${copy.span ? ` · ${copy.span}` : ""}${copy.round ? ` · R${copy.round}` : ""}`,
-            )
-            .join("\n");
-        }
-        cell.addEventListener("click", () => {
-          selectProtocol(caseRow, task.protocol, {
-            batchId: (state.batch.batch || {}).batchId,
-            round: (state.batch.batch || {}).round,
-          }).catch((caught) => showNotice(caught.message, "error"));
-        });
-        tr.append(cell);
+  const caseRows = (state.batch && state.batch.cases) || [];
+  for (const { caseRow, task } of filterProtocolTasks(caseRows, state.dataProtocol)) {
+    const tr = el("tr");
+    tr.append(el("td", "", String(caseRow.caseId)));
+    tr.append(el("td", "", caseRow.caseName || ""));
+    tr.append(el("td", "", protocolLabel(task.protocol)));
+    const rows = dataRowsOf(task);
+    for (const [pointId] of DATA_POINT_LABELS) {
+      const row = rows.get(pointId);
+      const cell = el("td", `data-cell ${dataCellClass(row)}`, dataCellText(row));
+      if (row && row.copies && row.copies.length) {
+        cell.title = row.copies
+          .map(
+            (copy) =>
+              `${copy.source}${copy.span ? ` · ${copy.span}` : ""}${copy.round ? ` · R${copy.round}` : ""}`,
+          )
+          .join("\n");
       }
-      tr.append(el("td", `verdict ${task.status}`, statusLabel(task.status)));
-      tbody.append(tr);
+      cell.addEventListener("click", () => {
+        selectProtocol(caseRow, task.protocol, {
+          batchId: (state.batch.batch || {}).batchId,
+          round: (state.batch.batch || {}).round,
+        }).catch((caught) => showNotice(caught.message, "error"));
+      });
+      tr.append(cell);
     }
+    const link = el("td", "langfuse-cell");
+    if (task.langfuseUrl) {
+      const anchor = el("a", "langfuse-link", langfuseLinkText(task));
+      anchor.href = task.langfuseUrl;
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
+      anchor.title = task.traceId ? `traceId ${task.traceId}` : "在 Langfuse 中打开该次运行的轨迹";
+      link.append(anchor);
+    } else {
+      link.append(el("span", "muted", task.traceId || "—"));
+      if (task.traceId) link.title = `traceId ${task.traceId}（没有记录 Langfuse 链接）`;
+    }
+    tr.append(link);
+    tbody.append(tr);
   }
   return card;
 }

@@ -238,11 +238,12 @@ def _original_copies(
 ) -> list[DataCopy]:
     """Resolve the operator's original request.
 
-    A blocked run dispatches a follow-up, so the run's own ``userRequest`` is the replacement
-    text. Only the replayed interception validation span names the blocked original; the
-    dispatched run's root must never fill this column.
+    A blocked A2A-T run dispatches a follow-up, so the run's own ``userRequest`` is the
+    replacement text. Only the replayed interception validation span names the blocked original;
+    the dispatched run's root must never fill this column. Pure A2A has no Task-T validation, so
+    its request is read from the trace itself.
     """
-    if context.blocked:
+    if context.blocked and context.protocol != PROTOCOL_A2A:
         return _copies(
             observations,
             predicate=lambda item: _kind(item) == "task_validation"
@@ -252,10 +253,10 @@ def _original_copies(
             fields=("userRequest",),
             value=lambda item: _text(item, "user_request", "userRequest"),
         )
-    copies = _copies(
+    copies = _run_then_trace_copies(
         observations,
-        predicate=lambda item: _matches_run(item, context.run_id)
-        and _kind(item) == "task_prompt_rendered"
+        context,
+        predicate=lambda item: _kind(item) == "task_prompt_rendered"
         and bool(_text(item, "user_request", "userRequest")),
         source="task_prompt_rendered",
         fields=("userRequest",),
@@ -263,7 +264,7 @@ def _original_copies(
     )
     if copies:
         return copies
-    return _root_request_copies(observations, context.run_id)
+    return _trace_request_copies(observations, context)
 
 
 def _dispatched_copies(
@@ -271,10 +272,10 @@ def _dispatched_copies(
     context: DataContext,
 ) -> list[DataCopy]:
     """Resolve the request the run actually dispatched (the follow-up when blocked)."""
-    copies = _copies(
+    copies = _run_then_trace_copies(
         observations,
-        predicate=lambda item: _matches_run(item, context.run_id)
-        and _kind(item) == "task_prompt_rendered"
+        context,
+        predicate=lambda item: _kind(item) == "task_prompt_rendered"
         and bool(_text(item, "user_request", "userRequest")),
         source="task_prompt_rendered",
         fields=("userRequest",),
@@ -282,10 +283,10 @@ def _dispatched_copies(
     )
     if copies:
         return copies
-    copies = _copies(
+    copies = _run_then_trace_copies(
         observations,
-        predicate=lambda item: _matches_run(item, context.run_id)
-        and _kind(item) == "message_sent"
+        context,
+        predicate=lambda item: _kind(item) == "message_sent"
         and _performative(item) == "TASK_T"
         and bool(_text(item, "summary")),
         source="message_sent",
@@ -294,7 +295,7 @@ def _dispatched_copies(
     )
     if copies:
         return copies
-    return _root_request_copies(observations, context.run_id)
+    return _trace_request_copies(observations, context)
 
 
 def _slot_extraction_copies(
@@ -302,10 +303,10 @@ def _slot_extraction_copies(
     context: DataContext,
 ) -> list[DataCopy]:
     """Resolve the LLM slot-extraction response (A2A-T only)."""
-    return _copies(
+    return _run_then_trace_copies(
         observations,
-        predicate=lambda item: _matches_run(item, context.run_id)
-        and _kind(item) == "llm"
+        context,
+        predicate=lambda item: _kind(item) == "llm"
         and _text(item, "stage") in _SLOT_STAGES
         and bool(_text(item, "response", "output")),
         source="llm",
@@ -319,19 +320,19 @@ def _task_t_copies(
     context: DataContext,
 ) -> list[DataCopy]:
     """Resolve the Task-T: the rendered prompt or any Task-T send frame."""
-    rendered = _copies(
+    rendered = _run_then_trace_copies(
         observations,
-        predicate=lambda item: _matches_run(item, context.run_id)
-        and _kind(item) == "task_prompt_rendered"
+        context,
+        predicate=lambda item: _kind(item) == "task_prompt_rendered"
         and bool(_text(item, "prompt_text", "promptText")),
         source="task_prompt_rendered",
         fields=("promptText",),
         value=lambda item: _text(item, "prompt_text", "promptText"),
     )
-    sent = _copies(
+    sent = _run_then_trace_copies(
         observations,
-        predicate=lambda item: _matches_run(item, context.run_id)
-        and _kind(item) == "message_sent"
+        context,
+        predicate=lambda item: _kind(item) == "message_sent"
         and _performative(item) == "TASK_T"
         and bool(_text(item, "task_t", "taskT")),
         source="message_sent",
@@ -424,20 +425,49 @@ def _task_succeeded_copies(
     )
 
 
-def _root_request_copies(
+def _run_then_trace_copies(
     observations: Sequence[Mapping[str, object]],
-    run_id: str | None,
+    context: DataContext,
+    *,
+    predicate: Callable[[Mapping[str, object]], bool],
+    source: str,
+    fields: tuple[str, ...],
+    value: Callable[[Mapping[str, object]], str],
 ) -> list[DataCopy]:
-    """Return the trace-root ``userRequest`` of the selected run."""
-    return _copies(
+    """Return the run's own copies, falling back to the whole exported trace.
+
+    The snapshot is already the selected run's evidence, but a hop's recorded ``runId`` can
+    differ from the review row's (gateway/OSS/agent, a correction chain, an older tester). A
+    strict equality there reported exported data as missing. The run's own copy is still listed
+    first; the trace-wide copy only answers presence.
+    """
+    own = [item for item in observations if _matches_run(item, context.run_id)]
+    copies = _copies(own, predicate=predicate, source=source, fields=fields, value=value)
+    if copies:
+        return copies
+    return _copies(observations, predicate=predicate, source=source, fields=fields, value=value)
+
+
+def _trace_request_copies(
+    observations: Sequence[Mapping[str, object]],
+    context: DataContext,
+) -> list[DataCopy]:
+    """Resolve the operator request from any observation carrying ``userRequest``.
+
+    The run root (``run · …``) and its anchors (``run opened`` / ``trace opened``) carry the
+    request as trace metadata, which the export surfaces as custom metadata. Older emitters and
+    other hops may name the span differently, so presence is decided by the field, not the name.
+    Root-looking spans are listed first.
+    """
+    copies = _run_then_trace_copies(
         observations,
-        predicate=lambda item: _matches_run(item, run_id)
-        and _name(item).startswith(_ROOT_SPAN_PREFIXES)
-        and bool(_text(item, "user_request", "userRequest")),
+        context,
+        predicate=lambda item: bool(_text(item, "user_request", "userRequest")),
         source="trace_root",
         fields=("userRequest",),
         value=lambda item: _text(item, "user_request", "userRequest"),
     )
+    return sorted(copies, key=lambda copy: 0 if copy.span.startswith(_ROOT_SPAN_PREFIXES) else 1)
 
 
 def _copies(

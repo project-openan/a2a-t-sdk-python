@@ -15,7 +15,9 @@ import {
   dimensionNeedsAttention,
   filterBatches,
   filterCases,
+  filterProtocolTasks,
   filterTraceRows,
+  langfuseLinkText,
   messageJudgement,
   missingRoundNotes,
   progressText,
@@ -533,3 +535,27 @@ assert.equal(dataCellClass({ status: "missing", applicable: true, required: true
 assert.equal(dataCellClass({ status: "missing", applicable: true, required: false }), "partial");
 assert.equal(dataCellClass({ status: "present", applicable: true, required: true }), "");
 assert.equal(dataCellClass({ status: "n/a", applicable: false, required: true }), "");
+
+// The key-data table lists one row per case × protocol and can be narrowed to one protocol.
+assert.deepEqual(
+  filterProtocolTasks(CASES, "").map((row) => [row.caseRow.caseId, row.task.protocol]),
+  [
+    [16, "a2a-t"],
+    [16, "a2a"],
+    [26, "a2a-t"],
+    [26, "a2a"],
+  ],
+);
+assert.deepEqual(
+  filterProtocolTasks(CASES, "a2a").map((row) => [row.caseRow.caseId, row.task.protocol]),
+  [
+    [16, "a2a"],
+    [26, "a2a"],
+  ],
+);
+assert.deepEqual(filterProtocolTasks(null, ""), []);
+
+// The verdict column is replaced by the Langfuse trace link.
+assert.equal(langfuseLinkText({ langfuseUrl: "https://langfuse/trace/1" }), "在 Langfuse 查看 ↗");
+assert.equal(langfuseLinkText({ langfuseUrl: "" }), "—");
+assert.equal(langfuseLinkText(null), "—");

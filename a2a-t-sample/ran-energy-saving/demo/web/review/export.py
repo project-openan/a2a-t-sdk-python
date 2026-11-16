@@ -223,7 +223,7 @@ def report_markdown(
 
     lines.extend(["", "## 2.2 关键数据表", ""])
     lines.append(
-        "| # | 用例 | 协议 | 原始请求 | 实际下发 | 槽位抽取 | Task-T | 协商报文 | 协商回复 | 成功报文 | 结论 |"
+        "| # | 用例 | 协议 | 原始请求 | 实际下发 | 槽位抽取 | Task-T | 协商报文 | 协商回复 | 成功报文 | Langfuse |"
     )
     lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for case in entries:
@@ -235,9 +235,11 @@ def report_markdown(
                 if isinstance(row, Mapping)
             }
             cells = [_data_cell(rows.get(point_id)) for point_id in DATA_POINT_IDS]
+            url = task.get("langfuseUrl")
+            link = f"[查看]({url})" if isinstance(url, str) and url.strip() else "—"
             lines.append(
                 f"| `#{case.get('id')}` | {case.get('name')} | {_PROTOCOL_LABEL.get(protocol, protocol)}"
-                f" | {' | '.join(cells)} | {_STATUS_LABEL.get(_auto_status(task), _auto_status(task))} |"
+                f" | {' | '.join(cells)} | {link} |"
             )
 
     acknowledged = [

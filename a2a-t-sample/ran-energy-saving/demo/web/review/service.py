@@ -1427,9 +1427,12 @@ class ReviewService:
                 "nms": False,
                 "inputChanged": False,
                 "data": [],
+                "traceId": "",
+                "langfuseUrl": "",
                 "decision": self._decision_block(case, protocol, decision, [], scope=scope),
             }
         evidence_map = _judged_evidence(observation)
+        langfuse_url = evidence_map.get("langfuseUrl")
         input_changed = not evidence_is_current_input(case, protocol, evidence_map)
         judgement = judge_protocol(case, protocol, evidence_map)
         status = STATUS_STALE if input_changed else judgement.status
@@ -1468,6 +1471,10 @@ class ReviewService:
             # copy names only: the verbatim text stays in the round detail so a 200-case batch
             # does not duplicate every Task-T into the list payload.
             "data": _compact_data(judgement.detail.get("trace") if isinstance(judgement.detail, Mapping) else None),
+            # The data table replaces its verdict column with the Langfuse trace link: the
+            # acceptance evidence is the exported trace, and one click should open it.
+            "traceId": str(observation.get("traceId") or ""),
+            "langfuseUrl": langfuse_url if isinstance(langfuse_url, str) else "",
             "decision": self._decision_block(
                 case,
                 protocol,

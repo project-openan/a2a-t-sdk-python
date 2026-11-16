@@ -439,7 +439,12 @@ table.grid tr.recorded td { background: #fafbfc; color: var(--muted); }
   .sidebar { height: auto; max-height: 45vh; }
 }
 
+.data-filters { margin: 4px 0 2px; }
+.data-filters select { min-width: 140px; }
 .data-table .data-cell { cursor: pointer; white-space: nowrap; }
 .data-table .data-cell:hover { background: var(--accent-soft); }
 .data-table td.fail { color: var(--bad); font-weight: 600; }
 .data-table td.partial { color: var(--warn); }
+.langfuse-cell { white-space: nowrap; }
+.langfuse-link { color: var(--info); text-decoration: none; font-size: 12px; }
+.langfuse-link:hover { text-decoration: underline; }
