@@ -597,7 +597,11 @@ def _interception_verdict(item: Mapping[str, Any]) -> str:
 def _interception_followup(item: Mapping[str, Any]) -> str:
     """Return the replacement request a blocked case was continued with, if any."""
     record = item.get("interception")
-    return str(record.get("followupInput") or "") if isinstance(record, Mapping) else ""
+    if not isinstance(record, Mapping):
+        return ""
+    text = str(record.get("followupInput") or "")
+    # A failed interception never dispatches the replacement: name it without implying it ran.
+    return f"（未执行）{text}" if record.get("followupSkipped") is True and text else text
 
 
 def _text(value: object) -> str:

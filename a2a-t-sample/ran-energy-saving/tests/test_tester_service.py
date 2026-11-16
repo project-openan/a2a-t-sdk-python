@@ -86,6 +86,8 @@ class _PromptClient:
         self._last_text = ""
         #: Extra operator texts whose runtime validation must report ``blocked``.
         self.blocked_texts: set[str] = set()
+        #: Texts the client must accept even when their case expects an interception.
+        self.unblocked_texts: set[str] = set()
 
     def generate_task_prompt_from_text(self, text: str, template_uri: str) -> object:
         case = self._by_text[text]
@@ -109,6 +111,8 @@ class _PromptClient:
         case = CASES[self._last_id]
         blocked_case = case["expect"]["protocols"]["a2a-t"]["validate"] == "blocked"
         original_input = self._last_text == str(case.get("user_input"))
+        if self._last_text in self.unblocked_texts:
+            return SimpleNamespace(data={})
         if self._last_text in self.blocked_texts or (blocked_case and original_input):
             raise ContentValidationError(
                 ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
@@ -2099,6 +2103,83 @@ async def test_a_full_flow_followup_that_is_still_blocked_says_so(tmp_path: Path
     interception = item["interception"]
     assert isinstance(interception, Mapping)
     assert interception["followupBlocked"] is True
+
+
+async def test_an_interception_that_did_not_fire_skips_the_followup(tmp_path: Path) -> None:
+    """A gate that does not hold fails the case and never dispatches the replacement."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    _inject_followup(manager, 22)
+    client = manager._prompt_client
+    assert isinstance(client, _PromptClient)
+    client.unblocked_texts.add(str(CASES[22]["user_input"]))
+    created = manager.create(
+        case_ids=[22],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    finished = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = _only_item(finished)
+    assert item["status"] == CASE_FAILED
+    interception = item["interception"]
+    assert isinstance(interception, Mapping)
+    assert interception["followupSkipped"] is True
+    blocked = interception["stages"]
+    assert isinstance(blocked, Mapping)
+    assert blocked["validate"]["status"] == STAGE_FAILED
+    assert blocked["validate"]["actual"] == "pass"
+    # The replacement's stage columns say it never ran, and the error names the gate.
+    stages = item["stages"]
+    assert isinstance(stages, Mapping)
+    assert {status["status"] for status in stages.values()} == {STAGE_SKIPPED}
+    assert "拦截未生效" in item["error"]
+    assert "blocked_followup.input" in item["error"]
+    # The frozen evidence names the request that actually ran.
+    refs = item["refs"]
+    assert isinstance(refs, Mapping)
+    assert refs["userInput"] == str(CASES[22]["user_input"])
+
+
+async def test_a_full_flow_case_whose_interception_did_not_fire_starts_no_run(
+    tmp_path: Path,
+) -> None:
+    """The replacement is not dispatched, and a Modify seeds no baseline Task either."""
+    runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED))
+    manager = _manager(tmp_path, runs)
+    case = manager._catalog.get(63)
+    assert case is not None
+    client = manager._prompt_client
+    assert isinstance(client, _PromptClient)
+    client.unblocked_texts.add(str(case["user_input"]))
+    created = manager.create(
+        case_ids=[63],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="send",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    finished = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = _only_item(finished)
+    assert item["status"] == CASE_FAILED
+    assert runs.calls == [], "no run and no baseline Task may start"
+    interception = item["interception"]
+    assert isinstance(interception, Mapping)
+    assert interception["followupSkipped"] is True
+    assert interception["stages"]["validate"]["status"] == STAGE_FAILED
+    stages = item["stages"]
+    assert isinstance(stages, Mapping)
+    assert stages["send"]["status"] == STAGE_SKIPPED
+    assert "拦截未生效" in item["error"]
+    refs = item["refs"]
+    assert isinstance(refs, Mapping)
+    assert refs["userInput"] == str(case["user_input"])
 
 
 async def test_a_pure_a2a_item_ignores_a_followup(tmp_path: Path) -> None:

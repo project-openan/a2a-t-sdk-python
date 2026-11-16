@@ -615,6 +615,10 @@ def test_the_validate_stage_fails_when_the_block_reports_another_slot_error() ->
     assert validate_stage.status == STAGE_FAILED
     assert [diff.path for diff in validate_stage.diffs] == ["validate.slotErrors[0]"]
     assert outcome.passed is False
+    # The block happened, but not the way the case describes: the interception segment failed,
+    # so the replacement request does not run either.
+    assert outcome.followup_skipped is True
+    assert outcome.stages == ()
 
 
 def test_runner_handles_a_blocked_generation_as_the_expected_outcome() -> None:
@@ -655,16 +659,34 @@ def test_blocked_case_runs_the_followup_segment() -> None:
     assert client.calls.count((25, "generate")) == 2, "both the blocked and the follow-up input ran"
 
 
-def test_blocked_case_fails_when_the_original_request_is_not_blocked() -> None:
+def test_blocked_case_runs_the_followup_when_the_batch_stops_before_the_validation() -> None:
+    # A batch that stops at ``intent`` / ``task_t`` never observes a verdict, so there is nothing
+    # that could gate the follow-up: the historical two-segment behaviour is kept.
+    client = FakePromptClient()
+    outcome = run_case(CASES[25], client, stop_after="task_t")
+    assert outcome.followup_skipped is False
+    assert _statuses(outcome) == {"intent": STAGE_PASSED, "task_t": STAGE_PASSED}
+    assert _statuses_of(outcome.interception) == {
+        "intent": STAGE_RECORDED,
+        "task_t": STAGE_RECORDED,
+    }
+    assert client.calls.count((25, "generate")) == 2
+
+
+def test_blocked_case_stops_when_the_original_request_is_not_blocked() -> None:
     client = FakePromptClient()  # the original request validates as pass
     outcome = run_case(CASES[25], client, stop_after="validate")
     assert outcome.passed is False
-    assert _statuses(outcome) == {
-        "intent": STAGE_PASSED,
-        "task_t": STAGE_PASSED,
-        "validate": STAGE_PASSED,
+    # The replacement request is a follow-up to a passing gate: a case that was not intercepted
+    # has already failed, so the follow-up must not run and its stages are never produced.
+    assert outcome.followup_skipped is True
+    assert outcome.stages == ()
+    assert _statuses_of(outcome.interception) == {
+        "intent": STAGE_RECORDED,
+        "task_t": STAGE_RECORDED,
+        "validate": STAGE_FAILED,
     }
-    assert _statuses_of(outcome.interception)["validate"] == STAGE_FAILED
+    assert client.calls.count((25, "generate")) == 1, "the follow-up request must not run"
 
 
 def test_blocked_case_reports_a_followup_generation_failure() -> None:

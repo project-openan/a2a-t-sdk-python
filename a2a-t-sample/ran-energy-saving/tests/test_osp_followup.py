@@ -10,6 +10,7 @@ from eval.osp.followup import (
     followup_input,
     has_followup,
     interception_case,
+    interception_held,
     is_blocked_case,
 )
 
@@ -173,3 +174,18 @@ def test_the_followup_case_requires_a_blocked_expectation() -> None:
 
     with pytest.raises(ValueError, match="blocked"):
         followup_case(case)
+
+
+@pytest.mark.parametrize("status", ["passed", "recorded"])
+def test_a_passing_interception_lets_the_followup_run(status: str) -> None:
+    assert interception_held(status) is True
+
+
+@pytest.mark.parametrize("status", ["failed", "error", "waiting", "skipped"])
+def test_a_failing_interception_stops_the_followup(status: str) -> None:
+    assert interception_held(status) is False
+
+
+def test_an_unrun_validation_keeps_the_two_segment_behaviour() -> None:
+    # A batch that stops at ``intent`` / ``task_t`` has no verdict to gate on.
+    assert interception_held(None) is True

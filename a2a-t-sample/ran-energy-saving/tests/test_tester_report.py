@@ -263,6 +263,17 @@ def test_the_results_sheet_carries_the_interception_columns() -> None:
     assert row[headers.index("拦截后补充信息")] == "clarified request"
 
 
+def test_the_results_sheet_marks_a_skipped_followup() -> None:
+    batch = _with_interception()
+    interception = batch["items"][0]["interception"]
+    interception["followupSkipped"] = True
+
+    rows = _results_sheet(batch)
+    headers = rows[0]
+
+    assert rows[1][headers.index("拦截后补充信息")] == "（未执行）clarified request"
+
+
 def _with_baseline(status: str = "failed") -> dict[str, Any]:
     batch = _snapshot()
     item = batch["items"][0]

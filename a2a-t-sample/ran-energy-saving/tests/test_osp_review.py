@@ -345,6 +345,61 @@ def test_a_blocked_case_without_the_expected_slot_error_fails() -> None:
     assert _dimension(judgement, "validate").status == VERDICT_FAIL
 
 
+def test_a_failed_interception_judges_only_the_block() -> None:
+    case = _case(blocked=True, followup="do it in A2ATestRegion")
+    evidence = _evidence(
+        run_id="",
+        interception={
+            "stages": {
+                "validate": {
+                    "stage": "validate",
+                    "status": "failed",
+                    "actual": "pass",
+                    "detail": {"verdict": "pass", "slotErrors": []},
+                }
+            },
+            "followupSkipped": True,
+        },
+    )
+    # The tester never dispatched the replacement, so the run stages are absent.
+    evidence["stages"] = {}
+
+    judgement = judge_protocol(case, "a2a-t", evidence)
+
+    assert judgement.status == VERDICT_FAIL
+    validate = _dimension(judgement, "validate")
+    assert validate.status == VERDICT_FAIL
+    assert validate.actual == "pass"
+    # The replacement's expectations describe a request that never ran: missing evidence would
+    # read as an incomplete batch, so every follow-up dimension is not applicable instead.
+    for name in ("intent", "task_t", "final_state"):
+        row = _dimension(judgement, name)
+        assert row.status == VERDICT_NOT_APPLICABLE
+        assert "未执行" in row.reason
+
+
+def test_a_followup_that_ran_is_still_judged() -> None:
+    # The flag is what stops the judging; a blocked case without it keeps the two-segment rules.
+    case = _case(blocked=True, followup="do it properly")
+    evidence = _evidence(
+        refs_input="do it properly",
+        interception={
+            "stages": {
+                "validate": {
+                    "stage": "validate",
+                    "status": "passed",
+                    "actual": "blocked",
+                    "detail": {"verdict": "blocked", "slotErrors": []},
+                }
+            }
+        },
+    )
+
+    judgement = judge_protocol(case, "a2a-t", evidence)
+
+    assert _dimension(judgement, "validate").status == VERDICT_PASS
+
+
 def test_the_negotiation_messages_are_judged_from_the_joined_evidence() -> None:
     case = _case(rounds=1, messages=[[MESSAGE]])
     matching = _evidence(messages=[{"round": 1, "kind": "feasibility", "content": MESSAGE}])

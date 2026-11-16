@@ -46,7 +46,13 @@ from shared.trace import trace_stage
 from eval.osp.compare import Diff, compare_intent, compare_task_t
 from eval.osp.detail import render_failures
 from eval.osp.expectations import slot_error_evidence
-from eval.osp.followup import followup_case, has_followup, interception_case, is_blocked_case
+from eval.osp.followup import (
+    followup_case,
+    has_followup,
+    interception_case,
+    interception_held,
+    is_blocked_case,
+)
 from eval.osp.intent_schema import OSP_INTENT_SCHEMA
 
 #: Stages this runner can execute, in pipeline order.
@@ -132,6 +138,9 @@ class CaseOutcome:
     ``blocked`` validation is judged) and ``stages`` is the follow-up request that carries the
     case's real expectations. A case without a follow-up has ``interception`` set to ``None`` and
     ``stages`` is its only segment.
+
+    A follow-up only runs on top of a passing interception: when the original request was not
+    blocked, the case has already failed, ``stages`` is empty and ``followup_skipped`` is true.
     """
 
     case_id: int
@@ -140,6 +149,8 @@ class CaseOutcome:
     passed: bool
     error: str | None = None
     interception: tuple[StageOutcome, ...] | None = None
+    #: True when a failed interception stopped the follow-up request from running at all.
+    followup_skipped: bool = False
 
     def to_dict(self) -> dict[str, object]:
         """Return the JSON-friendly representation used by the report."""
@@ -158,6 +169,8 @@ class CaseOutcome:
                 ),
                 "stages": {stage.stage: stage.to_dict() for stage in self.interception},
             }
+        if self.followup_skipped:
+            result["followupSkipped"] = True
         return result
 
 
@@ -203,6 +216,9 @@ def run_case(
     expectations. Without the second segment the replacement expectations would be compared with
     the incomplete original request, which reports a model error for a request the operator never
     meant to send.
+
+    The follow-up is gated by the interception: a case whose original request was not blocked has
+    already failed, so its replacement request is not executed at all (``followup_skipped``).
     """
     if stop_after not in STAGE_ORDER:
         raise ValueError(f"unsupported stop_after {stop_after!r}; expected one of {STAGE_ORDER}")
@@ -210,6 +226,16 @@ def run_case(
         return _run_segment(case, client, stop_after=stop_after)
 
     interception = _run_segment(interception_case(case), client, stop_after=stop_after)
+    if not _interception_held(interception):
+        return CaseOutcome(
+            case_id=interception.case_id,
+            name=interception.name,
+            stages=(),
+            passed=False,
+            error=interception.error,
+            interception=interception.stages,
+            followup_skipped=True,
+        )
     followup = _run_segment(followup_case(case), client, stop_after=stop_after)
     return CaseOutcome(
         case_id=followup.case_id,
@@ -219,6 +245,12 @@ def run_case(
         error=followup.error or interception.error,
         interception=interception.stages,
     )
+
+
+def _interception_held(outcome: CaseOutcome) -> bool:
+    """Return whether one interception segment's verdict lets the follow-up request run."""
+    status = next((stage.status for stage in outcome.stages if stage.stage == "validate"), None)
+    return interception_held(status)
 
 
 def run_interception_case(

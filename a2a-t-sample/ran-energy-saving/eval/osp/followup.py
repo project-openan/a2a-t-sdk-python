@@ -3,7 +3,9 @@
 A case whose A2A-T request is expected to be intercepted may carry a replacement request. The
 tester records the interception first, then replays the replacement through the case's own
 expectations, so the item does not stop at the blocked state and the intercepted request is never
-dispatched.
+dispatched. The replacement is a *follow-up to a passing gate*: when the interception segment does
+not pass, the case has already failed and the replacement must not run (see
+:func:`interception_held`).
 
 Two derived documents are needed and neither the SDK runner nor the tester should duplicate the
 merge rules:
@@ -27,6 +29,22 @@ from typing import Any, Final
 FOLLOWUP_KEY: Final[str] = "blocked_followup"
 #: Protocol block every derived document looks at.
 A2A_T_PATH: Final[tuple[str, ...]] = ("expect", "protocols", "a2a-t")
+
+
+#: Interception validation statuses that let a blocked case continue with its replacement request.
+INTERCEPTION_HELD_STATUSES: Final[frozenset[str]] = frozenset({"passed", "recorded"})
+
+
+def interception_held(validate_status: str | None) -> bool:
+    """Return whether an interception segment lets the replacement request run.
+
+    A blocked case's contract is "the original request is intercepted, then the replacement is
+    sent". The replacement is therefore only reachable through a passing gate: a failed or errored
+    validation means the case has already failed, and continuing would dispatch a second request
+    for a case that cannot pass. ``None`` is a batch that stops before the validation stage
+    (``intent`` / ``task_t``); the verdict is unknown there, so the two-segment behaviour is kept.
+    """
+    return validate_status is None or validate_status in INTERCEPTION_HELD_STATUSES
 
 
 def followup_input(case: Mapping[str, Any]) -> str | None:

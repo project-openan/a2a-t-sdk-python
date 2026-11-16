@@ -149,6 +149,19 @@ A2A 与 A2A-T 的预期结构化意图在这 100 条里完全相同，因此只�
 写在 item 的 `interception`（持久化 JSON 同名键）；结果表增加「拦截校验」「拦截后补充信息」两列，
 阶段差异表用 `拦截/validate` 等前缀区分两段。
 
+**补充段只在拦截段通过后执行。** 拦截段的状态不是 `passed`（用例关闭校验断言时是 `recorded`）就
+说明用例已经在网关处失败：实际未拦截、校验出错、或拦截了但 slot 错误与用例不符。这时用例直接判红，
+**不执行补充段**——不启动 run、不创建 Modify 基线、不下发任何请求，只保留原请求的拦截证据：
+
+- `item.interception.followupSkipped = true`，`item.error` 写明「拦截未生效（原因）」；
+- 未执行的阶段在结果表中记为 `skipped`，错误信息写明已跳过补充请求；
+- `/review` 只判定拦截段，`intent` / `task_t` / `negotiation` / `final_state` 标为 `not_applicable`
+  （补充请求没有运行，用 `missing` 会读成证据缺失）；
+- 拦截段通过时行为不变（两段都跑）。
+
+唯一的例外是 `stop_after` 停在 `intent` / `task_t` 的批次：这时还没有校验结论，无法判断拦截是否生效，
+保持两段都跑的旧行为。`/annotate` 只展示补充请求原文，不执行它。
+
 数据来源是重构版工作簿 K 列（`无线节能场景用例_重构版_A2ATestRegion`）。用例文件仍是生成产物，
 生成器尚未支持该列：重跑 `generate_osp_cases.py` 会丢掉字段，`--check` 会报漂移。合并脚本见
 `docs-local/merge-osp-blocked-followup.py`（内部，不入库）。

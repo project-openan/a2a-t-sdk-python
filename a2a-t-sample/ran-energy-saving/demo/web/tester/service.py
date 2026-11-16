@@ -42,7 +42,13 @@ from eval.osp.expectations import (
     negotiation_message_expectation,
     slot_error_evidence,
 )
-from eval.osp.followup import followup_case, followup_input, has_followup, is_blocked_case
+from eval.osp.followup import (
+    followup_case,
+    followup_input,
+    has_followup,
+    interception_held,
+    is_blocked_case,
+)
 from eval.osp.runner import (
     STAGE_ERROR,
     STAGE_FAILED,
@@ -241,6 +247,12 @@ _FOLLOWUP_STILL_BLOCKED_MESSAGE: Final[str] = (
 _FOLLOWUP_NOT_SENT_MESSAGE: Final[str] = (
     "补充请求（blocked_followup.input）未发出：run 在发送前结束（{final_state}）；"
     "原始请求被拦截是预期行为。"
+)
+
+#: Message of a blocked case whose interception segment failed: the replacement request is not
+#: dispatched, because the case has already failed at its gate.
+_INTERCEPTION_MISSED_MESSAGE: Final[str] = (
+    "拦截未生效（{detail}），已跳过补充请求（blocked_followup.input）。"
 )
 
 #: Scenario used to seed a Modify target task; it is a complete request that creates a task.
@@ -1083,6 +1095,8 @@ class EvalBatchManager:
         #: Producer spans of the blocked original request; replayed into the item's run trace so
         #: the trace shows the interception and the corrected retry like the presentation UI.
         interception_spans: list[dict[str, object]] = []
+        #: Whether the interception segment failed, so the replacement request must not run.
+        interception_missed = False
         if item.protocol == PROTOCOL_A2A:
             # OSP defines no SDK stages for pure A2A; only the runtime chain applies.
             stages = [stage for stage in stages if stage not in SDK_STAGE_ORDER]
@@ -1105,6 +1119,7 @@ class EvalBatchManager:
                     outcome_case=effective_case if blocked_followup else None,
                     concurrent=batch.active_concurrency > 1,
                 )
+                interception_missed = blocked_followup and not _interception_held(item)
             elif blocked_followup:
                 # A full-flow batch preflights only the original request of a blocked case: the
                 # interception is part of the case contract and the run never exercises it. The
@@ -1119,13 +1134,21 @@ class EvalBatchManager:
                     concurrent=batch.active_concurrency > 1,
                     interception_only=True,
                 )
+                interception_missed = not _interception_held(item)
         if item.cancel_requested:
             # The SDK call runs in a thread and cannot be interrupted; a cancel that arrived
             # during it must stop here, before a baseline is seeded or a real request is sent.
             return
-        self._collect_reference(item, effective_case)
+        # A case that stopped at a failed interception ran the original request, not the
+        # replacement, so the frozen evidence must name the original.
+        self._collect_reference(item, case if interception_missed else effective_case)
+        if interception_missed:
+            # The contract is "intercepted first, then the replacement": a gate that did not hold
+            # already fails the case, and the replacement must not be dispatched on top of that
+            # failure (no run, no baseline, no network change).
+            self._stamp_interception_miss(item, stages)
         if batch.stop_after in SDK_STAGE_ORDER:
-            if blocked_followup:
+            if blocked_followup and not interception_missed:
                 # The SDK stages are this item's whole evidence, so a follow-up that was blocked
                 # again must name itself here instead of looking like the expected interception.
                 self._stamp_followup_block(item)
@@ -1136,6 +1159,9 @@ class EvalBatchManager:
                 item.intent_meta["normalizedText"] = item.intent_meta["rawRequest"]
             if not item.intent_meta.get("source"):
                 item.intent_meta["source"] = "sdk" if item.intent is not None else ""
+            item.status = self._item_status(item)
+            return
+        if interception_missed:
             item.status = self._item_status(item)
             return
         await self._run_full_flow(
@@ -2356,6 +2382,21 @@ class EvalBatchManager:
             result.message = _TASK_T_MISMATCH_MESSAGE
         item.stages["task_t"] = result
 
+    def _stamp_interception_miss(self, item: CaseItem, stages: Sequence[str]) -> None:
+        """Report a failed interception and mark the replacement segment as not executed.
+
+        A blocked case is "intercepted first, then the replacement is sent", so a failed
+        interception already fails the case and its replacement must not run. The stage columns
+        say ``skipped`` for the segment that never ran instead of reading as missing evidence.
+        """
+        message = _INTERCEPTION_MISSED_MESSAGE.format(detail=_interception_miss_detail(item))
+        for stage in stages:
+            if stage not in item.stages:
+                item.stages[stage] = StageResult(stage, STAGE_SKIPPED, message)
+        if item.interception is not None:
+            item.interception["followupSkipped"] = True
+        item.error = f"{message} {item.error}" if item.error else message
+
     def _stamp_followup_block(self, item: CaseItem, run: RunState | None = None) -> None:
         """Report a follow-up that did not get through differently from the expected block.
 
@@ -3271,6 +3312,37 @@ def _mark_item_cancelled(item: CaseItem) -> None:
     """
     item.status = CASE_CANCELLED
     item.error = "已取消。"
+
+
+def _interception_held(item: CaseItem) -> bool:
+    """Return whether one item's recorded interception lets the replacement request run.
+
+    ``None`` when the item has no interception record (or a malformed one) keeps the historical
+    two-segment behaviour rather than inventing a stop.
+    """
+    record = item.interception if isinstance(item.interception, Mapping) else {}
+    stages = record.get("stages")
+    validate = stages.get("validate") if isinstance(stages, Mapping) else None
+    status = validate.get("status") if isinstance(validate, Mapping) else None
+    return interception_held(status if isinstance(status, str) else None)
+
+
+def _interception_miss_detail(item: CaseItem) -> str:
+    """Return the one-line reason of a failed interception, for the item's message."""
+    record = item.interception if isinstance(item.interception, Mapping) else {}
+    stages = record.get("stages")
+    validate = stages.get("validate") if isinstance(stages, Mapping) else None
+    if not isinstance(validate, Mapping):
+        return "没有校验结论"
+    if str(validate.get("status") or "") == STAGE_ERROR:
+        return f"校验失败：{validate.get('message') or '未取得结论'}"
+    actual = str(validate.get("actual") or "")
+    if not actual:
+        return "没有校验结论"
+    if actual == "blocked":
+        # The request was blocked, but not the way the case describes: the slot errors differ.
+        return "拦截结论符合预期，但 slot 错误与预期不一致"
+    return f"实际校验结论：{actual}"
 
 
 def _interception_statuses(record: Mapping[str, object]) -> list[str]:
