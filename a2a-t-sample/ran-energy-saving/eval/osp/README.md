@@ -150,14 +150,18 @@ A2A 与 A2A-T 的预期结构化意图在这 100 条里完全相同，因此只�
 阶段差异表用 `拦截/validate` 等前缀区分两段。
 
 **补充段只在原请求被真正拦截后执行。** 判定看拦截段**观察到的校验结论**，不看阶段状态：结论不是
-`blocked`（实际是 `pass`，或校验不可用）就是「实际未拦截」。这时用例直接判红，**不执行补充段**——
-不启动 run、不创建 Modify 基线、不下发任何请求，只保留原请求的拦截证据：
+`blocked`（实际是 `pass`，或校验不可用）就是「实际未拦截」。这时用例直接判红，**不执行补充段**，
+而是**改按原请求继续往下走**（原请求既然没被拦住，就应该看它下发后会发生什么）：
 
-- `item.interception.followupSkipped = true`，`item.error` 写明「拦截未生效（实际校验结论：…）」；
-- 未执行的阶段在结果表中记为 `skipped`，错误信息写明已跳过补充请求；
-- `/review` 只判定拦截段，`intent` / `task_t` / `negotiation` / `final_state` 标为 `not_applicable`
-  （补充请求没有运行，用 `missing` 会读成证据缺失）；
-- 原请求被拦截时行为不变（两段都跑）。
+- 全流程批次：run 下发**原 `user_input`**（Modify 仍先建基线 Task），下游阶段只记录、不判定
+  （`intent` / `task_t` / `send` / `negotiation` / `final_state` 的断言全部关闭，因为用例期望描述的是
+  补充请求）；
+- SDK-only 批次：这类批次本来不启动 run，阶段记 `skipped`；
+- `item.interception.followupSkipped = true`；全流程批次另加 `originalDispatched = true`；
+  `item.error` 写明「拦截未生效（实际校验结论：…），已改按原请求下发；补充请求
+  （blocked_followup.input）未执行」，结果表「拦截后补充信息」列标「（未执行）」；
+- `/review` 只判定拦截段：已按原请求下发时下游维度记 `recorded`，未启动 run 时记 `not_applicable`
+  （用 `missing` 会读成证据缺失）。
 
 两种不停止的情况：
 

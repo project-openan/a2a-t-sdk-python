@@ -2144,17 +2144,61 @@ async def test_an_interception_that_did_not_fire_skips_the_followup(tmp_path: Pa
     assert refs["userInput"] == str(CASES[22]["user_input"])
 
 
-async def test_a_full_flow_case_whose_interception_did_not_fire_starts_no_run(
+async def test_a_full_flow_case_whose_interception_did_not_fire_dispatches_the_original(
     tmp_path: Path,
 ) -> None:
-    """The replacement is not dispatched, and a Modify seeds no baseline Task either."""
+    """The original request goes downstream; the replacement is not sent."""
+    runs = _FakeRuns(_finish)
+    manager = _manager(tmp_path, runs)
+    _inject_followup(manager, 22)
+    client = manager._prompt_client
+    assert isinstance(client, _PromptClient)
+    original = str(CASES[22]["user_input"])
+    client.unblocked_texts.add(original)
+    created = manager.create(
+        case_ids=[22],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=2,
+    )
+
+    await manager.start(str(created["batchId"]))
+    finished = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = _only_item(finished)
+    assert item["status"] == CASE_FAILED
+    assert len(runs.calls) == 1
+    assert runs.calls[0]["userRequest"] == original
+    interception = item["interception"]
+    assert isinstance(interception, Mapping)
+    assert interception["followupSkipped"] is True
+    assert interception["originalDispatched"] is True
+    assert interception["stages"]["validate"]["status"] == STAGE_FAILED
+    # The run's evidence describes the original request, so it is recorded, never judged against
+    # the corpus expectations of the replacement.
+    stages = item["stages"]
+    assert isinstance(stages, Mapping)
+    assert stages["send"]["status"] == STAGE_RECORDED
+    assert stages["final"]["status"] == STAGE_RECORDED
+    assert "已改按原请求下发" in item["error"]
+    refs = item["refs"]
+    assert isinstance(refs, Mapping)
+    assert refs["userInput"] == original
+
+
+async def test_a_full_flow_blocked_modify_that_did_not_fire_falls_back_to_the_original(
+    tmp_path: Path,
+) -> None:
+    """A Modify still needs its paired baseline, then continues with the original request."""
     runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED))
     manager = _manager(tmp_path, runs)
     case = manager._catalog.get(63)
     assert case is not None
+    original = str(case["user_input"])
     client = manager._prompt_client
     assert isinstance(client, _PromptClient)
-    client.unblocked_texts.add(str(case["user_input"]))
+    client.unblocked_texts.add(original)
     created = manager.create(
         case_ids=[63],
         protocols=[PROTOCOL_A2A_T],
@@ -2168,18 +2212,15 @@ async def test_a_full_flow_case_whose_interception_did_not_fire_starts_no_run(
 
     item = _only_item(finished)
     assert item["status"] == CASE_FAILED
-    assert runs.calls == [], "no run and no baseline Task may start"
+    # Call 1 is the paired Create baseline; call 2 is the original request, not the replacement.
+    assert len(runs.calls) == 2
+    assert runs.calls[0]["userRequest"] != original
+    assert runs.calls[1]["userRequest"] == original
     interception = item["interception"]
     assert isinstance(interception, Mapping)
     assert interception["followupSkipped"] is True
-    assert interception["stages"]["validate"]["status"] == STAGE_FAILED
-    stages = item["stages"]
-    assert isinstance(stages, Mapping)
-    assert stages["send"]["status"] == STAGE_SKIPPED
-    assert "拦截未生效" in item["error"]
-    refs = item["refs"]
-    assert isinstance(refs, Mapping)
-    assert refs["userInput"] == str(case["user_input"])
+    assert interception["originalDispatched"] is True
+    assert "已改按原请求下发" in item["error"]
 
 
 async def test_a_pure_a2a_item_ignores_a_followup(tmp_path: Path) -> None:

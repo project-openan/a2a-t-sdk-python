@@ -345,7 +345,38 @@ def test_a_blocked_case_without_the_expected_slot_error_fails() -> None:
     assert _dimension(judgement, "validate").status == VERDICT_FAIL
 
 
-def test_an_interception_miss_judges_only_the_block() -> None:
+def test_an_interception_miss_with_a_dispatched_original_records_the_downstream() -> None:
+    case = _case(blocked=True, followup="do it in A2ATestRegion")
+    evidence = _evidence(
+        interception={
+            "stages": {
+                "validate": {
+                    "stage": "validate",
+                    "status": "failed",
+                    "actual": "pass",
+                    "detail": {"verdict": "pass", "slotErrors": []},
+                }
+            },
+            "followupSkipped": True,
+            "originalDispatched": True,
+        },
+    )
+
+    judgement = judge_protocol(case, "a2a-t", evidence)
+
+    assert judgement.status == VERDICT_FAIL
+    validate = _dimension(judgement, "validate")
+    assert validate.status == VERDICT_FAIL
+    assert validate.actual == "pass"
+    # The run's evidence describes the original request, so it is recorded, never judged against
+    # the replacement's expectations.
+    for name in ("intent", "task_t", "negotiation", "final_state", "trace"):
+        row = _dimension(judgement, name)
+        assert row.status == VERDICT_RECORDED
+        assert "只记录" in row.reason
+
+
+def test_an_interception_miss_without_a_run_marks_the_downstream_not_applicable() -> None:
     case = _case(blocked=True, followup="do it in A2ATestRegion")
     evidence = _evidence(
         run_id="",
@@ -361,18 +392,14 @@ def test_an_interception_miss_judges_only_the_block() -> None:
             "followupSkipped": True,
         },
     )
-    # The tester never dispatched the replacement, so the run stages are absent.
+    # An SDK-only item dispatched nothing, so the run stages are absent.
     evidence["stages"] = {}
 
     judgement = judge_protocol(case, "a2a-t", evidence)
 
     assert judgement.status == VERDICT_FAIL
-    validate = _dimension(judgement, "validate")
-    assert validate.status == VERDICT_FAIL
-    assert validate.actual == "pass"
-    # The replacement's expectations describe a request that never ran: missing evidence would
-    # read as an incomplete batch, so every follow-up dimension is not applicable instead.
-    for name in ("intent", "task_t", "final_state"):
+    assert _dimension(judgement, "validate").status == VERDICT_FAIL
+    for name in ("intent", "task_t", "negotiation", "final_state", "trace"):
         row = _dimension(judgement, name)
         assert row.status == VERDICT_NOT_APPLICABLE
         assert "未执行" in row.reason

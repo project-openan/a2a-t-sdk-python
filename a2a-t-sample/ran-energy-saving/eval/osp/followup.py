@@ -85,6 +85,27 @@ def interception_case(case: Mapping[str, Any]) -> dict[str, Any]:
     return derived
 
 
+def original_dispatch_case(case: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the case that dispatches the original request after a missed interception.
+
+    A case whose interception did not hold still has a request worth observing downstream, but
+    every corpus expectation describes the *replacement* request. The derived document keeps the
+    original ``user_input``, declares the send that is about to happen (so the acceptance stages
+    are observed instead of skipped as "the case expects no send"), and turns every downstream
+    assertion off: the run records evidence and only the interception segment judges the case.
+    """
+    derived = deepcopy(dict(case))
+    assertions = _mapping(derived.get("assert"))
+    assertions["intent"] = False
+    protocol_assertions = _mapping(assertions.get("a2a-t"))
+    for key in ("send", "task_t", "validate", "negotiation", "final_state"):
+        protocol_assertions[key] = False
+    assertions["a2a-t"] = protocol_assertions
+    derived["assert"] = assertions
+    _block(derived)["send"] = True
+    return derived
+
+
 def followup_case(case: Mapping[str, Any]) -> dict[str, Any]:
     """Return the case that sends the replacement request and judges its expectations.
 

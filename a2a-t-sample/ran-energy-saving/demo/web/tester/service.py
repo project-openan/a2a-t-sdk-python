@@ -48,6 +48,7 @@ from eval.osp.followup import (
     has_followup,
     interception_held,
     is_blocked_case,
+    original_dispatch_case,
 )
 from eval.osp.runner import (
     STAGE_ERROR,
@@ -249,10 +250,16 @@ _FOLLOWUP_NOT_SENT_MESSAGE: Final[str] = (
     "原始请求被拦截是预期行为。"
 )
 
-#: Message of a blocked case whose original request was not intercepted: the replacement request
-#: is not dispatched, because the case has already failed at its gate.
+#: Message of an SDK-only blocked case whose original request was not intercepted: no run is
+#: started, so the replacement request is not dispatched and the case fails at its gate.
 _INTERCEPTION_MISSED_MESSAGE: Final[str] = (
-    "拦截未生效（{detail}），已跳过补充请求（blocked_followup.input）。"
+    "拦截未生效（{detail}），未启动 run，补充请求（blocked_followup.input）未执行。"
+)
+
+#: Message of a full-flow blocked case whose original request was not intercepted: the run
+#: dispatches the original request instead of the replacement the corpus describes.
+_INTERCEPTION_MISS_DISPATCHED_MESSAGE: Final[str] = (
+    "拦截未生效（{detail}），已改按原请求下发；补充请求（blocked_followup.input）未执行。"
 )
 
 #: Scenario used to seed a Modify target task; it is a complete request that creates a task.
@@ -1139,14 +1146,19 @@ class EvalBatchManager:
             # The SDK call runs in a thread and cannot be interrupted; a cancel that arrived
             # during it must stop here, before a baseline is seeded or a real request is sent.
             return
-        # A case that stopped at a miss ran the original request, not the replacement, so the
-        # frozen evidence must name the original.
+        # A miss runs the original request, not the replacement, so the frozen evidence must name
+        # the original; a hit runs the replacement the corpus describes.
         self._collect_reference(item, case if interception_missed else effective_case)
         if interception_missed:
-            # The contract is "intercepted first, then the replacement": an original the gate let
-            # through already fails the case, and the replacement must not be dispatched on top of
-            # that failure (no run, no baseline, no network change).
-            self._stamp_interception_miss(item, stages)
+            if batch.stop_after in SDK_STAGE_ORDER:
+                # An SDK-only batch starts no run, so there is nothing to dispatch.
+                self._stamp_interception_miss(item, stages, dispatched=False)
+            else:
+                # The request the gate let through is the one that goes downstream. Its evidence
+                # is recorded — the corpus expectations describe the replacement — and only the
+                # interception segment judges the case.
+                effective_case = original_dispatch_case(case)
+                self._stamp_interception_miss(item, (), dispatched=True)
         if batch.stop_after in SDK_STAGE_ORDER:
             if blocked_followup and not interception_missed:
                 # The SDK stages are this item's whole evidence, so a follow-up that was blocked
@@ -1161,9 +1173,6 @@ class EvalBatchManager:
                 item.intent_meta["source"] = "sdk" if item.intent is not None else ""
             item.status = self._item_status(item)
             return
-        if interception_missed:
-            item.status = self._item_status(item)
-            return
         await self._run_full_flow(
             batch,
             index,
@@ -1171,7 +1180,7 @@ class EvalBatchManager:
             effective_case,
             stages,
             interception_spans=interception_spans,
-            followup=blocked_followup,
+            followup=blocked_followup and not interception_missed,
         )
         item.status = self._item_status(item)
 
@@ -2382,20 +2391,30 @@ class EvalBatchManager:
             result.message = _TASK_T_MISMATCH_MESSAGE
         item.stages["task_t"] = result
 
-    def _stamp_interception_miss(self, item: CaseItem, stages: Sequence[str]) -> None:
-        """Report an interception that did not hold and mark the replacement as not executed.
+    def _stamp_interception_miss(
+        self, item: CaseItem, stages: Sequence[str], *, dispatched: bool
+    ) -> None:
+        """Report an interception that did not hold and record what happened to the replacement.
 
-        A blocked case is "intercepted first, then the replacement is sent", so an original
-        request the gate let through already fails the case and its replacement must not run. The
-        stage columns say ``skipped`` for the segment that never ran instead of reading as missing
+        A blocked case is "intercepted first, then the replacement is sent". When the gate lets
+        the original through, the case is already red; ``dispatched`` says whether the original
+        request itself went downstream (full-flow) or no run was started at all (SDK-only). The
+        given stages are marked ``skipped`` so the unjudged segment does not read as missing
         evidence.
         """
-        message = _INTERCEPTION_MISSED_MESSAGE.format(detail=_interception_miss_detail(item))
+        template = (
+            _INTERCEPTION_MISS_DISPATCHED_MESSAGE if dispatched else _INTERCEPTION_MISSED_MESSAGE
+        )
+        message = template.format(detail=_interception_miss_detail(item))
         for stage in stages:
             if stage not in item.stages:
                 item.stages[stage] = StageResult(stage, STAGE_SKIPPED, message)
         if item.interception is not None:
             item.interception["followupSkipped"] = True
+            if dispatched:
+                # The original request is what the run dispatched; the review reads this flag to
+                # record — never judge — the downstream evidence.
+                item.interception["originalDispatched"] = True
         item.error = f"{message} {item.error}" if item.error else message
 
     def _stamp_followup_block(self, item: CaseItem, run: RunState | None = None) -> None:

@@ -12,6 +12,7 @@ from eval.osp.followup import (
     interception_case,
     interception_held,
     is_blocked_case,
+    original_dispatch_case,
 )
 
 
@@ -150,6 +151,32 @@ def test_the_followup_case_merges_expectation_and_assertion_overrides() -> None:
     assert derived["assert"]["a2a-t"]["task_t"] is True
     # Untouched assertion flags survive the merge.
     assert derived["assert"]["a2a-t"]["validate"] is True
+
+
+def test_the_original_dispatch_case_keeps_the_original_and_records_the_run() -> None:
+    derived = original_dispatch_case(_with_followup())
+
+    assert derived["user_input"] == "ambiguous request"
+    block = derived["expect"]["protocols"]["a2a-t"]
+    # The send that is about to happen is declared, so the acceptance stages are observed; the
+    # interception verdict stays in the expectation because the interception segment judges it.
+    assert block["send"] is True
+    assert block["validate"] == "blocked"
+    asserts = derived["assert"]
+    assert asserts["intent"] is False
+    for key in ("send", "task_t", "validate", "negotiation", "final_state"):
+        assert asserts["a2a-t"][key] is False
+
+
+def test_the_original_dispatch_case_does_not_mutate_the_source_case() -> None:
+    case = _with_followup()
+
+    original_dispatch_case(case)
+
+    assert case["user_input"] == "ambiguous request"
+    assert case["expect"]["protocols"]["a2a-t"]["send"] is False
+    assert case["assert"]["intent"] is True
+    assert case["assert"]["a2a-t"]["validate"] is True
 
 
 def test_the_followup_case_does_not_mutate_the_source_case() -> None:

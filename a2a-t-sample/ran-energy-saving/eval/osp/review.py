@@ -22,9 +22,9 @@ Two case shapes need care:
 * a ``blocked`` case with a ``blocked_followup`` runs twice. The interception segment is judged
   against the *original* case (it is the block the case expects), while the follow-up run is judged
   against :func:`eval.osp.followup.followup_case`, exactly like the tester. When the original
-  request was not intercepted, the tester never dispatched the follow-up
-  (``interception.followupSkipped``): the case is judged on its interception alone and the
-  follow-up dimensions are not applicable;
+  request was not intercepted, the follow-up is never dispatched (``followupSkipped``): the
+  original request runs instead (``originalDispatched``) or no run happens at all. The case is
+  judged on its interception alone, and the follow-up dimensions are recorded or not applicable;
 * a case that negotiates is judged on rounds/kinds and (when the corpus states them) the exact
   messages, but the final intent is still the downstream's reading of the **original** Task-T.
 """
@@ -178,19 +178,22 @@ def judge_protocol(
         _judge_final(effective, protocol, evidence),
         _judge_trace(case, effective, protocol, evidence),
     )
-    if _followup_skipped(case, protocol, evidence):
-        # The replacement request never ran, so its expectations cannot be judged. The case's
-        # verdict is the interception: replacing "never ran" with "missing evidence" would make
-        # the row look like an incomplete batch instead of a failed gate.
+    miss = _interception_miss(case, protocol, evidence)
+    if miss is not None:
+        # The corpus expectations describe the replacement request, which a missed interception
+        # never dispatches. The case verdict is the interception: the replacement dimensions are
+        # recorded when the original request went downstream instead, and not applicable when no
+        # run happened at all. "missing" would make either read as an incomplete batch.
+        dispatched = miss == "dispatched"
         dimensions = tuple(
             row
-            if row.dimension in (DIMENSION_VALIDATE, DIMENSION_TRACE)
+            if row.dimension == DIMENSION_VALIDATE
             else DimensionResult(
                 row.dimension,
-                VERDICT_NOT_APPLICABLE,
+                VERDICT_RECORDED if dispatched else VERDICT_NOT_APPLICABLE,
                 expected=row.expected,
                 actual=row.actual,
-                reason=_FOLLOWUP_SKIPPED_REASON,
+                reason=_MISS_DISPATCHED_REASON if dispatched else _MISS_SKIPPED_REASON,
             )
             for row in dimensions
         )
@@ -238,20 +241,30 @@ def evidence_input_signature(evidence: Mapping[str, Any]) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()[:16]
 
 
-#: Reason of every follow-up dimension of a case whose original request was not intercepted.
-_FOLLOWUP_SKIPPED_REASON: Final[str] = (
-    "原请求未被拦截，补充请求（blocked_followup.input）未执行；本用例只判定拦截段。"
+#: Reason of every non-interception dimension when the original request ran instead.
+_MISS_DISPATCHED_REASON: Final[str] = (
+    "拦截未生效，已按原请求下发；用例期望描述的是补充请求，下游证据只记录、不判定。"
+)
+#: Reason of every non-interception dimension when a missed interception started no run.
+_MISS_SKIPPED_REASON: Final[str] = (
+    "原请求未被拦截且未下发，补充请求（blocked_followup.input）未执行；本用例只判定拦截段。"
 )
 
 
-def _followup_skipped(
+def _interception_miss(
     case: Mapping[str, Any], protocol: str, evidence: Mapping[str, Any]
-) -> bool:
-    """Return whether the evidence records a miss whose follow-up never ran."""
+) -> str | None:
+    """Return ``dispatched`` / ``skipped`` for a missed interception, else ``None``.
+
+    ``dispatched`` is a full-flow item that sent the original request downstream instead of the
+    replacement; ``skipped`` is an SDK-only item that started no run.
+    """
     if protocol != A2A_T_PROTOCOL or not (is_blocked_case(case) and has_followup(case)):
-        return False
+        return None
     record = _mapping(evidence.get("interception"))
-    return record.get("followupSkipped") is True
+    if record.get("originalDispatched") is True:
+        return "dispatched"
+    return "skipped" if record.get("followupSkipped") is True else None
 
 
 def _effective_case(case: Mapping[str, Any], protocol: str) -> Mapping[str, Any]:
