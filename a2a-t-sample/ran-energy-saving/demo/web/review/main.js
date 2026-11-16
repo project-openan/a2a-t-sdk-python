@@ -86,9 +86,6 @@ const state = {
   traceQuery: "",
   traceExpanded: "",
   traceScope: null,
-  //: Trace ids this page already tried to auto-fetch. The snapshot is a permanent cache, so one
-  //: attempt per run is enough; a failure is retried by the reviewer's button, not by a rerender.
-  autoFetched: new Set(),
 };
 
 export function statusLabel(status) {
@@ -743,7 +740,65 @@ function renderBatchSummary() {
   }
   card.append(facts);
   card.append(el("p", "summary", progressText(state.batch)));
+  const actions = el("div", "trace-actions");
+  const fetchRound = el("button", "secondary", "抓取本轮轨迹");
+  fetchRound.type = "button";
+  fetchRound.disabled = !(state.meta && state.meta.traceFetchEnabled);
+  fetchRound.title =
+    `按 ${(state.meta && state.meta.traceConcurrency) || 2} 并发抓取本轮缺失的轨迹快照；`
+    + "已有缓存不会重复请求，遇到 Langfuse 429 会停止。";
+  fetchRound.addEventListener("click", () => {
+    fetchRoundTraces(fetchRound).catch((caught) => showNotice(caught.message, "error"));
+  });
+  actions.append(fetchRound);
+  card.append(actions);
+  if (!(state.meta && state.meta.traceFetchEnabled)) {
+    card.append(
+      el("p", "hint", "轨迹抓取未启用：启动 review 时加 --fetch-traces，并配置 Langfuse 凭据。"),
+    );
+  }
   return card;
+}
+
+async function fetchRoundTraces(button) {
+  const batch = (state.batch && state.batch.batch) || {};
+  const batchId = batch.batchId || (state.selectedBatch && state.selectedBatch.batchId);
+  if (!batchId) return;
+  const round = Number(batch.round || (state.selectedBatch && state.selectedBatch.round) || 0);
+  const observed = Number(((state.batch && state.batch.coverage) || {}).observed || 0);
+  if (
+    observed > 20
+    && !window.confirm(
+      `本轮 ${observed} 条证据，将按 2 并发抓取缺失的轨迹快照；遇到 Langfuse 429 会停止。继续？`,
+    )
+  ) {
+    return;
+  }
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "抓取中…";
+  try {
+    const payload = await postJson(
+      `/api/review/batch/${encodeURIComponent(batchId)}/traces`,
+      { round: round || undefined },
+    );
+    const summary = payload.summary || {};
+    const parts = [
+      `抓取 ${summary.fetched || 0}`,
+      `已有缓存 ${summary.cached || 0}`,
+      `跳过 ${summary.skipped || 0}`,
+    ];
+    if (summary.failed) parts.push(`失败 ${summary.failed}`);
+    if (summary.stopped) parts.push("触发限流，已停止");
+    const failed = Number(summary.failed || 0) > 0 || summary.stopped === true;
+    showNotice(`本轮轨迹：${parts.join(" · ")}`, failed ? "error" : "ok");
+    await refreshBatch();
+    renderBatch();
+  } catch (caught) {
+    showNotice(caught.message, "error");
+    button.disabled = false;
+    button.textContent = original;
+  }
 }
 
 function renderBatchTable() {
@@ -1854,7 +1909,6 @@ async function loadDetail() {
 async function fetchTrace(button, round, options = {}) {
   if (!state.selected) return;
   const { caseId, protocol } = state.selected;
-  const auto = options.auto === true;
   const original = button ? button.textContent : "";
   if (button) {
     button.disabled = true;
@@ -1869,20 +1923,11 @@ async function fetchTrace(button, round, options = {}) {
       force: options.force === true,
     });
     await loadDetail();
-    if (auto) showNotice("");
   } catch (caught) {
-    // An automatic load stays quiet on failure beyond the notice: the retry is a click, and a
-    // shared Langfuse quota must not turn one page open into a request loop.
     showNotice(caught.message, "error");
     if (button) {
       button.disabled = false;
       button.textContent = original;
-    }
-    // The attempt is not forgotten: the automatic load runs once per run and session, and the
-    // reviewer's button is the retry after a 429 or a vendor outage.
-    if (auto) {
-      const key = round ? round.traceId || round.runId || "" : "";
-      state.autoFetched.add(`${caseId}|${protocol}|${key}`);
     }
   }
 }
@@ -2161,14 +2206,6 @@ export function traceButtonLabel(trace) {
   return "重新抓取";
 }
 
-export function shouldAutoFetch(meta, trace) {
-  if (!meta || meta.traceFetchEnabled !== true) return false;
-  if (!trace || trace.canFetch !== true) return false;
-  // The snapshot is a permanent cache: an export is never refreshed automatically, and a failed
-  // attempt waits for the reviewer's retry instead of hammering a rate-limited API.
-  return !["exported", "partial", "failed"].includes(String(trace.exportState || ""));
-}
-
 function renderTraceBlock(card, round) {
   const trace = (round.judgement && round.judgement.detail && round.judgement.detail.trace) || {};
   const applicability = trace.applicability || {};
@@ -2239,20 +2276,6 @@ function renderTraceBlock(card, round) {
     link.rel = "noopener noreferrer";
     card.append(link);
   }
-  maybeAutoFetch(round, trace);
-}
-
-function maybeAutoFetch(round, trace) {
-  if (!shouldAutoFetch(state.meta, trace)) return;
-  const key = [
-    state.selected ? state.selected.caseId : "",
-    state.selected ? state.selected.protocol : "",
-    round.traceId || round.runId || "",
-  ].join("|");
-  if (state.autoFetched.has(key)) return;
-  state.autoFetched.add(key);
-  showNotice("正在自动抓取 Langfuse 轨迹…");
-  fetchTrace(null, round, { auto: true });
 }
 
 function renderIntentCard(round) {

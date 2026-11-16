@@ -1065,6 +1065,90 @@ def test_the_trace_snapshot_is_a_permanent_cache(tmp_path: Path) -> None:
     assert stub.fetched == [(TRACE_ID, "run-1"), (TRACE_ID, "run-1")]
 
 
+def _round_fetch_service(
+    tmp_path: Path,
+    items: list[dict[str, object]],
+    *,
+    stub: _StubTraceStore | None = None,
+) -> tuple[ReviewService, _StubTraceStore]:
+    """Build a service over one tester batch and scan it, with a filesystem-free trace store."""
+    cases_dir = tmp_path / "cases"
+    _write_cases(cases_dir, _case_document(blocked=False))
+    store = ReviewStore(tmp_path / "review.sqlite3")
+    store.ensure()
+    _write_batch(tmp_path / "runs", items, nms=True, nms_sim=False)
+    resolved = stub if stub is not None else _StubTraceStore()
+    service = ReviewService(
+        store=store,
+        catalog=CaseCatalog(cases_dir, overlay_path=tmp_path / "absent.yaml"),
+        runs_dir=tmp_path / "runs",
+        client_db_path=None,
+        trace_store=resolved,  # type: ignore[arg-type]
+        trace_config=object(),  # type: ignore[arg-type]
+    )
+    service.scan(days=2.0)
+    return service, resolved
+
+
+def test_a_round_fetch_covers_every_run_at_the_default_concurrency(tmp_path: Path) -> None:
+    second_trace = "b" * 32
+    service, stub = _round_fetch_service(
+        tmp_path,
+        [
+            _evidence_item(run_id="run-1", trace_id=TRACE_ID),
+            _evidence_item(run_id="run-2", trace_id=second_trace),
+        ],
+    )
+
+    summary = service.fetch_round_traces("batch-1", 1, concurrency=9)
+
+    assert summary["total"] == 2
+    assert summary["fetched"] == 2
+    assert summary["failed"] == 0
+    # The page's default is two in flight; a larger request is clamped to it.
+    assert summary["concurrency"] == 2
+    assert {(trace, run) for trace, run in stub.fetched} == {
+        (TRACE_ID, "run-1"),
+        (second_trace, "run-2"),
+    }
+
+
+def test_a_round_fetch_serves_cached_snapshots_without_a_request(tmp_path: Path) -> None:
+    second_trace = "b" * 32
+    stub = _StubTraceStore()
+    stub.snapshot_states[TRACE_ID] = "exported"
+    service, resolved = _round_fetch_service(
+        tmp_path,
+        [
+            _evidence_item(run_id="run-1", trace_id=TRACE_ID),
+            _evidence_item(run_id="run-2", trace_id=second_trace),
+        ],
+        stub=stub,
+    )
+
+    summary = service.fetch_round_traces("batch-1", 1)
+
+    assert summary["cached"] == 1
+    assert summary["fetched"] == 1
+    assert resolved.fetched == [(second_trace, "run-2")]
+
+
+def test_a_round_fetch_stops_at_the_first_rate_limit(tmp_path: Path) -> None:
+    stub = _StubTraceStore(
+        fetch_result={"traceId": TRACE_ID, "exportState": "failed", "error": "HTTP 429"}
+    )
+    service, _resolved = _round_fetch_service(
+        tmp_path,
+        [_evidence_item(run_id="run-1", trace_id=TRACE_ID)],
+        stub=stub,
+    )
+
+    summary = service.fetch_round_traces("batch-1", 1)
+
+    assert summary["failed"] == 1
+    assert summary["stopped"] is True
+
+
 def test_a_fetch_targets_the_round_the_reviewer_selected(tmp_path: Path) -> None:
     service, stub = _trace_service(tmp_path, trace_config=object())
     service.scan(days=2.0)

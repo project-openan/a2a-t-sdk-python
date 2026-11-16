@@ -113,12 +113,15 @@ curl -s http://127.0.0.1:8091/ready
   `LANGFUSE_BASE_URL` 就是访问 `us.cloud.langfuse.com` 的本地代理地址，抓取请求走同一个端点；
   进程环境优先于 `.env`。审核实例按 `<runs>/.env` → `<runs>/../.env` 的顺序查找；完整 Web UI
   直接把已加载的配置传给审核页面。注意 `langfuse_export` 自己的 `LANGFUSE_HOST` 不再使用。
-- **自动加载**：打开某一轮时，如果没有快照就自动抓一次；已有快照**永久缓存**，不会自动重抓。
-- **手动操作**：按钮随状态显示「抓取轨迹」/「重试抓取」/「重新抓取（强制刷新）」。只读实例会提示
-  启动命令；未配置凭据会提示缺哪个环境变量。
+- **全部手动**：打开用例或轮次**不会自动抓取**，避免一次浏览就消耗 Langfuse 额度。已有快照
+  **永久缓存**，不会重抓。
+- **单个抓取**：详情页按钮随状态显示「抓取轨迹」/「重试抓取」/「重新抓取（强制刷新）」。只读实例
+  会提示启动命令；未配置凭据会提示缺哪个环境变量。
+- **整轮抓取**：批次轮次页（选中批次后进入的「第 N 轮」页面）顶部有「抓取本轮轨迹」，一次抓本轮
+  所有运行缺失的快照；默认 **2 并发**，已缓存的不重复请求，遇 429 停止并显示已抓/已有/失败数量。
 - **按轮抓取**：请求带 `traceId`/`runId`/`batchId`/`round`，多轮批次抓的是当前查看的轮。
-- **限流**：同一进程一次只抓一个 trace；Langfuse 返回 429 后进入 60 秒冷却，页面提示剩余秒数。
-  自动加载每个 run 每次会话只尝试一次，失败后由人工点「重试抓取」。
+- **限流**：同一进程最多 2 个并发抓取；Langfuse 返回 429 后进入 60 秒冷却，页面提示剩余秒数。
+  失败后由人工点「重试抓取」或「抓取本轮轨迹」。
 - **快照位置**：默认 `<runs>/review/langfuse/<traceId>_<时间>/`，可用 `--trace-store` 改到源目录之外。
   客户验收可直接拷走该目录。
 - **页面查看**：判定汇总卡片里有 `traceId`、快照时间、NMS 帧数、归因；展开「轨迹观测」看每一条
@@ -178,6 +181,11 @@ curl -s "$BASE/api/review/case/16/a2a-t"
 curl -s -X POST "$BASE/api/review/case/16/a2a-t/trace" \
   -H 'content-type: application/json' \
   -d '{"traceId": "<32 位 trace id>", "round": 1, "force": false}'
+
+# 抓取整轮所有缺失轨迹（默认 2 并发；已缓存的直接挂载，429 停止）
+curl -s -X POST "$BASE/api/review/batch/<batchId>/traces" \
+  -H 'content-type: application/json' \
+  -d '{"round": 1}'
 
 # 保存结论（status: accepted|defect|known_issue|recheck|pending）
 curl -s -X POST "$BASE/api/review/case/16/a2a-t/decision" \

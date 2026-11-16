@@ -20,7 +20,6 @@ import {
   protocolLabel,
   roundEvidence,
   roundLabel,
-  shouldAutoFetch,
   stabilityOf,
   statusLabel,
   textExcerpt,
@@ -379,15 +378,7 @@ assert.equal(
   "重试抓取",
 );
 
-// The snapshot is permanent: only a missing export is loaded automatically, never refreshed and
-// never retried without a click.
-const META = { traceFetchEnabled: true };
-assert.equal(shouldAutoFetch(META, { canFetch: true, exportState: "not_exported" }), true);
-assert.equal(shouldAutoFetch(META, { canFetch: true, exportState: "exported" }), false);
-assert.equal(shouldAutoFetch(META, { canFetch: true, exportState: "partial" }), false);
-assert.equal(shouldAutoFetch(META, { canFetch: true, exportState: "failed" }), false);
-assert.equal(shouldAutoFetch({ traceFetchEnabled: false }, { canFetch: true }), false);
-assert.equal(shouldAutoFetch(META, { canFetch: false }), false);
+// Every fetch is explicit: opening a case or a round never spends Langfuse quota on its own.
 
 // Trace / run view: one row per run, a trace id may fan out, and an unjudged row is not a failure.
 const TRACE_ROWS = [

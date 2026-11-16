@@ -21,6 +21,7 @@ import re
 import threading
 import time
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -100,6 +101,10 @@ _EXPORTED_STATES: Final[frozenset[str]] = frozenset({"exported", "partial"})
 #: Cooldown after a Langfuse 429. The public API admits 30 requests/minute; one minute is enough
 #: for the bucket to refill and short enough that a reviewer can retry by hand.
 FETCH_COOLDOWN_SECONDS: Final[float] = 60.0
+
+#: Concurrent Langfuse fetches of one round. Two in flight keep a full round moving while staying
+#: well inside the 30 requests/minute public API; the 429 cooldown still stops the whole round.
+FETCH_CONCURRENCY: Final[int] = 2
 
 #: Hard bound of one trace id / run id lookup. A pasted list is a triage aid, not a bulk export;
 #: everything beyond this bound is reported as dropped instead of silently truncated.
@@ -192,9 +197,10 @@ class ReviewService:
         self._trace_config = trace_config
         #: The standalone read-only instance leaves this off: it must not call Langfuse at all.
         self._trace_fetch_enabled = trace_fetch_enabled
-        #: One fetch at a time. The public API admits 30 requests/minute; a serial queue plus the
-        #: permanent on-disk cache keeps a page that opens several cases from bursting through it.
-        self._fetch_lock = threading.Lock()
+        #: Bounded fetch concurrency. The public API admits 30 requests/minute; two in flight is
+        #: the default for a whole-round fetch, and the permanent on-disk cache keeps a page that
+        #: opens several cases from bursting through the budget.
+        self._fetch_lock = threading.BoundedSemaphore(FETCH_CONCURRENCY)
         #: Wall-clock moment before which no fetch is attempted after a 429.
         self._fetch_cooldown_until = 0.0
         self._last_scan: dict[str, object] | None = None
@@ -356,6 +362,109 @@ class ReviewService:
                     raise ValueError(f"Langfuse 限流（429），请 {int(FETCH_COOLDOWN_SECONDS)} 秒后重试。")
                 raise ValueError(f"轨迹抓取失败：{error}")
             return self._attach_trace(observation, target)
+
+    def fetch_round_traces(
+        self,
+        batch_id: str,
+        round: int | None = None,
+        *,
+        force: bool = False,
+        concurrency: int = FETCH_CONCURRENCY,
+    ) -> dict[str, object]:
+        """Fetch every trace of one batch round, at most ``FETCH_CONCURRENCY`` at a time.
+
+        The reviewer's whole-round action: one request per run (not per case), cached snapshots are
+        attached without spending quota, and a Langfuse 429 stops the round instead of retrying.
+        ``force`` is reserved for a caller that explicitly wants to refresh every snapshot; the
+        page's button uses the cached-first default.
+        """
+        if not self._trace_fetch_enabled:
+            raise ValueError("该实例是只读模式，未启用轨迹抓取（启动时加 --fetch-traces）。")
+        remaining = self._cooldown_remaining()
+        if remaining > 0:
+            raise ValueError(f"Langfuse 限流冷却中，请 {remaining} 秒后重试。")
+        rows = self._store.observations_for_batch(batch_id, round)
+        if not rows:
+            raise ValueError("未知批次，或该轮次没有证据。")
+        work: list[dict[str, object]] = []
+        seen: set[tuple[str, str]] = set()
+        skipped = 0
+        for observation in rows:
+            target = _trace_target(observation)
+            if target is None:
+                skipped += 1
+                continue
+            trace_value = str(target["traceId"])
+            run_value = str(target["runId"])
+            key = (trace_value, run_value)
+            if key in seen:
+                # Baseline Create and retry rows can name the same run; fetch it once.
+                skipped += 1
+                continue
+            seen.add(key)
+            work.append(
+                {
+                    "caseId": _as_int(observation.get("caseId")),
+                    "protocol": str(observation.get("protocol") or ""),
+                    "traceId": trace_value,
+                    "runId": run_value,
+                    "batchId": batch_id,
+                    "sourceRound": _as_int(observation.get("sourceRound"), 1),
+                }
+            )
+        workers = max(1, min(FETCH_CONCURRENCY, int(concurrency or FETCH_CONCURRENCY)))
+        counters = {"fetched": 0, "cached": 0, "failed": 0}
+        errors: list[str] = []
+        if work:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [
+                    pool.submit(self._fetch_round_item, item, force=force) for item in work
+                ]
+                for future in as_completed(futures):
+                    outcome, message = future.result()
+                    counters[outcome] += 1
+                    if message:
+                        errors.append(message)
+        return {
+            "batchId": batch_id,
+            "round": round,
+            "total": len(work),
+            "fetched": counters["fetched"],
+            "cached": counters["cached"],
+            "skipped": skipped,
+            "failed": counters["failed"],
+            "stopped": self._cooldown_remaining() > 0,
+            "concurrency": workers,
+            "errors": errors[:5],
+        }
+
+    def _fetch_round_item(self, item: Mapping[str, object], *, force: bool) -> tuple[str, str]:
+        """Fetch one round item and classify it; one failure never aborts the round.
+
+        A cached snapshot still goes through :meth:`fetch_trace` so the evidence row of this batch
+        gets attached; the classification only says whether an HTTP request was spent.
+        """
+        trace_value = str(item["traceId"])
+        case_value = item.get("caseId")
+        case_id = case_value if isinstance(case_value, int) else _as_int(case_value)
+        cached = "" if force else self._trace_store.load(trace_value).export_state
+        try:
+            self.fetch_trace(
+                case_id,
+                str(item["protocol"]),
+                trace_id=trace_value,
+                run_id=str(item["runId"]),
+                batch_id=str(item.get("batchId") or ""),
+                source_round=_as_int(item.get("sourceRound"), 1),
+                force=force,
+            )
+        except ValueError as exc:
+            return "failed", f"{trace_value}: {exc}"
+        except Exception as exc:  # noqa: BLE001 - one item must not abort the round
+            return "failed", f"{trace_value}: {type(exc).__name__}: {exc}"
+        if cached in _EXPORTED_STATES and not force:
+            return "cached", ""
+        return "fetched", ""
 
     def _attach_trace(
         self,

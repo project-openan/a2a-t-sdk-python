@@ -28,6 +28,7 @@ from demo.web.review.export import (
     report_markdown,
 )
 from demo.web.review.service import (
+    FETCH_CONCURRENCY,
     MAX_TRACE_IDS,
     PROTOCOLS,
     STATUSES,
@@ -111,9 +112,10 @@ def build_review_routes(
                 "runsDir": str(runs_dir),
                 "clientDb": str(client_db_path) if client_db_path is not None else None,
                 "store": str(resolved_store.path),
-                # The page decides whether to auto-fetch on open from these; the snapshot root is
-                # shown so a reviewer can hand the acceptance pack to the customer.
+                # Every trace fetch is explicit; the page uses these to enable the buttons and say
+                # where snapshots live, so a reviewer can hand the acceptance pack to the customer.
                 "traceFetchEnabled": trace_fetch_enabled,
+                "traceConcurrency": FETCH_CONCURRENCY,
                 "traceConfigured": service.trace_configured(),
                 "traceStore": str(resolved_trace_store.root),
                 "corpusVersion": catalog.version,
@@ -241,6 +243,46 @@ def build_review_routes(
             return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse({"ok": True, "trace": payload})
 
+    async def fetch_batch_traces(request: Request) -> Response:
+        """Fetch every trace of one batch round (two requests in flight by default).
+
+        One action for the round page: the service skips snapshots already on disk, attaches every
+        fetched snapshot to its evidence row, and stops at the first 429 instead of retrying.
+        """
+        batch_id = str(request.path_params.get("batch_id") or "").strip()
+        if not batch_id:
+            return JSONResponse({"error": "batchId 不能为空。"}, status_code=400)
+        options = await _json_body(request)
+        round_value = options.get("round")
+        source_round: int | None = None
+        if round_value is not None and round_value != "":
+            if isinstance(round_value, bool) or not isinstance(round_value, (int, str)):
+                return JSONResponse({"error": "round 必须是整数。"}, status_code=400)
+            try:
+                source_round = max(1, int(round_value))
+            except ValueError:
+                return JSONResponse({"error": "round 必须是整数。"}, status_code=400)
+        concurrency_value = options.get("concurrency")
+        concurrency = FETCH_CONCURRENCY
+        if concurrency_value not in (None, ""):
+            if isinstance(concurrency_value, bool) or not isinstance(concurrency_value, (int, str)):
+                return JSONResponse({"error": "concurrency 必须是整数。"}, status_code=400)
+            try:
+                concurrency = max(1, int(concurrency_value))
+            except ValueError:
+                return JSONResponse({"error": "concurrency 必须是整数。"}, status_code=400)
+        try:
+            summary = await asyncio.to_thread(
+                service.fetch_round_traces,
+                batch_id,
+                source_round,
+                force=options.get("force") is True,
+                concurrency=concurrency,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "summary": summary})
+
     async def traces(request: Request) -> Response:
         """Resolve a pasted list of trace ids / run ids to judged evidence.
 
@@ -353,6 +395,11 @@ def build_review_routes(
         Route("/api/review/cases", cases),
         Route("/api/review/batches", batches),
         Route("/api/review/batch/{batch_id}", batch),
+        Route(
+            "/api/review/batch/{batch_id}/traces",
+            fetch_batch_traces,
+            methods=["POST"],
+        ),
         Route("/api/review/scan", scan, methods=["POST"]),
         Route("/api/review/traces", traces, methods=["POST"]),
         Route("/api/review/traces/export", export_traces, methods=["POST"]),
