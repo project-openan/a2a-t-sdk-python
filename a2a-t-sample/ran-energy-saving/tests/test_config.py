@@ -39,6 +39,7 @@ from shared.config import (
     LANGFUSE_CAPTURE_CONTENT_ENV_KEY,
     LANGFUSE_ENABLED_ENV_KEY,
     LANGFUSE_ENVIRONMENT_ENV_KEY,
+    LANGFUSE_FLUSH_AT_ENV_KEY,
     LANGFUSE_PUBLIC_KEY_ENV_KEY,
     LANGFUSE_SECRET_KEY_ENV_KEY,
     LANGFUSE_UI_BASE_URL_ENV_KEY,
@@ -167,6 +168,7 @@ _ENV_KEYS = (
     LANGFUSE_CAPTURE_CONTENT_ENV_KEY,
     LANGFUSE_ENABLED_ENV_KEY,
     LANGFUSE_ENVIRONMENT_ENV_KEY,
+    LANGFUSE_FLUSH_AT_ENV_KEY,
     LANGFUSE_PUBLIC_KEY_ENV_KEY,
     LANGFUSE_SECRET_KEY_ENV_KEY,
     LANGFUSE_UI_BASE_URL_ENV_KEY,
@@ -968,6 +970,26 @@ def test_langfuse_defaults_are_disabled_and_capture_content(tmp_path: Path) -> N
     assert config.langfuse_ui_base_url == "https://us.cloud.langfuse.com"
     assert config.langfuse_capture_content is True
     assert config.langfuse_environment == "demo"
+    assert config.langfuse_flush_at == 8
+
+
+def test_langfuse_flush_at_can_be_tuned(tmp_path: Path) -> None:
+    """The batch size bounds the OTLP request body behind a size-limited egress proxy."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{LANGFUSE_FLUSH_AT_ENV_KEY}=1\n", encoding="utf-8")
+
+    config = load_config(env_path=env_file)
+
+    assert config.langfuse_flush_at == 1
+
+
+@pytest.mark.parametrize("value", ["0", "33", "abc"])
+def test_langfuse_rejects_an_invalid_flush_at(tmp_path: Path, value: str) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{LANGFUSE_FLUSH_AT_ENV_KEY}={value}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=LANGFUSE_FLUSH_AT_ENV_KEY):
+        load_config(env_path=env_file)
 
 
 def test_langfuse_keys_enable_the_export(tmp_path: Path) -> None:

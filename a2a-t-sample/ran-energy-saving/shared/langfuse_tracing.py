@@ -806,7 +806,10 @@ def _get_runtime(config: SampleConfig) -> _LangfuseRuntime | None:
             # The batch processor's export timeout must cover the retry budget (0.5+1+2+4s plus
             # the request time), otherwise it would give up while the exporter is still retrying.
             timeout=_OTLP_TIMEOUT_SECONDS,
-            flush_at=32,
+            # One LLM span carries the whole slot-extraction prompt (~34 KB with content capture),
+            # so the batch size bounds the request body: 32 spans of concurrent runs can exceed
+            # the egress proxy's 1 MB limit and get a 403 the batch processor cannot retry.
+            flush_at=config.langfuse_flush_at,
             flush_interval=1.0,
             **({"span_exporter": exporter} if exporter is not None else {}),
         )

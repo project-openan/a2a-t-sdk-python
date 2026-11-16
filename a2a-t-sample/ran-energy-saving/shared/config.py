@@ -204,6 +204,14 @@ LANGFUSE_UI_BASE_URL_ENV_KEY = "A2AT_SAMPLE_LANGFUSE_UI_BASE_URL"
 LANGFUSE_ENABLED_ENV_KEY = "A2AT_SAMPLE_LANGFUSE_ENABLED"
 LANGFUSE_CAPTURE_CONTENT_ENV_KEY = "A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT"
 LANGFUSE_ENVIRONMENT_ENV_KEY = "A2AT_SAMPLE_LANGFUSE_ENVIRONMENT"
+#: Spans per OTLP export request. OTel's batch processor groups spans by count, and one LLM span
+#: carries the whole slot-extraction prompt (~34 KB), so this key is the request-size lever: 32
+#: spans of concurrent runs can exceed the egress proxy's 1 MB body limit and get a 403 the batch
+#: processor cannot retry. The SDK reads the same key, but the exporter passes the value
+#: explicitly, so this is the single owner.
+LANGFUSE_FLUSH_AT_ENV_KEY = "LANGFUSE_FLUSH_AT"
+LANGFUSE_FLUSH_AT_LOWER_BOUND = 1
+LANGFUSE_FLUSH_AT_UPPER_BOUND = 32
 
 #: Vendor NMS integration (``A2AT_SAMPLE_DISCOVERY=nms``).
 #: ``A2AT_SAMPLE_NMS_HOST`` is the single value most deployments set; the two full URLs are
@@ -380,6 +388,10 @@ DEFAULT_ADK_OUTPUT_SCHEMA_WITH_TOOLS = ADK_OUTPUT_SCHEMA_WITH_TOOLS_AUTO
 DEFAULT_LANGFUSE_BASE_URL = "https://us.cloud.langfuse.com"
 DEFAULT_LANGFUSE_UI_BASE_URL = "https://us.cloud.langfuse.com"
 DEFAULT_LANGFUSE_ENVIRONMENT = "demo"
+#: The SDK default is 512 spans per request, which cannot fit the proxy's 1 MB body limit once
+#: content capture is on. 8 keeps a worst-case request near 0.3 MB while still batching a trace's
+#: usual 18-22 spans of one run into 2-3 requests.
+DEFAULT_LANGFUSE_FLUSH_AT = 8
 
 #: Sample root (the directory that owns ``runs/``). Relative runs directories resolve here.
 SAMPLE_ROOT = Path(__file__).resolve().parents[1]
@@ -533,6 +545,17 @@ def _llm_max_attempts(values: dict[str, str | None]) -> int:
         raise ValueError(
             f"Invalid value for {LLM_MAX_ATTEMPTS_ENV_KEY}: {value}; expected "
             f"{LLM_MAX_ATTEMPTS_LOWER_BOUND}..{LLM_MAX_ATTEMPTS_UPPER_BOUND}"
+        )
+    return value
+
+
+def _langfuse_flush_at(values: dict[str, str | None]) -> int:
+    """Resolve the OTLP batch size, validated against the bounds the exporter supports."""
+    value = _env_int(values, LANGFUSE_FLUSH_AT_ENV_KEY, DEFAULT_LANGFUSE_FLUSH_AT)
+    if not LANGFUSE_FLUSH_AT_LOWER_BOUND <= value <= LANGFUSE_FLUSH_AT_UPPER_BOUND:
+        raise ValueError(
+            f"Invalid value for {LANGFUSE_FLUSH_AT_ENV_KEY}: {value}; expected "
+            f"{LANGFUSE_FLUSH_AT_LOWER_BOUND}..{LANGFUSE_FLUSH_AT_UPPER_BOUND}"
         )
     return value
 
@@ -741,6 +764,8 @@ class SampleConfig:
         langfuse_enabled: explicit on/off switch; ``None`` enables when both keys are present.
         langfuse_capture_content: whether prompt/response text is sent, or only metadata.
         langfuse_environment: Langfuse environment label (``demo`` by default).
+        langfuse_flush_at: spans per OTLP request; it bounds the request body, which the egress
+            proxy rejects above 1 MB (one LLM span is ~34 KB with content capture on).
     """
 
     model_mode: ModelMode
@@ -840,6 +865,7 @@ class SampleConfig:
     langfuse_enabled: bool | None = None
     langfuse_capture_content: bool = True
     langfuse_environment: str = DEFAULT_LANGFUSE_ENVIRONMENT
+    langfuse_flush_at: int = DEFAULT_LANGFUSE_FLUSH_AT
 
     @property
     def is_offline(self) -> bool:
@@ -1139,4 +1165,5 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         langfuse_environment=_env_value(
             values, LANGFUSE_ENVIRONMENT_ENV_KEY, DEFAULT_LANGFUSE_ENVIRONMENT
         ),
+        langfuse_flush_at=_langfuse_flush_at(values),
     )

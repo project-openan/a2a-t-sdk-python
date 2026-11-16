@@ -24,6 +24,7 @@ from shared.langfuse_tracing import (
     LangfuseSpanExporter,
     _audit_for,
     _audited_exporter,
+    _get_runtime,
     _instrument_otlp_client,
     _LangfuseRuntime,
     _max_accepted_bytes,
@@ -1129,6 +1130,25 @@ def test_the_largest_accepted_request_tracks_only_successes(monkeypatch) -> None
     _note_accepted_request(SimpleNamespace(body=b"x" * 50, headers={}))
 
     assert _max_accepted_bytes() == 100
+
+
+def test_the_runtime_uses_the_configured_batch_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The batch size bounds the OTLP request body behind a size-limited egress proxy."""
+    config = replace(load_config(), langfuse_flush_at=4)
+    captured: dict[str, Any] = {}
+
+    class _FakeLangfuse:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr("shared.langfuse_tracing.Langfuse", _FakeLangfuse)
+    monkeypatch.setattr("shared.langfuse_tracing._retrying_otlp_exporter", lambda _config: None)
+    monkeypatch.setattr("shared.langfuse_tracing._RUNTIME", None)
+
+    _get_runtime(config)
+
+    assert captured["flush_at"] == 4
+    assert captured["flush_interval"] == 1.0
 
 
 def test_a_rejection_body_is_paired_with_its_status() -> None:
