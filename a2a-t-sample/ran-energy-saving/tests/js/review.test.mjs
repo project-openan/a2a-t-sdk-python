@@ -28,6 +28,7 @@ import {
   roundOptionLabel,
   stabilityOf,
   statusLabel,
+  taskHasRun,
   textExcerpt,
   traceButtonLabel,
   traceResolutionLabel,
@@ -155,6 +156,30 @@ assert.deepEqual(
   [16, 26],
 );
 assert.deepEqual(filterCases(CASES, { query: "26" }).map((row) => row.caseId), [26]);
+// The batch table defaults to the tasks this round actually ran.
+assert.equal(taskHasRun({ status: "not_run", observations: 0 }), false);
+assert.equal(taskHasRun({ status: "pass", observations: 1 }), true);
+assert.deepEqual(
+  filterCases(
+    [
+      {
+        caseId: 1,
+        caseName: "not run",
+        protocols: [
+          { protocol: "a2a-t", status: "not_run", observations: 0 },
+          { protocol: "a2a", status: "not_run", observations: 0 },
+        ],
+      },
+      {
+        caseId: 2,
+        caseName: "ran",
+        protocols: [{ protocol: "a2a-t", status: "pass", observations: 1 }],
+      },
+    ],
+    { onlyRun: true },
+  ).map((row) => row.caseId),
+  [2],
+);
 
 // The static expectation markers and their filter are distinct from the verdict.
 assert.deepEqual(

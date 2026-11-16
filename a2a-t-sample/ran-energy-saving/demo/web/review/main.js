@@ -72,6 +72,7 @@ const state = {
   batch: null, // payload of the selected batch/round
   batchView: "status", // "status": dimension table; "data": key-data table
   dataProtocol: "", // protocol filter of the key-data table, "" = both
+  onlyRun: true, // hide protocol tasks this round never ran; on by default
   selectedBatch: null, // {batchId, round}
   selected: null, // {caseId, protocol}
   detail: null,
@@ -256,6 +257,13 @@ export function traceSummaryText(summary) {
     + ` · 写入 ${summary.ingested || 0} ｜ ${attention}`;
 }
 
+//: Whether this round actually produced evidence for one protocol task.
+export function taskHasRun(task) {
+  if (!task) return false;
+  if (Number(task.observations) > 0) return true;
+  return Boolean(task.status) && task.status !== "not_run";
+}
+
 //: Filter the corpus rows by case, protocol, verdict, decision and attention flags.
 export function filterCases(cases, filters) {
   const query = String(filters.query || "").trim().toLowerCase();
@@ -275,6 +283,7 @@ export function filterCases(cases, filters) {
     const protocols = [];
     for (const task of caseRow.protocols || []) {
       if (filters.protocol && task.protocol !== filters.protocol) continue;
+      if (filters.onlyRun && !taskHasRun(task)) continue;
       if (filters.status && task.status !== filters.status) continue;
       if (
         filters.dimension
@@ -861,6 +870,16 @@ function renderDataTable() {
     renderBatch();
   });
   filters.append(protocolSelect);
+  const runOnly = el("label", "check");
+  const runOnlyInput = document.createElement("input");
+  runOnlyInput.type = "checkbox";
+  runOnlyInput.checked = state.onlyRun;
+  runOnlyInput.addEventListener("change", () => {
+    state.onlyRun = runOnlyInput.checked;
+    renderBatch();
+  });
+  runOnly.append(runOnlyInput, document.createTextNode(" 只看本轮已运行"));
+  filters.append(runOnly);
   card.append(filters);
 
   const wrap = el("div", "table-wrap");
@@ -878,6 +897,7 @@ function renderDataTable() {
   card.append(wrap);
   const caseRows = (state.batch && state.batch.cases) || [];
   for (const { caseRow, task } of filterProtocolTasks(caseRows, state.dataProtocol)) {
+    if (state.onlyRun && !taskHasRun(task)) continue;
     const tr = el("tr");
     tr.append(el("td", "", String(caseRow.caseId)));
     tr.append(el("td", "", caseRow.caseName || ""));
@@ -1066,6 +1086,8 @@ function batchCaseFilters() {
     category: field("batch-filter-category"),
     onlyFailures: checked("batch-only-failures"),
     onlyPending: checked("batch-only-pending"),
+    // Shared with the key-data tab, so switching tabs keeps the reviewer's choice.
+    onlyRun: state.onlyRun,
   };
 }
 
@@ -1150,6 +1172,7 @@ function renderBatchFilters() {
     bar.append(select);
   }
   for (const [id, label] of [
+    ["batch-only-run", "只看本轮已运行"],
     ["batch-only-failures", "只看失败/部分"],
     ["batch-only-pending", "只看未审核"],
   ]) {
@@ -1157,7 +1180,15 @@ function renderBatchFilters() {
     const input = document.createElement("input");
     input.type = "checkbox";
     input.id = id;
-    input.addEventListener("change", refreshBatchTable);
+    if (id === "batch-only-run") {
+      input.checked = state.onlyRun;
+      input.addEventListener("change", () => {
+        state.onlyRun = input.checked;
+        refreshBatchTable();
+      });
+    } else {
+      input.addEventListener("change", refreshBatchTable);
+    }
     wrapper.append(input, document.createTextNode(` ${label}`));
     bar.append(wrapper);
   }
