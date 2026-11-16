@@ -103,6 +103,10 @@ class Observation:
     task_id: str = ""
     context_id: str = ""
     final_state: str = ""
+    #: The vendor's own acceptance sentence of a status frame ("Task modification succeeded").
+    status_text: str = ""
+    #: ``taskModifyStatus`` of a status frame; ``SUCCESSFUL`` is the Modify acceptance.
+    modify_status: str = ""
     summary: str = ""
     source: str = ""
 
@@ -142,6 +146,8 @@ class Observation:
             ("taskId", self.task_id),
             ("contextId", self.context_id),
             ("finalState", self.final_state),
+            ("statusText", self.status_text),
+            ("modifyStatus", self.modify_status),
             ("summary", self.summary),
             ("source", self.source),
         ):
@@ -472,6 +478,8 @@ def normalize_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[Observation, ...]
                 or _text(metadata.get("context_id"))
                 or _event_identity(event, "contextId"),
                 final_state=_text(detail.get("finalState")) or _text(metadata.get("finalState")),
+                status_text=_event_text(event),
+                modify_status=_event_modify_status(event),
                 summary=_text(detail.get("summary")),
                 source=_text(detail.get("source")),
             )
@@ -488,17 +496,21 @@ def _merged_detail(metadata: Mapping[str, Any]) -> dict[str, Any]:
     for key, value in metadata.items():
         if not isinstance(key, str) or not key.startswith("detail."):
             continue
-        path = key[len("detail.") :]
-        head, separator, rest = path.partition(".")
-        if not separator:
-            detail.setdefault(head, value)
-            continue
-        bucket = detail.get(head)
-        if not isinstance(bucket, dict):
-            bucket = {}
-            detail[head] = bucket
-        bucket[rest] = value
+        parts = key[len("detail.") :].split(".")
+        bucket = detail
+        for part in parts[:-1]:
+            child = bucket.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                bucket[part] = child
+            bucket = child
+        bucket.setdefault(parts[-1], value)
     return detail
+
+
+def _mapping(value: object) -> Mapping[str, Any]:
+    """Return a mapping value, or an empty mapping."""
+    return value if isinstance(value, Mapping) else {}
 
 
 def _event_map(detail: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -520,6 +532,29 @@ def _event_state(event: Mapping[str, Any]) -> str:
         return state
     status = task.get("status")
     return _text(status.get("state")) if isinstance(status, Mapping) else ""
+
+
+def _event_text(event: Mapping[str, Any]) -> str:
+    """Return the human sentence of a status frame."""
+    text = _text(event.get("text"))
+    if text:
+        return text
+    parts = _mapping(_mapping(_mapping(event.get("task")).get("status")).get("message")).get("parts")
+    if isinstance(parts, list):
+        for part in parts:
+            text = _text(_mapping(part).get("text"))
+            if text:
+                return text
+    return ""
+
+
+def _event_modify_status(event: Mapping[str, Any]) -> str:
+    """Return the vendor's ``taskModifyStatus`` of a status frame."""
+    value = _text(_mapping(event.get("metadata")).get("taskModifyStatus"))
+    if value:
+        return value
+    message = _mapping(_mapping(_mapping(event.get("task")).get("status")).get("message"))
+    return _text(_mapping(message.get("metadata")).get("taskModifyStatus"))
 
 
 def _event_identity(event: Mapping[str, Any], key: str) -> str:

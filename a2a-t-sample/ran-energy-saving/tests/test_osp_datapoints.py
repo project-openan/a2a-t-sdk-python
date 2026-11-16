@@ -196,6 +196,37 @@ def test_task_created_falls_back_to_a_finished_task_identity() -> None:
     assert results["task.succeeded"].copies[0].source == "finished"
 
 
+def test_a_modify_success_is_the_vendor_acceptance_frame() -> None:
+    base = {"kind": "status", "task_id": "task-1", "context_id": "ctx-1", "state": "TASK_STATE_WORKING"}
+    plain = _by_id(
+        resolve_data_points({"observations": [_obs(**base)]}, _context(run_mode="modify"))
+    )
+    # A bare WORKING status is not the Modify acceptance.
+    assert plain["task.succeeded"].status == STATUS_MISSING
+
+    said = _by_id(
+        resolve_data_points(
+            {"observations": [_obs(**base, status_text="Task modification succeeded{}")]},
+            _context(run_mode="modify"),
+        )
+    )
+    assert said["task.succeeded"].status == STATUS_PRESENT
+
+    flagged = _by_id(
+        resolve_data_points(
+            {"observations": [_obs(**base, modify_status="SUCCESSFUL")]},
+            _context(run_mode="modify"),
+        )
+    )
+    assert flagged["task.succeeded"].status == STATUS_PRESENT
+
+    # A Create accepted as WORKING is a success even without the modification sentence.
+    created = _by_id(
+        resolve_data_points({"observations": [_obs(**base)]}, _context(run_mode="create"))
+    )
+    assert created["task.succeeded"].status == STATUS_PRESENT
+
+
 def test_data_points_keep_a_stable_column_set() -> None:
     assert [point.id for point in data_points(_context())] == [
         "request.original",

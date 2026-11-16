@@ -228,7 +228,7 @@ def _resolve_copies(
     if point_id == "negotiation.reply":
         return _negotiation_reply_copies(observations)
     if point_id == "task.succeeded":
-        return _task_succeeded_copies(observations)
+        return _task_succeeded_copies(observations, context)
     return []
 
 
@@ -392,12 +392,15 @@ def _negotiation_reply_copies(
 
 def _task_succeeded_copies(
     observations: Sequence[Mapping[str, object]],
+    context: DataContext,
 ) -> list[DataCopy]:
     """Resolve the Task creation/modification success frame.
 
     ``task_created`` is the acceptance carrier. Real NMS can accept a Modify as WORKING without a
     SUBMITTED frame, so a terminal ``finished`` span carrying the Task identity is also accepted.
-    A full-level ``status`` span with a success state is the final fallback.
+    A full-level ``status`` span is the final fallback, but a Modify must show its own acceptance
+    sentence (``Task modification succeeded`` / ``taskModifyStatus=SUCCESSFUL``); a bare WORKING
+    status is not proof of a successful modification.
     """
     created = _copies(
         observations,
@@ -422,10 +425,10 @@ def _task_succeeded_copies(
     return _copies(
         observations,
         predicate=lambda item: _kind(item) == "status"
-        and _text(item, "state") in _SUCCESS_STATES
-        and bool(_text(item, "task_id", "taskId") or _text(item, "context_id", "contextId")),
+        and bool(_text(item, "task_id", "taskId") or _text(item, "context_id", "contextId"))
+        and _status_proves_success(item, context),
         source="status",
-        fields=("taskId", "contextId", "state"),
+        fields=("taskId", "contextId", "state", "modifyStatus"),
         value=_task_identity_text,
     )
 
@@ -526,14 +529,32 @@ def _without_value(copy: DataCopy) -> DataCopy:
     )
 
 
+def _status_proves_success(observation: Mapping[str, object], context: DataContext) -> bool:
+    """Return whether a status frame is the recorded acceptance of this run.
+
+    A Modify accepted by the vendor is reported as ``Task modification succeeded`` with
+    ``taskModifyStatus=SUCCESSFUL`` while the Task stays WORKING. Accepting any WORKING frame
+    would make an intermediate status look like a successful modification.
+    """
+    text = _text(observation, "status_text", "statusText").lower()
+    modify_status = _text(observation, "modify_status", "modifyStatus").lower()
+    if "task modification succeeded" in text or modify_status in {"successful", "success", "succeeded"}:
+        return True
+    if context.run_mode == "modify":
+        return False
+    return _text(observation, "state") in _SUCCESS_STATES
+
+
 def _task_identity_text(observation: Mapping[str, object]) -> str:
     """Render the Task identity of a success copy as one readable line."""
     identity = {
         key: value
-        for key in ("taskId", "contextId", "state", "operation", "finalState")
+        for key in ("taskId", "contextId", "state", "operation", "finalState", "modifyStatus")
         if (value := _text(observation, _snake(key), key))
     }
-    return json.dumps(identity, ensure_ascii=False) if identity else _text(observation, "summary")
+    if identity:
+        return json.dumps(identity, ensure_ascii=False)
+    return _text(observation, "summary") or _text(observation, "status_text", "statusText")
 
 
 def _finished_is_success(observation: Mapping[str, object]) -> bool:

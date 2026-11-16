@@ -183,6 +183,8 @@ def test_normalize_rows_reads_a_vendor_status_event_identity_and_state() -> None
                 "detail.event.state": "TASK_STATE_WORKING",
                 "detail.event.task.id": "task-1",
                 "detail.event.task.contextId": "ctx-1",
+                "detail.event.metadata.taskModifyStatus": "SUCCESSFUL",
+                "detail.event.text": "Task modification succeeded{}",
             },
         )
     ]
@@ -192,6 +194,8 @@ def test_normalize_rows_reads_a_vendor_status_event_identity_and_state() -> None
     assert observation.state == "TASK_STATE_WORKING"
     assert observation.task_id == "task-1"
     assert observation.context_id == "ctx-1"
+    assert observation.status_text == "Task modification succeeded{}"
+    assert observation.modify_status == "SUCCESSFUL"
 
 
 def test_normalize_rows_reads_flattened_detail_and_generation_output() -> None:
