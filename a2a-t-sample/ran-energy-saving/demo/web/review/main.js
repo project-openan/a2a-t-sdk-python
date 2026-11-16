@@ -775,7 +775,7 @@ export function langfuseLinkText(task) {
 //: Provenance of one Langfuse copy. The blocked original and the dispatched request look alike
 //: once rendered, so the copy's origin is part of the evidence, not decoration.
 const DATA_SOURCE_LABELS = {
-  task_validation: "拦截回放",
+  task_validation: "拦截探针",
   task_prompt_rendered: "渲染提示词",
   trace_root: "轨迹根 metadata",
   message_sent: "发送报文",
@@ -791,7 +791,12 @@ const DATA_SOURCE_LABELS = {
 export function dataCopyLabel(copy) {
   if (!copy) return "";
   const label = DATA_SOURCE_LABELS[copy.source] || copy.source || "副本";
-  return copy.span ? `${label} · ${copy.span}` : label;
+  const name = copy.span ? `${label} · ${copy.span}` : label;
+  if (copy.source !== "task_validation" || !copy.verdict) return name;
+  // The probe records the expected-blocked original even when the block did not fire; say what
+  // was expected and what actually happened so "pass" is not read as missing evidence.
+  const expected = copy.expected || "blocked";
+  return `${name}（expected ${expected} / observed ${copy.verdict}）`;
 }
 
 export function dataCellText(row) {

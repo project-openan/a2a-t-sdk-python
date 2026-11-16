@@ -578,7 +578,21 @@ assert.equal(langfuseLinkText(null), "—");
 // Copy provenance: the blocked original and the dispatched request must stay distinguishable.
 assert.equal(
   dataCopyLabel({ source: "task_validation", span: "Task-T validation blocked" }),
-  "拦截回放 · Task-T validation blocked",
+  "拦截探针 · Task-T validation blocked",
+);
+// The probe keeps the original when the expected block did not fire; the label says so.
+assert.equal(
+  dataCopyLabel({
+    source: "task_validation",
+    span: "Task-T validation pass",
+    verdict: "pass",
+    expected: "blocked",
+  }),
+  "拦截探针 · Task-T validation pass（expected blocked / observed pass）",
+);
+assert.equal(
+  dataCopyLabel({ source: "task_validation", span: "Task-T validation pass", verdict: "pass" }),
+  "拦截探针 · Task-T validation pass（expected blocked / observed pass）",
 );
 assert.equal(
   dataCopyLabel({ source: "task_prompt_rendered", span: "Task-T prompt rendered" }),

@@ -121,6 +121,27 @@ def test_pure_a2a_marks_the_task_t_only_items_not_applicable() -> None:
     assert results["request.original"].status == STATUS_MISSING
 
 
+def test_an_interception_probe_keeps_the_original_when_the_block_did_not_fire() -> None:
+    # The tester always probes an expected-blocked case. A passing probe is not a blocked run,
+    # but its span still records the original operator input; presence must not depend on the
+    # verdict, only on the probe marker.
+    observations = [
+        _obs("task_prompt_rendered", user_request="replacement", promptText="TASK-T"),
+        _obs("task_validation", interception=True, userRequest="noisy original", verdict="pass"),
+    ]
+    results = _by_id(
+        resolve_data_points(
+            {"observations": observations},
+            _context(blocked=True, followup=True),
+            include_values=True,
+        )
+    )
+    assert results["request.original"].status == STATUS_PRESENT
+    assert results["request.original"].copies[0].source == "task_validation"
+    assert results["request.original"].copies[0].verdict == "pass"
+    assert results["request.original"].copies[0].value == "noisy original"
+
+
 def test_pure_a2a_reads_the_original_from_the_trace_even_for_a_blocked_case() -> None:
     # Task-T validation (and its interception replay) is A2A-T only; an A2A trace carries the
     # request on its own root, so a blocked case must not require the A2A-T span.

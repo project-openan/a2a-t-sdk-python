@@ -85,6 +85,10 @@ class DataCopy:
     fields: tuple[str, ...] = ()
     excerpt: str = ""
     value: str = ""
+    #: The validation verdict a copy records. The interception probe keeps the expected-blocked
+    #: original even when the block did not fire, so the page must show what actually happened.
+    verdict: str = ""
+    expected_verdict: str = ""
 
     def to_dict(self, *, include_value: bool = False) -> dict[str, object]:
         """Return the JSON-friendly form; the drawer asks for ``value`` explicitly."""
@@ -98,6 +102,10 @@ class DataCopy:
         }
         if self.excerpt:
             payload["excerpt"] = self.excerpt
+        if self.verdict:
+            payload["verdict"] = self.verdict
+        if self.expected_verdict:
+            payload["expected"] = self.expected_verdict
         if include_value and self.value:
             payload["value"] = self.value
         return payload
@@ -508,6 +516,8 @@ def _copies(
                 fields=fields,
                 excerpt=text[:_EXCERPT_LENGTH],
                 value=text,
+                verdict=_text(observation, "observed_verdict", "verdict"),
+                expected_verdict=_text(observation, "expected_verdict", "expectedVerdict"),
             )
         )
     return copies
@@ -526,6 +536,8 @@ def _without_value(copy: DataCopy) -> DataCopy:
         fields=copy.fields,
         excerpt=copy.excerpt,
         value="",
+        verdict=copy.verdict,
+        expected_verdict=copy.expected_verdict,
     )
 
 

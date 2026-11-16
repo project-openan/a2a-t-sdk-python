@@ -84,7 +84,10 @@ class Observation:
     round: int | None
     performative: str
     status: str
+    #: Observed validation verdict of a validation span (``blocked`` / ``pass`` / ``error``).
     verdict: str
+    #: Verdict the case expected of the interception probe (``blocked`` when it is a probe).
+    expected_verdict: str
     interception: bool
     run_id: str
     scope: str
@@ -123,6 +126,7 @@ class Observation:
             "performative": self.performative,
             "status": self.status,
             "verdict": self.verdict,
+            "expectedVerdict": self.expected_verdict,
             "interception": self.interception,
             "runId": self.run_id,
             "scope": self.scope,
@@ -453,7 +457,9 @@ def normalize_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[Observation, ...]
                 performative=_text(metadata.get("attributes.gen_ai.agent.a2at.negotiation.performative"))
                 or _text(detail.get("performative")),
                 status=_text(metadata.get("status")),
-                verdict=_text(detail.get("verdict")),
+                # The probe records what it observed; older spans only carry ``verdict``.
+                verdict=_text(detail.get("observedVerdict")) or _text(detail.get("verdict")),
+                expected_verdict=_text(detail.get("expectedVerdict")),
                 interception=_text(detail.get("source")) == "interception",
                 run_id=_text(metadata.get("runId")),
                 scope=_scope(metadata),

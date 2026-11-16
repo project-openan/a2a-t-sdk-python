@@ -1927,6 +1927,8 @@ def _compact_data(trace: object) -> list[dict[str, object]]:
                         "runId": str(copy.get("runId") or ""),
                         "side": str(copy.get("side") or ""),
                         "round": copy.get("round"),
+                        "verdict": str(copy.get("verdict") or ""),
+                        "expected": str(copy.get("expected") or ""),
                     }
                     for copy in copies
                     if isinstance(copy, Mapping)
