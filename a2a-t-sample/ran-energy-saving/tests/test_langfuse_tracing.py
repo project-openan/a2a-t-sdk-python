@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import replace
 from datetime import UTC, datetime
 from email.message import Message
@@ -28,6 +28,7 @@ from shared.langfuse_tracing import (
     _LangfuseRuntime,
     _max_accepted_bytes,
     _note_accepted_request,
+    _note_traffic,
     _probe_ingestion,
     _record_batch,
     _remember_rejection_body,
@@ -36,6 +37,7 @@ from shared.langfuse_tracing import (
     _reset_batch_diagnostics,
     _retrying_otlp_exporter,
     _take_batch_diagnostics,
+    _traffic_last_minute,
     create_langfuse_exporter,
 )
 
@@ -1107,6 +1109,16 @@ def test_a_rejected_request_reports_its_wire_size_and_encoding() -> None:
     assert _request_encoding(request) == "gzip"
     assert _request_body_size(SimpleNamespace(body=None, headers={})) == "unknown"
     assert _request_encoding(SimpleNamespace(body=b"", headers={})) == "none"
+
+
+def test_the_rolling_traffic_window_sums_recent_requests(monkeypatch) -> None:
+    """A per-time proxy quota is proved by comparing 1-way and 3-way traffic."""
+    monkeypatch.setattr("shared.langfuse_tracing._OTLP_TRAFFIC", deque())
+
+    _note_traffic(SimpleNamespace(body=b"x" * 1000, headers={}))
+    _note_traffic(SimpleNamespace(body=b"x" * 500, headers={}))
+
+    assert _traffic_last_minute() == (2, 1500)
 
 
 def test_the_largest_accepted_request_tracks_only_successes(monkeypatch) -> None:

@@ -29,7 +29,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -407,6 +407,40 @@ def _max_accepted_bytes() -> int:
         return _MAX_ACCEPTED_BYTES
 
 
+#: Rolling window of completed OTLP requests (monotonic seconds, wire bytes). The egress proxy's
+#: per-message limit is known, but a per-time byte quota is not: the same 1-way and 3-way batches
+#: compare their last-minute traffic in the log instead of guessing from concurrency alone.
+_TRAFFIC_WINDOW_SECONDS: Final[float] = 60.0
+_OTLP_TRAFFIC: deque[tuple[float, int]] = deque()
+_TRAFFIC_LOCK = threading.Lock()
+
+
+def _note_traffic(request: Any) -> None:
+    """Record one completed OTLP request in the rolling traffic window."""
+    size = _request_body_size(request)
+    if not isinstance(size, int):
+        return
+    now = time.monotonic()
+    with _TRAFFIC_LOCK:
+        _OTLP_TRAFFIC.append((now, size))
+        _prune_traffic(now)
+
+
+def _prune_traffic(now: float) -> None:
+    """Drop the entries that left the rolling window (caller holds the lock)."""
+    cutoff = now - _TRAFFIC_WINDOW_SECONDS
+    while _OTLP_TRAFFIC and _OTLP_TRAFFIC[0][0] < cutoff:
+        _OTLP_TRAFFIC.popleft()
+
+
+def _traffic_last_minute() -> tuple[int, int]:
+    """Return ``(requests, wire bytes)`` of the last 60 seconds."""
+    now = time.monotonic()
+    with _TRAFFIC_LOCK:
+        _prune_traffic(now)
+        return len(_OTLP_TRAFFIC), sum(size for _, size in _OTLP_TRAFFIC)
+
+
 def _trace_id_text(trace_id: int) -> str:
     """Render one OTel trace id as 32 lowercase hex characters."""
     formatter = format_trace_id
@@ -684,18 +718,22 @@ def _retrying_otlp_exporter(config: SampleConfig) -> Any | None:
             )
             try:
                 status = getattr(response, "status_code", 0)
+                _note_traffic(request)
                 if isinstance(status, int) and status >= 400:
                     body = _response_excerpt(response)
                     _remember_rejection_body(status, body)
                     # The bytes as they went on the wire (already compressed when gzip is on):
                     # an egress proxy that rejects by body size needs this to be measurable.
+                    minute_requests, minute_bytes = _traffic_last_minute()
                     _LOGGER.warning(
                         "Langfuse OTLP request rejected: HTTP %s bytes=%s encoding=%s "
-                        "maxAcceptedBytes=%s %s",
+                        "maxAcceptedBytes=%s lastMinuteRequests=%s lastMinuteBytes=%s %s",
                         status,
                         _request_body_size(request),
                         _request_encoding(request),
                         _max_accepted_bytes(),
+                        minute_requests,
+                        minute_bytes,
                         body,
                     )
                 elif isinstance(status, int):
@@ -1219,6 +1257,12 @@ class LangfuseSpanExporter:
             self._status = "failed"
             self._warning = f"{type(exc).__name__}: {exc}"
             _LOGGER.warning("Langfuse flush failed: %s", exc)
+        minute_requests, minute_bytes = _traffic_last_minute()
+        _LOGGER.info(
+            "Langfuse OTLP traffic (last 60 s): requests=%d bytes=%d",
+            minute_requests,
+            minute_bytes,
+        )
 
     def snapshot(self, *, resolve_url: bool = False) -> dict[str, object]:
         """Return the Langfuse state shown by the run snapshot and the presentation UI."""
