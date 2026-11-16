@@ -30,6 +30,7 @@ from demo.web.review.service import (
     MAX_TRACE_IDS,
     STATUS_NOT_RUN,
     ReviewService,
+    _judged_evidence,
     parse_trace_input,
 )
 from demo.web.review.store import (
@@ -367,6 +368,49 @@ def test_scan_stores_the_evidence_and_joins_the_negotiation_messages(tmp_path: P
     assert evidence["messages"] == [{"round": 1, "kind": "feasibility", "content": MESSAGE}]
     assert rows[0]["nms"] is True
     assert rows[0]["decisionMode"] == "live"
+
+
+def test_the_negotiation_dimension_falls_back_to_the_trace_messages() -> None:
+    """A push-delivered pure A2A question is evidence even when the store kept no proposal."""
+    observation = {
+        "runId": "run-1",
+        "traceId": TRACE_ID,
+        "evidence": {"messages": []},
+        "trace": {
+            "observations": [
+                {
+                    "name": "SendMessage-pushNotification",
+                    "state": "TASK_STATE_INPUT_REQUIRED",
+                    "response": "Site list is missing.",
+                    "startedAt": "2026-11-16T08:00:00Z",
+                }
+            ]
+        },
+    }
+
+    merged = _judged_evidence(observation)
+
+    assert merged["messages"] == [{"round": 1, "kind": "message", "content": "Site list is missing."}]
+
+
+def test_run_store_messages_win_over_the_trace_fallback() -> None:
+    stored = [{"round": 1, "kind": "feasibility", "content": "stored"}]
+    observation = {
+        "runId": "run-1",
+        "traceId": TRACE_ID,
+        "evidence": {"messages": stored},
+        "trace": {
+            "observations": [
+                {
+                    "name": "SendMessage-pushNotification",
+                    "state": "TASK_STATE_INPUT_REQUIRED",
+                    "response": "trace text",
+                }
+            ]
+        },
+    }
+
+    assert _judged_evidence(observation)["messages"] == stored
 
 
 def test_scan_reads_the_real_machine_flag_from_the_batch_discovery(tmp_path: Path) -> None:

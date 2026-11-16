@@ -18,6 +18,7 @@ from demo.web.review.traces import (
     TraceStore,
     build_frames,
     normalize_rows,
+    trace_negotiation_messages,
 )
 
 TRACE_ID = "0123456789abcdef0123456789abcdef"
@@ -268,6 +269,63 @@ def test_normalize_rows_reads_the_push_notification_status_message() -> None:
     assert pushed.response == "Site list is missing."
     assert pushed.state == "TASK_STATE_INPUT_REQUIRED"
     assert task_snapshot.response == "Task finished."
+
+
+def test_trace_negotiation_messages_read_the_push_channel_in_time_order() -> None:
+    """Langfuse lists observations newest first; the round numbering must use the start time."""
+    payload = {
+        "observations": [
+            {
+                "name": "SendMessage-pushNotification",
+                "kind": "",
+                "state": "TASK_STATE_INPUT_REQUIRED",
+                "response": "round two question",
+                "startedAt": "2026-11-16T08:10:00Z",
+            },
+            {
+                "name": "SendMessage-pushNotification",
+                "kind": "",
+                "state": "TASK_STATE_WORKING",
+                "response": "Task modification succeeded",
+                "startedAt": "2026-11-16T08:05:00Z",
+            },
+            {
+                "name": "SendMessage-pushNotification",
+                "kind": "",
+                "state": "TASK_STATE_INPUT_REQUIRED",
+                "response": "round one question",
+                "startedAt": "2026-11-16T08:00:00Z",
+            },
+        ]
+    }
+
+    messages = trace_negotiation_messages(payload)
+
+    assert [message["round"] for message in messages] == [1, 2]
+    assert [message["content"] for message in messages] == ["round one question", "round two question"]
+
+
+def test_trace_negotiation_messages_prefer_the_client_propose_span() -> None:
+    """A client-observed proposal is the primary evidence; the server push is the fallback."""
+    payload = {
+        "observations": [
+            {
+                "name": "SendMessage-pushNotification",
+                "state": "TASK_STATE_INPUT_REQUIRED",
+                "response": "server text",
+            },
+            {
+                "name": "Propose · information · R1",
+                "kind": "propose",
+                "round": 1,
+                "content": "observed proposal",
+            },
+        ]
+    }
+
+    assert trace_negotiation_messages(payload) == [
+        {"round": 1, "kind": "propose", "content": "observed proposal"}
+    ]
 
 
 def test_normalize_rows_reads_a_vendor_status_event_identity_and_state() -> None:

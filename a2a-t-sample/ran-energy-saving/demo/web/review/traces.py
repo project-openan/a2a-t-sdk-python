@@ -32,8 +32,10 @@ TRACE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[0-9a-fA-F]{32}$")
 #: snapshot on disk instead of judging with the fields the old code happened to record.
 #: v3 reads the push channel: ``SendMessage-pushNotification`` carries the same A2A text inside
 #: ``response.statusUpdate.status.message.parts``. A payload stored by v2 has no ``response`` on
-#: those rows, so it must be re-derived instead of judged.
-SNAPSHOT_SCHEMA: Final[str] = "review-trace/v3"
+#: those rows, so it must be re-derived instead of judged. v4 keeps each observation's start time:
+#: Langfuse returns observations newest first, and the negotiation-round fallback must order the
+#: push frames before numbering them.
+SNAPSHOT_SCHEMA: Final[str] = "review-trace/v4"
 
 EXPORT_STATE_EXPORTED: Final[str] = "exported"
 EXPORT_STATE_PARTIAL: Final[str] = "partial"
@@ -118,6 +120,9 @@ class Observation:
     modify_status: str = ""
     summary: str = ""
     source: str = ""
+    #: Observation start time. Langfuse lists observations newest first, so any fallback that has
+    #: to number frames by occurrence must sort on this before assigning rounds.
+    started_at: str = ""
 
     def to_dict(self) -> dict[str, object]:
         """Return the compact export form used by the review store."""
@@ -161,6 +166,7 @@ class Observation:
             ("modifyStatus", self.modify_status),
             ("summary", self.summary),
             ("source", self.source),
+            ("startedAt", self.started_at),
         ):
             if value:
                 payload[key] = value
@@ -504,6 +510,7 @@ def normalize_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[Observation, ...]
                 modify_status=_event_modify_status(event),
                 summary=_text(detail.get("summary")),
                 source=_text(detail.get("source")),
+                started_at=_text(row.get("startTime")) or _text(row.get("startedAt")),
             )
         )
     return tuple(observations)
@@ -828,6 +835,69 @@ def build_frames(
             "byScope": list(by_scope.values()),
         },
     }
+
+
+#: A status frame in this state hands the turn back to the client, so its text is a proposal.
+_TURN_BACK_STATE: Final[str] = "TASK_STATE_INPUT_REQUIRED"
+_A2A_SEND_PREFIXES: Final[tuple[str, ...]] = ("SendMessage", "SendStreamingMessage")
+_PROPOSAL_KINDS: Final[frozenset[str]] = frozenset({"propose", "decision_requested"})
+
+
+def trace_negotiation_messages(payload: Mapping[str, object]) -> list[dict[str, object]]:
+    """Return the server proposals observable in one trace payload.
+
+    The review's negotiation dimension normally reads the client store's ``negotiation_events``.
+    A pure A2A question can arrive as a push notification and the store may keep only the decision;
+    the same text is still in the trace (``response.statusUpdate.status.message``). Client
+    ``propose`` / ``decision_requested`` rows win because they are what the client observed; a
+    server ``SendMessage*`` reply counts only when it hands the turn back, so an execution status
+    is not mistaken for a proposal.
+
+    Langfuse returns observations newest first. Frames are sorted by their start time before a
+    missing ``round`` is numbered by occurrence; a recorded round always wins.
+    """
+    observations = payload.get("observations")
+    if not isinstance(observations, Sequence) or isinstance(observations, (str, bytes)):
+        return []
+    indexed: list[tuple[int, Mapping[str, Any]]] = [
+        (index, row) for index, row in enumerate(observations) if isinstance(row, Mapping)
+    ]
+    indexed.sort(key=lambda item: (_text(item[1].get("startedAt")), item[0]))
+    rows = [row for _index, row in indexed]
+
+    proposed: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for row in rows:
+        kind = _text(row.get("kind"))
+        content = _text(row.get("content"))
+        if kind not in _PROPOSAL_KINDS or not content or content in seen:
+            continue
+        seen.add(content)
+        proposed.append({"round": _int(row.get("round")), "kind": kind, "content": content})
+    if proposed:
+        return _with_negotiation_rounds(proposed)
+
+    replies: list[dict[str, object]] = []
+    for row in rows:
+        if not _text(row.get("name")).startswith(_A2A_SEND_PREFIXES):
+            continue
+        state = _text(row.get("state"))
+        if state and state != _TURN_BACK_STATE:
+            continue
+        content = _text(row.get("response"))
+        if not content or content in seen:
+            continue
+        seen.add(content)
+        replies.append({"round": _int(row.get("round")), "kind": "message", "content": content})
+    return _with_negotiation_rounds(replies)
+
+
+def _with_negotiation_rounds(messages: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Number the frames that carry no recorded round, in observation-time order."""
+    for index, message in enumerate(messages):
+        if not isinstance(message.get("round"), int):
+            message["round"] = index + 1
+    return messages
 
 
 def _side(row: Mapping[str, Any], metadata: Mapping[str, Any]) -> tuple[str, str]:

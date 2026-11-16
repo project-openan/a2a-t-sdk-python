@@ -69,7 +69,12 @@ from demo.web.review.store import (
     ReviewStore,
     now_iso,
 )
-from demo.web.review.traces import SNAPSHOT_SCHEMA, InvalidTraceIdError, TraceStore
+from demo.web.review.traces import (
+    SNAPSHOT_SCHEMA,
+    InvalidTraceIdError,
+    TraceStore,
+    trace_negotiation_messages,
+)
 
 _LOGGER = logging.getLogger("ran_energy_saving.review")
 
@@ -1978,6 +1983,13 @@ def _judged_evidence(observation: Mapping[str, object]) -> dict[str, object]:
     trace = observation.get("trace")
     if trace is not None:
         merged["trace"] = trace
+    if not merged.get("messages") and isinstance(trace, Mapping):
+        # The run-store join is the primary evidence, but a pure A2A question delivered by push can
+        # be absent there while the trace still carries it. The reviewer must not report the round
+        # unobserved when the server's own record has the message.
+        derived = trace_negotiation_messages(trace)
+        if derived:
+            merged["messages"] = derived
     merged["batch"] = {
         "nms": observation.get("nmsDeclared"),
         "nmsSim": observation.get("nmsSimDeclared"),
