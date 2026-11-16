@@ -401,7 +401,11 @@ def _get_runtime(config: SampleConfig) -> _LangfuseRuntime | None:
             # the request time), otherwise it would give up while the exporter is still retrying.
             timeout=_OTLP_TIMEOUT_SECONDS,
             flush_at=32,
-            flush_interval=1.0,
+            # OTel drains the queue once per window while spans keep arriving, so this is the
+            # ingestion request-rate lever (see ``SampleConfig.langfuse_flush_interval``). The
+            # value is passed explicitly: the SDK's own ``LANGFUSE_FLUSH_INTERVAL`` is only read
+            # when the argument is ``None``, and ``load_config`` owns that key.
+            flush_interval=config.langfuse_flush_interval,
             **({"span_exporter": exporter} if exporter is not None else {}),
         )
         tracer = provider.get_tracer(LANGFUSE_SCOPE_NAME)

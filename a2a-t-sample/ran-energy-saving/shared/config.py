@@ -204,6 +204,11 @@ LANGFUSE_UI_BASE_URL_ENV_KEY = "A2AT_SAMPLE_LANGFUSE_UI_BASE_URL"
 LANGFUSE_ENABLED_ENV_KEY = "A2AT_SAMPLE_LANGFUSE_ENABLED"
 LANGFUSE_CAPTURE_CONTENT_ENV_KEY = "A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT"
 LANGFUSE_ENVIRONMENT_ENV_KEY = "A2AT_SAMPLE_LANGFUSE_ENVIRONMENT"
+#: OTLP batch window of the client export. OTel's worker drains the queue once per window while
+#: spans keep arriving, so this is the main lever on the ingestion request rate (a run that emits
+#: spans for a minute sends roughly 60/window requests). The SDK reads the same key, but the
+#: exporter passes the value explicitly, so this is the single owner.
+LANGFUSE_FLUSH_INTERVAL_ENV_KEY = "LANGFUSE_FLUSH_INTERVAL"
 
 #: Vendor NMS integration (``A2AT_SAMPLE_DISCOVERY=nms``).
 #: ``A2AT_SAMPLE_NMS_HOST`` is the single value most deployments set; the two full URLs are
@@ -380,6 +385,9 @@ DEFAULT_ADK_OUTPUT_SCHEMA_WITH_TOOLS = ADK_OUTPUT_SCHEMA_WITH_TOOLS_AUTO
 DEFAULT_LANGFUSE_BASE_URL = "https://us.cloud.langfuse.com"
 DEFAULT_LANGFUSE_UI_BASE_URL = "https://us.cloud.langfuse.com"
 DEFAULT_LANGFUSE_ENVIRONMENT = "demo"
+#: Seconds between two OTLP exports. The SDK default is 5; the sample uses 3 so a trace shows up
+#: quickly in the dashboard while a long run still sends far fewer requests than a per-span export.
+DEFAULT_LANGFUSE_FLUSH_INTERVAL_SECONDS = 3.0
 
 #: Sample root (the directory that owns ``runs/``). Relative runs directories resolve here.
 SAMPLE_ROOT = Path(__file__).resolve().parents[1]
@@ -741,6 +749,8 @@ class SampleConfig:
         langfuse_enabled: explicit on/off switch; ``None`` enables when both keys are present.
         langfuse_capture_content: whether prompt/response text is sent, or only metadata.
         langfuse_environment: Langfuse environment label (``demo`` by default).
+        langfuse_flush_interval: seconds between two OTLP batches of the export; it bounds both
+            how soon a running trace appears and the ingestion request rate.
     """
 
     model_mode: ModelMode
@@ -840,6 +850,7 @@ class SampleConfig:
     langfuse_enabled: bool | None = None
     langfuse_capture_content: bool = True
     langfuse_environment: str = DEFAULT_LANGFUSE_ENVIRONMENT
+    langfuse_flush_interval: float = DEFAULT_LANGFUSE_FLUSH_INTERVAL_SECONDS
 
     @property
     def is_offline(self) -> bool:
@@ -1138,5 +1149,8 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         langfuse_capture_content=_env_bool(values, LANGFUSE_CAPTURE_CONTENT_ENV_KEY, True),
         langfuse_environment=_env_value(
             values, LANGFUSE_ENVIRONMENT_ENV_KEY, DEFAULT_LANGFUSE_ENVIRONMENT
+        ),
+        langfuse_flush_interval=_positive_seconds(
+            values, LANGFUSE_FLUSH_INTERVAL_ENV_KEY, DEFAULT_LANGFUSE_FLUSH_INTERVAL_SECONDS
         ),
     )
