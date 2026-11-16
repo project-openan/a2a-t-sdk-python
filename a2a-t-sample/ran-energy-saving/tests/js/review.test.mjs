@@ -14,6 +14,8 @@ import {
   filterBatches,
   filterCases,
   filterTraceRows,
+  messageJudgement,
+  missingRoundNotes,
   progressText,
   protocolLabel,
   roundEvidence,
@@ -489,3 +491,30 @@ assert.equal(longExcerpt.preview.length, 181);
 assert.ok(longExcerpt.preview.endsWith("…"));
 assert.deepEqual(textExcerpt("short"), { preview: "short", full: "short", truncated: false });
 assert.deepEqual(textExcerpt(null), { preview: "—", full: "—", truncated: false });
+
+// ---------------------------------------------------------------------------
+// Negotiation messages: every frame is shown, the verdict names the frames it used.
+// ---------------------------------------------------------------------------
+
+const MESSAGE_MATCH = {
+  matched: false,
+  rounds: [
+    { round: 1, matched: true, sourceIndex: 0, alternative: 1, reason: "" },
+    { round: 2, matched: false, sourceIndex: 2, alternative: null, reason: "缺少业务事实 rate:2" },
+    { round: 3, matched: false, sourceIndex: null, alternative: null, reason: "未观测到该轮协商" },
+  ],
+};
+assert.deepEqual(messageJudgement(MESSAGE_MATCH, 0), { judged: true, ok: true, label: "命中备选 2" });
+assert.deepEqual(messageJudgement(MESSAGE_MATCH, 1), {
+  judged: false,
+  ok: null,
+  label: "未参与判定（同轮多余报文）",
+});
+assert.deepEqual(messageJudgement(MESSAGE_MATCH, 2), {
+  judged: true,
+  ok: false,
+  label: "缺少业务事实 rate:2",
+});
+assert.deepEqual(messageJudgement(null, 0), { judged: false, ok: null, label: "未参与判定" });
+assert.deepEqual(missingRoundNotes(MESSAGE_MATCH), ["第 3 轮：未观测到该轮协商"]);
+assert.deepEqual(missingRoundNotes(null), []);

@@ -361,6 +361,23 @@ def test_the_negotiation_messages_are_judged_from_the_joined_evidence() -> None:
     assert "negotiation.messages[1]" in [diff["path"] for diff in _dimension(failed, "negotiation").diffs]
 
 
+def test_the_message_match_names_the_frame_it_used() -> None:
+    """A round with two inbound frames keeps both visible but judges only the first."""
+    case = _case(rounds=1, messages=[[MESSAGE]])
+    evidence = _evidence(
+        messages=[
+            {"round": 1, "kind": "feasibility", "content": MESSAGE},
+            {"round": 1, "kind": "confirm", "content": "Please confirm the revised target."},
+        ]
+    )
+
+    judgement = judge_protocol(case, "a2a-t", evidence)
+    detail = judgement.to_dict()["detail"]
+    message_match = detail["negotiation"]["messageMatch"]
+
+    assert message_match["rounds"][0]["sourceIndex"] == 0
+
+
 def test_an_expected_message_without_evidence_is_partial() -> None:
     case = _case(rounds=1, messages=[[MESSAGE]])
 

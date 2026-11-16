@@ -294,6 +294,29 @@ export function filterTaskTRows(rows, diffOnly) {
   return all.filter((row) => row.verdict !== "same" && row.verdict !== "recorded");
 }
 
+//: How one observed negotiation message participated in the verdict. The page shows every inbound
+//: frame; only one frame per round is compared, so the extras say so instead of looking judged.
+export function messageJudgement(match, index) {
+  if (!match) return { judged: false, ok: null, label: "未参与判定" };
+  const row = (match.rounds || []).find(
+    (item) => item && Number(item.sourceIndex) === Number(index),
+  );
+  if (!row) {
+    return { judged: false, ok: null, label: "未参与判定（同轮多余报文）" };
+  }
+  if (!row.matched) {
+    return { judged: true, ok: false, label: row.reason || "报文与所有备选都不匹配" };
+  }
+  return { judged: true, ok: true, label: `命中备选 ${Number(row.alternative) + 1}` };
+}
+
+//: Rounds the annotated dialogue expected but never observed, ready for the page.
+export function missingRoundNotes(match) {
+  return ((match && match.rounds) || [])
+    .filter((row) => row && row.sourceIndex === null && !row.matched)
+    .map((row) => `第 ${row.round} 轮：${row.reason || "未观测到该轮协商"}`);
+}
+
 //: Filter the batch list by identifier, model, time, downstream and decision mode.
 export function filterBatches(batches, filters) {
   const query = String(filters.query || "").trim().toLowerCase();
@@ -2512,15 +2535,20 @@ function renderNegotiationCard(round) {
     return card;
   }
   const alternatives = negotiation.expectedMessages || [];
-  for (const message of messages) {
+  const match = negotiation.messageMatch;
+  messages.forEach((message, index) => {
     const block = el("div", "candidate");
-    block.append(
-      el(
-        "div",
-        "candidate-head",
-        `第 ${message.round} 轮 · ${message.kind || "unknown"}`,
-      ),
+    const head = el(
+      "div",
+      "candidate-head",
+      `第 ${message.round} 轮 · ${message.kind || "unknown"}`,
     );
+    if (match) {
+      const judgement = messageJudgement(match, index);
+      const kind = judgement.ok === true ? "pass" : judgement.ok === false ? "fail" : "recorded";
+      head.append(el("span", `badge ${kind}`, judgement.label));
+    }
+    block.append(head);
     block.append(el("pre", "mono", message.content || ""));
     const expected = alternatives[(message.round || 1) - 1];
     if (expected && expected.length) {
@@ -2530,8 +2558,7 @@ function renderNegotiationCard(round) {
       block.append(alternativesBox);
     }
     card.append(block);
-  }
-  const match = negotiation.messageMatch;
+  });
   if (match) {
     card.append(
       el(
@@ -2540,6 +2567,8 @@ function renderNegotiationCard(round) {
         match.matched ? "报文匹配通过" : "报文与所有备选都不匹配",
       ),
     );
+    const missing = missingRoundNotes(match);
+    if (missing.length) card.append(el("p", "hint", missing.join("；")));
   }
   return card;
 }

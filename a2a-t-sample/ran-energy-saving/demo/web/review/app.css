@@ -251,6 +251,7 @@ table.grid tr.recorded td { background: #fafbfc; color: var(--muted); }
 .cell-more summary { cursor: pointer; color: var(--muted); }
 .cell-more summary:hover { color: var(--ink); }
 .cell-more pre.mono { margin: 6px 0 0; }
+.candidate-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .mono-cell { font-family: var(--mono); font-size: 12px; word-break: break-word; }
 .verdict { font-weight: 600; white-space: nowrap; }
 .verdict.pass { color: var(--ok); }

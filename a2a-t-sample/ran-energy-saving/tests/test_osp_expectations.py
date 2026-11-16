@@ -97,9 +97,7 @@ def test_an_empty_expectation_is_not_an_assertion() -> None:
 
 def test_a_matcher_requires_its_code_and_a_keyword_of_either_language() -> None:
     expectation = slot_error_expectation(
-        _case(
-            slot_errors=[{"code": "slot.constraint_violated", "contains": ["gain", "增益"]}]
-        )
+        _case(slot_errors=[{"code": "slot.constraint_violated", "contains": ["gain", "增益"]}])
     )
     assert expectation is not None
 
@@ -179,9 +177,7 @@ def test_the_expectation_round_trips_through_its_dict_form() -> None:
 
 
 def test_any_mode_accepts_one_match_among_several_errors() -> None:
-    expectation = slot_error_expectation(
-        _case(slot_errors={"mode": "any", "expect": ["slot.not_provided"]})
-    )
+    expectation = slot_error_expectation(_case(slot_errors={"mode": "any", "expect": ["slot.not_provided"]}))
     assert expectation is not None
 
     match = match_slot_errors(
@@ -194,9 +190,7 @@ def test_any_mode_accepts_one_match_among_several_errors() -> None:
 
 
 def test_cover_mode_requires_every_seen_error_to_be_expected() -> None:
-    expectation = slot_error_expectation(
-        _case(slot_errors={"mode": "cover", "expect": ["slot.not_provided"]})
-    )
+    expectation = slot_error_expectation(_case(slot_errors={"mode": "cover", "expect": ["slot.not_provided"]}))
     assert expectation is not None
 
     covered = match_slot_errors(expectation, [_error("slot.not_provided")])
@@ -211,9 +205,7 @@ def test_cover_mode_requires_every_seen_error_to_be_expected() -> None:
 
 
 def test_cover_mode_fails_when_nothing_was_observed() -> None:
-    expectation = slot_error_expectation(
-        _case(slot_errors={"mode": "cover", "expect": ["slot.not_provided"]})
-    )
+    expectation = slot_error_expectation(_case(slot_errors={"mode": "cover", "expect": ["slot.not_provided"]}))
     assert expectation is not None
 
     match = match_slot_errors(expectation, [])
@@ -407,6 +399,45 @@ def test_an_extra_round_fails_the_dialogue() -> None:
 
     assert match.matched is False
     assert [item.round for item in match.failed_rounds()] == [2]
+
+
+def test_a_second_message_in_one_round_is_left_out_of_the_verdict() -> None:
+    """The page shows every inbound frame; the verdict must name the one it actually used."""
+    expectation = negotiation_message_expectation(
+        _case(messages=[[FEASIBILITY]], expected_rounds=1),
+        "a2a-t",
+    )
+    assert expectation is not None
+
+    match = match_negotiation_messages(
+        expectation,
+        [
+            {"round": 1, "kind": "feasibility", "content": FEASIBILITY},
+            {"round": 1, "kind": "confirm", "content": "Please confirm the revised target."},
+        ],
+    )
+
+    assert match.matched is True
+    assert match.rounds[0].source_index == 0
+
+
+def test_an_extra_round_keeps_its_message_for_the_page() -> None:
+    expectation = negotiation_message_expectation(
+        _case(messages=[[FEASIBILITY]], expected_rounds=1),
+        "a2a-t",
+    )
+    assert expectation is not None
+
+    match = match_negotiation_messages(
+        expectation,
+        [
+            {"round": 1, "kind": "feasibility", "content": FEASIBILITY},
+            {"round": 2, "kind": "target", "content": "Anything else?"},
+        ],
+    )
+
+    assert match.rounds[1].source_index == 1
+    assert match.rounds[1].actual == "Anything else?"
 
 
 def test_any_alternative_of_a_round_satisfies_it() -> None:

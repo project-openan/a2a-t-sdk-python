@@ -96,9 +96,7 @@ class SlotErrorMatcher:
             return False
         if self.slot_name is not None and str(observed.get("slotName") or "") != self.slot_name:
             return False
-        if self.message is not None and _normalize_text(observed.get("message")) != (
-            _normalize_text(self.message)
-        ):
+        if self.message is not None and _normalize_text(observed.get("message")) != (_normalize_text(self.message)):
             return False
         observed_facts = observed.get("facts")
         fact_map = (
@@ -274,6 +272,9 @@ class RoundMessageMatch:
     actual: str
     alternative: int | None = None
     reason: str = ""
+    #: Index of the observed message this round used, or ``None`` when nothing was observed.
+    #: A page that renders every inbound frame needs it to mark the extras as unjudged.
+    source_index: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Return the JSON-friendly representation used by the report and the diff table."""
@@ -284,6 +285,7 @@ class RoundMessageMatch:
             "actual": self.actual,
             "alternative": self.alternative,
             "reason": self.reason,
+            "sourceIndex": self.source_index,
         }
 
 
@@ -366,18 +368,12 @@ def match_slot_errors(
     matched_matchers: list[int] = []
     unmatched_observed: list[int] = []
     for index, error in enumerate(errors):
-        hits = [
-            matcher_index
-            for matcher_index, matcher in enumerate(expectation.matchers)
-            if matcher.matches(error)
-        ]
+        hits = [matcher_index for matcher_index, matcher in enumerate(expectation.matchers) if matcher.matches(error)]
         matched_matchers.extend(hits)
         if not hits:
             unmatched_observed.append(index)
     unique_hits = tuple(sorted(set(matched_matchers)))
-    unmatched_matchers = tuple(
-        index for index in range(len(expectation.matchers)) if index not in unique_hits
-    )
+    unmatched_matchers = tuple(index for index in range(len(expectation.matchers)) if index not in unique_hits)
     if expectation.mode == SLOT_MODE_COVER:
         matched = bool(errors) and not unmatched_observed
     else:
@@ -436,8 +432,7 @@ def negotiation_message_expectation(
         return None
     if expected_rounds and len(rounds) != expected_rounds:
         raise ValueError(
-            f"negotiation.{MESSAGE_DIMENSION} describes {len(rounds)} rounds but "
-            f"expected_rounds is {expected_rounds}"
+            f"negotiation.{MESSAGE_DIMENSION} describes {len(rounds)} rounds but expected_rounds is {expected_rounds}"
         )
     return NegotiationMessageExpectation(rounds)
 
@@ -451,22 +446,25 @@ def match_negotiation_messages(
     ``observed`` entries carry ``round`` (1-based), ``kind`` and ``content`` (the rendered
     Negotiation-T prose, or the plain question of a pure-A2A hop). A round not observed, an extra
     observed round, and a round matching no alternative all fail the dialogue; the per-round result
-    keeps the reason so the tester can show which round diverged instead of one opaque verdict.
+    keeps the reason and the ``source_index`` of the frame it used, so the tester can show which
+    round diverged and the page can mark a second frame of the same round as unjudged.
     """
-    by_round: dict[int, str] = {}
-    extra_rounds: list[int] = []
+    by_round: dict[int, tuple[str, int]] = {}
+    extra_rounds: list[tuple[int, str, int]] = []
     for index, proposal in enumerate(observed):
         round_number = _round_number(proposal.get("round"), index + 1)
         content = str(proposal.get("content") or "")
         if round_number > len(expectation.rounds):
-            extra_rounds.append(round_number)
+            extra_rounds.append((round_number, content, index))
             continue
-        by_round.setdefault(round_number, content)
+        # The first inbound frame of a round is the proposal; later frames of the same round stay
+        # visible on the page but are deliberately not folded into the verdict.
+        by_round.setdefault(round_number, (content, index))
     matches: list[RoundMessageMatch] = []
     for index, alternatives in enumerate(expectation.rounds):
         round_number = index + 1
-        actual = by_round.get(round_number)
-        if actual is None:
+        observed_round = by_round.get(round_number)
+        if observed_round is None:
             matches.append(
                 RoundMessageMatch(
                     round=round_number,
@@ -477,6 +475,7 @@ def match_negotiation_messages(
                 )
             )
             continue
+        actual, source_index = observed_round
         alternative, reason = _best_alternative(alternatives, actual)
         matches.append(
             RoundMessageMatch(
@@ -486,16 +485,18 @@ def match_negotiation_messages(
                 actual=actual,
                 alternative=alternative,
                 reason="" if alternative is not None else reason,
+                source_index=source_index,
             )
         )
-    for round_number in sorted(extra_rounds):
+    for round_number, content, source_index in sorted(extra_rounds):
         matches.append(
             RoundMessageMatch(
                 round=round_number,
                 matched=False,
                 expected=(),
-                actual="",
+                actual=content,
                 reason="观测到期望之外的额外协商轮次",
+                source_index=source_index,
             )
         )
     return MessageMatch(
@@ -609,21 +610,11 @@ def _matcher(raw: object) -> SlotErrorMatcher:
     facts = raw.get("facts")
     return SlotErrorMatcher(
         code=str(code).strip() if isinstance(code, str) and code.strip() else None,
-        slot_name=(
-            str(slot_name).strip()
-            if isinstance(slot_name, str) and slot_name.strip()
-            else None
-        ),
-        message=(
-            str(message).strip() if isinstance(message, str) and message.strip() else None
-        ),
+        slot_name=(str(slot_name).strip() if isinstance(slot_name, str) and slot_name.strip() else None),
+        message=(str(message).strip() if isinstance(message, str) and message.strip() else None),
         contains=_string_tuple(contains),
         facts=(
-            tuple(
-                (str(key), str(value))
-                for key, value in facts.items()
-                if isinstance(key, str) and value is not None
-            )
+            tuple((str(key), str(value)) for key, value in facts.items() if isinstance(key, str) and value is not None)
             if isinstance(facts, Mapping)
             else ()
         ),
