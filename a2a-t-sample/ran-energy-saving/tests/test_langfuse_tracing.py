@@ -26,6 +26,8 @@ from shared.langfuse_tracing import (
     _audited_exporter,
     _instrument_otlp_client,
     _LangfuseRuntime,
+    _max_accepted_bytes,
+    _note_accepted_request,
     _probe_ingestion,
     _record_batch,
     _remember_rejection_body,
@@ -1105,6 +1107,16 @@ def test_a_rejected_request_reports_its_wire_size_and_encoding() -> None:
     assert _request_encoding(request) == "gzip"
     assert _request_body_size(SimpleNamespace(body=None, headers={})) == "unknown"
     assert _request_encoding(SimpleNamespace(body=b"", headers={})) == "none"
+
+
+def test_the_largest_accepted_request_tracks_only_successes(monkeypatch) -> None:
+    """An accepted request above a rejection proves the size rule is not the cause."""
+    monkeypatch.setattr("shared.langfuse_tracing._MAX_ACCEPTED_BYTES", 0)
+
+    _note_accepted_request(SimpleNamespace(body=b"x" * 100, headers={}))
+    _note_accepted_request(SimpleNamespace(body=b"x" * 50, headers={}))
+
+    assert _max_accepted_bytes() == 100
 
 
 def test_a_rejection_body_is_paired_with_its_status() -> None:

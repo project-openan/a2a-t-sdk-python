@@ -383,6 +383,30 @@ def _take_batch_diagnostics() -> tuple[int | None, str]:
     return status, reason
 
 
+#: Largest accepted OTLP request of the process, in wire bytes. A proxy that rejects by body size
+#: is proved when every rejection sits above this value; an accepted request above it rules the
+#: size rule out. Process lifetime is enough: the exporter is a singleton.
+_MAX_ACCEPTED_BYTES: int = 0
+_ACCEPTED_BYTES_LOCK = threading.Lock()
+
+
+def _note_accepted_request(request: Any) -> None:
+    """Remember the largest accepted request body of the process."""
+    global _MAX_ACCEPTED_BYTES
+    size = _request_body_size(request)
+    if not isinstance(size, int):
+        return
+    with _ACCEPTED_BYTES_LOCK:
+        if size > _MAX_ACCEPTED_BYTES:
+            _MAX_ACCEPTED_BYTES = size
+
+
+def _max_accepted_bytes() -> int:
+    """Return the largest accepted OTLP request body seen in this process."""
+    with _ACCEPTED_BYTES_LOCK:
+        return _MAX_ACCEPTED_BYTES
+
+
 def _trace_id_text(trace_id: int) -> str:
     """Render one OTel trace id as 32 lowercase hex characters."""
     formatter = format_trace_id
@@ -666,12 +690,16 @@ def _retrying_otlp_exporter(config: SampleConfig) -> Any | None:
                     # The bytes as they went on the wire (already compressed when gzip is on):
                     # an egress proxy that rejects by body size needs this to be measurable.
                     _LOGGER.warning(
-                        "Langfuse OTLP request rejected: HTTP %s bytes=%s encoding=%s %s",
+                        "Langfuse OTLP request rejected: HTTP %s bytes=%s encoding=%s "
+                        "maxAcceptedBytes=%s %s",
                         status,
                         _request_body_size(request),
                         _request_encoding(request),
+                        _max_accepted_bytes(),
                         body,
                     )
+                elif isinstance(status, int):
+                    _note_accepted_request(request)
             except Exception:  # noqa: BLE001 - inspecting the response must never fail the export
                 _LOGGER.debug("Langfuse rejection capture failed", exc_info=True)
             return response
@@ -709,6 +737,11 @@ def _retrying_otlp_exporter(config: SampleConfig) -> Any | None:
             )
     except Exception:  # noqa: BLE001 - fall back to the SDK default exporter
         return None
+    _LOGGER.info(
+        "Langfuse OTLP exporter ready: compression=%s endpoint=%s",
+        "gzip" if compression is not None else "none",
+        endpoint,
+    )
     _instrument_otlp_client(exporter)
     return _audited_exporter(exporter)
 
