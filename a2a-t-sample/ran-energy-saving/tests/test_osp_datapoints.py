@@ -193,6 +193,24 @@ def test_negotiation_items_appear_once_a_round_ran() -> None:
     assert len(results["negotiation.reply"].copies) == 2
 
 
+def test_task_t_falls_back_to_the_a2a_request_envelope() -> None:
+    observations = [
+        {
+            "name": "SendMessage",
+            "type": "AGENT",
+            "a2aTaskT": "## Operation Type\nCreate\n\n## Task Context\n...",
+        }
+    ]
+    results = _by_id(
+        resolve_data_points(
+            {"observations": observations}, _context(), include_values=True
+        )
+    )
+    assert results["task_t"].status == STATUS_PRESENT
+    assert results["task_t"].copies[0].source == "a2a_request"
+    assert results["task_t"].copies[0].value.startswith("## Operation Type")
+
+
 def test_pure_a2a_reads_the_negotiation_message_from_the_send_message_reply() -> None:
     observations = [
         {

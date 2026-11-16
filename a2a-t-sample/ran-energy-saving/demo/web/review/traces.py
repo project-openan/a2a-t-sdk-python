@@ -98,6 +98,9 @@ class Observation:
     prompt_truncated: bool = False
     params: Mapping[str, object] | None = None
     task_t: str = ""
+    #: Task-T read from the A2A request envelope of a SendMessage span. The client's rendered
+    #: prompt and send frames can be lost; the request the transport sent still carries it.
+    a2a_task_t: str = ""
     negotiation_t: str = ""
     content: str = ""
     response: str = ""
@@ -142,6 +145,7 @@ class Observation:
             payload["params"] = dict(self.params)
         for key, value in (
             ("taskT", self.task_t),
+            ("a2aTaskT", self.a2a_task_t),
             ("negotiationT", self.negotiation_t),
             ("content", self.content),
             ("response", self.response),
@@ -447,6 +451,7 @@ def normalize_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[Observation, ...]
             _output_text(row.get("output")) or _a2a_response_text(metadata), MAX_PROMPT_TEXT
         )
         task_t, _ = _clip(_text(detail.get("taskT")), MAX_PROMPT_TEXT)
+        a2a_task_t, _ = _clip(_a2a_request_task_t(metadata), MAX_PROMPT_TEXT)
         negotiation_t, _ = _clip(_text(detail.get("negotiationT")), MAX_PROMPT_TEXT)
         user_request = _text(detail.get("userRequest")) or _text(metadata.get("userRequest"))
         observations.append(
@@ -474,6 +479,7 @@ def normalize_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[Observation, ...]
                 prompt_truncated=prompt_truncated,
                 params=_merged_params(detail),
                 task_t=task_t,
+                a2a_task_t=a2a_task_t,
                 negotiation_t=negotiation_t,
                 content=_text(detail.get("content")),
                 response=response_text,
@@ -584,6 +590,67 @@ def _merged_params(detail: Mapping[str, Any]) -> dict[str, Any] | None:
     if isinstance(raw, Mapping):
         return {str(key): value for key, value in raw.items()}
     return None
+
+
+def _a2a_request_task_t(metadata: Mapping[str, Any]) -> str:
+    """Return the Task-T carried by a pure-A2A request envelope.
+
+    The client's rendered-prompt and send spans can be lost in a real run. The request the
+    transport actually sent still names the Task-T extension in
+    ``message.metadata[".../extensions/Task-T/v1"]``; read it from the SendMessage observation.
+    """
+    request = metadata.get("attributes.gen_ai.agent.a2a.request")
+    if isinstance(request, Mapping):
+        text = _task_t_from_message(request.get("message"))
+        if text:
+            return text
+    # v4 can flatten the whole request object into dotted keys.
+    for key, value in metadata.items():
+        if isinstance(key, str) and "Task-T/v1" in key:
+            text = _json_text(value)
+            if text:
+                return text
+    return ""
+
+
+def _task_t_from_message(message: object) -> str:
+    """Return the Task-T extension of one A2A ``message`` object."""
+    meta = _mapping(_mapping(message).get("metadata"))
+    for key, value in meta.items():
+        if isinstance(key, str) and "Task-T/v1" in key:
+            text = _json_text(value)
+            if text:
+                return text
+    return ""
+
+
+def _json_text(value: object) -> str:
+    """Return a string value, decoding the JSON string Task-T metadata carries."""
+    if isinstance(value, Mapping):
+        for key in ("taskT", "prompt", "content", "text", "value"):
+            text = _text(value.get(key))
+            if text:
+                return text
+        for item in value.values():
+            text = _text(item)
+            if text:
+                return text
+        return ""
+    text = _text(value)
+    if not text or text[0] not in {'"', "{", "["}:
+        return text
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return text
+    if isinstance(parsed, str):
+        return parsed.strip()
+    if isinstance(parsed, Mapping):
+        for key in ("taskT", "prompt", "content", "text", "value"):
+            decoded = _text(parsed.get(key))
+            if decoded:
+                return decoded
+    return text
 
 
 def _a2a_response_text(metadata: Mapping[str, Any]) -> str:

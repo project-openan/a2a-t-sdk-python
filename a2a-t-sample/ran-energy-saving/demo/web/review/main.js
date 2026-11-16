@@ -807,6 +807,7 @@ const DATA_SOURCE_LABELS = {
   propose: "协商报文",
   decision_requested: "协商请求",
   send_message: "服务端响应",
+  a2a_request: "Task-T 扩展 metadata",
   decision: "协商决策",
   task_created: "任务创建",
   finished: "运行结束",

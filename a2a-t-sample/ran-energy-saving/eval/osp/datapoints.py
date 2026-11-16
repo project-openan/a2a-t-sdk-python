@@ -352,7 +352,17 @@ def _task_t_copies(
         fields=("taskT",),
         value=lambda item: _text(item, "task_t", "taskT"),
     )
-    return [*rendered, *sent]
+    if rendered or sent:
+        return [*rendered, *sent]
+    # The client's spans are the first thing a real run loses. The A2A request envelope on the
+    # transport span still carries the Task-T extension metadata.
+    return _copies(
+        observations,
+        predicate=lambda item: bool(_text(item, "a2a_task_t", "a2aTaskT")),
+        source="a2a_request",
+        fields=("Task-T extension",),
+        value=lambda item: _text(item, "a2a_task_t", "a2aTaskT"),
+    )
 
 
 def _negotiation_message_copies(

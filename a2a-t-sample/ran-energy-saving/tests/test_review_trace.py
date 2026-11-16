@@ -169,6 +169,28 @@ def test_frames_gate_the_nms_hop_and_keep_other_hops_for_display(tmp_path: Path)
     assert frames["serverSendCount"]["byScope"] == [{"scope": "a2a-t-server", "count": 2, "sideSource": "metadata"}]
 
 
+def test_normalize_rows_reads_task_t_from_the_a2a_request_envelope() -> None:
+    """When the client spans are lost, the sent request still carries the Task-T extension."""
+    uri = "https://projects.tmforum.org/a2aproject/telecommunication/extensions/Task-T/v1"
+    rows = [
+        _row(
+            "SendMessage",
+            metadata={
+                "attributes.gen_ai.agent.a2a.request": {
+                    "message": {
+                        "metadata": {uri: '"## Operation Type\\nCreate"'},
+                        "parts": [{"text": "create ran energy saving task"}],
+                    }
+                }
+            },
+        )
+    ]
+
+    observation = normalize_rows(rows)[0]
+
+    assert observation.a2a_task_t == "## Operation Type\nCreate"
+
+
 def test_normalize_rows_reads_the_pure_a2a_send_message_response() -> None:
     """Pure A2A negotiates in the SendMessage reply text, not in a propose span."""
     rows = [
