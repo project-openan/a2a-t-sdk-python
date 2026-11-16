@@ -29,6 +29,8 @@ from shared.langfuse_tracing import (
     _probe_ingestion,
     _record_batch,
     _remember_rejection_body,
+    _request_body_size,
+    _request_encoding,
     _reset_batch_diagnostics,
     _retrying_otlp_exporter,
     _take_batch_diagnostics,
@@ -1093,6 +1095,16 @@ def test_the_otlp_client_status_is_captured() -> None:
 
     assert result.success is False
     assert _take_batch_diagnostics() == (403, "Forbidden")
+
+
+def test_a_rejected_request_reports_its_wire_size_and_encoding() -> None:
+    """A proxy that rejects by body size must leave the size in the log."""
+    request = SimpleNamespace(body=b"x" * 4096, headers={"Content-Encoding": "gzip"})
+
+    assert _request_body_size(request) == 4096
+    assert _request_encoding(request) == "gzip"
+    assert _request_body_size(SimpleNamespace(body=None, headers={})) == "unknown"
+    assert _request_encoding(SimpleNamespace(body=b"", headers={})) == "none"
 
 
 def test_a_rejection_body_is_paired_with_its_status() -> None:

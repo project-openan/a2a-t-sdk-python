@@ -546,6 +546,22 @@ def _instrument_otlp_client(exporter: Any) -> None:
         _LOGGER.debug("Langfuse OTLP client is not instrumentable", exc_info=True)
 
 
+def _request_body_size(request: Any) -> int | str:
+    """Return the on-the-wire body length of one OTLP request, ``unknown`` when unavailable."""
+    body = getattr(request, "body", None)
+    if isinstance(body, (bytes, bytearray)):
+        return len(body)
+    return "unknown"
+
+
+def _request_encoding(request: Any) -> str:
+    """Return the ``Content-Encoding`` of one OTLP request (``none`` when uncompressed)."""
+    headers = getattr(request, "headers", None)
+    if headers is None or not callable(getattr(headers, "get", None)):
+        return "unknown"
+    return str(headers.get("Content-Encoding") or "none")
+
+
 def _response_excerpt(response: Any) -> str:
     """Return a bounded one-line excerpt of a rejected HTTP response."""
     try:
@@ -647,7 +663,15 @@ def _retrying_otlp_exporter(config: SampleConfig) -> Any | None:
                 if isinstance(status, int) and status >= 400:
                     body = _response_excerpt(response)
                     _remember_rejection_body(status, body)
-                    _LOGGER.warning("Langfuse OTLP request rejected: HTTP %s %s", status, body)
+                    # The bytes as they went on the wire (already compressed when gzip is on):
+                    # an egress proxy that rejects by body size needs this to be measurable.
+                    _LOGGER.warning(
+                        "Langfuse OTLP request rejected: HTTP %s bytes=%s encoding=%s %s",
+                        status,
+                        _request_body_size(request),
+                        _request_encoding(request),
+                        body,
+                    )
             except Exception:  # noqa: BLE001 - inspecting the response must never fail the export
                 _LOGGER.debug("Langfuse rejection capture failed", exc_info=True)
             return response
