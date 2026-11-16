@@ -5,14 +5,16 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
+from collections import OrderedDict
 from dataclasses import replace
 from datetime import UTC, datetime
 from email.message import Message
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from shared.config import MODEL_MODE_LIVE, SampleConfig, load_config
 from shared.langfuse_tracing import (
@@ -20,10 +22,17 @@ from shared.langfuse_tracing import (
     LANGFUSE_SCOPE_NAME,
     LangfuseRunMetadata,
     LangfuseSpanExporter,
+    _audit_for,
+    _audited_exporter,
     _get_runtime,
+    _instrument_otlp_client,
     _LangfuseRuntime,
     _probe_ingestion,
+    _record_batch,
+    _remember_rejection_body,
+    _reset_batch_diagnostics,
     _retrying_otlp_exporter,
+    _take_batch_diagnostics,
     create_langfuse_exporter,
 )
 
@@ -936,7 +945,8 @@ def test_the_otlp_exporter_retries_rejected_batches() -> None:
     exporter = _retrying_otlp_exporter(config)
 
     assert exporter is not None
-    transport = exporter._client._transport  # type: ignore[attr-defined]
+    inner = exporter._inner  # type: ignore[attr-defined]
+    transport = inner._client._transport  # type: ignore[attr-defined]
     session = transport._session  # type: ignore[attr-defined]
     retry = session.get_adapter("https://us.cloud.langfuse.com/api/public/otel/v1/traces").max_retries
     assert retry.total == 4
@@ -964,3 +974,153 @@ def test_the_runtime_uses_the_configured_flush_interval(monkeypatch) -> None:
 
     assert captured["flush_interval"] == 7.0
     assert captured["flush_at"] == 32
+
+
+class _ExportedSpan:
+    """Minimal readable span for the export-audit unit tests."""
+
+    def __init__(self, name: str, trace_id: int, observation_type: str = "span") -> None:
+        self.name = name
+        self.context = SimpleNamespace(trace_id=trace_id)
+        self.attributes = {"langfuse.observation.type": observation_type}
+
+
+@pytest.fixture
+def clean_export_audit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every audit test from an empty per-trace registry."""
+    monkeypatch.setattr("shared.langfuse_tracing._EXPORT_AUDITS", OrderedDict())
+
+
+def test_a_rejected_batch_is_visible_on_the_run_snapshot(
+    offline_config: SampleConfig, clean_export_audit: None
+) -> None:
+    """A 403 batch is dropped by OTel, so the exporter must count it, not say exported."""
+    exporter, _runtime = _exporter(offline_config)
+    trace_id = int(exporter.trace_id, 16)
+
+    _record_batch(
+        [
+            _ExportedSpan("LLM · task_t_slot_extraction", trace_id, "generation"),
+            _ExportedSpan("Propose · target · R1", trace_id),
+        ],
+        failed=True,
+        status=403,
+        reason='{"message":"Ingestion suspended: Usage threshold exceeded."}',
+    )
+
+    snapshot = exporter.snapshot()
+
+    assert snapshot["status"] == "failed"
+    assert snapshot["rejectedBatches"] == 1
+    assert snapshot["lostSpans"] == 2
+    assert snapshot["lostGenerations"] == 1
+    assert snapshot["deliveredSpans"] == 0
+    assert snapshot["lastRejectStatus"] == 403
+    assert "Ingestion suspended" in str(snapshot["warning"])
+
+
+def test_a_partially_rejected_trace_is_partial_not_exported(
+    offline_config: SampleConfig, clean_export_audit: None
+) -> None:
+    exporter, _runtime = _exporter(offline_config)
+    trace_id = int(exporter.trace_id, 16)
+
+    _record_batch([_ExportedSpan("run · night · a2a-t", trace_id)], failed=False)
+    _record_batch(
+        [_ExportedSpan("LLM · task_t_client_validation", trace_id, "generation")],
+        failed=True,
+        status=429,
+    )
+
+    snapshot = exporter.snapshot()
+
+    assert snapshot["status"] == "partial"
+    assert snapshot["deliveredSpans"] == 1
+    assert snapshot["lostSpans"] == 1
+    assert snapshot["lostGenerations"] == 1
+    assert snapshot["lastRejectStatus"] == 429
+
+
+def test_the_export_audit_is_attributed_per_trace(
+    offline_config: SampleConfig, clean_export_audit: None
+) -> None:
+    first, _first_runtime = _exporter(offline_config)
+    second, _second_runtime = _exporter(offline_config)
+    assert first.trace_id != second.trace_id
+
+    _record_batch(
+        [_ExportedSpan("LLM · slot extraction", int(first.trace_id, 16), "generation")],
+        failed=True,
+        status=403,
+    )
+    _record_batch([_ExportedSpan("run opened", int(second.trace_id, 16))], failed=False)
+
+    assert first.snapshot()["lostSpans"] == 1
+    assert second.snapshot()["lostSpans"] == 0
+    assert second.snapshot()["status"] == "exporting"
+    assert _audit_for(second.trace_id) is not None
+
+
+class _InnerExporter:
+    """Inner exporter double returning a fixed result."""
+
+    def __init__(self, result: SpanExportResult) -> None:
+        self.result = result
+        self.batches = 0
+        self.shutdown_calls = 0
+
+    def export(self, spans: list[Any]) -> SpanExportResult:
+        self.batches += 1
+        return self.result
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return True
+
+    def shutdown(self) -> None:
+        self.shutdown_calls += 1
+
+
+def test_the_audited_exporter_forwards_the_result_and_records_the_loss(
+    clean_export_audit: None,
+) -> None:
+    inner = _InnerExporter(SpanExportResult.FAILURE)
+    wrapper = _audited_exporter(inner)
+    trace_id = int("ab" * 16, 16)
+
+    result = wrapper.export([_ExportedSpan("LLM · task_t_slot_extraction", trace_id, "generation")])
+
+    assert result is SpanExportResult.FAILURE
+    assert inner.batches == 1
+    audit = _audit_for(f"{trace_id:032x}")
+    assert audit is not None
+    assert audit.lost_spans == 1
+    assert audit.lost_generations == 1
+    wrapper.shutdown()
+    assert inner.shutdown_calls == 1
+
+
+def test_the_otlp_client_status_is_captured() -> None:
+    """The exporter only returns SUCCESS/FAILURE; the client result names the HTTP status."""
+    class _Client:
+        def export(self, data: bytes) -> Any:
+            return SimpleNamespace(success=False, status_code=403, reason="Forbidden")
+
+    exporter = SimpleNamespace(_client=_Client())
+    _reset_batch_diagnostics()
+    _instrument_otlp_client(exporter)
+
+    result = exporter._client.export(b"{}")
+
+    assert result.success is False
+    assert _take_batch_diagnostics() == (403, "Forbidden")
+
+
+def test_a_rejection_body_is_paired_with_its_status() -> None:
+    """The proxy/gateway body is what distinguishes quota from throttling."""
+    _reset_batch_diagnostics()
+    _remember_rejection_body(403, '{"message":"Ingestion suspended: Usage threshold exceeded."}')
+
+    status, reason = _take_batch_diagnostics()
+
+    assert status == 403
+    assert "Ingestion suspended" in reason

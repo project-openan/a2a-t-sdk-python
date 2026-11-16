@@ -29,8 +29,9 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections import OrderedDict
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Final
 from urllib.parse import urlsplit
@@ -160,6 +161,7 @@ try:  # pragma: no cover - exercised by the import-guard test
     from opentelemetry.context import Context
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SpanExportResult
     from opentelemetry.trace import format_span_id, format_trace_id, set_span_in_context
 
     LANGFUSE_AVAILABLE = True
@@ -167,6 +169,7 @@ except ImportError:  # pragma: no cover - default test environment installs the 
     Langfuse = None  # type: ignore[assignment,misc]
     Context = None  # type: ignore[assignment,misc]
     Resource = None  # type: ignore[assignment,misc]
+    SpanExportResult = None  # type: ignore[assignment,misc]
     TracerProvider = None  # type: ignore[assignment,misc]
     format_span_id = None  # type: ignore[assignment]
     format_trace_id = None  # type: ignore[assignment]
@@ -310,6 +313,260 @@ def _should_export_span(span: Any) -> bool:
     return scope is not None and getattr(scope, "name", None) == LANGFUSE_SCOPE_NAME
 
 
+#: A rejected OTLP batch is dropped by the batch processor after a warning on the SDK's logger, so
+#: the run snapshot would still say ``exported``. This audit is the authoritative account of what
+#: each trace actually delivered. Entries are keyed by OTel trace id (the chain id under a workflow
+#: root) and bounded: a long-lived UI process must not grow the map without limit.
+_MAX_AUDITED_TRACES: Final[int] = 512
+
+
+@dataclass
+class _TraceExportAudit:
+    """Span delivery of one trace, counted per export attempt."""
+
+    batches: int = 0
+    rejected_batches: int = 0
+    spans: int = 0
+    lost_spans: int = 0
+    generations: int = 0
+    lost_generations: int = 0
+    last_status: int | None = None
+    last_reason: str = ""
+    lost_names: list[str] = field(default_factory=list)
+
+
+_EXPORT_AUDITS: "OrderedDict[str, _TraceExportAudit]" = OrderedDict()
+_EXPORT_AUDIT_LOCK = threading.Lock()
+#: Diagnostics of the batch being exported right now. Exports are serialized by the batch
+#: processor's export lock, so a module-level slot is enough; the locks keep it exception-safe.
+_BATCH_DIAGNOSTICS_LOCK = threading.Lock()
+_LAST_EXPORT_RESULT: tuple[bool, int | None, str] | None = None
+_LAST_REJECTION_BODY: tuple[int, str] | None = None
+
+
+def _reset_batch_diagnostics() -> None:
+    """Clear the diagnostics of the previous export attempt."""
+    global _LAST_EXPORT_RESULT, _LAST_REJECTION_BODY
+    with _BATCH_DIAGNOSTICS_LOCK:
+        _LAST_EXPORT_RESULT = None
+        _LAST_REJECTION_BODY = None
+
+
+def _remember_export_result(result: Any) -> None:
+    """Record the OTLP client's result (``success``/``status_code``/``reason``)."""
+    global _LAST_EXPORT_RESULT
+    with _BATCH_DIAGNOSTICS_LOCK:
+        _LAST_EXPORT_RESULT = (
+            bool(getattr(result, "success", False)),
+            getattr(result, "status_code", None),
+            str(getattr(result, "reason", "") or ""),
+        )
+
+
+def _remember_rejection_body(status: int, body: str) -> None:
+    """Record the response body of a rejected OTLP request."""
+    global _LAST_REJECTION_BODY
+    with _BATCH_DIAGNOSTICS_LOCK:
+        _LAST_REJECTION_BODY = (status, body)
+
+
+def _take_batch_diagnostics() -> tuple[int | None, str]:
+    """Return the HTTP status and reason of the batch just exported, when known."""
+    with _BATCH_DIAGNOSTICS_LOCK:
+        result = _LAST_EXPORT_RESULT
+        body = _LAST_REJECTION_BODY
+    status = result[1] if result else None
+    reason = result[2] if result else ""
+    if body is not None:
+        status = status or body[0]
+        reason = body[1] or reason
+    return status, reason
+
+
+def _trace_id_text(trace_id: int) -> str:
+    """Render one OTel trace id as 32 lowercase hex characters."""
+    formatter = format_trace_id
+    return formatter(trace_id) if callable(formatter) else format(trace_id, "032x")
+
+
+def _record_batch(
+    spans: Sequence[Any],
+    *,
+    failed: bool,
+    status: int | None = None,
+    reason: str = "",
+) -> None:
+    """Account one export attempt per trace; never raises."""
+    try:
+        counts: dict[str, tuple[int, int]] = {}
+        names: dict[str, list[str]] = {}
+        for span in spans:
+            context = getattr(span, "context", None)
+            trace_id = getattr(context, "trace_id", 0)
+            if not isinstance(trace_id, int) or trace_id <= 0:
+                continue
+            key = _trace_id_text(trace_id)
+            attributes = getattr(span, "attributes", None) or {}
+            is_generation = attributes.get(OBSERVATION_TYPE_ATTRIBUTE) == OBSERVATION_GENERATION
+            total, generations = counts.get(key, (0, 0))
+            counts[key] = (total + 1, generations + (1 if is_generation else 0))
+            if failed:
+                bucket = names.setdefault(key, [])
+                name = str(getattr(span, "name", "") or "")
+                if name and len(bucket) < 10:
+                    bucket.append(name)
+        if not counts:
+            return
+        with _EXPORT_AUDIT_LOCK:
+            for key, (total, generations) in counts.items():
+                audit = _EXPORT_AUDITS.get(key)
+                if audit is None:
+                    audit = _TraceExportAudit()
+                    _EXPORT_AUDITS[key] = audit
+                _EXPORT_AUDITS.move_to_end(key)
+                audit.batches += 1
+                audit.spans += total
+                audit.generations += generations
+                if failed:
+                    audit.rejected_batches += 1
+                    audit.lost_spans += total
+                    audit.lost_generations += generations
+                    if status is not None:
+                        audit.last_status = status
+                    if reason:
+                        audit.last_reason = reason[:300]
+                    bucket = names.get(key) or []
+                    room = max(0, 20 - len(audit.lost_names))
+                    audit.lost_names.extend(bucket[:room])
+            while len(_EXPORT_AUDITS) > _MAX_AUDITED_TRACES:
+                _EXPORT_AUDITS.popitem(last=False)
+        if failed:
+            _LOGGER.warning(
+                "Langfuse rejected a span batch: %d span(s), %d generation(s) not stored "
+                "(traces=%s, status=%s, reason=%s, spans=%s)",
+                sum(total for total, _ in counts.values()),
+                sum(generations for _, generations in counts.values()),
+                ",".join(sorted(counts)),
+                status if status is not None else "unknown",
+                reason[:200],
+                ",".join(name for bucket in names.values() for name in bucket),
+            )
+    except Exception:  # noqa: BLE001 - observability must never break the run
+        _LOGGER.debug("Langfuse export audit failed", exc_info=True)
+
+
+def _audit_for(trace_id: str) -> _TraceExportAudit | None:
+    """Return a copy of one trace's delivery audit, or ``None``."""
+    with _EXPORT_AUDIT_LOCK:
+        audit = _EXPORT_AUDITS.get(trace_id)
+        if audit is None:
+            return None
+        return _TraceExportAudit(
+            batches=audit.batches,
+            rejected_batches=audit.rejected_batches,
+            spans=audit.spans,
+            lost_spans=audit.lost_spans,
+            generations=audit.generations,
+            lost_generations=audit.lost_generations,
+            last_status=audit.last_status,
+            last_reason=audit.last_reason,
+            lost_names=list(audit.lost_names),
+        )
+
+
+class _AuditingSpanExporter:
+    """Span exporter that records what each trace actually delivered.
+
+    It implements the ``SpanExporter`` protocol instead of inheriting from it: the SDK import is
+    optional, and the batch processor only calls ``export``/``force_flush``/``shutdown``.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def export(self, spans: Sequence[Any]) -> Any:
+        _reset_batch_diagnostics()
+        try:
+            result = self._inner.export(spans)
+        except Exception:  # noqa: BLE001 - record, then preserve the exporter contract
+            status, reason = _take_batch_diagnostics()
+            _record_batch(spans, failed=True, status=status, reason=reason)
+            raise
+        success = getattr(SpanExportResult, "SUCCESS", None)
+        failed = success is None or result is not success
+        if failed:
+            status, reason = _take_batch_diagnostics()
+        else:
+            status, reason = None, ""
+        _record_batch(spans, failed=failed, status=status, reason=reason)
+        return result
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        force_flush = getattr(self._inner, "force_flush", None)
+        return bool(force_flush(timeout_millis)) if callable(force_flush) else True
+
+
+def _audited_exporter(exporter: Any) -> Any:
+    """Wrap one exporter with the per-trace audit (a no-op when the SDK is absent)."""
+    if not LANGFUSE_AVAILABLE:
+        return exporter
+    try:
+        return _AuditingSpanExporter(exporter)
+    except Exception:  # noqa: BLE001 - never break the export path
+        _LOGGER.debug("Langfuse export audit wrapper unavailable", exc_info=True)
+        return exporter
+
+
+def _instrument_otlp_client(exporter: Any) -> None:
+    """Capture the OTLP client's status code without depending on the exporter's API.
+
+    The HTTP exporter returns only ``SUCCESS``/``FAILURE`` to the batch processor, but its client
+    result also carries ``status_code``. Wrapping that call is version-tolerant: when the attribute
+    is absent the audit still counts failures, it just cannot name the status.
+    """
+    client = getattr(exporter, "_client", None)
+    export = getattr(client, "export", None)
+    if client is None or not callable(export):
+        return
+
+    def audited_export(data: bytes) -> Any:
+        result = export(data)
+        try:
+            _remember_export_result(result)
+        except Exception:  # noqa: BLE001 - the export already succeeded or failed on its own
+            _LOGGER.debug("Langfuse export result capture failed", exc_info=True)
+        return result
+
+    try:
+        client.export = audited_export
+    except Exception:  # noqa: BLE001 - a read-only client just loses the status code
+        _LOGGER.debug("Langfuse OTLP client is not instrumentable", exc_info=True)
+
+
+def _response_excerpt(response: Any) -> str:
+    """Return a bounded one-line excerpt of a rejected HTTP response."""
+    try:
+        text = response.text
+    except Exception:  # noqa: BLE001 - a body we cannot read is not worth failing over
+        return ""
+    if not isinstance(text, str):
+        return ""
+    return " ".join(text.split())[:300]
+
+
+def _rejection_warning(audit: _TraceExportAudit) -> str:
+    """Return the human sentence of one trace's rejected batches."""
+    status = f" (HTTP {audit.last_status})" if audit.last_status is not None else ""
+    reason = f": {audit.last_reason}" if audit.last_reason else ""
+    return (
+        f"Langfuse rejected {audit.rejected_batches} batch(es): {audit.lost_spans} span(s) "
+        f"including {audit.lost_generations} generation(s) were not stored{status}{reason}"
+    )
+
+
 def _retrying_otlp_exporter(config: SampleConfig) -> Any | None:
     """Return an OTLP exporter that retries a temporary ingestion rejection.
 
@@ -364,18 +621,72 @@ def _retrying_otlp_exporter(config: SampleConfig) -> Any | None:
         raise_on_status=False,
     )
     session = requests.Session()
-    adapter = HTTPAdapter(max_retries=retry)
+
+    class _CapturingHTTPAdapter(HTTPAdapter):
+        """HTTP adapter that keeps the rejection status and body of an OTLP request."""
+
+        def send(
+            self,
+            request: Any,
+            stream: bool = False,
+            timeout: Any = None,
+            verify: Any = True,
+            cert: Any = None,
+            proxies: Any = None,
+        ) -> Any:
+            response = super().send(
+                request,
+                stream=stream,
+                timeout=timeout,
+                verify=verify,
+                cert=cert,
+                proxies=proxies,
+            )
+            try:
+                status = getattr(response, "status_code", 0)
+                if isinstance(status, int) and status >= 400:
+                    body = _response_excerpt(response)
+                    _remember_rejection_body(status, body)
+                    _LOGGER.warning("Langfuse OTLP request rejected: HTTP %s %s", status, body)
+            except Exception:  # noqa: BLE001 - inspecting the response must never fail the export
+                _LOGGER.debug("Langfuse rejection capture failed", exc_info=True)
+            return response
+
+    adapter = _CapturingHTTPAdapter(max_retries=retry)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
+    compression: Any = None
     try:
-        return OTLPSpanExporter(
-            endpoint=endpoint,
-            headers=headers,
-            timeout=_OTLP_TIMEOUT_SECONDS,
-            session=session,
-        )
+        from opentelemetry.exporter.otlp.proto.http import Compression
+
+        if not (
+            os.environ.get("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION")
+            or os.environ.get("OTEL_EXPORTER_OTLP_COMPRESSION")
+        ):
+            # The Langfuse SDK's own exporter defaults to gzip; a custom span_exporter must opt in.
+            compression = Compression.Gzip
+    except Exception:  # noqa: BLE001 - uncompressed is still a working exporter
+        compression = None
+    try:
+        if compression is not None:
+            exporter = OTLPSpanExporter(
+                endpoint=endpoint,
+                headers=headers,
+                timeout=_OTLP_TIMEOUT_SECONDS,
+                compression=compression,
+                session=session,
+            )
+        else:
+            exporter = OTLPSpanExporter(
+                endpoint=endpoint,
+                headers=headers,
+                timeout=_OTLP_TIMEOUT_SECONDS,
+                session=session,
+            )
     except Exception:  # noqa: BLE001 - fall back to the SDK default exporter
         return None
+    _instrument_otlp_client(exporter)
+    return _audited_exporter(exporter)
 
 
 def _get_runtime(config: SampleConfig) -> _LangfuseRuntime | None:
@@ -865,14 +1176,40 @@ class LangfuseSpanExporter:
                     self._trace_url = _ui_trace_url(sdk_url, self._config.langfuse_ui_base_url)
                 except Exception as exc:  # noqa: BLE001 - the trace id is still useful
                     self._warning = self._warning or f"{type(exc).__name__}: {exc}"
+            status = self._status
+            warning = self._warning
+            delivered = self._exported
+            rejected_batches = 0
+            lost_spans = 0
+            lost_generations = 0
+            last_status: int | None = None
+            audit = _audit_for(self._trace_id)
+            if audit is not None:
+                delivered = max(audit.spans - audit.lost_spans, 0)
+                rejected_batches = audit.rejected_batches
+                lost_spans = audit.lost_spans
+                lost_generations = audit.lost_generations
+                last_status = audit.last_status
+                if lost_spans:
+                    # A rejected batch is dropped by the batch processor; saying "exported" here
+                    # is what hid the field 403 losses. "failed" stays reserved for a flush error
+                    # or for a trace that lost every span.
+                    status = "failed" if self._status == "failed" or delivered <= 0 else "partial"
+                    detail = _rejection_warning(audit)
+                    warning = f"{warning}; {detail}" if warning else detail
             return {
                 "enabled": True,
                 "traceId": self._trace_id,
                 "workflowRootSpanId": self._workflow_root_span_id or None,
                 "url": self._trace_url,
-                "status": self._status,
-                "warning": self._warning,
+                "status": status,
+                "warning": warning,
                 "exportedSpans": self._exported,
+                "deliveredSpans": delivered,
+                "rejectedBatches": rejected_batches,
+                "lostSpans": lost_spans,
+                "lostGenerations": lost_generations,
+                "lastRejectStatus": last_status,
             }
 
     def _export(self, span: Mapping[str, object]) -> None:
