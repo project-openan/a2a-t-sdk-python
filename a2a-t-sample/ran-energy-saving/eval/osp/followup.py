@@ -5,7 +5,7 @@ tester records the interception first, then replays the replacement through the 
 expectations, so the item does not stop at the blocked state and the intercepted request is never
 dispatched. The replacement is a *follow-up to a held gate*: when the original request was not
 intercepted, the case has already failed and the replacement must not run (see
-:func:`interception_held`).
+:func:`followup_allowed`).
 
 Two derived documents are needed and neither the SDK runner nor the tester should duplicate the
 merge rules:
@@ -33,26 +33,27 @@ A2A_T_PATH: Final[tuple[str, ...]] = ("expect", "protocols", "a2a-t")
 
 #: Observed validation verdict that proves the original request was intercepted.
 BLOCKING_VERDICT: Final[str] = "blocked"
+#: Observed verdict of a validation that could not run; it proves neither a block nor a pass.
+UNAVAILABLE_VERDICT: Final[str] = "unavailable"
 #: Message of a missed interception whose validation is recorded instead of judged.
 MISSED_INTERCEPTION_NOTE: Final[str] = (
     "原请求未被拦截：补充请求（blocked_followup.input）未执行，本用例按记录处理。"
 )
 
 
-def interception_held(verdict: str | None) -> bool:
-    """Return whether an interception segment lets the replacement request run.
+def followup_allowed(verdict: str | None) -> bool:
+    """Return whether the replacement request of a blocked case may run.
 
-    A blocked case's contract is "the original request is intercepted, then the replacement is
-    sent". The replacement is therefore only reachable through a held gate: an observed verdict
-    other than ``blocked`` (the request passed, or validation was unavailable) means the original
-    was not intercepted, so the case has failed and its replacement must not run.
+    The replacement is a follow-up to a *held* gate. Only an observed ``pass`` proves the gate was
+    bypassed: that case has nothing left to judge and the replacement must not run.
 
     A block whose slot errors differ from the case is still a block: that case fails on its slot
-    expectation, but it never dispatched anything, so the replacement still runs. ``None`` is a run
-    that observed no verdict at all (a batch that stops at ``intent`` / ``task_t``, or a validation
-    call that errored); nothing proves a miss there, so the two-segment behaviour is kept.
+    expectation, but it never dispatched anything, so the replacement still runs. ``unavailable``
+    and ``None`` are runs without a usable verdict (a validation that could not run, a batch that
+    stops at ``intent`` / ``task_t``, or an errored validation call); neither proves a bypass, so
+    the two-segment behaviour is kept.
     """
-    return verdict is None or verdict == BLOCKING_VERDICT
+    return verdict is None or verdict in {BLOCKING_VERDICT, UNAVAILABLE_VERDICT}
 
 
 def followup_input(case: Mapping[str, Any]) -> str | None:

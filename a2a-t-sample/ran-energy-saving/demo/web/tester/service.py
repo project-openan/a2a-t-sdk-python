@@ -43,10 +43,10 @@ from eval.osp.expectations import (
     slot_error_evidence,
 )
 from eval.osp.followup import (
+    followup_allowed,
     followup_case,
     followup_input,
     has_followup,
-    interception_held,
     is_blocked_case,
     original_dispatch_case,
 )
@@ -3366,7 +3366,7 @@ def _interception_held(item: CaseItem) -> bool:
     stages = record.get("stages")
     validate = stages.get("validate") if isinstance(stages, Mapping) else None
     actual = validate.get("actual") if isinstance(validate, Mapping) else None
-    return interception_held(actual if isinstance(actual, str) and actual else None)
+    return followup_allowed(actual if isinstance(actual, str) and actual else None)
 
 
 def _interception_miss_detail(item: CaseItem) -> str:

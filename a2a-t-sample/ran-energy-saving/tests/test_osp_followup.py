@@ -6,11 +6,11 @@ from typing import Any
 
 import pytest
 from eval.osp.followup import (
+    followup_allowed,
     followup_case,
     followup_input,
     has_followup,
     interception_case,
-    interception_held,
     is_blocked_case,
     original_dispatch_case,
 )
@@ -204,15 +204,15 @@ def test_the_followup_case_requires_a_blocked_expectation() -> None:
 
 
 def test_a_blocked_verdict_lets_the_followup_run() -> None:
-    assert interception_held("blocked") is True
+    assert followup_allowed("blocked") is True
 
 
-@pytest.mark.parametrize("verdict", ["pass", "unavailable"])
-def test_an_unblocked_verdict_stops_the_followup(verdict: str) -> None:
-    assert interception_held(verdict) is False
+def test_a_passing_verdict_stops_the_followup() -> None:
+    assert followup_allowed("pass") is False
 
 
-def test_an_unobserved_verdict_keeps_the_two_segment_behaviour() -> None:
-    # A batch that stops at ``intent`` / ``task_t`` or a validation call that errored produced no
-    # verdict, so nothing proves the original was not intercepted.
-    assert interception_held(None) is True
+@pytest.mark.parametrize("verdict", ["unavailable", None])
+def test_an_unusable_verdict_keeps_the_two_segment_behaviour(verdict: str | None) -> None:
+    # A validation that could not run, a batch that stops at ``intent`` / ``task_t`` and an
+    # errored validation call all prove neither a block nor a bypass.
+    assert followup_allowed(verdict) is True

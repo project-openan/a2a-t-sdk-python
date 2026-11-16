@@ -48,10 +48,10 @@ from eval.osp.detail import render_failures
 from eval.osp.expectations import slot_error_evidence
 from eval.osp.followup import (
     MISSED_INTERCEPTION_NOTE,
+    followup_allowed,
     followup_case,
     has_followup,
     interception_case,
-    interception_held,
     is_blocked_case,
 )
 from eval.osp.intent_schema import OSP_INTENT_SCHEMA
@@ -258,7 +258,7 @@ def _interception_held(outcome: CaseOutcome) -> bool:
     """Return whether one interception segment's verdict lets the follow-up request run."""
     stage = next((stage for stage in outcome.stages if stage.stage == "validate"), None)
     actual = stage.actual if stage is not None else None
-    return interception_held(actual if isinstance(actual, str) else None)
+    return followup_allowed(actual if isinstance(actual, str) else None)
 
 
 def _recorded_interception(
