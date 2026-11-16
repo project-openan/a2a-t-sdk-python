@@ -1426,6 +1426,7 @@ class ReviewService:
                 "decisionMode": "",
                 "nms": False,
                 "inputChanged": False,
+                "data": [],
                 "decision": self._decision_block(case, protocol, decision, [], scope=scope),
             }
         evidence_map = _judged_evidence(observation)
@@ -1463,6 +1464,10 @@ class ReviewService:
             "inputChanged": input_changed,
             "traceReason": trace_reasons[0] if trace_reasons else "",
             "traceReasons": trace_reasons,
+            # The key-data table is one row per case × protocol. Keep the presence status and the
+            # copy names only: the verbatim text stays in the round detail so a 200-case batch
+            # does not duplicate every Task-T into the list payload.
+            "data": _compact_data(judgement.detail.get("trace") if isinstance(judgement.detail, Mapping) else None),
             "decision": self._decision_block(
                 case,
                 protocol,
@@ -1844,6 +1849,43 @@ def _string_list(value: object) -> list[str] | None:
     if not isinstance(value, list):
         return None
     return [str(item) for item in value]
+
+
+def _compact_data(trace: object) -> list[dict[str, object]]:
+    """Return the batch-level key-data row without the verbatim copy text."""
+    block = trace if isinstance(trace, Mapping) else {}
+    rows = block.get("data")
+    if not isinstance(rows, list):
+        return []
+    compact: list[dict[str, object]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        copies = row.get("copies")
+        compact.append(
+            {
+                "id": str(row.get("id") or ""),
+                "label": str(row.get("label") or ""),
+                "required": bool(row.get("required")),
+                "applicable": row.get("applicable") is not False,
+                "status": str(row.get("status") or ""),
+                "present": bool(row.get("present")),
+                "copies": [
+                    {
+                        "source": str(copy.get("source") or ""),
+                        "span": str(copy.get("span") or ""),
+                        "runId": str(copy.get("runId") or ""),
+                        "side": str(copy.get("side") or ""),
+                        "round": copy.get("round"),
+                    }
+                    for copy in copies
+                    if isinstance(copy, Mapping)
+                ]
+                if isinstance(copies, list)
+                else [],
+            }
+        )
+    return compact
 
 
 def _judged_evidence(observation: Mapping[str, object]) -> dict[str, object]:

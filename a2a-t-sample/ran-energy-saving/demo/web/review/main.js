@@ -71,6 +71,7 @@ const state = {
   cases: [],
   batches: [],
   batch: null, // payload of the selected batch/round
+  batchView: "status", // "status": dimension table; "data": key-data table
   selectedBatch: null, // {batchId, round}
   selected: null, // {caseId, protocol}
   detail: null,
@@ -704,11 +705,123 @@ function renderBatch() {
   const scrollTop = container.scrollTop;
   container.replaceChildren();
   container.append(renderBatchSummary());
-  container.append(renderBatchTable());
-  refreshBatchTable();
+  container.append(renderBatchTabs());
+  if (state.batchView === "data") {
+    container.append(renderDataTable());
+  } else {
+    container.append(renderBatchTable());
+    refreshBatchTable();
+  }
   container.scrollTop = scrollTop;
   const header = document.getElementById("progress");
   if (header) header.textContent = progressText(state.batch);
+}
+
+function renderBatchTabs() {
+  const bar = el("div", "view-switch");
+  for (const [view, label] of [
+    ["status", "本轮用例状态"],
+    ["data", "关键数据"],
+  ]) {
+    const button = el("button", `tab ${state.batchView === view ? "active" : ""}`, label);
+    button.type = "button";
+    button.addEventListener("click", () => {
+      state.batchView = view;
+      renderBatch();
+    });
+    bar.append(button);
+  }
+  return bar;
+}
+
+const DATA_POINT_LABELS = [
+  ["request.original", "原始请求"],
+  ["request.dispatched", "实际下发"],
+  ["slot_extraction", "槽位抽取"],
+  ["task_t", "Task-T"],
+  ["negotiation.message", "协商报文"],
+  ["negotiation.reply", "协商回复"],
+  ["task.succeeded", "成功报文"],
+];
+
+function dataRowsOf(task) {
+  const rows = Array.isArray(task.data) ? task.data : [];
+  return new Map(rows.map((row) => [row.id, row]));
+}
+
+export function dataCellText(row) {
+  if (!row || row.applicable === false) return "—";
+  if (row.status !== "present") return "缺";
+  const copies = Array.isArray(row.copies) ? row.copies : [];
+  const rounds = new Set(
+    copies.map((copy) => copy.round).filter((round) => Number.isInteger(round)),
+  );
+  if (row.id && row.id.startsWith("negotiation.") && rounds.size) return `✓ ${rounds.size} 轮`;
+  return `✓ ${copies.length || 1}`;
+}
+
+export function dataCellClass(row) {
+  if (!row || row.applicable === false) return "";
+  if (row.status !== "present") return row.required ? "fail" : "partial";
+  return "";
+}
+
+function renderDataTable() {
+  const card = el("section", "card");
+  const head = el("div", "section-title");
+  head.append(el("h2", "", "关键数据（1 行 = 1 用例 × 1 协议）"));
+  card.append(head);
+  card.append(
+    el(
+      "p",
+      "sub",
+      "只判导出的 Langfuse 轨迹里数据有没有；✓ n 表示 n 份副本中任一命中。点单元格查看该用例该协议的原文。",
+    ),
+  );
+  const wrap = el("div", "table-wrap");
+  const table = el("table", "batch-table data-table");
+  const headRow = el("tr");
+  for (const label of ["#", "用例", "协议", ...DATA_POINT_LABELS.map((entry) => entry[1]), "结论"]) {
+    headRow.append(el("th", "", label));
+  }
+  const thead = document.createElement("thead");
+  thead.append(headRow);
+  table.append(thead);
+  const tbody = document.createElement("tbody");
+  table.append(tbody);
+  wrap.append(table);
+  card.append(wrap);
+  for (const caseRow of (state.batch && state.batch.cases) || []) {
+    for (const task of caseRow.protocols || []) {
+      const tr = el("tr");
+      tr.append(el("td", "", String(caseRow.caseId)));
+      tr.append(el("td", "", caseRow.caseName || ""));
+      tr.append(el("td", "", protocolLabel(task.protocol)));
+      const rows = dataRowsOf(task);
+      for (const [pointId] of DATA_POINT_LABELS) {
+        const row = rows.get(pointId);
+        const cell = el("td", `data-cell ${dataCellClass(row)}`, dataCellText(row));
+        if (row && row.copies && row.copies.length) {
+          cell.title = row.copies
+            .map(
+              (copy) =>
+                `${copy.source}${copy.span ? ` · ${copy.span}` : ""}${copy.round ? ` · R${copy.round}` : ""}`,
+            )
+            .join("\n");
+        }
+        cell.addEventListener("click", () => {
+          selectProtocol(caseRow, task.protocol, {
+            batchId: (state.batch.batch || {}).batchId,
+            round: (state.batch.batch || {}).round,
+          }).catch((caught) => showNotice(caught.message, "error"));
+        });
+        tr.append(cell);
+      }
+      tr.append(el("td", `verdict ${task.status}`, statusLabel(task.status)));
+      tbody.append(tr);
+    }
+  }
+  return card;
 }
 
 function renderBatchSummary() {
@@ -2020,6 +2133,7 @@ function renderDetail() {
     const round = (state.detail.rounds || [])[state.round];
     if (round) {
       container.append(renderDimensionStrip(round));
+      container.append(renderDataCard(round));
       container.append(renderIntentCard(round));
       // Pure A2A has no SDK Task-T and no interception, and both dimensions are judged
       // not_applicable there; showing the empty cards only adds noise.
@@ -2455,21 +2569,91 @@ function renderTaskTCard(round) {
   return card;
 }
 
+function renderDataCard(round) {
+  const detail = (round.judgement && round.judgement.detail) || {};
+  const trace = detail.trace || {};
+  const rows = Array.isArray(trace.data) ? trace.data : [];
+  if (!rows.length) return null;
+  const card = el("section", "card");
+  const applicable = rows.filter((row) => row.applicable !== false);
+  const present = applicable.filter((row) => row.present);
+  card.append(el("h2", "", "关键数据"));
+  card.append(
+    el(
+      "p",
+      "sub",
+      `导出的 Langfuse 轨迹中，${present.length}/${applicable.length} 项关键数据有副本。只判有无，不比对副本内容。`,
+    ),
+  );
+  const table = document.createElement("table");
+  table.className = "grid";
+  const headRow = el("tr");
+  for (const title of ["数据项", "状态", "Langfuse 副本", "原文"]) {
+    headRow.append(el("th", "", title));
+  }
+  table.append(headRow);
+  for (const row of rows) {
+    const applies = row.applicable !== false;
+    const missing = applies && !row.present;
+    const tr = el("tr", missing && row.required ? "fail" : missing ? "partial" : "");
+    tr.append(el("td", "", row.label || row.id));
+    const status = !applies ? "不适用" : row.present ? "有" : row.required ? "缺（必选）" : "缺（可选）";
+    tr.append(el("td", `verdict ${!applies ? "na" : row.present ? "pass" : "missing"}`, status));
+    const copies = Array.isArray(row.copies) ? row.copies : [];
+    const copyCell = el("td", "");
+    copyCell.append(
+      el(
+        "span",
+        "sub",
+        copies.length
+          ? copies
+              .map(
+                (copy) =>
+                  `${copy.source}${copy.span ? ` · ${copy.span}` : ""}${copy.round ? ` · R${copy.round}` : ""}`,
+              )
+              .join("\n")
+          : "—",
+      ),
+    );
+    tr.append(copyCell);
+    const valueCell = el("td", "");
+    const values = copies.filter((copy) => copy.value);
+    if (values.length) {
+      const box = document.createElement("details");
+      box.append(el("summary", "", `${values.length} 份原文`));
+      for (const copy of values) {
+        box.append(el("p", "sub", `${copy.source}${copy.span ? ` · ${copy.span}` : ""}`));
+        box.append(el("pre", "mono", copy.value));
+      }
+      valueCell.append(box);
+    } else if (copies.some((copy) => copy.excerpt)) {
+      valueCell.append(el("span", "sub", copies.map((copy) => copy.excerpt || "").filter(Boolean).join("\n")));
+    } else {
+      valueCell.append(el("span", "sub", "—"));
+    }
+    tr.append(valueCell);
+    table.append(tr);
+  }
+  card.append(table);
+  return card;
+}
+
 function renderTracePointsCard(round) {
   const detail = (round.judgement && round.judgement.detail) || {};
   const trace = detail.trace || {};
   const points = trace.points || [];
   if (!points.length) return null;
-  // The trace points are their own acceptance area, never a footer of the SDK Task-T card: they
-  // describe what the run emitted, and the Task-T card describes what it generated. The table is
-  // expanded by default so a reviewer does not have to open a disclosure per round.
+  // Reference only: the point table explains an ingest gap, it no longer gates acceptance. The
+  // key-data card above is the judged view; this one stays folded so it does not compete with it.
   const card = el("section", "card");
   const passed = points.filter((point) => point.ok).length;
-  card.append(el("h2", "", "轨迹过程点"));
   const facts = [`期望 vs Langfuse，${passed}/${points.length} 满足`];
   if (trace.traceId) facts.push(`traceId ${trace.traceId}`);
   if (trace.nmsKind) facts.push(`下游 ${trace.nmsKind}`);
+  card.append(el("h2", "", "轨迹过程点（参考）"));
   card.append(el("p", "sub", facts.join(" · ")));
+  const box = document.createElement("details");
+  box.append(el("summary", "", "展开参考表（不影响验收结论）"));
   const table = document.createElement("table");
   table.className = "grid";
   const headRow = el("tr");
@@ -2478,7 +2662,7 @@ function renderTracePointsCard(round) {
   }
   table.append(headRow);
   for (const point of points) {
-    const tr = el("tr", point.ok ? "" : "fail");
+    const tr = el("tr", point.ok ? "" : "partial");
     // The original Langfuse observation name rides next to the process point so the table can be
     // matched against the observation list below without knowing the point-to-span mapping.
     const spans = (point.spans || []).filter(Boolean);
@@ -2489,11 +2673,12 @@ function renderTracePointsCard(round) {
       labelCell,
       el("td", "", point.expected),
       el("td", "", point.observed),
-      el("td", `verdict ${point.ok ? "same" : "missing"}`, point.ok ? "满足" : "缺失"),
+      el("td", `verdict ${point.ok ? "same" : "partial"}`, point.ok ? "满足" : "缺失（参考）"),
     );
     table.append(tr);
   }
-  card.append(table);
+  box.append(table);
+  card.append(box);
   return card;
 }
 

@@ -91,6 +91,17 @@ class Observation:
     prompt_text: str = ""
     prompt_truncated: bool = False
     params: Mapping[str, object] | None = None
+    task_t: str = ""
+    negotiation_t: str = ""
+    content: str = ""
+    response: str = ""
+    operation: str = ""
+    state: str = ""
+    task_id: str = ""
+    context_id: str = ""
+    final_state: str = ""
+    summary: str = ""
+    source: str = ""
 
     def to_dict(self) -> dict[str, object]:
         """Return the compact export form used by the review store."""
@@ -118,6 +129,21 @@ class Observation:
             payload["promptTruncated"] = self.prompt_truncated
         if self.params is not None:
             payload["params"] = dict(self.params)
+        for key, value in (
+            ("taskT", self.task_t),
+            ("negotiationT", self.negotiation_t),
+            ("content", self.content),
+            ("response", self.response),
+            ("operation", self.operation),
+            ("state", self.state),
+            ("taskId", self.task_id),
+            ("contextId", self.context_id),
+            ("finalState", self.final_state),
+            ("summary", self.summary),
+            ("source", self.source),
+        ):
+            if value:
+                payload[key] = value
         return payload
 
 
@@ -331,6 +357,10 @@ class TraceStore:
                 self.root,
                 zip_file=False,
                 run_id=run_id,
+                # Self-hosted Langfuse truncates metadata values unless they are expanded. The
+                # acceptance artifact keeps the Task-T and negotiation text in ``detail``;
+                # without this the export can contain the span but not the data.
+                expand_metadata=["detail"],
             )
         except Exception as exc:  # noqa: BLE001 - the review must survive a vendor outage
             failed = self.root / f"{trace_id}_failed-{_stamp()}"
@@ -371,20 +401,28 @@ class TraceStore:
 
 
 def normalize_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[Observation, ...]:
-    """Project raw Langfuse observation rows onto the review fields."""
+    """Project raw Langfuse observation rows onto the review fields.
+
+    Langfuse v4 flattens the exporter's ``detail`` object into dotted metadata keys
+    (``detail.promptText``), while v3 and the unit fixtures keep it nested. Both shapes are merged
+    here; reading only the nested form silently emptied Task-T, userRequest and verdict on every
+    real export.
+    """
     observations: list[Observation] = []
     for row in rows:
         raw_metadata = row.get("metadata")
         metadata: Mapping[str, Any] = raw_metadata if isinstance(raw_metadata, Mapping) else {}
-        raw_detail = metadata.get("detail")
-        detail: Mapping[str, Any] = raw_detail if isinstance(raw_detail, Mapping) else {}
+        detail = _merged_detail(metadata)
         raw_type = _text(row.get("type")).upper()
         kind = _text(metadata.get("kind"))
         if not kind:
             kind = "llm" if raw_type == "GENERATION" else "tool" if raw_type == "TOOL" else ""
         side, side_source = _side(row, metadata)
         prompt_text, prompt_truncated = _clip(_text(detail.get("promptText")), MAX_PROMPT_TEXT)
-        raw_params = detail.get("params")
+        response_text, _ = _clip(_output_text(row.get("output")), MAX_PROMPT_TEXT)
+        task_t, _ = _clip(_text(detail.get("taskT")), MAX_PROMPT_TEXT)
+        negotiation_t, _ = _clip(_text(detail.get("negotiationT")), MAX_PROMPT_TEXT)
+        user_request = _text(detail.get("userRequest")) or _text(metadata.get("userRequest"))
         observations.append(
             Observation(
                 name=_text(row.get("name")),
@@ -394,7 +432,8 @@ def normalize_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[Observation, ...]
                 side=side,
                 side_source=side_source,
                 round=_round(metadata),
-                performative=_text(metadata.get("attributes.gen_ai.agent.a2at.negotiation.performative")),
+                performative=_text(metadata.get("attributes.gen_ai.agent.a2at.negotiation.performative"))
+                or _text(detail.get("performative")),
                 status=_text(metadata.get("status")),
                 verdict=_text(detail.get("verdict")),
                 interception=_text(detail.get("source")) == "interception",
@@ -402,13 +441,66 @@ def normalize_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[Observation, ...]
                 scope=_scope(metadata),
                 span_id=_text(row.get("id")),
                 parent_id=_text(row.get("parentObservationId")),
-                user_request=_text(detail.get("userRequest")),
+                user_request=user_request,
                 prompt_text=prompt_text,
                 prompt_truncated=prompt_truncated,
-                params=dict(raw_params) if isinstance(raw_params, Mapping) else None,
+                params=_merged_params(detail),
+                task_t=task_t,
+                negotiation_t=negotiation_t,
+                content=_text(detail.get("content")),
+                response=response_text,
+                operation=_text(detail.get("operation")),
+                state=_text(detail.get("state")) or _text(metadata.get("state")),
+                task_id=_text(metadata.get("taskId")) or _text(metadata.get("task_id")),
+                context_id=_text(metadata.get("contextId")) or _text(metadata.get("context_id")),
+                final_state=_text(detail.get("finalState")) or _text(metadata.get("finalState")),
+                summary=_text(detail.get("summary")),
+                source=_text(detail.get("source")),
             )
         )
     return tuple(observations)
+
+
+def _merged_detail(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the span detail from either the nested or the flattened Langfuse shape."""
+    detail: dict[str, Any] = {}
+    nested = metadata.get("detail")
+    if isinstance(nested, Mapping):
+        detail.update({str(key): value for key, value in nested.items()})
+    for key, value in metadata.items():
+        if not isinstance(key, str) or not key.startswith("detail."):
+            continue
+        path = key[len("detail.") :]
+        head, separator, rest = path.partition(".")
+        if not separator:
+            detail.setdefault(head, value)
+            continue
+        bucket = detail.get(head)
+        if not isinstance(bucket, dict):
+            bucket = {}
+            detail[head] = bucket
+        bucket[rest] = value
+    return detail
+
+
+def _merged_params(detail: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return the structured params of a ``task_created`` span, if any."""
+    raw = detail.get("params")
+    if isinstance(raw, Mapping):
+        return {str(key): value for key, value in raw.items()}
+    return None
+
+
+def _output_text(value: object) -> str:
+    """Return the model output of a GENERATION as text."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (Mapping, list)):
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return ""
+    return ""
 
 
 def build_frames(

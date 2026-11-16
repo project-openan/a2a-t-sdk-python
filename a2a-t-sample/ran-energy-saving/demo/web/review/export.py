@@ -17,6 +17,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Final
 
+from eval.osp.datapoints import DATA_POINT_IDS
 from eval.osp.tracecheck import TRACE_REASONS, Fidelity, fidelity_summary
 
 from demo.web.yaml_dump import dump_yaml
@@ -219,6 +220,25 @@ def report_markdown(
         for code in TRACE_REASONS:
             if reason_counts.get(code):
                 lines.append(f"| `{code}` | {reason_counts[code]} |")
+
+    lines.extend(["", "## 2.2 关键数据表", ""])
+    lines.append(
+        "| # | 用例 | 协议 | 原始请求 | 实际下发 | 槽位抽取 | Task-T | 协商报文 | 协商回复 | 成功报文 | 结论 |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
+    for case in entries:
+        for protocol, task in _tasks(case):
+            data_rows = task.get("data")
+            rows = {
+                str(row.get("id") or ""): row
+                for row in (data_rows if isinstance(data_rows, list) else ())
+                if isinstance(row, Mapping)
+            }
+            cells = [_data_cell(rows.get(point_id)) for point_id in DATA_POINT_IDS]
+            lines.append(
+                f"| `#{case.get('id')}` | {case.get('name')} | {_PROTOCOL_LABEL.get(protocol, protocol)}"
+                f" | {' | '.join(cells)} | {_STATUS_LABEL.get(_auto_status(task), _auto_status(task))} |"
+            )
 
     acknowledged = [
         (case, protocol, task)
@@ -495,6 +515,7 @@ def _trace_entry(detail: Mapping[str, object]) -> dict[str, object]:
         "exportState": trace.get("exportState"),
         "frames": trace.get("frames") if isinstance(trace.get("frames"), Mapping) else {},
         "attribution": trace.get("attribution") if isinstance(trace.get("attribution"), Mapping) else {},
+        "data": [dict(row) for row in trace.get("data") or [] if isinstance(row, Mapping)],
         "points": [
             {
                 "id": row.get("point"),
@@ -536,6 +557,26 @@ def _tasks(
         if isinstance(task, Mapping):
             tasks.append((str(task.get("protocol") or ""), task))
     return tasks
+
+
+def _data_cell(row: Mapping[str, object] | None) -> str:
+    """Render one key-data cell of the Markdown table."""
+    if not isinstance(row, Mapping):
+        return "—"
+    if row.get("applicable") is False:
+        return "—"
+    if row.get("status") != "present":
+        return "缺"
+    copies = row.get("copies")
+    rounds = {
+        copy.get("round")
+        for copy in copies
+        if isinstance(copy, Mapping) and isinstance(copy.get("round"), int)
+    } if isinstance(copies, list) else set()
+    if rounds and str(row.get("id") or "").startswith("negotiation."):
+        return f"✓ {len(rounds)} 轮"
+    count = len(copies) if isinstance(copies, list) else 0
+    return f"✓ {count}" if count else "✓"
 
 
 def _decision_status(task: Mapping[str, object]) -> str:

@@ -395,20 +395,33 @@ def test_a_wrong_round_count_fails() -> None:
 
 REAL_BATCH: dict[str, object] = {"nms": True, "nmsSim": False}
 
-#: The client-side observations a one-round A2A-T run exports at phase level.
+#: The client-side observations a one-round A2A-T run exports at phase level. The content fields
+#: are the key-data copies the presence gate reads; the point table still matches on kind/stage.
 A2A_T_OBSERVATIONS: tuple[dict[str, object], ...] = (
-    {"kind": "task_prompt_rendered", "runId": "run-1"},
-    {"kind": "task_validation", "runId": "run-1"},
-    {"kind": "task_created", "runId": "run-1"},
     {
-        "kind": "generation",
+        "kind": "task_prompt_rendered",
+        "runId": "run-1",
+        "userRequest": "do it",
+        "promptText": TASK_T,
+    },
+    {"kind": "task_validation", "runId": "run-1"},
+    {"kind": "task_created", "runId": "run-1", "taskId": "task-1", "contextId": "ctx-1"},
+    {
+        "kind": "llm",
         "type": "GENERATION",
         "stage": "task_t_slot_extraction",
         "runId": "run-1",
+        "response": '{"slots": {}}',
     },
-    {"kind": "message_sent", "runId": "run-1"},
-    {"kind": "message_sent", "runId": "run-1"},
-    {"kind": "decision_requested", "round": 1, "runId": "run-1"},
+    {
+        "kind": "message_sent",
+        "runId": "run-1",
+        "performative": "TASK_T",
+        "taskT": TASK_T,
+        "summary": "do it",
+    },
+    {"kind": "message_sent", "runId": "run-1", "performative": "ACCEPT", "negotiationT": "accept"},
+    {"kind": "decision_requested", "round": 1, "runId": "run-1", "content": MESSAGE},
     {"kind": "accept", "round": 1, "runId": "run-1"},
 )
 
@@ -539,91 +552,96 @@ def test_a_failed_accepted_stage_does_not_require_task_created() -> None:
     assert _dimension(judgement, "trace").status == VERDICT_PASS
 
 
-def test_a_missing_expected_point_fails_with_its_code() -> None:
-    without_validation = tuple(row for row in A2A_T_OBSERVATIONS if row.get("kind") != "task_validation")
+def test_a_missing_required_datum_fails_with_its_code() -> None:
+    without_rendered = tuple(
+        row
+        for row in A2A_T_OBSERVATIONS
+        if row.get("kind") not in {"task_prompt_rendered", "message_sent"}
+    )
 
     judgement = judge_protocol(
         _case(),
         "a2a-t",
-        _evidence(
-            batch=REAL_BATCH,
-            trace=_trace(observations=without_validation, local_points=["task_validation"]),
-        ),
+        _evidence(batch=REAL_BATCH, trace=_trace(observations=without_rendered)),
     )
 
     assert _dimension(judgement, "trace").status == VERDICT_FAIL
-    assert _trace_code(judgement) == "trace_missing_ingest"
+    assert _trace_code(judgement) == "trace_data_missing"
     assert judgement.status == VERDICT_FAIL
 
     trace = judgement.to_dict()["detail"]["trace"]
-    assert trace["attribution"]["status"] == "missing_ingest"
-    assert trace["attribution"]["findings"]
+    assert {row["id"] for row in trace["data"] if row["status"] == "missing"} >= {
+        "request.original",
+        "request.dispatched",
+        "task_t",
+    }
     assert trace["nmsKind"] == "real"
 
 
-def test_a_missing_point_without_local_evidence_is_still_a_failure() -> None:
-    without_validation = tuple(row for row in A2A_T_OBSERVATIONS if row.get("kind") != "task_validation")
+def test_a_missing_optional_datum_is_partial() -> None:
+    without_extraction = tuple(row for row in A2A_T_OBSERVATIONS if row.get("kind") != "llm")
 
     judgement = judge_protocol(
         _case(),
         "a2a-t",
-        _evidence(batch=REAL_BATCH, trace=_trace(observations=without_validation)),
+        _evidence(batch=REAL_BATCH, trace=_trace(observations=without_extraction)),
     )
 
-    assert _dimension(judgement, "trace").status == VERDICT_FAIL
-    assert _trace_code(judgement) == "trace_missing_client"
+    assert _dimension(judgement, "trace").status == VERDICT_PARTIAL
+    assert _trace_code(judgement) == "trace_optional_data_missing"
+    trace = judgement.to_dict()["detail"]["trace"]
+    assert [row["id"] for row in trace["data"] if row["status"] == "missing"] == ["slot_extraction"]
 
 
-def test_a_frame_mismatch_fails_with_its_code() -> None:
+def test_a_frame_mismatch_is_reference_only() -> None:
     judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(observed=1)))
 
-    assert _dimension(judgement, "trace").status == VERDICT_FAIL
-    assert _trace_code(judgement) == "trace_frames_mismatch"
-    assert judgement.status == VERDICT_FAIL
+    assert _dimension(judgement, "trace").status == VERDICT_PASS
+    frames = judgement.to_dict()["detail"]["trace"]["frames"]
+    assert frames["nms"]["expected"] == 2
+    assert frames["nms"]["observed"] == 1
 
 
-def test_an_unidentified_nms_hop_is_not_applicable() -> None:
+def test_an_unidentified_nms_hop_no_longer_gates_the_data() -> None:
     judgement = judge_protocol(
         _case(),
         "a2a-t",
         _evidence(batch=REAL_BATCH, trace=_trace(expected=None, observed=None)),
     )
 
-    assert _dimension(judgement, "trace").status == VERDICT_NOT_APPLICABLE
-    assert _trace_code(judgement) == "trace_nms_hop_unknown"
-    # The abstention is explained in the detail, not left as a bare "不适用".
-    blockers = judgement.to_dict()["detail"]["trace"]["blockers"]
-    assert [row["code"] for row in blockers] == ["trace_nms_hop_unknown"]
+    assert _dimension(judgement, "trace").status == VERDICT_PASS
     assert judgement.status == VERDICT_PASS
+    trace = judgement.to_dict()["detail"]["trace"]
+    assert trace["frames"]["nms"]["expected"] is None
 
 
-def test_a_recognized_hop_without_a_round_count_says_so() -> None:
+def test_a_recognized_hop_without_a_round_count_is_reference_only() -> None:
     judgement = judge_protocol(
         _case(),
         "a2a-t",
         _evidence(batch=REAL_BATCH, trace=_trace(expected=None, observed=2)),
     )
 
-    assert _dimension(judgement, "trace").status == VERDICT_NOT_APPLICABLE
-    blockers = judgement.to_dict()["detail"]["trace"]["blockers"]
-    assert [row["code"] for row in blockers] == ["trace_rounds_unknown"]
+    assert _dimension(judgement, "trace").status == VERDICT_PASS
+    trace = judgement.to_dict()["detail"]["trace"]
+    assert trace["frames"]["nms"]["observed"] == 2
 
 
-def test_a_disabled_content_capture_only_partially_judges_the_trace() -> None:
+def test_the_capture_flag_is_not_a_gate_by_itself() -> None:
     judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(capture=False)))
 
-    assert _dimension(judgement, "trace").status == VERDICT_PARTIAL
-    assert _trace_code(judgement) == "trace_content_unavailable"
-    assert judgement.status == VERDICT_PARTIAL
+    # A snapshot whose observations carry the data passes even if the legacy flag says otherwise;
+    # a snapshot whose data is absent fails on the missing item, not on the flag.
+    assert _dimension(judgement, "trace").status == VERDICT_PASS
 
 
-def test_a_missing_client_frame_fails_only_the_a2a_t_hop() -> None:
-    failing = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(client=0)))
+def test_the_client_frame_count_is_reference_only() -> None:
+    a2a_t = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=_trace(client=0)))
     pure_observations = (
         {"kind": "message_sent", "runId": "run-1"},
         {"kind": "task_created", "runId": "run-1"},
     )
-    passing = judge_protocol(
+    pure = judge_protocol(
         _case(protocol="a2a", rounds=0),
         "a2a",
         _evidence(
@@ -633,9 +651,10 @@ def test_a_missing_client_frame_fails_only_the_a2a_t_hop() -> None:
         ),
     )
 
-    assert _dimension(failing, "trace").status == VERDICT_FAIL
-    assert _trace_code(failing) == "trace_missing_client"
-    assert _dimension(passing, "trace").status == VERDICT_PASS
+    assert _dimension(a2a_t, "trace").status == VERDICT_PASS
+    # Pure A2A has no request.original copy at all (no Task-T, no root), so the required item fails.
+    assert _dimension(pure, "trace").status == VERDICT_FAIL
+    assert _trace_code(pure) == "trace_data_missing"
 
 
 def test_the_detail_compares_the_judged_task_t_with_the_exported_one() -> None:
@@ -661,8 +680,8 @@ def test_a_different_exported_task_t_is_reported() -> None:
     other = TASK_T.replace("2Mbps", "5Mbps")
     trace = _trace()
     trace["observations"] = [
-        *A2A_T_OBSERVATIONS,
-        {"kind": "task_prompt_rendered", "promptText": other},
+        {**row, "promptText": other} if row.get("kind") == "task_prompt_rendered" else row
+        for row in A2A_T_OBSERVATIONS
     ]
 
     judgement = judge_protocol(_case(), "a2a-t", _evidence(batch=REAL_BATCH, trace=trace))

@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from eval.osp.tracecheck import (
     ATTRIBUTION_MISSING_CLIENT,
     ATTRIBUTION_MISSING_INGEST,
+    ATTRIBUTION_OK,
     ATTRIBUTION_UNKNOWN,
     NMS_KIND_LOCAL,
     NMS_KIND_REAL,
@@ -14,12 +15,14 @@ from eval.osp.tracecheck import (
     NMS_KIND_UNKNOWN,
     PROTOCOL_A2A,
     PROTOCOL_A2A_T,
+    REASON_DATA_MISSING,
     REASON_FRAMES_MISMATCH,
-    REASON_MISSING_CLIENT,
     REASON_NMS_HOP_UNKNOWN,
     REASON_NOT_EXPORTED,
+    REASON_OPTIONAL_DATA_MISSING,
     TRACE_FAIL,
     TRACE_NOT_APPLICABLE,
+    TRACE_PARTIAL,
     TRACE_PASS,
     TRACE_REASONS,
     TraceContext,
@@ -55,6 +58,7 @@ def _observation(
     run_id: str = "run-1",
     interception: bool = False,
     side: str = "client",
+    **extra: object,
 ) -> dict[str, object]:
     return {
         "name": name,
@@ -65,6 +69,7 @@ def _observation(
         "interception": interception,
         "run_id": run_id,
         "side": side,
+        **extra,
     }
 
 
@@ -204,12 +209,28 @@ def test_attribution_never_blames_the_producer_without_local_evidence() -> None:
 
 def _complete_observations() -> list[dict[str, object]]:
     return [
-        _observation(kind="task_prompt_rendered"),
-        _observation(type="GENERATION", stage="task_t_slot_extraction"),
-        _observation(type="GENERATION", stage="task_t_client_validation"),
+        _observation(kind="task_prompt_rendered", user_request="create a task", prompt_text="TASK-T"),
+        _observation(
+            type="GENERATION",
+            kind="llm",
+            stage="task_t_slot_extraction",
+            response='{"slots": {}}',
+        ),
+        _observation(
+            type="GENERATION",
+            kind="llm",
+            stage="task_t_client_validation",
+            response='{"semantic_verdict": true}',
+        ),
         _observation(kind="task_validation"),
-        _observation(kind="message_sent", run_id="run-1"),
-        _observation(kind="task_created"),
+        _observation(
+            kind="message_sent",
+            run_id="run-1",
+            performative="TASK_T",
+            summary="create a task",
+            task_t="TASK-T",
+        ),
+        _observation(kind="task_created", task_id="task-1", context_id="ctx-1", state="TASK_STATE_SUBMITTED"),
     ]
 
 
@@ -224,9 +245,10 @@ def test_judge_trace_applies_the_acceptance_order() -> None:
         {"exportState": "exported", "frames": _frames(), "observations": []},
         _context(),
     )
-    assert (missing_points.status, missing_points.reason) == (TRACE_FAIL, REASON_MISSING_CLIENT)
-    assert missing_points.attribution == ATTRIBUTION_UNKNOWN
+    assert (missing_points.status, missing_points.reason) == (TRACE_FAIL, REASON_DATA_MISSING)
+    assert missing_points.attribution == ATTRIBUTION_OK
 
+    # The NMS frame count is reference evidence now; it no longer fails the dimension.
     mismatch = judge_trace(
         {
             "exportState": "exported",
@@ -235,7 +257,8 @@ def test_judge_trace_applies_the_acceptance_order() -> None:
         },
         _context(),
     )
-    assert (mismatch.status, mismatch.reason) == (TRACE_FAIL, REASON_FRAMES_MISMATCH)
+    assert (mismatch.status, mismatch.reason) == (TRACE_PASS, "")
+    assert mismatch.frames["nms"] == {"expected": 2, "observed": 1, "scope": "a2a-t-server"}
 
 
 def test_attribution_keeps_unknown_outside_the_local_coverage() -> None:
@@ -252,20 +275,19 @@ def test_attribution_keeps_unknown_outside_the_local_coverage() -> None:
     assert status == ATTRIBUTION_MISSING_CLIENT
 
 
-def test_judge_trace_reads_the_payload_camel_case_local_points() -> None:
-    observations = [item for item in _complete_observations() if item["kind"] != "task_validation"]
+def test_judge_trace_reads_missing_optional_data_as_partial() -> None:
+    observations = [item for item in _complete_observations() if item["kind"] != "llm"]
     judgement = judge_trace(
         {
             "exportState": "exported",
             "frames": _frames(),
             "observations": observations,
-            "localPoints": ["task_validation"],
         },
         _context(),
     )
-    assert judgement.attribution == ATTRIBUTION_MISSING_INGEST
-    assert judgement.reason == "trace_missing_ingest"
-    assert [finding.status for finding in judgement.findings] == [ATTRIBUTION_MISSING_INGEST]
+    assert judgement.status == TRACE_PARTIAL
+    assert judgement.reason == REASON_OPTIONAL_DATA_MISSING
+    assert [finding.point for finding in judgement.findings] == ["slot_extraction"]
 
 
 def test_judge_trace_passes_when_every_point_and_frame_is_present() -> None:
@@ -279,18 +301,29 @@ def test_judge_trace_passes_when_every_point_and_frame_is_present() -> None:
     )
     assert judgement.status == TRACE_PASS
     assert judgement.reason == ""
+    assert [row.point.id for row in judgement.data] == [
+        "request.original",
+        "request.dispatched",
+        "slot_extraction",
+        "task_t",
+        "negotiation.message",
+        "negotiation.reply",
+        "task.succeeded",
+    ]
 
 
-def test_judge_trace_fails_when_the_client_hop_never_sent() -> None:
+def test_judge_trace_fails_when_a_required_datum_is_missing() -> None:
+    observations = [item for item in _complete_observations() if item["kind"] != "task_prompt_rendered"]
     judgement = judge_trace(
         {
             "exportState": "exported",
             "frames": {**_frames(), "client": {"runId": "run-1", "observed": 0}},
-            "observations": _complete_observations(),
+            "observations": observations,
         },
         _context(),
     )
-    assert (judgement.status, judgement.reason) == (TRACE_FAIL, REASON_MISSING_CLIENT)
+    assert (judgement.status, judgement.reason) == (TRACE_FAIL, REASON_DATA_MISSING)
+    assert "request.original" in {finding.point for finding in judgement.findings}
 
 
 def test_reason_codes_are_exposed_as_one_tuple() -> None:
@@ -302,6 +335,8 @@ def test_reason_codes_are_exposed_as_one_tuple() -> None:
         "trace_missing_vendor",
         "trace_content_unavailable",
         "trace_nms_hop_unknown",
+        "trace_data_missing",
+        "trace_optional_data_missing",
     }
 
 

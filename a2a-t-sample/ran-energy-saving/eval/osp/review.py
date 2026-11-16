@@ -669,7 +669,7 @@ def _judge_trace(
     )
     diffs: tuple[dict[str, object], ...] = tuple(
         {
-            "path": f"trace.{finding.point}",
+            "path": f"trace.data.{finding.point}",
             "expected": finding.label,
             "actual": finding.status,
             "reason": judgement.reason,
@@ -699,6 +699,8 @@ _TRACE_REASON_TEXT: Final[dict[str, str]] = {
     "trace_missing_vendor": "厂商侧轨迹点缺失",
     "trace_content_unavailable": "轨迹内容捕获关闭，仅判是否存在",
     "trace_nms_hop_unknown": "无法从轨迹确定 NMS 跳",
+    "trace_data_missing": "必选关键数据在导出轨迹中缺失",
+    "trace_optional_data_missing": "可选关键数据在导出轨迹中缺失",
 }
 
 
@@ -906,6 +908,7 @@ def _trace_detail(
             "frames": {},
             "attribution": {},
             "points": [],
+            "data": [],
             "warnings": [],
             "related": [],
             "blockers": _trace_blockers(applicability, None),
@@ -913,8 +916,11 @@ def _trace_detail(
     frames = trace.get("frames")
     attribution = trace.get("attribution")
     points: list[dict[str, object]] = []
+    data_rows: list[dict[str, object]] = []
     computed_attribution: dict[str, object] = dict(attribution) if isinstance(attribution, Mapping) else {}
     if context is not None:
+        # The point table is reference only: it explains an ingest gap, it no longer gates the
+        # acceptance. The key-data table below is what the dimension reads.
         points = [
             {
                 "point": result.point.id,
@@ -926,9 +932,10 @@ def _trace_detail(
             }
             for result in process_points(trace, context)
         ]
-        # The snapshot carries the observations, not the verdict: the attribution is derived here
-        # so the page and the customer pack show producer/ingest/vendor instead of an empty block.
+        # The snapshot carries the observations, not the verdict: the attribution and the key-data
+        # presence are derived here so the page and the customer pack stay self-contained.
         judged = judge_trace(trace, context, not_exported_status=TRACE_NOT_EXPORTED_STATUS)
+        data_rows = [result.to_dict(include_values=True) for result in judged.data]
         computed_attribution = {
             "status": judged.attribution,
             "findings": [
@@ -957,6 +964,7 @@ def _trace_detail(
         "frames": dict(frames) if isinstance(frames, Mapping) else {},
         "attribution": computed_attribution,
         "points": points,
+        "data": data_rows,
         "observations": _observation_rows(trace.get("observations")),
         "observationsTruncated": bool(trace.get("observationsTruncated")),
         "warnings": [str(item) for item in warnings] if isinstance(warnings, list) else [],

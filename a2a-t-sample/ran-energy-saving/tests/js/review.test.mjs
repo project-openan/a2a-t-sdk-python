@@ -5,6 +5,8 @@ import {
   batchLabel,
   caseExpectations,
   categoryLabel,
+  dataCellClass,
+  dataCellText,
   expectationMarkers,
   filterTaskTRows,
   decisionLabel,
@@ -509,3 +511,25 @@ assert.deepEqual(messageJudgement(MESSAGE_MATCH, 2), {
 assert.deepEqual(messageJudgement(null, 0), { judged: false, ok: null, label: "未参与判定" });
 assert.deepEqual(missingRoundNotes(MESSAGE_MATCH), ["第 3 轮：未观测到该轮协商"]);
 assert.deepEqual(missingRoundNotes(null), []);
+
+// Key-data cells: presence only, and the two negotiation items show the round count.
+const DATA_COPIES = [
+  { source: "propose", round: 1 },
+  { source: "propose", round: 2 },
+  { source: "decision_requested", round: 1 },
+];
+assert.equal(
+  dataCellText({ id: "task_t", status: "present", applicable: true, copies: [{}, {}] }),
+  "✓ 2",
+);
+assert.equal(
+  dataCellText({ id: "negotiation.message", status: "present", applicable: true, copies: DATA_COPIES }),
+  "✓ 2 轮",
+);
+assert.equal(dataCellText({ id: "task_t", status: "missing", applicable: true }), "缺");
+assert.equal(dataCellText({ id: "task_t", status: "n/a", applicable: false }), "—");
+assert.equal(dataCellText(null), "—");
+assert.equal(dataCellClass({ status: "missing", applicable: true, required: true }), "fail");
+assert.equal(dataCellClass({ status: "missing", applicable: true, required: false }), "partial");
+assert.equal(dataCellClass({ status: "present", applicable: true, required: true }), "");
+assert.equal(dataCellClass({ status: "n/a", applicable: false, required: true }), "");

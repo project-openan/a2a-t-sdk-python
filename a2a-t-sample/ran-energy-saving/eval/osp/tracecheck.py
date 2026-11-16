@@ -17,6 +17,14 @@ from dataclasses import dataclass
 from typing import Final
 
 from eval.osp.compare import flatten_intent, flatten_task_t
+from eval.osp.datapoints import (
+    STATUS_MISSING,
+    DataContext,
+    DataPointResult,
+    missing_optional,
+    missing_required,
+    resolve_data_points,
+)
 
 PROTOCOL_A2A_T: Final[str] = "a2a-t"
 PROTOCOL_A2A: Final[str] = "a2a"
@@ -138,6 +146,10 @@ REASON_MISSING_INGEST: Final[str] = "trace_missing_ingest"
 REASON_MISSING_VENDOR: Final[str] = "trace_missing_vendor"
 REASON_CONTENT_UNAVAILABLE: Final[str] = "trace_content_unavailable"
 REASON_NMS_HOP_UNKNOWN: Final[str] = "trace_nms_hop_unknown"
+#: The acceptance contract: a required key datum has no copy in the exported trace.
+REASON_DATA_MISSING: Final[str] = "trace_data_missing"
+#: An optional key datum is missing; the dimension is partial, not failed.
+REASON_OPTIONAL_DATA_MISSING: Final[str] = "trace_optional_data_missing"
 
 #: Every reason code the console exposes. The report iterates this tuple instead of matching
 #: strings, so a new code cannot silently disappear from the acceptance counts.
@@ -149,6 +161,8 @@ TRACE_REASONS: Final[tuple[str, ...]] = (
     REASON_MISSING_VENDOR,
     REASON_CONTENT_UNAVAILABLE,
     REASON_NMS_HOP_UNKNOWN,
+    REASON_DATA_MISSING,
+    REASON_OPTIONAL_DATA_MISSING,
 )
 
 ATTRIBUTION_OK: Final[str] = "ok"
@@ -233,6 +247,8 @@ class TraceJudgement:
     attribution: str
     findings: tuple[AttributionFinding, ...]
     frames: Mapping[str, object]
+    #: Presence-only key-data table. The gate reads this; ``points`` stays as a reference table.
+    data: tuple[DataPointResult, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -609,10 +625,11 @@ def judge_trace(
 ) -> TraceJudgement:
     """Judge one snapshot against the run facts.
 
-    The order is the acceptance contract: N/A for non-real-NMS and no-run items, exported
-    evidence required, then the attribution gaps, the client hop, the NMS hop, and finally the
-    frame count. ``not_exported_status`` is injectable so the unresolved "missing evidence is a
-    fail or blocked" decision stays a single line.
+    The acceptance contract is data presence, not span completeness: a required key datum with no
+    copy in the exported trace fails, an optional one makes the dimension partial, and everything
+    else passes. The client/NMS frame counts and the old point table stay as reference evidence.
+    ``not_exported_status`` is injectable so the unresolved "missing evidence is a fail or blocked"
+    decision stays a single line.
     """
     frames_value = payload.get("frames")
     frames: Mapping[str, object] = frames_value if isinstance(frames_value, Mapping) else {}
@@ -630,33 +647,60 @@ def judge_trace(
 
     points = expected_client_points(context)
     results = match_points(points, observations, run_id=context.run_id)
-    local_value = payload.get("local_points")
-    if local_value is None:
-        local_value = payload.get("localPoints")
-    local_points = tuple(str(item) for item in local_value) if isinstance(local_value, (list, tuple)) else None
-    known_value = payload.get("local_known")
-    if known_value is None:
-        known_value = payload.get("localKnown")
-    local_known = tuple(str(item) for item in known_value) if isinstance(known_value, (list, tuple)) else None
-    attribution, findings = attribute_points(results, local_points=local_points, local_known=local_known)
-    if findings:
-        # The customer gate is the presence of the expected points, not the attribution. A point
-        # we cannot attribute (local emission is not persisted) still fails; the report shows the
-        # attribution separately instead of hiding the gap behind an ``unknown``.
-        return TraceJudgement(TRACE_FAIL, _reason_for(attribution, findings), results, attribution, findings, frames)
+    # The customer gate is data presence, not span completeness. A data item counts when any
+    # observation of the exported trace carries it; the point table above stays as a reference.
+    data = resolve_data_points(
+        payload,
+        DataContext(
+            protocol=context.protocol,
+            run_mode=context.run_mode,
+            blocked=context.blocked,
+            followup=context.followup,
+            rounds=context.rounds,
+            accepted=context.accepted,
+            run_id=context.run_id,
+        ),
+        include_values=True,
+    )
+    findings = _data_findings(data)
+    if missing_required(data):
+        return TraceJudgement(
+            TRACE_FAIL,
+            REASON_DATA_MISSING,
+            results,
+            ATTRIBUTION_OK,
+            findings,
+            frames,
+            data,
+        )
+    if missing_optional(data):
+        return TraceJudgement(
+            TRACE_PARTIAL,
+            REASON_OPTIONAL_DATA_MISSING,
+            results,
+            ATTRIBUTION_OK,
+            findings,
+            frames,
+            data,
+        )
+    return TraceJudgement(TRACE_PASS, "", results, ATTRIBUTION_OK, findings, frames, data)
 
-    client = frames.get("client")
-    if context.protocol == PROTOCOL_A2A_T and isinstance(client, Mapping) and _int(client.get("observed")) == 0:
-        return TraceJudgement(TRACE_FAIL, REASON_MISSING_CLIENT, results, attribution, findings, frames)
 
-    gate_status, gate_reason = frame_gate(frames)
-    if gate_status == TRACE_FAIL:
-        return TraceJudgement(gate_status, gate_reason, results, attribution, findings, frames)
-    if gate_status == TRACE_NOT_APPLICABLE:
-        return TraceJudgement(gate_status, gate_reason, results, attribution, findings, frames)
-    if payload.get("capture_content") is False and not findings:
-        return TraceJudgement(TRACE_PARTIAL, REASON_CONTENT_UNAVAILABLE, results, attribution, findings, frames)
-    return TraceJudgement(TRACE_PASS, "", results, attribution, findings, frames)
+def _data_findings(data: Sequence[DataPointResult]) -> tuple[AttributionFinding, ...]:
+    """Return one finding per missing data item, required first."""
+    findings: list[AttributionFinding] = []
+    for result in data:
+        if result.status != STATUS_MISSING:
+            continue
+        status = "missing_required" if result.point.required else "missing_optional"
+        detail = (
+            "必选数据在导出的 Langfuse 轨迹中没有副本"
+            if result.point.required
+            else "可选数据在导出的 Langfuse 轨迹中没有副本"
+        )
+        findings.append(AttributionFinding(result.point.id, result.point.label, status, detail))
+    findings.sort(key=lambda finding: finding.status != "missing_required")
+    return tuple(findings)
 
 
 def _reason_for(attribution: str, findings: Sequence[AttributionFinding]) -> str:

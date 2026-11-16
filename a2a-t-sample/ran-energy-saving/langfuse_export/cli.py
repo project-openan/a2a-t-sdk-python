@@ -661,6 +661,7 @@ def export_full(
     zip_file: bool = True,
     run_id: str | None = None,
     round_mode: str = "legacy",
+    expand_metadata: list[str] | None = None,
 ) -> dict[str, Any]:
     """Full export for the server: no output, caller-owned ``Config`` (P3)."""
     round_mode = _round_mode(round_mode)
@@ -669,6 +670,8 @@ def export_full(
         argv.extend(["--run-id", run_id])
     if round_mode != "legacy":
         argv.extend(["--round-mode", round_mode])
+    if expand_metadata:
+        argv.extend(["--expand-metadata", ",".join(expand_metadata)])
     if zip_file:
         argv.append("--zip")
     args = build_parser().parse_args(argv)

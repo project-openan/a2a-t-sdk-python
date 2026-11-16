@@ -169,6 +169,68 @@ def test_frames_gate_the_nms_hop_and_keep_other_hops_for_display(tmp_path: Path)
     assert frames["serverSendCount"]["byScope"] == [{"scope": "a2a-t-server", "count": 2, "sideSource": "metadata"}]
 
 
+def test_normalize_rows_reads_flattened_detail_and_generation_output() -> None:
+    """Langfuse v4 flattens ``detail`` into dotted keys; the review must read both shapes."""
+    rows = [
+        _row(
+            "Task-T prompt rendered",
+            metadata={
+                "kind": "task_prompt_rendered",
+                "runId": "run-1",
+                "detail.userRequest": "create a task",
+                "detail.promptText": "TASK-T",
+            },
+        ),
+        _row(
+            "Task-T sent",
+            metadata={
+                "kind": "message_sent",
+                "runId": "run-1",
+                "detail.taskT": "TASK-T",
+                "detail.performative": "TASK_T",
+            },
+        ),
+        {
+            "id": "gen-1",
+            "name": "LLM call · task_t_slot_extraction",
+            "type": "GENERATION",
+            "metadata": {"kind": "llm", "stage": "task_t_slot_extraction", "runId": "run-1"},
+            "output": '{"slots": {}}',
+        },
+        _row(
+            "Task created",
+            metadata={
+                "kind": "task_created",
+                "runId": "run-1",
+                "taskId": "task-1",
+                "contextId": "ctx-1",
+                "detail.operation": "create",
+                "detail.state": "TASK_STATE_SUBMITTED",
+                "detail.params.Operation type": "Create",
+            },
+        ),
+        _row(
+            "run · night · a2a-t",
+            metadata={"runId": "run-1", "userRequest": "create a task"},
+        ),
+    ]
+
+    by_kind = {observation.kind: observation for observation in normalize_rows(rows)}
+
+    assert by_kind["task_prompt_rendered"].prompt_text == "TASK-T"
+    assert by_kind["task_prompt_rendered"].user_request == "create a task"
+    assert by_kind["message_sent"].task_t == "TASK-T"
+    assert by_kind["message_sent"].performative == "TASK_T"
+    assert by_kind["llm"].response == '{"slots": {}}'
+    assert by_kind["task_created"].task_id == "task-1"
+    assert by_kind["task_created"].context_id == "ctx-1"
+    assert by_kind["task_created"].operation == "create"
+    assert by_kind["task_created"].state == "TASK_STATE_SUBMITTED"
+    assert by_kind["task_created"].params == {"Operation type": "Create"}
+    root = next(observation for observation in normalize_rows(rows) if observation.name.startswith("run ·"))
+    assert root.user_request == "create a task"
+
+
 def test_frames_pick_the_unique_vendor_scope() -> None:
     rows = [
         _row("SendMessage", metadata={"side": "server", "scope.name": "a2a-t-server"}),
