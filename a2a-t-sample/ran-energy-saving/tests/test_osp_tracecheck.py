@@ -115,8 +115,13 @@ def test_expected_points_follow_the_run_mode_and_the_interception() -> None:
 def test_expected_points_count_every_negotiation_round() -> None:
     points = expected_client_points(_context(rounds=2))
     ids = {point.id for point in points}
-    assert {"decision_requested:R1", "propose:R1", "decision:R1"} <= ids
-    assert {"decision_requested:R2", "propose:R2", "decision:R2"} <= ids
+    assert {"decision_requested:R1", "decision:R1"} <= ids
+    assert {"decision_requested:R2", "decision:R2"} <= ids
+    # The downstream proposal and the ADK decision agent never appear in a real-machine tester
+    # run, so expecting them would mark a correct acceptance run as missing.
+    assert not any(point_id.startswith("propose:") for point_id in ids)
+    assert "gen:client_decision_agent" not in ids
+    assert "tool" not in ids
     message = next(point for point in points if point.id == "message_sent")
     assert message.count == 3
 

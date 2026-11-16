@@ -392,15 +392,7 @@ A2A_T_OBSERVATIONS: tuple[dict[str, object], ...] = (
     {"kind": "message_sent", "runId": "run-1"},
     {"kind": "message_sent", "runId": "run-1"},
     {"kind": "decision_requested", "round": 1, "runId": "run-1"},
-    {"kind": "propose", "round": 1, "runId": "run-1"},
     {"kind": "accept", "round": 1, "runId": "run-1"},
-    {
-        "kind": "generation",
-        "type": "GENERATION",
-        "stage": "client_decision_agent",
-        "runId": "run-1",
-    },
-    {"type": "TOOL", "stage": "client_decision_agent", "runId": "run-1"},
 )
 
 

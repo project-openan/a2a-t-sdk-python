@@ -395,7 +395,7 @@ def expected_client_points(context: TraceContext) -> tuple[TracePoint, ...]:
     """
     if context.protocol == PROTOCOL_A2A:
         points: list[TracePoint] = [TracePoint("message_sent", "客户端消息帧", kind="message_sent")]
-        points.extend(_round_points(context.rounds, agent=False))
+        points.extend(_round_points(context.rounds))
         if context.accepted:
             points.append(TracePoint("task_created", "任务接受", kind="task_created"))
         return tuple(points)
@@ -431,9 +431,7 @@ def expected_client_points(context: TraceContext) -> tuple[TracePoint, ...]:
         )
     if modify:
         points.append(TracePoint("gen:task_t_modify_extraction", "LLM 修改抽取", stage="task_t_modify_extraction"))
-    elif not (context.blocked and context.followup):
-        points.append(TracePoint("gen:task_t_slot_extraction", "LLM 槽位抽取", stage="task_t_slot_extraction"))
-    elif context.blocked and context.followup:
+    else:
         points.append(TracePoint("gen:task_t_slot_extraction", "LLM 槽位抽取", stage="task_t_slot_extraction"))
     points.append(
         TracePoint(
@@ -449,12 +447,14 @@ def expected_client_points(context: TraceContext) -> tuple[TracePoint, ...]:
     return tuple(points)
 
 
-def _round_points(rounds: int, *, agent: bool = True) -> tuple[TracePoint, ...]:
+def _round_points(rounds: int) -> tuple[TracePoint, ...]:
     """Return the per-round negotiation points of one run.
 
-    The decision LLM and its tool call do not carry a round in their metadata, so they are one
-    point with ``count = rounds`` rather than one point per round. The decision request, the
-    proposal and the decision itself do carry ``round`` and stay per-round.
+    Only the client-side carriers are judged: the decision request and the decision itself. The
+    server's proposal (``propose``) is the downstream's message and never appears in our export for
+    a real-machine run, and the ADK decision agent (``gen:client_decision_agent`` / ``tool``) only
+    runs when decisions are not scripted, so expecting either would mark a correct acceptance run
+    as missing points.
     """
     points: list[TracePoint] = []
     for number in range(1, max(rounds, 0) + 1):
@@ -467,34 +467,11 @@ def _round_points(rounds: int, *, agent: bool = True) -> tuple[TracePoint, ...]:
                     round=number,
                 ),
                 TracePoint(
-                    f"propose:R{number}",
-                    f"服务端提案 R{number}",
-                    kind="propose",
-                    round=number,
-                ),
-                TracePoint(
                     f"decision:R{number}",
                     f"决策结果 R{number}",
                     kind="decision",
                     round=number,
                 ),
-            )
-        )
-    if agent and rounds > 0:
-        points.append(
-            TracePoint(
-                "gen:client_decision_agent",
-                "LLM 决策",
-                stage="client_decision_agent",
-                count=rounds,
-            )
-        )
-        points.append(
-            TracePoint(
-                "tool",
-                "决策工具调用",
-                stage="client_decision_agent",
-                count=rounds,
             )
         )
     return tuple(points)
