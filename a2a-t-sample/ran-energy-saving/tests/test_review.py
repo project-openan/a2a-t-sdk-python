@@ -450,6 +450,67 @@ def test_scan_skips_items_without_stages(tmp_path: Path) -> None:
     assert scan.observations == ()
 
 
+def test_scan_skips_items_that_have_not_finished(tmp_path: Path) -> None:
+    """A batch persists its items while running; only a finished item is evidence.
+
+    The tester writes ``stages: {}`` for a queued item, which the old guard accepted. Such a row
+    has no run identity and, once stored, outranked the finished run of the same case.
+    """
+    finished = _evidence_item()
+    queued = _evidence_item()
+    queued.update({"status": "pending", "runId": "", "stages": {}})
+    running = _evidence_item(run_id="run-running")
+    running.update({"status": "running", "stages": {}})
+    _write_batch(tmp_path, [queued, running, finished])
+
+    scan = scan_evidence(
+        runs_dir=tmp_path,
+        client_db_path=None,
+        cases={1: _case_document()},
+        days=2.0,
+    )
+
+    assert [row["runId"] for row in scan.observations] == ["run-1"]
+    assert scan.skipped["incomplete"] == 2
+
+
+def test_stored_placeholders_are_ignored_without_deleting_them(tmp_path: Path) -> None:
+    """A placeholder already in an existing store must not win a read.
+
+    The new ingestion filter cannot clean rows written by an older version, and the yellow zone
+    must not run destructive SQL, so every observation query filters them out instead.
+    """
+    service, _catalog, _overlay, _runs = _fixture(tmp_path)
+    service.scan(days=2.0)
+    service.store.ingest(
+        [
+            {
+                "caseId": 1,
+                "protocol": "a2a-t",
+                "batchId": "batch-running",
+                "sourceRound": 1,
+                "runId": "",
+                "observedAt": "2026-11-15T11:00:00+00:00",
+                "model": "qwen3.8",
+                "decisionMode": "live",
+                "nms": True,
+                "status": "pending",
+                "evidence": {},
+            }
+        ]
+    )
+
+    assert [row["runId"] for row in service.store.observations(1, "a2a-t")] == ["run-1"]
+    assert service.store.observations_for_batch("batch-running") == []
+    assert {row["batchId"] for row in service.store.batches()} == {"batch-1"}
+    # The newest ingested row would be the placeholder without the filter.
+    tasks = service.cases()[0]["protocols"]
+    assert isinstance(tasks, list) and tasks
+    task = tasks[0]
+    assert isinstance(task, Mapping)
+    assert task["status"] == "pass"
+
+
 # ---------------------------------------------------------------------------
 # Judging projection
 # ---------------------------------------------------------------------------

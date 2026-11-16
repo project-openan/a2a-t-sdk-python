@@ -329,8 +329,16 @@ assert.equal(
 );
 assert.equal(
   defaultRoundIndex([
-    { ...ROUNDS[0], nmsSim: true, decisionMode: "live" },
-    { ...ROUNDS[0], batchId: "batch-real", nmsSim: false, decisionMode: "live" },
+    { ...ROUNDS[0], runId: "run-sim", nmsSim: true, decisionMode: "live" },
+    { ...ROUNDS[0], runId: "run-real", batchId: "batch-real", nmsSim: false, decisionMode: "live" },
+  ]),
+  1,
+);
+// A round without a run id is a placeholder from a mid-run scan; it is never the default.
+assert.equal(
+  defaultRoundIndex([
+    { ...ROUNDS[0], nms: true, nmsSim: false, decisionMode: "live" },
+    { ...ROUNDS[1], runId: "run-offline" },
   ]),
   1,
 );

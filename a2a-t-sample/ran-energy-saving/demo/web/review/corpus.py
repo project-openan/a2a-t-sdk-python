@@ -296,6 +296,16 @@ def scan_evidence(
             if not isinstance(item, Mapping):
                 continue
             if not isinstance(item.get("stages"), Mapping):
+                skipped["no_stages"] = skipped.get("no_stages", 0) + 1
+                continue
+            # A batch document is persisted while the batch runs. An item that has not finished
+            # yet (or never started a run) is not evidence: it has no identity, and storing it
+            # makes the finished run of the same case look unexecuted.
+            run_id = item.get("runId")
+            if str(item.get("status") or "") in ("pending", "running") or not (
+                isinstance(run_id, str) and run_id
+            ):
+                skipped["incomplete"] = skipped.get("incomplete", 0) + 1
                 continue
             items.append((batch, dict(item)))
     run_ids = [

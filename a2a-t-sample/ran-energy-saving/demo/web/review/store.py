@@ -124,6 +124,13 @@ _ADDITIVE_COLUMNS: Final[tuple[tuple[str, str], ...]] = (
     ("nms_sim_declared", "INTEGER"),
 )
 
+#: SQL predicate of a row that is real evidence rather than a placeholder written while its batch
+#: was still running. A running scan used to persist every item, including ``pending``/``running``
+#: ones and items that never started a run; those rows outrank the finished run by batch time and
+#: made a finished case look unexecuted. The filter is also applied on read so existing stores
+#: recover without deleting anything.
+_EVIDENCE_ONLY: Final[str] = "run_id <> '' AND status NOT IN ('pending', 'running')"
+
 
 @dataclass(frozen=True)
 class DecisionKey:
@@ -271,9 +278,9 @@ class ReviewStore:
         with self._session() as connection:
             connection.row_factory = sqlite3.Row
             rows = connection.execute(
-                """
+                f"""
                 SELECT * FROM observation
-                WHERE case_id=? AND protocol=?
+                WHERE case_id=? AND protocol=? AND {_EVIDENCE_ONLY}
                 ORDER BY observed_at DESC, source_round DESC, id DESC
                 """,
                 (case_id, protocol),
@@ -287,7 +294,8 @@ class ReviewStore:
         with self._session() as connection:
             connection.row_factory = sqlite3.Row
             rows = connection.execute(
-                "SELECT * FROM observation ORDER BY observed_at DESC, source_round DESC, id DESC"
+                f"SELECT * FROM observation WHERE {_EVIDENCE_ONLY}"
+                " ORDER BY observed_at DESC, source_round DESC, id DESC"
             ).fetchall()
         for row in rows:
             key = (int(row["case_id"]), str(row["protocol"]))
@@ -307,7 +315,7 @@ class ReviewStore:
         with self._session() as connection:
             connection.row_factory = sqlite3.Row
             rows = connection.execute(
-                """
+                f"""
                 SELECT batch_id,
                        MAX(observed_at) AS observed_at,
                        COUNT(*) AS observations,
@@ -322,16 +330,18 @@ class ReviewStore:
                        MIN(discovery) AS discovery,
                        MIN(transport) AS transport
                 FROM observation
+                WHERE {_EVIDENCE_ONLY}
                 GROUP BY batch_id
                 ORDER BY MAX(observed_at) DESC, batch_id DESC
                 """
             ).fetchall()
             per_round = connection.execute(
-                """
+                f"""
                 SELECT batch_id, source_round,
                        COUNT(*) AS observations,
                        COUNT(DISTINCT case_id) AS cases
                 FROM observation
+                WHERE {_EVIDENCE_ONLY}
                 GROUP BY batch_id, source_round
                 ORDER BY batch_id, source_round
                 """
@@ -372,16 +382,16 @@ class ReviewStore:
     ) -> list[dict[str, object]]:
         """Return the evidence rows of one batch, newest first; ``round`` narrows it."""
         if round is None:
-            sql = """
+            sql = f"""
                 SELECT * FROM observation
-                WHERE batch_id=?
+                WHERE batch_id=? AND {_EVIDENCE_ONLY}
                 ORDER BY observed_at DESC, source_round DESC, id DESC
             """
             params: tuple[object, ...] = (batch_id,)
         else:
-            sql = """
+            sql = f"""
                 SELECT * FROM observation
-                WHERE batch_id=? AND source_round=?
+                WHERE batch_id=? AND source_round=? AND {_EVIDENCE_ONLY}
                 ORDER BY observed_at DESC, id DESC
             """
             params = (batch_id, int(round))
@@ -410,7 +420,8 @@ class ReviewStore:
                 rows = connection.execute(
                     f"""
                     SELECT * FROM observation
-                    WHERE run_id IN ({placeholders}) OR trace_id IN ({placeholders})
+                    WHERE (run_id IN ({placeholders}) OR trace_id IN ({placeholders}))
+                      AND run_id <> '' AND status NOT IN ('pending', 'running')
                     ORDER BY observed_at DESC, source_round DESC, id DESC
                     """,
                     (*chunk, *chunk),

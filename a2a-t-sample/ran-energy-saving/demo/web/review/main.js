@@ -387,13 +387,16 @@ export function roundOptionLabel(round) {
   return runId ? `${roundLabel(round)} · ${shortId(runId)}` : roundLabel(round);
 }
 
-//: Default round: the newest real-machine live run (never the simulator), else the newest one.
+//: Default round: the newest real-machine live run (never the simulator), else the newest run.
+//: A round without a run id has no evidence to show, so it is never preferred.
 export function defaultRoundIndex(rounds) {
   if (!rounds || !rounds.length) return 0;
   const live = rounds.findIndex(
-    (round) => round.nms && !round.nmsSim && round.decisionMode === "live",
+    (round) => round.runId && round.nms && !round.nmsSim && round.decisionMode === "live",
   );
-  return live >= 0 ? live : 0;
+  if (live >= 0) return live;
+  const withRun = rounds.findIndex((round) => round.runId);
+  return withRun >= 0 ? withRun : 0;
 }
 
 //: Per-dimension pass counts across rounds, for the "all rounds" view.
