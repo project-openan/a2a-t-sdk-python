@@ -217,6 +217,57 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   min-width: 0;
 }
 
+/* Right-side detail drawer. The batch table keeps its DOM, filters and scroll position under the
+   overlay, so closing a case returns to exactly where the reviewer was. */
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(15, 23, 42, .45);
+}
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 61;
+  width: min(1100px, 92vw);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-left: 1px solid var(--line);
+  box-shadow: -18px 0 40px rgba(15, 23, 42, .18);
+}
+.drawer[hidden], .drawer-backdrop[hidden] { display: none; }
+.drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--card, #fff);
+}
+.drawer-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+.drawer-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px 24px;
+}
+#drawer.proto-a2a-t { --card: #fffaf5; --line: #f0dcc6; }
+#drawer.proto-a2a { --card: #f7faff; --line: #d7e2f6; }
+
 .section-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .section-title h2 { margin: 0; font-size: 16px; }
 .sub { color: var(--muted); font-size: 12px; margin: 6px 0 0; }

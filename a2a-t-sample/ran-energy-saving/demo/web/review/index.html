@@ -180,5 +180,19 @@
       </div>
     </div>
   </main>
+
+  <!-- Detail drawer opened from a batch round. The batch table stays mounted underneath, so
+       closing returns to the same filters, scroll position and row. -->
+  <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+  <aside class="drawer" id="drawer" aria-label="用例详情" hidden>
+    <div class="drawer-head">
+      <strong class="drawer-title" id="drawer-title"></strong>
+      <div class="drawer-actions">
+        <button class="ghost" id="drawer-all-rounds" type="button">查看全部轮次</button>
+        <button class="primary" id="drawer-close" type="button">关闭</button>
+      </div>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
 </body>
 </html>

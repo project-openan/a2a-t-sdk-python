@@ -708,6 +708,7 @@ function renderBatches() {
 
 async function selectBatch(batchId, round) {
   if (!confirmDiscardDecision()) return;
+  closeDrawer();
   state.selectedBatch = { batchId, round };
   state.selected = null;
   state.detail = null;
@@ -733,12 +734,16 @@ async function loadBatch() {
 
 function renderBatch() {
   if (!state.batch) return;
+  // The batch view owns the content pane; an open drawer would otherwise show a stale case.
+  closeDrawer();
   const container = document.getElementById("detail");
   const scrollTop = container.scrollTop;
   container.replaceChildren();
   container.append(renderBatchSummary());
   container.append(renderBatchTabs());
   if (state.batchView === "data") {
+    // The status table is not mounted in this tab; drop its stale references.
+    state.batchTable = null;
     container.append(renderDataTable());
   } else {
     container.append(renderBatchTable());
@@ -2047,12 +2052,82 @@ function traceLinkInput() {
     .join("\n");
 }
 
-//: Tint the detail area so A2A and A2A-T are distinguishable at a glance.
+//: Tint the detail area so A2A and A2A-T are distinguishable at a glance. Only the container that
+//: currently renders the detail is tinted; the batch table under a drawer keeps its neutral tint.
 function applyProtocolTint() {
-  const container = document.getElementById("detail");
   const protocol = (state.detail && state.detail.protocol) || "";
-  container.classList.toggle("proto-a2a-t", protocol === "a2a-t");
-  container.classList.toggle("proto-a2a", protocol === "a2a");
+  const pane = document.getElementById("detail");
+  const drawer = document.getElementById("drawer");
+  const target = drawerActive() ? drawer : pane;
+  for (const container of [pane, drawer]) {
+    if (!container) continue;
+    const active = container === target;
+    container.classList.toggle("proto-a2a-t", active && protocol === "a2a-t");
+    container.classList.toggle("proto-a2a", active && protocol === "a2a");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Detail drawer
+// ---------------------------------------------------------------------------
+
+//: A detail opened from one batch round overlays the table instead of replacing it, so closing
+//: returns to the same filters, scroll position and row.
+function drawerActive() {
+  return state.view === "round" && Boolean(state.detailScope && state.detailScope.batchId);
+}
+
+function detailContainer() {
+  const body = document.getElementById("drawer-body");
+  return drawerActive() && body ? body : document.getElementById("detail");
+}
+
+function openDrawer() {
+  const drawer = document.getElementById("drawer");
+  const backdrop = document.getElementById("drawer-backdrop");
+  if (drawer) drawer.hidden = false;
+  if (backdrop) backdrop.hidden = false;
+}
+
+function closeDrawer() {
+  const drawer = document.getElementById("drawer");
+  const backdrop = document.getElementById("drawer-backdrop");
+  if (drawer) drawer.hidden = true;
+  if (backdrop) backdrop.hidden = true;
+}
+
+function setDrawerTitle() {
+  const title = document.getElementById("drawer-title");
+  if (!title) return;
+  const caseRow = (state.detail && state.detail.case) || {};
+  const selected = state.selected || {};
+  const batch = state.selectedBatch || {};
+  const caseName = caseRow.name || selected.caseName || "";
+  const caseId = caseRow.id || selected.caseId || "";
+  const protocol = state.detail ? protocolLabel(state.detail.protocol) : "";
+  const scope = [batch.batchId, batch.round ? `第 ${batch.round} 轮` : ""].filter(Boolean).join(" · ");
+  title.textContent = [`#${caseId} ${caseName}`.trim(), protocol, scope]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+//: Refresh the batch rows in place, keeping the filter controls and the reviewer's scroll.
+function refreshBatchInPlace() {
+  if (state.view !== "round" || !state.batch || !state.batchTable) return;
+  const container = document.getElementById("detail");
+  const scrollTop = container ? container.scrollTop : 0;
+  refreshBatchTable();
+  if (container) container.scrollTop = scrollTop;
+}
+
+function closeDrawerDetail() {
+  if (!confirmDiscardDecision()) return;
+  state.detail = null;
+  state.selected = null;
+  state.detailScope = null;
+  state.traceScope = null;
+  closeDrawer();
+  refreshBatchInPlace();
 }
 
 function renderEmptyDetail(message, hint) {
@@ -2066,6 +2141,7 @@ function renderEmptyDetail(message, hint) {
 }
 
 async function setView(view) {
+  closeDrawer();
   const wasTrace = state.view === "trace";
   state.view = view === "case" ? "case" : view === "trace" ? "trace" : "round";
   if (wasTrace && state.view !== "trace") state.traceScope = null;
@@ -2131,14 +2207,19 @@ async function selectProtocol(caseRow, protocol, scope = null) {
   if (!confirmDiscardDecision()) return;
   state.selected = { caseId: caseRow.caseId, protocol, caseName: caseRow.caseName };
   state.detailScope = scope;
+  state.detail = null;
   state.snippet = null;
   await loadDetail();
 }
 
 async function loadDetail() {
   if (!state.selected) return;
-  const container = document.getElementById("detail");
+  const container = detailContainer();
   container.replaceChildren(el("section", "card", "加载中…"));
+  if (drawerActive()) {
+    setDrawerTitle();
+    openDrawer();
+  }
   const { caseId, protocol } = state.selected;
   state.detail = await getJson(detailPath(caseId, protocol));
   let index = defaultRoundIndex(state.detail.rounds || []);
@@ -2219,12 +2300,18 @@ function updateDecisionState() {
 
 function renderDetail() {
   if (!state.selected || !state.detail) return;
-  const container = document.getElementById("detail");
+  const container = detailContainer();
   const scrollTop = container.scrollTop;
   applyProtocolTint();
   container.replaceChildren();
   const scopedToBatch = state.view === "round" && Boolean(state.batch);
   const scopedToTrace = Boolean(state.traceScope);
+  if (drawerActive()) {
+    setDrawerTitle();
+    openDrawer();
+  }
+  const allRoundsButton = document.getElementById("drawer-all-rounds");
+  if (allRoundsButton) allRoundsButton.hidden = !drawerActive();
   if (scopedToTrace) {
     const bar = el("div", "backbar");
     const back = el("button", "ghost", "← 返回轨迹清单");
@@ -2235,33 +2322,6 @@ function renderDetail() {
     allRounds.type = "button";
     allRounds.addEventListener("click", () => {
       openCaseFromTrace().catch((caught) => showNotice(caught.message, "error"));
-    });
-    bar.append(allRounds);
-    container.append(bar);
-  } else if (scopedToBatch) {
-    const bar = el("div", "backbar");
-    const scopeRound = Number(state.selectedBatch?.round || 0);
-    const back = el(
-      "button",
-      "ghost",
-      `← 返回批次 ${state.selectedBatch?.batchId || ""}${scopeRound ? ` · 第 ${scopeRound} 轮` : ""}`,
-    );
-    back.type = "button";
-    back.addEventListener("click", () => {
-      state.detail = null;
-      state.selected = null;
-      state.detailScope = null;
-      renderBatch();
-    });
-    bar.append(back);
-    // The per-round selector belongs to the case view (one case, every round). From a batch
-    // round the scope is fixed, so offer the cross-round view explicitly instead of silently
-    // switching the round under a "back to this batch" bar.
-    const allRounds = el("button", "ghost", "查看该用例全部轮次");
-    allRounds.type = "button";
-    allRounds.addEventListener("click", () => {
-      state.detailScope = null;
-      setView("case").catch((caught) => showNotice(caught.message, "error"));
     });
     bar.append(allRounds);
     container.append(bar);
@@ -3097,6 +3157,8 @@ async function saveDecision() {
     await loadCases();
     if (state.view === "round" && state.selectedBatch) await refreshBatch();
     renderDetail();
+    // The list under the drawer must show the new conclusion as soon as it is saved.
+    refreshBatchInPlace();
   } catch (caught) {
     if (error) {
       error.hidden = false;
@@ -3199,6 +3261,19 @@ function wireEvents() {
   for (const id of ["batch-query", "batch-nms", "batch-mode"]) {
     document.getElementById(id).addEventListener("input", renderBatches);
   }
+  document.getElementById("drawer-close").addEventListener("click", closeDrawerDetail);
+  document.getElementById("drawer-backdrop").addEventListener("click", closeDrawerDetail);
+  document.getElementById("drawer-all-rounds").addEventListener("click", () => {
+    if (!confirmDiscardDecision()) return;
+    state.detailScope = null;
+    closeDrawer();
+    setView("case").catch((caught) => showNotice(caught.message, "error"));
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !document.getElementById("drawer").hidden) {
+      closeDrawerDetail();
+    }
+  });
 }
 
 async function autoSelect() {
