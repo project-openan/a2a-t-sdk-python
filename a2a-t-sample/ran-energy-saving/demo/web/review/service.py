@@ -69,7 +69,7 @@ from demo.web.review.store import (
     ReviewStore,
     now_iso,
 )
-from demo.web.review.traces import InvalidTraceIdError, TraceStore
+from demo.web.review.traces import SNAPSHOT_SCHEMA, InvalidTraceIdError, TraceStore
 
 _LOGGER = logging.getLogger("ran_energy_saving.review")
 
@@ -200,6 +200,9 @@ class ReviewService:
         #: Wall-clock moment before which no fetch is attempted after a 429.
         self._fetch_cooldown_until = 0.0
         self._last_scan: dict[str, object] | None = None
+        #: Trace blocks re-derived from the snapshot because the stored payload used an older
+        #: normalizer. Keyed by (trace id, run id); a page view re-judges the same rows often.
+        self._trace_payload_cache: dict[tuple[str, str], dict[str, object]] = {}
 
     @property
     def store(self) -> ReviewStore:
@@ -1392,6 +1395,56 @@ class ReviewService:
     # Projection helpers
     # ------------------------------------------------------------------
 
+    def _evidence_with_current_trace(self, observation: Mapping[str, object]) -> dict[str, object]:
+        """Return one observation's judged evidence with a current trace block.
+
+        The trace block is a normalized projection stored at scan time. A normalizer fix (the
+        Langfuse v4 ``detail.*`` flattening, the nested status ``event``) only reaches old rows
+        when the scan runs again, so a stored block of an older schema is re-derived from the
+        snapshot on disk before judging. No network and no hashing: the snapshot is the same
+        evidence, only read with today's field mapping.
+        """
+        trace = observation.get("trace")
+        schema = trace.get("schema") if isinstance(trace, Mapping) else None
+        if not isinstance(trace, Mapping) or not isinstance(schema, str) or schema == SNAPSHOT_SCHEMA:
+            # No stored payload, or one written before the schema was versioned (a test double).
+            return _judged_evidence(observation)
+        updated = dict(observation)
+        fresh = self._current_trace_payload(observation, trace)
+        if fresh is not None:
+            updated["trace"] = fresh
+        return _judged_evidence(updated)
+
+    def _current_trace_payload(
+        self,
+        observation: Mapping[str, object],
+        stored: Mapping[str, object],
+    ) -> dict[str, object] | None:
+        """Return the stored payload rebuilt from disk, or ``None`` when that is not possible."""
+        trace_id = str(observation.get("traceId") or stored.get("traceId") or "")
+        if not TRACE_ID_PATTERN.match(trace_id):
+            return None
+        run_id = str(observation.get("runId") or "")
+        key = (trace_id, run_id)
+        cached = self._trace_payload_cache.get(key)
+        if cached is not None:
+            return cached
+        try:
+            payload = self._trace_store.cached_payload(
+                trace_id,
+                run_id=run_id or None,
+                nms_kind=_row_nms_kind(observation),
+                local_points=_local_points(observation),
+                local_known=_local_known(observation),
+                hashes=False,
+            )
+        except (InvalidTraceIdError, OSError):
+            return None
+        if str(payload.get("exportState") or "") not in {"exported", "partial"}:
+            return None
+        self._trace_payload_cache[key] = payload
+        return payload
+
     def _protocol_row(
         self,
         case: Mapping[str, Any],
@@ -1422,7 +1475,7 @@ class ReviewService:
                 "langfuseUrl": "",
                 "decision": self._decision_block(case, protocol, decision, [], scope=scope),
             }
-        evidence_map = _judged_evidence(observation)
+        evidence_map = self._evidence_with_current_trace(observation)
         langfuse_url = evidence_map.get("langfuseUrl")
         # The verdict is identified by the case id it is judged under. The operator text a run was
         # produced from is frozen in its evidence and shown in the round detail, but a case edited
@@ -1483,7 +1536,7 @@ class ReviewService:
         observation: Mapping[str, object],
     ) -> dict[str, object]:
         """Build one judged evidence round for the detail payload."""
-        evidence_map = _judged_evidence(observation)
+        evidence_map = self._evidence_with_current_trace(observation)
         judgement: ProtocolJudgement = judge_protocol(case, protocol, evidence_map)
         detail = judgement.to_dict()
         _mark_fetch_state(detail, self._trace_fetch_enabled)

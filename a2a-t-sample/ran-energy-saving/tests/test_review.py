@@ -756,6 +756,62 @@ def test_the_batch_row_exposes_the_langfuse_trace_link(tmp_path: Path) -> None:
     assert task["langfuseUrl"] == url
 
 
+def test_a_stored_payload_of_an_older_schema_is_rebuilt_from_the_snapshot(tmp_path: Path) -> None:
+    cases_dir = tmp_path / "cases"
+    _write_cases(cases_dir, _case_document(blocked=False, rounds=0))
+    catalog = CaseCatalog(cases_dir, overlay_path=tmp_path / "absent.yaml")
+    store = ReviewStore(tmp_path / "review.sqlite3")
+    store.ensure()
+    service = ReviewService(
+        store=store,
+        catalog=catalog,
+        runs_dir=tmp_path / "runs",
+        client_db_path=None,
+    )
+    trace_id = "b" * 32
+    _write_batch(
+        tmp_path / "runs",
+        [_evidence_item(blocked=False, slot_error=False, trace_id=trace_id)],
+    )
+    service.scan(days=2.0)
+    # A scan made by an older normalizer stored a payload without the detail fields.
+    store.set_trace(
+        case_id=1,
+        protocol="a2a-t",
+        batch_id="batch-1",
+        source_round=1,
+        run_id="run-1",
+        trace={"schema": "review-trace/v1", "traceId": trace_id, "exportState": "exported"},
+        fetched_at="2026-01-01T00:00:00Z",
+    )
+    snapshot = tmp_path / "runs" / "review" / "langfuse" / f"{trace_id}_20260101-000000"
+    (snapshot / "raw").mkdir(parents=True)
+    rows = [
+        {
+            "id": "o1",
+            "traceId": trace_id,
+            "type": "SPAN",
+            "name": "Task-T prompt rendered",
+            "metadata": {
+                "runId": "run-1",
+                "kind": "task_prompt_rendered",
+                "detail.userRequest": "create a task",
+                "detail.promptText": "TASK-T",
+            },
+        }
+    ]
+    (snapshot / "raw" / "observations.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+    task = service.batch_rows("batch-1", 1)["cases"][0]["protocols"][0]
+
+    data = {row["id"]: row for row in task["data"]}
+    assert data["request.original"]["status"] == "present"
+    assert data["task_t"]["status"] == "present"
+
+
 def test_the_batch_view_can_narrow_to_one_round(tmp_path: Path) -> None:
     service, _catalog, _overlay, runs = _fixture(tmp_path)
     _write_batch(

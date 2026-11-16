@@ -27,7 +27,10 @@ from langfuse_export.config import Config
 from langfuse_export.metrics import _row_side
 
 TRACE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[0-9a-fA-F]{32}$")
-SNAPSHOT_SCHEMA: Final[str] = "review-trace/v1"
+#: Payload contract of the normalized trace block. Bumped whenever the normalizer changes which
+#: fields a stored payload carries: the review re-derives a payload of an older schema from the
+#: snapshot on disk instead of judging with the fields the old code happened to record.
+SNAPSHOT_SCHEMA: Final[str] = "review-trace/v2"
 
 EXPORT_STATE_EXPORTED: Final[str] = "exported"
 EXPORT_STATE_PARTIAL: Final[str] = "partial"
@@ -186,8 +189,12 @@ class TraceStore:
             return None
         return max(candidates, key=self._rank)
 
-    def load(self, trace_id: str) -> TraceSnapshot:
-        """Load one snapshot; a missing directory is ``not_exported``, not an error."""
+    def load(self, trace_id: str, *, hashes: bool = True) -> TraceSnapshot:
+        """Load one snapshot; a missing directory is ``not_exported``, not an error.
+
+        ``hashes`` is the provenance digest of the export directory. Re-judging a stored payload
+        does not need it, and hashing every file on every read is the expensive part of a load.
+        """
         directory = self.latest_dir(trace_id)
         if directory is None:
             return TraceSnapshot(
@@ -215,8 +222,10 @@ class TraceStore:
                 export_state=EXPORT_STATE_FAILED,
                 captured_at=captured_at,
                 export_dir=str(directory),
-                manifest_sha256=_sha256(manifest_path) if manifest_path.is_file() else "",
-                export_dir_sha256=_directory_sha256(directory),
+                manifest_sha256=(
+                    _sha256(manifest_path) if hashes and manifest_path.is_file() else ""
+                ),
+                export_dir_sha256=_directory_sha256(directory) if hashes else "",
                 rounds=None,
                 span_level="",
                 capture_content=None,
@@ -241,8 +250,8 @@ class TraceStore:
             export_state=state,
             captured_at=captured_at,
             export_dir=str(directory),
-            manifest_sha256=_sha256(manifest_path) if manifest_path.is_file() else "",
-            export_dir_sha256=_directory_sha256(directory),
+            manifest_sha256=_sha256(manifest_path) if hashes and manifest_path.is_file() else "",
+            export_dir_sha256=_directory_sha256(directory) if hashes else "",
             rounds=_int(root_metadata.get("rounds")),
             span_level=_text(root_metadata.get("spanLevel") or root_metadata.get("span_level")),
             capture_content=_first_bool(root_metadata, "captureContent", "capture_content"),
@@ -259,10 +268,11 @@ class TraceStore:
         nms_kind: str,
         local_points: Sequence[str] | None = None,
         local_known: Sequence[str] | None = None,
+        hashes: bool = True,
     ) -> dict[str, object]:
         """Return the compact trace block stored beside one review observation."""
         return self._payload(
-            self.load(trace_id),
+            self.load(trace_id, hashes=hashes),
             run_id=run_id,
             nms_kind=nms_kind,
             local_points=local_points,
@@ -279,6 +289,7 @@ class TraceStore:
         force: bool = False,
         local_points: Sequence[str] | None = None,
         local_known: Sequence[str] | None = None,
+        hashes: bool = True,
     ) -> dict[str, object]:
         """Return the cached snapshot, fetching only when no export exists yet.
 
@@ -287,10 +298,10 @@ class TraceStore:
         fetched again; ``force`` (the reviewer's "重新抓取") is the explicit way to ask for a new
         copy. ``scan`` passes no config and therefore only reads the snapshot root.
         """
-        snapshot = self.load(trace_id)
+        snapshot = self.load(trace_id, hashes=hashes)
         if config is not None and (force or snapshot.export_state not in _CACHED_STATES):
             self.fetch(trace_id, config, run_id=run_id)
-            snapshot = self.load(trace_id)
+            snapshot = self.load(trace_id, hashes=hashes)
         return self._payload(
             snapshot,
             run_id=run_id,
@@ -418,6 +429,7 @@ def normalize_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[Observation, ...]
         if not kind:
             kind = "llm" if raw_type == "GENERATION" else "tool" if raw_type == "TOOL" else ""
         side, side_source = _side(row, metadata)
+        event = _event_map(detail)
         prompt_text, prompt_truncated = _clip(_text(detail.get("promptText")), MAX_PROMPT_TEXT)
         response_text, _ = _clip(_output_text(row.get("output")), MAX_PROMPT_TEXT)
         task_t, _ = _clip(_text(detail.get("taskT")), MAX_PROMPT_TEXT)
@@ -450,9 +462,15 @@ def normalize_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[Observation, ...]
                 content=_text(detail.get("content")),
                 response=response_text,
                 operation=_text(detail.get("operation")),
-                state=_text(detail.get("state")) or _text(metadata.get("state")),
-                task_id=_text(metadata.get("taskId")) or _text(metadata.get("task_id")),
-                context_id=_text(metadata.get("contextId")) or _text(metadata.get("context_id")),
+                # A vendor status frame nests its state and Task identity under ``event``; the
+                # Modify acceptance is exactly such a frame (WORKING + modification succeeded).
+                state=_text(detail.get("state")) or _text(metadata.get("state")) or _event_state(event),
+                task_id=_text(metadata.get("taskId"))
+                or _text(metadata.get("task_id"))
+                or _event_identity(event, "taskId"),
+                context_id=_text(metadata.get("contextId"))
+                or _text(metadata.get("context_id"))
+                or _event_identity(event, "contextId"),
                 final_state=_text(detail.get("finalState")) or _text(metadata.get("finalState")),
                 summary=_text(detail.get("summary")),
                 source=_text(detail.get("source")),
@@ -481,6 +499,38 @@ def _merged_detail(metadata: Mapping[str, Any]) -> dict[str, Any]:
             detail[head] = bucket
         bucket[rest] = value
     return detail
+
+
+def _event_map(detail: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return the nested ``event`` of a status frame, or an empty mapping."""
+    event = detail.get("event")
+    return event if isinstance(event, Mapping) else {}
+
+
+def _event_state(event: Mapping[str, Any]) -> str:
+    """Return the Task state a status frame carries, wherever the vendor nests it."""
+    state = _text(event.get("state"))
+    if state:
+        return state
+    task = event.get("task")
+    if not isinstance(task, Mapping):
+        return ""
+    state = _text(task.get("state"))
+    if state:
+        return state
+    status = task.get("status")
+    return _text(status.get("state")) if isinstance(status, Mapping) else ""
+
+
+def _event_identity(event: Mapping[str, Any], key: str) -> str:
+    """Return the Task/context id a status frame carries under ``event``."""
+    snake = "task_id" if key == "taskId" else "context_id"
+    task = event.get("task")
+    if isinstance(task, Mapping):
+        value = _text(task.get(key)) or _text(task.get(snake))
+        if value:
+            return value
+    return _text(event.get(key)) or _text(event.get(snake))
 
 
 def _merged_params(detail: Mapping[str, Any]) -> dict[str, Any] | None:

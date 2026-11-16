@@ -169,6 +169,31 @@ def test_frames_gate_the_nms_hop_and_keep_other_hops_for_display(tmp_path: Path)
     assert frames["serverSendCount"]["byScope"] == [{"scope": "a2a-t-server", "count": 2, "sideSource": "metadata"}]
 
 
+def test_normalize_rows_reads_a_vendor_status_event_identity_and_state() -> None:
+    """A Modify acceptance is a WORKING status frame with its state under ``event``."""
+    rows = [
+        _row(
+            "Task modification succeeded",
+            metadata={
+                "kind": "status",
+                "runId": "run-1",
+                "taskId": "task-1",
+                "contextId": "ctx-1",
+                "detail.event.kind": "status",
+                "detail.event.state": "TASK_STATE_WORKING",
+                "detail.event.task.id": "task-1",
+                "detail.event.task.contextId": "ctx-1",
+            },
+        )
+    ]
+
+    observation = normalize_rows(rows)[0]
+
+    assert observation.state == "TASK_STATE_WORKING"
+    assert observation.task_id == "task-1"
+    assert observation.context_id == "ctx-1"
+
+
 def test_normalize_rows_reads_flattened_detail_and_generation_output() -> None:
     """Langfuse v4 flattens ``detail`` into dotted keys; the review must read both shapes."""
     rows = [
