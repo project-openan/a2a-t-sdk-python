@@ -441,7 +441,11 @@ def normalize_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[Observation, ...]
         side, side_source = _side(row, metadata)
         event = _event_map(detail)
         prompt_text, prompt_truncated = _clip(_text(detail.get("promptText")), MAX_PROMPT_TEXT)
-        response_text, _ = _clip(_output_text(row.get("output")), MAX_PROMPT_TEXT)
+        # Pure A2A negotiates in plain message text: the server's reply lives in the SendMessage
+        # attributes, not in a propose/decision span.
+        response_text, _ = _clip(
+            _output_text(row.get("output")) or _a2a_response_text(metadata), MAX_PROMPT_TEXT
+        )
         task_t, _ = _clip(_text(detail.get("taskT")), MAX_PROMPT_TEXT)
         negotiation_t, _ = _clip(_text(detail.get("negotiationT")), MAX_PROMPT_TEXT)
         user_request = _text(detail.get("userRequest")) or _text(metadata.get("userRequest"))
@@ -580,6 +584,44 @@ def _merged_params(detail: Mapping[str, Any]) -> dict[str, Any] | None:
     if isinstance(raw, Mapping):
         return {str(key): value for key, value in raw.items()}
     return None
+
+
+def _a2a_response_text(metadata: Mapping[str, Any]) -> str:
+    """Return the text of a pure-A2A ``SendMessage`` response.
+
+    The A2A transport records the server reply as observation attributes
+    (``attributes.gen_ai.agent.a2a.response.parts[].text``) in the nested shape, or as flattened
+    dotted keys on v4. Pure A2A negotiates in this text; there is no Negotiation-T span.
+    """
+    response = metadata.get("attributes.gen_ai.agent.a2a.response")
+    if isinstance(response, Mapping):
+        text = _parts_text(response.get("parts"))
+        if text:
+            return text
+    prefix = "attributes.gen_ai.agent.a2a.response."
+    flattened = sorted(
+        (
+            (key, value)
+            for key, value in metadata.items()
+            if isinstance(key, str) and key.startswith(prefix) and key.endswith(".text")
+        ),
+        key=lambda item: item[0],
+    )
+    for _key, value in flattened:
+        text = _text(value)
+        if text:
+            return text
+    return ""
+
+
+def _parts_text(parts: object) -> str:
+    """Return the first non-empty ``text`` of A2A message parts."""
+    values = parts.values() if isinstance(parts, Mapping) else parts if isinstance(parts, list) else ()
+    for part in values:
+        text = _text(_mapping(part).get("text"))
+        if text:
+            return text
+    return ""
 
 
 def _output_text(value: object) -> str:

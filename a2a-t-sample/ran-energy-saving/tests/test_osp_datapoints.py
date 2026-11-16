@@ -193,6 +193,29 @@ def test_negotiation_items_appear_once_a_round_ran() -> None:
     assert len(results["negotiation.reply"].copies) == 2
 
 
+def test_pure_a2a_reads_the_negotiation_message_from_the_send_message_reply() -> None:
+    observations = [
+        {
+            "name": "SendMessage",
+            "type": "AGENT",
+            "response": "The Guaranteed throughput target format is invalid.",
+        },
+        _obs("accept", summary="accept R1", round=1),
+    ]
+    results = _by_id(
+        resolve_data_points(
+            {"observations": observations},
+            _context(protocol="a2a", rounds=1),
+            include_values=True,
+        )
+    )
+    assert results["negotiation.message"].status == STATUS_PRESENT
+    assert results["negotiation.message"].copies[0].source == "send_message"
+    assert results["negotiation.message"].copies[0].value.startswith("The Guaranteed throughput")
+    assert results["negotiation.reply"].status == STATUS_PRESENT
+    assert results["task.succeeded"].status == STATUS_MISSING
+
+
 def test_required_and_optional_missing_are_separated() -> None:
     observations = [
         item for item in _complete() if item["kind"] != "llm"

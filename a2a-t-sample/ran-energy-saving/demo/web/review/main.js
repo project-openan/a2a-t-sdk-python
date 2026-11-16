@@ -797,6 +797,7 @@ const DATA_SOURCE_LABELS = {
   llm: "LLM 输出",
   propose: "协商报文",
   decision_requested: "协商请求",
+  send_message: "服务端响应",
   decision: "协商决策",
   task_created: "任务创建",
   finished: "运行结束",

@@ -373,7 +373,17 @@ def _negotiation_message_copies(
         fields=("content",),
         value=lambda item: _text(item, "content"),
     )
-    return [*proposed, *requested]
+    if proposed or requested:
+        return [*proposed, *requested]
+    # Pure A2A has no Negotiation-T span: the server proposes in the plain text of the
+    # SendMessage response (``attributes.gen_ai.agent.a2a.response.parts[].text``).
+    return _copies(
+        observations,
+        predicate=lambda item: _name(item) == "SendMessage" and bool(_text(item, "response", "output")),
+        source="send_message",
+        fields=("response",),
+        value=lambda item: _text(item, "response", "output"),
+    )
 
 
 def _negotiation_reply_copies(

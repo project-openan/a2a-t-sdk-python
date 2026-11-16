@@ -612,5 +612,6 @@ assert.equal(
   "渲染提示词 · Task-T prompt rendered",
 );
 assert.equal(dataCopyLabel({ source: "task_created" }), "任务创建");
+assert.equal(dataCopyLabel({ source: "send_message", span: "SendMessage" }), "服务端响应 · SendMessage");
 assert.equal(dataCopyLabel({ source: "mystery", span: "x" }), "mystery · x");
 assert.equal(dataCopyLabel(null), "");

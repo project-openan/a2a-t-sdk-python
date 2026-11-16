@@ -169,6 +169,34 @@ def test_frames_gate_the_nms_hop_and_keep_other_hops_for_display(tmp_path: Path)
     assert frames["serverSendCount"]["byScope"] == [{"scope": "a2a-t-server", "count": 2, "sideSource": "metadata"}]
 
 
+def test_normalize_rows_reads_the_pure_a2a_send_message_response() -> None:
+    """Pure A2A negotiates in the SendMessage reply text, not in a propose span."""
+    rows = [
+        _row(
+            "SendMessage",
+            metadata={
+                "attributes.gen_ai.agent.a2a.response": {
+                    "role": "ROLE_AGENT",
+                    "parts": [{"text": "The Guaranteed throughput target format is invalid."}],
+                },
+            },
+        ),
+        {
+            "id": "flat-1",
+            "name": "SendMessage",
+            "type": "AGENT",
+            "metadata": {
+                "attributes.gen_ai.agent.a2a.response.parts.0.text": "flattened reply",
+            },
+        },
+    ]
+
+    first, second = normalize_rows(rows)
+
+    assert first.response == "The Guaranteed throughput target format is invalid."
+    assert second.response == "flattened reply"
+
+
 def test_normalize_rows_reads_a_vendor_status_event_identity_and_state() -> None:
     """A Modify acceptance is a WORKING status frame with its state under ``event``."""
     rows = [
