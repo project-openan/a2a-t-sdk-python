@@ -918,8 +918,13 @@ def test_finish_probes_ingestion_with_a_real_runtime(offline_config, monkeypatch
         _INGESTION_PROBES.clear()
 
 
-def test_the_otlp_exporter_retries_rate_limited_batches() -> None:
-    """A 429 must be retried inside the HTTP session instead of dropping the whole batch."""
+def test_the_otlp_exporter_retries_rejected_batches() -> None:
+    """429/5xx and a temporary 403 must be retried instead of dropping the whole batch.
+
+    The 403 is the intermittent Cloud rejection observed in the field (403 interleaved with 200),
+    not the persistent "ingestion suspended" answer: a suspended project just exhausts the bounded
+    budget. 401 (bad key) stays out of the list.
+    """
     config = replace(
         load_config(),
         langfuse_public_key="pk",
@@ -934,6 +939,8 @@ def test_the_otlp_exporter_retries_rate_limited_batches() -> None:
     session = transport._session  # type: ignore[attr-defined]
     retry = session.get_adapter("https://us.cloud.langfuse.com/api/public/otel/v1/traces").max_retries
     assert retry.total == 4
+    assert 403 in retry.status_forcelist
     assert 429 in retry.status_forcelist
+    assert 401 not in retry.status_forcelist
     assert retry.allowed_methods == frozenset({"POST"})
     assert retry.respect_retry_after_header is True

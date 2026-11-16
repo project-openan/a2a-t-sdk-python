@@ -311,12 +311,17 @@ def _should_export_span(span: Any) -> bool:
 
 
 def _retrying_otlp_exporter(config: SampleConfig) -> Any | None:
-    """Return an OTLP exporter that retries 429/5xx before the batch is dropped.
+    """Return an OTLP exporter that retries a temporary ingestion rejection.
 
-    Langfuse's ingestion limiter answers 429; the SDK's default OTLP exporter reports one failure
-    and the batch processor discards the whole batch, so the trace silently loses spans. Retrying
-    inside the HTTP session keeps the batch alive: urllib3 honours ``Retry-After`` and rewinds the
-    POST body. 401/403 (bad key / suspended ingestion) are deliberately not retried.
+    The SDK's default OTLP exporter reports one failure and the batch processor discards the whole
+    batch, so the trace silently loses spans. Retrying inside the HTTP session keeps the batch
+    alive: urllib3 honours ``Retry-After`` and rewinds the POST body.
+
+    ``403`` is retried together with ``429``/5xx: the observed Langfuse Cloud rejection was
+    intermittent (403 with 200 in the same minute, see ``docs-local/langfuse_403问题分析.md``),
+    which is not the persistent "project suspended" case the older guidance assumed; a suspended
+    project simply exhausts the bounded budget and the batch is dropped as before. ``401`` (bad
+    key) is never retried.
 
     Returns ``None`` when the retry stack is unavailable, so the caller falls back to the SDK's
     default exporter rather than failing the run.
@@ -353,7 +358,7 @@ def _retrying_otlp_exporter(config: SampleConfig) -> Any | None:
         read=2,
         status=4,
         backoff_factor=0.5,
-        status_forcelist=(429, 500, 502, 503, 504),
+        status_forcelist=(403, 429, 500, 502, 503, 504),
         allowed_methods=frozenset({"POST"}),
         respect_retry_after_header=True,
         raise_on_status=False,
