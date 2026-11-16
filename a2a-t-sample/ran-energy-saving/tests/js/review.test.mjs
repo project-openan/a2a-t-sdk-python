@@ -25,6 +25,7 @@ import {
   protocolLabel,
   roundEvidence,
   roundLabel,
+  roundOptionLabel,
   stabilityOf,
   statusLabel,
   textExcerpt,
@@ -336,6 +337,12 @@ assert.equal(
 assert.equal(defaultRoundIndex([]), 0);
 assert.match(roundLabel(ROUNDS[0]), /batch-new · r1 · 2026-11-15 18:22 · qwen3\.8 · 真机 · live · 通过/);
 assert.match(roundLabel({ ...ROUNDS[0], nmsSim: true }), /模拟器/);
+// The selector label carries a short run id so two runs of one batch stay apart.
+assert.equal(roundOptionLabel(ROUNDS[0]), roundLabel(ROUNDS[0]));
+assert.match(
+  roundOptionLabel({ ...ROUNDS[0], runId: "0123456789abcdef0123456789abcdef" }),
+  /· 0123456789…abcdef$/,
+);
 
 assert.deepEqual(
   stabilityOf([

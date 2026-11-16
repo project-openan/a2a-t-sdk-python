@@ -381,6 +381,12 @@ export function roundLabel(round) {
   ].join(" · ");
 }
 
+//: Label of one round in the selector; the run id keeps two runs of one batch apart.
+export function roundOptionLabel(round) {
+  const runId = String(round.runId || "");
+  return runId ? `${roundLabel(round)} · ${shortId(runId)}` : roundLabel(round);
+}
+
 //: Default round: the newest real-machine live run (never the simulator), else the newest one.
 export function defaultRoundIndex(rounds) {
   if (!rounds || !rounds.length) return 0;
@@ -1256,6 +1262,24 @@ function traceFilters() {
     dimension: field("trace-filter-dimension"),
     resolution: field("trace-filter-resolution"),
   };
+}
+
+//: Copy-to-clipboard button used by the request blocks and the round identity line.
+function copyButton(text) {
+  const copy = el("button", "ghost small", "复制");
+  copy.type = "button";
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      copy.textContent = "已复制";
+      window.setTimeout(() => {
+        copy.textContent = "复制";
+      }, 1500);
+    } catch {
+      copy.textContent = "复制失败";
+    }
+  });
+  return copy;
 }
 
 function shortId(value, head = 10, tail = 6) {
@@ -2271,20 +2295,7 @@ function requestField(label, value, hint) {
   const head = el("div", "request-head");
   head.append(el("span", "request-label", label));
   const text = value === null || value === undefined || value === "" ? "—" : textBlock(value);
-  const copy = el("button", "ghost small", "复制");
-  copy.type = "button";
-  copy.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      copy.textContent = "已复制";
-      window.setTimeout(() => {
-        copy.textContent = "复制";
-      }, 1500);
-    } catch {
-      copy.textContent = "复制失败";
-    }
-  });
-  head.append(copy);
+  head.append(copyButton(text));
   item.append(head);
   if (hint) item.append(el("p", "request-hint", hint));
   item.append(el("pre", "request-text", text));
@@ -2308,7 +2319,8 @@ function renderRoundBar() {
   (state.detail.rounds || []).forEach((round, index) => {
     const option = document.createElement("option");
     option.value = String(index);
-    option.textContent = roundLabel(round);
+    option.textContent = roundOptionLabel(round);
+    option.title = `runId ${round.runId || "—"} · traceId ${round.traceId || "—"}`;
     select.append(option);
   });
   select.value = String(state.round);
@@ -2331,6 +2343,21 @@ function renderDimensionStrip(round) {
   head.append(el("h2", "", "判定汇总"));
   head.append(el("span", "summary", roundLabel(round)));
   card.append(head);
+  // The verdict belongs to one run; show its ids verbatim so a reviewer can look it up by hand.
+  const identity = el("dl", "kv");
+  for (const [label, value] of [
+    ["runId", round.runId],
+    ["traceId", round.traceId],
+  ]) {
+    if (!value) continue;
+    identity.append(el("dt", "", label));
+    const cell = el("dd", "mono-cell");
+    cell.append(document.createTextNode(String(value)));
+    cell.append(document.createTextNode(" "));
+    cell.append(copyButton(String(value)));
+    identity.append(cell);
+  }
+  if (identity.childNodes.length) card.append(identity);
   const strip = el("div", "dimension-status");
   for (const dimension of (round.judgement && round.judgement.dimensions) || []) {
     const badge = el(
