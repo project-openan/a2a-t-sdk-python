@@ -292,8 +292,10 @@ def report_markdown(
             reasons.append(str(mapping.get("note")))
         if mapping.get("staleReason"):
             reasons.append(str(mapping.get("staleReason")))
-        if mapping.get("newEvidence"):
-            reasons.append("有新证据")
+        if mapping.get("verdictChanged"):
+            reasons.append("本轮自动判定与结论时不同")
+        elif mapping.get("newEvidence"):
+            reasons.append("有新轮次（判定一致）")
         lines.append(
             f"- `#{case.get('id')}` {case.get('name')} · {_PROTOCOL_LABEL.get(protocol, protocol)}"
             f" — {'；'.join(reason for reason in reasons if reason)}"
@@ -413,6 +415,8 @@ def _case_entry(case: Mapping[str, object]) -> dict[str, object]:
                 "stale": bool(mapping.get("stale")),
                 "staleReason": str(mapping.get("staleReason") or ""),
                 "newEvidence": bool(mapping.get("newEvidence")),
+                "verdictChanged": bool(mapping.get("verdictChanged")),
+                "verdictChange": mapping.get("verdictChange") or {},
             },
             "failures": list(task.get("failures") or ()),
             "traceReason": str(task.get("traceReason") or ""),
@@ -591,9 +595,10 @@ def _auto_status(task: Mapping[str, object]) -> str:
 
 
 def _decision_stale(task: Mapping[str, object]) -> bool:
+    """Return whether a newer verdict or a changed case invalidated the conclusion."""
     decision = task.get("decision")
     mapping = decision if isinstance(decision, Mapping) else {}
-    return bool(mapping.get("stale") or mapping.get("newEvidence"))
+    return bool(mapping.get("stale") or mapping.get("verdictChanged"))
 
 
 def _decision_label(task: Mapping[str, object]) -> str:
@@ -601,7 +606,7 @@ def _decision_label(task: Mapping[str, object]) -> str:
     mapping = decision if isinstance(decision, Mapping) else {}
     status = str(mapping.get("status") or "pending")
     label = _DECISION_LABEL.get(status, status)
-    if mapping.get("stale") or mapping.get("newEvidence"):
+    if mapping.get("stale") or mapping.get("verdictChanged"):
         return f"{label}（待复核）"
     return label
 

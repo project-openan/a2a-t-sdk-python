@@ -97,6 +97,21 @@ export function decisionLabel(status) {
   return DECISION_LABELS[status] || String(status || "未审核");
 }
 
+//: Describe how a newer round's automatic verdict differs from the one a conclusion recorded.
+export function verdictChangeText(change) {
+  if (!change) return "";
+  const rows = [];
+  const status = change.status;
+  if (status && status.from && status.to && status.from !== status.to) {
+    rows.push(`整体 ${statusLabel(status.from)} → ${statusLabel(status.to)}`);
+  }
+  for (const row of change.dimensions || []) {
+    if (!row || !row.dimension) continue;
+    rows.push(`${dimensionLabel(row.dimension)} ${statusLabel(row.from)} → ${statusLabel(row.to)}`);
+  }
+  return rows.length ? `本轮自动判定与保存结论时不同：${rows.join("；")}。需要复核。` : "";
+}
+
 export function categoryLabel(category) {
   return CATEGORY_LABELS[category] || String(category || "—");
 }
@@ -583,7 +598,7 @@ function renderCases() {
         el(
           "span",
           `badge ${decisionStatus}`,
-          decision.stale || decision.newEvidence
+          decision.stale || decision.verdictChanged
             ? `${decisionLabel(decisionStatus)}·待复核`
             : decisionLabel(decisionStatus),
         ),
@@ -1235,7 +1250,7 @@ function batchMarkers(caseRow) {
   for (const task of caseRow.protocols || []) {
     const decision = task.decision || {};
     const decisionStatus = decision.status || "pending";
-    if (decision.stale) markers.add("结论待复核");
+    if (decision.stale || decision.verdictChanged) markers.add("结论待复核");
     if (decision.onThisRound === false && decisionStatus !== "pending") markers.add("结论来自其它轮次");
   }
   return [...markers].join("；");
@@ -2927,7 +2942,18 @@ function renderDecisionCard() {
   card.append(head);
   const decision = (state.detail && state.detail.decision) || {};
   if (decision.staleReason) card.append(el("p", "hint", decision.staleReason));
-  if (decision.newEvidence) card.append(el("p", "hint", "采集到了结论之后的新轮次，需要复核。"));
+  if (decision.verdictChanged) {
+    card.append(
+      el(
+        "p",
+        "hint",
+        verdictChangeText(decision.verdictChange) || "本轮自动判定与保存结论时不同，需要复核。",
+      ),
+    );
+  } else if (decision.newEvidence) {
+    // A newer round with the same verdict keeps the conclusion; say so instead of asking again.
+    card.append(el("p", "sub", "结论之后有新的轮次，自动判定与保存时一致，沿用结论。"));
+  }
   const auto = protocolStatus();
   if (auto !== "pass") {
     card.append(el("p", "hint", `自动判定为「${statusLabel(auto)}」；确认通过时必须填写理由。`));

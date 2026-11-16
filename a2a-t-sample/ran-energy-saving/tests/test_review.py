@@ -1588,19 +1588,57 @@ def test_a_decision_becomes_stale_when_the_case_changes(tmp_path: Path) -> None:
     assert "变更" in decision["staleReason"]
 
 
-def test_a_decision_is_flagged_when_new_evidence_arrives(tmp_path: Path) -> None:
+def test_a_new_round_with_the_same_verdict_keeps_the_decision(tmp_path: Path) -> None:
+    """A rerun that reaches the same automatic verdict inherits the conclusion silently."""
     service, _catalog, _overlay, runs = _fixture(tmp_path)
     service.scan(days=2.0)
     service.set_decision(1, "a2a-t", status=DECISION_ACCEPTED)
+    _record_message(runs / "client-state.sqlite3", "run-2")
     _write_batch(
         runs,
-        [_evidence_item(run_id="run-2", trace_id="trace-2")],
+        [_evidence_item(run_id="run-2", trace_id="trace-2", slot_error=True)],
         batch_id="batch-2",
         finished_at="2026-11-15T10:06:00+00:00",
     )
     service.scan(days=2.0)
 
-    assert service.detail(1, "a2a-t")["decision"]["newEvidence"] is True
+    block = service.detail(1, "a2a-t")["decision"]
+    assert isinstance(block, Mapping)
+
+    assert block["newEvidence"] is True
+    assert block["verdictChanged"] is False
+    assert block["verdictChange"] == {"status": None, "dimensions": []}
+
+
+def test_a_new_round_with_a_different_verdict_asks_for_a_recheck(tmp_path: Path) -> None:
+    """The conclusion stays saved, but a changed verdict or dimension asks for a recheck."""
+    service, _catalog, _overlay, runs = _fixture(tmp_path)
+    service.scan(days=2.0)
+    service.set_decision(1, "a2a-t", status=DECISION_ACCEPTED)
+    _record_message(runs / "client-state.sqlite3", "run-2")
+    _write_batch(
+        runs,
+        [
+            _evidence_item(
+                run_id="run-2",
+                trace_id="trace-2",
+                slot_error=True,
+                final_state="failed",
+            )
+        ],
+        batch_id="batch-2",
+        finished_at="2026-11-15T10:06:00+00:00",
+    )
+    service.scan(days=2.0)
+
+    block = service.detail(1, "a2a-t")["decision"]
+    assert isinstance(block, Mapping)
+
+    assert block["verdictChanged"] is True
+    assert block["verdictChange"] == {
+        "status": {"from": "pass", "to": "fail"},
+        "dimensions": [{"dimension": "final_state", "from": "pass", "to": "fail"}],
+    }
 
 
 def test_the_store_keeps_one_decision_per_target_and_audits_it(tmp_path: Path) -> None:

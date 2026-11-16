@@ -1376,6 +1376,9 @@ class ReviewService:
             "modes": sorted({str(row.get("decisionMode")) for row in rounds}),
             "nms": any(bool(row.get("nms")) for row in rounds),
             "autoStatus": auto,
+            #: The per-dimension verdicts at confirmation time. A later round that reaches the same
+            #: overall verdict through different dimensions still needs a recheck.
+            "dimensions": _dimension_statuses(rounds[0]) if rounds else {},
             "observedAt": str(evidence_rows[0].get("observedAt") or "") if evidence_rows else "",
         }
         self._store.set_decision(
@@ -1524,7 +1527,15 @@ class ReviewService:
                 case,
                 protocol,
                 decision,
-                [{"runId": observation.get("runId"), "batchId": observation.get("batchId")}],
+                [
+                    {
+                        "runId": observation.get("runId"),
+                        "batchId": observation.get("batchId"),
+                        # The verdict comparison needs this row's judgement; the identity fields
+                        # alone can only say which run the decision was based on.
+                        "judgement": judgement.to_dict(),
+                    }
+                ],
                 scope=scope,
             ),
         }
@@ -1608,6 +1619,10 @@ class ReviewService:
         With ``scope`` (the batch view) the block also reports whether the decision's evidence
         includes the scoped run, and stops claiming "new evidence": that flag compares against the
         newest run of the whole corpus, which is meaningless for one batch.
+
+        ``verdictChanged`` compares the newest round with the verdict the decision recorded. A
+        newer round inherits the human conclusion only when it reached the same automatic verdict;
+        a different status or dimension keeps the conclusion saved but asks for a recheck.
         """
         if decision is None:
             return {
@@ -1620,6 +1635,8 @@ class ReviewService:
                 "stale": False,
                 "staleReason": "",
                 "newEvidence": False,
+                "verdictChanged": False,
+                "verdictChange": {"status": None, "dimensions": []},
                 "onThisRound": None,
             }
         stale_reason = ""
@@ -1637,6 +1654,7 @@ class ReviewService:
         else:
             on_this_round = bool(newest) and newest in known
             new_evidence = False
+        verdict_changed, verdict_change = _verdict_change(evidence_map, rounds)
         return {
             "status": str(decision.get("status") or DECISION_PENDING),
             "category": str(decision.get("category") or ""),
@@ -1647,6 +1665,8 @@ class ReviewService:
             "stale": bool(stale_reason),
             "staleReason": stale_reason,
             "newEvidence": new_evidence,
+            "verdictChanged": verdict_changed,
+            "verdictChange": verdict_change,
             "onThisRound": on_this_round,
         }
 
@@ -1704,6 +1724,8 @@ def _pending_decision_block() -> dict[str, object]:
         "stale": False,
         "staleReason": "",
         "newEvidence": False,
+        "verdictChanged": False,
+        "verdictChange": {"status": None, "dimensions": []},
         "onThisRound": None,
     }
 
@@ -2028,6 +2050,51 @@ def _auto_status(rounds: Sequence[Mapping[str, object]]) -> str:
     if not isinstance(judgement, Mapping):
         return STATUS_NOT_RUN
     return str(judgement.get("status") or STATUS_NOT_RUN)
+
+
+def _dimension_statuses(round: Mapping[str, object]) -> dict[str, str]:
+    """Return the dimension → verdict map of one judged round."""
+    judgement = round.get("judgement")
+    dimensions = judgement.get("dimensions") if isinstance(judgement, Mapping) else None
+    rows = dimensions if isinstance(dimensions, (list, tuple)) else ()
+    return {
+        str(row.get("dimension")): str(row.get("status"))
+        for row in rows
+        if isinstance(row, Mapping) and row.get("dimension")
+    }
+
+
+def _verdict_change(
+    evidence: Mapping[str, object],
+    rounds: Sequence[Mapping[str, object]],
+) -> tuple[bool, dict[str, object]]:
+    """Compare the newest round with the verdict the decision was confirmed against.
+
+    The overall status and the per-dimension verdicts are both compared: a round can keep
+    ``partial`` while moving the failing dimension, and that still means the confirmed conclusion
+    was about different evidence. Decisions saved before the dimension snapshot existed fall back
+    to the overall status alone.
+    """
+    newest = rounds[0] if rounds else None
+    judgement = newest.get("judgement") if isinstance(newest, Mapping) else None
+    if not isinstance(judgement, Mapping):
+        # A run-only projection has no judged round; there is nothing to compare against.
+        return False, {"status": None, "dimensions": []}
+    recorded_status = str(evidence.get("autoStatus") or "")
+    current_status = _auto_status(rounds)
+    status_change: dict[str, str] | None = None
+    if recorded_status and current_status and recorded_status != current_status:
+        status_change = {"from": recorded_status, "to": current_status}
+    dimension_changes: list[dict[str, str]] = []
+    recorded_dimensions = evidence.get("dimensions")
+    if isinstance(recorded_dimensions, Mapping) and rounds:
+        current_dimensions = _dimension_statuses(rounds[0])
+        for name, before in recorded_dimensions.items():
+            after = current_dimensions.get(str(name))
+            if after is not None and after != str(before):
+                dimension_changes.append({"dimension": str(name), "from": str(before), "to": after})
+    changed = bool(status_change or dimension_changes)
+    return changed, {"status": status_change, "dimensions": dimension_changes}
 
 
 def _case_summary(case: Mapping[str, Any]) -> dict[str, object]:

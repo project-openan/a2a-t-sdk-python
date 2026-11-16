@@ -34,6 +34,7 @@ import {
   traceRowNeedsAttention,
   traceSummaryText,
   traceUnmatchedLabel,
+  verdictChangeText,
 } from "../../demo/web/review/main.js";
 
 const CASES = [
@@ -90,6 +91,18 @@ assert.equal(statusLabel("partial"), "部分可判");
 assert.equal(statusLabel(null), "未跑");
 assert.equal(decisionLabel("defect"), "缺陷");
 assert.equal(decisionLabel(null), "未审核");
+assert.equal(verdictChangeText(null), "");
+assert.equal(
+  verdictChangeText({
+    status: { from: "pass", to: "fail" },
+    dimensions: [{ dimension: "final_state", from: "pass", to: "fail" }],
+  }),
+  "本轮自动判定与保存结论时不同：整体 通过 → 失败；结果 通过 → 失败。需要复核。",
+);
+assert.equal(
+  verdictChangeText({ status: null, dimensions: [] }),
+  "",
+);
 assert.equal(categoryLabel("vendor"), "网管");
 assert.equal(categoryLabel(""), "—");
 assert.equal(protocolLabel("a2a-t"), "A2A-T");
