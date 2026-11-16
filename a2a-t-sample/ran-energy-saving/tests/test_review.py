@@ -29,7 +29,6 @@ from demo.web.review.routes import build_review_routes
 from demo.web.review.service import (
     MAX_TRACE_IDS,
     STATUS_NOT_RUN,
-    STATUS_STALE,
     ReviewService,
     parse_trace_input,
 )
@@ -546,18 +545,35 @@ def test_confirmed_annotations_are_used_without_an_export(tmp_path: Path) -> Non
     assert {row["dimension"]: row["status"] for row in task["dimensions"]}["validate"] == "fail"
 
 
-def test_a_changed_input_marks_the_evidence_stale(tmp_path: Path) -> None:
+def test_a_changed_input_still_judges_by_case_id(tmp_path: Path) -> None:
+    """An in-place corpus edit must not invalidate the stored rounds of the same case id."""
     service, catalog, _overlay, _runs = _fixture(tmp_path)
     service.scan(days=2.0)
     changed = _case_document()
+    changed["user_input"] = "a different request"
     changed["blocked_followup"] = {"input": "a different follow-up"}
     _write_cases(tmp_path / "cases", changed)
     catalog.reload()
 
-    rows = service.cases()
+    tasks = service.cases()[0]["protocols"]
+    assert isinstance(tasks, list) and tasks
+    task = tasks[0]
+    assert isinstance(task, Mapping)
+    rounds = service.detail(1, "a2a-t")["rounds"]
+    assert isinstance(rounds, list) and rounds
+    round_row = rounds[0]
+    assert isinstance(round_row, Mapping)
 
-    assert rows[0]["protocols"][0]["status"] == STATUS_STALE
-    assert rows[0]["protocols"][0]["inputChanged"] is True
+    assert "inputChanged" not in task
+    assert "inputChanged" not in round_row
+    # The evidence is still judged against the case it is filed under; the frozen input is only
+    # provenance and stays visible in the round's requests.
+    judgement = round_row["judgement"]
+    assert isinstance(judgement, Mapping)
+    assert task["status"] == judgement["status"]
+    requests = round_row["requests"]
+    assert isinstance(requests, Mapping)
+    assert requests["dispatched"] == "do it properly"
 
 
 def test_a_case_without_evidence_is_not_run(tmp_path: Path) -> None:

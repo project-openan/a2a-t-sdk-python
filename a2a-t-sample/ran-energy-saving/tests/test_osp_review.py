@@ -13,7 +13,7 @@ from eval.osp.review import (
     VERDICT_PASS,
     VERDICT_RECORDED,
     case_signature,
-    evidence_is_current_input,
+    evidence_input_signature,
     judge_protocol,
 )
 
@@ -748,18 +748,11 @@ def test_an_unobserved_acceptance_stays_missing() -> None:
     assert judgement.status == VERDICT_PARTIAL
 
 
-def test_evidence_from_another_input_is_detected() -> None:
-    case = _case()
-
-    assert evidence_is_current_input(case, "a2a-t", _evidence()) is True
-    assert evidence_is_current_input(case, "a2a-t", _evidence(refs_input="old text")) is False
-
-
-def test_the_blocked_followup_input_is_the_effective_input() -> None:
-    case = _case(blocked=True, followup="do it properly")
-
-    assert evidence_is_current_input(case, "a2a-t", _evidence(refs_input="do it properly")) is True
-    assert evidence_is_current_input(case, "a2a-t", _evidence(refs_input="do it")) is False
+def test_the_frozen_input_signature_records_what_the_run_dispatched() -> None:
+    """The signature is provenance: it changes with the run's input but never gates the verdict."""
+    assert evidence_input_signature(_evidence()) != evidence_input_signature(
+        _evidence(refs_input="old text")
+    )
 
 
 def test_the_case_signature_tracks_expectations_and_the_followup() -> None:

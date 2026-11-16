@@ -38,7 +38,6 @@ from eval.osp.review import (
     VERDICT_RECORDED,
     ProtocolJudgement,
     case_signature,
-    evidence_is_current_input,
     judge_protocol,
 )
 from eval.osp.tracecheck import (
@@ -79,10 +78,8 @@ PROTOCOLS: Final[tuple[str, ...]] = (PROTOCOL_A2A_T, PROTOCOL_A2A)
 
 #: Status of a protocol task with no evidence in the window.
 STATUS_NOT_RUN: Final[str] = "not_run"
-#: Status of a task whose newest evidence was produced from a different operator request.
-STATUS_STALE: Final[str] = "stale"
 
-#: Statuses the protocol list can show (automatic verdicts plus the two evidence states).
+#: Statuses the protocol list can show (automatic verdicts plus the no-evidence state).
 STATUSES: Final[tuple[str, ...]] = (
     VERDICT_PASS,
     VERDICT_FAIL,
@@ -91,7 +88,6 @@ STATUSES: Final[tuple[str, ...]] = (
     VERDICT_MISSING,
     VERDICT_NOT_EXPECTED,
     VERDICT_NOT_APPLICABLE,
-    STATUS_STALE,
     STATUS_NOT_RUN,
 )
 
@@ -122,7 +118,7 @@ TRACE_DIMENSIONS: Final[tuple[str, ...]] = (
 
 #: Verdicts that mean the reviewer still has to look at that dimension.
 _ATTENTION_STATUSES: Final[frozenset[str]] = frozenset(
-    {VERDICT_FAIL, VERDICT_PARTIAL, VERDICT_MISSING, VERDICT_RECORDED, "stale"}
+    {VERDICT_FAIL, VERDICT_PARTIAL, VERDICT_MISSING, VERDICT_RECORDED}
 )
 
 #: A 32-hex token is a trace id (and, in this sample, usually also the run id). A Langfuse URL or
@@ -959,7 +955,6 @@ class ReviewService:
                     "status": STATUS_NOT_RUN,
                     "dimensions": [],
                     "failures": [],
-                    "inputChanged": False,
                     "decision": _pending_decision_block(),
                     "hints": [f"用例 {case_id} 不在当前语料，无法重判。"],
                 }
@@ -996,7 +991,6 @@ class ReviewService:
             "status": STATUS_NOT_RUN,
             "dimensions": [],
             "failures": [],
-            "inputChanged": False,
             "resolution": "case_missing",
             "trace": self._trace_brief(trace_id=ref.trace_id, run_id=ref.run_id),
             "decision": _pending_decision_block(),
@@ -1103,7 +1097,6 @@ class ReviewService:
             "status": STATUS_NOT_RUN,
             "dimensions": [],
             "failures": [],
-            "inputChanged": False,
             "resolution": "client",
             "trace": self._trace_brief(trace_id=trace_id, run_id=run_id),
             "decision": decision,
@@ -1138,7 +1131,6 @@ class ReviewService:
             "status": STATUS_NOT_RUN,
             "dimensions": [],
             "failures": [],
-            "inputChanged": False,
             "resolution": "trace",
             "trace": trace,
             "decision": _pending_decision_block(),
@@ -1425,7 +1417,6 @@ class ReviewService:
                 "model": None,
                 "decisionMode": "",
                 "nms": False,
-                "inputChanged": False,
                 "data": [],
                 "traceId": "",
                 "langfuseUrl": "",
@@ -1433,9 +1424,11 @@ class ReviewService:
             }
         evidence_map = _judged_evidence(observation)
         langfuse_url = evidence_map.get("langfuseUrl")
-        input_changed = not evidence_is_current_input(case, protocol, evidence_map)
+        # The verdict is identified by the case id it is judged under. The operator text a run was
+        # produced from is frozen in its evidence and shown in the round detail, but a case edited
+        # in place must not turn the whole history into "rerun" noise.
         judgement = judge_protocol(case, protocol, evidence_map)
-        status = STATUS_STALE if input_changed else judgement.status
+        status = judgement.status
         trace_reasons: list[str] = []
         trace_dimension = judgement.dimension(DIMENSION_TRACE)
         if trace_dimension is not None:
@@ -1464,7 +1457,6 @@ class ReviewService:
             "model": observation.get("model"),
             "decisionMode": observation.get("decisionMode"),
             "nms": bool(observation.get("nms")),
-            "inputChanged": input_changed,
             "traceReason": trace_reasons[0] if trace_reasons else "",
             "traceReasons": trace_reasons,
             # The key-data table is one row per case × protocol. Keep the presence status and the
@@ -1492,7 +1484,6 @@ class ReviewService:
     ) -> dict[str, object]:
         """Build one judged evidence round for the detail payload."""
         evidence_map = _judged_evidence(observation)
-        input_changed = not evidence_is_current_input(case, protocol, evidence_map)
         judgement: ProtocolJudgement = judge_protocol(case, protocol, evidence_map)
         detail = judgement.to_dict()
         _mark_fetch_state(detail, self._trace_fetch_enabled)
@@ -1510,7 +1501,6 @@ class ReviewService:
             "nmsSim": bool(observation.get("nmsSim")),
             "discovery": observation.get("discovery"),
             "status": observation.get("status"),
-            "inputChanged": input_changed,
             "judgement": detail,
             "requests": _request_sources(case, evidence_map),
         }
@@ -2060,7 +2050,6 @@ __all__ = [
     "PROTOCOLS",
     "STATUSES",
     "STATUS_NOT_RUN",
-    "STATUS_STALE",
     "TRACE_DIMENSIONS",
     "ReviewService",
     "TraceQuery",

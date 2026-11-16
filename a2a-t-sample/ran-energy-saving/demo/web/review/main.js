@@ -23,7 +23,6 @@ const STATUS_LABELS = {
   missing: "缺证据",
   not_expected: "不适用",
   not_applicable: "不适用",
-  stale: "需重跑",
   not_run: "未跑",
 };
 
@@ -147,7 +146,7 @@ export function progressText(progress) {
   const statuses = progress.statuses;
   const decisions = progress.decisions || {};
   return `协议任务 ${progress.targets || 0} · 通过 ${statuses.pass || 0} · 失败 ${statuses.fail || 0}`
-    + ` · 部分 ${statuses.partial || 0} · 需重跑 ${statuses.stale || 0} · 未跑 ${statuses.not_run || 0}`
+    + ` · 部分 ${statuses.partial || 0} · 未跑 ${statuses.not_run || 0}`
     + ` ｜ 已审核 ${decisions.accepted || 0} · 缺陷 ${decisions.defect || 0}`
     + ` · 已知问题 ${decisions.known_issue || 0} · 待复核 ${decisions.recheck || 0}`;
 }
@@ -180,10 +179,9 @@ export function traceUnmatchedLabel(reason) {
   return TRACE_UNMATCHED_LABELS[reason] || String(reason || "未找到");
 }
 
-//: One trace row needs attention when the row itself is stale or any judged point is not clean.
+//: One trace row needs attention when any judged point is not clean.
 export function traceRowNeedsAttention(row) {
   if (!row) return false;
-  if (row.status === "stale") return true;
   return (row.dimensions || []).some((dimension) => dimensionNeedsAttention(dimension.status));
 }
 
@@ -275,7 +273,7 @@ export function filterCases(cases, filters) {
       const decisionStatus = decision.status || "pending";
       if (filters.decision && decisionStatus !== filters.decision) continue;
       if (filters.category && decision.category !== filters.category) continue;
-      if (filters.onlyFailures && !["fail", "partial", "stale"].includes(task.status)) continue;
+      if (filters.onlyFailures && !["fail", "partial"].includes(task.status)) continue;
       if (filters.onlyPending && decisionStatus !== "pending") continue;
       protocols.push(task);
     }
@@ -1064,7 +1062,6 @@ function renderBatchFilters() {
         ["pass", "通过"],
         ["fail", "失败"],
         ["partial", "部分可判"],
-        ["stale", "需重跑"],
         ["not_run", "未跑"],
         ["not_applicable", "不适用"],
       ],
@@ -1104,7 +1101,7 @@ function renderBatchFilters() {
     bar.append(select);
   }
   for (const [id, label] of [
-    ["batch-only-failures", "只看失败/部分/需重跑"],
+    ["batch-only-failures", "只看失败/部分"],
     ["batch-only-pending", "只看未审核"],
   ]) {
     const wrapper = el("label", "check");
@@ -1203,7 +1200,6 @@ function protocolCell(caseRow, protocol) {
 function batchMarkers(caseRow) {
   const markers = new Set();
   for (const task of caseRow.protocols || []) {
-    if (task.inputChanged) markers.add("输入已变更");
     const decision = task.decision || {};
     const decisionStatus = decision.status || "pending";
     if (decision.stale) markers.add("结论待复核");
@@ -1495,7 +1491,6 @@ function traceVerdictCell(row) {
   const td = el("td");
   if (["store", "tester"].includes(row.resolution) && row.caseId) {
     td.append(el("span", `badge ${row.status}`, statusLabel(row.status)));
-    if (row.inputChanged) td.append(el("span", "badge stale", "输入已变更"));
     return td;
   }
   td.append(el("span", "badge partial", traceResolutionLabel(row.resolution)));
@@ -2281,9 +2276,7 @@ function protocolStatus() {
   const rounds = state.detail && state.detail.rounds;
   if (!rounds || !rounds.length) return "not_run";
   const round = rounds[state.round >= 0 ? state.round : 0];
-  return round && round.inputChanged ? "stale" : round && round.judgement
-    ? round.judgement.status
-    : "not_run";
+  return round && round.judgement ? round.judgement.status : "not_run";
 }
 
 function renderRoundBar() {
@@ -2350,11 +2343,6 @@ function renderDimensionStrip(round) {
       facts.append(el("dd", "", textBlock(value)));
     }
     card.append(facts);
-  }
-  if (round.inputChanged) {
-    card.append(
-      el("p", "hint", "该轮证据来自另一个输入（用例输入已变更），不能作为当前用例的判定，需要重跑。"),
-    );
   }
   return card;
 }
@@ -2867,9 +2855,7 @@ function renderRoundMatrix() {
   for (const round of state.detail.rounds || []) {
     const tr = el("tr", round.judgement && round.judgement.status === "fail" ? "fail" : "");
     tr.append(el("td", "mono-cell", roundLabel(round)));
-    tr.append(
-      el("td", "", round.inputChanged ? "需重跑" : statusLabel(round.judgement && round.judgement.status)),
-    );
+    tr.append(el("td", "", statusLabel(round.judgement && round.judgement.status)));
     for (const dimension of Object.keys(DIMENSION_LABELS)) {
       const row = ((round.judgement && round.judgement.dimensions) || []).find(
         (item) => item.dimension === dimension,

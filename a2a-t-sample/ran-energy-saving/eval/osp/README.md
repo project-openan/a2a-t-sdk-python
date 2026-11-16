@@ -628,11 +628,12 @@ tester 回答"这一轮跑得怎么样"，`/review` 回答"**用今天的语料�
   intent / Task-T / 终态。
 - **不可判定就标出来**：模拟器/代理/无直连 payload 的意图是 `recorded`，缺报文证据是 `missing`，
   两者都让协议任务成为 `partial`，不能被当成通过。
-- 证据的输入签名（`refs.userInput`）与当前有效用例不一致时，任务标 `stale`（需重跑），不重判。
+- 证据按用例 id 归属：用例被就地修改（黄区常见）时，旧轮次仍按该用例重新判定；该轮冻结的原文
+  （`refs.userInput`）只在轮次详情里展示为溯源信息，不再作为有效性门槛。
 
 ### 13.2 结论与新鲜度
 
-- 自动判定：`pass / fail / partial / recorded / missing / not_expected / not_applicable / stale / not_run`。
+- 自动判定：`pass / fail / partial / recorded / missing / not_expected / not_applicable / not_run`。
 - 人工结论（按用例 × 协议，共 200 个）：`pending / accepted / defect / known_issue / recheck`；
   缺陷必须填归属（SDK / 网管 / 用例 / 环境 / 其他）和备注。
 - 人工覆盖自动判定时服务端要求备注；页面提示"自动判定不是通过"。

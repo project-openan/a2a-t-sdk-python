@@ -403,7 +403,6 @@ def _case_entry(case: Mapping[str, object]) -> dict[str, object]:
             "model": task.get("model"),
             "decisionMode": task.get("decisionMode"),
             "nms": task.get("nms"),
-            "inputChanged": task.get("inputChanged"),
             "decision": {
                 "status": str(mapping.get("status") or "pending"),
                 "category": str(mapping.get("category") or ""),

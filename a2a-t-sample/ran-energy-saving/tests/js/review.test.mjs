@@ -75,7 +75,7 @@ const CASES = [
       },
       {
         protocol: "a2a",
-        status: "stale",
+        status: "not_run",
         dimensions: [{ dimension: "negotiation", status: "missing" }],
         decision: { status: "accepted", category: "", stale: true, newEvidence: false },
       },
@@ -85,7 +85,6 @@ const CASES = [
 
 assert.equal(statusLabel("pass"), "通过");
 assert.equal(statusLabel("partial"), "部分可判");
-assert.equal(statusLabel("stale"), "需重跑");
 assert.equal(statusLabel(null), "未跑");
 assert.equal(decisionLabel("defect"), "缺陷");
 assert.equal(decisionLabel(null), "未审核");
@@ -98,10 +97,10 @@ assert.equal(dimensionLabel("final_state"), "结果");
 assert.equal(
   progressText({
     targets: 200,
-    statuses: { pass: 10, fail: 2, partial: 3, stale: 4, not_run: 100 },
+    statuses: { pass: 10, fail: 2, partial: 3, not_run: 100 },
     decisions: { accepted: 5, defect: 1, known_issue: 2, recheck: 3 },
   }),
-  "协议任务 200 · 通过 10 · 失败 2 · 部分 3 · 需重跑 4 · 未跑 100"
+  "协议任务 200 · 通过 10 · 失败 2 · 部分 3 · 未跑 100"
     + " ｜ 已审核 5 · 缺陷 1 · 已知问题 2 · 待复核 3",
 );
 assert.equal(progressText(null), "");

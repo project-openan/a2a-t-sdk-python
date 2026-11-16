@@ -207,34 +207,16 @@ def case_signature(case: Mapping[str, Any]) -> str:
     ).hexdigest()[:16]
 
 
-def input_signature(case: Mapping[str, Any]) -> str:
-    """Return the fingerprint of just the operator request a run was produced from."""
-    return hashlib.sha256(str(case.get("user_input") or "").encode("utf-8")).hexdigest()[:16]
-
-
 def evidence_input_signature(evidence: Mapping[str, Any]) -> str:
-    """Return the input fingerprint of the case a stored run was produced from.
+    """Return the fingerprint of the operator request a stored run was produced from.
 
-    ``refs.userInput`` is frozen by the tester at run time, so it survives a catalog edit and is
-    the only reliable way to tell "same input, updated expectations" from "different input, the
-    evidence is no longer about this case".
+    ``refs.userInput`` is frozen by the tester at run time. It is recorded as provenance of the
+    evidence, not as a gate: a case may be edited in place between runs (the yellow zone does this),
+    and a verdict is identified by the case id it was judged under.
     """
     refs = evidence.get("refs")
     value = refs.get("userInput") if isinstance(refs, Mapping) else None
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()[:16]
-
-
-def evidence_is_current_input(
-    case: Mapping[str, Any],
-    protocol: str,
-    evidence: Mapping[str, Any],
-) -> bool:
-    """Report whether the stored run used the input the current case would dispatch.
-
-    A blocked case's evidence comes from its follow-up request, so the comparison is against the
-    effective case, not the operator's original text.
-    """
-    return evidence_input_signature(evidence) == input_signature(_effective_case(case, protocol))
 
 
 def _effective_case(case: Mapping[str, Any], protocol: str) -> Mapping[str, Any]:
@@ -1217,7 +1199,5 @@ __all__ = [
     "VERDICT_RECORDED",
     "case_signature",
     "evidence_input_signature",
-    "evidence_is_current_input",
-    "input_signature",
     "judge_protocol",
 ]
