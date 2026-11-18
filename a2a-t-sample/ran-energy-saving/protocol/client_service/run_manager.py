@@ -1718,6 +1718,7 @@ class RunManager:
                 target_context_id=run.target_context_id,
                 target_server_task_id=run.target_server_task_id,
                 target_server_context_id=run.target_server_context_id,
+                reply_only_accept=_is_tester_source(run.source),
             )
             if run.pending_decision and not run.cancel_requested:
                 # A provider that returns while the operator is still being waited for would let
@@ -2246,6 +2247,15 @@ def _should_validate_before_send(
 def _should_enforce_required_fields(source: Mapping[str, object]) -> bool:
     """Return whether this run must satisfy the caller schema's required fields."""
     return str(source.get("kind") or "") in _REQUIRED_FIELD_SOURCE_KINDS
+
+
+def _is_tester_source(source: Mapping[str, object]) -> bool:
+    """Return whether this run replays a tester case.
+
+    A tester case authors its own negotiation reply and its own Task-T, so the accept carries the
+    reply only: no target is derived from the proposal and no refilled Task-T is attached.
+    """
+    return source.get("kind") == "tester"
 
 
 def _input_invalid_summary(run: RunState) -> str:

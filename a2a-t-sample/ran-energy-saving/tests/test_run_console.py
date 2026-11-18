@@ -38,6 +38,7 @@ class _PassRuntime:
         enforce_required_fields: bool = False,
         require_rate_target: bool = True,
         site_level_rate_optional: bool = False,
+        reply_only_accept: bool = False,
         run_mode: str = "create",
         target_task_id: str | None = None,
         target_context_id: str | None = None,
@@ -46,7 +47,7 @@ class _PassRuntime:
     ) -> ClientFlowResult:
         del trace_sink, activity_sink, run_id, user_request, conversation_context
         del validate_before_send, enforce_required_fields, require_rate_target, site_level_rate_optional
-        del run_mode, target_task_id, target_context_id
+        del reply_only_accept, run_mode, target_task_id, target_context_id
         del target_server_task_id, target_server_context_id
         del on_decision_requested, on_decision_made, on_intent_ready
         if event_sink is not None:

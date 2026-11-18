@@ -953,6 +953,7 @@ async def run_client_flow(
     conversation_context: str | None = None,
     single_extension_per_message: bool = False,
     infer_missing_negotiation_kind: bool = False,
+    reply_only_accept: bool = False,
     verbatim_decision_text: bool = False,
     client_policy: ClientPolicy | None = None,
     validate_before_send: bool = False,
@@ -1010,6 +1011,10 @@ async def run_client_flow(
             field on the proposal that continues a negotiation; without this the run fails hard.
             A body without a known heading still fails, because guessing the kind would pick the
             wrong decision prompt and reply template.
+        reply_only_accept: Build the accept from the decision's authored reply alone. A tester
+            replays a case, so the accept is that reply rendered by the template: no target is
+            derived from the proposal, nothing is refilled into a Task-T, and no Task-T metadata
+            travels with the accept. Model-authored decisions keep the derivation.
         verbatim_decision_text: Send the decision's ``confirmed_intent`` /
             ``feasibility_summary`` exactly as authored. A scripted provider replays case data,
             so the accept must not reword it or replace a reply that names a rate the flow did not
@@ -1695,6 +1700,7 @@ async def run_client_flow(
                 intent_fields=intent_fields,
                 call_timeout_seconds=call_timeout_seconds,
                 single_extension_per_message=single_extension_per_message,
+                reply_only_accept=reply_only_accept,
                 verbatim_decision_text=verbatim_decision_text,
                 task_id=task_id,
                 dropped=dropped_values,
@@ -2126,6 +2132,7 @@ async def _build_accept_request(
     intent_fields: Mapping[str, object] | None,
     call_timeout_seconds: float,
     single_extension_per_message: bool,
+    reply_only_accept: bool,
     verbatim_decision_text: bool,
     task_id: str | None = None,
     dropped: list[str] | None = None,
@@ -2137,18 +2144,30 @@ async def _build_accept_request(
     through an LLM extraction; a degenerate text made the extraction return an empty required
     field, which the SDK classifies as a non-retryable failure and which aborted live runs. The
     from-text path stays only as a fallback for content this flow cannot type.
+
+    ``reply_only_accept`` is the tester's mode: the decision replays a case, so the accept is that
+    reply and nothing else. No target is derived, no Task-T is refilled and none is attached to
+    the message.
     """
     filled = _accept_filled_values(kind, decision, baseline, intent_fields, dropped=dropped)
     # The interactive page sends one operator text, not structured params. On the local demo hop
     # the accept must also carry an agreed Task-T, so map the answer onto the fields the server
     # itself offered (or a canonical target the operator typed); never invent a value.
     operator_fields: dict[str, object] = {}
-    if kind is NegotiationKind.INFORMATION and not single_extension_per_message:
+    if (
+        kind is NegotiationKind.INFORMATION
+        and not single_extension_per_message
+        and not reply_only_accept
+    ):
         filled, operator_fields = _merge_operator_answer(filled, propose, decision.rationale)
-    agreed_target = _prefer_the_agreed_target(kind, filled, decision, propose, baseline)
+    agreed_target = (
+        None
+        if reply_only_accept
+        else _prefer_the_agreed_target(kind, filled, decision, propose, baseline)
+    )
     task_content = None
     task_text = ""
-    if not single_extension_per_message:
+    if not single_extension_per_message and not reply_only_accept:
         # Only the local demo server reads a refilled Task-T from the accept. The real NMS rejects
         # a second ``-T`` key, so it never receives one; generating it there was a pure LLM call
         # whose result was discarded (and whose failure could abort a valid accept).
@@ -2196,7 +2215,7 @@ async def _build_accept_request(
         accept_decision,
         baseline,
         agreed_target,
-        verbatim_text=verbatim_decision_text,
+        verbatim_text=reply_only_accept or verbatim_decision_text,
     )
     if typed is not None:
         content = await asyncio.to_thread(

@@ -1132,6 +1132,71 @@ async def test_a_scripted_summary_is_sent_verbatim_even_when_it_contradicts_the_
     assert content.feasibility_summary == summary
 
 
+async def test_a_reply_only_accept_sends_the_authored_summary_without_a_refilled_task_t() -> None:
+    """A tester replays a case reply: the accept is that reply, with no derived target."""
+    summary = "Reduce throughput target from 10Mbps to 2Mbps for the power outage period."
+    decision = NegotiationDecision(
+        action="accept",
+        rationale=summary,
+        feasibility_summary=summary,
+    )
+    prompt_client = FakePromptClient()
+    transport = ScriptedTransport(
+        [
+            [
+                propose_event(
+                    "feasibility",
+                    1,
+                    content="Proposal: Reduce rate target to 2Mbps or less.",
+                )
+            ],
+            _task_completed_batch(),
+        ]
+    )
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=transport,
+        user_request=SCENARIO_FEASIBILITY_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields={**_INTENT_FIELDS, "guaranteedThroughputTarget": "{08:00~18:00,10Mbps}"},
+        reply_only_accept=True,
+    )
+
+    assert prompt_client.refill_data == []
+    # Only the initial extraction runs; the accept adds no Task-T prompt of its own.
+    assert prompt_client.task_prompts == [SCENARIO_FEASIBILITY_SPEC.user_request["en-US"]]
+    metadata = transport.requests[1].message.metadata
+    assert TASK_T_EXTENSION_URI not in (MessageToDict(metadata) if metadata else {})
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, FeasibilityEndingContent)
+    assert content.feasibility_summary == summary
+
+
+async def test_a_reply_only_target_accept_sends_the_authored_confirmation_only() -> None:
+    """A target accept from a tester carries the case reply and no refilled Task-T either."""
+    confirmation = "Accept the target negotiation."
+    decision = NegotiationDecision(action="accept", rationale=confirmation, confirmed_intent=confirmation)
+    prompt_client = FakePromptClient()
+    transport = ScriptedTransport([[propose_event("target", 1)], _task_completed_batch()])
+    await run_client_flow(
+        prompt_client=prompt_client,
+        transport=transport,
+        user_request=SCENARIO_TARGET_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider((decision,)),
+        language="en-US",
+        intent_fields=_INTENT_FIELDS,
+        reply_only_accept=True,
+    )
+
+    assert prompt_client.refill_data == []
+    metadata = transport.requests[1].message.metadata
+    assert TASK_T_EXTENSION_URI not in (MessageToDict(metadata) if metadata else {})
+    content = prompt_client.accept_data[0].content
+    assert isinstance(content, TargetEndingContent)
+    assert content.confirmed_intent == confirmation
+
+
 async def test_a_summary_that_already_names_the_target_is_not_duplicated() -> None:
     """The agreed value is added only when the hand-written summary omits it."""
     decision = NegotiationDecision(

@@ -580,6 +580,7 @@ class ClientRuntime:
         target_context_id: str | None = None,
         target_server_task_id: str | None = None,
         target_server_context_id: str | None = None,
+        reply_only_accept: bool = False,
     ) -> ClientFlowResult:
         """Run the full client flow of the configured scenario.
 
@@ -612,6 +613,8 @@ class ClientRuntime:
             target_server_task_id: A2A peer's Task a pure Modify continues (the outer Task owned
                 by the OSS Agent). The vendor Task id above is only the picker's identity.
             target_server_context_id: Context paired with ``target_server_task_id``.
+            reply_only_accept: Build the accept from the decision's authored reply alone (the
+                tester replays a case): no derived target and no refilled Task-T.
 
         Returns:
             The collected events, decisions and terminal state.
@@ -844,6 +847,9 @@ class ClientRuntime:
                     # A scripted provider replays case/scenario data: that text is the reply, so
                     # the accept must carry it verbatim instead of the flow's own wording.
                     verbatim_decision_text=isinstance(provider, ScriptedDecisionProvider),
+                    # The tester (live mode included) replays its case reply: the accept carries
+                    # that reply only, with nothing derived or refilled.
+                    reply_only_accept=reply_only_accept,
                     client_policy=ClientPolicy.from_config(self.config),
                     validate_before_send=validate_before_send,
                     enforce_required_fields=enforce_required_fields,

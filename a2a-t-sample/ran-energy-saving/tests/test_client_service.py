@@ -65,6 +65,7 @@ class FakeRuntime:
         self.decision_entered = asyncio.Event()
         self.trace_id = ""
         self.downstream_trace_id = ""
+        self.reply_only_accept = False
 
     def set_decision_wait_sink(self, sink: Callable[[DecisionTimeoutError], None] | None) -> bool:
         """Accept the manager's expired-window observer."""
@@ -88,12 +89,14 @@ class FakeRuntime:
         enforce_required_fields: bool = False,
         require_rate_target: bool = True,
         site_level_rate_optional: bool = False,
+        reply_only_accept: bool = False,
         run_mode: str = "create",
         target_task_id: str | None = None,
         target_context_id: str | None = None,
         target_server_task_id: str | None = None,
         target_server_context_id: str | None = None,
     ) -> ClientFlowResult:
+        self.reply_only_accept = reply_only_accept
         del on_intent_ready, trace_sink, activity_sink, run_id, validate_before_send, enforce_required_fields
         del require_rate_target, site_level_rate_optional, run_mode, target_task_id, target_context_id
         del target_server_task_id, target_server_context_id
@@ -889,6 +892,40 @@ async def test_a_presentation_attempt_owns_the_chain_trace(
 
     await _finish(manager, first.run_id)
     await _finish(manager, retry.run_id)
+
+
+async def test_a_tester_run_sends_the_authored_reply_only(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """A tester case replays its own reply, so the accept must not be derived or refilled."""
+    manager, _, runtimes = _manager(tmp_path, offline_config)
+    run = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        source={"kind": "tester", "channel": "tester-console"},
+    )
+    await _finish(manager, run.run_id)
+
+    assert runtimes[0].reply_only_accept is True
+
+
+async def test_a_presentation_run_keeps_the_refilled_task_t(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """Only the tester replays case data; the page keeps the derived accept Task-T."""
+    manager, _, runtimes = _manager(tmp_path, offline_config)
+    run = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        source={"kind": "presentation"},
+    )
+    await _finish(manager, run.run_id)
+
+    assert runtimes[0].reply_only_accept is False
 
 
 async def test_a_caller_cannot_move_a_chain_to_another_trace(
