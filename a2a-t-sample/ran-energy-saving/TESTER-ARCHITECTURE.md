@@ -4,7 +4,7 @@
 
 **一句话**：被测方是即将上线的真机网管（大部分黑盒）；OSS 侧的 client agent 作为真实客户端驱动它；测试侧只给输入、采集证据、判定。主判定是网管验收，client 决策单独一张质量表。
 
-**当前观测范围到任务 accepted 为止**：真机环境暂时测不到任务执行与完成，后面属于协议与 agent 的内容；本文不把执行、完成、报告计入验收。
+**当前观测范围到任务 accepted 为止**：accepted 是本文术语，指网管已明确受理、协商已结束的边界（定义见 §2.1）。真机环境暂时测不到任务执行与完成；本文不把执行、完成、报告计入验收。
 
 ---
 
@@ -14,7 +14,7 @@
 flowchart LR
   subgraph TEST["测试侧（不属于产品）"]
     C["用例<br/>请求 + 客户条件 + 期望说明"]
-    H["工装"]
+    H["测试执行器"]
     EV["证据采集"]
     JD["判定器"]
     JI["独立评委"]
@@ -61,7 +61,7 @@ flowchart LR
 
 | 侧 | 包含 | 说明 |
 |---|---|---|
-| 测试侧 | 用例、工装、证据采集、判定器、独立评委 | 不属于产品，不被测 |
+| 测试侧 | 用例、测试执行器、证据采集、判定器、独立评委 | 不属于产品，不被测 |
 | OSS 侧 | client agent、协议层、客户条件检查器、发送前复核 | 我们的产品；既是测试驱动器，也单独评估决策质量 |
 | 网管侧 | 接入/发现、任务管理、协商处理、规划/执行、任务存储、推送/回调、报告 | **被测方**；内部结构仅示意，测试不假设 |
 
@@ -71,43 +71,83 @@ flowchart LR
 
 ## 2. 一次真实测试怎么跑
 
-以用例 26（停电期间保障速率 10Mbps → 网管提议 2Mbps）为例：
+### 2.1 accepted 是什么
+
+**accepted 是本文的术语，不是 A2A 的任务状态名。** A2A 自己的任务状态是 submitted / working / input-required / completed / canceled / failed 这些；accepted 指“网管已经明确受理这次任务、协商已经结束”的边界时刻，是本文观测的终点。
+
+判定 accepted 的依据（满足任一）：
+
+| 依据 | 含义 |
+|---|---|
+| 任务状态越过 submitted | 进入 working 或更后的状态，说明网管确实接下了任务 |
+| 受理响应带成功回执与结构化意图副本 | 状态仍是 submitted，但网管返回了成功回执和它对任务的结构化理解 |
+
+只回 submitted、既没有回执也没有意图副本，记“等待受理”，**不算 accepted**——真机上出现过这种形态：回了 submitted，随后任务被取消。这正是要抓的网管问题。
+
+为什么停在 accepted：真机目前只能稳定观测到受理这一点，执行、完成、报告都测不到（见 §3）。
+
+```mermaid
+stateDiagram-v2
+  state "协商中（创建场景：任务尚未受理）" as NEG
+  state "已受理（观测终点）" as ACC
+  state "未受理" as REJ
+  [*] --> NEG: 网管要求先协商
+  NEG --> NEG: PROPOSE / 反提案
+  NEG --> ACC: client ACCEPT 后网管受理
+  NEG --> REJ: client REJECT / ABORT
+  [*] --> ACC: 网管无需协商，直接受理
+  ACC --> [*]: 执行及其后不观测
+```
+
+### 2.2 创建任务：协商发生在受理之前
+
+A2A-T 的创建流程里，协商是**前置**的：协商结束之前，任务还没有被受理。顺序是“先协商、后受理”，不是“先受理、后协商”。
 
 ```mermaid
 sequenceDiagram
   autonumber
-  participant T as 测试工装
+  participant T as 测试执行器
   participant O as Client Agent（OSS）
   participant P as 协议层
   participant N as 真机网管（被测）
-  participant J as 网管评委
-  participant Q as Client 质量评委
-  participant D as 判定器
 
   T->>O: 业务请求 + 客户条件（人话）
   O->>P: Task-T
-  P->>N: 创建任务
-  N-->>P: 任务已受理
-  N-->>P: 协商提案：停电期间建议 2Mbps
+  P->>N: 创建任务（message:send）
+  N-->>P: 协商提案（此时任务尚未受理）
   P-->>O: 提案内容 + 可选项
-
-  O->>O: 依据客户条件决策（可查检查器）
-  O->>P: 决策 accept，2Mbps
-  P->>N: ACCEPT
-  N-->>P: accepted（观测到此为止）
-
-  par 网管验收判定
-    N-->>J: 边界报文、任务状态（到 accepted）
-    J->>J: 按 nms_expect 判定：受理、协商、最终意图
-  and client 决策质量
-    O-->>Q: 决策与同意的值
-    Q->>Q: 按 client_conditions 判定
-  end
-
-  J-->>D: 网管判定
-  Q-->>D: client 质量判定
-  D->>D: 两张表
+  O->>O: 按客户条件决策（可查条件检查器）
+  O->>P: 决策 accept + 同意的值
+  P->>N: ACCEPT（携带协商后的 Task-T）
+  Note over N: 协商结束，网管受理任务
+  N-->>P: accepted：受理回执 + 结构化意图副本
+  Note over P,N: 观测到此为止
 ```
+
+无协商时没有提案与 ACCEPT 往返：创建任务后网管直接受理，client 不产生协商决策（用例 45）。
+
+### 2.3 修改任务：任务在协商之前就已存在
+
+修改的时间线与创建不同：任务在进入协商之前就已经存在、并且已经被受理过；网管的提案通常搭载在这个已有任务的状态更新上（例如 input-required）。
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant O as Client Agent（OSS）
+  participant P as 协议层
+  participant N as 真机网管（被测）
+
+  O->>P: 修改请求（Modify Task-T）
+  P->>N: 提交修改（message:send，指向已有任务）
+  N-->>P: 状态更新：input-required + 协商提案
+  P-->>O: 提案内容
+  O->>O: 按客户条件决策
+  O->>P: 决策 accept
+  P->>N: ACCEPT（在同一任务上下文中回复）
+  N-->>P: 修改被受理（accepted）
+```
+
+用例必须写明自己属于哪种时间线。把创建的时间线套到修改上，会得出“协商发生在受理之后”的错误结论。如果创建请求先收到 submitted、提案随后才通过推送到达，按实际观测记录时间线并单独归因，不要硬套创建流程。
 
 ---
 
@@ -128,7 +168,7 @@ flowchart TD
 
 | 判定项 | 通过条件 | 失败示例 |
 |---|---|---|
-| 受理 | 任务到达 accepted（或平台等价状态），身份与用例一致 | 创建被拒、未到达 accepted、任务 id 错配 |
+| 受理 | 任务到达 accepted（定义见 §2.1），身份与用例一致 | 创建被拒、只回 submitted 且无回执/意图副本、任务 id 错配 |
 | 协商 | 该协商时发起；类型与轮次在预期内；提案是协议与业务上合法的替代方案 | 该协商却不协商；提案违反协议或业务约束（如负速率、窗口不覆盖停电） |
 | 最终意图 | 协商结束时的最终意图（速率/窗口/站点）与用例预期一致 | 同意的速率错误、窗口未覆盖停电、站点被改动 |
 
@@ -197,8 +237,8 @@ request: |
   停电期间保障速率改为 10Mbps。
 
 nms_expect: |
-  受理任务；因分段停电时间较长，应当发起 feasibility 协商，
-  提出一个可执行的替代速率（例如 2Mbps）；接受 client 的 accept 后到达 accepted。
+  因分段停电时间较长，应当在受理前发起 feasibility 协商，
+  提出一个可执行的替代速率（例如 2Mbps）；client accept 后受理任务（accepted）。
 
 client_conditions: |
   停电期间可以接受把速率降到 2Mbps；低于 2Mbps 不能接受。
@@ -222,8 +262,8 @@ request: |
   LNR_KPI_7745 的保障速率改为 10Mbps，NES_27A_321071 保持 2Mbps。
 
 nms_expect: |
-  受理任务；对 10Mbps 的站点发起 feasibility 协商，
-  接受 client 的 accept 后到达 accepted；2Mbps 的站点不应被改动。
+  对 10Mbps 的站点在受理前发起 feasibility 协商，
+  client accept 后受理任务（accepted）；2Mbps 的站点不应被改动。
 
 client_conditions: |
   两个站点在停电期间都可以接受降到 2Mbps；站点与时间窗口不能改。
@@ -320,7 +360,7 @@ flowchart TB
 ```mermaid
 flowchart LR
   C["用例库"] --> B["批次计划<br/>协议 / 环境 / 协商模型 / 判定模型 / NMS 版本 / 重复次数"]
-  B --> R["逐条执行<br/>工装 + 真实 client + 真机网管"]
+  B --> R["逐条执行<br/>测试执行器 + 真实 client + 真机网管"]
   R --> E["证据"]
   E --> J["判定"]
   J --> P["报告"]
@@ -385,7 +425,7 @@ flowchart TB
 
 | 规则 | 做法 |
 |---|---|
-| 只给输入 | 工装只提供请求与客户条件，不提供期望 |
+| 只给输入 | 测试执行器只提供请求与客户条件，不提供期望 |
 | 同一网管 | 两协议对同一个真机网管、同一版本 |
 | 同一条件与评委 | 同一段人话条件、同一套评委口径 |
 | 同一证据 | 边界报文、任务状态（到 accepted）、回执，同一套字段 |
@@ -398,7 +438,7 @@ flowchart TB
 | 组件 | 属于 | 职责 |
 |---|---|---|
 | 用例库 | 测试侧 | 请求、网管期望、客户条件、质量期望说明 |
-| 工装 | 测试侧 | 发起运行、提供输入、控制节奏 |
+| 测试执行器 | 测试侧 | 按用例发起一次运行、提供输入、控制节奏（即“跑用例的程序”） |
 | 证据采集 | 测试侧 | 边界报文、任务状态（到 accepted）、推送 |
 | 网管评委 | 测试侧 | 按 `nms_expect` 判定网管行为 |
 | client 质量评委 | 测试侧 | 按 `client_conditions` 判定 client 决策 |
