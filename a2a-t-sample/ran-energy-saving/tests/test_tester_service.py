@@ -2244,6 +2244,52 @@ async def test_a_full_flow_case_whose_interception_did_not_fire_dispatches_the_o
     assert refs["userInput"] == original
 
 
+async def test_a_rerun_after_a_process_restart_rebuilds_the_correction(tmp_path: Path) -> None:
+    """A restarted tester loads the persisted batch and reruns the item from the catalog.
+
+    The correction is an input of the run, not persisted run state, so the new process derives
+    it again: the rerun starts with the original request and the same replacement.
+    """
+    first_runs = _FakeRuns(_finish, gate="block_then_pass")
+    first = _manager(tmp_path, first_runs)
+    case = first._catalog.get(22)
+    assert case is not None
+    original = str(case["user_input"])
+    replacement = followup_input(case)
+    assert replacement
+    created = first.create(
+        case_ids=[22],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=2,
+    )
+    await first.start(str(created["batchId"]))
+    await _wait_status(first, str(created["batchId"]), "finished")
+
+    # A new process: fresh catalog, fresh run manager, the persisted batch document.
+    second_runs = _FakeRuns(_finish, gate="block_then_pass")
+    second = _manager(tmp_path, second_runs)
+    batch_id = str(created["batchId"])
+    assert second.get(batch_id) is not None
+
+    await second.rerun_item(batch_id, 0)
+    finished = await _wait_status(second, batch_id, "finished")
+
+    assert len(second_runs.calls) == 1
+    assert second_runs.calls[0]["userRequest"] == original
+    assert second_runs.calls[0]["correction"] == replacement
+    item = _only_item(finished)
+    assert item["status"] == CASE_PASSED
+    refs = item["refs"]
+    assert isinstance(refs, Mapping)
+    assert refs["userInput"] == original
+    assert refs["dispatchedRequest"] == replacement
+    attempts = item["attempts"]
+    assert isinstance(attempts, list)
+    assert len(attempts) == 1
+
+
 async def test_a_full_flow_blocked_modify_that_did_not_fire_falls_back_to_the_original(
     tmp_path: Path,
 ) -> None:
